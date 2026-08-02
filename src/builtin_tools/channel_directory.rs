@@ -122,14 +122,6 @@ impl AlephTool for ChannelDirectoryTool {
     type Args = ChannelDirectoryArgs;
     type Output = ChannelDirectoryOutput;
 
-    fn examples(&self) -> Option<Vec<String>> {
-        Some(vec![
-            r#"channel_directory(channel_id="slack", query="eng-releases")"#.to_string(),
-            r#"channel_directory(channel_id="slack", query="alice")"#.to_string(),
-            r#"channel_directory(channel_id="slack", limit=30)"#.to_string(),
-        ])
-    }
-
     async fn call(&self, args: Self::Args) -> Result<Self::Output> {
         let channel_id = ChannelId::new(args.channel_id.clone());
         let query = args.query.unwrap_or_default();

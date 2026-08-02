@@ -45,7 +45,6 @@ use crate::sandbox::exec_approval::gate::ApprovalRequester;
 use crate::session::events::ToolOutput;
 use crate::sync_primitives::Arc;
 use crate::tool_metadata::ToolHealthCache;
-use crate::tools::refresh::ToolRefreshSource;
 use crate::tools::runtime::{LoopTool, LoopToolRegistry};
 use crate::tools::service::{to_metadata_form, ToolDefinition, ToolError, ToolService, ToolSource};
 
@@ -59,7 +58,6 @@ use crate::tools::service::{to_metadata_form, ToolDefinition, ToolError, ToolSer
 /// ```text
 /// ScopedToolService::new(registry, allowed)
 ///     .with_subagent_tool(tool)
-///     .with_refresh(refresh_source)
 ///     .with_hook_decorator(decorator)
 /// ```
 ///
@@ -68,7 +66,6 @@ pub struct ScopedToolService {
     pub(super) inner: Arc<LoopToolRegistry>,
     pub(super) allowed: BTreeSet<String>,
     pub(super) subagent_tool: Option<Arc<SubagentTool>>,
-    pub(super) refresh: Option<Arc<dyn ToolRefreshSource>>,
     pub(super) hook_decorator: Option<Arc<dyn ToolHookDecorator>>,
     /// Extension-shipped hook executor. Fires `BeforeToolCall` interceptors
     /// (`block/deny/ask/update_input`) and `AfterToolCall`/`AfterToolCallFailure`
@@ -147,22 +144,47 @@ pub struct ScopedToolService {
 // ToolService trait impl
 // =============================================================================
 
+impl ScopedToolService {
+    /// Run any probe whose cached verdict is missing or expired, then snapshot.
+    ///
+    /// Nothing else in the process drives `ToolHealthCache::refresh`, so without
+    /// this the cache stays empty forever, `is_healthy` answers `true` for every
+    /// missing entry, and the three retain gates below — plus the
+    /// `<tool_runtime_state>` block built from `unhealthy_iter()` — are
+    /// unreachable. The probes were registered at boot and never ran: on a
+    /// machine with no Chromium the model still received all ~24 `browser_*`
+    /// schemas every turn and burned a call finding out.
+    ///
+    /// Cost is bounded by construction: `needs_refresh` is false for a name with
+    /// no probe and TTL-gated otherwise (the browser probe's TTL is well over
+    /// 30 s), `refresh` is single-flight through a `OnceCell`, and each probe is
+    /// hard-capped at `PROBE_DEADLINE` (200 ms). Running the stale ones
+    /// concurrently makes the worst case one 200 ms wait per TTL window, not one
+    /// per probe.
+    ///
+    /// `metadata_schema()` is sync and cannot await this; it reads whatever the
+    /// cache holds and re-bumps its own generation when `health.generation()`
+    /// moves, so a refresh performed here reaches it on the next read.
+    async fn refreshed_health_snapshot(&self) -> Option<crate::tool_metadata::HealthSnapshot> {
+        let health = self.health.as_ref()?;
+        let stale: Vec<String> = health
+            .probe_names()
+            .into_iter()
+            .filter(|name| health.needs_refresh(name))
+            .collect();
+        if !stale.is_empty() {
+            futures::future::join_all(stale.iter().map(|name| health.refresh(name))).await;
+        }
+        Some(health.snapshot())
+    }
+}
+
 #[async_trait]
 impl ToolService for ScopedToolService {
     async fn list(&self) -> Vec<ToolDefinition> {
-        // Trigger refresh poll if a source is configured.
-        if let Some(ref refresh) = self.refresh {
-            if refresh.poll_changes() {
-                // Refresh signals that tools changed externally. The registry
-                // is shared via Arc so callers needing live data swap it; here
-                // we just acknowledge the signal without mutating our snapshot.
-                let _ = refresh.fetch_tools();
-            }
-        }
-
         // Take a single health snapshot so the filter is consistent across
         // every tool in this list call.
-        let health_snap = self.health.as_ref().map(|h| h.snapshot());
+        let health_snap = self.refreshed_health_snapshot().await;
 
         let mut defs: Vec<ToolDefinition> = self
             .inner
@@ -398,14 +420,6 @@ impl ToolService for ScopedToolService {
 
     fn metadata_schema(&self) -> Arc<[crate::tool_metadata::ToolDefinition]> {
         use std::sync::atomic::Ordering;
-
-        // Bump generation if the refresh source signals external changes.
-        if let Some(ref refresh) = self.refresh {
-            if refresh.poll_changes() {
-                let _ = refresh.fetch_tools();
-                self.cache_generation.fetch_add(1, Ordering::AcqRel);
-            }
-        }
 
         // Bump generation if the health cache rotated (a probe flipped
         // healthy↔unhealthy or `invalidate_all` fired). This keeps the

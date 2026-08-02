@@ -294,13 +294,45 @@ fn scaffold_bytes_ratchet() {
     );
 }
 
-/// No sentence may be stated by two different layers.
+/// No sentence may be stated twice in one request — across prompt layers *and*
+/// the tool descriptions that ship beside them.
 ///
 /// Cross-layer duplication is how the prompt grew without anyone adding a
 /// section: the D4 acknowledgment contract was, at its peak, stated in
 /// `memory_protocol`, `special_actions`, and two tool descriptions. Each copy
 /// costs tokens on every request and is one more place the rule can drift out
 /// of sync with the others.
+///
+/// Half of that sentence used to be unmeasurable. The guard walked
+/// `layer_sections` only, so the two tool-description copies it names sat
+/// outside its field of view — it certified non-duplication over a surface that
+/// excluded where the duplication was. That is the same shape as
+/// `production_shaped` leaving `runtime_context` unset: an excuse that makes
+/// the number look clean by not looking. A tool's description ships with its
+/// schema in the same request as the layers, on the same token budget, with the
+/// same drift risk, so it belongs in the same scan.
+///
+/// The tool text ingested is `BUILTIN_TOOL_DEFINITIONS` — the LLM-facing
+/// catalog `agent_init` maps straight into the model's tool list — deliberately
+/// **not** the `AlephTool::DESCRIPTION` consts, several of which are richer than
+/// the catalog entry that paraphrases them. Measuring the consts would repeat
+/// the very mistake above in mirror image: measuring text production never
+/// sends. (Where an entry and its tool's const have drifted apart, that is a
+/// separate bug in `definitions.rs`; this guard reports on what ships, and will
+/// see those sentences the moment the catalog points at the consts.)
+///
+/// What widening it actually found, for the record: **no duplication at all —
+/// and the D4 clause named above ships zero times.** All three memory writers'
+/// catalog entries are terse one-line literals, so the `AFTER A SUCCESSFUL
+/// WRITE` paragraph in each tool's own const never reaches the model. The
+/// mirror-image failure of triplication, and invisible from the layer side
+/// exactly as triplication was. Fix is in `definitions.rs` (point those three
+/// entries at their consts, as the five file tools already do); this guard will
+/// start measuring the clause the moment it does.
+///
+/// The tool half must also stay non-empty — see the ingest assertion below. A
+/// guard that quietly narrows back to layer-only would keep passing while
+/// measuring the same partial surface this doc comment exists to condemn.
 #[test]
 fn no_sentence_is_stated_twice() {
     let pipeline = PromptPipeline::default_layers();
@@ -308,28 +340,62 @@ fn no_sentence_is_stated_twice() {
     let context = resolve(InteractionParadigm::Background);
     let input = production_shaped(&config, &context);
 
-    let mut seen: Vec<(String, &'static str)> = Vec::new();
+    let mut surfaces: Vec<(String, String)> = pipeline
+        .layer_sections(AssemblyPath::Cached, &input, PromptMode::Full)
+        .into_iter()
+        .map(|(name, section)| (format!("layer `{name}`"), section))
+        .collect();
+    surfaces.extend(
+        crate::executor::BUILTIN_TOOL_DEFINITIONS
+            .iter()
+            .map(|def| (format!("tool `{}`", def.name), def.description.to_string())),
+    );
+
+    // Whitespace-normalized sentences long enough to be a claim rather than a
+    // header, list marker or "Rules:" — short fragments collide by coincidence,
+    // not by duplication. One definition, so the ingest check below counts
+    // exactly what the duplicate scan compares.
+    fn measured_sentences(text: &str) -> impl Iterator<Item = String> + '_ {
+        text.split(['.', '\n'])
+            .map(|s| s.split_whitespace().collect::<Vec<_>>().join(" "))
+            .filter(|norm| norm.split_whitespace().count() >= 8)
+    }
+
+    // The tool half of the surface must actually carry text. Zero here means
+    // the guard silently reverted to layer-only scope — the exact blindness
+    // that let the D4 copies sit outside its field of view — and every
+    // "no duplicates" verdict below would again be a claim about half a request.
+    let tool_sentences = surfaces
+        .iter()
+        .filter(|(origin, _)| origin.starts_with("tool `"))
+        .flat_map(|(_, text)| measured_sentences(text))
+        .count();
+    assert!(
+        tool_sentences > 0,
+        "the tool half of the surface contributed no measurable sentence — this guard is \
+         back to certifying non-duplication across layers alone. Check that \
+         BUILTIN_TOOL_DEFINITIONS is still the catalog agent_init maps into the model's \
+         tool list, and that this test still ingests it."
+    );
+
+    let mut seen: Vec<(String, String)> = Vec::new();
     let mut dupes: Vec<String> = Vec::new();
 
-    for (name, section) in pipeline.layer_sections(AssemblyPath::Cached, &input, PromptMode::Full) {
-        for sentence in section.split(['.', '\n']) {
-            let norm = sentence.split_whitespace().collect::<Vec<_>>().join(" ");
-            // Short fragments (headers, list markers, "Rules:") collide by
-            // coincidence, not by duplication.
-            if norm.split_whitespace().count() < 8 {
-                continue;
-            }
+    for (origin, text) in &surfaces {
+        for norm in measured_sentences(text) {
             if let Some((_, other)) = seen.iter().find(|(s, _)| *s == norm) {
-                dupes.push(format!("{other} and {name} both say: {norm:?}"));
+                dupes.push(format!("{other} and {origin} both say: {norm:?}"));
             } else {
-                seen.push((norm, name));
+                seen.push((norm, origin.clone()));
             }
         }
     }
 
     assert!(
         dupes.is_empty(),
-        "the same sentence is emitted by two layers — pick one home:\n{}",
+        "the same sentence ships twice in one request — pick one home (a rule that \
+         ranks tools against each other belongs in a layer; a rule about one tool \
+         belongs in that tool's DESCRIPTION):\n{}",
         dupes.join("\n")
     );
 }

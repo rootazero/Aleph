@@ -70,15 +70,6 @@ impl AlephTool for TeamSetProtocolTool {
     type Args = TeamSetProtocolArgs;
     type Output = TeamSetProtocolOutput;
 
-    fn examples(&self) -> Option<Vec<String>> {
-        Some(vec![
-            "team_set_protocol(team_id='abc123', protocol='Reviewer owns QA. Workers submit a \
-             plan before coding. Merge only on green tests.')"
-                .to_string(),
-            "team_set_protocol(team_id='abc123')  // clears the protocol".to_string(),
-        ])
-    }
-
     async fn call(&self, args: Self::Args) -> Result<Self::Output> {
         // Determine the resulting state before the write so the message is
         // accurate (the store normalizes whitespace-only input to "cleared").

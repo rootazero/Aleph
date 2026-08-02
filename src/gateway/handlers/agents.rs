@@ -680,4 +680,52 @@ name = "Coder"
             .is_none());
         assert!(ctx.env_store.get_active_agent("discord").unwrap().is_none());
     }
+
+    /// `agents.files.list` enumerates MEMORY.md, so the Panel file editor
+    /// offers it for editing — but the file is the curated store's on-disk
+    /// form. These handlers carry no filename guard of their own (R4: pure
+    /// I/O); the refusal must arrive from `AgentManager`, which is where the
+    /// single-source predicate lives.
+    #[tokio::test]
+    async fn files_set_and_delete_refuse_memory_md() {
+        let dir = TempDir::new().unwrap();
+        let manager = test_manager(&dir);
+
+        let agent_dir = manager.agents_root.join("main");
+        std::fs::create_dir_all(&agent_dir).unwrap();
+        let memory = agent_dir.join("MEMORY.md");
+        let curated_body = "fact one\n\u{a7}\n";
+        std::fs::write(&memory, curated_body).unwrap();
+
+        let resp = handle_files_set(
+            req(
+                "agents.files.set",
+                json!({
+                    "agent_id": "main",
+                    "filename": "MEMORY.md",
+                    "content": "# free-form notes",
+                }),
+            ),
+            Arc::clone(&manager),
+        )
+        .await;
+        let msg = resp.error.as_ref().expect("must be refused").message.clone();
+        assert!(msg.contains("remember"), "msg was: {msg}");
+        assert_eq!(
+            std::fs::read_to_string(&memory).unwrap(),
+            curated_body,
+            "curated body must survive the refused write"
+        );
+
+        let resp = handle_files_delete(
+            req(
+                "agents.files.delete",
+                json!({ "agent_id": "main", "filename": "MEMORY.md" }),
+            ),
+            Arc::clone(&manager),
+        )
+        .await;
+        assert!(!resp.is_success(), "delete must be refused too");
+        assert!(memory.exists());
+    }
 }

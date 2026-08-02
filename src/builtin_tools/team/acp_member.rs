@@ -116,15 +116,6 @@ impl AlephTool for TeamAcpMemberTool {
     type Args = TeamAcpMemberArgs;
     type Output = TeamAcpMemberOutput;
 
-    fn examples(&self) -> Option<Vec<String>> {
-        Some(vec![
-            "team_acp_member(action='add', team_id='t1', harness_id='claude-code', cwd='/work/repo', role='code-reviewer')".into(),
-            "team_acp_member(action='add', team_id='t1', harness_id='codex', cwd='/work/repo', session_name='backend', role='backend-worker')".into(),
-            "team_acp_member(action='list', team_id='t1')".into(),
-            "team_acp_member(action='remove', team_id='t1', agent_id='acp:claude-code:/work/repo')".into(),
-        ])
-    }
-
     async fn call(&self, args: Self::Args) -> Result<Self::Output> {
         match args {
             TeamAcpMemberArgs::Add {

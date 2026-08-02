@@ -86,8 +86,8 @@ async fn plan_parses_valid_json() {
         gate: None,
     };
     let raw = RawMemory::new("some content".to_string(), RawMemorySource::Transcript);
-    let plan = ing
-        .plan("default", &[raw], &[], &RawMemorySource::Transcript, None)
+    let (plan, _degraded) = ing
+        .plan_with_health("default", &[raw], &[], &RawMemorySource::Transcript, None)
         .await
         // rust-doctor-disable-next-line unwrap-in-production
         .unwrap();
@@ -116,8 +116,8 @@ async fn plan_returns_empty_on_invalid_json() {
         gate: None,
     };
     let raw = RawMemory::new("c".to_string(), RawMemorySource::Transcript);
-    let plan = ing
-        .plan("default", &[raw], &[], &RawMemorySource::Transcript, None)
+    let (plan, _degraded) = ing
+        .plan_with_health("default", &[raw], &[], &RawMemorySource::Transcript, None)
         .await
         // rust-doctor-disable-next-line unwrap-in-production
         .unwrap();
@@ -146,8 +146,8 @@ async fn plan_filters_invalid_ops() {
         gate: None,
     };
     let raw = RawMemory::new("c".to_string(), RawMemorySource::Transcript);
-    let plan = ing
-        .plan("default", &[raw], &[], &RawMemorySource::Transcript, None)
+    let (plan, _degraded) = ing
+        .plan_with_health("default", &[raw], &[], &RawMemorySource::Transcript, None)
         .await
         // rust-doctor-disable-next-line unwrap-in-production
         .unwrap();
@@ -200,8 +200,8 @@ async fn plan_keeps_seed_create_when_all_link_tokens_hallucinated() {
     };
     // No related pages (sparse wiki) → `[P3]` is out of range and stripped.
     let raw = RawMemory::new("c".to_string(), RawMemorySource::Transcript);
-    let plan = ing
-        .plan("default", &[raw], &[], &RawMemorySource::Transcript, None)
+    let (plan, _degraded) = ing
+        .plan_with_health("default", &[raw], &[], &RawMemorySource::Transcript, None)
         .await
         // rust-doctor-disable-next-line unwrap-in-production
         .unwrap();
@@ -251,8 +251,8 @@ async fn plan_resolves_reference_token_to_canonical_path() {
         score: 1.0,
     }];
     let raw = RawMemory::new("c".to_string(), RawMemorySource::Transcript);
-    let plan = ing
-        .plan(
+    let (plan, _degraded) = ing
+        .plan_with_health(
             "default",
             &[raw],
             &related,
@@ -303,8 +303,8 @@ async fn plan_drops_op_with_hallucinated_token() {
         score: 1.0,
     }];
     let raw = RawMemory::new("c".to_string(), RawMemorySource::Transcript);
-    let plan = ing
-        .plan(
+    let (plan, _degraded) = ing
+        .plan_with_health(
             "default",
             &[raw],
             &related,

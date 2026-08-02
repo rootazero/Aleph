@@ -37,7 +37,6 @@ pub fn convert_openai_tools(tools: &[Value]) -> Vec<ToolDefinition> {
                 parameters: func.get("parameters").cloned().unwrap_or(json!({})),
                 requires_confirmation: false,
                 category: ToolCategory::Custom,
-                llm_context: None,
                 strict: func
                     .get("strict")
                     .and_then(|v| v.as_bool())

@@ -32,15 +32,19 @@ pub enum StrictResult {
 /// This function rewrites the root in-place:
 /// 1. Injects `type: "object"` if absent.
 /// 2. Flattens top-level `oneOf` / `anyOf` branches into root `properties`:
-///    each branch's `properties` is merged in (first-branch-wins on key collision),
+///    each branch's `properties` is merged in (first-branch-wins on key
+///    collision, except for a key that *every* declaring branch pins with
+///    `const` / `enum` — that widens to the union of the pinned values),
 ///    `required` becomes the intersection of all branches' required sets, and
 ///    the union keyword is removed.
 /// 3. Strips top-level `allOf` / `enum` / `not` (rare; no flatten attempt).
 /// 4. Ensures root `properties: {}` exists even if empty.
 ///
-/// The flatten is lossy on discriminator constraints but preserves all
-/// field-level type info — accepted by `OpenAI`'s parser. Tool descriptions
-/// carry the discriminator semantics for LLM guidance.
+/// The flatten is permissive rather than lossy on discriminator constraints:
+/// the widened `enum` names every legal tag value instead of pinning the first
+/// branch's. What it does drop is the per-branch co-occurrence rule ("`content`
+/// only accompanies `action: add`") — every field-level type survives, and tool
+/// descriptions carry the co-occurrence semantics for LLM guidance.
 ///
 /// Non-recursive (top-level only). Idempotent.
 // rust-doctor-disable-next-line high-cyclomatic-complexity
@@ -69,6 +73,12 @@ pub fn ensure_openai_tool_envelope(schema: &mut Value) {
         };
 
         let mut merged_props: serde_json::Map<String, Value> = serde_json::Map::new();
+        // Per-key discriminator accounting: how many branches declare the key,
+        // and every literal value they pin, in branch order. The value slot
+        // drops to `None` as soon as one declaring branch leaves the key open —
+        // such a key is not a discriminator and keeps first-branch-wins.
+        let mut pinned: std::collections::HashMap<String, (usize, Option<Vec<Value>>)> =
+            std::collections::HashMap::new();
         required_sets.clear();
 
         for branch in &branches {
@@ -78,6 +88,17 @@ pub fn ensure_openai_tool_envelope(schema: &mut Value) {
             };
             if let Some(Value::Object(props)) = branch_obj.get("properties") {
                 for (k, v) in props {
+                    // rust-doctor-disable-next-line excessive-clone
+                    let slot = pinned.entry(k.clone()).or_insert((0, Some(Vec::new())));
+                    slot.0 += 1;
+                    match pinned_values(v) {
+                        Some(values) => {
+                            if let Some(acc) = slot.1.as_mut() {
+                                acc.extend(values);
+                            }
+                        }
+                        None => slot.1 = None,
+                    }
                     // rust-doctor-disable-next-line excessive-clone
                     merged_props.entry(k.clone()).or_insert_with(|| v.clone());
                 }
@@ -89,6 +110,35 @@ pub fn ensure_openai_tool_envelope(schema: &mut Value) {
                     .collect();
                 required_sets.push(set);
             }
+        }
+
+        // Widen colliding discriminators before the merge. schemars renders an
+        // internally tagged enum (`#[serde(tag = "action")]`) as one branch per
+        // variant, each pinning the tag with `const`. First-branch-wins would
+        // ship `{"const": "<first variant>"}` — the schema would tell the model
+        // that the first action is the ONLY legal one while every other
+        // variant's fields sit beside it as siblings, contradicting both the
+        // tool description and the other properties it just merged in.
+        for (key, (declaring, values)) in &pinned {
+            // `< 2` is not a collision: a key only one branch declares keeps
+            // its own `const`, which is still exactly true.
+            if *declaring < 2 {
+                continue;
+            }
+            let Some(values) = values else { continue };
+            let mut deduped: Vec<Value> = Vec::with_capacity(values.len());
+            for v in values {
+                if !deduped.contains(v) {
+                    // rust-doctor-disable-next-line excessive-clone
+                    deduped.push(v.clone());
+                }
+            }
+            // Tags are strings in practice; ask the shared inference rather
+            // than hardcode it so a numeric `const` union does not ship a
+            // self-contradicting `{"type":"string","enum":[1,2]}`.
+            let ty = infer_type_from_values(&deduped);
+            // rust-doctor-disable-next-line excessive-clone
+            merged_props.insert(key.clone(), serde_json::json!({"type": ty, "enum": deduped}));
         }
 
         // Merge flattened properties into root properties (first-branch wins).
@@ -142,6 +192,41 @@ pub fn ensure_openai_tool_envelope(schema: &mut Value) {
             Value::Object(serde_json::Map::new()),
         );
     }
+}
+
+/// The literal values a property schema pins, if it pins any: `{"const": X}`
+/// → `[X]`, `{"enum": [...]}` → that list. `None` when the schema leaves the
+/// value open, which makes the key non-enumerable for the union flatten in
+/// [`ensure_openai_tool_envelope`].
+fn pinned_values(schema: &Value) -> Option<Vec<Value>> {
+    let obj = schema.as_object()?;
+    if let Some(constant) = obj.get("const") {
+        // rust-doctor-disable-next-line excessive-clone
+        return Some(vec![constant.clone()]);
+    }
+    match obj.get("enum") {
+        // rust-doctor-disable-next-line excessive-clone
+        Some(Value::Array(values)) if !values.is_empty() => Some(values.clone()),
+        _ => None,
+    }
+}
+
+/// Provider-agnostic name for [`ensure_openai_tool_envelope`].
+///
+/// The flatten is only *documented* against `OpenAI`'s validator; in substance
+/// it is what any provider needs when it rejects top-level `oneOf` / `anyOf`.
+/// Without it a schemars tagged-enum tool ships with an empty `properties` and
+/// the model has to guess argument names out of the description prose.
+/// Anthropic is the second caller (`protocols::anthropic::adapter`, which runs
+/// this first and keeps its own strip as the backstop). The alias exists so
+/// that call site does not read as "Anthropic borrows an `OpenAI` quirk" —
+/// the implementation above stays the only one, because a second copy would
+/// drift the moment either provider's envelope rules move.
+///
+/// Note for non-`OpenAI` callers: this also drops top-level `enum` / `not`,
+/// which are meaningless on a tool parameter object.
+pub(crate) fn flatten_tool_schema_unions(schema: &mut Value) {
+    ensure_openai_tool_envelope(schema);
 }
 
 /// Lenient multi-type rewriter for `OpenAI`'s non-strict tool path.
@@ -616,6 +701,33 @@ fn infer_type_from_values(values: &[Value]) -> String {
     "string".to_string()
 }
 
+/// Mimics the schemars output for `RememberArgs` — an internally tagged enum
+/// (`#[serde(tag = "action")]`) whose `Batch` variant carries
+/// `operations.items.$ref` → `#/$defs/SingleOp`.
+///
+/// Shared with the Anthropic adapter tests on purpose: both providers run the
+/// same flatten over this shape, so both must be pinned against the same
+/// fixture — otherwise a fix on one side silently stops covering the other,
+/// which is exactly how this schema came to reach Claude with zero parameters.
+#[cfg(test)]
+pub(crate) fn remember_args_shaped_schema() -> Value {
+    serde_json::json!({
+        "oneOf": [
+            {"type": "object", "properties": {"action": {"type": "string", "const": "add"}, "content": {"type": "string"}}, "required": ["action", "content"]},
+            {"type": "object", "properties": {"action": {"type": "string", "const": "remove"}, "old_text": {"type": "string"}}, "required": ["action", "old_text"]},
+            {"type": "object", "properties": {"action": {"type": "string", "const": "batch"}, "operations": {"type": "array", "items": {"$ref": "#/$defs/SingleOp"}}}, "required": ["action", "operations"]}
+        ],
+        "$defs": {
+            "SingleOp": {
+                "oneOf": [
+                    {"type": "object", "properties": {"action": {"type": "string", "const": "add"}, "content": {"type": "string"}}, "required": ["action", "content"]},
+                    {"type": "object", "properties": {"action": {"type": "string", "const": "remove"}, "old_text": {"type": "string"}}, "required": ["action", "old_text"]}
+                ]
+            }
+        }
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -871,6 +983,79 @@ mod tests {
     }
 
     #[test]
+    fn envelope_widens_colliding_discriminator_to_enum() {
+        let mut schema = remember_args_shaped_schema();
+        ensure_openai_tool_envelope(&mut schema);
+        let action = &schema["properties"]["action"];
+        assert!(
+            action.get("const").is_none(),
+            "first branch's const must not survive as the only legal action: {action}"
+        );
+        assert_eq!(action["type"], "string");
+        assert_eq!(
+            action["enum"],
+            serde_json::json!(["add", "remove", "batch"]),
+            "every variant tag, in branch order"
+        );
+        // The sibling fields the tag used to contradict are all still here.
+        let props = schema["properties"].as_object().expect("properties");
+        assert!(props.contains_key("content"));
+        assert!(props.contains_key("old_text"));
+        assert!(props.contains_key("operations"));
+    }
+
+    #[test]
+    fn envelope_widening_dedupes_and_reads_enum_branches() {
+        let mut schema = serde_json::json!({
+            "oneOf": [
+                {"type": "object", "properties": {"kind": {"enum": ["a", "b"]}}},
+                {"type": "object", "properties": {"kind": {"const": "b"}}},
+                {"type": "object", "properties": {"kind": {"enum": ["c"]}}}
+            ]
+        });
+        ensure_openai_tool_envelope(&mut schema);
+        assert_eq!(
+            schema["properties"]["kind"]["enum"],
+            serde_json::json!(["a", "b", "c"]),
+            "union of const + enum branches, branch order, deduped"
+        );
+    }
+
+    #[test]
+    fn envelope_leaves_key_alone_when_a_branch_does_not_pin_it() {
+        // `mode` is pinned in the first branch but free-form in the second, so
+        // it is not a discriminator — synthesizing an enum here would invent a
+        // constraint the schema never had. First-branch-wins still applies.
+        let mut schema = serde_json::json!({
+            "oneOf": [
+                {"type": "object", "properties": {"mode": {"type": "string", "const": "fast"}}},
+                {"type": "object", "properties": {"mode": {"type": "string"}}}
+            ]
+        });
+        ensure_openai_tool_envelope(&mut schema);
+        assert!(
+            schema["properties"]["mode"].get("enum").is_none(),
+            "no enum may be synthesized for a partially-pinned key"
+        );
+        assert_eq!(schema["properties"]["mode"]["const"], "fast");
+    }
+
+    #[test]
+    fn envelope_keeps_lone_branch_const_untouched() {
+        // Only one branch declares `only_here`, so its `const` is still exactly
+        // true — widening a non-collision would be pure noise.
+        let mut schema = serde_json::json!({
+            "oneOf": [
+                {"type": "object", "properties": {"only_here": {"type": "string", "const": "x"}}},
+                {"type": "object", "properties": {"other": {"type": "integer"}}}
+            ]
+        });
+        ensure_openai_tool_envelope(&mut schema);
+        assert_eq!(schema["properties"]["only_here"]["const"], "x");
+        assert!(schema["properties"]["only_here"].get("enum").is_none());
+    }
+
+    #[test]
     fn envelope_flattens_anyof_same_as_oneof() {
         let mut schema = serde_json::json!({
             "type": "object",
@@ -991,26 +1176,6 @@ mod tests {
     // =====================================================================
     // $ref / $defs strict incompatibility (per-tool non-strict downgrade)
     // =====================================================================
-
-    /// Mimics the schemars output for `RememberArgs` — a tagged enum whose
-    /// `Batch` variant carries `operations.items.$ref` → `#/$defs/SingleOp`.
-    fn remember_args_shaped_schema() -> Value {
-        serde_json::json!({
-            "oneOf": [
-                {"type": "object", "properties": {"action": {"type": "string", "const": "add"}, "content": {"type": "string"}}, "required": ["action", "content"]},
-                {"type": "object", "properties": {"action": {"type": "string", "const": "remove"}, "old_text": {"type": "string"}}, "required": ["action", "old_text"]},
-                {"type": "object", "properties": {"action": {"type": "string", "const": "batch"}, "operations": {"type": "array", "items": {"$ref": "#/$defs/SingleOp"}}}, "required": ["action", "operations"]}
-            ],
-            "$defs": {
-                "SingleOp": {
-                    "oneOf": [
-                        {"type": "object", "properties": {"action": {"type": "string", "const": "add"}, "content": {"type": "string"}}, "required": ["action", "content"]},
-                        {"type": "object", "properties": {"action": {"type": "string", "const": "remove"}, "old_text": {"type": "string"}}, "required": ["action", "old_text"]}
-                    ]
-                }
-            }
-        })
-    }
 
     #[test]
     fn remember_batch_shaped_defs_schema_returns_incompatible() {

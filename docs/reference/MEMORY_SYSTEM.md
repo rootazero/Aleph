@@ -90,7 +90,13 @@ pub trait WorkingMemoryAssembler: Send + Sync {
 
 `HybridAssembler` is the production implementation. It:
 1. Calls `NoteFactRetrieval::retrieve` for hybrid search
-2. Optionally runs LLM re-ranking (`AiProviderReranker`)
+2. Optionally runs LLM re-ranking (`AiProviderReranker`) — this one pins a
+   `"respond only with strict JSON"` system message, because `rerank::parse_response`
+   accepts nothing else. Anything that asks a model for **prose** (the `/end-summary`
+   synthesizer, `SessionReflector`) must take `AiProviderSummaryLlm` instead: the two
+   wrap the same provider and differ only in whether that system message is pinned,
+   so they look interchangeable and are not. There is deliberately no `SummaryLlm`
+   impl on the reranker to fall back on.
 3. Hydrates results into `EnvelopeItem`s
 4. Applies registered `MemoryExtension::on_retrieve` hooks
 5. Renders the envelope to XML via `render_with(&env, RenderStyle::Xml)`

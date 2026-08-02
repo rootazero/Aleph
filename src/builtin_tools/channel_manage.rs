@@ -116,14 +116,6 @@ impl AlephTool for ChannelPairingTool {
     type Args = ChannelPairingArgs;
     type Output = ChannelPairingOutput;
 
-    fn examples(&self) -> Option<Vec<String>> {
-        Some(vec![
-            r#"channel_pairing(action="generate")"#.to_string(),
-            r#"channel_pairing(action="generate", channel_id="telegram")"#.to_string(),
-            r#"channel_pairing(action="list")"#.to_string(),
-        ])
-    }
-
     async fn call(&self, args: Self::Args) -> Result<Self::Output> {
         let channel_id = self.resolve_channel_id(args.channel_id).await?;
 

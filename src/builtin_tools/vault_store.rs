@@ -67,14 +67,6 @@ impl AlephTool for VaultStoreTool {
         true
     }
 
-    fn examples(&self) -> Option<Vec<String>> {
-        Some(vec![
-            r#"vault.store(action="store", key="ai:openai", secret="sk-...")"#.into(),
-            r#"vault.store(action="delete", key="ai:openai")"#.into(),
-            r#"vault.store(action="list")"#.into(),
-        ])
-    }
-
     async fn call(&self, args: Self::Args) -> Result<Self::Output> {
         notify_tool_start(Self::NAME, &format!("{:?}", args.action));
 

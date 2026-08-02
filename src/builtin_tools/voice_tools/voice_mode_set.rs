@@ -133,14 +133,6 @@ impl AlephTool for VoiceModeSetTool {
     type Args = VoiceModeSetArgs;
     type Output = VoiceModeSetOutput;
 
-    fn examples(&self) -> Option<Vec<String>> {
-        Some(vec![
-            r#"voice_mode_set(enabled=true)"#.to_string(),
-            r#"voice_mode_set(enabled=false, channel_id="telegram")"#.to_string(),
-            r#"voice_mode_set(enabled=true, provider="openai", voice="alloy")"#.to_string(),
-        ])
-    }
-
     async fn call(&self, args: Self::Args) -> Result<Self::Output> {
         // When called through the standard AlephTool path there is no
         // current_channel_id context — callers that have it should use

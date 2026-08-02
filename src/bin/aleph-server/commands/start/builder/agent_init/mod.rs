@@ -172,6 +172,13 @@ pub(in crate::commands::start) async fn register_agent_handlers(
     let mut agent_reg: Option<Arc<AgentRegistry>> = None;
     let mut default_prov: Option<Arc<dyn alephcore::providers::AiProvider>> = None;
     let tool_catalog_out: Option<Arc<alephcore::tool_metadata::ToolCatalog>>;
+    // One runtime tool-health cache, shared by the `ExecutionEngine` and the
+    // `ToolCatalog`. It has to be created out here, ahead of both: the engine is
+    // wrapped in an `Arc` long before `init_tool_catalog` runs, so it cannot be
+    // handed the catalog's own cache afterwards. Sharing one handle is what
+    // connects "probes registered at boot" to "the model never receives the
+    // schema of a tool whose dependency is dead".
+    let tool_health = Arc::new(alephcore::tool_metadata::ToolHealthCache::new());
     let mut embedder_out: Option<std::sync::Arc<dyn alephcore::memory::EmbeddingProvider>> = None;
     // Long-lived embedding manager (B5.2): hoisted so the compound ingestor's
     // embedding queue has a real producer/consumer instead of the manager
@@ -815,7 +822,8 @@ pub(in crate::commands::start) async fn register_agent_handlers(
             tools,
             Some(memory_db.clone()),
         )
-        .with_app_config(app_config_arc.clone());
+        .with_app_config(app_config_arc.clone())
+        .with_tool_health(tool_health.clone());
         if let Some(ref state_db) = resilience_db {
             engine = engine.with_state_database(state_db.clone());
         }
@@ -1048,13 +1056,18 @@ pub(in crate::commands::start) async fn register_agent_handlers(
             // summary production. Requires an AiProvider for the synthesizer
             // fallback path; skip silently if none is configured.
             if let Some(ref prov) = default_prov {
-                use alephcore::memory::assembler::hybrid::AiProviderReranker;
+                use alephcore::memory::assembler::hybrid::AiProviderSummaryLlm;
                 use alephcore::memory::session_search_summary::{
                     end_hook::SessionEndSummarizer, synthesizer::SummarySynthesizer,
                 };
+                // Prose wrapper, NOT `AiProviderReranker` — both consumers
+                // below (the /end-summary synthesizer and SessionReflector)
+                // ask the model for plain text in a shape their own prompt
+                // defines; the reranker pins a "strict JSON, no prose" system
+                // message that would break both.
                 let summary_llm: std::sync::Arc<
                     dyn alephcore::memory::session_search_summary::synthesizer::SummaryLlm,
-                > = AiProviderReranker::new(prov.clone());
+                > = AiProviderSummaryLlm::new(prov.clone());
                 let synthesizer = std::sync::Arc::new(SummarySynthesizer::new(
                     memory_db.clone()
                         as std::sync::Arc<dyn alephcore::memory::store::raw_memory::RawMemoryStore>,
@@ -1073,7 +1086,7 @@ pub(in crate::commands::start) async fn register_agent_handlers(
                 // Batch 2 — session-end reflection ("lessons learned"). Opt-in: only
                 // registered when [memory.reflection] enabled = true, so the
                 // disabled default adds zero session-end overhead. Reuses the
-                // same SummaryLlm wrapper as the Spec B summarizer. The
+                // same prose SummaryLlm wrapper as the Spec B summarizer. The
                 // cooldown watermark persists to compression_metadata so a
                 // daemon restart cannot reset the per-agent throttle.
                 if app_config.memory.reflection.enabled {
@@ -1826,6 +1839,7 @@ pub(in crate::commands::start) async fn register_agent_handlers(
             memory_db,
             &memory_ext_registry,
             daemon,
+            tool_health.clone(),
         )
         .await,
     );

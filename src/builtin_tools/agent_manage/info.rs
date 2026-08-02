@@ -84,13 +84,6 @@ impl AlephTool for AgentInfoTool {
     type Args = AgentInfoArgs;
     type Output = AgentInfoOutput;
 
-    fn examples(&self) -> Option<Vec<String>> {
-        Some(vec![
-            r#"agent_info({"agent_id": "explore"})"#.to_string(),
-            r#"agent_info({"agent_id": "coder"})"#.to_string(),
-        ])
-    }
-
     async fn call(&self, args: Self::Args) -> Result<Self::Output> {
         info!(agent_id = %args.agent_id, "agent_info requested");
 
@@ -213,7 +206,6 @@ mod tests {
         let def = AlephTool::definition(&tool);
         assert_eq!(def.name, "agent_info");
         assert!(!def.requires_confirmation);
-        assert!(def.llm_context.is_some());
     }
 
     #[tokio::test]

@@ -154,7 +154,7 @@ fn exact_suggestions(tool_name: &str, kind: ToolErrorKind) -> Option<Vec<Fallbac
         "search" => Some(match kind {
             ToolErrorKind::RateLimited | ToolErrorKind::Unauthorized => vec![
                 S::new("web_fetch", "go direct to a known canonical URL"),
-                S::new("autocli", "use logged-in browser session for gated sites"),
+                S::new("browser_open", "open the gated page in a logged-in browser"),
             ],
             ToolErrorKind::EmptyResult => vec![
                 S::new(
@@ -165,7 +165,10 @@ fn exact_suggestions(tool_name: &str, kind: ToolErrorKind) -> Option<Vec<Fallbac
             ],
             ToolErrorKind::BlockedByPolicy | ToolErrorKind::UpstreamServerError => vec![
                 S::new("web_fetch", "different source (BBC/AP/Wikipedia/Reuters)"),
-                S::new("autocli", "browser-backed fetch via logged-in session"),
+                S::new(
+                    "browser_open",
+                    "browser-backed fetch via a logged-in session",
+                ),
             ],
             _ => vec![
                 S::new("web_fetch", "if you have a canonical URL in mind"),
@@ -181,7 +184,10 @@ fn exact_suggestions(tool_name: &str, kind: ToolErrorKind) -> Option<Vec<Fallbac
             | ToolErrorKind::UpstreamNotFound => vec![
                 S::new("web_fetch", "alternate source (BBC/AP/NYT/Wikipedia)"),
                 S::new("search", "find a different canonical URL via search"),
-                S::new("autocli", "logged-in browser session for gated content"),
+                S::new(
+                    "browser_open",
+                    "logged-in browser session for gated content",
+                ),
             ],
             ToolErrorKind::RateLimited => vec![
                 S::new("web_fetch", "different domain to avoid the rate-limit"),
@@ -193,7 +199,10 @@ fn exact_suggestions(tool_name: &str, kind: ToolErrorKind) -> Option<Vec<Fallbac
             ],
             _ => vec![
                 S::new("search", "find another URL for the same resource"),
-                S::new("autocli", "browser-backed fetch for sites that gate API"),
+                S::new(
+                    "browser_open",
+                    "browser-backed fetch for sites that gate API",
+                ),
             ],
         }),
 
@@ -210,11 +219,14 @@ fn exact_suggestions(tool_name: &str, kind: ToolErrorKind) -> Option<Vec<Fallbac
         }),
 
         // `memory_search` — the memory ladder is broader queries +
-        // raw_memory_search for unstructured recall.
+        // browsing the raw store when the query itself is the problem.
         "memory_search" => Some(match kind {
             ToolErrorKind::EmptyResult => vec![
                 S::new("memory_search", "broader query or different scope"),
-                S::new("raw_memory_search", "unstructured recall over raw events"),
+                S::new(
+                    "memory_browse",
+                    "walk the raw memory VFS instead of querying it",
+                ),
             ],
             _ => vec![],
         }),
@@ -235,7 +247,10 @@ fn family_suggestions(family: ToolFamily, kind: ToolErrorKind) -> Vec<FallbackSu
         ) => vec![
             S::new("search", "find a different source via search"),
             S::new("web_fetch", "fetch an alternate canonical URL directly"),
-            S::new("autocli", "use logged-in browser session if available"),
+            S::new(
+                "browser_open",
+                "use a logged-in browser session if available",
+            ),
         ],
         (ToolFamily::Network, ToolErrorKind::EmptyResult) => vec![
             S::new("search", "broaden the query or pick a different engine"),
@@ -262,7 +277,10 @@ fn family_suggestions(family: ToolFamily, kind: ToolErrorKind) -> Vec<FallbackSu
 
         (ToolFamily::Memory, ToolErrorKind::EmptyResult) => vec![
             S::new("memory_search", "broaden the query or widen the scope"),
-            S::new("raw_memory_search", "unstructured recall over raw events"),
+            S::new(
+                "memory_browse",
+                "walk the raw memory VFS instead of querying it",
+            ),
         ],
         (ToolFamily::Memory, _) => Vec::new(),
 
@@ -296,6 +314,13 @@ fn family_suggestions(family: ToolFamily, kind: ToolErrorKind) -> Vec<FallbackSu
 #[must_use]
 pub fn render_persistence_hint(err: &ToolError, tool_name: &str) -> String {
     let kind = err.kind();
+    // A cancelled call is not a rung of any ladder. The user pressed stop; the
+    // tool did not fail, was not blocked, and has no alternative worth
+    // suggesting. Telling the model to "climb the ladder before failing" here
+    // reads as advice about a failure that never happened.
+    if kind == ToolErrorKind::Cancelled {
+        return String::new();
+    }
     let alternatives = suggest_alternatives(tool_name, kind);
 
     let mut hint = String::with_capacity(160);
@@ -356,6 +381,65 @@ mod tests {
         assert!(s.iter().any(|x| x.tool == "search"));
     }
 
+    /// Every rung of the ladder must name a tool the model can actually call.
+    ///
+    /// This table told the model to `switch=autocli` and
+    /// `switch=raw_memory_search` for months; neither has ever been a
+    /// registered tool, so following the hint cost a guaranteed
+    /// `ToolError::NotFound` turn — and the cross-batch failure memo then
+    /// banned the phantom, while the rung it stood for still did not exist.
+    /// The harness already learned this once (`act.rs`: "this said 'call
+    /// `list_tools`', which production never registers, so the model looped on
+    /// NotFound") and `READ_ONLY_TOOLS` learned it again in the 2026-07 ghost
+    /// sweep. This is the check that stops the third time.
+    #[test]
+    fn every_suggested_tool_is_registered() {
+        use crate::executor::BUILTIN_TOOL_DEFINITIONS;
+
+        const KINDS: &[ToolErrorKind] = &[
+            ToolErrorKind::Unauthorized,
+            ToolErrorKind::RateLimited,
+            ToolErrorKind::UpstreamNotFound,
+            ToolErrorKind::UpstreamServerError,
+            ToolErrorKind::BlockedByPolicy,
+            ToolErrorKind::EmptyResult,
+            ToolErrorKind::Timeout,
+            ToolErrorKind::Transport,
+            ToolErrorKind::Validation,
+            ToolErrorKind::Permission,
+            ToolErrorKind::ToolNotFound,
+            ToolErrorKind::Duplicate,
+            ToolErrorKind::Execution,
+        ];
+        // Exact-registry names plus one probe per family, so the family
+        // fallback arms are covered too.
+        const PROBES: &[&str] = &[
+            "search",
+            "web_fetch",
+            "bash",
+            "memory_search",
+            "some_mcp__http_get",
+            "file_read",
+            "code_exec",
+            "memory_timeline",
+            "totally_unknown_tool",
+        ];
+
+        for probe in PROBES {
+            for kind in KINDS {
+                for s in suggest_alternatives(probe, *kind) {
+                    assert!(
+                        BUILTIN_TOOL_DEFINITIONS.iter().any(|d| d.name == s.tool),
+                        "suggest_alternatives({probe}, {kind:?}) offers '{}', which is not \
+                         in BUILTIN_TOOL_DEFINITIONS — the model would burn a turn on \
+                         ToolError::NotFound following it",
+                        s.tool
+                    );
+                }
+            }
+        }
+    }
+
     #[test]
     fn bash_timeout_suggests_code_exec() {
         let s = suggest_alternatives("bash", ToolErrorKind::Timeout);
@@ -366,7 +450,7 @@ mod tests {
     fn memory_empty_suggests_broaden_and_raw() {
         let s = suggest_alternatives("memory_search", ToolErrorKind::EmptyResult);
         assert!(s.iter().any(|x| x.tool == "memory_search"));
-        assert!(s.iter().any(|x| x.tool == "raw_memory_search"));
+        assert!(s.iter().any(|x| x.tool == "memory_browse"));
     }
 
     #[test]

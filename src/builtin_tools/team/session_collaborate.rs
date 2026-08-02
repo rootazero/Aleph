@@ -76,12 +76,6 @@ impl AlephTool for SessionCollaborateTool {
     type Args = SessionCollaborateArgs;
     type Output = SessionCollaborateOutput;
 
-    fn examples(&self) -> Option<Vec<String>> {
-        Some(vec![
-            "session_collaborate(team_id='team-1', participants=['agent-a','agent-b'], topic='API design review')".to_string(),
-        ])
-    }
-
     async fn call(&self, args: Self::Args) -> Result<Self::Output> {
         debug!(
             team_id = %args.team_id,

@@ -34,6 +34,12 @@ pub trait LlmReranker: Send + Sync {
     async fn complete(&self, prompt: &str, model: Option<&str>) -> Result<String, AlephError>;
 }
 
+/// System message pinned onto the re-rank call. The reply is fed straight to
+/// `rerank::parse_response`, which only accepts strict JSON — so this belongs
+/// to the re-rank path and to nothing else.
+const RERANK_SYSTEM_PROMPT: &str =
+    "You respond only with strict JSON. No prose. No markdown fences.";
+
 /// Default reranker that drives any [`AiProvider`] with a single user message.
 pub struct AiProviderReranker {
     provider: Arc<dyn AiProvider>,
@@ -49,9 +55,7 @@ impl AiProviderReranker {
 impl LlmReranker for AiProviderReranker {
     async fn complete(&self, prompt: &str, model: Option<&str>) -> Result<String, AlephError> {
         let messages = vec![UnifiedMessage::user(prompt.to_string())];
-        let mut payload = RequestPayload::new(&messages).with_system(Some(
-            "You respond only with strict JSON. No prose. No markdown fences.",
-        ));
+        let mut payload = RequestPayload::new(&messages).with_system(Some(RERANK_SYSTEM_PROMPT));
         if let Some(m) = model {
             payload.model = Some(m.to_string());
         }
@@ -60,13 +64,39 @@ impl LlmReranker for AiProviderReranker {
     }
 }
 
-/// Spec B: reuse `AiProviderReranker` as a `SummaryLlm` by delegating to
-/// `LlmReranker::complete` with no model override. This avoids a separate
-/// wrapper struct and keeps the two traits in sync automatically.
+/// Prose counterpart of [`AiProviderReranker`]: same provider, **no system
+/// override at all**.
+///
+/// It is a separate type precisely so it cannot be confused with the reranker.
+/// `AiProviderReranker` used to double as the only production `SummaryLlm` by
+/// delegating to `LlmReranker::complete`, on the theory that one impl "keeps
+/// the two traits in sync". The two traits have opposite output contracts, so
+/// what that kept in sync was the wrong half: every `SummaryLlm` consumer asks
+/// for prose in a format its own prompt spells out — the `/end-summary`
+/// synthesizer wants a plain-text digest of a target token length, and
+/// `SessionReflector` wants two sections under the verbatim headers `LESSONS:`
+/// / `OPEN_LOOPS:` (which `split_sections` matches literally) with a bare
+/// `NONE` sentinel. A model obeying "strict JSON, no prose" satisfies neither.
+///
+/// No system message is set here on purpose: each caller's prompt already
+/// carries its full output contract, and a second voice would only compete
+/// with it.
+pub struct AiProviderSummaryLlm {
+    provider: Arc<dyn AiProvider>,
+}
+
+impl AiProviderSummaryLlm {
+    pub fn new(provider: Arc<dyn AiProvider>) -> Arc<Self> {
+        Arc::new(Self { provider })
+    }
+}
+
 #[async_trait]
-impl crate::memory::session_search_summary::synthesizer::SummaryLlm for AiProviderReranker {
+impl crate::memory::session_search_summary::synthesizer::SummaryLlm for AiProviderSummaryLlm {
     async fn complete(&self, prompt: &str) -> Result<String, AlephError> {
-        <Self as LlmReranker>::complete(self, prompt, None).await
+        let messages = vec![UnifiedMessage::user(prompt.to_string())];
+        let response = self.provider.process(RequestPayload::new(&messages)).await?;
+        Ok(response.text_content())
     }
 }
 
@@ -445,6 +475,81 @@ fn emit_tracing(env: &MemoryEnvelope, query: &str) {
 mod tests {
     use super::*;
     use crate::memory::assembler::envelope::{EnvelopeItem, ItemSource};
+    use crate::memory::session_search_summary::synthesizer::SummaryLlm;
+    use crate::providers::adapter::ProviderResponse;
+    use crate::sync_primitives::Mutex;
+    use std::future::Future;
+    use std::pin::Pin;
+
+    /// Records the system prompt of every request it serves.
+    ///
+    /// Deliberately a mock `AiProvider` and not a mock `SummaryLlm`: the bug
+    /// this guards lives *below* the `SummaryLlm` boundary, so a stub at that
+    /// boundary is exactly what let a "strict JSON, no prose" system message
+    /// ride the prose path unnoticed.
+    struct SystemPromptRecorder {
+        seen: Mutex<Vec<Option<String>>>,
+    }
+
+    impl SystemPromptRecorder {
+        fn new() -> Arc<Self> {
+            Arc::new(Self {
+                seen: Mutex::new(Vec::new()),
+            })
+        }
+
+        fn last_system(&self) -> Option<String> {
+            let guard = self.seen.lock().unwrap_or_else(|e| e.into_inner());
+            guard.last().cloned().flatten()
+        }
+    }
+
+    type ProviderFuture<'a> =
+        Pin<Box<dyn Future<Output = crate::error::Result<ProviderResponse>> + Send + 'a>>;
+
+    impl AiProvider for SystemPromptRecorder {
+        fn process<'a>(&'a self, payload: RequestPayload<'a>) -> ProviderFuture<'a> {
+            self.seen
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .push(payload.system_prompt.map(str::to_string));
+            Box::pin(async move { Ok(ProviderResponse::text_only("ok".to_string())) })
+        }
+        fn name(&self) -> &str {
+            "system-prompt-recorder"
+        }
+        fn color(&self) -> &str {
+            "#000"
+        }
+    }
+
+    #[tokio::test]
+    async fn prose_path_sends_no_json_system_prompt_while_rerank_still_does() {
+        let provider = SystemPromptRecorder::new();
+
+        // Prose path: the distillation prompts spell out their own contract
+        // (verbatim `LESSONS:` / `OPEN_LOOPS:` headers, a bare NONE sentinel,
+        // a target token length). Any system message demanding JSON would make
+        // every one of those unparseable.
+        let prose = AiProviderSummaryLlm::new(provider.clone());
+        SummaryLlm::complete(&*prose, "LESSONS:\n...").await.unwrap();
+        let sys = provider.last_system();
+        assert!(
+            sys.is_none(),
+            "prose path must not pin a system message, got {sys:?}"
+        );
+
+        // Rerank path keeps its JSON contract — `parse_response` needs it.
+        let reranker = AiProviderReranker::new(provider.clone());
+        LlmReranker::complete(&*reranker, "rank these", None)
+            .await
+            .unwrap();
+        assert_eq!(
+            provider.last_system().as_deref(),
+            Some(RERANK_SYSTEM_PROMPT),
+            "rerank path must still demand strict JSON"
+        );
+    }
 
     #[test]
     fn hydrate_truncates_content_to_slot_budget() {

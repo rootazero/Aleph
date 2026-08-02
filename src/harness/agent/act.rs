@@ -210,6 +210,25 @@ impl AgentHarness {
         let mut executed_count: usize = 0;
         let mut remaining = tool_calls.into_iter();
         for (start, end) in groups {
+            // Cancel checkpoint at the group boundary. Without it `/stop` still
+            // walks every remaining group: each logs a ToolCallRequested,
+            // registers in-flight, dispatches (taking an instant cancellation
+            // error) and logs a ToolError — phantom failures the model reads
+            // next turn and `tool_summaries` counts as real. Closing the pending
+            // blocks supplies the tool_use↔result pairing dispatch would have.
+            // R7/R10: mechanical; an explicit user stop is not a completeness
+            // judgement.
+            if run_cancel.is_cancelled() {
+                let pending: Vec<String> = remaining.by_ref().map(|c| c.id).collect();
+                self.close_unexecuted_tool_uses(
+                    session_id,
+                    turn_id,
+                    &pending,
+                    "the run was cancelled before this tool group started",
+                )
+                .await;
+                break;
+            }
             // Cooperative steer checkpoint at the group boundary. Groups run
             // sequentially; a parallel group's `buffer_unordered` wave is not
             // interruptible mid-flight by design, so we stop *before*
@@ -741,8 +760,10 @@ impl AgentHarness {
         let mut sanitized: Vec<Option<serde_json::Value>> = vec![None; tool_calls.len()];
 
         // PASS 0 — serial: notify callback, emit ToolCallStarted trace,
-        // emit ToolCallRequested SessionEvent. Capture started Instant for
-        // duration metrics. Skipped calls take the synthetic-error fast path
+        // emit ToolCallRequested SessionEvent. The Instant captured here times
+        // only the synthetic-error paths that resolve inside this pass; a
+        // dispatched call is timed by its own future, which may not be polled
+        // for a while yet. Skipped calls take the synthetic-error fast path
         // here and are omitted from PASS 1 dispatch.
         let mut started_at: Vec<Instant> = Vec::with_capacity(tool_calls.len());
         for (idx, call) in tool_calls.iter().enumerate() {
@@ -855,7 +876,7 @@ impl AgentHarness {
         // in PASS 0. Each future carries its ORIGINAL index, so the
         // completion loop and PASS 2 address `tool_calls` directly with no
         // positional re-assembly.
-        let mut live_futs: Vec<BoxFuture<'static, (usize, ExecOutcome)>> =
+        let mut live_futs: Vec<BoxFuture<'static, (usize, ExecOutcome, u64)>> =
             Vec::with_capacity(tool_calls.len());
         // Gap B follow-up — keep one InFlightGuard per call alive for the
         // duration of the whole parallel dispatch. Each guard drops when this
@@ -889,11 +910,17 @@ impl AgentHarness {
                 call_id: call.id.clone(),
             };
             live_futs.push(Box::pin(async move {
+                // Clock starts on FIRST POLL, not at admission:
+                // `buffer_unordered` runs at most `parallelism` at a time, so
+                // anything past the cap queues first, and timing from PASS 0
+                // bills a fast tool for the wait it spent not running.
+                let started = Instant::now();
                 let exec = crate::approval::with_call_identity(Some(identity), async move {
                     tools.execute_with_cancel(&name, args, call_cancel).await
                 })
                 .await;
-                (idx, exec)
+                let dur_ms = started.elapsed().as_millis().try_into().unwrap_or(u64::MAX);
+                (idx, exec, dur_ms)
             }));
         }
         // Completion-order drive loop (pi/openclaw/codex parity): each live
@@ -910,13 +937,8 @@ impl AgentHarness {
             (0..tool_calls.len()).map(|_| None).collect();
         {
             let mut completions = stream::iter(live_futs).buffer_unordered(parallelism);
-            while let Some((idx, exec)) = completions.next().await {
+            while let Some((idx, exec, dur_ms)) = completions.next().await {
                 let call = &tool_calls[idx];
-                let dur_ms: u64 = started_at[idx]
-                    .elapsed()
-                    .as_millis()
-                    .try_into()
-                    .unwrap_or(u64::MAX);
                 let outcome = match exec {
                     Ok(output) => {
                         callback.on_tool_call_done(&call.id, Some(&output.value), None, dur_ms);

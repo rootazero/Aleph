@@ -110,6 +110,7 @@ impl PromptBuilder {
             .with_model_behavior_delta_opt(self.model_behavior_delta.as_deref())
             .with_iteration_cap_opt(self.iteration_cap)
             .with_session_summaries(self.has_session_summaries)
+            .with_recalled_memory(self.has_recalled_memory)
     }
 }
 

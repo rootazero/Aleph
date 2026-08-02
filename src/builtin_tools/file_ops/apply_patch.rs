@@ -30,14 +30,16 @@
 //!   [`super::path_utils::check_and_resolve_path`], which honours
 //!   workspace-scoped output dirs, denied-path lists, and rejects symlink
 //!   escapes — same as `file_edit`/`file_write`.
-//! - **Best-effort atomicity.** We parse the whole envelope before doing
-//!   any filesystem work, so syntax errors never half-apply. Per-op
-//!   failures abort the remaining ops but already-applied changes stay on
-//!   disk and are reported in the result; the model can retry the
-//!   remainder.
+//! - **Two-phase application.** The whole envelope is parsed, then every op
+//!   is resolved and its final content computed in memory, and only then is
+//!   anything written. A hunk that misses on the LAST file therefore leaves
+//!   the EARLIER files untouched, so the model can resend the same envelope
+//!   verbatim instead of working out which half already landed.
 //!
 //! [codex-apply-patch]: https://github.com/openai/codex/tree/main/codex-rs/apply-patch
 
+use std::borrow::Cow;
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 use async_trait::async_trait;
@@ -46,7 +48,7 @@ use serde::{Deserialize, Serialize};
 use tracing::info;
 
 use super::edit_match::{apply_ranges, locate, locate_lines, LocateResult};
-use super::path_utils::{check_and_resolve_path, get_denied_paths};
+use super::path_utils::{check_and_resolve_path, get_denied_paths, resolve_for_removal};
 use super::text::is_binary;
 use crate::builtin_tools::error::ToolError;
 use crate::error::Result;
@@ -156,32 +158,20 @@ make several coordinated edits at once."#;
         let output_dir = self.resolve_output_dir().await;
         let output_dir_ref = output_dir.as_deref();
 
-        let mut outcomes: Vec<FileOutcome> = Vec::with_capacity(ops.len());
-        let mut all_ok = true;
-        let mut applied = 0usize;
-
-        for op in ops {
-            let outcome = self.apply_one(&op, output_dir_ref).await;
-            if outcome.success {
-                applied += 1;
-            } else {
-                all_ok = false;
-            }
-            outcomes.push(outcome);
-            // Stop on first failure so we don't pile garbage onto disk.
-            if !all_ok {
-                break;
-            }
-        }
+        let total = ops.len();
+        let (all_ok, outcomes) = self.execute(&ops, output_dir_ref).await;
+        let applied = outcomes.iter().filter(|o| o.success).count();
 
         let message = if all_ok {
             format!("applied {applied} file operation(s)")
+        } else if applied == 0 {
+            // The envelope is resolved in full before anything is written, so a
+            // rejected op leaves every file untouched — the model fixes the one
+            // reported op and resends the same patch.
+            format!("nothing written: 1 of {total} operation(s) could not be applied")
         } else {
-            format!(
-                "applied {}/{} operations; aborted on first failure",
-                applied,
-                outcomes.len()
-            )
+            // Only an I/O fault no planning could predict gets this far.
+            format!("applied {applied}/{total} operations; a write failed partway")
         };
 
         let out = ApplyPatchOutput {
@@ -194,46 +184,137 @@ make several coordinated edits at once."#;
         Ok(out)
     }
 
-    async fn apply_one(&self, op: &PatchOp, output_dir: Option<&Path>) -> FileOutcome {
+    /// Resolve every op and compute its final content, then write. Writing
+    /// op-by-op left the EARLIER files already rewritten when a LATER hunk
+    /// missed, and the model's natural whole-envelope retry then failed
+    /// *differently* — hunk 1 no longer matched its own edit.
+    async fn execute(
+        &self,
+        ops: &[PatchOp],
+        output_dir: Option<&Path>,
+    ) -> (bool, Vec<FileOutcome>) {
+        // Held from the first read until the last write: the plan is computed
+        // against content that must not change underneath it.
+        let _guards = self.lock_all(ops, output_dir).await;
+
+        let mut pending: Pending = HashMap::new();
+        let mut plans: Vec<Planned> = Vec::with_capacity(ops.len());
+        for op in ops {
+            match self.plan_one(op, output_dir, &mut pending).await {
+                Ok(plan) => plans.push(plan),
+                // Nothing has been written, so every file is untouched — report
+                // only the op that could not be applied. Claiming the earlier
+                // ops succeeded would send the model retrying a remainder that
+                // does not exist.
+                Err(outcome) => return (false, vec![outcome]),
+            }
+        }
+
+        let mut outcomes: Vec<FileOutcome> = Vec::with_capacity(plans.len());
+        let mut all_ok = true;
+        for plan in plans {
+            let outcome = plan.commit().await;
+            if !outcome.success {
+                all_ok = false;
+            }
+            outcomes.push(outcome);
+            // Only an I/O fault gets here; stop rather than pile more writes
+            // onto a filesystem that just refused one.
+            if !all_ok {
+                break;
+            }
+        }
+        (all_ok, outcomes)
+    }
+
+    /// Take the write lock for every path the envelope touches, in sorted
+    /// order.
+    ///
+    /// The locks span planning *and* committing, so a concurrent `file_edit`
+    /// cannot land between a hunk's read and its write-back. Sorting is what
+    /// keeps two patches with crossed paths from ABBA-deadlocking (the
+    /// discipline [`crate::tools::path_locks::lock_path_pair`] documents).
+    /// Paths that fail to resolve are skipped — `plan_one` reports them, and it
+    /// does so before any write.
+    async fn lock_all(
+        &self,
+        ops: &[PatchOp],
+        output_dir: Option<&Path>,
+    ) -> Vec<tokio::sync::OwnedMutexGuard<()>> {
+        let mut paths: Vec<PathBuf> = Vec::with_capacity(ops.len());
+        let mut push = |resolved: std::result::Result<PathBuf, String>| {
+            if let Ok(p) = resolved {
+                paths.push(p);
+            }
+        };
+        for op in ops {
+            match op {
+                PatchOp::Add { path, .. } => push(self.resolve(path, output_dir)),
+                PatchOp::Delete { path } => {
+                    push(self.resolve(path, output_dir));
+                    push(self.resolve_unfollowed(path, output_dir));
+                }
+                PatchOp::Update {
+                    path, move_to: mv, ..
+                } => {
+                    push(self.resolve(path, output_dir));
+                    if let Some(dest) = mv {
+                        push(self.resolve(dest, output_dir));
+                        push(self.resolve_unfollowed(path, output_dir));
+                    }
+                }
+            }
+        }
+        // Dedup matters for correctness, not just tidiness: re-acquiring the
+        // same async mutex from one task deadlocks.
+        paths.sort();
+        paths.dedup();
+        let mut guards = Vec::with_capacity(paths.len());
+        for path in &paths {
+            guards.push(crate::tools::path_locks::lock_path(path).await);
+        }
+        guards
+    }
+
+    async fn plan_one(
+        &self,
+        op: &PatchOp,
+        output_dir: Option<&Path>,
+        pending: &mut Pending,
+    ) -> std::result::Result<Planned, FileOutcome> {
         match op {
-            PatchOp::Add { path, lines } => self.do_add(path, lines, output_dir).await,
-            PatchOp::Delete { path } => self.do_delete(path, output_dir).await,
+            PatchOp::Add { path, lines } => self.plan_add(path, lines, output_dir, pending),
+            PatchOp::Delete { path } => self.plan_delete(path, output_dir, pending),
             PatchOp::Update {
                 path,
                 move_to,
                 hunks,
             } => {
-                self.do_update(path, move_to.as_deref(), hunks, output_dir)
+                self.plan_update(path, move_to.as_deref(), hunks, output_dir, pending)
                     .await
             }
         }
     }
 
-    async fn do_add(&self, path: &str, lines: &[String], output_dir: Option<&Path>) -> FileOutcome {
-        let resolved = match self.resolve(path, output_dir) {
-            Ok(p) => p,
-            Err(msg) => return fail("add", path, msg),
-        };
-        // Cross-agent write guard (same lock file_write / file_edit hold).
-        let _path_guard = crate::tools::path_locks::lock_path(&resolved).await;
-        if resolved.exists() {
-            return fail(
+    fn plan_add(
+        &self,
+        path: &str,
+        lines: &[String],
+        output_dir: Option<&Path>,
+        pending: &mut Pending,
+    ) -> std::result::Result<Planned, FileOutcome> {
+        let resolved = self
+            .resolve(path, output_dir)
+            .map_err(|msg| fail("add", path, msg))?;
+        if exists_after_pending(&resolved, pending) {
+            return Err(fail(
                 "add",
                 path,
                 format!(
                     "{} already exists — use `*** Update File:` instead",
                     resolved.display()
                 ),
-            );
-        }
-        if let Some(parent) = resolved.parent() {
-            if let Err(e) = tokio::fs::create_dir_all(parent).await {
-                return fail(
-                    "add",
-                    path,
-                    format!("failed to create parent {}: {}", parent.display(), e),
-                );
-            }
+            ));
         }
         let body = if lines.is_empty() {
             String::new()
@@ -245,120 +326,84 @@ make several coordinated edits at once."#;
             s.push('\n');
             s
         };
-        // Atomic write-back (stage to temp + fsync + rename), matching the
-        // durability guarantee of file_edit/file_write — a crash mid-write must
-        // never leave the file truncated.
-        let byte_count = body.len();
-        match crate::utils::atomic_write::atomic_write_file(&resolved, &body).await {
-            Ok(()) => FileOutcome {
-                path: resolved.display().to_string(),
-                op: "add",
-                success: true,
-                message: format!("created ({byte_count} bytes)"),
+        pending.insert(resolved.clone(), Some(body.clone()));
+        Ok(Planned {
+            src: path.to_string(),
+            effect: Effect::Add {
+                path: resolved,
+                body,
             },
-            Err(e) => fail("add", path, format!("write failed: {e}")),
-        }
+        })
     }
 
-    async fn do_delete(&self, path: &str, output_dir: Option<&Path>) -> FileOutcome {
-        let resolved = match self.resolve(path, output_dir) {
-            Ok(p) => p,
-            Err(msg) => return fail("delete", path, msg),
-        };
-        // Cross-agent write guard (same lock file_write / file_edit hold).
-        let _path_guard = crate::tools::path_locks::lock_path(&resolved).await;
-        if !resolved.exists() {
-            return fail(
+    fn plan_delete(
+        &self,
+        path: &str,
+        output_dir: Option<&Path>,
+        pending: &mut Pending,
+    ) -> std::result::Result<Planned, FileOutcome> {
+        // A final-component symlink must be unlinked, not followed: `remove_file`
+        // never follows one, so handing it the canonical target destroys the
+        // pointed-at file and leaves the link dangling — data loss on a path the
+        // model only asked to unlink.
+        let resolved = self
+            .resolve_unfollowed(path, output_dir)
+            .map_err(|msg| fail("delete", path, msg))?;
+        if !exists_after_pending(&resolved, pending) {
+            return Err(fail(
                 "delete",
                 path,
                 format!("{} does not exist", resolved.display()),
-            );
+            ));
         }
-        match tokio::fs::remove_file(&resolved).await {
-            Ok(()) => FileOutcome {
-                path: resolved.display().to_string(),
-                op: "delete",
-                success: true,
-                message: "deleted".into(),
-            },
-            Err(e) => fail("delete", path, format!("delete failed: {e}")),
-        }
+        pending.insert(resolved.clone(), None);
+        Ok(Planned {
+            src: path.to_string(),
+            effect: Effect::Delete { path: resolved },
+        })
     }
 
-    async fn do_update(
+    async fn plan_update(
         &self,
         path: &str,
         move_to: Option<&str>,
         hunks: &[Hunk],
         output_dir: Option<&Path>,
-    ) -> FileOutcome {
-        let resolved = match self.resolve(path, output_dir) {
-            Ok(p) => p,
-            Err(msg) => return fail("update", path, msg),
-        };
-        // Resolve the move-to destination BEFORE taking any lock so both
-        // locks can be acquired in a canonical (sorted) order — two
-        // concurrent updates with crossed `move_to` targets could otherwise
-        // deadlock (A holds src wants dst while B holds dst wants src).
-        // Failing a bad destination here, before hunks are applied, also
-        // avoids a half-done update followed by a rejected rename.
-        let move_dest: Option<PathBuf> = match move_to {
-            Some(new_path) => match self.resolve(new_path, output_dir) {
-                Ok(p) => Some(p),
-                Err(msg) => {
-                    return fail("update", path, format!("move-to path rejected: {msg}"));
-                }
-            },
+        pending: &mut Pending,
+    ) -> std::result::Result<Planned, FileOutcome> {
+        let resolved = self
+            .resolve(path, output_dir)
+            .map_err(|msg| fail("update", path, msg))?;
+        // Resolve the move-to destination BEFORE applying any hunk, so a
+        // rejected destination fails here rather than after the edit is
+        // computed. The rename SOURCE must not follow a final-component
+        // symlink: `rename` never follows one, so handing it the canonical
+        // target moves the real file out from under the link instead of moving
+        // the link. The write-back keeps targeting the canonical file, so the
+        // patched text lands where the link points.
+        let rename: Option<(PathBuf, PathBuf)> = match move_to {
+            Some(new_path) => {
+                let dest = self
+                    .resolve(new_path, output_dir)
+                    .map_err(|msg| fail("update", path, format!("move-to path rejected: {msg}")))?;
+                let src = self
+                    .resolve_unfollowed(path, output_dir)
+                    .map_err(|msg| fail("update", path, msg))?;
+                Some((src, dest))
+            }
             None => None,
         };
-        // Cross-agent write guard: read → apply hunks → write below is a
-        // lost-update window across concurrent harnesses; the rename target
-        // (if any) is guarded too so a concurrent writer cannot be clobbered.
-        let (_guard_a, _guard_b) = match move_dest.as_ref() {
-            Some(dest) if dest != &resolved => {
-                let (first, second) = if dest < &resolved {
-                    (dest, &resolved)
-                } else {
-                    (&resolved, dest)
-                };
-                let ga = crate::tools::path_locks::lock_path(first).await;
-                let gb = crate::tools::path_locks::lock_path(second).await;
-                (ga, Some(gb))
-            }
-            _ => (crate::tools::path_locks::lock_path(&resolved).await, None),
-        };
-        if !resolved.exists() {
-            return fail(
-                "update",
-                path,
-                format!("{} does not exist", resolved.display()),
-            );
-        }
 
-        // Read + binary refusal mirrors `file_edit::read_text_file`.
-        let bytes = match tokio::fs::read(&resolved).await {
-            Ok(b) => b,
-            Err(e) => return fail("update", path, format!("read failed: {e}")),
-        };
-        if is_binary(&bytes) {
-            return fail(
-                "update",
-                path,
-                format!(
-                    "{} is binary — apply_patch only edits text",
-                    resolved.display()
-                ),
-            );
-        }
-        let mut content = match String::from_utf8(bytes) {
-            Ok(s) => s,
-            Err(_) => {
-                return fail(
+        let mut content = match pending.get(&resolved) {
+            Some(Some(text)) => text.clone(),
+            Some(None) => {
+                return Err(fail(
                     "update",
                     path,
-                    format!("{} is not valid UTF-8 text", resolved.display()),
-                );
+                    format!("{} does not exist", resolved.display()),
+                ))
             }
+            None => read_text(&resolved, path).await?,
         };
 
         let mut hunks_applied = 0;
@@ -382,7 +427,21 @@ make several coordinated edits at once."#;
                 skipped_context_less += 1;
                 continue;
             }
-            // Search only the un-consumed tail `content[search_from..]`, then
+            // `@@ <header>` names the section the hunk belongs to. A hunk whose
+            // `-` lines also occur in an EARLIER section otherwise binds to that
+            // earlier occurrence and reports success — the edit lands in the
+            // wrong function. The header is sought only in the un-consumed tail,
+            // so the anchor can never drag the cursor back over an applied hunk,
+            // and the search resumes AT the header line (not after it) so a hunk
+            // that repeats the header as its first context line still matches.
+            // An unfindable header is no anchor at all: fall through to the
+            // whole tail rather than fail a patch whose body is perfectly good.
+            let hunk_from = hunk
+                .header
+                .as_deref()
+                .and_then(|header| locate_lines(&content[search_from..], header, false))
+                .map_or(search_from, |(s, _)| search_from + s);
+            // Search only the un-consumed tail `content[hunk_from..]`, then
             // translate any hit back into whole-`content` coordinates. Substring
             // `locate` is the fast path and carries the rich "why" diagnostic on
             // a miss. `locate_lines` is the codex `seek_sequence` line-anchored
@@ -390,7 +449,7 @@ make several coordinated edits at once."#;
             // indentation / CRLF drift), and the *primary* matcher for
             // EOF-anchored hunks, which must bind to the tail rather than a
             // head-first substring hit on an identical earlier block.
-            let tail = &content[search_from..];
+            let tail = &content[hunk_from..];
             let substring = locate(tail, &old_text);
             let rel_range = if hunk.eof_anchor {
                 locate_lines(tail, &old_text, true).or_else(|| first_range(&substring))
@@ -402,11 +461,34 @@ make several coordinated edits at once."#;
             };
             match rel_range {
                 Some((s, e)) => {
-                    let abs = (s + search_from, e + search_from);
-                    content = apply_ranges(&content, &[abs], &new_text);
+                    let abs = (s + hunk_from, e + hunk_from);
+                    // The located block uses CRLF while every hunk line is
+                    // LF-only (the parser strips `\r`), so splicing the
+                    // replacement verbatim writes mixed line endings into a
+                    // Windows file — the contract `LocateResult::Crlf` documents
+                    // and `file_edit` honours. Both routes land here: the CRLF
+                    // substring pass, and `locate_lines`' rstrip pass. The
+                    // latter needs one extra step: it matches a `\r`-ended line
+                    // by trimming, but the span it returns *includes* that `\r`
+                    // while leaving the `\n` outside — so the final line's
+                    // carriage return is consumed by the splice and has to be
+                    // re-emitted, or only the last line silently converts to LF.
+                    let matched = &content[abs.0..abs.1];
+                    let trailing_cr = matched.ends_with('\r');
+                    let replacement =
+                        if (matched.contains("\r\n") || trailing_cr) && !new_text.contains('\r') {
+                            let mut crlf = new_text.replace('\n', "\r\n");
+                            if trailing_cr {
+                                crlf.push('\r');
+                            }
+                            Cow::Owned(crlf)
+                        } else {
+                            Cow::Borrowed(new_text.as_str())
+                        };
+                    content = apply_ranges(&content, &[abs], &replacement);
                     // Advance the cursor past the just-spliced replacement so the
                     // next hunk cannot rebind to it or anything before it.
-                    search_from = abs.0 + new_text.len();
+                    search_from = abs.0 + replacement.len();
                     hunks_applied += 1;
                 }
                 None => {
@@ -414,11 +496,11 @@ make several coordinated edits at once."#;
                         LocateResult::NotFound(w) => w.as_str(),
                         _ => "no matching location in file",
                     };
-                    return fail(
+                    return Err(fail(
                         "update",
                         path,
                         format!("hunk {}/{} did not match: {}", i + 1, hunks.len(), why),
-                    );
+                    ));
                 }
             }
         }
@@ -428,7 +510,7 @@ make several coordinated edits at once."#;
         // dropped — fail explicitly (whether or not other hunks applied) so it
         // re-emits with surrounding context or an EOF anchor.
         if skipped_context_less > 0 {
-            return fail(
+            return Err(fail(
                 "update",
                 path,
                 format!(
@@ -436,64 +518,62 @@ make several coordinated edits at once."#;
                      include surrounding context lines or an EOF-anchored hunk so each addition \
                      has an anchor"
                 ),
-            );
+            ));
         }
         if hunks_applied == 0 && !hunks.is_empty() {
-            return fail(
+            return Err(fail(
                 "update",
                 path,
                 "no hunks applied: context-less additions are not supported — \
                  include surrounding context lines or an EOF-anchored hunk"
                     .to_string(),
-            );
+            ));
         }
 
-        // Atomic write-back: a crash mid-write must never truncate the file.
-        if let Err(e) = crate::utils::atomic_write::atomic_write_file(&resolved, &content).await {
-            return fail("update", path, format!("write-back failed: {e}"));
+        pending.insert(resolved.clone(), Some(content.clone()));
+        if let Some((src, dest)) = rename.as_ref() {
+            // The rename empties the source and fills the destination. When the
+            // source is a symlink, the canonical file it points at keeps the
+            // patched text — which is exactly why the source key is the
+            // un-followed one and the write-back key is not.
+            pending.insert(src.clone(), None);
+            pending.insert(dest.clone(), Some(content.clone()));
         }
 
-        let final_path = if let Some(new_resolved) = move_dest {
-            if let Some(parent) = new_resolved.parent() {
-                if let Err(e) = tokio::fs::create_dir_all(parent).await {
-                    return fail(
-                        "update",
-                        path,
-                        format!(
-                            "failed to create move-to parent {}: {}",
-                            parent.display(),
-                            e
-                        ),
-                    );
-                }
-            }
-            if let Err(e) = tokio::fs::rename(&resolved, &new_resolved).await {
-                return fail(
-                    "update",
-                    path,
-                    format!(
-                        "rename {} → {} failed: {}",
-                        resolved.display(),
-                        new_resolved.display(),
-                        e
-                    ),
-                );
-            }
-            new_resolved
-        } else {
-            resolved
-        };
-
-        FileOutcome {
-            path: final_path.display().to_string(),
-            op: "update",
-            success: true,
-            message: format!("applied {hunks_applied} hunk(s)"),
-        }
+        Ok(Planned {
+            src: path.to_string(),
+            effect: Effect::Update {
+                write_to: resolved,
+                content,
+                rename,
+                hunks_applied,
+            },
+        })
     }
 
     fn resolve(
         &self,
+        path: &str,
+        output_dir: Option<&Path>,
+    ) -> std::result::Result<PathBuf, String> {
+        self.resolve_via(check_and_resolve_path, path, output_dir)
+    }
+
+    /// As [`Self::resolve`], but the final component is left unfollowed when it
+    /// is a symlink — the flavour `remove_file` / `rename` need, since neither
+    /// follows a final symlink and both would otherwise act on the pointed-at
+    /// file.
+    fn resolve_unfollowed(
+        &self,
+        path: &str,
+        output_dir: Option<&Path>,
+    ) -> std::result::Result<PathBuf, String> {
+        self.resolve_via(resolve_for_removal, path, output_dir)
+    }
+
+    fn resolve_via(
+        &self,
+        resolver: fn(&Path, &[String], Option<&Path>) -> std::result::Result<PathBuf, ToolError>,
         path: &str,
         output_dir: Option<&Path>,
     ) -> std::result::Result<PathBuf, String> {
@@ -502,8 +582,7 @@ make several coordinated edits at once."#;
                 "absolute path `{path}` is not allowed; apply_patch requires relative paths"
             ));
         }
-        check_and_resolve_path(Path::new(path), &self.denied_paths, output_dir)
-            .map_err(|e| e.to_string())
+        resolver(Path::new(path), &self.denied_paths, output_dir).map_err(|e| e.to_string())
     }
 }
 
@@ -532,6 +611,173 @@ impl AlephTool for ApplyPatchTool {
     async fn call(&self, args: Self::Args) -> Result<Self::Output> {
         self.run(args).await.map_err(Into::into)
     }
+}
+
+// =============================================================================
+// Planned effects
+// =============================================================================
+
+/// What each resolved path holds once every op planned so far has run — `None`
+/// for a path an op removes. Planning consults this instead of the filesystem,
+/// because the writes have not happened yet: `*** Add File: x` followed by
+/// `*** Update File: x` is a legal envelope, and the update must patch the
+/// pending body rather than the file on disk.
+type Pending = HashMap<PathBuf, Option<String>>;
+
+/// Does `path` exist once every op planned so far has run?
+fn exists_after_pending(path: &Path, pending: &Pending) -> bool {
+    match pending.get(path) {
+        Some(state) => state.is_some(),
+        None => path.exists(),
+    }
+}
+
+/// One op's filesystem effect, fully computed but not yet performed.
+struct Planned {
+    /// The path as the patch spelled it. Failure outcomes name it rather than
+    /// the resolved form, because that is the string the model can correct.
+    src: String,
+    effect: Effect,
+}
+
+enum Effect {
+    Add {
+        path: PathBuf,
+        body: String,
+    },
+    Delete {
+        path: PathBuf,
+    },
+    Update {
+        write_to: PathBuf,
+        content: String,
+        /// `(source, destination)` for `*** Move to:`; the source is resolved
+        /// without following a final-component symlink.
+        rename: Option<(PathBuf, PathBuf)>,
+        hunks_applied: usize,
+    },
+}
+
+impl Planned {
+    async fn commit(self) -> FileOutcome {
+        let Planned { src, effect } = self;
+        match effect {
+            Effect::Add { path, body } => {
+                if let Some(parent) = path.parent() {
+                    if let Err(e) = tokio::fs::create_dir_all(parent).await {
+                        return fail(
+                            "add",
+                            &src,
+                            format!("failed to create parent {}: {}", parent.display(), e),
+                        );
+                    }
+                }
+                // Atomic write-back (stage to temp + fsync + rename), matching
+                // the durability guarantee of file_edit/file_write — a crash
+                // mid-write must never leave the file truncated.
+                let byte_count = body.len();
+                match crate::utils::atomic_write::atomic_write_file(&path, &body).await {
+                    Ok(()) => FileOutcome {
+                        path: path.display().to_string(),
+                        op: "add",
+                        success: true,
+                        message: format!("created ({byte_count} bytes)"),
+                    },
+                    Err(e) => fail("add", &src, format!("write failed: {e}")),
+                }
+            }
+            Effect::Delete { path } => match tokio::fs::remove_file(&path).await {
+                Ok(()) => FileOutcome {
+                    path: path.display().to_string(),
+                    op: "delete",
+                    success: true,
+                    message: "deleted".into(),
+                },
+                Err(e) => fail("delete", &src, format!("delete failed: {e}")),
+            },
+            Effect::Update {
+                write_to,
+                content,
+                rename,
+                hunks_applied,
+            } => {
+                if let Err(e) =
+                    crate::utils::atomic_write::atomic_write_file(&write_to, &content).await
+                {
+                    return fail("update", &src, format!("write-back failed: {e}"));
+                }
+                let final_path = match rename {
+                    Some((from, to)) => {
+                        if let Some(parent) = to.parent() {
+                            if let Err(e) = tokio::fs::create_dir_all(parent).await {
+                                return fail(
+                                    "update",
+                                    &src,
+                                    format!(
+                                        "failed to create move-to parent {}: {}",
+                                        parent.display(),
+                                        e
+                                    ),
+                                );
+                            }
+                        }
+                        if let Err(e) = tokio::fs::rename(&from, &to).await {
+                            return fail(
+                                "update",
+                                &src,
+                                format!(
+                                    "rename {} → {} failed: {}",
+                                    from.display(),
+                                    to.display(),
+                                    e
+                                ),
+                            );
+                        }
+                        to
+                    }
+                    None => write_to,
+                };
+                FileOutcome {
+                    path: final_path.display().to_string(),
+                    op: "update",
+                    success: true,
+                    message: format!("applied {hunks_applied} hunk(s)"),
+                }
+            }
+        }
+    }
+}
+
+/// Read `resolved` as text, refusing binary / non-UTF-8 content — mirrors
+/// `file_edit::read_text_file`. `src` is the path as the patch spelled it.
+async fn read_text(resolved: &Path, src: &str) -> std::result::Result<String, FileOutcome> {
+    if !resolved.exists() {
+        return Err(fail(
+            "update",
+            src,
+            format!("{} does not exist", resolved.display()),
+        ));
+    }
+    let bytes = tokio::fs::read(resolved)
+        .await
+        .map_err(|e| fail("update", src, format!("read failed: {e}")))?;
+    if is_binary(&bytes) {
+        return Err(fail(
+            "update",
+            src,
+            format!(
+                "{} is binary — apply_patch only edits text",
+                resolved.display()
+            ),
+        ));
+    }
+    String::from_utf8(bytes).map_err(|_| {
+        fail(
+            "update",
+            src,
+            format!("{} is not valid UTF-8 text", resolved.display()),
+        )
+    })
 }
 
 // =============================================================================
@@ -606,7 +852,7 @@ fn hunk_to_old_new(hunk: &Hunk) -> (String, String) {
             }
         }
     }
-    // `eof_anchor` is consumed by `do_update`'s line-anchored fallback locator.
+    // `eof_anchor` is consumed by `plan_update`'s line-anchored fallback locator.
     (old, new)
 }
 
@@ -827,11 +1073,12 @@ fn current_mut(slot: &mut Option<Hunk>) -> &mut Hunk {
 /// First matched byte range of a substring [`LocateResult`], or `None` for a
 /// miss. V4A hunks identify exactly one location per hunk, so only the first
 /// occurrence is ever applied.
+///
+/// Every hit variant is treated alike: whether the replacement needs CRLF
+/// newlines is read off the located span in `plan_update`, which also covers
+/// the `locate_lines` fallback that never produces a [`LocateResult`] at all.
 fn first_range(result: &LocateResult) -> Option<(usize, usize)> {
     match result {
-        // Crlf is accepted as-is: the spliced hunk text keeps its LF newlines,
-        // matching the long-standing behaviour of the `locate_lines` rstrip
-        // fallback on CRLF files (see `edit_match::locate_lines`).
         LocateResult::Exact(ranges) | LocateResult::Folded(ranges) | LocateResult::Crlf(ranges) => {
             ranges.first().copied()
         }
@@ -986,28 +1233,33 @@ mod tests {
             ],
             eof_anchor: false,
         };
-        let outcome = tool
-            .do_update(app_py.to_str().unwrap(), None, &[hunk], Some(dir.path()))
-            .await;
-        // do_update will reject the absolute path; rerun with relative.
+        let outcome = run_update(
+            &tool,
+            dir.path(),
+            app_py.to_str().unwrap(),
+            None,
+            vec![hunk],
+        )
+        .await;
+        // The executor will reject the absolute path; rerun with relative.
         assert!(!outcome.success);
-        let outcome2 = tool
-            .do_update(
-                "app.py",
-                None,
-                &[Hunk {
-                    header: None,
-                    lines: vec![
-                        HunkLine::Context("x = 1".into()),
-                        HunkLine::Remove("y = 2".into()),
-                        HunkLine::Add("y = 20".into()),
-                        HunkLine::Context("z = 3".into()),
-                    ],
-                    eof_anchor: false,
-                }],
-                Some(dir.path()),
-            )
-            .await;
+        let outcome2 = run_update(
+            &tool,
+            dir.path(),
+            "app.py",
+            None,
+            vec![Hunk {
+                header: None,
+                lines: vec![
+                    HunkLine::Context("x = 1".into()),
+                    HunkLine::Remove("y = 2".into()),
+                    HunkLine::Add("y = 20".into()),
+                    HunkLine::Context("z = 3".into()),
+                ],
+                eof_anchor: false,
+            }],
+        )
+        .await;
         assert!(outcome2.success, "{:?}", outcome2);
 
         let updated = tokio::fs::read_to_string(&app_py).await.unwrap();
@@ -1029,9 +1281,7 @@ mod tests {
             ],
             eof_anchor: false,
         };
-        let outcome = tool
-            .do_update("app.py", None, &[hunk], Some(dir.path()))
-            .await;
+        let outcome = run_update(&tool, dir.path(), "app.py", None, vec![hunk]).await;
         assert!(!outcome.success);
         assert!(outcome.message.contains("did not match"), "{:?}", outcome);
     }
@@ -1049,23 +1299,23 @@ mod tests {
             .unwrap();
 
         let tool = ApplyPatchTool::new();
-        let outcome = tool
-            .do_update(
-                "app.py",
-                None,
-                &[Hunk {
-                    header: None,
-                    lines: vec![
-                        HunkLine::Context("x = 1".into()),
-                        HunkLine::Remove("y = 2".into()),
-                        HunkLine::Add("y = 20".into()),
-                        HunkLine::Context("z = 3".into()),
-                    ],
-                    eof_anchor: false,
-                }],
-                Some(dir.path()),
-            )
-            .await;
+        let outcome = run_update(
+            &tool,
+            dir.path(),
+            "app.py",
+            None,
+            vec![Hunk {
+                header: None,
+                lines: vec![
+                    HunkLine::Context("x = 1".into()),
+                    HunkLine::Remove("y = 2".into()),
+                    HunkLine::Add("y = 20".into()),
+                    HunkLine::Context("z = 3".into()),
+                ],
+                eof_anchor: false,
+            }],
+        )
+        .await;
         assert!(outcome.success, "{:?}", outcome);
         let updated = tokio::fs::read_to_string(&app_py).await.unwrap();
         assert_eq!(updated, "x = 1\ny = 20\nz = 3\n");
@@ -1090,9 +1340,14 @@ mod tests {
             ],
             eof_anchor: false,
         };
-        let outcome = tool
-            .do_update("f.txt", None, &[hunk("one"), hunk("two")], Some(dir.path()))
-            .await;
+        let outcome = run_update(
+            &tool,
+            dir.path(),
+            "f.txt",
+            None,
+            vec![hunk("one"), hunk("two")],
+        )
+        .await;
         assert!(outcome.success, "{:?}", outcome);
         let updated = tokio::fs::read_to_string(&f).await.unwrap();
         assert_eq!(
@@ -1124,9 +1379,7 @@ mod tests {
             lines: vec![HunkLine::Add("appended".into())],
             eof_anchor: false,
         };
-        let outcome = tool
-            .do_update("f.txt", None, &[normal, pure_add], Some(dir.path()))
-            .await;
+        let outcome = run_update(&tool, dir.path(), "f.txt", None, vec![normal, pure_add]).await;
         assert!(!outcome.success, "{:?}", outcome);
         assert!(
             outcome.message.contains("context-less"),
@@ -1136,6 +1389,284 @@ mod tests {
         // No partial write — the file is byte-for-byte unchanged.
         let after = tokio::fs::read_to_string(&f).await.unwrap();
         assert_eq!(after, "keep\n", "a failed update must not mutate the file");
+    }
+
+    /// Drive one `Update` op through the real executor — the same path `run`
+    /// takes, minus the envelope parsing.
+    async fn run_update(
+        tool: &ApplyPatchTool,
+        dir: &Path,
+        path: &str,
+        move_to: Option<&str>,
+        hunks: Vec<Hunk>,
+    ) -> FileOutcome {
+        let ops = vec![PatchOp::Update {
+            path: path.to_string(),
+            move_to: move_to.map(str::to_string),
+            hunks,
+        }];
+        let (_, mut outcomes) = tool.execute(&ops, Some(dir)).await;
+        outcomes.pop().expect("execute reports one outcome per op")
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn delete_of_symlink_unlinks_the_link_not_its_target() {
+        // `check_and_resolve_path` canonicalizes a final-component symlink to
+        // its target, so deleting through the link would destroy the pointed-at
+        // file and leave the link behind — data loss on a path the user only
+        // asked to unlink.
+        let dir = tempfile::tempdir().expect("tempdir");
+        let real = dir.path().join("real.txt");
+        tokio::fs::write(&real, "payload\n").await.unwrap();
+        let link = dir.path().join("link");
+        std::os::unix::fs::symlink(&real, &link).unwrap();
+
+        let tool = ApplyPatchTool::new();
+        let (ok, outcomes) = tool
+            .execute(
+                &[PatchOp::Delete {
+                    path: "link".to_string(),
+                }],
+                Some(dir.path()),
+            )
+            .await;
+        assert!(ok, "{outcomes:?}");
+        assert!(
+            link.symlink_metadata().is_err(),
+            "the link itself must be unlinked"
+        );
+        assert_eq!(
+            tokio::fs::read_to_string(&real).await.unwrap(),
+            "payload\n",
+            "the link's target must survive a delete of the link"
+        );
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn move_to_on_a_symlink_renames_the_link_not_its_target() {
+        // `rename` never follows a final symlink, so handing it the canonical
+        // target moves the real file out from under the link instead of moving
+        // the link. The write-back still goes *through* the link — only the
+        // rename must not follow it.
+        let dir = tempfile::tempdir().expect("tempdir");
+        let real = dir.path().join("real.txt");
+        tokio::fs::write(&real, "old\n").await.unwrap();
+        let link = dir.path().join("link");
+        std::os::unix::fs::symlink(&real, &link).unwrap();
+
+        let outcome = run_update(
+            &ApplyPatchTool::new(),
+            dir.path(),
+            "link",
+            Some("renamed"),
+            vec![Hunk {
+                header: None,
+                lines: vec![HunkLine::Remove("old".into()), HunkLine::Add("new".into())],
+                eof_anchor: false,
+            }],
+        )
+        .await;
+        assert!(outcome.success, "{outcome:?}");
+        assert_eq!(
+            tokio::fs::read_to_string(&real).await.unwrap(),
+            "new\n",
+            "the write-back follows the link, so the target holds the patched text"
+        );
+        assert!(link.symlink_metadata().is_err(), "the link must have moved");
+        assert!(
+            dir.path().join("renamed").symlink_metadata().is_ok(),
+            "the destination must exist"
+        );
+    }
+
+    #[tokio::test]
+    async fn crlf_file_hunk_keeps_crlf_line_endings() {
+        // The substring locator bridges the LF hunk to the CRLF file, but the
+        // spliced replacement carries bare LF newlines — writing mixed line
+        // endings into a Windows file (the contract `LocateResult::Crlf`
+        // documents and `file_edit` honours).
+        let dir = tempfile::tempdir().expect("tempdir");
+        let f = dir.path().join("win.txt");
+        tokio::fs::write(&f, "x = 1\r\ny = 2\r\n").await.unwrap();
+
+        let outcome = run_update(
+            &ApplyPatchTool::new(),
+            dir.path(),
+            "win.txt",
+            None,
+            vec![Hunk {
+                header: None,
+                lines: vec![
+                    HunkLine::Remove("x = 1".into()),
+                    HunkLine::Remove("y = 2".into()),
+                    HunkLine::Add("x = 10".into()),
+                    HunkLine::Add("y = 20".into()),
+                ],
+                eof_anchor: false,
+            }],
+        )
+        .await;
+        assert!(outcome.success, "{outcome:?}");
+        assert_eq!(
+            tokio::fs::read_to_string(&f).await.unwrap(),
+            "x = 10\r\ny = 20\r\n"
+        );
+    }
+
+    #[tokio::test]
+    async fn crlf_file_line_anchored_fallback_keeps_crlf_line_endings() {
+        // Trailing-whitespace drift defeats the substring locator, so the match
+        // comes from `locate_lines`' rstrip pass — which matches a `\r`-ended
+        // line while the returned span still *includes* that `\r`. A bare-LF
+        // replacement therefore silently converts the block to LF.
+        let dir = tempfile::tempdir().expect("tempdir");
+        let f = dir.path().join("win.txt");
+        tokio::fs::write(&f, "x = 1  \r\ny = 2\r\n").await.unwrap();
+
+        let outcome = run_update(
+            &ApplyPatchTool::new(),
+            dir.path(),
+            "win.txt",
+            None,
+            vec![Hunk {
+                header: None,
+                lines: vec![
+                    HunkLine::Remove("x = 1".into()),
+                    HunkLine::Remove("y = 2".into()),
+                    HunkLine::Add("x = 10".into()),
+                    HunkLine::Add("y = 20".into()),
+                ],
+                eof_anchor: false,
+            }],
+        )
+        .await;
+        assert!(outcome.success, "{outcome:?}");
+        assert_eq!(
+            tokio::fs::read_to_string(&f).await.unwrap(),
+            "x = 10\r\ny = 20\r\n"
+        );
+    }
+
+    #[tokio::test]
+    async fn failed_hunk_on_a_later_file_leaves_earlier_files_untouched() {
+        // Writing op-by-op leaves the earlier files already rewritten when a
+        // later hunk misses — and the model's natural whole-envelope retry then
+        // fails *differently*, because hunk 1 no longer matches its own edit.
+        let dir = tempfile::tempdir().expect("tempdir");
+        let a = dir.path().join("a.txt");
+        let b = dir.path().join("b.txt");
+        tokio::fs::write(&a, "alpha\n").await.unwrap();
+        tokio::fs::write(&b, "beta\n").await.unwrap();
+
+        let ops = vec![
+            PatchOp::Update {
+                path: "a.txt".to_string(),
+                move_to: None,
+                hunks: vec![Hunk {
+                    header: None,
+                    lines: vec![
+                        HunkLine::Remove("alpha".into()),
+                        HunkLine::Add("ALPHA".into()),
+                    ],
+                    eof_anchor: false,
+                }],
+            },
+            PatchOp::Update {
+                path: "b.txt".to_string(),
+                move_to: None,
+                hunks: vec![Hunk {
+                    header: None,
+                    lines: vec![
+                        HunkLine::Remove("absent".into()),
+                        HunkLine::Add("NOPE".into()),
+                    ],
+                    eof_anchor: false,
+                }],
+            },
+        ];
+        let (ok, outcomes) = ApplyPatchTool::new().execute(&ops, Some(dir.path())).await;
+        assert!(!ok, "{outcomes:?}");
+        let failure = outcomes
+            .iter()
+            .find(|o| !o.success)
+            .expect("the miss must be reported");
+        assert_eq!(failure.path, "b.txt", "the error must still name B");
+        assert!(failure.message.contains("did not match"), "{failure:?}");
+        assert_eq!(
+            tokio::fs::read_to_string(&a).await.unwrap(),
+            "alpha\n",
+            "a patch that cannot fully apply must not half-apply"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_later_op_sees_what_an_earlier_op_in_the_same_patch_wrote() {
+        // Resolving the whole envelope before writing must not make the ops
+        // blind to each other: `Add File: x` followed by `Update File: x` is a
+        // legal envelope, and the update has to patch the pending body rather
+        // than the on-disk file the add has not reached yet.
+        let dir = tempfile::tempdir().expect("tempdir");
+        let ops = vec![
+            PatchOp::Add {
+                path: "new.txt".to_string(),
+                lines: vec!["alpha".to_string()],
+            },
+            PatchOp::Update {
+                path: "new.txt".to_string(),
+                move_to: None,
+                hunks: vec![Hunk {
+                    header: None,
+                    lines: vec![
+                        HunkLine::Remove("alpha".into()),
+                        HunkLine::Add("ALPHA".into()),
+                    ],
+                    eof_anchor: false,
+                }],
+            },
+        ];
+        let (ok, outcomes) = ApplyPatchTool::new().execute(&ops, Some(dir.path())).await;
+        assert!(ok, "{outcomes:?}");
+        assert_eq!(
+            tokio::fs::read_to_string(dir.path().join("new.txt"))
+                .await
+                .unwrap(),
+            "ALPHA\n"
+        );
+    }
+
+    #[tokio::test]
+    async fn hunk_header_anchors_the_search_to_its_section() {
+        // Both functions end in the same line. Without using the `@@ <header>`
+        // the hunk binds to the FIRST occurrence and reports success — the edit
+        // lands in the wrong function.
+        let dir = tempfile::tempdir().expect("tempdir");
+        let f = dir.path().join("m.py");
+        tokio::fs::write(&f, "def foo():\n    return 1\n\ndef bar():\n    return 1\n")
+            .await
+            .unwrap();
+
+        let outcome = run_update(
+            &ApplyPatchTool::new(),
+            dir.path(),
+            "m.py",
+            None,
+            vec![Hunk {
+                header: Some("def bar():".to_string()),
+                lines: vec![
+                    HunkLine::Remove("    return 1".into()),
+                    HunkLine::Add("    return 2".into()),
+                ],
+                eof_anchor: false,
+            }],
+        )
+        .await;
+        assert!(outcome.success, "{outcome:?}");
+        assert_eq!(
+            tokio::fs::read_to_string(&f).await.unwrap(),
+            "def foo():\n    return 1\n\ndef bar():\n    return 2\n"
+        );
     }
 
     #[tokio::test]
@@ -1148,18 +1679,18 @@ mod tests {
         tokio::fs::write(&f, "end \nmiddle\nend \n").await.unwrap();
 
         let tool = ApplyPatchTool::new();
-        let outcome = tool
-            .do_update(
-                "log.txt",
-                None,
-                &[Hunk {
-                    header: None,
-                    lines: vec![HunkLine::Remove("end".into()), HunkLine::Add("FIN".into())],
-                    eof_anchor: true,
-                }],
-                Some(dir.path()),
-            )
-            .await;
+        let outcome = run_update(
+            &tool,
+            dir.path(),
+            "log.txt",
+            None,
+            vec![Hunk {
+                header: None,
+                lines: vec![HunkLine::Remove("end".into()), HunkLine::Add("FIN".into())],
+                eof_anchor: true,
+            }],
+        )
+        .await;
         assert!(outcome.success, "{:?}", outcome);
         let updated = tokio::fs::read_to_string(&f).await.unwrap();
         assert_eq!(updated, "end \nmiddle\nFIN\n");

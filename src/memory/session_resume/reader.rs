@@ -16,10 +16,18 @@ impl SnapshotReader {
         }
     }
 
-    /// Create a reader using the default path `~/.aleph/data/sessions/`.
+    /// Create a reader using the default path `<data_dir>/sessions/`.
+    ///
+    /// Same resolution as [`super::SnapshotWriter::default_path`] — through
+    /// [`crate::utils::paths::get_data_dir`], so `ALEPH_HOME` relocates the
+    /// read side and the write side together. A reader that ignored the knob
+    /// while the writer honoured it (or vice versa) would hand one instance's
+    /// summaries to another as its own "previous session".
     #[must_use]
     pub fn default_path() -> Option<Self> {
-        dirs::home_dir().map(|h| Self::new(h.join(".aleph/data/sessions")))
+        crate::utils::paths::get_data_dir()
+            .ok()
+            .map(|d| Self::new(d.join("sessions")))
     }
 
     /// Load `agent_id`'s most recently modified snapshot, excluding
@@ -80,10 +88,6 @@ mod tests {
             agent_id: agent.to_string(),
             created_at: Utc::now(),
             summary: summary.to_string(),
-            key_decisions: vec![],
-            active_files: vec![],
-            tool_state: None,
-            pending_tasks: vec![],
         }
     }
 
@@ -173,7 +177,9 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let reader = SnapshotReader::new(tmp.path());
 
-        // Simulate a pre-agent-dimension file: no agent_id key at all.
+        // Simulate a pre-agent-dimension file: no agent_id key at all. It also
+        // still carries the four structured fields that were later cut — real
+        // on-disk files do, and unknown keys must not fail the load.
         let dir = tmp.path().join("legacy-sess");
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::write(

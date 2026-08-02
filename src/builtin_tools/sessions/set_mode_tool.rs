@@ -68,13 +68,6 @@ impl AlephTool for SessionSetModeTool {
     type Args = SessionSetModeArgs;
     type Output = SessionSetModeOutput;
 
-    fn examples(&self) -> Option<Vec<String>> {
-        Some(vec![
-            "session_set_mode(mode='code')".to_string(),
-            "session_set_mode(mode='chat')".to_string(),
-        ])
-    }
-
     async fn call(&self, args: Self::Args) -> Result<Self::Output> {
         let session_key_str = &args.__session_key;
 

@@ -76,14 +76,6 @@ impl AlephTool for SessionTurnTool {
     type Args = SessionTurnArgs;
     type Output = SessionTurnOutput;
 
-    fn examples(&self) -> Option<Vec<String>> {
-        Some(vec![
-            "session_turn(session_id='sess-1', content='I think we should use approach A')".to_string(),
-            "session_turn(session_id='sess-1', content='Final summary', mode='conclude', conclusion='Use approach A', agreed_by=['agent-a','agent-b'])".to_string(),
-            "session_turn(session_id='sess-1', content='No longer relevant', mode='cancel')".to_string(),
-        ])
-    }
-
     async fn call(&self, args: Self::Args) -> Result<Self::Output> {
         debug!(
             session_id = %args.session_id,

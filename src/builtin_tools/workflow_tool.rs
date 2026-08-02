@@ -622,26 +622,6 @@ impl AlephTool for WorkflowTool {
     type Args = WorkflowArgs;
     type Output = WorkflowToolOutput;
 
-    fn examples(&self) -> Option<Vec<String>> {
-        Some(vec![
-            r#"workflow(action='save', definition={"name":"research-report","description":"research then write","steps":[{"id":"gather","agent":"researcher","prompt":"research {input}"},{"id":"write","agent":"writer","prompt":"write a report","depends_on":["gather"]}]})"#.into(),
-            "workflow(action='list')".into(),
-            "workflow(action='describe', name='research-report')".into(),
-            "workflow(action='run', name='research-report', team_id='team-42', input='quantum error correction')".into(),
-            "workflow(action='status', name='research-report', team_id='team-42')".into(),
-            "workflow(action='cancel', name='research-report', team_id='team-42', run_id='1f2e…')".into(),
-            "workflow(action='pause', name='research-report', team_id='team-42')".into(),
-            "workflow(action='resume', name='research-report', team_id='team-42')".into(),
-            "workflow(action='delete', name='research-report')".into(),
-            "workflow(action='export', name='research-report')".into(),
-            r#"workflow(action='import', source='export const meta = { name: \"x\" }\nawait agent(\"do it\")', save=true)"#.into(),
-            "workflow(action='proposals')".into(),
-            "workflow(action='describe_proposal', name='metaskill-git-pr')".into(),
-            "workflow(action='accept_proposal', name='metaskill-git-pr')".into(),
-            "workflow(action='reject_proposal', name='metaskill-git-pr')".into(),
-        ])
-    }
-
     async fn call(&self, args: Self::Args) -> Result<Self::Output> {
         match args {
             WorkflowArgs::Save { definition } => {

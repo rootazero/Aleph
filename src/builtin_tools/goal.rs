@@ -665,23 +665,6 @@ token_budget. \
     type Args = GoalArgs;
     type Output = GoalOutput;
 
-    fn examples(&self) -> Option<Vec<String>> {
-        Some(vec![
-            "goal(action='set', objective='Migrate the auth module to the new API', token_budget=50000)".into(),
-            "goal(action='set', objective='Triage failing CI', pursuit_max_iterations=10, timeout_minutes=30)".into(),
-            "goal(action='get')".into(),
-            "goal(action='update', status='complete', note='all endpoints migrated and tests green')".into(),
-            "goal(action='update', lesson='remember to run db migrations before tests')".into(),
-            "goal(action='update', status='active', pursuit_max_iterations=15)".into(),
-            "goal(action='update', wait_minutes=20, note='provider rate-limited; resume after cooldown')".into(),
-            "goal(action='update', wait_for_task='task-abc123', note='next step needs the research task result')".into(),
-            "goal(action='list')".into(),
-            "goal(action='clear')".into(),
-            "goal(action='update', status='paused', session='agent:main:tg-42')".into(),
-            "goal(action='pause_all')".into(),
-        ])
-    }
-
     async fn call(&self, args: Self::Args) -> Result<Self::Output> {
         let session = self.session().await;
         if session.is_empty() {

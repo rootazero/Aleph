@@ -152,7 +152,15 @@ pub fn aggregate_redundant_calls(events: &[SessionEventRecord]) -> Vec<Redundant
             continue;
         }
         let args_key = canonical_json_string(input);
-        let fingerprint = canonical_json_string(&output.value);
+        // Fingerprint the model-facing text with the offload path folded out:
+        // an over-budget result is replaced by a marker whose file name is
+        // unique per dispatch, which would make every repeat of a byte-identical
+        // large result compare *different* and silently disable the whole
+        // detector for exactly the expensive loops it exists to catch.
+        let fingerprint = match output.value.as_str() {
+            Some(text) => crate::tools::result_store::stabilize_persisted_ref(text).into_owned(),
+            None => canonical_json_string(&output.value),
+        };
 
         let tally = tallies
             .entry((name.to_string(), args_key))
@@ -279,6 +287,64 @@ mod tests {
             },
             at: now_ms(),
         })
+    }
+
+    /// The same loop, but with results big enough to be offloaded.
+    ///
+    /// Over-budget results are replaced wholesale by a `[Full output persisted:
+    /// …]` marker whose file name is minted per dispatch, so fingerprinting the
+    /// model-facing text verbatim made every repeat compare *different* and the
+    /// `all_identical` gate could never close. The detector therefore inverted:
+    /// a 300-byte failure loop fired at 3, while a 20k-token `cargo test` loop —
+    /// the one that actually costs money — was invisible at 40.
+    #[test]
+    fn an_offloaded_result_loop_still_fires() {
+        let args = serde_json::json!({ "cmd": "cargo test" });
+        let mut events = Vec::new();
+        for i in 0..REDUNDANT_CALL_THRESHOLD {
+            let id = format!("c{i}");
+            events.push(req(&id, "bash", args.clone()));
+            // Byte-identical output, offloaded under a per-dispatch file name.
+            events.push(res(
+                &id,
+                serde_json::json!(format!(
+                    "[Full output persisted: /tmp/tool_results/s1/{}_bash.txt (20431 tokens, bash)]",
+                    uuid::Uuid::new_v4().simple()
+                )),
+            ));
+        }
+        let groups = aggregate_redundant_calls(&events);
+        assert_eq!(
+            groups.first().map(|g| (g.tool.as_str(), g.count)),
+            Some(("bash", REDUNDANT_CALL_THRESHOLD)),
+            "identical offloaded results must not be told apart by their file names"
+        );
+        assert!(render_redundant_call_notice(&events).is_some());
+    }
+
+    /// The stabilizer must not blind the detector to genuinely different
+    /// offloaded results — a loop that is actually progressing still differs in
+    /// the size the marker reports.
+    #[test]
+    fn offloaded_results_of_different_sizes_are_still_distinguished() {
+        let args = serde_json::json!({ "cmd": "cargo test" });
+        let mut events = Vec::new();
+        for i in 0..REDUNDANT_CALL_THRESHOLD {
+            let id = format!("c{i}");
+            events.push(req(&id, "bash", args.clone()));
+            events.push(res(
+                &id,
+                serde_json::json!(format!(
+                    "[Full output persisted: /tmp/tool_results/s1/{}_bash.txt ({} tokens, bash)]",
+                    uuid::Uuid::new_v4().simple(),
+                    20000 + i
+                )),
+            ));
+        }
+        assert!(
+            aggregate_redundant_calls(&events).is_empty(),
+            "a loop whose output keeps changing size is progressing, not stuck"
+        );
     }
 
     /// The exact incident: `code_exec` ↔ `bash` perfectly interleaved, each

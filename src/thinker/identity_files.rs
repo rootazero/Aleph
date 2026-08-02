@@ -298,9 +298,11 @@ pub struct IdentityWriteOutcome {
 
 /// Write `content` to `<agent_dir>/<file_name>`, validating the name, enforcing
 /// the size cap, creating the directory, and snapshotting any prior version
-/// first. `MEMORY.md` is rejected — it is owned by the curated-memory module,
-/// not the identity-file path. Returns the write outcome or a human-readable
-/// error reason.
+/// first. Curated-memory-owned names (`MEMORY.md`) are rejected via the single
+/// source `config::agent_manager::is_curated_owned` — the check must run
+/// BEFORE `validate_identity_file_name`, or the generic "Invalid file name"
+/// would shadow the actionable "use `remember`" message. Returns the write
+/// outcome or a human-readable error reason.
 ///
 /// This is the single low-level write used by both the `self_config` tool and
 /// the `identity.*` handlers so the two paths cannot drift.
@@ -309,12 +311,8 @@ pub fn write_identity_file(
     file_name: &str,
     content: &str,
 ) -> Result<IdentityWriteOutcome, String> {
-    if file_name.eq_ignore_ascii_case("MEMORY.md") {
-        return Err(
-            "MEMORY.md is owned by the curated-memory module, not the identity-file \
-                    path. Use the `remember` tool for memory edits."
-                .to_string(),
-        );
+    if crate::config::agent_manager::is_curated_owned(file_name) {
+        return Err(crate::config::agent_manager::curated_owned_reason(file_name));
     }
     validate_identity_file_name(file_name)?;
 

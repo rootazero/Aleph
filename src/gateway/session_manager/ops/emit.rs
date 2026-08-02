@@ -50,6 +50,42 @@ pub(crate) fn emit_session_end_raw(
     tail: String,
     reason: crate::memory::store::raw_memory::SessionEndReason,
 ) {
+    emit_session_end(writer, agent_id, session_id, tail, reason, true);
+}
+
+/// `sessions.delete` variant: identical capture, but it does NOT materialize a
+/// `resume.json` snapshot.
+///
+/// The delete path used to manufacture one for the very conversation the user
+/// just deleted — an LLM-authored summary of it written to disk and then
+/// injected into the NEXT session's system prompt as "previous session"
+/// context. The handler purges the session's existing snapshot directory, but a
+/// purge alone cannot cover this one: the summarizer is an LLM call spawned
+/// here and lands seconds AFTER the handler has finished, so the only way not
+/// to leak the deleted conversation is not to write it. The `/end-summary` raw
+/// row itself is unaffected — capturing the dying session's tail into
+/// `raw_memories` is the delete handler's deliberate, documented behaviour.
+pub(crate) fn emit_session_end_raw_without_resume(
+    writer: std::sync::Arc<dyn crate::memory::store::raw_memory::RawMemoryStore>,
+    agent_id: String,
+    session_id: String,
+    tail: String,
+    reason: crate::memory::store::raw_memory::SessionEndReason,
+) {
+    emit_session_end(writer, agent_id, session_id, tail, reason, false);
+}
+
+/// Shared body of the two entry points above. `resume_snapshot` is the only
+/// difference: whether the session-end summary is also persisted as this
+/// session's `resume.json`.
+fn emit_session_end(
+    writer: std::sync::Arc<dyn crate::memory::store::raw_memory::RawMemoryStore>,
+    agent_id: String,
+    session_id: String,
+    tail: String,
+    reason: crate::memory::store::raw_memory::SessionEndReason,
+    resume_snapshot: bool,
+) {
     if tail.is_empty() {
         return;
     }
@@ -74,7 +110,28 @@ pub(crate) fn emit_session_end_raw(
         {
             let b_agent_id = agent_id.clone();
             let b_session_id = session_id.clone();
+            // Readiness gate, second producer. `HybridAssembler::assemble` opens
+            // with `flush::global_registry().await_ready(agent_id, 2s)`, and the
+            // ONLY thing that ever registered there was the Pillar-2 flush below
+            // — while THIS task is the one that writes `resume.json`. So a user
+            // who hit New chat and typed immediately got `await_ready` returning
+            // at once and the prompt assembled before the previous session's
+            // snapshot existed: the resume chain silently did nothing exactly
+            // when it mattered most. Registering here makes the gate see it.
+            //
+            // Acquired SYNCHRONOUSLY, for the same reason spelled out at the
+            // flush guard below: `rt.spawn` returns before the task is first
+            // polled, so taking the guard inside the task races the very waiter
+            // it exists for.
+            //
+            // This NARROWS the race, it does not close it: `produce` is an LLM
+            // synthesis and will usually outrun the assembler's 2 s ceiling.
+            // Raising that ceiling is a separate decision (it would make every
+            // follow-on session's first turn wait longer) and is deliberately
+            // not taken here.
+            let summary_guard = crate::memory::flush::global_registry().begin(&b_agent_id);
             rt.spawn(async move {
+                let _summary_guard = summary_guard;
                 if let Err(e) = summarizer.produce(&b_agent_id, &b_session_id).await {
                     tracing::warn!(
                         target: "spec_b.end_hook",
@@ -91,8 +148,11 @@ pub(crate) fn emit_session_end_raw(
                 // → memory envelope injected by the assembler) is no longer
                 // starved. Reuses the summarizer's stored output — zero extra
                 // LLM calls. Same fire-and-forget warn-on-error posture as
-                // the sibling hooks.
-                write_resume_snapshot(&summarizer, &b_agent_id, &b_session_id).await;
+                // the sibling hooks. Skipped for a DELETED session — see
+                // `emit_session_end_raw_without_resume`.
+                if resume_snapshot {
+                    write_resume_snapshot(&summarizer, &b_agent_id, &b_session_id).await;
+                }
             });
         }
 
@@ -204,14 +264,34 @@ async fn write_resume_snapshot(
     let Some(writer) = crate::memory::session_resume::SnapshotWriter::default_path() else {
         return;
     };
+    // Off the async worker: `write_from_summary` is blocking file work — a
+    // `create_dir_all`, an atomic write (temp + fsync + rename), and a
+    // retention sweep that opens every snapshot directory and can
+    // `remove_dir_all` several of them. Running that inline parked a tokio
+    // worker for the whole sweep.
+    //
     // `agent_id` is the fallback owner for session ids that don't parse as
     // gateway keys; the writer prefers the id embedded in the key itself.
-    if let Err(e) = writer.write_from_summary(session_id, &summary, agent_id) {
+    let owned_session = session_id.to_string();
+    let owned_agent = agent_id.to_string();
+    let written = tokio::task::spawn_blocking(move || {
+        writer.write_from_summary(&owned_session, &summary, &owned_agent)
+    })
+    .await;
+    let error: Option<String> = match written {
+        Ok(Ok(_)) => None,
+        Ok(Err(e)) => Some(e.to_string()),
+        // The blocking task panicked or the runtime is shutting down; either
+        // way no snapshot exists and the next session silently loses its
+        // resume context, so say so.
+        Err(e) => Some(e.to_string()),
+    };
+    if let Some(error) = error {
         tracing::warn!(
             target: "session_resume.end_hook",
             agent_id,
             session_id,
-            error = %e,
+            error = %error,
             "resume snapshot write failed (non-fatal)"
         );
     }

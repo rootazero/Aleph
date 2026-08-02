@@ -672,15 +672,6 @@ impl AlephTool for SkillManageTool {
     type Args = SkillManageArgs;
     type Output = SkillManageOutput;
 
-    fn examples(&self) -> Option<Vec<String>> {
-        Some(vec![
-            "skill_manage(skill_id='web-search', enabled=false) — disable web-search".to_string(),
-            "skill_manage(action='create', name='release-checklist', description='Step-by-step release flow for this repo', content='# Steps...') — save a new methodology".to_string(),
-            "skill_manage(action='patch', skill_id='release-checklist', find='cargo test', replace='just test-all') — fix an outdated instruction".to_string(),
-            "skill_manage(action='archive', skill_id='old-skill') — drop a dormant skill from the prompt index".to_string(),
-        ])
-    }
-
     async fn call(&self, args: Self::Args) -> Result<Self::Output> {
         match args.action {
             SkillManageAction::Configure => self.configure(&args).await,

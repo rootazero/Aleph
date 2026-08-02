@@ -19,7 +19,9 @@ async fn legacy_over_budget_blocks_add_allows_replace() {
         .await
         .unwrap();
 
-    assert!(store.is_legacy());
+    // Legacy state is observed the way production observes it — off a
+    // `WriteOutcome` (`snapshot_outcome` is the read-only snapshot of one).
+    assert!(store.snapshot_outcome("probe").legacy);
 
     let env = render_agent_block(
         &store.current_entries(),
@@ -35,11 +37,11 @@ async fn legacy_over_budget_blocks_add_allows_replace() {
         "expected legacy block reason, got: {msg}"
     );
 
-    store
+    let outcome = store
         .replace("Long-Term Memory", "User uses Linux Mint")
         .await
         .unwrap();
-    assert!(!store.is_legacy());
+    assert!(!outcome.legacy, "curating the blob clears the legacy flag");
     let entries = store.current_entries();
     assert_eq!(entries.len(), 1);
     assert_eq!(entries[0], "User uses Linux Mint");

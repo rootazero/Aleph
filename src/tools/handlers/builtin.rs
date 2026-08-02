@@ -73,13 +73,20 @@ impl ToolHandler for BuiltinHandler {
                 tags: Vec::new(),
                 idempotent,
                 max_duration_ms: Some(max_duration_ms),
-                // The static-dispatch `AlephTool` trait surface this handler
-                // wraps doesn't expose a concurrent-safety hint. The
-                // LoopTool-based production path (`ScopedToolService`) gets
-                // the real flag from `LoopTool::is_concurrent_safe`; this
-                // handler-path falls back to a conservative `false` and
-                // is therefore never picked up by the parallel fast path.
-                concurrent_safe: false,
+                // Same source as `idempotent`: `READ_ONLY_TOOLS` (via
+                // `is_idempotent_builtin_name`) is the single list from which
+                // read-only-ness, the `Shared` claim and the `Ask`-tier
+                // exemption all derive, and read-only implies safe to run
+                // alongside anything.
+                //
+                // This used to be a hard-coded `false` justified by "the
+                // handler path is never picked up by the parallel fast path".
+                // That was wrong for the bridge builtins (`mcp_read_resource`
+                // and friends): `BuiltinHandler` IS their production path, and
+                // `McpRegistryTool::from_registry_entry` copies this very flag
+                // into `LoopTool::is_concurrent_safe`. They were on the
+                // read-only list yet could never claim `Shared`.
+                concurrent_safe: idempotent,
             },
         }
     }
@@ -121,6 +128,25 @@ mod builtin_handler_tests {
         let handler = BuiltinHandler::new("memory_search".to_string(), Arc::new(FakeTool));
         let def = handler.definition();
         assert_eq!(def.metadata.max_duration_ms, Some(5_000));
+    }
+
+    #[test]
+    fn read_only_bridge_builtins_advertise_concurrent_safe() {
+        // Severed wire: the five `mcp_*` bridge builtins are on
+        // `READ_ONLY_TOOLS`, but their only production path is
+        // `BuiltinHandler` -> `McpRegistryTool::from_registry_entry`, which
+        // copies `metadata.concurrent_safe` straight into
+        // `LoopTool::is_concurrent_safe`. Hard-coding `false` here meant the
+        // list granted them idempotency but never the `Shared` claim, so a
+        // batch of pure MCP capability reads always serialized.
+        let handler = BuiltinHandler::new("mcp_list_resources".to_string(), Arc::new(FakeTool));
+        assert!(handler.definition().metadata.concurrent_safe);
+    }
+
+    #[test]
+    fn unlisted_bridge_builtins_stay_conservatively_serial() {
+        let handler = BuiltinHandler::new("unknown_custom_tool".to_string(), Arc::new(FakeTool));
+        assert!(!handler.definition().metadata.concurrent_safe);
     }
 
     #[test]

@@ -90,16 +90,6 @@ impl AlephTool for TeamTaskControlTool {
     type Args = TeamTaskControlArgs;
     type Output = TeamTaskControlOutput;
 
-    fn examples(&self) -> Option<Vec<String>> {
-        Some(vec![
-            "team_task_control(action='pause', task_id='task-3')".into(),
-            "team_task_control(action='resume', task_id='task-3')".into(),
-            "team_task_control(action='retry', task_id='task-3')".into(),
-            "team_task_control(action='skip', task_id='task-3')".into(),
-            "team_task_control(action='cancel', task_id='task-3')".into(),
-        ])
-    }
-
     async fn call(&self, args: Self::Args) -> Result<Self::Output> {
         match args {
             TeamTaskControlArgs::Pause { task_id } => {

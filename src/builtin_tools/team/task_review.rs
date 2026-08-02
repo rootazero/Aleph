@@ -155,17 +155,6 @@ impl AlephTool for TaskReviewTool {
     type Args = TaskReviewArgs;
     type Output = TaskReviewOutput;
 
-    fn examples(&self) -> Option<Vec<String>> {
-        Some(vec![
-            "task_review(task_id='task-3', decision='approve')".to_string(),
-            "task_review(task_id='task-3', decision='reject', feedback='缺少错误处理,补上再交')"
-                .to_string(),
-            "task_review(task_id='task-3', decision='approve', grounding={kind:'exit_code', \
-             source:'cargo test -p alephcore --lib', value:'0'})"
-                .to_string(),
-        ])
-    }
-
     async fn call(&self, args: Self::Args) -> Result<Self::Output> {
         // Resolve the task + its team leader for the soft authz check. A missing
         // task is a graceful no-op (the id may be freeform, not a coord_task).

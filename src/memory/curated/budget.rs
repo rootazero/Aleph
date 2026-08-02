@@ -5,19 +5,25 @@
 //!   `[OVER BUDGET — N% — used/limit chars]` when usage > limit
 //!   `[NEAR LIMIT — N% — used/limit chars]`  when ≥ `legacy_warn_threshold` but ≤ limit
 
-use super::format::{serialize, ENTRY_DELIMITER};
+use super::format::ENTRY_DELIMITER;
 
 /// Char usage of a list of entries (after § serialization).
 ///
 /// Counts `n` delimiters total: `n-1` between entries plus `1` trailing.
 /// Matches `format::serialize`, which emits a trailing `\n§\n` sentinel so
 /// the file is unambiguously distinguishable from legacy markdown on reload.
+///
+/// Counted in **chars, not bytes**: the name, the header line, and the
+/// over-budget error all advertise "chars" to the model, and the USER.md half
+/// (`snapshot::user_header`) already counts that way. Counting bytes here gave
+/// a CJK user ~1/3 of the advertised budget.
 #[must_use]
 pub fn used_chars(entries: &[String]) -> usize {
     if entries.is_empty() {
         return 0;
     }
-    entries.iter().map(|e| e.len()).sum::<usize>() + ENTRY_DELIMITER.len() * entries.len()
+    entries.iter().map(|e| e.chars().count()).sum::<usize>()
+        + ENTRY_DELIMITER.chars().count() * entries.len()
 }
 
 /// Percentage of `limit` consumed (0..=100, capped at 100 for display).
@@ -48,18 +54,6 @@ pub fn header(entries: &[String], limit: usize, near_threshold: f32) -> String {
     format!("[{pct_label} — {used}/{limit} chars]")
 }
 
-/// Sanity check: would adding `new_content` exceed the limit?
-#[must_use]
-pub fn would_exceed(entries: &[String], new_content: &str, limit: usize) -> bool {
-    let projected: Vec<String> = entries
-        .iter()
-        .cloned()
-        .chain(std::iter::once(new_content.to_string()))
-        .collect();
-    let _ = serialize(&projected); // keep type honest
-    used_chars(&projected) > limit
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -74,25 +68,37 @@ mod tests {
     fn used_chars_counts_delimiters() {
         let e = vec!["a".to_string(), "b".to_string()];
         // serialize emits "a" + "\n§\n" + "b" + "\n§\n" (trailing sentinel).
-        // 1 + 4 + 1 + 4 = 10. Delim is 4 bytes (\n=1, §=2 [U+00A7=0xC2 0xA7], \n=1).
-        assert_eq!(used_chars(&e), 10);
+        // 1 + 3 + 1 + 3 = 8. Delim is 3 chars (\n, §, \n) — 4 bytes, but the
+        // budget is advertised to the model in chars.
+        assert_eq!(used_chars(&e), 8);
+    }
+
+    #[test]
+    fn used_chars_counts_cjk_as_one_char_each() {
+        // 10 CJK chars = 30 bytes UTF-8. Counting bytes would bill 30 + delim
+        // and hand a Chinese-speaking user ~1/3 of the advertised budget.
+        let e = vec!["中文测试内容一二三四".to_string()];
+        assert_eq!(used_chars(&e), 13, "10 chars + 3-char delimiter");
+        let h = header(&e, 100, 0.95);
+        assert!(h.contains("13/100 chars"), "header was {h}");
+        assert!(!h.contains("OVER BUDGET"), "header was {h}");
     }
 
     #[test]
     fn header_under_limit() {
         let e = vec!["abc".to_string()];
-        // "abc" + trailing "\n§\n" = 3 + 4 = 7 bytes.
+        // "abc" + trailing "\n§\n" = 3 + 3 = 6 chars.
         let h = header(&e, 100, 0.95);
-        assert!(h.contains("7%"));
-        assert!(h.contains("7/100 chars"));
+        assert!(h.contains("6%"));
+        assert!(h.contains("6/100 chars"));
         assert!(!h.contains("OVER BUDGET"));
         assert!(!h.contains("NEAR LIMIT"));
     }
 
     #[test]
     fn header_near_limit() {
-        // "x"*96 + trailing "\n§\n" = 96 + 4 = 100 chars used (== limit, not over).
-        // 100% ≥ 95% threshold → NEAR LIMIT.
+        // "x"*96 + trailing "\n§\n" = 96 + 3 = 99 chars used (≤ limit, not over).
+        // 99% ≥ 95% threshold → NEAR LIMIT.
         let e = vec!["x".repeat(96)];
         let h = header(&e, 100, 0.95);
         assert!(h.contains("NEAR LIMIT"), "header was {h}");
@@ -104,14 +110,5 @@ mod tests {
         let h = header(&e, 100, 0.95);
         assert!(h.contains("OVER BUDGET"), "header was {h}");
         assert!(h.contains("100%"), "pct capped at 100, got {h}");
-    }
-
-    #[test]
-    fn would_exceed_when_adding() {
-        let e = vec!["x".repeat(90)];
-        // Projected ["x"*90, "ab"] → 90 + 4 (between) + 2 + 4 (trailing) = 100, not exceeding.
-        assert!(!would_exceed(&e, "ab", 100));
-        // Projected ["x"*90, "abc"] → 90 + 4 + 3 + 4 = 101, exceeding.
-        assert!(would_exceed(&e, "abc", 100));
     }
 }

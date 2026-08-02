@@ -7,7 +7,9 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use tracing::{debug, info};
 
-use super::path_utils::{check_and_resolve_path, path_is_denied, resolve_for_removal};
+use super::path_utils::{
+    check_and_resolve_path, contains_denied_descendant, path_is_denied, resolve_for_removal,
+};
 use super::types::{FileInfo, FileOpsOutput, DEFAULT_ENTRY_LIMIT};
 use crate::builtin_tools::error::ToolError;
 use crate::tools::path_locks::{lock_path, lock_path_pair};
@@ -36,15 +38,23 @@ pub async fn execute_list(
     }
 
     let mut files = Vec::new();
+    // One un-stat-able entry (EACCES, or an entry removed mid-walk) used to fail
+    // the entire listing through `?`. `search` and `stats` already skip such
+    // entries and keep walking; the count is reported below so a short listing
+    // is never silent.
+    let mut skipped = 0usize;
     for entry in fs::read_dir(&canonical)
         .map_err(|e| ToolError::Execution(format!("Failed to read directory: {e}")))?
     {
-        let entry =
-            entry.map_err(|e| ToolError::Execution(format!("Failed to read entry: {e}")))?;
+        let Ok(entry) = entry else {
+            skipped += 1;
+            continue;
+        };
 
-        let metadata = entry
-            .metadata()
-            .map_err(|e| ToolError::Execution(format!("Failed to get metadata: {e}")))?;
+        let Ok(metadata) = entry.metadata() else {
+            skipped += 1;
+            continue;
+        };
 
         let entry_path = entry.path();
         files.push(FileInfo {
@@ -71,13 +81,19 @@ pub async fn execute_list(
     let cap = limit.unwrap_or(DEFAULT_ENTRY_LIMIT).max(1);
     let count = files.len();
     files.truncate(cap);
-    info!(path = %canonical.display(), count, shown = files.len(), "Listed directory");
+    info!(path = %canonical.display(), count, shown = files.len(), skipped, "Listed directory");
+
+    let skipped_note = if skipped > 0 {
+        format!(". Skipped {skipped} unreadable entries")
+    } else {
+        String::new()
+    };
 
     Ok(FileOpsOutput {
         success: true,
         operation: "list".to_string(),
         message: format!(
-            "Listed {count} items in {}{}",
+            "Listed {count} items in {}{}{skipped_note}",
             canonical.display(),
             super::search::entry_cap_note_with(count, files.len(), cap, " to see the rest")
         ),
@@ -203,11 +219,26 @@ pub async fn execute_move(
 
     // lstat, not `exists()`: a dangling symlink source must still be movable
     // (`exists()` follows the link and would wrongly report it missing).
-    if from_canonical.symlink_metadata().is_err() {
+    let Ok(from_meta) = from_canonical.symlink_metadata() else {
         return Err(ToolError::Execution(format!(
             "Source not found: {}",
             from.display()
         )));
+    };
+
+    // `rename` relocates an entire tree in one syscall, so moving the PARENT of
+    // a protected entry carries `secrets.vault` / the `data/` auth databases out
+    // to a location an ordinary `file_read` will happily read — the
+    // non-destructive twin of the `delete` hole. `is_dir()` is false for a
+    // symlink here (lstat), and moving a link moves only the link.
+    if from_meta.is_dir() {
+        if let Some(protected) = contains_denied_descendant(&from_canonical, denied_paths) {
+            return Err(ToolError::InvalidArgs(format!(
+                "Access denied: {} contains a protected location ({})",
+                from.display(),
+                protected.display()
+            )));
+        }
     }
 
     // Create parent directories if needed
@@ -325,29 +356,50 @@ fn copy_dir_recursive(
         let from_path = entry.path();
         let to_path = to.join(entry.file_name());
 
-        if from_path.is_symlink() {
-            let canonical = fs::canonicalize(&from_path).map_err(|e| {
-                ToolError::Execution(format!("Failed to canonicalize symlink: {e}"))
-            })?;
-            // Deny guard: a symlink whose target resolves under a protected path
-            // would otherwise exfiltrate blacklisted content into the copy. Skip
-            // it (recursive copy follows symlinks by design; the escape is the
-            // hole). Checked before the cycle guard so a denied target does not
-            // consume a `visited` slot.
-            if path_is_denied(&canonical, denied_paths) {
+        let is_symlink = from_path.is_symlink();
+
+        let canonical = match fs::canonicalize(&from_path) {
+            Ok(canonical) => canonical,
+            Err(e) if is_symlink => {
+                return Err(ToolError::Execution(format!(
+                    "Failed to canonicalize symlink: {e}"
+                )))
+            }
+            // A plain entry that cannot be resolved (removed mid-walk, EACCES)
+            // cannot be shown to be outside the denylist, and it is only
+            // reachable at all because the top-level gate never saw it. Skipping
+            // is the conservative half of that pair; copying it blind is what
+            // this guard exists to stop.
+            Err(e) => {
                 info!(
-                    symlink = %from_path.display(),
-                    target = %canonical.display(),
-                    "copy: skipping symlink to protected target"
+                    entry = %from_path.display(),
+                    error = %e,
+                    "copy: skipping entry that cannot be resolved"
                 );
                 continue;
             }
-            if !visited.insert(canonical.clone()) {
-                return Err(ToolError::Execution(format!(
-                    "Symlink cycle detected at {}",
-                    from_path.display()
-                )));
-            }
+        };
+
+        // Deny guard on EVERY entry, not just symlinks: a plain file or
+        // directory whose own path is protected (`<config_dir>/data`, `~/.ssh`)
+        // is reached whenever the caller copies its PARENT — which the denylist
+        // does not name, so `check_and_resolve_path` waved the copy through and
+        // this is the only point that sees the descendant. A symlink is the same
+        // hole reached through its target. Checked before the cycle guard so a
+        // denied target does not consume a `visited` slot.
+        if path_is_denied(&canonical, denied_paths) {
+            info!(
+                entry = %from_path.display(),
+                target = %canonical.display(),
+                "copy: skipping protected entry"
+            );
+            continue;
+        }
+        if is_symlink && !visited.insert(canonical.clone()) {
+            return Err(ToolError::Execution(format!(
+                "Symlink cycle detected at {}",
+                from_path.display()
+            )));
         }
 
         if from_path.is_dir() {
@@ -404,6 +456,21 @@ pub async fn execute_delete(
         .map_err(|_| ToolError::Execution(format!("Path not found: {}", path.display())))?;
     let is_symlink = lmeta.file_type().is_symlink();
     let is_dir = !is_symlink && lmeta.is_dir();
+
+    // `remove_dir_all` on the PARENT of a protected entry destroys what deleting
+    // that entry directly is correctly refused: nothing on the denylist names
+    // `<config_dir>` itself, so the downward check waved this through and
+    // `secrets.vault` + the `data/` auth databases went with the tree.
+    if is_dir {
+        if let Some(protected) = contains_denied_descendant(&canonical, denied_paths) {
+            return Err(ToolError::InvalidArgs(format!(
+                "Access denied: {} contains a protected location ({})",
+                path.display(),
+                protected.display()
+            )));
+        }
+    }
+
     let items_deleted = if is_symlink {
         // Unlink the symlink itself — never touch its target.
         fs::remove_file(&canonical)
@@ -582,6 +649,110 @@ mod tests {
         // The benign file copied; the symlinked credential store did NOT.
         assert!(dst.join("ok.txt").exists());
         assert!(!dst.join("leak").exists(), "denied symlink must be skipped");
+    }
+
+    /// A protected entry reached by copying its PARENT. Nothing on the denylist
+    /// names the parent, so the top-level gate passes and only the per-entry
+    /// re-check can stop `<config_dir>/data` from being copied out to a location
+    /// a later `file_read` is happy to read.
+    #[tokio::test]
+    async fn copy_skips_denied_plain_directory() {
+        let root = tempdir().unwrap();
+        let src = root.path().join("aleph");
+        fs::create_dir(&src).unwrap();
+        fs::write(src.join("ok.txt"), b"fine").unwrap();
+        // A PLAIN (non-symlink) protected directory inside the copied tree.
+        let secret_dir = src.join("data");
+        fs::create_dir(&secret_dir).unwrap();
+        fs::write(secret_dir.join("pairing.db"), b"DB").unwrap();
+        let denied = vec![secret_dir.to_string_lossy().to_string()];
+
+        let dst = root.path().join("backup");
+        let out = execute_copy(&src, &dst, true, &denied, None).await.unwrap();
+        assert!(out.success);
+        assert!(dst.join("ok.txt").exists(), "benign file must still copy");
+        assert!(
+            !dst.join("data").exists(),
+            "protected plain directory must not be copied out"
+        );
+    }
+
+    #[tokio::test]
+    async fn delete_refuses_parent_holding_protected_entry() {
+        let root = tempdir().unwrap();
+        let config = root.path().join("aleph");
+        fs::create_dir(&config).unwrap();
+        let vault = config.join("secrets.vault");
+        fs::write(&vault, b"ENCRYPTED").unwrap();
+        let denied = vec![vault.to_string_lossy().to_string()];
+
+        let err = execute_delete(&config, &denied, None)
+            .await
+            .expect_err("deleting the parent of a protected entry must be refused");
+        assert!(
+            err.to_string().contains("secrets.vault"),
+            "refusal must name the protected location, got: {err}"
+        );
+        assert!(vault.exists(), "the protected leaf must survive");
+    }
+
+    #[tokio::test]
+    async fn move_refuses_parent_holding_protected_entry() {
+        let root = tempdir().unwrap();
+        let config = root.path().join("aleph");
+        fs::create_dir(&config).unwrap();
+        let vault = config.join("secrets.vault");
+        fs::write(&vault, b"ENCRYPTED").unwrap();
+        let denied = vec![vault.to_string_lossy().to_string()];
+
+        let dest = root.path().join("relocated");
+        let err = execute_move(&config, &dest, false, &denied, None)
+            .await
+            .expect_err("relocating the parent of a protected entry must be refused");
+        assert!(
+            err.to_string().contains("secrets.vault"),
+            "refusal must name the protected location, got: {err}"
+        );
+        assert!(vault.exists(), "the protected leaf must stay put");
+        assert!(!dest.exists(), "the tree must not be relocated");
+    }
+
+    /// One un-stat-able entry must not fail the whole listing — and the omission
+    /// must be reported, never silent.
+    ///
+    /// A dangling symlink does NOT produce this shape: `DirEntry::metadata` is an
+    /// `lstat` on Unix and succeeds on a dangling link. Dropping the directory's
+    /// search bit while keeping its read bit does — `read_dir` still yields the
+    /// names, `stat`ing any child returns EACCES.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn list_skips_unstatable_entries_and_reports_the_skip() {
+        use std::os::unix::fs::PermissionsExt;
+        let root = tempdir().unwrap();
+        let dir = root.path().join("d");
+        fs::create_dir(&dir).unwrap();
+        fs::write(dir.join("a.txt"), b"a").unwrap();
+        fs::write(dir.join("b.txt"), b"b").unwrap();
+        fs::set_permissions(&dir, fs::Permissions::from_mode(0o400)).unwrap();
+
+        let restricted = fs::symlink_metadata(dir.join("a.txt")).is_err();
+        if !restricted {
+            // Running as root (or on a filesystem ignoring mode bits): an
+            // un-stat-able entry cannot be constructed here.
+            fs::set_permissions(&dir, fs::Permissions::from_mode(0o700)).unwrap();
+            return;
+        }
+
+        let out = execute_list(&dir, &[], None, None).await;
+        fs::set_permissions(&dir, fs::Permissions::from_mode(0o700)).unwrap();
+
+        let out = out.expect("an un-stat-able entry must not fail the whole listing");
+        assert!(out.success);
+        assert!(
+            out.message.contains("Skipped 2 unreadable entries"),
+            "the listing must report what it dropped, got: {}",
+            out.message
+        );
     }
 
     #[tokio::test]

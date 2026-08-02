@@ -341,7 +341,6 @@ mod tests {
     // module header). They were left behind, and `cargo check` does not compile
     // `#[cfg(test)]` code, so the lib test target simply stopped building and
     // nothing said so.
-
     #[test]
     fn mcp_scope_error_displays_name_conflict() {
         let e = McpScopeError::NameConflict("github".into());

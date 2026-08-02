@@ -116,10 +116,6 @@ impl AlephTool for AgentDeleteTool {
     type Args = AgentDeleteArgs;
     type Output = AgentDeleteOutput;
 
-    fn examples(&self) -> Option<Vec<String>> {
-        Some(vec!["agent_delete(agent_id='trader')".to_string()])
-    }
-
     fn requires_confirmation(&self) -> bool {
         true
     }
@@ -303,7 +299,6 @@ mod tests {
 
         assert_eq!(def.name, "agent_delete");
         assert!(def.requires_confirmation);
-        assert!(def.llm_context.is_some());
     }
 
     #[test]

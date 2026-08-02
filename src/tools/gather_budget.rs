@@ -56,7 +56,7 @@
 use crate::session::events::{SessionEvent, SessionEventRecord};
 
 /// Tools whose invocation counts as "gathering". Kept tight: only the two
-/// external-information tools. Escalation tools (autocli, browser) are
+/// external-information tools. Escalation tools (the `browser_*` family) are
 /// deliberately excluded — the doctrine pushes the model *toward* a one-shot
 /// class escalation (the persistence-doctrine "Ceiling" clause), so counting
 /// them would punish the right move.
@@ -72,24 +72,43 @@ const GATHER_TOOLS: &[&str] = &["search", "web_fetch"];
 /// interactive `max_iterations` cap that the runaway gather run hit at ~156.
 pub const GATHER_BUDGET_THRESHOLD: usize = 12;
 
-/// Count `ToolCallRequested` events whose tool is in [`GATHER_TOOLS`] within
-/// `events`. Counts *requests* (every gather attempt, success or failure) so
-/// the signal measures total gathering volume — complementary to
-/// [`attempt_summary`](crate::tools::attempt_summary), which measures failure
-/// kind. The tool name is on the request event itself, so no `call_id`
-/// resolution is needed.
+/// Count gather-tool calls in `events` that actually **returned data** — a
+/// `ToolCallRequested` naming a [`GATHER_TOOLS`] entry which was later resolved
+/// by a `ToolResult` rather than a `ToolError`.
+///
+/// Counting bare requests instead was a lie with teeth. The notice this feeds
+/// tells the model "you have gathered plenty — stop and produce the deliverable
+/// with the data you already have". After twelve rate-limited `search` calls the
+/// model has no data at all, and the prompt carried the contradiction in two
+/// adjacent `<system-reminder>` blocks: `attempt_summary` said "climb the
+/// ladder", this said "stop gathering, you have enough". A wall of failures must
+/// not trip a convergence nudge.
+///
+/// Requests still in flight (no terminal event yet) count as zero: they have not
+/// produced anything to converge on.
 #[must_use]
-pub fn count_gather_calls(events: &[SessionEventRecord]) -> usize {
-    events
-        .iter()
-        .filter(|r| {
-            matches!(
-                &r.event,
-                SessionEvent::ToolCallRequested { name, .. }
-                    if GATHER_TOOLS.contains(&name.as_str())
-            )
-        })
-        .count()
+pub fn count_successful_gather_calls(events: &[SessionEventRecord]) -> usize {
+    let mut pending: std::collections::HashSet<&str> = std::collections::HashSet::new();
+    let mut succeeded = 0usize;
+    for record in events {
+        match &record.event {
+            SessionEvent::ToolCallRequested { call_id, name, .. }
+                if GATHER_TOOLS.contains(&name.as_str()) =>
+            {
+                pending.insert(call_id.as_str());
+            }
+            SessionEvent::ToolResult { call_id, .. } => {
+                if pending.remove(call_id.as_str()) {
+                    succeeded += 1;
+                }
+            }
+            SessionEvent::ToolError { call_id, .. } => {
+                pending.remove(call_id.as_str());
+            }
+            _ => {}
+        }
+    }
+    succeeded
 }
 
 /// Render the convergence notice when gather calls ≥ [`GATHER_BUDGET_THRESHOLD`].
@@ -99,7 +118,7 @@ pub fn count_gather_calls(events: &[SessionEventRecord]) -> usize {
 /// `<system-reminder>` to match Aleph's harness-injected channel.
 #[must_use]
 pub fn render_gather_notice(events: &[SessionEventRecord]) -> Option<String> {
-    let n = count_gather_calls(events);
+    let n = count_successful_gather_calls(events);
     if n < GATHER_BUDGET_THRESHOLD {
         return None;
     }
@@ -149,8 +168,45 @@ mod tests {
         })
     }
 
+    fn tres(call_id: &str) -> SessionEventRecord {
+        mk(SessionEvent::ToolResult {
+            turn_id: uuid::Uuid::nil(),
+            call_id: call_id.to_string(),
+            output: ToolOutput {
+                value: serde_json::json!({"ok": true}),
+                metadata: Default::default(),
+            },
+            at: now_ms(),
+        })
+    }
+
+    fn terr(call_id: &str) -> SessionEventRecord {
+        mk(SessionEvent::ToolError {
+            turn_id: uuid::Uuid::nil(),
+            call_id: call_id.to_string(),
+            error: "429 rate limited".to_string(),
+            at: now_ms(),
+        })
+    }
+
+    /// Requests that each came back with data — what the notice claims to count.
     fn gather_events(n: usize, tool: &str) -> Vec<SessionEventRecord> {
-        (0..n).map(|i| tcr(&format!("c{i}"), tool)).collect()
+        (0..n)
+            .flat_map(|i| {
+                let id = format!("{tool}-ok-{i}");
+                [tcr(&id, tool), tres(&id)]
+            })
+            .collect()
+    }
+
+    /// Requests that each failed. Same volume, zero data.
+    fn failed_gather_events(n: usize, tool: &str) -> Vec<SessionEventRecord> {
+        (0..n)
+            .flat_map(|i| {
+                let id = format!("{tool}-err-{i}");
+                [tcr(&id, tool), terr(&id)]
+            })
+            .collect()
     }
 
     #[test]
@@ -190,7 +246,7 @@ mod tests {
     fn counts_both_search_and_web_fetch() {
         let mut events = gather_events(7, "search");
         events.extend(gather_events(6, "web_fetch"));
-        assert_eq!(count_gather_calls(&events), 13);
+        assert_eq!(count_successful_gather_calls(&events), 13);
         assert!(render_gather_notice(&events).is_some());
     }
 
@@ -200,17 +256,53 @@ mod tests {
         // producing the deliverable is the opposite of over-gathering.
         let mut events = gather_events(20, "file_write");
         events.extend(gather_events(20, "file_read"));
-        assert_eq!(count_gather_calls(&events), 0);
+        assert_eq!(count_successful_gather_calls(&events), 0);
         assert!(render_gather_notice(&events).is_none());
     }
 
     #[test]
+    fn a_wall_of_failures_does_not_fire_the_converge_nudge() {
+        // The notice's whole content is "you have gathered plenty — stop and
+        // produce the deliverable with the data you already have". Twelve
+        // rate-limited searches produce no data, and `attempt_summary` is
+        // simultaneously telling the model to climb the ladder. Firing here put
+        // two contradictory `<system-reminder>` blocks in one prompt and pushed
+        // the model to deliver on nothing.
+        let events = failed_gather_events(GATHER_BUDGET_THRESHOLD * 2, "search");
+        assert_eq!(count_successful_gather_calls(&events), 0);
+        assert!(render_gather_notice(&events).is_none());
+    }
+
+    #[test]
+    fn in_flight_requests_are_not_counted_as_gathered() {
+        // A request with no terminal event yet has produced nothing to converge
+        // on. Counting it would let one concurrent batch trip the notice.
+        let events: Vec<_> = (0..GATHER_BUDGET_THRESHOLD)
+            .map(|i| tcr(&format!("inflight-{i}"), "search"))
+            .collect();
+        assert_eq!(count_successful_gather_calls(&events), 0);
+        assert!(render_gather_notice(&events).is_none());
+    }
+
+    #[test]
+    fn a_mixed_run_counts_only_the_calls_that_returned_data() {
+        let mut events = gather_events(GATHER_BUDGET_THRESHOLD, "search");
+        events.extend(failed_gather_events(30, "web_fetch"));
+        assert_eq!(
+            count_successful_gather_calls(&events),
+            GATHER_BUDGET_THRESHOLD
+        );
+        let s = render_gather_notice(&events).expect("the successful half reaches the threshold");
+        assert!(s.contains(&format!("made {GATHER_BUDGET_THRESHOLD} ")));
+    }
+
+    #[test]
     fn escalation_tools_excluded() {
-        // autocli/browser are the *right* one-shot escalation (doctrine
-        // "Ceiling" clause); counting them would punish the move it pushes toward.
-        let mut events = gather_events(20, "autocli");
-        events.extend(gather_events(20, "browser"));
-        assert_eq!(count_gather_calls(&events), 0);
+        // Browser tooling is the *right* one-shot escalation (doctrine
+        // "Ceiling" clause); counting it would punish the move it pushes toward.
+        let mut events = gather_events(20, "browser_open");
+        events.extend(gather_events(20, "browser_snapshot"));
+        assert_eq!(count_successful_gather_calls(&events), 0);
     }
 
     #[test]
@@ -244,7 +336,7 @@ mod tests {
         ];
         // Only ToolCallRequested counts — a ToolResult or a user message that
         // merely mentions "search" must not inflate the budget.
-        assert_eq!(count_gather_calls(&events), 0);
+        assert_eq!(count_successful_gather_calls(&events), 0);
     }
 
     #[test]

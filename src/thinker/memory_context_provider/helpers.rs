@@ -1,5 +1,6 @@
 use crate::memory::notes::orientation::types::OrientationSnapshot;
 use crate::sync_primitives::Arc;
+use crate::thinker::xml_util::escape_xml;
 
 /// Strip YAML frontmatter (`---\n…\n---\n`) from the start of `raw`.
 /// If no frontmatter is present, returns `raw` unchanged.
@@ -15,16 +16,14 @@ pub fn strip_frontmatter(raw: &str) -> &str {
 
 #[must_use]
 pub fn render_orientation_envelope(s: &OrientationSnapshot) -> String {
-    let esc = |t: &str| {
-        t.replace('&', "&amp;")
-            .replace('<', "&lt;")
-            .replace('>', "&gt;")
-    };
+    // Escaping goes through `xml_util`, the single source of truth — a
+    // hand-rolled copy here would silently miss the next hardening of the
+    // shared helper (it already diverged once: `escape_xml_attr` exists).
     format!(
         "<NoteOrientation>\n<schema>\n{}\n</schema>\n<index_snapshot>\n{}\n</index_snapshot>\n<recent_log>\n{}\n</recent_log>\n</NoteOrientation>",
-        esc(&s.schema_text),
-        esc(&s.index_text),
-        esc(&s.recent_log_tail)
+        escape_xml(&s.schema_text),
+        escape_xml(&s.index_text),
+        escape_xml(&s.recent_log_tail)
     )
 }
 

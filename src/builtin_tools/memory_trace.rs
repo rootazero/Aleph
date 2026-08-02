@@ -5,13 +5,28 @@
 //!   → source notes → raw memory rows → original transcript content.
 //!
 //! Missing raws degrade to a `pruned: true` node, never an error.
+//!
+//! The `write_decision` kind answers the mirror question — "why is this NOT in
+//! memory?" — off the curated-write audit log instead of the evidence chain. It
+//! lives here rather than in a tool of its own because both are provenance
+//! questions about one memory claim, and this tool already holds the two handles
+//! the answer needs (the memory backend and the calling agent's id).
 
 use crate::memory::notes::store::NoteStore;
 use crate::memory::store::raw_memory::RawMemoryStore;
+use crate::memory::store::sqlite::memory_write_decisions::{
+    MemoryWriteDecisionRow, MAX_DECISIONS_PER_AGENT,
+};
 use crate::memory::store::MemoryBackend;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
+
+/// Write-decision rows returned when the caller does not ask for a count.
+/// Small on purpose: these rows are read back into a model's context, and the
+/// question they answer ("what happened to this fact?") is about the last few
+/// attempts, not the whole retained window.
+const DEFAULT_WRITE_DECISION_ROWS: usize = 20;
 
 /// Which kind of target to trace.
 #[derive(Debug, Clone, Copy, Deserialize, Serialize, JsonSchema, PartialEq, Eq)]
@@ -23,17 +38,23 @@ pub enum TraceKind {
     Raw,
     /// Trace a USER.md section heading (e.g. `## Sources` key) to all citing notes.
     ProfileSection,
+    /// Look up what the curated hot memory (`remember`) did with a fact: one
+    /// row per write ATTEMPT, refusals included.
+    WriteDecision,
 }
 
 /// Arguments for the `memory_trace` tool.
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
 pub struct MemoryTraceArgs {
-    /// What to trace: a note path (`category/name`), a raw memory id, or a USER.md section heading.
+    /// What to trace: a note path (`category/name`), a raw memory id, a USER.md
+    /// section heading, or — for `write_decision` — a literal substring of the
+    /// fact whose fate you are asking about (empty browses recent decisions).
     pub target: String,
     /// The kind of target being traced.
     pub kind: TraceKind,
-    /// Maximum number of evidence items to return (default: unlimited). This
-    /// caps the returned `evidence` list; it is not a graph-traversal depth.
+    /// Maximum number of items to return. Caps the `evidence` list (default:
+    /// unlimited) or the `write_decisions` list (default: 20); it is not a
+    /// graph-traversal depth.
     #[serde(default)]
     pub max_results: Option<usize>,
 }
@@ -62,6 +83,11 @@ pub struct TraceResult {
     pub notes: Vec<String>,
     /// Evidence items collected.
     pub evidence: Vec<EvidenceItem>,
+    /// Curated-memory write decisions matching `target`, newest first — only
+    /// populated for `kind: "write_decision"`. Absent from the serialized shape
+    /// when empty, so the evidence-chain kinds keep the output they had.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub write_decisions: Vec<MemoryWriteDecisionRow>,
 }
 
 /// Tool that walks a memory claim down to ground-truth evidence.
@@ -79,7 +105,14 @@ impl MemoryTraceTool {
     pub const DESCRIPTION: &'static str =
         "Drill a memory claim down to ground-truth evidence: profile section / note / raw id \
          → source notes → raw memories → original transcript text. Returns the evidence chain; \
-         missing raws are marked as pruned rather than causing an error.";
+         missing raws are marked as pruned rather than causing an error.\n\n\
+         Use `kind: \"write_decision\"` for the mirror question — why a fact is NOT in hot \
+         memory. It returns one row per `remember` write ATTEMPT (newest first), refusals \
+         included, each with a machine-readable `reason` (written / duplicate / over_budget / \
+         scanner_rejected / no_match / batch_aborted / retry_cap_reached / …). `target` is a \
+         literal substring of the recorded subject; pass an empty string to browse recent \
+         decisions. Answer \"why didn't you remember that?\" from these rows, not from \
+         recollection.";
 
     /// Create a new `MemoryTraceTool`.
     ///
@@ -138,6 +171,9 @@ impl MemoryTraceTool {
                 }
                 notes
             }
+            // A write-decision trace visits no notes: the audit log is read
+            // directly below, so the evidence walk is a no-op for this kind.
+            TraceKind::WriteDecision => Vec::new(),
         };
 
         // 2. Each note → its source raw ids → fetch rows (graceful prune for missing).
@@ -188,10 +224,26 @@ impl MemoryTraceTool {
             evidence.truncate(max);
         }
 
+        // 5. The curated-write audit log: one row per `remember` attempt,
+        //    refusals included. Clamped to the table's own per-agent ceiling so
+        //    a large `max_results` cannot ask for more than is retained.
+        let write_decisions = if args.kind == TraceKind::WriteDecision {
+            let limit = args
+                .max_results
+                .unwrap_or(DEFAULT_WRITE_DECISION_ROWS)
+                .min(MAX_DECISIONS_PER_AGENT);
+            self.db
+                .recent_write_decisions(agent, Some(args.target.as_str()), limit)
+                .map_err(|e| anyhow::anyhow!("recent_write_decisions: {e}"))?
+        } else {
+            Vec::new()
+        };
+
         Ok(TraceResult {
             target: args.target,
             notes,
             evidence,
+            write_decisions,
         })
     }
 }
@@ -329,6 +381,59 @@ mod tests {
         );
     }
 
+    /// "Why didn't you remember that?" must be answerable from data: the
+    /// refusal reason comes back as a token, filtered to the fact asked about.
+    #[tokio::test]
+    async fn write_decision_kind_returns_the_refusal_reason() {
+        use crate::memory::store::sqlite::memory_write_decisions::MemoryWriteReason;
+
+        let dir = tempfile::tempdir().unwrap();
+        let backend: MemoryBackend =
+            Arc::new(SqliteMemoryBackend::new(&dir.path().join("m.db")).unwrap());
+        backend
+            .record_write_decision("main", "add", MemoryWriteReason::OverBudget, "prefers tabs")
+            .unwrap();
+        backend
+            .record_write_decision("main", "add", MemoryWriteReason::Written, "lives in Berlin")
+            .unwrap();
+
+        let tool = MemoryTraceTool::new(backend, "main", dir.path().to_path_buf());
+        let out = tool
+            .call_impl(MemoryTraceArgs {
+                target: "tabs".into(),
+                kind: TraceKind::WriteDecision,
+                max_results: None,
+            })
+            .await
+            .unwrap();
+
+        assert_eq!(out.write_decisions.len(), 1, "{:?}", out.write_decisions);
+        assert_eq!(out.write_decisions[0].reason, "over_budget");
+        assert_eq!(out.write_decisions[0].action, "add");
+        // A write-decision trace is not an evidence walk.
+        assert!(out.notes.is_empty());
+        assert!(out.evidence.is_empty());
+    }
+
+    /// The new field must not change the shape the evidence-chain kinds emit.
+    #[tokio::test]
+    async fn evidence_kinds_carry_no_write_decisions_key() {
+        let dir = tempfile::tempdir().unwrap();
+        let backend: MemoryBackend =
+            Arc::new(SqliteMemoryBackend::new(&dir.path().join("m.db")).unwrap());
+        let tool = MemoryTraceTool::new(backend, "main", dir.path().to_path_buf());
+        let out = tool
+            .call_impl(MemoryTraceArgs {
+                target: "preference/nothing".into(),
+                kind: TraceKind::Note,
+                max_results: None,
+            })
+            .await
+            .unwrap();
+        let json = serde_json::to_value(&out).unwrap();
+        assert!(json.get("write_decisions").is_none(), "{json}");
+    }
+
     #[test]
     fn tool_name_and_description() {
         assert_eq!(MemoryTraceTool::NAME, "memory_trace");
@@ -342,5 +447,9 @@ mod tests {
         assert_eq!(args.target, "preference/typescript");
         assert_eq!(args.kind, TraceKind::Note);
         assert!(args.max_results.is_none());
+        // The token the model actually sends for the write-decision log.
+        let wd: MemoryTraceArgs =
+            serde_json::from_str(r#"{"target": "", "kind": "write_decision"}"#).unwrap();
+        assert_eq!(wd.kind, TraceKind::WriteDecision);
     }
 }

@@ -111,6 +111,13 @@ impl Lane {
             // `require_idempotency_key = true` gets `IDEMPOTENCY_KEY_REQUIRED`
             // for opening a text file.
             "fs.read_file" | "artifacts.read_text" => Some(Self::Query),
+            // tools.in_flight is the read-only twin of tools.cancel_call: it
+            // lists what is currently running and mutates nothing. `.in_flight`
+            // matches no Query token, so the same deployment that made opening
+            // a text file need an idempotency key made it impossible to ask
+            // "what is running right now" — the one call you want when things
+            // are stuck.
+            "tools.in_flight" => Some(Self::Query),
             // skills.remove is package management, not a data delete →
             // System lane. memory.delete / sessions.delete / session.truncate
             // are data ops that fall through to default Mutate.
@@ -602,6 +609,15 @@ mod tests {
         assert_eq!(Lane::for_method("artifacts.read_text"), Lane::Query);
         assert_eq!(Lane::for_method("artifacts.list"), Lane::Query);
         assert!(!Lane::for_method("artifacts.read_text").needs_idempotency());
+    }
+
+    /// `tools.in_flight` only reads the in-flight registry; its mutating twin
+    /// is `tools.cancel_call`, which correctly stays on Mutate.
+    #[test]
+    fn the_in_flight_diagnostic_is_query_lane() {
+        assert_eq!(Lane::for_method("tools.in_flight"), Lane::Query);
+        assert!(!Lane::for_method("tools.in_flight").needs_idempotency());
+        assert_eq!(Lane::for_method("tools.cancel_call"), Lane::Mutate);
     }
 
     #[test]

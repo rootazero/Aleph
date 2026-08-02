@@ -114,15 +114,6 @@ impl AlephTool for TeamWorkflowCanvasTool {
     type Args = TeamWorkflowCanvasArgs;
     type Output = TeamWorkflowCanvasOutput;
 
-    fn examples(&self) -> Option<Vec<String>> {
-        Some(vec![
-            "team_workflow_canvas(action='export', team_id='t1')".to_string(),
-            "team_workflow_canvas(action='export', team_id='t1', status='pending')".to_string(),
-            "team_workflow_canvas(action='import', team_id='t1', canvas={...}, dry_run=true)"
-                .to_string(),
-        ])
-    }
-
     async fn call(&self, args: Self::Args) -> Result<Self::Output> {
         match args.action {
             WorkflowCanvasAction::Export => {

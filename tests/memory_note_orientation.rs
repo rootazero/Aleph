@@ -17,8 +17,7 @@ async fn orientation_layer_end_to_end() {
     ));
     orient.bootstrap("default").await.unwrap();
 
-    let indexer =
-        NoteIndexer::new(dir.path().join("note"), backend.clone()).with_orientation(orient.clone());
+    let indexer = NoteIndexer::new(dir.path().join("note"), backend.clone());
 
     for (cat, name) in [
         ("learning", "rust-async"),
@@ -41,9 +40,11 @@ async fn orientation_layer_end_to_end() {
         indexer.write_note("default", cat, &note).await.unwrap();
     }
 
-    // write_note only writes to disk and notifies the wiki invalidation hook.
-    // We must populate SQLite via full_rebuild so that NoteOrientation::rebuild_index
-    // (which reads from store.list_notes()) finds all five notes.
+    // The indexer has no orientation handle at all — `NoteOrientation` is
+    // driven explicitly, never as a write-path side effect. So we populate
+    // SQLite via full_rebuild and then rebuild the index ourselves, which is
+    // exactly how production reaches `rebuild_index` (it reads
+    // store.list_notes()).
     indexer.full_rebuild("default").await.unwrap();
 
     orient.rebuild_index("default").await.unwrap();

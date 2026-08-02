@@ -328,7 +328,12 @@ impl ToolRegistry for BuiltinToolRegistry {
                     .get_or_load_curated_store(&agent_id)
                     .await
                     .map_err(|e| AlephError::tool(format!("remember: {e}")))?;
-                let tool = crate::builtin_tools::RememberTool::new(store);
+                // The write-decision audit log shares the memory_trace_db handle
+                // (both gate on config.memory_db, and `memory_trace` is what
+                // reads these rows back). `None` before/without a memory
+                // backend: the audit is a NO-OP there, never a write failure.
+                let tool = crate::builtin_tools::RememberTool::new(store)
+                    .with_decision_log(self.memory_trace_db.clone());
                 tool.call_json(arguments).await
             }),
 

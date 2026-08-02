@@ -1,6 +1,8 @@
 //! Path validation and resolution utilities
 
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+use std::sync::{OnceLock, RwLock};
 use tracing::info;
 
 use crate::builtin_tools::error::ToolError;
@@ -140,6 +142,40 @@ fn expand_denied_entry(denied: &str) -> String {
     out
 }
 
+/// Memo of the expanded + normalized form of each raw denylist entry.
+static DENIED_NORM_CACHE: OnceLock<RwLock<HashMap<String, PathBuf>>> = OnceLock::new();
+
+/// The expanded ([`expand_denied_entry`]) and normalized ([`safe_normalize`])
+/// form of one raw denylist entry — computed once per process.
+///
+/// [`path_is_denied`] runs once per glob match inside the `search` / `stats`
+/// walks, and normalizing every entry on every call meant a `canonicalize()`
+/// syscall per entry per match: `stats` over a few thousand files issued tens of
+/// thousands of blocking syscalls on a tokio worker before returning four
+/// numbers — minutes of round-trips on a network mount. The entries are derived
+/// from the user's home / config dir at process start and do not change for the
+/// process lifetime, which is what makes normalizing each one exactly once
+/// sound.
+fn denied_entry_normalized(denied: &str) -> PathBuf {
+    let cache = DENIED_NORM_CACHE.get_or_init(Default::default);
+    if let Some(hit) = cache
+        .read()
+        .unwrap_or_else(|e| e.into_inner())
+        .get(denied)
+        .cloned()
+    {
+        return hit;
+    }
+    let expanded = expand_denied_entry(denied);
+    let normalized =
+        safe_normalize(Path::new(&expanded)).unwrap_or_else(|_| PathBuf::from(&expanded));
+    cache
+        .write()
+        .unwrap_or_else(|e| e.into_inner())
+        .insert(denied.to_string(), normalized.clone());
+    normalized
+}
+
 /// Whether an already-canonical path falls under any denylist entry.
 ///
 /// The single source of truth for the deny check, shared by
@@ -152,14 +188,32 @@ fn expand_denied_entry(denied: &str) -> String {
 /// a symlinked ancestor (`/etc` → `/private/etc` on macOS) cannot defeat it.
 pub fn path_is_denied(canonical: &Path, denied_paths: &[String]) -> bool {
     for denied in denied_paths {
-        let denied_expanded = expand_denied_entry(denied);
-        let denied_norm = safe_normalize(Path::new(&denied_expanded))
-            .unwrap_or_else(|_| PathBuf::from(&denied_expanded));
-        if canonical.starts_with(&denied_norm) {
+        if canonical.starts_with(denied_entry_normalized(denied)) {
             return true;
         }
     }
     false
+}
+
+/// The denylist entry living *beneath* `candidate`, if any.
+///
+/// [`path_is_denied`] only answers the downward question — "is this path under a
+/// protected entry" — so an operation on a PARENT sailed past it: nothing on the
+/// denylist names `<config_dir>` itself, yet `remove_dir_all` on it wipes the
+/// `secrets.vault` and `data/` auth databases that deleting either directly is
+/// correctly refused, and `rename` relocates that whole protected tree out to an
+/// undenied location in a single syscall. Shares
+/// [`denied_entry_normalized`] with the downward check so the two directions can
+/// never disagree about what an entry means.
+///
+/// Returns the protected location so the refusal can name it. Equality is not a
+/// hit: a candidate that *is* a denied entry is already refused by the downward
+/// check.
+pub fn contains_denied_descendant(candidate: &Path, denied_paths: &[String]) -> Option<PathBuf> {
+    denied_paths.iter().find_map(|denied| {
+        let denied_norm = denied_entry_normalized(denied);
+        (denied_norm != candidate && denied_norm.starts_with(candidate)).then_some(denied_norm)
+    })
 }
 
 /// Whether `canonical` is a Linux `/proc/<pid>/…` pseudo-file that leaks another
@@ -667,6 +721,74 @@ mod tests {
         assert!(path_is_denied(&secret_c.join("k.pem"), &denied));
         // A string-prefix sibling ("secret-sibling") must NOT match.
         assert!(!path_is_denied(&sibling_c.join("ok.txt"), &denied));
+    }
+
+    /// The upward check sees a protected entry the downward check cannot: a
+    /// parent is not "under" the denylist, but destroying or relocating it takes
+    /// the protected entry with it. Directions must stay disjoint — a candidate
+    /// that IS the entry is the downward check's case.
+    #[test]
+    fn contains_denied_descendant_finds_protected_child_only() {
+        let root = tempdir().unwrap();
+        let config = root.path().join("aleph");
+        fs::create_dir(&config).unwrap();
+        let vault = config.join("secrets.vault");
+        fs::write(&vault, b"ENCRYPTED").unwrap();
+        let sibling = root.path().join("other");
+        fs::create_dir(&sibling).unwrap();
+        let denied = vec![vault.to_string_lossy().to_string()];
+
+        let config_c = config.canonicalize().unwrap();
+        let vault_c = vault.canonicalize().unwrap();
+        assert_eq!(
+            contains_denied_descendant(&config_c, &denied),
+            Some(vault_c.clone()),
+            "the parent must report the protected entry it holds"
+        );
+        assert_eq!(
+            contains_denied_descendant(&vault_c, &denied),
+            None,
+            "the entry itself is the downward check's case, not a descendant"
+        );
+        assert_eq!(
+            contains_denied_descendant(&sibling.canonicalize().unwrap(), &denied),
+            None,
+            "an unrelated directory holds nothing protected"
+        );
+    }
+
+    /// Each raw denylist entry is expanded + normalized ONCE per process: the
+    /// walk operations call `path_is_denied` per glob match, and re-running
+    /// `canonicalize()` for every entry on every call is what turned a `stats`
+    /// over a few thousand files into tens of thousands of blocking syscalls.
+    ///
+    /// Observable via a swap the memo must not notice: the entry first resolves
+    /// through a symlink, then the symlink is replaced by a real directory.
+    #[cfg(unix)]
+    #[test]
+    fn denied_entry_is_normalized_once_per_process() {
+        use std::os::unix::fs::symlink;
+        let root = tempdir().unwrap();
+        let real = root.path().join("real");
+        fs::create_dir(&real).unwrap();
+        let link = root.path().join("link");
+        symlink(&real, &link).unwrap();
+        let real_c = real.canonicalize().unwrap();
+
+        let denied = vec![link.to_string_lossy().to_string()];
+        assert!(
+            path_is_denied(&real_c.join("k.pem"), &denied),
+            "the entry resolves through the symlink to `real`"
+        );
+
+        // Replace the symlink with a real directory: a re-normalization would
+        // now resolve the entry to `link` itself and stop covering `real`.
+        fs::remove_file(&link).unwrap();
+        fs::create_dir(&link).unwrap();
+        assert!(
+            path_is_denied(&real_c.join("k.pem"), &denied),
+            "the entry must not be re-normalized on the second call"
+        );
     }
 
     #[cfg(unix)]

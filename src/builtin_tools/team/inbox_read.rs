@@ -86,14 +86,6 @@ impl AlephTool for InboxReadTool {
     type Args = InboxReadArgs;
     type Output = InboxReadOutput;
 
-    fn examples(&self) -> Option<Vec<String>> {
-        Some(vec![
-            "inbox_read(team_id='team-1')".to_string(),
-            "inbox_read(team_id='team-1', mode='thread', thread_id='thr-abc123')".to_string(),
-            "inbox_read(team_id='team-1', msg_type='review_request')".to_string(),
-        ])
-    }
-
     async fn call(&self, args: Self::Args) -> Result<Self::Output> {
         debug!(
             team_id = %args.team_id,

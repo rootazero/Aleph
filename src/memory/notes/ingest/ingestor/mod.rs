@@ -59,20 +59,33 @@ pub struct DefaultCompoundIngestor<S: NoteStore + Send + Sync + 'static> {
 }
 
 impl<S: NoteStore + Send + Sync + 'static> DefaultCompoundIngestor<S> {
-    pub async fn plan(
+    /// Plan a batch and report whether the PLANNER degraded.
+    ///
+    /// The second element is `true` only when the planning call failed to yield
+    /// a usable plan: the response carried no extractable JSON, or the planner
+    /// emitted operations and every one of them was dropped (unidentifiable
+    /// `kind`, malformed shape, hallucinated `[P<n>]` reference, invalid path).
+    /// A planner that read the batch and deliberately returned `ops: []` — the
+    /// behaviour every source prompt asks for when nothing clears the bar — is
+    /// `false`: there is nothing here to extract and re-running the same call
+    /// will keep finding nothing.
+    pub(crate) async fn plan_with_health(
         &self,
         _agent_id: &str,
         raws: &[crate::memory::store::raw_memory::RawMemory],
         related: &[RelatedPage],
         source: &RawMemorySource,
         extra_context: Option<&str>,
-    ) -> Result<IngestPlan, AlephError> {
+    ) -> Result<(IngestPlan, bool), AlephError> {
         if raws.is_empty() {
-            return Ok(IngestPlan {
-                reasoning: String::new(),
-                ops: vec![],
-                schema_proposals: vec![],
-            });
+            return Ok((
+                IngestPlan {
+                    reasoning: String::new(),
+                    ops: vec![],
+                    schema_proposals: vec![],
+                },
+                false,
+            ));
         }
 
         let system = build_compound_system_prompt(source);
@@ -98,13 +111,27 @@ impl<S: NoteStore + Send + Sync + 'static> DefaultCompoundIngestor<S> {
             Some(v) => v,
             None => {
                 warn!("compound plan: no JSON in LLM response; returning empty plan");
-                return Ok(IngestPlan {
-                    reasoning: String::new(),
-                    ops: vec![],
-                    schema_proposals: vec![],
-                });
+                return Ok((
+                    IngestPlan {
+                        reasoning: String::new(),
+                        ops: vec![],
+                        schema_proposals: vec![],
+                    },
+                    // Degraded: the planner never got to decide anything. The
+                    // raw rows must survive for a retry.
+                    true,
+                ));
             }
         };
+
+        // How many operations the planner actually emitted, counted BEFORE any
+        // repair/parse/resolve pass can drop them. It is the only way to tell
+        // "the planner deliberately proposed nothing" (0 emitted) apart from
+        // "everything the planner proposed was unusable" (>0 emitted, 0 left).
+        let emitted_ops = json
+            .get("ops")
+            .and_then(|v| v.as_array())
+            .map_or(0, Vec::len);
 
         // Defensive: repair the `kind` discriminator before strict parsing.
         // The LLM frequently omits it despite the prompt; rather than failing
@@ -138,7 +165,8 @@ impl<S: NoteStore + Send + Sync + 'static> DefaultCompoundIngestor<S> {
         }
 
         plan.ops.retain(valid_op);
-        Ok(plan)
+        let degraded = emitted_ops > 0 && plan.ops.is_empty();
+        Ok((plan, degraded))
     }
 }
 

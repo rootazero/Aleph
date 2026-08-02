@@ -156,17 +156,6 @@ impl AlephTool for HooksManageTool {
     type Args = HooksManageArgs;
     type Output = HooksManageOutput;
 
-    fn examples(&self) -> Option<Vec<String>> {
-        Some(vec![
-            r#"hooks_manage(action="list", only_unreachable=true)"#.to_string(),
-            r#"hooks_manage(action="list", filter_event="PreToolUse")"#.to_string(),
-            r#"hooks_manage(action="add", event="PostToolUse", matcher="Write|Edit", command="npx prettier --write $FILE")"#.to_string(),
-            r#"hooks_manage(action="add", event="UserPromptSubmit", prompt="Current sprint: 42")"#.to_string(),
-            r#"hooks_manage(action="remove", event="PostToolUse", command="npx prettier --write $FILE")"#.to_string(),
-            r#"hooks_manage(action="events")"#.to_string(),
-        ])
-    }
-
     async fn call(&self, args: Self::Args) -> Result<Self::Output> {
         if matches!(args.action, HooksAction::Add | HooksAction::Remove) {
             let target = match args.action {

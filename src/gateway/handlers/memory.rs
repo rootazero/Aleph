@@ -29,30 +29,6 @@ pub struct MemoryEntry {
     pub timestamp: i64,
 }
 
-/// Memory statistics
-#[derive(Debug, Clone, Serialize)]
-pub struct MemoryStats {
-    pub total_memories: i64,
-    pub database_size_bytes: u64,
-}
-
-/// Compression statistics
-#[derive(Debug, Clone, Serialize)]
-pub struct CompressionStats {
-    pub total_raw_memories: i64,
-    pub total_facts: i64,
-    pub valid_facts: i64,
-}
-
-/// Compression result
-#[derive(Debug, Clone, Serialize)]
-pub struct CompressionResult {
-    pub memories_processed: i64,
-    pub facts_extracted: i64,
-    pub facts_invalidated: i64,
-    pub duration_ms: u64,
-}
-
 // ============================================================================
 // Search
 // ============================================================================

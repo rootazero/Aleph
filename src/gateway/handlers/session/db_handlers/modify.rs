@@ -25,6 +25,39 @@ async fn purge_session_artifacts(session_key: &str) {
     }
 }
 
+/// Drop the resume snapshot a deleted session left on disk.
+///
+/// `resume.json` holds an LLM-authored summary of the conversation, and the
+/// assembler injects the agent's newest one into the NEXT session's prompt as
+/// "previous session" context. A user who deletes a conversation *because of
+/// what was in it* must not have it read back to them one session later. The
+/// session key is stable, so a session deleted today typically already has a
+/// snapshot from an earlier close of the same key — that is the one this
+/// removes. (The delete path no longer manufactures a *fresh* one: it goes
+/// through `emit_session_end_raw_without_resume`, because that write lands long
+/// after this handler returns and no purge here could catch it.)
+///
+/// Best-effort, like [`purge_session_artifacts`]. `remove_for_session` owns the
+/// id→directory-name mapping; the call site must not re-derive it.
+async fn purge_session_snapshot(session_key: &str) {
+    let Some(writer) = crate::memory::session_resume::SnapshotWriter::default_path() else {
+        return;
+    };
+    let key = session_key.to_string();
+    // Blocking file work (a `remove_dir_all`) — keep it off the async worker,
+    // same as the writer's own call site.
+    let removed = tokio::task::spawn_blocking(move || writer.remove_for_session(&key)).await;
+    match removed {
+        Ok(Ok(())) => {}
+        Ok(Err(e)) => {
+            tracing::warn!(error = %e, session_key, "failed to purge session resume snapshot");
+        }
+        Err(e) => {
+            tracing::warn!(error = %e, session_key, "resume snapshot purge task failed");
+        }
+    }
+}
+
 /// Fire the `SessionEnd` extension hook (observers) for a deleted session.
 ///
 /// Best-effort: a missing extension manager, an empty hook set, or a hook
@@ -179,10 +212,22 @@ async fn handle_delete_db_inner(
                         .collect::<Vec<_>>()
                         .join("\n");
                     if !tail.is_empty() {
-                        crate::gateway::session_manager::ops::emit_session_end_raw(
+                        // Canonical spelling, not the caller's `key_str` — same
+                        // rule as the two siblings in this function: the
+                        // downstream snapshot store encodes the key straight
+                        // into a directory name, so a legacy spelling would
+                        // file this session's memory under a name nothing else
+                        // ever looks up.
+                        //
+                        // The `_without_resume` entry point is the one that
+                        // does NOT also write a `resume.json` of the
+                        // conversation being deleted; the tail capture into
+                        // `raw_memories` (this function's documented purpose)
+                        // is unchanged.
+                        crate::gateway::session_manager::ops::emit_session_end_raw_without_resume(
                             Arc::clone(w),
                             session_key.agent_id().to_string(),
-                            key_str.to_string(),
+                            session_key.to_key_string(),
                             tail,
                             crate::memory::store::raw_memory::SessionEndReason::Disconnect,
                         );
@@ -229,6 +274,10 @@ async fn handle_delete_db_inner(
                     // legacy spelling would purge a directory that never
                     // existed and silently leave the real one behind.
                     purge_session_artifacts(&session_key.to_key_string()).await;
+                    // Same for the resume snapshot: it is a summary OF this
+                    // conversation, and the assembler feeds the newest one into
+                    // the next session's prompt.
+                    purge_session_snapshot(&session_key.to_key_string()).await;
                     // SessionEnd — the session has been removed; extension
                     // observers witness the teardown.
                     fire_session_end_hook(&session_key).await;
@@ -749,6 +798,63 @@ mod tests {
                 .unwrap()
                 .is_empty(),
             "a deleted conversation must yield nothing to FTS"
+        );
+    }
+
+    /// Deleting a conversation must delete the summary OF that conversation.
+    /// `resume.json` is an LLM-authored recap that the assembler injects into
+    /// the next session's prompt as "previous session" context — a user who
+    /// deletes a conversation because of what was in it must not meet it again
+    /// one session later. The purge must also use the CANONICAL key spelling:
+    /// the store encodes the key into a directory name, so purging under the
+    /// caller's raw spelling would remove a directory that never existed and
+    /// leave the real one on disk.
+    #[tokio::test]
+    async fn delete_purges_the_resume_snapshot_under_the_canonical_key() {
+        // Isolate `ALEPH_HOME`: the snapshot store resolves off it, and this
+        // test writes into it.
+        let _home = crate::utils::paths::IsolatedAlephHome::new();
+        let _events = crate::session::store::install_test_event_store();
+        let temp = tempdir().unwrap();
+        let manager = SessionManager::new(SessionManagerConfig {
+            db_path: temp.path().join("delete_snapshot.db"),
+            ..Default::default()
+        })
+        .unwrap();
+        // A legacy spelling that parses to a DIFFERENT (canonical) key string,
+        // which is where the snapshot actually lives.
+        let raw_spelling = "AGENT:DelSnap:main";
+        let key = SessionKey::from_key_string(raw_spelling).unwrap();
+        let canonical = key.to_key_string();
+        assert_ne!(canonical, raw_spelling, "the two spellings must differ");
+        manager.get_or_create(&key).await.unwrap();
+        let store: Arc<dyn SessionStore> = Arc::new(manager);
+
+        let writer = crate::memory::session_resume::SnapshotWriter::default_path().unwrap();
+        let snapshot = writer
+            .write_from_summary(&canonical, "The user shared their diary.", "delsnap")
+            .unwrap();
+        assert!(snapshot.exists(), "precondition: a snapshot on disk");
+
+        let request = JsonRpcRequest {
+            jsonrpc: "2.0".into(),
+            method: "sessions.delete".into(),
+            params: Some(json!({ "session_key": raw_spelling })),
+            id: Some(json!(1)),
+        };
+        let response = handle_delete_db(request, store).await;
+        assert!(response.error.is_none(), "{:?}", response.error);
+
+        assert!(
+            !snapshot.exists(),
+            "the deleted conversation's resume snapshot must not survive"
+        );
+        assert!(
+            crate::memory::session_resume::SnapshotReader::default_path()
+                .unwrap()
+                .load_latest("delsnap", "none")
+                .is_none(),
+            "and it must not come back as the next session's 'previous session'"
         );
     }
 

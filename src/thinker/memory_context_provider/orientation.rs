@@ -62,17 +62,16 @@ impl MemoryContextProvider {
         }
         let key = (agent_id.to_string(), session_key.to_string());
         if let Some(cached) = self.orientation_snapshots.read().await.get(&key) {
-            return Ok(cached.clone().map(UnifiedMessage::user));
+            return Ok(cached.value.clone().map(UnifiedMessage::user));
         }
         let text = self
             .build_orientation_user_message(agent_id, mode)
             .await?
             .as_ref()
             .map(UnifiedMessage::text_content);
-        self.orientation_snapshots
-            .write()
-            .await
-            .insert(key, text.clone());
-        Ok(text.map(UnifiedMessage::user))
+        // Single write-guard get-or-insert (bounded + first-write-wins); see
+        // `super::freeze_into`.
+        let frozen = super::freeze_into(&mut *self.orientation_snapshots.write().await, key, text);
+        Ok(frozen.map(UnifiedMessage::user))
     }
 }

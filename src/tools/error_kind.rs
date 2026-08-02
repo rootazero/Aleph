@@ -49,6 +49,9 @@ pub enum ToolErrorKind {
     ToolNotFound,
     /// Aleph-internal: duplicate registration (developer error).
     Duplicate,
+    /// Aleph-internal: the run was stopped while the call was in flight.
+    /// Says nothing about the call — the user did not judge it.
+    Cancelled,
     /// Fallback when no other classifier matched. Treat as opaque —
     /// the LLM should switch methods rather than blindly retry.
     Execution,
@@ -73,19 +76,39 @@ impl ToolErrorKind {
             Self::Permission => "permission",
             Self::ToolNotFound => "tool_not_found",
             Self::Duplicate => "duplicate",
+            Self::Cancelled => "cancelled",
             Self::Execution => "execution",
         }
     }
 
     /// Whether re-running the SAME call with SAME arguments is likely
     /// to succeed. `false` means "switch tool / source / args before
-    /// trying again". Used by `tools::retry::execute_with_one_shot_backoff`
-    /// and surfaced to the LLM in the error hint.
+    /// trying again".
+    ///
+    /// **Not** the retry gate. `retry::execute_with_one_shot_backoff` asks
+    /// `ToolError::is_retryable`, a narrow match on the structural variants
+    /// (`Timeout` / `Transport` / `ApprovalExpired`); this predicate is the
+    /// wider, message-pattern-derived classification that also covers
+    /// `RateLimited` and `UpstreamServerError`. Deliberately keeping the gate
+    /// structural: a retry decision driven by substring matching is how a
+    /// healthy provider gets locked out because a token count contained
+    /// `"401"`.
+    ///
+    /// What it is for is the relationship between the two, which
+    /// `ToolError::kind`'s doc asserts and
+    /// `every_retryable_variant_is_also_transient` pins: the kind taxonomy must
+    /// stay a superset of the retry gate, so the LLM-facing routing hint never
+    /// tells the model to switch approach for an error the tool layer just
+    /// silently retried.
     #[must_use]
     pub const fn is_transient(self) -> bool {
         matches!(
             self,
-            Self::Timeout | Self::Transport | Self::RateLimited | Self::UpstreamServerError
+            Self::Timeout
+                | Self::Transport
+                | Self::RateLimited
+                | Self::UpstreamServerError
+                | Self::Cancelled
         )
     }
 }
@@ -207,6 +230,11 @@ pub fn classify_tool_error(err: &ToolError) -> ToolErrorKind {
         ToolError::PermissionDenied { .. } => ToolErrorKind::Permission,
         ToolError::NotFound { .. } => ToolErrorKind::ToolNotFound,
         ToolError::Duplicate { .. } => ToolErrorKind::Duplicate,
+        // Never falls through to the string scan: the cause of a cancellation
+        // is whatever the tool happened to be saying when the run stopped, and
+        // classifying *that* would hand the model a routing hint about a
+        // failure that never happened.
+        ToolError::Cancelled { .. } => ToolErrorKind::Cancelled,
         // For Execution / Other, fall through to string-based scan: the
         // upstream HTTP status or "rate limit" / "captcha" / empty-result
         // phrasing lives in the cause string we built when wrapping the
@@ -259,6 +287,103 @@ mod tests {
         assert!(!ToolErrorKind::UpstreamNotFound.is_transient());
         assert!(!ToolErrorKind::Duplicate.is_transient());
         assert!(!ToolErrorKind::Execution.is_transient());
+    }
+
+    /// Pressing stop must not ban the call that was stopped.
+    ///
+    /// The harness's cross-batch failure memo enters a call whose error is not
+    /// retryable (`agent/act.rs`: "Only a NON-retryable failure enters the
+    /// cross-batch memo"), and an identical re-issue is then refused for the
+    /// rest of the run. A cancellation used to arrive as
+    /// `ToolError::Execution { cause: "tool X cancelled" }`, so one `/stop`
+    /// permanently banned that exact call — and the model was handed a
+    /// persistence hint telling it to climb the tool ladder, about a failure
+    /// that never happened. Aleph already made this argument for
+    /// `ApprovalExpired` ("nobody said no — nobody said anything"); a
+    /// cancellation says even less about the call.
+    #[test]
+    fn a_cancelled_call_is_not_a_verdict_on_the_call() {
+        use crate::tools::service::ToolError;
+
+        let cancelled = ToolError::Cancelled {
+            name: "bash".into(),
+        };
+        assert!(
+            cancelled.is_retryable(),
+            "the cross-batch memo keys off !is_retryable — a cancelled call must \
+             not be banned for the rest of the run"
+        );
+        assert_eq!(cancelled.kind(), ToolErrorKind::Cancelled);
+        assert!(cancelled.kind().is_transient());
+        assert_eq!(
+            crate::tools::fallback_registry::render_persistence_hint(&cancelled, "bash"),
+            "",
+            "a stopped call is not a rung of any ladder"
+        );
+        // …while a genuine execution failure still is.
+        let failed = ToolError::Execution {
+            name: "bash".into(),
+            cause: "exit 1".into(),
+        };
+        assert!(!failed.is_retryable());
+        assert!(
+            !crate::tools::fallback_registry::render_persistence_hint(&failed, "bash").is_empty()
+        );
+    }
+
+    /// The superset relationship `ToolError::kind`'s doc asserts, made
+    /// checkable.
+    ///
+    /// It matters because the two classifications feed opposite advice at the
+    /// same moment: the tool layer silently respins anything `is_retryable`,
+    /// while the routing hint built from `kind()` tells the model whether to
+    /// try again or switch approach. If a variant were retryable but not
+    /// transient, the model would be told "switch tool / source / args" about a
+    /// call the layer beneath it had just retried on its behalf.
+    #[test]
+    fn every_retryable_variant_is_also_transient() {
+        use crate::tools::service::ToolError;
+
+        let variants = [
+            ToolError::NotFound { name: "t".into() },
+            ToolError::PermissionDenied {
+                name: "t".into(),
+                reason: "no".into(),
+            },
+            ToolError::ValidationFailed {
+                name: "t".into(),
+                cause: "bad".into(),
+            },
+            ToolError::Execution {
+                name: "t".into(),
+                cause: "boom".into(),
+            },
+            ToolError::Timeout {
+                name: "t".into(),
+                elapsed_ms: 1,
+            },
+            ToolError::ApprovalExpired {
+                name: "t".into(),
+                waited_ms: 1,
+            },
+            ToolError::Transport {
+                name: "t".into(),
+                cause: "reset".into(),
+            },
+            ToolError::Duplicate { name: "t".into() },
+            ToolError::Other("opaque".into()),
+        ];
+
+        for e in &variants {
+            if e.is_retryable() {
+                assert!(
+                    e.kind().is_transient(),
+                    "{e} is retried by the tool layer, so its kind must not tell \
+                     the model to switch approach (kind = {:?})",
+                    e.kind()
+                );
+            }
+        }
     }
 
     #[test]

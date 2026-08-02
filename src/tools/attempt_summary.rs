@@ -6,7 +6,7 @@
 //! Each individual `SessionEvent::ToolError` already carries a routing hint
 //! (see `tools::fallback_registry::render_persistence_hint`) appended at
 //! emit time. That hint is single-failure scoped: "this 401 on `web_fetch` →
-//! try alternate source / autocli". A model that keeps banging on the same
+//! try alternate source / browser". A model that keeps banging on the same
 //! ladder rung still sees only one hint per attempt and can lose sight of
 //! the broader pattern.
 //!
@@ -40,7 +40,7 @@
 //! - search × 3 (rate_limited)
 //! - web_fetch × 2 (unauthorized)
 //! Doctrine: when ≥3 failures of the same kind, climb the ladder
-//!   (search → web_fetch → autocli/browser tooling) instead of retrying
+//!   (search → web_fetch → browser tooling) instead of retrying
 //!   the same family. Choose a method that is structurally different
 //!   from the ones you have already tried.
 //! </system-reminder>
@@ -147,7 +147,7 @@ pub fn render_run_summary(events: &[SessionEventRecord]) -> Option<String> {
 
     out.push_str(
         "Doctrine: when ≥3 failures of the same kind, climb the ladder \
-         (search → web_fetch → autocli/browser tooling) instead of retrying \
+         (search → web_fetch → browser tooling) instead of retrying \
          the same family. Choose a method that is structurally different \
          from the ones you have already tried.\n",
     );

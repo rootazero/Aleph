@@ -941,22 +941,6 @@ impl AlephTool for LoopTool {
     type Args = LoopArgs;
     type Output = LoopOutput;
 
-    fn examples(&self) -> Option<Vec<String>> {
-        Some(vec![
-            "loop(action='start', interval='5m', prompt='Check the deploy status; tell me if it changed')".into(),
-            "loop(action='start', prompt='Triage the PR queue', max_iterations=20)".into(),
-            "loop(action='update', next_wake='8m')".into(),
-            "loop(action='update', interval='10m')".into(),
-            "loop(action='status')".into(),
-            "loop(action='list')".into(),
-            "loop(action='pause')".into(),
-            "loop(action='resume')".into(),
-            "loop(action='stop')".into(),
-            "loop(action='stop', session='agent:main:tg-42')".into(),
-            "loop(action='stop_all')".into(),
-        ])
-    }
-
     async fn call(&self, args: Self::Args) -> Result<Self::Output> {
         let session = self.session().await;
         if session.is_empty() {

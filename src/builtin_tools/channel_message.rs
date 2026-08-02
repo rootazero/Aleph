@@ -162,15 +162,6 @@ impl AlephTool for ChannelMessageTool {
     type Args = ChannelMessageArgs;
     type Output = ChannelMessageOutput;
 
-    fn examples(&self) -> Option<Vec<String>> {
-        Some(vec![
-            r#"channel_message(action="send", channel_id="telegram", conversation_id="12345", text="Your build finished ✅")"#.to_string(),
-            r#"channel_message(action="react", channel_id="slack", conversation_id="C0XX", message_id="170...", reaction="👍")"#.to_string(),
-            r#"channel_message(action="edit", channel_id="discord", conversation_id="98765", message_id="111", text="Updated answer")"#.to_string(),
-            r#"channel_message(action="typing", channel_id="telegram", conversation_id="12345")"#.to_string(),
-        ])
-    }
-
     async fn call(&self, args: Self::Args) -> Result<Self::Output> {
         let channel_id = ChannelId::new(args.channel_id.clone());
         let conversation_id = ConversationId::new(args.conversation_id.clone());

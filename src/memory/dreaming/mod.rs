@@ -531,6 +531,35 @@ fn should_skip_scheduled_run(status: &DreamStatus, today: &str) -> bool {
     status.last_status.as_deref() != Some("cancelled")
 }
 
+/// Feedback rules that actually landed on disk during this cycle.
+///
+/// This is what `dream_reports.feedback_distilled` promises ("total feedback
+/// rules distilled") and what `governance_metrics` surfaces as
+/// `feedback_distilled_sum` — which the loop-graph audit template reads as a
+/// Goodhart counter-metric: *corrections rising while `feedback_distilled_sum`
+/// stays flat ⇒ the watchdog loop is failing to turn user corrections into
+/// rules*.
+///
+/// Two things must therefore be excluded, and both used to be counted:
+/// * **rejections.** `distill_actions` carries a row for EVERY terminal state,
+///   including `FilteredInvalid` / `FilteredNonCandidate` / `FilteredEvidence`
+///   (recall-evidence and budget) / `Error`. Counting those inverted the
+///   signal outright — the harder the gates correctly rejected, the healthier
+///   the column looked.
+/// * **skips.** `apply_distill_action` is a pure no-op for `Skip`, so an
+///   `Applied` skip records a decision, not a rule on disk.
+fn feedback_rules_landed(report: &DreamReport) -> u32 {
+    report
+        .distill_actions
+        .iter()
+        .filter(|r| {
+            r.stage == "feedback_distill"
+                && r.outcome == DistillOutcome::Applied
+                && r.action_kind != "skip"
+        })
+        .count() as u32
+}
+
 /// `DreamDaemon` orchestrates idle-time consolidation.
 pub struct DreamDaemon {
     database: MemoryBackend,
@@ -896,13 +925,11 @@ impl DreamDaemon {
                     notes_consolidated: report.notes_consolidated,
                     notes_woven: report.notes_woven,
                     notes_archived: report.notes_archived,
-                    // Count only feedback-distill actions (the Dreaming×correction
-                    // Goodhart counter-metric); skill-distill shares the vec.
-                    feedback_distilled: report
-                        .distill_actions
-                        .iter()
-                        .filter(|r| r.stage == "feedback_distill")
-                        .count() as u32,
+                    // Rules that LANDED — not every feedback-distill row. See
+                    // `feedback_rules_landed`: this column is the Dreaming ×
+                    // correction Goodhart counter-metric, so counting rejected
+                    // and skipped actions inverts the very signal it exists for.
+                    feedback_distilled: feedback_rules_landed(&report),
                     // rust-doctor-disable-next-line excessive-clone
                     errors: report.errors.clone(),
                     namespace: "owner".to_string(),
@@ -1027,10 +1054,6 @@ impl DreamDaemon {
             (Some(provider), Some(embedder)) => {
                 // rust-doctor-disable-next-line excessive-clone
                 let mut indexer = NoteIndexer::new(memory_dir.clone(), self.database.clone());
-                if let Some(orientation) = &self.orientation {
-                    // rust-doctor-disable-next-line excessive-clone
-                    indexer = indexer.with_orientation(orientation.clone());
-                }
                 // Embed-on-write: distilled / rewritten / renamed notes get a
                 // fresh vector immediately instead of waiting for reembed_all.
                 // rust-doctor-disable-next-line excessive-clone
@@ -1100,10 +1123,6 @@ impl DreamDaemon {
                             let mut ns_indexer =
                                 // rust-doctor-disable-next-line excessive-clone
                                 NoteIndexer::new(memory_dir.clone(), self.database.clone());
-                            if let Some(orientation) = &self.orientation {
-                                // rust-doctor-disable-next-line excessive-clone
-                                ns_indexer = ns_indexer.with_orientation(orientation.clone());
-                            }
                             // rust-doctor-disable-next-line excessive-clone
                             ns_indexer = ns_indexer.with_embedder(embedder.clone());
                             let ns_ctx = DreamContext {
@@ -1576,6 +1595,97 @@ mod tests {
             &DreamStatus::default(),
             &today()
         ));
+    }
+
+    // -----------------------------------------------------------------------
+    // feedback_rules_landed — the Goodhart counter-metric must not invert
+    // -----------------------------------------------------------------------
+
+    fn rule(title: &str) -> DistillAction {
+        DistillAction::New {
+            title: title.into(),
+            rule: "r".into(),
+            confidence: 0.9,
+            severity: crate::memory::notes::Severity::High,
+            source_facts: vec![],
+        }
+    }
+
+    fn report_with(records: Vec<DistillActionRecord>) -> DreamReport {
+        DreamReport {
+            distill_actions: records,
+            ..Default::default()
+        }
+    }
+
+    /// A cycle where every action was turned away — gate-invalid, hallucinated
+    /// target, recall-evidence reject, apply error — distilled ZERO rules.
+    /// Counting those rows made the column read healthiest exactly when the
+    /// gates were rejecting hardest, inverting the audit signal that pairs it
+    /// against the user's correction count.
+    #[test]
+    fn rejected_and_errored_actions_are_not_distilled_rules() {
+        let report = report_with(vec![
+            DistillActionRecord::from_action(
+                "feedback_distill",
+                &rule("a"),
+                DistillOutcome::FilteredInvalid,
+                Some("title is empty".into()),
+            ),
+            DistillActionRecord::from_action(
+                "feedback_distill",
+                &DistillAction::Strengthen {
+                    existing_note_path: "feedback/ghost".into(),
+                    source_facts: vec![],
+                },
+                DistillOutcome::FilteredNonCandidate,
+                None,
+            ),
+            DistillActionRecord::from_action(
+                "feedback_distill",
+                &rule("b"),
+                DistillOutcome::FilteredEvidence,
+                Some("recall support wins".into()),
+            ),
+            DistillActionRecord::from_action(
+                "feedback_distill",
+                &rule("c"),
+                DistillOutcome::Error,
+                Some("disk full".into()),
+            ),
+        ]);
+        assert_eq!(feedback_rules_landed(&report), 0);
+    }
+
+    /// `Skip` is a no-op in `apply_distill_action`, so an `Applied` skip is a
+    /// decision the LLM made — not a rule on disk. Only real writes count, and
+    /// `skill_distill` rows share the same vec and must not leak in.
+    #[test]
+    fn only_applied_non_skip_feedback_actions_are_counted() {
+        let report = report_with(vec![
+            DistillActionRecord::from_action(
+                "feedback_distill",
+                &rule("landed"),
+                DistillOutcome::Applied,
+                None,
+            ),
+            DistillActionRecord::from_action(
+                "feedback_distill",
+                &DistillAction::Skip {
+                    source_fact: "F1".into(),
+                    reason: "transient".into(),
+                },
+                DistillOutcome::Applied,
+                None,
+            ),
+            DistillActionRecord::from_action(
+                "skill_distill",
+                &rule("other-stage"),
+                DistillOutcome::Applied,
+                None,
+            ),
+        ]);
+        assert_eq!(feedback_rules_landed(&report), 1);
     }
 
     #[test]

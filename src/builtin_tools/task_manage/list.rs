@@ -111,10 +111,6 @@ impl AlephTool for TaskListTool {
     type Args = TaskListArgs;
     type Output = TaskListOutput;
 
-    fn examples(&self) -> Option<Vec<String>> {
-        None
-    }
-
     async fn call(&self, args: Self::Args) -> Result<Self::Output> {
         let filter = CoordTaskFilter {
             team_id: args.team_id,

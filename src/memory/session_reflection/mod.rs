@@ -131,7 +131,13 @@ impl SessionReflector {
         // consumes the cooldown window (no repeated spend on the same agent).
         self.mark_attempt(agent_id);
 
-        let prompt = build_reflection_prompt(&transcript, self.config.open_loop_tracking);
+        // One clock for the whole reflection: the same date the prompt tells
+        // the model to absolutize against is the date stamped on the open-loops
+        // file, so "when were these captured" and "what did the model think
+        // today was" can never disagree.
+        let today = chrono::Utc::now().format("%Y-%m-%d").to_string();
+
+        let prompt = build_reflection_prompt(&transcript, self.config.open_loop_tracking, &today);
         let output = self.llm.complete(&prompt).await?;
         let stripped = strip_analysis_block(&output);
 
@@ -142,7 +148,7 @@ impl SessionReflector {
         // (legacy behaviour, byte-for-byte unchanged).
         let lessons = if self.config.open_loop_tracking {
             let (lessons, loops) = split_sections(&stripped);
-            self.write_open_loops(agent_id, &loops).await;
+            self.write_open_loops(agent_id, &loops, &today).await;
             lessons
         } else {
             normalize_section(&stripped)
@@ -165,7 +171,14 @@ impl SessionReflector {
     /// every reflection (resolved loops disappear) and removes the file when
     /// there are none. Best-effort: a write failure is logged, never propagated
     /// (P7 — memory is degradable).
-    async fn write_open_loops(&self, agent_id: &str, loops: &str) {
+    ///
+    /// `today` is stamped as a capture-date marker line above the body. This
+    /// file is rewritten ONLY when `reflect` runs to completion — every early
+    /// return above (disabled, cooldown, `min_turns`, `min_user_chars`, LLM
+    /// error) leaves the previous file untouched — so without the stamp the
+    /// injection side has no way to tell yesterday's loops from last month's
+    /// and ends up asserting a freshness it cannot back.
+    async fn write_open_loops(&self, agent_id: &str, loops: &str, today: &str) {
         let Some(path) = open_loops_path(agent_id) else {
             return;
         };
@@ -180,7 +193,8 @@ impl SessionReflector {
                 return;
             }
         }
-        if let Err(e) = tokio::fs::write(&path, loops.as_bytes()).await {
+        let stamped = stamp_open_loops(loops, today);
+        if let Err(e) = tokio::fs::write(&path, stamped.as_bytes()).await {
             tracing::warn!("reflect: open-loops write failed: {e}");
         }
     }
@@ -252,8 +266,14 @@ impl SessionReflector {
 /// follow-ups in a second labelled section (see [`split_sections`]); the LLM —
 /// not a heuristic — decides what is still open (R7/R9: one call, zero extra
 /// middleware).
-fn build_reflection_prompt(messages: &[(String, String)], track_open_loops: bool) -> String {
-    let today = chrono::Utc::now().format("%Y-%m-%d");
+///
+/// `today` is passed in rather than read from the clock here so the date the
+/// model absolutizes against is the same one stamped on `OPEN_LOOPS.md`.
+fn build_reflection_prompt(
+    messages: &[(String, String)],
+    track_open_loops: bool,
+    today: &str,
+) -> String {
     let mut prompt = String::new();
     prompt.push_str(&format!(
         "You are reflecting on a conversation that just ended, to record durable \
@@ -359,6 +379,16 @@ fn normalize_section(s: &str) -> String {
     } else {
         t.to_string()
     }
+}
+
+/// Build the `OPEN_LOOPS.md` body: a capture-date marker line followed by the
+/// loops. Split out from the file write so the on-disk shape is testable
+/// without an `ALEPH_HOME` (the write itself is a one-liner around
+/// [`open_loops_path`]). The marker format lives with its parser in
+/// `curated::snapshot` — one source, two directions.
+fn stamp_open_loops(loops: &str, today: &str) -> String {
+    let header = crate::memory::curated::snapshot::open_loops_capture_header(today);
+    format!("{header}\n{loops}")
 }
 
 /// Resolve `~/.aleph/agents/<agent_id>/OPEN_LOOPS.md` — beside the curated
@@ -570,7 +600,7 @@ mod tests {
             ("user".to_string(), "hello there".to_string()),
             ("assistant".to_string(), "hi".to_string()),
         ];
-        let p = build_reflection_prompt(&msgs, false);
+        let p = build_reflection_prompt(&msgs, false, "2026-07-02");
         assert!(
             p.contains("hello there"),
             "prompt must embed the transcript"
@@ -587,7 +617,7 @@ mod tests {
     #[test]
     fn prompt_carries_durability_rules() {
         let msgs = vec![("user".to_string(), "please stop paraphrasing".to_string())];
-        let p = build_reflection_prompt(&msgs, false);
+        let p = build_reflection_prompt(&msgs, false, "2026-07-02");
         assert!(
             p.contains("evidence → implication"),
             "must ask for evidence → implication phrasing"
@@ -612,15 +642,15 @@ mod tests {
             p.contains("act better for having"),
             "must carry the future-usefulness gate"
         );
-        // Today's date is embedded so the model can absolutize relatives.
-        let today = chrono::Utc::now().format("%Y-%m-%d").to_string();
-        assert!(p.contains(&today), "prompt must state today's date");
+        // Today's date is embedded so the model can absolutize relatives — the
+        // caller's date, not a second read of the clock.
+        assert!(p.contains("2026-07-02"), "prompt must state today's date");
     }
 
     #[test]
     fn tracking_prompt_requests_open_loops_section() {
         let msgs = vec![("user".to_string(), "is the deploy done?".to_string())];
-        let p = build_reflection_prompt(&msgs, true);
+        let p = build_reflection_prompt(&msgs, true, "2026-07-02");
         assert!(p.contains(LESSONS_HEADER), "must keep the lessons header");
         assert!(
             p.contains(OPEN_LOOPS_HEADER),
@@ -668,6 +698,26 @@ mod tests {
         // not panic (P7) and must be returned unchanged (no header present).
         let s = strip_header("待办：跟进部署", OPEN_LOOPS_HEADER);
         assert!(s.contains("跟进部署"));
+    }
+
+    #[test]
+    fn persisted_open_loops_carry_the_capture_date_to_the_injection_side() {
+        // End-to-end on the shape that actually crosses the disk: what
+        // `write_open_loops` stamps must make the injected wrapper name an
+        // absolute date instead of asserting "your last session" — the file
+        // outlives every reflection early-return (cooldown / min_turns / LLM
+        // error), so recency is not ours to claim.
+        let stamped = stamp_open_loops("- Follow up on the deploy status", "2026-07-02");
+        let block = crate::memory::curated::snapshot::render_open_loops_block(&stamped, 2000);
+        assert!(
+            block.contains("2026-07-02"),
+            "injected block must name the capture date: {block}"
+        );
+        assert!(
+            !block.contains("last session"),
+            "injected block must not claim recency: {block}"
+        );
+        assert!(block.contains("Follow up on the deploy status"));
     }
 
     #[test]

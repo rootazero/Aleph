@@ -148,6 +148,11 @@ Rules:
 /// Build the full system prompt for a batch whose rows share the given
 /// raw source. Appends the Spec-1 source-aware block (RESCUE / LESSON /
 /// DIGEST / RETRO) when applicable.
+///
+/// The suffix goes LAST, so it is the final thing the model reads: it may
+/// only sharpen *what* to distil. The output contract belongs to
+/// `PROMPT_COMPOUND_PLAN` alone — see the guard in
+/// `compression::source_prompts`.
 #[must_use]
 pub fn build_compound_system_prompt(source: &RawMemorySource) -> String {
     let mut out = String::from(PROMPT_COMPOUND_PLAN);

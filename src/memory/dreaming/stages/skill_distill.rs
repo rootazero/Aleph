@@ -215,7 +215,13 @@ impl DreamStage for SkillDistillStage {
                     .await
                 {
                     Ok(_) => {
-                        applied += 1;
+                        // `Skip` is a pure no-op inside `apply_distill_action`,
+                        // so `Ok` is not proof a note was written. Mirrors
+                        // `FeedbackDistill`: the record still lands in the audit
+                        // trail, but the write counter only counts writes.
+                        if !matches!(action, DistillAction::Skip { .. }) {
+                            applied += 1;
+                        }
                         ctx.report
                             .distill_actions
                             .push(DistillActionRecord::from_action(
@@ -479,6 +485,134 @@ mod tests {
         let actions = parse_distill_response(raw);
         assert_eq!(actions.len(), 1);
         assert!(matches!(actions[0], DistillAction::Skip { .. }));
+    }
+
+    // -----------------------------------------------------------------------
+    // Stage-level: a Skip is a decision, not a write
+    // -----------------------------------------------------------------------
+
+    struct StubEmbedder;
+
+    #[async_trait::async_trait]
+    impl crate::memory::embedding_provider::EmbeddingProvider for StubEmbedder {
+        async fn embed(&self, _text: &str) -> Result<Vec<f32>, AlephError> {
+            Ok(Vec::new())
+        }
+        async fn embed_batch(&self, _texts: &[&str]) -> Result<Vec<Vec<f32>>, AlephError> {
+            Ok(Vec::new())
+        }
+        fn dimensions(&self) -> usize {
+            0
+        }
+        fn model_name(&self) -> &str {
+            "stub"
+        }
+        fn provider_id(&self) -> &str {
+            "stub"
+        }
+    }
+
+    /// `DreamContext` holding one synthesis note on disk (so `SkillDistill` has
+    /// something to distill) plus a canned planner response.
+    async fn ctx_with_one_synthesis(
+        llm_response: &str,
+    ) -> (crate::memory::dreaming::DreamContext, tempfile::TempDir) {
+        use crate::memory::notes::NoteIndexer;
+        use crate::memory::store::SqliteMemoryBackend;
+        use crate::sync_primitives::Arc;
+
+        let dir = tempfile::tempdir().unwrap();
+        let store = Arc::new(SqliteMemoryBackend::new(&dir.path().join("mem.db")).unwrap());
+        let indexer = NoteIndexer::new(dir.path().join("note"), store.clone());
+
+        let synth_dir = dir.path().join("note").join("default").join("synthesis");
+        tokio::fs::create_dir_all(&synth_dir).await.unwrap();
+        tokio::fs::write(synth_dir.join("s1.md"), "- retries need jitter\n")
+            .await
+            .unwrap();
+
+        let ctx = crate::memory::dreaming::DreamContext {
+            notes: vec![crate::memory::dreaming::NoteEntry {
+                path: "synthesis/s1".into(),
+                category: "synthesis".into(),
+                tags: vec![],
+                created_at: 0,
+                updated_at: 0,
+                content_hash: "h".into(),
+            }],
+            note_contents: std::collections::HashMap::new(),
+            agent_id: "default".into(),
+            database: store.clone(),
+            indexer,
+            provider: Arc::new(crate::providers::mock::MockProvider::new(llm_response)),
+            embedder: Arc::new(StubEmbedder),
+            report: crate::memory::dreaming::DreamReport::default(),
+            pipeline_type: "synthesize".into(),
+            activity_checker: Arc::new(|| false),
+            strategy: crate::memory::dreaming::DreamStrategy::Synthesize,
+            orientation: None,
+            evolution_budget: crate::memory::dreaming::EditBudget::default(),
+        };
+        (ctx, dir)
+    }
+
+    /// `apply_distill_action` is a pure no-op for `Skip`, so treating its `Ok`
+    /// as a write reported skill notes that were never written. Mirrors the
+    /// same fix in `FeedbackDistill`.
+    #[tokio::test]
+    async fn a_batch_of_only_skips_records_zero_applied() {
+        let response = r#"{"actions":[
+            {"type":"skip","source_fact":"S1","reason":"transient"},
+            {"type":"skip","source_fact":"S2","reason":"transient"}
+        ]}"#;
+        let (ctx, _dir) = ctx_with_one_synthesis(response).await;
+
+        let ctx = SkillDistillStage { max_per_cycle: 3 }
+            .execute(ctx)
+            .await
+            .unwrap();
+
+        assert_eq!(
+            ctx.report
+                .extra
+                .get("skill_distill_count")
+                .map(String::as_str),
+            Some("0"),
+            "a skip writes no note, so it must not be counted as a distilled skill"
+        );
+        // The audit trail still records the decision.
+        assert_eq!(ctx.report.distill_actions.len(), 2);
+        assert!(ctx
+            .report
+            .distill_actions
+            .iter()
+            .all(|r| r.action_kind == "skip"));
+    }
+
+    /// Positive control: a real `New` still counts, so the fix narrowed the
+    /// counter rather than disabling it.
+    #[tokio::test]
+    async fn a_new_skill_still_counts_as_applied() {
+        let response = r#"{"actions":[
+            {"type":"new","title":"retry-with-jitter","rule":"add jitter to retries",
+             "confidence":0.9,"severity":"med","source_facts":["S1"]},
+            {"type":"skip","source_fact":"S2","reason":"transient"}
+        ]}"#;
+        let (ctx, _dir) = ctx_with_one_synthesis(response).await;
+
+        let ctx = SkillDistillStage { max_per_cycle: 3 }
+            .execute(ctx)
+            .await
+            .unwrap();
+
+        assert_eq!(
+            ctx.report
+                .extra
+                .get("skill_distill_count")
+                .map(String::as_str),
+            Some("1"),
+            "the new skill is the only write in the batch"
+        );
     }
 
     #[test]

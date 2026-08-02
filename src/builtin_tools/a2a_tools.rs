@@ -160,16 +160,6 @@ impl AlephTool for A2ADelegateTool {
             result: result_text,
         })
     }
-
-    fn examples(&self) -> Option<Vec<String>> {
-        Some(vec![
-            "a2a_delegate(prompt='Summarise the Q3 sales report and list the top 3 risks')"
-                .to_string(),
-            "a2a_delegate(prompt='Review this Rust diff for race conditions: ...', \
-             agent='code-reviewer')"
-                .to_string(),
-        ])
-    }
 }
 
 // =============================================================================
@@ -378,14 +368,6 @@ impl AlephTool for A2AAgentsTool {
                 })
             }
         }
-    }
-
-    fn examples(&self) -> Option<Vec<String>> {
-        Some(vec![
-            "a2a_agents(action='list')".to_string(),
-            "a2a_agents(action='add', url='https://agent.example.com:8080')".to_string(),
-            "a2a_agents(action='remove', agent='code-reviewer')".to_string(),
-        ])
     }
 }
 

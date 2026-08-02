@@ -135,13 +135,6 @@ last_run_status); for the loop topology use `loop_graph(action="status")`."#;
     type Args = GovernanceMetricsArgs;
     type Output = GovernanceMetricsOutput;
 
-    fn examples(&self) -> Option<Vec<String>> {
-        Some(vec![
-            "governance_metrics()".to_string(),
-            "governance_metrics(window_days=30)".to_string(),
-        ])
-    }
-
     async fn call(&self, args: Self::Args) -> Result<Self::Output> {
         let (window_days, since_epoch_secs) = resolve_window(args.window_days, now_epoch_secs());
 

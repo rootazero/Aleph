@@ -6,7 +6,6 @@
 //!   * `LoopToolRegistry` snapshot filtered by `allowed_tools` (builtins +
 //!     plugins + the MCP registry snapshot `run_loop` joins per request)
 //!   * optional `SubagentTool` (when the agent has it enabled)
-//!   * optional `ToolRefreshSource` for plugin / markdown-skill hot-reload
 //!
 //! Returned as `Arc<dyn ToolService>` for `FlowRequest.tool_service`.
 
@@ -17,7 +16,6 @@ use std::sync::OnceLock;
 use crate::agents::subagent_tool::SubagentTool;
 use crate::extension::hooks::HookExecutor;
 use crate::sandbox::exec_approval::gate::ApprovalRequester;
-use crate::tools::refresh::ToolRefreshSource;
 use crate::tools::runtime::LoopToolRegistry;
 use crate::tools::scoped::ScopedToolService;
 use crate::tools::service::ToolService;
@@ -67,7 +65,6 @@ pub(super) fn mcp_tool_registry() -> Option<&'static Arc<crate::tools::ToolHandl
 /// * `allowed_tools` — tool names visible to this agent. Empty = allow-all.
 /// * `subagent_tool` — optional subagent tool handle (adds the `subagent`
 ///   verb to the agent's toolbelt).
-/// * `tool_refresh` — optional refresh source (plugin/MCP hot-reload).
 /// * `turn_context` — optional routing context of the agent turn; lets HITL
 ///   tools (sandbox escalation, `requires_confirmation`, `ask_user`) reach the
 ///   originating channel.
@@ -100,11 +97,13 @@ pub(super) fn mcp_tool_registry() -> Option<&'static Arc<crate::tools::ToolHandl
 ///   of it on discovery so they become callable — passing a fresh set here
 ///   would silently restore the old "discoverable but uncallable" trap.
 ///   Empty set (flag off) is a no-op — byte-identical surface.
+/// * `tool_health` — the runtime probe cache shared with the `ToolCatalog`.
+///   When present, a tool whose probe reports Unhealthy is stripped from the
+///   model's list. `None` is fail-open: every tool stays visible.
 pub fn build_request_tool_service(
     tool_registry: Arc<LoopToolRegistry>,
     allowed_tools: BTreeSet<String>,
     subagent_tool: Option<Arc<SubagentTool>>,
-    tool_refresh: Option<Arc<dyn ToolRefreshSource>>,
     turn_context: Option<crate::tools::turn_context::TurnContext>,
     hook_executor: Option<Arc<HookExecutor>>,
     session_id: impl Into<String>,
@@ -114,6 +113,7 @@ pub fn build_request_tool_service(
     core_tools: &[String],
     truncate_tool_descriptions: bool,
     deferred: Arc<crate::tools::scoped::DeferredTools>,
+    tool_health: Option<Arc<crate::tool_metadata::ToolHealthCache>>,
 ) -> Arc<dyn ToolService> {
     let session_id: String = session_id.into();
     let mut svc = ScopedToolService::new(tool_registry, allowed_tools);
@@ -123,11 +123,11 @@ pub fn build_request_tool_service(
     if let Some(perms) = tool_permissions {
         svc = svc.with_tool_permissions(perms);
     }
+    if let Some(health) = tool_health {
+        svc = svc.with_health(health);
+    }
     svc = svc.with_exec_tier(exec_tier);
     svc = svc.with_unattended(unattended);
-    if let Some(refresh) = tool_refresh {
-        svc = svc.with_refresh(refresh);
-    }
     if let Some(tc) = turn_context {
         svc = svc.with_turn_context(tc);
     }
@@ -217,7 +217,6 @@ mod tests {
             None,
             None,
             None,
-            None,
             "",
             None,
             crate::config::types::policies::ExecTier::Auto,
@@ -225,6 +224,7 @@ mod tests {
             &[],
             false,
             crate::tools::scoped::DeferredTools::empty(),
+            None,
         );
         let defs = svc.list().await;
         assert!(defs.iter().any(|d| d.name == "read_file"));
@@ -259,7 +259,6 @@ mod tests {
             None,
             None,
             None,
-            None,
             "",
             None,
             crate::config::types::policies::ExecTier::Auto,
@@ -267,6 +266,7 @@ mod tests {
             &[],
             false,
             deferred,
+            None,
         );
         let names: Vec<String> = svc.list().await.into_iter().map(|d| d.name).collect();
         assert!(names.contains(&"read_file".to_string()));
@@ -289,7 +289,6 @@ mod tests {
             None,
             None,
             None,
-            None,
             "",
             None,
             crate::config::types::policies::ExecTier::Auto,
@@ -297,6 +296,7 @@ mod tests {
             &[],
             false,
             crate::tools::scoped::DeferredTools::empty(),
+            None,
         );
         let defs = svc.list().await;
         assert!(
@@ -320,7 +320,6 @@ mod tests {
             None,
             None,
             None,
-            None,
             "",
             None,
             crate::config::types::policies::ExecTier::Auto,
@@ -328,6 +327,7 @@ mod tests {
             &[],
             false,
             crate::tools::scoped::DeferredTools::empty(),
+            None,
         );
         let off_names: Vec<String> = off.list().await.into_iter().map(|d| d.name).collect();
         assert!(off_names.contains(&"web_fetch".to_string()));
@@ -339,7 +339,6 @@ mod tests {
             None,
             None,
             None,
-            None,
             "",
             None,
             crate::config::types::policies::ExecTier::Auto,
@@ -347,6 +346,7 @@ mod tests {
             &[],
             false,
             crate::tools::scoped::DeferredTools::new(["web_fetch".to_string()].into()),
+            None,
         );
         let on_names: Vec<String> = on.list().await.into_iter().map(|d| d.name).collect();
         assert!(!on_names.contains(&"web_fetch".to_string()));
@@ -392,7 +392,6 @@ mod progressive_tests {
             None,
             None,
             None,
-            None,
             "",
             None,
             crate::config::types::policies::ExecTier::Auto,
@@ -400,6 +399,7 @@ mod progressive_tests {
             &["bash".to_string()],
             false, // core, truncate
             crate::tools::scoped::DeferredTools::empty(),
+            None,
         );
         let schema = svc.metadata_schema();
         let bash = schema.iter().find(|d| d.name == "bash").unwrap();
@@ -422,7 +422,6 @@ mod progressive_tests {
             None,
             None,
             None,
-            None,
             "",
             None,
             crate::config::types::policies::ExecTier::Auto,
@@ -430,6 +429,7 @@ mod progressive_tests {
             &["*".to_string()],
             false,
             crate::tools::scoped::DeferredTools::empty(),
+            None,
         );
         let nav = svc
             .metadata_schema()

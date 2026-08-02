@@ -74,6 +74,12 @@ pub enum CuratedError {
     #[error("entry content is empty")]
     Empty,
     #[error(
+        "entry contains the `\\n§\\n` record separator, which would re-parse as several \
+         entries on the next reload — split the fact into one operation per entry \
+         instead (a single `batch` call can carry them all)"
+    )]
+    ContainsDelimiter,
+    #[error(
         "operation {index} ({action}) failed: {reason} — no operations were applied \
          (batch is all-or-nothing)"
     )]
@@ -136,16 +142,14 @@ impl CuratedMemoryStore {
             .clone()
     }
 
-    pub fn is_legacy(&self) -> bool {
-        self.state.lock().unwrap_or_else(|e| e.into_inner()).legacy
-    }
-
-    /// Append a new entry. Rejects: empty, exact duplicate, over budget, legacy mode.
+    /// Append a new entry. Rejects: empty, record separator, exact duplicate,
+    /// over budget, legacy mode.
     pub async fn add(&self, content: &str) -> Result<WriteOutcome, CuratedError> {
         let content = content.trim().to_string();
         if content.is_empty() {
             return Err(CuratedError::Empty);
         }
+        reject_delimiter(&content)?;
         self.with_lock(|st| {
             if st.legacy {
                 return Err(CuratedError::LegacyBlocked);
@@ -184,8 +188,22 @@ impl CuratedMemoryStore {
         if new_content.is_empty() {
             return Err(CuratedError::Empty);
         }
+        reject_delimiter(&new_content)?;
         self.with_lock(|st| {
             let idx = match_unique(&st.entries, old_substr)?;
+            // `add` rejects exact duplicates; `replace` must too. Without this,
+            // `replace` can mint a second byte-identical entry that
+            // `match_unique` can never address again — its `unique.len() > 1`
+            // guard is false when every match is the same string, so it
+            // silently returns the first — and the twin bills the budget forever.
+            if st
+                .entries
+                .iter()
+                .enumerate()
+                .any(|(i, e)| i != idx && e == &new_content)
+            {
+                return Err(CuratedError::Duplicate);
+            }
             // rust-doctor-disable-next-line excessive-clone
             let mut new_entries = st.entries.clone();
             // rust-doctor-disable-next-line excessive-clone
@@ -385,6 +403,19 @@ impl CuratedMemoryStore {
     }
 }
 
+/// Reject content carrying the `\n§\n` record separator. Accepting it bills the
+/// model for ONE entry, then silently re-parses as SEVERAL on the next reload:
+/// afterwards `replace` / `remove` address entries the model never wrote, and
+/// the budget gains an unaccounted delimiter. Escaping is not an option — a
+/// memory entry has no legitimate use for a record separator (a lone `§` is
+/// fine; only the full `\n§\n` splits, see `format::parse`).
+fn reject_delimiter(content: &str) -> Result<(), CuratedError> {
+    if content.contains(super::format::ENTRY_DELIMITER) {
+        return Err(CuratedError::ContainsDelimiter);
+    }
+    Ok(())
+}
+
 /// Find the single entry containing `old_substr`. Errors on no match, or when
 /// the substring matches multiple distinct entries.
 fn match_unique(entries: &[String], old_substr: &str) -> Result<usize, CuratedError> {
@@ -415,6 +446,7 @@ fn apply_one(st: &mut StoreState, op: &BatchOp) -> Result<(), CuratedError> {
             if content.is_empty() {
                 return Err(CuratedError::Empty);
             }
+            reject_delimiter(content)?;
             if st.legacy {
                 return Err(CuratedError::LegacyBlocked);
             }
@@ -430,7 +462,18 @@ fn apply_one(st: &mut StoreState, op: &BatchOp) -> Result<(), CuratedError> {
             if old_text.is_empty() || content.is_empty() {
                 return Err(CuratedError::Empty);
             }
+            reject_delimiter(content)?;
             let idx = match_unique(&st.entries, old_text)?;
+            // Same guard as the single-op `replace`: an unaddressable twin
+            // would bill the budget forever (see `CuratedMemoryStore::replace`).
+            if st
+                .entries
+                .iter()
+                .enumerate()
+                .any(|(i, e)| i != idx && e == content)
+            {
+                return Err(CuratedError::Duplicate);
+            }
             st.entries[idx] = content.to_string();
             // Replacing legacy entry de-legacys the file if the user shrinks/curates.
             if st.legacy
@@ -480,8 +523,8 @@ mod tests {
         let r = s.add("hello").await.unwrap();
         assert_eq!(r.entries, vec!["hello"]);
         assert!(!r.legacy);
-        // "hello" + trailing "\n§\n" sentinel = 5 + 4 = 9 chars used.
-        assert_eq!(r.usage_chars, 9);
+        // "hello" + trailing "\n§\n" sentinel = 5 + 3 = 8 chars used.
+        assert_eq!(r.usage_chars, 8);
     }
 
     #[tokio::test]
@@ -498,7 +541,7 @@ mod tests {
         let d = tempdir().unwrap();
         let s = fresh(d.path(), 10).await;
         s.add("12345").await.unwrap(); // 5 chars
-        let err = s.add("12345678").await.unwrap_err(); // 5 + 4 (\n§\n) + 8 = 17 > 10
+        let err = s.add("12345678").await.unwrap_err(); // 5 + 8 + 2×3 (\n§\n) = 19 > 10
         assert!(matches!(err, CuratedError::OverBudget { .. }));
     }
 
@@ -527,6 +570,87 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn add_rejects_record_separator_in_content() {
+        let d = tempdir().unwrap();
+        let s = fresh(d.path(), 200).await;
+        let err = s.add("first half\n§\nsecond half").await.unwrap_err();
+        assert!(matches!(err, CuratedError::ContainsDelimiter));
+        assert!(s.current_entries().is_empty(), "nothing may be written");
+        // A lone § is legitimate content — only the full `\n§\n` record
+        // separator splits, so it must still be accepted.
+        s.add("see § for the clause").await.unwrap();
+        assert_eq!(s.current_entries().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn replace_and_batch_reject_record_separator() {
+        let d = tempdir().unwrap();
+        let s = fresh(d.path(), 200).await;
+        s.add("original fact").await.unwrap();
+        let err = s.replace("original", "a\n§\nb").await.unwrap_err();
+        assert!(matches!(err, CuratedError::ContainsDelimiter));
+        let err = s
+            .apply_batch(&[BatchOp::Add {
+                content: "x\n§\ny".into(),
+            }])
+            .await
+            .unwrap_err();
+        assert!(matches!(err, CuratedError::BatchAborted { .. }));
+        let err = s
+            .apply_batch(&[BatchOp::Replace {
+                old_text: "original".into(),
+                content: "x\n§\ny".into(),
+            }])
+            .await
+            .unwrap_err();
+        assert!(matches!(err, CuratedError::BatchAborted { .. }));
+        assert_eq!(s.current_entries(), vec!["original fact"]);
+    }
+
+    #[tokio::test]
+    async fn replace_rejects_duplicate_of_another_entry() {
+        let d = tempdir().unwrap();
+        let s = fresh(d.path(), 200).await;
+        s.add("Alice prefers tabs").await.unwrap();
+        s.add("Bob prefers spaces").await.unwrap();
+        // Collapsing Bob onto Alice's exact text would mint an unaddressable
+        // twin that permanently bills the budget.
+        let err = s.replace("Bob", "Alice prefers tabs").await.unwrap_err();
+        assert!(matches!(err, CuratedError::Duplicate));
+        assert_eq!(s.current_entries().len(), 2);
+        // Replacing an entry with its own current text is still legal (no-op).
+        s.replace("Bob", "Bob prefers spaces").await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn batch_replace_rejects_duplicate_of_another_entry() {
+        let d = tempdir().unwrap();
+        let s = fresh(d.path(), 200).await;
+        s.add("keep one").await.unwrap();
+        s.add("keep two").await.unwrap();
+        let err = s
+            .apply_batch(&[BatchOp::Replace {
+                old_text: "keep two".into(),
+                content: "keep one".into(),
+            }])
+            .await
+            .unwrap_err();
+        match err {
+            CuratedError::BatchAborted {
+                index,
+                action,
+                reason,
+            } => {
+                assert_eq!(index, 1);
+                assert_eq!(action, "replace");
+                assert!(reason.contains("already exists"), "reason was {reason}");
+            }
+            other => panic!("expected BatchAborted, got {other}"),
+        }
+        assert_eq!(s.current_entries(), vec!["keep one", "keep two"]);
+    }
+
+    #[tokio::test]
     async fn remove_substring() {
         let d = tempdir().unwrap();
         let s = fresh(d.path(), 200).await;
@@ -546,12 +670,13 @@ mod tests {
         let s = CuratedMemoryStore::load(path.clone(), 200, "agent")
             .await
             .unwrap();
-        assert!(s.is_legacy());
+        // Legacy state is read the way production reads it — off a WriteOutcome.
+        assert!(s.snapshot_outcome("probe").legacy);
         let err = s.add("new").await.unwrap_err();
         assert!(matches!(err, CuratedError::LegacyBlocked));
         // Remove the legacy entry → file becomes non-legacy and empty.
-        let _ = s.remove("legacy").await.unwrap();
-        assert!(!s.is_legacy());
+        let r = s.remove("legacy").await.unwrap();
+        assert!(!r.legacy);
         assert!(s.current_entries().is_empty());
     }
 
@@ -653,7 +778,7 @@ mod tests {
         let path = d.path().join("MEMORY.md");
         std::fs::write(&path, "# legacy\n## free markdown\n- a\n- b\n").unwrap();
         let s = CuratedMemoryStore::load(path, 200, "agent").await.unwrap();
-        assert!(s.is_legacy());
+        assert!(s.snapshot_outcome("probe").legacy);
         // Ops apply in order against the evolving state: removing the legacy
         // blob clears the legacy flag, so the following add is allowed.
         let r = s

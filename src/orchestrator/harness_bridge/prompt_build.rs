@@ -547,6 +547,19 @@ impl AgentHarnessRunner {
         let curated_chars = curated_text.as_ref().map_or(0, String::len);
         builder = builder.with_curated_envelope(curated_text);
         let memory_chars = memory_text.as_ref().map_or(0, String::len);
+        // `MemoryProtocolLayer` tells the model the auto-recalled
+        // `<memory-context>` message is already in the conversation. That is a
+        // statement of runtime fact, so it is read off the one producer that
+        // decides it: `build_memory_user_message` returns `Ok(None)` under
+        // `MemoryInjectionMode::Tools` (the mode whose whole point is that the
+        // model retrieves via tools) and for an empty query — and `memory_text`
+        // IS that value. Any proxy would drift; recompute it here and the two
+        // halves start disagreeing turn by turn.
+        //
+        // ORDERING: must stay above the `strands` build below, which moves
+        // `memory_text`. Keep this line adjacent to `memory_chars`, which reads
+        // the same value for the same reason.
+        builder = builder.with_recalled_memory(memory_text.is_some());
         // Per-query recall (memory + routing experience) is returned to the
         // caller for tail-message delivery instead of being fed to the
         // builder's `MemoryAugmentationLayer` — see the method doc. Both
@@ -969,7 +982,6 @@ mod orientation_wiring_tests {
         async fn rotate_log_if_needed(&self, _: &str) -> Result<bool, AlephError> {
             Ok(false)
         }
-        fn invalidate(&self, _: &str, _: &str) {}
     }
 
     #[test]

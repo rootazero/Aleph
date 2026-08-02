@@ -79,13 +79,6 @@ impl AlephTool for TaskExitJournalTool {
     type Args = TaskExitJournalArgs;
     type Output = TaskExitJournalOutput;
 
-    fn examples(&self) -> Option<Vec<String>> {
-        Some(vec![
-            "task_exit_journal(task_id='task-3', summary='OAuth refresh-token flow now persisted to keychain')".into(),
-            "task_exit_journal(task_id='task-3', summary='Wired DI for SkillStore', decisions=['Use Arc<Mutex<_>> over RwLock — write-heavy path'], next_steps=['Add retry on transient keychain errors'])".into(),
-        ])
-    }
-
     async fn call(&self, args: Self::Args) -> Result<Self::Output> {
         let summary = args.summary.trim();
         if summary.is_empty() {

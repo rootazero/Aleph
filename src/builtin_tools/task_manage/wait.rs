@@ -170,10 +170,6 @@ impl AlephTool for TaskWaitTool {
     type Args = TaskWaitArgs;
     type Output = TaskWaitOutput;
 
-    fn examples(&self) -> Option<Vec<String>> {
-        None
-    }
-
     async fn call(&self, args: Self::Args) -> Result<Self::Output> {
         if args.task_ids.is_none() && args.team_id.is_none() {
             return Err(crate::error::AlephError::other(

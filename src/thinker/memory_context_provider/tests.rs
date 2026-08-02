@@ -5,10 +5,7 @@ use crate::memory::notes::orientation::types::{
     IndexStats, LogEntry, OrientationSnapshot, TokenBudget,
 };
 use crate::memory::notes::orientation::NoteOrientation;
-use crate::memory::notes::profile::types::{ProfileSection, UserProfile};
-use crate::memory::notes::profile::ProfileSynthesizer;
 use async_trait::async_trait;
-use std::collections::BTreeMap;
 
 struct FixedOrient;
 
@@ -46,7 +43,6 @@ impl NoteOrientation for FixedOrient {
     async fn rotate_log_if_needed(&self, _: &str) -> Result<bool, AlephError> {
         Ok(false)
     }
-    fn invalidate(&self, _: &str, _: &str) {}
 }
 
 struct NoopOrient;
@@ -84,43 +80,6 @@ impl NoteOrientation for NoopOrient {
     }
     async fn rotate_log_if_needed(&self, _: &str) -> Result<bool, AlephError> {
         Ok(false)
-    }
-    fn invalidate(&self, _: &str, _: &str) {}
-}
-
-struct FixedProfile;
-
-#[async_trait]
-impl ProfileSynthesizer for FixedProfile {
-    async fn bootstrap(&self, _agent_id: &str) -> Result<UserProfile, AlephError> {
-        unimplemented!() // rust-doctor-disable-line panic-in-library
-    }
-
-    async fn current(&self, _agent_id: &str) -> Result<Option<UserProfile>, AlephError> {
-        let mut sections = BTreeMap::new();
-        sections.insert(
-            ProfileSection::Identity.heading().to_string(),
-            vec!["Software engineer".to_string()],
-        );
-        Ok(Some(UserProfile {
-            schema_version: 1,
-            updated: "2026-04-17".to_string(),
-            revision: 3,
-            last_session: "ses_001".to_string(),
-            confidence: "medium".to_string(),
-            raw: "# User Profile\n## Identity\n- Software engineer\n".to_string(),
-            sections,
-            sources: Default::default(),
-            content_hash: "abc".to_string(),
-        }))
-    }
-
-    async fn update(
-        &self,
-        _agent_id: &str,
-        _signal: crate::memory::notes::profile::types::SessionSignal,
-    ) -> Result<crate::memory::notes::profile::types::UpdateOutcome, AlephError> {
-        unimplemented!() // rust-doctor-disable-line panic-in-library
     }
 }
 
@@ -383,7 +342,6 @@ impl NoteOrientation for CountingOrient {
     async fn rotate_log_if_needed(&self, _: &str) -> Result<bool, AlephError> {
         Ok(false)
     }
-    fn invalidate(&self, _: &str, _: &str) {}
 }
 
 fn empty_snapshot(_read: u32) -> OrientationSnapshot {
@@ -478,33 +436,6 @@ async fn orientation_cached_freezes_empty_outcome_too() {
         assert!(msg.is_none());
     }
     assert_eq!(orient.read_count(), 1, "empty outcome must be frozen too");
-}
-
-#[tokio::test]
-async fn profile_message_injected_in_context_mode() {
-    let provider = MemoryContextProvider::new_for_test_empty_envelope(MemoryInjectionMode::Context)
-        .with_profile(Arc::new(FixedProfile));
-
-    let msg = provider
-        .build_profile_user_message("default", MemoryInjectionMode::Context)
-        .await
-        .unwrap();
-    let m = msg.expect("context mode should inject profile");
-    let text = format!("{m:?}");
-    assert!(text.contains("<UserProfile>"));
-    assert!(text.contains("</UserProfile>"));
-}
-
-#[tokio::test]
-async fn profile_skipped_in_tools_mode() {
-    let provider = MemoryContextProvider::new_for_test_empty_envelope(MemoryInjectionMode::Tools)
-        .with_profile(Arc::new(FixedProfile));
-
-    let msg = provider
-        .build_profile_user_message("default", MemoryInjectionMode::Tools)
-        .await
-        .unwrap();
-    assert!(msg.is_none());
 }
 
 #[tokio::test]

@@ -274,6 +274,19 @@ CREATE INDEX IF NOT EXISTS idx_assembly_logs_agent_created
     ON assembly_logs(agent_id, created_at);
 "#;
 
+pub const MEMORY_WRITE_DECISIONS_DDL: &str = r#"
+CREATE TABLE IF NOT EXISTS memory_write_decisions (
+    id          TEXT PRIMARY KEY,
+    agent_id    TEXT NOT NULL,
+    action      TEXT NOT NULL,
+    reason      TEXT NOT NULL,
+    subject     TEXT NOT NULL,
+    created_at  INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_memory_write_decisions_agent_created
+    ON memory_write_decisions(agent_id, created_at);
+"#;
+
 pub(crate) const CREATE_QUERY_FILED: &str = r#"
 CREATE TABLE IF NOT EXISTS query_filed (
     id          TEXT PRIMARY KEY,

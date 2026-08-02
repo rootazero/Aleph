@@ -31,10 +31,11 @@ use crate::builtin_tools::{
     ApplyPatchTool, BashExecTool, CodeCheckTool, CodeExecTool, ConfigAuditTool, CtxSearchTool,
     DesktopAxQueryByRole, DesktopAxQueryFocused, DesktopAxQueryTree, DesktopAxSnapshot,
     DesktopCheckPermissions, DesktopGuiLocate, DesktopSom, DesktopTool, DoctorTool, FileEditTool,
-    FileOpsTool, FileReadTool, FileWriteTool, ImageGenerateTool, PdfGenerateTool,
-    ReadConfigGuideTool, RecallEventsTool, SearchTool, SelectModelTool, SelfManageTool,
-    VaultStoreTool, WebFetchTool,
+    FileOpsTool, FileReadTool, FileWriteTool, FlagUserCorrectionTool, ImageGenerateTool,
+    PdfGenerateTool, ReadConfigGuideTool, RecallEventsTool, RememberTool, SearchTool,
+    SelectModelTool, SelfManageTool, VaultStoreTool, WebFetchTool,
 };
+use crate::builtin_tools::note_manage::NoteManageTool;
 use crate::tools::AlephToolDyn;
 
 use super::BuiltinToolConfig;
@@ -261,7 +262,14 @@ pub const BUILTIN_TOOL_DEFINITIONS: &[BuiltinToolDefinition] = &[
     },
     BuiltinToolDefinition {
         name: "remember",
-        description: "Save durable agent-side memory (add/replace/remove) that auto-injects into future system prompts. Curated, bounded — only stable user preferences, environment facts, or workflow conventions. Not for task progress or transient notes.",
+        // Point at the const, do not restate it. A literal here SHADOWS the
+        // tool's own `DESCRIPTION`: `agent_init` builds the LLM tool list from
+        // this catalog and then only APPENDS registry tools whose name is not
+        // already present, so whatever is written here is the only thing the
+        // model ever reads. The D4 acknowledgment contract, the batch/budget
+        // semantics and the `memory_trace` pointer all live in the const and
+        // shipped nowhere while this line was prose.
+        description: <RememberTool as crate::tools::AlephTool>::DESCRIPTION,
         requires_config: true, // Requires MemoryContextProvider (deferred via OnceCell)
     },
     BuiltinToolDefinition {
@@ -308,7 +316,10 @@ pub const BUILTIN_TOOL_DEFINITIONS: &[BuiltinToolDefinition] = &[
     },
     BuiltinToolDefinition {
         name: "memory_trace",
-        description: "Drill a memory claim down to ground-truth evidence: profile section / note path / raw id → source notes → raw memories → original transcript text. Returns the evidence chain; missing raws are marked as pruned rather than causing an error.",
+        // The const, not a hand-copied duplicate of it — same reason as the
+        // file tools above: this is the model-facing list, so a literal here
+        // silently drifts from the guidance the tool documents about itself.
+        description: crate::builtin_tools::memory_trace::MemoryTraceTool::DESCRIPTION,
         requires_config: true,
     },
     BuiltinToolDefinition {
@@ -343,7 +354,9 @@ pub const BUILTIN_TOOL_DEFINITIONS: &[BuiltinToolDefinition] = &[
     },
     BuiltinToolDefinition {
         name: "flag_user_correction",
-        description: "Record a user-correction signal so the system can learn from it",
+        // See the `remember` entry: a literal here shadows the const, and this
+        // tool's D4 acknowledgment contract lives only in the const.
+        description: <FlagUserCorrectionTool as crate::tools::AlephTool>::DESCRIPTION,
         requires_config: true,
     },
     BuiltinToolDefinition {
@@ -846,7 +859,10 @@ pub const BUILTIN_TOOL_DEFINITIONS: &[BuiltinToolDefinition] = &[
     },
     BuiltinToolDefinition {
         name: "note_manage",
-        description: "Manage personal knowledge notes across all categories: create, update, append, query (hybrid semantic + full-text search), list, delete, plus read-only insights (knowledge-graph health) and evolution (why memory changed overnight)",
+        // See the `remember` entry: a literal here shadows the const, and this
+        // tool's D4 acknowledgment contract and `destination` receipt pointer
+        // live only in the const.
+        description: <NoteManageTool as crate::tools::AlephTool>::DESCRIPTION,
         requires_config: true,
     },
     // ACP delegate tool — unified delegation to any external CLI agent.
