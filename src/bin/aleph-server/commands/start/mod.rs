@@ -1930,8 +1930,10 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
     //
     // On every SKILL.md change under ~/.aleph/skills/, the watcher reloads
     // the affected tools and registers them into the shared markdown-skill
-    // server. The MarkdownSkillRefreshSource (Task 12) detects the bumped
-    // revision on the next agent loop turn and refreshes the tool set.
+    // server. The per-request registry build in `run_loop/inner.rs` snapshots
+    // that server, so the next turn simply has the reloaded tool — there is no
+    // revision counter to poll (the source that polled one never delivered its
+    // tools to anybody).
     {
         if let Ok(skills_dir) = alephcore::utils::paths::get_skills_dir() {
             if skills_dir.exists() {
@@ -1949,7 +1951,6 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
                                         server.replace_tool(tool).await;
                                     }
                                 });
-                                alephcore::gateway::handlers::markdown_skills::bump_markdown_skills_revision();
                                 Ok(())
                             },
                         );

@@ -17,7 +17,6 @@ use once_cell::sync::Lazy;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicU64, Ordering};
 use tokio::sync::RwLock;
 use tracing::{info, warn};
 
@@ -31,10 +30,6 @@ use crate::tools::AlephToolServer;
 /// internally `Arc<RwLock<..>>`, so no outer lock is needed.
 static MARKDOWN_SKILLS_SERVER: Lazy<AlephToolServer> = Lazy::new(AlephToolServer::new);
 
-/// Monotonic revision — bumped on every install/load/reload/unload so the
-/// agent loop's `MarkdownSkillRefreshSource` can detect changes cheaply.
-static MARKDOWN_SKILLS_REVISION: AtomicU64 = AtomicU64::new(0);
-
 // Track loaded skill paths for reload
 static SKILL_PATHS: Lazy<Arc<RwLock<std::collections::HashMap<String, PathBuf>>>> =
     Lazy::new(|| Arc::new(RwLock::new(std::collections::HashMap::new())));
@@ -43,16 +38,6 @@ static SKILL_PATHS: Lazy<Arc<RwLock<std::collections::HashMap<String, PathBuf>>>
 #[must_use]
 pub fn markdown_skills_server() -> &'static AlephToolServer {
     &MARKDOWN_SKILLS_SERVER
-}
-
-/// Current revision of the markdown-skill tool set.
-pub fn markdown_skills_revision() -> u64 {
-    MARKDOWN_SKILLS_REVISION.load(Ordering::Relaxed)
-}
-
-/// Bump the revision; call after any add/replace/remove.
-pub fn bump_markdown_skills_revision() {
-    MARKDOWN_SKILLS_REVISION.fetch_add(1, Ordering::Relaxed);
 }
 
 /// Markdown skill info for JSON serialization
@@ -376,7 +361,6 @@ pub async fn handle_install(request: JsonRpcRequest) -> JsonRpcResponse {
         paths.insert(tool_name, load_path.clone());
         loaded_skills.push(skill_info);
     }
-    bump_markdown_skills_revision();
 
     JsonRpcResponse::success(
         request.id,
@@ -465,7 +449,6 @@ pub async fn handle_load(request: JsonRpcRequest) -> JsonRpcResponse {
         paths.insert(tool_name, path.clone());
         loaded_skills.push(skill_info);
     }
-    bump_markdown_skills_revision();
 
     JsonRpcResponse::success(
         request.id,
@@ -524,7 +507,6 @@ pub async fn handle_reload(request: JsonRpcRequest) -> JsonRpcResponse {
     // Replace in server
     let server = markdown_skills_server();
     let update_info = server.replace_tool(tool.clone()).await;
-    bump_markdown_skills_revision();
 
     info!(
         name = %params.name,
@@ -597,7 +579,6 @@ pub async fn handle_unload(request: JsonRpcRequest) -> JsonRpcResponse {
     let removed = server.remove_tool(&params.name).await;
 
     if removed {
-        bump_markdown_skills_revision();
     } else {
         warn!(name = %params.name, "Attempted to unload non-existent skill");
     }
@@ -639,13 +620,6 @@ mod tests {
         let json = json!({"name": "my-skill"});
         let params: UnloadParams = serde_json::from_value(json).unwrap();
         assert_eq!(params.name, "my-skill");
-    }
-
-    #[test]
-    fn revision_bumps_monotonically() {
-        let before = markdown_skills_revision();
-        bump_markdown_skills_revision();
-        assert!(markdown_skills_revision() > before);
     }
 
     /// `handle_load` must reject a directory that contains a dangerous reverse-shell script

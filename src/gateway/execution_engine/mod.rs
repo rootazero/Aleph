@@ -23,7 +23,7 @@ mod goal_continuation;
 pub mod goal_wait;
 pub mod helpers;
 mod history;
-pub mod markdown_skill_refresh;
+pub mod markdown_skill_tools;
 mod orchestrator;
 mod persistence;
 mod run_loop;

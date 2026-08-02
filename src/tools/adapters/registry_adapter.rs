@@ -97,6 +97,7 @@ pub(crate) const READ_ONLY_TOOLS: &[&str] = &[
     "memory_browse",
     "memory_explore",
     "memory_timeline",
+    "memory_trace",
     "recall_context",
     "recall_events",
     // Governance audit reality probe (correction + dreaming counts). Pure read.
@@ -130,6 +131,13 @@ pub(crate) const READ_ONLY_TOOLS: &[&str] = &[
     // per-argument instead — see `note_schema_claim`).
     "note_orient",
     "note_graph_query",
+    // Hub catalog reads. `hub_catalog_search` / `hub_resolve_spec` query the
+    // local catalog cache; `hub_fetch_docs` is a `web_fetch`-shaped GET of a
+    // README/manifest. None of them touch the install path — that is
+    // `hub_install_run` / `hub_catalog_sync`, deliberately absent.
+    "hub_catalog_search",
+    "hub_resolve_spec",
+    "hub_fetch_docs",
     // MCP capability reads (bridge builtins; the servers' own tools declare
     // safety via `readOnlyHint` through `McpRegistryTool` instead).
     "mcp_read_resource",
@@ -700,6 +708,55 @@ mod tests {
             assert!(
                 READ_ONLY_TOOLS.contains(tool),
                 "{tool} is read-only and should be on READ_ONLY_TOOLS",
+            );
+        }
+    }
+
+    /// Every name on [`READ_ONLY_TOOLS`] must resolve to a tool that actually
+    /// registers under that spelling.
+    ///
+    /// The sibling membership tests above are circular — they assert a
+    /// hand-written name is in the constant, which stays green forever after a
+    /// tool is renamed out from under it. A ghost entry is not inert: it
+    /// occupies a pre-approved `Shared` slot, classifies nothing, and (as the
+    /// 2026-07 sweep of `memory_recall` / `web_search` / `knowledge` /
+    /// `list_tools` / `search_tools` showed) quietly rots trust in the list
+    /// that three consumers read.
+    ///
+    /// The dynamically-registered names below are not in
+    /// `BUILTIN_TOOL_DEFINITIONS` — they are registered by the optional-tool
+    /// builder, the progressive-disclosure meta layer, or the MCP capability
+    /// bridge. Each is pinned to the constant that defines it, so a rename
+    /// breaks this test instead of silently orphaning the entry.
+    #[test]
+    fn every_read_only_name_is_a_registered_tool() {
+        use crate::executor::BUILTIN_TOOL_DEFINITIONS;
+        use crate::tools::AlephTool;
+
+        let mut dynamic: Vec<&str> = vec![
+            <crate::builtin_tools::channel_directory::ChannelDirectoryTool as AlephTool>::NAME,
+            crate::tools::schema_lookup::SchemaLookupTool::NAME,
+            crate::tools::tool_search::ToolSearchTool::NAME,
+        ];
+        dynamic.extend_from_slice(crate::mcp::CAPABILITY_READ_BUILTIN_NAMES);
+
+        for name in READ_ONLY_TOOLS {
+            let registered = BUILTIN_TOOL_DEFINITIONS.iter().any(|d| d.name == *name);
+            assert!(
+                registered || dynamic.contains(name),
+                "READ_ONLY_TOOLS names '{name}', which is neither in \
+                 BUILTIN_TOOL_DEFINITIONS nor a pinned dynamic registration — \
+                 it is a ghost entry that classifies no live tool",
+            );
+        }
+
+        // The exception list itself must not rot: a dynamic name that migrates
+        // into the definitions table should be dropped from it.
+        for name in &dynamic {
+            assert!(
+                READ_ONLY_TOOLS.contains(name),
+                "'{name}' is listed as a dynamic READ_ONLY exception but is not \
+                 on READ_ONLY_TOOLS",
             );
         }
     }

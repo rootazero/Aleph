@@ -400,6 +400,26 @@ fn distill_or_truncate(text: &str, budget_tokens: usize) -> String {
 /// blob first. Returns `None` when there is no error signal. Bounded to a
 /// handful of lines to preserve the offload's token saving.
 fn inline_error_digest(text: &str) -> Option<String> {
+    // The distiller is line-oriented: it walks `text.lines()`, classifies each
+    // as error / context, and renders the salient ones. A builtin tool's result
+    // reaches Layer 2 already flattened by `Value::to_string()`, which escapes
+    // every newline and collapses the whole envelope onto ONE line — so the
+    // distiller saw a single "line", matched the `"error"` substring somewhere
+    // inside it, and rendered `[Output digest: 1 lines, 1 error]` followed by a
+    // char-capped prefix of the JSON envelope
+    // (`{"success":false,"exit_code":101,"stdout":"\n running 2001 tests…`).
+    // Not one compiler error or panic message, but formatted as though it were
+    // the error preview.
+    //
+    // A payload with no newline at all cannot be line-distilled, and this arm is
+    // the OPAQUE one — we do not know what the content is, so a prefix slice is
+    // a guess dressed up as a signal. Decline and let the recovery marker stand
+    // alone, which is what the invariant asks for. Typed results get their
+    // signal inlined through the other arm, where `tool_output::hygiene` walked
+    // the value field by field and kept the line shape intact.
+    if !text.contains('\n') {
+        return None;
+    }
     let digest = crate::tool_output::distill::distill_output(text)?;
     if digest.error_count == 0 {
         return None;
@@ -466,6 +486,43 @@ fn parse_marker_path(line: &str) -> Option<PathBuf> {
 mod tests {
     use super::*;
     use std::path::PathBuf;
+
+    /// A flattened builtin result must not get a fake "error preview".
+    ///
+    /// `Value::to_string()` puts the whole envelope on one line, so the
+    /// line-oriented distiller saw exactly one "line", matched `"error"`
+    /// somewhere inside the JSON, and presented a char-capped prefix of the
+    /// envelope — `{"success":false,…` — under an `[Output digest: 1 lines, 1
+    /// error]` header. The compiler errors and panic messages the preview
+    /// exists to surface were all past the cap.
+    #[test]
+    fn a_flattened_envelope_gets_no_inline_error_preview() {
+        let flat = serde_json::json!({
+            "success": false,
+            "exit_code": 101,
+            "stdout": format!("running 2001 tests\n{}", "test foo ... ok\n".repeat(400)),
+            "stderr": "error[E0308]: mismatched types\n  --> src/main.rs:4:9",
+        })
+        .to_string();
+        assert!(!flat.contains('\n'), "the flattened envelope is one line");
+        assert_eq!(
+            inline_error_digest(&flat),
+            None,
+            "an opaque single-line payload cannot be line-distilled; the preview \
+             would be the JSON envelope's head, not the error"
+        );
+    }
+
+    /// The line-shaped case — a bare MCP text result — still gets its preview.
+    #[test]
+    fn a_line_shaped_payload_still_gets_its_error_preview() {
+        let text = format!(
+            "running 2001 tests\n{}error[E0308]: mismatched types\n  --> src/main.rs:4:9\n",
+            "test foo ... ok\n".repeat(400)
+        );
+        let digest = inline_error_digest(&text).expect("line-shaped output distills");
+        assert!(digest.contains("error[E0308]"), "got: {digest}");
+    }
 
     fn test_store(name: &str) -> (ToolResultStore, PathBuf) {
         let base = std::env::temp_dir()

@@ -517,6 +517,17 @@ impl ScopedToolService {
                     .await;
                 match raw_outcome {
                     Ok(output) => Ok(self.apply_layer_two(name, output).await),
+                    // Attribute anything that came back after the run was
+                    // stopped to the stop, whatever the tool said. The tool
+                    // layer's own cancel arm reports a generic execution error,
+                    // and so does a tool that happened to fail in the same
+                    // instant — and `Execution` is a verdict on the call, which
+                    // put the call into the harness's cross-batch memo and
+                    // banned an identical re-issue for the rest of the run.
+                    // Pressing stop once must not ban what was stopped.
+                    Err(_) if cancel.is_cancelled() => Err(ToolError::Cancelled {
+                        name: name.to_string(),
+                    }),
                     Err(err) => Err(Self::sanitize_tool_error(name, err)),
                 }
             }
@@ -1090,7 +1101,7 @@ impl ScopedToolService {
         // Compress first: hands JSON to the per-tool summarizer that
         // already exists in `tool_output::compressor`. The text we feed
         // into Layer 2 reflects what the LLM will ultimately see.
-        let raw = match &out.value {
+        let mut raw = match &out.value {
             Value::String(s) => s.clone(),
             other => other.to_string(),
         };
@@ -1123,25 +1134,56 @@ impl ScopedToolService {
                         Value::String(s) => s.clone(),
                         other => other.to_string(),
                     };
-                    for r in &reductions {
-                        tracing::debug!(
-                            tool = name,
-                            field = %r.field,
-                            method = ?r.method,
-                            tokens_before = r.tokens_before,
-                            tokens_after = r.tokens_after,
-                            "ingress hygiene reduced a tool-result field"
-                        );
+                    // Hygiene's own "never grow" guard measures each field
+                    // against the RAW value it walked, which is not the string
+                    // it is about to displace. For the DevTools family the
+                    // compressor has already cut the output hard, so a
+                    // reduction that is a genuine 30% win over the raw field
+                    // can still be several times larger than `compressed` —
+                    // and swapping it in made an over-budget result bigger.
+                    // Compare against what we would otherwise send.
+                    let before =
+                        crate::context::budget::pressure::estimate_tokens_smart(&model_facing);
+                    let after = crate::context::budget::pressure::estimate_tokens_smart(&flattened);
+                    if after < before {
+                        for r in &reductions {
+                            tracing::debug!(
+                                tool = name,
+                                field = %r.field,
+                                method = ?r.method,
+                                tokens_before = r.tokens_before,
+                                tokens_after = r.tokens_after,
+                                "ingress hygiene reduced a tool-result field"
+                            );
+                        }
+                        model_facing = flattened;
+                        // The offloaded blob is the model's only way back to the
+                        // detail that was dropped, so it has to be the untouched
+                        // original — `compressed` is itself a lossy cut (a
+                        // head/tail byte slice for `compress_generic`), and
+                        // persisting it made the reduction irreversible while
+                        // still calling the file "Full output".
+                        reduced_from = Some(std::mem::take(&mut raw));
                     }
-                    reduced_from = Some(std::mem::replace(&mut model_facing, flattened));
                 }
             }
         }
 
-        // Generate a per-call file name suffix so concurrent calls to the
-        // same tool do not collide on disk. The LLM correlates the result
-        // through the surrounding conversation history, not the path.
-        let call_id = uuid::Uuid::new_v4().simple().to_string();
+        // Per-call file name suffix, so concurrent calls to the same tool do
+        // not collide on disk.
+        //
+        // Prefer the model's own `tool_call_id`: the harness Act phase scopes it
+        // as an ambient `CallIdentity` around this very future, and it is the id
+        // the transcript, the `tool_timeline`, the approval card and the trace
+        // all key on. Minting a fresh uuid here instead meant the persisted
+        // filename, the `TOOL_CALL_ID` handed to extension hooks, and the
+        // `ctx_search` source label all named something that appears nowhere
+        // else — a hook could not correlate the offloaded blob with the call
+        // that produced it, and neither could a human reading the directory.
+        // The uuid stays as the fallback for the paths that have no ambient
+        // identity (direct `tools.invoke` RPC, cluster node calls, tests).
+        let call_id = crate::approval::current_tool_call_id()
+            .unwrap_or_else(|| uuid::Uuid::new_v4().simple().to_string());
 
         let processed = crate::tools::result_processing::apply_result_budget(
             &call_id,

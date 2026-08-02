@@ -31,11 +31,17 @@ pub(super) async fn init_tool_catalog(
     memory_db: &alephcore::memory::store::MemoryBackend,
     memory_ext_registry: &std::sync::Arc<alephcore::memory::extensions::MemoryExtensionRegistry>,
     daemon: bool,
+    tool_health: Arc<alephcore::tool_metadata::ToolHealthCache>,
 ) -> Arc<alephcore::tool_metadata::ToolCatalog> {
     use alephcore::executor::BUILTIN_TOOL_DEFINITIONS;
     use alephcore::tool_metadata::ToolCatalog;
 
-    let tool_catalog = Arc::new(ToolCatalog::new());
+    // Shares the cache the `ExecutionEngine` already holds: the engine is
+    // wrapped in an `Arc` long before this runs, so it cannot be handed the
+    // catalog's own cache afterwards. Creating one cache up front and giving
+    // the same handle to both is what makes the probes registered below
+    // reachable from the per-request tool service.
+    let tool_catalog = Arc::new(ToolCatalog::with_health(tool_health));
 
     // Register curated multi-word slash commands (skill_read/skill_list,
     // groupchat, session_new, cron_manage, voice, goal, help).
@@ -77,11 +83,13 @@ pub(super) async fn init_tool_catalog(
     // ── Capability health probes (hermes-style runtime gating) ──────────
     // Attach probes to the catalog's shared `ToolHealthCache` so the LLM
     // tool list — and the `<tool_runtime_state>` hints — reflect live
-    // capability, not just boot-time registration. This cache is the same
-    // one `ScopedToolService` consults via `is_healthy`, and probes are
-    // refreshed off the registered-probe set (`trigger_health_refresh`),
-    // so a probe keyed by the executor's LLM-facing tool name fires even
-    // when the catalog stores a different slash-command name.
+    // capability, not just boot-time registration. The same `Arc` reaches the
+    // per-request tool service (engine field -> `build_request_tool_service`
+    // -> `ScopedToolService::with_health`), and
+    // `ScopedToolService::refreshed_health_snapshot` is what actually runs the
+    // probes, TTL-gated and concurrently. Probes are keyed by the executor's
+    // LLM-facing tool name, so one fires even when the catalog stores a
+    // different slash-command name.
     {
         use alephcore::generation::GenerationType;
         use alephcore::tools::probes::browser::BrowserRuntimeProbe;

@@ -43,6 +43,17 @@ pub enum ToolError {
     #[error("tool {name} transport error: {cause}")]
     Transport { name: String, cause: String },
 
+    /// The run was cancelled while this call was in flight (or before it was
+    /// polled). Distinct from every other variant for the same reason
+    /// `ApprovalExpired` is: nobody judged the call. Collapsing it into
+    /// `Execution` made `is_retryable` false, which entered the call into the
+    /// harness's cross-batch failure memo — so pressing stop once *banned* that
+    /// exact call for the rest of the run — and handed the model a persistence
+    /// hint telling it to climb the tool ladder because the user had pressed
+    /// stop.
+    #[error("tool {name} was cancelled — the run was stopped, this is not a verdict on the call")]
+    Cancelled { name: String },
+
     #[error("duplicate tool name: {name}")]
     Duplicate { name: String },
 
@@ -58,10 +69,13 @@ impl ToolError {
     ///   (subject to per-tool idempotence). Only `Timeout` / `Transport` can
     ///   reach it: it lives *below* the approval gate, so an
     ///   `ApprovalExpired` is returned long before the retry layer is entered
-    ///   and is never silently respun into a second approval card.
+    ///   and is never silently respun into a second approval card. That helper
+    ///   excludes `Cancelled` explicitly — respinning after `/stop` would sleep
+    ///   the backoff and fail again.
     /// - the harness's cross-batch failure memo (`agent/act.rs`) refuses to
     ///   *ban* a call whose error was retryable. An expired approval must not
-    ///   be banned — the human was away, they did not refuse.
+    ///   be banned — the human was away, they did not refuse. Neither must a
+    ///   cancelled one: the user stopped the run, they did not judge the call.
     ///
     /// For richer, prompt-side classification (rate-limited,
     /// unauthorized, blocked-by-policy, …) see [`Self::kind`].
@@ -69,7 +83,10 @@ impl ToolError {
     pub const fn is_retryable(&self) -> bool {
         matches!(
             self,
-            Self::Timeout { .. } | Self::Transport { .. } | Self::ApprovalExpired { .. }
+            Self::Timeout { .. }
+                | Self::Transport { .. }
+                | Self::ApprovalExpired { .. }
+                | Self::Cancelled { .. }
         )
     }
 

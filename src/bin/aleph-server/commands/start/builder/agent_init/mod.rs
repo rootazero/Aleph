@@ -172,6 +172,13 @@ pub(in crate::commands::start) async fn register_agent_handlers(
     let mut agent_reg: Option<Arc<AgentRegistry>> = None;
     let mut default_prov: Option<Arc<dyn alephcore::providers::AiProvider>> = None;
     let tool_catalog_out: Option<Arc<alephcore::tool_metadata::ToolCatalog>>;
+    // One runtime tool-health cache, shared by the `ExecutionEngine` and the
+    // `ToolCatalog`. It has to be created out here, ahead of both: the engine is
+    // wrapped in an `Arc` long before `init_tool_catalog` runs, so it cannot be
+    // handed the catalog's own cache afterwards. Sharing one handle is what
+    // connects "probes registered at boot" to "the model never receives the
+    // schema of a tool whose dependency is dead".
+    let tool_health = Arc::new(alephcore::tool_metadata::ToolHealthCache::new());
     let mut embedder_out: Option<std::sync::Arc<dyn alephcore::memory::EmbeddingProvider>> = None;
     // Long-lived embedding manager (B5.2): hoisted so the compound ingestor's
     // embedding queue has a real producer/consumer instead of the manager
@@ -815,7 +822,8 @@ pub(in crate::commands::start) async fn register_agent_handlers(
             tools,
             Some(memory_db.clone()),
         )
-        .with_app_config(app_config_arc.clone());
+        .with_app_config(app_config_arc.clone())
+        .with_tool_health(tool_health.clone());
         if let Some(ref state_db) = resilience_db {
             engine = engine.with_state_database(state_db.clone());
         }
@@ -1831,6 +1839,7 @@ pub(in crate::commands::start) async fn register_agent_handlers(
             memory_db,
             &memory_ext_registry,
             daemon,
+            tool_health.clone(),
         )
         .await,
     );

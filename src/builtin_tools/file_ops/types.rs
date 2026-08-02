@@ -91,7 +91,7 @@ pub const SKIPPED_DIRS: &[&str] = &[
 ];
 
 /// Whether `path` sits inside a [`SKIPPED_DIRS`] directory **below `root`** that
-/// `pattern` does not mention. Mentioning it anywhere in the pattern opts back in.
+/// `pattern` does not name. Naming it as a pattern component opts back in.
 ///
 /// Only components below `root` are examined, and that is the whole subtlety: the
 /// paths a glob walk yields are absolute, so testing every component made the
@@ -106,7 +106,14 @@ pub fn is_skipped_dir_path(root: &std::path::Path, path: &std::path::Path, patte
     let relative = path.strip_prefix(root).unwrap_or(path);
     relative.components().any(|c| {
         let name = c.as_os_str().to_string_lossy();
-        SKIPPED_DIRS.contains(&name.as_ref()) && !pattern.contains(name.as_ref())
+        // The opt-in test compares whole path components, like the skip test
+        // itself: as a raw substring match, a pattern that merely *contains* a
+        // skip-dir name (`my-target-notes/**` contains "target") switched the
+        // skip off for the entire walk and re-admitted every generated file.
+        SKIPPED_DIRS.contains(&name.as_ref())
+            && !std::path::Path::new(pattern)
+                .components()
+                .any(|p| p.as_os_str() == c.as_os_str())
     })
 }
 
@@ -150,4 +157,25 @@ pub struct FileOpsOutput {
     /// Aggregate summary, populated only by `stats`.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub summary: Option<StatsSummary>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::path::Path;
+
+    #[test]
+    fn skip_opt_in_compares_components_not_substrings() {
+        let root = Path::new("/w");
+        let generated = Path::new("/w/target/debug/app.rs");
+
+        // `my-target-notes/**` merely *contains* "target"; it does not name the
+        // build cache, so a walk under it must still skip `target/`. A raw
+        // substring test switched the skip off for the whole walk.
+        assert!(is_skipped_dir_path(root, generated, "my-target-notes/**"));
+
+        // Naming the directory outright still opts back in — the documented
+        // escape hatch must survive.
+        assert!(!is_skipped_dir_path(root, generated, "target/**/*.rs"));
+    }
 }

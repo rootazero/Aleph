@@ -226,13 +226,21 @@ impl AlephTool for AgentCreateTool {
          wants a specialized agent (trading, coding, health, a companion, etc.).\n\n\
          Before creating, if the request is under-specified, run a short creation interview:\n\
          1) Recommend ONE soul archetype from the user's purpose and confirm it — pick from \
-         the values enumerated on the `archetype` parameter.\n\
+         the Soul Archetypes list below.\n\
          2) Ask up to 2-5 short questions to gather: domain/focus, name, tone tweaks, hard \
          boundaries, signature behaviors.\n\
          3) Call agent_create with the chosen `archetype` and a `personalization` markdown \
          block synthesizing the answers.\n\
          If the user already gave enough detail or asks you to just create it, skip the \
-         questions. After creation, make it active with agent_switch.";
+         questions. After creation, make it active with agent_switch.\n\n\
+         Soul Archetypes:\n\
+         - expert: analysis, research, decisions — rigorous, argues the counter-case, tags \
+         claims and confidence\n\
+         - maker: writing code, building, automation — action-biased, surgical, plans then \
+         verifies\n\
+         - assistant: general getting-things-done — fast, answer-first, low-friction \
+         (default when unclear)\n\
+         - companion: support, journaling, presence — warm, listens, does not rush to fix";
 
     type Args = AgentCreateArgs;
     type Output = AgentCreateOutput;
@@ -571,13 +579,33 @@ mod tests {
 
         assert_eq!(def.name, "agent_create");
         assert!(!def.requires_confirmation);
+    }
 
-        // The description tells the model to pick an archetype from the
-        // `archetype` parameter, so the wire schema — the only thing that
-        // actually reaches the model — must enumerate them there.
-        let schema = def.parameters.to_string();
-        for id in ["expert", "companion", "assistant", "maker"] {
-            assert!(schema.contains(id), "archetype schema missing '{id}'");
+    /// The Soul Archetypes list in `DESCRIPTION` is a literal copy of
+    /// [`SoulArchetype::summary`] (a `const` cannot interpolate). Pin every
+    /// entry to the enum so editing a summary can never leave the description
+    /// — the only copy the model ever reads — silently stale.
+    #[test]
+    fn description_lists_every_archetype_summary() {
+        for a in SoulArchetype::ALL {
+            assert!(
+                AgentCreateTool::DESCRIPTION.contains(a.as_str()),
+                "agent_create DESCRIPTION is missing archetype id: {}",
+                a.as_str()
+            );
+            assert!(
+                AgentCreateTool::DESCRIPTION.contains(a.summary()),
+                "agent_create DESCRIPTION drifted from summary() for {}: expected {:?}",
+                a.as_str(),
+                a.summary()
+            );
         }
+        // The default is the only entry flagged as the fallback.
+        assert_eq!(
+            AgentCreateTool::DESCRIPTION
+                .matches("(default when unclear)")
+                .count(),
+            1
+        );
     }
 }
