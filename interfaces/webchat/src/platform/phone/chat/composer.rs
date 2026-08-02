@@ -15,9 +15,7 @@ use crate::api::chat::ChatApi;
 use crate::context::DashboardState;
 use crate::views::chat::state::{ChatPhase, ChatSendError, QueuedPrompt};
 use crate::views::chat::ChatState;
-use shared_ui_logic::state::{
-    merge_recalled_draft, should_auto_drain_on_settle, should_flush_on_turn_boundary,
-};
+use shared_ui_logic::state::{should_auto_drain_on_settle, should_flush_on_turn_boundary};
 
 #[component]
 #[must_use]
@@ -25,7 +23,12 @@ pub fn PhoneComposer() -> impl IntoView {
     let dashboard = expect_context::<DashboardState>();
     let chat = expect_context::<ChatState>();
 
-    let input_text = RwSignal::new(String::new());
+    // Shared with the wide composer via ChatState: the shared `MessageList`
+    // renders the starter chips and the queued-ghost bubbles on phone too, and
+    // both restore their text by writing this signal. While the draft was a
+    // composer-local signal, a tap on a ghost took the prompt out of the queue
+    // and dropped it on the floor here.
+    let input_text = chat.draft;
     let is_sending = RwSignal::new(false);
     // Set by Stop to suppress exactly one auto-drain (B6 — Stop keeps ghosts).
     let user_interrupted = RwSignal::new(false);
@@ -174,8 +177,8 @@ pub fn PhoneComposer() -> impl IntoView {
         let project_root = chat.active_project_root.get_untracked();
         let dash = dashboard;
         spawn_local(async move {
-            for entry in batch {
-                chat.push_user_message(&entry.text);
+            let mut pending = batch.into_iter();
+            while let Some(entry) = pending.next() {
                 match ChatApi::send(
                     &dash,
                     &entry.text,
@@ -191,8 +194,21 @@ pub fn PhoneComposer() -> impl IntoView {
                 )
                 .await
                 {
-                    Ok(resp) => chat.session_key.set(Some(resp.session_key)),
-                    Err(e) => chat.set_send_error(ChatSendError::classify(e)),
+                    Ok(resp) => {
+                        // Only once it is really sent — the bubble used to go up
+                        // first, so a failed send left the transcript claiming a
+                        // prompt had been delivered that the queue had already
+                        // thrown away.
+                        chat.push_user_message(&entry.text);
+                        chat.session_key.set(Some(resp.session_key));
+                    }
+                    Err(e) => {
+                        chat.set_send_error(ChatSendError::classify(e));
+                        let mut unsent = vec![entry];
+                        unsent.extend(pending);
+                        chat.requeue_front(unsent);
+                        break;
+                    }
                 }
             }
         });
@@ -229,18 +245,6 @@ pub fn PhoneComposer() -> impl IntoView {
             let _ = ChatApi::abort(&dash, &run_id).await;
         });
     };
-
-    // Drain `chat.draft_seed` into the local textarea. The shared `MessageList`
-    // renders the starter chips and the queued-ghost bubbles on phone too, and
-    // both hand their text over on this signal — without a consumer here, a tap
-    // on a ghost took the prompt out of the queue and dropped it on the floor.
-    // Seed goes ahead of the draft, never over it (see `merge_recalled_draft`).
-    Effect::new(move |_| {
-        if let Some(seed) = chat.draft_seed.get() {
-            input_text.set(merge_recalled_draft(&seed, &input_text.get_untracked()));
-            chat.draft_seed.set(None);
-        }
-    });
 
     // Queue auto-drain — when a run settles naturally (busy→idle), flush the
     // queue. An explicit Stop set `user_interrupted`, suppressing exactly one

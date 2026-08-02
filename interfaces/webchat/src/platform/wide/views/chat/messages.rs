@@ -28,7 +28,7 @@ struct AttributionMap(Memo<HashMap<String, bool>>);
 pub(super) fn ChatHero() -> impl IntoView {
     let i18n = use_i18n();
     let chat = expect_context::<ChatState>();
-    // Starter prompts — clicking seeds the composer via `chat.draft_seed` so the
+    // Starter prompts — clicking seeds the composer via `chat.seed_draft` so the
     // user lands on an editable draft instead of a blank box. Mirrors
     // hermes-desktop's `ChatEmptyState` suggestion cards. Small fixed set; each
     // tuple is (emoji, short label, seed prompt).
@@ -81,7 +81,7 @@ pub(super) fn ChatHero() -> impl IntoView {
                                        text-text-secondary glass-inset
                                        hover:text-text-primary hover:bg-surface-raised
                                        transition-colors"
-                                on:click=move |_| chat.draft_seed.set(Some(seed.to_string()))
+                                on:click=move |_| chat.seed_draft(seed.to_string(), Vec::new())
                             >
                                 <span>{icon}</span>
                                 <span>{label}</span>
@@ -366,7 +366,7 @@ fn PendingAskCard() -> impl IntoView {
 /// Pending follow-up prompts rendered as right-aligned "ghost" bubbles at the
 /// tail of the conversation stream. They stay here until inserted: at a turn
 /// boundary (Steer) they solidify into real user bubbles, or the user can ✕
-/// remove / click-to-edit (pull back into the composer via `draft_seed`) /
+/// remove / click-to-edit (pull back into the composer via `seed_draft`) /
 /// Esc·⚡ force-insert. Replaces the old above-the-input chip strip so the
 /// queue lives in the stream and never fights the sticky Todo panel for the
 /// fixed bottom slot.

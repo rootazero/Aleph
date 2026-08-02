@@ -33,8 +33,7 @@ use shared_ui_logic::safety::{
     check_prompt_injection, prompt_guard_message, PromptInjectionVerdict,
 };
 use shared_ui_logic::state::{
-    merge_recalled_draft, should_auto_drain_on_settle, should_flush_on_turn_boundary,
-    should_recall_on_bare_arrow_up,
+    should_auto_drain_on_settle, should_flush_on_turn_boundary, should_recall_on_bare_arrow_up,
 };
 use wasm_bindgen::closure::Closure;
 use wasm_bindgen::JsCast;
@@ -60,7 +59,12 @@ pub(super) fn InputArea() -> impl IntoView {
     let sessions = expect_context::<SessionMap>();
     let i18n = use_i18n();
 
-    let input_text = RwSignal::new(String::new());
+    // The unsent draft lives on ChatState next to the attachment tray and the
+    // prompt queue it belongs with, so a tab swap carries all three together
+    // instead of keeping the text on the wrong conversation. It is also how
+    // anything outside the composer (starter chips, the queued-ghost tap,
+    // keyboard recall) puts a prompt back in front of the user.
+    let input_text = chat.draft;
     let is_sending = RwSignal::new(false);
     // One-shot flag: set when the user presses Stop, consumed by the queue
     // drain Effect so an explicit interrupt suppresses exactly one auto-drain
@@ -385,18 +389,39 @@ pub(super) fn InputArea() -> impl IntoView {
     };
 
     // Flush the entire prompt queue into the live run in one batch. Each prompt
-    // rides the normal ChatApi::send path: while a run is active the gateway
+    // rides the normal send path: while a run is active the gateway
     // Steer-injects it into the live session (picked up at the next turn
     // boundary); when idle the first send starts a fresh run and the rest steer
     // into it. Sends are awaited sequentially so the backend coalesces them in
-    // order. The returned run_id of a steered send is intentionally ignored —
-    // `active_run_id` is owned by the `run_accepted` event, and a steered send
-    // emits none (execute.rs returns Ok before the RunAccepted emit).
+    // order.
     let flush_queue = move || {
-        // Single-agent path: in team chat `active_run_id` is never set, so the
-        // queue/flush is gated off entirely (team runs route via TeamChatApi).
         let batch = chat.drain_all_queued();
         if batch.is_empty() {
+            return;
+        }
+        // Team chat. `active_run_id` IS set here — `team_events` writes it on
+        // the fan-out `started` event, which is what puts a Stop button under a
+        // group run — so Enter queues in group chat exactly as it does in a
+        // single chat, and this flush is reached. Sending the batch down the
+        // single-agent `ChatApi::send` below would have started a *separate*
+        // one-agent run instead of talking to the group. The group takes one
+        // requirement per turn, so the queued follow-ups go as one message
+        // rather than N fan-outs.
+        if let Some(team_id) = chat.team_id.get_untracked() {
+            let joined = batch
+                .iter()
+                .map(|e| e.text.as_str())
+                .collect::<Vec<_>>()
+                .join("\n\n");
+            let dash = dashboard;
+            chat.push_user_message(&joined);
+            spawn_local(async move {
+                if let Err(e) =
+                    crate::api::team_chat::TeamChatApi::send(&dash, &team_id, &joined).await
+                {
+                    chat.set_send_error(ChatSendError::classify(e));
+                }
+            });
             return;
         }
         let session_key = chat.session_key.get_untracked();
@@ -411,13 +436,20 @@ pub(super) fn InputArea() -> impl IntoView {
         } else {
             chat.session_mode.get_untracked()
         };
+        // Bind each run to the conversation that is active *now*, exactly as
+        // the typed path does: a flush on the busy->idle settle starts a fresh
+        // run, and if the user has switched tabs by the time `run_accepted`
+        // arrives, the event router would otherwise fall back to whichever
+        // conversation is in the foreground and stream the reply into it.
+        let send_conv = sessions.active_conv();
         let dash = dashboard;
         spawn_local(async move {
-            for entry in batch {
-                chat.push_user_message(&entry.text);
+            let mut pending = batch.into_iter();
+            while let Some(entry) = pending.next() {
                 let api_attachments: Vec<ChatAttachment> = entry
                     .attachments
-                    .into_iter()
+                    .iter()
+                    .cloned()
                     .map(|f| ChatAttachment {
                         name: f.name,
                         mime_type: f.mime_type,
@@ -439,8 +471,28 @@ pub(super) fn InputArea() -> impl IntoView {
                 )
                 .await
                 {
-                    Ok(resp) => chat.session_key.set(Some(resp.session_key)),
-                    Err(e) => chat.set_send_error(ChatSendError::classify(e)),
+                    Ok(resp) => {
+                        if let Some(conv) = send_conv {
+                            sessions.bind_run(&resp.run_id, conv, Some(&resp.session_key));
+                        }
+                        // Only now is it a message that was actually sent. The
+                        // bubble used to go up first, so a failed send left the
+                        // transcript claiming a prompt had been delivered that
+                        // the queue had already thrown away.
+                        chat.push_user_message(&entry.text);
+                        chat.session_key.set(Some(resp.session_key));
+                    }
+                    Err(e) => {
+                        chat.set_send_error(ChatSendError::classify(e));
+                        // The prompt never left the client. Give it — and every
+                        // prompt behind it — back to the queue instead of
+                        // dropping the batch on the floor, and stop: the rest
+                        // would almost certainly fail the same way.
+                        let mut unsent = vec![entry];
+                        unsent.extend(pending);
+                        chat.requeue_front(unsent);
+                        break;
+                    }
                 }
             }
         });
@@ -459,9 +511,24 @@ pub(super) fn InputArea() -> impl IntoView {
         enqueue_message(); // no-op when the draft is empty
         user_interrupted.set(false); // ensure the upcoming settle is NOT suppressed
         if let Some(run_id) = chat.active_run_id.get_untracked() {
+            // Same split as the Stop button: in team chat the id is a fan-out
+            // TREE, not an engine run, so `chat.abort` misses `active_runs` and
+            // the group keeps talking. Force-insert used to abort unconditionally
+            // — in a group that made Esc/⚡ a silent no-op that also stranded the
+            // queue, because the settle it was waiting for never came.
+            let is_team = chat.team_id.get_untracked().is_some();
             let dash = dashboard;
             spawn_local(async move {
-                let _ = ChatApi::abort(&dash, &run_id).await;
+                if is_team {
+                    let _ = crate::api::team_chat::TeamChatApi::cancel(&dash, &run_id).await;
+                    // No `settled` event follows a poisoned tree, so release the
+                    // slot here — and that busy->idle edge is what drains the
+                    // queue we just folded the draft into.
+                    chat.active_run_id.set(None);
+                    chat.phase.set(ChatPhase::Idle);
+                } else {
+                    let _ = ChatApi::abort(&dash, &run_id).await;
+                }
             });
         }
     };
@@ -501,25 +568,6 @@ pub(super) fn InputArea() -> impl IntoView {
                 }
             }
             pulse
-        });
-    }
-
-    // Empty-state suggestion chips, the queued-ghost tap, and keyboard recall
-    // all drop text on `chat.draft_seed`; drain it into this local `input_text`
-    // here so none of them need a handle on the composer. Same shape as the
-    // retry plumbing above. Writing the signal back to `None` inside the Effect
-    // that reads it is safe — the re-run sees `None` and stops.
-    //
-    // The seed goes *ahead of* whatever is already typed rather than replacing
-    // it: recalling a queued prompt must not silently destroy a draft in
-    // progress, and prepending is what makes repeated tail-recalls rebuild the
-    // queue's original order (see `merge_recalled_draft`).
-    {
-        Effect::new(move |_| {
-            if let Some(seed) = chat.draft_seed.get() {
-                input_text.set(merge_recalled_draft(&seed, &input_text.get_untracked()));
-                chat.draft_seed.set(None);
-            }
         });
     }
 

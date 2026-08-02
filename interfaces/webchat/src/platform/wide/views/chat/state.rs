@@ -484,12 +484,15 @@ pub struct ChatState {
     /// True while a drag is hovering the chat surface — drives the drop
     /// overlay highlight.
     pub is_dragging_files: RwSignal<bool>,
-    /// One-shot composer prefill request. Empty-state suggestion chips (and any
-    /// future "insert prompt" source) drop a starter string here; the composer's
-    /// consume-Effect drains it into the textarea and resets it to `None`.
-    /// Ephemeral like `is_dragging_files` / `retry_pulse` — intentionally
-    /// excluded from [`SessionSnapshot`] so it never replays on a tab swap.
-    pub draft_seed: RwSignal<Option<String>>,
+    /// What the user has typed but not yet sent. Owned here rather than by the
+    /// composer so that (a) it is conversation-scoped like the queue and the
+    /// attachment tray it belongs with — a tab swap used to keep the text while
+    /// swapping the files out from under it — and (b) anything outside the
+    /// composer (starter chips, the queued-ghost tap, keyboard recall) can put
+    /// a prompt back in front of the user by writing it, with no prefill
+    /// channel that could be produced with nothing draining it.
+    /// Both composers bind their textarea straight to this signal.
+    pub draft: RwSignal<String>,
     /// Latest context-window occupancy, set on each `run_complete` and read by
     /// the composer's [`super::context_gauge::ContextGauge`]. `None` until the
     /// first run reports usage. Ephemeral (excluded from [`SessionSnapshot`]);
@@ -625,7 +628,7 @@ impl ChatState {
             send_error: RwSignal::new(None),
             pending_attachments: RwSignal::new(Vec::new()),
             is_dragging_files: RwSignal::new(false),
-            draft_seed: RwSignal::new(None),
+            draft: RwSignal::new(String::new()),
             context_usage: RwSignal::new(None),
             prompt_queue: RwSignal::new(Vec::new()),
             retry_pulse: RwSignal::new(0),
@@ -793,22 +796,19 @@ impl ChatState {
         popped
     }
 
-    /// Hand text (and any files) to whichever composer is mounted, **ahead of**
-    /// whatever the user is already typing.
+    /// Put a prompt back in front of the user, **ahead of** whatever they are
+    /// already typing.
     ///
-    /// This is the single channel for "put this prompt back in the composer":
-    /// starter chips, the queued-ghost tap, and keyboard recall all go through
-    /// it, and both the wide and phone composers drain it. Seeds accumulate
-    /// rather than overwrite, so two recalls landing before the composer's
-    /// drain Effect runs keep both prompts and their order.
+    /// The single entry point for "restore this into the composer": starter
+    /// chips, the queued-ghost tap, and keyboard recall all call it. It writes
+    /// [`Self::draft`] directly — there is no prefill channel that could be
+    /// written with nothing draining it — and merges rather than overwrites, so
+    /// neither an in-progress draft nor a second recall arriving in the same
+    /// frame can be lost.
     pub fn seed_draft(&self, text: String, attachments: Vec<PendingAttachment>) {
         if !text.trim().is_empty() {
-            self.draft_seed.update(|slot| {
-                *slot = Some(match slot.take() {
-                    Some(pending) => merge_recalled_draft(&text, &pending),
-                    None => text,
-                });
-            });
+            self.draft
+                .update(|draft| *draft = merge_recalled_draft(&text, draft));
         }
         if !attachments.is_empty() {
             self.pending_attachments.update(|staged| {
@@ -822,11 +822,28 @@ impl ChatState {
     /// Remove and return every queued prompt (FIFO order preserved), leaving
     /// the queue empty. Flushes the whole batch in one shot — at a turn
     /// boundary (Steer) or on the busy→idle settle.
+    ///
+    /// The caller now owns those prompts: a flush that fails part-way must put
+    /// the remainder back with [`Self::requeue_front`] rather than drop them.
     #[must_use]
     pub fn drain_all_queued(&self) -> Vec<QueuedPrompt> {
         let mut out = Vec::new();
         self.prompt_queue.update(|q| out = std::mem::take(q));
         out
+    }
+
+    /// Put drained prompts back at the head of the queue, ahead of anything
+    /// enqueued while the flush was in flight, so their arrival order is
+    /// preserved. Used when a send never left the client.
+    pub fn requeue_front(&self, prompts: Vec<QueuedPrompt>) {
+        if prompts.is_empty() {
+            return;
+        }
+        self.prompt_queue.update(|q| {
+            let mut restored = prompts;
+            restored.append(q);
+            *q = restored;
+        });
     }
 
     /// Register a run whose final assistant reply should be spoken aloud.
@@ -1286,6 +1303,7 @@ impl ChatState {
         self.error_message.set(None);
         self.send_error.set(None);
         self.prompt_queue.set(Vec::new());
+        self.draft.set(String::new());
         self.strip_open.set(std::collections::HashMap::new());
         self.plan.set(None);
         self.context_usage.set(None);
@@ -1306,6 +1324,7 @@ impl ChatState {
         self.error_message.set(None);
         self.send_error.set(None);
         self.prompt_queue.set(Vec::new());
+        self.draft.set(String::new());
         self.team_id.set(None);
         self.team_members.set(Vec::new());
         // Clear the task strip too. Leaving it behind meant switching from
@@ -1343,6 +1362,7 @@ impl ChatState {
             send_error: self.send_error.get_untracked(),
             pending_attachments: self.pending_attachments.get_untracked(),
             prompt_queue: self.prompt_queue.get_untracked(),
+            draft: self.draft.get_untracked(),
             active_project_root: self.active_project_root.get_untracked(),
             active_project_name: self.active_project_name.get_untracked(),
             selected_model: self.selected_model.get_untracked(),
@@ -1368,6 +1388,7 @@ impl ChatState {
         self.send_error.set(snap.send_error);
         self.pending_attachments.set(snap.pending_attachments);
         self.prompt_queue.set(snap.prompt_queue);
+        self.draft.set(snap.draft);
         self.active_project_root.set(snap.active_project_root);
         self.active_project_name.set(snap.active_project_name);
         self.selected_model.set(snap.selected_model);
@@ -1415,6 +1436,9 @@ pub struct SessionSnapshot {
     pub send_error: Option<ChatSendError>,
     pub pending_attachments: Vec<PendingAttachment>,
     pub prompt_queue: Vec<QueuedPrompt>,
+    /// The unsent composer text, so a tab swap carries it with the queue and
+    /// the attachment tray instead of stranding it on the wrong conversation.
+    pub draft: String,
     pub active_project_root: Option<String>,
     pub active_project_name: Option<String>,
     pub selected_model: Option<crate::api::providers::ModelOverride>,
@@ -2109,6 +2133,33 @@ mod queue_tests {
     }
 
     #[test]
+    fn a_failed_flush_gives_the_unsent_prompts_back_ahead_of_newer_ones() {
+        let owner = Owner::new();
+        owner.set();
+        let chat = ChatState::new();
+        chat.enqueue_prompt(prompt("a", 0));
+        chat.enqueue_prompt(prompt("b", 0));
+
+        // Flush drains the batch; the first send fails, so nothing was sent.
+        let batch = chat.drain_all_queued();
+        // Meanwhile the user queues another one.
+        chat.enqueue_prompt(prompt("typed during the flush", 0));
+        chat.requeue_front(batch);
+
+        let texts: Vec<_> = chat
+            .prompt_queue
+            .get_untracked()
+            .into_iter()
+            .map(|p| p.text)
+            .collect();
+        assert_eq!(
+            texts,
+            vec!["a", "b", "typed during the flush"],
+            "prompts that never left the client keep their place in the arrival order"
+        );
+    }
+
+    #[test]
     fn recall_takes_the_newest_and_shortens_the_queue() {
         let owner = Owner::new();
         owner.set();
@@ -2152,11 +2203,47 @@ mod queue_tests {
         }
 
         assert_eq!(
-            chat.draft_seed.get_untracked().as_deref(),
-            Some("first\n\nsecond"),
+            chat.draft.get_untracked(),
+            "first\n\nsecond",
             "recalling from the tail and prepending rebuilds the queue's order"
         );
         assert!(chat.prompt_queue.get_untracked().is_empty());
+    }
+
+    #[test]
+    fn recall_joins_an_in_progress_draft_instead_of_replacing_it() {
+        let owner = Owner::new();
+        owner.set();
+        let chat = ChatState::new();
+        chat.draft.set("half a thought".into());
+        chat.enqueue_prompt(prompt("queued", 0));
+
+        let entry = chat.recall_latest_queued().expect("queued prompt");
+        chat.seed_draft(entry.text, entry.attachments);
+
+        assert_eq!(chat.draft.get_untracked(), "queued\n\nhalf a thought");
+    }
+
+    #[test]
+    fn a_tab_swap_carries_the_draft_with_the_queue_and_the_tray() {
+        let owner = Owner::new();
+        owner.set();
+        let chat = ChatState::new();
+        chat.draft.set("conversation A's unsent line".into());
+        chat.enqueue_prompt(prompt("A queued", 0));
+        let snap = chat.capture_snapshot();
+
+        // Project conversation B over the same signals, then come back to A.
+        chat.draft.set("conversation B's line".into());
+        chat.prompt_queue.set(Vec::new());
+        chat.restore_from(snap);
+
+        assert_eq!(
+            chat.draft.get_untracked(),
+            "conversation A's unsent line",
+            "the draft must swap with the conversation, not linger on the next one"
+        );
+        assert_eq!(chat.prompt_queue.get_untracked().len(), 1);
     }
 
     #[test]
