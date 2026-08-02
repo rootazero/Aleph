@@ -101,7 +101,13 @@ superseded_by: []
 ---
 ```
 
-`relations` and `permanent` are emitted only when non-default, so legacy notes without them serialize byte-for-byte as before those fields existed. The `title` / `type` / `category` scalars are single-quoted when needed (`yaml_scalar` in `note/helpers.rs`) — an unquoted `title: [wip] plans` would make the whole note permanently unparseable. Forward-compatible: unknown fields are ignored by the parser.
+`relations` and `permanent` are emitted only when non-default, so legacy notes without them serialize byte-for-byte as before those fields existed. Forward-compatible: unknown fields are ignored by the parser.
+
+> **Every frontmatter scalar that can carry model output MUST go through `yaml_scalar` (`note/helpers.rs`).** This is a durability rule, not a style preference: an unquoted `title: [wip] plans` makes the whole note permanently unparseable, and *the failure is silent* — `mention_weave` drops the note with `.ok()?`, `note_decay` `continue`s past it, nothing logs above `debug!`, and `load_existing_or_default` hands the next ingest an empty note that overwrites the original's facts. The note simply disappears from the corpus.
+>
+> `title` / `type` / `category` and the arrays (via `yaml_inline_array`) were always quoted; the `relations:` block was not, until 2026-08-01. Both of its fields are raw model input — the ingest prompt tells the model `"to": "<entity path or [P<n>] token>"`, and `rel_type` is an explicitly free-form LLM-chosen verb (R7, no fixed taxonomy) — so `to: [[plan/x]]`, the wikilink form the model sees everywhere else in the note API, parsed as a nested YAML flow sequence and bricked the note.
+>
+> The paired rule on the ingest side: any new `IngestPlan` field that can hold a path must be added to `RefTable::resolve_plan`'s field policy. `create.relations` / `append.new_relations` were missing from it, so a prompt-instructed `[P<n>]` token reached `Relation.to` verbatim — the exact leak that table exists to prevent.
 
 ## 4. `KnowledgeNote` Data Model
 

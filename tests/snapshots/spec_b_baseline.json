@@ -43,7 +43,7 @@
         }
       ],
       "kind": "session_recent",
-      "tokens_budget": 1500,
+      "tokens_budget": 512,
       "tokens_used": 9
     }
   ]
