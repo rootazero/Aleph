@@ -606,9 +606,23 @@ mod tests {
 
     #[test]
     fn records_signed_before_a_rotation_still_verify() {
+        // Rotation as the only production path performs it (`agent_identity`
+        // action="rotate"): mint the key AND make the chain declare it. Both
+        // halves are load-bearing — the declaration is what keeps
+        // `UndeclaredSigner` off the ordinary rows the incoming key goes on to
+        // sign, which is the case below and the one the neighbouring test does
+        // not reach (its last row IS the rotation).
         let (l, _s, _d) = ledger();
         l.append(&entry("main", "before")).unwrap();
-        l.keys().rotate("main").unwrap();
+        let old = l
+            .keys()
+            .identity("main")
+            .unwrap()
+            .unwrap()
+            .active_fingerprint;
+        let new = l.keys().rotate("main").unwrap().active_fingerprint;
+        l.append(&NewRecord::identity_rotated("main", &new, Some(&old)))
+            .unwrap();
         l.append(&entry("main", "after")).unwrap();
 
         let report = l.verify("main").unwrap();
@@ -617,7 +631,36 @@ mod tests {
             "rotation must not invalidate history: {:?}",
             report.faults
         );
-        assert_eq!(report.records, 2 + GENESIS_ROWS);
+        assert_eq!(report.records, 3 + GENESIS_ROWS);
+    }
+
+    #[test]
+    fn a_key_the_chain_never_declares_faults_only_the_rows_it_signed() {
+        // The tamper `UndeclaredSigner` exists for: `agent_identities` is a
+        // single mutable row, so deleting it makes the next append mint a fresh
+        // key and continue the chain under it with every link and every
+        // signature intact. A rotation nobody records has the same shape and is
+        // the cheapest way to write it down.
+        //
+        // The second half of the name is the part worth pinning: the undeclared
+        // key indicts its own rows and nothing else. A check that also faulted
+        // the history would tell an operator the whole chain is untrustworthy
+        // when in fact everything up to the substitution still holds.
+        let (l, _s, _d) = ledger();
+        l.append(&entry("main", "before")).unwrap();
+        let new = l.keys().rotate("main").unwrap().active_fingerprint;
+        l.append(&entry("main", "after")).unwrap();
+
+        let report = l.verify("main").unwrap();
+        assert!(!report.ok);
+        assert_eq!(
+            report.faults,
+            vec![ChainFault::UndeclaredSigner {
+                seq: 3,
+                fingerprint: new
+            }],
+            "the substitution is the only fault: rows 1-2 predate it"
+        );
     }
 
     #[test]

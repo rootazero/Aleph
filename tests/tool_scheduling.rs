@@ -1,8 +1,16 @@
 //! Tool scheduling overhaul — integration coverage.
 //!
-//! Commit 1 (ToolHealthGate): verifies that an unhealthy probe strips a
-//! tool from the dispatcher's emitted prompt + smart-prompt schema, and
-//! that invalidation flips the result back the next turn.
+//! This file's original subject — "an unhealthy probe strips the tool from the
+//! dispatcher's smart-prompt schema" — is no longer reachable from here. The
+//! health gate moved to the single enforcement point, `src/tools/scoped/`, and
+//! `ToolCatalog::generate_smart_prompt` was cut with the layer it belonged to.
+//! Its coverage moved with it and got stronger on the way: see
+//! `scoped::tests::{list_strips_unhealthy_tools,
+//! metadata_schema_strips_unhealthy_tools_and_invalidates_on_flip}` — the
+//! latter also proves the schema cache rotates on a health-generation flip,
+//! which the version that lived here could not observe.
+//!
+//! What remains below is the probe/cache contract seen from outside the crate.
 
 use std::borrow::Cow;
 use std::sync::Arc;
@@ -51,53 +59,4 @@ async fn dead_probe_makes_tool_unhealthy_until_invalidation() {
     // Invalidate: tool is healthy again (membership change semantics).
     cache.invalidate_all();
     assert!(cache.snapshot().is_healthy("dead_tool"));
-}
-
-#[tokio::test]
-async fn dispatcher_smart_prompt_filters_unhealthy_tools() {
-    use alephcore::tool_metadata::{ToolCatalog, UnifiedTool};
-
-    let registry = ToolCatalog::new();
-
-    // Register two builtin-shaped tools by way of the refresh path.
-    let tools = vec![
-        UnifiedTool::builtin("alive").with_description("a"),
-        UnifiedTool::builtin("dead").with_description("b"),
-    ];
-    registry.refresh_atomic(tools).await;
-
-    // Probe "dead" as unhealthy.
-    registry.register_health_probe(
-        "dead",
-        Arc::new(CannedProbe(ProbeResult::Unhealthy {
-            reason: HealthReason::DependencyDown(Cow::Borrowed("test offline")),
-            retry_after: None,
-        })),
-    );
-    // Force a synchronous refresh so the probe result is in the snapshot
-    // before we query — the live `trigger_health_refresh` fires
-    // `tokio::spawn` which is racy in a single-tick test.
-    registry.health().refresh("dead").await;
-
-    let (full, _index) = registry
-        .generate_smart_prompt(&["alive", "dead"], &[])
-        .await;
-    let names: Vec<&str> = full.iter().map(|t| t.name.as_str()).collect();
-    assert!(names.contains(&"alive"), "alive tool should remain visible");
-    assert!(
-        !names.contains(&"dead"),
-        "dead tool must be stripped from the schema; got: {names:?}"
-    );
-
-    // After invalidation the cache forgets the unhealthy entry → tool
-    // reappears (until the next refresh repopulates the probe result).
-    registry.health().invalidate_all();
-    let (full2, _) = registry
-        .generate_smart_prompt(&["alive", "dead"], &[])
-        .await;
-    let names2: Vec<&str> = full2.iter().map(|t| t.name.as_str()).collect();
-    assert!(
-        names2.contains(&"dead"),
-        "after invalidation, dead reappears until next probe re-fires; got: {names2:?}"
-    );
 }
