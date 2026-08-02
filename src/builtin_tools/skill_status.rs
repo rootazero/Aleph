@@ -46,13 +46,6 @@ impl AlephTool for SkillStatusTool {
     type Args = SkillStatusArgs;
     type Output = SkillStatusOutput;
 
-    fn examples(&self) -> Option<Vec<String>> {
-        Some(vec![
-            "skill_status(filter='all') — list all skills with their status".to_string(),
-            "skill_status(filter='needs_setup') — find skills missing dependencies".to_string(),
-        ])
-    }
-
     async fn call(&self, args: Self::Args) -> Result<Self::Output> {
         let filter = match args.filter.as_str() {
             "all" => SkillStatusFilter::All,

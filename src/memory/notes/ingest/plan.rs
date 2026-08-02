@@ -119,10 +119,28 @@ pub struct ApplyReport {
     pub appended: u32,
     pub updated: u32,
     pub contradicted: u32,
+    /// Link edges written by `PageOp::Link`. Each edge rewrites BOTH endpoint
+    /// notes on disk (`add_link` runs in both directions), so it is apply-pass
+    /// work, not bookkeeping — `compress_to_notes` folds it into
+    /// `CompressionResult::facts_extracted`. Kept a distinct field rather than
+    /// pre-summed so the apply layer stays free to report edges separately.
     pub linked: u32,
     pub superseded: u32,
     pub tx_id: String,
     pub touched_paths: Vec<String>,
+    /// True when the PLANNER failed to produce a usable plan — the LLM returned
+    /// nothing parseable, or every operation it emitted was dropped — as opposed
+    /// to deliberately planning nothing.
+    ///
+    /// Load-bearing because all four source prompts instruct the planner to
+    /// "emit an empty plan" when nothing clears the bar, so an empty report is
+    /// the EXPECTED outcome for an un-noteworthy batch. `CompressionService`
+    /// used to read every empty report as a transient failure and hold the rows
+    /// in a 6h retry grace, re-running the same LLM call over the same
+    /// transcript on every tick until the rows aged out — punishing the planner
+    /// for doing exactly what its prompt asked. Only a degraded planner earns
+    /// the retry; a model-intended empty plan consumes its rows immediately.
+    pub planner_degraded: bool,
 }
 
 impl ApplyReport {
@@ -244,6 +262,12 @@ mod tests {
         assert_eq!(r.created, 0);
         assert!(r.tx_id.is_empty());
         assert!(r.touched_paths.is_empty());
+        // Several early-return paths hand back `ApplyReport::default()` for
+        // outcomes that are NOT planner failures (empty raw batch, all creates
+        // deduped as no-ops, every op deferred by the governance gate). If the
+        // default ever flipped to `true` those would all start burning a 6h
+        // retry grace on rows nothing will ever extract a note from.
+        assert!(!r.planner_degraded);
     }
 
     #[test]

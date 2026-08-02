@@ -10,9 +10,7 @@ use crate::memory::notes::orientation::types::{
 use crate::memory::notes::store::NoteStore;
 use crate::providers::AiProvider;
 use crate::sync_primitives::Arc;
-use crate::sync_primitives::Mutex;
 use async_trait::async_trait;
-use std::collections::HashSet;
 use std::path::PathBuf;
 
 #[async_trait]
@@ -52,16 +50,12 @@ pub trait NoteOrientation: Send + Sync {
     }
 
     async fn rotate_log_if_needed(&self, agent_id: &str) -> Result<bool, AlephError>;
-
-    /// Mark a note dirty. A subsequent `rebuild_index` (or `refresh_index_after_ingest`) flushes.
-    fn invalidate(&self, agent_id: &str, note_path: &str);
 }
 
 /// Production implementation.
 pub struct FsNoteOrientation<S: NoteStore + Send + Sync + 'static> {
     memory_dir: PathBuf,
     store: Arc<S>,
-    dirty: Mutex<HashSet<String>>, // "agent_id|path"
     provider: Option<Arc<dyn AiProvider>>,
 }
 
@@ -70,7 +64,6 @@ impl<S: NoteStore + Send + Sync + 'static> FsNoteOrientation<S> {
         Self {
             memory_dir: memory_dir.into(),
             store,
-            dirty: Mutex::new(HashSet::new()),
             provider: None,
         }
     }
@@ -166,9 +159,16 @@ impl<S: NoteStore + Send + Sync + 'static> NoteOrientation for FsNoteOrientation
             .unwrap_or_default();
         let recent_log_tail = LogMdWriter::new(&dir).tail(20).await.unwrap_or_default();
 
-        // Crude char-based budget: ≈ 4 chars / token.
+        // Crude char-based budget: ≈ 4 chars / token. The gate counts CHARS,
+        // not bytes: `.len()` on a CJK index reports ~3x its char count, so a
+        // comfortably-under-budget index entered the branch, `chars().take()`
+        // returned it verbatim, and the model was handed a COMPLETE index
+        // carrying a "truncated" marker — it then burns a turn on note_search
+        // recovering content it already has. Counting chars in the condition
+        // also makes the marker honest by construction: it is only appended
+        // when characters were actually dropped.
         let max_chars = budget.max_tokens.saturating_mul(4);
-        let index_text = if index_text.len() > max_chars {
+        let index_text = if index_text.chars().count() > max_chars {
             let cut: String = index_text.chars().take(max_chars).collect();
             format!("{cut}\n<!-- truncated to {max_chars} chars under budget -->\n")
         } else {
@@ -202,12 +202,7 @@ impl<S: NoteStore + Send + Sync + 'static> NoteOrientation for FsNoteOrientation
         let entries = self.store.list_notes(agent_id).await?;
         let gen = IndexMdGenerator::new(self.agent_dir(agent_id));
         let health = self.graph_health(agent_id).await;
-        let stats = gen.write(&entries, health).await?;
-        self.dirty
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .retain(|k| !k.starts_with(&format!("{agent_id}|")));
-        Ok(stats)
+        gen.write(&entries, health).await
     }
 
     async fn refresh_index_after_ingest(
@@ -228,13 +223,6 @@ impl<S: NoteStore + Send + Sync + 'static> NoteOrientation for FsNoteOrientation
         LogMdWriter::new(self.agent_dir(agent_id))
             .rotate_if_needed()
             .await
-    }
-
-    fn invalidate(&self, agent_id: &str, note_path: &str) {
-        self.dirty
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .insert(format!("{agent_id}|{note_path}"));
     }
 }
 
@@ -331,21 +319,58 @@ mod tests {
         );
     }
 
-    #[tokio::test]
-    async fn invalidate_tracked_until_rebuild() {
-        let dir = tempfile::tempdir().unwrap();
-        let backend = fresh_backend(dir.path());
-        let orient = FsNoteOrientation::new(dir.path().join("note"), backend);
+    /// Overwrite the bootstrapped `index.md` with `body` and read a snapshot
+    /// back under `max_tokens`.
+    async fn snapshot_with_index(
+        dir: &std::path::Path,
+        body: &str,
+        max_tokens: usize,
+    ) -> OrientationSnapshot {
+        let backend = fresh_backend(dir);
+        let orient = FsNoteOrientation::new(dir.join("note"), backend);
         orient.bootstrap("default").await.unwrap();
-        orient.invalidate("default", "learning/rust");
+        tokio::fs::write(dir.join("note/default/index.md"), body)
+            .await
+            .unwrap();
+        orient
+            .read_snapshot("default", TokenBudget { max_tokens })
+            .await
+            .unwrap()
+    }
+
+    #[tokio::test]
+    async fn multibyte_index_under_budget_is_not_marked_truncated() {
+        // 600 CJK chars ≈ 1800 bytes. Under a 200-token (=800 char) budget by
+        // chars, over it by bytes: the byte-vs-char mixup entered the branch,
+        // `chars().take(800)` returned the whole string, and the model got a
+        // complete index stamped "truncated".
+        let dir = tempfile::tempdir().unwrap();
+        let body = "记".repeat(600);
+        let snap = snapshot_with_index(dir.path(), &body, 200).await;
         assert_eq!(
-            orient.dirty.lock().unwrap_or_else(|e| e.into_inner()).len(),
-            1
+            snap.index_text.chars().count(),
+            600,
+            "under-budget index must pass through untouched"
         );
-        orient.rebuild_index("default").await.unwrap();
+        assert!(
+            !snap.index_text.contains("truncated"),
+            "must not claim truncation when nothing was dropped"
+        );
+    }
+
+    #[tokio::test]
+    async fn over_budget_index_is_cut_and_marked() {
+        let dir = tempfile::tempdir().unwrap();
+        let body = "记".repeat(1200);
+        let snap = snapshot_with_index(dir.path(), &body, 200).await;
+        assert!(
+            snap.index_text.contains("truncated to 800 chars"),
+            "genuinely over-budget index must carry the marker"
+        );
         assert_eq!(
-            orient.dirty.lock().unwrap_or_else(|e| e.into_inner()).len(),
-            0
+            snap.index_text.matches('记').count(),
+            800,
+            "cut must land on the char budget, not the byte count"
         );
     }
 

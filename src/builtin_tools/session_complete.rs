@@ -113,13 +113,6 @@ impl AlephTool for SessionCompleteTool {
     type Args = SessionCompleteArgs;
     type Output = SessionCompleteResult;
 
-    fn examples(&self) -> Option<Vec<String>> {
-        Some(vec![
-            "session_complete(outcome='Built the CSV parser feature', key_learnings=['serde flattening requires explicit field names'])".to_string(),
-            "session_complete(outcome='Diagnosed and fixed the memory leak')".to_string(),
-        ])
-    }
-
     async fn call(&self, args: Self::Args) -> Result<Self::Output> {
         let content = build_content(&args);
         let session_id = self.current_session_id();

@@ -68,13 +68,6 @@ impl AlephTool for SessionNewTool {
     type Args = SessionNewArgs;
     type Output = SessionNewOutput;
 
-    fn examples(&self) -> Option<Vec<String>> {
-        Some(vec![
-            "session_new()".to_string(),
-            "session_new(topic='讨论了项目架构设计')".to_string(),
-        ])
-    }
-
     async fn call(&self, args: Self::Args) -> Result<Self::Output> {
         let session_key_str = &args.__session_key;
 

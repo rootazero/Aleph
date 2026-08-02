@@ -1,8 +1,13 @@
-//! Source-specialised system prompts for the fact extractor.
+//! Source-specialised guidance blocks for the compound-ingest LLM call.
 //!
-//! Each `RawMemorySource` variant routes to a prompt tuned to the
-//! semantic of that capture point. Legacy variants fall back to the
-//! generic prompt so existing behaviour is preserved.
+//! Each `RawMemorySource` variant routes to a block tuned to the semantic
+//! of that capture point. These are SUFFIXES, not standalone prompts:
+//! `notes::ingest::prompts::build_compound_system_prompt` appends the
+//! selected one to `PROMPT_COMPOUND_PLAN`, which alone owns the output
+//! contract. A snapshot must therefore never restate an output shape — two
+//! contracts in one system prompt means the model obeys the wrong one and
+//! the plan parser rejects the result. Legacy variants select no block and
+//! run on the base prompt alone.
 
 use crate::memory::store::raw_memory::{RawMemorySource, SessionEndReason};
 
@@ -11,9 +16,9 @@ pub const PROMPT_LESSON: &str = include_str!("source_prompts/snapshots/lesson.tx
 pub const PROMPT_DIGEST: &str = include_str!("source_prompts/snapshots/digest.txt");
 pub const PROMPT_RETRO: &str = include_str!("source_prompts/snapshots/retro.txt");
 
-/// Choose the system prompt for a given raw-memory source.
-/// Legacy variants return `None` so the caller falls back to the
-/// existing generic prompt in `FactExtractor`.
+/// Choose the source-specific guidance block for a given raw-memory source.
+/// Legacy variants return `None` so the caller emits the base
+/// `PROMPT_COMPOUND_PLAN` unsuffixed.
 #[must_use]
 pub const fn prompt_for(source: &RawMemorySource) -> Option<&'static str> {
     match source {
@@ -34,10 +39,10 @@ pub const fn prompt_for(source: &RawMemorySource) -> Option<&'static str> {
         | RawMemorySource::Attachment => None,
         // Correction signals are consumed by FeedbackDistill via path-prefix,
         // not by CompressionService. If one ever reaches this path defensively
-        // fall back to the generic prompt rather than synthesizing a bogus one.
+        // fall back to the base prompt rather than synthesizing a bogus one.
         RawMemorySource::Correction { .. } => None,
         // Tool-invocation signals are pure metrics consumed by Dream's
-        // signal collector; the FactExtractor never sees them.
+        // signal collector; the ingest planner never sees them.
         RawMemorySource::ToolInvocation { .. } => None,
     }
 }
@@ -102,12 +107,12 @@ mod tests {
 
     #[test]
     fn prompts_have_nonempty_snapshots() {
+        // No output-format assertion here on purpose: the JSON contract is
+        // stated once, by `PROMPT_COMPOUND_PLAN`. A snapshot that also
+        // described a shape is the bug `prompts_carry_distillation_quality_rules`
+        // guards against.
         for prompt in [PROMPT_RESCUE, PROMPT_LESSON, PROMPT_DIGEST, PROMPT_RETRO] {
             assert!(prompt.len() > 100, "prompt snapshot too short");
-            assert!(
-                prompt.contains("JSON"),
-                "prompt must instruct LLM to emit JSON"
-            );
         }
     }
 
@@ -118,6 +123,10 @@ mod tests {
         // empty-output-preferred gate, and the anti-rot denylist (store the
         // remedy, not the failure narrative).
         for prompt in [PROMPT_RESCUE, PROMPT_LESSON, PROMPT_DIGEST, PROMPT_RETRO] {
+            assert!(
+                prompt.contains("RULES:"),
+                "guidance block must keep its rules section"
+            );
             assert!(
                 prompt.contains("never paraphrase identifiers"),
                 "must preserve greppable handles"
@@ -134,6 +143,38 @@ mod tests {
                 prompt.contains("remedy, not the failure narrative"),
                 "anti-rot denylist must be present"
             );
+            // These blocks are appended AFTER the base plan prompt, so whatever
+            // they say last is what the model reads last. They once ended with
+            // a `{"updates": [...]}` block belonging to the retired
+            // FactExtractor — an instruction to emit a shape the plan parser
+            // cannot read, placed where it overrides the real contract.
+            // Guidance only: the rules must be the final word.
+            assert!(
+                !prompt.contains("updates"),
+                "snapshot must not resurrect the retired `updates` output shape"
+            );
+            assert!(
+                prompt.trim_end().ends_with("emit an empty plan."),
+                "snapshot must end on its rules, with nothing appended after"
+            );
         }
+        // Per-source rules the shared loop above cannot see, so the deletion
+        // cannot silently take a whole rules block with it.
+        for prompt in [PROMPT_LESSON, PROMPT_RETRO] {
+            assert!(
+                prompt.contains("evidence → implication"),
+                "lesson-shaped prompts must keep the evidence→implication phrasing"
+            );
+        }
+        for prompt in [PROMPT_LESSON, PROMPT_DIGEST, PROMPT_RETRO] {
+            assert!(
+                prompt.contains("will a future agent plausibly act better"),
+                "must keep the act-better gate"
+            );
+        }
+        assert!(
+            PROMPT_RESCUE.contains("Err on over-extraction"),
+            "rescue trades precision for recall — that rule is its whole point"
+        );
     }
 }

@@ -72,14 +72,6 @@ impl AlephTool for LifecycleIdleTool {
     type Args = LifecycleIdleArgs;
     type Output = LifecycleIdleOutput;
 
-    fn examples(&self) -> Option<Vec<String>> {
-        Some(vec![
-            "lifecycle_idle(team_id='team-1', summary='auth module complete', last_task_id='task-42')"
-                .to_string(),
-            "lifecycle_idle(team_id='team-1')".to_string(),
-        ])
-    }
-
     async fn call(&self, args: Self::Args) -> Result<Self::Output> {
         let team = self
             .team_store

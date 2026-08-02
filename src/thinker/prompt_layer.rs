@@ -93,6 +93,18 @@ pub struct LayerInput<'a> {
     /// `<session_context>` block in the message history.  The
     /// `SessionContextGuideLayer` uses this flag to inject usage guidance.
     pub has_session_summaries: bool,
+    /// Whether this turn actually carries an auto-recalled `<memory-context>`
+    /// message.
+    ///
+    /// The recall message is delivered as a transient tail message, never
+    /// through the builder, so no layer can observe it directly. The harness
+    /// bridge sets this from the single producer that decides it —
+    /// `MemoryContextProvider::build_memory_user_message`, which returns
+    /// `Ok(None)` under `MemoryInjectionMode::Tools` and for an empty query.
+    /// `MemoryProtocolLayer` gates its "already in this conversation" claim on
+    /// it: asserting a block the turn does not carry costs the model a wasted
+    /// turn.
+    pub has_recalled_memory: bool,
     /// Agent definition for sub-agent prompt assembly.
     ///
     /// When set, `AgentRoleLayer` injects the role header and protocol
@@ -150,6 +162,7 @@ impl<'a> LayerInput<'a> {
             mode: PromptMode::Full,
             identity_files: None,
             has_session_summaries: false,
+            has_recalled_memory: false,
             agent_def: None,
             mcp_instructions: None,
             curated_memory_envelope: None,
@@ -203,6 +216,15 @@ impl<'a> LayerInput<'a> {
     #[must_use]
     pub const fn with_session_summaries(mut self, has: bool) -> Self {
         self.has_session_summaries = has;
+        self
+    }
+
+    /// Signal that this turn carries an auto-recalled `<memory-context>`
+    /// message. Pass the producer's own answer (`memory_text.is_some()`), not
+    /// a proxy for it — `MemoryProtocolLayer` states it to the model as fact.
+    #[must_use]
+    pub const fn with_recalled_memory(mut self, has: bool) -> Self {
+        self.has_recalled_memory = has;
         self
     }
 

@@ -1048,13 +1048,18 @@ pub(in crate::commands::start) async fn register_agent_handlers(
             // summary production. Requires an AiProvider for the synthesizer
             // fallback path; skip silently if none is configured.
             if let Some(ref prov) = default_prov {
-                use alephcore::memory::assembler::hybrid::AiProviderReranker;
+                use alephcore::memory::assembler::hybrid::AiProviderSummaryLlm;
                 use alephcore::memory::session_search_summary::{
                     end_hook::SessionEndSummarizer, synthesizer::SummarySynthesizer,
                 };
+                // Prose wrapper, NOT `AiProviderReranker` — both consumers
+                // below (the /end-summary synthesizer and SessionReflector)
+                // ask the model for plain text in a shape their own prompt
+                // defines; the reranker pins a "strict JSON, no prose" system
+                // message that would break both.
                 let summary_llm: std::sync::Arc<
                     dyn alephcore::memory::session_search_summary::synthesizer::SummaryLlm,
-                > = AiProviderReranker::new(prov.clone());
+                > = AiProviderSummaryLlm::new(prov.clone());
                 let synthesizer = std::sync::Arc::new(SummarySynthesizer::new(
                     memory_db.clone()
                         as std::sync::Arc<dyn alephcore::memory::store::raw_memory::RawMemoryStore>,
@@ -1073,7 +1078,7 @@ pub(in crate::commands::start) async fn register_agent_handlers(
                 // Batch 2 — session-end reflection ("lessons learned"). Opt-in: only
                 // registered when [memory.reflection] enabled = true, so the
                 // disabled default adds zero session-end overhead. Reuses the
-                // same SummaryLlm wrapper as the Spec B summarizer. The
+                // same prose SummaryLlm wrapper as the Spec B summarizer. The
                 // cooldown watermark persists to compression_metadata so a
                 // daemon restart cannot reset the per-agent throttle.
                 if app_config.memory.reflection.enabled {

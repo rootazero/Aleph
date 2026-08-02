@@ -306,18 +306,34 @@ impl CompressionService {
                 return Ok(CompressionResult::empty());
             };
 
-            // ToolInvocation rows are per-call telemetry, consumed by the
-            // insights aggregator and dream signal metrics (which read them
-            // by source, independent of `is_processed`). They are NOT
-            // knowledge — keep them out of the note-extraction LLM batch so
-            // they neither waste a planning call nor pollute L1 with
-            // "tool X ok in Yms" pseudo-notes. They are marked processed
-            // immediately below (they can never yield a note, so nothing may
-            // ever defer them) so the unprocessed queue stays bounded.
-            let (telemetry, ingestable): (Vec<RawMemory>, Vec<RawMemory>) = raw_memories
-                .iter()
-                .cloned()
-                .partition(|r| matches!(r.source, RawMemorySource::ToolInvocation { .. }));
+            // Rows this drain must NOT hand to the note-extraction LLM, because
+            // a different consumer already owns them and that consumer reads
+            // `raw_memories` by source/path — never through `is_processed`:
+            //
+            //   * `ToolInvocation` — per-call telemetry for the insights
+            //     aggregator and the dream signal metrics. Not knowledge; would
+            //     pollute L1 with "tool X ok in Yms" pseudo-notes.
+            //   * `Correction` — owned by the `FeedbackDistill` dream stage,
+            //     which reads them via `get_raw_by_path_prefix_since` on the
+            //     `aleph://correction/` prefix. Leaving them in the batch made
+            //     every correction land TWICE: once as a generic note here and
+            //     once as a feedback rule there — and `flag_user_correction`
+            //     kicks this very drain, so the double ingest was immediate,
+            //     not hypothetical. (`source_prompts::prompt_for` has always
+            //     claimed corrections never reach this path; now that is true.)
+            //
+            // Both are marked processed immediately below rather than left for
+            // the stop-the-bleed retry grace: neither can ever yield a note, so
+            // deferring them would only grow the unprocessed queue forever.
+            // Marking is safe precisely because their real consumers ignore the
+            // flag.
+            let (bypassed, ingestable): (Vec<RawMemory>, Vec<RawMemory>) =
+                raw_memories.iter().cloned().partition(|r| {
+                    matches!(
+                        r.source,
+                        RawMemorySource::ToolInvocation { .. } | RawMemorySource::Correction { .. }
+                    )
+                });
 
             // X1 C3: let extensions contribute context before ingest. Computed
             // once for the whole drained batch and shared by every per-source
@@ -388,16 +404,19 @@ impl CompressionService {
             let mut facts_extracted: u32 = 0;
             let mut facts_invalidated: u32 = 0;
 
-            // Telemetry rows never enter an ingest group; mark them right away.
-            if !telemetry.is_empty() {
-                let ids: Vec<String> = telemetry.iter().map(|r| r.id.clone()).collect();
+            // Bypassed rows never enter an ingest group; mark them right away.
+            if !bypassed.is_empty() {
+                let ids: Vec<String> = bypassed.iter().map(|r| r.id.clone()).collect();
                 match self.database.mark_raw_as_processed(&ids).await {
                     Ok(n) => {
                         memories_processed += n as u32;
-                        tracing::info!(marked = n, "Marked telemetry raws as processed");
+                        tracing::info!(marked = n, "Marked non-ingestable raws as processed");
                     }
                     Err(e) => {
-                        tracing::warn!(error = %e, "Failed to mark telemetry raws as processed");
+                        tracing::warn!(
+                            error = %e,
+                            "Failed to mark non-ingestable raws as processed"
+                        );
                     }
                 }
             }
@@ -432,18 +451,31 @@ impl CompressionService {
 
                 match ingest_outcome {
                     Ok(report) => {
-                        facts_extracted += report.created + report.appended + report.updated;
+                        // `linked` counts Link ops, each of which rewrites both
+                        // endpoint notes on disk — real extraction work that
+                        // used to report as zero because nothing read the field.
+                        facts_extracted +=
+                            report.created + report.appended + report.updated + report.linked;
                         facts_invalidated += report.contradicted + report.superseded;
 
                         // Stop-the-bleed: when this group's plan produced no
-                        // notes, don't burn the knowledge. Defer marking rows
-                        // still within the grace window so a transiently-failed
-                        // extraction (flaky planner LLM / embedding outage)
-                        // gets retried on a later tick instead of being
-                        // discarded forever. Past the window even ingestable
-                        // rows are marked, to bound the queue.
+                        // notes AND the planner degraded, don't burn the
+                        // knowledge. Defer marking rows still within the grace
+                        // window so a transiently-failed extraction (flaky
+                        // planner LLM / embedding outage) gets retried on a
+                        // later tick instead of being discarded forever. Past
+                        // the window even ingestable rows are marked, to bound
+                        // the queue.
+                        //
+                        // The `planner_degraded` conjunct is what keeps this
+                        // from punishing correct behaviour: every source prompt
+                        // tells the planner to emit an empty plan when nothing
+                        // clears the bar, and an un-noteworthy transcript will
+                        // still be un-noteworthy six hours later — so a
+                        // deliberate empty plan consumes its rows now instead of
+                        // being re-planned on every tick until they age out.
                         let mut consumed: Vec<String> = Vec::with_capacity(group.len());
-                        if report.is_empty() {
+                        if report.is_empty() && report.planner_degraded {
                             const RETRY_GRACE_SECS: i64 = 6 * 3600;
                             let now = chrono::Utc::now().timestamp();
                             let mut deferred = 0usize;
@@ -458,7 +490,7 @@ impl CompressionService {
                                 tracing::info!(
                                     group = %group_key,
                                     deferred,
-                                    "compound ingest produced no notes; deferring \
+                                    "compound ingest planner degraded; deferring \
                                      ingestable rows for retry (within grace window)"
                                 );
                             }
@@ -857,7 +889,12 @@ mod tests {
                     .lock()
                     .unwrap()
                     .extend(raws.iter().map(|r| r.source.clone()));
-                Ok(ApplyReport::default())
+                // Degraded planner, so the young transcript takes the deferral
+                // branch below (a deliberate empty plan would consume it).
+                Ok(ApplyReport {
+                    planner_degraded: true,
+                    ..Default::default()
+                })
             }
         }
 
@@ -911,28 +948,31 @@ mod tests {
         );
     }
 
-    /// Stop-the-bleed: an empty plan over an ingestable row that has aged past
-    /// the retry grace window must be marked processed (give-up), so the
+    /// Stop-the-bleed: a degraded planner over an ingestable row that has aged
+    /// past the retry grace window must be marked processed (give-up), so the
     /// unprocessed queue stays bounded even when extraction keeps failing.
     #[tokio::test]
-    async fn compress_to_notes_marks_aged_rows_when_plan_empty() {
+    async fn compress_to_notes_marks_aged_rows_when_planner_degraded() {
         use crate::memory::notes::ingest::{ApplyReport, CompoundIngestor};
 
-        struct EmptyIngestor;
+        struct DegradedIngestor;
         #[async_trait::async_trait]
-        impl CompoundIngestor for EmptyIngestor {
+        impl CompoundIngestor for DegradedIngestor {
             async fn ingest_batch(
                 &self,
                 _agent_id: &str,
                 _raws: Vec<RawMemory>,
                 _extra_context: Option<&str>,
             ) -> Result<ApplyReport, AlephError> {
-                Ok(ApplyReport::default())
+                Ok(ApplyReport {
+                    planner_degraded: true,
+                    ..Default::default()
+                })
             }
         }
 
         let (service, database, _tmp) = create_test_service_with_tempdir().await;
-        let service = service.with_compound_ingestor(Arc::new(EmptyIngestor));
+        let service = service.with_compound_ingestor(Arc::new(DegradedIngestor));
 
         // Aged transcript: created well past the 6h grace window.
         let mut aged = RawMemory::new("old conversation".to_string(), RawMemorySource::Transcript);
@@ -948,28 +988,31 @@ mod tests {
         );
     }
 
-    /// Stop-the-bleed: a young ingestable row whose plan produced no note is
+    /// Stop-the-bleed: a young ingestable row whose PLANNER degraded is
     /// deferred (left unprocessed) so a later tick can retry once the planner or
     /// embedding backend recovers — knowledge is not discarded on first failure.
     #[tokio::test]
-    async fn compress_to_notes_defers_young_rows_when_plan_empty() {
+    async fn compress_to_notes_defers_young_rows_when_planner_degraded() {
         use crate::memory::notes::ingest::{ApplyReport, CompoundIngestor};
 
-        struct EmptyIngestor;
+        struct DegradedIngestor;
         #[async_trait::async_trait]
-        impl CompoundIngestor for EmptyIngestor {
+        impl CompoundIngestor for DegradedIngestor {
             async fn ingest_batch(
                 &self,
                 _agent_id: &str,
                 _raws: Vec<RawMemory>,
                 _extra_context: Option<&str>,
             ) -> Result<ApplyReport, AlephError> {
-                Ok(ApplyReport::default())
+                Ok(ApplyReport {
+                    planner_degraded: true,
+                    ..Default::default()
+                })
             }
         }
 
         let (service, database, _tmp) = create_test_service_with_tempdir().await;
-        let service = service.with_compound_ingestor(Arc::new(EmptyIngestor));
+        let service = service.with_compound_ingestor(Arc::new(DegradedIngestor));
 
         let fresh = RawMemory::new("new conversation".to_string(), RawMemorySource::Transcript);
         database.insert_raw_memory(&fresh).await.unwrap();
@@ -980,6 +1023,135 @@ mod tests {
             database.count_unprocessed("default").await.unwrap(),
             1,
             "young ingestable rows must be deferred for retry, not burned"
+        );
+    }
+
+    /// The mirror case, and the one the old code punished: the planner READ the
+    /// batch and deliberately decided there was nothing worth writing down —
+    /// exactly what every source prompt asks for ("if nothing clears the bar,
+    /// emit an empty plan"). Those rows must be consumed immediately. Deferring
+    /// them re-ran the same LLM call over the same un-noteworthy transcript on
+    /// every tick for six hours before giving up on the identical answer.
+    #[tokio::test]
+    async fn compress_to_notes_consumes_young_rows_when_plan_deliberately_empty() {
+        use crate::memory::notes::ingest::{ApplyReport, CompoundIngestor};
+        use crate::sync_primitives::Mutex;
+
+        struct DeliberatelyEmptyIngestor {
+            calls: Mutex<usize>,
+        }
+        #[async_trait::async_trait]
+        impl CompoundIngestor for DeliberatelyEmptyIngestor {
+            async fn ingest_batch(
+                &self,
+                _agent_id: &str,
+                _raws: Vec<RawMemory>,
+                _extra_context: Option<&str>,
+            ) -> Result<ApplyReport, AlephError> {
+                *self.calls.lock().unwrap_or_else(|e| e.into_inner()) += 1;
+                // Parsed cleanly, planned nothing: NOT degraded.
+                Ok(ApplyReport::default())
+            }
+        }
+
+        let (service, database, _tmp) = create_test_service_with_tempdir().await;
+        let spy = Arc::new(DeliberatelyEmptyIngestor {
+            calls: Mutex::new(0),
+        });
+        let service = service.with_compound_ingestor(spy.clone());
+
+        let fresh = RawMemory::new(
+            "what's the weather".to_string(),
+            RawMemorySource::Transcript,
+        );
+        database.insert_raw_memory(&fresh).await.unwrap();
+
+        service.compress_to_notes("default").await.unwrap();
+        assert_eq!(
+            database.count_unprocessed("default").await.unwrap(),
+            0,
+            "a model-intended empty plan must consume its rows, not hold them for retry"
+        );
+
+        // And the second tick therefore costs nothing: no rows, no LLM call.
+        service.compress_to_notes("default").await.unwrap();
+        assert_eq!(
+            *spy.calls.lock().unwrap_or_else(|e| e.into_inner()),
+            1,
+            "the same un-noteworthy batch must not be re-planned on the next tick"
+        );
+    }
+
+    /// Regression (double ingest): a `Correction` row is owned by the
+    /// `FeedbackDistill` dream stage, which reads it by path prefix
+    /// (`aleph://correction/`) independently of `is_processed`. It must never
+    /// also reach the note-extraction ingestor — otherwise every correction the
+    /// model flags lands twice, as a generic note AND as a feedback rule. It
+    /// must still be marked processed, so the unprocessed queue stays bounded.
+    #[tokio::test]
+    async fn compress_to_notes_leaves_corrections_for_feedback_distill() {
+        use crate::memory::notes::ingest::{ApplyReport, CompoundIngestor};
+        use crate::sync_primitives::Mutex;
+
+        struct RecordingIngestor {
+            seen: Mutex<Vec<RawMemorySource>>,
+        }
+        #[async_trait::async_trait]
+        impl CompoundIngestor for RecordingIngestor {
+            async fn ingest_batch(
+                &self,
+                _agent_id: &str,
+                raws: Vec<RawMemory>,
+                _extra_context: Option<&str>,
+            ) -> Result<ApplyReport, AlephError> {
+                self.seen
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .extend(raws.iter().map(|r| r.source.clone()));
+                Ok(ApplyReport::default())
+            }
+        }
+
+        let (service, database, _tmp) = create_test_service_with_tempdir().await;
+        let spy = Arc::new(RecordingIngestor {
+            seen: Mutex::new(vec![]),
+        });
+        let service = service.with_compound_ingestor(spy.clone());
+
+        let correction = RawMemory::new(
+            "never force-push to shared branches".to_string(),
+            RawMemorySource::Correction {
+                severity: "high".to_string(),
+                suggested_rule: None,
+            },
+        )
+        .with_path("aleph://correction/c1");
+        database.insert_raw_memory(&correction).await.unwrap();
+
+        service.compress_to_notes("default").await.unwrap();
+
+        assert!(
+            spy.seen
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .is_empty(),
+            "corrections must not reach the note-extraction ingestor"
+        );
+        assert_eq!(
+            database.count_unprocessed("default").await.unwrap(),
+            0,
+            "corrections must still be marked processed so the queue stays bounded"
+        );
+        // FeedbackDistill's reader is `is_processed`-independent, so marking
+        // them does not strand them: the row is still there for the prefix read.
+        let still_readable = database
+            .get_raw_by_path_prefix("aleph://correction/", "default", 10)
+            .await
+            .unwrap();
+        assert_eq!(
+            still_readable.len(),
+            1,
+            "FeedbackDistill must still be able to read the correction after compression"
         );
     }
 
@@ -1104,8 +1276,10 @@ mod tests {
 
         assert_eq!(result.memories_processed, 1, "consumed raw rows counted");
         assert_eq!(
-            result.facts_extracted, 4,
-            "created + appended + updated notes counted"
+            result.facts_extracted, 7,
+            "created + appended + updated notes AND link edges counted — `linked` was \
+             a write-only counter nobody read, so 3 applied Link ops (each rewriting \
+             both endpoints) reported as zero work"
         );
         assert_eq!(
             result.facts_invalidated, 2,

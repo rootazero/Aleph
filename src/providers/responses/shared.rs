@@ -809,7 +809,6 @@ mod tests {
             }),
             requires_confirmation: false,
             category: ToolCategory::Builtin,
-            llm_context: None,
             strict: false,
         }];
         let result = build_tools(Some(&tools), false).unwrap();
@@ -830,7 +829,6 @@ mod tests {
             parameters,
             requires_confirmation: false,
             category: ToolCategory::Builtin,
-            llm_context: None,
             strict: false,
         }
     }

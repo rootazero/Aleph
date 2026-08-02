@@ -137,6 +137,12 @@ pub struct PromptBuilder {
     /// injects its usage guide only when summaries are present. Sourced by the
     /// harness bridge from `FlowInput::carries_session_summaries()`.
     has_session_summaries: bool,
+    /// True when this turn's transient tail carries an auto-recalled
+    /// `<memory-context>` message. Threaded into every `LayerInput` so
+    /// `MemoryProtocolLayer` claims the block is in the conversation only when
+    /// it really is. Sourced by the harness bridge from
+    /// `MemoryContextProvider::build_memory_user_message`'s own result.
+    has_recalled_memory: bool,
 }
 
 impl PromptBuilder {
@@ -159,6 +165,7 @@ impl PromptBuilder {
             strategy: None,
             session_mode: None,
             has_session_summaries: false,
+            has_recalled_memory: false,
         }
     }
 
@@ -259,6 +266,18 @@ impl PromptBuilder {
         self
     }
 
+    /// Mark whether this turn's transient tail carries an auto-recalled
+    /// `<memory-context>` message, so `MemoryProtocolLayer` may state it as
+    /// fact. The harness bridge sources the value from the producer itself —
+    /// `build_memory_user_message` returns `Ok(None)` under
+    /// `MemoryInjectionMode::Tools`, which is exactly the configuration the
+    /// unconditional claim used to lie about.
+    #[must_use]
+    pub const fn with_recalled_memory(mut self, has: bool) -> Self {
+        self.has_recalled_memory = has;
+        self
+    }
+
     /// Attach a welded strategy `<strategy>` body for the subagent inline
     /// prompt. The body is the inner text (no tags); `build_system_prompt`
     /// wraps it in `<strategy> … </strategy>` exactly like `StrategyLayer`.
@@ -303,7 +322,8 @@ impl PromptBuilder {
             .with_model_behavior_delta_opt(self.model_behavior_delta.as_deref());
         let input = input
             .with_iteration_cap_opt(self.iteration_cap)
-            .with_session_summaries(self.has_session_summaries);
+            .with_session_summaries(self.has_session_summaries)
+            .with_recalled_memory(self.has_recalled_memory);
         maybe_trace_prompt_size(&self.pipeline, path, &input, PromptMode::Full);
         let mut prompt = self.pipeline.execute(path, &input);
         // Subagent strategy weld: appended post-pipeline because the Basic-path

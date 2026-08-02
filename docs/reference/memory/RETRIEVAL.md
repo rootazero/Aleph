@@ -64,7 +64,10 @@ pub trait WorkingMemoryAssembler: Send + Sync {
 The assembly pipeline:
 
 1. **Retrieve** — calls `NoteFactRetrieval::retrieve` for hybrid search
-2. **Re-rank** — optionally runs `AiProviderReranker` for LLM-based re-ranking
+2. **Re-rank** — optionally runs `AiProviderReranker` for LLM-based re-ranking.
+   It pins a `"respond only with strict JSON"` system message (the rerank parser
+   accepts nothing else); prose consumers take `AiProviderSummaryLlm` — see
+   [MEMORY_SYSTEM.md](../MEMORY_SYSTEM.md)
 3. **Hydrate** — converts `NoteSearchResult`s into `EnvelopeItem`s
 4. **Extend** — applies registered `MemoryExtension::on_retrieve` hooks
 5. **Render** — serializes to XML via `render_with(&env, RenderStyle::Xml)`

@@ -142,6 +142,13 @@ pub fn init_schema(conn: &Connection) -> Result<(), AlephError> {
     conn.execute_batch(ddl::ASSEMBLY_LOGS_DDL)
         .map_err(|e| AlephError::config(format!("Failed to create assembly_logs table: {e}")))?;
 
+    conn.execute_batch(ddl::MEMORY_WRITE_DECISIONS_DDL)
+        .map_err(|e| {
+            AlephError::config(format!(
+                "Failed to create memory_write_decisions table: {e}"
+            ))
+        })?;
+
     conn.execute_batch(ddl::CREATE_QUERY_FILED)
         .map_err(|e| AlephError::other(format!("init query_filed: {e}")))?;
 

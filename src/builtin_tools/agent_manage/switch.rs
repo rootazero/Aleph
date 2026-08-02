@@ -93,10 +93,6 @@ impl AlephTool for AgentSwitchTool {
     type Args = AgentSwitchArgs;
     type Output = AgentSwitchOutput;
 
-    fn examples(&self) -> Option<Vec<String>> {
-        Some(vec!["agent_switch(agent_id='trader')".to_string()])
-    }
-
     async fn call(&self, args: Self::Args) -> Result<Self::Output> {
         info!(agent_id = %args.agent_id, channel = %args.__channel, "Agent switch requested");
 
@@ -194,7 +190,6 @@ mod tests {
         let def = AlephTool::definition(&tool);
         assert_eq!(def.name, "agent_switch");
         assert!(!def.requires_confirmation);
-        assert!(def.llm_context.is_some());
     }
 
     #[tokio::test]

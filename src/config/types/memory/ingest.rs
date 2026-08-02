@@ -100,6 +100,11 @@ impl Default for CuratedSection {
     }
 }
 
+/// Consumed by the `MemoryContextProvider` factory
+/// (`init_memory_context_provider_with_extensions` →
+/// `MemoryContextProvider::with_curated_config`). Until that call existed every
+/// construction path hardcoded `CuratedConfig::default()`, so both char limits
+/// were unreachable from config no matter what the user wrote.
 impl From<CuratedSection> for CuratedConfig {
     fn from(s: CuratedSection) -> Self {
         Self {

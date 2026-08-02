@@ -259,13 +259,6 @@ impl AlephTool for TeamDelegateTool {
     type Args = TeamDelegateArgs;
     type Output = TeamDelegateOutput;
 
-    fn examples(&self) -> Option<Vec<String>> {
-        Some(vec![
-            "team_delegate(team_id='abc123', agent_id='researcher', task='Summarize the latest AI papers')".to_string(),
-            "team_delegate(team_id='abc123', agent_id='coder', task='Implement the login page', timeout_secs=600)".to_string(),
-        ])
-    }
-
     async fn call(&self, args: Self::Args) -> Result<Self::Output> {
         let context = self.context.as_ref().ok_or_else(|| {
             AlephError::other("GatewayContext not configured for team_delegate tool")

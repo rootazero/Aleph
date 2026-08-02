@@ -130,16 +130,6 @@ impl AlephTool for TeamSnapshotTool {
     // action arg already conveys intent).
     type Output = Value;
 
-    fn examples(&self) -> Option<Vec<String>> {
-        Some(vec![
-            "team_snapshot(action='create', team_id='team-abc', tag='pre-refactor')".into(),
-            "team_snapshot(action='list', team_id='team-abc')".into(),
-            "team_snapshot(action='restore', snapshot_id='snap-123')   # dry-run".into(),
-            "team_snapshot(action='restore', snapshot_id='snap-123', apply=true)".into(),
-            "team_snapshot(action='delete', snapshot_id='snap-123')".into(),
-        ])
-    }
-
     async fn call(&self, args: Self::Args) -> Result<Self::Output> {
         info!(
             action = ?args.action,

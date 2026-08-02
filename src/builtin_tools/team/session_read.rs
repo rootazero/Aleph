@@ -100,10 +100,6 @@ impl AlephTool for SessionReadTool {
     type Args = SessionReadArgs;
     type Output = SessionReadOutput;
 
-    fn examples(&self) -> Option<Vec<String>> {
-        Some(vec!["session_read(session_id='sess-1')".to_string()])
-    }
-
     async fn call(&self, args: Self::Args) -> Result<Self::Output> {
         debug!(session_id = %args.session_id, "session_read");
 

@@ -156,7 +156,6 @@ proptest! {
                 parameters: d.input_schema.clone(),
                 requires_confirmation: false,
                 category: ToolCategory::Builtin,
-                llm_context: None,
                 strict: false,
             })
             .collect();
@@ -168,7 +167,6 @@ proptest! {
             prop_assert_eq!(a.requires_confirmation, m.requires_confirmation);
             prop_assert_eq!(a.strict, m.strict);
             prop_assert_eq!(matches!(a.category, ToolCategory::Builtin), true);
-            prop_assert_eq!(a.llm_context.is_none(), true);
         }
     }
 }

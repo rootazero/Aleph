@@ -61,13 +61,6 @@ impl AlephTool for LifecycleRequestShutdownTool {
     type Args = LifecycleRequestShutdownArgs;
     type Output = LifecycleRequestShutdownOutput;
 
-    fn examples(&self) -> Option<Vec<String>> {
-        Some(vec![
-            "lifecycle_request_shutdown(team_id='team-1', reason='all assigned tasks complete')"
-                .to_string(),
-        ])
-    }
-
     async fn call(&self, args: Self::Args) -> Result<Self::Output> {
         let team = self
             .team_store

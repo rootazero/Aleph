@@ -306,7 +306,17 @@ impl DreamStage for FeedbackDistillStage {
                 .await
             {
                 Ok(_) => {
-                    applied += 1;
+                    // `Skip` is a pure no-op inside `apply_distill_action` (it
+                    // logs and returns `Ok`), so an `Ok` return is NOT proof a
+                    // file changed. Counting it made the prompt's own
+                    // "Empty output beats noise" gate look like productivity:
+                    // three correctly-skipped signals reported three applied
+                    // feedback rules and triggered an index rebuild over
+                    // nothing. The provenance record is still pushed — the LLM
+                    // did make a decision and the audit trail must show it.
+                    if !matches!(action, DistillAction::Skip { .. }) {
+                        applied += 1;
+                    }
                     ctx.report
                         .distill_actions
                         .push(DistillActionRecord::from_action(
@@ -752,6 +762,227 @@ mod tests {
             }
             _ => panic!("variant changed"),
         }
+    }
+
+    // -----------------------------------------------------------------------
+    // Stage-level: a Skip is a decision, not a write
+    // -----------------------------------------------------------------------
+
+    struct StubEmbedder;
+
+    #[async_trait::async_trait]
+    impl crate::memory::embedding_provider::EmbeddingProvider for StubEmbedder {
+        async fn embed(&self, _text: &str) -> Result<Vec<f32>, AlephError> {
+            Ok(Vec::new())
+        }
+        async fn embed_batch(&self, _texts: &[&str]) -> Result<Vec<Vec<f32>>, AlephError> {
+            Ok(Vec::new())
+        }
+        fn dimensions(&self) -> usize {
+            0
+        }
+        fn model_name(&self) -> &str {
+            "stub"
+        }
+        fn provider_id(&self) -> &str {
+            "stub"
+        }
+    }
+
+    /// Counts `refresh_index_after_ingest` calls. Every other method is an
+    /// inert stub — the stage only ever reaches the refresh.
+    struct RefreshSpy {
+        refreshes: std::sync::atomic::AtomicUsize,
+    }
+
+    impl RefreshSpy {
+        fn count(&self) -> usize {
+            self.refreshes.load(std::sync::atomic::Ordering::SeqCst)
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl crate::memory::notes::orientation::NoteOrientation for RefreshSpy {
+        async fn bootstrap(&self, _agent_id: &str) -> Result<(), AlephError> {
+            Ok(())
+        }
+        async fn read_snapshot(
+            &self,
+            _agent_id: &str,
+            _budget: crate::memory::notes::orientation::types::TokenBudget,
+        ) -> Result<crate::memory::notes::orientation::types::OrientationSnapshot, AlephError>
+        {
+            Ok(
+                crate::memory::notes::orientation::types::OrientationSnapshot {
+                    schema_text: String::new(),
+                    index_text: String::new(),
+                    recent_log_tail: String::new(),
+                },
+            )
+        }
+        async fn record_ingest(
+            &self,
+            _agent_id: &str,
+            _entry: crate::memory::notes::orientation::types::LogEntry,
+        ) -> Result<(), AlephError> {
+            Ok(())
+        }
+        async fn record_query(
+            &self,
+            _agent_id: &str,
+            _entry: crate::memory::notes::orientation::types::LogEntry,
+        ) -> Result<(), AlephError> {
+            Ok(())
+        }
+        async fn record_lint(
+            &self,
+            _agent_id: &str,
+            _entry: crate::memory::notes::orientation::types::LogEntry,
+        ) -> Result<(), AlephError> {
+            Ok(())
+        }
+        async fn record_session_end(
+            &self,
+            _agent_id: &str,
+            _entry: crate::memory::notes::orientation::types::LogEntry,
+        ) -> Result<(), AlephError> {
+            Ok(())
+        }
+        async fn rebuild_index(
+            &self,
+            _agent_id: &str,
+        ) -> Result<crate::memory::notes::orientation::types::IndexStats, AlephError> {
+            Ok(crate::memory::notes::orientation::types::IndexStats::default())
+        }
+        async fn refresh_index_after_ingest(
+            &self,
+            _agent_id: &str,
+            _summary: &crate::memory::notes::orientation::types::IngestBatchSummary,
+        ) -> Result<(), AlephError> {
+            self.refreshes
+                .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            Ok(())
+        }
+        async fn rotate_log_if_needed(&self, _agent_id: &str) -> Result<bool, AlephError> {
+            Ok(false)
+        }
+    }
+
+    /// Build a `DreamContext` seeded with three fresh corrections and a
+    /// canned planner response, returning the refresh spy for assertions.
+    async fn ctx_with_three_corrections(
+        llm_response: &str,
+    ) -> (
+        crate::memory::dreaming::DreamContext,
+        std::sync::Arc<RefreshSpy>,
+        tempfile::TempDir,
+    ) {
+        use crate::memory::notes::NoteIndexer;
+        use crate::memory::store::SqliteMemoryBackend;
+        use crate::sync_primitives::Arc;
+
+        let dir = tempfile::tempdir().unwrap();
+        let store = Arc::new(SqliteMemoryBackend::new(&dir.path().join("mem.db")).unwrap());
+        let indexer = NoteIndexer::new(dir.path().join("note"), store.clone());
+
+        for i in 0..3 {
+            let id = format!("c{i}");
+            let raw = fake_correction(&id, &format!("user corrected me {i}"), "med")
+                .with_agent("default");
+            store.insert_raw_memory(&raw).await.unwrap();
+        }
+
+        let spy = Arc::new(RefreshSpy {
+            refreshes: std::sync::atomic::AtomicUsize::new(0),
+        });
+        let orientation: Arc<dyn crate::memory::notes::orientation::NoteOrientation> = spy.clone();
+
+        let ctx = crate::memory::dreaming::DreamContext {
+            notes: Vec::new(),
+            note_contents: std::collections::HashMap::new(),
+            agent_id: "default".into(),
+            database: store.clone(),
+            indexer,
+            provider: Arc::new(crate::providers::mock::MockProvider::new(llm_response)),
+            embedder: Arc::new(StubEmbedder),
+            report: crate::memory::dreaming::DreamReport::default(),
+            pipeline_type: "consolidate".into(),
+            activity_checker: Arc::new(|| false),
+            strategy: crate::memory::dreaming::DreamStrategy::Consolidate,
+            orientation: Some(orientation),
+            evolution_budget: crate::memory::dreaming::EditBudget::default(),
+        };
+        (ctx, spy, dir)
+    }
+
+    fn stage() -> FeedbackDistillStage {
+        FeedbackDistillStage {
+            max_per_cycle: 3,
+            min_candidates: 3,
+            lookback: 50,
+        }
+    }
+
+    /// The prompt's own gate — "Empty output beats noise: … if not, SKIP it" —
+    /// must not read as productivity. `apply_distill_action` is a pure no-op for
+    /// `Skip` (it logs and returns `Ok`), so treating any `Ok` as a write made
+    /// three correctly-skipped corrections report three applied feedback rules
+    /// AND rebuild `index.md` over a corpus nothing had touched.
+    #[tokio::test]
+    async fn a_batch_of_only_skips_applies_nothing_and_never_refreshes_the_index() {
+        let response = r#"{"actions":[
+            {"type":"skip","source_fact":"c0","reason":"transient"},
+            {"type":"skip","source_fact":"c1","reason":"transient"},
+            {"type":"skip","source_fact":"c2","reason":"transient"}
+        ]}"#;
+        let (ctx, spy, _dir) = ctx_with_three_corrections(response).await;
+
+        let ctx = stage().execute(ctx).await.unwrap();
+
+        assert_eq!(
+            ctx.report
+                .extra
+                .get("feedback_distill_count")
+                .map(String::as_str),
+            Some("0"),
+            "a skip writes no file, so it must not be counted as a distilled rule"
+        );
+        assert_eq!(
+            spy.count(),
+            0,
+            "no note changed — index.md must not be rebuilt"
+        );
+        // The audit trail still records every decision the LLM made.
+        assert_eq!(ctx.report.distill_actions.len(), 3);
+        assert!(ctx
+            .report
+            .distill_actions
+            .iter()
+            .all(|r| r.action_kind == "skip"));
+    }
+
+    /// Positive control for the above: a real `New` still counts and still
+    /// refreshes, so the fix narrowed the counter rather than disabling it.
+    #[tokio::test]
+    async fn a_new_rule_counts_as_applied_and_refreshes_the_index() {
+        let response = r#"{"actions":[
+            {"type":"new","title":"no-force-push","rule":"never force-push shared branches",
+             "confidence":0.9,"severity":"high","source_facts":["c0"]},
+            {"type":"skip","source_fact":"c1","reason":"transient"}
+        ]}"#;
+        let (ctx, spy, _dir) = ctx_with_three_corrections(response).await;
+
+        let ctx = stage().execute(ctx).await.unwrap();
+
+        assert_eq!(
+            ctx.report
+                .extra
+                .get("feedback_distill_count")
+                .map(String::as_str),
+            Some("1"),
+            "the new rule is the only write in the batch"
+        );
+        assert_eq!(spy.count(), 1, "a real write must still refresh index.md");
     }
 
     #[test]

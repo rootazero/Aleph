@@ -267,28 +267,12 @@ pub const fn default_orientation_max_tokens() -> usize {
     4000
 }
 
-pub const fn default_orientation_log_rotate_lines() -> usize {
-    2000
-}
-
-pub const fn default_orientation_inject_on_agent_switch() -> bool {
-    true
-}
-
 pub const fn default_profile_enabled() -> bool {
     true
 }
 
 pub const fn default_profile_min_interval_minutes() -> u32 {
     30
-}
-
-pub const fn default_profile_inject_interval_turns() -> u32 {
-    10
-}
-
-pub const fn default_profile_max_body_bytes() -> usize {
-    2048
 }
 
 pub const fn default_profile_max_bullets() -> usize {

@@ -312,13 +312,6 @@ impl AlephTool for SessionSearchTool {
     type Args = SessionSearchArgs;
     type Output = SessionSearchOutput;
 
-    fn examples(&self) -> Option<Vec<String>> {
-        Some(vec![
-            "session_search(query='Rust async patterns')".to_string(),
-            "session_search(query='deployment configuration', max_results=3)".to_string(),
-        ])
-    }
-
     async fn call(&self, args: Self::Args) -> Result<Self::Output> {
         self.call_impl(args).await.map_err(Into::into)
     }

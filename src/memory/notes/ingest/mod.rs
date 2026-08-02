@@ -1,7 +1,9 @@
 //! Compound-ingest pipeline: retrieve → plan → apply → record.
 //!
-//! Replaces the single-step `FactExtractor::extract_note_updates_for_source`
-//! with a two-phase flow that updates multiple note pages per batch.
+//! One LLM call plans cross-page edits for a whole batch of raw memories:
+//! `prompts::build_compound_system_prompt` builds the system prompt (the
+//! `IngestPlan` contract plus a source-specific guidance block), `plan`
+//! parses the returned plan, and `apply` commits its ops to the note store.
 
 pub mod apply;
 pub mod plan;

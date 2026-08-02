@@ -10,6 +10,7 @@ use super::profile::UserProfileLoader;
 use crate::memory::context::FactSource;
 use crate::memory::note_retrieval::NoteFactRetrieval;
 use crate::memory::session_resume::reader::SnapshotReader;
+use crate::memory::session_resume::SessionSnapshot;
 use crate::memory::session_search_summary::FactSourceFilter;
 use crate::memory::store::raw_memory::{RawMemory, RawMemorySource, RawMemoryStore};
 use crate::memory::store::MemoryBackend;
@@ -172,27 +173,7 @@ impl Gatherer {
         let Some(snap) = self.snapshots.load_latest(agent_id, exclude) else {
             return Vec::new();
         };
-        let body = format!(
-            "Summary: {}\nKey decisions: {}\nActive files: {}\nPending: {}",
-            snap.summary,
-            snap.key_decisions.join("; "),
-            snap.active_files.join(", "),
-            snap.pending_tasks.join("; "),
-        );
-        let sid = snap.session_id;
-        vec![Candidate {
-            id: format!("aleph://session/{sid}/snapshot"),
-            title: format!("Session {sid} snapshot"),
-            full_content: body,
-            source: ItemSource::Summary {
-                layer: "d1".into(),
-                session_id: sid,
-            },
-            relevance: 0.9,
-            updated_at: snap.created_at.timestamp(),
-            slot_hint: SlotKind::SessionRecent,
-            fact_source: FactSource::Summary,
-        }]
+        vec![snapshot_to_candidate(snap)]
     }
 
     async fn fetch_raws(
@@ -352,6 +333,33 @@ fn feedback_entry_to_candidate(id: String, entry: FeedbackFloorEntry) -> Candida
     }
 }
 
+/// Convert the prior session's [`SessionSnapshot`] into a `SessionRecent`-slotted
+/// candidate.
+///
+/// The body is the summary VERBATIM. That summary is the `/end-summary`, which
+/// is mandated to carry filled `## Key Decisions` / `## Files & Code` /
+/// `## Pending` sections — so the old render, which appended
+/// `Key decisions: …\nActive files: …\nPending: …` from snapshot fields no
+/// producer ever filled, handed the model a filled answer and then, four lines
+/// later, an empty one it would read last. Those fields are gone (R7/P8: their
+/// only possible source was scraping this very natural-language summary).
+fn snapshot_to_candidate(snap: SessionSnapshot) -> Candidate {
+    let sid = snap.session_id;
+    Candidate {
+        id: format!("aleph://session/{sid}/snapshot"),
+        title: format!("Session {sid} snapshot"),
+        full_content: snap.summary,
+        source: ItemSource::Summary {
+            layer: "d1".into(),
+            session_id: sid,
+        },
+        relevance: 0.9,
+        updated_at: snap.created_at.timestamp(),
+        slot_hint: SlotKind::SessionRecent,
+        fact_source: FactSource::Summary,
+    }
+}
+
 /// Convert a dream-daemon [`DailyInsight`] into a `SessionRecent`-slotted
 /// candidate. Relevance sits below the prior-session snapshot (0.9) — the
 /// digest is ambient daily context, not a direct continuation of this session.
@@ -466,6 +474,26 @@ mod tests {
             slot_hint_for_path("reference/rust-ownership"),
             SlotKind::RelevantNotes
         );
+    }
+
+    #[test]
+    fn snapshot_candidate_body_is_the_summary_verbatim() {
+        // Regression: the render used to append `Key decisions:` /
+        // `Active files:` / `Pending:` labels fed by fields that had no
+        // producer, so every injected snapshot ended with three empty labels
+        // contradicting the summary's own filled sections directly above.
+        let summary = "## Key Decisions\n- chose SQLite\n\n## Pending\n- ship the migration";
+        let snap = SessionSnapshot {
+            session_id: "agent:main:prev".into(),
+            agent_id: "main".into(),
+            created_at: chrono::Utc::now(),
+            summary: summary.into(),
+        };
+        let c = snapshot_to_candidate(snap);
+        assert_eq!(c.full_content, summary);
+        assert_eq!(c.slot_hint, SlotKind::SessionRecent);
+        assert_eq!(c.fact_source, FactSource::Summary);
+        assert_eq!(c.id, "aleph://session/agent:main:prev/snapshot");
     }
 
     #[test]

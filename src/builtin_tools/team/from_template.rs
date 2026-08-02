@@ -124,14 +124,6 @@ impl AlephTool for TeamFromTemplateTool {
     type Args = TeamFromTemplateArgs;
     type Output = TeamFromTemplateOutput;
 
-    fn examples(&self) -> Option<Vec<String>> {
-        Some(vec![
-            "team_from_template(template='software-dev', team_name='checkout-redesign', goal='rebuild the checkout flow with stripe webhooks')".to_string(),
-            "team_from_template(template='code-review', team_name='pr-1234-review', goal='review the diff on branch feat/oauth')".to_string(),
-            "team_from_template(template='strategy-room', team_name='hire-or-buy', goal='hire a senior backend engineer vs buy a contractor')".to_string(),
-        ])
-    }
-
     async fn call(&self, args: Self::Args) -> Result<Self::Output> {
         info!(
             template = %args.template,

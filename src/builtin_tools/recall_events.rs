@@ -96,13 +96,6 @@ impl AlephTool for RecallEventsTool {
     type Args = RecallEventsArgs;
     type Output = RecallEventsOutput;
 
-    fn examples(&self) -> Option<Vec<String>> {
-        Some(vec![
-            "recall_events(query=\"file I was editing parseConfig\")".to_string(),
-            "recall_events(query=\"cargo build failed error\", limit=3)".to_string(),
-        ])
-    }
-
     async fn call(&self, args: Self::Args) -> Result<Self::Output> {
         notify_tool_start(Self::NAME, &args.query);
         let limit = args.limit.unwrap_or(DEFAULT_LIMIT).clamp(1, MAX_LIMIT);

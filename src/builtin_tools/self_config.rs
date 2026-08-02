@@ -258,12 +258,11 @@ impl SelfConfigTool {
         // identity-file path. It is not one of IDENTITY_FILE_NAMES, so this guard
         // must run BEFORE validate_file_name — otherwise the generic "Invalid
         // file name" error would shadow this actionable deprecation message.
-        if file_name.eq_ignore_ascii_case("MEMORY.md") {
+        // The name list and the wording live in `config::agent_manager` so this
+        // surface cannot drift from `agents.files.set` / `write_identity_file`.
+        if crate::config::agent_manager::is_curated_owned(file_name) {
             return Err(ToolError::Execution(
-                "self_config does not manage MEMORY.md. \
-                 Use the `remember` tool with action=add/replace/remove for entry-level edits. \
-                 MEMORY.md content is injected into your context automatically each turn."
-                    .to_string(),
+                crate::config::agent_manager::curated_owned_reason(file_name),
             )
             .into());
         }

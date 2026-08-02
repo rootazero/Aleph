@@ -63,17 +63,6 @@ impl AlephTool for LifecycleResolveShutdownTool {
     type Args = LifecycleResolveShutdownArgs;
     type Output = LifecycleResolveShutdownOutput;
 
-    fn examples(&self) -> Option<Vec<String>> {
-        Some(vec![
-            "lifecycle_resolve_shutdown(team_id='team-1', shutdown_request_id='msg-1', \
-             requester_agent_id='worker-1', decision='approve')"
-                .to_string(),
-            "lifecycle_resolve_shutdown(team_id='team-1', shutdown_request_id='msg-1', \
-             requester_agent_id='worker-1', decision='reject', feedback='Still need you on review')"
-                .to_string(),
-        ])
-    }
-
     async fn call(&self, args: Self::Args) -> Result<Self::Output> {
         let leader_id = if self.current_agent_id.is_empty() {
             "leader".to_string()

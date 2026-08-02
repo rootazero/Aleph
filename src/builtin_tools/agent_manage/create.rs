@@ -226,7 +226,7 @@ impl AlephTool for AgentCreateTool {
          wants a specialized agent (trading, coding, health, a companion, etc.).\n\n\
          Before creating, if the request is under-specified, run a short creation interview:\n\
          1) Recommend ONE soul archetype from the user's purpose and confirm it — pick from \
-         the Soul Archetypes catalog in this tool's usage notes below.\n\
+         the values enumerated on the `archetype` parameter.\n\
          2) Ask up to 2-5 short questions to gather: domain/focus, name, tone tweaks, hard \
          boundaries, signature behaviors.\n\
          3) Call agent_create with the chosen `archetype` and a `personalization` markdown \
@@ -236,47 +236,6 @@ impl AlephTool for AgentCreateTool {
 
     type Args = AgentCreateArgs;
     type Output = AgentCreateOutput;
-
-    fn examples(&self) -> Option<Vec<String>> {
-        Some(vec![
-            "agent_create(id='quant', name='Quant', archetype='expert', personalization='Focus: equities and macro. Always show confidence and sourcing. Hard boundary: no trade execution.')".to_string(),
-            "agent_create(id='coder', name='Coder', archetype='maker', personalization='Stack: Rust + tokio. Always run cargo check before claiming done.')".to_string(),
-            "agent_create(id='iris', name='Iris', archetype='companion', personalization='Evening check-ins. Reflect first; never push advice unasked.')".to_string(),
-        ])
-    }
-
-    /// Build the definition, then append the Soul Archetypes catalog to
-    /// `llm_context` from the single source ([`soul_archetypes::creation_catalog`]).
-    ///
-    /// The trait default only injects `examples()`; we extend it so the
-    /// interview list the model reads is generated from [`SoulArchetype::summary`]
-    /// rather than a hand-copied literal that drifts from the templates.
-    fn definition(&self) -> crate::tool_metadata::ToolDefinition {
-        use crate::thinker::soul_archetypes::creation_catalog;
-
-        let mut context = format!("## Soul Archetypes (choose one)\n\n{}", creation_catalog());
-        if let Some(examples) = self.examples() {
-            let examples_text = examples
-                .iter()
-                .enumerate()
-                .map(|(i, ex)| format!("{}. {}", i + 1, ex))
-                .collect::<Vec<_>>()
-                .join("\n");
-            context.push_str(&format!("\n\n## Usage Examples\n\n{examples_text}"));
-        }
-
-        let schema = schemars::schema_for!(AgentCreateArgs);
-        let parameters = serde_json::to_value(&schema).unwrap_or_default();
-        crate::tool_metadata::ToolDefinition::new(
-            Self::NAME,
-            Self::DESCRIPTION,
-            parameters,
-            self.category(),
-        )
-        .with_confirmation(self.requires_confirmation())
-        .with_strict(self.strict_schema())
-        .with_llm_context(context)
-    }
 
     async fn call(&self, mut args: Self::Args) -> Result<Self::Output> {
         // Auto-resolve name and id from raw slash command input
@@ -613,15 +572,12 @@ mod tests {
         assert_eq!(def.name, "agent_create");
         assert!(!def.requires_confirmation);
 
-        // llm_context carries the SSOT archetype catalog (from summary()) AND
-        // the usage examples — both must be wired in.
-        let context = def
-            .llm_context
-            .expect("agent_create must inject llm_context");
-        assert!(context.contains("## Soul Archetypes"));
-        assert!(context.contains("expert:"));
-        assert!(context.contains("companion:"));
-        assert!(context.contains("(default when unclear)"));
-        assert!(context.contains("## Usage Examples"));
+        // The description tells the model to pick an archetype from the
+        // `archetype` parameter, so the wire schema — the only thing that
+        // actually reaches the model — must enumerate them there.
+        let schema = def.parameters.to_string();
+        for id in ["expert", "companion", "assistant", "maker"] {
+            assert!(schema.contains(id), "archetype schema missing '{id}'");
+        }
     }
 }

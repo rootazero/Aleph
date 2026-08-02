@@ -177,6 +177,16 @@ pub struct NoteManageResult {
     /// VFS path of the note affected (create/update/append/delete).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub note_path: Option<String>,
+    /// D4 receipt: resolved on-disk note path + tier label, so the model can
+    /// tell the user exactly where the note lives. Sibling of
+    /// `RememberOutput.destination` / `FlagUserCorrectionOutput.destination`.
+    /// `None` — and absent from the serialized shape — for every action that
+    /// did not land content in a note: the read actions, and `delete` (whose
+    /// note no longer lives anywhere). A receipt is proof that a write landed;
+    /// stamping one on anything else is how a model ends up telling the user
+    /// their note is filed away when nothing was filed.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub destination: Option<String>,
     /// File content (query action returns matching note bodies).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub content: Option<String>,
@@ -238,21 +248,6 @@ impl NoteManageTool {
     #[must_use]
     pub const fn with_project_scoping(mut self, enabled: bool) -> Self {
         self.project_scoped = enabled;
-        self
-    }
-
-    /// Attach the note-orientation hook so LLM-driven note writes invalidate
-    /// the generated `index.md` / `log.md` like every other write path. The
-    /// inner indexer is rebuilt because `NoteIndexer::with_orientation`
-    /// consumes `self` and this tool wraps it in an `Arc`.
-    #[must_use]
-    pub fn with_orientation(
-        mut self,
-        orientation: Arc<dyn crate::memory::notes::orientation::NoteOrientation>,
-    ) -> Self {
-        let memory_dir = self.indexer.memory_dir().to_path_buf();
-        let store = Arc::clone(self.indexer.store());
-        self.indexer = Arc::new(NoteIndexer::new(memory_dir, store).with_orientation(orientation));
         self
     }
 
@@ -419,6 +414,34 @@ impl NoteManageTool {
         ))
     }
 
+    /// D4 receipt data plane: where a note write landed, as a human-readable
+    /// string — resolved on-disk file (home abbreviated to `~`) plus the tier
+    /// label. Modelled on `CuratedMemoryStore::destination()`: the acknowledgment
+    /// the model owes the user must be able to name the destination for whichever
+    /// tier it wrote to, and reading it off the two writers' identically shaped
+    /// receipts is what keeps the two acknowledgments comparable.
+    ///
+    /// `note_path` is the `{category}/{filename}` VFS path the write returned.
+    fn destination(&self, agent_id: &str, note_path: &str) -> String {
+        let file = self
+            .indexer
+            .memory_dir()
+            .join(agent_id)
+            .join(format!("{note_path}.md"));
+        let shown = crate::utils::paths::get_home_dir()
+            .ok()
+            .and_then(|home| {
+                file.strip_prefix(&home)
+                    .ok()
+                    .map(|rel| format!("~/{}", rel.display()))
+            })
+            .unwrap_or_else(|| file.display().to_string());
+        format!(
+            "{shown} (durable notes — searchable, recalled on relevance; \
+             not always in your prompt)"
+        )
+    }
+
     // -------------------------------------------------------------------------
     // Action handlers
     // -------------------------------------------------------------------------
@@ -492,7 +515,7 @@ impl NoteManageTool {
             merge_relations(&mut note, rels);
         }
 
-        // Single write chokepoint: atomic write + reparse-index + orientation.
+        // Single write chokepoint: atomic write + reparse-index.
         // (The pre-write existence check above leaves a narrow check-to-write
         // window; note writes are single-process, so this is acceptable.)
         self.indexer
@@ -594,6 +617,7 @@ impl NoteManageTool {
             related_notes,
             success: true,
             message,
+            destination: Some(self.destination(agent_id, &note_path)),
             note_path: Some(note_path),
             content: None,
             notes: None,
@@ -659,7 +683,7 @@ impl NoteManageTool {
         }
         note.updated_at = chrono::Utc::now().timestamp();
 
-        // Single write chokepoint: atomic write + reparse-index + orientation
+        // Single write chokepoint: atomic write + reparse-index
         // (the previous plain fs::write could leave a truncated source-of-truth
         // file on a crash).
         self.indexer
@@ -678,6 +702,7 @@ impl NoteManageTool {
             related_notes: None,
             success: true,
             message: format!("Updated note '{safe_filename}' in '{category}'"),
+            destination: Some(self.destination(agent_id, &note_path)),
             note_path: Some(note_path),
             content: None,
             notes: None,
@@ -752,6 +777,7 @@ impl NoteManageTool {
                 "Appended {} fact(s) to '{safe_filename}' in '{category}'",
                 new_facts.len()
             ),
+            destination: Some(self.destination(agent_id, &note_path)),
             note_path: Some(note_path),
             content: None,
             notes: None,
@@ -876,6 +902,7 @@ impl NoteManageTool {
                 related_notes: None,
                 success: true,
                 message: format!("No notes found matching '{query}'"),
+                destination: None,
                 note_path: None,
                 content: None,
                 notes: Some(vec![]),
@@ -934,6 +961,7 @@ impl NoteManageTool {
                 "Found {} note(s) matching '{query}' ({mode} search)",
                 notes.len()
             ),
+            destination: None,
             note_path: None,
             content: Some(combined_content),
             notes: Some(notes),
@@ -983,6 +1011,7 @@ impl NoteManageTool {
             related_notes: None,
             success: true,
             message: format!("{} note(s){category_label}", entries.len()),
+            destination: None,
             note_path: None,
             content: None,
             notes: Some(entries),
@@ -1020,8 +1049,8 @@ impl NoteManageTool {
 
         let note_path = format!("{category}/{safe_filename}");
 
-        // Unified delete path: index rows (incl. embedding) + file +
-        // orientation notification, all owned by the indexer.
+        // Unified delete path: index rows (incl. embedding) + file, both
+        // owned by the indexer.
         self.indexer
             .delete_note(agent_id, category, filename)
             .await
@@ -1033,6 +1062,9 @@ impl NoteManageTool {
             related_notes: None,
             success: true,
             message: format!("Deleted note '{safe_filename}' from '{category}'"),
+            // A delete lands nothing: the note no longer lives anywhere, so a
+            // "where it lives" receipt would be a lie in the most literal sense.
+            destination: None,
             note_path: Some(note_path),
             content: None,
             notes: None,
@@ -1086,6 +1118,7 @@ impl NoteManageTool {
             message: format!(
                 "Renamed '{safe_old}' → '{safe_new}'. Inbound [[wikilinks]] were rewritten."
             ),
+            destination: Some(self.destination(agent_id, &note_path)),
             note_path: Some(note_path),
             content: None,
             notes: None,
@@ -1120,6 +1153,7 @@ impl NoteManageTool {
             related_notes: None,
             success: true,
             message: format!("Graph insights ({} kinds)", rows.len()),
+            destination: None,
             note_path: None,
             content: Some(content),
             notes: None,
@@ -1151,6 +1185,7 @@ impl NoteManageTool {
                 related_notes: None,
                 success: true,
                 message: "No dream cycles recorded yet".to_string(),
+                destination: None,
                 note_path: None,
                 content: Some(content),
                 notes: None,
@@ -1211,6 +1246,7 @@ impl NoteManageTool {
             related_notes: None,
             success: true,
             message: msg,
+            destination: None,
             note_path: None,
             content: Some(content),
             notes: None,
@@ -1239,34 +1275,19 @@ impl AlephTool for NoteManageTool {
          contradicts are force-surfaced at retrieval. \
          Use this tool to store and retrieve long-term knowledge and preferences. \
          This is the DURABLE tier — searchable and recalled on relevance, not always \
-         in-prompt. ROUTING: the authoritative destination ladder lives in the memory \
-         protocol section of your system prompt. \
+         in-prompt. \
          IMPORTANT: notes form a wiki — when creating a note, ALWAYS connect it to \
          related notes via the `links` parameter; linkless notes become orphan \
          islands and are archived early. The create result returns `related_notes` \
          candidates — link the relevant ones with a follow-up append. \
          AFTER A SUCCESSFUL WRITE: treat the success response as terminal — do not repeat \
          the write or re-echo the note into another memory tool. Acknowledge to the user in \
-         one short sentence, in the user's language, saying what was recorded and that it \
-         lives in searchable durable notes. Never quote the stored content back verbatim.";
+         one short sentence, in the user's language, saying what was recorded and where it \
+         landed — use the `destination` field from the result. Never quote the stored \
+         content back verbatim.";
 
     type Args = NoteManageArgs;
     type Output = NoteManageResult;
-
-    fn examples(&self) -> Option<Vec<String>> {
-        Some(vec![
-            "note_manage(action='create', category='preference', filename='editor-prefs', title='Editor Preferences', content='- Prefers Vim\\n- Uses LazyVim', tags=['editor'])".to_string(),
-            "note_manage(action='update', category='preference', filename='editor-prefs', content='- Prefers Neovim\\n- Uses LazyVim config')".to_string(),
-            "note_manage(action='append', category='skill', filename='rust-skills', facts=['Learned async/await patterns'], links=['Tokio'])".to_string(),
-            "note_manage(action='query', query='vim editor preferences', limit=5)".to_string(),
-            "note_manage(action='list', category='reference')".to_string(),
-            "note_manage(action='delete', category='plan', filename='old-plan')".to_string(),
-            "note_manage(action='rename', filename='old-name', new_title='new-name')".to_string(),
-            "note_manage(action='update', category='plan', filename='new-roadmap', content='...', relations=[{to: 'plan/old-roadmap', type: 'supersedes'}])".to_string(),
-            "note_manage(action='insights')".to_string(),
-            "note_manage(action='evolution')".to_string(),
-        ])
-    }
 
     async fn call(&self, args: Self::Args) -> Result<Self::Output> {
         let result = match args.action {
@@ -1446,10 +1467,23 @@ mod tests {
         // memory-protocol prompt layer). The old "also pin it to the hot zone
         // with `remember`" sentence instructed a dual write and misrouted
         // "standing correction" — it must not resurface.
+        //
+        // Nor may the pointer TO that layer resurface here. It used to read
+        // "ROUTING: the authoritative destination ladder lives in the memory
+        // protocol section of your system prompt" — byte-identical to
+        // `remember`'s, and redundant with the always-on layer that states the
+        // ladder outright. Now that the catalog entry ships this const, that
+        // duplication is real prompt weight on every request, and
+        // `no_sentence_is_stated_twice` measures it.
         let d = <NoteManageTool as AlephTool>::DESCRIPTION;
         assert!(
-            d.contains("authoritative destination ladder"),
-            "must cross-reference the memory-protocol ladder"
+            !d.contains("authoritative destination ladder"),
+            "the ladder pointer belongs to the memory-protocol layer, which is always on; \
+             restating it here duplicates `remember`'s copy on every request"
+        );
+        assert!(
+            d.contains("DURABLE tier"),
+            "the tier framing is note_manage's own and must survive"
         );
         assert!(
             !d.contains("also pin") && !d.contains("standing correction"),
@@ -1615,6 +1649,106 @@ mod tests {
             .await
             .unwrap();
         assert!(r.success);
+    }
+
+    #[test]
+    fn description_points_at_the_destination_field() {
+        // D4 has a data plane now: the one-sentence acknowledgment must be
+        // read off `destination`, not invented from the tool's own prose.
+        // Same shape as `flag_user_correction`'s description.
+        let d = <NoteManageTool as AlephTool>::DESCRIPTION;
+        assert!(
+            d.contains("`destination` field from the result"),
+            "the ack contract must point at the field that backs it"
+        );
+    }
+
+    #[tokio::test]
+    async fn destination_receipt_populated_on_writes() {
+        // Every action that lands content in a note carries the receipt: path
+        // plus tier label, so the acknowledgment can name where it went.
+        let (_d, tool) = mk_tool();
+        let created = tool
+            .call(create_args("daily-log", "- shipped the gateway retry fix"))
+            .await
+            .unwrap();
+        let dest = created
+            .destination
+            .expect("a landed write carries its receipt");
+        assert!(dest.contains("daily-log.md"), "{dest}");
+        assert!(dest.contains("durable notes"), "{dest}");
+
+        let appended = tool
+            .call(NoteManageArgs {
+                action: NoteManageAction::Append,
+                category: Some("learning".into()),
+                filename: Some("daily-log".into()),
+                facts: Some(vec!["- and the retry budget".into()]),
+                ..blank_args()
+            })
+            .await
+            .unwrap();
+        assert!(appended
+            .destination
+            .is_some_and(|d| d.contains("daily-log.md")));
+
+        let renamed = tool
+            .call(NoteManageArgs {
+                action: NoteManageAction::Rename,
+                filename: Some("daily-log".into()),
+                new_title: Some("nightly-log".into()),
+                ..blank_args()
+            })
+            .await
+            .unwrap();
+        // The receipt follows the note to its new name — a stale path would
+        // send the user looking for a file that no longer exists.
+        assert!(renamed
+            .destination
+            .is_some_and(|d| d.contains("nightly-log.md")));
+    }
+
+    #[tokio::test]
+    async fn destination_receipt_absent_when_nothing_landed() {
+        // The receipt is proof that content landed in a note. A read action —
+        // or a delete, whose note now lives nowhere — must not carry one, or
+        // the model reads a path off the result and tells the user their note
+        // is filed away when nothing was filed.
+        let (_d, tool) = mk_tool();
+        tool.call(create_args("gone-soon", "- transient fact"))
+            .await
+            .unwrap();
+
+        let queried = tool
+            .call(NoteManageArgs {
+                action: NoteManageAction::Query,
+                query: Some("transient".into()),
+                ..blank_args()
+            })
+            .await
+            .unwrap();
+        assert!(queried.destination.is_none());
+
+        let deleted = tool
+            .call(NoteManageArgs {
+                action: NoteManageAction::Delete,
+                category: Some("learning".into()),
+                filename: Some("gone-soon".into()),
+                ..blank_args()
+            })
+            .await
+            .unwrap();
+        assert!(deleted.success);
+        assert!(
+            deleted.destination.is_none(),
+            "a deleted note lives nowhere: {:?}",
+            deleted.destination
+        );
+        // The absence must survive serialization too — a shape-reader that
+        // never inspects the action must not find a destination key either.
+        let json = serde_json::to_value(&deleted).unwrap();
+        assert!(json.get("destination").is_none(), "{json}");
+        assert!(json.get("note_path").is_some(), "{json}");
     }
 
     #[tokio::test]

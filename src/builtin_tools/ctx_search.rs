@@ -83,13 +83,6 @@ impl AlephTool for CtxSearchTool {
     type Args = CtxSearchArgs;
     type Output = CtxSearchOutput;
 
-    fn examples(&self) -> Option<Vec<String>> {
-        Some(vec![
-            "ctx_search(query=\"failing test assertion panic\")".to_string(),
-            "ctx_search(query=\"database connection timeout\", limit=3)".to_string(),
-        ])
-    }
-
     async fn call(&self, args: Self::Args) -> Result<Self::Output> {
         notify_tool_start(Self::NAME, &args.query);
         let limit = args.limit.unwrap_or(DEFAULT_LIMIT).clamp(1, MAX_LIMIT);

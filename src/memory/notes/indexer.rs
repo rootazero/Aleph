@@ -157,8 +157,6 @@ async fn index_one_file<S: NoteStore + Send + Sync + 'static>(
 pub struct NoteIndexer<S: NoteStore> {
     memory_dir: PathBuf,
     store: Arc<S>,
-    orientation:
-        Option<crate::sync_primitives::Arc<dyn crate::memory::notes::orientation::NoteOrientation>>,
     /// Optional embedding provider. When present, every full note write
     /// (`write_note`, `write_note_raw`, `rename_note`) refreshes the note's
     /// vector so it becomes searchable immediately — instead of only after the
@@ -177,21 +175,8 @@ impl<S: NoteStore> NoteIndexer<S> {
         Self {
             memory_dir,
             store,
-            orientation: None,
             embedder: None,
         }
-    }
-
-    /// Attach a `NoteOrientation` hook. After every successful disk write,
-    /// `NoteOrientation::invalidate` is called with the affected note path.
-    pub fn with_orientation(
-        mut self,
-        orientation: crate::sync_primitives::Arc<
-            dyn crate::memory::notes::orientation::NoteOrientation,
-        >,
-    ) -> Self {
-        self.orientation = Some(orientation);
-        self
     }
 
     /// Attach an embedding provider so every full note write refreshes the
@@ -205,12 +190,6 @@ impl<S: NoteStore> NoteIndexer<S> {
     ) -> Self {
         self.embedder = Some(embedder);
         self
-    }
-
-    fn notify_orientation(&self, agent_id: &str, category: &str, filename: &str) {
-        if let Some(w) = &self.orientation {
-            w.invalidate(agent_id, &format!("{category}/{filename}"));
-        }
     }
 
     /// Embed `content` and upsert the note's vector so it is searchable
@@ -243,9 +222,9 @@ impl<S: NoteStore> NoteIndexer<S> {
     }
 
     /// Shared post-write pipeline for a full note write: reparse the on-disk
-    /// markdown, sync the SQLite index, invalidate orientation, and refresh the
-    /// vector (embed-on-write). Every full-write entry point (`write_note`,
-    /// `write_note_raw`) funnels through here so the index / orientation / vector
+    /// markdown, sync the SQLite index, and refresh the vector
+    /// (embed-on-write). Every full-write entry point (`write_note`,
+    /// `write_note_raw`) funnels through here so the index / vector
     /// side-effects stay in lockstep and no writer can silently forget one.
     async fn finalize_write(
         &self,
@@ -267,7 +246,6 @@ impl<S: NoteStore> NoteIndexer<S> {
         );
         self.store.index_note(&reparsed, agent_id, category).await?;
 
-        self.notify_orientation(agent_id, category, safe_title);
         self.finalize_side_effects(
             agent_id,
             category,
@@ -290,8 +268,8 @@ impl<S: NoteStore> NoteIndexer<S> {
     /// `reembed_all` sweep. Callers pass `reembed = false` for metadata-only
     /// edits (link/relation weaving on an already-embedded note) so the
     /// zero-cost structural dream stages (`NoteWeave`) don't issue an embedding
-    /// call per woven edge. Callers keep their own `index_note` +
-    /// `notify_orientation`; this covers only the link/vector legs.
+    /// call per woven edge. Callers keep their own `index_note`; this covers
+    /// only the link/vector legs.
     async fn finalize_side_effects(
         &self,
         agent_id: &str,
@@ -563,7 +541,7 @@ impl<S: NoteStore> NoteIndexer<S> {
         );
         atomic_write_file(&path, &content).await?;
 
-        // Sync index + orientation + vector immediately so callers don't have to
+        // Sync index + vector immediately so callers don't have to
         // wait for full_rebuild / reembed_all.
         self.finalize_write(agent_id, category, &safe_title, &content)
             .await?;
@@ -612,7 +590,7 @@ impl<S: NoteStore> NoteIndexer<S> {
 
         atomic_write_file(&path, content).await?;
 
-        // Sync index + orientation + vector immediately so the graph reflects
+        // Sync index + vector immediately so the graph reflects
         // the edit without waiting for the next full_rebuild. Index under the
         // path `category` (the file's physical location), mirroring `write_note`.
         self.finalize_write(agent_id, category, &safe_title, content)
@@ -701,7 +679,6 @@ impl<S: NoteStore> NoteIndexer<S> {
         atomic_write_file(&file_path, &md).await?;
         self.store.index_note(&note, agent_id, &safe_cat).await?;
 
-        self.notify_orientation(agent_id, &safe_cat, filename);
         // Re-embed only when searchable content actually changed: a brand-new
         // note (created here) or real appended facts. A link-only append on an
         // already-embedded note (e.g. NoteWeave orphan-linking) skips the
@@ -768,7 +745,6 @@ impl<S: NoteStore> NoteIndexer<S> {
         note.content_hash = sha2_hash(&md);
         atomic_write_file(&file_path, &md).await?;
         self.store.index_note(&note, agent_id, &safe_cat).await?;
-        self.notify_orientation(agent_id, &safe_cat, &safe_title);
         // Relations are frontmatter metadata on an already-existing (already
         // embedded) note — searchable prose is unchanged, so skip the re-embed
         // and only run the cheap inbound-link backfill.
@@ -778,7 +754,7 @@ impl<S: NoteStore> NoteIndexer<S> {
     }
 
     /// Delete a note: remove its index rows (including any embedding) and the
-    /// markdown file, then notify orientation. Sanitizes both path segments.
+    /// markdown file. Sanitizes both path segments.
     ///
     /// Index removal runs first — if it fails the file stays put and the two
     /// remain consistent; if the file delete fails afterwards, `full_rebuild`
@@ -809,7 +785,6 @@ impl<S: NoteStore> NoteIndexer<S> {
                 )))
             }
         }
-        self.notify_orientation(agent_id, &safe_cat, &safe_title);
         Ok(())
     }
 
@@ -933,8 +908,6 @@ impl<S: NoteStore> NoteIndexer<S> {
             tracing::warn!(error = %e, "rename_note: inbound backfill failed (non-fatal)");
         }
 
-        self.notify_orientation(agent_id, &category, &safe_old);
-        self.notify_orientation(agent_id, &category, &safe_new);
         Ok(())
     }
 
@@ -1009,7 +982,6 @@ impl<S: NoteStore> NoteIndexer<S> {
         note.content_hash = sha2_hash(&md);
         atomic_write_file(&file_path, &md).await?;
         self.store.index_note(&note, agent_id, &safe_cat).await?;
-        self.notify_orientation(agent_id, &safe_cat, &safe_title);
         // Merges source-provenance + confidence (frontmatter metadata) into an
         // already-embedded note — searchable prose is unchanged, so skip the
         // re-embed and only run the cheap inbound-link backfill.
@@ -1153,7 +1125,6 @@ impl<S: NoteStore> NoteIndexer<S> {
                 self.store
                     .remove_note_index(old_note_path, agent_id)
                     .await?;
-                self.notify_orientation(agent_id, old_cat, &safe_old);
 
                 let now = chrono::Utc::now().timestamp();
                 let note = KnowledgeNote {

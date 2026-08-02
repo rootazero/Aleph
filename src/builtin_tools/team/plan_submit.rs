@@ -69,13 +69,6 @@ impl AlephTool for PlanSubmitTool {
     type Args = PlanSubmitArgs;
     type Output = PlanSubmitOutput;
 
-    fn examples(&self) -> Option<Vec<String>> {
-        Some(vec![
-            "plan_submit(team_id='abc', title='Cache rework', content='1. Benchmark\\n2. Implement')"
-                .to_string(),
-        ])
-    }
-
     async fn call(&self, args: Self::Args) -> Result<Self::Output> {
         let from_agent = if self.current_agent_id.is_empty() {
             "agent"

@@ -726,95 +726,12 @@ async fn write_note_backfills_dangling_links_in_other_notes() {
 mod reference_hook_tests {
     use super::*;
     use crate::memory::notes::note::KnowledgeNote;
-    use crate::memory::notes::orientation::types::{
-        IndexStats, LogEntry, OrientationSnapshot, TokenBudget,
-    };
-    use crate::memory::notes::orientation::NoteOrientation;
     use crate::memory::store::sqlite::SqliteMemoryBackend;
-    use async_trait::async_trait;
-    use std::sync::{Arc, Mutex};
+    use std::sync::Arc;
 
-    struct CountingOrient {
-        calls: Mutex<Vec<(String, String)>>,
-    }
-
-    #[async_trait]
-    impl NoteOrientation for CountingOrient {
-        async fn bootstrap(&self, _a: &str) -> Result<(), AlephError> {
-            Ok(())
-        }
-        async fn read_snapshot(
-            &self,
-            _a: &str,
-            _b: TokenBudget,
-        ) -> Result<OrientationSnapshot, AlephError> {
-            Ok(OrientationSnapshot {
-                schema_text: String::new(),
-                index_text: String::new(),
-                recent_log_tail: String::new(),
-            })
-        }
-        async fn record_ingest(&self, _a: &str, _e: LogEntry) -> Result<(), AlephError> {
-            Ok(())
-        }
-        async fn record_query(&self, _a: &str, _e: LogEntry) -> Result<(), AlephError> {
-            Ok(())
-        }
-        async fn record_lint(&self, _a: &str, _e: LogEntry) -> Result<(), AlephError> {
-            Ok(())
-        }
-        async fn record_session_end(&self, _a: &str, _e: LogEntry) -> Result<(), AlephError> {
-            Ok(())
-        }
-        async fn rebuild_index(&self, _a: &str) -> Result<IndexStats, AlephError> {
-            Ok(IndexStats::default())
-        }
-        async fn rotate_log_if_needed(&self, _a: &str) -> Result<bool, AlephError> {
-            Ok(false)
-        }
-        fn invalidate(&self, agent_id: &str, note_path: &str) {
-            self.calls
-                .lock()
-                .unwrap_or_else(|e| e.into_inner())
-                .push((agent_id.to_string(), note_path.to_string()));
-        }
-    }
-
-    #[tokio::test]
-    async fn write_note_invalidates_orientation() {
-        let dir = tempfile::tempdir().unwrap();
-        let backend = Arc::new(SqliteMemoryBackend::new(&dir.path().join("mem.db")).unwrap());
-        let orient = Arc::new(CountingOrient {
-            calls: Mutex::new(vec![]),
-        });
-        let indexer = NoteIndexer::new(dir.path().join("note"), backend.clone())
-            .with_orientation(orient.clone() as Arc<dyn NoteOrientation>);
-
-        let note = KnowledgeNote {
-            title: "rust".into(),
-            category: "learning".into(),
-            tags: vec![],
-            facts: vec!["f1".into()],
-            links: vec![],
-            created_at: 0,
-            updated_at: 0,
-            content_hash: String::new(),
-            ..Default::default()
-        };
-        indexer
-            .write_note("default", "learning", &note)
-            .await
-            .unwrap();
-
-        let calls = orient
-            .calls
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .clone();
-        assert_eq!(calls.len(), 1);
-        assert_eq!(calls[0].0, "default");
-        assert_eq!(calls[0].1, "learning/rust");
-    }
+    // `write_note_invalidates_orientation` (and the `CountingOrient` mock that
+    // existed only to observe it) went out with the `NoteOrientation::invalidate`
+    // CUT: the hook it asserted on no longer exists.
 
     #[tokio::test]
     async fn write_note_also_indexes_to_sqlite() {

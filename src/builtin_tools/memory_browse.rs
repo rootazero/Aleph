@@ -193,16 +193,6 @@ impl AlephTool for MemoryBrowseTool {
     type Args = MemoryBrowseArgs;
     type Output = MemoryBrowseOutput;
 
-    fn examples(&self) -> Option<Vec<String>> {
-        Some(vec![
-            "memory_browse(action='list')  // list all categories".to_string(),
-            "memory_browse(action='list', path='reference')  // list notes in reference category"
-                .to_string(),
-            "memory_browse(action='read', path='wiki/rust-ownership')  // read one note"
-                .to_string(),
-        ])
-    }
-
     async fn call(&self, args: Self::Args) -> Result<Self::Output> {
         match args.action {
             MemoryBrowseAction::List => self.handle_list(args.path.as_deref()).await,

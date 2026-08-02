@@ -11,6 +11,7 @@ pub mod assembly_logs;
 pub mod dream_kv;
 pub mod dream_reports;
 pub mod embedding_meta;
+pub mod memory_write_decisions;
 pub mod notes;
 pub mod query_filed;
 pub mod raw_memories;

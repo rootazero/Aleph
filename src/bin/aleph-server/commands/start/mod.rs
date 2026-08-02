@@ -1715,10 +1715,10 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
     // NoteIndexer — the canonical write+reindex path. Built once and shared
     // between graph.update_note (panel node editor) and the startup full_rebuild
     // below, so we never construct two indexers over the same memory dir.
-    let note_indexer = Arc::new(
-        alephcore::memory::notes::NoteIndexer::new(note_memory_dir.clone(), memory_db.clone())
-            .with_orientation(wiki.clone()),
-    );
+    let note_indexer = Arc::new(alephcore::memory::notes::NoteIndexer::new(
+        note_memory_dir.clone(),
+        memory_db.clone(),
+    ));
 
     // Graph visualization handlers (wired with MemoryBackend + default agent +
     // the shared NoteIndexer for the write path)

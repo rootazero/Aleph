@@ -19,6 +19,7 @@ use crate::providers::protocols::anthropic::provider_policy::{
     is_kimi_anthropic_base_url, normalize_kimi_coding_model_id, strip_cache_control,
     KIMI_CODING_USER_AGENT,
 };
+use crate::providers::protocols::openai_common::openai_strict_schema::flatten_tool_schema_unions;
 use crate::thinker::prompt_builder::SystemPromptPart;
 use crate::tool_metadata::DEFAULT_MAX_TOKENS;
 use async_trait::async_trait;
@@ -103,6 +104,16 @@ fn parse_stop_sequences(csv: &str) -> Vec<String> {
 /// `Option<T>`-rich structs. Dropping the keywords lets the request
 /// validate against the fallback `type: object` schema rather than
 /// failing the whole turn.
+///
+/// **Backstop only.** [`flatten_tool_schema_unions`] runs first and merges the
+/// branch `properties` into the root, so by the time this sees a schema the
+/// `oneOf` / `anyOf` are already gone and the parameters survived. What is left
+/// for this function is `allOf` (which the flatten does not attempt) and any
+/// non-array union value. The empty-`properties` fallback below therefore no
+/// longer fires for tagged-enum tools — it used to, and that shipped `remember`
+/// / `self_config` / `moa_manage` / `cron_manage` / `user_profile` to Claude
+/// with a ZERO-PARAMETER schema. Do not "simplify" by dropping the flatten and
+/// keeping only this: the strip alone loses every argument name.
 ///
 /// Mirrors hermes-agent `_normalize_tool_input_schema` (lines 1411-1416).
 /// We do NOT recurse into nested properties — Anthropic only rejects the
@@ -378,10 +389,13 @@ impl ProtocolAdapter for AnthropicProtocol {
         // mapped back to the tool layer's original tool names.
         //
         // Two additional defenses convert hard 400s into warnings:
-        // 1. Strip top-level `oneOf` / `allOf` / `anyOf` from the schema —
+        // 1. Remove top-level `oneOf` / `allOf` / `anyOf` from the schema —
         //    Anthropic's validator rejects union keywords on tool input_schema.
         //    Without this, schemars-generated tool schemas (common for Rust
-        //    enums) 400 with "items is not an object".
+        //    enums) 400 with "items is not an object". Two steps, in order:
+        //    flatten the union's branch properties up into the root, then strip
+        //    whatever union keyword survives. Flatten-first is what keeps the
+        //    tool's parameters — see `strip_anthropic_tool_schema_unions`.
         // 2. Dedup tool names — Anthropic rejects requests with duplicate
         //    tool names. Upstream injection paths may slip a duplicate
         //    through; drop the second occurrence with a warning so the
@@ -398,9 +412,15 @@ impl ProtocolAdapter for AnthropicProtocol {
                     obj.entry("type")
                         .or_insert_with(|| serde_json::json!("object"));
                 }
-                // Migrate schemars draft-07 schemas to draft 2020-12
+                // Migrate schemars draft-07 schemas to draft 2020-12. Runs
+                // BEFORE the flatten so merged-up branch properties already
+                // carry `#/$defs/...` refs into the (renamed) root bucket.
                 crate::tools::schema_strictify::migrate_to_draft_2020_12(&mut schema);
-                // Defense (1): strip union keywords that Anthropic rejects.
+                // Defense (1a): flatten the union into root properties so a
+                // tagged-enum tool keeps its parameters.
+                flatten_tool_schema_unions(&mut schema);
+                // Defense (1b): backstop — strip whatever union keyword the
+                // flatten does not handle (`allOf`, non-array union values).
                 strip_anthropic_tool_schema_unions(&mut schema);
                 let sanitized = sanitize_anthropic_tool_name(&td.name);
                 if sanitized != td.name {

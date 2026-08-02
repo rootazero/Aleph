@@ -108,13 +108,6 @@ impl AlephTool for MemoryReflectTool {
     type Args = MemoryReflectArgs;
     type Output = MemoryReflectResult;
 
-    fn examples(&self) -> Option<Vec<String>> {
-        Some(vec![
-            "memory_reflect(query='What do I know about Rust ownership?')".to_string(),
-            "memory_reflect(query='Summarise my notes on the Aleph architecture')".to_string(),
-        ])
-    }
-
     async fn call(&self, args: Self::Args) -> Result<Self::Output> {
         let reflector = self.reflector.as_ref().ok_or_else(|| {
             AlephError::other(

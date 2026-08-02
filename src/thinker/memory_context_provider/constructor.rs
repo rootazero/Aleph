@@ -90,8 +90,8 @@ impl MemoryContextProvider {
     }
 
     /// The configured injection mode. Callers that drive the mode-gated
-    /// builders (`build_orientation_user_message` / `build_profile_user_message`)
-    /// pass this back in so the gate reflects the provider's own config.
+    /// builder (`build_orientation_user_message`) pass this back in so the
+    /// gate reflects the provider's own config.
     #[must_use]
     pub const fn injection_mode(&self) -> MemoryInjectionMode {
         self.injection_mode
@@ -217,31 +217,23 @@ impl MemoryContextProvider {
                 .with_scoring_config(&assembler_config.retrieval_scoring)
                 .with_expansion_config(&assembler_config.expansion),
         );
-        // Snapshots live under ~/.aleph/data/sessions by convention; we pass
-        // whatever the `session_resume` defaults produce, falling back to the
-        // memory_dir/sessions subdir if the home dir resolution fails.
-        let snapshot_dir = SnapshotReader::default_path().map_or_else(
-            || {
-                memory_dir.parent().map_or_else(
-                    || {
-                        tracing::warn!("Memory dir has no parent, using memory_dir for sessions");
-                        memory_dir.clone()
-                    },
-                    |p| p.join("sessions"),
-                )
-            },
-            |_| {
-                dirs::home_dir()
-                    .unwrap_or_else(|| {
-                        tracing::warn!(
-                            "HOME directory not available for session snapshots, using temp dir"
-                        );
-                        std::env::temp_dir()
-                    })
-                    .join(".aleph/data/sessions")
-            },
-        );
-        let snapshots = Arc::new(SnapshotReader::new(snapshot_dir));
+        // Read snapshots from wherever `SnapshotWriter` puts them. Use the
+        // reader `default_path()` hands back rather than re-deriving the path:
+        // the two halves resolve `ALEPH_HOME` (via `utils::paths`), and the old
+        // shape called `default_path()` only as an `Option` discriminator and
+        // then rebuilt `~/.aleph/data/sessions` from `dirs::home_dir()`. Under
+        // `ALEPH_HOME` that wrote here and read there, so the resume chain was
+        // not merely ignoring the knob — it was severed end to end.
+        let snapshots = Arc::new(SnapshotReader::default_path().unwrap_or_else(|| {
+            let fallback = memory_dir.parent().map_or_else(
+                || {
+                    tracing::warn!("Memory dir has no parent, using memory_dir for sessions");
+                    memory_dir.clone()
+                },
+                |p| p.join("sessions"),
+            );
+            SnapshotReader::new(fallback)
+        }));
         let feedback_floor = FeedbackFloorLoader::new(memory_dir.clone());
         let profile = UserProfileLoader::new(memory_dir);
         let reranker: Arc<dyn crate::memory::assembler::hybrid::LlmReranker> = match provider {
@@ -294,6 +286,20 @@ impl MemoryContextProvider {
         self
     }
 
+    /// Set the token budget spent on one orientation snapshot (builder-style).
+    ///
+    /// Every constructor above starts from `TokenBudget::default()`; the boot
+    /// factory overrides it from `[memory.orientation] max_tokens` so the
+    /// configured budget is what `read_snapshot` actually spends.
+    #[must_use]
+    pub const fn with_orientation_budget(
+        mut self,
+        budget: crate::memory::notes::orientation::types::TokenBudget,
+    ) -> Self {
+        self.orientation_budget = budget;
+        self
+    }
+
     /// Set the curated hot-memory char-budget config (builder-style).
     #[must_use]
     pub const fn with_curated_config(mut self, cfg: CuratedConfig) -> Self {
@@ -329,5 +335,49 @@ impl MemoryContextProvider {
             std::env::temp_dir().join(".aleph")
         });
         base.join("agents").join(agent_id).join("MEMORY.md")
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::MemoryContextProvider;
+    use crate::config::types::memory::{CuratedSection, MemoryInjectionMode};
+    use crate::memory::curated::CuratedConfig;
+    use crate::memory::notes::orientation::types::TokenBudget;
+
+    #[test]
+    fn configured_curated_limits_reach_the_provider() {
+        // `[memory.curated] memory_char_limit = 9001` — deliberately not the
+        // default. Before this wire existed every construction path hardcoded
+        // `CuratedConfig::default()`, so the parsed section was inert no matter
+        // what the user wrote.
+        let section: CuratedSection =
+            serde_json::from_str(r#"{"memory_char_limit": 9001}"#).unwrap();
+        assert_ne!(
+            section.memory_char_limit,
+            CuratedConfig::default().memory_char_limit,
+            "test is meaningless unless the configured value differs from the default"
+        );
+
+        let provider =
+            MemoryContextProvider::new_for_test_empty_envelope(MemoryInjectionMode::Context)
+                .with_curated_config(section.into());
+
+        assert_eq!(provider.curated_config.memory_char_limit, 9001);
+        // Keys the user omitted still land on the section default, not zero.
+        assert_eq!(
+            provider.curated_config.user_char_limit,
+            CuratedConfig::default().user_char_limit
+        );
+    }
+
+    #[test]
+    fn configured_orientation_budget_reaches_the_provider() {
+        let provider =
+            MemoryContextProvider::new_for_test_empty_envelope(MemoryInjectionMode::Context)
+                .with_orientation_budget(TokenBudget { max_tokens: 1234 });
+
+        assert_ne!(1234, TokenBudget::default().max_tokens);
+        assert_eq!(provider.orientation_budget.max_tokens, 1234);
     }
 }

@@ -154,13 +154,6 @@ impl AlephTool for HeartbeatCreateTool {
     type Args = HeartbeatCreateArgs;
     type Output = HeartbeatCreateOutput;
 
-    fn examples(&self) -> Option<Vec<String>> {
-        Some(vec![
-            r#"heartbeat_create(name="Gmail unread check", probe_tool_name="gmail_unread_count", interval_ms=300000, probe_trigger_condition={"greater_than":{"threshold":0}})"#.to_string(),
-            r#"heartbeat_create(name="Server health monitor", probe_tool_name="server_health_check", interval_ms=60000, probe_trigger_condition={"contains":{"text":"error"}})"#.to_string(),
-        ])
-    }
-
     async fn call(&self, args: Self::Args) -> Result<Self::Output> {
         // Floor the interval (consistent with cron's Every guard). A sub-second
         // interval makes the probe — and any L2 agent run it triggers — fire on
@@ -463,13 +456,6 @@ impl AlephTool for HeartbeatReportTool {
 
     type Args = HeartbeatReportArgs;
     type Output = HeartbeatReportOutput;
-
-    fn examples(&self) -> Option<Vec<String>> {
-        Some(vec![
-            r#"heartbeat_report(action="silent")"#.to_string(),
-            r#"heartbeat_report(action="notify", message="您有 3 封未读邮件，其中 1 封来自重要联系人。")"#.to_string(),
-        ])
-    }
 
     async fn call(&self, args: Self::Args) -> Result<Self::Output> {
         let (action_str, message) = match args.action {

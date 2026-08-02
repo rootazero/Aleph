@@ -80,13 +80,6 @@ impl AlephTool for TaskSubmitTool {
     type Args = TaskSubmitArgs;
     type Output = TaskSubmitOutput;
 
-    fn examples(&self) -> Option<Vec<String>> {
-        Some(vec![
-            "task_submit(task_id='task-1', artifact_type='report', title='Analysis Report', content='# Findings\\n...')".to_string(),
-            "task_submit(task_id='task-2', artifact_type='code', title='Implementation', content='```rust\\nfn main() {}\\n```')".to_string(),
-        ])
-    }
-
     async fn call(&self, args: Self::Args) -> Result<Self::Output> {
         debug!(
             task_id = %args.task_id,

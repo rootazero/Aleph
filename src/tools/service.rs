@@ -245,7 +245,6 @@ pub fn to_metadata_form(defs: &[ToolDefinition]) -> Arc<[crate::tool_metadata::T
             parameters: def.input_schema.clone(),
             requires_confirmation: false,
             category: crate::tool_metadata::ToolCategory::Builtin,
-            llm_context: None,
             strict: false,
         })
         .collect::<Vec<_>>()
@@ -285,7 +284,6 @@ mod metadata_form_tests {
         assert_eq!(d.parameters, json!({"type": "object"}));
         assert!(!d.requires_confirmation);
         assert!(matches!(d.category, ToolCategory::Builtin));
-        assert!(d.llm_context.is_none());
         assert!(!d.strict);
     }
 

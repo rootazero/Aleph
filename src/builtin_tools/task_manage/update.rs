@@ -70,10 +70,6 @@ impl AlephTool for TaskUpdateTool {
     type Args = TaskUpdateArgs;
     type Output = TaskUpdateOutput;
 
-    fn examples(&self) -> Option<Vec<String>> {
-        None
-    }
-
     async fn call(&self, args: Self::Args) -> Result<Self::Output> {
         let new_status = args
             .status

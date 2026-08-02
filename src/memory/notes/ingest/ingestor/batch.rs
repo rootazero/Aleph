@@ -84,11 +84,19 @@ impl<S: NoteStore + Send + Sync + 'static> CompoundIngestor for DefaultCompoundI
             }
         };
 
-        let mut plan = self
-            .plan(agent_id, &raws, &related, &source, extra_context)
+        let (mut plan, planner_degraded) = self
+            .plan_with_health(agent_id, &raws, &related, &source, extra_context)
             .await?;
         if plan.ops.is_empty() {
-            return Ok(ApplyReport::default());
+            // Carry WHY the plan was empty. `CompressionService` defers the raw
+            // rows for a retry only when the planner degraded; a deliberate
+            // empty plan (what every source prompt asks for when nothing clears
+            // the bar) consumes its rows now instead of being re-planned on
+            // every tick for six hours.
+            return Ok(ApplyReport {
+                planner_degraded,
+                ..Default::default()
+            });
         }
 
         // Write-time semantic dedup (mem0-style): redirect near-duplicate
@@ -115,6 +123,9 @@ impl<S: NoteStore + Send + Sync + 'static> CompoundIngestor for DefaultCompoundI
         if self.gate.is_some() {
             plan.ops = self.filter_ops_through_gate(agent_id, plan.ops).await?;
             if plan.ops.is_empty() {
+                // NOT a planner failure: the gate deferred every op and already
+                // enqueued the candidates into `notes_review_queue`, so the
+                // knowledge is preserved. Re-planning would only re-defer.
                 return Ok(ApplyReport::default());
             }
         }
@@ -130,11 +141,14 @@ impl<S: NoteStore + Send + Sync + 'static> CompoundIngestor for DefaultCompoundI
                         "\n\n[system] previous plan referenced {path} with a stale hash; actual hash is {actual}. Re-plan using fresh data."
                     ));
                 }
-                let mut plan2 = self
-                    .plan(agent_id, &augmented, &related, &source, extra_context)
+                let (mut plan2, planner_degraded) = self
+                    .plan_with_health(agent_id, &augmented, &related, &source, extra_context)
                     .await?;
                 if plan2.ops.is_empty() {
-                    return Ok(ApplyReport::default());
+                    return Ok(ApplyReport {
+                        planner_degraded,
+                        ..Default::default()
+                    });
                 }
                 plan2.ops = self
                     .dedup_redirect_creates(agent_id, plan2.ops, &related)
@@ -145,6 +159,7 @@ impl<S: NoteStore + Send + Sync + 'static> CompoundIngestor for DefaultCompoundI
                 if self.gate.is_some() {
                     plan2.ops = self.filter_ops_through_gate(agent_id, plan2.ops).await?;
                     if plan2.ops.is_empty() {
+                        // Gate-deferred, not planner-degraded — see above.
                         return Ok(ApplyReport::default());
                     }
                 }

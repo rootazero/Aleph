@@ -10,7 +10,6 @@ use crate::error::Result;
 use crate::tool_metadata::{ToolCategory, ToolDefinition};
 use crate::tools::AlephToolDyn;
 
-use super::parser::{extract_first_paragraph, extract_markdown_section};
 use super::spec::{AlephSkillSpec, SandboxMode};
 
 /// Dynamic CLI tool loaded from Markdown
@@ -123,26 +122,13 @@ impl MarkdownCliTool {
     pub fn definition(&self) -> ToolDefinition {
         let schema = self.build_dynamic_schema();
 
-        // Extract examples section for LLM context
-        let llm_context = extract_markdown_section(&self.spec.markdown_content, "Examples")
-            .or_else(|| {
-                // Fallback: use first paragraph
-                Some(extract_first_paragraph(&self.spec.markdown_content))
-            });
-
-        let mut def = ToolDefinition::new(
+        ToolDefinition::new(
             &self.spec.name,
             &self.spec.description,
             schema,
             ToolCategory::Skills,
         )
-        .with_confirmation(self.requires_confirmation());
-
-        if let Some(ctx) = llm_context {
-            def = def.with_llm_context(ctx);
-        }
-
-        def
+        .with_confirmation(self.requires_confirmation())
     }
 
     /// Check if tool requires confirmation

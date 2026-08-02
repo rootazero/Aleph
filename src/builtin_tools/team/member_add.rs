@@ -102,17 +102,6 @@ impl AlephTool for TeamMemberAddTool {
     type Args = TeamMemberAddArgs;
     type Output = TeamMemberAddOutput;
 
-    fn examples(&self) -> Option<Vec<String>> {
-        Some(vec![
-            "team_member_add(team_id='abc123', agent_id='researcher', role='researcher')"
-                .to_string(),
-            "team_member_add(team_id='abc123', agent_id='acp:claude-code', role='senior-dev')"
-                .to_string(),
-            "team_member_add(team_id='abc123', agent_id='acp:codex/backend', role='backend')"
-                .to_string(),
-        ])
-    }
-
     async fn call(&self, args: Self::Args) -> Result<Self::Output> {
         // Verify the team exists and the caller is the leader.
         let team = self

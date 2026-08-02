@@ -359,16 +359,6 @@ impl AlephTool for GoogleMeetTool {
     type Args = GoogleMeetArgs;
     type Output = GoogleMeetOutput;
 
-    fn examples(&self) -> Option<Vec<String>> {
-        Some(vec![
-            r#"google_meet(action="join", meeting="https://meet.google.com/abc-defg-hij", mode="agent")"#.to_string(),
-            r#"google_meet(action="create", transport="chrome")"#.to_string(),
-            r#"google_meet(action="speak", text="I'm here and listening.")"#.to_string(),
-            r#"google_meet(action="status")"#.to_string(),
-            r#"google_meet(action="leave")"#.to_string(),
-        ])
-    }
-
     async fn call(&self, args: Self::Args) -> Result<Self::Output> {
         Self::validate(&args)?;
         match self.bridge {
