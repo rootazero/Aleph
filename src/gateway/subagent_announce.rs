@@ -167,6 +167,22 @@ async fn announce_one(
     for delay_secs in RETRY_DELAYS_SECS {
         if delay_secs > 0 {
             tokio::time::sleep(std::time::Duration::from_secs(delay_secs)).await;
+            // Re-check the dedup guard after every wait, not just once up front.
+            // The retry schedule spans over two minutes, and the reason the
+            // parent is busy is very often that it is parked in the subagent
+            // tool's own `wait` — which returns this exact result and marks it
+            // consumed. Checking only before the loop meant the announce woke
+            // up minutes later and spent a fresh parent turn re-delivering
+            // something the model had already folded in.
+            if crate::agents::background_tracker::BackgroundAgentTracker::global()
+                .is_consumed(&request_id)
+            {
+                debug!(
+                    request_id = %request_id,
+                    "subagent announce: result consumed while waiting to retry; skipping delivery"
+                );
+                return;
+            }
         }
 
         let request = RunRequest {

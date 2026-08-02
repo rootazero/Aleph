@@ -125,6 +125,17 @@ struct RunningAgent {
     /// where it would otherwise read as a pollable background sub-agent that
     /// `check_status` can never resolve and a tree node that never settles.
     presence_only: bool,
+    /// Set by [`mark_consumed`](BackgroundAgentTracker::mark_consumed) while the
+    /// agent is still running: the parent has already accounted for whatever
+    /// this run turns into, so the completed entry must be born `consumed`.
+    ///
+    /// The one caller that needs this is the model-issued `cancel`: it fires the
+    /// token and returns *before* the child unwinds, so at that moment there is
+    /// no completed entry to stamp. Without carrying the intent across the
+    /// transition, the cancelled child's `Err("sub-agent failed: cancelled")`
+    /// reached `subagent_announce` un-consumed and spent a whole fresh parent
+    /// turn reporting the failure of a sub-agent the parent itself just killed.
+    consume_on_completion: bool,
     started_at: Instant,
     /// FIFO-capped progress events; capacity 50.
     progress: VecDeque<SubagentProgress>,
@@ -236,11 +247,11 @@ pub enum WaitOutcome {
 
 /// Outcome of a [`wait_any`](BackgroundAgentTracker::wait_any) over a SET of
 /// background subagents — the fan-out "wait for whichever finishes first"
-/// primitive (codex `wait_agent` parity). `Completed` names the first id in the
-/// set to finish; draining the rest is the caller's job (drop it and
-/// `wait_any` again). `TimedOut` lists the ids still running when the window
-/// closed. `NotFound` means none of the ids is known (all unregistered /
-/// TTL-pruned).
+/// primitive (codex `wait_agent` parity). `Completed` names the first
+/// **undelivered** id in the set to finish. `TimedOut` lists the ids still
+/// running when the window closed. `AllDelivered` means every id has already
+/// been handed over and none is still running — the fan-out is drained.
+/// `NotFound` means none of the ids is known (all unregistered / TTL-pruned).
 #[derive(Debug, Clone)]
 pub enum WaitAnyOutcome {
     Completed {
@@ -249,6 +260,13 @@ pub enum WaitAnyOutcome {
     },
     TimedOut {
         still_running: Vec<String>,
+    },
+    /// Terminal for a fan-out drain loop: every id finished **and** was already
+    /// delivered to the caller, with nothing left running. Re-returning one of
+    /// those results instead is what made repeating the same `wait` arguments
+    /// spin forever — see [`wait_any`](BackgroundAgentTracker::wait_any).
+    AllDelivered {
+        request_ids: Vec<String>,
     },
     NotFound,
 }
@@ -345,6 +363,7 @@ impl BackgroundAgentTracker {
                 cancel_token,
                 task_description,
                 presence_only,
+                consume_on_completion: false,
                 started_at: Instant::now(),
                 progress: VecDeque::with_capacity(50),
                 meta,
@@ -365,6 +384,12 @@ impl BackgroundAgentTracker {
     /// `request_id` more than once without the result vanishing.
     pub fn mark_completed(&self, request_id: &str, outcome: CompletedOutcome) {
         let now = Instant::now();
+        // Read once, before the `running` borrow below, so no code path ever
+        // holds two of this struct's locks at the same time. Covers the case
+        // where the id has no running entry (already completed, or never
+        // registered): a `mark_consumed` that already landed on the completed
+        // entry must survive a re-completion rather than be reset to `false`.
+        let already_consumed = self.is_consumed(request_id);
         // Snapshot the running entry's carry-over fields via a *read* borrow —
         // without removing it yet. The completed entry is inserted BEFORE the
         // running entry is removed (below), so the `request_id` is present in
@@ -382,6 +407,7 @@ impl BackgroundAgentTracker {
             last_tool,
             last_activity,
             progress_tail,
+            born_consumed,
         ) = {
             let running = self.running.read().unwrap_or_else(|e| {
                 warn!("BackgroundAgentTracker lock poisoned, recovering");
@@ -403,6 +429,7 @@ impl BackgroundAgentTracker {
                         agent.last_tool.clone(),
                         agent.last_activity.clone(),
                         tail,
+                        agent.consume_on_completion || already_consumed,
                     )
                 }
                 None => (
@@ -414,6 +441,7 @@ impl BackgroundAgentTracker {
                     None,
                     None,
                     Vec::new(),
+                    already_consumed,
                 ),
             }
         };
@@ -437,7 +465,7 @@ impl BackgroundAgentTracker {
                     last_tool,
                     last_activity,
                     progress_tail,
-                    consumed: false,
+                    consumed: born_consumed,
                 },
             );
             // C1 follow-up — bound the map by count. `mark_completed` is the only
@@ -581,6 +609,15 @@ impl BackgroundAgentTracker {
         let ids = [request_id.to_string()];
         match self.wait_any(&ids, timeout).await {
             WaitAnyOutcome::Completed { snapshot, .. } => WaitOutcome::Completed(snapshot),
+            // A single-id wait stays idempotent: `wait_any` reports a
+            // second wait on the same id as `AllDelivered` (that distinction
+            // only matters for draining a SET), but the caller asked about one
+            // agent and the honest answer is still its result. Falls through to
+            // `NotFound` only if the entry was TTL-pruned between the two.
+            WaitAnyOutcome::AllDelivered { .. } => match self.result_snapshot(request_id) {
+                Some(snapshot) => WaitOutcome::Completed(snapshot),
+                None => WaitOutcome::NotFound,
+            },
             WaitAnyOutcome::TimedOut { .. } => WaitOutcome::TimedOut {
                 elapsed_secs: self
                     .running_meta(request_id)
@@ -596,9 +633,19 @@ impl BackgroundAgentTracker {
     /// parity). Sleeps on the shared [`completion`](Self::completion) notifier
     /// (which wakes on every completion) and re-checks the whole set, so it
     /// costs no CPU while waiting and returns the instant the first result
-    /// lands. The first-finished result is marked consumed so the announce does
-    /// not re-deliver it; the caller drains the rest by dropping that id and
-    /// calling `wait_any` again.
+    /// lands.
+    ///
+    /// # Delivered results are skipped, not re-returned
+    ///
+    /// Only an **undelivered** completion satisfies the wait; the returned one
+    /// is marked consumed on the way out. This is what lets a fan-out be
+    /// drained by *repeating the same call*: `wait([a,b,c])` yields `a`, then
+    /// `b`, then `c`, then `AllDelivered`. Returning the first completed id
+    /// regardless of delivery made the obvious drain loop — a model re-issuing
+    /// its previous arguments — hand back `a` instantly and forever, burning
+    /// one LLM turn per iteration. Bookkeeping the caller would otherwise have
+    /// to do by hand is mechanical, so the harness does it (R10 scaffolding, no
+    /// judgement about *what* the results mean).
     pub async fn wait_any(&self, request_ids: &[String], timeout: Duration) -> WaitAnyOutcome {
         let deadline = Instant::now() + timeout;
         loop {
@@ -609,25 +656,43 @@ impl BackgroundAgentTracker {
             tokio::pin!(notified);
             notified.as_mut().enable();
 
-            // First completed in the set wins. `mark_completed` inserts into
-            // `completed` before removing from `running`, so a finished agent is
-            // always visible here and never mistaken for absent.
+            // First *undelivered* completion in the set wins. `mark_completed`
+            // inserts into `completed` before removing from `running`, so a
+            // finished agent is always visible here and never mistaken for
+            // absent.
             let mut any_running = false;
+            let mut delivered: Vec<String> = Vec::new();
+            let mut fresh: Option<(String, CompletedSnapshot)> = None;
             for id in request_ids {
                 if let Some(snapshot) = self.result_snapshot(id) {
-                    self.mark_consumed(id);
-                    return WaitAnyOutcome::Completed {
-                        request_id: id.clone(),
-                        snapshot,
-                    };
+                    if self.is_consumed(id) {
+                        delivered.push(id.clone());
+                    } else if fresh.is_none() {
+                        fresh = Some((id.clone(), snapshot));
+                    }
+                    continue;
                 }
                 if self.running_meta(id).is_some() {
                     any_running = true;
                 }
             }
-            // None completed and none running ⇒ every id is unknown.
+            if let Some((request_id, snapshot)) = fresh {
+                self.mark_consumed(&request_id);
+                return WaitAnyOutcome::Completed {
+                    request_id,
+                    snapshot,
+                };
+            }
+            // Nothing fresh and nothing running ⇒ the set is finished: either
+            // fully drained, or every id is unknown.
             if !any_running {
-                return WaitAnyOutcome::NotFound;
+                return if delivered.is_empty() {
+                    WaitAnyOutcome::NotFound
+                } else {
+                    WaitAnyOutcome::AllDelivered {
+                        request_ids: delivered,
+                    }
+                };
             }
             let now = Instant::now();
             if now >= deadline {
@@ -657,18 +722,41 @@ impl BackgroundAgentTracker {
             .collect()
     }
 
-    /// Mark a completed result as already delivered to the parent on-demand
-    /// (via `wait`, or a `check_status` that returned the outcome) so the
+    /// Mark this run's outcome as already accounted for by the parent, so the
     /// proactive `subagent_announce` does not spend a fresh parent turn
-    /// re-announcing a result the model has already seen. No-op for an unknown
-    /// or still-running id.
+    /// re-announcing something the model has already seen.
+    ///
+    /// Works in **both** phases of a run's life, because the two producers sit
+    /// on opposite sides of the transition:
+    ///
+    /// * already completed (`wait` / `check_status` returned the outcome) —
+    ///   stamps the completed entry directly;
+    /// * still running (the model-issued `cancel` — it fires the token and
+    ///   returns long before the child unwinds) — records the intent on the
+    ///   running entry, and `mark_completed` folds it into the completed entry
+    ///   at the moment it is born.
+    ///
+    /// Covering only the first case left cancellation as the single most likely
+    /// producer of a spurious announce: a whole parent turn spent reporting
+    /// `sub-agent failed: cancelled` for a child the parent itself killed.
+    /// No-op for an id that is in neither map.
     pub fn mark_consumed(&self, request_id: &str) {
-        let mut completed = self.completed.write().unwrap_or_else(|e| {
+        {
+            let mut completed = self.completed.write().unwrap_or_else(|e| {
+                warn!("BackgroundAgentTracker lock poisoned, recovering");
+                e.into_inner()
+            });
+            if let Some(agent) = completed.get_mut(request_id) {
+                agent.consumed = true;
+                return;
+            }
+        }
+        let mut running = self.running.write().unwrap_or_else(|e| {
             warn!("BackgroundAgentTracker lock poisoned, recovering");
             e.into_inner()
         });
-        if let Some(agent) = completed.get_mut(request_id) {
-            agent.consumed = true;
+        if let Some(agent) = running.get_mut(request_id) {
+            agent.consume_on_completion = true;
         }
     }
 
@@ -686,21 +774,31 @@ impl BackgroundAgentTracker {
             .is_some_and(|c| c.consumed)
     }
 
-    /// List running agents as (`request_id`, `task_description`, `elapsed_secs`).
+    /// List running agents as (`request_id`, `task_description`, `elapsed_secs`),
+    /// optionally scoped to one `root_session`.
     ///
     /// Backs the `subagent` tool's `list` action, so it reports only ids the
     /// parent model can actually act on: presence-only entries are skipped
     /// because they never reach `completed`, which would make every follow-up
     /// `check_status` / `wait` on such an id answer "no background sub-agent
     /// found" the moment the inline result was already returned at its own seam.
-    pub fn list_running(&self) -> Vec<(String, String, u64)> {
+    ///
+    /// `scope` mirrors [`flat_nodes`](Self::flat_nodes)'s filter, and for the
+    /// same reason: the tracker is **process-global**, so an unscoped
+    /// enumeration handed one session's model the live request_ids of every
+    /// other session's background sub-agents — ids it could then `check_status`
+    /// (reading another session's output) or `cancel`. `None` keeps the whole
+    /// process visible, for callers that genuinely have no owning session (CLI
+    /// / direct construction / tests).
+    pub fn list_running(&self, scope: Option<&str>) -> Vec<(String, String, u64)> {
         let running = self.running.read().unwrap_or_else(|e| {
             warn!("BackgroundAgentTracker lock poisoned, recovering");
             e.into_inner()
         });
-        running
+        let mut rows: Vec<(String, String, u64)> = running
             .iter()
             .filter(|(_, agent)| !agent.presence_only)
+            .filter(|(_, agent)| scope.is_none_or(|s| agent.meta.root_session == s))
             .map(|(id, agent)| {
                 (
                     id.clone(),
@@ -708,7 +806,12 @@ impl BackgroundAgentTracker {
                     agent.started_at.elapsed().as_secs(),
                 )
             })
-            .collect()
+            .collect();
+        // Deterministic order (longest-running first, id as tiebreak): the
+        // backing map's iteration order is random, so an unsorted list reshuffles
+        // between two `list` calls in one turn and reads as churn to the model.
+        rows.sort_by(|a, b| b.2.cmp(&a.2).then_with(|| a.0.cmp(&b.0)));
+        rows
     }
 
     /// Whether any sub-agent is currently running under `root_session` (the
@@ -745,16 +848,32 @@ impl BackgroundAgentTracker {
         })
     }
 
-    /// Snapshot every finished agent as `(request_id, CompletedSnapshot)`.
-    /// Backs the `list` action's view of results still retrievable by the
-    /// parent. Bounded by the TTL prune in `cleanup`.
-    pub fn all_completed(&self) -> Vec<(String, CompletedSnapshot)> {
+    /// Snapshot every finished agent as `(request_id, CompletedSnapshot)`,
+    /// optionally scoped to one `root_session`. Backs the `list` action's view
+    /// of results still retrievable by the parent. Bounded by the TTL prune in
+    /// `cleanup` and the count cap in `mark_completed`.
+    ///
+    /// See [`list_running`](Self::list_running) for why `scope` exists; `None`
+    /// keeps the pre-scoping process-wide view.
+    pub fn all_completed(&self, scope: Option<&str>) -> Vec<(String, CompletedSnapshot)> {
         let completed = self.completed.read().unwrap_or_else(|e| {
             warn!("BackgroundAgentTracker lock poisoned, recovering");
             e.into_inner()
         });
-        completed
+        let mut in_scope: Vec<(&String, &CompletedAgent)> = completed
             .iter()
+            .filter(|(_, c)| scope.is_none_or(|s| c.meta.root_session == s))
+            .collect();
+        // Newest completion first (id as tiebreak). The backing map iterates in
+        // random order, so any downstream cap would otherwise drop an arbitrary
+        // subset — silent truncation that reads as "these are all of them".
+        in_scope.sort_by(|a, b| {
+            b.1.completed_at
+                .cmp(&a.1.completed_at)
+                .then_with(|| a.0.cmp(b.0))
+        });
+        in_scope
+            .into_iter()
             .map(|(id, c)| {
                 (
                     id.clone(),
@@ -766,6 +885,23 @@ impl BackgroundAgentTracker {
                     },
                 )
             })
+            .collect()
+    }
+
+    /// The subset of `request_ids` the tracker has never heard of — in neither
+    /// the running nor the completed map (typo'd, from another session, or
+    /// TTL-pruned).
+    ///
+    /// `wait` used to silently ignore these: a set with one bad id parked for
+    /// the full window and reported only on the good ones, so a typo looked
+    /// exactly like a slow sub-agent. Reporting them lets the model fix the
+    /// call instead of waiting again.
+    #[must_use]
+    pub fn unknown_ids(&self, request_ids: &[String]) -> Vec<String> {
+        request_ids
+            .iter()
+            .filter(|id| self.result_snapshot(id).is_none() && self.running_meta(id).is_none())
+            .cloned()
             .collect()
     }
 
@@ -995,12 +1131,193 @@ impl Drop for RunningRegistration {
 mod tests {
     use super::*;
 
+    /// Register a background agent owned by `root_session`.
+    fn register_in(tracker: &BackgroundAgentTracker, id: &str, root_session: &str) {
+        tracker.register_with_meta(
+            id.to_string(),
+            CancellationToken::new(),
+            format!("task for {id}"),
+            SpawnMeta {
+                root_session: root_session.to_string(),
+                depth: 1,
+                ..SpawnMeta::default()
+            },
+        );
+    }
+
+    /// A late `mark_completed` on an id whose *completed* entry was already
+    /// delivered must not resurrect it as fresh news.
+    #[test]
+    fn re_completing_a_delivered_id_keeps_it_consumed() {
+        let tracker = BackgroundAgentTracker::new();
+        tracker.mark_completed("req-late", CompletedOutcome::ok_text("first"));
+        tracker.mark_consumed("req-late");
+
+        tracker.mark_completed("req-late", CompletedOutcome::ok_text("second"));
+
+        assert!(tracker.is_consumed("req-late"));
+    }
+
+    /// The fan-out drain loop: re-issuing the SAME id set walks the completions
+    /// one at a time instead of handing back the first one forever.
+    #[tokio::test]
+    async fn wait_any_walks_the_set_instead_of_repeating_one_result() {
+        let tracker = BackgroundAgentTracker::new();
+        let ids = vec!["fan-a".to_string(), "fan-b".to_string()];
+        for id in &ids {
+            register_in(&tracker, id, "sess");
+        }
+        tracker.mark_completed("fan-a", CompletedOutcome::ok_text("A"));
+        tracker.mark_completed("fan-b", CompletedOutcome::ok_text("B"));
+
+        let short = Duration::from_millis(50);
+        let first = tracker.wait_any(&ids, short).await;
+        let second = tracker.wait_any(&ids, short).await;
+        let third = tracker.wait_any(&ids, short).await;
+
+        let delivered = |outcome: &WaitAnyOutcome| match outcome {
+            WaitAnyOutcome::Completed { request_id, .. } => request_id.clone(),
+            other => panic!("expected a completion, got {other:?}"),
+        };
+        assert_ne!(
+            delivered(&first),
+            delivered(&second),
+            "the second wait must not repeat the first result"
+        );
+
+        match third {
+            WaitAnyOutcome::AllDelivered { mut request_ids } => {
+                request_ids.sort();
+                assert_eq!(request_ids, ids, "the drained set is reported back");
+            }
+            other => panic!("a drained set must terminate, got {other:?}"),
+        }
+    }
+
+    /// The half that made the old behaviour a *loop*: with one result already
+    /// delivered and a sibling still running, the wait must park for the
+    /// sibling — not hand back the delivered one instantly.
+    #[tokio::test]
+    async fn wait_any_parks_for_a_running_sibling_after_one_is_delivered() {
+        let tracker = BackgroundAgentTracker::new();
+        let ids = vec!["mix-done".to_string(), "mix-running".to_string()];
+        for id in &ids {
+            register_in(&tracker, id, "sess");
+        }
+        tracker.mark_completed("mix-done", CompletedOutcome::ok_text("done"));
+
+        let short = Duration::from_millis(50);
+        assert!(matches!(
+            tracker.wait_any(&ids, short).await,
+            WaitAnyOutcome::Completed { .. }
+        ));
+
+        match tracker.wait_any(&ids, short).await {
+            WaitAnyOutcome::TimedOut { still_running } => {
+                assert_eq!(still_running, vec!["mix-running".to_string()]);
+            }
+            other => panic!("must wait for the live sibling, got {other:?}"),
+        }
+    }
+
+    /// A single-id `wait` is a question about ONE agent, so it keeps answering
+    /// with that agent's result. Only draining a SET needs the `AllDelivered`
+    /// terminal, and `wait` maps it back.
+    #[tokio::test]
+    async fn single_wait_stays_idempotent_after_delivery() {
+        let tracker = BackgroundAgentTracker::new();
+        register_in(&tracker, "solo", "sess");
+        tracker.mark_completed("solo", CompletedOutcome::ok_text("payload"));
+
+        let short = Duration::from_millis(50);
+        for attempt in 0..2 {
+            match tracker.wait("solo", short).await {
+                WaitOutcome::Completed(snap) => match snap.outcome {
+                    CompletedOutcome::Ok { final_text, .. } => assert_eq!(final_text, "payload"),
+                    other => panic!("attempt {attempt}: unexpected outcome {other:?}"),
+                },
+                other => panic!("attempt {attempt}: expected the result, got {other:?}"),
+            }
+        }
+    }
+
+    /// The tracker is process-global, so an unscoped enumeration handed one
+    /// session's model live request_ids belonging to every other session — ids
+    /// it could then `check_status` (reading foreign output) or `cancel`.
+    #[test]
+    fn enumeration_faces_scope_to_the_owning_session() {
+        let tracker = BackgroundAgentTracker::new();
+        register_in(&tracker, "mine-live", "sess-mine");
+        register_in(&tracker, "mine-done", "sess-mine");
+        register_in(&tracker, "theirs-live", "sess-theirs");
+        register_in(&tracker, "theirs-done", "sess-theirs");
+        tracker.mark_completed("mine-done", CompletedOutcome::ok_text("m"));
+        tracker.mark_completed("theirs-done", CompletedOutcome::ok_text("t"));
+
+        let running: Vec<String> = tracker
+            .list_running(Some("sess-mine"))
+            .into_iter()
+            .map(|(id, _, _)| id)
+            .collect();
+        assert_eq!(running, vec!["mine-live".to_string()]);
+
+        let completed: Vec<String> = tracker
+            .all_completed(Some("sess-mine"))
+            .into_iter()
+            .map(|(id, _)| id)
+            .collect();
+        assert_eq!(completed, vec!["mine-done".to_string()]);
+
+        // No owning session (CLI / direct construction) still sees everything.
+        assert_eq!(tracker.list_running(None).len(), 2);
+        assert_eq!(tracker.all_completed(None).len(), 2);
+    }
+
+    /// A cap over a randomly-ordered map drops an arbitrary subset. `list`
+    /// truncates to the newest, so the order has to come from here.
+    #[test]
+    fn all_completed_is_newest_first() {
+        let tracker = BackgroundAgentTracker::new();
+        for id in ["c1", "c2", "c3"] {
+            register_in(&tracker, id, "sess");
+            tracker.mark_completed(id, CompletedOutcome::ok_text(id));
+            // `completed_at` is an Instant; force a distinguishable ordering.
+            std::thread::sleep(std::time::Duration::from_millis(2));
+        }
+        let ids: Vec<String> = tracker
+            .all_completed(Some("sess"))
+            .into_iter()
+            .map(|(id, _)| id)
+            .collect();
+        assert_eq!(
+            ids,
+            vec!["c3".to_string(), "c2".to_string(), "c1".to_string()]
+        );
+    }
+
+    /// A typo'd id used to be indistinguishable from a slow sub-agent: the wait
+    /// parked the whole window and reported only on the ids that resolved.
+    #[test]
+    fn unknown_ids_names_the_ids_in_neither_map() {
+        let tracker = BackgroundAgentTracker::new();
+        register_in(&tracker, "known-live", "sess");
+        register_in(&tracker, "known-done", "sess");
+        tracker.mark_completed("known-done", CompletedOutcome::ok_text("x"));
+
+        let probe = vec![
+            "known-live".to_string(),
+            "known-done".to_string(),
+            "typo".to_string(),
+        ];
+        assert_eq!(tracker.unknown_ids(&probe), vec!["typo".to_string()]);
+    }
+
     #[test]
     fn register_and_list() {
         let tracker = BackgroundAgentTracker::new();
         let token = CancellationToken::new();
         tracker.register("req-1".to_string(), token, "test task".to_string());
-        let running = tracker.list_running();
+        let running = tracker.list_running(None);
         assert_eq!(running.len(), 1);
         assert_eq!(running[0].0, "req-1");
     }
@@ -1070,7 +1387,7 @@ mod tests {
         let token = CancellationToken::new();
         tracker.register("req-1".to_string(), token, "test task".to_string());
         tracker.mark_completed("req-1", CompletedOutcome::ok_text("done"));
-        assert!(tracker.list_running().is_empty());
+        assert!(tracker.list_running(None).is_empty());
         let snap = tracker
             .result_snapshot("req-1")
             .expect("completed entry present");
@@ -1114,7 +1431,7 @@ mod tests {
             tracker.mark_completed(&format!("rid-{i}"), CompletedOutcome::ok_text("r"));
         }
         assert_eq!(
-            tracker.all_completed().len(),
+            tracker.all_completed(None).len(),
             MAX_COMPLETED_RESULTS,
             "completed map must be bounded by MAX_COMPLETED_RESULTS"
         );
@@ -1198,7 +1515,7 @@ mod tests {
         tracker.mark_completed("a", CompletedOutcome::ok_text("ra"));
         tracker.mark_completed("b", CompletedOutcome::Err("boom".into()));
         let mut ids: Vec<String> = tracker
-            .all_completed()
+            .all_completed(None)
             .into_iter()
             .map(|(id, _)| id)
             .collect();
@@ -1423,15 +1740,29 @@ mod tests {
     }
 
     #[test]
-    fn mark_consumed_is_noop_for_unknown_and_running() {
+    fn mark_consumed_ignores_unknown_ids_and_carries_across_completion() {
         let tracker = BackgroundAgentTracker::new();
         tracker.mark_consumed("ghost"); // no panic, no-op
         assert!(!tracker.is_consumed("ghost"));
+
         tracker.register("rid".into(), CancellationToken::new(), "t".into());
-        tracker.mark_consumed("rid"); // still running → nothing to mark yet
+        tracker.mark_consumed("rid");
+        // Still running: there is no outcome yet, so there is nothing to
+        // suppress and nothing to report as consumed.
         assert!(!tracker.is_consumed("rid"));
+
         tracker.mark_completed("rid", CompletedOutcome::ok_text("x"));
-        assert!(!tracker.is_consumed("rid"));
+        // ...but the intent survived the transition. This assertion is
+        // deliberately INVERTED from its original form: dropping the intent on
+        // the floor is precisely what let a model-issued `cancel` — which fires
+        // the token and returns before the child unwinds — produce a spurious
+        // announce turn about a sub-agent the parent itself killed.
+        assert!(
+            tracker.is_consumed("rid"),
+            "consuming a running agent must make its result born consumed"
+        );
+
+        // Stamping an already-consumed completed entry stays idempotent.
         tracker.mark_consumed("rid");
         assert!(tracker.is_consumed("rid"));
     }
@@ -1596,7 +1927,7 @@ mod tests {
             SpawnMeta::default(),
         );
         let listed: Vec<String> = tracker
-            .list_running()
+            .list_running(None)
             .into_iter()
             .map(|(id, _, _)| id)
             .collect();

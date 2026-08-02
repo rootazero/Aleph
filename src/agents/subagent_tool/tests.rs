@@ -892,11 +892,11 @@ async fn sync_batch_registers_running_only_entries() {
     // RAII delist: nothing left running, and — running-only — nothing
     // retained as completed.
     assert!(
-        tracker.list_running().is_empty(),
+        tracker.list_running(None).is_empty(),
         "sync batch entries must delist when the fan-out settles"
     );
     assert!(
-        tracker.all_completed().is_empty(),
+        tracker.all_completed(None).is_empty(),
         "sync path must not retain completed entries (no announce source)"
     );
 }
@@ -1256,7 +1256,11 @@ async fn background_subagent_forwards_trace_to_parent_sink() {
 
     // Poll until the background task completes (bounded).
     for _ in 0..100 {
-        if tracker.list_running().iter().all(|(id, _, _)| id != &rid) {
+        if tracker
+            .list_running(None)
+            .iter()
+            .all(|(id, _, _)| id != &rid)
+        {
             break;
         }
         tokio::time::sleep(std::time::Duration::from_millis(20)).await;
@@ -1696,4 +1700,235 @@ async fn wiring_proof_guard_terminates_bridge_on_unwind() {
             "arm2: bridge watcher must have exited"
         );
     }
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// §4.11 round-8 — wait cancellability, fan-out drain terminal, announce
+// dedup at cancel, and the scoped/compact `list` directory.
+// ─────────────────────────────────────────────────────────────────────────
+
+/// Build a tool whose background sub-agents are owned by `session`.
+fn tool_for_session(tracker: Arc<BackgroundAgentTracker>, session: &str) -> SubagentTool {
+    let provider: Arc<dyn AiProvider> = Arc::new(MockAiProvider);
+    SubagentTool::new(
+        provider,
+        crate::harness::chain_context::ChainContext::new(),
+        make_registry(),
+        tracker,
+        in_mem_session(),
+        Arc::new(NoopTestToolService),
+    )
+    .with_parent_session_id(session)
+}
+
+/// Register a background agent owned by `session`.
+fn register_owned(tracker: &BackgroundAgentTracker, id: &str, session: &str) {
+    tracker.register_with_meta(
+        id.to_string(),
+        CancellationToken::new(),
+        format!("task {id}"),
+        crate::agents::background_tracker::SpawnMeta {
+            root_session: session.to_string(),
+            depth: 1,
+            ..Default::default()
+        },
+    );
+}
+
+/// A parked `wait` must observe the harness cancel token.
+///
+/// It used to ignore it entirely, so a `/stop` landing on a run that was inside
+/// `wait(timeout_secs=600)` left that run wedged in the sleep for up to ten more
+/// minutes. Asserted against a wall clock, because "the token is passed in" is
+/// exactly the kind of wiring that can be present and still not connected.
+#[tokio::test]
+async fn wait_returns_promptly_when_the_harness_cancels() {
+    let tracker = make_tracker();
+    register_owned(&tracker, "slow-child", "sess-cancel");
+    let tool = tool_for_session(tracker, "sess-cancel");
+
+    let cancel = CancellationToken::new();
+    let fire = cancel.clone();
+    tokio::spawn(async move {
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        fire.cancel();
+    });
+
+    let started = std::time::Instant::now();
+    let result = tool
+        .execute(
+            json!({ "action": "wait", "request_id": "slow-child", "timeout_secs": 600 }),
+            cancel,
+        )
+        .await;
+    let elapsed = started.elapsed();
+
+    assert!(
+        elapsed < std::time::Duration::from_secs(10),
+        "a cancelled wait must not run out its window (took {elapsed:?})"
+    );
+    match result {
+        // Not an Error: nothing failed. Reporting a failure would feed the
+        // harness failure counter and the cross-batch memo a verdict about a
+        // call that was merely interrupted.
+        ToolResult::Success { output } => {
+            assert_eq!(output["status"], "wait_interrupted");
+            assert_eq!(output["still_running"][0]["request_id"], "slow-child");
+        }
+        other => unreachable!("expected an interrupted-wait report, got {other:?}"),
+    }
+}
+
+/// Cancelling a background sub-agent is the parent deciding its outcome, so the
+/// proactive announce must stay quiet about it — otherwise a whole fresh parent
+/// turn is spent reporting the death of a child the parent itself ordered.
+#[tokio::test]
+async fn cancel_marks_the_pending_outcome_consumed() {
+    let tracker = make_tracker();
+    register_owned(&tracker, "doomed", "sess-cancel-2");
+    let tool = tool_for_session(tracker.clone(), "sess-cancel-2");
+
+    let out = tool
+        .execute(
+            json!({ "action": "cancel", "request_id": "doomed" }),
+            CancellationToken::new(),
+        )
+        .await;
+    match out {
+        ToolResult::Success { output } => assert_eq!(output["status"], "cancelling"),
+        other => unreachable!("expected a cancelling report, got {other:?}"),
+    }
+
+    // The child unwinds a moment later, exactly as `spawn_background` does.
+    tracker.mark_completed(
+        "doomed",
+        CompletedOutcome::Err("sub-agent failed: cancelled".to_string()),
+    );
+    assert!(
+        tracker.is_consumed("doomed"),
+        "the announce guard must already be set when the cancelled child lands"
+    );
+}
+
+/// `list` is a directory of THIS session's sub-agents. Unscoped it handed the
+/// model live request_ids from every other session — ids it could then
+/// `check_status` (reading foreign output) or `cancel`.
+#[tokio::test]
+async fn list_shows_only_this_sessions_subagents() {
+    let tracker = make_tracker();
+    for (id, session) in [
+        ("mine-live", "sess-a"),
+        ("mine-done", "sess-a"),
+        ("theirs-live", "sess-b"),
+        ("theirs-done", "sess-b"),
+    ] {
+        register_owned(&tracker, id, session);
+    }
+    tracker.mark_completed("mine-done", CompletedOutcome::ok_text("m"));
+    tracker.mark_completed("theirs-done", CompletedOutcome::ok_text("t"));
+
+    let tool = tool_for_session(tracker, "sess-a");
+    let out = tool
+        .execute(json!({ "action": "list" }), CancellationToken::new())
+        .await;
+    let ToolResult::Success { output } = out else {
+        unreachable!("list must succeed");
+    };
+    assert_eq!(output["running_count"], 1);
+    assert_eq!(output["running"][0]["request_id"], "mine-live");
+    assert_eq!(output["completed_count"], 1);
+    assert_eq!(output["completed"][0]["request_id"], "mine-done");
+}
+
+/// `list` rows are summaries. Rendering every retained completion's FULL output
+/// let one call swamp the parent's context with material it never asked for.
+#[tokio::test]
+async fn list_rows_preview_the_result_instead_of_inlining_it() {
+    let tracker = make_tracker();
+    let huge = "x".repeat(50_000);
+    register_owned(&tracker, "big", "sess-big");
+    tracker.mark_completed("big", CompletedOutcome::ok_text(huge.clone()));
+
+    let tool = tool_for_session(tracker, "sess-big");
+    let out = tool
+        .execute(json!({ "action": "list" }), CancellationToken::new())
+        .await;
+    let ToolResult::Success { output } = out else {
+        unreachable!("list must succeed");
+    };
+    let row = &output["completed"][0];
+    let preview = row["result_preview"].as_str().unwrap();
+    assert!(
+        preview.chars().count() <= 201,
+        "the row must preview, not inline ({} chars)",
+        preview.chars().count()
+    );
+    // …and it must say how much was withheld, so the model can decide whether
+    // to fetch the rest with check_status.
+    assert_eq!(row["result_chars"], huge.chars().count());
+}
+
+/// Re-issuing the same `request_ids` drains the fan-out one completion at a
+/// time and then terminates. Returning the first completed id regardless of
+/// delivery made that loop spin forever, one LLM turn per lap.
+#[tokio::test]
+async fn wait_on_a_set_drains_then_reports_all_delivered() {
+    let tracker = make_tracker();
+    for id in ["p1", "p2"] {
+        register_owned(&tracker, id, "sess-fan");
+        tracker.mark_completed(id, CompletedOutcome::ok_text(id));
+    }
+    let tool = tool_for_session(tracker, "sess-fan");
+    let args = json!({
+        "action": "wait",
+        "request_ids": ["p1", "p2"],
+        "timeout_secs": 1
+    });
+
+    let mut seen = Vec::new();
+    for _ in 0..2 {
+        let ToolResult::Success { output } =
+            tool.execute(args.clone(), CancellationToken::new()).await
+        else {
+            unreachable!("each drain step must succeed");
+        };
+        assert_eq!(output["status"], "completed");
+        seen.push(output["request_id"].as_str().unwrap().to_string());
+    }
+    seen.sort();
+    assert_eq!(seen, vec!["p1".to_string(), "p2".to_string()]);
+
+    let ToolResult::Success { output } = tool.execute(args, CancellationToken::new()).await else {
+        unreachable!("the terminal step must succeed");
+    };
+    assert_eq!(
+        output["status"], "all_delivered",
+        "a drained set must terminate instead of repeating a delivered result"
+    );
+}
+
+/// A typo'd id used to park the full window and report only on the ids that
+/// resolved, so it looked exactly like a slow sub-agent.
+#[tokio::test]
+async fn wait_names_request_ids_it_has_never_heard_of() {
+    let tracker = make_tracker();
+    register_owned(&tracker, "real", "sess-unknown");
+    tracker.mark_completed("real", CompletedOutcome::ok_text("done"));
+    let tool = tool_for_session(tracker, "sess-unknown");
+
+    let ToolResult::Success { output } = tool
+        .execute(
+            json!({
+                "action": "wait",
+                "request_ids": ["real", "typo-id"],
+                "timeout_secs": 1
+            }),
+            CancellationToken::new(),
+        )
+        .await
+    else {
+        unreachable!("wait must succeed");
+    };
+    assert_eq!(output["status"], "completed");
+    assert_eq!(output["unknown_request_ids"][0], "typo-id");
 }
