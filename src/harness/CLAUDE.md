@@ -14,10 +14,16 @@
 
 **「顶层」二字是本条最重要的部分**——见下方警告。**口径现在由测试执行**：`src/harness/tests/budget.rs`（跑在 `cargo test -p alephcore --lib` 里），同时守 12 文件与行数；出现第 13 个文件或行数上涨即 FAIL。**改这里的数字就得改那里的 `CEILING`，反之亦然。**
 
-**当前测量（2026-07-30 复测）：5062 行。这就是红线本身。** 由 `tests/budget.rs` 的棘轮守（`CEILING = 5062`，实测非手算，只减不增，增必答下方 3 问）。**代码是权威**——这里的数字只是 `CEILING` 的副本，对不上时信代码。
+**当前测量（2026-08-02 复测）：5084 行。这就是红线本身。** 由 `tests/budget.rs` 的棘轮守（`CEILING = 5084`，实测非手算，只减不增，增必答下方 3 问）。**代码是权威**——这里的数字只是 `CEILING` 的副本，对不上时信代码。
 
 > **文档订正（2026-07-25）**：本行此前写 5008，而代码里的 `CEILING` 早在 `396c6d200`（"harness: adjust line budget CEILING…"）就抬到 5082，本文与根 CLAUDE.md 都没跟上。这正是本文件开头那段"手写的状态行会撒谎、所以改用测量"要防的失效模式——它在**文档层**复发了一次。**以 `budget.rs::CEILING` 为唯一权威**，任何文档里的数字都只是它的副本；发现不一致时改文档，不要改代码去迁就文档。抬闸那次提交未在正文作答 R10 三问，欠账在此记录。
 
+> **Round 8（2026-08-02）：5062 → 5084（+22）。** 付清 2026-08-02 工具层轮记在 FEATURE_LOCATOR §3.3 ⑥ 的两笔 Act 欠账（当时就写明「落在本预算里，需先答 3 问」）。完整作答在 `tests/budget.rs::CEILING` 的 Round 8 段，摘要：
+> - **+~16 `act.rs`：组循环查 `run_cancel`。** `/stop` 之后剩余每个分组照旧发 `ToolCallRequested`、登记 in-flight、派发（立刻拿到取消错误）、发 `ToolError` —— 那些幽灵失败会进下一轮 prompt（模型读成「跑过并失败」）、进 `RunSummary.tool_summaries`、进 `tool_signal_sink`。剩余 `tool_use` 块仍需配对，**那趟注定失败的派发此前正是配对的来源**，所以检查点必须调既有的 `close_unexecuted_tool_uses` 再 break。三问：① 脚手架 —— 遵从一个外部停止信号是管道活，且**不是** R10 禁止的完成度判断（不是模型判断，是用户按了停）；② 模型升级仍需要 —— 取消是运行时事实；③ 三个真实消费者。
+> - **+~6 `act.rs`：并行时钟改在首次 poll 起表。** PASS 0 每调用盖一个 `Instant`，而 PASS 1 走 `buffer_unordered(parallelism)`，超出并发上限的调用先排队 —— 于是它们的时长里含着**没在跑**的那段。完成序驱动环自己的注释早就写着相反的话（“its `duration_ms` is the tool's real wall clock”），是本仓反复吃亏的那个形状：注释断言了一个代码不成立的不变量。三问：① 度量不是决策；② 墙钟与模型能力无关；③ 两个真实消费者。
+> 
+> **同轮刻意不做**：`on_tool_call_start` 仍在 PASS 0 为全部 N 个调用触发，排队中的调用仍**被宣告**在跑。把它挪进 future 要把 `&mut dyn HarnessCallback` 跨 `'static` 送 —— 为一个几毫秒后就被完成事件覆盖的状态往循环里加机件，而转录的 `ToolCallRequested` 线性序是刻意的。第 1 问不过。
+> 
 > **Round 7（2026-07-29）：5055 → 5066（+11）。** 一进两出，涨的那笔在此作答（完整版在 `tests/budget.rs::CEILING`）：
 > - **+13 `guardrails.rs`**：工具调用 guardrail 的 `Block` 臂**不**调 `push_tool_invocation`——而成功 / 失败 / 批内 memo 命中 / 跨批拒绝四条终态都调。于是被拦调用缺席 `tool_timeline` → `FlowOutcome` → `RunSummary.tool_summaries`，也就是消费方用来跟**有意有损**的 `agent_trace` 流（`mpsc(256)` + `try_send`，满即丢）对账的那份权威真源。换句话说：**被拦调用是唯一没有兜底的一类**，掉一帧 live 事件就留下永久「运行中」幽灵；run 摘要少计，dream 的 `tool_signal_sink` 也看不见这次尝试。三问：① 脚手架——它记录一件已经发生的事，不做任何判断；② 模型升级仍需要——终态账本与模型能力无关；③ 三个真实消费者（`tool_summaries` / runtime footer 摘要 / tool-signal sink）。
 > - **−2 `trace.rs`**：`LoopTraceTurnOutcome::{HitLimit, Cancelled}` 零生产者（`think.rs` 只发 `Continue`/`Stop`——封顶与取消是**会话级**退出，归 `LoopTraceSessionOutcome`），唯一提及是 `gateway/trace_protocol.rs` 里翻译没人构造的变体的 `From` 臂。`LoopTraceEvent` 生产环境从不反序列化（只序列化、走进程内 mpsc），删除动不到存量 blob；协议侧 `AgentTraceTurnOutcome` 保留宽集合（`AgentTraceTextKind::Intermediate` 同例）。
