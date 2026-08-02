@@ -112,26 +112,36 @@ jobs:
       # forms, on Windows.
       #
       # `line-tables-only` is load-bearing, not tidiness. Without it `ld` dies
-      # linking these targets with `signal 7 [Bus error]`. That is *not* the
-      # disk running out, which is the obvious reading and the wrong one: the
-      # runner had 87 GB free at the time, and a step that freed a further
-      # 17 GB changed nothing. It is memory — ld mmaps its inputs, and on ELF
-      # the debuginfo sits inside each of those binaries, making up most of
-      # their ~4.5 GB. Line tables are what a panic backtrace reads, so failures
-      # stay diagnosable.
+      # with `signal 7 [Bus error]`, which is what an mmap'd output file raises
+      # when the filesystem cannot supply its pages. Measured on a Linux host:
+      # full debuginfo makes each test binary 3.7x larger (390 MB -> 1.48 GB,
+      # five targets sampled), so all 134 come to ~54 GB with the flag against
+      # ~200 GB without — and the runner had 87 GB free. It does not fit.
+      # That a cleanup freeing a further 17 GB "changed nothing" does not argue
+      # otherwise: the shortfall is over 100 GB, so 17 GB sits below the
+      # resolution of that experiment in either direction. Memory is tight too
+      # — ld peaks at 5.4-9.2 GB per link without the flag against 3.3-4.4 GB
+      # with it — but exhausting memory kills the runner outright (exit 143),
+      # and that is the *earlier* failure, already fixed above by not building
+      # the lib harness twice. Two failures, two causes; do not merge them.
+      # Line tables are what a panic backtrace reads, so failures stay
+      # diagnosable.
       #
-      # That reasoning is ELF-only and could not be checked on macOS, where
-      # debuginfo stays out in .o/dSYM and the binaries barely change size
-      # (28.46 -> 28.41 MB). Windows splits it out too, into .pdb, so the flag
-      # buys no link memory there — it buys disk, and it is still the larger
-      # half: measured on a Windows host this step writes 20.6 GB, of which
-      # 13.3 GB is .pdb against 2.5 GB of .exe, *already* at line-tables-only.
-      # Same host, 134 binaries, 537 passed / 0 failed, 25 min from cold.
-      # Disk on both sides of the step, because this is the one leg where the
-      # obvious-but-wrong reading of the ELF bus error above would actually be
-      # right: nothing here reports free space, and the step writes 20.6 GB on
-      # Windows. `df -h .` names the filesystem holding the workspace — which is
-      # where target/ lands — so it needs no per-runner knowledge of C: vs D:.
+      # The flag buys disk on every platform; how much is platform-specific and
+      # could not be checked on macOS, where debuginfo stays out in .o/dSYM and
+      # the binaries barely change size (28.46 -> 28.41 MB). Windows splits it
+      # into .pdb: measured there, this step writes 20.6 GB, of which 13.3 GB is
+      # .pdb against 2.5 GB of .exe, *already* at line-tables-only — 134
+      # binaries, 537 passed / 0 failed, 25 min from cold. On ELF the debuginfo
+      # sits inside each binary instead (92% of one, 359.3 MB of 389.6 MB), and
+      # the step writes 66.6 GB — 134 binaries, 538 passed / 0 failed, 21 min
+      # from cold at -j4, peaking at 12.7 GB of RAM.
+      #
+      # Hence `df` on both sides: this step writes 20.6 GB on Windows and
+      # 66.6 GB on Linux, nothing else here reports free space, and disk is the
+      # constraint that actually bit. `df -h .` names the filesystem holding the
+      # workspace — where target/ lands — so it needs no per-runner knowledge of
+      # C: vs D:.
       - name: Disk before integration tests
         shell: bash
         run: df -h .
@@ -217,8 +227,13 @@ jobs:
     # The hosted runner for this long job is reclaimed by GitHub infra
     # mid-compile every run (exit 143, "runner received a shutdown signal";
     # no OOM/disk signature, variable death time, only this job affected), so
-    # a flaky infra death must not block the run. Benches are verified to
-    # compile locally.
+    # a flaky infra death must not block the run. Measured on Linux from cold:
+    # exit 0, five executables, 12m40s, 4.96 GB of disk, peaking at 11.5 GB RSS
+    # in one rustc. That peak is the alephcore lib itself — reproducible by
+    # building it plus a single bench target, and it is not something this job
+    # adds. The Test job compiles a *larger* unit (the lib test harness, ~14.6k
+    # tests) on the same runner and survives, so the death here does not read as
+    # memory, which is the reading an 11.5 GB peak would otherwise invite.
     continue-on-error: true
     steps:
       - uses: actions/checkout@v6
