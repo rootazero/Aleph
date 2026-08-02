@@ -136,10 +136,6 @@ impl AlephTool for TaskCreateTool {
     type Args = TaskCreateArgs;
     type Output = TaskCreateOutput;
 
-    fn examples(&self) -> Option<Vec<String>> {
-        None
-    }
-
     async fn call(&self, args: Self::Args) -> Result<Self::Output> {
         // An unknown priority string must be a hard error, not a silent default
         // to Normal: silently discarding the caller's intent misleads the model.

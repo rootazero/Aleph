@@ -398,17 +398,6 @@ impl AlephTool for TeamCreateTool {
     type Args = TeamCreateArgs;
     type Output = TeamCreateOutput;
 
-    fn examples(&self) -> Option<Vec<String>> {
-        Some(vec![
-            "team_create(name='Research Team', members=[{agent_id: 'researcher', role: 'lead'}])"
-                .to_string(),
-            "team_create(name='Dev Squad', description='Backend development team', members=[\
-                {agent_id: 'coder', role: 'developer'}, \
-                {create: {id: 'reviewer', name: 'Code Reviewer'}, role: 'reviewer'}])"
-                .to_string(),
-        ])
-    }
-
     async fn call(&self, args: Self::Args) -> Result<Self::Output> {
         let leader_id = self.current_agent_id.clone();
 

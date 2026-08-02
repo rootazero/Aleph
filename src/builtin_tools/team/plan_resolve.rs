@@ -62,13 +62,6 @@ impl AlephTool for PlanResolveTool {
     type Args = PlanResolveArgs;
     type Output = PlanResolveOutput;
 
-    fn examples(&self) -> Option<Vec<String>> {
-        Some(vec![
-            "plan_resolve(team_id='abc', plan_message_id='m1', submitter_agent_id='worker', decision='approve')"
-                .to_string(),
-        ])
-    }
-
     async fn call(&self, args: Self::Args) -> Result<Self::Output> {
         let leader_id = if self.current_agent_id.is_empty() {
             "leader"

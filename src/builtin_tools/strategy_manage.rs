@@ -225,13 +225,6 @@ impl AlephTool for StrategyTool {
     type Args = StrategyArgs;
     type Output = StrategyOutput;
 
-    fn examples(&self) -> Option<Vec<String>> {
-        Some(vec![
-            "strategy(action='show')".into(),
-            "strategy(action='revise', reason='the auth library we planned around was removed upstream', new_strategy={objective:'...', approach:'...', phases:['...'], guardrails:['...'], success_criteria:'...'})".into(),
-        ])
-    }
-
     async fn call(&self, args: Self::Args) -> Result<Self::Output> {
         let session = self.session().await;
         if session.is_empty() {

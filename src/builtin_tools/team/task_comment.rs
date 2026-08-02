@@ -60,15 +60,6 @@ impl AlephTool for TaskCommentTool {
     type Args = TaskCommentArgs;
     type Output = TaskCommentOutput;
 
-    fn examples(&self) -> Option<Vec<String>> {
-        Some(vec![
-            "task_comment(task_id='task-1', body='Backend deps still flaky; retrying in 5m')"
-                .to_string(),
-            "task_comment(task_id='task-2', body='Decision: chose option B because A breaks idempotency')"
-                .to_string(),
-        ])
-    }
-
     async fn call(&self, args: Self::Args) -> Result<Self::Output> {
         debug!(
             task_id = %args.task_id,

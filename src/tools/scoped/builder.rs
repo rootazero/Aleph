@@ -14,7 +14,6 @@ use crate::sandbox::exec_approval::gate::ApprovalRequester;
 use crate::session::events::ToolOutput;
 use crate::sync_primitives::Arc;
 use crate::tool_metadata::ToolHealthCache;
-use crate::tools::refresh::ToolRefreshSource;
 use crate::tools::runtime::{LoopTool, LoopToolRegistry};
 use crate::tools::service::{ToolDefinition, ToolDefinitionMetadata, ToolError, ToolSource};
 
@@ -31,7 +30,6 @@ impl ScopedToolService {
             inner,
             allowed,
             subagent_tool: None,
-            refresh: None,
             hook_decorator: None,
             hook_executor: None,
             hook_session_id: String::new(),
@@ -183,16 +181,6 @@ impl ScopedToolService {
     /// Attach a `SubagentTool` that will appear in listings and can be executed.
     pub fn with_subagent_tool(mut self, tool: Arc<SubagentTool>) -> Self {
         self.subagent_tool = Some(tool);
-        self
-    }
-
-    /// Attach a refresh source. `list()` will trigger a poll on each call.
-    ///
-    /// Note: because `LoopToolRegistry` is shared via `Arc`, callers that need
-    /// live refresh should rebuild the registry externally and swap the `Arc`.
-    /// This hook is provided for compatibility with the plan interface.
-    pub fn with_refresh(mut self, refresh: Arc<dyn ToolRefreshSource>) -> Self {
-        self.refresh = Some(refresh);
         self
     }
 

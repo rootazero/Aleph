@@ -15,8 +15,6 @@ pub struct ToolDefinition {
     pub parameters: Value,
     pub requires_confirmation: bool,
     pub category: ToolCategory,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub llm_context: Option<String>,
     #[serde(default)]
     pub strict: bool,
 }
@@ -35,7 +33,6 @@ impl ToolDefinition {
             parameters,
             requires_confirmation: false,
             category,
-            llm_context: None,
             strict: false,
         }
     }
@@ -43,12 +40,6 @@ impl ToolDefinition {
     #[must_use]
     pub const fn with_confirmation(mut self, requires: bool) -> Self {
         self.requires_confirmation = requires;
-        self
-    }
-
-    #[must_use]
-    pub fn with_llm_context(mut self, context: String) -> Self {
-        self.llm_context = Some(context);
         self
     }
 
@@ -90,11 +81,9 @@ mod tests {
             ToolCategory::Builtin,
         )
         .with_confirmation(true)
-        .with_llm_context("ctx".into())
         .with_strict(true);
         assert_eq!(def.name, "search");
         assert!(def.requires_confirmation);
-        assert_eq!(def.llm_context.as_deref(), Some("ctx"));
         assert!(def.strict);
     }
 }

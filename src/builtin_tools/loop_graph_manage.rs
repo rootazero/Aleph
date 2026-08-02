@@ -306,15 +306,6 @@ impl AlephTool for LoopGraphTool {
     type Args = LoopGraphArgs;
     type Output = LoopGraphOutput;
 
-    fn examples(&self) -> Option<Vec<String>> {
-        Some(vec![
-            r#"loop_graph(action="node", id="daemon:dreaming", kind="daemon", label="记忆整理夜巡", cadence="nightly")"#.to_string(),
-            r#"loop_graph(action="link", from_id="heartbeat:abc", to_id="daemon:dreaming", edge="watches", note="用户纠正率反指标")"#.to_string(),
-            r#"loop_graph(action="enable_audit")"#.to_string(),
-            r#"loop_graph(action="status")"#.to_string(),
-        ])
-    }
-
     async fn call(&self, args: Self::Args) -> Result<Self::Output> {
         // The graph is scoped to the default agent, full stop. `agent_id` used
         // to be a model-facing arg, but every READ path hardcodes "main" —

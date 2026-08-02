@@ -61,12 +61,6 @@ impl AlephTool for TeamMemberRemoveTool {
     type Args = TeamMemberRemoveArgs;
     type Output = TeamMemberRemoveOutput;
 
-    fn examples(&self) -> Option<Vec<String>> {
-        Some(vec![
-            "team_member_remove(team_id='abc123', agent_id='agent-2')".to_string(),
-        ])
-    }
-
     async fn call(&self, args: Self::Args) -> Result<Self::Output> {
         // Verify the team exists and the caller is the leader
         let team = self

@@ -1253,21 +1253,6 @@ impl AlephTool for NoteManageTool {
     type Args = NoteManageArgs;
     type Output = NoteManageResult;
 
-    fn examples(&self) -> Option<Vec<String>> {
-        Some(vec![
-            "note_manage(action='create', category='preference', filename='editor-prefs', title='Editor Preferences', content='- Prefers Vim\\n- Uses LazyVim', tags=['editor'])".to_string(),
-            "note_manage(action='update', category='preference', filename='editor-prefs', content='- Prefers Neovim\\n- Uses LazyVim config')".to_string(),
-            "note_manage(action='append', category='skill', filename='rust-skills', facts=['Learned async/await patterns'], links=['Tokio'])".to_string(),
-            "note_manage(action='query', query='vim editor preferences', limit=5)".to_string(),
-            "note_manage(action='list', category='reference')".to_string(),
-            "note_manage(action='delete', category='plan', filename='old-plan')".to_string(),
-            "note_manage(action='rename', filename='old-name', new_title='new-name')".to_string(),
-            "note_manage(action='update', category='plan', filename='new-roadmap', content='...', relations=[{to: 'plan/old-roadmap', type: 'supersedes'}])".to_string(),
-            "note_manage(action='insights')".to_string(),
-            "note_manage(action='evolution')".to_string(),
-        ])
-    }
-
     async fn call(&self, args: Self::Args) -> Result<Self::Output> {
         let result = match args.action {
             NoteManageAction::Create => self.handle_create(&args).await,

@@ -325,21 +325,6 @@ impl AlephTool for ScratchpadTool {
     type Args = ScratchpadArgs;
     type Output = ScratchpadOutput;
 
-    fn examples(&self) -> Option<Vec<String>> {
-        Some(vec![
-            "scratchpad(action='set_plan', value='Redesign the blog layout with modern CSS', items=['Design mockup', 'Implement header', 'Add responsive styles'])"
-                .to_string(),
-            "scratchpad(project_id='blog-redesign', action='set_plan', items=[{'text': 'Design mockup', 'status': 'completed'}, {'text': 'Implement header', 'status': 'in_progress'}, 'Add responsive styles', 'Cross-browser pass'])"
-                .to_string(),
-            "scratchpad(project_id='blog-redesign', action='start_item', item_index=0)"
-                .to_string(),
-            "scratchpad(project_id='blog-redesign', action='complete_item', item_index=0)"
-                .to_string(),
-            "scratchpad(project_id='blog-redesign', action='append_note', value='User prefers dark theme')"
-                .to_string(),
-        ])
-    }
-
     async fn call(&self, args: Self::Args) -> Result<Self::Output> {
         // Resolve the effective project id: explicit, else derive from the
         // live chat session so single-chat todos need no project name.
@@ -600,14 +585,6 @@ mod tests {
     }
 
     #[test]
-    fn test_tool_examples() {
-        let tool = ScratchpadTool::new();
-        let examples = tool.examples();
-        assert!(examples.is_some());
-        assert_eq!(examples.unwrap().len(), 5);
-    }
-
-    #[test]
     fn test_action_display() {
         assert_eq!(format!("{}", ScratchpadAction::Initialize), "initialize");
         assert_eq!(format!("{}", ScratchpadAction::Read), "read");
@@ -787,7 +764,6 @@ mod tests {
         let tool = ScratchpadTool::new();
         let def = AlephTool::definition(&tool);
         assert_eq!(def.name, "scratchpad");
-        assert!(def.llm_context.is_some());
     }
 
     #[test]

@@ -517,6 +517,17 @@ impl ScopedToolService {
                     .await;
                 match raw_outcome {
                     Ok(output) => Ok(self.apply_layer_two(name, output).await),
+                    // Attribute anything that came back after the run was
+                    // stopped to the stop, whatever the tool said. The tool
+                    // layer's own cancel arm reports a generic execution error,
+                    // and so does a tool that happened to fail in the same
+                    // instant — and `Execution` is a verdict on the call, which
+                    // put the call into the harness's cross-batch memo and
+                    // banned an identical re-issue for the rest of the run.
+                    // Pressing stop once must not ban what was stopped.
+                    Err(_) if cancel.is_cancelled() => Err(ToolError::Cancelled {
+                        name: name.to_string(),
+                    }),
                     Err(err) => Err(Self::sanitize_tool_error(name, err)),
                 }
             }

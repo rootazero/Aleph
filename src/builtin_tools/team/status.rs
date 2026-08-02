@@ -83,10 +83,6 @@ impl AlephTool for TeamStatusTool {
     type Args = TeamStatusArgs;
     type Output = TeamStatusOutput;
 
-    fn examples(&self) -> Option<Vec<String>> {
-        Some(vec!["team_status(team_id='abc123')".to_string()])
-    }
-
     async fn call(&self, args: Self::Args) -> Result<Self::Output> {
         let team = self
             .store

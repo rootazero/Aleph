@@ -110,10 +110,6 @@ impl AlephTool for AgentListTool {
     type Args = AgentListArgs;
     type Output = AgentListOutput;
 
-    fn examples(&self) -> Option<Vec<String>> {
-        Some(vec!["agent_list()".to_string()])
-    }
-
     async fn call(&self, args: Self::Args) -> Result<Self::Output> {
         info!("Agent list requested");
 
@@ -224,7 +220,6 @@ mod tests {
 
         assert_eq!(def.name, "agent_list");
         assert!(!def.requires_confirmation);
-        assert!(def.llm_context.is_some());
     }
 
     #[tokio::test]

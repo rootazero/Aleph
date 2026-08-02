@@ -87,35 +87,6 @@ fn validate_spec(spec: &AlephSkillSpec) -> Result<()> {
     Ok(())
 }
 
-/// Extract specific sections from markdown (e.g., ## Examples)
-pub fn extract_markdown_section(content: &str, heading: &str) -> Option<String> {
-    let search = format!("## {heading}");
-
-    if let Some(start) = content.find(&search) {
-        let after_heading = &content[start + search.len()..];
-
-        // Find next ## heading or end of document
-        let end = after_heading.find("\n## ").unwrap_or(after_heading.len());
-
-        Some(after_heading[..end].trim().to_string())
-    } else {
-        None
-    }
-}
-
-/// Extract first paragraph as short description
-pub fn extract_first_paragraph(content: &str) -> String {
-    content
-        .lines()
-        .skip_while(|l| l.trim().is_empty() || l.starts_with('#'))
-        .take_while(|l| !l.trim().is_empty())
-        .collect::<Vec<_>>()
-        .join(" ")
-        .chars()
-        .take(200)
-        .collect()
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -196,56 +167,5 @@ Content"#;
             .unwrap_err()
             .to_string()
             .contains("name cannot be empty"));
-    }
-
-    #[test]
-    fn test_extract_markdown_section() {
-        let content = r"
-# Title
-
-Some intro text.
-
-## Examples
-
-```bash
-command --flag value
-```
-
-## Notes
-
-Some notes here.
-";
-        let examples = extract_markdown_section(content, "Examples").unwrap();
-        assert!(examples.contains("```bash"));
-        assert!(examples.contains("command --flag value"));
-        assert!(!examples.contains("## Notes"));
-    }
-
-    #[test]
-    fn test_extract_missing_section() {
-        let content = "# Title\n\nNo examples here.";
-        let result = extract_markdown_section(content, "Examples");
-        assert!(result.is_none());
-    }
-
-    #[test]
-    fn test_extract_first_paragraph() {
-        let content = r"
-# Title
-
-This is the first paragraph.
-It has multiple lines.
-
-This is the second paragraph.
-";
-        let para = extract_first_paragraph(content);
-        assert_eq!(para, "This is the first paragraph. It has multiple lines.");
-    }
-
-    #[test]
-    fn test_extract_first_paragraph_long() {
-        let content = format!("# Title\n\n{}", "A".repeat(300));
-        let para = extract_first_paragraph(&content);
-        assert_eq!(para.len(), 200); // Truncated to 200 chars
     }
 }

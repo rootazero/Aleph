@@ -54,13 +54,6 @@ impl AlephTool for TaskReadArtifactTool {
     type Args = TaskReadArtifactArgs;
     type Output = TaskReadArtifactOutput;
 
-    fn examples(&self) -> Option<Vec<String>> {
-        Some(vec![
-            "task_read_artifact(task_id='task-1')".to_string(),
-            "task_read_artifact(task_id='task-1', artifact_id='artifact-abc')".to_string(),
-        ])
-    }
-
     async fn call(&self, args: Self::Args) -> Result<Self::Output> {
         if let Some(ref artifact_id) = args.artifact_id {
             debug!(

@@ -87,10 +87,6 @@ impl AlephTool for TeamDisbandTool {
         true
     }
 
-    fn examples(&self) -> Option<Vec<String>> {
-        Some(vec!["team_disband(team_id='abc123')".to_string()])
-    }
-
     async fn call(&self, args: Self::Args) -> Result<Self::Output> {
         self.store.disband_team(&args.team_id).await?;
 

@@ -1,74 +1,70 @@
-//! Bridges the markdown-skill tool server into the agent loop's tool set,
-//! mirroring `ExtensionToolRefreshSource` (the plugin-tool pattern).
+//! Markdown CLI skills as callable loop tools.
 //!
-//! Markdown CLI skills installed via the `skills.install` RPC land in the
-//! process-wide `MARKDOWN_SKILLS_SERVER`. This refresh source polls that
-//! server's revision counter and, on change, snapshots each `AlephToolDyn`
-//! tool into a `LoopTool` so the agent loop can invoke them.
+//! A markdown skill whose frontmatter declares an executable `command` is
+//! installed — by the `skills.install` RPC or the boot `SkillWatcher` — into the
+//! process-wide `MARKDOWN_SKILLS_SERVER`. This module snapshots that server and
+//! wraps each entry so the per-request tool registry can carry it.
+//!
+//! ## Why a snapshot and not a refresh source
+//!
+//! There used to be a `MarkdownSkillRefreshSource` here: a `ToolRefreshSource`
+//! that polled a revision counter, and whose `fetch_tools()` was called from
+//! `ScopedToolService::list()` as `let _ = refresh.fetch_tools();`. The
+//! `Vec<Box<dyn LoopTool>>` it built was dropped on the floor — `list()`,
+//! `metadata_schema()` and `execute()` all resolve against `self.inner`, an Arc
+//! snapshot taken before the install. Every producer in that chain was complete
+//! and the last hop was a `let _ =`, so a markdown CLI skill installed
+//! successfully, reported success, and was never callable for the life of the
+//! process. Worse, `poll_changes()` was a consuming swap, so it also ate the
+//! change signal that a future consumer would have needed.
+//!
+//! The registry is rebuilt per request anyway (that is where MCP bridge tools
+//! and plugin tools already join), which makes polling for changes pointless:
+//! merge at the same seam and the next turn simply has the tool. The refresh
+//! abstraction went with it.
 
-use crate::sync_primitives::{AtomicU64, Ordering};
+use std::collections::BTreeSet;
 
 use async_trait::async_trait;
 use serde_json::Value;
 use tokio_util::sync::CancellationToken;
 
-use crate::gateway::handlers::markdown_skills::{markdown_skills_revision, markdown_skills_server};
-use crate::tools::refresh::ToolRefreshSource;
-use crate::tools::runtime::{LoopTool, ToolResult};
+use crate::gateway::handlers::markdown_skills::markdown_skills_server;
+use crate::tools::runtime::{LoopTool, LoopToolRegistry, ToolResult};
 use crate::tools::AlephToolDyn;
 
-/// A `ToolRefreshSource` whose tool set is the markdown-skill server.
-pub struct MarkdownSkillRefreshSource {
-    last_seen_revision: AtomicU64,
-}
-
-impl MarkdownSkillRefreshSource {
-    #[must_use]
-    pub fn new() -> Self {
-        Self {
-            last_seen_revision: AtomicU64::new(markdown_skills_revision()),
-        }
-    }
-}
-
-impl Default for MarkdownSkillRefreshSource {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-/// Snapshot the markdown-skill server's tools synchronously.
+/// Merge every installed markdown CLI skill into a per-request registry.
+/// Returns how many joined.
 ///
-/// `fetch_tools` is a sync trait method but `AlephToolServer::list_tools_arc`
-/// is async. The markdown server is only written by `skills.install`/`load`/
-/// `reload`/`unload` RPC handlers, and the revision counter is bumped only
-/// *after* those writes release the lock — so by the time `poll_changes`
-/// returns `true` no writer holds the lock. We still bridge async→sync via
-/// `block_in_place` (sound on the multi-threaded server runtime) rather than
-/// a bare `block_on`, which would panic inside a tokio worker.
-fn snapshot_markdown_tools() -> Vec<std::sync::Arc<dyn AlephToolDyn>> {
-    let server = markdown_skills_server();
-    match tokio::runtime::Handle::try_current() {
-        Ok(handle) => tokio::task::block_in_place(|| handle.block_on(server.list_tools_arc())),
-        // No tokio runtime (e.g. unit tests on a current-thread executor):
-        // a plain block_on is fine because there is no worker to starve.
-        Err(_) => futures::executor::block_on(server.list_tools_arc()),
+/// This is the wire, kept as its own function so a test can exercise it
+/// against a real registry. The predecessor bug survived a passing test
+/// precisely because that test asserted the *producer* was called
+/// (`fetch_tools must be called when poll_changes returns true`) and never
+/// asked whether the tool came out callable on the other side.
+///
+/// `allowed_names` is only widened when it is already non-empty: an empty set
+/// means allow-all in `ScopedToolService`, so inserting into it would flip the
+/// service restrictive — the same guard the MCP and schema-loader joins use.
+pub(crate) async fn join_markdown_skills(
+    registry: &mut LoopToolRegistry,
+    is_allowed: impl Fn(&str) -> bool,
+    allowed_names: &mut BTreeSet<String>,
+) -> usize {
+    let mut joined = 0usize;
+    for tool in markdown_skills_server().list_tools_arc().await {
+        let tool = Box::new(MarkdownLoopTool::new(tool)) as Box<dyn LoopTool>;
+        let name = tool.name().to_string();
+        // Builtins win collisions, same as the MCP join.
+        if !is_allowed(&name) || registry.get(&name).is_some() {
+            continue;
+        }
+        registry.register(tool);
+        if !allowed_names.is_empty() {
+            allowed_names.insert(name);
+        }
+        joined += 1;
     }
-}
-
-impl ToolRefreshSource for MarkdownSkillRefreshSource {
-    fn poll_changes(&self) -> bool {
-        let current = markdown_skills_revision();
-        let last = self.last_seen_revision.swap(current, Ordering::Relaxed);
-        current != last
-    }
-
-    fn fetch_tools(&self) -> Vec<Box<dyn LoopTool>> {
-        snapshot_markdown_tools()
-            .into_iter()
-            .map(|t| Box::new(MarkdownLoopTool::new(t)) as Box<dyn LoopTool>)
-            .collect()
-    }
+    joined
 }
 
 /// Thin `AlephToolDyn` → `LoopTool` adapter for markdown CLI skills.
@@ -141,14 +137,93 @@ impl LoopTool for MarkdownLoopTool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::future::Future;
+    use std::pin::Pin;
+
+    /// Stands in for a `MarkdownCliTool`: the only thing that matters here is
+    /// that it is an `AlephToolDyn` living in the process-wide server.
+    struct FakeSkill(&'static str);
+
+    impl AlephToolDyn for FakeSkill {
+        fn name(&self) -> &str {
+            self.0
+        }
+
+        fn definition(&self) -> crate::tool_metadata::ToolDefinition {
+            crate::tool_metadata::ToolDefinition::new(
+                self.0,
+                "installed at runtime",
+                serde_json::json!({"type": "object"}),
+                crate::tool_metadata::ToolCategory::Builtin,
+            )
+        }
+
+        fn call(
+            &self,
+            _args: Value,
+        ) -> Pin<Box<dyn Future<Output = crate::error::Result<Value>> + Send + '_>> {
+            Box::pin(async { Ok(serde_json::json!({"ran": true})) })
+        }
+    }
+
+    /// The wire, asserted the only way that means anything: the tool comes out
+    /// the far side **callable**.
+    ///
+    /// The test this replaces asserted that `fetch_tools()` was invoked. It
+    /// passed for the entire time the returned tools were being dropped on the
+    /// floor, which is why a skill could install successfully and never be
+    /// invokable for the life of the process.
+    #[tokio::test]
+    async fn an_installed_skill_joins_the_registry_and_runs() {
+        markdown_skills_server()
+            .replace_tool(FakeSkill("joins_and_runs_skill"))
+            .await;
+
+        let mut registry = LoopToolRegistry::new();
+        let mut allowed: BTreeSet<String> = BTreeSet::new();
+        let joined = join_markdown_skills(&mut registry, |_| true, &mut allowed).await;
+        assert!(joined >= 1, "the installed skill must join the registry");
+
+        let tool = registry
+            .get("joins_and_runs_skill")
+            .expect("the installed skill must be resolvable by name");
+        let out = tool
+            .execute(serde_json::json!({}), CancellationToken::new())
+            .await;
+        assert!(
+            matches!(out, ToolResult::Success { .. }),
+            "the joined skill must actually dispatch: {out:?}"
+        );
+    }
+
+    /// An empty allow-set means allow-all downstream; widening it here would
+    /// silently flip the whole tool surface restrictive.
+    #[tokio::test]
+    async fn an_empty_allow_set_is_left_empty() {
+        markdown_skills_server()
+            .replace_tool(FakeSkill("empty_allowset_skill"))
+            .await;
+
+        let mut registry = LoopToolRegistry::new();
+        let mut allowed: BTreeSet<String> = BTreeSet::new();
+        join_markdown_skills(&mut registry, |_| true, &mut allowed).await;
+        assert!(allowed.is_empty());
+
+        let mut registry = LoopToolRegistry::new();
+        let mut allowed: BTreeSet<String> = ["something_else".to_string()].into();
+        join_markdown_skills(&mut registry, |_| true, &mut allowed).await;
+        assert!(allowed.contains("empty_allowset_skill"));
+    }
 
     #[tokio::test]
-    async fn refresh_source_detects_revision_bump() {
-        let src = MarkdownSkillRefreshSource::new();
-        let initial = src.poll_changes();
-        // first poll establishes baseline; after a bump poll must return true
-        crate::gateway::handlers::markdown_skills::bump_markdown_skills_revision();
-        assert!(src.poll_changes(), "should detect revision bump");
-        let _ = initial;
+    async fn a_disallowed_skill_is_not_joined() {
+        markdown_skills_server()
+            .replace_tool(FakeSkill("disallowed_skill"))
+            .await;
+
+        let mut registry = LoopToolRegistry::new();
+        let mut allowed: BTreeSet<String> = BTreeSet::new();
+        join_markdown_skills(&mut registry, |n| n != "disallowed_skill", &mut allowed).await;
+        assert!(registry.get("disallowed_skill").is_none());
     }
 }

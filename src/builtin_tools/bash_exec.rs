@@ -218,15 +218,6 @@ Examples:
     type Args = BashExecArgs;
     type Output = super::code_exec::CodeExecOutput;
 
-    fn examples(&self) -> Option<Vec<String>> {
-        Some(vec![
-            "bash(cmd='ls -la /tmp')".to_string(),
-            "bash(cmd='echo \"Hello World\" > /tmp/test.txt')".to_string(),
-            "bash(cmd='pwd && ls -l', working_dir='/home/user')".to_string(),
-            "bash(cmd='find . -name \"*.rs\" | wc -l', timeout=30)".to_string(),
-        ])
-    }
-
     /// Build/test/log output can run long; cap at 8k tokens (was the legacy
     /// `resolve_result_budget` name-table value for `bash`).
     fn max_result_tokens(&self) -> Option<usize> {

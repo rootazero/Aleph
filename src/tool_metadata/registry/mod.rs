@@ -84,13 +84,26 @@ impl ToolCatalog {
     /// Create a new empty registry
     #[must_use]
     pub fn new() -> Self {
+        Self::with_health(Arc::new(ToolHealthCache::new()))
+    }
+
+    /// Create a registry that shares an existing health cache.
+    ///
+    /// Boot needs this because the catalog is built *after* the
+    /// `ExecutionEngine` has already been wrapped in an `Arc`, so the engine
+    /// cannot be handed the catalog's own cache afterwards. Creating the cache
+    /// first and giving the same handle to both is what lets the per-request
+    /// tool service consult the probes this catalog registers — without it the
+    /// gate is attached to a cache nobody writes to.
+    #[must_use]
+    pub fn with_health(health: Arc<ToolHealthCache>) -> Self {
         let tools: ToolStorage = Arc::new(AsyncRwLock::new(HashMap::new()));
         Self {
             registrar: ToolRegistrar::new(Arc::clone(&tools)),
             conflict_resolver: ConflictResolver::new(Arc::clone(&tools)),
             query: ToolQuery::new(Arc::clone(&tools)),
             state: ToolState::new(tools),
-            health: Arc::new(ToolHealthCache::new()),
+            health,
         }
     }
 

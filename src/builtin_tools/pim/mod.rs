@@ -605,16 +605,6 @@ Mail:
     type Args = PimArgs;
     type Output = PimOutput;
 
-    fn examples(&self) -> Option<Vec<String>> {
-        Some(vec![
-            r#"pim(action="calendar_list", from="2026-02-27T00:00:00Z", to="2026-02-28T00:00:00Z")"#.to_string(),
-            r#"pim(action="calendar_create", title="Team standup", start="2026-02-27T09:00:00Z", end="2026-02-27T09:30:00Z")"#.to_string(),
-            r#"pim(action="reminders_create", title="Buy groceries", due_date="2026-02-28T18:00:00Z", priority=1)"#.to_string(),
-            r#"pim(action="notes_create", title="Meeting notes", body="Discussed Q1 roadmap...")"#.to_string(),
-            r#"pim(action="contacts_search", query="John")"#.to_string(),
-        ])
-    }
-
     async fn call(&self, args: Self::Args) -> Result<Self::Output> {
         // Check approval for write actions before attempting PIM execution.
         if let Some(out) = self.check_approval(&args).await {

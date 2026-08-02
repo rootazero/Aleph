@@ -61,14 +61,6 @@ impl AlephTool for SkillInstallTool {
         true // Installing software requires user confirmation
     }
 
-    fn examples(&self) -> Option<Vec<String>> {
-        Some(vec![
-            "skill_install(skill_id='web-search') — install deps for web-search skill".to_string(),
-            "skill_install(skill_id='code-review', spec_id='brew-rg') — install rg via brew"
-                .to_string(),
-        ])
-    }
-
     async fn call(&self, args: Self::Args) -> Result<Self::Output> {
         let skill_id = SkillId::new(&args.skill_id);
         let result = self

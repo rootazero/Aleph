@@ -90,10 +90,6 @@ impl AlephTool for MemoryTimelineTool {
     type Args = MemoryTimelineArgs;
     type Output = MemoryTimelineOutput;
 
-    fn examples(&self) -> Option<Vec<String>> {
-        Some(vec!["memory_timeline(fact_id='abc-123-def')".to_string()])
-    }
-
     async fn call(&self, args: Self::Args) -> Result<Self::Output> {
         self.call_impl(args).await.map_err(Into::into)
     }

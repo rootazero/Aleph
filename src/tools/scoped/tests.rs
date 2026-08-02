@@ -5,12 +5,11 @@ use crate::extension::hooks::HookExecutor;
 #[cfg(unix)]
 use crate::extension::{HookAction, HookConfig, HookEvent, HookKind, HookPriority};
 use crate::sync_primitives::Arc as StdArc;
-use crate::tools::refresh::ToolRefreshSource;
 use crate::tools::runtime::{LoopTool, LoopToolRegistry, ToolResult as LoopToolResult};
 use serde_json::{json, Value};
 #[cfg(unix)]
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Mutex as StdMutex;
 
 // -------------------------------------------------------------------------
@@ -112,31 +111,6 @@ fn make_registry(names: &[&'static str]) -> Arc<LoopToolRegistry> {
         r.register(Box::new(StubTool { tool_name: name }));
     }
     Arc::new(r)
-}
-
-// Stub refresh source that records whether fetch was called.
-struct StubRefresh {
-    has_changes: AtomicBool,
-    fetched: StdArc<AtomicBool>,
-}
-
-impl StubRefresh {
-    fn new(has_changes: bool, fetched: StdArc<AtomicBool>) -> Self {
-        Self {
-            has_changes: AtomicBool::new(has_changes),
-            fetched,
-        }
-    }
-}
-
-impl ToolRefreshSource for StubRefresh {
-    fn poll_changes(&self) -> bool {
-        self.has_changes.load(Ordering::Acquire)
-    }
-    fn fetch_tools(&self) -> Vec<Box<dyn LoopTool>> {
-        self.fetched.store(true, Ordering::Release);
-        vec![]
-    }
 }
 
 // Stub hook decorator that counts calls.
@@ -384,24 +358,6 @@ async fn subagent_survives_non_empty_allow_set() {
         !matches!(&result, Err(ToolError::NotFound { name }) if name == "subagent"),
         "execute(subagent) must not be NotFound under non-empty allow set; got {:?}",
         result
-    );
-}
-
-// -------------------------------------------------------------------------
-// Test 3: list triggers refresh on first call (when poll_changes is true)
-// -------------------------------------------------------------------------
-#[tokio::test]
-async fn list_triggers_refresh_on_first_call() {
-    let fetched = StdArc::new(AtomicBool::new(false));
-    let refresh = Arc::new(StubRefresh::new(true, StdArc::clone(&fetched)));
-
-    let registry = make_registry(&["tool_a"]);
-    let svc = ScopedToolService::new(registry, BTreeSet::new()).with_refresh(refresh);
-
-    svc.list().await;
-    assert!(
-        fetched.load(Ordering::Acquire),
-        "fetch_tools must be called when poll_changes returns true"
     );
 }
 

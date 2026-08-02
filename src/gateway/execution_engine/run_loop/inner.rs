@@ -23,7 +23,7 @@ use super::super::engine::ExecutionEngine;
 // Submodule helpers used by the loop body.
 use super::super::callback::{CallbackStateFlushHandle, StreamCallbackState, TracePersistence};
 use super::super::history::build_loop_history;
-use super::super::tool_refresh::{active_plugin_tools_for_agent, ExtensionToolRefreshSource};
+use super::super::tool_refresh::active_plugin_tools_for_agent;
 
 // Free helpers carved into the sibling project_context module.
 use super::project_context::{
@@ -722,6 +722,28 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
                 }
             }
 
+            // Markdown CLI skills join at the same seam, for the same reason:
+            // the registry is rebuilt per request, so an install that landed
+            // mid-session is simply present on the next turn. They used to
+            // arrive through a `ToolRefreshSource` whose result
+            // `ScopedToolService::list()` discarded, which meant a skill
+            // installed at runtime was never callable at all.
+            {
+                let joined = super::super::markdown_skill_tools::join_markdown_skills(
+                    &mut loop_registry_inner,
+                    |name| agent.is_tool_allowed(name),
+                    &mut allowed_names,
+                )
+                .await;
+                if joined > 0 {
+                    info!(
+                        run_id = run_id,
+                        count = joined,
+                        "markdown CLI skills joined tool surface"
+                    );
+                }
+            }
+
             // Register the on-demand schema loader ONLY when progressive
             // disclosure is active. When disabled (core empty / ["*"]), nothing
             // is collapsed, so get_tool_schema has nothing to serve and must NOT
@@ -816,38 +838,12 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
 
             let loop_registry = Arc::new(loop_registry_inner);
 
-            // Compose refresh sources: plugin tools (when an extension manager
-            // is wired) + markdown CLI skills (always — installed via the
-            // `skills.install` RPC into the process-wide markdown server).
-            let mut refresh_sources: Vec<Arc<dyn crate::tools::refresh::ToolRefreshSource>> =
-                Vec::new();
-            if let Some(ext_manager) = extension_manager.as_ref() {
-                refresh_sources.push(Arc::new(ExtensionToolRefreshSource::new(
-                    Arc::clone(ext_manager),
-                    self.tool_registry.clone(),
-                    agent.clone(),
-                    base_allowed_tools.clone(),
-                    default_working_dir.clone(),
-                ))
-                    as Arc<dyn crate::tools::refresh::ToolRefreshSource>);
-            }
-            refresh_sources.push(Arc::new(
-                super::super::markdown_skill_refresh::MarkdownSkillRefreshSource::new(),
-            )
-                as Arc<dyn crate::tools::refresh::ToolRefreshSource>);
-            let tool_refresh: Option<Arc<dyn crate::tools::refresh::ToolRefreshSource>> = Some(
-                Arc::new(crate::tools::refresh::CompositeRefreshSource::new(
-                    refresh_sources,
-                )) as Arc<dyn crate::tools::refresh::ToolRefreshSource>,
-            );
-
             // Build parent view ToolService WITHOUT the subagent tool
             let parent_view_for_children: Arc<dyn crate::tools::service::ToolService> =
                 super::super::build_request_tool_service(
                     loop_registry.clone(),
                     allowed_names.clone(),
                     None,
-                    tool_refresh.clone(),
                     Some(turn_context.clone()),
                     hook_executor.clone(),
                     hook_session_id.clone(),
@@ -857,6 +853,7 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
                     &mode_core_tools,
                     self.config.truncate_tool_descriptions,
                     deferred.clone(),
+                    self.tool_health.clone(),
                 );
 
             // Trace sink — built before SubagentTool so it can be inherited by
@@ -1112,7 +1109,6 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
                 loop_registry,
                 allowed_names,
                 Some(subagent_tool),
-                tool_refresh,
                 Some(turn_context.clone()),
                 hook_executor.clone(),
                 hook_session_id.clone(),
@@ -1122,6 +1118,7 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
                 &mode_core_tools,
                 self.config.truncate_tool_descriptions,
                 deferred.clone(),
+                self.tool_health.clone(),
             );
 
             // Legacy backfill: a session with `messages` rows but no

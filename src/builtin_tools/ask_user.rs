@@ -315,16 +315,6 @@ impl AlephTool for AskUserTool {
     type Args = AskUserArgs;
     type Output = AskUserOutput;
 
-    fn examples(&self) -> Option<Vec<String>> {
-        Some(vec![
-            r#"ask_user(question="Which file should I edit?")"#.to_string(),
-            r#"ask_user(question="Deploy to which environment?", choices=["staging", "production"])"#
-                .to_string(),
-            r#"ask_user(question="Which migration strategy?", choices=[{"label": "in-place", "description": "faster, brief downtime"}, {"label": "blue-green", "description": "zero downtime, more resources"}])"#
-                .to_string(),
-        ])
-    }
-
     async fn call(&self, args: Self::Args) -> Result<Self::Output> {
         let question = args.question.trim();
         if question.is_empty() {

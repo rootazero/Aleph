@@ -82,6 +82,13 @@ where
     if !e.is_retryable() {
         return first;
     }
+    // `is_retryable` means "this failure was not a verdict on the call", which
+    // is true of a cancellation and is why the harness must not ban it. It does
+    // not mean "try again right now": the run has been stopped, so a respin
+    // would sleep the backoff and fail identically.
+    if matches!(e, ToolError::Cancelled { .. }) {
+        return first;
+    }
     if !idempotent {
         return first;
     }

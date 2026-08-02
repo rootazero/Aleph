@@ -72,14 +72,6 @@ impl AlephTool for SessionCompactTool {
     type Args = SessionCompactArgs;
     type Output = SessionCompactOutput;
 
-    fn examples(&self) -> Option<Vec<String>> {
-        Some(vec![
-            "session_compact()".to_string(),
-            "session_compact(instructions=\"keep the API design decisions, drop the build errors\")"
-                .to_string(),
-        ])
-    }
-
     async fn call(&self, args: Self::Args) -> Result<Self::Output> {
         let outcome = run_manual_compaction(
             &args.__session_key,

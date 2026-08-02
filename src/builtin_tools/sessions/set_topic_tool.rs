@@ -56,13 +56,6 @@ impl AlephTool for SessionSetTopicTool {
     type Args = SessionSetTopicArgs;
     type Output = SessionSetTopicOutput;
 
-    fn examples(&self) -> Option<Vec<String>> {
-        Some(vec![
-            "session_set_topic(topic='项目架构讨论')".to_string(),
-            "session_set_topic(topic='Debug WASM compilation issues')".to_string(),
-        ])
-    }
-
     async fn call(&self, args: Self::Args) -> Result<Self::Output> {
         let session_key_str = &args.__session_key;
 

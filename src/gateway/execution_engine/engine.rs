@@ -59,6 +59,12 @@ pub struct ExecutionEngine<P: ThinkerProviderRegistry + 'static, R: ToolRegistry
     pub(super) tools: Arc<Vec<UnifiedTool>>,
     /// Workspace manager for workspace-scoped profile resolution
     pub(super) workspace_manager: Option<Arc<AgentEnvStore>>,
+    /// Runtime tool-health cache, shared with the `ToolCatalog` that registers
+    /// the probes. The per-request tool service consults it so the model never
+    /// receives the schema of a tool whose dependency is dead (no Chromium →
+    /// no `browser_*`). `None` in tests / non-gateway contexts, which is
+    /// fail-open: every tool stays visible.
+    pub(super) tool_health: Option<Arc<crate::tool_metadata::ToolHealthCache>>,
     /// Memory backend for auto-memorization of conversations
     pub(super) memory_backend: Option<crate::memory::store::MemoryBackend>,
     /// Compression service for turn-based fact extraction
@@ -147,6 +153,7 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
             tool_registry,
             tools: Arc::new(tools),
             workspace_manager: None,
+            tool_health: None,
             memory_backend,
             compression_service: None,
             memory_context_provider: None,
@@ -309,6 +316,13 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
         processor: Arc<crate::media::processor::MediaProcessor>,
     ) -> Self {
         self.media_processor = Some(processor);
+        self
+    }
+
+    /// Share the runtime tool-health cache the `ToolCatalog` writes probes into.
+    #[must_use]
+    pub fn with_tool_health(mut self, health: Arc<crate::tool_metadata::ToolHealthCache>) -> Self {
+        self.tool_health = Some(health);
         self
     }
 

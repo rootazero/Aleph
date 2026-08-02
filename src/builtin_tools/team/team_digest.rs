@@ -139,13 +139,6 @@ impl AlephTool for TeamDigestTool {
     type Args = TeamDigestArgs;
     type Output = TeamDigestOutput;
 
-    fn examples(&self) -> Option<Vec<String>> {
-        Some(vec![
-            "team_digest(team_id='abc123')".to_string(),
-            "team_digest(team_id='abc123', hours=48)".to_string(),
-        ])
-    }
-
     async fn call(&self, args: Self::Args) -> Result<Self::Output> {
         // Verify team exists
         let team = self

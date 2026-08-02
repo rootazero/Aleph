@@ -100,15 +100,6 @@ impl AlephTool for WorkflowStepReviewTool {
     type Args = WorkflowStepReviewArgs;
     type Output = WorkflowStepReviewOutput;
 
-    fn examples(&self) -> Option<Vec<String>> {
-        Some(vec![
-            "workflow_step_review(action='approve', task_id='task-3', comment='OAuth flow LGTM')".into(),
-            "workflow_step_review(action='reject', task_id='task-3', comment='Refresh token logic missing')".into(),
-            "workflow_step_review(action='retry', task_id='task-3')".into(),
-            "workflow_step_review(action='skip', task_id='task-3', comment='covered by integration tests')".into(),
-        ])
-    }
-
     async fn call(&self, args: Self::Args) -> Result<Self::Output> {
         // Read the task once, up front: every verdict path echoes back its
         // definition of done, and the retry path needs its current metadata

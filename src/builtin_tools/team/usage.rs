@@ -116,14 +116,6 @@ impl AlephTool for TeamUsageTool {
     type Args = TeamUsageArgs;
     type Output = TeamUsageOutput;
 
-    fn examples(&self) -> Option<Vec<String>> {
-        Some(vec![
-            "team_usage(team_id='team-abc')".into(),
-            "team_usage(team_id='team-abc', since=1716163200)".into(),
-            "team_usage(team_id='team-abc', since=1716163200, until=1716249600)".into(),
-        ])
-    }
-
     async fn call(&self, args: Self::Args) -> Result<Self::Output> {
         info!(
             team_id = %args.team_id,

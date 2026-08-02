@@ -288,13 +288,6 @@ impl AlephTool for MemoryExploreTool {
     type Args = MemoryExploreArgs;
     type Output = MemoryExploreOutput;
 
-    fn examples(&self) -> Option<Vec<String>> {
-        Some(vec![
-            "memory_explore(query='Rust async patterns')".to_string(),
-            "memory_explore(query='my health goals', max_hops=3, max_per_hop=8)".to_string(),
-        ])
-    }
-
     async fn call(&self, args: Self::Args) -> Result<Self::Output> {
         self.call_impl(args).await.map_err(Into::into)
     }

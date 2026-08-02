@@ -46,7 +46,6 @@ pub mod name_repair;
 pub mod no_progress;
 pub mod path_locks;
 pub mod redundant_calls;
-pub mod refresh;
 pub mod result_processing;
 pub mod result_store;
 pub mod retry;

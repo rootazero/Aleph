@@ -239,15 +239,6 @@ impl AlephTool for RememberTool {
     type Args = RememberArgs;
     type Output = RememberOutput;
 
-    fn examples(&self) -> Option<Vec<String>> {
-        Some(vec![
-            r#"remember(action="add", content="User prefers concise replies")"#.into(),
-            r#"remember(action="replace", old_text="Alice prefers tabs", content="Alice prefers two-space indent")"#.into(),
-            r#"remember(action="remove", old_text="Bob prefers spaces")"#.into(),
-            r#"remember(action="batch", operations=[{"action":"remove","old_text":"stale fact"},{"action":"add","content":"fresh fact"}])"#.into(),
-        ])
-    }
-
     async fn call(&self, args: Self::Args) -> Result<Self::Output> {
         self.call_impl(args).await.map_err(Into::into)
     }

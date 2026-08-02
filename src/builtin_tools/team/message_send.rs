@@ -95,14 +95,6 @@ impl AlephTool for MessageSendTool {
     type Args = MessageSendArgs;
     type Output = MessageSendOutput;
 
-    fn examples(&self) -> Option<Vec<String>> {
-        Some(vec![
-            "message_send(team_id='team-1', to=['agent-b'], subject='Status update', content='All tasks complete')".to_string(),
-            "message_send(team_id='team-1', to=[], subject='Heads up', content='@alice please take a look at task-42')".to_string(),
-            "message_send(team_id='team-1', to=[], subject='Standup', content='@everyone please post status by EOD')".to_string(),
-        ])
-    }
-
     async fn call(&self, args: Self::Args) -> Result<Self::Output> {
         // Extract @mentions from content. `@all` / `@everyone` upgrade the
         // request to a broadcast; plain `@<id>` mentions are union-merged

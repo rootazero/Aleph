@@ -98,13 +98,6 @@ impl AlephTool for FlagUserCorrectionTool {
     type Args = FlagUserCorrectionArgs;
     type Output = FlagUserCorrectionOutput;
 
-    fn examples(&self) -> Option<Vec<String>> {
-        Some(vec![
-            "flag_user_correction(content='User pushed back on adding JSDoc — they prefer no doc comments', severity='med', suggested_rule='never write JSDoc')".into(),
-            "flag_user_correction(content='User said never to commit without confirmation', severity='critical', suggested_rule='ask before every git commit')".into(),
-        ])
-    }
-
     async fn call(&self, args: Self::Args) -> Result<Self::Output> {
         let raw = RawMemory::new(
             args.content,

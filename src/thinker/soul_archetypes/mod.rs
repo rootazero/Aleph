@@ -28,8 +28,8 @@ pub enum SoulArchetype {
 impl SoulArchetype {
     /// Every archetype, in creation-interview presentation order (the default,
     /// [`SoulArchetype::Assistant`], sits third — recommended when the purpose
-    /// is unclear). Single source for enumeration: [`creation_catalog`] and the
-    /// tests derive from this, so adding a variant can never leave a hand-kept
+    /// is unclear). Single source for enumeration: the tests derive from this,
+    /// so adding a variant can never leave a hand-kept
     /// `[Expert, Companion, …]` array silently behind.
     pub const ALL: [SoulArchetype; 4] = [
         SoulArchetype::Expert,
@@ -112,30 +112,6 @@ impl SoulArchetype {
     }
 }
 
-/// One-line-per-archetype catalog for the `agent_create` interview, built from
-/// the single source [`SoulArchetype::summary`] over [`SoulArchetype::ALL`].
-///
-/// This is what wires `summary()` into what the model actually reads: the
-/// `agent_create` tool injects it into `llm_context`, so the interview list can
-/// never drift from the templates it selects (previously the blurbs were a
-/// hand-copied — and already stale — literal inside the tool description).
-#[must_use]
-pub fn creation_catalog() -> String {
-    let default = SoulArchetype::default();
-    SoulArchetype::ALL
-        .iter()
-        .map(|a| {
-            let default_tag = if *a == default {
-                " (default when unclear)"
-            } else {
-                ""
-            };
-            format!("- {}: {}{}", a.as_str(), a.summary(), default_tag)
-        })
-        .collect::<Vec<_>>()
-        .join("\n")
-}
-
 /// Compose a full SOUL.md from Base + Archetype + optional personalization.
 #[must_use]
 pub fn compose_soul(
@@ -197,23 +173,6 @@ mod tests {
         ids.sort_unstable();
         ids.dedup();
         assert_eq!(ids, ["assistant", "companion", "expert", "maker"]);
-    }
-
-    #[test]
-    fn creation_catalog_is_built_from_summaries_and_flags_default() {
-        let catalog = creation_catalog();
-        // Every archetype's id + its single-source summary is present.
-        for a in SoulArchetype::ALL {
-            assert!(catalog.contains(a.as_str()), "missing id: {}", a.as_str());
-            assert!(
-                catalog.contains(a.summary()),
-                "catalog drifted from summary() for {}",
-                a.as_str()
-            );
-        }
-        // The default (Assistant) is the only line flagged as the fallback.
-        assert_eq!(catalog.matches("(default when unclear)").count(), 1);
-        assert!(catalog.contains("assistant: general getting-things-done"));
     }
 
     #[test]

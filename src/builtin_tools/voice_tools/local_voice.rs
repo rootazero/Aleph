@@ -125,10 +125,6 @@ impl AlephTool for LocalVoiceTool {
     type Args = LocalVoiceArgs;
     type Output = LocalVoiceOutput;
 
-    fn examples(&self) -> Option<Vec<String>> {
-        Some(vec![r#"local_voice(action="status")"#.to_string()])
-    }
-
     async fn call(&self, args: Self::Args) -> Result<Self::Output> {
         Ok(self.execute(args).await)
     }

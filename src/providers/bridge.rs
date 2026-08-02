@@ -79,7 +79,6 @@ impl AiProviderBridge {
             // tools (see `LoopTool::requires_confirmation`).
             requires_confirmation: def.requires_confirmation,
             category: ToolCategory::Builtin,
-            llm_context: None,
             strict: false,
         }
     }
@@ -167,7 +166,6 @@ mod tests {
         assert_eq!(converted.parameters, def.parameters);
         assert!(!converted.requires_confirmation);
         assert_eq!(converted.category, ToolCategory::Builtin);
-        assert!(converted.llm_context.is_none());
         assert!(!converted.strict);
     }
 }

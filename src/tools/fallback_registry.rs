@@ -314,6 +314,13 @@ fn family_suggestions(family: ToolFamily, kind: ToolErrorKind) -> Vec<FallbackSu
 #[must_use]
 pub fn render_persistence_hint(err: &ToolError, tool_name: &str) -> String {
     let kind = err.kind();
+    // A cancelled call is not a rung of any ladder. The user pressed stop; the
+    // tool did not fail, was not blocked, and has no alternative worth
+    // suggesting. Telling the model to "climb the ladder before failing" here
+    // reads as advice about a failure that never happened.
+    if kind == ToolErrorKind::Cancelled {
+        return String::new();
+    }
     let alternatives = suggest_alternatives(tool_name, kind);
 
     let mut hint = String::with_capacity(160);
