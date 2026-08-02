@@ -581,10 +581,16 @@ mod tests {
         assert!(!def.requires_confirmation);
     }
 
-    /// The Soul Archetypes list in `DESCRIPTION` is a literal copy of
-    /// [`SoulArchetype::summary`] (a `const` cannot interpolate). Pin every
-    /// entry to the enum so editing a summary can never leave the description
-    /// — the only copy the model ever reads — silently stale.
+    /// `DESCRIPTION` carries the Soul Archetypes list the model reads, and a
+    /// `const` cannot interpolate — so the prose is hand-written here while
+    /// [`SoulArchetype::ALL`] stays the single source for *which* archetypes
+    /// exist. Pin the ids so a new variant cannot land without its line.
+    ///
+    /// This once also pinned the prose to `SoulArchetype::summary()`. That
+    /// method is gone (2026-08-02: it fed a channel with no consumer), and
+    /// with it the only symbol the prose copied — an assertion against a
+    /// deleted referent is not a check, so it is not kept as one. The id
+    /// coverage below is the half that still catches the drift that matters.
     #[test]
     fn description_lists_every_archetype_summary() {
         for a in SoulArchetype::ALL {
@@ -592,12 +598,6 @@ mod tests {
                 AgentCreateTool::DESCRIPTION.contains(a.as_str()),
                 "agent_create DESCRIPTION is missing archetype id: {}",
                 a.as_str()
-            );
-            assert!(
-                AgentCreateTool::DESCRIPTION.contains(a.summary()),
-                "agent_create DESCRIPTION drifted from summary() for {}: expected {:?}",
-                a.as_str(),
-                a.summary()
             );
         }
         // The default is the only entry flagged as the fallback.
