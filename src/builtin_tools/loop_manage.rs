@@ -20,7 +20,9 @@ use crate::tools::AlephTool;
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum LoopAction {
-    /// Begin a timer loop in this session.
+    /// Begin a timer loop in this session. Replaces any loop already here,
+    /// INCLUDING a paused one (whose tick count and caps are then lost) —
+    /// check `status` first if a held watch might exist.
     Start,
     /// Stop the session's loop (the only way it ends, absent a safety cap).
     Stop,
@@ -369,17 +371,30 @@ impl LoopTool {
         // Strategy (e.g. from an overwritten still-active loop) so
         // maybe_plan_strategy plans for THIS objective instead of silently
         // welding the old one. Best-effort, same as the stop-side cleanup.
-        let replaced_active = self.registry.get(session).is_some_and(|p| p.is_active());
+        // "Still exists" is `status != Stopped`, the same predicate the
+        // collision count below uses — NOT `is_active()`. A Paused loop is
+        // exactly the state pause exists to preserve (tick count, caps, prompt,
+        // cadence), and `put` overwrites it unconditionally; reporting the
+        // neutral "Loop started in this session." there destroyed a held watch
+        // and said nothing.
+        let replaced = self
+            .registry
+            .get(session)
+            .map(|p| p.status)
+            .filter(|s| *s != LoopStatus::Stopped);
         Self::clear_welded_strategy(session, "start fresh-plan claim");
         let cadence_desc = state.cadence.describe();
         self.registry.put(state);
         // Honest confirmation: say what was actually registered — the parsed
         // cadence, whether a previous loop was replaced, and the silently
         // applied default cap (which the model can raise or replace).
-        let lead = if replaced_active {
-            "Loop started, replacing this session's previous loop."
-        } else {
-            "Loop started in this session."
+        let lead = match replaced {
+            Some(LoopStatus::Paused) => {
+                "Loop started, replacing the loop that was PAUSED in this session — \
+                 its tick count, caps, prompt and cadence are gone."
+            }
+            Some(_) => "Loop started, replacing this session's previous loop.",
+            None => "Loop started in this session.",
         };
         let cap_note = match (args.max_iterations, deadline) {
             (None, None) => format!(
@@ -535,6 +550,29 @@ impl LoopTool {
     /// [`Self::reject_remote`]): the next tick is claimed by THIS turn's
     /// completion hook, which only runs for the session that is executing.
     fn resume(&self, session: &str) -> std::result::Result<LoopOutput, String> {
+        // A wall-clock deadline keeps running while paused (the pause receipt
+        // says so). Resuming a loop whose bound already elapsed used to answer
+        // "the next tick is scheduled from now" and then, seconds later on the
+        // same channel, "⏹ Loop stopped: reached its time limit" — the very
+        // next post-run claim takes the Exhausted path. Refuse honestly up
+        // front, reusing the same two pure functions the claim uses so there
+        // is no second opinion about what "exhausted" means. Tokens are 0 here,
+        // matching `rearm_after_busy`'s claim-side-only budget convention.
+        if let Some(state) = self.registry.get(session).filter(LoopState::is_paused) {
+            let now = now_ms();
+            if crate::looping::pursuit::exhausted(&state, 0, now) {
+                let reason = crate::looping::pursuit::stop_reason_note(&state, 0, now);
+                return Ok(LoopOutput {
+                    success: false,
+                    message: format!(
+                        "Loop cannot resume — it hit its bound while paused ({reason}). \
+                         Widen it in place with loop(action='update', timeout_minutes=… \
+                         / max_iterations=…) and resume, or loop(action='start') for a \
+                         new one."
+                    ),
+                });
+            }
+        }
         match self.registry.transition(session, LoopStatus::Active, None) {
             crate::looping::TransitionOutcome::Applied { .. } => Ok(LoopOutput {
                 success: true,
@@ -622,10 +660,30 @@ impl LoopTool {
     /// loops alive now — no orphan rows to reconcile.
     fn list(&self, session: &str) -> std::result::Result<LoopOutput, String> {
         let mut loops = self.registry.list_all();
+        // Scope, don't deny. Every OTHER cross-session verb here carries an
+        // operator gate (`resolve_target`, `stop_all`) — and `status(session=…)`
+        // reveals strictly LESS than this does, since `human_summary` has no
+        // prompt in it while `render_list_line` prints the session key and the
+        // first 60 chars of the watch prompt. A chat-tier channel asking "what
+        // loops are running?" still gets a true answer about its own session,
+        // plus an honest count so it never reads as "nothing is running".
+        let hidden = if Self::caller_is_operator() {
+            0
+        } else {
+            let before = loops.len();
+            loops.retain(|l| l.session_id == session);
+            before - loops.len()
+        };
         if loops.is_empty() {
             return Ok(LoopOutput {
                 success: true,
-                message: "No timer loops in any session.".to_string(),
+                message: match hidden {
+                    0 => "No timer loops in any session.".to_string(),
+                    n => format!(
+                        "No timer loops in this session. {n} loop(s) in other \
+                         sessions are not shown at this permission level."
+                    ),
+                },
             });
         }
         // Newest-started first so the most recent watch leads. A loop has no
@@ -637,6 +695,11 @@ impl LoopTool {
         for state in &loops {
             message.push_str(&Self::render_list_line(state, session, now));
             message.push('\n');
+        }
+        if hidden > 0 {
+            message.push_str(&format!(
+                "({hidden} loop(s) in other sessions are not shown at this permission level.)\n"
+            ));
         }
         Ok(LoopOutput {
             success: true,
@@ -771,9 +834,15 @@ impl LoopTool {
         // loop) before taking effect. The in-flight tick's pending marker is
         // cleared so its confirm_fire mismatches (it skips), and this very
         // run's completion re-claims a fresh tick from the updated state.
-        // Cap-only updates keep the in-flight tick and its schedule.
+        // Cap-only updates keep the in-flight tick and its schedule — except
+        // `timeout_minutes`, which re-bases the watch WINDOW: the in-flight
+        // tick's wake was projected against the OLD deadline, and only a fresh
+        // claim re-runs `pursuit::fires_out_of_bounds` against the new one. So
+        // a shortened window would otherwise still let the already-claimed tick
+        // execute past it.
         let reschedule = args.interval.is_some()
             || args.next_wake.is_some()
+            || args.timeout_minutes.is_some()
             || args.prompt.as_deref().is_some_and(|p| !p.trim().is_empty());
         // Commit atomically: `state` was built from a `get` snapshot taken
         // above, but a concurrent tick fire/re-arm may have moved the LIVE
@@ -845,7 +914,9 @@ impl AlephTool for LoopTool {
          clock and never self-stops — end it with action='stop'. Use \
          action='start' with `interval` (e.g. '5m') for a fixed cadence, or omit \
          `interval` for model-paced (call action='update' with `next_wake` each \
-         tick to set the next delay). action='update' also re-paces a running \
+         tick to set the next delay). The FIRST tick fires one cadence AFTER the \
+         turn that starts the loop, never immediately — if the user wants a \
+         check right away, do it in this same turn. action='update' also re-paces a running \
          loop in place — pass `interval` to change a fixed cadence, or \
          `prompt`/`timeout_minutes`/`max_iterations` to re-target or re-bound it \
          without stop/start. action='pause' holds the watch without losing it \
@@ -1797,6 +1868,99 @@ mod tests {
             reg.get_active("other-session").is_some(),
             "a refused remote arm must leave the loop exactly as it was"
         );
+    }
+
+    #[tokio::test]
+    async fn start_says_so_when_it_replaces_a_paused_loop() {
+        // Pause preserves tick count / caps / prompt / cadence — and `start`
+        // overwrites the entry unconditionally. Reporting the neutral "Loop
+        // started in this session." there destroyed a held watch in silence.
+        let reg = std::sync::Arc::new(crate::looping::LoopRegistry::default());
+        let tool = started(&reg, "s").await;
+        assert!(tool.run(mk(LoopAction::Pause)).await.unwrap().success);
+
+        let out = tool
+            .run(LoopArgs {
+                interval: Some("10m".to_string()),
+                prompt: Some("watch the deploy".to_string()),
+                ..mk(LoopAction::Start)
+            })
+            .await
+            .unwrap();
+        assert!(out.success);
+        assert!(
+            out.message.contains("PAUSED"),
+            "must name the paused loop it destroyed: {}",
+            out.message
+        );
+    }
+
+    #[tokio::test]
+    async fn resume_refuses_a_loop_whose_bound_elapsed_while_paused() {
+        // The pause receipt warns that a wall-clock deadline keeps running.
+        // Resuming past it used to answer "the next tick is scheduled from now"
+        // and then, seconds later, "⏹ Loop stopped: reached its time limit".
+        let reg = std::sync::Arc::new(crate::looping::LoopRegistry::default());
+        let tool = LoopTool::new(reg.clone()).with_session_for_test("s");
+        tool.run(LoopArgs {
+            interval: Some("5m".to_string()),
+            prompt: Some("watch CI".to_string()),
+            timeout_minutes: Some(1),
+            ..mk(LoopAction::Start)
+        })
+        .await
+        .unwrap();
+        assert!(tool.run(mk(LoopAction::Pause)).await.unwrap().success);
+        // Rewind the deadline into the past to simulate a long pause.
+        let expired = reg.get("s").unwrap().with_deadline_ms(Some(1));
+        assert!(reg.commit_field_update(expired, false));
+
+        let out = tool.run(mk(LoopAction::Resume)).await.unwrap();
+        assert!(!out.success, "{}", out.message);
+        assert!(out.message.contains("time limit"), "{}", out.message);
+        assert!(out.message.contains("update"), "must name the escape hatch");
+        assert!(
+            reg.get("s").unwrap().is_paused(),
+            "a refused resume must not flip the status"
+        );
+    }
+
+    #[tokio::test]
+    async fn list_is_scoped_to_the_caller_session_below_operator() {
+        use crate::routing::session_key::SessionKey;
+        use crate::tools::turn_context::{TurnContext, TURN_CONTEXT};
+
+        let reg = std::sync::Arc::new(crate::looping::LoopRegistry::default());
+        let _elsewhere = started(&reg, "operator-session").await;
+        let here = started(&reg, "here").await;
+        let guest = TurnContext {
+            session_key: SessionKey::main("a"),
+            run_id: String::new(),
+            channel_id: "telegram".to_string(),
+            conversation_id: "c".to_string(),
+            caller_role: Some("guest".to_string()),
+            channel_tool_permissions: None,
+            unattended: false,
+        };
+
+        let out = TURN_CONTEXT
+            .scope(guest, here.run(mk(LoopAction::List)))
+            .await
+            .unwrap();
+        assert!(
+            !out.message.contains("operator-session"),
+            "another session's key must not reach a chat-tier caller: {}",
+            out.message
+        );
+        assert!(
+            out.message.contains("not shown at this permission level"),
+            "must not read as a false zero: {}",
+            out.message
+        );
+
+        // An operator still sees everything (the R6/R8 answer is preserved).
+        let all = here.run(mk(LoopAction::List)).await.unwrap();
+        assert!(all.message.contains("operator-session"), "{}", all.message);
     }
 
     #[tokio::test]

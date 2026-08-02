@@ -3,16 +3,14 @@
 //! This module defines the core configuration structures for Aleph.
 
 use crate::config::types::{
-    AcpConfig, AgentsConfig, BehaviorConfig, ContextBudgetToml, CoworkConfigToml,
-    ExecutionConfig, FallbackProviderToml,
-    FetchConfigInternal, GeneralConfig, GenerationConfig, GroupChatConfig, GuardrailsToml,
-    McpConfig, MemoryConfig, OrchestratorConfig, PersonaConfig, PoliciesConfig,
-    PrivacyConfig, ProfileConfig, PromptSectionConfig, ProviderConfig,
-    RoutingRuleConfig, SearchConfigInternal, SecretMapping, SecretProviderConfig,
-    SecretsConfig, ShellSecurityConfig, SkillsConfig,
-    StabilityToml, StopHookConfig, TeamBroadcastConfigToml,
-    TeamDispatcherConfigToml, TeamMessagesConfigToml, ToolServiceConfig, ToolsConfig,
-    UnifiedToolsConfig, VoiceLocalConfig, VoiceSection,
+    AcpConfig, AgentsConfig, BehaviorConfig, ContextBudgetToml, CoworkConfigToml, ExecutionConfig,
+    FallbackProviderToml, FetchConfigInternal, GeneralConfig, GenerationConfig, GroupChatConfig,
+    GuardrailsToml, McpConfig, MemoryConfig, OrchestratorConfig, PersonaConfig, PoliciesConfig,
+    PrivacyConfig, ProfileConfig, PromptSectionConfig, ProviderConfig, RoutingRuleConfig,
+    SearchConfigInternal, SecretMapping, SecretProviderConfig, SecretsConfig, ShellSecurityConfig,
+    SkillsConfig, StabilityToml, StopHookConfig, TeamBroadcastConfigToml, TeamDispatcherConfigToml,
+    TeamMessagesConfigToml, ToolServiceConfig, ToolsConfig, UnifiedToolsConfig, VoiceLocalConfig,
+    VoiceSection,
 };
 use crate::tasks::cron::CronConfig;
 use crate::tasks::heartbeat::config::HeartbeatConfig;

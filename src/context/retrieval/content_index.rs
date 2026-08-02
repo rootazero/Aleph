@@ -1005,7 +1005,6 @@ mod tests {
         }
         // Reopen and confirm the data survived.
         let idx2 = ContentIndex::open(&db).unwrap();
-        assert!(!idx2.is_empty(SESS).unwrap());
         let hits = idx2.search(SESS, "payment refund", 3).unwrap();
         assert!(!hits.is_empty());
         let _ = std::fs::remove_dir_all(&dir);

@@ -163,6 +163,12 @@ impl AgentLedger {
     /// Verify every known chain. Used by the `agent_identity` tool and by the
     /// offline `aleph-server identity verify`.
     ///
+    /// Enumerates the **union** of the identity table and the agent ids present
+    /// in the ledger itself. Driving this off identities alone (what it did)
+    /// meant deleting one mutable `agent_identities` row silently removed that
+    /// agent's entire chain from the verdict — a clean "all chains OK" that had
+    /// simply stopped looking at one of them.
+    ///
     /// Deliberately **not** run at boot: a full pass reads every row of every
     /// chain and checks a signature per row, which is the wrong thing to put on
     /// the startup path, and a warning in a log the daemon itself wrote is not
@@ -170,11 +176,34 @@ impl AgentLedger {
     /// is asked for — and, for the case that matters, in the process that did
     /// not write the records.
     pub fn verify_all(&self) -> Result<Vec<ChainReport>, KeyError> {
-        self.keys
-            .list()?
-            .into_iter()
-            .map(|id| verify_chain(&self.keys, &id.agent_id))
+        self.agent_ids()?
+            .iter()
+            .map(|id| verify_chain(&self.keys, id))
             .collect()
+    }
+
+    /// Every agent this installation has evidence about: one with an identity,
+    /// one with records, or both. Sorted, so two runs report in the same order.
+    pub fn agent_ids(&self) -> Result<Vec<String>, KeyError> {
+        let mut ids: std::collections::BTreeSet<String> =
+            self.keys.list()?.into_iter().map(|i| i.agent_id).collect();
+        ids.extend(self.keys.store().ledger_agent_ids()?);
+        Ok(ids.into_iter().collect())
+    }
+
+    /// Agents whose chain has records but **no identity row** — the anchor that
+    /// would reveal a truncated tail is gone, and the agent is absent from
+    /// every identity-driven listing. Empty in a healthy installation.
+    pub fn orphan_chains(&self) -> Result<Vec<String>, KeyError> {
+        let known: std::collections::BTreeSet<String> =
+            self.keys.list()?.into_iter().map(|i| i.agent_id).collect();
+        Ok(self
+            .keys
+            .store()
+            .ledger_agent_ids()?
+            .into_iter()
+            .filter(|id| !known.contains(id))
+            .collect())
     }
 
     fn note_lost(&self) {
@@ -577,9 +606,23 @@ mod tests {
 
     #[test]
     fn records_signed_before_a_rotation_still_verify() {
+        // Rotation as the only production path performs it (`agent_identity`
+        // action="rotate"): mint the key AND make the chain declare it. Both
+        // halves are load-bearing — the declaration is what keeps
+        // `UndeclaredSigner` off the ordinary rows the incoming key goes on to
+        // sign, which is the case below and the one the neighbouring test does
+        // not reach (its last row IS the rotation).
         let (l, _s, _d) = ledger();
         l.append(&entry("main", "before")).unwrap();
-        l.keys().rotate("main").unwrap();
+        let old = l
+            .keys()
+            .identity("main")
+            .unwrap()
+            .unwrap()
+            .active_fingerprint;
+        let new = l.keys().rotate("main").unwrap().active_fingerprint;
+        l.append(&NewRecord::identity_rotated("main", &new, Some(&old)))
+            .unwrap();
         l.append(&entry("main", "after")).unwrap();
 
         let report = l.verify("main").unwrap();
@@ -588,7 +631,36 @@ mod tests {
             "rotation must not invalidate history: {:?}",
             report.faults
         );
-        assert_eq!(report.records, 2 + GENESIS_ROWS);
+        assert_eq!(report.records, 3 + GENESIS_ROWS);
+    }
+
+    #[test]
+    fn a_key_the_chain_never_declares_faults_only_the_rows_it_signed() {
+        // The tamper `UndeclaredSigner` exists for: `agent_identities` is a
+        // single mutable row, so deleting it makes the next append mint a fresh
+        // key and continue the chain under it with every link and every
+        // signature intact. A rotation nobody records has the same shape and is
+        // the cheapest way to write it down.
+        //
+        // The second half of the name is the part worth pinning: the undeclared
+        // key indicts its own rows and nothing else. A check that also faulted
+        // the history would tell an operator the whole chain is untrustworthy
+        // when in fact everything up to the substitution still holds.
+        let (l, _s, _d) = ledger();
+        l.append(&entry("main", "before")).unwrap();
+        let new = l.keys().rotate("main").unwrap().active_fingerprint;
+        l.append(&entry("main", "after")).unwrap();
+
+        let report = l.verify("main").unwrap();
+        assert!(!report.ok);
+        assert_eq!(
+            report.faults,
+            vec![ChainFault::UndeclaredSigner {
+                seq: 3,
+                fingerprint: new
+            }],
+            "the substitution is the only fault: rows 1-2 predate it"
+        );
     }
 
     #[test]

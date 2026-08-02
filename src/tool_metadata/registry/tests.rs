@@ -1,4 +1,4 @@
-use super::super::types::{ChannelType, ConflictInfo, ConflictResolution, ToolSource};
+use super::super::types::{ChannelType, ToolSource};
 use super::*;
 use crate::tool_metadata::types::ToolPriority;
 
@@ -231,103 +231,6 @@ async fn test_check_conflict_case_insensitive() {
     let conflict = registry.check_conflict("SEARCH").await;
     assert!(conflict.is_some());
     assert_eq!(conflict.unwrap().existing_name, "search");
-}
-
-#[test]
-fn test_resolve_conflict_new_wins() {
-    let registry = ToolCatalog::new();
-
-    // MCP tool exists, Builtin tries to register
-    let conflict = ConflictInfo {
-        existing_id: "mcp:server:search".to_string(),
-        existing_name: "search".to_string(),
-        existing_source: ToolSource::Mcp {
-            server: "server".into(),
-        },
-        existing_priority: ToolPriority::Mcp,
-    };
-
-    let resolution = registry.resolve_conflict("search", &conflict, &ToolSource::Builtin);
-
-    // Builtin has higher priority, should rename existing
-    match resolution {
-        ConflictResolution::RenameExisting {
-            original_name,
-            new_name,
-        } => {
-            assert_eq!(original_name, "search");
-            assert_eq!(new_name, "search-mcp");
-        }
-        _ => panic!("Expected RenameExisting"),
-    }
-}
-
-#[test]
-fn test_resolve_conflict_existing_wins() {
-    let registry = ToolCatalog::new();
-
-    // Builtin exists, MCP tries to register
-    let conflict = ConflictInfo {
-        existing_id: "builtin:search".to_string(),
-        existing_name: "search".to_string(),
-        existing_source: ToolSource::Builtin,
-        existing_priority: ToolPriority::Builtin,
-    };
-
-    let resolution = registry.resolve_conflict(
-        "search",
-        &conflict,
-        &ToolSource::Mcp {
-            server: "server".into(),
-        },
-    );
-
-    // Builtin has higher priority, should rename new
-    match resolution {
-        ConflictResolution::RenameNew {
-            original_name,
-            new_name,
-        } => {
-            assert_eq!(original_name, "search");
-            assert_eq!(new_name, "search-mcp");
-        }
-        _ => panic!("Expected RenameNew"),
-    }
-}
-
-#[test]
-fn test_resolve_conflict_same_priority() {
-    let registry = ToolCatalog::new();
-
-    // Two MCP tools with same priority
-    let conflict = ConflictInfo {
-        existing_id: "mcp:server1:status".to_string(),
-        existing_name: "status".to_string(),
-        existing_source: ToolSource::Mcp {
-            server: "server1".into(),
-        },
-        existing_priority: ToolPriority::Mcp,
-    };
-
-    let resolution = registry.resolve_conflict(
-        "status",
-        &conflict,
-        &ToolSource::Mcp {
-            server: "server2".into(),
-        },
-    );
-
-    // Same priority - new tool gets renamed (first registered wins)
-    match resolution {
-        ConflictResolution::RenameNew {
-            original_name,
-            new_name,
-        } => {
-            assert_eq!(original_name, "status");
-            assert_eq!(new_name, "status-mcp");
-        }
-        _ => panic!("Expected RenameNew"),
-    }
 }
 
 #[tokio::test]

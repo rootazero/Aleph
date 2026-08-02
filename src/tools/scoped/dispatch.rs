@@ -344,15 +344,43 @@ impl ScopedToolService {
                 }
                 Ok(true)
             }
-            None => Err(ToolError::PermissionDenied {
-                name: name.to_string(),
-                reason: format!(
-                    "`{name}` changes Aleph's own configuration and requires operator \
-                     authorization, but no approval channel is available. This device \
-                     is paired at chat level. Do not retry."
-                ),
-            }),
+            // Fail closed *and* on the record. This branch refuses without ever
+            // reaching `confirm_with_memory`, so it used to be the one gate
+            // decision that left no trace at all — a chat-tier device turned
+            // away from a config-changing tool was invisible to the very trail
+            // that exists to show refused attempts.
+            None => {
+                self.record_gate_refusal(
+                    name,
+                    input,
+                    "auto-denied: operator authorization required and no approval channel \
+                     is available",
+                )
+                .await;
+                Err(ToolError::PermissionDenied {
+                    name: name.to_string(),
+                    reason: format!(
+                        "`{name}` changes Aleph's own configuration and requires operator \
+                         authorization, but no approval channel is available. This device \
+                         is paired at chat level. Do not retry."
+                    ),
+                })
+            }
         }
+    }
+
+    /// File a gate refusal that never reached [`Self::confirm_with_memory`].
+    ///
+    /// Same shape as the unattended auto-deny recorded there — an
+    /// `ApprovalDenied` keyed on this exact call — so the two ways a gate can
+    /// refuse without asking anyone land on the chain identically. Recorded as
+    /// an approval decision rather than a tool refusal because that is what it
+    /// is: the authority to run was withheld, which is a separate fact from the
+    /// call itself.
+    async fn record_gate_refusal(&self, name: &str, input: &Value, reason: &'static str) {
+        let fingerprint = crate::sandbox::exec_approval::grant_fingerprint(name, input);
+        self.record_approval_decision(name, &fingerprint, ApprovalRecord::Denied(reason))
+            .await;
     }
 
     /// Confirmation gate: tools flagged `requires_confirmation`, permission
@@ -400,13 +428,23 @@ impl ScopedToolService {
                 }
                 Ok(())
             }
-            None => Err(ToolError::Execution {
-                name: name.to_string(),
-                cause: format!(
-                    "Tool `{name}` requires confirmation but no approval \
-                     channel is available. Do not retry."
-                ),
-            }),
+            // The confirm-gate twin of the branch above: refused without asking
+            // anyone, and — until this — without recording anything either.
+            None => {
+                self.record_gate_refusal(
+                    name,
+                    input,
+                    "auto-denied: confirmation required and no approval channel is available",
+                )
+                .await;
+                Err(ToolError::Execution {
+                    name: name.to_string(),
+                    cause: format!(
+                        "Tool `{name}` requires confirmation but no approval \
+                         channel is available. Do not retry."
+                    ),
+                })
+            }
         }
     }
 

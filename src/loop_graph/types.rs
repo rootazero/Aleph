@@ -77,9 +77,15 @@ impl NodeKind {
 }
 
 /// The six-verb closed edge vocabulary. Deliberately NOT free text (unlike
-/// memory-note relations): every verb here has a structural code consumer —
-/// `Feeds` being the one acknowledged documentation-only exception — and the
-/// set only grows when a new verb brings its consumer with it.
+/// memory-note relations): the set only grows when a new verb brings its
+/// consumer with it.
+///
+/// Two verbs are documentation-only by design, and both should stay that way:
+/// `Feeds` (pure data-flow annotation) and `Arbitrates` — arbitration is an
+/// EVENT adjudicated in an LLM turn, not a resident mechanism, and a
+/// deterministic conflict detector is on the NOT-build list (GRAPH_LAYER.md
+/// §4.3). If you came here hunting for `Arbitrates`'s missing consumer: there
+/// isn't one, and building it would violate R7.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 #[non_exhaustive]

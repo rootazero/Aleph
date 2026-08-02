@@ -111,7 +111,7 @@ mod tests {
     }
 
     #[test]
-    fn test_exec_approval_requires_permission() {
+    fn test_approval_events_require_permission() {
         let guard = EventScopeGuard::default_rules();
 
         // Topic names must be the ones a producer actually publishes —

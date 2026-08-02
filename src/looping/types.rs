@@ -4,13 +4,17 @@
 //!
 //! Distinct from `goal` (condition-stop) and `cron` (persistent, own session):
 //! a loop is "current session, multi-turn, clock-gated, never self-stops".
-
-use schemars::JsonSchema;
-use serde::{Deserialize, Serialize};
+//!
+//! These types deliberately carry NO `Serialize`/`Deserialize`/`JsonSchema`.
+//! They used to, along with `#[serde(default)]` on every optional field and
+//! comments promising "old payloads read None" — a forward-compatibility
+//! contract with an on-disk format that has never existed and that the first
+//! line of this file forbids. The only readers were three tests exercising the
+//! derives themselves. If a loop ever does need persisting, the wire type
+//! belongs beside the store that writes it, not here.
 
 /// How the loop picks the delay before its next tick.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-#[serde(tag = "kind", rename_all = "snake_case")]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Cadence {
     /// Fixed interval: wait this many ms between ticks.
     Fixed { interval_ms: u64 },
@@ -62,8 +66,7 @@ pub fn fmt_duration_ms(ms: u64) -> String {
     out
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-#[serde(rename_all = "snake_case")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LoopStatus {
     /// Ticking: the continuation hook claims a tick after every completed run.
     Active,
@@ -78,7 +81,7 @@ pub enum LoopStatus {
 }
 
 impl LoopStatus {
-    /// Canonical snake_case name — identical to the serde wire form and to the
+    /// Canonical snake_case name — identical to the
     /// `action='…'` verb that produces it. Single source for every renderer
     /// (`human_summary` / `stable_summary` / the tool's `list` line), so a new
     /// variant can never be surfaced in one place and forgotten in another.
@@ -95,7 +98,7 @@ impl LoopStatus {
 
 /// One session's loop. Immutable-update style: `with_*` / `spent_*` return
 /// new copies, never mutate in place (project immutability rule).
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LoopState {
     pub session_id: String,
     /// The fixed prompt re-injected verbatim each tick.
@@ -103,7 +106,6 @@ pub struct LoopState {
     pub cadence: Cadence,
     /// Model-paced override (absolute epoch ms of the next wake). `None` →
     /// fall back to the cadence default. For `Fixed` cadence this is ignored.
-    #[serde(default)]
     pub next_wake_ms: Option<u64>,
     /// Absolute epoch-ms fire time of the tick already enqueued by the
     /// continuation hook. `None` → no tick in flight. Set when a tick is
@@ -112,33 +114,24 @@ pub struct LoopState {
     /// hook — without this gate each user turn would spawn one more
     /// self-perpetuating tick chain), and a woken tick only executes if its
     /// wake still matches (a stop/start during the delay supersedes it).
-    /// `#[serde(default)]` → old payloads read `None`.
-    #[serde(default)]
     pub pending_tick_wake_ms: Option<u64>,
     pub iterations_used: u32,
     /// Optional safety cap: stop after this many ticks. `None` → unbounded.
-    #[serde(default)]
     pub max_iterations: Option<u32>,
     /// Optional safety cap: absolute epoch-ms wall-clock deadline.
-    #[serde(default)]
     pub deadline_ms: Option<u64>,
     /// Optional soft token budget: stop the loop once it has consumed more than
     /// this many session tokens since the baseline was captured. Enforced by the
     /// continuation hook via [`Self::over_budget`] (codex `tokenStartFresh`
     /// parity, mirroring `goal::Goal`).
-    #[serde(default)]
     pub token_budget: Option<u64>,
     /// Session cumulative-token baseline at the moment budget enforcement began.
     /// Seeded lazily by the continuation hook on the first tick that sees a
     /// budget set (the `loop` tool has no live token counter at creation). Until
-    /// `baseline_captured`, the token budget is not enforced. `#[serde(default)]`
-    /// → old payloads read 0.
-    #[serde(default)]
+    /// `baseline_captured`, the token budget is not enforced.
     pub tokens_at_start: u64,
     /// Whether `tokens_at_start` holds a real session-token baseline yet. Mirrors
-    /// `goal::Goal::baseline_captured`. `#[serde(default)]` → old payloads read
-    /// `false`.
-    #[serde(default)]
+    /// `goal::Goal::baseline_captured`.
     pub baseline_captured: bool,
     pub status: LoopStatus,
     pub created_at_ms: u64,
@@ -148,8 +141,6 @@ pub struct LoopState {
     /// loop the user stopped by hand. Surfaced by `loop(action='status')` so a
     /// silently-capped watch loop can explain itself on the next turn — without
     /// it, the stop reason the hook computes was logged and dropped.
-    /// `#[serde(default)]` → old payloads read `None`.
-    #[serde(default)]
     pub stop_reason: Option<String>,
 }
 
@@ -174,9 +165,29 @@ impl LoopState {
         }
     }
 
+    /// Count a tick at CLAIM time, so a cap still holds if the tick crashes.
     #[must_use]
-    pub fn spent_iteration(mut self) -> Self {
+    pub const fn spent_iteration(mut self) -> Self {
         self.iterations_used = self.iterations_used.saturating_add(1);
+        self
+    }
+
+    /// Give back a tick that was claimed but provably never executed.
+    ///
+    /// Counting at claim time is the right default (a crashed tick must still
+    /// consume its budget), but two paths retire a tick that is still *asleep*:
+    /// leaving `Active` (`transition`, e.g. `pause`) and a rescheduling
+    /// `update`. Both clear the pending marker so the sleeping task's
+    /// `confirm_fire` mismatches and it is discarded — yet the counter kept the
+    /// claim. Five re-paces of a `max_iterations=5` loop reported `ticks: 5/5`
+    /// and stopped "at the cap" having executed nothing.
+    ///
+    /// Only ever called under the registry lock on an explicit, synchronous
+    /// supersede — never for a tick that could still fire — so the crash-safety
+    /// rationale above is untouched.
+    #[must_use]
+    pub const fn refund_iteration(mut self) -> Self {
+        self.iterations_used = self.iterations_used.saturating_sub(1);
         self
     }
 
@@ -532,21 +543,6 @@ mod tests {
     }
 
     #[test]
-    fn serde_roundtrip_preserves_state() {
-        let l = sample()
-            .with_max_iterations(Some(5))
-            .with_token_budget(Some(2_000))
-            .with_baseline(1_000);
-        let json = serde_json::to_string(&l).unwrap();
-        let back: LoopState = serde_json::from_str(&json).unwrap();
-        assert_eq!(back.iterations_used, l.iterations_used);
-        assert_eq!(back.max_iterations, Some(5));
-        assert_eq!(back.token_budget, Some(2_000));
-        assert_eq!(back.tokens_at_start, 1_000);
-        assert!(back.baseline_captured);
-    }
-
-    #[test]
     fn new_loop_has_no_baseline() {
         let l = sample();
         assert_eq!(l.tokens_at_start, 0);
@@ -777,29 +773,5 @@ mod tests {
         .with_next_wake_ms(Some(10_000));
         // now=4_000, wake=10_000 → "in 6s"
         assert!(l.human_summary(4_000).contains("next wake: in 6s"));
-    }
-
-    #[test]
-    fn old_payload_without_stop_reason_deserializes_none() {
-        // stop_reason absent in an older payload must read None, never error.
-        let json = r#"{"session_id":"s","prompt":"p",
-            "cadence":{"kind":"fixed","interval_ms":300000},
-            "iterations_used":0,"status":"stopped","created_at_ms":1}"#;
-        let l: LoopState = serde_json::from_str(json).expect("deserialize old payload");
-        assert!(l.stop_reason.is_none());
-    }
-
-    #[test]
-    fn old_payload_without_baseline_fields_deserializes_defaults() {
-        // JSON persisted before these fields existed (no tokens_at_start /
-        // baseline_captured keys). Loop is never persisted today, but parity
-        // with goal keeps the forward-compat guarantee.
-        let json = r#"{"session_id":"s","prompt":"p",
-            "cadence":{"kind":"fixed","interval_ms":300000},
-            "iterations_used":0,"status":"active","created_at_ms":1}"#;
-        let l: LoopState = serde_json::from_str(json).expect("deserialize old payload");
-        assert_eq!(l.tokens_at_start, 0);
-        assert!(!l.baseline_captured);
-        assert!(l.token_budget.is_none());
     }
 }

@@ -63,9 +63,7 @@ const LIVE_SECTIONS: &[&str] = &["route", "behavior", "execution"];
 ///
 /// Mirrors the `⚠️ Legacy — parsed but inert` markers in the `/self` SKILL.md.
 /// Editing these is a no-op at runtime.
-const INERT_SECTIONS: &[&str] = &[
-    "task_routing",
-];
+const INERT_SECTIONS: &[&str] = &["task_routing"];
 
 impl ReloadImpact {
     /// Classify a dot-path config target (e.g. `"providers.openai"`,
