@@ -160,7 +160,7 @@ pub use crate::config::{
 };
 
 // Logging
-pub use crate::logging::{create_pii_scrubbing_layer, LogLevel};
+pub use crate::logging::LogLevel;
 
 // =============================================================================
 // Agent System Exports
@@ -251,26 +251,3 @@ pub use crate::utils::paths::{get_skills_dir, get_skills_dir_string};
 
 // Event handler types (for backward compatibility)
 pub use crate::event_handler::{ErrorType, McpServerError, McpStartupReport, ProcessingState};
-
-// =============================================================================
-// Initialization Function
-// =============================================================================
-
-/// Initialize the tracing subscriber for logging
-///
-/// This function should be called once at application startup.
-/// It configures structured logging with environment-based filtering,
-/// daily log file rotation, and automatic PII scrubbing.
-pub fn init_logging() {
-    if let Err(e) = crate::logging::init_file_logging() {
-        eprintln!("Warning: Failed to initialize file logging: {e}");
-        eprintln!("Falling back to console-only logging");
-
-        use tracing_subscriber::{fmt, layer::SubscriberExt, util::SubscriberInitExt, EnvFilter};
-        let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info"));
-        let _ = tracing_subscriber::registry()
-            .with(filter)
-            .with(fmt::layer().with_target(true))
-            .try_init();
-    }
-}

@@ -5,12 +5,8 @@
 /// dynamic modification without restarting the application.
 use std::sync::atomic::{AtomicU8, Ordering};
 use std::sync::Once;
-use tracing::Level;
 
-/// Log level enumeration (matches aleph.udl)
-///
-/// Note: This type is defined in aleph.udl for `UniFFI` code generation.
-/// The Rust definition must match the UDL enum exactly.
+/// Log level enumeration
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 #[repr(C)]
 pub enum LogLevel {
@@ -23,18 +19,6 @@ pub enum LogLevel {
 }
 
 impl LogLevel {
-    /// Convert to `tracing::Level`
-    #[must_use]
-    pub const fn to_tracing_level(&self) -> Level {
-        match self {
-            Self::Error => Level::ERROR,
-            Self::Warn => Level::WARN,
-            Self::Info => Level::INFO,
-            Self::Debug => Level::DEBUG,
-            Self::Trace => Level::TRACE,
-        }
-    }
-
     /// Convert to `EnvFilter` string
     #[must_use]
     pub const fn to_filter_string(&self) -> &'static str {
@@ -152,15 +136,6 @@ pub fn set_log_level(level: LogLevel) {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn test_log_level_to_tracing_level() {
-        assert_eq!(LogLevel::Error.to_tracing_level(), Level::ERROR);
-        assert_eq!(LogLevel::Warn.to_tracing_level(), Level::WARN);
-        assert_eq!(LogLevel::Info.to_tracing_level(), Level::INFO);
-        assert_eq!(LogLevel::Debug.to_tracing_level(), Level::DEBUG);
-        assert_eq!(LogLevel::Trace.to_tracing_level(), Level::TRACE);
-    }
 
     #[test]
     fn test_log_level_to_filter_string() {

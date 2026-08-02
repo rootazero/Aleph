@@ -1,33 +1,7 @@
-/// Log file appender — delegates to `aleph-logging` crate
-///
-/// This module re-exports the shared logging API from `aleph-logging`
-/// and provides backward-compatible convenience wrappers for the server.
+/// Log file appender helpers — delegates to `aleph-logging` crate
 use std::path::PathBuf;
 
 use crate::logging::LoggingError;
-
-const DEFAULT_RETENTION_DAYS: u32 = 7;
-const DEFAULT_FILTER: &str = "info";
-
-/// Initialize file + console logging for a named component.
-///
-/// Delegates to `aleph_logging::init_component_logging`.
-/// See that function for full documentation.
-pub fn init_component_logging(
-    component: &str,
-    retention_days: u32,
-    default_filter: &str,
-) -> Result<(), LoggingError> {
-    aleph_logging::init_component_logging(component, retention_days, default_filter)
-        .map_err(LoggingError::Init)
-}
-
-/// Initialize logging with file appender and PII scrubbing (server defaults).
-///
-/// Convenience wrapper that calls `init_component_logging("server", 7, "info")`.
-pub fn init_file_logging() -> Result<(), LoggingError> {
-    init_component_logging("server", DEFAULT_RETENTION_DAYS, DEFAULT_FILTER)
-}
 
 /// Get the log directory path: `~/.aleph/logs/`
 pub fn get_log_directory() -> Result<PathBuf, LoggingError> {
