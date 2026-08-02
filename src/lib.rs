@@ -84,7 +84,6 @@ pub mod goal;
 pub mod guardrails;
 pub mod hub;
 pub mod identity;
-mod init_unified;
 pub mod logging;
 pub mod loop_graph;
 pub mod looping;
@@ -122,11 +121,6 @@ pub mod secrets;
 pub mod security;
 pub mod sync_primitives;
 
-/// Unified initialization module (re-export for backward compatibility)
-pub mod initialization {
-    pub use crate::init_unified::*;
-}
-
 pub mod a2a;
 pub mod acp;
 pub mod gateway;
@@ -163,11 +157,6 @@ pub use crate::config::{
     AssemblerConfig, BehaviorConfig, ChannelInstanceConfig, Config, EmbeddingProviderConfig,
     GeneralConfig, GenerationProviderConfig, MemoryConfig, MemoryInjectionMode,
     PluginMarketplaceEntry, ProviderConfig, RoutingRuleConfig,
-};
-
-// Initialization
-pub use crate::initialization::{
-    InitError, InitPhase, InitProgressHandler, InitializationCoordinator, InitializationResult,
 };
 
 // Logging

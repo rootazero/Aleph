@@ -195,7 +195,7 @@ pub fn governing_owner(session: &str) -> crate::error::Result<Option<String>> {
 
 /// Store-taking form of [`governing_owner`] (unit-testable without the
 /// process global).
-pub fn governing_owner_in(
+fn governing_owner_in(
     store: &crate::loop_graph::LoopGraphStore,
     session: &str,
 ) -> crate::error::Result<Option<String>> {
@@ -219,7 +219,7 @@ pub fn render_session_topology(session: &str) -> Option<String> {
 
 /// Store-taking form of [`render_session_topology`].
 #[must_use]
-pub fn render_session_topology_in(
+fn render_session_topology_in(
     store: &crate::loop_graph::LoopGraphStore,
     session: &str,
 ) -> Option<String> {
