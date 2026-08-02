@@ -79,8 +79,23 @@ impl ToolErrorKind {
 
     /// Whether re-running the SAME call with SAME arguments is likely
     /// to succeed. `false` means "switch tool / source / args before
-    /// trying again". Used by `tools::retry::execute_with_one_shot_backoff`
-    /// and surfaced to the LLM in the error hint.
+    /// trying again".
+    ///
+    /// **Not** the retry gate. `retry::execute_with_one_shot_backoff` asks
+    /// `ToolError::is_retryable`, a narrow match on the structural variants
+    /// (`Timeout` / `Transport` / `ApprovalExpired`); this predicate is the
+    /// wider, message-pattern-derived classification that also covers
+    /// `RateLimited` and `UpstreamServerError`. Deliberately keeping the gate
+    /// structural: a retry decision driven by substring matching is how a
+    /// healthy provider gets locked out because a token count contained
+    /// `"401"`.
+    ///
+    /// What it is for is the relationship between the two, which
+    /// `ToolError::kind`'s doc asserts and
+    /// `every_retryable_variant_is_also_transient` pins: the kind taxonomy must
+    /// stay a superset of the retry gate, so the LLM-facing routing hint never
+    /// tells the model to switch approach for an error the tool layer just
+    /// silently retried.
     #[must_use]
     pub const fn is_transient(self) -> bool {
         matches!(
@@ -259,6 +274,61 @@ mod tests {
         assert!(!ToolErrorKind::UpstreamNotFound.is_transient());
         assert!(!ToolErrorKind::Duplicate.is_transient());
         assert!(!ToolErrorKind::Execution.is_transient());
+    }
+
+    /// The superset relationship `ToolError::kind`'s doc asserts, made
+    /// checkable.
+    ///
+    /// It matters because the two classifications feed opposite advice at the
+    /// same moment: the tool layer silently respins anything `is_retryable`,
+    /// while the routing hint built from `kind()` tells the model whether to
+    /// try again or switch approach. If a variant were retryable but not
+    /// transient, the model would be told "switch tool / source / args" about a
+    /// call the layer beneath it had just retried on its behalf.
+    #[test]
+    fn every_retryable_variant_is_also_transient() {
+        use crate::tools::service::ToolError;
+
+        let variants = [
+            ToolError::NotFound { name: "t".into() },
+            ToolError::PermissionDenied {
+                name: "t".into(),
+                reason: "no".into(),
+            },
+            ToolError::ValidationFailed {
+                name: "t".into(),
+                cause: "bad".into(),
+            },
+            ToolError::Execution {
+                name: "t".into(),
+                cause: "boom".into(),
+            },
+            ToolError::Timeout {
+                name: "t".into(),
+                elapsed_ms: 1,
+            },
+            ToolError::ApprovalExpired {
+                name: "t".into(),
+                waited_ms: 1,
+            },
+            ToolError::Transport {
+                name: "t".into(),
+                cause: "reset".into(),
+            },
+            ToolError::Duplicate { name: "t".into() },
+            ToolError::Other("opaque".into()),
+        ];
+
+        for e in &variants {
+            if e.is_retryable() {
+                assert!(
+                    e.kind().is_transient(),
+                    "{e} is retried by the tool layer, so its kind must not tell \
+                     the model to switch approach (kind = {:?})",
+                    e.kind()
+                );
+            }
+        }
     }
 
     #[test]
