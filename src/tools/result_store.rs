@@ -545,6 +545,48 @@ pub fn extract_persisted_ref(text: &str) -> Option<&str> {
         .find(|line| line.starts_with(PERSISTED_REF_PREFIX))
 }
 
+/// Replace the per-call file path inside any persisted-output marker with a
+/// fixed placeholder, so two byte-identical tool results compare equal.
+///
+/// The marker embeds a path whose file name is unique per dispatch. That is
+/// correct for the file system and wrong for anything that fingerprints the
+/// model-facing result: both loop detectors
+/// ([`redundant_calls`](crate::tools::redundant_calls) and
+/// [`no_progress`](crate::tools::no_progress)) bucket by `(tool, args)` and
+/// then require every result in the bucket to be identical before they nudge.
+/// An over-budget result is replaced wholesale by this marker, so the unique
+/// path made every repeat differ and the `all_identical` gate could never
+/// fire — inverting both detectors exactly where they matter most: the bigger
+/// and more expensive the loop, the less likely it was to be caught.
+///
+/// The size + tool tail is deliberately kept: identical content offloads to an
+/// identical token count, so the placeholder loses no discriminating power that
+/// a fingerprint of the whole payload would have had.
+#[must_use]
+pub fn stabilize_persisted_ref(text: &str) -> std::borrow::Cow<'_, str> {
+    if !text.contains(PERSISTED_REF_PREFIX) {
+        return std::borrow::Cow::Borrowed(text);
+    }
+    let mut out = String::with_capacity(text.len());
+    for (i, line) in text.lines().enumerate() {
+        if i > 0 {
+            out.push('\n');
+        }
+        if line.starts_with(PERSISTED_REF_PREFIX) {
+            out.push_str(PERSISTED_REF_PREFIX);
+            out.push_str("<offloaded>");
+            // Keep " (<n> tokens, <tool>)]" — the part that still varies with
+            // the content rather than with the dispatch.
+            if let Some(tail) = line.rfind(" (") {
+                out.push_str(&line[tail..]);
+            }
+        } else {
+            out.push_str(line);
+        }
+    }
+    std::borrow::Cow::Owned(out)
+}
+
 // =============================================================================
 // TTL sweeper for stale per-session dirs
 // =============================================================================

@@ -87,6 +87,7 @@ pub use sampling::{
     extract_system_prompt, sampling_messages_to_chat, SamplingCallback, SamplingHandler,
 };
 pub use tool_bridge::spawn_tool_bridge;
+pub(crate) use tool_bridge::CAPABILITY_READ_BUILTIN_NAMES;
 pub use tool_sanitize::{normalize_tool_schema, scan_description_for_injection};
 pub use transport::{
     HttpTransport, HttpTransportConfig, McpTransport, NotificationCallback, SseTransport,

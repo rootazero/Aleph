@@ -53,6 +53,22 @@ const PROMPT_LIST_TOOL: &str = "mcp_list_prompts";
 /// Registry name of the OAuth login builtin (present only with remote servers).
 const LOGIN_TOOL: &str = "mcp_login";
 
+/// The capability-gated bridge builtins that are pure reads, in the exact
+/// spelling they register under.
+///
+/// Exists so `READ_ONLY_TOOLS` can pin its dynamic exceptions to the
+/// definition site rather than re-typing the strings: these five never appear
+/// in `BUILTIN_TOOL_DEFINITIONS`, so a rename here would otherwise orphan five
+/// allowlist entries with nothing to fail. `LOGIN_TOOL` is deliberately absent
+/// — an OAuth login is not a read.
+pub(crate) const CAPABILITY_READ_BUILTIN_NAMES: &[&str] = &[
+    RESOURCE_TOOL,
+    RESOURCE_LIST_TOOL,
+    RESOURCE_TEMPLATE_LIST_TOOL,
+    PROMPT_TOOL,
+    PROMPT_LIST_TOOL,
+];
+
 /// Spawn the MCP → `ToolHandlerRegistry` bridge task.
 ///
 /// The task subscribes to the manager's event broadcast and keeps `registry`

@@ -51,12 +51,27 @@ pub async fn execute_batch_move(
     output_dir_override: Option<&std::path::Path>,
 ) -> Result<FileOpsOutput, ToolError> {
     let canonical = check_and_resolve_path(dir, denied_paths, output_dir_override)?;
-    let dest_canonical = if dest.exists() {
-        check_and_resolve_path(dest, denied_paths, output_dir_override)?
+
+    if !canonical.is_dir() {
+        return Err(ToolError::InvalidArgs(format!(
+            "Source path is not a directory: {}",
+            dir.display()
+        )));
+    }
+
+    reject_unsafe_glob_pattern(pattern)?;
+
+    // Security: check destination path BEFORE creating it, to prevent writing
+    // into denied directories (e.g., ~/.ssh with create_parents=true). Resolve
+    // it up front and test THAT for existence: `dest.exists()` answered for the
+    // literal argument, so a `~/...` (or run-relative) destination that was
+    // right there read as missing and the whole call was refused. Both this and
+    // the creation happen after the checks above, so a rejected call no longer
+    // leaves a directory behind.
+    let checked_dest = check_and_resolve_path(dest, denied_paths, output_dir_override)?;
+    let dest_canonical = if checked_dest.exists() {
+        checked_dest
     } else if create_parents {
-        // Security: check destination path BEFORE creating it, to prevent
-        // writing into denied directories (e.g., ~/.ssh with create_parents=true).
-        let checked_dest = check_and_resolve_path(dest, denied_paths, output_dir_override)?;
         // Create destination if needed
         fs::create_dir_all(&checked_dest)
             .map_err(|e| ToolError::Execution(format!("Failed to create destination: {e}")))?;
@@ -67,15 +82,6 @@ pub async fn execute_batch_move(
             dest.display()
         )));
     };
-
-    if !canonical.is_dir() {
-        return Err(ToolError::InvalidArgs(format!(
-            "Source path is not a directory: {}",
-            dir.display()
-        )));
-    }
-
-    reject_unsafe_glob_pattern(pattern)?;
 
     let full_pattern = canonical.join(pattern);
     let pattern_str = full_pattern.to_string_lossy();
@@ -284,12 +290,11 @@ pub async fn execute_organize(
 
         // Move file to category directory
         let file_name = path.file_name().unwrap_or_default();
-        let dest_path = category_dir.join(file_name);
-
-        // Skip if already in category folder
-        if path.parent() == Some(&category_dir) {
-            continue;
-        }
+        // A category folder accumulates across runs, so a `photo.png` arriving
+        // a week after the first one would `fs::rename` straight over the file
+        // an earlier organize had already filed there — silent data loss, still
+        // reported as success. De-duplicate exactly as `batch_move` does.
+        let dest_path = unique_dest(&category_dir, &file_name.to_string_lossy());
 
         // Cross-agent serialization per item (sorted pair — same guard
         // `execute_move` takes; released each iteration). `path` comes from
@@ -413,6 +418,77 @@ mod tests {
         // Original name + one de-duplicated name, both present, no data lost.
         assert!(dst.path().join("report.log").exists());
         assert!(dst.path().join("report (1).log").exists());
+    }
+
+    #[tokio::test]
+    async fn organize_dedups_against_an_already_filed_same_name_file() {
+        // A category folder accumulates across runs: a `photo.png` that arrives
+        // a week after the first one used to be renamed straight over the file
+        // the earlier organize had already filed, and the result still said
+        // `success: true`.
+        let dir = tempdir().unwrap();
+        fs::write(dir.path().join("photo.png"), b"first").unwrap();
+        execute_organize(dir.path(), &[], None).await.unwrap();
+
+        fs::write(dir.path().join("photo.png"), b"second-arrival").unwrap();
+        let out = execute_organize(dir.path(), &[], None).await.unwrap();
+
+        assert!(out.success, "message: {}", out.message);
+        assert_eq!(
+            fs::read(dir.path().join("Images/photo.png")).unwrap(),
+            b"first",
+            "the already-filed file must survive"
+        );
+        assert_eq!(
+            fs::read(dir.path().join("Images/photo (1).png")).unwrap(),
+            b"second-arrival",
+            "the newcomer must land beside it, not on top of it"
+        );
+    }
+
+    #[tokio::test]
+    async fn batch_move_rejected_pattern_leaves_no_destination_behind() {
+        // The destination was created before the pattern was validated, so a
+        // call that got refused still littered a directory on disk.
+        let src = tempdir().unwrap();
+        let holder = tempdir().unwrap();
+        let dest = holder.path().join("made-by-a-refused-call");
+
+        let out = execute_batch_move(src.path(), "/etc/*", &dest, true, &[], None).await;
+        assert!(
+            matches!(out, Err(ToolError::InvalidArgs(_))),
+            "absolute glob pattern must be rejected, got {out:?}"
+        );
+        assert!(
+            !dest.exists(),
+            "a refused call must not leave its destination behind"
+        );
+    }
+
+    #[tokio::test]
+    async fn batch_move_tests_existence_of_the_expanded_destination() {
+        // Existence was tested on the RAW argument, so a destination spelled
+        // `~/...` — or relative to the run's base, as here — was reported
+        // missing even when it was right there, and `create_parents: false`
+        // refused the whole call.
+        let src = tempdir().unwrap();
+        let base = tempdir().unwrap();
+        fs::write(src.path().join("a.log"), b"hello-log").unwrap();
+        fs::create_dir(base.path().join("inbox")).unwrap();
+
+        let out = execute_batch_move(
+            src.path(),
+            "*.log",
+            Path::new("inbox"),
+            false,
+            &[],
+            Some(base.path()),
+        )
+        .await
+        .unwrap();
+
+        assert!(out.success, "message: {}", out.message);
+        assert!(base.path().join("inbox/a.log").is_file());
     }
 
     #[tokio::test]

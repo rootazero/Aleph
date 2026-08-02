@@ -130,7 +130,15 @@ pub fn aggregate_no_progress(events: &[SessionEventRecord]) -> Vec<NoProgressGro
             continue;
         }
         let args_key = canonical_json_string(input);
-        let fingerprint = canonical_json_string(&output.value);
+        // Fingerprint the model-facing text with the offload path folded out:
+        // an over-budget result is replaced by a marker whose file name is
+        // unique per dispatch, which would make every repeat of a byte-identical
+        // large result compare *different* and silently disable the whole
+        // detector for exactly the expensive loops it exists to catch.
+        let fingerprint = match output.value.as_str() {
+            Some(text) => crate::tools::result_store::stabilize_persisted_ref(text).into_owned(),
+            None => canonical_json_string(&output.value),
+        };
 
         let tally = tallies
             .entry((name.to_string(), args_key))

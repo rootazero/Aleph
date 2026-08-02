@@ -1138,10 +1138,21 @@ impl ScopedToolService {
             }
         }
 
-        // Generate a per-call file name suffix so concurrent calls to the
-        // same tool do not collide on disk. The LLM correlates the result
-        // through the surrounding conversation history, not the path.
-        let call_id = uuid::Uuid::new_v4().simple().to_string();
+        // Per-call file name suffix, so concurrent calls to the same tool do
+        // not collide on disk.
+        //
+        // Prefer the model's own `tool_call_id`: the harness Act phase scopes it
+        // as an ambient `CallIdentity` around this very future, and it is the id
+        // the transcript, the `tool_timeline`, the approval card and the trace
+        // all key on. Minting a fresh uuid here instead meant the persisted
+        // filename, the `TOOL_CALL_ID` handed to extension hooks, and the
+        // `ctx_search` source label all named something that appears nowhere
+        // else — a hook could not correlate the offloaded blob with the call
+        // that produced it, and neither could a human reading the directory.
+        // The uuid stays as the fallback for the paths that have no ambient
+        // identity (direct `tools.invoke` RPC, cluster node calls, tests).
+        let call_id = crate::approval::current_tool_call_id()
+            .unwrap_or_else(|| uuid::Uuid::new_v4().simple().to_string());
 
         let processed = crate::tools::result_processing::apply_result_budget(
             &call_id,

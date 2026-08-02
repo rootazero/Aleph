@@ -230,7 +230,7 @@ impl AlephTool for FileOpsTool {
 - search: Search files by glob pattern (e.g., "*.pdf", "**/*.jpg")
 - stats: Recursive line/byte counts. Returns an aggregate {total_files, total_lines, total_bytes} plus per-file FileInfo {size, lines}. Use this to answer "how many lines / files / bytes are in this directory" — DO NOT loop over file_read for that.
 - batch_move: Move ALL files matching a pattern to destination (e.g., pattern="*.jpg" moves all JPGs)
-- organize: Auto-organize files by type into categorized folders (Images, Documents, Videos, Audio, Archives, Code, Others)
+- organize: Auto-organize files by type into categorized folders (Images, Documents, Videos, Audio, Archives, Code, Apps, Others)
 
 LISTING LIMITS (list / search / stats):
 - At most 500 entries are returned by default; `limit` raises it. The `message` says when the cap was reached and what to pass.
