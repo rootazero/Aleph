@@ -417,6 +417,88 @@ async fn two_sessions_same_agent_run_in_parallel() {
     );
 }
 
+/// Round-7 regression: a run that has claimed its session slot but is still
+/// parked on the per-agent concurrency semaphore must be reachable by cancel.
+///
+/// `try_claim` withdraws the run's busy-queue ticket (`mark_admitted`), so once
+/// it succeeds the message is no longer "waiting" anywhere the queue can see.
+/// If `active_runs` is only populated after `concurrency.acquire().await` — an
+/// unbounded wait — the run exists in NO registry any stop path consults:
+/// `cancel` / `cancel_session` read `active_runs` and miss, and
+/// `cancel_queued_run` / `purge` find no ticket. Stop answers "nothing is
+/// running" and then the cancelled turn executes anyway, whenever a permit
+/// frees up. Asserts the effect at the consumer — `cancel` reaches it — not
+/// that some registration function was called.
+#[tokio::test]
+async fn a_run_waiting_for_a_concurrency_permit_can_still_be_cancelled() {
+    let temp = tempfile::tempdir().unwrap();
+    let agent = gate_test_agent(&temp, "capped-agent").await;
+    // One permit for the whole agent, so the second admission must park.
+    let engine = Arc::new(test_engine_with_config(ExecutionEngineConfig {
+        max_runs_global: 8,
+        max_runs_per_agent: 1,
+        ..Default::default()
+    }));
+
+    let session_a = SessionKey::peer("capped-agent", "conv-a");
+    let session_b = SessionKey::peer("capped-agent", "conv-b");
+
+    let req_a = gate_test_request(&session_a, "run-a");
+    let (tx_a, _rx_a) = mpsc::channel::<()>(1);
+    let _slot_a = match engine
+        .admit_run(&req_a, "run-a", &agent, tx_a)
+        .await
+        .expect("run A must be admitted")
+    {
+        GateOutcome::Admitted(slot) => slot,
+        GateOutcome::HandledInline => panic!("an idle session must not be handled inline"),
+    };
+
+    // Run B is on a different session (its own slot is free) but the agent's
+    // only permit is held by A, so this call parks inside `admit_run`.
+    let engine_b = Arc::clone(&engine);
+    let agent_b = Arc::clone(&agent);
+    let req_b = gate_test_request(&session_b, "run-b");
+    let (tx_b, mut rx_b) = mpsc::channel::<()>(1);
+    let parked = tokio::spawn(async move {
+        engine_b
+            .admit_run(&req_b, "run-b", &agent_b, tx_b)
+            .await
+            .map(|outcome| matches!(outcome, GateOutcome::Admitted(_)))
+    });
+
+    // Let it get as far as the semaphore.
+    let claimed = tokio::time::timeout(std::time::Duration::from_secs(5), async {
+        loop {
+            if engine.get_status("run-b").await.is_some() {
+                return true;
+            }
+            tokio::task::yield_now().await;
+        }
+    })
+    .await;
+    assert!(
+        claimed.unwrap_or(false),
+        "a run holding a session claim must be visible to the stop paths while it \
+         waits for a permit — it has already left the busy queue's wait lane"
+    );
+
+    // The consumer that matters: Stop must actually reach it.
+    engine
+        .cancel("run-b")
+        .await
+        .expect("cancelling a permit-waiting run must not report RunNotFound");
+    assert!(
+        rx_b.recv().await.is_some(),
+        "the cancel must reach the run's own channel, so the loop sees it the \
+         moment the permit lands instead of executing a turn the user stopped"
+    );
+
+    // Release A so the parked admission can finish and the task can join.
+    drop(_slot_a);
+    let _ = tokio::time::timeout(std::time::Duration::from_secs(5), parked).await;
+}
+
 /// Task 6 regression: a second message on the SAME session while a run is
 /// still active must still take the busy-input path (`try_claim` returns
 /// `false`) — the session-scoped claim must not accidentally admit two runs
