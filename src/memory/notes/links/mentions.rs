@@ -106,14 +106,31 @@ pub fn scan_mentions(docs: &[MentionDoc]) -> Vec<(String, String)> {
         owners.len() == 1
     });
 
+    // Flatten to (name_norm, owner_path, owner_path_norm, name_is_cjk) once.
+    // `owner_path_norm` and the CJK test depend only on the dictionary, not on
+    // the document being scanned, but used to be recomputed inside the
+    // `docs × dict` inner loop — an allocation and a full char scan per pair.
+    let entries: Vec<(&str, &str, String, bool)> = dict
+        .iter()
+        .map(|(name_norm, owners)| {
+            let target = owners[0];
+            (
+                name_norm.as_str(),
+                target,
+                normalize_link_key(target),
+                name_norm.chars().any(is_cjk),
+            )
+        })
+        .collect();
+
     let mut out: Vec<(String, String)> = Vec::new();
     let mut hits: Vec<(String, String)> = Vec::new();
     for d in docs {
         let body_norm = normalize_link_key(&d.body);
         let linked: Vec<String> = d.linked_raw.iter().map(|s| normalize_link_key(s)).collect();
         hits.clear();
-        for (name_norm, owners) in &dict {
-            let target = owners[0];
+        for (name_norm, target, target_norm, cjk) in &entries {
+            let target = *target;
             if target == d.path {
                 continue; // self
             }
@@ -133,12 +150,10 @@ pub fn scan_mentions(docs: &[MentionDoc]) -> Vec<(String, String)> {
             // `MAX_MENTIONS_PER_NOTE` and in the per-cycle cap. A note with 5+
             // path-form outgoing links therefore emitted five no-op hits and zero
             // genuine unlinked-mention edges, every cycle, forever.
-            let target_norm = normalize_link_key(target);
-            if linked.iter().any(|l| l == name_norm || *l == target_norm) {
+            if linked.iter().any(|l| l == name_norm || l == target_norm) {
                 continue;
             }
-            let cjk = name_norm.chars().any(is_cjk);
-            if body_mentions(&body_norm, name_norm, cjk) {
+            if body_mentions(&body_norm, name_norm, *cjk) {
                 hits.push((d.path.clone(), target.to_string()));
             }
         }

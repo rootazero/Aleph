@@ -124,7 +124,6 @@ mod integration_tests {
         let reranker: Arc<dyn LlmReranker> = Arc::new(NeverCalledReranker);
         let cfg = crate::config::types::memory::AssemblerConfig {
             enabled: true,
-            total_budget_tokens: 4000,
             candidate_pool_limit: 20,
             rerank_timeout_ms: 200,
             rerank_model: None,

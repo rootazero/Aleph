@@ -440,6 +440,22 @@ pub async fn spawn(base: &SpawnerBase, req: SpawnRequest<'_>) -> Result<LoopRunR
         let (context_budget, context_compactor, preflight_pipeline) =
             build_context_triple(base.context_budget_config.as_ref(), &llm);
 
+        // Layer-3 per-turn aggregate budget — derive from `context_budget_config`
+        // when the parent has one wired, otherwise fall back to the
+        // process-wide singleton (mirrors the root runner's last-resort
+        // branch). Without this, subagent tool results only see Layer 2
+        // (per-message) caps; large bash/file outputs cannot spill to disk
+        // and the subagent reads a truncated result.
+        let turn_budget: Option<Arc<crate::tools::turn_budget::TurnResultBudget>> = base
+            .context_budget_config
+            .as_ref()
+            .map(|cfg| {
+                let (_, per_turn) =
+                    crate::tools::turn_budget::budget_for_window(cfg.token_budget);
+                Arc::new(crate::tools::turn_budget::TurnResultBudget::new(per_turn))
+            })
+            .or_else(crate::tools::turn_budget::global_turn_result_budget);
+
         let deps = HarnessDeps {
             session: base.session.clone(),
             tools: scoped_tools,
@@ -469,7 +485,7 @@ pub async fn spawn(base: &SpawnerBase, req: SpawnRequest<'_>) -> Result<LoopRunR
             stall_config: base.stall_config.clone(),
             consecutive_failure_cap: base.consecutive_failure_cap,
             turn_timeout: base.turn_timeout,
-            turn_budget: None,
+            turn_budget,
             // §3.2 overflow-tier parity: was `None`, so a subagent's oversized
             // tool results were truncated inline (the subagent then re-ran the
             // tool against truncated context). Reuse the same shared

@@ -131,7 +131,7 @@ Both lists over-fetch `limit * 2` to give RRF enough signal for the final top-k 
 
 Between `hybrid_search_notes` and the cross-encoder rerank, `retrieve()` runs
 `note_retrieval::expansion::graph_expand`. For the top `max_seeds` direct hits it
-looks up each seed's strongest 4-signal related peers (`NoteStore::related_peers`,
+looks up each seed's strongest 5-signal related peers (`NoteStore::related_peers`,
 materialized per dream cycle in `notes_graph_related`), dedups them against the
 direct hits, hydrates their content (`NoteStore::get_notes_with_content`), and
 adds them to the candidate pool with a propagated score
@@ -455,6 +455,10 @@ The "热门记忆浮顶" / reinforcement-salience behaviour is a closed producer
 
 - **Consumer** — `NoteFactRetrieval::fetch_reinforcement_counts` reads `NoteStore::recall_hit_counts` (SQLite `aggregate_for_facts`, `signal_count` per note) and `scoring::apply_reinforcement` boosts each candidate by `1 + w·ln(1 + hits)` (default `reinforcement_weight = 0.3`, default-on). This was always wired.
 - **Producer** — every primary retrieval (`NoteFactRetrieval::retrieve` and `retrieve_multi_agent`, used by the `memory_search` tool *and* the proactive `MemoryContextProvider` injection) records the *surfaced* notes (after rerank/scoring/truncation) via `NoteStore::record_recall_hits` → the existing `record_signals` writer, `channel = "auto-recall"`. Best-effort (write failures are logged at `debug` and never break recall) and gated on `reinforcement_enabled`, so disabling hot-floating also stops recording.
+
+> **Signals are filed per owning namespace, never under a "representative" label.** `retrieve_multi_agent` serves the project-scoped read union, and `project_scope::read_scope_ids` returns `[base, scoped]` — so labelling every hit with `agent_ids.first()` (as this path did until 2026-08-01) filed *every project note's* hit under the base namespace. Both downstream consumers read under a **specific** id: `NoteDecay`'s `access_weight` and the evolution recall-evidence gate run with the dream context's *scoped* id. The result was project notes that looked never-recalled (and were archived early) while the base namespace accrued phantom heat for notes it does not own. `to_scored_fact` already stamps the true owner onto `fact.agent`; group by it (`record_recall_by_owner`). Reinforcement counts are keyed `(owner, path)` — two namespaces can hold notes at the same relative path, and a bare-path map lets one namespace's heat leak into the other's ranking.
+>
+> **A hit that contributes nothing to the prompt must not earn a signal.** The FTS-only leg (`text_retrieve`, used when no embedder is configured *and* when the embed endpoint is down) built facts from index rows, which carry no body — so the model received titles with empty content while the recall signal was still written, durably teaching reinforcement that empty notes are hot. It now hydrates through `get_notes_with_content` (the same trait method the hybrid path uses) and *skips* any hit whose body cannot be loaded.
 
 Both halves dedup on `UNIQUE(note_path, query_hash, day_bucket, channel)`, so a note must surface across **distinct queries / days** to genuinely heat up — repeated recalls of the same note for the same query on the same day count once, which bounds the rich-get-richer feedback. The `auto-recall` channel is kept distinct from `reflect` so the two producers dedup independently. Prior to this wiring the boost was effectively inert: only the narrow `memory_reflect` synthesis path wrote signals, so notes recalled through the primary paths never accrued hotness.
 

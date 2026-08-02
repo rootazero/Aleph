@@ -97,6 +97,10 @@ async fn test_list_tasks_with_filter() {
         .unwrap();
     assert_eq!(by_team.len(), 2);
 
+    // (Owner filtering was removed from `CoordTaskFilter` in 503bd9993 — the
+    // field had no production consumer. `CoordTask.owner` itself still exists
+    // and is asserted elsewhere; only the filter arm is gone.)
+
     // No filter
     let all = store.list_tasks(CoordTaskFilter::default()).await.unwrap();
     assert_eq!(all.len(), 3);

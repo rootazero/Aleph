@@ -6,9 +6,12 @@
 //!   each cached-unhealthy entry → `ToolRuntimeStateLayer @502` renders
 //!   `<tool_runtime_state>` XML through a real `PromptBuilder` pipeline.
 //!
-//! Together with `tests/tool_scheduling.rs` (consumer side — emit-time
-//! gating) this locks the round trip: a dead probe both *strips* the tool
-//! from the schema and *surfaces* a runtime-state hint.
+//! The gating half of the round trip — a dead probe *strips* the tool from
+//! the schema — lives at the single enforcement point, in
+//! `src/tools/scoped/tests.rs::{list_strips_unhealthy_tools,
+//! metadata_schema_strips_unhealthy_tools_and_invalidates_on_flip}`. Together
+//! with this file it locks the pair: a dead probe both vanishes from the
+//! schema and *surfaces* a runtime-state hint.
 
 use std::borrow::Cow;
 use std::sync::Arc;

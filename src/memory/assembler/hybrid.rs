@@ -5,7 +5,7 @@ use super::envelope::{
     EnvelopeItem, EnvelopeMeta, EnvelopeSlot, MemoryEnvelope, SlotKind, SCHEMA_VERSION,
 };
 use super::error::AssemblerError;
-use super::fallback::{skeleton_pack, Candidate};
+use super::fallback::{skeleton_pack, sort_by_pinned_relevance, Candidate};
 use super::feedback_floor::FeedbackFloorLoader;
 use super::gather::{GatherInputs, Gatherer};
 use super::hydration::{estimate_tokens, truncate_utf8_safe};
@@ -165,14 +165,37 @@ impl HybridAssembler {
             candidates.iter().map(|c| (c.id.as_str(), c)).collect();
         let mut slots: Vec<EnvelopeSlot> = Vec::new();
 
-        // Feedback (user-taught rules) is pre-populated first — highest
-        // priority and never subject to the LLM re-rank's discretion, so a
-        // standing rule that matched retrieval can never be dropped. Mirrors
-        // the UserProfile handling below.
-        let feedback_cands: Vec<&Candidate> = candidates
+        // The two pinned slots below are added ON TOP of the LLM-chosen slots,
+        // which `parse_response` has already scaled to 70% of `total_budget`.
+        // Charging them their full static `fallback_skeleton` figures therefore
+        // overshot the envelope (with headroom 300: 210 + 500 + 200 = 910).
+        // Bound the pinned pair to the remaining 30% so the whole envelope
+        // stays within budget.
+        let pinned_cap = u32::try_from((f64::from(total_budget) * 0.3) as u64).unwrap_or(u32::MAX);
+        let clamp_pinned = |configured: u32| -> u32 {
+            if configured == 0 {
+                0
+            } else {
+                configured.min(pinned_cap.max(1))
+            }
+        };
+
+        // Feedback (user-taught rules) is pre-populated first — exempt from the
+        // LLM re-rank's discretion. Ordering matters as much as inclusion:
+        // `hydrate` charges the slot budget strictly in item order and drops
+        // whatever truncates to empty, and `gather` pushes retrieval matches
+        // into the pool BEFORE the always-on High/Critical floor. Collecting in
+        // pool order therefore put the floor entry last in line for the budget,
+        // so query-matched feedback notes could evict the standing rule the
+        // floor exists to guarantee. Sorting by pinned relevance (floor entries
+        // carry 1.0; RRF scores are «1.0) makes the eviction unrepresentable.
+        // Same comparator the deterministic path already uses in `skeleton_pack`.
+        let now = self.now();
+        let mut feedback_cands: Vec<&Candidate> = candidates
             .iter()
             .filter(|c| c.slot_hint == SlotKind::Feedback)
             .collect();
+        sort_by_pinned_relevance(&mut feedback_cands, now);
         if !feedback_cands.is_empty() {
             let items = feedback_cands
                 .into_iter()
@@ -182,15 +205,17 @@ impl HybridAssembler {
                 kind: SlotKind::Feedback,
                 items,
                 tokens_used: 0,
-                tokens_budget: self.config.fallback_skeleton.feedback_tokens,
+                tokens_budget: clamp_pinned(self.config.fallback_skeleton.feedback_tokens),
             });
         }
 
-        // UserProfile always appended first if present in candidates.
-        let profile_cands: Vec<&Candidate> = candidates
+        // UserProfile always appended first if present in candidates. Same
+        // budget-order hazard as Feedback above.
+        let mut profile_cands: Vec<&Candidate> = candidates
             .iter()
             .filter(|c| c.slot_hint == SlotKind::UserProfile)
             .collect();
+        sort_by_pinned_relevance(&mut profile_cands, now);
         if !profile_cands.is_empty() {
             let items = profile_cands
                 .into_iter()
@@ -200,7 +225,7 @@ impl HybridAssembler {
                 kind: SlotKind::UserProfile,
                 items,
                 tokens_used: 0,
-                tokens_budget: self.config.fallback_skeleton.user_profile_tokens,
+                tokens_budget: clamp_pinned(self.config.fallback_skeleton.user_profile_tokens),
             });
         }
 
@@ -315,7 +340,12 @@ impl WorkingMemoryAssembler for HybridAssembler {
             } else {
                 "tiny_pool"
             };
-            let slots = skeleton_pack(&gathered, &self.config.fallback_skeleton, self.now());
+            let slots = skeleton_pack(
+                &gathered,
+                &self.config.fallback_skeleton,
+                budget.total_tokens,
+                self.now(),
+            );
             let env = self.pack_envelope(
                 query,
                 agent_id,
@@ -355,7 +385,12 @@ impl WorkingMemoryAssembler for HybridAssembler {
                 Ok(env)
             }
             Err(reason) => {
-                let slots = skeleton_pack(&gathered, &self.config.fallback_skeleton, self.now());
+                let slots = skeleton_pack(
+                    &gathered,
+                    &self.config.fallback_skeleton,
+                    budget.total_tokens,
+                    self.now(),
+                );
                 let env = self.pack_envelope(
                     query,
                     agent_id,

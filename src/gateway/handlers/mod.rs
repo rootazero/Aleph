@@ -282,6 +282,7 @@ impl HandlerRegistry {
         registry.register("hooks.remove", hooks_admin::handle_hooks_remove);
         registry.register("hooks.reload", hooks_admin::handle_hooks_reload);
         registry.register("hooks.events", hooks_admin::handle_hooks_events);
+        registry.register("hooks.registry", hooks_admin::handle_hooks_registry);
 
         // Plugin handlers (plural — legacy namespace, kept for backward compatibility)
         registry.register("plugins.list", plugins::handle_list);

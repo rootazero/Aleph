@@ -25,6 +25,7 @@
 
 use crate::memory::notes::ingest::plan::{IngestPlan, PageOp};
 use crate::memory::notes::ingest::retrieve::RelatedPage;
+use crate::memory::notes::note::Relation;
 
 /// Bidirectional map between the `[P<n>]` tokens shown to the LLM and the
 /// canonical note paths of the related pages they stand for.
@@ -136,6 +137,33 @@ impl RefTable {
         });
     }
 
+    /// Resolve the `to` end of a typed relation list in place, dropping entries
+    /// whose token is out of range. Same entry-drop policy as [`Self::resolve_links`]:
+    /// a hallucinated edge target is discarded rather than written verbatim.
+    ///
+    /// This exists because the ingest prompt explicitly instructs the model to
+    /// write `"to": "<entity path or [P<n>] token>"` (`prompts.rs`), so relation
+    /// targets carry the same tokens links do. Without this the token reaches
+    /// `Relation.to` untouched and is written into note frontmatter as a literal
+    /// `[P0]` — the exact silent data loss this table exists to prevent.
+    pub(crate) fn resolve_relations(
+        &self,
+        relations: &mut Vec<Relation>,
+        stats: &mut ResolveStats,
+    ) {
+        relations.retain_mut(|r| match self.resolve_field(&mut r.to) {
+            FieldOutcome::Resolved => {
+                stats.resolved += 1;
+                true
+            }
+            FieldOutcome::Passthrough => true,
+            FieldOutcome::OutOfRange => {
+                stats.dropped_links += 1;
+                false
+            }
+        });
+    }
+
     /// Rewrite every `[P<n>]` token in `plan` to its canonical path and drop
     /// ops that reference an out-of-range (hallucinated) page. Returns a tally
     /// for the caller to log. Raw-path fields are left untouched.
@@ -144,6 +172,9 @@ impl RefTable {
     /// - `create.note_path` is a *new* page identifier — never resolved.
     /// - `create.links` / `append.new_links` are link lists — bad entries are
     ///   dropped individually (entry-drop).
+    /// - `create.relations` / `append.new_relations` carry a `to` end that the
+    ///   prompt explicitly allows to be a `[P<n>]` token — same entry-drop
+    ///   policy as links.
     /// - all other path fields are primary targets — a bad token drops the
     ///   whole op (op-fatal), since the op has no valid page to act on.
     pub fn resolve_plan(&self, plan: &mut IngestPlan) -> ResolveStats {
@@ -152,18 +183,23 @@ impl RefTable {
 
         for mut op in std::mem::take(&mut plan.ops) {
             let keep = match &mut op {
-                PageOp::Create { links, .. } => {
+                PageOp::Create {
+                    links, relations, ..
+                } => {
                     self.resolve_links(links, &mut stats);
+                    self.resolve_relations(relations, &mut stats);
                     true
                 }
                 PageOp::Append {
                     note_path,
                     new_links,
+                    new_relations,
                     ..
                 } => {
                     let ok = self.resolve_target(note_path, &mut stats);
                     if ok {
                         self.resolve_links(new_links, &mut stats);
+                        self.resolve_relations(new_relations, &mut stats);
                     }
                     ok
                 }
@@ -353,6 +389,59 @@ mod tests {
                     links,
                     &vec!["projects/aleph".to_string(), "learning/raw".to_string()]
                 );
+            }
+            _ => panic!(),
+        }
+    }
+
+    #[test]
+    fn create_relations_resolve_tokens_and_drop_out_of_range() {
+        // The ingest prompt tells the model `"to": "<entity path or [P<n>]
+        // token>"`, so relation targets carry the same tokens links do. Before
+        // this was wired, `[P2]` reached `Relation.to` verbatim and got written
+        // into note frontmatter as a literal `[P2]` edge.
+        let t = table();
+        let mut plan = IngestPlan {
+            reasoning: String::new(),
+            ops: vec![PageOp::Create {
+                source_ids: vec![],
+                note_path: "entity/alice".into(),
+                title: "Alice".into(),
+                summary: String::new(),
+                facts: vec![],
+                links: vec![],
+                tags: vec![],
+                relations: vec![
+                    Relation {
+                        to: "[P2]".into(),
+                        rel_type: "works_at".into(),
+                        confidence: 0.9,
+                    },
+                    Relation {
+                        to: "[P50]".into(),
+                        rel_type: "hallucinated".into(),
+                        confidence: 0.5,
+                    },
+                    Relation {
+                        to: "entity/bob".into(),
+                        rel_type: "colleague".into(),
+                        confidence: 0.7,
+                    },
+                ],
+                confidence: 1.0,
+                severity: Default::default(),
+            }],
+            schema_proposals: vec![],
+        };
+        let stats = t.resolve_plan(&mut plan);
+        assert_eq!(stats.resolved, 1);
+        assert_eq!(stats.dropped_links, 1);
+        assert_eq!(stats.dropped_ops, 0);
+        match &plan.ops[0] {
+            PageOp::Create { relations, .. } => {
+                assert_eq!(relations.len(), 2);
+                assert_eq!(relations[0].to, "projects/aleph"); // token resolved
+                assert_eq!(relations[1].to, "entity/bob"); // raw path passthrough
             }
             _ => panic!(),
         }

@@ -14,6 +14,7 @@ use std::sync::OnceLock;
 use tracing::warn;
 
 use crate::memory::compression::CompressionService;
+use crate::memory::store::raw_memory::RawMemoryStore;
 use crate::sync_primitives::Arc;
 
 /// Process-global flush registry (one per daemon). Mirrors the `OnceCell`
@@ -48,8 +49,30 @@ pub async fn flush_agent_memory(
     compression: Arc<CompressionService>,
 ) {
     let _guard = guard;
-    if let Err(e) = compression.compress_to_notes(&agent).await {
-        warn!(agent = %agent, error = %e, "flush_agent_memory: compress_to_notes failed");
+
+    // Drain, don't sip. One `compress_to_notes` call consumes at most
+    // `batch_size` (50) rows and the fetch is `ORDER BY created_at ASC` — the
+    // 50 OLDEST. The session-end caller commits the SessionEnd digest and *then*
+    // flushes precisely so the digest is consumed; but the digest is the NEWEST
+    // row, so on any session that accumulated more than a batch of raw rows
+    // (tool-heavy sessions produce several per turn) a single call never
+    // reaches it. Loop while the pending count STRICTLY decreases: the
+    // stop-the-bleed grace window in `compress_to_notes` deliberately leaves
+    // young rows unprocessed, so `while count > 0` would spin forever.
+    const MAX_DRAIN_ROUNDS: usize = 8;
+    let mut prev = usize::MAX;
+    for _ in 0..MAX_DRAIN_ROUNDS {
+        if let Err(e) = compression.compress_to_notes(&agent).await {
+            warn!(agent = %agent, error = %e, "flush_agent_memory: compress_to_notes failed");
+            break;
+        }
+        let Ok(remaining) = compression.store().count_unprocessed(&agent).await else {
+            break;
+        };
+        if remaining == 0 || remaining >= prev {
+            break;
+        }
+        prev = remaining;
     }
     // `_guard` drops here → wakes any `await_ready` waiter, once every concurrent
     // flush for this agent has also finished.
@@ -130,6 +153,55 @@ mod tests {
             database.count_unprocessed("default").await.unwrap(),
             0,
             "flush_agent_memory must drain the agent's pending raw memory via compress_to_notes"
+        );
+    }
+
+    /// One `compress_to_notes` call consumes at most `batch_size` (50) rows and
+    /// takes the OLDEST first, so a single call cannot reach the SessionEnd
+    /// digest that the session-end caller deliberately commits *before*
+    /// flushing. With a backlog above one batch, a sipping flush left the
+    /// freshest and highest-value row unprocessed — exactly the row the
+    /// ordering exists to capture.
+    #[tokio::test]
+    async fn flush_agent_memory_drains_a_backlog_larger_than_one_batch() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let database: Arc<SqliteMemoryBackend> =
+            Arc::new(SqliteMemoryBackend::new(temp_dir.path()).unwrap());
+
+        let provider = create_mock_provider();
+        let embedder: Arc<dyn EmbeddingProvider> = Arc::new(
+            crate::memory::embedding_provider::tests::MockEmbeddingProvider::new(
+                1024,
+                "mock-model",
+            ),
+        );
+        let service = CompressionService::new(
+            database.clone(),
+            provider,
+            embedder,
+            CompressionConfig::default(),
+        )
+        .with_compound_ingestor(Arc::new(EmptyIngestor));
+
+        // 130 rows = 3 batches of 50. All aged past the grace window so each
+        // drain round genuinely consumes them.
+        let aged = chrono::Utc::now().timestamp() - 7 * 3600;
+        for i in 0..130 {
+            let mut raw =
+                RawMemory::new(format!("tool call {i} output"), RawMemorySource::Transcript);
+            raw.created_at = aged + i;
+            database.insert_raw_memory(&raw).await.unwrap();
+        }
+        assert_eq!(database.count_unprocessed("default").await.unwrap(), 130);
+
+        let reg = FlushRegistry::new();
+        let guard = reg.begin("default");
+        flush_agent_memory(guard, "default".into(), Arc::new(service)).await;
+
+        assert_eq!(
+            database.count_unprocessed("default").await.unwrap(),
+            0,
+            "a single flush must drain the whole backlog, not just the first batch"
         );
     }
 }

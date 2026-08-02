@@ -387,7 +387,7 @@ mod tests {
         config.profiles.insert(
             "work".into(),
             ProfileConfig {
-                headless: Some(true),
+            headless: Some(true),
                 ..Default::default()
             },
         );
@@ -466,19 +466,25 @@ mod tests {
 
     #[test]
     fn test_explicit_user_profile_not_overridden() {
+        // An explicitly-configured "user" profile must survive the
+        // auto-injection pass verbatim. This used `color` as its distinguishing
+        // marker until that field was cut in 3757bb4f8; `idle_timeout_secs`
+        // carries the same proof (default is 1800, so 999 can only come from
+        // the explicit config).
         let mut config = BrowserSystemConfig::default();
         config.profiles.insert(
             "user".into(),
             ProfileConfig {
                 browser: BrowserType::Chrome,
                 driver: BrowserDriver::ExistingSession,
-                headless: Some(false),
+            idle_timeout_secs: 999,
                 ..Default::default()
             },
         );
         let manager = ProfileManager::new(config);
         let user_config = manager.get_config("user").unwrap();
-        assert_eq!(user_config.headless, Some(false));
+        assert_eq!(user_config.idle_timeout_secs, 999);
+        assert_eq!(user_config.driver, BrowserDriver::ExistingSession);
     }
 
     #[test]

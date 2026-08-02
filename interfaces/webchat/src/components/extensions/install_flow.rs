@@ -322,7 +322,9 @@ mod tests {
     #[test]
     fn done_goes_to_done() {
         assert_eq!(
-            next_step(&done_with(serde_json::json!({"ok": true, "detail": "running; 7 tools"}))),
+            next_step(&done_with(
+                serde_json::json!({"ok": true, "detail": "running; 7 tools"})
+            )),
             InstallStep::Done
         );
     }
@@ -331,7 +333,8 @@ mod tests {
     /// as "Installed ✓". This is the wire that used to be dropped.
     #[test]
     fn done_with_failed_verify_goes_to_unhealthy() {
-        let r = done_with(serde_json::json!({"ok": false, "detail": "running but exposes 0 tools"}));
+        let r =
+            done_with(serde_json::json!({"ok": false, "detail": "running but exposes 0 tools"}));
         assert_eq!(next_step(&r), InstallStep::DoneUnhealthy);
         let InstallResult::Done { verify, .. } = &r else {
             unreachable!()

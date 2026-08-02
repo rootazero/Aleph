@@ -87,9 +87,11 @@ jobs:
         run: cargo test -p alephcore --lib sandbox
 
       # `--test '*'` runs every binary in tests/, rather than a hand-kept list
-      # of names. The list is what let 6 of the 132 targets run while the other
-      # 126 silently did not: a new tests/ file joined CI only if someone
-      # remembered to name it here, and nothing failed when they forgot.
+      # of names. The list is what let 6 of the 132 targets that existed then run
+      # while the other 126 silently did not: a new tests/ file joined CI only if
+      # someone remembered to name it here, and nothing failed when they forgot.
+      # The count is anchored to that moment on purpose; tests/ is +3/-1 since,
+      # so no live count is asserted below either.
       #
       # It is `--test '*'` and not `--tests` for the same reason `[lib]` sets
       # `bench = false`: `--tests` selects every target with `test = true`, and
@@ -99,27 +101,51 @@ jobs:
       # and therefore the fingerprint. That second harness build is what took
       # the runner down ("runner has received a shutdown signal", exit 143) on
       # Linux and Windows while the far larger macOS runner survived it.
-      # `--test '*'` selects exactly the 132 tests/ binaries and nothing else.
+      # `--test '*'` selects exactly the tests/ binaries and nothing else.
       #
       # `--features test-helpers` gates `providers::recording_mock`, which three
-      # targets declare through `required-features`. Without it cargo *skips*
-      # them rather than failing, which is the same silence in a second costume.
+      # targets declare through `required-features`. Dropping it is no longer the
+      # silent hazard it was: *implicit* selection (`--tests`, bare `cargo test`)
+      # skips a target whose features are unmet and still exits 0, but a glob is
+      # explicit selection, so `--test '*'` now stops with `error: target ...
+      # requires the features` and exit 101. Measured, cargo 1.96.0 — all four
+      # forms, on Windows.
       #
       # `line-tables-only` is load-bearing, not tidiness. Without it `ld` dies
       # linking these targets with `signal 7 [Bus error]`. That is *not* the
       # disk running out, which is the obvious reading and the wrong one: the
       # runner had 87 GB free at the time, and a step that freed a further
       # 17 GB changed nothing. It is memory — ld mmaps its inputs, and on ELF
-      # the debuginfo sits inside each of the 132 binaries, making up most of
+      # the debuginfo sits inside each of those binaries, making up most of
       # their ~4.5 GB. Line tables are what a panic backtrace reads, so failures
       # stay diagnosable.
       #
-      # This also cannot be checked locally on macOS, where debuginfo stays out
-      # in .o/dSYM and the binaries barely change size (28.46 -> 28.41 MB).
+      # That reasoning is ELF-only and could not be checked on macOS, where
+      # debuginfo stays out in .o/dSYM and the binaries barely change size
+      # (28.46 -> 28.41 MB). Windows splits it out too, into .pdb, so the flag
+      # buys no link memory there — it buys disk, and it is still the larger
+      # half: measured on a Windows host this step writes 20.6 GB, of which
+      # 13.3 GB is .pdb against 2.5 GB of .exe, *already* at line-tables-only.
+      # Same host, 134 binaries, 537 passed / 0 failed, 25 min from cold.
+      # Disk on both sides of the step, because this is the one leg where the
+      # obvious-but-wrong reading of the ELF bus error above would actually be
+      # right: nothing here reports free space, and the step writes 20.6 GB on
+      # Windows. `df -h .` names the filesystem holding the workspace — which is
+      # where target/ lands — so it needs no per-runner knowledge of C: vs D:.
+      - name: Disk before integration tests
+        shell: bash
+        run: df -h .
+
       - name: Run integration tests
         env:
           CARGO_PROFILE_TEST_DEBUG: line-tables-only
         run: cargo test -p alephcore --features test-helpers --test '*'
+
+      # `always()`, or the reading dies with the failure it exists to explain.
+      - name: Disk after integration tests
+        if: always()
+        shell: bash
+        run: df -h .
 
   lint:
     name: Lint

@@ -328,6 +328,15 @@ impl ContentIndex {
     /// Number of chunks indexed across the given session ids (see
     /// [`Self::search_sessions`] for why a set: epoch-aware retrieval after a
     /// session split). An empty set counts nothing.
+    /// Test-only: whether the session has no indexed rows. Cut from the
+    /// production surface in `0202b6a17` as an inert metrics accessor; restored
+    /// under `cfg(test)` because that cut left its test behind and broke the
+    /// lib-test build.
+    #[cfg(test)]
+    pub(crate) fn is_empty(&self, session_id: &str) -> Result<bool, IndexError> {
+        Ok(self.len(session_id)? == 0)
+    }
+
     pub fn len_sessions(&self, session_ids: &[&str]) -> Result<usize, IndexError> {
         if session_ids.is_empty() {
             return Ok(0);

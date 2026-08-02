@@ -93,7 +93,6 @@ impl EmbeddingProvider for FakeEmbedder {
 fn default_cfg() -> AssemblerConfig {
     AssemblerConfig {
         enabled: true,
-        total_budget_tokens: 4000,
         candidate_pool_limit: 20,
         rerank_timeout_ms: 200,
         rerank_model: None,
@@ -331,6 +330,75 @@ async fn path_force_fallback_bypasses_llm() {
     assert!(env.meta.used_fallback);
     assert_eq!(env.meta.fallback_reason.as_deref(), Some("forced"));
     assert!(!fx.reranker.was_called.load(Ordering::SeqCst));
+}
+
+/// The skeleton path used to pack the static `FallbackSkeleton` budgets
+/// (~8200 tokens) regardless of the caller's runtime headroom, so the
+/// context-pressure back-off was a no-op on what is 100% of traffic when no
+/// rerank provider is configured.
+#[tokio::test]
+async fn skeleton_fallback_respects_the_runtime_token_budget() {
+    let mut cfg = default_cfg();
+    cfg.force_fallback = true;
+    let reranker = StubReranker::invalid_json();
+    // rust-doctor-disable-next-line excessive-clone
+    let fx = fixture(reranker.clone(), cfg);
+    seed_raw(&fx.backend, "sess-budget", 40).await;
+
+    let env = fx
+        .assembler
+        .assemble(
+            "q",
+            "default",
+            Some("sess-budget"),
+            AssemblyBudget { total_tokens: 300 },
+            crate::memory::session_search_summary::FactSourceFilter::Any,
+        )
+        .await
+        // rust-doctor-disable-next-line unwrap-in-production
+        .unwrap();
+
+    assert!(env.meta.used_fallback);
+    let total: u32 = env.slots.iter().map(|s| s.tokens_used).sum();
+    assert!(
+        total <= 300,
+        "skeleton fallback emitted {total} tokens against a 300-token budget"
+    );
+}
+
+/// A zero budget means "inject nothing this turn". The skeleton path used to
+/// emit a full envelope anyway.
+#[tokio::test]
+async fn zero_budget_yields_a_near_empty_skeleton_envelope() {
+    let mut cfg = default_cfg();
+    cfg.force_fallback = true;
+    let reranker = StubReranker::invalid_json();
+    // rust-doctor-disable-next-line excessive-clone
+    let fx = fixture(reranker.clone(), cfg);
+    seed_raw(&fx.backend, "sess-zero", 20).await;
+
+    let env = fx
+        .assembler
+        .assemble(
+            "q",
+            "default",
+            Some("sess-zero"),
+            AssemblyBudget { total_tokens: 0 },
+            crate::memory::session_search_summary::FactSourceFilter::Any,
+        )
+        .await
+        // rust-doctor-disable-next-line unwrap-in-production
+        .unwrap();
+
+    // Each live slot floors at 1 token (so hydration cannot silently delete a
+    // slot the config enabled), so the envelope is bounded by the slot count
+    // rather than exactly zero.
+    let total: u32 = env.slots.iter().map(|s| s.tokens_used).sum();
+    assert!(
+        total <= env.slots.len() as u32 * 2,
+        "zero budget produced {total} tokens across {} slots",
+        env.slots.len()
+    );
 }
 
 // ---- Property test ----

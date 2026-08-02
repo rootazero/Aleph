@@ -251,8 +251,13 @@ impl KnowledgeNote {
         if !self.relations.is_empty() {
             out.push_str("relations:\n");
             for r in &self.relations {
-                out.push_str(&format!("  - to: {}\n", r.to));
-                out.push_str(&format!("    type: {}\n", r.rel_type));
+                // Both values are unvalidated model input (`to` may be a path or
+                // a wikilink target; `rel_type` is a free-form LLM-chosen verb,
+                // R7). They need the same quoting as every other scalar above —
+                // an unquoted `to: [[plan/x]]` parses as a nested flow sequence
+                // and makes the whole note permanently unparseable.
+                out.push_str(&format!("  - to: {}\n", yaml_scalar(&r.to)));
+                out.push_str(&format!("    type: {}\n", yaml_scalar(&r.rel_type)));
                 out.push_str(&format!("    confidence: {:.4}\n", r.confidence));
             }
         }

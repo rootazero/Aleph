@@ -184,14 +184,15 @@ impl AlephTool for HooksManageTool {
                     action_type: ActionType::HooksManage,
                     target: target.clone(),
                     display_target: target,
-                    agent_id: crate::approval::audit_identity("hooks", "manage", "global")
-                        .0,
+                    agent_id: crate::approval::audit_identity("hooks", "manage", "global").0,
                     context: format!("hooks_manage action={:?}", args.action),
                     timestamp: chrono::Utc::now(),
                 };
                 match policy.check(&request).await {
                     crate::approval::ApprovalDecision::Allow => {
-                        policy.record(&request, &crate::approval::ApprovalDecision::Allow).await;
+                        policy
+                            .record(&request, &crate::approval::ApprovalDecision::Allow)
+                            .await;
                     }
                     crate::approval::ApprovalDecision::Deny { reason } => {
                         let _ = reason;

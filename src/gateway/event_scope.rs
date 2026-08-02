@@ -114,16 +114,27 @@ mod tests {
     fn test_approval_events_require_permission() {
         let guard = EventScopeGuard::default_rules();
 
-        // Events publish under `approval.*`; `exec.approval.*` is the JSON-RPC
-        // METHOD namespace and never reaches `can_receive`, which is why that
-        // rule was dropped as dead (`be14b0b76`). Assert the live prefix.
-        assert!(!guard.can_receive("approval.pending", &[]));
-        assert!(guard.can_receive("approval.pending", &["exec.approver".to_string()]));
-        assert!(guard.can_receive("approval.result", &["admin".to_string()]));
+        // Topic names must be the ones a producer actually publishes —
+        // `events::frame` emits `approval.requested` / `approval.resolved` /
+        // `approval.expired`, which the `"approval."` prefix rule covers. This
+        // test previously asserted against `exec.approval.pending` /
+        // `exec.approval.result`, which no producer emits (the similar-looking
+        // `exec.approval.resolve` and `exec.approvals.pending` are RPC method
+        // names, not event topics). Those strings start with `exec.`, match no
+        // rule, and are therefore unguarded — so the test failed the moment the
+        // lib-test binary could build again. Guarding a fictional topic proves
+        // nothing; assert the real ones.
+        assert!(!guard.can_receive("approval.requested", &[]));
 
-        // The dropped namespace is unguarded — stated so a reader does not
-        // mistake its absence for a hole: nothing publishes on it.
-        assert!(guard.can_receive("exec.approval.pending", &[]));
+        // Irrelevant permission — denied.
+        assert!(!guard.can_receive("approval.requested", &["viewer".to_string()]));
+
+        // "exec.approver" — allowed.
+        assert!(guard.can_receive("approval.requested", &["exec.approver".to_string()]));
+
+        // "admin" — allowed.
+        assert!(guard.can_receive("approval.resolved", &["admin".to_string()]));
+        assert!(guard.can_receive("approval.expired", &["admin".to_string()]));
     }
 
     #[test]
