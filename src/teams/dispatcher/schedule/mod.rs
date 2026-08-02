@@ -253,7 +253,14 @@ impl TeamDispatcher {
             .inbox_provider
             .as_deref()
             .map(|p| p as &dyn InboxContextProvider);
-        let input = build_handoff_context(&self.coord_store, &self.team_store, inbox, &task).await;
+        let input = build_handoff_context(
+            &self.coord_store,
+            &self.team_store,
+            self.artifact_store.as_ref(),
+            inbox,
+            &task,
+        )
+        .await;
 
         // Start a per-attempt run record so the drawer can show this
         // execution alongside any prior retries. Failure to record is

@@ -10,11 +10,51 @@ use crate::agents::swarm::tasks::acceptance::{
 };
 use crate::agents::swarm::tasks::{CoordTask, CoordTaskStatus, CoordTaskStore, TaskRunStatus};
 use crate::sync_primitives::Arc;
+use crate::teams::artifacts::ArtifactStore;
 use crate::teams::context::InboxContextProvider;
 use crate::teams::store::TeamStore;
 
 /// Max bytes kept per free-form section (task body, each dependency result).
 const MAX_SECTION_BYTES: usize = 4096;
+
+/// Budget for the deliverable half of the WHOLE fan-in block, split evenly
+/// across the dependencies.
+///
+/// The per-dependency cap alone is not a bound: a 40-way fan-in (per-file
+/// analysis feeding one synthesis node — the natural map/reduce shape this
+/// engine exists to run) could contribute 40 × [`MAX_SECTION_BYTES`] before the
+/// first model call. Dividing a total keeps every dependency represented
+/// (narrower slices) instead of dropping the tail. Chosen so that a fan-in of
+/// six or fewer keeps the full [`MAX_SECTION_BYTES`] slice each — i.e. a
+/// dependency with no exit journal renders byte-identically to before.
+///
+/// A dependency's exit journal rides on top of its slice, itself capped at
+/// `slice / 4` (and [`MAX_DEP_JOURNAL_BYTES`]), so the whole block stays under
+/// `MAX_DEP_SECTION_TOTAL_BYTES × 1.25` at any width.
+const MAX_DEP_SECTION_TOTAL_BYTES: usize = MAX_SECTION_BYTES * 6;
+
+/// Floor for one dependency's slice. Below this a section cannot carry enough
+/// to be worth reading, so a very wide fan-in exceeds the total rather than
+/// degenerating into 40 unreadable stubs.
+const MIN_DEP_BYTES: usize = 512;
+
+/// Max items surfaced per exit-journal list on a dependency (artifacts / next
+/// steps). The full journal stays available to the owner via `task_*` tools.
+const MAX_DEP_JOURNAL_ITEMS: usize = 5;
+
+/// Bytes per exit-journal list item carried across an edge.
+const MAX_DEP_JOURNAL_ITEM_BYTES: usize = 256;
+
+/// Ceiling for one dependency's exit-journal block, whatever the fan-in width.
+const MAX_DEP_JOURNAL_BYTES: usize = 1024;
+
+/// Per-dependency byte slice for a fan-in of `dep_count`.
+fn dep_budget(dep_count: usize) -> usize {
+    if dep_count <= 1 {
+        return MAX_SECTION_BYTES;
+    }
+    (MAX_DEP_SECTION_TOTAL_BYTES / dep_count).clamp(MIN_DEP_BYTES, MAX_SECTION_BYTES)
+}
 
 /// Max bytes kept for the injected team protocol. Larger than a normal section
 /// because the operating agreement may enumerate roles, hand-off rules, and
@@ -67,12 +107,29 @@ async fn build_recovery_section(coord_store: &Arc<dyn CoordTaskStore>, task: &Co
     }
 
     let attempt = runs.len() + 1;
-    let mut out = format!(
-        "\n## Recovery Context\nThis is attempt {attempt}. {} previous attempt(s) did not \
-         complete — resume from where they left off; reuse work already done and do not \
-         restart from scratch.\n",
-        runs.len()
-    );
+    // A rejected run DID complete — a reviewer sent it back. Saying "did not
+    // complete" to a member whose work was turned down is not a wording
+    // quibble: it tells it to resume and reuse, when the actual instruction is
+    // to change what the reviewer objected to. The verdict is written by five
+    // producers (`record_run_review` from both review tools and both RPCs) and,
+    // until now, read by none.
+    let rejected = runs
+        .iter()
+        .any(|r| r.review_verdict == Some(crate::agents::swarm::tasks::ReviewVerdict::Rejected));
+    let mut out = if rejected {
+        format!(
+            "\n## Recovery Context\nThis is attempt {attempt}. A previous attempt was \
+             REVIEWED AND REJECTED — read the reviewer's note below and in Notes, and change \
+             what they objected to. Do not simply resubmit the same work.\n"
+        )
+    } else {
+        format!(
+            "\n## Recovery Context\nThis is attempt {attempt}. {} previous attempt(s) did not \
+             complete — resume from where they left off; reuse work already done and do not \
+             restart from scratch.\n",
+            runs.len()
+        )
+    };
 
     // Most-recent prior attempts first, capped. Each line names the terminal
     // status and the failure reason / final note so the member sees *why* it
@@ -93,7 +150,15 @@ async fn build_recovery_section(coord_store: &Arc<dyn CoordTaskStore>, task: &Co
                 _ => "(no detail recorded)".to_string(),
             },
         };
-        out.push_str(&format!("- {}: {detail}\n", run.status.as_str()));
+        // Name the verdict when there was one: "failed" and "rejected by the
+        // reviewer" call for different next moves.
+        match run.review_verdict {
+            Some(crate::agents::swarm::tasks::ReviewVerdict::Rejected) => out.push_str(&format!(
+                "- rejected by {}: {detail}\n",
+                run.reviewer_id.as_deref().unwrap_or("the reviewer")
+            )),
+            _ => out.push_str(&format!("- {}: {detail}\n", run.status.as_str())),
+        }
     }
 
     // Structured exit journal (the prior self's deliberate hand-off). One per
@@ -157,6 +222,135 @@ async fn build_notes_section(coord_store: &Arc<dyn CoordTaskStore>, task: &Coord
     out
 }
 
+/// The deliverable a completed dependency put on the edge.
+///
+/// `coord_tasks.result` is the primary channel (the dispatcher writes the
+/// member's reply there). It is legitimately absent for a task that submitted
+/// its work through `task_submit`: that tool flips the row to `WaitingReview`
+/// mid-run, so the dispatcher's finalize fence classifies its own completion
+/// write as a foreign transition and skips it — the deliverable then exists
+/// ONLY as an artifact row. Falling back to the newest artifact is what makes
+/// the documented "submit your deliverable, then the lead reviews it" contract
+/// actually reach the next node instead of handing it an empty section.
+async fn dependency_deliverable(
+    artifact_store: Option<&Arc<dyn ArtifactStore>>,
+    dep_id: &str,
+    result: Option<&str>,
+) -> Option<String> {
+    if let Some(text) = result.map(str::trim).filter(|s| !s.is_empty()) {
+        return Some(text.to_string());
+    }
+    let store = artifact_store?;
+    let artifacts = store.get_artifacts_for_task(dep_id).await.ok()?;
+    // Newest wins: `get_artifacts_for_task` is creation-ordered, and a member
+    // that submitted twice meant the later one.
+    artifacts
+        .into_iter()
+        .rev()
+        .find(|a| !a.content.trim().is_empty())
+        .map(|a| format!("{}\n{}", a.title.trim(), a.content.trim()))
+}
+
+/// The upstream's structured exit journal, compacted for the edge.
+///
+/// The acceptance envelope tells every node to write one, but until now only a
+/// *retrying* node read it (`build_recovery_section`) — a downstream node never
+/// learned the artifact paths or caveats its upstream deliberately recorded.
+/// Returns an empty string when there is no journal (envelope byte-identical).
+/// `budget` is the journal's share of this dependency's slice, so the block
+/// cannot escape the fan-in total (a 40-way fan-in where every member did what
+/// the acceptance envelope asks would otherwise add ~100 KB of journals on top
+/// of a capped 20 KB of deliverables).
+async fn dependency_journal_block(
+    coord_store: &Arc<dyn CoordTaskStore>,
+    dep_id: &str,
+    budget: usize,
+) -> String {
+    let Ok(Some(j)) = coord_store.get_task_journal(dep_id).await else {
+        return String::new();
+    };
+    let mut out = String::new();
+    let mut list = |heading: &str, items: &[String]| {
+        if items.is_empty() || out.len() >= budget {
+            return;
+        }
+        out.push_str(heading);
+        for item in items.iter().take(MAX_DEP_JOURNAL_ITEMS) {
+            if out.len() >= budget {
+                out.push_str("- … (more omitted)\n");
+                return;
+            }
+            out.push_str(&format!(
+                "- {}\n",
+                truncate_utf8(item, MAX_DEP_JOURNAL_ITEM_BYTES.min(budget))
+            ));
+        }
+    };
+    list("Artifacts / anchors it left:\n", &j.artifacts_ref);
+    list("It flagged for whoever continues:\n", &j.next_steps);
+    out
+}
+
+/// Render one dependency's fan-in section (heading + body), byte-capped to
+/// `budget`. Pure formatting over already-fetched state — no judgment (R7).
+async fn render_dependency(
+    coord_store: &Arc<dyn CoordTaskStore>,
+    artifact_store: Option<&Arc<dyn ArtifactStore>>,
+    dep: &CoordTask,
+    budget: usize,
+) -> String {
+    // The deliverable keeps the whole slice (so a dependency with no exit
+    // journal renders exactly as it always did); the journal is an annotation
+    // and gets a quarter of the slice on top, itself capped — so it scales
+    // DOWN with the fan-in width instead of escaping the bound entirely.
+    let journal_budget = (budget / 4).min(MAX_DEP_JOURNAL_BYTES);
+    match dep.status {
+        CoordTaskStatus::Completed => {
+            match dependency_deliverable(artifact_store, &dep.id, dep.result.as_deref()).await {
+                Some(body) => format!(
+                    "### {}\n{}\n{}",
+                    dep.subject,
+                    truncate_utf8(&body, budget),
+                    dependency_journal_block(coord_store, &dep.id, journal_budget).await
+                ),
+                // Completed with nothing on the edge used to render as an
+                // empty heading — indistinguishable from "no section at all",
+                // which is the exact ambiguity the Skipped marker exists to
+                // kill. Name it instead of leaving silence.
+                None => format!(
+                    "### {}\n*(completed but recorded no output — treat this input as missing)*\n",
+                    dep.subject
+                ),
+            }
+        }
+        // A skipped upstream also satisfies the dependency but has no output —
+        // say so explicitly, or the member reads the silence as a missing input
+        // and wastes a run hunting for it. A skip that WAIVED a failure is a
+        // different fact and its error text is the evidence: announcing it as
+        // "deliberately not run" tells the next node the opposite of the truth.
+        CoordTaskStatus::Skipped => match dep
+            .result
+            .as_deref()
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+        {
+            Some(err) => format!(
+                "### {}\n*(skipped after a failed attempt — its last recorded error follows; \
+                 treat this input as unavailable, not as done)*\n{}\n",
+                dep.subject,
+                truncate_utf8(err, budget)
+            ),
+            None => format!(
+                "### {}\n*(skipped — deliberately not run; no output to consume)*\n",
+                dep.subject
+            ),
+        },
+        // Any other status shouldn't occur for a task that unblocked us;
+        // contribute nothing (matches the legacy envelope).
+        _ => String::new(),
+    }
+}
+
 /// Build the handoff context block for `task`.
 ///
 /// Sections (each individually byte-capped): the task instruction, the team's
@@ -168,6 +362,7 @@ async fn build_notes_section(coord_store: &Arc<dyn CoordTaskStore>, task: &Coord
 pub async fn build_handoff_context(
     coord_store: &Arc<dyn CoordTaskStore>,
     team_store: &Arc<dyn TeamStore>,
+    artifact_store: Option<&Arc<dyn ArtifactStore>>,
     inbox_provider: Option<&dyn InboxContextProvider>,
     task: &CoordTask,
 ) -> String {
@@ -250,46 +445,35 @@ pub async fn build_handoff_context(
     out.push_str(&build_notes_section(coord_store, task).await);
 
     // --- Dependency results (fan-in from completed upstream tasks) ---
-    let mut dep_section = String::new();
+    // `task.dependencies` now arrives in the order the template declared
+    // (both store readers order by the dependency row's rowid), so render it
+    // as given: a three-way fan-in reaches the synthesis node in the author's
+    // order, and re-running the same template does not reshuffle it.
+    let mut fetched: Vec<CoordTask> = Vec::with_capacity(task.dependencies.len());
+    let mut unreadable = String::new();
     for dep_id in &task.dependencies {
         match coord_store.get_task(dep_id).await {
-            Ok(Some(dep)) => match dep.status {
-                CoordTaskStatus::Completed => {
-                    if let Some(result) = &dep.result {
-                        dep_section.push_str(&format!(
-                            "### {}\n{}\n",
-                            dep.subject,
-                            truncate_utf8(result, MAX_SECTION_BYTES)
-                        ));
-                    }
-                }
-                // A skipped upstream also satisfies the dependency but has no
-                // output — say so explicitly, or the member reads the silence
-                // as a missing input and wastes a run hunting for it.
-                CoordTaskStatus::Skipped => {
-                    dep_section.push_str(&format!(
-                        "### {}\n*(skipped — deliberately not run; no output to consume)*\n",
-                        dep.subject
-                    ));
-                }
-                // Any other status shouldn't occur for a task that unblocked
-                // us; contribute nothing (matches the legacy envelope).
-                _ => {}
-            },
+            Ok(Some(dep)) => fetched.push(dep),
             Ok(None) => {
                 tracing::warn!(task_id = %task.id, dep_id = %dep_id, "Handoff: dependency task not found");
-                dep_section.push_str(&format!(
+                unreadable.push_str(&format!(
                     "### Dependency `{dep_id}`\n*(missing from store)*\n"
                 ));
             }
             Err(e) => {
                 tracing::warn!(task_id = %task.id, dep_id = %dep_id, error = %e, "Handoff: failed to fetch dependency");
-                dep_section.push_str(&format!(
+                unreadable.push_str(&format!(
                     "### Dependency `{dep_id}`\n*(fetch error: {e})*\n"
                 ));
             }
         }
     }
+    let budget = dep_budget(task.dependencies.len());
+    let mut dep_section = String::new();
+    for dep in &fetched {
+        dep_section.push_str(&render_dependency(coord_store, artifact_store, dep, budget).await);
+    }
+    dep_section.push_str(&unreadable);
     if !dep_section.is_empty() {
         out.push_str("\n## Dependency Results\n");
         out.push_str(&dep_section);
@@ -363,13 +547,207 @@ mod tests {
         }
     }
 
+    async fn artifact_store() -> Arc<dyn ArtifactStore> {
+        let store = crate::teams::artifacts::SqliteArtifactStore::new(
+            Connection::open_in_memory().unwrap(),
+        );
+        store.migrate().await.unwrap();
+        Arc::new(store)
+    }
+
+    /// The `task_submit` shape end to end: the member puts its deliverable in
+    /// the artifact store, the tool flips the row to WaitingReview mid-run (so
+    /// the dispatcher's finalize fence never writes `result`), the lead
+    /// approves, and the DOWNSTREAM node must still receive the work.
+    ///
+    /// Delete the artifact-fallback branch and this test fails — which is the
+    /// point: the previous suite passed `artifact_store = None` everywhere, so
+    /// the whole branch was unreachable from any test.
+    #[tokio::test]
+    async fn submitted_artifact_crosses_the_edge_when_result_is_empty() {
+        let cs = coord_store().await;
+        let ts = team_store().await;
+        let arts = artifact_store().await;
+
+        let upstream = cs.create_task(plain_task("analyse")).await.unwrap();
+        // What `task_submit` does: artifact row, then WaitingReview.
+        arts.create_artifact(crate::teams::artifacts::NewArtifact {
+            task_id: upstream.id.clone(),
+            agent_id: "worker".into(),
+            artifact_type: crate::teams::artifacts::ArtifactType::Report,
+            title: "Q2 analysis".into(),
+            content: "revenue is up 12% on EU rows".into(),
+            metadata: serde_json::Value::Null,
+            status: crate::teams::artifacts::TaskStatus::Pending,
+            blocked_by: vec![],
+            assignee: None,
+            priority: 0,
+        })
+        .await
+        .unwrap();
+        // ...and what the lead's approve does: Completed, `result` untouched.
+        cs.update_task(
+            &upstream.id,
+            CoordTaskUpdate {
+                status: Some(CoordTaskStatus::Completed),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+
+        let mut down = plain_task("write report");
+        down.blocked_by = vec![upstream.id.clone()];
+        let down = cs.create_task(down).await.unwrap();
+
+        // Without the artifact store the edge is empty and says so...
+        let blind = build_handoff_context(&cs, &ts, None, None, &down).await;
+        assert!(
+            blind.contains("completed but recorded no output"),
+            "an empty edge must be named, not silent: {blind}"
+        );
+        // ...with it, the deliverable actually reaches the next node.
+        let ctx = build_handoff_context(&cs, &ts, Some(&arts), None, &down).await;
+        assert!(
+            ctx.contains("revenue is up 12% on EU rows"),
+            "the submitted artifact must cross the edge: {ctx}"
+        );
+    }
+
+    /// A three-way fan-in must present every upstream, in the order the
+    /// template declared, each under its own heading.
+    #[tokio::test]
+    async fn three_way_fan_in_keeps_every_dependency_in_declared_order() {
+        let cs = coord_store().await;
+        let ts = team_store().await;
+        let mut ids = Vec::new();
+        for subject in ["gather_market", "gather_legal", "gather_finance"] {
+            let t = cs.create_task(plain_task(subject)).await.unwrap();
+            cs.update_task(
+                &t.id,
+                CoordTaskUpdate {
+                    status: Some(CoordTaskStatus::Completed),
+                    result: Some(format!("{subject} findings")),
+                    ..Default::default()
+                },
+            )
+            .await
+            .unwrap();
+            ids.push(t.id);
+        }
+        let mut synth = plain_task("synthesise");
+        // Declared order is deliberately NOT the creation order of the ids as
+        // sorted text — it is the order written here.
+        synth.blocked_by = vec![ids[2].clone(), ids[0].clone(), ids[1].clone()];
+        let synth = cs.create_task(synth).await.unwrap();
+        let reread = cs.get_task(&synth.id).await.unwrap().unwrap();
+
+        let ctx = build_handoff_context(&cs, &ts, None, None, &reread).await;
+        let pos = |needle: &str| {
+            ctx.find(needle)
+                .unwrap_or_else(|| panic!("missing {needle}: {ctx}"))
+        };
+        assert!(pos("gather_finance findings") < pos("gather_market findings"));
+        assert!(pos("gather_market findings") < pos("gather_legal findings"));
+    }
+
+    /// A skip that WAIVED a failure is a different fact from a skip that was
+    /// planned — announcing the first as "deliberately not run" tells the next
+    /// node the opposite of the truth and throws away the error evidence.
+    #[tokio::test]
+    async fn skipped_after_failure_carries_the_error_not_a_planned_skip_notice() {
+        let cs = coord_store().await;
+        let ts = team_store().await;
+        let up = cs.create_task(plain_task("fetch_pricing")).await.unwrap();
+        cs.update_task(
+            &up.id,
+            CoordTaskUpdate {
+                status: Some(CoordTaskStatus::Failed),
+                result: Some("Timed out after 600 seconds".into()),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+        cs.update_task(
+            &up.id,
+            CoordTaskUpdate {
+                status: Some(CoordTaskStatus::Skipped),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+
+        let mut down = plain_task("write_report");
+        down.blocked_by = vec![up.id.clone()];
+        let down = cs.create_task(down).await.unwrap();
+
+        let ctx = build_handoff_context(&cs, &ts, None, None, &down).await;
+        assert!(ctx.contains("Timed out after 600 seconds"), "{ctx}");
+        assert!(
+            !ctx.contains("deliberately not run"),
+            "a waived failure is not a planned skip: {ctx}"
+        );
+    }
+
+    /// The exit journal is the structured hand-off the acceptance envelope asks
+    /// every node to write; until now only a RETRY of the same node read it.
+    #[tokio::test]
+    async fn dependency_exit_journal_crosses_the_edge() {
+        let cs = coord_store().await;
+        let ts = team_store().await;
+        let up = cs.create_task(plain_task("research")).await.unwrap();
+        cs.update_task(
+            &up.id,
+            CoordTaskUpdate {
+                status: Some(CoordTaskStatus::Completed),
+                result: Some("two sentences of summary".into()),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+        cs.upsert_task_journal(NewTaskExitJournal {
+            task_id: up.id.clone(),
+            agent_id: "worker".into(),
+            summary: "done".into(),
+            decisions: vec![],
+            artifacts_ref: vec!["reports/q2-pricing.csv".into()],
+            next_steps: vec!["the EU rows are estimates, re-check before publishing".into()],
+            confidence: Some(70),
+        })
+        .await
+        .unwrap();
+
+        let mut down = plain_task("write_report");
+        down.blocked_by = vec![up.id.clone()];
+        let down = cs.create_task(down).await.unwrap();
+
+        let ctx = build_handoff_context(&cs, &ts, None, None, &down).await;
+        assert!(ctx.contains("reports/q2-pricing.csv"), "{ctx}");
+        assert!(ctx.contains("re-check before publishing"), "{ctx}");
+    }
+
+    #[test]
+    fn dep_budget_keeps_narrow_fan_in_byte_identical_and_bounds_wide_ones() {
+        assert_eq!(dep_budget(1), MAX_SECTION_BYTES);
+        assert_eq!(dep_budget(6), MAX_SECTION_BYTES, "<=6 unchanged");
+        let wide = dep_budget(40);
+        assert!(wide >= MIN_DEP_BYTES);
+        assert!(
+            wide * 40 <= MAX_DEP_SECTION_TOTAL_BYTES + MIN_DEP_BYTES * 40,
+            "a 40-way fan-in must not scale linearly at the per-dep ceiling"
+        );
+    }
+
     #[tokio::test]
     async fn no_recovery_or_notes_on_first_attempt() {
         let cs = coord_store().await;
         let ts = team_store().await;
         let task = cs.create_task(plain_task("Fresh task")).await.unwrap();
 
-        let ctx = build_handoff_context(&cs, &ts, None, &task).await;
+        let ctx = build_handoff_context(&cs, &ts, None, None, &task).await;
         // A first-pass task with no run history / comments is byte-identical to
         // the legacy envelope — neither additive section appears.
         assert!(!ctx.contains("## Recovery Context"));
@@ -408,7 +786,7 @@ mod tests {
         .await
         .unwrap();
 
-        let ctx = build_handoff_context(&cs, &ts, None, &task).await;
+        let ctx = build_handoff_context(&cs, &ts, None, None, &task).await;
         assert!(ctx.contains("## Recovery Context"));
         assert!(ctx.contains("This is attempt 2"));
         assert!(ctx.contains("panic: index out of bounds"));
@@ -431,7 +809,7 @@ mod tests {
             .await
             .unwrap();
 
-        let ctx = build_handoff_context(&cs, &ts, None, &task).await;
+        let ctx = build_handoff_context(&cs, &ts, None, None, &task).await;
         assert!(ctx.contains("## Notes"));
         assert!(ctx.contains("**lead**"));
         assert!(ctx.contains("Use the Q2 numbers, not Q1."));
@@ -480,7 +858,7 @@ mod tests {
             .await
             .unwrap();
 
-        let ctx = build_handoff_context(&cs, &ts, None, &task).await;
+        let ctx = build_handoff_context(&cs, &ts, None, None, &task).await;
         assert!(ctx.contains("## Task"));
         assert!(ctx.contains("Analyze data"));
         assert!(ctx.contains("Produce a summary"));
@@ -521,7 +899,7 @@ mod tests {
             .await
             .unwrap();
 
-        let ctx = build_handoff_context(&cs, &ts, None, &task).await;
+        let ctx = build_handoff_context(&cs, &ts, None, None, &task).await;
         // The skipped upstream is named with an explicit no-output note, so
         // the member doesn't read the silence as a missing input.
         assert!(ctx.contains("## Dependency Results"));
@@ -537,7 +915,7 @@ mod tests {
 
         // No criteria -> no Acceptance Criteria heading (byte-identical legacy).
         let plain = cs.create_task(plain_task("Bare task")).await.unwrap();
-        let before = build_handoff_context(&cs, &ts, None, &plain).await;
+        let before = build_handoff_context(&cs, &ts, None, None, &plain).await;
         assert!(!before.contains("## Acceptance Criteria"));
 
         // A task carrying criteria in its metadata surfaces them as a checklist.
@@ -547,7 +925,7 @@ mod tests {
             vec!["tests pass".into(), "no clippy warnings".into()],
         );
         let task = cs.create_task(spec).await.unwrap();
-        let after = build_handoff_context(&cs, &ts, None, &task).await;
+        let after = build_handoff_context(&cs, &ts, None, None, &task).await;
         assert!(after.contains("## Acceptance Criteria"));
         assert!(after.contains("- [ ] tests pass"));
         assert!(after.contains("- [ ] no clippy warnings"));
@@ -561,14 +939,14 @@ mod tests {
 
         // No flag -> no Review Gate heading (byte-identical legacy envelope).
         let plain = cs.create_task(plain_task("Bare task")).await.unwrap();
-        let before = build_handoff_context(&cs, &ts, None, &plain).await;
+        let before = build_handoff_context(&cs, &ts, None, None, &plain).await;
         assert!(!before.contains("## Review Gate"));
 
         // A review-gated task tells the member its output will be judged.
         let mut spec = plain_task("Ship login");
         spec.metadata = with_lead_review_required(spec.metadata, true);
         let task = cs.create_task(spec).await.unwrap();
-        let after = build_handoff_context(&cs, &ts, None, &task).await;
+        let after = build_handoff_context(&cs, &ts, None, None, &task).await;
         assert!(after.contains("## Review Gate"));
         assert!(after.contains("verifiable handle"));
     }
@@ -608,7 +986,7 @@ mod tests {
             .await
             .unwrap();
 
-        let ctx = build_handoff_context(&cs, &ts, None, &task).await;
+        let ctx = build_handoff_context(&cs, &ts, None, None, &task).await;
         assert!(ctx.contains("## Team"));
         assert!(ctx.contains("You are agent `analyst`"));
         assert!(ctx.contains("data analyst"));
@@ -642,14 +1020,14 @@ mod tests {
             .unwrap();
 
         // No protocol set -> no protocol heading.
-        let before = build_handoff_context(&cs, &ts, None, &task).await;
+        let before = build_handoff_context(&cs, &ts, None, None, &task).await;
         assert!(!before.contains("## Team Protocol"));
 
         // After setting a protocol, it appears verbatim.
         ts.set_protocol(&team.id, Some("Always write tests first.".into()))
             .await
             .unwrap();
-        let after = build_handoff_context(&cs, &ts, None, &task).await;
+        let after = build_handoff_context(&cs, &ts, None, None, &task).await;
         assert!(after.contains("## Team Protocol"));
         assert!(after.contains("Always write tests first."));
     }
@@ -676,7 +1054,7 @@ mod tests {
         });
         let task = cs.create_task(nt).await.unwrap();
 
-        let ctx = build_handoff_context(&cs, &ts, None, &task).await;
+        let ctx = build_handoff_context(&cs, &ts, None, None, &task).await;
 
         // Labeled global-frame block is present...
         assert!(ctx.contains("## Global Strategy (context — your specific task is below)"));
@@ -696,7 +1074,7 @@ mod tests {
         let ts = team_store().await;
         let task = cs.create_task(plain_task("Plain task")).await.unwrap();
 
-        let ctx = build_handoff_context(&cs, &ts, None, &task).await;
+        let ctx = build_handoff_context(&cs, &ts, None, None, &task).await;
         // Byte-identical to the legacy envelope: no global-strategy heading.
         assert!(!ctx.contains("## Global Strategy"));
     }

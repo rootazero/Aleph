@@ -219,6 +219,11 @@ fn render_agent_call(step: &WorkflowManifestStep) -> String {
         // `skip_serializing_if` parity keeps ungated steps byte-identical).
         opts.push("review: true".to_string());
     }
+    if step.require_grounding {
+        // Same reasoning as `review`: the grounding demand is an oversight
+        // attribute, so it must survive a header-stripped round trip.
+        opts.push("requireGrounding: true".to_string());
+    }
     if let Some(t) = step.timeout_secs {
         opts.push(format!("timeoutSecs: {t}"));
     }
@@ -336,6 +341,7 @@ mod tests {
             kind: WorkflowStepKind::Agent,
             choices: vec![],
             review: false,
+            require_grounding: false,
             timeout_secs: None,
             max_retries: None,
         }
@@ -362,6 +368,7 @@ mod tests {
             kind: WorkflowStepKind::Clarify,
             choices: choices.iter().map(|s| s.to_string()).collect(),
             review: false,
+            require_grounding: false,
             timeout_secs: None,
             max_retries: None,
         }

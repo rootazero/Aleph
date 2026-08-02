@@ -305,6 +305,16 @@ pub(super) fn InputArea() -> impl IntoView {
         if text.is_empty() && files.is_empty() {
             return;
         }
+        // Same refusal the typed team path makes: `teams.chat.send` has no
+        // attachment leg. Queuing them would only defer the disappearance to
+        // flush time, where there is no composer left to explain it.
+        if chat.team_id.get_untracked().is_some() && !files.is_empty() {
+            chat.set_send_error(ChatSendError::new(
+                ChatSendErrorCode::Unsupported,
+                t_string!(i18n, chat.team_attachments_unsupported).to_string(),
+            ));
+            return;
+        }
         if !text.is_empty() {
             let check = check_prompt_injection(&text);
             if check.verdict == PromptInjectionVerdict::Block {
@@ -388,10 +398,33 @@ pub(super) fn InputArea() -> impl IntoView {
     // `active_run_id` is owned by the `run_accepted` event, and a steered send
     // emits none (execute.rs returns Ok before the RunAccepted emit).
     let flush_queue = move || {
-        // Single-agent path: in team chat `active_run_id` is never set, so the
-        // queue/flush is gated off entirely (team runs route via TeamChatApi).
         let batch = chat.drain_all_queued();
         if batch.is_empty() {
+            return;
+        }
+        // Team chat: route to the same RPC the typed path uses. The old comment
+        // here claimed `active_run_id` is never set in team chat, so the queue
+        // could not engage — that stopped being true when `team.<id>.fanout`
+        // became the writer of `active_run_id` (it is what gives the group its
+        // Stop button). From then on, a follow-up typed during a fan-out WAS
+        // queued, and this flush delivered it to `chat.send` — i.e. to whatever
+        // single agent was last selected, into a private session the team never
+        // sees. The message did not arrive late; it arrived somewhere else.
+        if let Some(team_id) = chat.team_id.get_untracked() {
+            let dash = dashboard;
+            chat.phase.set(ChatPhase::Thinking);
+            spawn_local(async move {
+                for entry in batch {
+                    chat.push_user_message(&entry.text);
+                    if let Err(e) =
+                        crate::api::team_chat::TeamChatApi::send(&dash, &team_id, &entry.text).await
+                    {
+                        chat.phase.set(ChatPhase::Idle);
+                        chat.set_send_error(ChatSendError::classify(e));
+                        return;
+                    }
+                }
+            });
             return;
         }
         let session_key = chat.session_key.get_untracked();
@@ -492,9 +525,23 @@ pub(super) fn InputArea() -> impl IntoView {
         enqueue_message(); // no-op when the draft is empty
         user_interrupted.set(false); // ensure the upcoming settle is NOT suppressed
         if let Some(run_id) = chat.active_run_id.get_untracked() {
+            // Same fork as `on_abort`: in team chat the id is a fan-out TREE,
+            // which `chat.abort` cannot find (it is not in the engine's
+            // `active_runs`). Without this the button did nothing at all — the
+            // tree talked on for its full duration and the queued correction
+            // sat until natural settle.
+            let is_team = chat.team_id.get_untracked().is_some();
             let dash = dashboard;
             spawn_local(async move {
-                let _ = ChatApi::abort(&dash, &run_id).await;
+                if is_team {
+                    let _ = crate::api::team_chat::TeamChatApi::cancel(&dash, &run_id).await;
+                    // A cancelled tree emits no `settled`, so release the slot
+                    // here — that busy→idle edge is what drains the queue.
+                    chat.active_run_id.set(None);
+                    chat.phase.set(ChatPhase::Idle);
+                } else {
+                    let _ = ChatApi::abort(&dash, &run_id).await;
+                }
             });
         }
     };
@@ -556,26 +603,6 @@ pub(super) fn InputArea() -> impl IntoView {
             }
         });
     }
-
-    // ↑ retraction — take the most recently queued prompt back into the
-    // composer for editing (codex `edit_queued_message`). Restores the whole
-    // prompt: the text merges above the current draft, the files rejoin the
-    // pending list. Shared by the plain-↑ and Alt+↑ key paths below so both
-    // behave identically. Returns whether anything was actually taken back, so
-    // the caller only swallows the keystroke when it did something.
-    //
-    // Writes `input_text` directly rather than routing through `draft_seed`:
-    // the seed is a ONE-SHOT slot drained by an Effect, so two ↑ presses inside
-    // one frame would overwrite the first prompt before it ever reached the
-    // textarea — silently eating a message the user asked to get back.
-    let retract_latest_queued = move || -> bool {
-        let Some(entry) = chat.retract_latest_queued() else {
-            return false;
-        };
-        chat.add_pending_attachments(entry.attachments);
-        input_text.set(merge_draft(&entry.text, &input_text.get_untracked()));
-        true
-    };
 
     // Queue auto-drain — when a run settles naturally (busy → idle), replay
     // the head of the queue through the normal send pipeline. An explicit

@@ -134,6 +134,12 @@ pub async fn handle_disband(
 
     match store.disband_team(&params.team_id).await {
         Ok(()) => {
+            // Victory-claim trigger, identical to the `team_disband` tool arm.
+            // A disband is once-only: whichever face performs it is the ONLY
+            // chance the governance graph gets to review the claim, so a face
+            // that skips this makes `loop_graph(action='pair', to_id='team:…')`
+            // silently untrue for every Panel-driven disband.
+            let _ = crate::loop_graph::service::notify_team_settled(&params.team_id).await;
             notify_team_changed(&event_bus, &params.team_id, ChangeKind::Updated);
             JsonRpcResponse::success(request.id, json!({ "success": true }))
         }

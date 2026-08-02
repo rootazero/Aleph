@@ -882,6 +882,24 @@ token_budget. \
                     goal = goal.with_deadline_ms(Some(deadline_from_minutes(now, minutes)));
                 }
                 if let Some(cmd) = args.gate_command.clone() {
+                    // The gate command IS part of the reference: it is the
+                    // objective's operational definition — the command whose
+                    // exit code decides "was this achieved". A governed loop
+                    // that cannot rewrite its objective but CAN swap
+                    // `cargo test` for `true` (or clear the gate outright) has
+                    // simply moved the goalpost by another door, and the very
+                    // next `update(status='complete')` sails through. Same ACL,
+                    // same escape hatch, same wording as the objective itself.
+                    if let Some(owner) = governing_owner_or_refuse(&session)? {
+                        return Err(AlephError::tool(format!(
+                            "此会话 goal 的 gate_command 由 {owner} 治理（owns_reference edge）——\
+                             它是 objective 的可执行定义，与 objective 同属参照。\
+                             变更理由请写成提案 note（note_manage，tag: reference-proposal），\
+                             由治理环在其周期裁决；或经用户确认先解除托管：\
+                             loop_graph(action='unlink', from_id='{owner}', \
+                             to_id='goal:{session}', edge='owns_reference')。"
+                        )));
+                    }
                     // Empty string clears the per-goal gate; anything else sets it
                     // — after the same boundary check `set` applies, so an
                     // unrunnable gate can never be installed by either door.

@@ -98,6 +98,14 @@ impl Lane {
             // The `.usage` suffix isn't in the Query heuristic; keep it out of
             // Mutate so it isn't idempotency-guarded for nothing.
             "teams.usage" => Some(Self::Query),
+            // The rest of the group-chat reading surface. `teams.chat.history`
+            // already passes on its `.history` suffix, but its siblings do not:
+            // `.thread`, `.list_tasks` and `.list_templates` match no Query
+            // token (the heuristic wants an exact `list`, not `list_tasks`), so
+            // on a deployment with `require_idempotency_key = true` opening a
+            // group chat left the task strip permanently empty and the durable
+            // thread unloadable while the message history rendered fine.
+            "teams.chat.thread" | "teams.list_tasks" | "teams.list_templates" => Some(Self::Query),
             // moa.listPresets returns a read-only `[moa]` config snapshot. The
             // `.listPresets` suffix doesn't match the Query heuristic's `.list`,
             // so classify it explicitly — keeps this hot read off the Mutate

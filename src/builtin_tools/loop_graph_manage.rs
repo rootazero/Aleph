@@ -10,7 +10,7 @@
 use async_trait::async_trait;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
-use tracing::info;
+use tracing::{info, warn};
 
 use crate::error::{AlephError, Result};
 use crate::loop_graph::templates::{AUDIT_DEFAULT_CRON_EXPR, AUDIT_TEMPLATE};
@@ -89,7 +89,9 @@ pub struct LoopGraphArgs {
     /// notes, not in the graph)
     #[serde(default)]
     pub edge: Option<EdgeKind>,
-    /// One-line rationale for the edge (prose; code never parses it)
+    /// One-line rationale for the edge (prose; code never parses it).
+    /// Omitting it on a re-`link` KEEPS the existing rationale (pass `""` to
+    /// clear) — same rule as a node's `body`/`cadence`.
     #[serde(default)]
     pub note: Option<String>,
 
@@ -222,13 +224,26 @@ impl LoopGraphTool {
                 NodeKind::LoopGoal => {
                     if let Some(store) = &goal_store {
                         let session_id = n.id.trim_start_matches("goal:");
+                        // Three-way, like the cron arm: "the store answered and
+                        // this row is gone" is a finding; "I could not read the
+                        // store" is not. Collapsing them let a single
+                        // SQLITE_BUSY brand every goal node in one pass as
+                        // vanished — and the audit template reads exactly this
+                        // line when it calls the roll, so a transient error
+                        // manufactured findings against a healthy graph.
                         match store.get(session_id) {
                             Ok(Some(g)) => out.push_str(&format!(
                                 "\n    live: status={:?} objective={}",
                                 g.status,
                                 truncate(&g.objective, 80)
                             )),
-                            _ => out.push_str("\n    live: ⚠ target missing（goal 已消失）"),
+                            Ok(None) => {
+                                out.push_str("\n    live: ⚠ target missing（goal 已消失）");
+                            }
+                            Err(e) => {
+                                tracing::warn!(node = %n.id, error = %e,
+                                    "loop_graph status: goal store unreadable — live line omitted");
+                            }
                         }
                     }
                 }
@@ -261,6 +276,7 @@ impl LoopGraphTool {
                 NodeKind::Team => {
                     if let Some(ts) = &self.teams {
                         let team_id = n.id.trim_start_matches("team:");
+                        // Same three-way discipline as the goal / cron arms.
                         match ts.get_team(team_id).await {
                             Ok(Some(t)) => out.push_str(&format!(
                                 "\n    live: status={} leader={} name={}",
@@ -268,7 +284,13 @@ impl LoopGraphTool {
                                 t.leader_id,
                                 truncate(&t.name, 40)
                             )),
-                            _ => out.push_str("\n    live: ⚠ target missing（team 记录已消失）"),
+                            Ok(None) => {
+                                out.push_str("\n    live: ⚠ target missing（team 记录已消失）");
+                            }
+                            Err(e) => {
+                                tracing::warn!(node = %n.id, error = %e,
+                                    "loop_graph status: team store unreadable — live line omitted");
+                            }
                         }
                     }
                 }
@@ -556,7 +578,23 @@ impl AlephTool for LoopGraphTool {
                 )
                 .with_cadence("weekly")
                 .with_body(crate::loop_graph::AUDIT_NODE_BODY);
-                self.store.upsert_node(&node)?;
+                // The marker row is what makes this action idempotent, and it
+                // can only be written after `add_job` mints the id the node is
+                // named for. So the ordering cannot be reversed — roll the job
+                // back instead. Without this, a failed write (locked DB, full
+                // disk) left a real weekly audit cron that the guard above
+                // cannot see: the operator retries, gets a SECOND audit ring,
+                // and two independent seven-step audits run forever, each
+                // filing verdicts about the other.
+                if let Err(e) = self.store.upsert_node(&node) {
+                    let service = cron.lock().await;
+                    if let Err(rollback) = service.delete_job(&job_id).await {
+                        warn!(job_id = %job_id, error = %rollback,
+                            "loop_graph enable_audit: audit cron left orphaned after a failed \
+                             graph write — delete it by hand with cron_manage");
+                    }
+                    return Err(e);
+                }
 
                 let targets: Vec<GraphNode> = self
                     .store
@@ -628,15 +666,38 @@ impl AlephTool for LoopGraphTool {
                     })?
                 };
                 let watcher_id = format!("cron:{job_id}");
-                self.store.upsert_node(
-                    &GraphNode::new(&agent_id, &watcher_id, NodeKind::LoopCron, &label, origin)
-                        .with_cadence(args.cadence.unwrap_or_else(|| "nightly".to_string()))
-                        .with_body(truncate(&watch_prompt, 200)),
-                )?;
-                self.store.upsert_edge(
-                    &GraphEdge::new(&agent_id, &watcher_id, &to_id, EdgeKind::Watches, origin)
-                        .with_note(args.note.unwrap_or_else(|| "pair 配对".to_string())),
-                )?;
+                // Roll the cron back if the graph write fails: a watcher job the
+                // graph has no row for is a loop that burns LLM runs on a
+                // schedule while being invisible to `list`/`status`/`lint` and
+                // unreachable by `unlink` (same rule as `enable_audit`).
+                let wired = self
+                    .store
+                    .upsert_node(
+                        &GraphNode::new(&agent_id, &watcher_id, NodeKind::LoopCron, &label, origin)
+                            .with_cadence(args.cadence.unwrap_or_else(|| "nightly".to_string()))
+                            .with_body(truncate(&watch_prompt, 200)),
+                    )
+                    .and_then(|()| {
+                        self.store.upsert_edge(
+                            &GraphEdge::new(
+                                &agent_id,
+                                &watcher_id,
+                                &to_id,
+                                EdgeKind::Watches,
+                                origin,
+                            )
+                            .with_note(args.note.unwrap_or_else(|| "pair 配对".to_string())),
+                        )
+                    });
+                if let Err(e) = wired {
+                    let service = cron.lock().await;
+                    if let Err(rollback) = service.delete_job(&job_id).await {
+                        warn!(job_id = %job_id, error = %rollback,
+                            "loop_graph pair: watcher cron left orphaned after a failed graph \
+                             write — delete it by hand with cron_manage");
+                    }
+                    return Err(e);
+                }
                 info!(job_id = %job_id, target = %to_id, "watcher paired");
                 Ok(LoopGraphOutput {
                     message: format!(

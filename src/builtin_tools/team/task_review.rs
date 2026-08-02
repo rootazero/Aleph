@@ -2,7 +2,8 @@
 //! (strategy round 2, group-chat path). After reading a member's submitted
 //! deliverable (`task_read_artifact`), the leader accepts or rejects the owning
 //! coord_task: approve → Completed (downstream dependents unblock); reject →
-//! InProgress (the owner redoes it; the leader's feedback rides along). Mirrors
+//! Pending (the owner redoes it; the leader's feedback rides along as a task
+//! comment). Mirrors
 //! `WorkflowStepReviewTool` but uses a flat verdict arg and carries a soft
 //! leader-only guard (a non-leader caller is a no-op — prompt-gating is the
 //! primary gate; this is defense-in-depth, R7/R9).
@@ -47,7 +48,7 @@ pub struct GroundingEvidence {
 }
 
 /// Closed grounding vocabulary — aligned with the loop_graph anchor truth set.
-fn grounding_kind_valid(kind: &str) -> bool {
+pub(crate) fn grounding_kind_valid(kind: &str) -> bool {
     matches!(kind, "exit_code" | "numeric" | "line_count")
 }
 
@@ -55,7 +56,7 @@ fn grounding_kind_valid(kind: &str) -> bool {
 /// Only approvals are gated: a rejection is naturally conservative. Pure /
 /// host-testable.
 #[must_use]
-fn needs_grounding_bounce(
+pub(crate) fn needs_grounding_bounce(
     decision: ReviewDecision,
     metadata: &serde_json::Value,
     has_grounding: bool,
@@ -70,7 +71,7 @@ pub struct TaskReviewArgs {
     /// assigning, which the member echoes back on submit.
     pub task_id: String,
     /// `approve` → the task is completed and downstream dependents unblock;
-    /// `reject` → the task returns to in_progress for the owner to redo.
+    /// `reject` → the task is re-queued (pending) for the owner to redo.
     pub decision: ReviewDecision,
     /// Optional feedback, stored on the task (shown to the owner on a reject).
     #[serde(default)]
@@ -97,14 +98,21 @@ pub struct TaskReviewOutput {
 }
 
 /// Map a verdict to the coord_task status it sets. `Approve` → Completed
-/// (satisfies downstream deps); `Reject` → InProgress (re-queue for the owner —
+/// (satisfies downstream deps); `Reject` → Pending (re-queue for the owner —
 /// strategy round 2 chose redo-in-place over the sibling `workflow_step_review`'s
 /// terminal Failed). Pure / host-testable.
+///
+/// A rejection means "do it again", and the only status the scheduler ever
+/// claims is `Pending` (`select_schedulable`). Parking the redo in
+/// `InProgress` made it depend on a crash-recovery janitor noticing an orphan
+/// — and `reclaim_orphaned` only touches dispatcher-managed rows, so a task
+/// created by `team_delegate` (no `managed_by` stamp) simply stopped there
+/// forever, with the leader told it had been sent back.
 #[must_use]
 fn target_status(decision: ReviewDecision) -> CoordTaskStatus {
     match decision {
         ReviewDecision::Approve => CoordTaskStatus::Completed,
-        ReviewDecision::Reject => CoordTaskStatus::InProgress,
+        ReviewDecision::Reject => CoordTaskStatus::Pending,
     }
 }
 
@@ -145,7 +153,7 @@ impl AlephTool for TaskReviewTool {
          Call this after reading the member's artifact (task_read_artifact) for \
          a task the member submitted: decision='approve' marks the task \
          completed and unblocks dependents; decision='reject' sends it back to \
-         in_progress for the owner to redo — put what to fix in `feedback`. The \
+         re-queued for the owner to redo — put what to fix in `feedback`. The \
          member's result is a self-report, not a verified fact: before approving \
          claims with external side-effects (files written, requests sent, things \
          published), verify the handle it returned (path, URL, id) yourself. \
@@ -235,12 +243,19 @@ impl AlephTool for TaskReviewTool {
                 Some(&self.current_agent_id),
             )
             .await;
+        // The verdict changes the task's STATUS, never its result. `result` is
+        // the state this node put on its outgoing edges — `build_handoff_context`
+        // renders it verbatim into every dependent's prompt — so writing the
+        // reviewer's feedback there deletes the deliverable and hands the next
+        // node "good, ship it" where the analysis used to be. The feedback has
+        // its own durable channel (the comment thread below, surfaced to the
+        // owner by `build_notes_section`), which is also where a rejecting
+        // reviewer's notes belong: the redoing member reads Notes, not result.
         self.coord_store
             .update_task(
                 &args.task_id,
                 CoordTaskUpdate {
                     status: Some(status),
-                    result: args.feedback.clone(),
                     ..Default::default()
                 },
             )
@@ -285,7 +300,7 @@ impl AlephTool for TaskReviewTool {
 
         let message = match args.decision {
             ReviewDecision::Approve => "approved → completed".to_string(),
-            ReviewDecision::Reject => "rejected → back to in_progress".to_string(),
+            ReviewDecision::Reject => "rejected → re-queued (pending)".to_string(),
         };
         Ok(TaskReviewOutput {
             task_id: args.task_id,
@@ -308,7 +323,7 @@ mod tests {
         );
         assert_eq!(
             target_status(ReviewDecision::Reject),
-            CoordTaskStatus::InProgress
+            CoordTaskStatus::Pending
         );
     }
 

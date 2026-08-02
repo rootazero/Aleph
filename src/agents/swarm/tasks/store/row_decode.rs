@@ -69,8 +69,13 @@ pub(super) fn load_dependencies(
     conn: &Connection,
     task_id: &str,
 ) -> rusqlite::Result<Vec<CoordTaskId>> {
-    let mut stmt =
-        conn.prepare_cached("SELECT depends_on FROM coord_task_dependencies WHERE task_id = ?1")?;
+    // `ORDER BY rowid` = insertion order = the order the template declared
+    // `blocked_by` in. Keeps this reader in step with the `GROUP_CONCAT(…
+    // ORDER BY d.rowid)` in `crud.rs`, so both paths agree AND both are the
+    // declared order rather than uuid order.
+    let mut stmt = conn.prepare_cached(
+        "SELECT depends_on FROM coord_task_dependencies WHERE task_id = ?1 ORDER BY rowid",
+    )?;
     let rows = stmt.query_map(params![task_id], |row| row.get(0))?;
     rows.collect()
 }
