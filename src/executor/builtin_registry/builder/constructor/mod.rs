@@ -499,9 +499,8 @@ impl BuiltinToolRegistry {
             .with_approval_policy(Arc::clone(&approval_policy));
         let browser_fill_form_tool = BrowserFillFormTool::new(Arc::clone(&browser_profile_manager))
             .with_approval_policy(Arc::clone(&approval_policy));
-        let browser_press_key_tool =
-            BrowserPressKeyTool::new(Arc::clone(&browser_profile_manager))
-                .with_approval_policy(Arc::clone(&approval_policy));
+        let browser_press_key_tool = BrowserPressKeyTool::new(Arc::clone(&browser_profile_manager))
+            .with_approval_policy(Arc::clone(&approval_policy));
         let browser_wait_for_tool = BrowserWaitForTool::new(Arc::clone(&browser_profile_manager));
         let browser_console_tool = BrowserConsoleTool::new(Arc::clone(&browser_profile_manager));
         let browser_hover_tool = BrowserHoverTool::new(Arc::clone(&browser_profile_manager))
@@ -518,9 +517,8 @@ impl BuiltinToolRegistry {
             .with_approval_policy(Arc::clone(&approval_policy));
         let browser_resize_tool = BrowserResizeTool::new(Arc::clone(&browser_profile_manager));
         let browser_emulate_tool = BrowserEmulateTool::new(Arc::clone(&browser_profile_manager));
-        let browser_cookies_tool =
-            BrowserCookiesTool::new(Arc::clone(&browser_profile_manager))
-                .with_approval_policy(Arc::clone(&approval_policy));
+        let browser_cookies_tool = BrowserCookiesTool::new(Arc::clone(&browser_profile_manager))
+            .with_approval_policy(Arc::clone(&approval_policy));
         let browser_session_tool = BrowserSessionTool::new(Arc::clone(&browser_profile_manager));
         // Start the idle-profile reaper (sweeps stale browsers every 60s).
         browser_profile_manager.spawn_idle_reaper(60);
