@@ -142,9 +142,25 @@ jobs:
       # constraint that actually bit. `df -h .` names the filesystem holding the
       # workspace — where target/ lands — so it needs no per-runner knowledge of
       # C: vs D:.
+      #
+      # Windows gets a second reading, because that is the one runner where
+      # naming the workspace volume is not enough. CARGO_HOME, rustup and TEMP
+      # sit under C:\Users\runneradmin no matter which volume the workspace was
+      # placed on, so this step can run C: dry while `df -h .` still reports the
+      # workspace as roomy — and the failure would then point at the wrong disk.
+      # Listing every FileSystem drive rather than C: alone is deliberate, for
+      # the same reason `df -h .` is preferred over a hardcoded path above:
+      # assuming a drive letter is the thing being avoided. Whichever volume
+      # `df` named, it said nothing about the others. Bare `Get-PSDrive` already
+      # prints Name / Used (GB) / Free (GB), so no formatting is needed.
       - name: Disk before integration tests
         shell: bash
         run: df -h .
+
+      - name: Disk before integration tests (Windows volumes)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: Get-PSDrive -PSProvider FileSystem
 
       - name: Run integration tests
         env:
@@ -156,6 +172,11 @@ jobs:
         if: always()
         shell: bash
         run: df -h .
+
+      - name: Disk after integration tests (Windows volumes)
+        if: always() && runner.os == 'Windows'
+        shell: pwsh
+        run: Get-PSDrive -PSProvider FileSystem
 
   lint:
     name: Lint
