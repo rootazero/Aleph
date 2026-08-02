@@ -47,7 +47,7 @@ marker-only shape — with no idea what the signal is, a head/tail slice would
 just be a guess.
 
 Two producers cap themselves so they never reach this cascade: `file_read`
-sizes its window against `READ_WINDOW_TOKENS`, and `file_ops`
+sizes its window against `text.rs::read_window_tokens()`, and `file_ops`
 `list`/`search`/`stats` cap their entry lists (aggregates stay exact). See
 FEATURE_LOCATOR §3.14 and §3.4.
 See [AGENT_LOOP_TOOL_EXECUTION.md](./AGENT_LOOP_TOOL_EXECUTION.md) for the
