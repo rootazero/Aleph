@@ -314,10 +314,7 @@ pub(super) fn InputArea() -> impl IntoView {
                 return;
             }
         }
-        chat.enqueue_prompt(QueuedPrompt {
-            text,
-            attachments: files,
-        });
+        chat.enqueue_prompt(QueuedPrompt::new(text, files));
         input_text.set(String::new());
         attachments.set(Vec::new());
         show_palette.set(false);
@@ -442,6 +439,44 @@ pub(super) fn InputArea() -> impl IntoView {
             }
         });
     };
+
+    // Retract: pull one queued prompt back out of the queue and into the
+    // composer for editing. The ONE implementation — both triggers (the
+    // ↑ key below, and the ghost bubble's click-to-edit, which arrives as
+    // `chat.retract_request`) come through here, so they cannot diverge.
+    //
+    // Non-destructive: the current draft (text AND staged attachments) is
+    // handed to `retract_queued_prompt`, which parks it at the tail of the
+    // queue instead of letting it be overwritten. Codex's equivalent
+    // (`chat.edit_queued_message`) clobbers its composer, which it can afford
+    // because it has Up/Ctrl+R history recall; this composer has no undo.
+    //
+    // `None` back means the prompt is no longer queued — the auto-drain can
+    // empty the queue between a bubble rendering and its click landing. The
+    // composer must then be left ALONE: seeding the draft with a prompt that
+    // has already been sent is how the same message gets sent twice.
+    let retract = move |id: u64| {
+        let draft = QueuedPrompt::new(
+            input_text.get_untracked().trim().to_string(),
+            attachments.get_untracked(),
+        );
+        let Some(entry) = chat.retract_queued_prompt(id, Some(draft)) else {
+            return;
+        };
+        input_text.set(entry.text);
+        attachments.set(entry.attachments);
+    };
+
+    // Ghost-bubble click-to-edit: the bubble lives in the message stream and
+    // cannot read the draft, so it asks here.
+    {
+        Effect::new(move |_| {
+            if let Some(id) = chat.retract_request.get() {
+                chat.retract_request.set(None);
+                retract(id);
+            }
+        });
+    }
 
     // Force-insert (B7): the user won't wait for the next turn boundary. Fold
     // the current draft into the queue, then interrupt the running task WITHOUT
@@ -800,6 +835,34 @@ pub(super) fn InputArea() -> impl IntoView {
                     _ => {}
                 }
                 return;
+            }
+            // ↑ = take back the newest queued prompt (codex's
+            // `chat.edit_queued_message`, default Alt+Up / Shift+Left).
+            //
+            // Plain ↑ only fires on an EMPTY draft: this is a <textarea>, so
+            // with text in it ↑ is caret movement between lines and must stay
+            // that way. Empty is also exactly when the gesture is wanted —
+            // Enter just queued the line and cleared the box. ⌥/Alt+↑ matches
+            // codex's own chord and works mid-draft, which is only safe
+            // because `retract` parks the draft back in the queue rather than
+            // overwriting it. Both palettes return earlier, so they still own
+            // the arrows while open (guarded again here as the single
+            // predicate's `popup_open`).
+            if ev.key() == "ArrowUp" {
+                let draft_is_empty = input_text.get_untracked().trim().is_empty()
+                    && attachments.get_untracked().is_empty();
+                if shared_ui_logic::state::should_retract_on_up(
+                    chat.prompt_queue.get_untracked().len(),
+                    draft_is_empty,
+                    show_palette.get_untracked() || show_mention.get_untracked(),
+                    ev.alt_key(),
+                ) {
+                    if let Some(id) = chat.last_queued_id() {
+                        ev.prevent_default();
+                        retract(id);
+                        return;
+                    }
+                }
             }
             // Esc while a run is active = force-insert: interrupt now and flush
             // the queue (+ the current draft) as a fresh run (B7). Palette/

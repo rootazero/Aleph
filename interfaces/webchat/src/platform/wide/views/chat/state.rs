@@ -22,10 +22,54 @@ pub struct PendingAttachment {
 /// Mirrors hermes-agent's `QueuedPromptEntry`. Reuses [`PendingAttachment`]
 /// so a queued prompt carries the exact same payload as a live send — the
 /// drain path just replays it through the normal composer pipeline.
+///
+/// One struct, not parallel vectors: codex keeps its queued messages and their
+/// per-message display records in two positional `VecDeque`s "in lockstep",
+/// tolerating desync with `.unwrap_or(default)` — which silently restores one
+/// message's text with another's attachments. Nothing here can drift apart.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct QueuedPrompt {
+    /// Stable identity, unique within a session's queue.
+    ///
+    /// Every removal addresses a prompt by `id`, never by list position. A
+    /// captured index goes stale the moment anything else mutates the queue —
+    /// and the queue is mutated *asynchronously*, by the turn-boundary flush
+    /// and the busy→idle auto-drain. Clicking a ghost bubble whose index had
+    /// gone stale removed the wrong row, and clicking one after the queue had
+    /// already drained restored the text with nothing removed, so the same
+    /// prompt got sent twice. `#[serde(default)]` keeps snapshots written
+    /// before this field readable (they restore as id 0 and are re-minted on
+    /// the next enqueue).
+    #[serde(default)]
+    pub id: u64,
     pub text: String,
     pub attachments: Vec<PendingAttachment>,
+}
+
+impl QueuedPrompt {
+    /// Build a prompt carrying a freshly minted [`QueuedPrompt::id`].
+    #[must_use]
+    pub fn new(text: String, attachments: Vec<PendingAttachment>) -> Self {
+        Self {
+            id: next_queued_prompt_id(),
+            text,
+            attachments,
+        }
+    }
+
+    /// Nothing to send — the composer treats this as "no draft".
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.text.trim().is_empty() && self.attachments.is_empty()
+    }
+}
+
+/// Monotonic source for [`QueuedPrompt::id`]. Process-wide (the Panel is
+/// single-threaded WASM); ids only ever need to be unique within one queue.
+fn next_queued_prompt_id() -> u64 {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static NEXT: AtomicU64 = AtomicU64::new(1);
+    NEXT.fetch_add(1, Ordering::Relaxed)
 }
 
 /// One-line preview for a queued prompt: trimmed text (UTF-8-safe truncation,
@@ -499,6 +543,15 @@ pub struct ChatState {
     /// [`shared_ui_logic::state::should_auto_drain_on_settle`]). Session-scoped
     /// content, so it rides along in [`SessionSnapshot`] across tab swaps.
     pub prompt_queue: RwSignal<Vec<QueuedPrompt>>,
+    /// One-shot pulse carrying the [`QueuedPrompt::id`] a ghost bubble asked to
+    /// pull back into the composer.
+    ///
+    /// The bubble lives in the message stream and cannot reach the composer's
+    /// draft — which is exactly what a non-destructive retract needs to read.
+    /// Same shape as `retry_pulse` / `flush_pulse`: the stream requests, the
+    /// composer (the only owner of the draft) performs. Ephemeral, so it is
+    /// excluded from [`SessionSnapshot`].
+    pub retract_request: RwSignal<Option<u64>>,
     /// Pulse signal that asks the composer to retry the last user message:
     /// each bump increments by 1. Used by `MessageBubble`'s retry button so
     /// the composer (which owns the send pipeline) actually fires the send
@@ -627,6 +680,7 @@ impl ChatState {
             draft_seed: RwSignal::new(None),
             context_usage: RwSignal::new(None),
             prompt_queue: RwSignal::new(Vec::new()),
+            retract_request: RwSignal::new(None),
             retry_pulse: RwSignal::new(0),
             flush_pulse: RwSignal::new(0),
             repair_pulse: RwSignal::new(0),
@@ -755,26 +809,59 @@ impl ChatState {
         self.prompt_queue.update(|q| q.push(entry));
     }
 
-    /// Pop the head of the queue, if any. Returns the prompt to replay.
-    #[must_use]
-    pub fn dequeue_prompt_front(&self) -> Option<QueuedPrompt> {
-        let mut popped = None;
-        self.prompt_queue.update(|q| {
-            if !q.is_empty() {
-                popped = Some(q.remove(0));
-            }
-        });
-        popped
+    /// Remove the queued prompt with `id` (no-op if it is already gone). Used
+    /// by the per-row ✕ in the queue preview bar.
+    pub fn remove_queued_prompt(&self, id: u64) {
+        self.prompt_queue.update(|q| q.retain(|e| e.id != id));
     }
 
-    /// Remove the queued prompt at `index` (no-op if out of range). Used by
-    /// the per-row ✕ in the queue preview bar.
-    pub fn remove_queued_prompt(&self, index: usize) {
+    /// Id of the newest queued prompt — the one an Up-arrow retract takes.
+    ///
+    /// The *back*, not the front, for the same reason codex pops the back: the
+    /// front is what the drain claims the instant the turn settles, so editing
+    /// it races the sender. The back is the line the user just typed, and
+    /// removing it cannot reorder anything already committed to be sent.
+    #[must_use]
+    pub fn last_queued_id(&self) -> Option<u64> {
+        self.prompt_queue.with_untracked(|q| q.last().map(|e| e.id))
+    }
+
+    /// Pull one queued prompt back out of the queue for editing, handing the
+    /// caller everything needed to restore it into the composer.
+    ///
+    /// The single retract path — the Up-arrow key and the ghost bubble's
+    /// click-to-edit both come through here, so the two cannot diverge.
+    ///
+    /// **Non-destructive**: `draft` is whatever the composer currently holds,
+    /// and if it has content it takes the retracted prompt's place at the tail
+    /// of the queue rather than being overwritten. Codex overwrites the
+    /// composer outright, which it can afford because its composer has Up /
+    /// Ctrl+R history recall; the Panel composer has no undo, so an overwrite
+    /// here silently destroys typed text (and, in the click path, replaced the
+    /// staged attachments too).
+    ///
+    /// Returns `None` when `id` is no longer queued — the caller must then
+    /// leave the composer alone. That case is real: the auto-drain can empty
+    /// the queue between the bubble rendering and the click landing, and
+    /// restoring text for a prompt that has already been sent would send it
+    /// twice.
+    #[must_use]
+    pub fn retract_queued_prompt(
+        &self,
+        id: u64,
+        draft: Option<QueuedPrompt>,
+    ) -> Option<QueuedPrompt> {
+        let mut taken = None;
         self.prompt_queue.update(|q| {
-            if index < q.len() {
-                q.remove(index);
+            let Some(pos) = q.iter().position(|e| e.id == id) else {
+                return;
+            };
+            taken = Some(q.remove(pos));
+            if let Some(draft) = draft.filter(|d| !d.is_empty()) {
+                q.push(draft);
             }
         });
+        taken
     }
 
     /// Remove and return every queued prompt (FIFO order preserved), leaving
@@ -2022,9 +2109,9 @@ mod queue_tests {
     use super::*;
 
     fn prompt(text: &str, attachments: usize) -> QueuedPrompt {
-        QueuedPrompt {
-            text: text.to_string(),
-            attachments: (0..attachments)
+        QueuedPrompt::new(
+            text.to_string(),
+            (0..attachments)
                 .map(|i| PendingAttachment {
                     name: format!("f{i}"),
                     mime_type: "text/plain".into(),
@@ -2032,7 +2119,7 @@ mod queue_tests {
                     size: 0,
                 })
                 .collect(),
-        }
+        )
     }
 
     #[test]
@@ -2064,6 +2151,143 @@ mod queue_tests {
         let texts: Vec<_> = drained.iter().map(|p| p.text.clone()).collect();
         assert_eq!(texts, vec!["a", "b"]);
         assert!(chat.prompt_queue.get_untracked().is_empty());
+    }
+
+    /// The retract gesture returns the newest prompt and leaves the rest alone.
+    #[test]
+    fn retract_takes_the_newest_and_leaves_the_order_intact() {
+        let owner = Owner::new();
+        owner.set();
+        let chat = ChatState::new();
+        chat.enqueue_prompt(prompt("a", 0));
+        chat.enqueue_prompt(prompt("b", 0));
+        chat.enqueue_prompt(prompt("c", 0));
+
+        let last = chat.last_queued_id().expect("queue is not empty");
+        let taken = chat
+            .retract_queued_prompt(last, None)
+            .expect("the newest prompt comes back");
+        assert_eq!(taken.text, "c", "retract takes the back, not the front");
+
+        let left: Vec<_> = chat
+            .prompt_queue
+            .get_untracked()
+            .iter()
+            .map(|p| p.text.clone())
+            .collect();
+        assert_eq!(left, vec!["a", "b"], "the rest keep their order");
+    }
+
+    /// Retract must never silently destroy what the user has already typed.
+    ///
+    /// Codex's equivalent overwrites its composer outright; it can afford that
+    /// because its composer has Up / Ctrl+R history recall. The Panel composer
+    /// has no undo, so the draft is parked at the tail of the queue instead —
+    /// after the round-trip every piece of user input still exists exactly once.
+    #[test]
+    fn retract_parks_a_non_empty_draft_instead_of_destroying_it() {
+        let owner = Owner::new();
+        owner.set();
+        let chat = ChatState::new();
+        chat.enqueue_prompt(prompt("queued", 0));
+        let id = chat.last_queued_id().unwrap();
+
+        let taken = chat
+            .retract_queued_prompt(id, Some(prompt("half-typed draft", 2)))
+            .expect("retract succeeds");
+        assert_eq!(taken.text, "queued");
+
+        let left = chat.prompt_queue.get_untracked();
+        assert_eq!(left.len(), 1, "the draft took the retracted prompt's place");
+        assert_eq!(left[0].text, "half-typed draft");
+        assert_eq!(
+            left[0].attachments.len(),
+            2,
+            "the draft's staged files ride along with it"
+        );
+    }
+
+    /// An empty draft is not worth a queue slot.
+    #[test]
+    fn retract_does_not_park_an_empty_draft() {
+        let owner = Owner::new();
+        owner.set();
+        let chat = ChatState::new();
+        chat.enqueue_prompt(prompt("queued", 0));
+        let id = chat.last_queued_id().unwrap();
+
+        chat.retract_queued_prompt(id, Some(prompt("   ", 0)))
+            .expect("retract succeeds");
+        assert!(
+            chat.prompt_queue.get_untracked().is_empty(),
+            "a whitespace-only draft must not be re-queued"
+        );
+    }
+
+    /// The double-send guard: a prompt that is no longer queued must NOT reach
+    /// the composer.
+    ///
+    /// The queue drains asynchronously (turn-boundary flush, busy→idle
+    /// auto-drain), so a ghost bubble's click can land after its prompt has
+    /// already been sent. Addressing by list position could not tell the
+    /// difference — it would restore the text of an already-sent prompt (which
+    /// the user then sends a second time) or remove a different row entirely.
+    #[test]
+    fn retracting_an_already_drained_prompt_is_a_no_op() {
+        let owner = Owner::new();
+        owner.set();
+        let chat = ChatState::new();
+        chat.enqueue_prompt(prompt("will be sent", 0));
+        let stale_id = chat.last_queued_id().unwrap();
+
+        // The turn settles and the queue flushes before the click lands.
+        let _ = chat.drain_all_queued();
+        chat.enqueue_prompt(prompt("queued after", 0));
+
+        assert!(
+            chat.retract_queued_prompt(stale_id, None).is_none(),
+            "a drained prompt must not come back — the caller leaves the composer alone"
+        );
+        let left: Vec<_> = chat
+            .prompt_queue
+            .get_untracked()
+            .iter()
+            .map(|p| p.text.clone())
+            .collect();
+        assert_eq!(left, vec!["queued after"], "no other row was disturbed");
+    }
+
+    /// The per-row ✕ addresses by id too, so removing the head does not
+    /// renumber the rest out from under a pending click.
+    #[test]
+    fn remove_addresses_by_id_not_position() {
+        let owner = Owner::new();
+        owner.set();
+        let chat = ChatState::new();
+        chat.enqueue_prompt(prompt("a", 0));
+        chat.enqueue_prompt(prompt("b", 0));
+        let b_id = chat.last_queued_id().unwrap();
+
+        chat.remove_queued_prompt(b_id);
+        let left: Vec<_> = chat
+            .prompt_queue
+            .get_untracked()
+            .iter()
+            .map(|p| p.text.clone())
+            .collect();
+        assert_eq!(left, vec!["a"]);
+
+        // Removing it twice is harmless.
+        chat.remove_queued_prompt(b_id);
+        assert_eq!(chat.prompt_queue.get_untracked().len(), 1);
+    }
+
+    /// Ids are unique per prompt — the whole addressing scheme rests on it.
+    #[test]
+    fn queued_prompt_ids_are_unique() {
+        let a = prompt("same text", 0);
+        let b = prompt("same text", 0);
+        assert_ne!(a.id, b.id, "identical text must still be distinguishable");
     }
 }
 

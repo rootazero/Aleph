@@ -15,7 +15,9 @@ use crate::api::chat::ChatApi;
 use crate::context::DashboardState;
 use crate::views::chat::state::{ChatPhase, ChatSendError, QueuedPrompt};
 use crate::views::chat::ChatState;
-use shared_ui_logic::state::{should_auto_drain_on_settle, should_flush_on_turn_boundary};
+use shared_ui_logic::state::{
+    should_auto_drain_on_settle, should_flush_on_turn_boundary, should_retract_on_up,
+};
 
 #[component]
 #[must_use]
@@ -97,17 +99,48 @@ pub fn PhoneComposer() -> impl IntoView {
 
     // Queue a follow-up while a run is active → it becomes a ghost bubble.
     // No client-side prompt-injection guard (server is the authority).
+    //
+    // Attachments ride through `chat.pending_attachments` even though this
+    // surface has no attach button: a prompt retracted back into the composer
+    // may carry files (queued from the wide surface in the same session), and
+    // re-queueing it must not drop them. Phone's *send* path still cannot
+    // transmit attachments — that is the documented phone limitation above,
+    // untouched here.
     let enqueue = move || {
         let text = input_text.get_untracked().trim().to_string();
-        if text.is_empty() {
+        let files = chat.pending_attachments.get_untracked();
+        if text.is_empty() && files.is_empty() {
             return;
         }
-        chat.enqueue_prompt(QueuedPrompt {
-            text,
-            attachments: Vec::new(),
-        });
+        chat.enqueue_prompt(QueuedPrompt::new(text, files));
         input_text.set(String::new());
+        chat.pending_attachments.set(Vec::new());
     };
+
+    // Retract: the phone half of the same single path the wide composer owns.
+    // Without this the ghost bubble's click-to-edit was silently DESTRUCTIVE
+    // here — it wrote `draft_seed`, which no phone component reads, and then
+    // removed the row, so the queued prompt simply disappeared.
+    let retract = move |id: u64| {
+        let draft = QueuedPrompt::new(
+            input_text.get_untracked().trim().to_string(),
+            chat.pending_attachments.get_untracked(),
+        );
+        let Some(entry) = chat.retract_queued_prompt(id, Some(draft)) else {
+            return;
+        };
+        input_text.set(entry.text);
+        chat.pending_attachments.set(entry.attachments);
+    };
+
+    {
+        Effect::new(move |_| {
+            if let Some(id) = chat.retract_request.get() {
+                chat.retract_request.set(None);
+                retract(id);
+            }
+        });
+    }
 
     // Answer a pending `ask_user` with the current draft. Returns `true` when a
     // question was pending — the caller must then NOT fall through to send/queue.
@@ -266,7 +299,26 @@ pub fn PhoneComposer() -> impl IntoView {
 
     // Enter sends (idle) or queues (running); Shift+Enter inserts a newline.
     // A pending question outranks both — the turn is blocked on the answer.
+    // ↑ on an empty draft takes the newest queued prompt back (see the wide
+    // composer for the full rationale). Phone has no palettes, so nothing else
+    // competes for the arrow keys.
     let on_keydown = move |ev: leptos::ev::KeyboardEvent| {
+        if ev.key() == "ArrowUp" {
+            let draft_is_empty = input_text.get_untracked().trim().is_empty()
+                && chat.pending_attachments.get_untracked().is_empty();
+            if should_retract_on_up(
+                chat.prompt_queue.get_untracked().len(),
+                draft_is_empty,
+                false,
+                ev.alt_key(),
+            ) {
+                if let Some(id) = chat.last_queued_id() {
+                    ev.prevent_default();
+                    retract(id);
+                    return;
+                }
+            }
+        }
         if ev.key() == "Enter" && !ev.shift_key() {
             ev.prevent_default();
             if answer_pending_ask() {

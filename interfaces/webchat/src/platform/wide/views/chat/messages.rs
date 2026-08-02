@@ -387,11 +387,13 @@ fn QueuedGhosts() -> impl IntoView {
             <div class="space-y-2 pt-1">
                 <For
                     each=enumerated
-                    key=|(idx, e)| format!("{}:{}", idx, e.text)
+                    // Identity is the id; `idx` rides along only so the
+                    // position badge re-renders when an earlier row leaves.
+                    // (Removal itself no longer uses `idx` — see the handlers.)
+                    key=|(idx, e)| (e.id, *idx)
                     children=move |(idx, entry)| {
                         let label = queue_preview_label(&entry);
-                        let edit_text = entry.text.clone();
-                        let edit_attachments = entry.attachments.clone();
+                        let entry_id = entry.id;
                         view! {
                             <div class="flex justify-end group">
                                 <div
@@ -400,14 +402,14 @@ fn QueuedGhosts() -> impl IntoView {
                                            cursor-text transition-colors hover:bg-primary/15"
                                     title=move || t_string!(i18n, chat.queued).to_string()
                                     on:click=move |_| {
-                                        // Edit: pull the full prompt (text + attachments) back
-                                        // into the composer, drop it from the queue. The composer's
-                                        // attachments are backed by `chat.pending_attachments`;
-                                        // `draft_seed` feeds the textarea. Restoring both avoids
-                                        // silently dropping a queued prompt's files on edit.
-                                        chat.draft_seed.set(Some(edit_text.clone()));
-                                        chat.pending_attachments.set(edit_attachments.clone());
-                                        chat.remove_queued_prompt(idx);
+                                        // Edit: ask the composer to retract this prompt (the same
+                                        // path the ↑ key uses). It has to be the composer's job:
+                                        // only it owns the draft, and the retract must fold that
+                                        // draft back into the queue instead of destroying it.
+                                        // Writing `draft_seed` + `pending_attachments` from here
+                                        // used to overwrite whatever the user had typed and
+                                        // REPLACE their staged files, with no undo anywhere.
+                                        chat.retract_request.set(Some(entry_id));
                                     }
                                 >
                                     <span class="absolute -top-2 right-2 text-[9px] px-1.5 rounded-full
@@ -422,7 +424,7 @@ fn QueuedGhosts() -> impl IntoView {
                                         title=move || t_string!(i18n, chat.remove).to_string()
                                         on:click=move |ev: web_sys::MouseEvent| {
                                             ev.stop_propagation();
-                                            chat.remove_queued_prompt(idx);
+                                            chat.remove_queued_prompt(entry_id);
                                         }
                                     >
                                         "✕"
