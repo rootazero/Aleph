@@ -372,7 +372,51 @@ const BUDGETED: [&str; 12] = [
 ///     over an in-process mpsc), so nothing reads back an old blob through this
 ///     enum; the protocol-side `AgentTraceTurnOutcome` keeps its wider set for
 ///     stored blobs, exactly as `AgentTraceTextKind::Intermediate` does.
-const CEILING: usize = 5062;
+///
+/// **Round 8 (2026-08-02): 5062 → 5084 (+22).** Two Act-path deferrals from the
+/// 2026-08-02 tool-layer round, both booked against R10's three questions
+/// before a line was written (FEATURE_LOCATOR §3.3 ⑥ (a) and (b) recorded them
+/// as "owed, not done" precisely because they land in this budget):
+///
+///   - **+~16, `act.rs`: the group loop checks `run_cancel`.** After `/stop`,
+///     `act()`'s multi-group loop still walked every remaining group. Each one
+///     logged a `ToolCallRequested`, registered in-flight, dispatched (taking an
+///     instant cancellation error) and logged a `ToolError`. Those are phantom
+///     failures: the model reads them in the next prompt as calls that ran and
+///     failed, and `tool_summaries` counts them as real errors. The remaining
+///     `tool_use` blocks still need their pairing — that is the only reason the
+///     old behaviour was survivable — so the checkpoint closes them via the
+///     existing `close_unexecuted_tool_uses` rather than just breaking. Three
+///     questions: (1) scaffolding — honouring an external stop signal is
+///     plumbing, and it is explicitly NOT R10's forbidden completeness
+///     judgement (the model did not decide anything; the user pressed stop);
+///     (2) yes after a model upgrade — a cancelled run is a runtime fact, no
+///     amount of model capability makes those events true; (3) three real
+///     consumers (the session event log the next prompt is rebuilt from,
+///     `RunSummary.tool_summaries`, `deps.tool_signal_sink`).
+///   - **+~6, `act.rs`: the parallel clock starts on first poll.** PASS 0
+///     stamped one `Instant` per call, but PASS 1 feeds them through
+///     `buffer_unordered(parallelism)`, which polls at most `parallelism` at a
+///     time — so every call past the cap was billed for the time it spent
+///     queued, not running. The completion-order loop's own comment already
+///     claimed the opposite ("its `duration_ms` is the tool's real wall clock
+///     instead of being inflated by the wait"), which is the shape this repo
+///     keeps paying for: a comment asserting an invariant the code does not
+///     hold. The future now carries its own duration. Three questions:
+///     (1) scaffolding — a measurement, not a decision; (2) yes after a model
+///     upgrade — wall clock is model-independent; (3) two real consumers
+///     (`callback.on_tool_call_done` → the Panel tool row, and
+///     `persist_tool_success`'s `dur_ms` → `tool_timeline` →
+///     `RunSummary.tool_summaries`).
+///
+/// Deliberately NOT fixed in the same pass, so the raise stays honest about
+/// what it bought: `on_tool_call_start` still fires for all N calls in PASS 0,
+/// so a queued call is *announced* running before it is polled. Moving that
+/// into the futures needs `&mut dyn HarnessCallback` across `'static` boundaries
+/// — new machinery in the loop for a state the completion event settles
+/// milliseconds later, and the transcript's linear `ToolCallRequested` order is
+/// deliberate. Fails question 1.
+const CEILING: usize = 5084;
 
 fn repo_root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))

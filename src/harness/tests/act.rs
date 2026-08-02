@@ -2510,3 +2510,198 @@ async fn a_timed_out_call_may_be_retried_in_the_next_batch() {
         "batch 1's overrun must surface as ToolError::Timeout"
     );
 }
+
+// =============================================================================
+// Cancel checkpoint at the group boundary
+// =============================================================================
+
+/// After `/stop`, `act()`'s group loop must not keep walking. Before the
+/// checkpoint every remaining group still logged a `ToolCallRequested`,
+/// registered in-flight, dispatched (taking an instant cancellation error) and
+/// logged a `ToolError` — phantom failures the next prompt reads as calls that
+/// ran and failed, and `tool_summaries` counts as real. The pending `tool_use`
+/// blocks still need results, so the checkpoint closes them out explicitly
+/// instead of letting a doomed dispatch supply the pairing.
+#[tokio::test]
+async fn group_boundary_stops_and_closes_out_when_the_run_is_cancelled() {
+    // No user message in the seed and `last_prompt_seq` left at 0, so
+    // `has_unanswered_user_message` is false — the steer checkpoint cannot fire
+    // and anything observed here belongs to the cancel checkpoint.
+    let session = MockSession::new(vec![turn_started_event()]);
+    let tools = ScriptedTools::new_concurrent(
+        vec![
+            Ok(ok_output(serde_json::json!({"ok": 1}))),
+            Ok(ok_output(serde_json::json!({"ok": 2}))),
+            Ok(ok_output(serde_json::json!({"ok": 3}))),
+        ],
+        std::time::Duration::ZERO,
+    );
+
+    let deps = HarnessDeps {
+        session: session.clone(),
+        tools: tools.clone(),
+        llm: CapturingProvider::text_only("idle"),
+        robustness_profile: crate::verification::ModelRobustnessProfile::conservative(),
+        verifier_chain: None,
+        context_budget: None,
+        context_compactor: None,
+        preflight_pipeline: None,
+        trace_sink: None,
+        system_prompt: None,
+        system_prompt_parts: None,
+        recall_context: None,
+        chain_context: crate::harness::chain_context::ChainContext::default(),
+        guardrails: None,
+        max_iterations: None,
+        power: None,
+        stall_config: None,
+        consecutive_failure_cap: None,
+        turn_timeout: None,
+        turn_budget: None,
+        result_store: None,
+        session_epoch_registrar: None,
+        tool_signal_sink: std::sync::Arc::new(crate::memory::tool_signal_sink::NoopToolSignalSink),
+        in_flight_tool_calls: None,
+        parallel_tool_concurrency: Some(2),
+    };
+    let harness = AgentHarness::new(deps);
+
+    let cancel = tokio_util::sync::CancellationToken::new();
+    cancel.cancel();
+
+    let executed = harness
+        .act(
+            &sample_session_id(),
+            uuid::Uuid::new_v4(),
+            vec![
+                read_call("k1", "a"),
+                read_call("k2", "b"),
+                read_call("k3", "c"),
+            ],
+            &mut NoopHarnessCallback,
+            0,
+            &cancel,
+        )
+        .await
+        .expect("act should return cleanly on a cancelled run");
+
+    assert_eq!(executed, 0, "a cancelled run executes nothing");
+    assert_eq!(
+        tools.calls().await.len(),
+        0,
+        "no call may be dispatched after the run is cancelled",
+    );
+
+    let events = session.snapshot().await;
+    let requested = events
+        .iter()
+        .filter(|r| matches!(&r.event, SessionEvent::ToolCallRequested { .. }))
+        .count();
+    assert_eq!(
+        requested, 0,
+        "a cancelled run must not log tool calls it never made",
+    );
+
+    let closed: Vec<String> = events
+        .iter()
+        .filter_map(|r| match &r.event {
+            SessionEvent::ToolError { call_id, error, .. } if error.contains("cancelled") => {
+                Some(call_id.clone())
+            }
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        closed,
+        vec!["k1".to_string(), "k2".to_string(), "k3".to_string()],
+        "every pending tool_use block is closed out so the pairing survives",
+    );
+}
+
+/// A call that queues behind the concurrency cap must be timed from its own
+/// first poll, not from batch admission. With `parallel_tool_concurrency = 2`
+/// and three calls, the third cannot start until a slot frees — timing it from
+/// PASS 0 bills it for that wait, which is exactly what the completion-order
+/// loop's comment promises it does not do.
+#[tokio::test]
+async fn queued_parallel_call_is_timed_from_its_own_start_not_admission() {
+    let session = MockSession::new(vec![turn_started_event()]);
+    let deps = HarnessDeps {
+        session: session.clone(),
+        tools: Arc::new(DelayByArgTools),
+        llm: CapturingProvider::text_only("idle"),
+        robustness_profile: crate::verification::ModelRobustnessProfile::conservative(),
+        verifier_chain: None,
+        context_budget: None,
+        context_compactor: None,
+        preflight_pipeline: None,
+        trace_sink: None,
+        system_prompt: None,
+        system_prompt_parts: None,
+        recall_context: None,
+        chain_context: crate::harness::chain_context::ChainContext::default(),
+        guardrails: None,
+        max_iterations: None,
+        power: None,
+        stall_config: None,
+        consecutive_failure_cap: None,
+        turn_timeout: None,
+        turn_budget: None,
+        result_store: None,
+        session_epoch_registrar: None,
+        tool_signal_sink: std::sync::Arc::new(crate::memory::tool_signal_sink::NoopToolSignalSink),
+        in_flight_tool_calls: None,
+        parallel_tool_concurrency: Some(2),
+    };
+    let harness = AgentHarness::new(deps);
+
+    let sleep_call = |id: &str, ms: u64| NativeToolCall {
+        thought_signature: None,
+        id: id.into(),
+        name: "sleep_tool".into(),
+        arguments: serde_json::json!({ "delay_ms": ms }),
+    };
+
+    // Distinct delays keep the three `(name, args)` signatures distinct: two
+    // identical calls would trip the within-batch duplicate check, collapse to
+    // one whole-batch group and route through the SERIAL loop, where the clock
+    // is already correct — the test would pass without exercising anything.
+    let mut callback = DoneOrderCallback::default();
+    let started = std::time::Instant::now();
+    harness
+        .act(
+            &sample_session_id(),
+            uuid::Uuid::new_v4(),
+            vec![
+                sleep_call("q-hold-a", 200),
+                sleep_call("q-hold-b", 210),
+                sleep_call("q-queued", 60),
+            ],
+            &mut callback,
+            0,
+            &tokio_util::sync::CancellationToken::new(),
+        )
+        .await
+        .expect("act should succeed");
+    let wall = started.elapsed();
+
+    // Guard against passing for the wrong reason: serially this batch is
+    // 200+210+60 = 470ms, and a serial run times every call correctly.
+    assert!(
+        wall < std::time::Duration::from_millis(400),
+        "the batch must actually run in parallel for this test to mean \
+         anything (took {wall:?})",
+    );
+
+    let queued = callback
+        .done
+        .iter()
+        .find(|(id, _)| id == "q-queued")
+        .expect("the queued call reports a done event");
+    assert!(
+        queued.1 < 150,
+        "the queued call slept 60ms but waited ~200ms for a slot; its duration \
+         must be its own work (got {}ms)",
+        queued.1,
+    );
+}
