@@ -22,6 +22,20 @@ use super::spawn::CancelGuard;
 use super::types::{BatchTask, SubagentAction};
 use super::SubagentTool;
 
+/// How many finished sub-agents `list` renders (newest first).
+///
+/// `list` used to render every retained completion with its **full** result
+/// text — up to `MAX_COMPLETED_RESULTS` (256) of them, each an entire
+/// sub-agent's output plus a progress tail. One call could swamp the parent's
+/// whole context window with material it did not ask for, and the generic
+/// result-budget truncation downstream would then chop that blob from the
+/// middle. `list` is a directory: it answers "which request_ids exist and how
+/// did they end", and `check_status` fetches the one the model actually wants.
+const MAX_LISTED_COMPLETED: usize = 20;
+
+/// Characters of a finished sub-agent's output kept in a `list` row.
+const LIST_RESULT_PREVIEW_CHARS: usize = 200;
+
 #[async_trait]
 impl LoopTool for SubagentTool {
     fn name(&self) -> &str {
@@ -52,7 +66,7 @@ impl LoopTool for SubagentTool {
                 "action": {
                     "type": "string",
                     "enum": ["run", "check_status", "wait", "cancel", "list", "send_message", "read_inbox"],
-                    "description": "The action to perform. Defaults to 'run' (or 'check_status' if only request_id is provided). 'wait' blocks (event-driven, no busy-poll) until a background sub-agent finishes or the bounded 'timeout_secs' window elapses — pass 'request_id' to wait on one, or 'request_ids' to wait for whichever of a set finishes first. It returns the completed result in ONE call, or status 'still_running' so you can wait again. 'cancel' interrupts a still-running background sub-agent identified by request_id. 'list' enumerates every background sub-agent (running and recently-completed) with their request_ids — use it to recover a request_id you no longer hold."
+                    "description": "The action to perform. Defaults to 'run' (or 'check_status' if only request_id is provided). 'wait' blocks (event-driven, no busy-poll) until a background sub-agent finishes or the bounded 'timeout_secs' window elapses — pass 'request_id' to wait on one, or 'request_ids' to wait for whichever of a set finishes first. It returns the completed result in ONE call, or status 'still_running' so you can wait again. Re-issue the same 'request_ids' to take the next completion; status 'all_delivered' means the fan-out is drained. 'cancel' interrupts a still-running background sub-agent identified by request_id. 'list' is a DIRECTORY of this session's background sub-agents (running and recently-finished) with their request_ids and one-line outcomes — use it to recover a request_id you no longer hold, then 'check_status' for the full result text."
                 },
                 "task": {
                     "type": "string",
@@ -131,7 +145,7 @@ impl LoopTool for SubagentTool {
                 "request_ids": {
                     "type": "array",
                     "items": { "type": "string" },
-                    "description": "For 'wait' only: a set of background request_ids to wait on. 'wait' returns as soon as the FIRST of them finishes (reporting which), so you can react to a fan-out in completion order. Use 'request_id' instead to wait on a single sub-agent."
+                    "description": "For 'wait' only: a set of background request_ids to wait on. 'wait' returns as soon as the FIRST one that has not already been returned to you finishes, so you drain a fan-out by re-issuing the SAME request_ids until you get status 'all_delivered'. Use 'request_id' instead to wait on a single sub-agent."
                 },
                 "team_name": {
                     "type": "string",
@@ -346,7 +360,12 @@ impl LoopTool for SubagentTool {
                 // Single id → the simple wait (nicer elapsed_secs on timeout).
                 if request_ids.len() == 1 {
                     let request_id = &request_ids[0];
-                    return match self.background_tracker.wait(request_id, dur).await {
+                    let outcome = tokio::select! {
+                        biased;
+                        () = cancel.cancelled() => return self.wait_cancelled(&request_ids),
+                        outcome = self.background_tracker.wait(request_id, dur) => outcome,
+                    };
+                    return match outcome {
                         // Identical shape to check_status so the model reads a
                         // finished agent the same way regardless of how it asked.
                         WaitOutcome::Completed(snap) => {
@@ -361,15 +380,25 @@ impl LoopTool for SubagentTool {
                                 }
                             }
                         }
-                        WaitOutcome::TimedOut { elapsed_secs } => ToolResult::Success {
-                            output: json!({
-                                "status": "still_running",
-                                "request_id": request_id,
-                                "elapsed_secs": elapsed_secs,
-                                "waited_secs": timeout_secs,
-                                "note": "Sub-agent still running when the wait window elapsed. Call 'wait' again with this request_id to keep blocking, or do other work and check back — its completion is also announced to you.",
-                            }),
-                        },
+                        WaitOutcome::TimedOut { elapsed_secs } => {
+                            // Carry the same progress pair `check_status` gives.
+                            // Without it the model's only way to decide "keep
+                            // waiting or cancel?" was to spend another whole turn
+                            // on check_status for data the tracker already had.
+                            let progress =
+                                self.background_tracker.progress_snapshot(request_id, 10);
+                            ToolResult::Success {
+                                output: json!({
+                                    "status": "still_running",
+                                    "request_id": request_id,
+                                    "elapsed_secs": elapsed_secs,
+                                    "waited_secs": timeout_secs,
+                                    "summary": summarize_progress(&progress),
+                                    "progress": progress,
+                                    "note": "Sub-agent still running when the wait window elapsed. Call 'wait' again with this request_id to keep blocking, or do other work and check back — its completion is also announced to you.",
+                                }),
+                            }
+                        }
                         WaitOutcome::NotFound => ToolResult::Error {
                             error: format!(
                                 "No background sub-agent found with request_id '{request_id}'"
@@ -384,21 +413,59 @@ impl LoopTool for SubagentTool {
                 // Success carrying the `failed` report (not a ToolResult::Error)
                 // so it does not trip the harness failure counter — the model
                 // sees which child failed and can wait for the rest.
-                return match self.background_tracker.wait_any(&request_ids, dur).await {
+                let outcome = tokio::select! {
+                    biased;
+                    () = cancel.cancelled() => return self.wait_cancelled(&request_ids),
+                    outcome = self.background_tracker.wait_any(&request_ids, dur) => outcome,
+                };
+                let unknown = self.background_tracker.unknown_ids(&request_ids);
+                return match outcome {
                     WaitAnyOutcome::Completed {
                         request_id,
                         snapshot,
-                    } => ToolResult::Success {
-                        output: completed_to_json(&request_id, "completed", &snapshot),
-                    },
-                    WaitAnyOutcome::TimedOut { still_running } => ToolResult::Success {
-                        output: json!({
+                    } => {
+                        let mut output = completed_to_json(&request_id, "completed", &snapshot);
+                        annotate_unknown(&mut output, &unknown);
+                        ToolResult::Success { output }
+                    }
+                    WaitAnyOutcome::TimedOut { still_running } => {
+                        let waiting: Vec<Value> = still_running
+                            .iter()
+                            .map(|id| match self.background_tracker.running_meta(id) {
+                                Some(meta) => json!({
+                                    "request_id": id,
+                                    "task": meta.task,
+                                    "elapsed_secs": meta.elapsed_secs,
+                                }),
+                                None => json!({ "request_id": id }),
+                            })
+                            .collect();
+                        let mut output = json!({
                             "status": "still_running",
-                            "still_running": still_running,
+                            "still_running": waiting,
                             "waited_secs": timeout_secs,
                             "note": "No sub-agent in the set finished within the wait window. Call 'wait' again with these request_ids to keep blocking, or do other work — completions are also announced to you.",
-                        }),
-                    },
+                        });
+                        annotate_unknown(&mut output, &unknown);
+                        ToolResult::Success { output }
+                    }
+                    // Every id in the set already handed you its result. Re-issuing
+                    // the same wait is the natural drain loop, so this terminal is
+                    // what stops it (the old behaviour re-returned the first
+                    // completed id instantly, forever, one LLM turn per lap).
+                    WaitAnyOutcome::AllDelivered { request_ids } => {
+                        // An unknown id contributes to neither side of the
+                        // drained/running split, so a set of {delivered, typo}
+                        // terminates here — and this is the model's only chance
+                        // to learn the typo was never a sub-agent at all.
+                        let mut output = json!({
+                            "status": "all_delivered",
+                            "request_ids": request_ids,
+                            "note": "Every sub-agent in this set has finished and its result was already returned to you. Nothing is left to wait for; use 'check_status' with a specific request_id to re-read one.",
+                        });
+                        annotate_unknown(&mut output, &unknown);
+                        ToolResult::Success { output }
+                    }
                     WaitAnyOutcome::NotFound => ToolResult::Error {
                         error:
                             "None of the given request_ids matches a known background sub-agent \
@@ -411,6 +478,14 @@ impl LoopTool for SubagentTool {
             SubagentAction::Cancel(request_id) => {
                 let hit = self.background_tracker.cancel(&request_id);
                 if hit {
+                    // The parent has decided this run's outcome: whatever the
+                    // child unwinds into is already accounted for. Stamping the
+                    // *running* entry carries that across the transition, so the
+                    // `Err("sub-agent failed: cancelled")` that lands a moment
+                    // later does not reach `subagent_announce` un-consumed and
+                    // spend a whole fresh parent turn reporting the failure of a
+                    // sub-agent the parent itself just killed.
+                    self.background_tracker.mark_consumed(&request_id);
                     return ToolResult::Success {
                         output: json!({
                             "status": "cancelling",
@@ -425,7 +500,10 @@ impl LoopTool for SubagentTool {
                             "note": "CancellationToken fired. Background sub-agents exit at their \
                                      next await point; runs owned by other surfaces (team chat, \
                                      delegations) are stopped by their owners — use teams.chat.cancel \
-                                     for a chat fan-out tree.",
+                                     for a chat fan-out tree. You will NOT be notified when this one \
+                                     settles (you asked for it to stop, so its outcome is not news); \
+                                     use 'check_status' with this request_id if you do want to see \
+                                     how it ended.",
                         }),
                     };
                 }
@@ -461,9 +539,16 @@ impl LoopTool for SubagentTool {
                 };
             }
             SubagentAction::List => {
+                // Scope both enumeration faces to this run's owning session. The
+                // tracker is process-global, so an unscoped `list` handed this
+                // model the live request_ids of every other session's background
+                // sub-agents — ids it could then `check_status` (reading another
+                // session's output) or `cancel`. `None` only when this tool has
+                // no owning session at all (CLI / direct construction).
+                let scope = self.parent_session_id.as_deref();
                 let running: Vec<Value> = self
                     .background_tracker
-                    .list_running()
+                    .list_running(scope)
                     .into_iter()
                     .map(|(id, task, elapsed_secs)| {
                         json!({
@@ -473,20 +558,39 @@ impl LoopTool for SubagentTool {
                         })
                     })
                     .collect();
-                let completed: Vec<Value> = self
-                    .background_tracker
-                    .all_completed()
+                // Newest-first from the tracker, so the cap keeps the results the
+                // parent is most likely to still care about.
+                let all_completed = self.background_tracker.all_completed(scope);
+                let completed_total = all_completed.len();
+                let completed: Vec<Value> = all_completed
                     .iter()
-                    .map(|(id, snap)| completed_to_json(id, "completed", snap))
+                    .take(MAX_LISTED_COMPLETED)
+                    .map(|(id, snap)| completed_row_json(id, snap))
                     .collect();
-                return ToolResult::Success {
-                    output: json!({
-                        "running": running,
-                        "running_count": running.len(),
-                        "completed": completed,
-                        "completed_count": completed.len(),
-                    }),
-                };
+                let mut output = json!({
+                    "running": running,
+                    "running_count": running.len(),
+                    "completed": completed,
+                    "completed_count": completed_total,
+                    "note": "Rows are summaries. Use 'check_status' with a request_id for a sub-agent's full result text.",
+                });
+                if completed_total > MAX_LISTED_COMPLETED {
+                    // Never let a cap read as "these are all of them" (the
+                    // silent-truncation trap): say what was withheld and how to
+                    // reach it.
+                    if let Some(obj) = output.as_object_mut() {
+                        obj.insert("completed_listed".to_string(), json!(MAX_LISTED_COMPLETED));
+                        obj.insert(
+                            "completed_truncated_note".to_string(),
+                            json!(format!(
+                                "Showing the {MAX_LISTED_COMPLETED} most recently finished of \
+                                 {completed_total}; older results are still retrievable by \
+                                 request_id via 'check_status'."
+                            )),
+                        );
+                    }
+                }
+                return ToolResult::Success { output };
             }
             SubagentAction::Run(run_args) => run_args,
         };
@@ -972,6 +1076,72 @@ impl LoopTool for SubagentTool {
     }
 }
 
+impl SubagentTool {
+    /// Report a `wait` that was cut short by the harness cancel token.
+    ///
+    /// # Why the wait listens to the token at all
+    ///
+    /// `wait` parks for up to `MAX_WAIT_TIMEOUT_SECS` (600 s). The park used to
+    /// ignore the per-call `CancellationToken` entirely, so a `/stop` — or a
+    /// per-tool cancel — landed on a run that then stayed wedged inside the
+    /// sleep for up to ten more minutes. codex's `wait_agent` treats new input
+    /// as a first-class wake reason (`WaitOutcome::Steered`) for the same
+    /// reason: a blocking wait must never outlive the intent to stop.
+    ///
+    /// # Why this is a Success, not an Error
+    ///
+    /// Nothing failed. The sub-agents are untouched — the token cancels *this
+    /// wait*, not the children (a run-level cancel reaches them through their
+    /// own tokens). Reporting a failure here would feed the harness's
+    /// consecutive-failure counter and the cross-batch memo a verdict about a
+    /// call that never failed, the same trap `ToolError::Cancelled` exists to
+    /// avoid one layer down.
+    fn wait_cancelled(&self, request_ids: &[String]) -> ToolResult {
+        let still_running: Vec<Value> = request_ids
+            .iter()
+            .filter_map(|id| {
+                self.background_tracker.running_meta(id).map(|meta| {
+                    json!({
+                        "request_id": id,
+                        "task": meta.task,
+                        "elapsed_secs": meta.elapsed_secs,
+                    })
+                })
+            })
+            .collect();
+        ToolResult::Success {
+            output: json!({
+                "status": "wait_interrupted",
+                "still_running": still_running,
+                "note": "The wait was interrupted before any sub-agent finished. The sub-agents themselves were not cancelled by this — their completions are still announced to you, and 'check_status' still reads their results.",
+            }),
+        }
+    }
+}
+
+/// Attach the ids the tracker has never heard of to a `wait` report.
+///
+/// A set containing one typo'd (or foreign-session, or TTL-pruned) id used to
+/// park for the whole window and report only on the good ids, so a typo was
+/// indistinguishable from a slow sub-agent. No-op when every id resolved, so
+/// the common case stays byte-identical.
+fn annotate_unknown(output: &mut Value, unknown: &[String]) {
+    if unknown.is_empty() {
+        return;
+    }
+    if let Some(obj) = output.as_object_mut() {
+        obj.insert("unknown_request_ids".to_string(), json!(unknown));
+        obj.insert(
+            "unknown_note".to_string(),
+            json!(
+                "These request_ids match no background sub-agent (never registered, \
+                 owned by another session, or expired). They will never complete — \
+                 drop them from your next 'wait', and use 'list' to recover valid ids."
+            ),
+        );
+    }
+}
+
 /// Derive a compact activity summary from a running sub-agent's progress
 /// window. `steps` is the highest iteration index observed (monotonic, so
 /// it stays accurate even though the window is FIFO-capped at 50); the
@@ -1059,6 +1229,53 @@ fn build_synthesis_prompt(
     }
     out.push_str("\n## Your task\nReturn the single synthesized answer to the goal.");
     out
+}
+
+/// Render a finished background sub-agent as a compact **directory row** for
+/// `list`: identity, terminal status, cost, and a bounded preview — never the
+/// full output.
+///
+/// The full text stays one `check_status` away. See [`MAX_LISTED_COMPLETED`]
+/// for why `list` must not carry it.
+fn completed_row_json(request_id: &str, snap: &CompletedSnapshot) -> Value {
+    match &snap.outcome {
+        CompletedOutcome::Ok {
+            final_text,
+            iterations,
+            tool_calls_made,
+            total_tokens,
+        } => json!({
+            "status": "completed",
+            "request_id": request_id,
+            "task": snap.task,
+            "result_preview": preview(final_text),
+            "result_chars": final_text.chars().count(),
+            "iterations": iterations,
+            "tool_calls_made": tool_calls_made,
+            "total_tokens": total_tokens,
+            "duration_secs": snap.duration_secs,
+        }),
+        CompletedOutcome::Err(err) => json!({
+            "status": "failed",
+            "request_id": request_id,
+            "task": snap.task,
+            // A failure message is short and is the whole point of the row, so
+            // it rides in full — unlike a success's output.
+            "error": err,
+            "duration_secs": snap.duration_secs,
+        }),
+    }
+}
+
+/// UTF-8-safe head slice of a sub-agent's output, ellipsised when cut (P7 —
+/// byte slicing a model-authored string is how this panics on CJK).
+fn preview(text: &str) -> String {
+    let head: String = text.chars().take(LIST_RESULT_PREVIEW_CHARS).collect();
+    if head.chars().count() < text.chars().count() {
+        format!("{head}…")
+    } else {
+        head
+    }
 }
 
 /// Render a finished background sub-agent as a JSON object. `ok_status` is

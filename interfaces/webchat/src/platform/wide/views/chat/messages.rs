@@ -5,7 +5,7 @@
 //! the chat module (`pub(super)`).
 
 use super::reasoning::ReasoningPanel;
-use super::state::{ChatMessage, ChatPhase, ChatState, QueuedPrompt};
+use super::state::{merge_draft, ChatMessage, ChatPhase, ChatState, QueuedPrompt};
 use super::timeline::{self, TimelineRow};
 use super::PlanArchiveCell;
 use crate::components::markdown::TypewriterRenderer;

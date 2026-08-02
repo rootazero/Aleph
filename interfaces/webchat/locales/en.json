@@ -253,7 +253,7 @@
     "remove": "Remove",
     "clear": "Clear draft",
     "force_insert": "Insert now (interrupt current task)",
-    "queue_hint": "Auto-inserts next turn · ↑ to take the last one back · Esc/⚡ to insert now",
+    "queue_hint": "Auto-inserts next turn · Esc/⚡ to insert now · ↑ to take the last one back",
     "ask_user_header": "Aleph has a question",
     "ask_user_placeholder": "Type your answer…",
     "ask_user_answer": "Answer",

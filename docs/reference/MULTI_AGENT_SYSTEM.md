@@ -1087,18 +1087,46 @@ turn. When the parent must block on a specific result before continuing, the
   the **same shape** `check_status` gives (a failure still surfaces as a
   `ToolResult::Error`); on timeout it returns `{"status": "still_running",
   "request_id": "...", "elapsed_secs": N, "waited_secs": 120, ...}` so the model
-  may `wait` again.
+  may `wait` again. The timeout report carries the same `summary` + `progress`
+  pair `check_status` gives, so deciding "keep waiting or cancel?" does not cost
+  another turn for data the tracker already had.
 - `{"action": "wait", "request_ids": ["a", "b", ...], "timeout_secs": 120}` —
-  fan-out first-completion: returns as soon as **any** id in the set finishes,
-  reporting which one (`request_id`). Drain the rest by dropping it and calling
-  `wait` again. A failed first-completion comes back as a `status: "failed"`
-  Success (not a `ToolResult::Error`) so it does not trip the harness failure
-  counter — the model sees which child failed and can wait for the rest. Mirrors
-  codex `wait_agent`.
+  fan-out first-completion: returns as soon as any id in the set finishes that
+  has **not already been returned to you**, reporting which one (`request_id`).
+  Drain the set by **re-issuing the same call**; once every id has been handed
+  over and none is still running you get `{"status": "all_delivered",
+  "request_ids": [...]}`. A failed first-completion comes back as a
+  `status: "failed"` Success (not a `ToolResult::Error`) so it does not trip the
+  harness failure counter — the model sees which child failed and can wait for
+  the rest. Ids the tracker has never heard of come back as
+  `unknown_request_ids` instead of being silently parked on. Mirrors codex
+  `wait_agent`.
 
 `timeout_secs` defaults to 120 and is clamped to 600 (`DEFAULT_WAIT_TIMEOUT_SECS`
 / `MAX_WAIT_TIMEOUT_SECS` in `types.rs`) — well under the subagent tool's
 `1_800_000`ms wall-clock budget, so a single `wait` can never hang the turn.
+
+**A parked wait is interruptible.** Both branches run inside a
+`tokio::select!` against the harness's per-call `CancellationToken`, so a
+`/stop` (or a per-tool cancel) is honoured immediately instead of waiting out
+the window — that window is up to ten minutes, and the cancel token's worst-case
+latency is exactly the longest sleep on the path. codex's `wait_agent` treats
+new input as a first-class wake reason (`WaitOutcome::Steered`) for the same
+reason. The interrupted wait reports
+`{"status": "wait_interrupted", "still_running": [...]}` as a **Success**:
+nothing failed, and the sub-agents themselves are untouched by this token (a
+run-level cancel reaches them through their own). Reporting it as an error would
+feed the harness's consecutive-failure counter and the cross-batch memo a verdict
+about a call that was merely interrupted — the trap `ToolError::Cancelled` exists
+to avoid one layer down.
+
+**Delivered results are skipped, not re-returned.** `wait_any` satisfies the wait
+only from an *undelivered* completion and marks it consumed on the way out. This
+is what makes "re-issue the same `request_ids`" a correct drain loop. Returning
+the first completed id regardless of delivery meant a model repeating its own
+previous arguments got the same result back instantly and forever, burning one
+LLM turn per lap. A single-id `wait` stays idempotent: the caller asked about one
+agent, so `wait` maps the `AllDelivered` terminal back to that agent's snapshot.
 
 Implementation (`src/agents/background_tracker.rs`): a `tokio::sync::Notify`
 `completion` signal fires at the end of `mark_completed`; `wait`/`wait_any` use
@@ -1118,21 +1146,64 @@ poll/wait path and the announce path never double-inject the same result (hermes
 `_completion_consumed` parity). Both paths share the process-global
 `BackgroundAgentTracker::global()` instance.
 
+`mark_consumed` works in **both** phases of a run's life, because its two
+producers sit on opposite sides of the completion transition. A `wait` /
+`check_status` stamps an existing completed entry. A model-issued **`cancel`**
+cannot: it fires the token and returns long before the child unwinds, so at that
+moment there is no completed entry — the intent is recorded on the running entry
+(`RunningAgent.consume_on_completion`) and folded in by `mark_completed`, so the
+result is *born* consumed. Covering only the first case left cancellation as the
+likeliest producer of a spurious announce: a whole parent turn spent reporting
+`sub-agent failed: cancelled` for a child the parent itself killed.
+
+The dedup guard is also re-checked **before every retry attempt**, not once up
+front. The announce retry schedule (`[0, 30, 120]s`) spans over two minutes, and
+the commonest reason the parent is busy is that it is parked in this very `wait`
+— which returns the result and consumes it. Checking only before the loop meant
+the announce woke minutes later and spent a fresh turn re-delivering something
+the model had already folded in.
+
 ### list Action
 
-`{"action": "list"}` enumerates every background sub-agent the tracker still
-holds — running and recently-completed — so the parent can recover a
-`request_id` it no longer has in context:
+`{"action": "list"}` is a **directory** of the background sub-agents this
+session still holds — running and recently-finished — so the parent can recover
+a `request_id` it no longer has in context:
 
 ```json
 {
   "running":   [ { "request_id": "...", "task": "...", "elapsed_secs": 12 } ],
   "running_count": 1,
   "completed": [ { "status": "completed", "request_id": "...", "task": "...",
-                   "result": "...", "iterations": 4, "duration_secs": 31, ... } ],
-  "completed_count": 1
+                   "result_preview": "first 200 chars…", "result_chars": 8123,
+                   "iterations": 4, "duration_secs": 31, ... } ],
+  "completed_count": 1,
+  "note": "Rows are summaries. Use 'check_status' ... for full result text."
 }
 ```
+
+**Rows are summaries, and the list is scoped to this session.** Two properties
+that are easy to lose and expensive to lose:
+
+- *Scope.* The tracker is a **process-global** singleton. `flat_nodes` has always
+  taken a `root_session` filter; `list_running` / `all_completed` did not, so an
+  unscoped `list` handed one session's model the live `request_id`s of **every
+  other session's** background sub-agents — ids it could then `check_status`
+  (reading foreign output) or `cancel` (stopping foreign work). Both now take
+  `scope: Option<&str>` and the tool passes its `parent_session_id`; `None` is
+  reserved for callers that genuinely have no owning session (CLI / direct
+  construction / tests). A model's ids can only come from its own spawns or from
+  an enumeration face, so scoping the enumeration is sufficient — by-id lookups
+  keep their semantics.
+- *Size.* `list` used to render every retained completion with its **full**
+  result text (up to `MAX_COMPLETED_RESULTS` = 256 of them), which one call could
+  use to swamp the parent's whole context with material it never asked for — and
+  which the generic result budget would then chop from the middle. Rows now carry
+  a bounded `result_preview` plus `result_chars`; a failure message rides in full
+  because it is short and is the point of the row. The list is capped at
+  `MAX_LISTED_COMPLETED` = 20, ordered newest-first by `all_completed` (the
+  backing map iterates randomly, so an unordered cap would drop an arbitrary
+  subset), and when it truncates it says how many were withheld and how to reach
+  them — never a silent cut.
 
 `list` reports only ids the parent can act on. *Presence-only* registrations —
 the running-only entries the sync fan-out seams create (sync `batch_tasks` /

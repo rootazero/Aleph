@@ -72,6 +72,24 @@ fn next_queued_prompt_id() -> u64 {
     NEXT.fetch_add(1, Ordering::Relaxed)
 }
 
+/// Fold a restored prompt back into whatever the user has already typed.
+///
+/// Restoring used to **replace** the composer contents, so pulling a queued
+/// prompt back for editing silently destroyed a half-written draft — the one
+/// keystroke a user cannot undo. Both restore paths (the ghost bubble's click
+/// and the composer's ↑) merge instead, and both put the restored text first,
+/// matching codex's `restore_user_message_to_composer`: the thing you asked to
+/// edit lands where the cursor was, with your in-progress line below it.
+///
+/// Pure and host-testable — no signals, no DOM.
+#[must_use]
+pub fn merge_draft(restored: &str, current: &str) -> String {
+    match (restored.trim().is_empty(), current.trim().is_empty()) {
+        (true, _) => current.to_string(),
+        (false, true) => restored.to_string(),
+        (false, false) => format!("{restored}\n\n{current}"),
+    }
+}
 /// One-line preview for a queued prompt: trimmed text (UTF-8-safe truncation,
 /// P7), or an attachment-count fallback when attachments-only. Pure — the
 /// ghost bubble renders whatever this returns.
@@ -2288,6 +2306,21 @@ mod queue_tests {
         let a = prompt("same text", 0);
         let b = prompt("same text", 0);
         assert_ne!(a.id, b.id, "identical text must still be distinguishable");
+    }
+
+    /// The restored prompt lands above the in-progress line, and neither side
+    /// is ever destroyed (codex `restore_user_message_to_composer` order).
+    #[test]
+    fn merge_draft_keeps_both_sides_restored_first() {
+        assert_eq!(merge_draft("queued", "typing"), "queued\n\ntyping");
+    }
+
+    #[test]
+    fn merge_draft_is_identity_when_one_side_is_blank() {
+        assert_eq!(merge_draft("queued", ""), "queued");
+        assert_eq!(merge_draft("queued", "   "), "queued");
+        assert_eq!(merge_draft("", "typing"), "typing");
+        assert_eq!(merge_draft("  ", "typing"), "typing");
     }
 }
 

@@ -253,7 +253,7 @@
     "remove": "移除",
     "clear": "清空草稿",
     "force_insert": "立即插入（中断当前任务）",
-    "queue_hint": "下个回合自动插入 · ↑ 撤回最后一条 · Esc/⚡ 立即插入",
+    "queue_hint": "下个回合自动插入 · Esc/⚡ 立即插入 · ↑ 撤回最后一条",
     "ask_user_header": "Aleph 有个问题",
     "ask_user_placeholder": "输入你的回答…",
     "ask_user_answer": "回答",
