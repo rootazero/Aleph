@@ -6,4 +6,7 @@
 
 pub mod composer_queue;
 
-pub use composer_queue::{should_auto_drain_on_settle, should_flush_on_turn_boundary};
+pub use composer_queue::{
+    merge_recalled_draft, should_auto_drain_on_settle, should_flush_on_turn_boundary,
+    should_recall_on_bare_arrow_up,
+};

@@ -32,7 +32,10 @@ use palette::{
 use shared_ui_logic::safety::{
     check_prompt_injection, prompt_guard_message, PromptInjectionVerdict,
 };
-use shared_ui_logic::state::{should_auto_drain_on_settle, should_flush_on_turn_boundary};
+use shared_ui_logic::state::{
+    merge_recalled_draft, should_auto_drain_on_settle, should_flush_on_turn_boundary,
+    should_recall_on_bare_arrow_up,
+};
 use wasm_bindgen::closure::Closure;
 use wasm_bindgen::JsCast;
 
@@ -501,15 +504,20 @@ pub(super) fn InputArea() -> impl IntoView {
         });
     }
 
-    // Empty-state suggestion chips (and any future "insert prompt" source) drop
-    // a starter string on `chat.draft_seed`; drain it into this local
-    // `input_text` here so the chips never need a handle on the composer. Same
-    // shape as the retry plumbing above. Writing the signal back to `None`
-    // inside the Effect that reads it is safe — the re-run sees `None` and stops.
+    // Empty-state suggestion chips, the queued-ghost tap, and keyboard recall
+    // all drop text on `chat.draft_seed`; drain it into this local `input_text`
+    // here so none of them need a handle on the composer. Same shape as the
+    // retry plumbing above. Writing the signal back to `None` inside the Effect
+    // that reads it is safe — the re-run sees `None` and stops.
+    //
+    // The seed goes *ahead of* whatever is already typed rather than replacing
+    // it: recalling a queued prompt must not silently destroy a draft in
+    // progress, and prepending is what makes repeated tail-recalls rebuild the
+    // queue's original order (see `merge_recalled_draft`).
     {
         Effect::new(move |_| {
             if let Some(seed) = chat.draft_seed.get() {
-                input_text.set(seed);
+                input_text.set(merge_recalled_draft(&seed, &input_text.get_untracked()));
                 chat.draft_seed.set(None);
             }
         });
@@ -800,6 +808,32 @@ pub(super) fn InputArea() -> impl IntoView {
                     _ => {}
                 }
                 return;
+            }
+            // Recall the newest queued prompt back into the composer — the
+            // keyboard twin of tapping a ghost bubble. Two bindings, one
+            // action:
+            //   * `Alt`/`Option` + `ArrowUp` always, matching codex
+            //     (`edit_queued_message`) and pi (`app.message.dequeue`);
+            //   * a bare `ArrowUp` only when the textarea is empty, where the
+            //     key has no caret work to do and "up = my last message" is
+            //     what a terminal-shaped habit expects.
+            // Both palettes claim `ArrowUp` for list navigation and return
+            // early above, so neither is reachable from here. Repeated presses
+            // walk further back: each recall prepends, so the queue's order is
+            // rebuilt in the draft rather than reversed.
+            if ev.key() == "ArrowUp" {
+                let queue_len = chat.prompt_queue.get_untracked().len();
+                let bare_recall = should_recall_on_bare_arrow_up(
+                    queue_len,
+                    input_text.get_untracked().is_empty(),
+                );
+                if (ev.alt_key() && queue_len > 0) || (!ev.alt_key() && bare_recall) {
+                    ev.prevent_default();
+                    if let Some(entry) = chat.recall_latest_queued() {
+                        chat.seed_draft(entry.text, entry.attachments);
+                    }
+                    return;
+                }
             }
             // Esc while a run is active = force-insert: interrupt now and flush
             // the queue (+ the current draft) as a fresh run (B7). Palette/

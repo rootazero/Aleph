@@ -15,7 +15,9 @@ use crate::api::chat::ChatApi;
 use crate::context::DashboardState;
 use crate::views::chat::state::{ChatPhase, ChatSendError, QueuedPrompt};
 use crate::views::chat::ChatState;
-use shared_ui_logic::state::{should_auto_drain_on_settle, should_flush_on_turn_boundary};
+use shared_ui_logic::state::{
+    merge_recalled_draft, should_auto_drain_on_settle, should_flush_on_turn_boundary,
+};
 
 #[component]
 #[must_use]
@@ -227,6 +229,18 @@ pub fn PhoneComposer() -> impl IntoView {
             let _ = ChatApi::abort(&dash, &run_id).await;
         });
     };
+
+    // Drain `chat.draft_seed` into the local textarea. The shared `MessageList`
+    // renders the starter chips and the queued-ghost bubbles on phone too, and
+    // both hand their text over on this signal — without a consumer here, a tap
+    // on a ghost took the prompt out of the queue and dropped it on the floor.
+    // Seed goes ahead of the draft, never over it (see `merge_recalled_draft`).
+    Effect::new(move |_| {
+        if let Some(seed) = chat.draft_seed.get() {
+            input_text.set(merge_recalled_draft(&seed, &input_text.get_untracked()));
+            chat.draft_seed.set(None);
+        }
+    });
 
     // Queue auto-drain — when a run settles naturally (busy→idle), flush the
     // queue. An explicit Stop set `user_interrupted`, suppressing exactly one

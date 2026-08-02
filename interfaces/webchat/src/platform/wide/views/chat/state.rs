@@ -4,6 +4,7 @@ use super::plan::{PlanUpdate, PlanView};
 use crate::api::teams::CoordTaskDto;
 use leptos::prelude::*;
 use serde::{Deserialize, Serialize};
+use shared_ui_logic::state::merge_recalled_draft;
 
 /// File staged for upload as part of the next outbound message.
 ///
@@ -755,18 +756,6 @@ impl ChatState {
         self.prompt_queue.update(|q| q.push(entry));
     }
 
-    /// Pop the head of the queue, if any. Returns the prompt to replay.
-    #[must_use]
-    pub fn dequeue_prompt_front(&self) -> Option<QueuedPrompt> {
-        let mut popped = None;
-        self.prompt_queue.update(|q| {
-            if !q.is_empty() {
-                popped = Some(q.remove(0));
-            }
-        });
-        popped
-    }
-
     /// Remove the queued prompt at `index` (no-op if out of range). Used by
     /// the per-row ✕ in the queue preview bar.
     pub fn remove_queued_prompt(&self, index: usize) {
@@ -775,6 +764,59 @@ impl ChatState {
                 q.remove(index);
             }
         });
+    }
+
+    /// Take the queued prompt at `index` back out of the queue, if it exists.
+    /// The caller is expected to hand it to [`Self::seed_draft`] — dropping the
+    /// return value silently destroys a message the user queued.
+    #[must_use]
+    pub fn take_queued_prompt(&self, index: usize) -> Option<QueuedPrompt> {
+        let mut taken = None;
+        self.prompt_queue.update(|q| {
+            if index < q.len() {
+                taken = Some(q.remove(index));
+            }
+        });
+        taken
+    }
+
+    /// Take the **newest** queued prompt back out of the queue — the keyboard
+    /// recall (`ArrowUp` / `Alt+ArrowUp`) and its pointer equivalent.
+    ///
+    /// Recall pops from the tail so that repeated recalls, each prepended to
+    /// the draft by [`Self::seed_draft`], rebuild the queue's original order in
+    /// the composer.
+    #[must_use]
+    pub fn recall_latest_queued(&self) -> Option<QueuedPrompt> {
+        let mut popped = None;
+        self.prompt_queue.update(|q| popped = q.pop());
+        popped
+    }
+
+    /// Hand text (and any files) to whichever composer is mounted, **ahead of**
+    /// whatever the user is already typing.
+    ///
+    /// This is the single channel for "put this prompt back in the composer":
+    /// starter chips, the queued-ghost tap, and keyboard recall all go through
+    /// it, and both the wide and phone composers drain it. Seeds accumulate
+    /// rather than overwrite, so two recalls landing before the composer's
+    /// drain Effect runs keep both prompts and their order.
+    pub fn seed_draft(&self, text: String, attachments: Vec<PendingAttachment>) {
+        if !text.trim().is_empty() {
+            self.draft_seed.update(|slot| {
+                *slot = Some(match slot.take() {
+                    Some(pending) => merge_recalled_draft(&text, &pending),
+                    None => text,
+                });
+            });
+        }
+        if !attachments.is_empty() {
+            self.pending_attachments.update(|staged| {
+                let mut merged = attachments;
+                merged.append(staged);
+                *staged = merged;
+            });
+        }
     }
 
     /// Remove and return every queued prompt (FIFO order preserved), leaving
@@ -2064,6 +2106,99 @@ mod queue_tests {
         let texts: Vec<_> = drained.iter().map(|p| p.text.clone()).collect();
         assert_eq!(texts, vec!["a", "b"]);
         assert!(chat.prompt_queue.get_untracked().is_empty());
+    }
+
+    #[test]
+    fn recall_takes_the_newest_and_shortens_the_queue() {
+        let owner = Owner::new();
+        owner.set();
+        let chat = ChatState::new();
+        chat.enqueue_prompt(prompt("a", 0));
+        chat.enqueue_prompt(prompt("b", 0));
+
+        assert_eq!(
+            chat.recall_latest_queued().map(|p| p.text).as_deref(),
+            Some("b")
+        );
+        assert_eq!(
+            chat.prompt_queue.get_untracked().len(),
+            1,
+            "the recalled prompt must leave the queue, not be copied out of it"
+        );
+        assert_eq!(
+            chat.recall_latest_queued().map(|p| p.text).as_deref(),
+            Some("a")
+        );
+        assert!(
+            chat.recall_latest_queued().is_none(),
+            "an empty queue recalls nothing"
+        );
+    }
+
+    #[test]
+    fn two_recalls_before_the_composer_drains_keep_both_and_their_order() {
+        // The composer's drain runs in an Effect, i.e. after the keystroke.
+        // Two fast presses must not let the second seed overwrite the first —
+        // that would silently destroy a queued message.
+        let owner = Owner::new();
+        owner.set();
+        let chat = ChatState::new();
+        chat.enqueue_prompt(prompt("first", 0));
+        chat.enqueue_prompt(prompt("second", 0));
+
+        for _ in 0..2 {
+            let entry = chat.recall_latest_queued().expect("queued prompt");
+            chat.seed_draft(entry.text, entry.attachments);
+        }
+
+        assert_eq!(
+            chat.draft_seed.get_untracked().as_deref(),
+            Some("first\n\nsecond"),
+            "recalling from the tail and prepending rebuilds the queue's order"
+        );
+        assert!(chat.prompt_queue.get_untracked().is_empty());
+    }
+
+    #[test]
+    fn seeding_a_prompt_with_files_stages_them_ahead_of_what_is_already_attached() {
+        let owner = Owner::new();
+        owner.set();
+        let chat = ChatState::new();
+        chat.pending_attachments.set(prompt("", 1).attachments);
+
+        chat.seed_draft("recalled".into(), prompt("", 2).attachments);
+
+        assert_eq!(
+            chat.pending_attachments.get_untracked().len(),
+            3,
+            "a recalled prompt's files must join the staged ones, not replace them"
+        );
+    }
+
+    #[test]
+    fn taking_a_queued_prompt_by_index_returns_it_and_removes_it_once() {
+        let owner = Owner::new();
+        owner.set();
+        let chat = ChatState::new();
+        chat.enqueue_prompt(prompt("a", 0));
+        chat.enqueue_prompt(prompt("b", 0));
+
+        assert_eq!(
+            chat.take_queued_prompt(0).map(|p| p.text).as_deref(),
+            Some("a")
+        );
+        let left: Vec<_> = chat
+            .prompt_queue
+            .get_untracked()
+            .into_iter()
+            .map(|p| p.text)
+            .collect();
+        assert_eq!(left, vec!["b"]);
+        assert!(
+            chat.take_queued_prompt(7).is_none(),
+            "an out-of-range index must not disturb the queue"
+        );
+        assert_eq!(chat.prompt_queue.get_untracked().len(), 1);
     }
 }
 
