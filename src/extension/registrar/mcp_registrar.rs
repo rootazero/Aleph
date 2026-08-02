@@ -9,6 +9,8 @@
 
 // -- P3 Stage I — per-agent MCP scope ----------------------------------------
 
+use crate::extension::registry::PluginRegistry;
+
 /// Errors raised while provisioning or tearing down an [`McpScope`].
 ///
 /// All variants are fail-loud: `subagent_spawner::spawn` maps any

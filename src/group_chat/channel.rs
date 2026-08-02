@@ -4,7 +4,7 @@
 //! to render group chat messages in their native format and parse channel-specific
 //! commands into group chat requests.
 
-use super::protocol::{GroupChatRequest, Persona, PersonaSource, RenderedContent};
+use super::protocol::{GroupChatRequest, Persona, PersonaSource};
 
 // =============================================================================
 // DefaultGroupChatCommandParser

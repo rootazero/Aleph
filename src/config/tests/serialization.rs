@@ -124,9 +124,6 @@ fn test_config_save_and_load() {
         loaded.general.default_provider,
         config.general.default_provider
     );
-        loaded.general.default_provider,
-        config.general.default_provider
-    );
     assert!(loaded.providers.contains_key("openai"));
 }
 

@@ -217,7 +217,7 @@ impl FromStr for GroupChatStatus {
         match s {
             s if s.eq_ignore_ascii_case("active") => Ok(Self::Active),
             s if s.eq_ignore_ascii_case("ended") => Ok(Self::Ended),
-            _ => Err(format!("unknown group chat status: '{s}')),
+            _ => Err(format!("unknown group chat status: '{s}'")),
         }
     }
 }
@@ -365,7 +365,7 @@ pub enum GroupChatError {
     #[error("invalid persona: {0}")]
     InvalidPersona(String),
 
-    /// The session is not active (e.g., ended or paused).
+    /// The session is not active (e.g., has ended).
     #[error("session is not active: {0}")]
     SessionInactive(String),
 }
@@ -414,12 +414,10 @@ mod tests {
 
     #[test]
     fn test_group_chat_status_display_and_fromstr() {
-        // Test as_str() and Display
         assert_eq!(GroupChatStatus::Active.as_str(), "active");
         assert_eq!(GroupChatStatus::Ended.as_str(), "ended");
         assert_eq!(format!("{}", GroupChatStatus::Active), "active");
 
-        // Test FromStr roundtrip
         assert_eq!(
             "active".parse::<GroupChatStatus>().unwrap(),
             GroupChatStatus::Active
