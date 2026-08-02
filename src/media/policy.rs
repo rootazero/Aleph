@@ -1,8 +1,5 @@
 //! Size and lifecycle policy for media processing.
 
-use std::path::PathBuf;
-use std::time::Duration;
-
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
@@ -35,14 +32,6 @@ pub struct MediaPolicy {
     /// Maximum document pages (default: 200).
     #[serde(default = "default_max_document_pages")]
     pub max_document_pages: u32,
-
-    /// Temporary file directory.
-    #[serde(default = "default_temp_dir")]
-    pub temp_dir: PathBuf,
-
-    /// Temp file TTL in seconds (default: 3600 = 1 hour).
-    #[serde(default = "default_temp_ttl_secs")]
-    pub temp_ttl_secs: u64,
 }
 
 const fn default_max_image_bytes() -> u64 {
@@ -63,15 +52,6 @@ const fn default_max_document_bytes() -> u64 {
 const fn default_max_document_pages() -> u32 {
     200
 }
-fn default_temp_dir() -> PathBuf {
-    dirs::cache_dir()
-        .unwrap_or_else(|| PathBuf::from("/tmp"))
-        .join("aleph")
-        .join("media_temp")
-}
-const fn default_temp_ttl_secs() -> u64 {
-    3600
-}
 
 impl Default for MediaPolicy {
     fn default() -> Self {
@@ -82,19 +62,11 @@ impl Default for MediaPolicy {
             max_video_bytes: default_max_video_bytes(),
             max_document_bytes: default_max_document_bytes(),
             max_document_pages: default_max_document_pages(),
-            temp_dir: default_temp_dir(),
-            temp_ttl_secs: default_temp_ttl_secs(),
         }
     }
 }
 
 impl MediaPolicy {
-    /// Temp file TTL as Duration.
-    #[must_use]
-    pub const fn temp_ttl(&self) -> Duration {
-        Duration::from_secs(self.temp_ttl_secs)
-    }
-
     /// Validate file size against policy for the given media type.
     pub fn check_size(
         &self,
@@ -193,7 +165,6 @@ mod tests {
         assert_eq!(p.max_video_bytes, 500 * 1024 * 1024);
         assert_eq!(p.max_document_bytes, 50 * 1024 * 1024);
         assert_eq!(p.max_document_pages, 200);
-        assert_eq!(p.temp_ttl(), Duration::from_secs(3600));
     }
 
     #[test]
@@ -201,8 +172,6 @@ mod tests {
         let p = MediaPolicy::default();
         let mt = MediaType::Image {
             format: MediaImageFormat::Png,
-            width: None,
-            height: None,
         };
         assert!(p.check_size(&mt, 1024).is_ok());
     }
@@ -212,8 +181,6 @@ mod tests {
         let p = MediaPolicy::default();
         let mt = MediaType::Image {
             format: MediaImageFormat::Png,
-            width: None,
-            height: None,
         };
         assert!(p.check_size(&mt, 21 * 1024 * 1024).is_err());
     }

@@ -27,31 +27,10 @@ impl MediaPipeline {
         }
     }
 
-    /// Create pipeline with custom policy.
-    #[must_use]
-    pub fn with_policy(policy: MediaPolicy) -> Self {
-        Self {
-            providers: Vec::new(),
-            policy,
-        }
-    }
-
-    /// Get the policy.
-    #[must_use]
-    pub const fn policy(&self) -> &MediaPolicy {
-        &self.policy
-    }
-
     /// Register a provider. Providers are sorted by priority on each call.
     pub fn add_provider(&mut self, provider: Box<dyn MediaProvider>) {
         self.providers.push(provider);
         self.providers.sort_by_key(|p| p.priority());
-    }
-
-    /// Number of registered providers.
-    #[must_use]
-    pub fn provider_count(&self) -> usize {
-        self.providers.len()
     }
 
     /// Process media input through the pipeline.
@@ -117,20 +96,6 @@ impl MediaPipeline {
 
         Err(last_err)
     }
-
-    /// List supported media categories across all providers.
-    #[must_use]
-    pub fn supported_categories(&self) -> Vec<String> {
-        let mut categories: Vec<String> = self
-            .providers
-            .iter()
-            .flat_map(|p| p.supported_types())
-            .map(|t| t.category().to_string())
-            .collect();
-        categories.sort();
-        categories.dedup();
-        categories
-    }
 }
 
 impl Default for MediaPipeline {
@@ -157,8 +122,6 @@ mod tests {
     fn image_type() -> MediaType {
         MediaType::Image {
             format: MediaImageFormat::Png,
-            width: None,
-            height: None,
         }
     }
     fn audio_type() -> MediaType {
@@ -338,40 +301,5 @@ mod tests {
             }
             _ => panic!("Expected Description"),
         }
-    }
-
-    #[test]
-    fn supported_categories() {
-        let mut pipeline = MediaPipeline::new();
-        pipeline.add_provider(Box::new(SuccessProvider {
-            name: "a",
-            priority: 10,
-            category: "image",
-        }));
-        pipeline.add_provider(Box::new(SuccessProvider {
-            name: "b",
-            priority: 20,
-            category: "audio",
-        }));
-        pipeline.add_provider(Box::new(SuccessProvider {
-            name: "c",
-            priority: 30,
-            category: "image",
-        }));
-
-        let cats = pipeline.supported_categories();
-        assert_eq!(cats, vec!["audio", "image"]);
-    }
-
-    #[test]
-    fn provider_count() {
-        let mut pipeline = MediaPipeline::new();
-        assert_eq!(pipeline.provider_count(), 0);
-        pipeline.add_provider(Box::new(SuccessProvider {
-            name: "a",
-            priority: 10,
-            category: "image",
-        }));
-        assert_eq!(pipeline.provider_count(), 1);
     }
 }

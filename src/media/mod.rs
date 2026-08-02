@@ -41,11 +41,10 @@ pub use detect::{detect_by_extension, detect_by_magic, detect_from_path};
 pub use error::MediaError;
 pub use pipeline::MediaPipeline;
 pub use policy::MediaPolicy;
-pub use processors::{AudioStubProvider, ImageMediaProvider, TextDocumentProvider};
+pub use processors::{ImageMediaProvider, TextDocumentProvider};
 pub use provider::MediaProvider;
 pub use types::{
-    AudioFormat, DocFormat, MediaChunk, MediaImageFormat, MediaInput, MediaOutput, MediaType,
-    VideoFormat,
+    AudioFormat, DocFormat, MediaImageFormat, MediaInput, MediaOutput, MediaType, VideoFormat,
 };
 
 #[cfg(test)]

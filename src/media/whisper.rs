@@ -46,7 +46,7 @@ impl WhisperTranscription {
         let client = reqwest::Client::builder()
             .timeout(TRANSCRIPTION_TIMEOUT)
             .build()
-            .expect("failed to build reqwest client with timeout");
+            .unwrap_or_else(|_| reqwest::Client::new());
 
         Self {
             api_key,

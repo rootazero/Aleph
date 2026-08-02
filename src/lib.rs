@@ -232,8 +232,8 @@ pub use crate::generation::{
 
 // Media Pipeline Exports
 pub use crate::media::{
-    AudioFormat, DocFormat, MediaChunk, MediaError, MediaImageFormat, MediaInput, MediaOutput,
-    MediaPipeline, MediaPolicy, MediaProvider, MediaType, VideoFormat,
+    AudioFormat, DocFormat, MediaError, MediaImageFormat, MediaInput, MediaOutput, MediaPipeline,
+    MediaPolicy, MediaProvider, MediaType, VideoFormat,
 };
 
 // =============================================================================

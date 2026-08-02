@@ -335,9 +335,9 @@ impl BuiltinToolRegistry {
         // the LLM-free providers so the tools actually run: document text
         // extraction stands alone; image understanding shares the vision
         // pipeline (OCR text today, scene description once a multimodal vision
-        // provider is registered — no change here). AudioStubProvider is
-        // deliberately NOT registered: it only returns `NoProvider`, so adding
-        // it would make the pipeline *claim* audio support while still failing —
+        // provider is registered — no change here). No audio stub provider is
+        // registered: it would only return `NoProvider`, so adding one would
+        // make the pipeline *claim* audio support while still failing —
         // audio_transcribe stays honestly unsupported until a real transcription
         // provider (e.g. a Whisper MCP) is wired. Only construct when the caller
         // did not supply a pipeline.

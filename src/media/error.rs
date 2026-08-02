@@ -24,8 +24,4 @@ pub enum MediaError {
     /// Format detection failed.
     #[error("Cannot detect media format: {0}")]
     DetectionFailed(String),
-
-    /// I/O error reading file.
-    #[error("I/O error: {0}")]
-    IoError(#[from] std::io::Error),
 }

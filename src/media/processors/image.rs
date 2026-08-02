@@ -73,8 +73,6 @@ impl MediaProvider for ImageMediaProvider {
     fn supported_types(&self) -> Vec<MediaType> {
         vec![MediaType::Image {
             format: MediaImageFormat::Png,
-            width: None,
-            height: None,
         }]
     }
 
@@ -174,8 +172,6 @@ mod tests {
         };
         let mt = MediaType::Image {
             format: MediaImageFormat::Png,
-            width: None,
-            height: None,
         };
         let result = p.process(&input, &mt, Some("what is this?")).await.unwrap();
         match result {
@@ -195,8 +191,6 @@ mod tests {
         };
         let mt = MediaType::Image {
             format: MediaImageFormat::Png,
-            width: None,
-            height: None,
         };
         let result = p.process(&input, &mt, None).await.unwrap();
         match result {
@@ -210,13 +204,9 @@ mod tests {
         let p = make_provider();
         let png = MediaType::Image {
             format: MediaImageFormat::Png,
-            width: None,
-            height: None,
         };
         let jpeg = MediaType::Image {
             format: MediaImageFormat::Jpeg,
-            width: Some(100),
-            height: Some(100),
         };
         let audio = MediaType::Audio {
             format: AudioFormat::Mp3,

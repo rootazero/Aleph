@@ -20,32 +20,6 @@ pub enum MediaImageFormat {
     Heic,
 }
 
-impl MediaImageFormat {
-    #[must_use]
-    pub const fn mime_type(&self) -> &'static str {
-        match self {
-            Self::Png => "image/png",
-            Self::Jpeg => "image/jpeg",
-            Self::WebP => "image/webp",
-            Self::Gif => "image/gif",
-            Self::Svg => "image/svg+xml",
-            Self::Heic => "image/heic",
-        }
-    }
-
-    #[must_use]
-    pub const fn extension(&self) -> &'static str {
-        match self {
-            Self::Png => "png",
-            Self::Jpeg => "jpeg",
-            Self::WebP => "webp",
-            Self::Gif => "gif",
-            Self::Svg => "svg",
-            Self::Heic => "heic",
-        }
-    }
-}
-
 // ---------------------------------------------------------------------------
 // Audio Format
 // ---------------------------------------------------------------------------
@@ -60,30 +34,6 @@ pub enum AudioFormat {
     M4a,
 }
 
-impl AudioFormat {
-    #[must_use]
-    pub const fn mime_type(&self) -> &'static str {
-        match self {
-            Self::Mp3 => "audio/mpeg",
-            Self::Wav => "audio/wav",
-            Self::Ogg => "audio/ogg",
-            Self::Flac => "audio/flac",
-            Self::M4a => "audio/mp4",
-        }
-    }
-
-    #[must_use]
-    pub const fn extension(&self) -> &'static str {
-        match self {
-            Self::Mp3 => "mp3",
-            Self::Wav => "wav",
-            Self::Ogg => "ogg",
-            Self::Flac => "flac",
-            Self::M4a => "m4a",
-        }
-    }
-}
-
 // ---------------------------------------------------------------------------
 // Video Format
 // ---------------------------------------------------------------------------
@@ -94,26 +44,6 @@ pub enum VideoFormat {
     Mp4,
     WebM,
     Mov,
-}
-
-impl VideoFormat {
-    #[must_use]
-    pub const fn mime_type(&self) -> &'static str {
-        match self {
-            Self::Mp4 => "video/mp4",
-            Self::WebM => "video/webm",
-            Self::Mov => "video/quicktime",
-        }
-    }
-
-    #[must_use]
-    pub const fn extension(&self) -> &'static str {
-        match self {
-            Self::Mp4 => "mp4",
-            Self::WebM => "webm",
-            Self::Mov => "mov",
-        }
-    }
 }
 
 // ---------------------------------------------------------------------------
@@ -131,32 +61,6 @@ pub enum DocFormat {
     Html,
 }
 
-impl DocFormat {
-    #[must_use]
-    pub const fn mime_type(&self) -> &'static str {
-        match self {
-            Self::Pdf => "application/pdf",
-            Self::Docx => "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-            Self::Xlsx => "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-            Self::Txt => "text/plain",
-            Self::Markdown => "text/markdown",
-            Self::Html => "text/html",
-        }
-    }
-
-    #[must_use]
-    pub const fn extension(&self) -> &'static str {
-        match self {
-            Self::Pdf => "pdf",
-            Self::Docx => "docx",
-            Self::Xlsx => "xlsx",
-            Self::Txt => "txt",
-            Self::Markdown => "md",
-            Self::Html => "html",
-        }
-    }
-}
-
 // ---------------------------------------------------------------------------
 // Unified MediaType
 // ---------------------------------------------------------------------------
@@ -165,11 +69,7 @@ impl DocFormat {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum MediaType {
-    Image {
-        format: MediaImageFormat,
-        width: Option<u32>,
-        height: Option<u32>,
-    },
+    Image { format: MediaImageFormat },
     Audio {
         format: AudioFormat,
         duration_secs: Option<f64>,
@@ -219,19 +119,6 @@ pub enum MediaInput {
 // MediaOutput — result of processing
 // ---------------------------------------------------------------------------
 
-/// A chunk of media output (for large media split into segments).
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
-pub struct MediaChunk {
-    /// Segment index (0-based).
-    pub index: u32,
-    /// Start offset in seconds (audio/video) or page number (document).
-    pub offset: f64,
-    /// Duration in seconds (audio/video) or page count (document).
-    pub length: f64,
-    /// Content for this chunk.
-    pub content: String,
-}
-
 /// Result of a media understanding operation.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(tag = "output_type", rename_all = "snake_case")]
@@ -240,10 +127,6 @@ pub enum MediaOutput {
     Text { text: String },
     /// Natural-language description.
     Description { text: String, confidence: f64 },
-    /// Structured data (tables, charts, metadata).
-    Structured { data: serde_json::Value },
-    /// Chunked output for long media.
-    Chunks { chunks: Vec<MediaChunk> },
 }
 
 #[cfg(test)]
@@ -254,8 +137,6 @@ mod tests {
     fn media_type_category() {
         let img = MediaType::Image {
             format: MediaImageFormat::Png,
-            width: Some(800),
-            height: Some(600),
         };
         assert_eq!(img.category(), "image");
 
@@ -281,27 +162,9 @@ mod tests {
     }
 
     #[test]
-    fn format_mime_types() {
-        assert_eq!(MediaImageFormat::Png.mime_type(), "image/png");
-        assert_eq!(AudioFormat::Mp3.mime_type(), "audio/mpeg");
-        assert_eq!(VideoFormat::Mp4.mime_type(), "video/mp4");
-        assert_eq!(DocFormat::Pdf.mime_type(), "application/pdf");
-    }
-
-    #[test]
-    fn format_extensions() {
-        assert_eq!(MediaImageFormat::Heic.extension(), "heic");
-        assert_eq!(AudioFormat::Flac.extension(), "flac");
-        assert_eq!(VideoFormat::Mov.extension(), "mov");
-        assert_eq!(DocFormat::Markdown.extension(), "md");
-    }
-
-    #[test]
     fn media_type_serde_round_trip() {
         let mt = MediaType::Image {
             format: MediaImageFormat::Jpeg,
-            width: Some(1920),
-            height: Some(1080),
         };
         let json = serde_json::to_value(&mt).unwrap();
         assert_eq!(json["kind"], "image");
@@ -325,17 +188,6 @@ mod tests {
         };
         let json = serde_json::to_value(&output).unwrap();
         assert_eq!(json["output_type"], "description");
-
-        let output = MediaOutput::Chunks {
-            chunks: vec![MediaChunk {
-                index: 0,
-                offset: 0.0,
-                length: 30.0,
-                content: "First segment".into(),
-            }],
-        };
-        let json = serde_json::to_value(&output).unwrap();
-        assert_eq!(json["output_type"], "chunks");
     }
 
     #[test]

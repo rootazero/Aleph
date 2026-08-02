@@ -33,11 +33,7 @@ fn detect_image_extension(ext: &str) -> Option<MediaType> {
         "heic" | "heif" => MediaImageFormat::Heic,
         _ => return None,
     };
-    Some(MediaType::Image {
-        format,
-        width: None,
-        height: None,
-    })
+    Some(MediaType::Image { format })
 }
 
 fn detect_audio_extension(ext: &str) -> Option<MediaType> {
@@ -104,32 +100,24 @@ fn detect_image_magic(bytes: &[u8]) -> Option<MediaType> {
     if bytes.starts_with(&[0x89, 0x50, 0x4E, 0x47]) {
         return Some(MediaType::Image {
             format: MediaImageFormat::Png,
-            width: None,
-            height: None,
         });
     }
     // JPEG: FF D8 FF
     if bytes.starts_with(&[0xFF, 0xD8, 0xFF]) {
         return Some(MediaType::Image {
             format: MediaImageFormat::Jpeg,
-            width: None,
-            height: None,
         });
     }
     // GIF: GIF87a or GIF89a
     if bytes.starts_with(b"GIF8") {
         return Some(MediaType::Image {
             format: MediaImageFormat::Gif,
-            width: None,
-            height: None,
         });
     }
     // WebP: RIFF....WEBP
     if bytes.len() >= 12 && bytes.starts_with(b"RIFF") && &bytes[8..12] == b"WEBP" {
         return Some(MediaType::Image {
             format: MediaImageFormat::WebP,
-            width: None,
-            height: None,
         });
     }
     None
@@ -209,8 +197,6 @@ fn detect_ftyp_magic(bytes: &[u8]) -> Option<MediaType> {
     if brand == b"heic" || brand == b"mif1" || brand == b"msf1" || brand == b"heix" {
         return Some(MediaType::Image {
             format: MediaImageFormat::Heic,
-            width: None,
-            height: None,
         });
     }
     Some(MediaType::Video {

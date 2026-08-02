@@ -61,8 +61,6 @@ mod tests {
         fn supported_types(&self) -> Vec<MediaType> {
             vec![MediaType::Image {
                 format: MediaImageFormat::Png,
-                width: None,
-                height: None,
             }]
         }
 
@@ -91,13 +89,9 @@ mod tests {
         };
         let png = MediaType::Image {
             format: MediaImageFormat::Png,
-            width: None,
-            height: None,
         };
         let jpeg = MediaType::Image {
             format: MediaImageFormat::Jpeg,
-            width: Some(100),
-            height: Some(100),
         };
         let audio = MediaType::Audio {
             format: AudioFormat::Mp3,
@@ -147,8 +141,6 @@ mod tests {
         };
         let mt = MediaType::Image {
             format: MediaImageFormat::Png,
-            width: None,
-            height: None,
         };
         let result = p.process(&input, &mt, Some("describe")).await.unwrap();
         match result {

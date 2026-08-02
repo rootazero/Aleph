@@ -149,8 +149,6 @@ mod tests {
         }));
         assert!(!p.supports(&MediaType::Image {
             format: MediaImageFormat::Png,
-            width: None,
-            height: None,
         }));
     }
 
