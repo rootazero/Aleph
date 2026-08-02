@@ -138,7 +138,10 @@ pub fn ensure_openai_tool_envelope(schema: &mut Value) {
             // self-contradicting `{"type":"string","enum":[1,2]}`.
             let ty = infer_type_from_values(&deduped);
             // rust-doctor-disable-next-line excessive-clone
-            merged_props.insert(key.clone(), serde_json::json!({"type": ty, "enum": deduped}));
+            merged_props.insert(
+                key.clone(),
+                serde_json::json!({"type": ty, "enum": deduped}),
+            );
         }
 
         // Merge flattened properties into root properties (first-branch wins).

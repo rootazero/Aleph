@@ -26,6 +26,7 @@
 
 use crate::sync_primitives::Arc;
 
+use crate::builtin_tools::note_manage::NoteManageTool;
 use crate::builtin_tools::skill_reader::ListSkillsTool as SkillListTool;
 use crate::builtin_tools::{
     ApplyPatchTool, BashExecTool, CodeCheckTool, CodeExecTool, ConfigAuditTool, CtxSearchTool,
@@ -35,7 +36,6 @@ use crate::builtin_tools::{
     PdfGenerateTool, ReadConfigGuideTool, RecallEventsTool, RememberTool, SearchTool,
     SelectModelTool, SelfManageTool, VaultStoreTool, WebFetchTool,
 };
-use crate::builtin_tools::note_manage::NoteManageTool;
 use crate::tools::AlephToolDyn;
 
 use super::BuiltinToolConfig;
