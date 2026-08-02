@@ -994,6 +994,11 @@ pub enum ChatControlAction {
     Abort {
         /// Run ID to abort
         run_id: String,
+        /// Also abandon everything this session still has queued behind the
+        /// run. Without it the cancel frees the session slot and the gateway's
+        /// wait lane starts firing the backlog, one full agent turn at a time.
+        #[arg(long)]
+        session_key: Option<String>,
     },
     /// Show chat history
     History {

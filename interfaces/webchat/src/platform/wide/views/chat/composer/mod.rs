@@ -414,12 +414,15 @@ pub(super) fn InputArea() -> impl IntoView {
                 .collect::<Vec<_>>()
                 .join("\n\n");
             let dash = dashboard;
-            chat.push_user_message(&joined);
             spawn_local(async move {
-                if let Err(e) =
-                    crate::api::team_chat::TeamChatApi::send(&dash, &team_id, &joined).await
-                {
-                    chat.set_send_error(ChatSendError::classify(e));
+                match crate::api::team_chat::TeamChatApi::send(&dash, &team_id, &joined).await {
+                    // The bubble goes up only once the group has the message —
+                    // same contract as the single-agent loop below.
+                    Ok(_) => chat.push_user_message(&joined),
+                    Err(e) => {
+                        chat.set_send_error(ChatSendError::classify(e));
+                        chat.requeue_front(batch);
+                    }
                 }
             });
             return;
@@ -436,11 +439,22 @@ pub(super) fn InputArea() -> impl IntoView {
         } else {
             chat.session_mode.get_untracked()
         };
-        // Bind each run to the conversation that is active *now*, exactly as
-        // the typed path does: a flush on the busy->idle settle starts a fresh
-        // run, and if the user has switched tabs by the time `run_accepted`
-        // arrives, the event router would otherwise fall back to whichever
-        // conversation is in the foreground and stream the reply into it.
+        // Bind the run to the conversation that is active *now*, exactly as the
+        // typed path does: a flush on the busy->idle settle starts a fresh run,
+        // and if the user has switched tabs by the time `run_accepted` arrives,
+        // the event router would otherwise fall back to whichever conversation
+        // is in the foreground and stream the reply into it.
+        //
+        // Only the *first* send of an idle flush is a run, though. A flush while
+        // a run is live (the turn-boundary steer) is folded into that run by the
+        // gateway, and so are the follow-ups behind the first idle send: those
+        // return a run_id the client already has, but no run ever exists under
+        // it, so no `run_complete` will ever arrive to settle it. Binding one
+        // would leave `SessionMap::running` incremented forever — a red dot on a
+        // conversation that finished. That is why the original code ignored the
+        // returned id outright; the bug was that it also ignored the one case
+        // where the id is real.
+        let mut binds_a_real_run = chat.active_run_id.get_untracked().is_none();
         let send_conv = sessions.active_conv();
         let dash = dashboard;
         spawn_local(async move {
@@ -472,8 +486,12 @@ pub(super) fn InputArea() -> impl IntoView {
                 .await
                 {
                     Ok(resp) => {
-                        if let Some(conv) = send_conv {
-                            sessions.bind_run(&resp.run_id, conv, Some(&resp.session_key));
+                        if binds_a_real_run {
+                            if let Some(conv) = send_conv {
+                                sessions.bind_run(&resp.run_id, conv, Some(&resp.session_key));
+                            }
+                            // Everything after this one steers into it.
+                            binds_a_real_run = false;
                         }
                         // Only now is it a message that was actually sent. The
                         // bubble used to go up first, so a failed send left the

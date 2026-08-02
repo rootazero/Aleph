@@ -440,7 +440,10 @@ fn QueuedGhosts() -> impl IntoView {
                         // disabled" trap in reverse — the pointer affordance is
                         // real on both, the keyboard one only on wide.
                         {move || {
-                            if form_factor.form_factor.get() == FormFactor::Wide {
+                            // `!= Phone`, not `== Wide`: `app.rs` picks the
+                            // composer on exactly that predicate, so a tablet
+                            // runs the wide composer — and has the binding.
+                            if form_factor.form_factor.get() != FormFactor::Phone {
                                 t_string!(i18n, chat.queue_hint_keyboard).to_string()
                             } else {
                                 t_string!(i18n, chat.queue_hint).to_string()

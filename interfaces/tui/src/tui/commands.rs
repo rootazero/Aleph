@@ -314,12 +314,25 @@ async fn execute_stop(state: &mut AppState, client: &AlephClient) {
         state.add_system_message("No active run.".to_string());
         return;
     };
-    let params = json!({ "run_id": run_id });
+    // Scoped to the session, not just the run: cancelling frees the session
+    // slot and the gateway's wait lane would otherwise fire whatever the user
+    // had queued behind this run, one full turn at a time — the opposite of
+    // what pressing stop means.
+    let params = json!({ "run_id": run_id, "session_key": state.session_key });
     match client.call::<_, Value>("chat.abort", Some(params)).await {
-        Ok(_) => {
+        Ok(reply) => {
             state.current_run = None;
             state.run_started_at = None;
-            state.add_system_message(format!("Run aborted ({run_id})."));
+            let dropped = reply
+                .get("dropped")
+                .and_then(serde_json::Value::as_u64)
+                .unwrap_or(0);
+            let backlog = match dropped {
+                0 => String::new(),
+                1 => " 1 queued message dropped.".to_string(),
+                n => format!(" {n} queued messages dropped."),
+            };
+            state.add_system_message(format!("Run aborted ({run_id}).{backlog}"));
         }
         Err(e) => state.add_system_message(format!("Abort error: {e}")),
     }
