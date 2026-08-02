@@ -106,14 +106,19 @@ pub fn PhoneComposer() -> impl IntoView {
     // No client-side prompt-injection guard (server is the authority).
     let enqueue = move || {
         let text = input_text.get_untracked().trim().to_string();
-        if text.is_empty() {
+        // The tray lives on ChatState and the shared surfaces can fill it — a
+        // recalled prompt puts its files back there. Phone has no paperclip, but
+        // it must still carry what is staged rather than drop it on the floor.
+        let files = chat.pending_attachments.get_untracked();
+        if text.is_empty() && files.is_empty() {
             return;
         }
         chat.enqueue_prompt(QueuedPrompt {
             text,
-            attachments: Vec::new(),
+            attachments: files,
         });
         input_text.set(String::new());
+        chat.pending_attachments.set(Vec::new());
     };
 
     // Answer a pending `ask_user` with the current draft. Returns `true` when a
@@ -181,11 +186,22 @@ pub fn PhoneComposer() -> impl IntoView {
         spawn_local(async move {
             let mut pending = batch.into_iter();
             while let Some(entry) = pending.next() {
+                let api_attachments: Vec<crate::api::chat::ChatAttachment> = entry
+                    .attachments
+                    .iter()
+                    .cloned()
+                    .map(|f| crate::api::chat::ChatAttachment {
+                        name: f.name,
+                        mime_type: f.mime_type,
+                        data_base64: f.data_base64,
+                        size: f.size,
+                    })
+                    .collect();
                 match ChatApi::send(
                     &dash,
                     &entry.text,
                     session_key.as_deref(),
-                    Vec::new(),
+                    api_attachments,
                     agent_id.as_deref(),
                     project_root.as_deref(),
                     None,
@@ -228,12 +244,21 @@ pub fn PhoneComposer() -> impl IntoView {
         enqueue(); // no-op when the draft is empty
         user_interrupted.set(false); // ensure the upcoming settle is NOT suppressed
         if let Some(run_id) = chat.active_run_id.get_untracked() {
+            let is_team = chat.team_id.get_untracked().is_some();
             let dash = dashboard;
             spawn_local(async move {
-                // Not session-scoped on purpose: force-insert is "run this now",
-                // not "drop this work" — purging the lane would throw away the
-                // prompts it just folded the draft into.
-                let _ = ChatApi::abort(&dash, &run_id, None).await;
+                if is_team {
+                    let _ = crate::api::team_chat::TeamChatApi::cancel(&dash, &run_id).await;
+                    // The busy->idle edge released here is what drains the queue
+                    // this just folded the draft into.
+                    chat.active_run_id.set(None);
+                    chat.phase.set(ChatPhase::Idle);
+                } else {
+                    // Not session-scoped on purpose: force-insert is "run this
+                    // now", not "drop this work" — purging the lane would throw
+                    // away the prompts it just folded the draft into.
+                    let _ = ChatApi::abort(&dash, &run_id, None).await;
+                }
             });
         }
     };
@@ -246,12 +271,24 @@ pub fn PhoneComposer() -> impl IntoView {
             return;
         };
         let session_key = chat.session_key.get_untracked();
+        // In team chat the id is a fan-out TREE, not an engine run: `chat.abort`
+        // looks it up in `active_runs`, misses, and the group keeps talking with
+        // the button stuck on Stop. Same split the wide composer makes.
+        let is_team = chat.team_id.get_untracked().is_some();
         let dash = dashboard;
         spawn_local(async move {
-            // Stop must reach the session's server-side backlog too, or the
-            // freed slot lets the lane fire the queued messages one run at a
-            // time — exactly what the user just refused.
-            let _ = ChatApi::abort(&dash, &run_id, session_key.as_deref()).await;
+            if is_team {
+                let _ = crate::api::team_chat::TeamChatApi::cancel(&dash, &run_id).await;
+                // No `settled` event follows a poisoned tree — release the slot
+                // here or the composer stays stuck on Stop.
+                chat.active_run_id.set(None);
+                chat.phase.set(ChatPhase::Idle);
+            } else {
+                // Stop must reach the session's server-side backlog too, or the
+                // freed slot lets the lane fire the queued messages one run at a
+                // time — exactly what the user just refused.
+                let _ = ChatApi::abort(&dash, &run_id, session_key.as_deref()).await;
+            }
         });
     };
 

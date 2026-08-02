@@ -1260,9 +1260,21 @@ impl ChatState {
                 msg.error = Some(error.to_string());
             }
         });
-        self.active_run_id.set(None);
-        self.phase.set(ChatPhase::Error);
-        self.clear_provider_retry();
+        // Only the run that failed gets torn down. A conversation can have a
+        // second run_id outstanding — one the Panel queued and the gateway is
+        // still holding in its wait lane — and a `RunError` for *that* one used
+        // to clear `active_run_id` and flip the phase to Error while the live
+        // run was still streaming: the transcript kept filling in but the
+        // composer showed Stop gone, an error banner up, and the queue's settle
+        // edge already spent.
+        if self
+            .active_run_id
+            .with_untracked(|live| live.as_deref() == Some(run_id))
+        {
+            self.active_run_id.set(None);
+            self.phase.set(ChatPhase::Error);
+            self.clear_provider_retry();
+        }
         let structured = ChatSendError::classify(error);
         self.error_message.set(Some(structured.message.clone()));
         self.send_error.set(Some(structured));
@@ -2147,6 +2159,32 @@ mod queue_tests {
         let texts: Vec<_> = drained.iter().map(|p| p.text.clone()).collect();
         assert_eq!(texts, vec!["a", "b"]);
         assert!(chat.prompt_queue.get_untracked().is_empty());
+    }
+
+    #[test]
+    fn a_queued_runs_failure_does_not_tear_down_the_live_run() {
+        let owner = Owner::new();
+        owner.set();
+        let chat = ChatState::new();
+        chat.start_assistant_message("live");
+
+        // A second run id the Panel is holding — queued in the gateway's wait
+        // lane — fails (purged by a Stop, rejected by a full lane, timed out).
+        chat.fail_run("queued", "queue full");
+
+        assert_eq!(
+            chat.active_run_id.get_untracked().as_deref(),
+            Some("live"),
+            "the live run must survive another run's failure"
+        );
+        assert!(
+            chat.send_error.get_untracked().is_some(),
+            "the failure is still reported — it just does not end the live run"
+        );
+
+        // The live run's own failure does tear it down.
+        chat.fail_run("live", "provider unreachable");
+        assert!(chat.active_run_id.get_untracked().is_none());
     }
 
     #[test]
