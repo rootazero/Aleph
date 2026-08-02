@@ -527,7 +527,11 @@ pub(super) fn InputArea() -> impl IntoView {
                     chat.active_run_id.set(None);
                     chat.phase.set(ChatPhase::Idle);
                 } else {
-                    let _ = ChatApi::abort(&dash, &run_id).await;
+                    // Force-insert deliberately does NOT scope the abort to the
+                    // session: it is "run this now", not "drop this work", and
+                    // purging the lane would throw away the very prompts it just
+                    // folded the draft into.
+                    let _ = ChatApi::abort(&dash, &run_id, None).await;
                 }
             });
         }
@@ -871,9 +875,13 @@ pub(super) fn InputArea() -> impl IntoView {
             // rebuilt in the draft rather than reversed.
             if ev.key() == "ArrowUp" {
                 let queue_len = chat.prompt_queue.get_untracked().len();
+                // Trimmed, like every other draft-emptiness test in this file
+                // (`can_send`, `has_draft`, `enqueue_message`): a textarea
+                // holding only spaces has no line for the caret to move to
+                // either, so `ArrowUp` is just as free there.
                 let bare_recall = should_recall_on_bare_arrow_up(
                     queue_len,
-                    input_text.get_untracked().is_empty(),
+                    input_text.get_untracked().trim().is_empty(),
                 );
                 if (ev.alt_key() && queue_len > 0) || (!ev.alt_key() && bare_recall) {
                     ev.prevent_default();
@@ -978,6 +986,7 @@ pub(super) fn InputArea() -> impl IntoView {
         // looks it up in `active_runs`, misses, and the group keeps talking.
         // `teams.chat.cancel` poisons the tree and walks its member runs.
         let is_team = chat.team_id.get_untracked().is_some();
+        let session_key = chat.session_key.get_untracked();
         let dash = dashboard;
         spawn_local(async move {
             if is_team {
@@ -987,7 +996,11 @@ pub(super) fn InputArea() -> impl IntoView {
                 chat.active_run_id.set(None);
                 chat.phase.set(ChatPhase::Idle);
             } else {
-                let _ = ChatApi::abort(&dash, &run_id).await;
+                // Stop is "I do not want this work", so it must reach the
+                // session's server-side backlog too — cancelling alone frees the
+                // slot and lets the lane fire the queued messages one full run
+                // at a time, which is exactly what the user just refused.
+                let _ = ChatApi::abort(&dash, &run_id, session_key.as_deref()).await;
             }
         });
     };

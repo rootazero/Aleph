@@ -228,7 +228,10 @@ pub fn PhoneComposer() -> impl IntoView {
         if let Some(run_id) = chat.active_run_id.get_untracked() {
             let dash = dashboard;
             spawn_local(async move {
-                let _ = ChatApi::abort(&dash, &run_id).await;
+                // Not session-scoped on purpose: force-insert is "run this now",
+                // not "drop this work" — purging the lane would throw away the
+                // prompts it just folded the draft into.
+                let _ = ChatApi::abort(&dash, &run_id, None).await;
             });
         }
     };
@@ -240,9 +243,13 @@ pub fn PhoneComposer() -> impl IntoView {
         let Some(run_id) = chat.active_run_id.get_untracked() else {
             return;
         };
+        let session_key = chat.session_key.get_untracked();
         let dash = dashboard;
         spawn_local(async move {
-            let _ = ChatApi::abort(&dash, &run_id).await;
+            // Stop must reach the session's server-side backlog too, or the
+            // freed slot lets the lane fire the queued messages one run at a
+            // time — exactly what the user just refused.
+            let _ = ChatApi::abort(&dash, &run_id, session_key.as_deref()).await;
         });
     };
 

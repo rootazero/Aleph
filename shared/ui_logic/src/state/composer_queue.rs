@@ -49,10 +49,13 @@ pub const fn should_flush_on_turn_boundary(queue_len: usize, is_busy: bool) -> b
 /// queued prompt instead of moving the caret.
 ///
 /// A bare `ArrowUp` is only free to mean "recall" when the textarea has no
-/// caret work to do — i.e. the draft text is empty. Any non-empty draft (even
-/// a single line) keeps `ArrowUp` for text editing; the modifier binding
+/// caret work to do — i.e. the draft is blank. Any draft with content (even a
+/// single line) keeps `ArrowUp` for text editing; the modifier binding
 /// (`Alt`/`Option` + `ArrowUp`) covers that case instead. Attachments do not
 /// enter the decision: they are not text the caret can move through.
+///
+/// `draft_is_empty` is the caller's *trimmed* emptiness — whitespace has no
+/// line to move to either, and every other draft test in the composer trims.
 #[must_use]
 pub const fn should_recall_on_bare_arrow_up(queue_len: usize, draft_is_empty: bool) -> bool {
     queue_len > 0 && draft_is_empty
@@ -92,6 +95,8 @@ mod tests {
         assert!(should_recall_on_bare_arrow_up(1, true));
         // A draft is being edited → ArrowUp belongs to the caret.
         assert!(!should_recall_on_bare_arrow_up(1, false));
+        // Whitespace-only counts as empty: the caller trims before asking.
+        assert!(should_recall_on_bare_arrow_up(1, "   ".trim().is_empty()));
         // Nothing queued → nothing to recall, whatever the draft is.
         assert!(!should_recall_on_bare_arrow_up(0, true));
         assert!(!should_recall_on_bare_arrow_up(0, false));

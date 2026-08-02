@@ -12,6 +12,7 @@ use crate::components::markdown::TypewriterRenderer;
 use crate::components::tool_card::ToolCard;
 use crate::i18n::{t, t_string, use_i18n};
 use crate::state::layout::WorkspaceState;
+use crate::state::viewport::FormFactor;
 use leptos::prelude::*;
 use std::collections::HashMap;
 
@@ -374,6 +375,7 @@ fn PendingAskCard() -> impl IntoView {
 fn QueuedGhosts() -> impl IntoView {
     use crate::views::chat::state::queue_preview_label;
     let chat = expect_context::<ChatState>();
+    let form_factor = expect_context::<crate::state::viewport::FormFactorState>();
     let i18n = use_i18n();
 
     let enumerated = move || {
@@ -432,7 +434,18 @@ fn QueuedGhosts() -> impl IntoView {
                 />
                 <div class="flex justify-end">
                     <span class="text-[10px] text-text-tertiary pr-1">
-                        {move || t_string!(i18n, chat.queue_hint).to_string()}
+                        // `QueuedGhosts` is shared with the phone surface, which
+                        // has no ArrowUp binding (and no arrow keys). Advertising
+                        // a key that does nothing there is the "advertised but
+                        // disabled" trap in reverse — the pointer affordance is
+                        // real on both, the keyboard one only on wide.
+                        {move || {
+                            if form_factor.form_factor.get() == FormFactor::Wide {
+                                t_string!(i18n, chat.queue_hint_keyboard).to_string()
+                            } else {
+                                t_string!(i18n, chat.queue_hint).to_string()
+                            }
+                        }}
                     </span>
                 </div>
             </div>

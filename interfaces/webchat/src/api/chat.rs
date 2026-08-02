@@ -112,9 +112,20 @@ impl ChatApi {
         serde_json::from_value(result).map_err(|e| e.to_string())
     }
 
-    /// Abort a running agent.
-    pub async fn abort(state: &DashboardState, run_id: &str) -> Result<(), String> {
-        let params = serde_json::json!({ "run_id": run_id });
+    /// Abort a running agent, and abandon whatever that session still has
+    /// waiting in the gateway's busy lane.
+    ///
+    /// `session_key` is what makes Stop mean "I do not want this work" rather
+    /// than "stop this one run": without it the cancel frees the session slot
+    /// and the server-side backlog starts firing a fresh agent run per queued
+    /// message. Pass `None` only when there is no session to scope to (a run
+    /// aborted before its first `chat.send` returned).
+    pub async fn abort(
+        state: &DashboardState,
+        run_id: &str,
+        session_key: Option<&str>,
+    ) -> Result<(), String> {
+        let params = serde_json::json!({ "run_id": run_id, "session_key": session_key });
         state.rpc_call("chat.abort", params).await?;
         Ok(())
     }
