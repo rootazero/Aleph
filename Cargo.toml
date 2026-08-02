@@ -120,7 +120,7 @@ name = "alephcore"
 # compiling all ~14.6k `#[cfg(test)]` tests under the bench profile. That is the
 # memory hog the CI comment blamed on bare `cargo bench`, and it survived the
 # switch to `--benches` because the flag never excluded the lib in the first
-# place. There are no `#[bench]` fns in the lib (the four benches/ targets are
+# place. There are no `#[bench]` fns in the lib (all five benches/ targets are
 # `harness = false` criterion binaries), so opting out costs nothing. Does not
 # affect `cargo test --lib`, which selects the lib explicitly.
 bench = false
@@ -298,6 +298,12 @@ windows-sys = { version = "0.61", features = [
 [[bin]]
 name = "aleph-server"
 path = "src/bin/aleph-server/main.rs"
+# Same reason as `[lib] bench = false` above, and missed when that one was
+# added: bins default to `bench = true` too, so `--benches` was selecting this
+# one and building it with `--test` — the whole binary plus its `#[cfg(test)]`
+# code, compiled as a bench harness that has no `#[bench]` fns to run. The
+# benches/ targets already cover what the bench job is for.
+bench = false
 
 [dev-dependencies]
 criterion = { version = "0.5", features = ["html_reports", "async_tokio"] }
@@ -326,6 +332,18 @@ harness = false
 
 [[bench]]
 name = "full_rebuild_1000_notes"
+harness = false
+
+# Undeclared, this one was auto-discovered with the default `harness = true`,
+# so cargo built it with `--test`: libtest supplied the `main`, the one
+# `criterion_main!` generates was compiled out as dead code, and the binary
+# reported `0 tests, 0 benchmarks` and exited 0. Every benchmark in the file had
+# been inert for as long as it has existed, and nothing said so — `cargo bench`
+# ran it and printed success.
+# The four siblings above are declared for exactly this reason; this one was
+# simply never added.
+[[bench]]
+name = "performance_benchmarks"
 harness = false
 
 [[test]]
