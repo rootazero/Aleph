@@ -11,10 +11,6 @@
 //!   - Connected via transport abstraction ([`McpTransport`] trait)
 //!   - Tools discovered via JSON-RPC
 //!
-//! - **Resources**: Files, data, and content exposed by servers ([`McpResourceManager`])
-//!
-//! - **Prompts**: Reusable prompt templates from servers ([`McpPromptManager`])
-//!
 //! # Transport Layer
 //!
 //! The [`McpTransport`] trait provides an abstraction for different transport
@@ -34,14 +30,13 @@
 //! │  ├── WebFetchTool          │  │   ├── StdioTransport            │
 //! │  └── McpToolWrapper        │  │   ├── HttpTransport             │
 //! │                            │  │   └── SseTransport              │
-//! │                            │  ├── Resources (McpResourceManager)│
-//! │                            │  ├── Prompts (McpPromptManager)    │
+//! │                            │  ├── Resources                     │
+//! │                            │  ├── Prompts                       │
 //! │                            │  └── Runtime Detection             │
 //! │                            │      (node, python, bun)           │
 //! └─────────────────────────────────────────────────────────────────┘
 //! ```
 
-mod approval;
 pub mod auth;
 mod client;
 mod context_injector;
@@ -62,12 +57,11 @@ mod tool_sanitize;
 pub mod transport;
 pub mod types;
 
-pub use approval::{ApprovalHandler, ApprovalPresentCallback};
 pub use auth::{
     AuthorizationRequest, CallbackResult, CallbackServer, ClientInfo, OAuthEntry, OAuthProvider,
     OAuthServerMetadata, OAuthStorage, OAuthTokens, DEFAULT_CALLBACK_PORT,
 };
-pub use client::{ExternalServerConfig, McpClient, McpClientBuilder, McpStartupReport};
+pub use client::{ExternalServerConfig, McpClient};
 pub use context_injector::{ContextInjector, InjectedContext, ResourceContext, ToolContext};
 pub use error_class::{classify_mcp_error, McpErrorKind};
 pub use external::{check_runtime, McpServerConnection, RuntimeKind};
@@ -75,17 +69,11 @@ pub use jsonrpc::{
     IdGenerator, JsonRpcError, JsonRpcNotification, JsonRpcRequest, JsonRpcResponse,
 };
 pub use preflight::preflight_remote_url;
-pub use prompts::{
-    McpPrompt, McpPromptArgument, McpPromptManager, PromptContent, PromptMessage, PromptResult,
-};
-pub use protocol::{
-    ApprovalDecision, ApprovalRequest, ApprovalResponse, IncludeContext, SamplingChunk,
-};
+pub use prompts::{McpPrompt, McpPromptArgument, PromptContent, PromptMessage, PromptResult};
+pub use protocol::IncludeContext;
 pub use redact::redact_mcp_error;
-pub use resources::{McpResourceManager, ResourceContent};
-pub use sampling::{
-    extract_system_prompt, sampling_messages_to_chat, SamplingCallback, SamplingHandler,
-};
+pub use resources::ResourceContent;
+pub use sampling::{SamplingCallback, SamplingHandler};
 pub use tool_bridge::spawn_tool_bridge;
 #[cfg(test)]
 pub(crate) use tool_bridge::CAPABILITY_READ_BUILTIN_NAMES;
@@ -95,9 +83,7 @@ pub use transport::{
     SseTransportConfig, StdioTransport,
 };
 pub use types::{
-    McpEnvVar, McpRemoteServerConfig, McpResource, McpServerConfig, McpServerPermissions,
-    McpServerStatus, McpServerStatusInfo, McpServerType, McpServiceInfo, McpSettingsConfig,
-    McpTool, McpToolCall, McpToolFilter, McpToolInfo, McpToolResult, TransportPreference,
+    McpRemoteServerConfig, McpResource, McpTool, McpToolFilter, McpToolResult, TransportPreference,
 };
 
 // Manager types (MCP orchestration layer)

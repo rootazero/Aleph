@@ -68,22 +68,6 @@ pub struct McpStartupReport {
 }
 
 impl McpStartupReport {
-    /// Create from internal `McpStartupReport`
-    #[must_use]
-    pub fn from_internal(report: &crate::mcp::McpStartupReport) -> Self {
-        Self {
-            succeeded_servers: report.succeeded.clone(),
-            failed_servers: report
-                .failed
-                .iter()
-                .map(|(name, error): &(String, String)| McpServerError {
-                    server_name: name.clone(),
-                    error_message: error.clone(),
-                })
-                .collect(),
-        }
-    }
-
     /// Check if all servers started successfully
     #[must_use]
     pub const fn all_succeeded(&self) -> bool {

@@ -20,32 +20,6 @@ use crate::mcp::types::{
     McpRemoteServerConfig, McpTool, McpToolFilter, McpToolResult, TransportPreference,
 };
 
-/// MCP server startup report
-///
-/// Contains information about which servers started successfully
-/// and which ones failed (with error messages).
-#[derive(Debug, Clone, Default)]
-pub struct McpStartupReport {
-    /// Names of servers that started successfully
-    pub succeeded: Vec<String>,
-    /// Failed servers: (`server_name`, `error_message`)
-    pub failed: Vec<(String, String)>,
-}
-
-impl McpStartupReport {
-    /// Check if all servers started successfully
-    #[must_use]
-    pub const fn all_succeeded(&self) -> bool {
-        self.failed.is_empty()
-    }
-
-    /// Get total number of servers attempted
-    #[must_use]
-    pub const fn total(&self) -> usize {
-        self.succeeded.len() + self.failed.len()
-    }
-}
-
 /// External server configuration
 #[derive(Debug, Clone)]
 pub struct ExternalServerConfig {
@@ -373,15 +347,6 @@ impl McpClient {
         Err(AlephError::NotFound(format!("Prompt not found: {name}")))
     }
 
-    /// Get tools as a formatted list for context injection
-    pub async fn get_tools_for_context(&self) -> Vec<(String, String, serde_json::Value)> {
-        self.list_tools()
-            .await
-            .into_iter()
-            .map(|t| (t.name, t.description, t.input_schema))
-            .collect()
-    }
-
     /// Call a tool by name
     pub async fn call_tool(&self, name: &str, args: serde_json::Value) -> Result<McpToolResult> {
         // Clone Arc refs under lock, then release lock before awaiting network I/O
@@ -417,22 +382,6 @@ impl McpClient {
         let mut names: Vec<String> = servers.keys().cloned().collect();
         names.sort();
         names
-    }
-
-    /// Check if any external servers are connected
-    pub async fn has_services(&self) -> bool {
-        let servers = self.external_servers.read().await;
-        !servers.is_empty()
-    }
-
-    /// Get total number of available tools from external servers
-    pub async fn tool_count(&self) -> usize {
-        self.list_tools().await.len()
-    }
-
-    /// Get number of external servers
-    pub async fn external_server_count(&self) -> usize {
-        self.external_servers.read().await.len()
     }
 
     /// Stop all external servers
@@ -658,29 +607,6 @@ impl McpClient {
         Ok(())
     }
 
-    /// Stop a specific external server by name
-    ///
-    /// Used for incremental refresh when only one server needs to be restarted.
-    /// Returns true if the server was found and stopped.
-    pub async fn stop_server(&self, name: &str) -> bool {
-        let mut servers = self.external_servers.write().await;
-
-        if let Some(connection) = servers.remove(name) {
-            tracing::info!(server = %name, "Stopping specific MCP server");
-            if let Err(e) = connection.close().await {
-                tracing::warn!(
-                    server = %name,
-                    error = %e,
-                    "Error stopping MCP server"
-                );
-            }
-            true
-        } else {
-            tracing::debug!(server = %name, "MCP server not found (may already be stopped)");
-            false
-        }
-    }
-
     /// Check health of all external servers
     pub async fn check_server_health(&self) -> HashMap<String, bool> {
         // Clone Arc refs under lock, then release lock before awaiting network I/O
@@ -782,42 +708,9 @@ impl Default for McpClient {
     }
 }
 
-/// Builder for creating `McpClient` with configuration
-pub struct McpClientBuilder {
-    client: McpClient,
-}
-
-impl McpClientBuilder {
-    /// Create a new builder
-    #[must_use]
-    pub fn new() -> Self {
-        Self {
-            client: McpClient::new(),
-        }
-    }
-
-    /// Build the client (without starting external servers)
-    pub fn build(self) -> McpClient {
-        self.client
-    }
-}
-
-impl Default for McpClientBuilder {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[tokio::test]
-    async fn test_new_client() {
-        let client = McpClient::new();
-        assert_eq!(client.tool_count().await, 0);
-        assert!(!client.has_services().await);
-    }
 
     #[tokio::test]
     async fn test_tool_not_found() {
@@ -837,18 +730,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_builder() {
-        let client = McpClientBuilder::new().build();
-        assert_eq!(client.external_server_count().await, 0);
-    }
-
-    #[tokio::test]
-    async fn test_external_server_count() {
-        let client = McpClient::new();
-        assert_eq!(client.external_server_count().await, 0);
-    }
-
-    #[tokio::test]
     async fn test_stop_all_empty() {
         let client = McpClient::new();
         // Should not error when no servers to stop
@@ -860,26 +741,6 @@ mod tests {
         let client = McpClient::new();
         let health = client.check_server_health().await;
         assert!(health.is_empty());
-    }
-
-    #[tokio::test]
-    async fn test_startup_report_structure() {
-        // Test McpStartupReport default and methods
-        let report = McpStartupReport::default();
-        assert!(report.succeeded.is_empty());
-        assert!(report.failed.is_empty());
-
-        // Test with mixed results
-        let mut report = McpStartupReport::default();
-        report.succeeded.push("server1".to_string());
-        report.succeeded.push("server2".to_string());
-        report.failed.push((
-            "failing-server".to_string(),
-            "connection refused".to_string(),
-        ));
-
-        assert_eq!(report.succeeded.len(), 2);
-        assert_eq!(report.failed.len(), 1);
     }
 
     #[tokio::test]

@@ -4,19 +4,16 @@
 //! allowing MCP servers to call the host's LLM.
 
 use crate::sync_primitives::Arc;
-use std::pin::Pin;
 
-use futures::Stream;
 use serde_json::Value;
 use tokio::sync::RwLock;
 
 use crate::error::{AlephError, Result};
 use crate::mcp::client::McpClient;
 use crate::mcp::context_injector::ContextInjector;
-use crate::mcp::jsonrpc::mcp::{
-    PromptRole, SamplingChunk, SamplingContent, SamplingMessage, SamplingRequest, SamplingResponse,
-    StopReason,
-};
+use crate::mcp::jsonrpc::mcp::{SamplingRequest, SamplingResponse};
+#[cfg(test)]
+use crate::mcp::jsonrpc::mcp::{PromptRole, SamplingContent, StopReason};
 
 /// Callback for handling sampling requests
 ///
@@ -30,19 +27,10 @@ pub type SamplingCallback = Box<
         + Sync,
 >;
 
-/// Callback for streaming sampling requests
-pub type StreamingSamplingCallback = Box<
-    dyn Fn(SamplingRequest) -> Pin<Box<dyn Stream<Item = Result<SamplingChunk>> + Send>>
-        + Send
-        + Sync,
->;
-
 /// Manages sampling requests from MCP servers
 pub struct SamplingHandler {
     /// Callback to invoke for sampling requests (Arc-wrapped for cheap cloning out of lock)
     callback: Arc<RwLock<Option<Arc<SamplingCallback>>>>,
-    /// Streaming callback (optional, for streaming responses)
-    streaming_callback: Arc<RwLock<Option<Arc<StreamingSamplingCallback>>>>,
     /// Optional MCP client for context injection
     client: Arc<RwLock<Option<Arc<McpClient>>>>,
 }
@@ -53,7 +41,6 @@ impl SamplingHandler {
     pub fn new() -> Self {
         Self {
             callback: Arc::new(RwLock::new(None)),
-            streaming_callback: Arc::new(RwLock::new(None)),
             client: Arc::new(RwLock::new(None)),
         }
     }
@@ -80,21 +67,6 @@ impl SamplingHandler {
     /// Check if a callback is registered
     pub async fn has_callback(&self) -> bool {
         self.callback.read().await.is_some()
-    }
-
-    /// Set streaming callback for streaming responses
-    pub async fn set_streaming_callback<F, S>(&self, callback: F)
-    where
-        F: Fn(SamplingRequest) -> S + Send + Sync + 'static,
-        S: Stream<Item = Result<SamplingChunk>> + Send + 'static,
-    {
-        let mut cb = self.streaming_callback.write().await;
-        *cb = Some(Arc::new(Box::new(move |req| Box::pin(callback(req)))));
-    }
-
-    /// Check if streaming is available
-    pub async fn has_streaming(&self) -> bool {
-        self.streaming_callback.read().await.is_some()
     }
 
     /// Handle an incoming sampling request from server
@@ -166,6 +138,7 @@ impl SamplingHandler {
     }
 
     /// Create a simple text response
+    #[cfg(test)]
     pub fn text_response(text: impl Into<String>) -> SamplingResponse {
         SamplingResponse {
             role: PromptRole::Assistant,
@@ -176,6 +149,7 @@ impl SamplingHandler {
     }
 
     /// Create an error response (still valid `SamplingResponse` with error text)
+    #[cfg(test)]
     pub fn error_response(error: impl Into<String>) -> SamplingResponse {
         SamplingResponse {
             role: PromptRole::Assistant,
@@ -192,55 +166,6 @@ impl Default for SamplingHandler {
     fn default() -> Self {
         Self::new()
     }
-}
-
-/// Convert `SamplingMessage` to a format suitable for Thinker
-///
-/// Returns a vector of (role, content) tuples.
-#[must_use]
-pub fn sampling_messages_to_chat(messages: &[SamplingMessage]) -> Vec<(String, String)> {
-    messages
-        .iter()
-        .map(|m| {
-            let role = match m.role {
-                PromptRole::User => "user",
-                PromptRole::Assistant => "assistant",
-                PromptRole::System => "system",
-            };
-            let content = match &m.content {
-                SamplingContent::Text { text } => {
-                    // rust-doctor-disable-next-line excessive-clone
-                    text.clone()
-                }
-                SamplingContent::Image { data, mime_type } => {
-                    format!("[Image: {} ({} bytes)]", mime_type, data.len())
-                }
-            };
-            (role.to_string(), content)
-        })
-        .collect()
-}
-
-/// Extract system prompt from sampling request
-#[must_use]
-pub fn extract_system_prompt(request: &SamplingRequest) -> Option<String> {
-    // First check explicit system_prompt field
-    if let Some(ref system) = request.system_prompt {
-        // rust-doctor-disable-next-line excessive-clone
-        return Some(system.clone());
-    }
-
-    // Then check for system role in messages
-    for msg in &request.messages {
-        if matches!(msg.role, PromptRole::System) {
-            if let SamplingContent::Text { ref text } = msg.content {
-                // rust-doctor-disable-next-line excessive-clone
-                return Some(text.clone());
-            }
-        }
-    }
-
-    None
 }
 
 #[cfg(test)]
@@ -286,90 +211,5 @@ mod tests {
         } else {
             panic!("Expected text content");
         }
-    }
-
-    #[test]
-    fn test_messages_to_chat() {
-        let messages = vec![
-            SamplingMessage {
-                role: PromptRole::User,
-                content: SamplingContent::Text {
-                    text: "Hello".to_string(),
-                },
-            },
-            SamplingMessage {
-                role: PromptRole::Assistant,
-                content: SamplingContent::Text {
-                    text: "Hi there!".to_string(),
-                },
-            },
-        ];
-
-        let chat = sampling_messages_to_chat(&messages);
-        assert_eq!(chat.len(), 2);
-        assert_eq!(chat[0].0, "user");
-        assert_eq!(chat[0].1, "Hello");
-        assert_eq!(chat[1].0, "assistant");
-        assert_eq!(chat[1].1, "Hi there!");
-    }
-
-    #[test]
-    fn test_extract_system_prompt_from_field() {
-        let request = SamplingRequest {
-            messages: vec![],
-            model_preferences: None,
-            system_prompt: Some("You are a helpful assistant.".to_string()),
-            include_context: None,
-            max_tokens: None,
-        };
-
-        let system = extract_system_prompt(&request);
-        assert_eq!(system, Some("You are a helpful assistant.".to_string()));
-    }
-
-    #[test]
-    fn test_extract_system_prompt_from_messages() {
-        let request = SamplingRequest {
-            messages: vec![
-                SamplingMessage {
-                    role: PromptRole::System,
-                    content: SamplingContent::Text {
-                        text: "System message".to_string(),
-                    },
-                },
-                SamplingMessage {
-                    role: PromptRole::User,
-                    content: SamplingContent::Text {
-                        text: "Hello".to_string(),
-                    },
-                },
-            ],
-            model_preferences: None,
-            system_prompt: None,
-            include_context: None,
-            max_tokens: None,
-        };
-
-        let system = extract_system_prompt(&request);
-        assert_eq!(system, Some("System message".to_string()));
-    }
-
-    #[test]
-    fn test_extract_system_prompt_none() {
-        let request = SamplingRequest {
-            messages: vec![SamplingMessage {
-                role: PromptRole::User,
-                content: SamplingContent::Text {
-                    text: "Hello".to_string(),
-                },
-            }],
-            model_preferences: None,
-            system_prompt: None,
-            include_context: None,
-            max_tokens: None,
-        };
-
-        let system = extract_system_prompt(&request);
-        assert!(system.is_none());
     }
 }

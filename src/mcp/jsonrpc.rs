@@ -131,11 +131,6 @@ impl JsonRpcResponse {
             })
         }
     }
-
-    /// Parse from JSON string
-    pub fn from_json(json: &str) -> Result<Self, serde_json::Error> {
-        serde_json::from_str(json)
-    }
 }
 
 /// JSON-RPC 2.0 Error Object
@@ -159,7 +154,7 @@ impl std::fmt::Display for JsonRpcError {
 impl std::error::Error for JsonRpcError {}
 
 /// Standard JSON-RPC error codes
-pub mod error_codes {
+pub(crate) mod error_codes {
     /// Parse error - Invalid JSON
     pub const PARSE_ERROR: i32 = -32700;
     /// Invalid Request - Not a valid JSON-RPC request

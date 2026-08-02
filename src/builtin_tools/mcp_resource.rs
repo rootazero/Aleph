@@ -103,14 +103,6 @@ impl AlephToolDyn for McpReadResourceTool {
                         mime_type: Some(mime_type),
                     }
                 }
-                ResourceContent::Image { data, mime_type } => {
-                    use base64::Engine;
-                    McpReadResourceOutput {
-                        content: base64::engine::general_purpose::STANDARD.encode(&data),
-                        content_type: "image".to_string(),
-                        mime_type: Some(mime_type),
-                    }
-                }
             };
 
             Ok(serde_json::to_value(output)?)

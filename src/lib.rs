@@ -203,10 +203,6 @@ pub use crate::skill::{
     SkillSystem, SkillsConfig,
 };
 
-pub use crate::mcp::{
-    McpServerConfig, McpServerStatus, McpServerStatusInfo, McpServerType, McpToolInfo,
-};
-
 // =============================================================================
 // Exec Security Exports
 // =============================================================================
