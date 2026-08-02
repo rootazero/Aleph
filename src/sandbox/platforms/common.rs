@@ -217,6 +217,48 @@ fn termination_signal_xplat(_status: &std::process::ExitStatus) -> Option<i32> {
     None
 }
 
+/// Read `pipe` to EOF, keeping at most `buffer_ceiling` bytes and counting
+/// (but discarding) the rest. Returns `(kept, discarded)`.
+///
+/// Reading to EOF is the whole point: an earlier version wrapped the pipe in
+/// `take(ceiling)`, which stops reading at the ceiling and then DROPS the read
+/// end. The child's next write gets EPIPE/SIGPIPE and dies — so a command was
+/// killed for the crime of being verbose, and the model was handed a signalled
+/// exit instead of truncated output. A `cargo build -v`, a big `git log -p`, a
+/// full test run all clear 8 MB of stdout routinely; killing them mid-flight
+/// also abandons whatever side effects they were partway through.
+///
+/// The runaway guard is, and always was, the wall clock in
+/// [`run_child_with_drain`] — not the pipe filling up. Draining costs one
+/// read loop into a fixed buffer; the producer burns the same CPU it would
+/// burn writing to a file.
+async fn drain_bounded<R>(pipe: Option<R>, buffer_ceiling: u64) -> (Vec<u8>, u64)
+where
+    R: tokio::io::AsyncRead + Unpin,
+{
+    let Some(mut pipe) = pipe else {
+        return (Vec::new(), 0);
+    };
+    let mut kept: Vec<u8> = Vec::new();
+    let mut discarded: u64 = 0;
+    let mut chunk = [0u8; 16 * 1024];
+    // A read error ends the loop just like EOF: the pipe is unusable either
+    // way, and what was already read stays valid (matches the previous
+    // `let _ = ...read_to_end(...)`).
+    while let Ok(n) = pipe.read(&mut chunk).await {
+        if n == 0 {
+            break;
+        }
+        let room = usize::try_from(buffer_ceiling)
+            .unwrap_or(usize::MAX)
+            .saturating_sub(kept.len());
+        let take = room.min(n);
+        kept.extend_from_slice(&chunk[..take]);
+        discarded = discarded.saturating_add((n - take) as u64);
+    }
+    (kept, discarded)
+}
+
 /// Spawn stdout/stderr reader tasks, optionally pipe `stdin_data`, then
 /// race the child's `wait()` against `timeout`.
 ///
@@ -263,31 +305,19 @@ pub async fn run_child_with_drain(
     let stdout = child.stdout.take();
     let stderr = child.stderr.take();
 
-    // Read PAST the keep-budget so `truncate_output` can both preserve a
+    // Buffer PAST the keep-budget so `truncate_output` can both preserve a
     // head+tail slice AND report how many bytes were elided — the
     // `*_truncated_bytes` contract surfaced to the model (see `code_exec`).
-    // Capping the read at exactly `max_output_bytes` would silently drop the
-    // overflow before it could be counted (drop count stuck at 0, `truncated`
-    // stuck false). Reads stay bounded: at most `DRAIN_READ_FACTOR *
-    // max_output_bytes` is buffered for a runaway child, and the reported drop
-    // count saturates at that ceiling for pathological overflows.
-    const DRAIN_READ_FACTOR: u64 = 8;
-    let read_ceiling = (max_output_bytes as u64).saturating_mul(DRAIN_READ_FACTOR);
+    // Buffering exactly `max_output_bytes` would silently drop the overflow
+    // before it could be counted (drop count stuck at 0, `truncated` stuck
+    // false). Memory stays bounded: at most `DRAIN_BUFFER_FACTOR *
+    // max_output_bytes` is ever held for a runaway child; everything past that
+    // is read and discarded, counted but not kept.
+    const DRAIN_BUFFER_FACTOR: u64 = 8;
+    let buffer_ceiling = (max_output_bytes as u64).saturating_mul(DRAIN_BUFFER_FACTOR);
 
-    let stdout_task = tokio::spawn(async move {
-        let mut buf = Vec::new();
-        if let Some(pipe) = stdout {
-            let _ = pipe.take(read_ceiling).read_to_end(&mut buf).await;
-        }
-        buf
-    });
-    let stderr_task = tokio::spawn(async move {
-        let mut buf = Vec::new();
-        if let Some(pipe) = stderr {
-            let _ = pipe.take(read_ceiling).read_to_end(&mut buf).await;
-        }
-        buf
-    });
+    let stdout_task = tokio::spawn(drain_bounded(stdout, buffer_ceiling));
+    let stderr_task = tokio::spawn(drain_bounded(stderr, buffer_ceiling));
 
     let start = Instant::now();
     let wait_result = tokio::time::timeout(timeout, child.wait()).await;
@@ -295,10 +325,15 @@ pub async fn run_child_with_drain(
 
     match wait_result {
         Ok(Ok(status)) => {
-            let stdout_buf = stdout_task.await.unwrap_or_default();
-            let stderr_buf = stderr_task.await.unwrap_or_default();
-            let (stdout, stdout_dropped) = truncate_output(stdout_buf, max_output_bytes);
-            let (stderr, stderr_dropped) = truncate_output(stderr_buf, max_output_bytes);
+            let (stdout_buf, stdout_overflow) = stdout_task.await.unwrap_or_default();
+            let (stderr_buf, stderr_overflow) = stderr_task.await.unwrap_or_default();
+            // Bytes elided from the buffered slice PLUS the bytes that never
+            // fit in the buffer at all — the count the model reads is the
+            // whole overflow, not just the visible part of it.
+            let (stdout, stdout_kept_drop) = truncate_output(stdout_buf, max_output_bytes);
+            let (stderr, stderr_kept_drop) = truncate_output(stderr_buf, max_output_bytes);
+            let stdout_dropped = stdout_kept_drop.saturating_add(stdout_overflow);
+            let stderr_dropped = stderr_kept_drop.saturating_add(stderr_overflow);
             Ok(SandboxOutput {
                 stdout,
                 stderr,
@@ -316,8 +351,8 @@ pub async fn run_child_with_drain(
             // than relying on `kill_on_drop` firing when we return.
             let _ = child.start_kill();
             let drain = tokio::time::timeout(KILL_DRAIN_TIMEOUT, async {
-                let stdout_buf = stdout_task.await.unwrap_or_default();
-                let stderr_buf = stderr_task.await.unwrap_or_default();
+                let (stdout_buf, _) = stdout_task.await.unwrap_or_default();
+                let (stderr_buf, _) = stderr_task.await.unwrap_or_default();
                 (stdout_buf, stderr_buf)
             })
             .await;
@@ -738,5 +773,43 @@ mod tests {
         assert_eq!(out.stdout.len(), 50);
         assert_eq!(out.stdout_truncated_bytes, 150);
         assert!(out.truncated);
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn run_child_with_drain_does_not_kill_a_loud_child() {
+        use tokio::process::Command;
+        // A child whose stdout exceeds the *read* ceiling must still be
+        // truncated — not executed. `exec` makes the writing process the very
+        // child we wait on, so its death shows up in `signal` instead of being
+        // absorbed by an intermediate shell (a real `cargo build` / `git log
+        // -p` is the same shape one level down: the loud process dies and the
+        // shell reports 128+13).
+        let child = Command::new("bash")
+            .arg("-c")
+            .arg("exec head -c 100000 /dev/zero")
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .stdin(std::process::Stdio::piped())
+            .kill_on_drop(true)
+            .spawn()
+            .expect("spawn bash");
+
+        let out = run_child_with_drain(child, None, Duration::from_secs(20), 1024)
+            .await
+            .expect("a loud command still exits naturally");
+        assert_eq!(
+            out.signal, None,
+            "closing the read end early SIGPIPEs the child: a command is \
+             killed for talking too much, and the model is told it crashed"
+        );
+        assert_eq!(out.exit_code, Some(0), "the command itself succeeded");
+        assert!(out.truncated);
+        assert_eq!(
+            out.stdout_truncated_bytes,
+            100_000 - 1024,
+            "every overflowing byte is counted, not just the ones that fit \
+             under the read ceiling"
+        );
     }
 }
