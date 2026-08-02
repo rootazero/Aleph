@@ -27,21 +27,6 @@ impl RuntimeKind {
         s.parse().unwrap_or(Self::None)
     }
 
-    /// Get the canonical command to check for this runtime.
-    ///
-    /// This is the first (preferred) entry of [`Self::check_commands`]. Prefer
-    /// `check_commands` when probing availability so platform fallbacks apply.
-    #[must_use]
-    pub const fn check_command(&self) -> Option<&'static str> {
-        match self {
-            Self::Node => Some("node"),
-            Self::Python => Some("python3"),
-            Self::Bun => Some("bun"),
-            Self::Deno => Some("deno"),
-            Self::None => None,
-        }
-    }
-
     /// All command names to probe for this runtime, in priority order.
     ///
     /// Most runtimes expose a single canonical binary across every platform
@@ -235,15 +220,6 @@ mod tests {
     }
 
     #[test]
-    fn test_runtime_check_command() {
-        assert_eq!(RuntimeKind::Node.check_command(), Some("node"));
-        assert_eq!(RuntimeKind::Python.check_command(), Some("python3"));
-        assert_eq!(RuntimeKind::Bun.check_command(), Some("bun"));
-        assert_eq!(RuntimeKind::Deno.check_command(), Some("deno"));
-        assert_eq!(RuntimeKind::None.check_command(), None);
-    }
-
-    #[test]
     fn test_python_probes_python3_then_python() {
         // Regression: Python must fall back to `python` so that Windows
         // (python.org installer / `py` launcher) and minimal Linux hosts —
@@ -257,21 +233,6 @@ mod tests {
         assert_eq!(RuntimeKind::Bun.check_commands(), &["bun"]);
         assert_eq!(RuntimeKind::Deno.check_commands(), &["deno"]);
         assert!(RuntimeKind::None.check_commands().is_empty());
-    }
-
-    #[test]
-    fn test_check_command_matches_first_candidate() {
-        // Guard against the two mappings drifting apart: `check_command` must
-        // always equal the first entry of `check_commands` (or None when empty).
-        for kind in [
-            RuntimeKind::Node,
-            RuntimeKind::Python,
-            RuntimeKind::Bun,
-            RuntimeKind::Deno,
-            RuntimeKind::None,
-        ] {
-            assert_eq!(kind.check_command(), kind.check_commands().first().copied());
-        }
     }
 
     #[test]

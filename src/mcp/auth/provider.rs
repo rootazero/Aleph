@@ -8,7 +8,7 @@
 //! 2. User visits URL and authorizes in browser
 //! 3. Callback server receives authorization code
 //! 4. `finish_authorization()` - Exchange code for tokens
-//! 5. `refresh_token()` - Refresh expired tokens
+//! 5. `ensure_valid_token()` - Refresh expired tokens
 
 use crate::sync_primitives::Arc;
 use std::time::Duration;
@@ -51,17 +51,6 @@ pub struct OAuthServerMetadata {
     pub code_challenge_methods_supported: Vec<String>,
 }
 
-/// Authorization request parameters
-#[derive(Debug, Clone)]
-pub struct AuthorizationRequest {
-    /// The authorization URL to open in browser
-    pub authorization_url: String,
-    /// The state parameter for CSRF protection
-    pub state: String,
-    /// The PKCE code verifier (store this for token exchange)
-    pub code_verifier: String,
-}
-
 /// OAuth provider for MCP server authentication
 ///
 /// Handles the OAuth 2.0 authorization code flow with PKCE.
@@ -96,8 +85,7 @@ impl OAuthProvider {
         Self {
             // Bound every OAuth round-trip (metadata discovery, token exchange,
             // refresh). reqwest's default client has NO timeout, so a hung
-            // endpoint would block the caller — and, via TokenRefreshManager,
-            // the refresh loop — indefinitely.
+            // endpoint would block the caller indefinitely.
             client: Client::builder()
                 .timeout(Duration::from_secs(30))
                 .build()
@@ -235,15 +223,15 @@ impl OAuthProvider {
 
     /// Start the authorization flow
     ///
-    /// Generates an authorization URL that the user should visit in their browser.
-    /// Returns the URL along with the PKCE code verifier and state that should be
-    /// stored for the token exchange.
+    /// Generates an authorization URL that the user should visit in their
+    /// browser. The PKCE code verifier and state are kept in storage for the
+    /// token exchange in [`Self::finish_authorization`].
     pub async fn start_authorization(
         &self,
         metadata: &OAuthServerMetadata,
         client_id: &str,
         scope: Option<&str>,
-    ) -> Result<AuthorizationRequest> {
+    ) -> Result<String> {
         // Generate PKCE code verifier
         let code_verifier = generate_code_verifier();
         let code_challenge = generate_code_challenge(&code_verifier);
@@ -277,19 +265,13 @@ impl OAuthProvider {
         entry.code_verifier = Some(code_verifier.clone());
         // rust-doctor-disable-next-line excessive-clone
         entry.oauth_state = Some(state.clone());
-        // rust-doctor-disable-next-line excessive-clone
-        entry.server_url = Some(self.server_url.clone());
         // Recorded now so the authorization response's `iss` has something
         // trustworthy to be checked against later (RFC 9207).
         // rust-doctor-disable-next-line excessive-clone
         entry.issuer = metadata.issuer.clone();
         self.storage.save_entry(&self.server_name, &entry).await?;
 
-        Ok(AuthorizationRequest {
-            authorization_url: url.to_string(),
-            state,
-            code_verifier,
-        })
+        Ok(url.to_string())
     }
 
     /// Finish the authorization flow by exchanging the code for tokens
@@ -387,28 +369,6 @@ impl OAuthProvider {
         Ok(tokens)
     }
 
-    /// Refresh an expired access token using stored refresh token
-    ///
-    /// Uses the refresh token from storage to obtain a new access token.
-    pub async fn refresh_token(
-        &self,
-        metadata: &OAuthServerMetadata,
-        client_id: &str,
-    ) -> Result<OAuthTokens> {
-        let current_tokens = self
-            .storage
-            .get_tokens(&self.server_name)
-            .await?
-            .ok_or_else(|| AlephError::IoError("No tokens to refresh".to_string()))?;
-
-        let refresh_token = current_tokens
-            .refresh_token
-            .ok_or_else(|| AlephError::IoError("No refresh token available".to_string()))?;
-
-        self.refresh_token_with(metadata, client_id, &refresh_token)
-            .await
-    }
-
     /// Refresh an expired access token
     ///
     /// Uses the `refresh_token` grant to obtain a new access token.
@@ -460,40 +420,6 @@ impl OAuthProvider {
         );
 
         Ok(tokens)
-    }
-
-    /// Get valid tokens, refreshing if necessary
-    ///
-    /// Returns cached tokens if still valid, otherwise attempts to refresh.
-    pub async fn get_valid_tokens(
-        &self,
-        metadata: &OAuthServerMetadata,
-        client_id: &str,
-    ) -> Result<Option<OAuthTokens>> {
-        let tokens = match self.storage.get_tokens(&self.server_name).await? {
-            Some(t) => t,
-            None => return Ok(None),
-        };
-
-        if !tokens.is_expired() {
-            return Ok(Some(tokens));
-        }
-
-        if tokens.can_refresh() {
-            match self.refresh_token(metadata, client_id).await {
-                Ok(new_tokens) => return Ok(Some(new_tokens)),
-                Err(e) => {
-                    tracing::warn!(
-                        server = %self.server_name,
-                        error = %e,
-                        "Token refresh failed"
-                    );
-                }
-            }
-        }
-
-        // Tokens expired and can't refresh
-        Ok(None)
     }
 
     /// Check if tokens need refresh and refresh if possible

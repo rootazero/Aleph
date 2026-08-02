@@ -58,8 +58,8 @@ pub mod transport;
 pub mod types;
 
 pub use auth::{
-    AuthorizationRequest, CallbackResult, CallbackServer, ClientInfo, OAuthEntry, OAuthProvider,
-    OAuthServerMetadata, OAuthStorage, OAuthTokens, DEFAULT_CALLBACK_PORT,
+    CallbackResult, CallbackServer, ClientInfo, OAuthEntry, OAuthProvider, OAuthServerMetadata,
+    OAuthStorage, OAuthTokens,
 };
 pub use client::{ExternalServerConfig, McpClient};
 pub use context_injector::{ContextInjector, InjectedContext, ResourceContext, ToolContext};

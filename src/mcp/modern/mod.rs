@@ -204,19 +204,6 @@ impl RequestMeta {
         Self { meta }
     }
 
-    /// The protocol version this metadata declares.
-    ///
-    /// The Streamable HTTP transport mirrors this into the
-    /// `MCP-Protocol-Version` header, and a server rejects the request outright
-    /// if the two disagree — so both readings must come from here.
-    #[must_use]
-    pub fn protocol_version(&self) -> &str {
-        self.meta
-            .get(META_PROTOCOL_VERSION)
-            .and_then(Value::as_str)
-            .unwrap_or(MCP_MODERN_PROTOCOL_VERSION)
-    }
-
     /// Attach this metadata to a request's params, preserving any `_meta`
     /// members the caller already set (the spec's `_meta` is a shared,
     /// prefix-namespaced map — progress tokens and trace context live there
@@ -398,15 +385,14 @@ mod tests {
 
     #[test]
     fn header_version_and_body_version_share_one_source() {
-        // The transport mirrors `protocol_version()` into MCP-Protocol-Version
+        // The transport mirrors the dialect's version into MCP-Protocol-Version
         // while the body carries the `_meta` copy; a server rejects the request
-        // if they differ, so they must not be able to drift.
-        let meta = meta();
-        let params = meta.attach(None);
+        // if they differ, so both must resolve to the same revision.
+        let params = meta().attach(None);
 
         assert_eq!(
             params[META_FIELD][META_PROTOCOL_VERSION],
-            meta.protocol_version()
+            MCP_MODERN_PROTOCOL_VERSION
         );
     }
 

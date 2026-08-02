@@ -120,8 +120,6 @@ pub struct OAuthEntry {
     pub code_verifier: Option<String>,
     /// OAuth state parameter (for CSRF protection)
     pub oauth_state: Option<String>,
-    /// The server URL this entry is for
-    pub server_url: Option<String>,
     /// The authorization server issuer recorded when the in-flight
     /// authorization began.
     ///
@@ -148,7 +146,6 @@ impl std::fmt::Debug for OAuthEntry {
                 "oauth_state",
                 &self.oauth_state.as_ref().map(|_| "<redacted>"),
             )
-            .field("server_url", &self.server_url)
             .field("issuer", &self.issuer)
             .finish()
     }
@@ -423,28 +420,6 @@ impl OAuthStorage {
         *cache = Some(storage);
         Ok(())
     }
-
-    /// Remove all credentials for a server
-    pub async fn remove(&self, server: &str) -> Result<()> {
-        let mut cache = self.cache.write().await;
-        let mut storage = self.load_for_write(cache.as_ref()).await?;
-        storage.entries.remove(server);
-        self.save_to_file(&storage).await?;
-        *cache = Some(storage);
-        Ok(())
-    }
-
-    /// List all servers with stored credentials
-    pub async fn list_servers(&self) -> Result<Vec<String>> {
-        let storage = self.load().await?;
-        Ok(storage.entries.keys().cloned().collect())
-    }
-
-    /// Clear the in-memory cache
-    pub async fn clear_cache(&self) {
-        let mut cache = self.cache.write().await;
-        *cache = None;
-    }
 }
 
 #[cfg(test)]
@@ -547,9 +522,17 @@ mod tests {
         a.save_tokens("srv-c", &tok("c")).await.unwrap(); // must merge, not clobber srv-b
 
         let reader = OAuthStorage::new(path.clone());
-        let mut servers = reader.list_servers().await.unwrap();
-        servers.sort();
-        assert_eq!(servers, vec!["srv-a", "srv-b", "srv-c"]);
+        for (server, token) in [("srv-a", "a"), ("srv-b", "b"), ("srv-c", "c")] {
+            assert_eq!(
+                reader
+                    .get_tokens(server)
+                    .await
+                    .unwrap()
+                    .unwrap_or_else(|| panic!("{server} missing"))
+                    .access_token,
+                token
+            );
+        }
     }
 
     #[tokio::test]
@@ -571,25 +554,6 @@ mod tests {
                 "stable"
             );
         }
-    }
-
-    #[tokio::test]
-    async fn test_oauth_storage_remove() {
-        let dir = tempdir().unwrap();
-        let storage = OAuthStorage::new(dir.path().join("mcp-auth.json"));
-
-        let tokens = OAuthTokens {
-            access_token: "test".to_string(),
-            refresh_token: None,
-            expires_at: None,
-            scope: None,
-        };
-
-        storage.save_tokens("server1", &tokens).await.unwrap();
-        storage.remove("server1").await.unwrap();
-
-        let loaded = storage.get_tokens("server1").await.unwrap();
-        assert!(loaded.is_none());
     }
 
     #[tokio::test]
@@ -622,27 +586,6 @@ mod tests {
         let loaded = storage.get_client_info("server1").await.unwrap();
         assert!(loaded.is_some());
         assert_eq!(loaded.unwrap().client_id, "client123");
-    }
-
-    #[tokio::test]
-    async fn test_oauth_storage_list_servers() {
-        let dir = tempdir().unwrap();
-        let storage = OAuthStorage::new(dir.path().join("mcp-auth.json"));
-
-        let tokens = OAuthTokens {
-            access_token: "test".to_string(),
-            refresh_token: None,
-            expires_at: None,
-            scope: None,
-        };
-
-        storage.save_tokens("server1", &tokens).await.unwrap();
-        storage.save_tokens("server2", &tokens).await.unwrap();
-
-        let servers = storage.list_servers().await.unwrap();
-        assert_eq!(servers.len(), 2);
-        assert!(servers.contains(&"server1".to_string()));
-        assert!(servers.contains(&"server2".to_string()));
     }
 
     #[test]

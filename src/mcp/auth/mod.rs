@@ -7,7 +7,6 @@
 //! - **Storage** ([`OAuthStorage`]): Secure credential storage
 //! - **Provider** ([`OAuthProvider`]): OAuth flow implementation
 //! - **Callback** ([`CallbackServer`]): Authorization code callback server
-//! - **Refresh** ([`TokenRefreshManager`]): Background token refresh
 //!
 //! Wiring: [`stored_bearer_token`] is consulted by
 //! `McpClient::start_remote_server` to inject `Authorization` headers from
@@ -32,8 +31,8 @@
 //!
 //! // Start authorization flow
 //! let metadata = provider.discover_metadata().await?;
-//! let auth_req = provider.start_authorization(&metadata, "client_id", None).await?;
-//! println!("Open in browser: {}", auth_req.authorization_url);
+//! let authorization_url = provider.start_authorization(&metadata, "client_id", None).await?;
+//! println!("Open in browser: {authorization_url}");
 //!
 //! // After user authorizes, exchange code for tokens
 //! let tokens = provider.finish_authorization(&metadata, "client_id", &code, &state).await?;
@@ -41,14 +40,10 @@
 
 mod callback;
 mod provider;
-mod refresh;
 mod storage;
 
-pub use callback::{
-    CallbackResult, CallbackServer, DEFAULT_CALLBACK_PORT, DEFAULT_CALLBACK_TIMEOUT,
-};
-pub use provider::{AuthorizationRequest, OAuthProvider, OAuthServerMetadata};
-pub use refresh::{TokenRefreshConfig, TokenRefreshManager};
+pub use callback::{CallbackResult, CallbackServer};
+pub use provider::{OAuthProvider, OAuthServerMetadata};
 pub use storage::{ClientInfo, OAuthEntry, OAuthStorage, OAuthTokens};
 
 use crate::sync_primitives::Arc;

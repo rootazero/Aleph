@@ -16,7 +16,7 @@ use serde_json::Value;
 
 use crate::mcp::protocol::{ServerCapabilities, ServerInfo};
 
-use super::{cache::CacheDirective, META_SERVER_INFO};
+use super::META_SERVER_INFO;
 
 /// The discovery method name.
 pub const DISCOVER_METHOD: &str = "server/discover";
@@ -53,12 +53,6 @@ impl DiscoverResult {
     pub fn server_info(&self) -> Option<ServerInfo> {
         let raw = self.meta.as_ref()?.get(META_SERVER_INFO)?;
         serde_json::from_value(raw.clone()).ok()
-    }
-
-    /// How long this discovery answer stays fresh.
-    #[must_use]
-    pub fn cache_directive(raw_result: &Value) -> CacheDirective {
-        CacheDirective::from_result(raw_result)
     }
 }
 
@@ -204,15 +198,5 @@ mod tests {
         }));
 
         assert!(result.server_info().is_none());
-    }
-
-    #[test]
-    fn discover_results_carry_a_freshness_hint() {
-        let raw = json!({"supportedVersions": [], "ttlMs": 60_000});
-
-        assert_eq!(
-            DiscoverResult::cache_directive(&raw).ttl(),
-            Some(std::time::Duration::from_secs(60))
-        );
     }
 }

@@ -35,19 +35,6 @@ fn strip_server_prefix<'a>(s: &'a str, server_name: &str) -> &'a str {
 /// This includes: process spawn + initialize handshake + tools/list
 const DEFAULT_CONNECT_TIMEOUT: Duration = Duration::from_secs(300);
 
-/// Connection state
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ConnectionState {
-    /// Not connected
-    Disconnected,
-    /// Connection in progress
-    Connecting,
-    /// Connected and ready
-    Ready,
-    /// Connection failed
-    Failed,
-}
-
 /// Which cached lists came back different after a TTL-driven re-fetch.
 ///
 /// Deliberately mirrors the granularity of the server-sent list-changed
@@ -64,12 +51,6 @@ pub struct ChangedLists {
 }
 
 impl ChangedLists {
-    /// Whether anything changed at all.
-    #[must_use]
-    pub const fn any(self) -> bool {
-        self.tools || self.resources || self.prompts
-    }
-
     /// Combine two reports, as when one client fronts several connections.
     #[must_use]
     pub const fn merged(self, other: Self) -> Self {
@@ -133,8 +114,6 @@ pub struct McpServerConnection {
     cached_prompts: RwLock<Vec<crate::mcp::prompts::McpPrompt>>,
     /// Cached server instructions (from the handshake or `server/discover`)
     cached_instructions: RwLock<Option<String>>,
-    /// Connection state
-    state: RwLock<ConnectionState>,
     /// Which protocol era this server speaks.
     ///
     /// Settled exactly once, by [`Self::handshake`], before any other request —
@@ -267,7 +246,6 @@ impl McpServerConnection {
             cached_resource_templates: RwLock::new(Vec::new()),
             cached_prompts: RwLock::new(Vec::new()),
             cached_instructions: RwLock::new(None),
-            state: RwLock::new(ConnectionState::Connecting),
             dialect: OnceLock::new(),
             request_meta: OnceLock::new(),
             param_headers: RwLock::new(HashMap::new()),
@@ -284,12 +262,6 @@ impl McpServerConnection {
     /// completion — and therefore whether it may declare the capability.
     async fn can_sample(&self) -> bool {
         self.sampling.read().await.is_some()
-    }
-
-    /// The protocol dialect settled for this server, or `None` before the probe.
-    #[must_use]
-    pub fn dialect(&self) -> Option<&McpDialect> {
-        self.dialect.get()
     }
 
     /// Whether this connection speaks the stateless `2026-07-28` shape.
@@ -343,11 +315,6 @@ impl McpServerConnection {
                 )))
             }
         }?;
-
-        {
-            let mut state = self.state.write().await;
-            *state = ConnectionState::Ready;
-        }
 
         // Pre-fetch tools list
         self.refresh_tools().await?;
@@ -1415,11 +1382,6 @@ impl McpServerConnection {
         })
     }
 
-    /// Get current connection state
-    pub async fn state(&self) -> ConnectionState {
-        *self.state.read().await
-    }
-
     /// Get server name
     pub fn name(&self) -> &str {
         &self.name
@@ -1465,11 +1427,6 @@ impl McpServerConnection {
     /// Close the connection
     pub async fn close(&self) -> Result<()> {
         tracing::info!(server = %self.name, "Closing MCP connection");
-
-        {
-            let mut state = self.state.write().await;
-            *state = ConnectionState::Disconnected;
-        }
 
         self.transport.close().await
     }
@@ -1692,7 +1649,7 @@ mod tests {
         let conn = connect_with(&transport).await.unwrap();
 
         assert_eq!(
-            conn.dialect(),
+            conn.dialect.get(),
             Some(&McpDialect::Modern {
                 version: MCP_MODERN_PROTOCOL_VERSION.to_string()
             })
@@ -1731,7 +1688,7 @@ mod tests {
         let conn = connect_with(&transport).await.unwrap();
 
         assert_eq!(
-            conn.dialect(),
+            conn.dialect.get(),
             Some(&McpDialect::Legacy {
                 version: "2025-03-26".to_string()
             })
@@ -1789,7 +1746,7 @@ mod tests {
 
         let conn = connect_with(&transport).await.unwrap();
 
-        assert!(conn.dialect().is_some_and(McpDialect::is_modern));
+        assert!(conn.dialect.get().is_some_and(McpDialect::is_modern));
         assert!(!transport
             .methods_seen()
             .await
@@ -1847,7 +1804,7 @@ mod tests {
 
         let conn = connect_with(&transport).await.unwrap();
 
-        assert!(conn.dialect().is_some_and(McpDialect::is_modern));
+        assert!(conn.dialect.get().is_some_and(McpDialect::is_modern));
         assert_eq!(conn.instructions().await.as_deref(), Some("use me well"));
         // The resources capability was learned on the second ask, so the
         // resource list was actually fetched.
@@ -1883,7 +1840,7 @@ mod tests {
 
         let conn = connect_with(&transport).await.unwrap();
 
-        assert!(conn.dialect().is_some_and(|d| !d.is_modern()));
+        assert!(conn.dialect.get().is_some_and(|d| !d.is_modern()));
     }
 
     #[tokio::test]
@@ -2149,12 +2106,6 @@ mod tests {
 
     // Note: Most tests require an actual MCP server to be available
     // These are basic structure tests
-
-    #[test]
-    fn test_connection_state() {
-        assert_eq!(ConnectionState::Disconnected, ConnectionState::Disconnected);
-        assert_ne!(ConnectionState::Ready, ConnectionState::Failed);
-    }
 
     #[tokio::test]
     async fn test_connect_nonexistent() {

@@ -8,12 +8,11 @@
 //! - Notifies the main process via a channel
 //! - Auto-shuts down after receiving a callback or timeout (5 minutes)
 
-use crate::sync_primitives::Arc;
 use std::net::SocketAddr;
 use std::time::Duration;
 
 use tokio::net::TcpListener;
-use tokio::sync::{mpsc, oneshot, RwLock};
+use tokio::sync::mpsc;
 use tokio::time::timeout;
 
 use crate::error::{AlephError, Result};
@@ -47,8 +46,6 @@ pub struct CallbackServer {
     port: u16,
     /// Timeout duration
     timeout_duration: Duration,
-    /// Shutdown signal sender
-    shutdown_tx: Arc<RwLock<Option<oneshot::Sender<()>>>>,
 }
 
 impl CallbackServer {
@@ -58,11 +55,11 @@ impl CallbackServer {
         Self {
             port: DEFAULT_CALLBACK_PORT,
             timeout_duration: DEFAULT_CALLBACK_TIMEOUT,
-            shutdown_tx: Arc::new(RwLock::new(None)),
         }
     }
 
     /// Create a callback server with custom port
+    #[cfg(test)]
     #[must_use]
     pub const fn with_port(mut self, port: u16) -> Self {
         self.port = port;
@@ -70,6 +67,7 @@ impl CallbackServer {
     }
 
     /// Create a callback server with custom timeout
+    #[cfg(test)]
     #[must_use]
     pub const fn with_timeout(mut self, duration: Duration) -> Self {
         self.timeout_duration = duration;
@@ -100,33 +98,18 @@ impl CallbackServer {
         // Channel to receive callback result
         let (result_tx, mut result_rx) = mpsc::channel::<CallbackResult>(1);
 
-        // Shutdown channel
-        let (shutdown_tx, mut shutdown_rx) = oneshot::channel::<()>();
-        {
-            let mut tx = self.shutdown_tx.write().await;
-            *tx = Some(shutdown_tx);
-        }
-
         // Spawn the server task
         let server_task = tokio::spawn(async move {
             loop {
-                tokio::select! {
-                    accept_result = listener.accept() => {
-                        match accept_result {
-                            Ok((stream, _addr)) => {
-                                if let Some(result) = handle_connection(stream).await {
-                                    let _ = result_tx.send(result).await;
-                                    break;
-                                }
-                            }
-                            Err(e) => {
-                                tracing::warn!(error = %e, "Failed to accept connection");
-                            }
+                match listener.accept().await {
+                    Ok((stream, _addr)) => {
+                        if let Some(result) = handle_connection(stream).await {
+                            let _ = result_tx.send(result).await;
+                            break;
                         }
                     }
-                    _ = &mut shutdown_rx => {
-                        tracing::info!("Callback server shutdown requested");
-                        break;
+                    Err(e) => {
+                        tracing::warn!(error = %e, "Failed to accept connection");
                     }
                 }
             }
@@ -150,14 +133,6 @@ impl CallbackServer {
                 "OAuth callback timeout after {} seconds",
                 self.timeout_duration.as_secs()
             ))),
-        }
-    }
-
-    /// Shutdown the server
-    pub async fn shutdown(&self) {
-        let mut tx = self.shutdown_tx.write().await;
-        if let Some(shutdown_tx) = tx.take() {
-            let _ = shutdown_tx.send(());
         }
     }
 }

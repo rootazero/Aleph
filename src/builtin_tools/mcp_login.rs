@@ -115,7 +115,7 @@ impl AlephToolDyn for McpLoginTool {
                 None => provider.register_client(&metadata).await?,
             };
 
-            let auth_req = provider
+            let authorization_url = provider
                 .start_authorization(&metadata, &client_info.client_id, args.scope.as_deref())
                 .await?;
 
@@ -169,7 +169,7 @@ impl AlephToolDyn for McpLoginTool {
             });
 
             let output = McpLoginOutput {
-                authorization_url: auth_req.authorization_url,
+                authorization_url,
                 instructions: "Send this URL to the user to open in a browser. After they \
                                approve access, the token exchange completes automatically \
                                (within a 5 minute window) and the MCP server reconnects with \
