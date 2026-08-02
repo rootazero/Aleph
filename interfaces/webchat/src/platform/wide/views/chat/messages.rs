@@ -5,7 +5,7 @@
 //! the chat module (`pub(super)`).
 
 use super::reasoning::ReasoningPanel;
-use super::state::{ChatMessage, ChatPhase, ChatState, QueuedPrompt};
+use super::state::{merge_draft, ChatMessage, ChatPhase, ChatState, QueuedPrompt};
 use super::timeline::{self, TimelineRow};
 use super::PlanArchiveCell;
 use crate::components::markdown::TypewriterRenderer;
@@ -405,8 +405,26 @@ fn QueuedGhosts() -> impl IntoView {
                                         // attachments are backed by `chat.pending_attachments`;
                                         // `draft_seed` feeds the textarea. Restoring both avoids
                                         // silently dropping a queued prompt's files on edit.
-                                        chat.draft_seed.set(Some(edit_text.clone()));
-                                        chat.pending_attachments.set(edit_attachments.clone());
+                                        //
+                                        // Both restores now ADD to what is already there — the
+                                        // seed merges above the current draft (see
+                                        // `merge_draft`) and the files join the pending list.
+                                        // Replacing wiped a half-written message and any file
+                                        // staged for it, with no undo.
+                                        //
+                                        // The seed slot itself accumulates too: it is a one-shot
+                                        // drained by an Effect, so a second restore landing in the
+                                        // same frame would otherwise overwrite the first — and
+                                        // that first prompt is already out of the queue, so it
+                                        // would be gone for good.
+                                        chat.draft_seed.update(|pending| {
+                                            let merged = merge_draft(
+                                                &edit_text,
+                                                pending.as_deref().unwrap_or_default(),
+                                            );
+                                            *pending = Some(merged);
+                                        });
+                                        chat.add_pending_attachments(edit_attachments.clone());
                                         chat.remove_queued_prompt(idx);
                                     }
                                 >

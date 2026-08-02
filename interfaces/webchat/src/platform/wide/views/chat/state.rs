@@ -28,6 +28,25 @@ pub struct QueuedPrompt {
     pub attachments: Vec<PendingAttachment>,
 }
 
+/// Fold a restored prompt back into whatever the user has already typed.
+///
+/// Restoring used to **replace** the composer contents, so pulling a queued
+/// prompt back for editing silently destroyed a half-written draft — the one
+/// keystroke a user cannot undo. Both restore paths (the ghost bubble's click
+/// and the composer's ↑) merge instead, and both put the restored text first,
+/// matching codex's `restore_user_message_to_composer`: the thing you asked to
+/// edit lands where the cursor was, with your in-progress line below it.
+///
+/// Pure and host-testable — no signals, no DOM.
+#[must_use]
+pub fn merge_draft(restored: &str, current: &str) -> String {
+    match (restored.trim().is_empty(), current.trim().is_empty()) {
+        (true, _) => current.to_string(),
+        (false, true) => restored.to_string(),
+        (false, false) => format!("{restored}\n\n{current}"),
+    }
+}
+
 /// One-line preview for a queued prompt: trimmed text (UTF-8-safe truncation,
 /// P7), or an attachment-count fallback when attachments-only. Pure — the
 /// ghost bubble renders whatever this returns.
@@ -765,6 +784,31 @@ impl ChatState {
             }
         });
         popped
+    }
+
+    /// Pop the **most recently** queued prompt, if any.
+    ///
+    /// LIFO on purpose (codex `pop_latest_queued_composer_state` parity): the
+    /// composer's ↑ means "take back what I just said", so it must walk the
+    /// queue newest-first — the opposite end from
+    /// [`dequeue_prompt_front`](Self::dequeue_prompt_front), which is the
+    /// delivery order.
+    #[must_use]
+    pub fn retract_latest_queued(&self) -> Option<QueuedPrompt> {
+        let mut popped = None;
+        self.prompt_queue.update(|q| popped = q.pop());
+        popped
+    }
+
+    /// Append files to the pending-attachment list, keeping what is already
+    /// staged. Restoring a queued prompt used to *replace* the list, so pulling
+    /// back a prompt that carried files discarded any file the user had
+    /// attached for their next message.
+    pub fn add_pending_attachments(&self, files: Vec<PendingAttachment>) {
+        if files.is_empty() {
+            return;
+        }
+        self.pending_attachments.update(|a| a.extend(files));
     }
 
     /// Remove the queued prompt at `index` (no-op if out of range). Used by
@@ -2064,6 +2108,51 @@ mod queue_tests {
         let texts: Vec<_> = drained.iter().map(|p| p.text.clone()).collect();
         assert_eq!(texts, vec!["a", "b"]);
         assert!(chat.prompt_queue.get_untracked().is_empty());
+    }
+
+    /// ↑ means "take back what I just said", so it walks the queue from the
+    /// newest end — the opposite of the delivery order `dequeue_prompt_front`
+    /// serves.
+    #[test]
+    fn retract_takes_the_newest_first() {
+        let owner = Owner::new();
+        owner.set();
+        let chat = ChatState::new();
+        chat.enqueue_prompt(prompt("first", 0));
+        chat.enqueue_prompt(prompt("second", 0));
+
+        assert_eq!(chat.retract_latest_queued().unwrap().text, "second");
+        assert_eq!(chat.retract_latest_queued().unwrap().text, "first");
+        assert!(chat.retract_latest_queued().is_none());
+    }
+
+    /// Restoring used to *replace* the pending files, so pulling back a prompt
+    /// that carried attachments discarded whatever the user had staged since.
+    #[test]
+    fn restoring_attachments_adds_to_the_staged_ones() {
+        let owner = Owner::new();
+        owner.set();
+        let chat = ChatState::new();
+        chat.pending_attachments.set(prompt("draft", 1).attachments);
+
+        chat.add_pending_attachments(prompt("queued", 2).attachments);
+
+        assert_eq!(chat.pending_attachments.get_untracked().len(), 3);
+    }
+
+    /// The restored prompt lands above the in-progress line, and neither side
+    /// is ever destroyed (codex `restore_user_message_to_composer` order).
+    #[test]
+    fn merge_draft_keeps_both_sides_restored_first() {
+        assert_eq!(merge_draft("queued", "typing"), "queued\n\ntyping");
+    }
+
+    #[test]
+    fn merge_draft_is_identity_when_one_side_is_blank() {
+        assert_eq!(merge_draft("queued", ""), "queued");
+        assert_eq!(merge_draft("queued", "   "), "queued");
+        assert_eq!(merge_draft("", "typing"), "typing");
+        assert_eq!(merge_draft("  ", "typing"), "typing");
     }
 }
 

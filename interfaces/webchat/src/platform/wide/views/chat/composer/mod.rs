@@ -14,7 +14,8 @@ mod voice;
 use super::mention_palette::{update_mention_palette, MentionPaletteView};
 use super::project_menu::ProjectMenu;
 use super::state::{
-    ChatPhase, ChatSendError, ChatSendErrorCode, ChatState, QueuedPrompt, TeamMemberView,
+    merge_draft, ChatPhase, ChatSendError, ChatSendErrorCode, ChatState, QueuedPrompt,
+    TeamMemberView,
 };
 use super::TodoPanel;
 use crate::api::chat::{ChatApi, ChatAttachment};
@@ -501,19 +502,45 @@ pub(super) fn InputArea() -> impl IntoView {
         });
     }
 
-    // Empty-state suggestion chips (and any future "insert prompt" source) drop
-    // a starter string on `chat.draft_seed`; drain it into this local
-    // `input_text` here so the chips never need a handle on the composer. Same
-    // shape as the retry plumbing above. Writing the signal back to `None`
-    // inside the Effect that reads it is safe — the re-run sees `None` and stops.
+    // Empty-state suggestion chips, the queued-ghost "click to edit", and the
+    // composer's own ↑ retraction all drop a starter string on
+    // `chat.draft_seed`; drain it into this local `input_text` here so none of
+    // them needs a handle on the composer. Same shape as the retry plumbing
+    // above. Writing the signal back to `None` inside the Effect that reads it
+    // is safe — the re-run sees `None` and stops.
+    //
+    // The seed is MERGED with whatever is already typed, never substituted for
+    // it: clicking a queued ghost to edit it used to wipe a half-written draft
+    // with no way back. Chips only fire from the empty state, so for them the
+    // merge is the identity.
     {
         Effect::new(move |_| {
             if let Some(seed) = chat.draft_seed.get() {
-                input_text.set(seed);
+                input_text.set(merge_draft(&seed, &input_text.get_untracked()));
                 chat.draft_seed.set(None);
             }
         });
     }
+
+    // ↑ retraction — take the most recently queued prompt back into the
+    // composer for editing (codex `edit_queued_message`). Restores the whole
+    // prompt: the text merges above the current draft, the files rejoin the
+    // pending list. Shared by the plain-↑ and Alt+↑ key paths below so both
+    // behave identically. Returns whether anything was actually taken back, so
+    // the caller only swallows the keystroke when it did something.
+    //
+    // Writes `input_text` directly rather than routing through `draft_seed`:
+    // the seed is a ONE-SHOT slot drained by an Effect, so two ↑ presses inside
+    // one frame would overwrite the first prompt before it ever reached the
+    // textarea — silently eating a message the user asked to get back.
+    let retract_latest_queued = move || -> bool {
+        let Some(entry) = chat.retract_latest_queued() else {
+            return false;
+        };
+        chat.add_pending_attachments(entry.attachments);
+        input_text.set(merge_draft(&entry.text, &input_text.get_untracked()));
+        true
+    };
 
     // Queue auto-drain — when a run settles naturally (busy → idle), replay
     // the head of the queue through the normal send pipeline. An explicit
@@ -800,6 +827,36 @@ pub(super) fn InputArea() -> impl IntoView {
                     _ => {}
                 }
                 return;
+            }
+            // ↑ = take the most recently queued prompt back for editing.
+            //
+            // The queued ghosts were mouse-only: a user who lined up three
+            // follow-ups and then wanted the last one back had to leave the
+            // keyboard. Both reference harnesses bind this (codex
+            // `edit_queued_message` = Alt+↑ / Shift+←, pi `app.message.dequeue`
+            // = Alt+↑), so Alt+↑ is the portable chord — and plain ↑ is offered
+            // too, but ONLY on an empty draft, where the key has no caret work
+            // to do. With text in the box plain ↑ must stay caret movement:
+            // stealing it there would break editing a multi-line prompt.
+            //
+            // Ctrl/Meta are left alone (word-jump / document-start on the two
+            // platforms). Palette and mention navigation already returned above,
+            // so this cannot shadow them. `is_composing` keeps ↑ away from an
+            // open IME candidate window — the draft reads as empty while a CJK
+            // candidate is being picked, which is exactly when ↑ means "previous
+            // candidate" and stealing it would be maddening.
+            if ev.key() == "ArrowUp"
+                && !ev.ctrl_key()
+                && !ev.meta_key()
+                && !ev.is_composing()
+                && (ev.alt_key() || input_text.get_untracked().trim().is_empty())
+            {
+                // Only swallow the key when there was actually something to take
+                // back; an empty queue leaves ↑ its default behaviour.
+                if retract_latest_queued() {
+                    ev.prevent_default();
+                    return;
+                }
             }
             // Esc while a run is active = force-insert: interrupt now and flush
             // the queue (+ the current draft) as a fresh run (B7). Palette/
