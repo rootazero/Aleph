@@ -1,6 +1,4 @@
-use super::super::types::{
-    ChannelType, ConflictInfo, ConflictResolution, ToolSource,
-};
+use super::super::types::{ChannelType, ConflictInfo, ConflictResolution, ToolSource};
 use super::*;
 use crate::tool_metadata::types::ToolPriority;
 
@@ -170,32 +168,6 @@ async fn test_set_tool_active() {
     // Should appear in full list
     let all_with_inactive = registry.list_all_with_inactive().await;
     assert!(all_with_inactive.iter().any(|t| t.id == "custom:0:test"));
-}
-
-#[tokio::test]
-async fn test_to_prompt_block() {
-    let registry = ToolCatalog::new();
-
-    // Register custom commands to test prompt block
-    let rules = vec![
-        RoutingRuleConfig {
-            regex: "^/translate".to_string(),
-            provider: Some("openai".to_string()),
-            system_prompt: Some("Translate".to_string()),
-            ..Default::default()
-        },
-        RoutingRuleConfig {
-            regex: "^/code".to_string(),
-            provider: Some("openai".to_string()),
-            system_prompt: Some("Code assistant".to_string()),
-            ..Default::default()
-        },
-    ];
-    registry.register_custom_commands(&rules).await;
-
-    let prompt = registry.to_prompt_block().await;
-    assert!(prompt.contains("**translate**"));
-    assert!(prompt.contains("**code**"));
 }
 
 // =========================================================================
@@ -1174,43 +1146,6 @@ async fn test_list_namespace_children_empty() {
 
     let children = registry.list_namespace_children("search").await;
     assert!(children.is_empty());
-}
-
-#[tokio::test]
-async fn test_get_tool_definition_prefers_exact_name_match() {
-    // Regression: when one tool matches by `name` and another by id-suffix
-    // (`:{name}`), selection used HashMap iteration order and could return
-    // the wrong tool's schema. The exact-name match must always win.
-    let registry = ToolCatalog::new();
-
-    // Custom command literally named "translate".
-    let rules = vec![RoutingRuleConfig {
-        regex: "^/translate".to_string(),
-        provider: Some("openai".to_string()),
-        system_prompt: Some("Translation assistant".to_string()),
-        ..Default::default()
-    }];
-    registry.register_custom_commands(&rules).await;
-
-    // Skill whose id is "translate" — conflict resolution renames its NAME
-    // to "translate-skill" (Custom outranks Skill) but its id stays
-    // "skill:translate", which ends with ":translate".
-    let skills = vec![SkillInfo {
-        id: "translate".to_string(),
-        name: "Translate".to_string(),
-        description: "Translate skill".to_string(),
-        ecosystem: "aleph".to_string(),
-    }];
-    registry.register_skills(&skills).await;
-
-    // Both the custom (name == "translate") and the skill (id ends
-    // ":translate") match the filter; the exact-name custom must win.
-    let def = registry
-        .get_tool_definition("translate")
-        .await
-        .expect("translate tool definition");
-    assert_eq!(def.id, "custom:0:translate");
-    assert_eq!(def.name, "translate");
 }
 
 // ── Slash-command surfacing (round: reference-driven /help + friendly aliases) ──

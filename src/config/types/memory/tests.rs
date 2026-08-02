@@ -70,7 +70,6 @@ mod tests {
     fn assembler_config_defaults_sane() {
         let c = AssemblerConfig::default();
         assert!(c.enabled);
-        assert_eq!(c.total_budget_tokens, 8000);
         assert_eq!(c.rerank_timeout_ms, 800);
         assert!(!c.force_fallback);
         assert_eq!(c.fallback_skeleton.relevant_notes_tokens, 5000);
@@ -124,11 +123,9 @@ mod tests {
     fn assembler_partial_toml_falls_back_to_defaults() {
         let toml_src = r#"
             enabled = false
-            total_budget_tokens = 4000
         "#;
         let c: AssemblerConfig = toml::from_str(toml_src).expect("parse");
         assert!(!c.enabled);
-        assert_eq!(c.total_budget_tokens, 4000);
         assert_eq!(c.rerank_timeout_ms, 800);
         assert_eq!(c.fallback_skeleton.relevant_notes_tokens, 5000);
     }

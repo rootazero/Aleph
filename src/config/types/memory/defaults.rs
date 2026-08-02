@@ -127,10 +127,6 @@ pub const fn default_assembler_enabled() -> bool {
     true
 }
 
-pub const fn default_total_budget() -> u32 {
-    8000
-}
-
 pub const fn default_pool_limit() -> usize {
     20
 }

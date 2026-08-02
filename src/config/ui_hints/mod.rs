@@ -75,6 +75,58 @@ impl ConfigUiHints {
     }
 }
 
+/// Test-only read accessors.
+///
+/// `build_ui_hints()` is shipped to the Panel wholesale (`gateway/handlers/
+/// config.rs`), which does its own field lookup — so production never needed
+/// these, and `6e63cabe2` correctly cut them from the production surface.
+/// That cut left their tests behind, which broke the whole `alephcore` lib-test
+/// build; they are restored here under `#[cfg(test)]` so the wildcard-matching
+/// contract stays covered without re-exposing an unused public API.
+#[cfg(test)]
+impl ConfigUiHints {
+    /// Look up a field hint, falling back to wildcard patterns (`*` matches one
+    /// path segment). Longest matching pattern wins.
+    pub(crate) fn get_hint(&self, path: &str) -> Option<&FieldHint> {
+        if let Some(hint) = self.fields.get(path) {
+            return Some(hint);
+        }
+
+        let parts: Vec<&str> = path.split('.').collect();
+        let mut best_match: Option<(&str, &FieldHint)> = None;
+
+        for (pattern, hint) in &self.fields {
+            if Self::matches_pattern(pattern, &parts)
+                && best_match.is_none_or(|(best, _)| pattern.len() > best.len())
+            {
+                best_match = Some((pattern.as_str(), hint));
+            }
+        }
+
+        best_match.map(|(_, hint)| hint)
+    }
+
+    /// Whether `pattern` (with `*` segment wildcards) matches the split path.
+    fn matches_pattern(pattern: &str, path_parts: &[&str]) -> bool {
+        let pattern_parts: Vec<&str> = pattern.split('.').collect();
+        if pattern_parts.len() != path_parts.len() {
+            return false;
+        }
+
+        pattern_parts
+            .iter()
+            .zip(path_parts.iter())
+            .all(|(p, t)| *p == "*" || p == t)
+    }
+
+    /// All groups sorted by their declared display order.
+    pub(crate) fn sorted_groups(&self) -> Vec<(&String, &GroupMeta)> {
+        let mut groups: Vec<_> = self.groups.iter().collect();
+        groups.sort_by_key(|(_, meta)| meta.order);
+        groups
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

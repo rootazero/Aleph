@@ -1164,6 +1164,48 @@ mod tests {
         );
     }
 
+    /// A project-scoped read unions `[base, scoped]` (`read_scope_ids`), and the
+    /// multi-agent path used to label every hit with `agent_ids.first()` — the
+    /// base id. Decay's `access_weight` and the evolution recall-evidence gate
+    /// read signals under the *scoped* id, so project notes looked
+    /// never-recalled (early archival) while the base namespace collected
+    /// phantom hits for notes it does not own.
+    #[tokio::test]
+    async fn recall_signals_are_filed_under_each_notes_owning_namespace() {
+        let (retrieval, _dir) = create_retrieval().await;
+
+        // Two notes at the SAME relative path in different namespaces — the
+        // case a bare-path signal map cannot distinguish.
+        let mut base_hit = scored("preference/editor", "base note", 0.9);
+        base_hit.fact.agent = "main".to_string();
+        let mut scoped_hit = scored("preference/editor", "project note", 0.8);
+        scoped_hit.fact.agent = "main__proj-x".to_string();
+
+        retrieval
+            .record_recall_by_owner("which editor", &[base_hit, scoped_hit])
+            .await;
+
+        let store = retrieval.indexer.store();
+        let path = vec!["preference/editor".to_string()];
+
+        let scoped = store
+            .recall_hit_counts("main__proj-x", &path)
+            .await
+            .unwrap();
+        assert_eq!(
+            scoped.get("preference/editor"),
+            Some(&1),
+            "the project-owned note must earn its signal under its own namespace"
+        );
+
+        let base = store.recall_hit_counts("main", &path).await.unwrap();
+        assert_eq!(
+            base.get("preference/editor"),
+            Some(&1),
+            "the base-owned note earns exactly its own signal, not the project's too"
+        );
+    }
+
     #[tokio::test]
     async fn vector_retrieve_empty_returns_empty() {
         let (retrieval, _dir) = create_retrieval().await;
@@ -1467,7 +1509,7 @@ mod tests {
             scored("p/hot", "frequently used knowledge", 0.70),
         ];
         let mut counts = HashMap::new();
-        counts.insert("p/hot".to_string(), 40_i64);
+        counts.insert(("main".to_string(), "p/hot".to_string()), 40_i64);
         // 0.70 * (1 + 0.5 * ln(41)) = 0.70 * (1 + 0.5 * 3.714) = 0.70 * 2.857 = 2.0
         let out = retrieval.apply_scoring(facts, 1_000_000, &counts, &mut TraceSink::Off);
         let order: Vec<&str> = out.iter().map(|f| f.fact.id.as_str()).collect();
@@ -1485,7 +1527,7 @@ mod tests {
         let retrieval = retrieval.with_scoring_config(&inactive_scoring());
         let facts = vec![scored("p/a", "alpha", 0.9), scored("p/b", "beta", 0.5)];
         let mut counts = HashMap::new();
-        counts.insert("p/b".to_string(), 999_i64);
+        counts.insert(("main".to_string(), "p/b".to_string()), 999_i64);
         let out = retrieval.apply_scoring(facts, 1_000_000, &counts, &mut TraceSink::Off);
         let order: Vec<&str> = out.iter().map(|f| f.fact.id.as_str()).collect();
         assert_eq!(order, vec!["p/a", "p/b"]);
@@ -1528,7 +1570,8 @@ mod tests {
             scored("b", "beta content two", 0.5),
             scored("c", "gamma content three", 0.3),
         ];
-        let counts: std::collections::HashMap<String, i64> = std::collections::HashMap::new();
+        let counts: std::collections::HashMap<(String, String), i64> =
+            std::collections::HashMap::new();
 
         // Untraced (Off) reference result.
         let mut off = TraceSink::Off;
