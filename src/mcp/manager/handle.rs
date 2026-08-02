@@ -334,25 +334,6 @@ impl McpManagerHandle {
             .map_err(|_| AlephError::channel_closed("McpManager response channel closed"))
     }
 
-    // ===== Config Methods =====
-
-    /// Reload configuration from disk
-    ///
-    /// This will reload the MCP server configurations and reconcile
-    /// the running state with the new configuration.
-    pub async fn reload_config(&self) -> Result<()> {
-        let (respond_to, rx) = oneshot::channel();
-
-        self.tx
-            .send(McpCommand::ReloadConfig { respond_to })
-            .await
-            .map_err(|_| AlephError::channel_closed("McpManager command channel closed"))?;
-
-        rx.await
-            .map_err(|_| AlephError::channel_closed("McpManager response channel closed"))?
-            .map_err(AlephError::other)
-    }
-
     // ===== Control Methods =====
 
     /// Gracefully shutdown the manager

@@ -292,15 +292,6 @@ impl Default for ServerHealth {
 }
 
 impl ServerHealth {
-    /// Create a new healthy server health
-    #[must_use]
-    pub fn healthy() -> Self {
-        Self {
-            status: HealthStatus::Healthy,
-            ..Default::default()
-        }
-    }
-
     /// Record a successful operation
     pub fn record_success(&mut self) {
         self.consecutive_failures = 0;
@@ -574,12 +565,6 @@ pub enum McpCommand {
         respond_to: oneshot::Sender<Vec<crate::thinker::prompt_layer::McpServerInstruction>>,
     },
 
-    /// Reload configuration from disk
-    ReloadConfig {
-        /// Response channel
-        respond_to: oneshot::Sender<Result<(), String>>,
-    },
-
     /// Graceful shutdown
     Shutdown {
         /// Response channel (sent when shutdown complete)
@@ -649,7 +634,6 @@ impl std::fmt::Debug for McpCommand {
             Self::AggregateResources { .. } => f.debug_struct("AggregateResources").finish(),
             Self::AggregatePrompts { .. } => f.debug_struct("AggregatePrompts").finish(),
             Self::AggregateInstructions { .. } => f.debug_struct("AggregateInstructions").finish(),
-            Self::ReloadConfig { .. } => f.debug_struct("ReloadConfig").finish(),
             Self::Shutdown { .. } => f.debug_struct("Shutdown").finish(),
             Self::SetSamplingCallback { .. } => f.debug_struct("SetSamplingCallback").finish(),
             Self::ServerListChanged { server_id, kind } => f
@@ -750,52 +734,6 @@ pub enum McpManagerEvent {
         /// New prompt count
         prompt_count: usize,
     },
-
-    /// Configuration was reloaded
-    ConfigReloaded {
-        /// Number of servers after reload
-        server_count: usize,
-    },
-}
-
-impl McpManagerEvent {
-    /// Get the server ID if this event is server-specific
-    #[must_use]
-    pub fn server_id(&self) -> Option<&str> {
-        match self {
-            Self::ManagerReady | Self::ManagerShutdown | Self::ConfigReloaded { .. } => None,
-            Self::ServerAdded { server_id, .. }
-            | Self::ServerRemoved { server_id, .. }
-            | Self::ServerStarted { server_id, .. }
-            | Self::ServerStopped { server_id, .. }
-            | Self::ServerCrashed { server_id, .. }
-            | Self::ServerRestarting { server_id, .. }
-            | Self::ToolsChanged { server_id, .. }
-            | Self::ResourcesChanged { server_id, .. }
-            | Self::PromptsChanged { server_id, .. } => Some(server_id),
-        }
-    }
-
-    /// Check if this is a lifecycle event (start/stop/crash)
-    #[must_use]
-    pub const fn is_lifecycle_event(&self) -> bool {
-        matches!(
-            self,
-            Self::ServerStarted { .. }
-                | Self::ServerStopped { .. }
-                | Self::ServerCrashed { .. }
-                | Self::ServerRestarting { .. }
-        )
-    }
-
-    /// Check if this is a capability change event
-    #[must_use]
-    pub const fn is_capability_event(&self) -> bool {
-        matches!(
-            self,
-            Self::ToolsChanged { .. } | Self::ResourcesChanged { .. } | Self::PromptsChanged { .. }
-        )
-    }
 }
 
 #[cfg(test)]
@@ -915,37 +853,6 @@ mod tests {
             health.status,
             HealthStatus::Restarting { attempt: 2 }
         ));
-    }
-
-    #[test]
-    fn test_mcp_manager_event_server_id() {
-        let event = McpManagerEvent::ServerStarted {
-            server_id: "test".to_string(),
-            server_name: "Test".to_string(),
-            tool_count: 5,
-        };
-        assert_eq!(event.server_id(), Some("test"));
-
-        let event = McpManagerEvent::ManagerReady;
-        assert_eq!(event.server_id(), None);
-    }
-
-    #[test]
-    fn test_mcp_manager_event_classification() {
-        let lifecycle = McpManagerEvent::ServerStarted {
-            server_id: "test".to_string(),
-            server_name: "Test".to_string(),
-            tool_count: 5,
-        };
-        assert!(lifecycle.is_lifecycle_event());
-        assert!(!lifecycle.is_capability_event());
-
-        let capability = McpManagerEvent::ToolsChanged {
-            server_id: "test".to_string(),
-            tool_count: 10,
-        };
-        assert!(!capability.is_lifecycle_event());
-        assert!(capability.is_capability_event());
     }
 
     #[test]

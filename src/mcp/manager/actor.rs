@@ -19,7 +19,7 @@
 use crate::sync_primitives::Arc;
 use std::collections::HashMap;
 use std::path::PathBuf;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use tokio::sync::{broadcast, mpsc};
 
@@ -39,8 +39,6 @@ use crate::mcp::{
 pub struct HealthCheckConfig {
     /// Interval between health checks
     pub interval: Duration,
-    /// Timeout for health check request
-    pub timeout: Duration,
     /// Consecutive failures before a server is marked unhealthy
     /// (consumed by `ServerHealth::record_failure`).
     pub max_failures: u32,
@@ -54,7 +52,6 @@ impl Default for HealthCheckConfig {
     fn default() -> Self {
         Self {
             interval: Duration::from_secs(30),
-            timeout: Duration::from_secs(5),
             max_failures: 3,
             max_restarts: 3,
             restart_window: Duration::from_secs(300),
@@ -75,8 +72,6 @@ pub struct McpManagerActor {
     clients: HashMap<String, Arc<McpClient>>,
     /// Health tracking per server
     health_states: HashMap<String, ServerHealth>,
-    /// Server start times for uptime tracking
-    start_times: HashMap<String, Instant>,
     /// Health check configuration
     health_config: HealthCheckConfig,
     /// Event broadcaster
@@ -127,7 +122,6 @@ impl McpManagerActor {
             config,
             clients: HashMap::new(),
             health_states: HashMap::new(),
-            start_times: HashMap::new(),
             health_config: HealthCheckConfig::default(),
             event_tx,
             cmd_rx,
@@ -406,10 +400,6 @@ impl McpManagerActor {
             McpCommand::AggregateInstructions { respond_to } => {
                 let instructions = self.aggregate_instructions().await;
                 let _ = respond_to.send(instructions);
-            }
-            McpCommand::ReloadConfig { respond_to } => {
-                let result = self.reload_config().await;
-                let _ = respond_to.send(result);
             }
             McpCommand::Shutdown { .. } => {
                 // Handled in the run() loop directly to ensure ACK is sent
@@ -796,13 +786,11 @@ impl McpManagerActor {
         // Get tool count for event
         let tool_count = client.list_tools().await.len();
 
-        // Store client and track start time
+        // Store client
         // rust-doctor-disable-next-line excessive-clone
         let server_id = config.id.clone();
         // rust-doctor-disable-next-line excessive-clone
         self.clients.insert(server_id.clone(), client);
-        // rust-doctor-disable-next-line excessive-clone
-        self.start_times.insert(server_id.clone(), Instant::now());
         // Mark healthy while preserving the restart-window bookkeeping
         // (restart_count / restart_window_start). Re-inserting a fresh
         // ServerHealth here would zero the counter on every successful spawn,
@@ -844,8 +832,6 @@ impl McpManagerActor {
                 );
             }
         }
-
-        self.start_times.remove(server_id);
 
         // Update health state to stopped
         if let Some(health) = self.health_states.get_mut(server_id) {
@@ -1017,67 +1003,6 @@ impl McpManagerActor {
         self.aggregate_from_healthy(|c| async move { c.collect_instructions().await })
             .await
     }
-
-    // ===== Config Methods =====
-
-    /// Reload configuration from disk
-    ///
-    /// Reconciles running state with new configuration:
-    /// - Stops servers that were removed
-    /// - Starts new servers with `auto_start=true`
-    /// - Updates configs for existing servers
-    async fn reload_config(&mut self) -> Result<(), String> {
-        // Load new config
-        let mut new_config = McpPersistentConfig::load(&self.config_path)
-            .await
-            .map_err(|e| format!("Failed to reload config: {e}"))?;
-        new_config.expand_env_vars();
-
-        // Find servers to stop (in old config but not in new)
-        let servers_to_stop: Vec<_> = self
-            .config
-            .servers
-            .keys()
-            .filter(|id| !new_config.servers.contains_key(*id))
-            .cloned()
-            .collect();
-
-        // Stop removed servers
-        for server_id in servers_to_stop {
-            self.stop_server_internal(&server_id).await;
-            tracing::info!(server_id = %server_id, "Stopped removed server");
-        }
-
-        // Find new servers to start
-        let servers_to_start: Vec<_> = new_config
-            .servers
-            .values()
-            .filter(|config| config.auto_start && !self.config.servers.contains_key(&config.id))
-            .cloned()
-            .collect();
-
-        // Update config
-        self.config = new_config;
-
-        // Start new auto-start servers
-        for config in servers_to_start {
-            if let Err(e) = self.start_server_internal(&config).await {
-                tracing::error!(
-                    server_id = %config.id,
-                    error = %e,
-                    "Failed to start new server from reloaded config"
-                );
-            }
-        }
-
-        // Broadcast event
-        let _ = self.event_tx.send(McpManagerEvent::ConfigReloaded {
-            server_count: self.config.servers.len(),
-        });
-
-        tracing::info!("Configuration reloaded");
-        Ok(())
-    }
 }
 
 /// Map a TTL-driven refresh report onto the list-changed kinds it implies.
@@ -1152,7 +1077,6 @@ mod tests {
     fn test_health_check_config_default() {
         let config = HealthCheckConfig::default();
         assert_eq!(config.interval, Duration::from_secs(30));
-        assert_eq!(config.timeout, Duration::from_secs(5));
         assert_eq!(config.max_failures, 3);
         assert_eq!(config.max_restarts, 3);
         assert_eq!(config.restart_window, Duration::from_secs(300));
@@ -1224,7 +1148,7 @@ mod tests {
             .insert(id.to_string(), Arc::new(McpClient::new()));
         actor
             .health_states
-            .insert(id.to_string(), ServerHealth::healthy());
+            .insert(id.to_string(), ServerHealth::default());
 
         assert!(actor.remove_transient_server(id).await.is_ok());
         assert!(!actor.clients.contains_key(id), "client should be removed");

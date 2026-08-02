@@ -105,8 +105,6 @@ pub struct HttpTransport {
     /// A `std` lock (not tokio's) because it is written from the sync
     /// `set_dialect` trait method and only held to clone a small value.
     dialect: std::sync::RwLock<Option<McpDialect>>,
-    /// Notification handler (stored but not actively used in HTTP transport)
-    _notification_handler: RwLock<Option<NotificationCallback>>,
 }
 
 impl HttpTransport {
@@ -124,7 +122,6 @@ impl HttpTransport {
             alive: RwLock::new(true),
             session_id: RwLock::new(None),
             dialect: std::sync::RwLock::new(None),
-            _notification_handler: RwLock::new(None),
         })
     }
 
@@ -503,7 +500,7 @@ impl McpTransport for HttpTransport {
 
     fn set_notification_handler(&self, handler: NotificationCallback) {
         // HTTP transport doesn't support server-initiated notifications
-        // in basic mode, but we store it for potential polling implementation
+        // in basic mode; the trait requires the hook, so accept and drop.
         tracing::debug!(
             server = %self.server_name,
             "Notification handler set (HTTP transport has limited notification support)"

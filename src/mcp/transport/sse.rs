@@ -571,61 +571,6 @@ impl SseTransport {
 
         Ok(())
     }
-
-    /// Send an error response to a server-initiated request
-    pub async fn send_error_response(
-        &self,
-        request_id: serde_json::Value,
-        code: i32,
-        message: &str,
-    ) -> Result<()> {
-        let (validated_url, client) =
-            Self::build_pinned_client(&self.config.url, Some(self.config.timeout))
-                .await
-                .map_err(|e| {
-                    AlephError::IoError(format!("SSRF blocked for '{}': {}", self.server_name, e))
-                })?;
-
-        let response = serde_json::json!({
-            "jsonrpc": "2.0",
-            "id": request_id,
-            "error": {
-                "code": code,
-                "message": message,
-            },
-        });
-
-        let response_json = serde_json::to_string(&response)
-            .map_err(|e| AlephError::IoError(format!("Failed to serialize error response: {e}")))?;
-
-        let mut req = client
-            .post(validated_url.as_str())
-            .header("Content-Type", "application/json");
-        for (key, value) in &self.config.headers {
-            req = req.header(key, value);
-        }
-        let http_response = req
-            .body(response_json)
-            .send()
-            .await
-            .map_err(|e| AlephError::IoError(format!("Failed to send error response: {e}")))?;
-
-        if !http_response.status().is_success() {
-            return Err(AlephError::IoError(format!(
-                "Server returned error status: {}",
-                http_response.status()
-            )));
-        }
-
-        tracing::debug!(
-            server = %self.server_name,
-            request_id = %request_id,
-            code = code,
-            "Sent error response to server-initiated request"
-        );
-
-        Ok(())
-    }
 }
 
 #[cfg(test)]
