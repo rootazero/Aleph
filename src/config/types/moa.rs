@@ -18,16 +18,113 @@ pub struct MoaSlot {
 }
 
 /// Advisor fan-out cadence.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize, JsonSchema)]
-#[serde(rename_all = "snake_case")]
+///
+/// Wire form is a STRING (`"per_iteration"` / `"user_turn"` / `"every_n:3"`),
+/// not a serde-derived enum: `EveryN` carries a payload, and a derived
+/// representation would spell it `{ "every_n": 3 }` — an object where every
+/// other cadence is a bare string. One scalar keeps TOML, the `moa` tool
+/// schema, the `moa.*` RPCs and the Panel `<select>` all agreeing on one
+/// shape, and keeps the two pre-existing spellings byte-identical.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum MoaFanout {
     /// Advisors re-run whenever the advisory view changes (every tool
-    /// iteration). hermes default — maximally informed.
+    /// iteration). Maximally informed, and the most expensive: advisor
+    /// latency and spend both multiply by the tool-loop depth.
     #[default]
     PerIteration,
     /// Advisors run once per user turn (= once per run); later iterations
-    /// reuse that advice. The original MoA shape.
+    /// reuse that advice. The original MoA shape, and the cheapest.
     UserTurn,
+    /// The middle ground: advisors run on the first state advance of the run
+    /// and then every `N`-th one after it; the iterations in between reuse
+    /// the last advice. `N >= 2` by construction — [`FromStr`] folds
+    /// `every_n:1` into [`PerIteration`] (they are the same cadence) and
+    /// rejects `every_n:0`.
+    ///
+    /// [`FromStr`]: std::str::FromStr
+    EveryN(u32),
+}
+
+impl std::fmt::Display for MoaFanout {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::PerIteration => f.write_str("per_iteration"),
+            Self::UserTurn => f.write_str("user_turn"),
+            Self::EveryN(n) => write!(f, "every_n:{n}"),
+        }
+    }
+}
+
+/// Accepted spellings, quoted once for every error message and the schema.
+const FANOUT_FORMS: &str = "`per_iteration`, `user_turn`, or `every_n:<N>` (N >= 2)";
+
+impl std::str::FromStr for MoaFanout {
+    type Err = String;
+
+    fn from_str(s: &str) -> std::result::Result<Self, Self::Err> {
+        let raw = s.trim();
+        match raw {
+            "per_iteration" => Ok(Self::PerIteration),
+            "user_turn" => Ok(Self::UserTurn),
+            _ => {
+                let digits = raw.strip_prefix("every_n:").ok_or_else(|| {
+                    format!("unknown MoA fanout '{raw}' — expected {FANOUT_FORMS}")
+                })?;
+                let every: u32 = digits.trim().parse().map_err(|_| {
+                    format!(
+                        "MoA fanout 'every_n:{}' needs an integer N >= 2",
+                        digits.trim()
+                    )
+                })?;
+                match every {
+                    // Never consulting advisors is what `enabled = false` is
+                    // for; silently accepting it here would look like a
+                    // cadence and behave like an off switch.
+                    0 => Err("MoA fanout `every_n:0` would never consult advisors — \
+                         use `enabled = false` to run the aggregator alone, or \
+                         `user_turn` to consult once per run"
+                        .to_string()),
+                    // Degenerate: "every 1st iteration" IS per-iteration.
+                    // Collapsing keeps one canonical spelling per cadence, so
+                    // the cache/cadence code never has to handle N == 1.
+                    1 => Ok(Self::PerIteration),
+                    n => Ok(Self::EveryN(n)),
+                }
+            }
+        }
+    }
+}
+
+impl Serialize for MoaFanout {
+    fn serialize<S: serde::Serializer>(&self, s: S) -> std::result::Result<S::Ok, S::Error> {
+        s.collect_str(self)
+    }
+}
+
+impl<'de> Deserialize<'de> for MoaFanout {
+    fn deserialize<D: serde::Deserializer<'de>>(d: D) -> std::result::Result<Self, D::Error> {
+        let raw = String::deserialize(d)?;
+        raw.parse().map_err(serde::de::Error::custom)
+    }
+}
+
+impl JsonSchema for MoaFanout {
+    fn schema_name() -> std::borrow::Cow<'static, str> {
+        "MoaFanout".into()
+    }
+
+    fn json_schema(_generator: &mut schemars::SchemaGenerator) -> schemars::Schema {
+        schemars::json_schema!({
+            "type": "string",
+            "title": "MoaFanout",
+            "description":
+                "Advisor fan-out cadence: `per_iteration` (re-consult on every \
+                 tool iteration), `user_turn` (consult once per run), or \
+                 `every_n:<N>` with N >= 2 (consult on the first iteration, \
+                 then every Nth).",
+            "examples": ["per_iteration", "user_turn", "every_n:3"]
+        })
+    }
 }
 
 /// One named MoA preset.
@@ -131,6 +228,19 @@ impl MoaToml {
                     "[moa.presets.{name}] advisor_timeout_secs must be >= 1"
                 ));
             }
+            // `FromStr` already folds `every_n:1` into `PerIteration` and
+            // rejects `every_n:0`, so a parsed config can never land here. A
+            // preset built as a Rust literal (the `moa` tool, `MoaPresetStore`,
+            // tests) bypasses that parse, and `EveryN(0)` would divide by zero
+            // in the cadence check — keep the boundary honest on both paths.
+            if let MoaFanout::EveryN(n) = preset.fanout {
+                if n < 2 {
+                    errs.push(format!(
+                        "[moa.presets.{name}] fanout every_n:{n} must have N >= 2 \
+                         (use per_iteration for every iteration)"
+                    ));
+                }
+            }
             // Temperatures thread straight to the provider with no clamp
             // (fan_out.rs / provider.rs → RequestPayload::with_temperature), so an
             // out-of-range value reaches the API verbatim; the aggregator branch
@@ -229,6 +339,68 @@ aggregator = { provider = "b", model = "n" }
         )
         .unwrap();
         assert_eq!(parsed.presets["p"].fanout, MoaFanout::UserTurn);
+    }
+
+    fn fanout_toml(spelling: &str) -> String {
+        format!(
+            r#"
+[presets.p]
+fanout = "{spelling}"
+advisors = [{{ provider = "a", model = "m" }}]
+aggregator = {{ provider = "b", model = "n" }}
+"#
+        )
+    }
+
+    #[test]
+    fn every_n_parses_and_round_trips_through_the_wire_string() {
+        let parsed: MoaToml = toml::from_str(&fanout_toml("every_n:3")).unwrap();
+        assert_eq!(parsed.presets["p"].fanout, MoaFanout::EveryN(3));
+        assert!(parsed.validation_errors().is_empty());
+        // The wire form is one scalar in both directions — the Panel `<select>`
+        // and the `moa` tool both round-trip a preset through it.
+        assert_eq!(
+            serde_json::to_value(MoaFanout::EveryN(3)).unwrap(),
+            serde_json::json!("every_n:3")
+        );
+        assert_eq!(
+            serde_json::to_value(MoaFanout::PerIteration).unwrap(),
+            serde_json::json!("per_iteration")
+        );
+        assert_eq!(
+            serde_json::from_value::<MoaFanout>(serde_json::json!("user_turn")).unwrap(),
+            MoaFanout::UserTurn
+        );
+    }
+
+    #[test]
+    fn every_n_one_collapses_and_zero_is_rejected() {
+        // "every 1st iteration" IS per-iteration — one canonical spelling per
+        // cadence means the cadence arithmetic never sees N == 1.
+        let one: MoaToml = toml::from_str(&fanout_toml("every_n:1")).unwrap();
+        assert_eq!(one.presets["p"].fanout, MoaFanout::PerIteration);
+
+        for bad in ["every_n:0", "every_n:", "every_n:abc", "bogus", "everyn:2"] {
+            let err = toml::from_str::<MoaToml>(&fanout_toml(bad))
+                .expect_err(&format!("`{bad}` must not parse"))
+                .to_string();
+            assert!(
+                err.contains("every_n") || err.contains("unknown MoA fanout"),
+                "`{bad}` must fail with an actionable message, got: {err}"
+            );
+        }
+    }
+
+    #[test]
+    fn every_n_below_two_is_rejected_when_built_as_a_literal() {
+        // `FromStr` cannot be bypassed by config, but the `moa` tool and
+        // `MoaPresetStore` build `MoaPreset` values directly.
+        let mut cfg = preset_with(vec![slot("openai", "gpt-5.5")], slot("anthropic", "opus"));
+        cfg.presets.get_mut("p").unwrap().fanout = MoaFanout::EveryN(0);
+        assert!(cfg
+            .validation_errors()
+            .iter()
+            .any(|e| e.contains("must have N >= 2")));
     }
 
     #[test]

@@ -73,7 +73,8 @@ pub enum MoaManageArgs {
         /// Omit for `true`.
         #[serde(default)]
         enabled: Option<bool>,
-        /// Advisor fan-out cadence. Omit for `per_iteration` (hermes default).
+        /// Advisor fan-out cadence: `per_iteration` (default), `user_turn`,
+        /// or `every_n:<N>` with N >= 2.
         #[serde(default)]
         fanout: Option<MoaFanout>,
         /// Per-advisor wall-clock budget in seconds. Omit for 120. Accepts the
@@ -181,8 +182,8 @@ impl JsonSchema for MoaManageArgs {
                 },
                 "fanout": {
                     "type": "string",
-                    "enum": ["per_iteration", "user_turn"],
-                    "description": "set_preset: advisor fan-out cadence. Default per_iteration."
+                    "examples": ["per_iteration", "user_turn", "every_n:3"],
+                    "description": "set_preset: advisor fan-out cadence — how often advisors are re-consulted within one run. `per_iteration` (default) re-consults on every tool iteration: most informed, and multiplies advisor latency and spend by the tool-loop depth. `user_turn` consults once per run and reuses that advice: cheapest. `every_n:<N>` (N >= 2) consults on the first iteration and then every Nth, reusing the last advice in between."
                 },
                 "advisor_timeout_seconds": { "type": "integer", "description": "set_preset: per-advisor wall-clock budget in seconds. Default 120." },
                 "advisor_max_tokens": { "type": "integer", "description": "set_preset: cap advisor output tokens. Omit for no cap." },

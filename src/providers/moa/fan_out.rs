@@ -57,10 +57,11 @@ pub(crate) async fn run_fan_out(
 ) -> Vec<AdvisorResult> {
     let futures = advisors.iter().enumerate().map(|(idx, slot)| {
         let skip = skip_reasons.get(idx).and_then(Option::as_deref);
+        let label = slot.label.as_str();
         async move {
             if let Some(reason) = skip {
                 return (
-                    format!("[skipped: {reason}]"),
+                    AdvisorOutcome::unavailable(label, &format!("[skipped: {reason}]")),
                     None,
                     Some(format!("skipped: {reason}")),
                     CallOutcome::Skipped,
@@ -72,22 +73,35 @@ pub(crate) async fn run_fan_out(
                 .with_max_tokens(max_tokens);
             match tokio::time::timeout(timeout, slot.chain.process(advisor_payload)).await {
                 Ok(Ok(resp)) => {
-                    let text = resp
+                    let advice = resp
                         .text
                         .as_deref()
                         .filter(|t| !t.trim().is_empty())
-                        .map(|t| t.to_string())
-                        .unwrap_or_else(|| "(empty response)".to_string());
-                    (text, resp.usage, None::<String>, CallOutcome::Ok)
+                        .map(str::to_string);
+                    let usage = resp.usage;
+                    // The CALL succeeded either way, so health must not take a
+                    // strike (the slot is reachable and answering) — but an
+                    // empty body is not advice, and numbering it as one asks
+                    // the aggregator to act on a blank block.
+                    let outcome = advice.map_or_else(
+                        || AdvisorOutcome::unavailable(label, "[empty response]"),
+                        |text| AdvisorOutcome::advice(label, text),
+                    );
+                    (outcome, usage, None::<String>, CallOutcome::Ok)
                 }
                 Ok(Err(e)) => (
-                    format!("[failed: {e}]"),
+                    AdvisorOutcome::unavailable(label, &format!("[failed: {e}]")),
                     None,
+                    // The trace/panel channel keeps the FULL error — only the
+                    // prompt-bound copy inside `outcome` is clamped.
                     Some(e.to_string()),
                     CallOutcome::failed(&e),
                 ),
                 Err(_) => (
-                    format!("[timeout after {}s]", timeout.as_secs()),
+                    AdvisorOutcome::unavailable(
+                        label,
+                        &format!("[timeout after {}s]", timeout.as_secs()),
+                    ),
                     None,
                     Some(format!("timeout after {}s", timeout.as_secs())),
                     CallOutcome::timed_out(),
@@ -99,13 +113,8 @@ pub(crate) async fn run_fan_out(
 
     results
         .into_iter()
-        .enumerate()
-        .map(|(idx, (text, usage, error, health))| AdvisorResult {
-            outcome: AdvisorOutcome {
-                // rust-doctor-disable-next-line excessive-clone
-                label: advisors[idx].label.clone(),
-                text,
-            },
+        .map(|(outcome, usage, error, health)| AdvisorResult {
+            outcome,
             usage,
             error,
             health,
