@@ -25,6 +25,7 @@ static PASSTHROUGH_WARNED: AtomicBool = AtomicBool::new(false);
 )]
 pub struct PiiScrubbingLayer;
 
+#[allow(deprecated)]
 impl<S: Subscriber> Layer<S> for PiiScrubbingLayer {
     fn on_event(&self, event: &Event<'_>, _ctx: Context<'_, S>) {
         let _ = event;

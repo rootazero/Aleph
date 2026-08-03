@@ -32,3 +32,15 @@ pub enum CliError {
 
 /// Result type alias for CLI operations
 pub type CliResult<T> = Result<T, CliError>;
+
+impl From<tokio_tungstenite::tungstenite::Error> for CliError {
+    fn from(err: tokio_tungstenite::tungstenite::Error) -> Self {
+        Self::Connection(err.to_string())
+    }
+}
+
+impl From<anyhow::Error> for CliError {
+    fn from(err: anyhow::Error) -> Self {
+        Self::Other(err.to_string())
+    }
+}

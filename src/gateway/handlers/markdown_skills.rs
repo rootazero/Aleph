@@ -14,6 +14,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::json;
 use std::path::PathBuf;
 use tokio::sync::RwLock;
+use tracing::{info, warn};
 
 use super::super::protocol::{JsonRpcRequest, JsonRpcResponse, INTERNAL_ERROR};
 use super::parse_params;

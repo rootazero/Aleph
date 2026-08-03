@@ -102,13 +102,17 @@ pub fn human_size(bytes: u64) -> String {
     }
 }
 
-/// Result of `session.export_html` — the export is itself stored as an
-/// artifact, so it comes back as a byte URL like any other row.
+/// Result of `artifacts.read_text` — a bounded UTF-8 slice of one artifact.
+///
+/// `truncated` is not decoration: a preview that silently stops is a preview
+/// that lies about the file's contents, so the pane says so and keeps the link
+/// to the whole thing.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
-pub struct ExportResult {
-    pub url: String,
+pub struct TextPreview {
     pub filename: String,
-    pub size: u64,
+    pub mime_type: String,
+    pub content: String,
+    pub truncated: bool,
 }
 
 /// Result of `session.export_html` — the export is itself stored as an
@@ -135,6 +139,27 @@ impl ArtifactsApi {
         serde_json::from_value(items).map_err(|e| e.to_string())
     }
 
+    /// Read a text artifact for the in-pane preview.
+    ///
+    /// The Panel has no HTTP client — it speaks JSON-RPC over the authenticated
+    /// WebSocket and nothing else — so bytes destined for the screen come back
+    /// this way rather than through the capability URL. That URL still exists
+    /// and is still what "open in a browser" uses; this is for reading in
+    /// place.
+    pub async fn read_text(
+        state: &DashboardState,
+        session_key: &str,
+        id: &str,
+    ) -> Result<TextPreview, String> {
+        let result = state
+            .rpc_call(
+                "artifacts.read_text",
+                json!({ "session_key": session_key, "id": id }),
+            )
+            .await?;
+        serde_json::from_value(result).map_err(|e| e.to_string())
+    }
+
     /// Render the session transcript to a self-contained HTML document and
     /// store it as an `export` artifact. Returns its byte URL.
     pub async fn export_html(
@@ -146,6 +171,19 @@ impl ArtifactsApi {
             .await?;
         serde_json::from_value(result).map_err(|e| e.to_string())
     }
+}
+
+/// Does this `session.artifact` frame concern `session_key`?
+///
+/// The gateway subscribes topic-wide, so a background session's ping arrives in
+/// every Panel. Scoping here keeps a background run from forcing a re-read (and
+/// a visible flicker) in the conversation the user is actually looking at —
+/// the same discipline `team.*` events already follow.
+#[must_use]
+pub fn ping_is_for_session(data: &Value, session_key: &str) -> bool {
+    data.get(aleph_protocol::artifact::TOPIC_SESSION_KEY)
+        .and_then(Value::as_str)
+        == Some(session_key)
 }
 
 #[cfg(test)]
@@ -232,6 +270,16 @@ mod tests {
         let p: TextPreview = serde_json::from_str(j).unwrap();
         assert_eq!(p.content, "# hi");
         assert!(p.truncated);
+    }
+
+    #[test]
+    fn a_ping_for_another_session_is_ignored() {
+        let mine = json!({ "session_key": "agent:main:main" });
+        let theirs = json!({ "session_key": "agent:main:other" });
+        assert!(ping_is_for_session(&mine, "agent:main:main"));
+        assert!(!ping_is_for_session(&theirs, "agent:main:main"));
+        // A malformed frame must not be read as "everyone".
+        assert!(!ping_is_for_session(&json!({}), "agent:main:main"));
     }
 
     /// The three row kinds the pane routes a click on, and the rule that they
