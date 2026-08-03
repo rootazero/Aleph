@@ -33,6 +33,10 @@ pub struct StatusBar<'a> {
     /// call has. Rendered as a `cache N%` segment — a sudden drop is the
     /// live signal that a prefix bust just happened.
     pub cache_stat: Option<(u64, u64)>,
+    /// Agent id behind `cache_stat` when it is not the session root's, so a
+    /// delegated sub-agent's cold start is labelled instead of being read as
+    /// the root agent's prefix breaking.
+    pub cache_stat_agent: Option<&'a str>,
     pub is_connected: bool,
     pub tool_progress_mode: ToolProgressMode,
     /// Advances the working-indicator spinner (shared 50ms tick counter).
@@ -109,9 +113,13 @@ impl StatusBar<'_> {
         // is the live symptom of a stable-prefix bust.
         if let Some((read, denom)) = self.cache_stat.filter(|&(_, d)| d > 0) {
             let pct = cache_hit_pct(read, denom);
+            let label = match self.cache_stat_agent {
+                Some(agent) => format!(" cache {pct}% ·{agent} "),
+                None => format!(" cache {pct}% "),
+            };
             spans.push(sep());
             spans.push(Span::styled(
-                format!(" cache {pct}% "),
+                label,
                 Style::default()
                     .fg(cache_stat_color(pct))
                     .bg(DEFAULT_THEME.status_bg),

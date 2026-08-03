@@ -465,9 +465,23 @@ impl ProtocolAdapter for AnthropicProtocol {
         //    carrying the cache breakpoint, and the remaining `cache:false`
         //    parts into a SINGLE dynamic tail block with no marker. Per
         //    Anthropic semantics everything UP TO AND INCLUDING the marker
-        //    is the cacheable prefix; the dynamic tail therefore does NOT
-        //    break the prefix hash when its content changes turn-to-turn
-        //    (e.g. RuntimeContext.current_time, tool_runtime_state).
+        //    is the cacheable prefix, so a byte change in the dynamic tail
+        //    does not break *the system block's own* breakpoint.
+        //
+        //    It does NOT follow that dynamic-tail churn is free. Anthropic
+        //    builds cache prefixes in the order tools → system → messages, so
+        //    the dynamic tail sits ahead of every *message-level* breakpoint
+        //    placed below (`inject_cache_control_into_recent_messages` spends
+        //    the remaining 3). Any byte that changes there re-keys all of
+        //    them, and the whole conversation is re-billed as
+        //    `cache_creation`. `harness/deps.rs` states the rule and is why
+        //    recall was routed to the transient message tail instead:
+        //    "any varying bytes in the system prompt sit ahead of every
+        //    message-level prompt-cache breakpoint, re-keying the whole
+        //    conversation prefix each run".
+        //
+        //    The dynamic tail is therefore for content that varies at most
+        //    per-run and is cheap relative to history — not a free zone.
         //
         // 2. Legacy single-string: caller used `system_prompt`. Wrapped as
         //    one block; `inject_cache_control_into_system_array` then puts
@@ -591,64 +605,74 @@ impl ProtocolAdapter for AnthropicProtocol {
             }
         }
 
-        // Inject prompt-cache breakpoints only when the endpoint supports it
-        // (cf. policy.capabilities.supports_cache_control). Cycle 4 moved
-        // the host-level gate here from effective_cache_retention.
-        let extended_cache_ttl = if policy.capabilities.supports_cache_control {
-            let retention = effective_cache_retention(config, &endpoint);
-            // The 1h TTL is an Anthropic-1P beta: third-party Anthropic-protocol
-            // hosts (Bedrock/Azure) accept plain ephemeral markers but reject
-            // the `ttl` key under strict schema validation — gate the TTL (and
-            // via `ext`, its beta header) on the official endpoint, mirroring
-            // the OpenAI adapter's EndpointClass::OpenAiPublic gate on
-            // prompt_cache_retention. `Long` elsewhere degrades to the default
-            // 5m marker: still cached, never a 400.
-            let ext =
-                matches!(retention, CacheRetention::Long) && endpoint.contains("api.anthropic.com");
-            if retention != CacheRetention::Off {
-                let cc = CacheControl::Ephemeral {
-                    ttl: if ext {
-                        Some(EphemeralTtl::OneHour)
-                    } else {
-                        None
-                    },
-                };
-                // System block takes one breakpoint; the rest go to the most
-                // recent messages so multi-turn conversations cache-hit.
-                //
-                // Cache-first path: `split_system_blocks_for_cache` already
-                // placed the marker on the stable tail, so don't double-inject
-                // — just charge one breakpoint to the budget. Legacy path:
-                // marker not yet placed, so run the injector which targets
-                // the last text block of the (single-element) system array.
-                let system_used = if pre_placed_system_breakpoint {
-                    // Stable-tail breakpoint already set on the cached_text
-                    // block via `SystemBlock::cached_text()`. If the active
-                    // retention is `Long`, overwrite the (short, no-TTL)
-                    // marker with the 1h ephemeral variant so the user's
-                    // cache_retention setting is honoured on the split path.
-                    if ext {
-                        promote_system_marker_ttl(&mut body, cc);
-                    }
-                    true
-                } else {
-                    inject_cache_control_into_system_array(&mut body, cc)
-                };
-                let message_budget = MAX_CACHE_BREAKPOINTS - usize::from(system_used);
-                inject_cache_control_into_recent_messages(&mut body, cc, message_budget);
-            }
-            ext
+        // Resolve prompt-cache retention for this request. An endpoint that
+        // does not advertise `supports_cache_control` is treated exactly like
+        // `cache_retention = "off"`: both mean "no cache_control anywhere on
+        // this request", and collapsing them here gives the gate a single
+        // predicate instead of two half-gates.
+        let retention = if policy.capabilities.supports_cache_control {
+            effective_cache_retention(config, &endpoint)
         } else {
-            false
+            CacheRetention::Off
         };
+        let cache_allowed = retention != CacheRetention::Off;
+        // The 1h TTL is an Anthropic-1P beta: third-party Anthropic-protocol
+        // hosts (Bedrock/Azure) accept plain ephemeral markers but reject the
+        // `ttl` key under strict schema validation — gate the TTL (and via
+        // `extended_cache_ttl`, its beta header) on the official endpoint,
+        // mirroring the OpenAI adapter's EndpointClass::OpenAiPublic gate on
+        // prompt_cache_retention. `Long` elsewhere degrades to the default 5m
+        // marker: still cached, never a 400.
+        let extended_cache_ttl = cache_allowed
+            && matches!(retention, CacheRetention::Long)
+            && endpoint.contains("api.anthropic.com");
 
-        // Cycle 4: strip capability-gated fields one last time.
-        policy.apply(&mut body);
-
-        // Kimi Coding rejects pre-placed cache_control markers on system blocks
-        // and message content, even though it does not advertise cache support.
-        // Mirrors openclaw's `stripAnthropicCacheControlMarkers`.
-        if is_kimi {
+        if cache_allowed {
+            let cc = CacheControl::Ephemeral {
+                ttl: if extended_cache_ttl {
+                    Some(EphemeralTtl::OneHour)
+                } else {
+                    None
+                },
+            };
+            // System block takes one breakpoint; the rest go to the most
+            // recent messages so multi-turn conversations cache-hit.
+            //
+            // Cache-first path: `split_system_blocks_for_cache` already
+            // placed the marker on the stable tail, so don't double-inject
+            // — just charge one breakpoint to the budget. Legacy path:
+            // marker not yet placed, so run the injector which targets
+            // the last text block of the (single-element) system array.
+            let system_used = if pre_placed_system_breakpoint {
+                // Stable-tail breakpoint already set on the cached_text
+                // block via `SystemBlock::cached_text()`. If the active
+                // retention is `Long`, overwrite the (short, no-TTL)
+                // marker with the 1h ephemeral variant so the user's
+                // cache_retention setting is honoured on the split path.
+                if extended_cache_ttl {
+                    promote_system_marker_ttl(&mut body, cc);
+                }
+                true
+            } else {
+                inject_cache_control_into_system_array(&mut body, cc)
+            };
+            let message_budget = MAX_CACHE_BREAKPOINTS - usize::from(system_used);
+            inject_cache_control_into_recent_messages(&mut body, cc, message_budget);
+        } else {
+            // No caching on this request — so nothing may carry a marker.
+            //
+            // Skipping injection is NOT enough: markers arrive here pre-placed
+            // from two upstream producers that never see this gate.
+            // `split_system_blocks_for_cache` stamps the stable system block
+            // via `SystemBlock::cached_text()`, and the MoA advisory view
+            // (`providers/moa/advisory_view.rs::mark_cache_breakpoints`) stamps
+            // message content. Both used to survive `retention = "off"` and
+            // every `supports_cache_control = false` endpoint, so the config
+            // switch was inert (Anthropic still billed `cache_creation` at
+            // 1.25x) and strict-schema proxies 400'd the whole turn. That was
+            // observed once, on Kimi, and patched per-host; enforcing the
+            // capability bit here covers every such endpoint instead of the
+            // one that complained.
             if let Some(system) = body.get_mut("system") {
                 strip_cache_control(system);
             }
@@ -656,6 +680,9 @@ impl ProtocolAdapter for AnthropicProtocol {
                 strip_cache_control(messages);
             }
         }
+
+        // Cycle 4: strip capability-gated fields one last time.
+        policy.apply(&mut body);
 
         let beta_header = Self::build_beta_headers(
             actual_model,

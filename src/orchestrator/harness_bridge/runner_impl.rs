@@ -87,7 +87,7 @@ impl HarnessRunner for AgentHarnessRunner {
         max_iterations_override: Option<u32>,
         transient_context: Option<String>,
         think_level: Option<crate::agents::thinking::ThinkLevel>,
-        envelope: crate::thinker::TurnEnvelope,
+        mut envelope: crate::thinker::TurnEnvelope,
         turn_model: Option<crate::providers::session_model_handle::SessionModelPref>,
     ) -> Result<FlowOutcome, FlowError> {
         // Step 1: honour pre-dispatch cancellation fast-path (short-circuit
@@ -361,6 +361,17 @@ impl HarnessRunner for AgentHarnessRunner {
             })
             // rust-doctor-disable-next-line excessive-clone
             .unwrap_or_else(|| provider_name.clone());
+        // Complete the turn envelope with the model that is actually going to
+        // answer. The gateway builds the rest of the envelope but cannot fill
+        // this in — it is only resolvable here, after the provider chain is
+        // constructed. Reusing `gauge_model` (rather than re-deriving) is the
+        // point: the context gauge, the cost estimate and the `model=` line
+        // the model reads then agree by construction instead of by
+        // coincidence. Before this, `RuntimeContext` fell back to
+        // `provider.name()` and told every turn it was running on `failover`.
+        // rust-doctor-disable-next-line excessive-clone
+        envelope.serving_model = Some(gauge_model.clone());
+
         // Gauge denominator: authoritative per-model context window (R7 — the
         // lookup is core's, not the panel's), honoring the configured
         // per-provider override first.

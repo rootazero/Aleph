@@ -969,8 +969,14 @@ mod usage_handler_tests {
         let _ = db
             .insert_agent_task(&AgentTask::new("t1", "s", "coder", "x", RiskLevel::Low))
             .await;
-        // OpenAI/DeepSeek shape: input is the total and includes the cached
-        // portion. ratio = 80 / 100 = 0.8 per row, also at the rollup.
+        // Counters are DISJOINT for every provider — each adapter subtracts the
+        // cached portion out of its protocol's prompt total before the usage is
+        // recorded — so the ratio is cache_read / (input + cache_read)
+        // = 80 / 180. This used to assert 0.8 on the theory that an
+        // OpenAI/DeepSeek row carries cache_read *inside* input; no adapter can
+        // produce that row, and asserting it locked in a rollup that
+        // over-reported the hit rate by up to 2x in exactly the degraded regime
+        // (see `AgentUsageTotal::cache_hit_ratio`).
         db.insert_trace(&TaskTrace {
             id: 0,
             task_id: "t1".into(),
@@ -999,7 +1005,10 @@ mod usage_handler_tests {
         let ratio = resp.result.as_ref().unwrap()["total"]["cache_hit_ratio"]
             .as_f64()
             .expect("ratio must be a number");
-        assert!((ratio - 0.8).abs() < 1e-9, "expected 0.8, got {ratio}");
+        assert!(
+            (ratio - 80.0 / 180.0).abs() < 1e-9,
+            "expected 0.444…, got {ratio}"
+        );
     }
 
     #[tokio::test]

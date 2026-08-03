@@ -234,16 +234,31 @@ impl AppState {
             // Denominator follows the Anthropic accounting (input excludes
             // cached reads): input + cache_creation + cache_read.
             AgentTraceEvent::ProviderUsage {
+                agent_id,
                 input_tokens,
                 cache_read_tokens,
                 cache_creation_tokens,
                 ..
             } => {
+                // The first reporting agent in a session is its root: an agent
+                // must take a turn before it can delegate, so nothing else can
+                // report first.
+                if self.cache_root_agent.is_none() {
+                    self.cache_root_agent = Some(agent_id.clone());
+                }
                 let read = u64::from(cache_read_tokens.unwrap_or(0));
                 let creation = u64::from(cache_creation_tokens.unwrap_or(0));
                 if read > 0 || creation > 0 {
                     let denom = u64::from(*input_tokens) + creation + read;
                     self.cache_stat = Some((read, denom));
+                    // Label the reading whenever it is not the root agent's —
+                    // sub-agents and MoA advisors share this stream, and their
+                    // cold starts would otherwise read as the root agent's
+                    // prefix breaking.
+                    self.cache_stat_agent = match self.cache_root_agent.as_deref() {
+                        Some(root) if root == agent_id => None,
+                        _ => Some(agent_id.clone()),
+                    };
                 }
                 Action::None
             }

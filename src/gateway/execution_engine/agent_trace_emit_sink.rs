@@ -25,8 +25,12 @@
 //!   persistence + scratchpad progress are unaffected.
 //!
 //! Only the step-relevant variants are forwarded (see [`is_step_event`]) —
-//! the heavy/internal ones (session metrics, provider usage, worktree/MCP
-//! lifecycle) carry no Panel meaning and would only add wire noise.
+//! the heavy/internal ones (session metrics, worktree/MCP lifecycle) carry no
+//! Panel meaning and would only add wire noise.
+//!
+//! `ProviderUsage` is an explicit exception to the "internal" rule: it is the
+//! sole source of the live prompt-cache reading, and it fires once per LLM
+//! call rather than per delta, so the wire-noise argument does not apply.
 
 use crate::sync_primitives::Arc;
 use tokio::sync::mpsc;
@@ -44,6 +48,16 @@ use crate::harness::TraceSink;
 /// Also the three lightweight MoA fan-out moments (advisor answer, aggregator
 /// hand-off, advisor spend) — `MoaTurnTrace` is deliberately excluded: it
 /// carries the full advisor I/O payload and is persisted-only, never wire.
+///
+/// And `ProviderUsage`, which is what the TUI's `cache N%` cell is built from
+/// (`interfaces/tui/.../app/trace.rs` → `AppState.cache_stat` →
+/// `widgets/status_bar.rs`). It was previously dropped here as "internal",
+/// which left that cell — the product's only *live* prompt-cache indicator —
+/// unable to fire during a run: it could only appear when a user manually
+/// replayed a persisted trace, after the fact. A broken prefix is silent by
+/// nature (the symptom is the bill), so this is the one number that has to
+/// reach a live surface. Volume is one event per LLM call, not per delta.
+///
 /// Everything else is dropped — it carries no user-facing meaning.
 pub(crate) const fn is_step_event(event: &LoopTraceEvent) -> bool {
     matches!(
@@ -57,6 +71,7 @@ pub(crate) const fn is_step_event(event: &LoopTraceEvent) -> bool {
             | LoopTraceEvent::MoaAdvisor { .. }
             | LoopTraceEvent::MoaAggregating { .. }
             | LoopTraceEvent::MoaAdvisorSpend { .. }
+            | LoopTraceEvent::ProviderUsage { .. }
     )
 }
 
@@ -150,5 +165,55 @@ mod tests {
             tool_timeline: Vec::new(),
         };
         assert!(!is_step_event(&session_completed));
+    }
+
+    /// `ProviderUsage` must actually REACH the emitter, not merely satisfy the
+    /// predicate.
+    ///
+    /// This asserts the delivered effect on purpose. The predicate-only tests
+    /// above are what let this wire stay severed: `ProviderUsage` was absent
+    /// from `is_step_event`, so the TUI's `cache N%` cell — the only live
+    /// prompt-cache indicator in the product — could never light up during a
+    /// run, while every test here stayed green because none of them pushed an
+    /// event through `on_trace` and looked at the other end.
+    #[tokio::test]
+    async fn provider_usage_reaches_the_emitter() {
+        use crate::gateway::event_emitter::{CollectingEventEmitter, StreamEvent};
+        use crate::harness::trace_sink::NoopTraceSink;
+
+        let emitter = Arc::new(CollectingEventEmitter::new());
+        let sink = AgentTraceEmitSink::new(
+            Arc::new(NoopTraceSink),
+            Arc::clone(&emitter) as Arc<dyn EventEmitter>,
+            "run-cache".to_string(),
+        );
+
+        sink.on_trace(&LoopTraceEvent::ProviderUsage {
+            agent_id: "main".into(),
+            input_tokens: 120,
+            output_tokens: 30,
+            cache_read_tokens: Some(4_000),
+            cache_creation_tokens: Some(0),
+            thinking_tokens: None,
+        });
+
+        // The drain runs on a spawned task; yield until it lands.
+        let mut seen = false;
+        for _ in 0..50 {
+            tokio::task::yield_now().await;
+            if emitter
+                .events()
+                .await
+                .iter()
+                .any(|e| matches!(e, StreamEvent::AgentTrace { .. }))
+            {
+                seen = true;
+                break;
+            }
+        }
+        assert!(
+            seen,
+            "ProviderUsage must be mirrored to the wire — the live cache cell reads it"
+        );
     }
 }

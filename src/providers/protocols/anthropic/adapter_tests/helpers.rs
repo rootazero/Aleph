@@ -31,6 +31,22 @@ pub(super) fn build_body(payload: &RequestPayload, config: &ProviderConfig) -> s
     serde_json::from_slice(built.body().unwrap().as_bytes().unwrap()).unwrap()
 }
 
+/// Count `cache_control` markers anywhere in a JSON value.
+///
+/// Shared because the marker budget is asserted from two angles: the
+/// prefix-stability contract caps it at `MAX_CACHE_BREAKPOINTS`, and the
+/// retention/capability gate requires it to be exactly zero.
+pub(super) fn marker_count(value: &serde_json::Value) -> usize {
+    match value {
+        serde_json::Value::Object(map) => {
+            usize::from(map.contains_key("cache_control"))
+                + map.values().map(marker_count).sum::<usize>()
+        }
+        serde_json::Value::Array(items) => items.iter().map(marker_count).sum(),
+        _ => 0,
+    }
+}
+
 pub(super) fn build_http(payload: &RequestPayload, config: &ProviderConfig) -> reqwest::Request {
     let protocol = AnthropicProtocol::new(reqwest::Client::new());
     protocol

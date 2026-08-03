@@ -5,7 +5,7 @@ use crate::memory::extensions::types::CaptureCtx;
 use crate::memory::store::raw_memory::{RawMemory, RawMemorySource, RawMemoryStore};
 use crate::providers::adapter::RequestPayload;
 use crate::providers::message::UnifiedMessage;
-use crate::sync_primitives::{Arc, Ordering};
+use crate::sync_primitives::Arc;
 use tracing::{info, warn};
 
 impl SessionCompactor {
@@ -86,7 +86,6 @@ impl SessionCompactor {
             warn!(depth, "Using deterministic fallback for summary generation");
         }
 
-        self.metrics.fallback_count.fetch_add(1, Ordering::Relaxed);
         tracing::warn!(target: "session_compactor", depth, "fallback");
         let target = super::fallback::target_tokens(
             source_token_count,

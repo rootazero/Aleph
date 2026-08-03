@@ -145,7 +145,12 @@ fn fixed_runtime_context() -> crate::thinker::runtime_context::RuntimeContext {
         shell: "bash".to_string(),
         working_dir: std::path::PathBuf::from("/home/u/.aleph/workspaces/main"),
         repo_root: None,
-        current_model: "anthropic".to_string(),
+        // Model-ID shaped, deliberately NOT a provider name. In production
+        // this is `TurnEnvelope::serving_model` (= `runner_impl`'s
+        // `gauge_model`). It used to fall back to `provider.name()`, which is
+        // `"failover"` on every real stack — and a fixture holding a provider
+        // name would have mirrored that defect rather than exposing it.
+        current_model: "claude-sonnet-4-5-20250929".to_string(),
         hostname: "aleph-host".to_string(),
         current_time: "2026-07-26 12:00".to_string(),
         timezone: "UTC".to_string(),
@@ -444,6 +449,116 @@ fn no_environment_fact_is_stated_twice() {
             "environment fact {fact} ({value:?}) is stated by {stating:?} — exactly one \
              layer must own it. Stable facts belong in `environment`, per-run facts in \
              `runtime_context`; see RuntimeContext's module docs for the split."
+        );
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Stable-prefix determinism
+// ---------------------------------------------------------------------------
+//
+// The two guards below are the assembly-side twin of
+// `providers::protocols::anthropic::adapter_tests::prefix_stability`, which
+// pins the same property on raw request bodies but only ever sees a
+// hand-written fixture — never the real layer set.
+//
+// They exist because `PromptLayer::stability()` DEFAULTS to `Stable`. A layer
+// that simply forgets to declare rides inside the cacheable prefix by
+// omission, and every byte it renders then re-keys the provider's prompt cache
+// for the whole conversation behind it. That has already happened once here:
+// `ToolRuntimeStateLayer` sat at priority 502 with no `stability()`, so a
+// 30-second-TTL tool-health probe silently invalidated entire sessions. It was
+// caught by a human reading code, not by a mechanism.
+//
+// DeepSeek-Reasonix guards the same invariant with a runtime
+// `verifyFingerprint()` that throws when a mutation path bypasses cache
+// invalidation. Aleph deliberately does NOT carry a runtime hash — one existed
+// in `cache_monitor.rs`, never gained a production consumer, and was removed
+// per YAGNI. The useful half of that mechanism is the assertion, not the
+// hash, so it lives here as a test.
+
+/// Building the stable prefix twice from identical input must produce
+/// identical bytes.
+///
+/// Catches any `Stable` layer that reads a clock, a counter, a process global,
+/// or an unsorted collection. Note the honest limit: this input carries FIXED
+/// stand-ins for machine facts, so it proves determinism *inside* the layers —
+/// `stable_prefix_ignores_per_run_facts` below is what catches a per-run input
+/// being threaded into a stable layer.
+#[test]
+fn stable_prefix_is_byte_identical_when_built_twice() {
+    let pipeline = PromptPipeline::default_layers();
+    let config = PromptConfig::default();
+
+    for &paradigm in PARADIGMS {
+        let context = resolve(paradigm);
+        let input = production_shaped(&config, &context);
+        let first = pipeline.execute_stable_with_mode(AssemblyPath::Cached, &input, PromptMode::Full);
+        let second =
+            pipeline.execute_stable_with_mode(AssemblyPath::Cached, &input, PromptMode::Full);
+        assert_eq!(
+            first, second,
+            "the cacheable prefix is not deterministic under {paradigm:?} — some Stable \
+             layer renders a clock, a counter, a global, or an unsorted collection. \
+             Every byte of drift re-keys the provider prompt cache for the entire \
+             conversation behind it."
+        );
+    }
+}
+
+/// Facts that vary within a session must not reach the cacheable prefix.
+///
+/// Two contexts differing ONLY in per-run machine facts (time, cwd, repo root,
+/// serving model) must produce a byte-identical stable prefix. The dynamic
+/// suffix is where those belong, and it is asserted to actually differ so the
+/// test cannot pass by the facts having been dropped everywhere.
+///
+/// This is the guard that fails the moment someone welds a `RuntimeContext`
+/// field into a `Stable` layer — the exact regression class that is otherwise
+/// invisible until a monthly bill.
+#[test]
+fn stable_prefix_ignores_per_run_facts() {
+    let pipeline = PromptPipeline::default_layers();
+    let config = PromptConfig::default();
+
+    for &paradigm in PARADIGMS {
+        let baseline = resolve(paradigm);
+
+        let mut shifted = resolve(paradigm);
+        shifted.runtime_context = Some(crate::thinker::runtime_context::RuntimeContext {
+            // Per-run / per-hour facts: all four must live in the dynamic zone.
+            working_dir: std::path::PathBuf::from("/home/u/.aleph/workspaces/other"),
+            repo_root: Some(std::path::PathBuf::from("/home/u/src/other")),
+            current_model: "openai".to_string(),
+            current_time: "2026-07-26 13:00".to_string(),
+            // Process-invariant facts held equal — those legitimately belong to
+            // the stable `environment` layer.
+            ..fixed_runtime_context()
+        });
+
+        let input_a = production_shaped(&config, &baseline);
+        let input_b = production_shaped(&config, &shifted);
+
+        let stable_a =
+            pipeline.execute_stable_with_mode(AssemblyPath::Cached, &input_a, PromptMode::Full);
+        let stable_b =
+            pipeline.execute_stable_with_mode(AssemblyPath::Cached, &input_b, PromptMode::Full);
+        assert_eq!(
+            stable_a, stable_b,
+            "a per-run fact (cwd / repo / model / time) reached the cacheable prefix \
+             under {paradigm:?}. It belongs in the dynamic suffix — see RuntimeContext's \
+             module docs for the split."
+        );
+
+        let dynamic_a =
+            pipeline.execute_dynamic_with_mode(AssemblyPath::Cached, &input_a, PromptMode::Full);
+        let dynamic_b =
+            pipeline.execute_dynamic_with_mode(AssemblyPath::Cached, &input_b, PromptMode::Full);
+        assert_ne!(
+            dynamic_a, dynamic_b,
+            "under {paradigm:?} the per-run facts vanished from the dynamic suffix too — \
+             the stable-prefix assertion above would then pass vacuously. The model must \
+             still be told its cwd and time somewhere."
         );
     }
 }

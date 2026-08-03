@@ -465,8 +465,11 @@ impl HttpProvider {
 
     /// Expose raw delta stream with outbound safety checks applied.
     ///
-    /// Used by `AiProviderBridge` for real streaming to `AgentLoop`.
-    /// Inbound leak check is deferred to the `DeltaCollector` consumer.
+    /// Used by the OpenAI-compatible gateway passthrough
+    /// (`gateway::openai_api::completions::passthrough`,
+    /// `gateway::openai_api::responses`) to relay an upstream SSE stream
+    /// verbatim. Inbound leak check is deferred to the `DeltaCollector`
+    /// consumer.
     pub async fn stream_raw<'a>(
         &'a self,
         payload: RequestPayload<'a>,

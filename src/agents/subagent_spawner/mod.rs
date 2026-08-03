@@ -438,7 +438,7 @@ pub async fn spawn(base: &SpawnerBase, req: SpawnRequest<'_>) -> Result<LoopRunR
         ));
 
         let (context_budget, context_compactor, preflight_pipeline) =
-            build_context_triple(base.context_budget_config.as_ref(), &llm);
+            build_context_triple(base.context_budget_config.as_ref(), &llm, &req.agent_def.id);
 
         // Layer-3 per-turn aggregate budget — derive from `context_budget_config`
         // when the parent has one wired, otherwise fall back to the
@@ -766,9 +766,20 @@ type ContextTriple = (
     Option<Arc<crate::context::budget::preflight::PreflightPipeline>>,
 );
 
+/// `agent_id` scopes the compactor's cache-watchdog reset to this sub-agent.
+///
+/// Without it the compactor calls `notify_compaction(None)`, the process-wide
+/// reset — so the moment any one sub-agent compacts (routine on a long,
+/// tool-heavy child run) every *other* agent's consecutive-miss streak is
+/// zeroed too, including the parent's. The watchdog needs 3 consecutive armed
+/// misses to warn, which in a busy swarm it would then never reach: the single
+/// early-warning signal for prefix breakage is disarmed precisely in the
+/// multi-agent runs where prompt-cache spend is highest. The scoped reset it
+/// mirrors is `runner_impl.rs`'s on the root path.
 fn build_context_triple(
     cfg: Option<&crate::context::budget::ContextBudgetConfig>,
     llm: &Arc<dyn AiProvider>,
+    agent_id: &str,
 ) -> ContextTriple {
     use crate::context::compact::compactor::{CompactorConfig, ContextCompactor};
     let Some(cfg) = cfg else {
@@ -777,13 +788,16 @@ fn build_context_triple(
     let budget = Arc::new(tokio::sync::Mutex::new(
         crate::context::budget::ContextBudget::new(cfg),
     ));
-    let compactor = Arc::new(ContextCompactor::new(
-        llm.clone(),
-        CompactorConfig {
-            fresh_tail: cfg.fresh_tail_count,
-            ..CompactorConfig::default()
-        },
-    ));
+    let compactor = Arc::new(
+        ContextCompactor::new(
+            llm.clone(),
+            CompactorConfig {
+                fresh_tail: cfg.fresh_tail_count,
+                ..CompactorConfig::default()
+            },
+        )
+        .with_monitor_agent(agent_id),
+    );
     let pipeline = Arc::new(crate::context::budget::preflight::default_pipeline(cfg));
     (Some(budget), Some(compactor), Some(pipeline))
 }
