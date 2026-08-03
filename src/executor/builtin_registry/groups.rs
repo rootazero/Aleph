@@ -165,6 +165,7 @@ pub static TOOL_CATEGORIES: &[ToolCategory] = &[
             "gateway_route",
             "channel_message",
             "channel_directory",
+            "channel_outbox",
         ],
     },
     ToolCategory {

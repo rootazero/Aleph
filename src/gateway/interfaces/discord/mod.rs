@@ -715,7 +715,17 @@ impl Channel for DiscordChannel {
                     client.shard_manager.shutdown_all().await;
                 }
             }
-            *status.write().await = ChannelStatus::Disconnected;
+            // Do NOT clobber `Error`: the unconditional assignment that used to
+            // live here erased the failure one line after it was recorded, so a
+            // crashed gateway client reported "disconnected" — indistinguishable
+            // from a clean shutdown to `channels.list`, and invisible to the
+            // health monitor's error-based restart path.
+            {
+                let mut guard = status.write().await;
+                if *guard != ChannelStatus::Error {
+                    *guard = ChannelStatus::Disconnected;
+                }
+            }
         });
 
         // Wait a moment for connection

@@ -468,6 +468,20 @@ impl BuiltinToolRegistry {
             info!("Registered channel_directory tool in BuiltinToolRegistry");
         }
 
+        // Channel outbox tool — the recovery half of the delivery queue, and
+        // the only production consumer of the dead-letter trail. Same deferred
+        // ChannelRegistry injection as the two above.
+        {
+            use crate::builtin_tools::channel_outbox::ChannelOutboxTool;
+            reg(
+                tools,
+                "channel_outbox",
+                ChannelOutboxTool::DESCRIPTION,
+                schema::<crate::builtin_tools::channel_outbox::ChannelOutboxArgs>("channel_outbox"),
+            );
+            info!("Registered channel_outbox tool in BuiltinToolRegistry");
+        }
+
         // ask_user clarification tool — always register metadata
         // (ChannelRegistry + ClarificationManager injected later via deferred
         // OnceCell wiring). Execution checks both cells at call time.

@@ -40,6 +40,27 @@ use super::voice::VoiceState;
 /// Type alias for a thread-safe, shareable channel handle
 type ChannelHandle = Arc<RwLock<Box<dyn Channel>>>;
 
+/// Whether the registry *intends* a channel to be carrying traffic right now.
+///
+/// [`ChannelStatus`] alone cannot answer this. `Disconnected` is written by
+/// three unrelated situations — never started, stopped on purpose, and a
+/// transport that died under a running channel — and several adapters
+/// (`discord`, `irc`, `xmpp`) land in it after their connection task exits for
+/// *any* reason. Restart policy needs the operator's intent, which only the
+/// registry knows because only the registry serves `start` / `stop`.
+///
+/// Mapped from openclaw's `isManagedAccount` + `lifecycle` pair in
+/// `gateway/channel-health-policy.ts`, collapsed to the one bit Aleph's
+/// registry can actually own.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DesiredChannelState {
+    /// `start_channel` / `restart_channel` succeeded and nothing stopped it
+    /// since: the channel owes us traffic.
+    Running,
+    /// Never started, or explicitly stopped. Never a restart candidate.
+    Stopped,
+}
+
 /// Policy for retrying transient outbound sends at the registry layer.
 ///
 /// Deliberately scoped to [`ChannelError::RateLimited`]: a channel returns that
@@ -143,6 +164,9 @@ pub struct ChannelRegistry {
     /// `stop` / `delete` / runtime `create` change what HTTP actually serves.
     /// Handed to `GatewayServer::set_webhook_mounts` at boot.
     webhook_mounts: Arc<super::webhook_receiver::WebhookMountTable>,
+    /// Per-channel *intent* (see [`DesiredChannelState`]). Written only by the
+    /// lifecycle methods on this type, read by the health monitor.
+    desired_state: RwLock<HashMap<ChannelId, DesiredChannelState>>,
 }
 
 impl ChannelRegistry {
@@ -160,6 +184,7 @@ impl ChannelRegistry {
             send_retry: SendRetryPolicy::default(),
             delivery_store: None,
             webhook_mounts: Arc::new(super::webhook_receiver::WebhookMountTable::new()),
+            desired_state: RwLock::new(HashMap::new()),
         }
     }
 
@@ -253,6 +278,10 @@ impl ChannelRegistry {
         // `channel.delete` otherwise leaves an authenticated endpoint the
         // operator believes is gone.
         self.webhook_mounts.unmount_channel(channel_id).await;
+        // Drop the intent with the instance. Leaving it behind would both leak
+        // an entry per deleted channel and hand a later channel that reuses the
+        // id a `Running` intent it never asked for.
+        self.desired_state.write().await.remove(channel_id);
 
         let mut channels = self.channels.write().await;
         if let Some(channel_arc) = channels.remove(channel_id) {
@@ -365,6 +394,11 @@ impl ChannelRegistry {
             self.webhook_mounts.mount(mount).await;
         }
 
+        // Only after `start()` returned Ok: a channel that refused to start is
+        // not something the health monitor should keep resurrecting.
+        self.set_desired(channel_id, DesiredChannelState::Running)
+            .await;
+
         info!("Started channel: {}", channel_id);
         Ok(())
     }
@@ -374,6 +408,12 @@ impl ChannelRegistry {
         let channel_arc = self.get(channel_id).await.ok_or_else(|| {
             ChannelError::NotConnected(format!("Channel not found: {channel_id}"))
         })?;
+
+        // Recorded before `stop()` runs, not after: an adapter whose `stop`
+        // returns an error has still been told to shut down, and the health
+        // monitor must not race in to restart it.
+        self.set_desired(channel_id, DesiredChannelState::Stopped)
+            .await;
 
         let mut channel = channel_arc.write().await;
         channel.stop().await?;
@@ -429,13 +469,12 @@ impl ChannelRegistry {
         channel_id: &ChannelId,
         message: OutboundMessage,
     ) -> ChannelResult<SendResult> {
-        // Fast path: without a durable queue, behave exactly as before (no
-        // extra clone, byte-identical to the historic implementation).
-        if self.delivery_store.is_none() {
-            return self.send_attempt(channel_id, message).await;
-        }
-
-        match self.send_attempt(channel_id, message.clone()).await {
+        // `send_attempt` borrows the message (it clones once per transport
+        // attempt internally), so the persist-on-failure path costs no extra
+        // deep copy of the payload — which for a message carrying inline
+        // attachment bytes is the difference between one and two copies of the
+        // whole media blob on every single outbound send.
+        match self.send_attempt(channel_id, &message).await {
             Ok(sent) => Ok(sent),
             Err(e) => {
                 self.maybe_enqueue(channel_id, &message, &e);
@@ -458,9 +497,17 @@ impl ChannelRegistry {
         let next =
             super::delivery_queue::now_secs() + store.config().initial_backoff.as_secs() as i64;
         match store.enqueue(channel_id.as_str(), message, &format!("{err:?}"), next) {
-            Ok(_) => info!(
+            Ok(super::delivery_queue::EnqueueOutcome::Queued(_)) => info!(
                 channel = %channel_id,
                 "outbound send failed transiently; queued for durable retry"
+            ),
+            // Reported distinctly rather than folded into the success log: the
+            // message is *not* coming back, and the operator's next question is
+            // "which one?" — answered by the dead-letter trail the store wrote.
+            Ok(super::delivery_queue::EnqueueOutcome::TooLarge { bytes }) => warn!(
+                channel = %channel_id,
+                bytes,
+                "outbound payload exceeds the durable-queue byte cap; dead-lettered instead of retried"
             ),
             Err(e) => warn!(
                 channel = %channel_id,
@@ -477,7 +524,7 @@ impl ChannelRegistry {
     pub(crate) async fn send_attempt(
         &self,
         channel_id: &ChannelId,
-        message: OutboundMessage,
+        message: &OutboundMessage,
     ) -> ChannelResult<SendResult> {
         let channel_arc = self.get(channel_id).await.ok_or_else(|| {
             ChannelError::NotConnected(format!("Channel not found: {channel_id}"))
@@ -788,16 +835,28 @@ impl ChannelRegistry {
         summary
     }
 
-    /// Per-channel `(id, status, health)` snapshot read by the
+    /// Per-channel lifecycle snapshot read by the
     /// [`crate::gateway::channel_health_monitor::ChannelHealthMonitor`] to pick
     /// restart candidates. Pure data access — restart policy lives in the
     /// monitor, not here.
-    pub async fn health_states(&self) -> Vec<(ChannelId, ChannelStatus, ChannelHealth)> {
+    pub async fn health_states(&self) -> Vec<ChannelLifecycleSnapshot> {
         let channels = self.channels.read().await;
+        let desired = self.desired_state.read().await;
         let mut out = Vec::with_capacity(channels.len());
         for (id, channel_arc) in channels.iter() {
             let channel = channel_arc.read().await;
-            out.push((id.clone(), channel.status(), channel.health().await));
+            out.push(ChannelLifecycleSnapshot {
+                // A channel registered but never started has no entry, which is
+                // `Stopped` — the correct answer, and the reason this defaults
+                // rather than erroring.
+                desired: desired
+                    .get(id)
+                    .copied()
+                    .unwrap_or(DesiredChannelState::Stopped),
+                id: id.clone(),
+                status: channel.status(),
+                health: channel.health().await,
+            });
         }
         out
     }
@@ -880,18 +939,31 @@ impl ChannelRegistry {
     /// Move dead-lettered deliveries back into the live outbound queue for
     /// another delivery pass — the recovery half of the dead-letter trail (R5).
     /// `channel` optionally restricts the redrive to one transport. Returns the
-    /// number redriven, or `None` when no durable store is attached. Safe by
-    /// construction (every dead letter was a duplicate-safe transient failure —
-    /// see [`super::delivery_queue::DeliveryStore::redrive_dead_letters`]).
-    pub fn redrive_dead_letters(&self, channel: Option<&str>) -> Option<u64> {
+    /// [`RedriveOutcome`](super::delivery_queue::RedriveOutcome), or `None` when
+    /// no durable store is attached. Only records whose failure is
+    /// *definitely-not-delivered* are moved; see
+    /// [`super::delivery_queue::DeliveryStore::redrive_dead_letters`].
+    pub fn redrive_dead_letters(
+        &self,
+        channel: Option<&str>,
+    ) -> Option<super::delivery_queue::RedriveOutcome> {
         let store = self.delivery_store.as_ref()?;
         match store.redrive_dead_letters(super::delivery_queue::now_secs(), channel) {
-            Ok(n) => Some(n),
+            Ok(outcome) => Some(outcome),
             Err(e) => {
                 warn!(error = %e, "delivery queue: redrive_dead_letters failed");
-                Some(0)
+                Some(super::delivery_queue::RedriveOutcome::default())
             }
         }
+    }
+
+    /// Record that `channel_id` is *supposed to be running*, so the health
+    /// monitor can tell a transport that died from one an operator stopped.
+    async fn set_desired(&self, channel_id: &ChannelId, desired: DesiredChannelState) {
+        self.desired_state
+            .write()
+            .await
+            .insert(channel_id.clone(), desired);
     }
 }
 
@@ -911,6 +983,20 @@ pub struct ChannelStatusSummary {
     pub disconnected: usize,
     pub error: usize,
     pub disabled: usize,
+}
+
+/// One channel's lifecycle facts, as the health monitor sees them.
+///
+/// Carries `desired` alongside the live `status` because the two answer
+/// different questions and only their *conjunction* identifies a wedged
+/// channel: `status` says what the transport reports, `desired` says whether
+/// anyone still expects it to work.
+#[derive(Debug, Clone)]
+pub struct ChannelLifecycleSnapshot {
+    pub id: ChannelId,
+    pub desired: DesiredChannelState,
+    pub status: ChannelStatus,
+    pub health: ChannelHealth,
 }
 
 #[derive(Debug, Clone, Default)]

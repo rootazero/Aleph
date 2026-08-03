@@ -9,14 +9,18 @@
 //! Each channel already owns an exponential reconnect schedule
 //! ([`crate::gateway::restart_backoff`]) for *detected* drops. This monitor is
 //! the safety net for the *undetected* case: a periodic sweep over the
-//! [`ChannelRegistry`] that restarts any channel that has both declared an
-//! error state **and** gone silent past a staleness threshold.
+//! [`ChannelRegistry`] that restarts any channel the registry still expects to
+//! be running which is down and has gone silent past a staleness threshold.
 //!
 //! Design (parity with the openclaw reference + the local `MemoryMonitor`):
 //! - Background task, `Notify`-based shutdown, never blocks process exit.
 //! - `check_secs = 0` disables the monitor (config sentinel).
-//! - Restart decision is conservative: `status == Error && is_stale`. A
-//!   healthy-but-idle channel (no traffic, still `Connected`) is **never**
+//! - The restart decision reads *intent* ([`DesiredChannelState`]) alongside
+//!   live status, because status alone cannot tell an operator-stopped channel
+//!   from a dead socket — see [`should_restart`], which documents why keying on
+//!   `status == Error` alone made this monitor a no-op for exactly the
+//!   long-lived socket channels it was written for.
+//! - A healthy-but-idle channel (no traffic, still `Connected`) is **never**
 //!   restarted, so there is no restart-storm risk.
 //! - Per-channel restart budget over a rolling hour (default 10, matching
 //!   openclaw) so a permanently-broken channel cannot thrash.
@@ -34,7 +38,7 @@ use tokio::time::interval;
 use tracing::{info, warn};
 
 use super::channel::{ChannelHealth, ChannelId, ChannelStatus};
-use super::channel_registry::ChannelRegistry;
+use super::channel_registry::{ChannelRegistry, DesiredChannelState};
 
 /// Default sweep cadence: 5 minutes between health checks.
 pub const DEFAULT_CHECK_SECS: u64 = 300;
@@ -67,15 +71,45 @@ impl Default for ChannelHealthConfig {
 
 /// Whether a channel should be restarted this sweep.
 ///
-/// Conservative by design: only a channel that has *declared* an error state
-/// **and** gone silent past the staleness threshold qualifies. An idle but
-/// `Connected` channel is healthy and is left alone.
+/// Two independent facts must both hold:
+///
+/// 1. **The channel is supposed to be running** ([`DesiredChannelState::Running`]).
+///    This is what makes the rest safe to widen. It comes from the registry's
+///    `start` / `stop` bookkeeping, not from the transport.
+/// 2. **It is down and has gone silent** past the staleness threshold.
+///
+/// "Down" deliberately covers `Error`, `Disconnected` *and* `Connecting`, not
+/// just `Error`. The old predicate tested `status == Error` alone, which
+/// **never matched the channels this monitor exists for**: `discord`, `irc` and
+/// `xmpp` all run their connection inside a spawned task that writes
+/// `Disconnected` on the way out — Discord even assigns `Error` first and then
+/// unconditionally overwrites it one line later. A wedged Discord gateway
+/// therefore presented as `Disconnected`, the predicate was false, and the
+/// zombie-channel safety net silently never fired for any of them. `Connecting`
+/// is included for the mirror case: a connect that hangs forever is
+/// indistinguishable from a dead one after the staleness window, which is
+/// openclaw's `startup-connect-grace` boundary in
+/// `gateway/channel-health-policy.ts`.
+///
+/// Still deliberately excluded:
+/// * `Connected` but silent — a quiet Slack workspace is not a broken one, and
+///   Aleph tracks no separate *transport* liveness signal that could tell them
+///   apart (openclaw restarts on `stale-socket` only because it has one).
+/// * `Disabled` — permanently off by configuration.
 fn should_restart(
+    desired: DesiredChannelState,
     status: ChannelStatus,
     health: &ChannelHealth,
     stale_threshold: chrono::Duration,
 ) -> bool {
-    status == ChannelStatus::Error && health.is_stale(stale_threshold)
+    if desired != DesiredChannelState::Running {
+        return false;
+    }
+    let down = matches!(
+        status,
+        ChannelStatus::Error | ChannelStatus::Disconnected | ChannelStatus::Connecting
+    );
+    down && health.is_stale(stale_threshold)
 }
 
 /// Sliding-window per-channel restart budget.
@@ -186,28 +220,30 @@ async fn run_monitor(
     }
 }
 
-/// One health sweep: restart every stale-and-errored channel still within its
-/// hourly budget. Returns the ids restarted (used by tests).
+/// One health sweep: restart every channel that owes us traffic but has gone
+/// silent while down, still within its hourly budget. Returns the ids restarted
+/// (used by tests).
 async fn sweep(
     registry: &ChannelRegistry,
     stale_threshold: chrono::Duration,
     limiter: &mut RestartLimiter,
 ) -> Vec<ChannelId> {
     let mut restarted = Vec::new();
-    for (id, status, health) in registry.health_states().await {
-        if !should_restart(status, &health, stale_threshold) {
+    for snap in registry.health_states().await {
+        if !should_restart(snap.desired, snap.status, &snap.health, stale_threshold) {
             continue;
         }
+        let id = snap.id;
         if !limiter.try_acquire(&id, Instant::now()) {
             warn!(
-                "[CHANNEL-HEALTH] channel={} stale+error but hourly restart budget exhausted — skipping",
-                id
+                "[CHANNEL-HEALTH] channel={} down+stale but hourly restart budget exhausted — skipping (status={:?})",
+                id, snap.status
             );
             continue;
         }
         warn!(
-            "[CHANNEL-HEALTH] channel={} stale+error — restarting (reason={:?})",
-            id, health.status_reason
+            "[CHANNEL-HEALTH] channel={} down+stale — restarting (status={:?} reason={:?})",
+            id, snap.status, snap.health.status_reason
         );
         match registry.restart_channel(&id).await {
             Ok(()) => {
@@ -237,42 +273,93 @@ mod tests {
         h
     }
 
+    const THRESHOLD: chrono::TimeDelta = chrono::Duration::seconds(300);
+    const RUNNING: DesiredChannelState = DesiredChannelState::Running;
+
     #[test]
     fn idle_connected_channel_is_not_restarted() {
         // Stale but Connected (idle) → left alone, no storm.
-        let threshold = chrono::Duration::seconds(300);
         assert!(!should_restart(
+            RUNNING,
             ChannelStatus::Connected,
             &stale(),
-            threshold
+            THRESHOLD
         ));
     }
 
     #[test]
     fn fresh_error_channel_is_not_restarted() {
         // Errored but still receiving events → its own loop is coping.
-        let threshold = chrono::Duration::seconds(300);
-        assert!(!should_restart(ChannelStatus::Error, &healthy(), threshold));
+        assert!(!should_restart(
+            RUNNING,
+            ChannelStatus::Error,
+            &healthy(),
+            THRESHOLD
+        ));
     }
 
     #[test]
     fn stale_error_channel_is_restarted() {
-        let threshold = chrono::Duration::seconds(300);
-        assert!(should_restart(ChannelStatus::Error, &stale(), threshold));
+        assert!(should_restart(
+            RUNNING,
+            ChannelStatus::Error,
+            &stale(),
+            THRESHOLD
+        ));
     }
 
     #[test]
-    fn disconnected_and_disabled_are_left_alone() {
-        let threshold = chrono::Duration::seconds(300);
-        assert!(!should_restart(
+    fn stale_disconnected_running_channel_is_restarted() {
+        // The case the old `status == Error` predicate could never see. The
+        // discord / irc / xmpp connection tasks all write `Disconnected` on the
+        // way out — Discord even overwrote its own `Error` one line later — so
+        // a dead gateway socket presented as `Disconnected` and the zombie-
+        // channel safety net silently never fired for any of them.
+        assert!(should_restart(
+            RUNNING,
             ChannelStatus::Disconnected,
             &stale(),
-            threshold
+            THRESHOLD
         ));
+    }
+
+    #[test]
+    fn stale_connecting_channel_is_restarted() {
+        // A connect that never completes is indistinguishable from a dead one
+        // once the staleness window has passed (openclaw's connect grace).
+        assert!(should_restart(
+            RUNNING,
+            ChannelStatus::Connecting,
+            &stale(),
+            THRESHOLD
+        ));
+    }
+
+    #[test]
+    fn a_channel_nobody_started_is_never_restarted() {
+        // The bit that makes widening to `Disconnected` safe: intent, not
+        // status. An operator's `channel.stop` (and a channel that was
+        // registered but never started) must not be resurrected on the next
+        // sweep, and `Disconnected` alone cannot tell those from a dead socket.
+        for status in [
+            ChannelStatus::Disconnected,
+            ChannelStatus::Error,
+            ChannelStatus::Connecting,
+        ] {
+            assert!(
+                !should_restart(DesiredChannelState::Stopped, status, &stale(), THRESHOLD),
+                "stopped channel restarted from status {status:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn disabled_is_left_alone_even_when_running_was_intended() {
         assert!(!should_restart(
+            RUNNING,
             ChannelStatus::Disabled,
             &stale(),
-            threshold
+            THRESHOLD
         ));
     }
 
