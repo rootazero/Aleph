@@ -226,6 +226,51 @@ fn tools_serialization_is_byte_stable_across_turns() {
     );
 }
 
+/// `ToolChoice::None` must disable tool use WITHOUT dropping the tools array.
+///
+/// Anthropic builds its cache prefix tools → system → messages, so a request
+/// that omits the array shares no prefix with the conversation's other calls.
+/// The one production caller is the boundary grace turn, which fires right
+/// after a turn that warmed the prefix and replays the entire history — exactly
+/// the request that can least afford to re-bill it. Dropping the array is what
+/// made the grace path's own "this turns into a cache hit" comment impossible.
+#[test]
+fn tool_choice_none_keeps_the_tools_array_in_the_prefix() {
+    use crate::providers::adapter::ToolChoice;
+    use crate::tool_metadata::{ToolCategory, ToolDefinition};
+
+    let config = official_config();
+    let tools = [ToolDefinition::new(
+        "file_read",
+        "Read a file",
+        serde_json::json!({"type": "object", "properties": {"path": {"type": "string"}}}),
+        ToolCategory::Builtin,
+    )];
+    let msgs = [UnifiedMessage::user("hi")];
+    let parts = system_parts("time=2026-08-03T10");
+
+    let acting = RequestPayload::new(&msgs)
+        .with_system_blocks(Some(&parts))
+        .with_tools(Some(&tools));
+    let salvaging = RequestPayload::new(&msgs)
+        .with_system_blocks(Some(&parts))
+        .with_tools(Some(&tools))
+        .with_tool_choice(Some(ToolChoice::None));
+
+    let acting_body = build_body(&acting, &config);
+    let salvaging_body = build_body(&salvaging, &config);
+
+    assert_eq!(
+        acting_body["tools"], salvaging_body["tools"],
+        "the grace turn must share the acting turn's tools prefix"
+    );
+    assert_eq!(
+        salvaging_body["tool_choice"],
+        serde_json::json!({"type": "none"}),
+        "tool use is disabled by tool_choice, not by deleting the array"
+    );
+}
+
 // ── the "no caching means no markers" gate ────────────────────────────────
 //
 // These replace a test that lived in `adapter/cache.rs` under the name

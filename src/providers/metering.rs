@@ -42,11 +42,28 @@ impl MeteringProvider {
     /// one response. Shared by the streaming and non-streaming paths so metering
     /// is byte-identical on both — the streaming path previously bypassed this
     /// decorator entirely, so streamed turns produced no `ProviderUsage` at all.
+    /// The cache-watchdog key for a request: `(agent, session)`, because the
+    /// provider's prompt-cache prefix is per conversation. `session_id` rides
+    /// the payload metadata that `harness::agent::think::build_request_payload`
+    /// stamps on every call, and it is the serialized `SessionKey` — the same
+    /// string the compaction side resets under.
+    fn cache_scope_of(payload: &RequestPayload<'_>, agent_id: &str) -> String {
+        crate::thinker::prompt_builder::cache_monitor::cache_scope(
+            agent_id,
+            payload
+                .metadata
+                .as_ref()
+                .and_then(|m| m.get("session_id"))
+                .map(String::as_str),
+        )
+    }
+
     fn record_usage(
         resp: &ProviderResponse,
         sink: &Option<Arc<dyn TraceSink>>,
         agent_id: &str,
         provider_name: &str,
+        cache_scope: &str,
     ) {
         let Some(usage) = resp.usage.as_ref() else {
             return;
@@ -64,12 +81,13 @@ impl MeteringProvider {
             "LLM call completed"
         );
         // Cache-first observability: feed cache token counts into the
-        // process-wide `CacheMonitor`, keyed by agent id. Three consecutive
-        // misses (counted only once the agent has seen real cache activity) with
-        // more than three total calls triggers a warn — surfaces accidental
-        // stable-prefix changes that would otherwise only show up on the bill.
+        // process-wide `CacheMonitor`, keyed per prompt-cache prefix. Three
+        // consecutive misses (counted only once that prefix has seen real cache
+        // activity) with more than three total calls triggers a warn — surfaces
+        // accidental stable-prefix changes that would otherwise only show up on
+        // the bill.
         crate::thinker::prompt_builder::cache_monitor::global_cache_monitor().record_cache_usage(
-            agent_id,
+            cache_scope,
             usage.cache_read_tokens,
             usage.cache_creation_tokens,
         );
@@ -91,13 +109,14 @@ impl AiProvider for MeteringProvider {
         &'a self,
         req: RequestPayload<'a>,
     ) -> Pin<Box<dyn Future<Output = Result<ProviderResponse>> + Send + 'a>> {
+        let scope = Self::cache_scope_of(&req, &self.agent_id);
         let fut = self.inner.process(req);
         let sink = self.sink.clone();
         let agent_id = self.agent_id.clone();
         let provider_name = self.inner.name().to_string();
         Box::pin(async move {
             let resp = fut.await?;
-            Self::record_usage(&resp, &sink, &agent_id, &provider_name);
+            Self::record_usage(&resp, &sink, &agent_id, &provider_name, &scope);
             Ok(resp)
         })
     }
@@ -111,13 +130,14 @@ impl AiProvider for MeteringProvider {
         // assembled response identically to `process`. This is the fix for the
         // streaming metering gap: the same `ProviderUsage` pipeline now fires on
         // streamed turns instead of being skipped by the harness downcast.
+        let scope = Self::cache_scope_of(&payload, &self.agent_id);
         let fut = self.inner.execute_streaming_dyn(payload, stream_sink);
         let sink = self.sink.clone();
         let agent_id = self.agent_id.clone();
         let provider_name = self.inner.name().to_string();
         Box::pin(async move {
             let resp = fut.await?;
-            Self::record_usage(&resp, &sink, &agent_id, &provider_name);
+            Self::record_usage(&resp, &sink, &agent_id, &provider_name, &scope);
             Ok(resp)
         })
     }
