@@ -427,7 +427,7 @@ mod tests {
             "agent:main:peer:user123",
             "agent:main:telegram:dm:user456",
             "agent:main:discord:group:guild789",
-            "agent:main:slack:channel:c123",
+            "agent:main:slack:group:c123",
             "agent:main:cron:daily",
             "agent:main:webhook:hook-1",
             "agent:main:ephemeral:uuid-abc",
