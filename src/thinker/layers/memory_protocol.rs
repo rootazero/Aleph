@@ -1,22 +1,34 @@
-//! `MemoryProtocolLayer` — cross-tool memory routing (priority 1745)
+//! `MemoryProtocolLayer` — the cross-tool memory destination ladder (priority 1105)
 //!
-//! Sits just before `SessionContextGuideLayer` (1750, post-compaction guide).
-//! Always-on routing; only the window claim below varies per turn. (Retrieved
-//! memory itself no longer rides the system prompt: it arrives as the transient
-//! trailing `<memory-context>` message, see `HarnessDeps::recall_context`.)
+//! Sits beside `SpecialActionsLayer` (1100) — the other layer whose whole job is
+//! ranking tools against each other — and inside the **cacheable prefix**: every
+//! byte it renders is a compile-time constant.
+//!
+//! **The volatile half is a different layer.** [`MemoryWindowLayer`] (1745,
+//! Dynamic) carries the one sentence that varies per turn: the claim that
+//! `<CuratedMemory>` / `<memory-context>` are already in this request's window.
+//! The two were a single Dynamic layer until 2026-08-03, which dragged the
+//! constant ladder into the dynamic tail with it — where it was re-written at
+//! 1.25x every time a genuinely volatile neighbour moved, because
+//! `split_system_blocks_for_cache` stamps `cache_control` on the stable block
+//! only (FEATURE_LOCATOR §2.18 ledger item 10; same tax that moved
+//! `agent_catalog`, `identity_files` and `extra_files` out). The split moves
+//! those bytes without deleting a sentence.
+//!
+//! Worth recording because the measurement inverted the intuition: under
+//! `prompt_contract`'s production-shaped input **both** window-claim gates are
+//! false, so all of the layer's measured bytes were the constant, and none were
+//! the part that justified the Dynamic rating.
 //!
 //! **Scope rule — this layer carries only what no single tool can state.** That
-//! is exactly two things: the destination ladder that ranks `remember` /
-//! `flag_user_correction` / `note_manage` / scratchpad against each other, and
-//! the runtime fact that memory is already in the window (so searching for it
-//! wastes a turn). The ladder is unconditional — cross-tool routing applies in
-//! every configuration — but the window claim is a statement of runtime fact,
-//! and it names two blocks with two different producers, so each half is
-//! emitted only when that turn's input proves its own block is there.
-//! Everything else about a memory tool — what it does, what its
-//! actions mean, how to recover from a soft rejection, how to acknowledge a
-//! write — belongs in that tool's own `DESCRIPTION`, which ships with its
-//! schema on every request that can call it.
+//! is the destination ladder that ranks `remember` / `flag_user_correction` /
+//! `note_manage` / scratchpad against each other. Everything else about a memory
+//! tool — what it does, what its actions mean, how to recover from a soft
+//! rejection, how to acknowledge a write — belongs in that tool's own
+//! `DESCRIPTION`, which ships with its schema on every request that can call it.
+//! (Retrieved memory itself does not ride the system prompt at all: it arrives
+//! as the transient trailing `<memory-context>` message, see
+//! `HarnessDeps::recall_context`.)
 //!
 //! This layer was ~1,150 tokens on 2026-07-26 and roughly two thirds of it was a
 //! second copy of `RememberTool::DESCRIPTION` (hot-tier framing, demote-when-
@@ -29,23 +41,13 @@
 //! Why this is a separate layer rather than text glued onto an existing one:
 //! * `SessionContextGuideLayer` only fires after compaction. Routing guidance
 //!   must apply to the first turn too.
+//!
+//! [`MemoryWindowLayer`]: super::MemoryWindowLayer
 
 use crate::thinker::prompt_layer::{AssemblyPath, LayerInput, LayerStability, PromptLayer};
 use crate::thinker::prompt_mode::PromptMode;
 
 pub struct MemoryProtocolLayer;
-
-/// Whether `<CuratedMemory>` really lands in *this* request's system prompt.
-///
-/// Deliberately the same predicate `CuratedMemoryLayer::inject` (priority 60)
-/// applies to the same field — `Some` plus a non-blank body. Re-deriving it any
-/// other way is how the description and the described block drift apart.
-fn curated_block_present(input: &LayerInput) -> bool {
-    input
-        .curated_memory_envelope
-        .as_ref()
-        .is_some_and(|text| !text.trim().is_empty())
-}
 
 impl PromptLayer for MemoryProtocolLayer {
     fn name(&self) -> &'static str {
@@ -53,38 +55,38 @@ impl PromptLayer for MemoryProtocolLayer {
     }
 
     fn priority(&self) -> u32 {
-        1745
+        1105
     }
 
     fn stability(&self) -> LayerStability {
-        // Dynamic because the text is NOT identical across requests: the window
-        // claim below is one of four strings chosen from
-        // `(curated_block_present, has_recalled_memory)`, and the second of those
-        // flips turn to turn (`build_memory_user_message` returns `Ok(None)` for
-        // an empty query). A per-turn-varying layer belongs in the dynamic tail.
+        // Stable because the bytes below are a `&'static str` — no input reaches
+        // them, which `ladder_is_a_constant` asserts directly rather than by
+        // inspection.
         //
-        // The previous comment here gave a different reason, and it was wrong
-        // twice over — worth recording because it was cited as precedent
-        // ("`SessionContextGuideLayer` makes the same call") and so was
-        // propagating. It read: *"The text is identical across requests, so a
-        // Dynamic rating costs no provider-cache stability (byte-identical
-        // dynamic bytes never re-key the prefix)."*
+        // It was Dynamic until 2026-08-03, and the reason recorded here has been
+        // wrong twice in a row — worth keeping, because the second version was
+        // cited as precedent by another layer and so was propagating:
         //
-        //   1. The text is not identical — see above.
-        //   2. Even if it were, Dynamic is not free. The dynamic system block
-        //      carries no `cache_control` marker of its own; it is covered only
-        //      by the message-level breakpoints, and those all sit *after* it.
-        //      So unchanged bytes parked there do not *cause* a miss but still
-        //      *pay* for one: whenever any other dynamic layer moves, the whole
-        //      dynamic block is re-written at 1.25x. Session-stable content in
-        //      this zone pays its neighbours' volatility tax — which is exactly
-        //      why `agent_catalog`, `identity_files` and `extra_files` moved out
-        //      (FEATURE_LOCATOR §2.18 ledger item 10).
+        //   v1: *"The text is identical across requests, so a Dynamic rating
+        //   costs no provider-cache stability (byte-identical dynamic bytes
+        //   never re-key the prefix)."* — the premise was right for the ladder
+        //   and the conclusion still wrong. The dynamic system block carries no
+        //   `cache_control` marker of its own; it is covered only by the
+        //   message-level breakpoints, and those all sit *after* it. Unchanged
+        //   bytes parked there do not *cause* a miss but still *pay* for one:
+        //   whenever any other dynamic layer moves, the whole dynamic block is
+        //   re-written at 1.25x.
+        //
+        //   v2: "Dynamic because the window claim varies per turn" — true of the
+        //   window claim, and it was the whole justification for a layer that
+        //   was ~1,037 B of constant plus ~200 B of claim. A layer is classified
+        //   as one thing; when its halves disagree, the answer is two layers,
+        //   not the worse of the two ratings.
         //
         // The rule that survives: `stability()` states whether the content
         // varies. Priority states reading order. Deciding one from the other —
         // in either direction — is how layers end up in the wrong zone.
-        LayerStability::Dynamic
+        LayerStability::Stable
     }
 
     fn paths(&self) -> &'static [AssemblyPath] {
@@ -95,48 +97,10 @@ impl PromptLayer for MemoryProtocolLayer {
         !matches!(mode, PromptMode::Minimal)
     }
 
-    fn inject(&self, output: &mut String, input: &LayerInput) {
-        output.push_str("\n\n## Memory Protocol\n");
-        // The window claim is a statement of runtime fact, and it names two
-        // blocks that two DIFFERENT producers decide independently — so it is
-        // two claims, each gated on its own producer. Merging them (or gating
-        // both on one flag) reintroduces the bug: the sentence asserts a block
-        // that is not there, the model doesn't search for what it cannot read,
-        // and the only recovery is another turn.
-        //
-        // * `<CuratedMemory>` ← `build_curated_message`, which does NOT gate on
-        //   `MemoryInjectionMode`. Provable here from the input, using the
-        //   exact predicate `CuratedMemoryLayer` (priority 60) applies to the
-        //   same field, so the claim and the block can never disagree.
-        // * `<memory-context>` ← `build_memory_user_message`, which returns
-        //   `Ok(None)` under `MemoryInjectionMode::Tools` (the mode whose whole
-        //   point is retrieval-by-tool) and for an empty query. It rides the
-        //   transient tail, never the builder, so no layer can observe it — the
-        //   harness bridge reads the producer's own answer into
-        //   `has_recalled_memory`.
-        match (curated_block_present(input), input.has_recalled_memory) {
-            (true, true) => output.push_str(
-                "`<CuratedMemory>` is already in this prompt, and the auto-recalled \
-                 `<memory-context>` message is already in this conversation — don't \
-                 search for facts you can already read.\n\
-                 \n",
-            ),
-            (true, false) => output.push_str(
-                "`<CuratedMemory>` is already in this prompt — don't search for facts \
-                 you can already read.\n\
-                 \n",
-            ),
-            (false, true) => output.push_str(
-                "The auto-recalled `<memory-context>` message is already in this \
-                 conversation — don't search for facts you can already read.\n\
-                 \n",
-            ),
-            // Neither block landed this turn: no window claim at all. The
-            // ladder below still ships — routing is not a runtime fact.
-            (false, false) => {}
-        }
+    fn inject(&self, output: &mut String, _input: &LayerInput) {
         output.push_str(
-            "Where a NEW memory goes — ONE destination ladder, first matching rung wins:\n\
+            "\n\n## Memory Protocol\n\
+             Where a NEW memory goes — ONE destination ladder, first matching rung wins:\n\
              1. Durable user preference / identity fact / standing instruction → `remember` \
              (HOT tier: MEMORY.md, always in-prompt, tiny).\n\
              2. You made a mistake and the user corrected you → `flag_user_correction`. \
@@ -165,9 +129,14 @@ mod tests {
     fn metadata() {
         let layer = MemoryProtocolLayer;
         assert_eq!(layer.name(), "memory_protocol");
-        assert_eq!(layer.priority(), 1745);
-        // Dynamic so the priority-zone convention holds (≥1700 = dynamic).
-        assert_eq!(layer.stability(), LayerStability::Dynamic);
+        // Beside `special_actions` (1100), the other cross-tool routing layer,
+        // and below 1700 so it rides the cacheable prefix.
+        assert_eq!(layer.priority(), 1105);
+        assert!(
+            layer.priority() < 1700,
+            "constant bytes belong in the prefix"
+        );
+        assert_eq!(layer.stability(), LayerStability::Stable);
         for path in [AssemblyPath::Basic, AssemblyPath::Cached] {
             assert!(layer.paths().contains(&path), "missing path {path:?}");
         }
@@ -195,98 +164,56 @@ mod tests {
         assert!(out.contains("session_search"));
     }
 
-    /// The curated envelope as the harness bridge threads it in, for the tests
-    /// that need the window claim to fire.
-    fn envelope() -> Option<String> {
-        Some("<CuratedMemory>user prefers tabs</CuratedMemory>".to_string())
+    #[test]
+    fn ladder_is_a_constant() {
+        // This is what earns the `Stable` rating, so it is asserted rather than
+        // argued: no combination of inputs — including the two that used to
+        // vary this layer, before the window claim moved to `MemoryWindowLayer`
+        // — changes a byte. A layer whose bytes move under some input belongs in
+        // the dynamic tail, and `dynamic_tail_bytes_ratchet` then charges for it.
+        let layer = MemoryProtocolLayer;
+        let config = PromptConfig::default();
+        let render = |input: &LayerInput| {
+            let mut out = String::new();
+            layer.inject(&mut out, input);
+            out
+        };
+
+        let baseline = render(&LayerInput::basic(&config, &[]));
+        assert!(!baseline.is_empty());
+        for input in [
+            LayerInput::basic(&config, &[]).with_session_summaries(true),
+            LayerInput::basic(&config, &[])
+                .with_curated_envelope(Some("<CuratedMemory>x</CuratedMemory>".to_string())),
+            LayerInput::basic(&config, &[]).with_recalled_memory(true),
+            LayerInput::basic(&config, &[])
+                .with_curated_envelope(Some("<CuratedMemory>x</CuratedMemory>".to_string()))
+                .with_recalled_memory(true),
+        ] {
+            assert_eq!(render(&input), baseline, "ladder must not vary with input");
+        }
     }
 
-    /// Render for one of the four (curated, recalled) combinations.
-    fn render(curated: bool, recalled: bool) -> String {
+    #[test]
+    fn window_claim_moved_out() {
+        // The split is load-bearing for the dynamic-tail ceiling, and a revert
+        // would be invisible: re-inlining the claim here still renders correct
+        // prompt text, it just puts ~1 KB of constant back in the 1.25x zone.
         let layer = MemoryProtocolLayer;
         let config = PromptConfig::default();
         let mut out = String::new();
         layer.inject(
             &mut out,
             &LayerInput::basic(&config, &[])
-                .with_curated_envelope(curated.then(|| envelope().unwrap()))
-                .with_recalled_memory(recalled),
+                .with_curated_envelope(Some("<CuratedMemory>x</CuratedMemory>".to_string()))
+                .with_recalled_memory(true),
         );
-        out
-    }
-
-    #[test]
-    fn mentions_already_visible_blocks() {
-        // Regression — when both blocks ARE in this turn's window, forget to
-        // say so and the LLM wastes tool calls re-searching for them. This is a
-        // runtime fact about the window, not a tool's semantics, so it is one
-        // of the two things that belong in this layer.
-        let out = render(true, true);
-        assert!(out.contains("CuratedMemory"));
-        assert!(out.contains("memory-context"));
-        assert!(out.contains("already in this prompt"));
-        assert!(out.contains("already in this conversation"));
-        assert!(out.contains("don't search for facts you can already read"));
-    }
-
-    #[test]
-    fn window_claim_names_only_the_block_that_landed() {
-        // Two producers, two independent gates. `build_curated_message` does
-        // NOT gate on `MemoryInjectionMode`, while `build_memory_user_message`
-        // returns `Ok(None)` under `Tools` — so both mixed combinations are
-        // reachable in production and each must name exactly what is there.
-        let curated_only = render(true, false);
-        assert!(curated_only.contains("`<CuratedMemory>` is already in this prompt"));
+        assert!(!out.contains("already in this prompt"), "{out}");
+        assert!(!out.contains("already in this conversation"), "{out}");
         assert!(
-            !curated_only.contains("memory-context"),
-            "must not assert a recall message this turn does not carry: {curated_only}"
+            !out.contains("don't search for facts you can already read"),
+            "{out}"
         );
-        assert!(curated_only.contains("don't search for facts you can already read"));
-
-        let recall_only = render(false, true);
-        const RECALL_CLAIM: &str = "`<memory-context>` message is already in this conversation";
-        assert!(recall_only.contains(RECALL_CLAIM), "{recall_only}");
-        assert!(
-            !recall_only.contains("CuratedMemory"),
-            "must not assert a curated block this prompt does not carry: {recall_only}"
-        );
-        assert!(recall_only.contains("don't search for facts you can already read"));
-    }
-
-    #[test]
-    fn window_claim_is_silent_when_neither_block_landed() {
-        // P2 — the claim is runtime fact, not standing advice, and the fact is
-        // false in a whole configuration: no curated envelope this turn (empty
-        // MEMORY.md and no profile) and, under `MemoryInjectionMode::Tools`, no
-        // `<memory-context>` message either. Asserting "already in this
-        // conversation" points the model at blocks that are not there, and the
-        // only recovery is a wasted turn. Blank counts as absent for the
-        // curated half: that is the predicate `CuratedMemoryLayer` itself
-        // applies before emitting.
-        let layer = MemoryProtocolLayer;
-        let config = PromptConfig::default();
-        for absent in [None, Some("   ".to_string())] {
-            let mut out = String::new();
-            layer.inject(
-                &mut out,
-                &LayerInput::basic(&config, &[])
-                    .with_curated_envelope(absent)
-                    .with_recalled_memory(false),
-            );
-            assert!(
-                !out.contains("already in this prompt"),
-                "must not claim a block it cannot prove: {out}"
-            );
-            assert!(!out.contains("already in this conversation"), "{out}");
-            assert!(!out.contains("memory-context"), "{out}");
-            assert!(!out.contains("CuratedMemory"), "{out}");
-            assert!(
-                !out.contains("don't search for facts you can already read"),
-                "no window claim at all when there is no window to claim: {out}"
-            );
-            // ...and the routing half is untouched by the gate.
-            assert!(out.contains("ONE destination ladder"), "{out}");
-        }
     }
 
     #[test]
@@ -318,43 +245,6 @@ mod tests {
         let notes = <crate::builtin_tools::note_manage::NoteManageTool as AlephTool>::DESCRIPTION;
         assert!(notes.contains("one short sentence") && notes.contains("user's language"));
         assert!(notes.contains("Never quote the stored content back verbatim"));
-    }
-
-    #[test]
-    fn always_injects_regardless_of_input_flags() {
-        // P3 contract, NARROWED to the half that is still unconditional: the
-        // destination ladder is always-on, not conditional like
-        // SessionContextGuideLayer (which only fires after compaction), and no
-        // input flag varies it — cross-tool routing applies in every memory
-        // configuration. The window claim above it is runtime fact about *this*
-        // request and IS conditional (see
-        // `window_claim_is_silent_when_neither_block_landed`).
-        let layer = MemoryProtocolLayer;
-        let config = PromptConfig::default();
-        let mut out_no_session = String::new();
-        layer.inject(&mut out_no_session, &LayerInput::basic(&config, &[]));
-        let mut out_with_session = String::new();
-        layer.inject(
-            &mut out_with_session,
-            &LayerInput::basic(&config, &[]).with_session_summaries(true),
-        );
-        assert!(!out_no_session.is_empty());
-        assert_eq!(out_no_session, out_with_session, "ladder must not vary");
-
-        // The window claim only ever PREPENDS — the ladder below it stays
-        // byte-identical across all four (curated, recalled) combinations, so
-        // gating the claim can never silently reshape the layer's invariant
-        // payload.
-        const LADDER: &str = "Where a NEW memory goes";
-        let tail_of = |out: &str| out[out.find(LADDER).expect("ladder present")..].to_string();
-        let expected = tail_of(&out_no_session);
-        for (curated, recalled) in [(false, false), (true, false), (false, true), (true, true)] {
-            assert_eq!(
-                tail_of(&render(curated, recalled)),
-                expected,
-                "ladder must be byte-identical for (curated={curated}, recalled={recalled})"
-            );
-        }
     }
 
     #[test]

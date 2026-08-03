@@ -34,10 +34,38 @@ use crate::thinker::PromptConfig;
 /// that says "no fixed input makes this layer speak, and here is the session
 /// content that does". A layer that cannot be justified in one line does not
 /// belong in the pipeline.
+///
+/// **What an entry here does NOT say — and the hole that opens under a Dynamic
+/// layer.** It says only "no *fixed* input wakes this". It says nothing about
+/// how big the layer gets when session content *does* wake it, and
+/// [`dynamic_tail_bytes_ratchet`] measures the same fixed input, so for a
+/// Dynamic layer on this list the answer is always 0 B — a number that cannot
+/// distinguish "renders one short sentence" from "renders whatever the user
+/// pasted". `graph_topology` sat here for two weeks interpolating uncapped
+/// human-authored root bodies straight into the zone that re-writes at 1.25x,
+/// and the placement was defended as correct — which it is; it was the
+/// *unboundedness* that nothing had ever measured.
+///
+/// So a Dynamic entry on this list owes a bound of its own, asserted wherever
+/// the waking input is cheap to construct — which is the layer's own module when
+/// the layer builds its own text, and the *producer's* module when the layer is
+/// a pass-through. Both shapes exist:
+///
+/// * `layers::memory_window::worst_case_render_is_bounded` — bounded by
+///   construction; the layer picks one of three consts and interpolates nothing.
+/// * `loop_graph::service::render_is_bounded_against_oversized_graph_rows` —
+///   bounded by cap. `GraphTopologyLayer` only escapes and emits whatever
+///   `render_session_topology` handed it, so the bound has to live at the
+///   producer; asserting it on the layer would only pin that a `String` is as
+///   long as it is.
 const CONDITIONALLY_SILENT: &[(&str, &str)] = &[
     ("soul", "agent SOUL.md on disk"),
     ("agent_role", "a registered sub-agent's AgentDef"),
     ("curated_memory", "a non-empty MEMORY.md hot zone"),
+    (
+        "memory_window",
+        "a non-empty MEMORY.md hot zone, or an auto-recalled <memory-context>",
+    ),
     ("strategy", "an active StraTA strategy"),
     ("strategy_pointer", "an active strategy's guardrails"),
     ("chain_context", "a sub-agent delegation chain (depth > 0)"),
@@ -383,17 +411,28 @@ fn scaffold_bytes_ratchet() {
 /// move *out* of the stable prefix (that is a correctness fix, and the raise is
 /// the price). Raising it to park static content here is the thing this guard
 /// forbids; move the content below priority 1700 instead.
-/// 2,054 B measured 2026-08-03, worst paradigm WebRich, immediately after
-/// `agent_catalog` / `identity_files` / `extra_files` moved out. `memory_protocol`
-/// (1,037 B) and `operating_envelope` (633 B) are most of what is left.
+/// Prior entry: 2,054 B measured 2026-08-03, worst paradigm WebRich, immediately
+/// after `agent_catalog` / `identity_files` / `extra_files` moved out.
+/// `memory_protocol` (1,037 B) and `operating_envelope` (633 B) were most of
+/// what was left.
 ///
-/// Known follow-up, deliberately not taken in the same pass: `memory_protocol`
-/// is only *partly* volatile — the destination ladder is a constant and only the
-/// one-sentence window claim varies with `has_recalled_memory`. Splitting it
-/// would take roughly two thirds off this number, but it means a second layer
-/// and a second registration, so it is a decision of its own rather than a
-/// side-effect of this round.
-const DYNAMIC_TAIL_CEILING_BYTES: usize = 2_054;
+/// **1,017 B measured 2026-08-03**, same day, worst paradigm still WebRich —
+/// the follow-up the entry above deferred, now taken. `memory_protocol` carried
+/// two things with opposite cache profiles: a constant destination ladder and a
+/// per-turn window claim. A layer gets one `stability()` for both, so the pair
+/// was rated by its volatile half and the constant rode the unmarked block. It
+/// is now two layers — the ladder at @1105/Stable keeping the name, the claim at
+/// @1745/Dynamic as `memory_window`. **Not one byte of prompt content changed**;
+/// this is the same text billed differently.
+///
+/// The measurement is worth recording because it inverted the intuition that
+/// justified the split: under this test's input **both** window-claim gates are
+/// false, so the entire 1,037 B was the constant, and the volatile sentence that
+/// earned the layer its Dynamic rating contributed **nothing** to the number it
+/// was blamed for. A layer's rating is about the bytes that *can* vary; its
+/// measured size here is about the bytes that *do* render. Those are different
+/// questions, and this ratchet only ever answers the second one.
+const DYNAMIC_TAIL_CEILING_BYTES: usize = 1_017;
 
 /// The uncached half of the system prompt may not grow past its ceiling.
 #[test]

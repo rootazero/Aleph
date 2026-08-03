@@ -209,10 +209,66 @@ fn governing_owner_in(
         .next())
 }
 
+/// Char cap for a node id or label on its way into the prompt.
+///
+/// Ids and labels are routing handles, not prose — `goal:s1`, `cron:steward`,
+/// `月度参照复审`. A long one is a mistake or an injection attempt, never a
+/// requirement, so clamping loses nothing a governed session needed.
+const MAX_HANDLE_CHARS: usize = 80;
+
+/// Char cap for a root reference body.
+///
+/// Unlike a handle this genuinely IS prose — the human-supplied north star the
+/// model must obey — so the cap is generous and truncation is announced rather
+/// than silent (see [`clamp_root_body`]). A root that needs more than this is
+/// better read with the `graph` tool than pasted into every turn.
+const MAX_ROOT_BODY_CHARS: usize = 600;
+
+/// Marker appended when a root body is clamped, so the model knows it is
+/// reading an excerpt and where the full text lives.
+///
+/// Silent truncation would be worse than the byte cost it saves: the model
+/// would follow a reference whose operative clause it cannot see, with nothing
+/// in the prompt saying so.
+const ROOT_BODY_TRUNCATED: &str = "（根参照过长，此处为节选；完整原文用 graph 工具读该节点）";
+
+/// Clamp a node id or label.
+fn clamp_handle(s: &str) -> String {
+    crate::utils::text_format::truncate_text(s, MAX_HANDLE_CHARS)
+}
+
+/// Clamp a root reference body, announcing the cut when it happens.
+fn clamp_root_body(body: &str) -> String {
+    // Counted in chars, not bytes: root bodies are routinely Chinese, where a
+    // byte test would clamp at a third of the intended length — and
+    // `truncate_text` is char-indexed, so a byte-based "did it truncate?" test
+    // would also disagree with it about whether a cut happened.
+    if body.chars().count() <= MAX_ROOT_BODY_CHARS {
+        return body.to_string();
+    }
+    format!(
+        "{}{ROOT_BODY_TRUNCATED}",
+        crate::utils::text_format::truncate_text(body, MAX_ROOT_BODY_CHARS)
+    )
+}
+
 /// Deterministic topology context for a governed session's prompt. `None`
 /// (no graph / session not a registered node) leaves the prompt
 /// byte-identical. Content is drawn from graph rows only — no clocks, no
 /// counters — so unchanged graph ⇒ unchanged bytes (cache-safe).
+///
+/// **Bounded, as of 2026-08-03.** It was not before, and nothing could have
+/// told you: every string below comes from a graph row written by a human or by
+/// the model through the `graph` tool, and root bodies were interpolated
+/// verbatim with no cap. The output lands in `GraphTopologyLayer` (@1754,
+/// Dynamic) — the system block `split_system_blocks_for_cache` leaves without a
+/// `cache_control` marker of its own, re-written at 1.25x whenever any volatile
+/// neighbour moves. That is the `identity_files` shape with no cap at all, and
+/// it was invisible from the other end too: `graph_topology` is on
+/// `prompt_contract::CONDITIONALLY_SILENT`, honestly (ungoverned sessions really
+/// do render nothing), so the dynamic-tail ratchet measures this at 0 B no
+/// matter how large it gets. **The Dynamic classification was right; the claim
+/// that it was therefore fine had never been checked against a number.**
 #[must_use]
 pub fn render_session_topology(session: &str) -> Option<String> {
     let store = crate::loop_graph::global()?;
@@ -233,19 +289,20 @@ pub(crate) fn render_session_topology_in(
     let edges = store.list_edges(DEFAULT_AGENT).ok()?;
     let nodes = store.list_nodes(DEFAULT_AGENT).ok()?;
     let label_of = |id: &str| -> String {
-        nodes
-            .iter()
-            .find(|n| n.id == id)
-            .map_or_else(|| id.to_string(), |n| format!("{} ({})", id, n.label))
+        nodes.iter().find(|n| n.id == id).map_or_else(
+            || clamp_handle(id),
+            |n| format!("{} ({})", clamp_handle(id), clamp_handle(&n.label)),
+        )
     };
 
     let mut out = String::new();
     out.push_str(&format!(
         "本会话是循环治理图中的节点 {}（{}）。\n",
-        node.id, node.label
+        clamp_handle(&node.id),
+        clamp_handle(&node.label)
     ));
     if let Some(c) = &node.cadence {
-        out.push_str(&format!("声明节奏: {c}\n"));
+        out.push_str(&format!("声明节奏: {}\n", clamp_handle(c)));
     }
     for e in edges.iter().filter(|e| e.to_id == node_id) {
         match e.kind {
@@ -279,8 +336,9 @@ pub(crate) fn render_session_topology_in(
     for r in roots {
         if let Some(body) = &r.body {
             out.push_str(&format!(
-                "根参照 {}（人供给——你可以引用、必须遵循、无权修改）: {body}\n",
-                r.id
+                "根参照 {}（人供给——你可以引用、必须遵循、无权修改）: {}\n",
+                clamp_handle(&r.id),
+                clamp_root_body(body)
             ));
         }
     }
@@ -428,6 +486,98 @@ mod tests {
             rendered,
             render_session_topology_in(&store, "sess-1").unwrap()
         );
+    }
+
+    /// The number that was never taken.
+    ///
+    /// This render is the body of `GraphTopologyLayer` (@1754, Dynamic) — the
+    /// system block with no `cache_control` marker of its own, re-written at
+    /// 1.25x whenever a volatile neighbour moves. The layer is on
+    /// `prompt_contract::CONDITIONALLY_SILENT` for an honest reason (ungoverned
+    /// sessions render nothing), which means `dynamic_tail_bytes_ratchet`
+    /// measures it at **0 B regardless of how large it actually gets**. Keeping
+    /// it Dynamic was the right call and was never the question; that it was
+    /// *bounded* was assumed, and it was false — root bodies went in verbatim.
+    ///
+    /// So the bound is asserted here, where a governed session is cheap to
+    /// build, and it is asserted against inputs a hostile or careless graph can
+    /// actually contain.
+    #[test]
+    fn render_is_bounded_against_oversized_graph_rows() {
+        let (_dir, store) = seeded_store();
+        // A root body a human could plausibly paste (a whole policy document),
+        // plus handles far past any legitimate use.
+        store
+            .upsert_node(
+                &GraphNode::new(
+                    DEFAULT_AGENT,
+                    "root:aleph",
+                    NodeKind::Root,
+                    "长".repeat(500),
+                    Origin::Human,
+                )
+                .with_body("参".repeat(50_000)),
+            )
+            .unwrap();
+
+        let rendered =
+            render_session_topology_in(&store, "sess-1").expect("governed session renders");
+
+        // Clamped, and the clamp is announced — a silently cut root reference
+        // would have the model obeying a rule whose operative half it cannot
+        // see, with nothing in the prompt saying so.
+        assert!(
+            rendered.contains(ROOT_BODY_TRUNCATED),
+            "an oversized root body must announce its own truncation: {rendered}"
+        );
+        assert!(
+            !rendered.contains(&"参".repeat(MAX_ROOT_BODY_CHARS + 1)),
+            "root body exceeded its cap"
+        );
+        assert!(
+            !rendered.contains(&"长".repeat(MAX_HANDLE_CHARS + 1)),
+            "node label exceeded its cap"
+        );
+
+        // The whole render, in bytes, against the ceiling the ratchet cannot
+        // see. Chinese is 3 bytes/char, so the caps alone do not tell you this
+        // number — measured, not computed.
+        //
+        // **What this bounds and what it does not.** It bounds a governed
+        // session of THIS SHAPE — one root, one governing edge — against rows
+        // of any size. It does not bound row *count*: a graph with fifty roots
+        // renders fifty capped lines, and no cap here would catch that. That is
+        // deliberate rather than overlooked — row count is operator-authored
+        // topology with a real meaning, and clamping it would silently hide
+        // governance from a session that is genuinely governed that way, which
+        // is a worse failure than the bytes. The per-row caps are what turn
+        // "unbounded" into "proportional to a number a human chose".
+        const CEILING_BYTES: usize = 2_256;
+        assert!(
+            rendered.len() <= CEILING_BYTES,
+            "governed-session topology renders {} B (ceiling {CEILING_BYTES}) — every byte \
+             here is re-written at 1.25x whenever a dynamic neighbour moves, and \
+             `dynamic_tail_bytes_ratchet` will never see it. Raise this only for content a \
+             governed session genuinely cannot work without.",
+            rendered.len()
+        );
+    }
+
+    #[test]
+    fn clamping_leaves_ordinary_rows_byte_identical() {
+        // The caps must be inert for real graphs: a root reference is a
+        // sentence, a label is a name. If clamping changed the common render it
+        // would be a prompt change dressed as a size guard — and it would break
+        // the determinism the cache story rests on for every governed session.
+        let (_dir, store) = seeded_store();
+        let rendered =
+            render_session_topology_in(&store, "sess-1").expect("governed session renders");
+        assert!(
+            !rendered.contains(ROOT_BODY_TRUNCATED) && !rendered.contains("..."),
+            "ordinary graph rows must pass through untouched: {rendered}"
+        );
+        assert!(rendered.contains("用户真实工作被推进且不被打扰 > 任何代理指标"));
+        assert!(rendered.contains("被治理的目标"));
     }
 
     #[test]
