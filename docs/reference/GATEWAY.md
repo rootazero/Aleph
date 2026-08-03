@@ -388,12 +388,28 @@ backoff is therefore carried to the rest of its conversation
 (`defer_conversation`, over an indexed `conversation_id` column backfilled at
 open). Different conversations never block each other.
 
-**Known limit (deliberate)**: this covers *queued* messages. A live `send` that
-succeeds while an older message for the same conversation is still queued can
-still arrive first. Fixing that would require `send` to enqueue rather than
-attempt whenever a backlog exists, changing what callers observe from a
-`ChannelResult<SendResult>` — out of scope here, and it is documented rather
-than silently half-solved.
+That covered only the *queued* half. A live `send` that succeeded while an
+older message for the same conversation was still serving out a backoff arrived
+first — permanently, and up to `max_backoff` early. `send` now flushes that
+conversation's backlog ahead of itself (`flush_conversation`), which keeps the
+return contract byte-for-byte: the caller still gets a real `SendResult` or the
+exact error it would have got before. The rejected alternative was admitting
+live sends into the queue, which changes what every caller observes (a queued
+message has no `SendResult`) and converts a reordering bug into head-of-line
+*unavailability* — one wedged record would hold up its conversation until it
+dead-lettered, roughly 45 minutes at the default curve.
+
+Three constraints make the flush safe:
+
+| Constraint | Why |
+|---|---|
+| `claim_conversation` ignores `next_attempt_at` | the record a live send overtakes is precisely the one sitting in the future |
+| `AttemptMode::Inline` never settles a *transient* failure (`clear_inflight` only, `attempts` / `next_attempt_at` untouched) | an opportunistic probe must not spend the backlog's retry budget — ten user messages would otherwise burn the head's ten attempts and dead-letter it far ahead of the configured curve. Ambiguous *terminal* failures are still settled: handing a possibly-on-the-wire send back for another attempt is how at-most-once dies |
+| `drain_gate` serializes flush against the drain loop; `try_lock`, never blocking | both claims are unleased SELECTs — this is exactly the "a second drainer is introduced" case `claim_due` warns about. A process-local mutex suffices because the single-drainer invariant already is process-local. Standing down when the drainer holds it beats blocking a user-facing send behind a whole tick |
+
+Bounded by `inline_flush_max` (default 8, `0` disables; deliberately not floored
+at 1). A backlog deeper than the cap is flushed up to the cap and the overtake
+is logged, not silently accepted.
 
 ### Dead letters carry their own replay-safety
 
@@ -416,6 +432,34 @@ now`, the rows evicted were the genuinely-older *pending* deliveries.
   `Attachment`s that may hold inline `data: Vec<u8>`, so a row-count cap alone
   lets a few media pushes to a wedged channel grow `delivery.db` without bound.
   Over-cap payloads are dead-lettered (`PayloadTooLarge`), not silently dropped.
+
+### A durable row must not outlive its media
+
+Every local `Attachment.path` Aleph produces points **inside the OS temp
+directory** — `media::cache` refuses to attach a local path from anywhere else
+(arbitrary-file exfiltration guard) and TTS writes there too. So the one thing
+this queue exists to promise, "it survives a restart", was false for any row
+carrying media: a path attachment serializes to a couple of hundred bytes,
+sails past `max_payload_bytes`, and replays as a message whose media is gone.
+The byte cap cannot see this — it is measuring the reference, not the file.
+
+`take_media_custody` (called from `maybe_enqueue`, the single admission
+chokepoint, and only on the failure path) inlines the bytes into
+`Attachment.data` — the branch every adapter already prefers over `path`.
+Custody lives **in the row**, not in a spool directory: the row stays
+self-contained, so eviction, dead-lettering, redrive and the byte cap keep
+working unchanged and there is no second lifecycle to garbage-collect. openclaw
+needs its `delivery-queue-media-spool.ts` (stage table, `.part` publishes, 24h
+orphan grace, prune sweep) because it is queue-first — every message goes
+through the queue, so the copy must be cheap and out of band. Aleph queues only
+on failure, so it can afford the simplest shape. Do not port the spool.
+
+Both refusals leave the attachment exactly as the caller wrote it, so a queued
+row is never *less* deliverable than before: an unreadable file (already gone,
+permissions) has nothing to inline, and bytes that would push the payload over
+`max_payload_bytes` are better queued as a path that *might* still be there
+than dead-lettered on the spot. Both are logged. The path's file name moves
+into `filename` on the way in, because inline bytes carry no name of their own.
 
 ### Surfaces
 
