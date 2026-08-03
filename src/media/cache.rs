@@ -13,7 +13,7 @@ use base64::Engine as _;
 use tracing::{debug, warn};
 
 use crate::gateway::channel::Attachment;
-use crate::gateway::media::{detect_mime, MediaItem};
+use crate::gateway::media::{detect_mime, is_data_url, is_local_media_path, MediaItem};
 use crate::security::ssrf::{safe_fetch, SafeFetchRequest, SsrfPolicy};
 
 /// Maximum file size allowed (50 MB — for video files).
@@ -262,7 +262,7 @@ impl MediaCache {
         );
 
         // Build a temporary Attachment to pass through resolve()
-        let temp_attachment = if item.url.to_ascii_lowercase().starts_with("data:") {
+        let temp_attachment = if is_data_url(&item.url) {
             // Parse data URL: data:[<mediatype>][;base64],<data>
             match Self::decode_data_url(&item.url) {
                 Ok((decoded_mime, bytes)) => Attachment {
@@ -287,16 +287,7 @@ impl MediaCache {
                     return Self::url_only_attachment(&id, &item.url, &mime, &item.filename);
                 }
             }
-        } else if item.url.starts_with('/')
-            || item.url.starts_with("./")
-            || item.url.starts_with("~/")
-            // A Windows local path (`C:\…`, `\\server\share\…`) matches none of
-            // the prefixes above, so every legitimate local file on that platform
-            // fell through to the URL-only branch and was never attached. A real
-            // URL (`http://…`) is not an absolute path on any platform, so this
-            // cannot swallow one.
-            || std::path::Path::new(&item.url).is_absolute()
-        {
+        } else if is_local_media_path(&item.url) {
             // Local file path. A `media_send` path is model-supplied and
             // untrusted: only accept one that resolves inside the OS temp dir —
             // the sole root where legitimate producers write (native

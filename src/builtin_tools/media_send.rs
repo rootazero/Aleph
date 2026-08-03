@@ -1,14 +1,17 @@
 //! `media_send` — LLM-invoked tool for delivering media to the user.
 //!
-//! This tool does NO processing. It simply passes the input items as `_media`
-//! output, which the `ReplyEmitter` picks up for download and channel delivery.
+//! This tool does no media processing. It SSRF-pre-flights the remotely-fetched
+//! items so a refusal is visible to the model, then passes the input items
+//! through as `_media` output, which the `ReplyEmitter` picks up for download
+//! and channel delivery.
 
 use async_trait::async_trait;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 use crate::error::Result;
-use crate::gateway::media::MediaItem;
+use crate::gateway::media::{is_remote_fetch_url, MediaItem};
+use crate::security::ssrf::{validate_url_async, SsrfPolicy};
 use crate::tools::AlephTool;
 
 /// Input arguments for `media_send` tool.
@@ -70,6 +73,30 @@ impl AlephTool for MediaSendTool {
     type Output = MediaSendOutput;
 
     async fn call(&self, args: Self::Args) -> Result<Self::Output> {
+        // Pre-flight, not the enforcement point: the fetch itself is guarded by
+        // `safe_fetch` in `MediaCache::resolve_url`, which every delivery path
+        // reaches. What this buys is a *visible* failure — without it a blocked
+        // URL degrades to a url-only attachment while the model is told
+        // "Sending 1 media file...", so it never learns the URL was refused and
+        // cannot self-correct.
+        //
+        // Guard exactly the remote-fetch branch. Local file paths (what
+        // `camera_clip`/`record_audio` return) and `data:` URLs are delivered by
+        // reading/decoding locally — running the SSRF host check on them
+        // rejected every one (`Url::parse` fails on a bare path; `file:`/`data:`
+        // have no host), so a captured clip could never be sent.
+        let ssrf_policy = SsrfPolicy::default();
+        for item in &args.items {
+            if is_remote_fetch_url(&item.url) {
+                if let Err(e) = validate_url_async(&item.url, &ssrf_policy).await {
+                    return Err(crate::error::AlephError::tool(format!(
+                        "SSRF blocked for URL '{}': {}",
+                        item.url, e
+                    )));
+                }
+            }
+        }
+
         let count = args.items.len();
         let media: Vec<MediaItem> = args
             .items
