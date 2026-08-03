@@ -68,7 +68,7 @@ mod tests {
 
     fn entry(detail: &str) -> AuditEntry {
         AuditEntry {
-            event_type: AuditEventType::SsrfBlocked,
+            event_type: AuditEventType::ExecBlocked,
             severity: AuditSeverity::Warn,
             source_ip: None,
             session_id: Some("sess-1".to_string()),
@@ -104,13 +104,13 @@ mod tests {
             // One ancient row (well past any retention window) and one fresh row.
             conn.execute(
                 "INSERT INTO security_audit_log (timestamp, event_type, severity, detail) \
-                 VALUES (strftime('%s','now') - 1000000, 'ssrf_blocked', 'warn', 'old')",
+                 VALUES (strftime('%s','now') - 1000000, 'exec_blocked', 'warn', 'old')",
                 [],
             )
             .unwrap();
             conn.execute(
                 "INSERT INTO security_audit_log (event_type, severity, detail) \
-                 VALUES ('ssrf_blocked', 'warn', 'fresh')",
+                 VALUES ('exec_blocked', 'warn', 'fresh')",
                 [],
             )
             .unwrap();

@@ -8,8 +8,7 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 use crate::error::Result;
-use crate::gateway::media::{is_remote_fetch_url, MediaItem};
-use crate::security::ssrf::{validate_url_async, SsrfPolicy};
+use crate::gateway::media::MediaItem;
 use crate::tools::AlephTool;
 
 /// Input arguments for `media_send` tool.
@@ -71,24 +70,6 @@ impl AlephTool for MediaSendTool {
     type Output = MediaSendOutput;
 
     async fn call(&self, args: Self::Args) -> Result<Self::Output> {
-        // SSRF protection applies only to URLs the pipeline actually fetches
-        // over the network. Local file paths (what `camera_clip`/`record_audio`
-        // return) and `data:` URLs are delivered by reading/decoding locally —
-        // running the SSRF host check on them rejected every one (`Url::parse`
-        // fails on a bare path; `file:`/`data:` have no host), so a captured
-        // clip could never be sent. Guard exactly the remote-fetch branch.
-        let ssrf_policy = SsrfPolicy::default();
-        for item in &args.items {
-            if is_remote_fetch_url(&item.url) {
-                if let Err(e) = validate_url_async(&item.url, &ssrf_policy).await {
-                    return Err(crate::error::AlephError::tool(format!(
-                        "SSRF blocked for URL '{}': {}",
-                        item.url, e
-                    )));
-                }
-            }
-        }
-
         let count = args.items.len();
         let media: Vec<MediaItem> = args
             .items

@@ -11,9 +11,9 @@ use async_trait::async_trait;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
-use crate::error::{AlephError, Result};
+use crate::error::Result;
 use crate::hub::trust::{scan_for_injection, InjectionFinding};
-use crate::security::ssrf::{validate_url_async, SsrfPolicy};
+use crate::security::ssrf::{safe_fetch, SafeFetchRequest, SsrfPolicy};
 use crate::tools::AlephTool;
 
 /// Maximum number of bytes accepted from the remote response body.
@@ -50,49 +50,30 @@ impl AlephTool for HubFetchDocsTool {
     type Output = HubFetchDocsOutput;
 
     async fn call(&self, args: Self::Args) -> Result<Self::Output> {
-        // SSRF protection: reject private/reserved IP ranges before the request.
         let ssrf_policy = SsrfPolicy::default();
-        let (_url, _pinned) = validate_url_async(&args.url, &ssrf_policy)
+        let fetch_request = SafeFetchRequest::get(std::time::Duration::from_secs(10))
+            .with_max_body_bytes(DOC_BYTE_BUDGET + 1);
+
+        let resp = safe_fetch(&args.url, &ssrf_policy, fetch_request)
             .await
-            .map_err(|e| {
-                AlephError::network(format!("SSRF blocked for URL '{}': {e}", args.url))
-            })?;
+            .map_err(|e| crate::error::AlephError::network(format!("fetch failed: {e}")))?;
 
-        // Build a short-timeout client, mirroring docker_mcp/mcp_registry providers.
-        let client = reqwest::Client::builder()
-            .timeout(std::time::Duration::from_secs(10))
-            .build()
-            .map_err(|e| AlephError::network(format!("failed to build HTTP client: {e}")))?;
-
-        let resp = client
-            .get(&args.url)
-            .send()
-            .await
-            .map_err(|e| AlephError::network(format!("fetch failed: {e}")))?;
-
-        if !resp.status().is_success() {
-            return Err(AlephError::network(format!(
+        if !resp.status.is_success() {
+            return Err(crate::error::AlephError::network(format!(
                 "HTTP {} for {}",
-                resp.status(),
-                args.url
+                resp.status, args.url
             )));
         }
 
-        let bytes = resp
-            .bytes()
-            .await
-            .map_err(|e| AlephError::network(format!("read body failed: {e}")))?;
-
-        let truncated = bytes.len() > DOC_BYTE_BUDGET;
+        let truncated = resp.body.len() > DOC_BYTE_BUDGET;
         let slice = if truncated {
-            bytes
+            resp.body
                 .get(..DOC_BYTE_BUDGET)
                 .expect("invariant: truncated only when bytes exceed budget")
         } else {
-            &bytes[..]
+            &resp.body[..]
         };
 
-        // Lossy UTF-8 decode so we never panic on binary content.
         let text = String::from_utf8_lossy(slice).into_owned();
 
         let injection_findings = scan_for_injection(&text);

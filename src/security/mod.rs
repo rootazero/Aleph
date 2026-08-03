@@ -9,7 +9,6 @@
 pub mod audit;
 pub mod audit_drain;
 pub mod content_sanitizer;
-pub mod context_id_hasher;
 pub mod dangerous_tools;
 pub mod headers;
 pub mod injection_patterns;
@@ -21,7 +20,6 @@ pub mod ssrf;
 pub mod unicode_guard;
 
 pub use audit_drain::spawn_audit_drain;
-pub use context_id_hasher::ContextIdHasher;
 pub use runtime_guard::{
     GuardResult, RuntimeSecurityGuard, SecurityContext, SecurityGuardConfig, SecurityGuardError,
 };
