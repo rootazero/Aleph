@@ -216,7 +216,6 @@ pub use crate::exec::{
 // =============================================================================
 
 pub use crate::resilience::database::MemoryStats;
-pub use crate::search::{ProviderTestResult, SearchProviderTestConfig};
 
 // =============================================================================
 // Vision & Generation Exports

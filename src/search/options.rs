@@ -262,30 +262,6 @@ impl SearchOptions {
     }
 }
 
-/// Quota information for rate-limited providers
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct QuotaInfo {
-    /// Remaining searches in current period
-    pub remaining: Option<u32>,
-
-    /// Total quota limit
-    pub limit: Option<u32>,
-
-    /// Reset timestamp (Unix timestamp)
-    pub reset_at: Option<i64>,
-}
-
-impl QuotaInfo {
-    #[must_use]
-    pub const fn unlimited() -> Self {
-        Self {
-            remaining: None,
-            limit: None,
-            reset_at: None,
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -324,15 +300,6 @@ mod tests {
         assert_eq!(options.language.unwrap(), "zh-CN");
         assert_eq!(options.max_results, 10);
         assert!(options.include_full_content);
-    }
-
-    #[test]
-    fn test_quota_info_unlimited() {
-        let quota = QuotaInfo::unlimited();
-
-        assert!(quota.remaining.is_none());
-        assert!(quota.limit.is_none());
-        assert!(quota.reset_at.is_none());
     }
 
     #[test]

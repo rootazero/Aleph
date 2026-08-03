@@ -1,5 +1,5 @@
 use crate::error::Result;
-use crate::search::{QuotaInfo, SearchOptions, SearchResult};
+use crate::search::{SearchOptions, SearchResult};
 /// Search provider trait abstraction
 ///
 /// This module defines the `SearchProvider` trait which all search backends implement
@@ -40,11 +40,6 @@ pub trait SearchProvider: Send + Sync {
     ///
     /// Returns `false` if API key is missing or invalid
     fn is_available(&self) -> bool;
-
-    /// Get quota information (optional, returns unlimited by default)
-    async fn get_quota(&self) -> Result<QuotaInfo> {
-        Ok(QuotaInfo::unlimited())
-    }
 }
 
 #[cfg(test)]
@@ -101,18 +96,6 @@ mod tests {
 
         assert_eq!(provider.name(), "test-provider");
         assert!(provider.is_available());
-    }
-
-    #[tokio::test]
-    async fn test_provider_quota_default() {
-        let provider = MockSearchProvider {
-            name: "test".to_string(),
-            available: true,
-        };
-
-        let quota = provider.get_quota().await.unwrap();
-        assert!(quota.remaining.is_none());
-        assert!(quota.limit.is_none());
     }
 
     #[test]

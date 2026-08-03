@@ -3,7 +3,6 @@
 //! Contains search capability configuration:
 //! - `SearchConfigInternal`: Internal search config with `HashMap` backends
 //! - `SearchBackendConfig`: Individual search backend settings
-//! - `PIIConfig`: PII scrubbing settings
 
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -38,10 +37,6 @@ pub struct SearchConfigInternal {
 
     /// Backend configurations
     pub backends: HashMap<String, SearchBackendConfig>,
-
-    /// PII scrubbing configuration (migrate from `behavior.pii_scrubbing_enabled`)
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub pii: Option<PIIConfig>,
 
     /// Enable the WebFetch-based SERP scrape fallback (Round-2 feature).
     ///
@@ -79,51 +74,8 @@ pub const fn default_search_timeout() -> u64 {
     10
 }
 
-// =============================================================================
-// PIIConfig
-// =============================================================================
-
-/// PII (Personally Identifiable Information) scrubbing configuration
-///
-/// Migrated from `behavior.pii_scrubbing_enabled` to search.pii
-/// (integrate-search-registry proposal)
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
-pub struct PIIConfig {
-    /// Enable PII scrubbing (email, phone, SSN, etc.)
-    #[serde(default)]
-    pub enabled: bool,
-
-    /// Scrub email addresses
-    #[serde(default = "default_true")]
-    pub scrub_email: bool,
-
-    /// Scrub phone numbers
-    #[serde(default = "default_true")]
-    pub scrub_phone: bool,
-
-    /// Scrub SSN (Social Security Numbers)
-    #[serde(default = "default_true")]
-    pub scrub_ssn: bool,
-
-    /// Scrub credit card numbers
-    #[serde(default = "default_true")]
-    pub scrub_credit_card: bool,
-}
-
 pub const fn default_true() -> bool {
     true
-}
-
-impl Default for PIIConfig {
-    fn default() -> Self {
-        Self {
-            enabled: false,
-            scrub_email: true,
-            scrub_phone: true,
-            scrub_ssn: true,
-            scrub_credit_card: true,
-        }
-    }
 }
 
 // =============================================================================
