@@ -240,10 +240,23 @@ impl ScopedToolService {
     }
 
     /// The permission an override entry explicitly states for `name`, if any.
-    fn explicit_permission(&self, name: &str) -> Option<crate::extension::PermissionAction> {
+    /// Did the operator name THIS tool, by name?
+    ///
+    /// Exact lookup on purpose. Its one caller
+    /// ([`Self::tier_asks_for_arguments`]) disarms the tier's argument-level
+    /// approval card on the strength of "the operator already decided about
+    /// this tool", and a glob is not that decision: `"*" = "allow"` — an
+    /// ordinary way to say "stop interrupting me" — used to resolve here and
+    /// silently switch off the LAST card standing in front of `file_ops
+    /// delete` and of `loop_graph` writes to `root:`/`frozen:`, the two rules
+    /// that exist precisely because a name-keyed policy cannot see arguments.
+    /// The glob-resolving lookup is still what decides allow/ask/deny for the
+    /// tool itself ([`Self::permission_for`]); only this one question is
+    /// exact.
+    fn explicitly_named(&self, name: &str) -> bool {
         self.tool_permissions
             .as_ref()
-            .and_then(|p| p.resolve_explicit(name))
+            .is_some_and(|p| p.overrides.contains_key(name))
     }
 
     /// The tool's DECLARED facts, as the tier rules consume them. An unknown
@@ -267,12 +280,14 @@ impl ScopedToolService {
     }
 
     /// `true` when this *call*'s arguments trip the tier's destructive-argument
-    /// hard filter (`file_ops` delete/move/…), which a name-keyed rule cannot
-    /// see. Skipped when an override explicitly names the tool: the operator
-    /// already decided, and the tier — argument filter included — only speaks
-    /// when nobody did.
+    /// hard filter (`file_ops` delete/move/…, `loop_graph` root/frozen writes),
+    /// which a name-keyed rule cannot see. Skipped when an override explicitly
+    /// names the tool: the operator already decided, and the tier — argument
+    /// filter included — only speaks when nobody did. "Explicitly" is literal
+    /// (see [`Self::explicitly_named`]); a glob is a blanket preference, not a
+    /// decision about this tool.
     pub(super) fn tier_asks_for_arguments(&self, name: &str, input: &Value) -> bool {
-        if self.explicit_permission(name).is_some() {
+        if self.explicitly_named(name) {
             return false;
         }
         self.exec_tier

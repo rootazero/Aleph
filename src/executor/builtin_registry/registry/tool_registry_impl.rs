@@ -259,6 +259,42 @@ impl ToolRegistry for BuiltinToolRegistry {
             }
             "goal" => Box::pin(async move { self.goal_tool.call_json(arguments).await }),
             "loop_graph" => {
+                // Same delivery plumbing `cron_manage` gets, for the same
+                // reason: `enable_audit` / `pair` INSTALL cron jobs, and those
+                // jobs' whole point is to report a governance verdict back to
+                // the user (AUDIT_TEMPLATE step 7 / WATCH_TEMPLATE_FOOTER).
+                // Without a channel they run, decide, and deliver nowhere.
+                // Prefer the race-free per-turn context over the process-global
+                // mirror, which a concurrent run can swap mid-turn.
+                let arguments = {
+                    let mut args = arguments;
+                    let (channel, conversation_id) =
+                        match crate::tools::turn_context::current_turn_context() {
+                            Some(t) => {
+                                (Some(t.channel_id.clone()), Some(t.conversation_id.clone()))
+                            }
+                            None => self
+                                .session_context_handle
+                                .as_ref()
+                                .and_then(|h| h.try_read().ok())
+                                .map(|ctx| {
+                                    (Some(ctx.channel.clone()), Some(ctx.conversation_id.clone()))
+                                })
+                                .unwrap_or((None, None)),
+                        };
+                    if let Some(obj) = args.as_object_mut() {
+                        if let Some(channel) = channel {
+                            obj.insert("__channel".into(), serde_json::Value::String(channel));
+                        }
+                        if let Some(conversation_id) = conversation_id {
+                            obj.insert(
+                                "__conversation_id".into(),
+                                serde_json::Value::String(conversation_id),
+                            );
+                        }
+                    }
+                    args
+                };
                 Box::pin(async move { self.loop_graph_tool.call_json(arguments).await })
             }
             "loop" => Box::pin(async move { self.loop_tool.call_json(arguments).await }),

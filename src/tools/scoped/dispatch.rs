@@ -204,6 +204,19 @@ impl ScopedToolService {
             }
         };
 
+        // The argument-level gates above judged `input`; what runs is
+        // `effective_input`. A `BeforeToolCall` interceptor's `update_input:`
+        // sits between them, so a rewrite could turn an un-carded call into a
+        // carded one AFTER the card was decided — `file_ops{operation:"list"}`
+        // into `delete`, `loop_graph{id:"anchor:x"}` into `id:"root:aleph"`.
+        // Re-ask on the bytes that will actually execute. Costs nothing in the
+        // overwhelmingly common case: no hook, or a hook that did not rewrite,
+        // leaves the two values equal and skips this entirely.
+        if effective_input != input {
+            self.check_confirmation_gate(name, &effective_input, approved_by_operator_gate)
+                .await?;
+        }
+
         // Cat-guard: when a raw `file_read` / shell read targets a file inside
         // an installed (or plugin-shipped) skill, append a non-blocking
         // `<system-reminder>` steering the model to `skill_read` — which

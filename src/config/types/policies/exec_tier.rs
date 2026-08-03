@@ -261,8 +261,11 @@ pub fn effective_permission(
 /// Aleph itself defines them.
 /// A `loop_graph` call that **names** a `root:` or `frozen:` node in its
 /// arguments and writes — including `pair`, which writes the same `watches`
-/// edge onto its `to_id` that `link` would. Writes to ordinary loop/anchor
-/// nodes never match: the gate is exactly the graph's ground layer.
+/// edge onto its `to_id` that `link` would — **or** an `unlink` of an
+/// `owns_reference` edge, which removes the objective ACL itself while naming
+/// no protected id at all. Other writes to ordinary loop/anchor nodes never
+/// match: the gate is exactly the graph's ground layer plus the one verb that
+/// can take that layer's authority away.
 ///
 /// Two write actions are deliberately OUT of scope, because the mechanism is
 /// argument-level and neither call carries a protected id to match on:
@@ -284,12 +287,24 @@ pub fn effective_permission(
 /// (`dangerous_tools::is_denied_on_gateway_surface` reads it directly), so
 /// widening it here silently narrows those surfaces too.
 fn loop_graph_touches_protected(input: &Value) -> bool {
-    let is_write = input
-        .get("action")
-        .and_then(Value::as_str)
-        .is_some_and(|a| matches!(a, "node" | "drop_node" | "link" | "unlink" | "pair"));
+    let action = input.get("action").and_then(Value::as_str);
+    let is_write =
+        action.is_some_and(|a| matches!(a, "node" | "drop_node" | "link" | "unlink" | "pair"));
     if !is_write {
         return false;
+    }
+    // Cutting an `owns_reference` edge dissolves the objective ACL itself, and
+    // the ids involved carry no protected prefix — the governed loop is
+    // `goal:<session>` and its governor is an ordinary `cron:`/`daemon:` node.
+    // Without this arm the §6.2 write protection is removable by the very loop
+    // it governs, in one un-carded call whose exact arguments the refusal
+    // message in `builtin_tools/goal.rs` prints for the model. GRAPH_LAYER.md
+    // has always described that escape hatch as "用户确认后 unlink" — this is
+    // the confirmation.
+    if action == Some("unlink")
+        && input.get("edge").and_then(Value::as_str) == Some("owns_reference")
+    {
+        return true;
     }
     ["id", "from_id", "to_id"].iter().any(|k| {
         input
@@ -572,6 +587,22 @@ mod tests {
         for action in ["status", "list", "gc", "enable_audit"] {
             assert!(!auto.asks_for_arguments("loop_graph", &json!({"action": action})));
         }
+        // Cutting the objective ACL asks, even though no id here is protected:
+        // this is the "用户确认后 unlink" the design has always specified, and
+        // `builtin_tools/goal.rs` prints these exact arguments to the model when
+        // it refuses an objective rewrite.
+        assert!(auto.asks_for_arguments(
+            "loop_graph",
+            &json!({"action": "unlink", "from_id": "cron:steward",
+                    "to_id": "goal:s1", "edge": "owns_reference"})
+        ));
+        // Other verbs on the same ordinary ids stay free — the gate is the ACL,
+        // not `unlink`.
+        assert!(!auto.asks_for_arguments(
+            "loop_graph",
+            &json!({"action": "unlink", "from_id": "cron:w",
+                    "to_id": "goal:s1", "edge": "watches"})
+        ));
         // Ask gates the tool wholesale by the name-keyed rule; Full never asks
         // (its documented contract).
         assert!(!ExecTier::Full
