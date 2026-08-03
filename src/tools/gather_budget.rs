@@ -147,31 +147,6 @@ pub fn render_gather_notice(events: &[SessionEventRecord]) -> Option<String> {
 ///
 /// Reads `ToolOutputMetadata::cost_cents` — the same field the harness now
 /// populates from provider metering data at tool-result construction time.
-#[must_use]
-pub fn sum_gather_cost_cents(events: &[SessionEventRecord]) -> u64 {
-    let mut pending: std::collections::HashSet<&str> = std::collections::HashSet::new();
-    let mut total: u64 = 0;
-    for record in events {
-        match &record.event {
-            SessionEvent::ToolCallRequested { call_id, name, .. }
-                if GATHER_TOOLS.contains(&name.as_str()) =>
-            {
-                pending.insert(call_id.as_str());
-            }
-            SessionEvent::ToolResult { call_id, output, .. } => {
-                if pending.remove(call_id.as_str()) {
-                    total = total.saturating_add(output.metadata.cost_cents.unwrap_or(0));
-                }
-            }
-            SessionEvent::ToolError { call_id, .. } => {
-                pending.remove(call_id.as_str());
-            }
-            _ => {}
-        }
-    }
-    total
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -373,25 +348,5 @@ mod tests {
         let events = gather_events(999, "search");
         let s = render_gather_notice(&events).expect("renders");
         assert!(s.len() < 2048, "notice length {}", s.len());
-    }
-
-    #[test]
-    fn cost_cents_read_path_is_wired() {
-        let events = vec![
-            tcr("cost-1", "search"),
-            mk(SessionEvent::ToolResult {
-                turn_id: uuid::Uuid::nil(),
-                call_id: "cost-1".into(),
-                output: ToolOutput {
-                    value: serde_json::json!("result"),
-                    metadata: crate::session::events::ToolOutputMetadata {
-                        cost_cents: Some(42),
-                        ..Default::default()
-                    },
-                },
-                at: now_ms(),
-            }),
-        ];
-        assert_eq!(sum_gather_cost_cents(&events), 42);
     }
 }

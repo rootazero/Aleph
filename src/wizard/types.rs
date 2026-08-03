@@ -38,8 +38,6 @@ pub enum StepType {
     Confirm,
     /// Progress indicator
     Progress,
-    /// Background action (server-executed)
-    Action,
 }
 
 /// Who executes this step
@@ -246,10 +244,6 @@ pub struct WizardNextResult {
     /// Error message (if status is Error)
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
-    /// Final payload produced by the flow (only set when done with success).
-    /// Carries flow-specific output.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub data: Option<Value>,
 }
 
 impl WizardNextResult {
@@ -261,7 +255,6 @@ impl WizardNextResult {
             step: Some(step),
             status: WizardStatus::Running,
             error: None,
-            data: None,
         }
     }
 
@@ -273,19 +266,6 @@ impl WizardNextResult {
             step: None,
             status: WizardStatus::Done,
             error: None,
-            data: None,
-        }
-    }
-
-    /// Done with a flow-specific payload (e.g. issued token).
-    #[must_use]
-    pub const fn done_with_data(data: Value) -> Self {
-        Self {
-            done: true,
-            step: None,
-            status: WizardStatus::Done,
-            error: None,
-            data: Some(data),
         }
     }
 
@@ -297,7 +277,6 @@ impl WizardNextResult {
             step: None,
             status: WizardStatus::Cancelled,
             error: None,
-            data: None,
         }
     }
 
@@ -308,18 +287,8 @@ impl WizardNextResult {
             step: None,
             status: WizardStatus::Error,
             error: Some(message.into()),
-            data: None,
         }
     }
-}
-
-/// Answer to a wizard step
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct WizardAnswer {
-    /// Step ID being answered
-    pub step_id: String,
-    /// Answer value
-    pub value: Value,
 }
 
 #[cfg(test)]
@@ -369,26 +338,5 @@ mod tests {
 
         let json = serde_json::to_string(&WizardStatus::Cancelled).unwrap();
         assert_eq!(json, "\"cancelled\"");
-    }
-
-    #[test]
-    fn next_result_carries_finish_data() {
-        let result = WizardNextResult::done_with_data(json!({ "token": "abc" }));
-        assert!(result.done);
-        assert_eq!(result.status, WizardStatus::Done);
-        assert_eq!(
-            result
-                .data
-                .as_ref()
-                .and_then(|v| v.get("token"))
-                .and_then(|t| t.as_str()),
-            Some("abc")
-        );
-
-        // Backwards compat: bare done() still works and serializes without data.
-        let bare = WizardNextResult::done();
-        assert!(bare.data.is_none());
-        let s = serde_json::to_string(&bare).unwrap();
-        assert!(!s.contains("\"data\""));
     }
 }

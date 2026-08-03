@@ -33,7 +33,6 @@ use async_trait::async_trait;
 use tokio_util::sync::CancellationToken;
 
 use crate::builtin_tools::scratchpad_registry;
-use crate::error::ErrorClass;
 use crate::memory::ScratchpadManager;
 use crate::verification::turn_verifier::{TurnVerifier, TurnVerifyContext, VerifierVerdict};
 
@@ -60,9 +59,6 @@ impl Default for ScratchpadGoalVerifier {
 
 #[async_trait]
 impl TurnVerifier for ScratchpadGoalVerifier {
-    fn name(&self) -> &str {
-        "scratchpad_goal"
-    }
 
     async fn verify(
         &self,
@@ -130,7 +126,6 @@ impl TurnVerifier for ScratchpadGoalVerifier {
         );
         VerifierVerdict::Veto {
             reason,
-            class: ErrorClass::Recoverable,
         }
     }
 }

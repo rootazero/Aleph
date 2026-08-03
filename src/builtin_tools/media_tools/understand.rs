@@ -195,15 +195,12 @@ mod tests {
         ) -> std::result::Result<VisionResult, VisionError> {
             Ok(VisionResult {
                 description: format!("Saw: {}", prompt),
-                elements: vec![],
-                confidence: 0.9,
             })
         }
 
         async fn ocr(&self, _: &ImageInput) -> std::result::Result<OcrResult, VisionError> {
             Ok(OcrResult {
                 full_text: "OCR text".into(),
-                lines: vec![],
             })
         }
 

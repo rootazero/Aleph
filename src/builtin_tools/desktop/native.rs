@@ -2113,14 +2113,12 @@ mod tests {
         async fn ocr(&self, _image: &ImageInput) -> std::result::Result<OcrResult, VisionError> {
             Ok(OcrResult {
                 full_text: "Login Submit".into(),
-                lines: vec![],
             })
         }
         fn capabilities(&self) -> VisionCapabilities {
             VisionCapabilities {
                 image_understanding: false,
                 ocr: true,
-                object_detection: false,
             }
         }
         fn name(&self) -> &str {
