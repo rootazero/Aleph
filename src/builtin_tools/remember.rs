@@ -298,9 +298,12 @@ impl RememberTool {
         };
         // The agent comes off the store itself, so a row can never be filed
         // against an agent other than the one whose MEMORY.md was targeted.
-        if let Err(e) =
-            db.record_write_decision(&self.store.agent_id, attempt.action, reason, &attempt.subject)
-        {
+        if let Err(e) = db.record_write_decision(
+            &self.store.agent_id,
+            attempt.action,
+            reason,
+            &attempt.subject,
+        ) {
             warn!("remember: write decision not recorded: {e}");
         }
     }
@@ -1057,7 +1060,10 @@ mod tests {
         assert!(filed.contains(&"scanner_rejected"), "{filed:?}");
         assert!(filed.contains(&"empty"), "{filed:?}");
         // The refused payload is a bounded label, not a stored copy of itself.
-        let scanned = rows.iter().find(|r| r.reason == "scanner_rejected").unwrap();
+        let scanned = rows
+            .iter()
+            .find(|r| r.reason == "scanner_rejected")
+            .unwrap();
         assert!(scanned.subject.chars().count() <= 81, "{scanned:?}");
         assert_eq!(
             rows.iter().find(|r| r.reason == "empty").unwrap().action,

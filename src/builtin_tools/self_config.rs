@@ -261,10 +261,12 @@ impl SelfConfigTool {
         // The name list and the wording live in `config::agent_manager` so this
         // surface cannot drift from `agents.files.set` / `write_identity_file`.
         if crate::config::agent_manager::is_curated_owned(file_name) {
-            return Err(ToolError::Execution(
-                crate::config::agent_manager::curated_owned_reason(file_name),
-            )
-            .into());
+            return Err(
+                ToolError::Execution(crate::config::agent_manager::curated_owned_reason(
+                    file_name,
+                ))
+                .into(),
+            );
         }
 
         validate_identity_file_name(file_name).map_err(ToolError::InvalidArgs)?;

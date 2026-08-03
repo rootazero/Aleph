@@ -259,6 +259,18 @@ pub async fn materialize(
             if step.review {
                 if let Some(obj) = meta.as_object_mut() {
                     obj.insert(LEAD_REVIEW_METADATA_KEY.to_string(), json!(true));
+                    // The anchor demand rides the SAME metadata channel
+                    // `task_create(require_grounding=…)` writes, so the review
+                    // tools' existing bounce reads it with zero new plumbing.
+                    // `validate()` already refuses grounding without review, so
+                    // this is the only place it can be stamped.
+                    if step.require_grounding {
+                        obj.insert(
+                            crate::agents::swarm::tasks::acceptance::REQUIRE_GROUNDING_METADATA_KEY
+                                .to_string(),
+                            json!(true),
+                        );
+                    }
                 }
             }
             // Per-step model override (from the AWI manifest): stamp the model
@@ -413,6 +425,7 @@ mod tests {
             kind: crate::workflow::def::WorkflowStepKind::Agent,
             choices: vec![],
             review: false,
+            require_grounding: false,
             timeout_seconds: None,
             max_retries: None,
         }
@@ -427,6 +440,7 @@ mod tests {
             kind: crate::workflow::def::WorkflowStepKind::Clarify,
             choices: choices.iter().map(|s| s.to_string()).collect(),
             review: false,
+            require_grounding: false,
             timeout_seconds: None,
             max_retries: None,
         }

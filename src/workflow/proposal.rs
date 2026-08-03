@@ -112,6 +112,7 @@ pub fn skeleton_from_chain(chain: &[String], observations: u32) -> Option<Workfl
                 kind: Default::default(),
                 choices: Vec::new(),
                 review: false,
+                require_grounding: false,
                 timeout_seconds: None,
                 max_retries: None,
             }

@@ -236,7 +236,7 @@ impl LoopGraphStore {
                  (agent_id, from_id, to_id, kind, note, origin, created_at_ms)
              VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
              ON CONFLICT(agent_id, from_id, to_id, kind) DO UPDATE SET
-                 note = excluded.note",
+                 note = COALESCE(excluded.note, note)",
             rusqlite::params![
                 edge.agent_id,
                 edge.from_id,
@@ -285,6 +285,40 @@ impl LoopGraphStore {
             if let Ok(Some(e)) = r {
                 out.push(e);
             }
+        }
+        Ok(out)
+    }
+
+    /// Ids of the loops that own `to_id`'s reference, read from raw columns.
+    ///
+    /// Deliberately NOT `list_edges().filter(...)`: `row_to_edge` is fail-soft
+    /// (an unknown `kind`/`origin` text yields `Ok(None)` so one bad row cannot
+    /// wedge every reader), and `list_edges` therefore silently DROPS such a
+    /// row. For a lint that is an acceptable blind spot; for an ACL it is a
+    /// grant — a governed loop whose `owns_reference` row happens to be
+    /// unreadable (a rolled-back build meeting a newer `Origin` variant; both
+    /// enums are `#[non_exhaustive]`, so the vocabulary is expected to grow)
+    /// would be answered "ungoverned" and allowed to rewrite its own objective.
+    /// Existence questions read the columns that cannot fail to parse, exactly
+    /// as [`node_ids_present`] does.
+    pub fn owns_reference_sources(&self, agent_id: &str, to_id: &str) -> Result<Vec<String>> {
+        let conn = self.lock();
+        let mut stmt = conn
+            .prepare(
+                "SELECT from_id FROM graph_edges
+                 WHERE agent_id = ?1 AND to_id = ?2 AND kind = ?3
+                 ORDER BY from_id",
+            )
+            .map_err(|e| AlephError::other(format!("loop_graph owns_reference prepare: {e}")))?;
+        let rows = stmt
+            .query_map(
+                rusqlite::params![agent_id, to_id, EdgeKind::OwnsReference.as_str()],
+                |r| r.get::<_, String>(0),
+            )
+            .map_err(|e| AlephError::other(format!("loop_graph owns_reference query: {e}")))?;
+        let mut out = Vec::new();
+        for r in rows {
+            out.push(r.map_err(|e| AlephError::other(format!("loop_graph owns_reference: {e}")))?);
         }
         Ok(out)
     }
@@ -390,6 +424,7 @@ impl LoopGraphStore {
 
         let mut findings = lint_dangling_edges(&edges, &present);
         findings.extend(lint_naked_loops(&nodes, &edges));
+        findings.extend(lint_forged_coverage(&nodes, &edges, &by_id));
         findings.extend(lint_governance_chain(&nodes, &edges, &by_id));
         findings.extend(lint_cadence_mismatch(&edges, &by_id));
         Ok(findings)
@@ -469,6 +504,78 @@ fn lint_naked_loops(nodes: &[GraphNode], edges: &[GraphEdge]) -> Vec<String> {
         if !watched {
             findings.push(format!(
                 "裸奔优化环: {}（'{}'）没有任何 watches/audits 入边",
+                n.id, n.label
+            ));
+        }
+    }
+    findings
+}
+
+/// Is any loop's coverage self-granted — a `watches`/`audits` ring with no
+/// unforgeable node above it?
+///
+/// `lint_naked_loops` asks "does an edge point at me", and round 9 made that
+/// unforgeable at length 1 (`from_id != n.id`, enforced at write time too).
+/// Length 2 is still free: two `link` calls make an optimizer and its own
+/// auditor watch each other, and both go silent — the optimizer granted itself
+/// the exemption, which is precisely the measurement-decay failure this layer
+/// exists to detect.
+///
+/// The predicate is deliberately narrow: a ring is only reported when NOTHING
+/// above it is unforgeable. `Root`/`Frozen`/`Anchor` are kinds a loop cannot
+/// award itself (root writes are human-origin by store invariant and gated at
+/// the tool boundary), so a ring with one of them upstream is genuinely
+/// covered. A merely *un-anchored* linear chain is not reported here — its top
+/// element already shows up as a naked loop, and repeating the same root cause
+/// once per node below it would drown the real finding.
+fn lint_forged_coverage(
+    nodes: &[GraphNode],
+    edges: &[GraphEdge],
+    by_id: &std::collections::HashMap<&str, &GraphNode>,
+) -> Vec<String> {
+    let is_coverage = |e: &GraphEdge| matches!(e.kind, EdgeKind::Watches | EdgeKind::Audits);
+    let mut findings = Vec::new();
+    for n in nodes {
+        if !n.kind.is_optimization_loop() {
+            continue;
+        }
+        // Walk upward through everything that claims to cover `n`.
+        let mut visited: std::collections::HashSet<&str> = std::collections::HashSet::new();
+        let mut frontier: Vec<&str> = edges
+            .iter()
+            .filter(|e| is_coverage(e) && e.to_id == n.id)
+            .map(|e| e.from_id.as_str())
+            .collect();
+        if frontier.is_empty() {
+            continue; // uncovered — that is `lint_naked_loops`' finding, not ours
+        }
+        let mut grounded = false;
+        let mut returns_to_self = false;
+        while let Some(current) = frontier.pop() {
+            if current == n.id {
+                returns_to_self = true;
+            }
+            if !visited.insert(current) {
+                continue;
+            }
+            if by_id.get(current).is_some_and(|c| {
+                matches!(c.kind, NodeKind::Root | NodeKind::Frozen | NodeKind::Anchor)
+            }) {
+                grounded = true;
+                break;
+            }
+            frontier.extend(
+                edges
+                    .iter()
+                    .filter(|e| is_coverage(e) && e.to_id == current)
+                    .map(|e| e.from_id.as_str()),
+            );
+        }
+        if returns_to_self && !grounded {
+            findings.push(format!(
+                "伪造的看守覆盖: {}（'{}'）的 watches/audits 覆盖绕回它自己，\
+                 且这个环之上没有 root/frozen/anchor —— 等于它自己给自己发了豁免。\
+                 请由人接一条 root:… -[watches]-> 该环",
                 n.id, n.label
             ));
         }
@@ -629,6 +736,177 @@ mod tests {
         let got2 = s.get_node("main", "daemon:dreaming").unwrap().unwrap();
         assert_eq!(got2.label, "记忆整理夜巡");
         assert_eq!(got2.created_at_ms, got.created_at_ms);
+    }
+
+    /// Round 9 made the naked-loop exemption unforgeable at length 1
+    /// (`x -[watches]-> x` is refused at write time). Length 2 was still free:
+    /// two `link` calls make an optimizer and its auditor watch each other and
+    /// both go quiet. The exemption must come from something a loop cannot
+    /// award itself.
+    #[test]
+    fn mutual_watching_between_two_loops_is_not_a_valid_exemption() {
+        let (_d, store) = store();
+        let a = GraphNode::new(
+            "main",
+            "cron:aud",
+            NodeKind::LoopCron,
+            "auditor",
+            Origin::Llm,
+        );
+        let b = GraphNode::new(
+            "main",
+            "daemon:dreaming",
+            NodeKind::Daemon,
+            "optimiser",
+            Origin::Llm,
+        );
+        store.upsert_node(&a).unwrap();
+        store.upsert_node(&b).unwrap();
+        store
+            .upsert_edge(&GraphEdge::new(
+                "main",
+                "cron:aud",
+                "daemon:dreaming",
+                EdgeKind::Audits,
+                Origin::Llm,
+            ))
+            .unwrap();
+        // The forgery: the watched loop now "watches" its own watcher.
+        store
+            .upsert_edge(&GraphEdge::new(
+                "main",
+                "daemon:dreaming",
+                "cron:aud",
+                EdgeKind::Watches,
+                Origin::Llm,
+            ))
+            .unwrap();
+
+        let findings = store.lint("main").unwrap();
+        assert!(
+            findings.iter().any(|f| f.contains("伪造的看守覆盖")),
+            "a two-node watch ring with nothing unforgeable above it must be reported: {findings:?}"
+        );
+
+        // A human root above the ring is a real exemption, and silences it.
+        store
+            .upsert_node(&GraphNode::new(
+                "main",
+                "root:aleph",
+                NodeKind::Root,
+                "human reference",
+                Origin::Human,
+            ))
+            .unwrap();
+        store
+            .upsert_edge(&GraphEdge::new(
+                "main",
+                "root:aleph",
+                "cron:aud",
+                EdgeKind::Watches,
+                Origin::Human,
+            ))
+            .unwrap();
+        let findings = store.lint("main").unwrap();
+        assert!(
+            !findings.iter().any(|f| f.contains("伪造的看守覆盖")),
+            "a root above the ring is an unforgeable exemption: {findings:?}"
+        );
+    }
+
+    /// Round 9 gave `upsert_node` COALESCE semantics for `body`/`cadence` so a
+    /// re-registration cannot null out human prose. Edges carry the same kind of
+    /// prose in `note` and were left on the old全量-overwrite path.
+    #[test]
+    fn relinking_without_a_note_keeps_the_existing_rationale() {
+        let (_d, store) = store();
+        for id in ["cron:counter", "daemon:dreaming"] {
+            store
+                .upsert_node(&GraphNode::new(
+                    "main",
+                    id,
+                    NodeKind::LoopCron,
+                    id,
+                    Origin::Human,
+                ))
+                .unwrap();
+        }
+        store
+            .upsert_edge(
+                &GraphEdge::new(
+                    "main",
+                    "cron:counter",
+                    "daemon:dreaming",
+                    EdgeKind::Watches,
+                    Origin::Human,
+                )
+                .with_note("用户纠正率是唯一反指标，勿改"),
+            )
+            .unwrap();
+        // Re-link without a note (confirming the pairing, a re-registration sweep…)
+        store
+            .upsert_edge(&GraphEdge::new(
+                "main",
+                "cron:counter",
+                "daemon:dreaming",
+                EdgeKind::Watches,
+                Origin::Human,
+            ))
+            .unwrap();
+        let edges = store.list_edges("main").unwrap();
+        let e = edges.iter().find(|e| e.to_id == "daemon:dreaming").unwrap();
+        assert_eq!(
+            e.note.as_deref(),
+            Some("用户纠正率是唯一反指标，勿改"),
+            "omitting `note` on a re-link must keep the rationale, not NULL it"
+        );
+    }
+
+    /// The objective ACL must not read "I could not decode this row" as
+    /// "ungoverned" — that is a grant. `list_edges` is fail-soft by design, so
+    /// the ACL reads raw columns instead.
+    #[test]
+    fn owns_reference_survives_a_row_list_edges_cannot_decode() {
+        let (_d, store) = store();
+        store
+            .upsert_node(&GraphNode::new(
+                "main",
+                "cron:steward",
+                NodeKind::LoopCron,
+                "steward",
+                Origin::Human,
+            ))
+            .unwrap();
+        store
+            .upsert_node(&GraphNode::new(
+                "main",
+                "goal:sess-1",
+                NodeKind::LoopGoal,
+                "governed goal",
+                Origin::Human,
+            ))
+            .unwrap();
+        {
+            let conn = store.lock();
+            conn.execute(
+                "INSERT INTO graph_edges (agent_id, from_id, to_id, kind, note, origin, created_at_ms)
+                 VALUES (?1, 'cron:steward', 'goal:sess-1', 'owns_reference', NULL, 'from_the_future', 1)",
+                rusqlite::params!["main"],
+            )
+            .unwrap();
+        }
+        assert!(
+            store.list_edges("main").unwrap().is_empty(),
+            "precondition: the fail-soft reader drops this row"
+        );
+        assert_eq!(
+            store
+                .owns_reference_sources("main", "goal:sess-1")
+                .unwrap()
+                .as_slice(),
+            ["cron:steward".to_string()],
+            "the ACL must still see the governance edge"
+        );
     }
 
     #[test]

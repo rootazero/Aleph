@@ -626,13 +626,36 @@ impl AlephTool for WorkflowTool {
         match args {
             WorkflowArgs::Save { definition } => {
                 debug!(name = %definition.name, "workflow: save");
-                // `save` authors the lean executable core; persist it as a
-                // manifest (extras empty) so the on-disk format stays uniform.
-                let manifest = WorkflowManifest::from_def(&definition);
+                // `save` authors the lean executable core — but it must not
+                // DELETE what the core cannot express. Overwriting a stored
+                // manifest with `from_def` stripped each step's `model` /
+                // `effort` pin (both executable: they become the
+                // WORKFLOW_MODEL_KEY / WORKFLOW_EFFORT_KEY stamps at
+                // materialisation), and import's own "edit + save to retarget
+                // the agents" advice walked users straight into it.
+                let existing = workflow::store::load(&definition.name).ok();
+                let manifest = match &existing {
+                    Some(prev) => prev.with_core_from(&definition),
+                    None => WorkflowManifest::from_def(&definition),
+                };
                 let path = workflow::store::save(&manifest)?;
+                let kept = existing.is_some_and(|prev| {
+                    prev.steps
+                        .iter()
+                        .any(|s| s.model.is_some() || s.effort.is_some())
+                });
                 Ok(WorkflowToolOutput::msg(
                     "save",
-                    format!("saved workflow '{}' → {}", definition.name, path.display()),
+                    format!(
+                        "saved workflow '{}' → {}{}",
+                        definition.name,
+                        path.display(),
+                        if kept {
+                            " (per-step model/effort pins preserved)"
+                        } else {
+                            ""
+                        }
+                    ),
                 ))
             }
             WorkflowArgs::List {} => {
@@ -1222,6 +1245,32 @@ impl AlephTool for WorkflowTool {
 }
 
 #[cfg(test)]
+mod catalog_contract {
+    /// The catalog entry must POINT AT the tool's own `DESCRIPTION`, never
+    /// restate it. A hand-written literal there SHADOWS the const — `agent_init`
+    /// builds the model's tool table from this catalog first and only appends
+    /// names the catalog lacks — and the literal that used to sit here
+    /// enumerated five of the fifteen actions, so cancel / pause / resume /
+    /// status / export / import / the proposal family were never advertised at
+    /// all. Assert on the shipped catalog, not on the const: asserting on the
+    /// const is exactly what stayed green while the model received nothing.
+    #[test]
+    fn the_shipped_workflow_entry_is_the_tools_own_description() {
+        let entry = crate::executor::BUILTIN_TOOL_DEFINITIONS
+            .iter()
+            .find(|d| d.name == "workflow")
+            .expect("the workflow tool is in the static catalog");
+        for action in ["cancel", "pause", "resume", "status", "import", "export"] {
+            assert!(
+                entry.description.contains(action),
+                "the model never learns about `{action}`: {}",
+                entry.description
+            );
+        }
+    }
+}
+
+#[cfg(test)]
 mod tests {
     use super::*;
     use crate::agents::swarm::tasks::{store::SqliteCoordTaskStore, CoordTaskStatus};
@@ -1257,6 +1306,7 @@ mod tests {
                     kind: crate::workflow::WorkflowStepKind::Agent,
                     choices: vec![],
                     review: false,
+                    require_grounding: false,
                     timeout_seconds: None,
                     max_retries: None,
                 },
@@ -1268,6 +1318,7 @@ mod tests {
                     kind: crate::workflow::WorkflowStepKind::Agent,
                     choices: vec![],
                     review: false,
+                    require_grounding: false,
                     timeout_seconds: None,
                     max_retries: None,
                 },
@@ -1969,6 +2020,7 @@ mod tests {
                     kind: crate::workflow::WorkflowStepKind::Clarify,
                     choices: vec!["staging".into(), "prod".into()],
                     review: false,
+                    require_grounding: false,
                     timeout_seconds: None,
                     max_retries: None,
                 },
@@ -1980,6 +2032,7 @@ mod tests {
                     kind: crate::workflow::WorkflowStepKind::Agent,
                     choices: vec![],
                     review: false,
+                    require_grounding: false,
                     timeout_seconds: None,
                     max_retries: None,
                 },

@@ -222,7 +222,9 @@ impl SqliteMemoryBackend {
 
         let mut out = Vec::new();
         for row in rows {
-            out.push(row.map_err(|e| AlephError::config(format!("recent_write_decisions row: {e}")))?);
+            out.push(
+                row.map_err(|e| AlephError::config(format!("recent_write_decisions row: {e}")))?,
+            );
         }
         Ok(out)
     }
@@ -283,7 +285,10 @@ mod tests {
         let db = backend();
         db.record_write_decision("a", "remove", MemoryWriteReason::NoMatch, "ghost")
             .unwrap();
-        assert_eq!(db.recent_write_decisions("a", None, 10).unwrap()[0].subject, "ghost");
+        assert_eq!(
+            db.recent_write_decisions("a", None, 10).unwrap()[0].subject,
+            "ghost"
+        );
     }
 
     #[test]
@@ -308,8 +313,13 @@ mod tests {
     #[test]
     fn subject_filter_matches_literally() {
         let db = backend();
-        db.record_write_decision("a", "add", MemoryWriteReason::Duplicate, "prefers 100% tabs")
-            .unwrap();
+        db.record_write_decision(
+            "a",
+            "add",
+            MemoryWriteReason::Duplicate,
+            "prefers 100% tabs",
+        )
+        .unwrap();
         db.record_write_decision("a", "add", MemoryWriteReason::Duplicate, "prefers spaces")
             .unwrap();
 
@@ -317,6 +327,11 @@ mod tests {
         assert_eq!(hits.len(), 1, "`%` must match literally, not as a wildcard");
         assert_eq!(hits[0].subject, "prefers 100% tabs");
         // A blank filter browses rather than matching nothing.
-        assert_eq!(db.recent_write_decisions("a", Some("  "), 10).unwrap().len(), 2);
+        assert_eq!(
+            db.recent_write_decisions("a", Some("  "), 10)
+                .unwrap()
+                .len(),
+            2
+        );
     }
 }

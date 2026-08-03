@@ -238,6 +238,44 @@ fn parse_reviewer_kind(s: &str) -> Result<ReviewerKind, &'static str> {
     ReviewerKind::from_stored(s).ok_or("reviewer_kind must be one of: user, lead_agent, auto")
 }
 
+/// Outcome of the pre-write transition check shared by approve / reject.
+enum VerdictGate {
+    /// Write the verdict.
+    Proceed,
+    /// Already in the verdict's terminal state — answer ok without writing.
+    AlreadyThere,
+    /// Not a reviewable state; `String` is the user-facing reason.
+    Refuse(String),
+}
+
+/// Enforce the guarantee this face's docs already made ("refuses to approve
+/// tasks that have not yet finished a run") and the tool face now enforces via
+/// `verdict_admissible`. Without it, approving a `Pending` step completed it
+/// with no result, unblocked its dependents with an empty fan-in section, and
+/// let the settle sweep report the run `✅ finished`.
+///
+/// A task that cannot be read is NOT treated as absent (that would restore the
+/// hole on the first `SQLITE_BUSY`): the caller refuses and says so.
+async fn verdict_gate(
+    coord_store: &Arc<dyn CoordTaskStore>,
+    task_id: &str,
+    settled: CoordTaskStatus,
+) -> VerdictGate {
+    match coord_store.get_task(task_id).await {
+        Ok(Some(t)) if t.status == settled => VerdictGate::AlreadyThere,
+        Ok(Some(t)) if crate::builtin_tools::team::verdict_admissible(t.status) => {
+            VerdictGate::Proceed
+        }
+        Ok(Some(t)) => VerdictGate::Refuse(format!(
+            "cannot review a step in status '{}' — a verdict judges a run that happened, \
+             and this one has not produced one",
+            t.status
+        )),
+        Ok(None) => VerdictGate::Refuse(format!("task '{task_id}' not found")),
+        Err(e) => VerdictGate::Refuse(format!("could not read task '{task_id}': {e}")),
+    }
+}
+
 /// `teams.workflow.approve_step` — stamp the latest run as approved and
 /// transition the task to Completed so downstream dependents unblock.
 /// Idempotent on Completed tasks (re-approve is a no-op). Refuses to
@@ -255,6 +293,13 @@ pub async fn handle_workflow_approve_step(
         Ok(k) => k,
         Err(msg) => return JsonRpcResponse::error(request.id, INVALID_PARAMS, msg.to_string()),
     };
+    match verdict_gate(&coord_store, &params.task_id, CoordTaskStatus::Completed).await {
+        VerdictGate::Proceed => {}
+        VerdictGate::AlreadyThere => {
+            return JsonRpcResponse::success(request.id, json!({ "status": "completed" }))
+        }
+        VerdictGate::Refuse(msg) => return JsonRpcResponse::error(request.id, INVALID_PARAMS, msg),
+    }
 
     if let Err(e) = coord_store
         .record_run_review(
@@ -321,6 +366,13 @@ pub async fn handle_workflow_reject_step(
         Ok(k) => k,
         Err(msg) => return JsonRpcResponse::error(request.id, INVALID_PARAMS, msg.to_string()),
     };
+    match verdict_gate(&coord_store, &params.task_id, CoordTaskStatus::Failed).await {
+        VerdictGate::Proceed => {}
+        VerdictGate::AlreadyThere => {
+            return JsonRpcResponse::success(request.id, json!({ "status": "failed" }))
+        }
+        VerdictGate::Refuse(msg) => return JsonRpcResponse::error(request.id, INVALID_PARAMS, msg),
+    }
 
     if let Err(e) = coord_store
         .record_run_review(
@@ -337,12 +389,15 @@ pub async fn handle_workflow_reject_step(
             format!("Failed to record review: {e}"),
         );
     }
+    // Status only: `result` is the state this node put on its outgoing edges
+    // (rendered verbatim into every dependent's prompt by
+    // `build_handoff_context`). The reviewer's comment lands in the task
+    // comment thread below, which is where the redoing member reads it.
     if let Err(e) = coord_store
         .update_task(
             &params.task_id,
             CoordTaskUpdate {
                 status: Some(CoordTaskStatus::Failed),
-                result: params.comment.clone(),
                 ..Default::default()
             },
         )

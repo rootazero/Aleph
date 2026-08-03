@@ -243,9 +243,38 @@ impl TeamDispatcher {
                 .unwrap_or_default();
 
             let text = render_run_summary(name, &rid, team_id, &run_tasks);
-            let message = OutboundMessage::text(conversation_id.clone(), text);
-            match channels.send(&ChannelId::new(&channel_id), message).await {
-                Ok(_) => {
+            let message = OutboundMessage::text(conversation_id.clone(), text.clone());
+            let sent = match channels.send(&ChannelId::new(&channel_id), message).await {
+                Ok(_) => Ok(()),
+                Err(e) => {
+                    // The Panel's `gui:chat` is a pseudo-channel that is never
+                    // registered in the ChannelRegistry, so the channel
+                    // transport denies EVERY Panel-launched run — the summary
+                    // this whole sweep exists to deliver could not reach the
+                    // most common launch surface at all. Fall back to the
+                    // team's own live topic, which the Panel already renders
+                    // as a centred system chip (same wire `post_system` uses);
+                    // mirrors ask_user's channel → event-bus fallback.
+                    if team_id.is_empty() {
+                        Err(e)
+                    } else {
+                        crate::gateway::event_emitter::team_fanout::publish_team_event(
+                            team_id,
+                            "system",
+                            serde_json::json!({ "text": text }),
+                        );
+                        tracing::info!(
+                            run_id = %rid,
+                            channel = %channel_id,
+                            error = %e,
+                            "dispatcher: channel refused the workflow summary; delivered on the team topic instead"
+                        );
+                        Ok(())
+                    }
+                }
+            };
+            match sent {
+                Ok(()) => {
                     tracing::info!(
                         run_id = %rid,
                         workflow = %name,

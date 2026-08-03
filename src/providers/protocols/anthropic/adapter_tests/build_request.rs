@@ -306,6 +306,34 @@ fn build_request_kimi_coding_normalizes_model_id() {
     );
 }
 
+/// The K3 ids must reach the wire byte-for-byte, and the open-platform
+/// spelling must be translated rather than dropped. Asserted on the request
+/// body rather than on the normalizer alone: the preset, the picker and the
+/// capability table all say "K3", so a fold here would be invisible — every
+/// request would quietly run K2.7 Code.
+#[test]
+fn build_request_kimi_coding_preserves_k3_ids() {
+    let msgs = [UnifiedMessage::user("Hi")];
+    for (requested, expected) in [
+        ("k3", "k3"),
+        ("k3-256k", "k3-256k"),
+        ("kimi-for-coding-highspeed", "kimi-for-coding-highspeed"),
+        // Open-platform id → the coding endpoint's own K3 id.
+        ("kimi-k3", "k3"),
+    ] {
+        let payload = RequestPayload::new(&msgs).with_model(Some(requested.to_string()));
+        let mut config = ProviderConfig::test_config("kimi-for-coding");
+        config.api_key = Some("test-key".to_string());
+        config.base_url = Some("https://api.kimi.com/coding/v1".to_string());
+
+        let body = build_body(&payload, &config);
+        assert_eq!(
+            body["model"], expected,
+            "requested {requested} should reach the wire as {expected}"
+        );
+    }
+}
+
 #[test]
 fn build_request_kimi_coding_omits_beta_headers_and_adds_user_agent() {
     use reqwest::header::{HeaderValue, USER_AGENT};

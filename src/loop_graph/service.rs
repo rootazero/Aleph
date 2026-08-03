@@ -200,11 +200,13 @@ fn governing_owner_in(
     session: &str,
 ) -> crate::error::Result<Option<String>> {
     let node_id = format!("goal:{session}");
+    // Raw-column read, not `list_edges`: that one is fail-soft and DROPS a row
+    // it cannot decode, which for an ACL is indistinguishable from "no such
+    // edge" — i.e. a grant. See `LoopGraphStore::owns_reference_sources`.
     Ok(store
-        .list_edges(DEFAULT_AGENT)?
+        .owns_reference_sources(DEFAULT_AGENT, &node_id)?
         .into_iter()
-        .find(|e| e.kind == EdgeKind::OwnsReference && e.to_id == node_id)
-        .map(|e| e.from_id))
+        .next())
 }
 
 /// Deterministic topology context for a governed session's prompt. `None`

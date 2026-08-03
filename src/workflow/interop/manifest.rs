@@ -101,13 +101,36 @@ pub struct WorkflowManifestStep {
     /// wire when false (byte-identical to legacy manifests).
     #[serde(default, skip_serializing_if = "is_false")]
     pub review: bool,
+    /// Reviewer must attach measured evidence to approve (see
+    /// `WorkflowStepDef::require_grounding`). Executable core; omitted on the
+    /// wire when false. `require_grounding` is accepted as an alias so a
+    /// serialised `WorkflowDef` round-trips.
+    #[serde(default, skip_serializing_if = "is_false", alias = "require_grounding")]
+    pub require_grounding: bool,
     /// Per-step run timeout in seconds (see `WorkflowStepDef::timeout_seconds`).
     /// Executable core; omitted on the wire when unset.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    ///
+    /// The `timeout_seconds` alias accepts a serialised `WorkflowDef` — the
+    /// exact document `workflow(action='describe')` hands back. Without it,
+    /// `describe` → edit → `import` deserialised a def-shaped JSON into a
+    /// manifest and dropped this field wordlessly (no `deny_unknown_fields`,
+    /// so the camelCase rename made it invisible), silently reverting the step
+    /// to the dispatcher's global timeout. `depends_on` already carried this
+    /// treatment; these two were simply forgotten.
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        alias = "timeout_seconds"
+    )]
     pub timeout_secs: Option<u64>,
     /// Per-step retry ceiling (see `WorkflowStepDef::max_retries`).
-    /// Executable core; omitted on the wire when unset.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    /// Executable core; omitted on the wire when unset. `max_retries` is
+    /// accepted as an alias for the same def-shaped-document reason.
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        alias = "max_retries"
+    )]
     pub max_retries: Option<u32>,
 }
 
@@ -144,11 +167,47 @@ impl WorkflowManifest {
                     kind: s.kind,
                     choices: s.choices.clone(),
                     review: s.review,
+                    require_grounding: s.require_grounding,
                     timeout_secs: s.timeout_seconds,
                     max_retries: s.max_retries,
                 })
                 .collect(),
         }
+    }
+
+    /// Re-author the executable core from `def`, KEEPING every extra this
+    /// manifest already carries (per-step `model` / `effort` / `label` /
+    /// `phase` / `schema` / `isolation` / `agentType`, plus `whenToUse` and the
+    /// phase plan), matched by step id.
+    ///
+    /// `save` used to persist `from_def(&definition)` unconditionally, i.e. an
+    /// extras-stripped copy — and `import`'s own remediation note tells the
+    /// user to "retarget the agents (edit + save) before running". Following
+    /// that instruction after importing an engineering `.mjs` silently deleted
+    /// its per-step model and effort pins, which are NOT decoration: `run`
+    /// reads them into the `WORKFLOW_MODEL_KEY` / `WORKFLOW_EFFORT_KEY` stamps
+    /// that decide which model and reasoning tier each step actually executes
+    /// on. Steps the def added or renamed simply get empty extras.
+    #[must_use]
+    pub fn with_core_from(&self, def: &WorkflowDef) -> Self {
+        let mut fresh = Self::from_def(def);
+        // A def cannot express these at all, so an author working through
+        // `describe` → edit → `save` can never intend to clear them.
+        fresh.when_to_use = self.when_to_use.clone();
+        fresh.phases = self.phases.clone();
+        for step in &mut fresh.steps {
+            let Some(prev) = self.steps.iter().find(|s| s.id == step.id) else {
+                continue;
+            };
+            step.label = prev.label.clone();
+            step.model = prev.model.clone();
+            step.phase = prev.phase.clone();
+            step.schema = prev.schema.clone();
+            step.isolation = prev.isolation.clone();
+            step.agent_type = prev.agent_type.clone();
+            step.effort = prev.effort.clone();
+        }
+        fresh
     }
 
     /// Validate the manifest: the executable projection (`WorkflowDef` checks —
@@ -198,6 +257,7 @@ impl WorkflowManifest {
                     kind: s.kind,
                     choices: s.choices.clone(),
                     review: s.review,
+                    require_grounding: s.require_grounding,
                     timeout_seconds: s.timeout_secs,
                     max_retries: s.max_retries,
                 })
@@ -223,6 +283,7 @@ mod tests {
                     kind: WorkflowStepKind::Agent,
                     choices: vec![],
                     review: false,
+                    require_grounding: false,
                     timeout_seconds: None,
                     max_retries: None,
                 },
@@ -234,6 +295,7 @@ mod tests {
                     kind: WorkflowStepKind::Agent,
                     choices: vec![],
                     review: false,
+                    require_grounding: false,
                     timeout_seconds: None,
                     max_retries: None,
                 },
@@ -246,6 +308,64 @@ mod tests {
         let def = core_def();
         let manifest = WorkflowManifest::from_def(&def);
         assert_eq!(manifest.to_def(), def);
+    }
+
+    /// `save` re-authors the executable core but must not DELETE what the core
+    /// cannot express. It used to persist `from_def(&definition)` — an
+    /// extras-stripped copy — and import's own remediation note ("retarget the
+    /// agents: edit + save") walked users straight into it, silently dropping
+    /// per-step `model` / `effort`, which are executable.
+    #[test]
+    fn with_core_from_keeps_executable_extras_of_surviving_steps() {
+        let mut stored = WorkflowManifest::from_def(&core_def());
+        stored.when_to_use = "nightly briefings".into();
+        stored.phases = vec![WorkflowPhase {
+            title: "Verify".into(),
+            detail: "four adversarial reviewers".into(),
+            model: Some("opus".into()),
+        }];
+        stored.steps[0].model = Some("opus".into());
+        stored.steps[0].effort = Some("max".into());
+        stored.steps[0].schema = Some(serde_json::json!({"type": "object"}));
+
+        // The author edits an unrelated thing and saves the def back.
+        let mut edited = core_def();
+        edited.steps[0].prompt = "a reworded prompt".into();
+        let merged = stored.with_core_from(&edited);
+
+        assert_eq!(
+            merged.steps[0].prompt, "a reworded prompt",
+            "core is re-authored"
+        );
+        assert_eq!(merged.steps[0].model.as_deref(), Some("opus"));
+        assert_eq!(merged.steps[0].effort.as_deref(), Some("max"));
+        assert!(merged.steps[0].schema.is_some());
+        assert_eq!(merged.when_to_use, "nightly briefings");
+        assert_eq!(merged.phases.len(), 1);
+    }
+
+    /// A serialised `WorkflowDef` — exactly what `describe` hands back — must
+    /// deserialise into a manifest without losing its executable budget fields.
+    /// Only `depends_on` carried a back-compat alias; these two were forgotten,
+    /// so `describe` → edit → `import` silently reverted the step to the
+    /// dispatcher's global timeout and retry ceiling.
+    #[test]
+    fn def_shaped_json_keeps_timeout_retries_and_grounding() {
+        let step: WorkflowManifestStep = serde_json::from_value(serde_json::json!({
+            "id": "crawl",
+            "agent": "researcher",
+            "prompt": "go",
+            "depends_on": ["seed"],
+            "review": true,
+            "require_grounding": true,
+            "timeout_seconds": 3600,
+            "max_retries": 2
+        }))
+        .unwrap();
+        assert_eq!(step.depends_on, vec!["seed".to_string()]);
+        assert_eq!(step.timeout_secs, Some(3600));
+        assert_eq!(step.max_retries, Some(2));
+        assert!(step.require_grounding);
     }
 
     #[test]
@@ -288,6 +408,7 @@ mod tests {
                 kind: WorkflowStepKind::Agent,
                 choices: vec![],
                 review: false,
+                require_grounding: false,
                 timeout_secs: None,
                 max_retries: None,
             }],
@@ -322,6 +443,7 @@ mod tests {
                 kind: WorkflowStepKind::Agent,
                 choices: vec![],
                 review: false,
+                require_grounding: false,
                 timeout_secs: None,
                 max_retries: None,
             }],
@@ -407,6 +529,7 @@ mod tests {
                 kind: WorkflowStepKind::Clarify,
                 choices: vec!["staging".into(), "prod".into()],
                 review: false,
+                require_grounding: false,
                 timeout_seconds: None,
                 max_retries: None,
             }],

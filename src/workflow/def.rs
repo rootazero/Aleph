@@ -97,6 +97,19 @@ pub struct WorkflowStepDef {
     /// wire for every pre-existing template).
     #[serde(default, skip_serializing_if = "is_false")]
     pub review: bool,
+    /// Require the reviewer to attach real measured evidence before approving
+    /// this step (exit code / count / line count — never a self-report).
+    ///
+    /// Only meaningful together with [`review`](Self::review): it stamps the
+    /// same `require_grounding` metadata `task_create` already writes, which
+    /// `workflow_step_review`'s approve arm bounces on. Without it, the
+    /// declarative path could declare a review gate but never demand that the
+    /// gate touch reality — the review verdict was one model's word about
+    /// another model's word, which is the failure mode the whole review gate
+    /// exists to prevent. Absent on the wire when false (byte-identical legacy
+    /// templates).
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub require_grounding: bool,
     /// Per-step wall-clock timeout (seconds) for the member run. Stamped into
     /// the materialised task's metadata (`timeout_secs` — the same override
     /// channel `task_create` uses), so a deep-research step and a quick
@@ -178,9 +191,9 @@ impl WorkflowDef {
                             step.id
                         )));
                     }
-                    if step.review {
+                    if step.review || step.require_grounding {
                         return Err(AlephError::invalid_input(format!(
-                            "clarify step '{}' cannot require review — there is no agent run to review",
+                            "clarify step '{}' cannot require review/grounding — there is no agent run to review",
                             step.id
                         )));
                     }
@@ -198,6 +211,16 @@ impl WorkflowDef {
             if step.timeout_seconds == Some(0) {
                 return Err(AlephError::invalid_input(format!(
                     "step '{}' has timeout_seconds=0 — omit the field for the global default",
+                    step.id
+                )));
+            }
+            // Grounding is enforced at the review gate, so demanding it without
+            // one means nobody is ever asked for the evidence: the flag would
+            // read as a guarantee while doing nothing at all.
+            if step.require_grounding && !step.review {
+                return Err(AlephError::invalid_input(format!(
+                    "step '{}' sets require_grounding without review — the evidence is \
+                     demanded at the review gate, so add `review: true` (or drop the flag)",
                     step.id
                 )));
             }
@@ -310,6 +333,7 @@ mod tests {
             kind: WorkflowStepKind::Agent,
             choices: vec![],
             review: false,
+            require_grounding: false,
             timeout_seconds: None,
             max_retries: None,
         }
@@ -324,6 +348,7 @@ mod tests {
             kind: WorkflowStepKind::Clarify,
             choices: choices.iter().map(|s| s.to_string()).collect(),
             review: false,
+            require_grounding: false,
             timeout_seconds: None,
             max_retries: None,
         }

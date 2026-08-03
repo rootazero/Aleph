@@ -253,7 +253,15 @@ pub(super) async fn list_tasks(
             t.completed_at, t.locked_by, t.locked_at,
             COALESCE(SUM(CASE WHEN dep.status IS NOT NULL AND dep.status NOT IN ('completed', 'skipped') THEN 1 ELSE 0 END), 0) AS unresolved_parents,
             COALESCE(SUM(CASE WHEN dep.status IN ('failed', 'cancelled') THEN 1 ELSE 0 END), 0) AS dead_parents,
-            GROUP_CONCAT(d.depends_on) AS dep_ids
+            -- Ordered by insertion, which IS the declared order: `create_task`
+            -- inserts `blocked_by` in the order the template listed it, and the
+            -- table is a rowid table. Without the ORDER BY, SQLite returned the
+            -- covering index's order — dependency-id (uuid) order — so a
+            -- three-way fan-in presented its inputs to the synthesis node in an
+            -- order that changed every time the same template was
+            -- re-materialised. (`GROUP_CONCAT(x ORDER BY y)` needs SQLite
+            -- >= 3.44; rusqlite is `bundled`, so the version is ours.)
+            GROUP_CONCAT(d.depends_on ORDER BY d.rowid) AS dep_ids
         FROM coord_tasks t
         LEFT JOIN coord_task_dependencies d ON d.task_id = t.id
         LEFT JOIN coord_tasks dep ON dep.id = d.depends_on

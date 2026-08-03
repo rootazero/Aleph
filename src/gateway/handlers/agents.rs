@@ -709,7 +709,12 @@ name = "Coder"
             Arc::clone(&manager),
         )
         .await;
-        let msg = resp.error.as_ref().expect("must be refused").message.clone();
+        let msg = resp
+            .error
+            .as_ref()
+            .expect("must be refused")
+            .message
+            .clone();
         assert!(msg.contains("remember"), "msg was: {msg}");
         assert_eq!(
             std::fs::read_to_string(&memory).unwrap(),

@@ -82,4 +82,6 @@ pub use usage::{TeamUsageArgs, TeamUsageOutput, TeamUsageTool, UsageTotal};
 pub use workflow_canvas::{
     TeamWorkflowCanvasArgs, TeamWorkflowCanvasOutput, TeamWorkflowCanvasTool, WorkflowCanvasAction,
 };
-pub use workflow_step::{WorkflowStepReviewArgs, WorkflowStepReviewOutput, WorkflowStepReviewTool};
+pub use workflow_step::{
+    verdict_admissible, WorkflowStepReviewArgs, WorkflowStepReviewOutput, WorkflowStepReviewTool,
+};

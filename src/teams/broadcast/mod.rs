@@ -94,7 +94,7 @@ use crate::gateway::event_emitter::team_fanout::{
     publish_team_event, team_event_bus, TeamFanoutEmitter,
 };
 use crate::gateway::event_emitter::{CollectingEventEmitter, EventEmitter};
-use crate::gateway::execution_engine::RunRequest;
+use crate::gateway::execution_engine::{ExecutionError, RunRequest};
 use crate::gateway::reply_emitter::extract_final_response;
 use crate::routing::session_key::SessionKey;
 use crate::sync_primitives::Arc;
@@ -387,7 +387,10 @@ impl GroupChatBroadcaster {
                 .unwrap_or_default();
             let roster_ids: Vec<String> = members.iter().map(|m| m.agent_id.clone()).collect();
 
-            let targets = targets::resolve_targets(
+            let targets::ResolvedTargets {
+                targets,
+                suppressed,
+            } = targets::resolve_targets(
                 &content,
                 &sender,
                 &team.leader_id,
@@ -411,6 +414,22 @@ impl GroupChatBroadcaster {
             if leader_first && user_triggered && content.contains('@') {
                 self.post_system(&team_id, "已交由 leader 统筹:先规划任务分配,再分派给成员。")
                     .await;
+            }
+            // The width gate held back members that were explicitly addressed.
+            // Say so once, in the same place the depth and activation gates
+            // announce themselves — a silent drop reads downstream (and to the
+            // user watching) as "that member ignored you".
+            if !suppressed.is_empty() {
+                let named = suppressed
+                    .iter()
+                    .map(|a| format!("@{a}"))
+                    .collect::<Vec<_>>()
+                    .join(" ");
+                self.post_system(
+                    &team_id,
+                    &format!("本轮发言人数已达上限,{named} 未被唤醒,可稍后单独 @ 他们。"),
+                )
+                .await;
             }
             if targets.is_empty() {
                 return; // chain naturally stops
@@ -644,25 +663,45 @@ impl GroupChatBroadcaster {
             .execute(req, agent, emitter)
             .await
         {
-            tracing::warn!(team_id = %team_id, agent_id = %agent_id, error = %e, "group-chat member run failed");
+            // A run the USER stopped is not a member failure. `teams.chat.cancel`
+            // aborts every in-flight member, so treating `Cancelled` like a
+            // fault wrote one permanent "@X 执行失败或超时" row per member into
+            // the durable transcript — a record that every later turn (and the
+            // leader's own review) then reads as teammates who could not do
+            // their job. Nobody failed; the user pressed Stop. Same for
+            // `AgentBusy`: that member is already speaking in this round.
+            let stopped_by_user = matches!(e, ExecutionError::Cancelled);
+            let already_speaking = matches!(e, ExecutionError::AgentBusy(_));
+            if stopped_by_user || already_speaking {
+                tracing::debug!(team_id = %team_id, agent_id = %agent_id, error = %e,
+                    "group-chat member run ended without a reply (cancelled or already running)");
+            } else {
+                tracing::warn!(team_id = %team_id, agent_id = %agent_id, error = %e, "group-chat member run failed");
+            }
             // Release the roster badge this member claimed above. An adapter-level
             // failure (spawn refused, timeout) never reaches the emitter's
             // `RunError` arm, so without this the avatar stays amber "working"
-            // for the rest of the session.
-            publish_team_event(
-                &team_id,
-                "activity",
-                serde_json::json!({ "agent_id": agent_id, "status": "error", "error": e.to_string() }),
-            );
+            // for the rest of the session. A stopped/busy member goes back to
+            // idle rather than showing an error the user did not cause.
+            let activity = if stopped_by_user || already_speaking {
+                serde_json::json!({ "agent_id": agent_id, "status": "idle" })
+            } else {
+                serde_json::json!({ "agent_id": agent_id, "status": "error", "error": e.to_string() })
+            };
+            publish_team_event(&team_id, "activity", activity);
             // Failure/timeout must leave a trace in the group transcript — otherwise
             // an @'ed member vanishes silently, leaving a traceless hole in
             // subsequent rounds and Panel history (mirroring the depth/width gate
-            // system notices).
-            self.post_system(
-                &team_id,
-                &format!("@{agent_id} 的发言执行失败或超时,本轮未能回复。"),
-            )
-            .await;
+            // system notices). A cancellation deliberately leaves none: the
+            // transcript is read back into every later prompt, so a durable row
+            // is a durable lie.
+            if !stopped_by_user && !already_speaking {
+                self.post_system(
+                    &team_id,
+                    &format!("@{agent_id} 的发言执行失败或超时,本轮未能回复。"),
+                )
+                .await;
+            }
             return;
         }
 

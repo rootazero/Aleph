@@ -773,7 +773,13 @@ pub const BUILTIN_TOOL_DEFINITIONS: &[BuiltinToolDefinition] = &[
     },
     BuiltinToolDefinition {
         name: "workflow",
-        description: "Manage and run reusable workflow templates: save / list / describe / delete / run. Running compiles a template's steps into a coordination-task DAG executed by the team dispatcher.",
+        // Point at the constant, do not restate it. A hand-written literal here
+        // SHADOWS the tool's own `DESCRIPTION` (agent_init builds the model's
+        // tool table from this catalog first and then only appends names the
+        // catalog lacks), and this one enumerated five of the fifteen actions —
+        // so cancel / pause / resume / status / export / import / the proposal
+        // family were never advertised to the model at all.
+        description: <crate::builtin_tools::workflow_tool::WorkflowTool as crate::tools::AlephTool>::DESCRIPTION,
         requires_config: true,
     },
     // Task artifact tools — require ArtifactStore

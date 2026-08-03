@@ -79,15 +79,108 @@ fn extract_embedded(src: &str) -> Option<String> {
     Some(rest[..end].trim().to_string())
 }
 
+/// Blank every JS comment (`//` to end of line, `/* … */`) so the bare scan
+/// sees only code. String-aware, so a `//` inside a prompt survives untouched.
+/// Comment bodies become spaces and newlines are preserved, keeping the line
+/// structure the rest of the scan reads.
+///
+/// Without this the scanner had no notion of comments at all, and two ordinary
+/// files broke it silently:
+/// - `// don't forget the schema` — the apostrophe opened a phantom string
+///   literal that ran to the next quote in the file, inverting quote parity for
+///   everything after it. Every `agent()` call downstream vanished and the user
+///   was told "no agent() calls found".
+/// - `// await agent('old first pass')` — a deliberately commented-out step
+///   imported as a live one.
+///
+/// Only reachable on the hand-written path: [`extract_embedded`] runs first,
+/// and the `@aleph-workflow` header is itself a block comment.
+fn blank_comments(src: &str) -> String {
+    let mut out = String::with_capacity(src.len());
+    let mut chars = src.chars().peekable();
+    while let Some(c) = chars.next() {
+        match c {
+            '\'' | '"' | '`' => {
+                out.push(c);
+                while let Some(d) = chars.next() {
+                    out.push(d);
+                    if d == '\\' {
+                        if let Some(esc) = chars.next() {
+                            out.push(esc);
+                        }
+                        continue;
+                    }
+                    if d == c {
+                        break;
+                    }
+                }
+            }
+            '/' if chars.peek() == Some(&'/') => {
+                out.push_str("  ");
+                chars.next();
+                for d in chars.by_ref() {
+                    if d == '\n' {
+                        out.push('\n');
+                        break;
+                    }
+                    out.push(' ');
+                }
+            }
+            '/' if chars.peek() == Some(&'*') => {
+                out.push_str("  ");
+                chars.next();
+                let mut prev_star = false;
+                for d in chars.by_ref() {
+                    // Newlines survive so line-oriented reads stay sane.
+                    out.push(if d == '\n' { '\n' } else { ' ' });
+                    if prev_star && d == '/' {
+                        break;
+                    }
+                    prev_star = d == '*';
+                }
+            }
+            _ => out.push(c),
+        }
+    }
+    out
+}
+
 /// Light-weight scan of a hand-written `.workflow.js`.
-fn scan_bare(src: &str) -> Result<ImportOutcome> {
-    let name = scan_meta_field(src, "name").ok_or_else(|| {
+fn scan_bare(raw: &str) -> Result<ImportOutcome> {
+    // Every read below works on the comment-blanked copy so offsets stay
+    // mutually consistent; string literals (prompts) are untouched.
+    let blanked = blank_comments(raw);
+    let src: &str = &blanked;
+    // Hoisted top-level `const NAME = <data-literal>` declarations, so a bare
+    // `schema: AUDIT_SCHEMA` reference in the body resolves to its object —
+    // and so `meta` itself is read as a parsed object rather than by grepping
+    // the file for a `name:` substring.
+    let consts = collect_consts(src);
+    let meta_obj = consts.get("meta").and_then(serde_json::Value::as_object);
+    // Prefer the parsed `meta` object; fall back to the positional scan only
+    // when `meta` is not a pure data literal (it may hold an expression).
+    //
+    // The positional scan alone was wrong in both directions: it took the FIRST
+    // `<field>:` anywhere in the raw source, so hoisting a schema const above
+    // the meta block — the engineering format's own convention — made
+    // `name:` land on a schema property whose next token is `{`, aborting the
+    // whole import; and a `description:` inside a schema could supply the
+    // workflow's description instead of the author's.
+    let meta_field = |field: &str| -> Option<String> {
+        meta_obj
+            .and_then(|m| m.get(field))
+            .and_then(|v| v.as_str())
+            .map(str::to_string)
+            .filter(|s| !s.is_empty())
+            .or_else(|| scan_meta_field(src, field))
+    };
+    let name = meta_field("name").ok_or_else(|| {
         AlephError::invalid_input(
             "no @aleph-workflow block and no `meta.name` found; cannot import",
         )
     })?;
-    let description = scan_meta_field(src, "description").unwrap_or_default();
-    let when_to_use = scan_meta_field(src, "whenToUse").unwrap_or_default();
+    let description = meta_field("description").unwrap_or_default();
+    let when_to_use = meta_field("whenToUse").unwrap_or_default();
 
     // Imperative-construct detection must ignore string-literal *contents* so a
     // prompt like `agent('search for files if (any) exist')` does not
@@ -134,9 +227,6 @@ fn scan_bare(src: &str) -> Result<ImportOutcome> {
     let mut prev_layer: Vec<usize> = Vec::new();
     let mut parallel_depth: u32 = 0;
     let mut parallel_group: Vec<usize> = Vec::new();
-    // Hoisted top-level `const NAME = <data-literal>` declarations, so a bare
-    // `schema: AUDIT_SCHEMA` reference in the body resolves to its object.
-    let consts = collect_consts(src);
     // Count of `agent()`/`clarify()` calls skipped for a dynamic (non-literal)
     // prompt — reported in `dropped` after the walk so the loss is never silent.
     let mut dynamic_prompts: usize = 0;
@@ -197,6 +287,7 @@ fn scan_bare(src: &str) -> Result<ImportOutcome> {
                     isolation: call.opts.isolation,
                     agent_type: call.opts.agent_type,
                     effort: call.opts.effort,
+                    require_grounding: call.opts.require_grounding,
                     kind: crate::workflow::def::WorkflowStepKind::Agent,
                     choices: vec![],
                     review: call.opts.review,
@@ -248,6 +339,7 @@ fn scan_bare(src: &str) -> Result<ImportOutcome> {
                     kind: crate::workflow::def::WorkflowStepKind::Clarify,
                     choices: call.choices,
                     review: false,
+                    require_grounding: false,
                     timeout_secs: None,
                     max_retries: None,
                 });
@@ -542,6 +634,11 @@ struct AgentOpts {
     /// header-stripped round-trip cannot silently drop an oversight gate
     /// (a step meant to park in WaitingReview would auto-complete).
     review: bool,
+    /// Grounding demand (`requireGrounding: true`) — the review gate's anchor
+    /// requirement. Same reasoning as `review`: a round trip that drops it
+    /// silently downgrades a gate that must touch reality into one that takes
+    /// the model's word.
+    require_grounding: bool,
     /// Per-step timeout — parsed from `timeoutSecs: <n>`.
     timeout_secs: Option<u64>,
     /// Per-step retry ceiling — parsed from `maxRetries: <n>`.
@@ -587,17 +684,32 @@ fn read_agent_opts(chars: &[char], start: usize, consts: &ConstTable) -> AgentOp
             }
             _ => {}
         }
-        // Read a bare identifier key (label / phase / model / schema / …).
-        let key_start = i;
-        while i < n && (chars[i].is_alphanumeric() || chars[i] == '_') {
-            i += 1;
-        }
-        if i == key_start {
-            // Not an identifier where a key was expected — give up on the rest
-            // of the object rather than spin.
-            break;
-        }
-        let key: String = chars[key_start..i].iter().collect();
+        // Read the key: a bare identifier (label / phase / model / schema / …)
+        // or a quoted one. Quoted keys are ordinary JS and the interchange
+        // format nowhere forbids them, but hitting one used to abandon the
+        // WHOLE opts object at that point with no diagnostic — so a single
+        // `{ "phase": "Ship", review: true }` silently dropped the review gate
+        // (a safety control) along with everything after it.
+        let key: String = if matches!(chars.get(i), Some('\'' | '"')) {
+            match read_literal_at(chars, i) {
+                Some((lit, next)) => {
+                    i = next;
+                    lit
+                }
+                None => break,
+            }
+        } else {
+            let key_start = i;
+            while i < n && (chars[i].is_alphanumeric() || chars[i] == '_') {
+                i += 1;
+            }
+            if i == key_start {
+                // Not a key at all — give up on the rest of the object rather
+                // than spin.
+                break;
+            }
+            chars[key_start..i].iter().collect()
+        };
         i = first_non_ws(chars, i);
         if chars.get(i) != Some(&':') {
             break;
@@ -710,7 +822,18 @@ fn assign_bare_opt(opts: &mut AgentOpts, key: &str, raw: &str) {
                 opts.review = true;
             }
         }
-        "timeoutSecs" => opts.timeout_secs = raw.parse::<u64>().ok().filter(|t| *t > 0),
+        "requireGrounding" => {
+            if raw == "true" {
+                opts.require_grounding = true;
+            }
+        }
+        // `timeoutSecs: 0` is passed through so the shared `validate()` produces
+        // the one authoritative error ("omit the field for the global
+        // default"). Silently rewriting it to "unset" here made the UNTRUSTED
+        // boundary the most permissive of the three import paths: the author's
+        // (mistaken) "no timeout" became the dispatcher's global budget with no
+        // word to anyone.
+        "timeoutSecs" => opts.timeout_secs = raw.parse::<u64>().ok(),
         "maxRetries" => opts.max_retries = raw.parse::<u32>().ok(),
         _ => {}
     }
@@ -969,6 +1092,71 @@ fn scan_events(src: &str, consts: &ConstTable) -> Vec<ScanEvent> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The bare scanner had no notion of comments, and two ordinary files broke
+    /// it silently: an apostrophe in a `//` comment opened a phantom string
+    /// literal that swallowed the rest of the file (every step vanished, the
+    /// user was told "no agent() calls found"), and a commented-out `agent()`
+    /// imported as a live step.
+    #[test]
+    fn a_comment_apostrophe_does_not_swallow_the_rest_of_the_file() {
+        let src = r#"
+export const meta = { name: 'wf', description: 'demo' }
+// don't forget to update the schema
+await agent('gather the sources')
+await agent('write the brief')
+"#;
+        let out = scan_bare(src).expect("import must succeed");
+        let ids: Vec<&str> = out.manifest.steps.iter().map(|s| s.id.as_str()).collect();
+        assert_eq!(ids.len(), 2, "both steps survive the comment: {ids:?}");
+        assert!(out.manifest.steps[0].prompt.contains("gather the sources"));
+    }
+
+    #[test]
+    fn a_commented_out_agent_call_is_not_imported_as_a_step() {
+        let src = r#"
+export const meta = { name: 'wf' }
+// await agent('the old first pass')
+await agent('the real step')
+/* await agent('an even older pass') */
+"#;
+        let out = scan_bare(src).expect("import must succeed");
+        assert_eq!(out.manifest.steps.len(), 1, "only the live call is a step");
+        assert!(out.manifest.steps[0].prompt.contains("the real step"));
+    }
+
+    /// `meta.name` used to be found by grepping the whole raw source for
+    /// `"name:"`, so hoisting a schema const above the meta block — the
+    /// engineering format's own convention — made the scan land on a schema
+    /// property and abort the entire import.
+    #[test]
+    fn a_hoisted_schema_const_does_not_hijack_meta_name() {
+        let src = r#"
+const REPORT_SCHEMA = { type: 'object', properties: { name: { type: 'string' } } }
+export const meta = { name: 'audit', description: 'the real description' }
+await agent('do the thing', { schema: REPORT_SCHEMA })
+"#;
+        let out = scan_bare(src).expect("import must succeed");
+        assert_eq!(out.manifest.name, "audit");
+        assert_eq!(out.manifest.description, "the real description");
+    }
+
+    /// A quoted object key is ordinary JS; hitting one used to abandon the whole
+    /// opts object at that point, silently dropping the `review` safety gate and
+    /// everything after it.
+    #[test]
+    fn a_quoted_opts_key_does_not_drop_the_review_gate() {
+        let src = r#"
+export const meta = { name: 'wf' }
+await agent('deploy to prod', { "phase": "Ship", review: true, timeoutSecs: 900 })
+"#;
+        let out = scan_bare(src).expect("import must succeed");
+        let step = &out.manifest.steps[0];
+        assert!(step.review, "the review gate must survive a quoted key");
+        assert_eq!(step.timeout_secs, Some(900));
+        assert_eq!(step.phase.as_deref(), Some("Ship"));
+    }
+
     use crate::workflow::interop::export::render_workflow_js;
     use crate::workflow::interop::manifest::{WorkflowManifest, WorkflowManifestStep};
 
@@ -995,6 +1183,7 @@ mod tests {
                     kind: crate::workflow::def::WorkflowStepKind::Agent,
                     choices: vec![],
                     review: false,
+                    require_grounding: false,
                     timeout_secs: None,
                     max_retries: None,
                 },
@@ -1013,6 +1202,7 @@ mod tests {
                     kind: crate::workflow::def::WorkflowStepKind::Agent,
                     choices: vec![],
                     review: false,
+                    require_grounding: false,
                     timeout_secs: None,
                     max_retries: None,
                 },
@@ -1109,6 +1299,7 @@ const r = await pipeline(items, s1, s2)
                 kind: crate::workflow::def::WorkflowStepKind::Agent,
                 choices: vec![],
                 review: false,
+                require_grounding: false,
                 timeout_secs: None,
                 max_retries: None,
             }],
@@ -1343,6 +1534,7 @@ await agent('fix more')
                 kind: crate::workflow::def::WorkflowStepKind::Agent,
                 choices: vec![],
                 review: false,
+                require_grounding: false,
                 timeout_secs: None,
                 max_retries: None,
             }],
@@ -1436,6 +1628,7 @@ await agent('fix more')
                 kind: crate::workflow::def::WorkflowStepKind::Agent,
                 choices: vec![],
                 review: true,
+                require_grounding: false,
                 timeout_secs: None,
                 max_retries: None,
             }],
@@ -1650,6 +1843,7 @@ await agent('fix more')
                 kind: crate::workflow::def::WorkflowStepKind::Agent,
                 choices: vec![],
                 review: false,
+                require_grounding: false,
                 timeout_secs: None,
                 max_retries: None,
             }],
@@ -1688,6 +1882,7 @@ await agent('fix more')
                 kind: crate::workflow::def::WorkflowStepKind::Agent,
                 choices: vec![],
                 review: false,
+                require_grounding: false,
                 timeout_secs: None,
                 max_retries: None,
             }],
@@ -1732,6 +1927,7 @@ await agent('fix more')
             kind: crate::workflow::def::WorkflowStepKind::Agent,
             choices: vec![],
             review: false,
+            require_grounding: false,
             timeout_secs: None,
             max_retries: None,
         }
@@ -1944,6 +2140,7 @@ await agent('fix more')
                     kind: crate::workflow::def::WorkflowStepKind::Clarify,
                     choices: vec!["staging".into(), "prod".into()],
                     review: false,
+                    require_grounding: false,
                     timeout_secs: None,
                     max_retries: None,
                 },
@@ -1962,6 +2159,7 @@ await agent('fix more')
                     kind: crate::workflow::def::WorkflowStepKind::Agent,
                     choices: vec![],
                     review: false,
+                    require_grounding: false,
                     timeout_secs: None,
                     max_retries: None,
                 },

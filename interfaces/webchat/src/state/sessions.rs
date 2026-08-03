@@ -346,7 +346,7 @@ impl SessionMap {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::views::chat::state::ChatState;
+    use crate::views::chat::state::{ChatState, QueuedPrompt};
     use leptos::prelude::Owner;
 
     // Each test case creates its own owner, ensuring the background ChatState is created in a valid arena.
@@ -398,6 +398,60 @@ mod tests {
             // Switch back to A restores its stamped agent_id into the singleton.
             map.activate(singleton, a);
             assert_eq!(singleton.agent_id.get_untracked(), Some("agent-a".into()));
+        });
+    }
+
+    /// The sidebar opens another session by calling `activate` and then
+    /// clearing what no snapshot carries. It used to call the blanket
+    /// `clear_session()` instead, which undid the restore one line after it
+    /// happened: the queue and the draft were gone for good, and `active_run_id`
+    /// was nulled so the composer stopped showing Stop and stopped queueing —
+    /// the next Enter opened a second concurrent run on a session that was
+    /// still generating. Assert the surviving state, not the call.
+    #[test]
+    fn opening_another_session_keeps_what_the_snapshot_restored() {
+        with_owner(|| {
+            let map = SessionMap::new();
+            let singleton = ChatState::new();
+            let a = map.open_conversation("agent-a", "A");
+            let b = map.open_conversation("agent-a", "B");
+
+            // A is mid-run with a queued prompt and an unsent draft.
+            map.activate(singleton, a);
+            singleton.active_run_id.set(Some("run-a".into()));
+            singleton.prompt_queue.set(vec![QueuedPrompt {
+                text: "queued while busy".into(),
+                attachments: Vec::new(),
+            }]);
+            singleton.draft.set("half-typed".into());
+            singleton.team_id.set(Some("team-a".into()));
+
+            // Leave for B, then come back the way the sidebar does it.
+            map.activate(singleton, b);
+            singleton.clear_team_context();
+            map.activate(singleton, a);
+            singleton.clear_team_context();
+
+            assert_eq!(
+                singleton.active_run_id.get_untracked(),
+                Some("run-a".into()),
+                "the conversation is still running, so the composer must still know"
+            );
+            assert_eq!(
+                singleton.prompt_queue.get_untracked().len(),
+                1,
+                "a queued prompt must survive opening another session"
+            );
+            assert_eq!(
+                singleton.draft.get_untracked(),
+                "half-typed",
+                "an unsent draft must survive opening another session"
+            );
+            assert_eq!(
+                singleton.team_id.get_untracked(),
+                None,
+                "team context is the part no snapshot carries, so it must be cleared"
+            );
         });
     }
 

@@ -248,12 +248,13 @@ pub(crate) async fn hydrate_session_history(
                 ws.unseen_artifacts.set(0);
             }
 
-            // Re-project the gauge from the persisted occupancy. This is the
-            // authoritative source on reload — it overrides the `clear_session`
-            // wipe that runs just before hydrate, so switching to/back from any
-            // history conversation shows that conversation's own occupancy
+            // Re-project the gauge from the persisted occupancy. Hydration only
+            // runs for a conversation with no local transcript to preserve, and
+            // for that case the persisted occupancy is the authoritative source
             // (None = no real occupancy yet ⇒ fall back to a core estimate
             // below; the gauge stays hidden only if that estimate also fails).
+            // A conversation restored from its background state keeps the
+            // occupancy its snapshot carried, which is fresher than this.
             match occupancy_from_history(&history) {
                 Some(real) => chat.context_usage.set(Some(real)),
                 None => {
@@ -601,9 +602,13 @@ pub fn ChatSidebar() -> impl IntoView {
         if current.as_deref() == Some(&key) {
             return;
         }
-        // Switch tabs first (snapshots outgoing, restores agent's tab),
-        // then clear that tab's session so the upcoming history load
-        // overwrites cleanly without leaking the previous topic.
+        // Switch tabs first: this snapshots the outgoing conversation and
+        // restores the incoming one, so the draft, the prompt queue and the
+        // live `active_run_id` all come back with it. Only the state no
+        // snapshot carries (team roster / tasks) still needs clearing — the
+        // full `clear_session()` used to run here and undid the restore one
+        // line after it happened. The history load below overwrites
+        // `messages` either way.
         let conv = session_map.conv_for_session_key(&key).unwrap_or_else(|| {
             // Open the tab labelled with the session's topic (M1), falling back
             // to the raw key only when the backend hasn't assigned one yet.
@@ -616,7 +621,7 @@ pub fn ChatSidebar() -> impl IntoView {
             session_map.open_conversation(&agent_id, label)
         });
         session_map.activate(chat, conv);
-        chat.clear_session();
+        chat.clear_team_context();
         if let Some(ws) = workspace {
             ws.reset();
         }
@@ -643,10 +648,12 @@ pub fn ChatSidebar() -> impl IntoView {
         chat.active_project_root.set(restored_root);
         chat.active_project_name.set(restored_name);
 
-        // Same treatment for the session's exec-tier override, which
-        // `clear_session()` above nulls: the run loop resolves the STORED tier
-        // every turn, so a pill left reading "follow global" would under-report
-        // the gate the server is enforcing. Set the signal directly — going
+        // Same treatment for the session's exec-tier override: the server's
+        // stored value is authoritative because the run loop resolves the
+        // STORED tier every turn, so a pill showing anything else — a stale
+        // snapshot value, or "follow global" after a blanket clear — would
+        // under-report the gate the server is enforcing. Set the signal
+        // directly from what the session list reports — going
         // through the picker's `select` would re-issue a `sessions.patch` write
         // on every selection.
         chat.session_exec_tier.set(
@@ -665,13 +672,24 @@ pub fn ChatSidebar() -> impl IntoView {
                 .and_then(|s| s.mode.clone()),
         );
 
-        leptos::task::spawn_local(hydrate_session_history(
-            dash,
-            chat,
-            workspace,
-            key,
-            i18n.get_locale_untracked(),
-        ));
+        // A conversation that is already open keeps a background `ChatState`
+        // which the global dispatcher feeds the entire time it is backgrounded,
+        // so what `activate` just restored is at least as fresh as the server's
+        // history — and strictly fresher while a run is still streaming, since
+        // those rows are not persisted until it completes. Hydrating anyway
+        // replaced a live transcript with an empty one: the message list went
+        // blank while the composer correctly still showed Stop. Load history
+        // only when there is nothing to preserve, i.e. a conversation being
+        // opened here for the first time.
+        if chat.messages.with_untracked(Vec::is_empty) {
+            leptos::task::spawn_local(hydrate_session_history(
+                dash,
+                chat,
+                workspace,
+                key,
+                i18n.get_locale_untracked(),
+            ));
+        }
     };
 
     // Enter team chat mode: fetch detail, build roster, replay history.

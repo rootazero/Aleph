@@ -312,7 +312,9 @@ pub fn write_identity_file(
     content: &str,
 ) -> Result<IdentityWriteOutcome, String> {
     if crate::config::agent_manager::is_curated_owned(file_name) {
-        return Err(crate::config::agent_manager::curated_owned_reason(file_name));
+        return Err(crate::config::agent_manager::curated_owned_reason(
+            file_name,
+        ));
     }
     validate_identity_file_name(file_name)?;
 
