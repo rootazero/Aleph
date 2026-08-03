@@ -1222,15 +1222,20 @@ impl AgentHarness {
         // every other LLM call in the harness. The grace turn fires *right
         // after* a primary turn that already warmed the prompt-cache prefix, so
         // sending the flat string alone re-billed the whole system prompt;
-        // threading the parts turns that into a cache hit. No tools — the grace
-        // turn salvages terminal text, it must not act.
+        // threading the parts turns that into a cache hit. The tool schema is
+        // threaded for the same reason — Anthropic's prefix runs
+        // tools → system → messages, so dropping the array shares no prefix
+        // with the turn that just ran and the cache claim above cannot hold.
+        // `ToolChoice::None` is what keeps the grace turn from acting.
+        let grace_tools = self.deps.tools.metadata_schema();
         let grace_payload = build_request_payload(
             self.deps.system_prompt.as_deref(),
             self.deps.system_prompt_parts.as_deref(),
             &grace_messages,
-            None,
+            (!grace_tools.is_empty()).then(|| grace_tools.as_ref()),
             session_id,
-        );
+        )
+        .with_tool_choice(Some(crate::providers::adapter::ToolChoice::None));
         // Race the grace call against cancel + turn-timeout, like every
         // other LLM call in the harness, and additionally cap it at
         // `GRACE_TIMEOUT_BUDGET`: `race_llm_call`'s timeout arm only exists

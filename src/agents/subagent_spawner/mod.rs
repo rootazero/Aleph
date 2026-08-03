@@ -437,8 +437,12 @@ pub async fn spawn(base: &SpawnerBase, req: SpawnRequest<'_>) -> Result<LoopRunR
             base.default_max_iterations.unwrap_or(0),
         ));
 
-        let (context_budget, context_compactor, preflight_pipeline) =
-            build_context_triple(base.context_budget_config.as_ref(), &llm, &req.agent_def.id);
+        let (context_budget, context_compactor, preflight_pipeline) = build_context_triple(
+            base.context_budget_config.as_ref(),
+            &llm,
+            &req.agent_def.id,
+            &child_id,
+        );
 
         // Layer-3 per-turn aggregate budget — derive from `context_budget_config`
         // when the parent has one wired, otherwise fall back to the
@@ -766,7 +770,8 @@ type ContextTriple = (
     Option<Arc<crate::context::budget::preflight::PreflightPipeline>>,
 );
 
-/// `agent_id` scopes the compactor's cache-watchdog reset to this sub-agent.
+/// `agent_id` + `child_id` scope the compactor's cache-watchdog reset to this
+/// sub-agent's own conversation.
 ///
 /// Without it the compactor calls `notify_compaction(None)`, the process-wide
 /// reset — so the moment any one sub-agent compacts (routine on a long,
@@ -775,11 +780,14 @@ type ContextTriple = (
 /// misses to warn, which in a busy swarm it would then never reach: the single
 /// early-warning signal for prefix breakage is disarmed precisely in the
 /// multi-agent runs where prompt-cache spend is highest. The scoped reset it
-/// mirrors is `runner_impl.rs`'s on the root path.
+/// mirrors is `runner_impl.rs`'s on the root path — and it must be scoped the
+/// same way, since a fan-out spawns many children of the SAME agent id whose
+/// prefixes are entirely independent.
 fn build_context_triple(
     cfg: Option<&crate::context::budget::ContextBudgetConfig>,
     llm: &Arc<dyn AiProvider>,
     agent_id: &str,
+    child_id: &SessionId,
 ) -> ContextTriple {
     use crate::context::compact::compactor::{CompactorConfig, ContextCompactor};
     let Some(cfg) = cfg else {
@@ -796,7 +804,10 @@ fn build_context_triple(
                 ..CompactorConfig::default()
             },
         )
-        .with_monitor_agent(agent_id),
+        .with_monitor_scope(crate::thinker::prompt_builder::cache_monitor::cache_scope(
+            agent_id,
+            Some(&child_id.to_key_string()),
+        )),
     );
     let pipeline = Arc::new(crate::context::budget::preflight::default_pipeline(cfg));
     (Some(budget), Some(compactor), Some(pipeline))

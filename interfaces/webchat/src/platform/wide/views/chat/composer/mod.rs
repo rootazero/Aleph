@@ -613,14 +613,13 @@ pub(super) fn InputArea() -> impl IntoView {
     }
 
     // NOTE: there is deliberately no "drain the prefill channel" Effect here.
-    // Chips, the queued-ghost tap and keyboard recall all go through
-    // `ChatState::seed_draft`, which writes `chat.draft` — the very signal this
-    // composer binds as `input_text` above — and merges rather than overwrites.
-    // A separate `draft_seed` signal used to sit in between, and the version of
-    // it that survived a merge referenced fields `ChatState` no longer has;
-    // reviving it would recreate a second prefill path competing for one draft,
-    // plus the failure mode it was removed for (a platform with no drain site
-    // silently swallowing a recalled message).
+    // Empty-state suggestion chips, the queued-ghost "click to edit", and the
+    // composer's own ↑ retraction all call `ChatState::seed_draft`, which writes
+    // `chat.draft` — and `input_text` above *is* `chat.draft`. A separate
+    // `draft_seed` signal drained here would need a second consumer on every
+    // platform shell (phone never had one, so a ghost tap silently dropped the
+    // message it pulled out of the queue). One home for the state, one entry
+    // point that merges instead of overwriting.
 
     // Queue auto-drain — when a run settles naturally (busy → idle), replay
     // the head of the queue through the normal send pipeline. An explicit

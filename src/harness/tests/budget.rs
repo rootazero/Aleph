@@ -416,7 +416,45 @@ const BUDGETED: [&str; 12] = [
 /// — new machinery in the loop for a state the completion event settles
 /// milliseconds later, and the transcript's linear `ToolCallRequested` order is
 /// deliberate. Fails question 1.
-const CEILING: usize = 5084;
+///
+/// **Round 9 (2026-08-03): 5084 → 5109 (+25).** Two prompt-cache correctness
+/// fixes off FEATURE_LOCATOR §2.18's follow-up ledger (items 3 and 7). Both are
+/// about the *shape of the bytes on the wire*, which is why neither could be
+/// paid for outside the loop: `prompt.rs` and `think.rs` are where the request
+/// is assembled. Measured, not arithmetic.
+///   - **+~19, `prompt.rs`: the orphan scan stops at its own turn.** Rebuilding
+///     an assistant message scanned `events[idx + 1..]` to the end of the log
+///     for a matching `ToolResult`/`ToolError`. A call id reused by a *later*
+///     turn — weaker and proxied models do reuse them — therefore reached back
+///     and un-orphaned a `tool_use` block in an assistant message the provider
+///     had already cached: the same history rendered differently on a later
+///     turn, so the whole message prefix was re-billed at `cache_creation`, and
+///     the resurrected block was still unpaired on the wire. Narrowing is safe
+///     because every synthetic closure (`act::emit_deferred_tool_results`,
+///     `think::close_unexecuted_tool_uses`) carries its *original* turn id —
+///     verified before writing the narrowing, since getting that wrong would
+///     start dropping legitimate pairs. Most of the +19 is the free function's
+///     doc, which records exactly that precondition; trimming it back to hit a
+///     number would be the accounting-cosmetics this file exists to prevent.
+///     Three questions: (1) scaffolding — it decides nothing, it stops reading
+///     bytes that belong to another turn; (2) yes after a model upgrade — a
+///     stronger model does not make id reuse or a late result impossible, and
+///     the wire-level pairing rule is the provider's, not the model's; (3) one
+///     real consumer, the request every turn is built from.
+///   - **+~6, `think.rs`: the boundary grace turn keeps the tools array.** It
+///     sent `tools: None` to stop itself acting, while its own comment claimed
+///     the call "turns into a cache hit". It cannot: Anthropic builds its prefix
+///     tools → system → messages, so a request with no tools array shares no
+///     prefix with the turn that just ran — and the grace turn replays the
+///     entire history, right after a turn that warmed it. It now threads the
+///     schema and disables tool use with `ToolChoice::None`, which all four
+///     adapters honour. (The §2.18 ledger prescribed `tool_choice: none` alone;
+///     that was not enough — the Anthropic adapter implemented `None` by
+///     *deleting* the tools array, i.e. the identical wire shape. Fixed there
+///     too, outside this budget.) Three questions: (1) scaffolding — request
+///     shape, no judgement; (2) yes — prefix construction is a provider fact;
+///     (3) one real consumer, all six grace sites funnel through here.
+const CEILING: usize = 5109;
 
 fn repo_root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
