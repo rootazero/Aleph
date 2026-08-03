@@ -284,9 +284,10 @@ impl ProtocolAdapter for AnthropicProtocol {
             .unwrap_or_else(|| config.default_model());
         let normalized_model = self.normalize_model_id(raw_model);
         let mut actual_model = normalized_model.as_ref();
-        // The Kimi Coding endpoint only serves the single model id
-        // `kimi-for-coding`; display-style ids like `Kimi-K2.7` and legacy
-        // aliases (`kimi-code`, `k2p5`) must be mapped to it.
+        // The Kimi Coding endpoint has its own model-id namespace (`k3`,
+        // `k3-256k`, `kimi-for-coding`, `kimi-for-coding-highspeed`);
+        // open-platform ids (`kimi-k3`), display-style ids (`Kimi-K2.7`) and
+        // legacy aliases (`kimi-code`, `k2p5`) must be mapped into it.
         let is_kimi = is_kimi_anthropic_base_url(config.base_url.as_deref());
         if is_kimi {
             actual_model = normalize_kimi_coding_model_id(actual_model);

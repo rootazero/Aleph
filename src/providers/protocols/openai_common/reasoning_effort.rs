@@ -25,7 +25,17 @@ fn effort_ordinal(effort: &str) -> Option<u8> {
         "low" => Some(2),
         "medium" => Some(3),
         "high" => Some(4),
-        "xhigh" => Some(5),
+        // `xhigh` and `max` are the SAME rung spelled two ways: OpenAI (and
+        // Anthropic 4.7+) call the top level `xhigh`, Kimi (and Anthropic 4.6)
+        // call it `max`. Sharing an ordinal is what lets a requested `xhigh`
+        // land exactly on `max` for a family that only spells it that way —
+        // with distinct ordinals it would tie with `high` at distance 1 and
+        // the tie-break would take the cheaper rung, leaving `max` a value no
+        // request could ever reach.
+        //
+        // No pre-existing family list contains `max`, so this widens nothing
+        // that was already in use; `map_think_level` never emits it either.
+        "xhigh" | "max" => Some(5),
         _ => None,
     }
 }
@@ -78,10 +88,42 @@ fn minor_of(id: &str) -> Option<u32> {
     digits.parse().ok()
 }
 
+/// Drop an aggregator's routing prefix (`moonshotai/kimi-k3` → `kimi-k3`).
+///
+/// [`normalize_for_family`] mirrors openclaw and deliberately does not peel
+/// vendor tags, but the Moonshot rows below match on prefixes — without this,
+/// `moonshotai/kimi-k3` would be caught by the `moonshot` catch-all and lose
+/// the effort it gets when the same model is reached directly.
+fn strip_routing_prefix(id: &str) -> &str {
+    match id.rfind('/') {
+        Some(i) => &id[i + 1..],
+        None => id,
+    }
+}
+
+/// True for the Kimi K3 generation under either of its two id spellings: the
+/// open platform serves `kimi-k3`, the Kimi Code subscription endpoint serves
+/// bare `k3` / `k3-256k`.
+fn is_kimi_k3(id: &str) -> bool {
+    id == "k3" || id.starts_with("k3-") || id.starts_with("kimi-k3")
+}
+
+/// True for any other Moonshot / Kimi id. Used to keep the vendor **fail-closed**:
+/// an id this table has never heard of (a future `kimi-k4`) sends no effort at
+/// all rather than inheriting the generic ladder and 400ing.
+fn is_other_moonshot(id: &str) -> bool {
+    id.starts_with("kimi") || id.starts_with("moonshot") || id == "k2p5"
+}
+
 /// Supported `reasoning_effort` values for the given model's family.
 ///
 /// Returns the generic ladder for non-gpt-5 reasoning models. The tables track
 /// openclaw's family matrix.
+///
+/// An **empty** slice means "this model takes no `reasoning_effort` field at
+/// all" — [`clamp_effort`] then returns `None` and the caller omits the field.
+/// That is the model-granularity twin of the endpoint-level
+/// `supports_reasoning_effort` strip.
 #[must_use]
 pub fn supported_efforts(model: &str) -> &'static [&'static str] {
     const GPT_5: &[&str] = &["minimal", "low", "medium", "high"];
@@ -93,6 +135,21 @@ pub fn supported_efforts(model: &str) -> &'static [&'static str] {
     const CODEX_MAX: &[&str] = &["none", "medium", "high", "xhigh"];
     const CODEX_MINI: &[&str] = &["medium"];
     const GENERIC: &[&str] = &["low", "medium", "high"];
+    // Kimi K3 publishes exactly three levels (`low` / `high` / `max`, default
+    // `max`). This is deliberately the INTERSECTION of what the two Kimi
+    // endpoints accept: the Kimi Code endpoint also maps `medium`/`ultra`/
+    // `xhigh`/`minimum`/`light`, but the open platform documents only these
+    // three and 400s on anything unmapped.
+    //
+    // `none` is excluded on purpose, and it is the important one: on Kimi,
+    // "thinking off" is not a setting, it is a MODEL SWAP — the vendor docs
+    // state that disabling thinking reroutes the request to K2.6. So a
+    // `ThinkLevel::Off` clamps up to `low` (thinking on, cheapest rung, still
+    // K3) rather than silently answering from a different model.
+    const KIMI_K3: &[&str] = &["low", "high", "max"];
+    // "Accepts no effort field." K2.x has a thinking mode but not this knob,
+    // and `moonshot-v1` has no reasoning at all.
+    const NO_EFFORT: &[&str] = &[];
 
     let id = normalize_for_family(model);
 
@@ -102,6 +159,18 @@ pub fn supported_efforts(model: &str) -> &'static [&'static str] {
         "gpt-5.1-codex-max" => return CODEX_MAX,
         "gpt-5-pro" => return GPT_5_PRO,
         _ => {}
+    }
+
+    // ── Moonshot / Kimi ──────────────────────────────────────────────────
+    // Must precede the generic fallthrough: the endpoint-level gate is now
+    // open for this vendor (the endpoint *does* understand the field), so this
+    // table is the only thing standing between a K2.6 request and a 400.
+    let bare = strip_routing_prefix(&id);
+    if is_kimi_k3(bare) {
+        return KIMI_K3;
+    }
+    if is_other_moonshot(bare) {
+        return NO_EFFORT;
     }
 
     // Anything outside the gpt-5 family uses the generic ladder.
@@ -134,8 +203,11 @@ pub fn supported_efforts(model: &str) -> &'static [&'static str] {
 /// toward the lower (cheaper) effort. `"none"` is never a clamp target — a
 /// caller asking for an active effort wants reasoning *on*, so collapsing it to
 /// the disabled state would defeat the request (e.g. `minimal` on a family that
-/// exposes `none/low/…` clamps up to `low`, not down to `none`). Returns `None`
-/// only when `requested` is not a recognized effort token.
+/// exposes `none/low/…` clamps up to `low`, not down to `none`).
+///
+/// Returns `None` in two cases, both of which mean "omit the field": the token
+/// is not a recognized effort, or the family accepts no effort at all
+/// (empty [`supported_efforts`] — see the Moonshot rows there).
 #[must_use]
 pub fn clamp_effort(model: &str, requested: &str) -> Option<String> {
     let supported = supported_efforts(model);
@@ -235,5 +307,101 @@ mod tests {
     #[test]
     fn unknown_effort_token_returns_none() {
         assert_eq!(clamp_effort("gpt-5", "bogus"), None);
+    }
+
+    /// K3 publishes `low`/`high`/`max`. The top rung must be *reachable* — a
+    /// value in the supported list that no request can produce is the same
+    /// defect as not supporting it at all.
+    #[test]
+    fn kimi_k3_reaches_max_and_clamps_the_rest() {
+        for id in ["k3", "k3-256k", "kimi-k3", "Kimi-K3"] {
+            assert_eq!(
+                clamp_effort(id, "xhigh").as_deref(),
+                Some("max"),
+                "{id}: xhigh is Kimi's `max` under another spelling"
+            );
+            assert_eq!(clamp_effort(id, "high").as_deref(), Some("high"));
+            assert_eq!(clamp_effort(id, "low").as_deref(), Some("low"));
+            // `medium` is not published on the open platform; ties break to
+            // the cheaper rung.
+            assert_eq!(clamp_effort(id, "medium").as_deref(), Some("low"));
+            assert_eq!(clamp_effort(id, "minimal").as_deref(), Some("low"));
+        }
+    }
+
+    /// On Kimi, "thinking off" is a MODEL SWAP: the vendor reroutes a
+    /// thinking-disabled K3 request to K2.6. Aleph must never emit `none`
+    /// here — the user asked for cheap, not for a different model.
+    #[test]
+    fn kimi_k3_never_emits_none() {
+        for id in ["k3", "k3-256k", "kimi-k3"] {
+            let got = clamp_effort(id, "none");
+            assert_eq!(
+                got.as_deref(),
+                Some("low"),
+                "{id}: `none` must clamp up to the cheapest thinking rung"
+            );
+            assert!(!supported_efforts(id).contains(&"none"));
+        }
+    }
+
+    /// The endpoint gate is open for this vendor now, so this table is the
+    /// only thing keeping the field off models that would 400 on it —
+    /// including ids it has never heard of.
+    #[test]
+    fn non_k3_moonshot_models_take_no_effort_field() {
+        for id in [
+            "kimi-k2.6",
+            "kimi-k2.7-code",
+            "kimi-for-coding",
+            "kimi-for-coding-highspeed",
+            "kimi-latest",
+            "moonshot-v1-128k",
+            "k2p5",
+            // Fail-closed: a generation this table predates must not inherit
+            // the generic ladder.
+            "kimi-k4",
+        ] {
+            assert!(
+                supported_efforts(id).is_empty(),
+                "{id} should accept no reasoning_effort"
+            );
+            assert_eq!(
+                clamp_effort(id, "high"),
+                None,
+                "{id}: an empty family must omit the field, not pick a value"
+            );
+        }
+    }
+
+    /// Aggregator-hosted Kimi must land on the same row as the direct id.
+    /// Without the routing-prefix strip, `moonshotai/kimi-k3` falls into the
+    /// `moonshot` catch-all and loses an effort it used to get — a regression
+    /// introduced by adding the catch-all, not by anything upstream.
+    #[test]
+    fn aggregator_routed_kimi_resolves_to_the_same_family() {
+        assert_eq!(
+            clamp_effort("moonshotai/kimi-k3", "xhigh").as_deref(),
+            Some("max")
+        );
+        assert!(supported_efforts("moonshotai/kimi-k2.6").is_empty());
+        // Non-Kimi aggregator ids are untouched by the strip.
+        assert_eq!(
+            clamp_effort("openai/gpt-5.2", "xhigh").as_deref(),
+            Some("high"),
+            "the prefix strip must not reroute non-Kimi ids into a gpt-5 row"
+        );
+    }
+
+    /// `max` entering the ordinal ladder must not change any family that does
+    /// not list it.
+    #[test]
+    fn adding_max_to_the_ladder_leaves_other_families_alone() {
+        assert_eq!(clamp_effort("gpt-5", "xhigh").as_deref(), Some("high"));
+        assert_eq!(clamp_effort("gpt-5.2", "xhigh").as_deref(), Some("xhigh"));
+        assert_eq!(clamp_effort("o3", "xhigh").as_deref(), Some("high"));
+        // `max` is now a recognized token, so a family without it clamps
+        // rather than dropping the field.
+        assert_eq!(clamp_effort("o3", "max").as_deref(), Some("high"));
     }
 }

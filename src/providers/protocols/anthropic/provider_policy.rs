@@ -70,21 +70,40 @@ fn is_bedrock_anthropic_endpoint(host: &str) -> bool {
 /// Matches the openclaw Kimi Coding extension header.
 pub(crate) const KIMI_CODING_USER_AGENT: &str = "claude-code/0.1.0";
 
-/// The Kimi Coding endpoint exposes a single model id: `kimi-for-coding`.
-/// Legacy aliases (`kimi-code`, `k2p5`) and display-style ids (`Kimi-K2.7`,
-/// `Kimi-K2.6`) must be mapped to the canonical id. Mirrors
-/// `normalizeKimiCodingModelId` in the openclaw Kimi Coding extension.
+/// The Kimi Coding endpoint serves **four** model ids — `k3`, `k3-256k`,
+/// `kimi-for-coding` (K2.7 Code) and `kimi-for-coding-highspeed`
+/// (www.kimi.com/code/docs/kimi-code/models). Those pass through untouched;
+/// this function is the translation layer for every *other* namespace that can
+/// reach the endpoint.
+///
+/// It used to serve a single id, and the mapping was written as "everything
+/// becomes `kimi-for-coding`". That shape no longer holds: the K3 ids must
+/// survive, or selecting K3 would silently downgrade to K2.7 Code with no
+/// error anywhere — this function is the last chokepoint before the wire.
+///
+/// What still needs mapping:
+///   * open-platform K3 (`kimi-k3`, api.moonshot.ai) → `k3`
+///   * `Kimi-K2.*` display ids and legacy aliases (`kimi-code`, `k2p5`)
+///     → `kimi-for-coding`
+///
+/// Mirrors `normalizeKimiCodingModelId` in the openclaw Kimi Coding extension,
+/// extended for the K3 generation.
 pub(crate) fn normalize_kimi_coding_model_id(model_id: &str) -> &str {
     let lower = model_id.to_lowercase();
-    if lower == "kimi-for-coding" {
+    // Ids the endpoint serves natively.
+    if lower == "kimi-for-coding"
+        || lower == "kimi-for-coding-highspeed"
+        || lower == "k3"
+        || lower == "k3-256k"
+    {
         return model_id;
     }
-    // Legacy aliases and any Kimi-K2.* display id resolve to the one coding model.
-    if lower == "kimi-code"
-        || lower == "k2p5"
-        || lower.starts_with("kimi-k2")
-        || lower.starts_with("kimi-k2.")
-    {
+    // Open-platform / display-style K3 id → this endpoint's own K3 id.
+    if lower == "kimi-k3" || lower.starts_with("kimi-k3-") {
+        return "k3";
+    }
+    // Legacy aliases and any Kimi-K2.* display id resolve to the K2.7 coding model.
+    if lower == "kimi-code" || lower == "k2p5" || lower.starts_with("kimi-k2") {
         return "kimi-for-coding";
     }
     model_id
@@ -557,6 +576,42 @@ mod tests {
             normalize_kimi_coding_model_id("claude-sonnet-4-6"),
             "claude-sonnet-4-6"
         );
+    }
+
+    /// The four ids the coding endpoint actually serves must survive this
+    /// function byte-for-byte. This is the last chokepoint before the wire:
+    /// if `k3` were folded into `kimi-for-coding` the preset, the picker and
+    /// the capability table would all still say "K3", while every request ran
+    /// K2.7 Code — no error, no log, nothing to notice.
+    #[test]
+    fn normalize_kimi_coding_model_passes_through_native_ids() {
+        for id in [
+            "k3",
+            "k3-256k",
+            "kimi-for-coding",
+            "kimi-for-coding-highspeed",
+        ] {
+            assert_eq!(
+                normalize_kimi_coding_model_id(id),
+                id,
+                "{id} is served natively by the coding endpoint and must not be rewritten"
+            );
+        }
+        // Case is normalised for matching only — the caller's spelling is
+        // what goes on the wire.
+        assert_eq!(normalize_kimi_coding_model_id("K3-256K"), "K3-256K");
+    }
+
+    /// The open platform names the same model `kimi-k3`; the coding endpoint
+    /// 400s on it. Selecting K3 from the general Kimi roster while pointed at
+    /// the coding endpoint must land on K3, not fall through to K2.7.
+    #[test]
+    fn normalize_kimi_coding_model_maps_open_platform_k3() {
+        assert_eq!(normalize_kimi_coding_model_id("kimi-k3"), "k3");
+        assert_eq!(normalize_kimi_coding_model_id("Kimi-K3"), "k3");
+        // A dated / suffixed K3 id resolves the same way, and must NOT be
+        // captured by the `kimi-k2` arm below it.
+        assert_eq!(normalize_kimi_coding_model_id("kimi-k3-20260716"), "k3");
     }
 
     #[test]
