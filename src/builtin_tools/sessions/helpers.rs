@@ -232,10 +232,10 @@ mod tests {
 
     #[test]
     fn test_resolve_display_key_group() {
-        let key = SessionKey::group("main", "discord", PeerKind::Channel, "channel123");
+        let key = SessionKey::group("main", "discord", PeerKind::Group, "channel123");
         assert_eq!(
             resolve_display_key(&key),
-            "agent:main:discord:channel:channel123"
+            "agent:main:discord:group:channel123"
         );
     }
 
@@ -373,7 +373,7 @@ mod tests {
 
     #[test]
     fn test_derive_channel_subagent_inherits_from_parent() {
-        let parent = SessionKey::group("main", "slack", PeerKind::Channel, "C123");
+        let parent = SessionKey::group("main", "slack", PeerKind::Group, "C123");
         let key = SessionKey::Subagent {
             parent_key: Box::new(parent),
             subagent_id: "translator".to_string(),

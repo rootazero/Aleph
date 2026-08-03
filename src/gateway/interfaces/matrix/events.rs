@@ -115,25 +115,6 @@ fn convert_room_message(
         .and_then(|eid| eid.as_str())
         .map(|id| MessageId::new(id.to_string()));
 
-    let thread_root = relates_to
-        .and_then(|r| r.get("rel_type"))
-        .and_then(|rt| {
-            if rt.as_str()? == "m.thread" {
-                Some(())
-            } else {
-                None
-            }
-        })
-        .and(relates_to)
-        .and_then(|r| r.get("event_id"))
-        .and_then(|eid| eid.as_str())
-        .map(|id| MessageId::new(id.to_string()));
-
-    let mut meta = metadata;
-    if let Some(root) = thread_root {
-        meta.push(MessageMeta::ThreadRoot(root));
-    }
-
     Some(InboundMessage {
         id: MessageId::new(event_id),
         channel_id: channel_id.clone(),
@@ -146,7 +127,7 @@ fn convert_room_message(
         reply_to,
         is_group: true,
         raw: Some(event.clone()),
-        metadata: meta,
+        metadata,
     })
 }
 
@@ -328,40 +309,6 @@ mod tests {
         .unwrap();
 
         assert_eq!(msg.reply_to.as_ref().unwrap().as_str(), "$original_event");
-    }
-
-    #[test]
-    fn test_convert_thread_root_extraction() {
-        let event = serde_json::json!({
-            "type": "m.room.message",
-            "sender": "@user:matrix.org",
-            "event_id": "$thread_reply",
-            "origin_server_ts": 1700000002000_i64,
-            "content": {
-                "msgtype": "m.text",
-                "body": "Reply in thread",
-                "m.relates_to": {
-                    "rel_type": "m.thread",
-                    "event_id": "$thread_root"
-                }
-            }
-        });
-
-        let channel_id = ChannelId::new("matrix");
-        let msg = convert_timeline_event(
-            &event,
-            "!room1:matrix.org",
-            &channel_id,
-            "@bot:matrix.org",
-            None,
-        )
-        .unwrap();
-
-        let has_thread_root = msg
-            .metadata
-            .iter()
-            .any(|m| matches!(m, MessageMeta::ThreadRoot(id) if id.as_str() == "$thread_root"));
-        assert!(has_thread_root);
     }
 
     #[test]

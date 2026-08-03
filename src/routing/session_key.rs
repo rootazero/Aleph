@@ -25,7 +25,6 @@ pub enum DmScope {
 #[serde(rename_all = "lowercase")]
 pub enum PeerKind {
     Group,
-    Channel,
     Thread,
 }
 
@@ -59,8 +58,6 @@ pub enum SessionKey {
         channel: String,
         peer_kind: PeerKind,
         peer_id: String,
-        /// Optional thread ID for nested conversations
-        thread_id: Option<String>,
     },
 
     /// Task session (cron, webhook, scheduled)
@@ -145,23 +142,6 @@ impl SessionKey {
             channel: sanitize_component(&channel.into()),
             peer_kind,
             peer_id: sanitize_component(&peer_id.into()),
-            thread_id: None,
-        }
-    }
-
-    pub fn group_thread(
-        agent_id: impl Into<String>,
-        channel: impl Into<String>,
-        peer_kind: PeerKind,
-        peer_id: impl Into<String>,
-        thread_id: impl Into<String>,
-    ) -> Self {
-        Self::Group {
-            agent_id: normalize_agent_id(&agent_id.into()),
-            channel: sanitize_component(&channel.into()),
-            peer_kind,
-            peer_id: sanitize_component(&peer_id.into()),
-            thread_id: Some(sanitize_component(&thread_id.into())),
         }
     }
 
@@ -249,16 +229,6 @@ impl SessionKey {
             self,
             Self::Main { .. } | Self::DirectMessage { .. } | Self::Group { .. }
         )
-    }
-
-    /// Get the main session key for this agent
-    #[must_use]
-    pub fn main_session_key(&self) -> Self {
-        Self::Main {
-            agent_id: self.agent_id().to_string(),
-            main_key: DEFAULT_MAIN_KEY.to_string(),
-            epoch: 0,
-        }
     }
 
     /// Get the epoch of this session key (only Main and `DirectMessage` have epochs)
@@ -351,19 +321,12 @@ impl SessionKey {
                 channel,
                 peer_kind,
                 peer_id,
-                thread_id,
             } => {
                 let kind = match peer_kind {
                     PeerKind::Group => "group",
-                    PeerKind::Channel => "channel",
                     PeerKind::Thread => "thread",
                 };
-                match thread_id {
-                    Some(tid) => {
-                        format!("agent:{agent_id}:{channel}:{kind}:{peer_id}:thread:{tid}")
-                    }
-                    None => format!("agent:{agent_id}:{channel}:{kind}:{peer_id}"),
-                }
+                format!("agent:{agent_id}:{channel}:{kind}:{peer_id}")
             }
             Self::Task {
                 agent_id,
@@ -501,49 +464,12 @@ impl SessionKey {
                 epoch,
             }),
 
-            // agent:id:channel:group:peer:thread:tid
-            [channel, "group", peer_id, "thread", thread_id] => Some(Self::Group {
-                agent_id: agent_id.to_string(),
-                channel: channel.to_string(),
-                peer_kind: PeerKind::Group,
-                peer_id: peer_id.to_string(),
-                thread_id: Some(thread_id.to_string()),
-            }),
-
-            // agent:id:channel:channel:peer:thread:tid
-            [channel, "channel", peer_id, "thread", thread_id] => Some(Self::Group {
-                agent_id: agent_id.to_string(),
-                channel: channel.to_string(),
-                peer_kind: PeerKind::Channel,
-                peer_id: peer_id.to_string(),
-                thread_id: Some(thread_id.to_string()),
-            }),
-
-            // agent:id:channel:thread:peer:thread:tid
-            [channel, "thread", peer_id, "thread", thread_id] => Some(Self::Group {
-                agent_id: agent_id.to_string(),
-                channel: channel.to_string(),
-                peer_kind: PeerKind::Thread,
-                peer_id: peer_id.to_string(),
-                thread_id: Some(thread_id.to_string()),
-            }),
-
             // agent:id:channel:group:peer
             [channel, "group", peer_id] => Some(Self::Group {
                 agent_id: agent_id.to_string(),
                 channel: channel.to_string(),
                 peer_kind: PeerKind::Group,
                 peer_id: peer_id.to_string(),
-                thread_id: None,
-            }),
-
-            // agent:id:channel:channel:peer
-            [channel, "channel", peer_id] => Some(Self::Group {
-                agent_id: agent_id.to_string(),
-                channel: channel.to_string(),
-                peer_kind: PeerKind::Channel,
-                peer_id: peer_id.to_string(),
-                thread_id: None,
             }),
 
             // agent:id:channel:thread:peer
@@ -552,7 +478,6 @@ impl SessionKey {
                 channel: channel.to_string(),
                 peer_kind: PeerKind::Thread,
                 peer_id: peer_id.to_string(),
-                thread_id: None,
             }),
 
             // agent:id:ephemeral:uuid
@@ -742,15 +667,6 @@ mod tests {
         assert_eq!(key.agent_id(), "main");
     }
 
-    #[test]
-    fn test_main_session_key_from_any() {
-        let dm = SessionKey::dm("work", "telegram", "user1", DmScope::PerPeer);
-        let main = dm.main_session_key();
-        assert!(
-            matches!(main, SessionKey::Main { agent_id, main_key, .. } if agent_id == "work" && main_key == "main")
-        );
-    }
-
     // --- Serialization tests ---
 
     #[test]
@@ -781,21 +697,6 @@ mod tests {
     fn test_to_key_string_group() {
         let key = SessionKey::group("main", "discord", PeerKind::Group, "guild456");
         assert_eq!(key.to_key_string(), "agent:main:discord:group:guild456");
-    }
-
-    #[test]
-    fn test_to_key_string_group_channel() {
-        let key = SessionKey::group("main", "slack", PeerKind::Channel, "C123");
-        assert_eq!(key.to_key_string(), "agent:main:slack:channel:c123");
-    }
-
-    #[test]
-    fn test_to_key_string_group_thread() {
-        let key = SessionKey::group_thread("main", "telegram", PeerKind::Group, "chat789", "t1");
-        assert_eq!(
-            key.to_key_string(),
-            "agent:main:telegram:group:chat789:thread:t1"
-        );
     }
 
     #[test]
@@ -857,12 +758,6 @@ mod tests {
     }
 
     #[test]
-    fn test_parse_group_thread() {
-        let key = SessionKey::parse("agent:main:telegram:group:chat789:thread:t1").unwrap();
-        assert!(matches!(key, SessionKey::Group { thread_id: Some(tid), .. } if tid == "t1"));
-    }
-
-    #[test]
     fn test_parse_task() {
         let key = SessionKey::parse("agent:main:cron:daily").unwrap();
         assert!(
@@ -921,7 +816,6 @@ mod tests {
             SessionKey::main("work"),
             SessionKey::peer("main", "user1"),
             SessionKey::dm("main", "discord", "user2", DmScope::PerChannelPeer),
-            SessionKey::group("main", "slack", PeerKind::Channel, "C123"),
             SessionKey::task("main", "webhook", "hook-1"),
             SessionKey::Subagent {
                 parent_key: Box::new(SessionKey::main("main")),

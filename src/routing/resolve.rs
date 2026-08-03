@@ -31,7 +31,6 @@ pub struct RoutePeer {
 pub enum RoutePeerKind {
     Dm,
     Group,
-    Channel,
 }
 
 /// Resolved route result
@@ -229,7 +228,6 @@ fn build_session_key(
             SessionKey::dm(agent_id, channel, peer_id, dm_scope)
         }
         RoutePeerKind::Group => SessionKey::group(agent_id, channel, PeerKind::Group, &peer.id),
-        RoutePeerKind::Channel => SessionKey::group(agent_id, channel, PeerKind::Channel, &peer.id),
     }
 }
 
@@ -253,7 +251,6 @@ fn matches_peer(rule: &MatchRule, peer: &RoutePeer) -> bool {
         let kind_matches = match peer.kind {
             RoutePeerKind::Dm => p.kind.trim().eq_ignore_ascii_case("dm"),
             RoutePeerKind::Group => p.kind.trim().eq_ignore_ascii_case("group"),
-            RoutePeerKind::Channel => p.kind.trim().eq_ignore_ascii_case("channel"),
         };
         kind_matches && p.id.trim().eq_ignore_ascii_case(&peer.id)
     })
