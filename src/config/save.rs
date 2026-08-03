@@ -261,7 +261,7 @@ impl Config {
     /// user's custom settings like providers and rules.
     ///
     /// # Arguments
-    /// * `sections` - List of section names to update (e.g., ["trigger", "search.pii"])
+    /// * `sections` - List of section names to update (e.g., ["trigger", "search"])
     ///
     /// # How it works
     /// 1. Read existing TOML file as raw `toml::Value`

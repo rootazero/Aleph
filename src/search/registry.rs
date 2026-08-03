@@ -1,8 +1,6 @@
 use crate::error::{AlephError, Result};
-use crate::search::{
-    ProviderTestResult, SearchOptions, SearchProvider, SearchResult, WebFetchSerpFallback,
-};
-use crate::sync_primitives::{Arc, Mutex};
+use crate::search::{SearchOptions, SearchProvider, SearchResult, WebFetchSerpFallback};
+use crate::sync_primitives::Arc;
 
 /// Map an `AlephError` returned by a search provider to a short, stable
 /// kind label used for structured log output. Lets ops grep the search
@@ -34,8 +32,6 @@ pub struct SearchRegistry {
     providers: HashMap<String, Arc<dyn SearchProvider>>,
     default_provider: String,
     fallback_providers: Vec<String>,
-    /// Cache for provider test results (name -> (result, timestamp))
-    test_cache: Arc<Mutex<HashMap<String, (ProviderTestResult, Instant)>>>,
     /// WebFetch-based SERP scrape fallback. Consulted only after every
     /// configured provider has failed — typically when the operator's
     /// IP has hit a simultaneous rate-limit across paid APIs. `None`
@@ -51,7 +47,6 @@ impl SearchRegistry {
             providers: HashMap::new(),
             default_provider: default_provider.into(),
             fallback_providers: Vec::new(),
-            test_cache: Arc::new(Mutex::new(HashMap::new())),
             web_fetch_fallback: None,
         }
     }
@@ -185,14 +180,7 @@ impl SearchRegistry {
     }
 
     /// Add a provider to the registry
-    ///
-    /// Invalidates any cached test results for this provider name
-    /// to ensure stale results are not returned after configuration changes.
     pub fn add_provider(&mut self, name: String, provider: Arc<dyn SearchProvider>) {
-        // Invalidate cached test result for this provider before moving `name`
-        // into the providers map so we can reference it without cloning.
-        let mut cache = self.test_cache.lock().unwrap_or_else(|e| e.into_inner());
-        cache.remove(&name);
         self.providers.insert(name, provider);
     }
 
@@ -300,94 +288,6 @@ impl SearchRegistry {
 
         let summary = format!("All search providers failed: {}", errors.join("; "));
         Err(AlephError::provider(summary))
-    }
-
-    /// Test a search provider connection
-    ///
-    /// Executes a minimal test query to validate API key and connectivity.
-    /// Results are cached for 5 minutes to avoid excessive API calls.
-    ///
-    /// # Arguments
-    /// * `name` - Provider name to test
-    ///
-    /// # Returns
-    /// * `ProviderTestResult` - Test result with latency or error information
-    pub async fn test_search_provider(&self, name: &str) -> ProviderTestResult {
-        const CACHE_TTL: Duration = Duration::from_secs(5 * 60); // 5 minutes
-
-        // Check cache first
-        {
-            let cache = self.test_cache.lock().unwrap_or_else(|e| e.into_inner());
-            if let Some((result, timestamp)) = cache.get(name) {
-                if timestamp.elapsed() < CACHE_TTL {
-                    log::debug!("Returning cached test result for provider '{name}'");
-                    // rust-doctor-disable-next-line excessive-clone
-                    return result.clone();
-                }
-            }
-        }
-
-        // Provider not found
-        let provider = match self.providers.get(name) {
-            Some(p) => p,
-            None => {
-                let result = ProviderTestResult {
-                    success: false,
-                    latency_ms: 0,
-                    error_message: format!("Provider '{name}' not found in registry"),
-                    error_type: "config".to_string(),
-                };
-                return result;
-            }
-        };
-
-        // Skip test if provider is not configured
-        if !provider.is_available() {
-            return ProviderTestResult {
-                success: false,
-                latency_ms: 0,
-                error_message: format!("Provider '{name}' is not configured (missing API key)"),
-                error_type: "config".to_string(),
-            };
-        }
-
-        // Execute test search
-        let test_options = SearchOptions {
-            max_results: 1,
-            timeout_seconds: 5,
-            ..Default::default()
-        };
-
-        let start = Instant::now();
-        let result = match provider.search("test", &test_options).await {
-            Ok(_) => {
-                let latency = start.elapsed().as_millis().min(u128::from(u32::MAX)) as u32;
-                ProviderTestResult {
-                    success: true,
-                    latency_ms: latency,
-                    error_message: String::new(),
-                    error_type: String::new(),
-                }
-            }
-            Err(e) => {
-                let error_type = classify_search_error(&e).to_string();
-                ProviderTestResult {
-                    success: false,
-                    latency_ms: 0,
-                    error_message: e.to_string(),
-                    error_type,
-                }
-            }
-        };
-
-        // Cache only successful results; failures are retried on next call
-        if result.success {
-            let mut cache = self.test_cache.lock().unwrap_or_else(|e| e.into_inner());
-            // rust-doctor-disable-next-line excessive-clone
-            cache.insert(name.to_string(), (result.clone(), Instant::now()));
-        }
-
-        result
     }
 }
 
@@ -703,7 +603,6 @@ mod tests {
             max_results: 5,
             timeout_seconds: 10,
             backends,
-            pii: None,
             web_fetch_fallback: true,
         };
         let registry = SearchRegistry::from_config(Some(&cfg)).expect("registry");
@@ -752,7 +651,6 @@ mod tests {
             max_results: 5,
             timeout_seconds: 10,
             backends,
-            pii: None,
             web_fetch_fallback: false,
         };
         let registry = SearchRegistry::from_config(Some(&cfg)).expect("registry");
@@ -786,7 +684,6 @@ mod tests {
             max_results: 5,
             timeout_seconds: 10,
             backends,
-            pii: None,
             web_fetch_fallback: false,
         };
         let registry = SearchRegistry::from_config(Some(&cfg)).expect("registry");
