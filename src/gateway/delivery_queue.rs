@@ -97,6 +97,17 @@ pub struct DeliveryQueueConfig {
     /// ([`DeadLetterReason::PayloadTooLarge`]) rather than silently dropped, so
     /// the operator still sees *what* was too big.
     pub max_payload_bytes: usize,
+    /// Most queued records one live [`send`](ChannelRegistry::send) will flush
+    /// ahead of itself to keep a conversation in order (see
+    /// [`flush_conversation`]). `0` disables the inline flush entirely.
+    ///
+    /// This bounds how long a user-facing send can block behind its own
+    /// backlog: the flush stops at the first failure anyway, so the cap only
+    /// bites when the channel is healthy and the backlog is deep — the case
+    /// where the background drain is about to deliver them regardless. Past the
+    /// cap the send proceeds live and may overtake what is still queued, which
+    /// is logged rather than silently accepted.
+    pub inline_flush_max: usize,
 }
 
 impl Default for DeliveryQueueConfig {
@@ -110,6 +121,7 @@ impl Default for DeliveryQueueConfig {
             batch: 32,
             max_queue_len: 10_000,
             max_payload_bytes: 1_048_576,
+            inline_flush_max: 8,
         }
     }
 }
@@ -141,6 +153,8 @@ pub struct DeliveryQueueTomlConfig {
     pub max_queue_len: i64,
     /// Hard cap on one serialized payload, in bytes (CWE-400 defense).
     pub max_payload_bytes: usize,
+    /// Most queued records one live send flushes ahead of itself (`0` = off).
+    pub inline_flush_max: usize,
 }
 
 impl Default for DeliveryQueueTomlConfig {
@@ -155,6 +169,7 @@ impl Default for DeliveryQueueTomlConfig {
             batch: d.batch,
             max_queue_len: d.max_queue_len,
             max_payload_bytes: d.max_payload_bytes,
+            inline_flush_max: d.inline_flush_max,
         }
     }
 }
@@ -188,6 +203,10 @@ impl DeliveryQueueTomlConfig {
             // outage. Floor it at a value that comfortably holds any text-only
             // push plus its metadata.
             max_payload_bytes: self.max_payload_bytes.max(4096),
+            // Deliberately *not* floored at 1: `0` is the meaningful "never
+            // flush inline" setting, for an operator who would rather keep
+            // `send` latency independent of queue depth than have ordering.
+            inline_flush_max: self.inline_flush_max,
         }
     }
 }
@@ -473,6 +492,21 @@ pub struct DeliveryStore {
     /// spawn on the same store is refused loudly instead of racing the first
     /// drainer into duplicate deliveries.
     drain_spawned: AtomicBool,
+    /// Serializes every claim→deliver→settle sequence against this store.
+    ///
+    /// [`claim_due`](Self::claim_due) / [`claim_conversation`](Self::claim_conversation)
+    /// are plain SELECTs with no row lease, so two overlapping passes would
+    /// claim the same row twice and deliver it twice. There are now two
+    /// producers of such a pass — the background [`drain_loop`] and the
+    /// opportunistic [`flush_conversation`] that runs ahead of a live send —
+    /// which is exactly the "a second drainer is introduced" case
+    /// [`claim_due`] warns about. A process-local async mutex is the whole fix
+    /// rather than a `claimed_until` column, because the single-drainer
+    /// invariant this store relies on is *already* process-local (enforced by
+    /// [`try_claim_drainer`](Self::try_claim_drainer) over an in-memory flag):
+    /// a second process was never a supported deployment, so a durable lease
+    /// would buy nothing and cost a migration.
+    drain_gate: tokio::sync::Mutex<()>,
 }
 
 impl DeliveryStore {
@@ -526,6 +560,16 @@ impl DeliveryStore {
         ] {
             let _ = conn.execute(stmt, []);
         }
+        // Created after the migration above, not in the batch: `conversation_id`
+        // does not exist yet on a store opened before that column was added.
+        // Covers both per-conversation accesses — `defer_conversation`'s update
+        // and `claim_conversation`, the latter of which now runs on *every*
+        // outbound send that has a store attached.
+        let _ = conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_outbound_conversation
+                ON outbound_deliveries(channel_id, conversation_id, id)",
+            [],
+        );
         // `conversation_id` is a projection of the payload, so pre-existing rows
         // can be backfilled rather than left permanently outside the
         // per-conversation ordering guarantee. Bounded by `max_queue_len`, runs
@@ -537,6 +581,7 @@ impl DeliveryStore {
             conn: Mutex::new(conn),
             config,
             drain_spawned: AtomicBool::new(false),
+            drain_gate: tokio::sync::Mutex::new(()),
         })
     }
 
@@ -774,6 +819,54 @@ impl DeliveryStore {
             mapped.collect::<rusqlite::Result<Vec<_>>>()?
         };
 
+        Ok(Self::hydrate(&conn, raw))
+    }
+
+    /// Claim this conversation's queued records in enqueue order, **ignoring
+    /// `next_attempt_at`** — the backlog a live send must not overtake.
+    ///
+    /// Deliberately blind to the backoff schedule: the head of a wedged
+    /// conversation is precisely the record sitting in the future, and it is the
+    /// one a live send would jump ahead of. Pulling it forward is no more
+    /// aggressive than the live send that is about to hit the same transport
+    /// anyway. What the caller must *not* do is settle a transient failure here
+    /// — see [`AttemptMode::Inline`].
+    ///
+    /// Ordered by `id` (enqueue order), which is the order the caller produced
+    /// them in. Same poison-row handling as [`claim_due`](Self::claim_due).
+    pub fn claim_conversation(
+        &self,
+        channel_id: &str,
+        conversation_id: &str,
+        limit: usize,
+    ) -> rusqlite::Result<Vec<DeliveryRecord>> {
+        let conn = self.guard();
+        let raw: Vec<(i64, String, String, i64)> = {
+            let mut stmt = conn.prepare(
+                "SELECT id, channel_id, payload, attempts
+                 FROM outbound_deliveries
+                 WHERE channel_id = ?1 AND conversation_id = ?2
+                 ORDER BY id ASC
+                 LIMIT ?3",
+            )?;
+            let mapped =
+                stmt.query_map(params![channel_id, conversation_id, limit as i64], |row| {
+                    Ok((
+                        row.get::<_, i64>(0)?,
+                        row.get::<_, String>(1)?,
+                        row.get::<_, String>(2)?,
+                        row.get::<_, i64>(3)?,
+                    ))
+                })?;
+            mapped.collect::<rusqlite::Result<Vec<_>>>()?
+        };
+        Ok(Self::hydrate(&conn, raw))
+    }
+
+    /// Turn claimed raw rows into records, dropping any whose payload no longer
+    /// deserializes so a poison row can never wedge the queue. Shared by both
+    /// claim paths so "what a claimed record is" has one definition.
+    fn hydrate(conn: &Connection, raw: Vec<(i64, String, String, i64)>) -> Vec<DeliveryRecord> {
         let mut out = Vec::with_capacity(raw.len());
         for (id, channel_id, payload, attempts) in raw {
             match serde_json::from_str::<OutboundMessage>(&payload) {
@@ -790,7 +883,7 @@ impl DeliveryStore {
                 }
             }
         }
-        Ok(out)
+        out
     }
 
     /// Delete a record after a successful delivery.
@@ -854,6 +947,22 @@ impl DeliveryStore {
         self.guard().execute(
             "UPDATE outbound_deliveries SET inflight_since = ?1 WHERE id = ?2",
             params![now, id],
+        )?;
+        Ok(())
+    }
+
+    /// Clear an in-flight stamp without touching the record's retry schedule.
+    ///
+    /// The counterpart to [`mark_inflight`](Self::mark_inflight) for an attempt
+    /// that ended in a *reported* transient failure yet must leave the record
+    /// exactly as it was — the opportunistic inline flush
+    /// ([`AttemptMode::Inline`]). [`reschedule`](Self::reschedule) also clears
+    /// the stamp but owns `attempts` and `next_attempt_at` with it, which is
+    /// precisely what an opportunistic probe must not spend.
+    pub fn clear_inflight(&self, id: i64) -> rusqlite::Result<()> {
+        self.guard().execute(
+            "UPDATE outbound_deliveries SET inflight_since = NULL WHERE id = ?1",
+            params![id],
         )?;
         Ok(())
     }
@@ -1220,6 +1329,9 @@ impl DeliveryStore {
 /// exhausted → dead-letter, ambiguous/permanent → drop). Factored out of
 /// [`drain_loop`] to keep the loop body readable.
 async fn drain_once(registry: &ChannelRegistry, store: &DeliveryStore) {
+    // Held for the whole pass: claim → deliver → settle must not interleave
+    // with the inline flush, which claims from the same unleased table.
+    let _gate = store.drain_gate.lock().await;
     let cfg = store.config();
     let now = now_secs();
     let due = match store.claim_due(now, cfg.batch) {
@@ -1261,13 +1373,32 @@ async fn drain_once(registry: &ChannelRegistry, store: &DeliveryStore) {
             continue;
         };
         for rec in records {
-            if !deliver_one(registry, store, cfg, now, &rec).await {
+            if !deliver_one(registry, store, cfg, now, &rec, AttemptMode::Drain).await {
                 // Head-of-line: everything still queued for this conversation
                 // stays queued and keeps its relative order.
                 break;
             }
         }
     }
+}
+
+/// Who is attempting a queued record, and therefore what a *failure* is allowed
+/// to change about it.
+///
+/// The success path is identical for both. The difference is ownership of the
+/// retry schedule: the drain loop owns `attempts` / `next_attempt_at` and the
+/// `max_attempts` budget behind them; the inline flush is an opportunistic
+/// probe riding along with a live send and must leave that budget alone. If it
+/// did not, a chatty conversation talking to a wedged channel would burn its
+/// own backlog's ten attempts in ten consecutive user messages and dead-letter
+/// it far sooner than the configured backoff curve intends.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum AttemptMode {
+    /// Background drain tick — settles every outcome.
+    Drain,
+    /// Inline flush ahead of a live send — settles success and *terminal*
+    /// failures only (see [`deliver_one`]).
+    Inline,
 }
 
 /// Attempt one queued record and settle it. Returns `true` when the
@@ -1279,6 +1410,7 @@ async fn deliver_one(
     cfg: &DeliveryQueueConfig,
     now: i64,
     rec: &DeliveryRecord,
+    mode: AttemptMode,
 ) -> bool {
     let channel = ChannelId(rec.channel_id.clone());
 
@@ -1306,6 +1438,22 @@ async fn deliver_one(
                 );
             }
             true
+        }
+        // Transient, and the record's schedule is not this attempt's to spend:
+        // put it back exactly as it was found. The live send this flush runs
+        // ahead of is about to hit the same failure and be enqueued *behind*
+        // this record, so the conversation's order survives either way.
+        Err(e) if should_enqueue(&e) && mode == AttemptMode::Inline => {
+            if let Err(clear_err) = store.clear_inflight(rec.id) {
+                warn!(id = rec.id, error = %clear_err, "delivery queue: could not clear the inline probe's in-flight stamp");
+            }
+            debug!(
+                id = rec.id,
+                channel = %rec.channel_id,
+                error = ?e,
+                "delivery queue: inline flush stopped at a still-failing record; schedule untouched"
+            );
+            false
         }
         Err(e) if should_enqueue(&e) => {
             let attempts = rec.attempts + 1;
@@ -1349,6 +1497,11 @@ async fn deliver_one(
         // for a terminal failure than for a transient one: the dead-letter trail
         // existed precisely so an undelivered proactive push is never silent
         // (R5), and this was the one path that stayed silent.
+        //
+        // Settled in **both** modes, unlike the transient arm above: leaving an
+        // ambiguous failure for the drain loop to retry is how at-most-once
+        // dies. An inline probe that may already have put the message on the
+        // wire must retire it here, not hand it back for a second attempt.
         Err(e) => {
             retire(
                 store,
@@ -1360,6 +1513,190 @@ async fn deliver_one(
             false
         }
     }
+}
+
+/// Deliver this conversation's queued backlog, in enqueue order, immediately
+/// before a live send to the same conversation goes out.
+///
+/// # Why this exists
+///
+/// Per-conversation ordering used to hold only *within* the queue. A message
+/// that never failed took the live path and went out at once, while messages
+/// that had failed sat in the queue serving out a backoff of up to
+/// `max_backoff` — so a reply the user was waiting for could land minutes after
+/// the replies that came later. Fixing that by admitting live sends into the
+/// queue would have changed what every caller of
+/// [`send`](ChannelRegistry::send) observes (a queued message has no
+/// [`SendResult`](super::channel::SendResult) to return) and would have turned
+/// a reordering bug into a head-of-line availability bug: one wedged record
+/// would hold up every later message for its conversation until the record
+/// dead-lettered. Flushing the backlog *ahead* of the live send instead keeps
+/// the return contract byte-for-byte and stops at the first failure, so a
+/// wedged conversation costs one extra attempt, not a stall.
+///
+/// # What it will not do
+///
+/// - It never runs while the background drainer holds the gate
+///   ([`try_lock`](tokio::sync::Mutex::try_lock)): the drainer is already
+///   delivering this conversation in order, and blocking a user-facing send
+///   behind a whole drain tick is worse than the one-tick reorder window that
+///   skipping leaves.
+/// - It never spends the backlog's retry budget — see [`AttemptMode::Inline`].
+/// - It stops at [`DeliveryQueueConfig::inline_flush_max`] records and says so,
+///   rather than letting one send block on an unbounded backlog.
+pub(super) async fn flush_conversation(
+    registry: &ChannelRegistry,
+    store: &DeliveryStore,
+    channel_id: &str,
+    conversation_id: &str,
+) {
+    let cfg = store.config();
+    let limit = cfg.inline_flush_max;
+    if limit == 0 {
+        return;
+    }
+    let Ok(_gate) = store.drain_gate.try_lock() else {
+        debug!(
+            channel = %channel_id,
+            "delivery queue: drain in progress; skipping the inline flush for this send"
+        );
+        return;
+    };
+
+    // One over the cap: the extra record is never attempted, it only answers
+    // "is there more behind what we are about to flush?" without a second query.
+    let mut records = match store.claim_conversation(channel_id, conversation_id, limit + 1) {
+        Ok(r) => r,
+        Err(e) => {
+            warn!(error = %e, channel = %channel_id, "delivery queue: claim_conversation failed");
+            return;
+        }
+    };
+    if records.is_empty() {
+        return;
+    }
+    let overflowed = records.len() > limit;
+    records.truncate(limit);
+
+    let now = now_secs();
+    let mut delivered = 0usize;
+    for rec in &records {
+        if !deliver_one(registry, store, cfg, now, rec, AttemptMode::Inline).await {
+            return;
+        }
+        delivered += 1;
+    }
+    if overflowed {
+        warn!(
+            channel = %channel_id,
+            flushed = delivered,
+            limit,
+            "delivery queue: backlog deeper than inline_flush_max; this send may overtake what is still queued"
+        );
+    } else {
+        debug!(
+            channel = %channel_id,
+            flushed = delivered,
+            "delivery queue: flushed this conversation's backlog ahead of a live send"
+        );
+    }
+}
+
+/// Take custody of producer-owned local attachments before a message is
+/// persisted for retry, returning a rewritten copy — or `None` when the message
+/// is already durable as-is (the common case, which then costs no deep copy).
+///
+/// # Why
+///
+/// A durable row must not outlive its media. Every local
+/// [`Attachment::path`](super::channel::Attachment::path) Aleph produces points
+/// **inside the OS temp directory** — `media::cache` refuses to attach a local
+/// path from anywhere else (arbitrary-file exfiltration guard), and TTS writes
+/// its output there too. So a queued row referencing a path is referencing a
+/// file the OS is entitled to delete, and "survives a daemon restart" is
+/// exactly the promise this queue exists to make. The byte cap does not cover
+/// this: a path attachment serializes to a couple of hundred bytes and sails
+/// through, then replays as a message whose media is simply gone.
+///
+/// Custody is taken by inlining the bytes into
+/// [`Attachment::data`](super::channel::Attachment::data) — the branch every
+/// adapter already prefers over `path` — rather than by copying into a separate
+/// spool directory. The row stays self-contained, so eviction, dead-lettering,
+/// redrive and the byte cap keep working unchanged and there is no second
+/// lifecycle to garbage-collect.
+///
+/// # Never worse than before
+///
+/// Both refusals leave the attachment exactly as the caller wrote it, so the
+/// queued row is no less deliverable than it is today:
+///
+/// - the file cannot be read (already gone, permissions) — nothing to inline;
+/// - inlining would push the payload over `max_payload_bytes` — a large video
+///   is better queued as a path that *might* still be there than dead-lettered
+///   on the spot.
+///
+/// Both are logged, because "this row's media will not survive a restart" is
+/// exactly the kind of thing that is otherwise only discovered by a user who
+/// received a caption with no picture.
+pub async fn take_media_custody(
+    message: &OutboundMessage,
+    max_payload_bytes: usize,
+) -> Option<OutboundMessage> {
+    let needs_custody = message
+        .attachments
+        .iter()
+        .any(|a| a.data.is_none() && a.path.is_some());
+    if !needs_custody {
+        return None;
+    }
+
+    let mut rewritten = message.clone();
+    let mut inlined_any = false;
+    for att in &mut rewritten.attachments {
+        let (None, Some(path)) = (att.data.as_ref(), att.path.as_ref()) else {
+            continue;
+        };
+        match tokio::fs::read(path).await {
+            Ok(bytes) => {
+                // `InputFile::memory` carries no name of its own, so the name the
+                // path used to supply has to move with the bytes or the upload
+                // silently becomes "attachment".
+                if att.filename.is_none() {
+                    att.filename = std::path::Path::new(path)
+                        .file_name()
+                        .map(|n| n.to_string_lossy().into_owned());
+                }
+                att.size = Some(bytes.len() as u64);
+                att.data = Some(bytes);
+                att.path = None;
+                inlined_any = true;
+            }
+            Err(e) => warn!(
+                path = %path,
+                error = %e,
+                "delivery queue: could not read a local attachment while queueing it; \
+                 the queued row still references the original path and its media may \
+                 not survive a restart"
+            ),
+        }
+    }
+    if !inlined_any {
+        return None;
+    }
+
+    // Measured on the same serialization the store will cap, so the two can
+    // never disagree about what fits.
+    let fits = serde_json::to_string(&rewritten).is_ok_and(|s| s.len() <= max_payload_bytes);
+    if !fits {
+        warn!(
+            max_payload_bytes,
+            "delivery queue: attachment bytes exceed the payload cap; queueing the \
+             original local path instead of dead-lettering, but its media may not \
+             survive a restart"
+        );
+        return None;
+    }
+    Some(rewritten)
 }
 
 /// Move a record out of the live queue into the dead-letter trail, falling back
@@ -1595,6 +1932,7 @@ mod tests {
             batch: 0,
             max_queue_len: 0,
             max_payload_bytes: 0,
+            inline_flush_max: 0,
         };
         let rt = bad.to_runtime();
         assert_eq!(rt.max_attempts, 1);
@@ -1607,6 +1945,9 @@ mod tests {
         assert_eq!(rt.tick, Duration::from_secs(1));
         assert_eq!(rt.batch, 1);
         assert_eq!(rt.max_queue_len, 1);
+        // Deliberately *not* floored: 0 is the meaningful "never flush inline"
+        // setting, not a pathological value to clamp away.
+        assert_eq!(rt.inline_flush_max, 0);
     }
 
     #[test]
@@ -1620,6 +1961,7 @@ mod tests {
             batch: 64,
             max_queue_len: 50_000,
             max_payload_bytes: 65_536,
+            inline_flush_max: 3,
         };
         let rt = cfg.to_runtime();
         assert_eq!(rt.max_payload_bytes, 65_536);
@@ -1630,6 +1972,7 @@ mod tests {
         assert_eq!(rt.tick, Duration::from_secs(15));
         assert_eq!(rt.batch, 64);
         assert_eq!(rt.max_queue_len, 50_000);
+        assert_eq!(rt.inline_flush_max, 3);
     }
 
     #[test]
@@ -2227,6 +2570,359 @@ mod tests {
         assert_eq!(sent.lock().unwrap_or_else(|e| e.into_inner()).len(), 1);
         assert_eq!(store.reconcile_inflight(now + 1).unwrap(), 0);
         assert_eq!(store.stats(now).unwrap().dead_lettered, 0);
+    }
+
+    // ---- ordering across the live/queued boundary ---------------------------
+
+    /// Registry wired to `store`, serving the `rec` channel.
+    async fn registry_with(
+        store: &Arc<DeliveryStore>,
+        sent: &Arc<Mutex<Vec<String>>>,
+        failing: &Arc<Mutex<Vec<String>>>,
+    ) -> Arc<ChannelRegistry> {
+        let registry = Arc::new(ChannelRegistry::new().with_delivery_store(Arc::clone(store)));
+        registry
+            .register(Box::new(RecordingChannel::new(
+                Arc::clone(sent),
+                Arc::clone(failing),
+            )))
+            .await;
+        registry
+    }
+
+    #[test]
+    fn claim_conversation_ignores_backoff_and_returns_enqueue_order() {
+        // The whole point: the record a live send would overtake is the one
+        // sitting in the *future*, so this claim must not filter by due-ness.
+        let s = store();
+        let far = now_secs() + 10_000;
+        s.enqueue_id("rec", &conv_msg("A", "a1"), "NotConnected", far)
+            .unwrap();
+        s.enqueue_id("rec", &conv_msg("A", "a2"), "NotConnected", far)
+            .unwrap();
+        s.enqueue_id("rec", &conv_msg("B", "b1"), "NotConnected", far)
+            .unwrap();
+
+        assert!(
+            s.claim_due(now_secs(), 10).unwrap().is_empty(),
+            "nothing is due — which is exactly when the old bug showed"
+        );
+        let claimed = s.claim_conversation("rec", "A", 10).unwrap();
+        assert_eq!(
+            claimed.iter().map(|r| &r.message.text).collect::<Vec<_>>(),
+            vec!["a1", "a2"],
+            "this conversation only, in enqueue order"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_live_send_flushes_its_conversation_backlog_first() {
+        // The other half of per-conversation ordering: a message that never
+        // failed used to take the live path and land ahead of replies that had
+        // been queued minutes earlier.
+        let sent = Arc::new(Mutex::new(Vec::new()));
+        let failing = Arc::new(Mutex::new(Vec::new()));
+        let store = Arc::new(DeliveryStore::open_in_memory(cfg()).unwrap());
+        let registry = registry_with(&store, &sent, &failing).await;
+
+        // Backlog serving out a long backoff, i.e. not due for a long time.
+        let far = now_secs() + 10_000;
+        store
+            .enqueue_id("rec", &conv_msg("A", "queued1"), "NotConnected", far)
+            .unwrap();
+        store
+            .enqueue_id("rec", &conv_msg("A", "queued2"), "NotConnected", far)
+            .unwrap();
+        store
+            .enqueue_id("rec", &conv_msg("B", "other"), "NotConnected", far)
+            .unwrap();
+
+        registry
+            .send(&ChannelId::new("rec"), conv_msg("A", "live"))
+            .await
+            .expect("the live send still reports its own result");
+
+        assert_eq!(
+            sent.lock().unwrap_or_else(|e| e.into_inner()).clone(),
+            vec!["queued1", "queued2", "live"],
+            "the backlog goes out first; an unrelated conversation is untouched"
+        );
+        assert_eq!(
+            store.claim_conversation("rec", "B", 10).unwrap().len(),
+            1,
+            "conversation B was not flushed by a send addressed to A"
+        );
+    }
+
+    #[tokio::test]
+    async fn an_inline_flush_never_spends_the_backlogs_retry_budget() {
+        // An opportunistic probe must leave the record exactly as it found it.
+        // Otherwise ten user messages to a wedged channel burn the head's ten
+        // attempts and dead-letter it far ahead of the configured curve.
+        let sent = Arc::new(Mutex::new(Vec::new()));
+        let failing = Arc::new(Mutex::new(vec!["queued".to_string(), "live".to_string()]));
+        let store = Arc::new(DeliveryStore::open_in_memory(cfg()).unwrap());
+        let registry = registry_with(&store, &sent, &failing).await;
+
+        let far = now_secs() + 10_000;
+        let id = store
+            .enqueue_id("rec", &conv_msg("A", "queued"), "NotConnected", far)
+            .unwrap();
+
+        for _ in 0..3 {
+            let _ = registry
+                .send(&ChannelId::new("rec"), conv_msg("A", "live"))
+                .await;
+        }
+
+        let head = store
+            .claim_conversation("rec", "A", 10)
+            .unwrap()
+            .into_iter()
+            .find(|r| r.id == id)
+            .expect("head still queued");
+        assert_eq!(head.attempts, 0, "probes must not consume attempts");
+        assert_eq!(
+            store.stats(now_secs()).unwrap().dead_lettered,
+            0,
+            "and must not retire it early"
+        );
+        assert_eq!(
+            store.reconcile_inflight(now_secs() + 1).unwrap(),
+            0,
+            "a failed probe leaves no in-flight stamp for the next boot to misread"
+        );
+        // The failing live sends queued themselves behind the head, in order.
+        let conv = store.claim_conversation("rec", "A", 10).unwrap();
+        assert_eq!(
+            conv.iter().map(|r| &r.message.text).collect::<Vec<_>>(),
+            vec!["queued", "live", "live", "live"],
+            "order survives even when nothing can be delivered"
+        );
+    }
+
+    #[tokio::test]
+    async fn an_inline_flush_retires_an_ambiguous_failure_rather_than_reattempting_it() {
+        // The one failure an inline probe must settle: `SendFailed` may already
+        // be on the wire, so handing it back for the drain loop to retry is how
+        // at-most-once dies.
+        let sent = Arc::new(Mutex::new(Vec::new()));
+        let store = Arc::new(DeliveryStore::open_in_memory(cfg()).unwrap());
+        let registry = Arc::new(ChannelRegistry::new().with_delivery_store(Arc::clone(&store)));
+        registry
+            .register(Box::new(RecordingChannel::terminal(Arc::clone(&sent))))
+            .await;
+
+        store
+            .enqueue_id(
+                "rec",
+                &conv_msg("A", "ambiguous"),
+                "NotConnected",
+                now_secs() + 10_000,
+            )
+            .unwrap();
+
+        let _ = registry
+            .send(&ChannelId::new("rec"), conv_msg("A", "live"))
+            .await;
+
+        assert!(
+            store.claim_conversation("rec", "A", 10).unwrap().is_empty(),
+            "the ambiguous record left the live queue instead of waiting for a second attempt"
+        );
+        let dl = store.recent_dead_letters(10).unwrap();
+        assert_eq!(dl.len(), 1);
+        assert_eq!(dl[0].message.text, "ambiguous");
+        assert!(!dl[0].reason.replay_safe());
+    }
+
+    #[tokio::test]
+    async fn the_inline_flush_stands_down_while_the_drainer_holds_the_gate() {
+        // Blocking a user-facing send behind a whole drain tick is worse than
+        // the one-tick reorder window that skipping leaves.
+        let sent = Arc::new(Mutex::new(Vec::new()));
+        let failing = Arc::new(Mutex::new(Vec::new()));
+        let store = Arc::new(DeliveryStore::open_in_memory(cfg()).unwrap());
+        let registry = registry_with(&store, &sent, &failing).await;
+        store
+            .enqueue_id(
+                "rec",
+                &conv_msg("A", "queued"),
+                "NotConnected",
+                now_secs() + 10_000,
+            )
+            .unwrap();
+
+        let held = store.drain_gate.lock().await;
+        registry
+            .send(&ChannelId::new("rec"), conv_msg("A", "live"))
+            .await
+            .unwrap();
+        drop(held);
+
+        assert_eq!(
+            sent.lock().unwrap_or_else(|e| e.into_inner()).clone(),
+            vec!["live"],
+            "the send went out without touching the gated queue"
+        );
+        assert_eq!(
+            store.claim_conversation("rec", "A", 10).unwrap().len(),
+            1,
+            "and the backlog is still there for the drainer"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_backlog_deeper_than_the_cap_flushes_only_the_cap() {
+        let sent = Arc::new(Mutex::new(Vec::new()));
+        let failing = Arc::new(Mutex::new(Vec::new()));
+        let mut c = cfg();
+        c.inline_flush_max = 2;
+        let store = Arc::new(DeliveryStore::open_in_memory(c).unwrap());
+        let registry = registry_with(&store, &sent, &failing).await;
+
+        let far = now_secs() + 10_000;
+        for i in 0..4 {
+            store
+                .enqueue_id("rec", &conv_msg("A", &format!("q{i}")), "NotConnected", far)
+                .unwrap();
+        }
+        registry
+            .send(&ChannelId::new("rec"), conv_msg("A", "live"))
+            .await
+            .unwrap();
+
+        assert_eq!(
+            sent.lock().unwrap_or_else(|e| e.into_inner()).clone(),
+            vec!["q0", "q1", "live"],
+            "bounded: the send is not held hostage by an unbounded backlog"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_zero_cap_disables_the_inline_flush() {
+        let sent = Arc::new(Mutex::new(Vec::new()));
+        let failing = Arc::new(Mutex::new(Vec::new()));
+        let mut c = cfg();
+        c.inline_flush_max = 0;
+        let store = Arc::new(DeliveryStore::open_in_memory(c).unwrap());
+        let registry = registry_with(&store, &sent, &failing).await;
+        store
+            .enqueue_id(
+                "rec",
+                &conv_msg("A", "queued"),
+                "NotConnected",
+                now_secs() + 10_000,
+            )
+            .unwrap();
+
+        registry
+            .send(&ChannelId::new("rec"), conv_msg("A", "live"))
+            .await
+            .unwrap();
+        assert_eq!(
+            sent.lock().unwrap_or_else(|e| e.into_inner()).clone(),
+            vec!["live"]
+        );
+    }
+
+    // ---- media custody ------------------------------------------------------
+
+    fn with_attachment(att: super::super::channel::Attachment) -> OutboundMessage {
+        let mut m = conv_msg("A", "caption");
+        m.attachments = vec![att];
+        m
+    }
+
+    fn path_attachment(path: &str) -> super::super::channel::Attachment {
+        super::super::channel::Attachment {
+            id: "att".into(),
+            mime_type: "image/png".into(),
+            filename: None,
+            size: None,
+            url: None,
+            path: Some(path.to_string()),
+            data: None,
+        }
+    }
+
+    #[tokio::test]
+    async fn media_custody_inlines_a_local_file_and_keeps_its_name() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("shot.png");
+        std::fs::write(&file, b"pixels").unwrap();
+
+        let msg = with_attachment(path_attachment(file.to_str().unwrap()));
+        let taken = take_media_custody(&msg, 1_048_576)
+            .await
+            .expect("a path attachment needs custody");
+
+        let att = &taken.attachments[0];
+        assert_eq!(att.data.as_deref(), Some(&b"pixels"[..]));
+        assert_eq!(att.size, Some(6));
+        assert!(
+            att.path.is_none(),
+            "the row must have exactly one source of truth"
+        );
+        assert_eq!(
+            att.filename.as_deref(),
+            Some("shot.png"),
+            "inline bytes carry no name of their own; the path's name has to move with them"
+        );
+    }
+
+    #[tokio::test]
+    async fn media_custody_declines_rather_than_degrading_the_message() {
+        // Both refusals must leave the message exactly as the caller wrote it,
+        // so a queued row is never *less* deliverable than it is today.
+        let missing = with_attachment(path_attachment("/nonexistent/aleph-custody-test.png"));
+        assert!(
+            take_media_custody(&missing, 1_048_576).await.is_none(),
+            "an unreadable file leaves the path in place"
+        );
+
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("big.bin");
+        std::fs::write(&file, vec![0u8; 4096]).unwrap();
+        let big = with_attachment(path_attachment(file.to_str().unwrap()));
+        assert!(
+            take_media_custody(&big, 512).await.is_none(),
+            "over the cap, a path that might still be there beats a dead letter"
+        );
+
+        // Nothing to do at all: no clone, no read.
+        let plain = conv_msg("A", "text only");
+        assert!(take_media_custody(&plain, 1_048_576).await.is_none());
+    }
+
+    #[tokio::test]
+    async fn a_queued_row_carries_its_media_rather_than_a_temp_path() {
+        // End to end: the file is deleted after the send fails, exactly as the
+        // OS would delete it across a restart, and the record still replays.
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("tts.mp3");
+        std::fs::write(&file, b"audio").unwrap();
+
+        let sent = Arc::new(Mutex::new(Vec::new()));
+        let failing = Arc::new(Mutex::new(vec!["voice".to_string()]));
+        let store = Arc::new(DeliveryStore::open_in_memory(cfg()).unwrap());
+        let registry = registry_with(&store, &sent, &failing).await;
+
+        let mut msg = conv_msg("A", "voice");
+        msg.attachments = vec![path_attachment(file.to_str().unwrap())];
+        let _ = registry.send(&ChannelId::new("rec"), msg).await;
+
+        std::fs::remove_file(&file).unwrap();
+
+        let queued = store.claim_conversation("rec", "A", 10).unwrap();
+        assert_eq!(queued.len(), 1);
+        let att = &queued[0].message.attachments[0];
+        assert_eq!(
+            att.data.as_deref(),
+            Some(&b"audio"[..]),
+            "the row survived the file"
+        );
+        assert!(att.path.is_none());
     }
 
     #[test]

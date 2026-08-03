@@ -76,6 +76,24 @@ impl HealthCheck for LoopGraphCheck {
             }
         };
         if findings.is_empty() {
+            // "Nothing is wrong" and "nothing is declared" are different
+            // answers, and only one of them is reassuring. The `!path.exists()`
+            // branch above cannot tell them apart in production: the daemon
+            // creates `loop_graph.db` unconditionally at boot
+            // (`builtin_registry/builder/constructor`), so the file is always
+            // there and an EMPTY graph — no loop registered, nothing watching
+            // anything — used to report as "Topology sound". A governance layer
+            // that certifies its own absence is the failure it exists to catch.
+            let empty = matches!(store.list_nodes(DEFAULT_AGENT), Ok(n) if n.is_empty());
+            if empty {
+                return vec![Finding::ok(
+                    ID,
+                    "No topology declared",
+                    "loop_graph.db exists but holds no nodes — no loop is registered, so nothing \
+                     is watched, anchored or grounded. Zero cost, and zero coverage: \
+                     `loop_graph(action='enable_audit')` + `pair` are how it starts.",
+                )];
+            }
             return vec![Finding::ok(
                 ID,
                 "Topology sound",
@@ -123,5 +141,21 @@ mod tests {
             findings.iter().any(Finding::is_problem),
             "naked loop must be a warning: {findings:?}"
         );
+    }
+
+    /// The production shape: the daemon always creates the DB, so `!exists()`
+    /// never fires and an empty graph reached the "Topology sound" line —
+    /// certifying its own absence.
+    #[tokio::test]
+    async fn an_existing_but_empty_graph_is_not_reported_as_sound() {
+        let dir = tempfile::tempdir().unwrap();
+        drop(LoopGraphStore::open(&dir.path().join(DB_FILENAME)).unwrap());
+        let findings = LoopGraphCheck::new(dir.path().to_path_buf())
+            .run(Posture::Inspect)
+            .await;
+        assert!(findings.iter().all(|f| !f.is_problem()));
+        let rendered = format!("{findings:?}");
+        assert!(rendered.contains("No topology declared"), "{rendered}");
+        assert!(!rendered.contains("Topology sound"), "{rendered}");
     }
 }

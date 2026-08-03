@@ -358,7 +358,8 @@ impl AgentHarness {
         // 2. Build the LLM request. `build_prompt` has access to the full log
         //    so it can reconstruct the preceding assistant tool_use turn and
         //    resolve tool names for tool_result messages.
-        let mut messages = super::prompt::build_prompt(&events, tail_start);
+        let (mut messages, mut transient_tail) =
+            super::prompt::build_prompt_with_transient_tail(&events, tail_start);
 
         // 2+. Append the per-run recall context (memory retrieval + routing
         //     experience) as a transient trailing user message. Mechanical
@@ -369,6 +370,7 @@ impl AgentHarness {
         //     Recomputed into the vec fresh each Think, never persisted.
         if let Some(recall) = self.deps.recall_context.as_deref() {
             messages.push(crate::providers::message::UnifiedMessage::user(recall));
+            transient_tail += 1;
         }
 
         // Fetch the cached metadata-form tool schema once (O(1) `Arc::clone` on
@@ -420,7 +422,17 @@ impl AgentHarness {
                     NO_BUDGET_FRESH_TAIL,
                 ),
             };
-            let freed = pipeline.run(&mut messages, &pressure, fresh_tail).await;
+            // `+ transient_tail`: the protected tail is a count of PERSISTED
+            // messages, but this vector ends with up to four `<system-reminder>`
+            // nudges plus the recall message — five synthetic entries that could
+            // consume a six-message guard, letting the cheap passes rewrite a
+            // message the model saw one turn ago. Adding the count back makes the
+            // cut `persisted_len - fresh_tail`, which is also independent of how
+            // many nudges happened to fire, so the boundary stops jittering near
+            // a quantum edge (FEATURE_LOCATOR §2.18 ledger item 2).
+            let freed = pipeline
+                .run(&mut messages, &pressure, fresh_tail + transient_tail)
+                .await;
             if freed > 0 {
                 tracing::debug!(
                     ?session_id,

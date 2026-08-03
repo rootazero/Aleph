@@ -423,7 +423,7 @@ impl AgentHarnessRunner {
         let runtime_caps_phase_ms = runtime_caps_phase_start.elapsed().as_millis() as u64;
 
         // Sub-agent catalog: surface the delegatable agents so `AgentCatalogLayer`
-        // (priority 1704) renders `<available_agents>`. This field had NO
+        // (priority 1060) renders `<available_agents>`. This field had NO
         // production population site — the layer was inert and the model
         // discovered agents only reactively (by guessing an id and reading the
         // error). The delegatable set is the builtin sub-agents (explore / coder /
@@ -435,7 +435,14 @@ impl AgentHarnessRunner {
         // agents fold in insert-if-absent so they never shadow a
         // builtin/user/project id — mirroring `AgentRegistry::resolve`'s three
         // passes so the catalog matches exactly what `delegate` can spawn.
-        // Session-stable, so it sits in the cached stable prefix without re-keying.
+        // Session-stable, so it sits in the cached stable prefix without
+        // re-keying. That sentence was aspirational until 2026-08-03: the layer
+        // declared `Dynamic` at priority 1704, so this content actually rode the
+        // uncached tail and was re-written at 1.25x whenever a genuinely volatile
+        // neighbour moved. The claim is now true — `AgentCatalogLayer::stability`
+        // says `Stable` and a test pins it. **A comment asserting where content
+        // lands is only as good as the layer that decides it; check the
+        // `stability()` before trusting one.**
         let available_agents = {
             use crate::agents::AgentMode;
             let mut by_id: std::collections::BTreeMap<String, crate::agents::AgentDef> =
