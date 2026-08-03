@@ -268,6 +268,7 @@ impl Config {
             if let Err(e) = config.save() {
                 warn!("Failed to save default config: {}", e);
             }
+            crate::metrics::init_metrics_runtime(&config.policies.metrics);
             Ok(config)
         }
     }

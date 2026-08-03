@@ -79,6 +79,13 @@ fn metrics_runtime() -> MetricsRuntime {
     METRICS_RUNTIME.get().copied().unwrap_or_default()
 }
 
+impl MetricsRuntime {
+    #[must_use]
+    pub fn warning_threshold_ms(&self, target_ms: u64) -> u64 {
+        (target_ms as f64 * self.warning_multiplier) as u64
+    }
+}
+
 /// A timer for measuring the duration of a specific stage in the pipeline
 ///
 /// The timer starts when created via `start()` and automatically logs
@@ -197,7 +204,7 @@ impl Drop for StageTimer {
         // Check if we exceeded the target (if set) and warnings are enabled
         if let Some(target_ms) = self.target_ms {
             if target_ms > 0 {
-                let threshold_ms = (target_ms as f64 * rt.warning_multiplier) as u64;
+                let threshold_ms = rt.warning_threshold_ms(target_ms);
                 if elapsed_ms > threshold_ms && rt.enable_warnings {
                     tracing::warn!(
                         stage = %self.name,
