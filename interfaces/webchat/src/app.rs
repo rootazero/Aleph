@@ -45,7 +45,11 @@ use crate::platform::phone::settings::connection::PhoneConnection;
 use crate::platform::phone::settings::embeddings::PhoneEmbeddings;
 use crate::platform::phone::settings::model_route::PhoneModelRoute;
 use crate::platform::phone::settings::providers::PhoneProviders;
-use crate::platform::phone::settings::PhoneSettings;
+use crate::platform::phone::settings::{
+    screen_for_path as phone_settings_screen, title_for_path as phone_settings_title, NativeScreen,
+    PhoneSettings, PhoneSettingsScreen,
+};
+use crate::platform::phone::shell::PhoneShell;
 use crate::platform::phone::teams::PhoneTeams;
 use crate::state::hotkey::{self as hotkey, HotkeyState};
 use crate::state::layout::{LayoutMode, WorkspaceState};
@@ -546,99 +550,108 @@ fn DashboardRouter() -> impl IntoView {
     }
 }
 
-/// Settings sub-routing
+/// Settings sub-routing.
+///
+/// Two form factors, one path table. Wide renders the desktop page body
+/// directly; Phone asks [`phone_settings_screen`] which of its screens serves
+/// the path — a hand-built iOS screen where one exists, otherwise the *same*
+/// desktop body wrapped in `PhoneShell` so it gets a title, a `‹ Settings` back
+/// button and the tab bar. Wrapping is what makes the 17 settings pages without
+/// a native phone screen usable at all on a phone: before it, they rendered the
+/// 256 px desktop sidebar into a 390 px viewport with no way back.
 #[component]
 fn SettingsRouter() -> impl IntoView {
     let location = use_location();
     let form_factor = expect_context::<FormFactorState>();
+    let i18n = use_i18n();
 
     move || {
         let path = location.pathname.get();
-        match path.as_str() {
-            // Single-tier Gateway-token model: any connection that can reach
-            // these settings is already authorized (operator) — loopback or a
-            // token-validated remote — so there is no per-page ConfigGate; the
-            // login wall (TokenWall) is the one and only gate.
-            "/settings" => {
-                if form_factor.form_factor.get() == FormFactor::Phone {
-                    view! { <PhoneSettings /> }.into_any()
-                } else {
-                    view! { <Settings /> }.into_any()
-                }
-            }
-            "/settings/general" => view! { <GeneralView /> }.into_any(),
-            "/settings/appearance" => {
-                if form_factor.form_factor.get() == FormFactor::Phone {
-                    view! { <PhoneAppearance /> }.into_any()
-                } else {
-                    view! { <AppearanceView /> }.into_any()
-                }
-            }
-            "/settings/behavior" => view! { <BehaviorView /> }.into_any(),
-
-            // AI
-            "/settings/search" => view! { <SearchView /> }.into_any(),
-            "/settings/providers" => {
-                if form_factor.form_factor.get() == FormFactor::Phone {
-                    view! { <PhoneProviders /> }.into_any()
-                } else {
-                    view! { <ProvidersView /> }.into_any()
-                }
-            }
-            "/settings/embedding-providers" => {
-                if form_factor.form_factor.get() == FormFactor::Phone {
-                    view! { <PhoneEmbeddings /> }.into_any()
-                } else {
-                    view! { <EmbeddingProvidersView /> }.into_any()
-                }
-            }
-            "/settings/reranking-providers" => view! { <RerankingProvidersView /> }.into_any(),
-            "/settings/generation-providers" => view! { <GenerationProvidersView /> }.into_any(),
-            "/settings/moa" => view! { <MoaView /> }.into_any(),
-            "/settings/model-route" => {
-                if form_factor.form_factor.get() == FormFactor::Phone {
-                    view! { <PhoneModelRoute /> }.into_any()
-                } else {
-                    view! { <RouteView /> }.into_any()
-                }
-            }
-            "/settings/memory" => view! { <MemoryView /> }.into_any(),
-
-            // Browser
-            "/settings/browser" => view! { <BrowserView /> }.into_any(),
-            "/settings/network" => {
-                if form_factor.form_factor.get() == FormFactor::Phone {
-                    view! { <PhoneConnection /> }.into_any()
-                } else {
-                    view! { <NetworkView /> }.into_any()
-                }
-            }
-
-            // Extensions
-            "/settings/routing" => view! { <RoutingRulesView /> }.into_any(),
-            "/settings/mcp" => view! { <McpView /> }.into_any(),
-            "/settings/plugins" => view! { <PluginsView /> }.into_any(),
-            "/settings/skills" => view! { <SkillsView /> }.into_any(),
-            "/settings/acp" => view! { <AcpHarnessesView /> }.into_any(),
-
-            // Security
-            "/settings/security" => view! { <SecurityView /> }.into_any(),
-            "/settings/policies" => view! { <PoliciesView /> }.into_any(),
-            "/settings/execution" => view! { <ExecutionView /> }.into_any(),
-            // Channels
-            "/settings/channels" => view! { <ChannelsOverview /> }.into_any(),
-            _ if path.starts_with("/settings/channels/") => {
-                let platform_type = path
-                    .strip_prefix("/settings/channels/")
-                    .unwrap_or("")
-                    .to_string();
-                let platform_type = StoredValue::new(platform_type);
-                view! { <ChannelPlatformPage platform_type=platform_type.get_value() /> }.into_any()
-            }
-
-            // Not in settings mode or unknown path — render nothing (div is hidden)
-            _ => ().into_any(),
+        if form_factor.form_factor.get() != FormFactor::Phone {
+            return desktop_settings_body(&path);
         }
+        match phone_settings_screen(&path) {
+            // Not in settings mode — render nothing (div is hidden).
+            PhoneSettingsScreen::NotSettings => ().into_any(),
+            PhoneSettingsScreen::Landing => view! { <PhoneSettings /> }.into_any(),
+            PhoneSettingsScreen::Native(NativeScreen::Appearance) => {
+                view! { <PhoneAppearance /> }.into_any()
+            }
+            PhoneSettingsScreen::Native(NativeScreen::Connection) => {
+                view! { <PhoneConnection /> }.into_any()
+            }
+            PhoneSettingsScreen::Native(NativeScreen::Embeddings) => {
+                view! { <PhoneEmbeddings /> }.into_any()
+            }
+            PhoneSettingsScreen::Native(NativeScreen::ModelRoute) => {
+                view! { <PhoneModelRoute /> }.into_any()
+            }
+            PhoneSettingsScreen::Native(NativeScreen::Providers) => {
+                view! { <PhoneProviders /> }.into_any()
+            }
+            PhoneSettingsScreen::Wrapped => view! {
+                <PhoneShell title=phone_settings_title(&path, i18n) back="/settings">
+                    {desktop_settings_body(&path)}
+                </PhoneShell>
+            }
+            .into_any(),
+        }
+    }
+}
+
+/// The desktop page body for a `/settings…` path — the single path table both
+/// form factors read. Returns nothing for non-settings paths (the container div
+/// is hidden then anyway).
+///
+/// Single-tier Gateway-token model: any connection that can reach these settings
+/// is already authorized (operator) — loopback or a token-validated remote — so
+/// there is no per-page ConfigGate; the login wall (TokenWall) is the one and
+/// only gate.
+fn desktop_settings_body(path: &str) -> AnyView {
+    match path {
+        "/settings" => view! { <Settings /> }.into_any(),
+        "/settings/general" => view! { <GeneralView /> }.into_any(),
+        "/settings/appearance" => view! { <AppearanceView /> }.into_any(),
+        "/settings/behavior" => view! { <BehaviorView /> }.into_any(),
+
+        // AI
+        "/settings/search" => view! { <SearchView /> }.into_any(),
+        "/settings/providers" => view! { <ProvidersView /> }.into_any(),
+        "/settings/embedding-providers" => view! { <EmbeddingProvidersView /> }.into_any(),
+        "/settings/reranking-providers" => view! { <RerankingProvidersView /> }.into_any(),
+        "/settings/generation-providers" => view! { <GenerationProvidersView /> }.into_any(),
+        "/settings/moa" => view! { <MoaView /> }.into_any(),
+        "/settings/model-route" => view! { <RouteView /> }.into_any(),
+        "/settings/memory" => view! { <MemoryView /> }.into_any(),
+
+        // Browser
+        "/settings/browser" => view! { <BrowserView /> }.into_any(),
+        "/settings/network" => view! { <NetworkView /> }.into_any(),
+
+        // Extensions
+        "/settings/routing" => view! { <RoutingRulesView /> }.into_any(),
+        "/settings/mcp" => view! { <McpView /> }.into_any(),
+        "/settings/plugins" => view! { <PluginsView /> }.into_any(),
+        "/settings/skills" => view! { <SkillsView /> }.into_any(),
+        "/settings/acp" => view! { <AcpHarnessesView /> }.into_any(),
+
+        // Security
+        "/settings/security" => view! { <SecurityView /> }.into_any(),
+        "/settings/policies" => view! { <PoliciesView /> }.into_any(),
+        "/settings/execution" => view! { <ExecutionView /> }.into_any(),
+        // Channels
+        "/settings/channels" => view! { <ChannelsOverview /> }.into_any(),
+        _ if path.starts_with("/settings/channels/") => {
+            let platform_type = path
+                .strip_prefix("/settings/channels/")
+                .unwrap_or("")
+                .to_string();
+            let platform_type = StoredValue::new(platform_type);
+            view! { <ChannelPlatformPage platform_type=platform_type.get_value() /> }.into_any()
+        }
+
+        // Not in settings mode or unknown path — render nothing (div is hidden)
+        _ => ().into_any(),
     }
 }
 

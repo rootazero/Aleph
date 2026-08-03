@@ -42,6 +42,18 @@ pub fn PhoneDashboardMenu() -> impl IntoView {
                     <div class="cell-body"><div class="cell-title">"Agent Trace"</div></div>
                     <svg class="cell-chevron" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 6 15 12 9 18"></polyline></svg>
                 </div>
+                <div class="cell" on:click=go("/dashboard/subagents")>
+                    <span class="cell-leading">
+                        <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+                            <circle cx="18" cy="5" r="3"></circle>
+                            <circle cx="6" cy="12" r="3"></circle>
+                            <circle cx="18" cy="19" r="3"></circle>
+                            <path d="M8.6 13.5l6.8 4M15.4 6.5l-6.8 4"></path>
+                        </svg>
+                    </span>
+                    <div class="cell-body"><div class="cell-title">"Subagents"</div></div>
+                    <svg class="cell-chevron" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 6 15 12 9 18"></polyline></svg>
+                </div>
                 <div class="cell" on:click=go("/dashboard/tasks")>
                     <span class="cell-leading">
                         <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">

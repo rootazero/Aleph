@@ -51,10 +51,15 @@ pub fn PhoneTabBar() -> impl IntoView {
 /// back + title), scroll body, shared bottom tab bar. `back=None` = landing
 /// (left-aligned title, no back); `back=Some(route)` = detail (centered title +
 /// back button). Root uses `h-dvh` so the tab bar clears the mobile browser bar.
+///
+/// `title` is `impl Into<String>` (not `&'static str`) so a caller can hand it a
+/// runtime-resolved label — the settings drill-down titles its screens from
+/// `SettingsTab::i18n_label`, which is a `String`. Literals still work verbatim.
+/// `back` / `back_label` stay `&'static str`: they are route constants.
 #[component]
 #[must_use]
 pub fn PhoneShell(
-    title: &'static str,
+    #[prop(into)] title: String,
     #[prop(optional)] back: Option<&'static str>,
     #[prop(optional)] back_label: Option<&'static str>,
     children: Children,
