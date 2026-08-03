@@ -4,13 +4,18 @@
 /// PII scrubbing and daily log rotation.
 ///
 /// Run with: cargo run --example file_logging_demo
-use alephcore::init_logging;
+use aleph_logging::init_component_logging;
 use alephcore::logging::get_log_directory;
 use tracing::{debug, error, info, warn};
 
 fn main() {
-    // Initialize logging (console + file with PII scrubbing)
-    init_logging();
+    // Initialize logging (console + file with PII scrubbing), the same entry
+    // point the server / CLI / TUI use. `debug` rather than the usual `info`
+    // because Example 1 below demonstrates every level — `RUST_LOG` still wins.
+    if let Err(e) = init_component_logging("demo", 7, "debug") {
+        eprintln!("Failed to initialize logging: {e}");
+        return;
+    }
 
     println!("=== File Logging Demo ===\n");
 
@@ -74,5 +79,5 @@ fn main() {
     println!("  1. All messages from this demo");
     println!("  2. Timestamps for each message");
     println!("  3. PII automatically replaced with placeholders");
-    println!("  4. Daily rotation (files named aleph-YYYY-MM-DD.log)");
+    println!("  4. Daily rotation (files named aleph-demo.log.YYYY-MM-DD)");
 }

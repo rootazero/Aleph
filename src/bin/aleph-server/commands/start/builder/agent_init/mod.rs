@@ -764,6 +764,14 @@ pub(in crate::commands::start) async fn register_agent_handlers(
         // Capture default provider before provider_registry is moved into engine
         default_prov = Some(provider_registry.default_provider());
 
+        // Answer MCP `sampling/createMessage` with this provider. The MCP
+        // manager already declared the capability at boot (its callback resolves
+        // lazily precisely because it spawns before this point); registering
+        // here is what makes that declaration true.
+        if let Some(ref prov) = default_prov {
+            alephcore::mcp::register_sampling_llm(prov.clone());
+        }
+
         // Clone provider registry for topic generation before it's moved into engine
         let topic_provider_registry = provider_registry.clone();
 
@@ -1125,91 +1133,26 @@ pub(in crate::commands::start) async fn register_agent_handlers(
         {
             use alephcore::media::processor::MediaProcessor;
             use alephcore::media::transcription::TranscriptionService;
-            use alephcore::media::whisper::WhisperTranscription;
 
-            // Look up transcription provider from the dedicated transcription_providers config.
-            // api_key is #[serde(skip)] and injected from vault at runtime,
-            // so we must resolve it from the vault (gen:<provider_name>) before checking.
-            let transcription: Option<Box<dyn TranscriptionService>> = {
-                let gen_cfg = &app_config.generation;
-
-                // Helper: resolve api_key from vault for a transcription provider
-                let resolve_key = |name: &str,
-                                   pcfg: &alephcore::GenerationProviderConfig|
-                 -> Option<String> {
-                    // BYO local endpoints commonly run unauthenticated — an
-                    // empty key is valid for them (no Authorization header),
-                    // so the presence walk must not skip the entry.
-                    if pcfg.provider_type == alephcore::LOCAL_PROVIDER_TYPE {
-                        return Some(pcfg.api_key.clone().unwrap_or_default());
+            // Which transcription backend is configured is answered in exactly
+            // one place (`media::resolve`), shared with the builtin tool
+            // registry's MediaPipeline — otherwise `audio_transcribe` and
+            // attachment transcription can disagree about whether transcription
+            // exists at all, which is the state this replaced.
+            let transcription: Option<Box<dyn TranscriptionService>> =
+                alephcore::media::transcription_service(&app_config.generation, &|name: &str| {
+                    shared_token_mgr
+                        .get_secret(&format!("gen:{name}"))
+                        .ok()
+                        .flatten()
+                        .map(|secret| secret.expose().to_string())
+                })
+                .map(|resolved| {
+                    if !daemon {
+                        println!("  MediaProcessor: {}", resolved.label);
                     }
-                    // Use config api_key if present
-                    if let Some(ref key) = pcfg.api_key {
-                        if !key.is_empty() {
-                            return Some(key.clone());
-                        }
-                    }
-                    // Fall back to vault
-                    if let Ok(Some(secret)) = shared_token_mgr.get_secret(&format!("gen:{name}")) {
-                        let val = secret.expose().to_string();
-                        if !val.is_empty() {
-                            return Some(val);
-                        }
-                    }
-                    None
-                };
-
-                let tcfg = gen_cfg
-                    .default_transcription_provider
-                    .as_ref()
-                    .and_then(|name| {
-                        gen_cfg
-                            .transcription_providers
-                            .get(name)
-                            .filter(|pcfg| pcfg.enabled)
-                            .and_then(|pcfg| resolve_key(name, pcfg).map(|key| (key, pcfg)))
-                    })
-                    .or_else(|| {
-                        gen_cfg
-                            .transcription_providers
-                            .iter()
-                            .find_map(|(name, pcfg)| {
-                                if pcfg.enabled {
-                                    resolve_key(name, pcfg).map(|key| (key, pcfg))
-                                } else {
-                                    None
-                                }
-                            })
-                    });
-
-                if let Some((key, pcfg)) = tcfg {
-                    if pcfg.provider_type == alephcore::LOCAL_PROVIDER_TYPE {
-                        // BYO endpoint: connection values live on the entry
-                        // itself (`key` is consumed by the Whisper branch
-                        // below).
-                        if !daemon {
-                            println!(
-                                "  MediaProcessor: local voice transcription enabled (BYO endpoint)"
-                            );
-                        }
-                        Some(Box::new(
-                            alephcore::gateway::voice::local_provider::LocalTranscription::from_config(pcfg),
-                        ) as Box<dyn TranscriptionService>)
-                    } else {
-                        let whisper = WhisperTranscription::new(
-                            key,
-                            pcfg.base_url.clone(),
-                            pcfg.models.first().cloned(),
-                        );
-                        if !daemon {
-                            println!("  MediaProcessor: Whisper transcription enabled (from transcription provider)");
-                        }
-                        Some(Box::new(whisper) as Box<dyn TranscriptionService>)
-                    }
-                } else {
-                    None
-                }
-            };
+                    resolved.service
+                });
 
             // VisionPipeline is not currently created at startup — pass None for now.
             let vision: Option<Arc<alephcore::vision::VisionPipeline>> = None;

@@ -461,7 +461,18 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
         let resolver = std::sync::Arc::new(alephcore::secrets::VaultSecretResolver::new(
             auth_bundle.auth_ctx.shared_token_mgr.clone(),
         ));
-        tokio::spawn(actor.with_secret_resolver(resolver).run());
+        // `with_sampling_bridge` must be applied before `run()`: each server's
+        // handshake declares the `sampling` capability from whether a callback
+        // is registered, so installing it afterwards would tell every
+        // auto-started server that this host cannot service
+        // `sampling/createMessage`. The provider behind it is resolved lazily
+        // (registered later, in agent_init).
+        tokio::spawn(
+            actor
+                .with_secret_resolver(resolver)
+                .with_sampling_bridge()
+                .run(),
+        );
         if !args.daemon {
             println!("MCP Manager spawned");
         }

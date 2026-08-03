@@ -18,13 +18,25 @@
 
 use serde::Serialize;
 
-use super::alias::canonicalize_model_id;
+use super::alias::{canonicalize_model_id, prefix_matches};
 
 /// Capability metadata for one model family.
 ///
-/// Figures are best-effort reference data (vendor docs as of 2026-07),
+/// Figures are best-effort reference data (vendor docs as of 2026-08),
 /// mirroring `pricing`'s "operators upgrade Aleph to refresh" stance — no
 /// runtime config knob, no network lookup.
+///
+/// # On `max_output_tokens` when a catalog reports it equal to the window
+///
+/// Several host catalogs publish `maxTokens == contextWindow`. That is a
+/// statement that the output is not *separately* capped, not an output budget,
+/// and copying it here is actively harmful: the compaction budget is
+/// `window - max_output_tokens` (see `deps_builder::context_budget`), so an
+/// equal pair collapses the usable budget to its floor and the agent compacts
+/// on every turn. Where a family's output cap is not separately published,
+/// this table records the highest figure that *is* — usually the same family's
+/// sibling model. That is why `deepseek-v4` reads 65_536 against a vendor
+/// figure of 384_000, and why `step-3.7-flash` reads its sibling's 65_536.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 pub struct ModelCapabilities {
     /// Maximum total context window in tokens (input + output budget).
@@ -46,6 +58,29 @@ const CAPABILITY_TABLE: &[(&str, ModelCapabilities)] = &[
     // Generation-5 flagship: 1M context, 128K output, adaptive reasoning.
     (
         "claude-fable-5",
+        ModelCapabilities {
+            context_window: 1_000_000,
+            max_output_tokens: 128_000,
+            supports_vision: true,
+            supports_tools: true,
+            supports_reasoning: true,
+        },
+    ),
+    // Mythos 5 shares Fable 5's shape and rate card.
+    (
+        "claude-mythos-5",
+        ModelCapabilities {
+            context_window: 1_000_000,
+            max_output_tokens: 128_000,
+            supports_vision: true,
+            supports_tools: true,
+            supports_reasoning: true,
+        },
+    ),
+    // Opus 5 supersedes Opus 4.8 (which the lifecycle table now records as
+    // retired). Same window and output cap, half the 4.x-era price.
+    (
+        "claude-opus-5",
         ModelCapabilities {
             context_window: 1_000_000,
             max_output_tokens: 128_000,
@@ -176,6 +211,11 @@ const CAPABILITY_TABLE: &[(&str, ModelCapabilities)] = &[
     // GPT-5 family (openclaw catalog). Specific dotted prefixes precede the
     // broad `gpt-5` fallback. 5.6 is the current default (openclaw
     // OPENAI_DEFAULT_MODEL): ~1.05M window, 128K output.
+    //
+    // The three 5.6 tiers (`-sol` / `-terra` / `-luna`) share this shape and
+    // are covered by the `gpt-5.6` prefix, so they need no rows here. They do
+    // NOT share a rate card — see `pricing::PRICE_TABLE`, where each has its
+    // own row ahead of the broad one.
     (
         "gpt-5.6",
         ModelCapabilities {
@@ -674,6 +714,19 @@ const CAPABILITY_TABLE: &[(&str, ModelCapabilities)] = &[
     // compaction budget under-sized every Doubao run. `doubao-seed` (the Seed
     // 1.x/2.x flagship line, multimodal) precedes the broad `doubao` fallback
     // for legacy non-Seed ids (e.g. the prior default doubao-1.5-pro-256k).
+    //
+    // `doubao-seed-evolving` is the one Seed model on a 1M window, so it needs
+    // its own row ahead of the 256K family default.
+    (
+        "doubao-seed-evolving",
+        ModelCapabilities {
+            context_window: 1_024_000,
+            max_output_tokens: 256_000,
+            supports_vision: true,
+            supports_tools: true,
+            supports_reasoning: true,
+        },
+    ),
     (
         "doubao-seed",
         ModelCapabilities {
@@ -771,6 +824,30 @@ const CAPABILITY_TABLE: &[(&str, ModelCapabilities)] = &[
     // ── Cohere Command ─────────────────────────────────────────────────────
     // OpenAI-compatible via /compatibility/v1. Command-A (256K) precedes the
     // broad `command` (Command-R/R+ at 128K).
+    //
+    // Command A Plus is the current flagship and trades window for a much
+    // larger output cap (128K/64K vs 256K/8K), so it must precede `command-a`.
+    (
+        "command-a-plus",
+        ModelCapabilities {
+            context_window: 128_000,
+            max_output_tokens: 64_000,
+            supports_vision: true,
+            supports_tools: true,
+            supports_reasoning: true,
+        },
+    ),
+    // North Mini Code — Cohere's coding tier, listed alongside Command A Plus.
+    (
+        "north-mini-code",
+        ModelCapabilities {
+            context_window: 256_000,
+            max_output_tokens: 64_000,
+            supports_vision: true,
+            supports_tools: true,
+            supports_reasoning: true,
+        },
+    ),
     (
         "command-a",
         ModelCapabilities {
@@ -825,8 +902,22 @@ const CAPABILITY_TABLE: &[(&str, ModelCapabilities)] = &[
         },
     ),
     // ── StepFun ────────────────────────────────────────────────────────────
+    // The Step-3.x Flash line supersedes the Step-1 generation whose window was
+    // encoded in the id. Both current tiers are 256K; 3.7's own catalog entry
+    // reports `maxTokens == contextWindow`, so its sibling's published 64K cap
+    // is recorded instead.
+    (
+        "step-3",
+        ModelCapabilities {
+            context_window: 262_144,
+            max_output_tokens: 65_536,
+            supports_vision: true,
+            supports_tools: true,
+            supports_reasoning: true,
+        },
+    ),
     // StepFun encodes the window in the id itself (`step-1-8k`, `step-1-32k`,
-    // `step-1-256k`); the `stepfun` preset ships the 8K variant, which is far
+    // `step-1-256k`); the `stepfun` preset shipped the 8K variant, which is far
     // below the conservative 128K default it used to inherit — the one
     // direction where a missing row is actively dangerous, since the context
     // budget would have planned for 16x the room the model has.
@@ -860,6 +951,86 @@ const CAPABILITY_TABLE: &[(&str, ModelCapabilities)] = &[
             supports_reasoning: false,
         },
     ),
+    // ── Baidu ERNIE (Qianfan) ──────────────────────────────────────────────
+    // ERNIE 5.0 is multimodal and reasons; 5.1 is the faster text tier.
+    (
+        "ernie-5",
+        ModelCapabilities {
+            context_window: 128_000,
+            max_output_tokens: 65_536,
+            supports_vision: true,
+            supports_tools: true,
+            supports_reasoning: true,
+        },
+    ),
+    // ── Xiaomi MiMo ────────────────────────────────────────────────────────
+    (
+        "mimo-v2",
+        ModelCapabilities {
+            context_window: 1_048_576,
+            max_output_tokens: 131_072,
+            supports_vision: true,
+            supports_tools: true,
+            supports_reasoning: true,
+        },
+    ),
+    // ── Meituan LongCat ────────────────────────────────────────────────────
+    (
+        "longcat",
+        ModelCapabilities {
+            context_window: 1_048_576,
+            max_output_tokens: 131_072,
+            supports_vision: false,
+            supports_tools: true,
+            supports_reasoning: true,
+        },
+    ),
+    // ── Open-weight families served by the inference hosts ─────────────────
+    // These are not any one vendor's hosted product, so they get capabilities
+    // (which are a property of the weights) but deliberately **no rates** —
+    // the same stance `pricing` takes for Llama, and for the same reason: each
+    // host charges its own price and inventing a single figure is worse than
+    // `Unknown`. See `pricing::tests::open_weight_families_stay_unpriced`.
+    //
+    // OpenAI's gpt-oss pair replaced both Llama tiers on Groq and is Cerebras'
+    // and Baseten's general-purpose model.
+    (
+        "gpt-oss",
+        ModelCapabilities {
+            context_window: 131_072,
+            max_output_tokens: 65_536,
+            supports_vision: false,
+            supports_tools: true,
+            supports_reasoning: true,
+        },
+    ),
+    // NVIDIA Nemotron 3 (Ultra 550B / Super 120B) — NIM's own flagship line.
+    // Ultra publishes 1_048_576; the shared row takes Super's 1_000_000 so the
+    // budget is never over-sized for either.
+    (
+        "nemotron-3",
+        ModelCapabilities {
+            context_window: 1_000_000,
+            max_output_tokens: 8_192,
+            supports_vision: false,
+            supports_tools: true,
+            supports_reasoning: true,
+        },
+    ),
+    // Cerebras writes GLM ids as `zai-glm-4.7` — a hyphenated org prefix that
+    // `canonicalize_model_id` cannot peel (it only collapses `/` paths), so it
+    // never reaches the `glm` rows above and would inherit the conservative
+    // default.
+    (
+        "zai-glm",
+        ModelCapabilities {
+            context_window: 131_072,
+            max_output_tokens: 40_960,
+            supports_vision: false,
+            supports_tools: true,
+            supports_reasoning: true,
+        },
+    ),
 ];
 
 /// Look up capability metadata for a model id (raw or canonical).
@@ -871,7 +1042,7 @@ pub fn capabilities_for(model: &str) -> Option<ModelCapabilities> {
     let canon = canonicalize_model_id(model);
     CAPABILITY_TABLE
         .iter()
-        .find(|(prefix, _)| canon.starts_with(prefix))
+        .find(|(prefix, _)| prefix_matches(&canon, prefix))
         .map(|(_, caps)| *caps)
 }
 
@@ -967,12 +1138,17 @@ mod tests {
     /// matches, so a broad row above a specific one makes the specific row
     /// unreachable — it still compiles and still reads correctly, it just never
     /// runs. Table order is load-bearing and nothing else enforces it.
+    ///
+    /// Compared with [`prefix_matches`], the same predicate the lookup uses: a
+    /// guard on plain `starts_with` would be blind to separator-folded
+    /// shadowing (a `gpt-5-6` row hidden behind an earlier `gpt-5.6` one) and
+    /// would report a clean table while the lookup silently skipped a row.
     #[test]
     fn no_capability_row_is_shadowed_by_an_earlier_broader_prefix() {
         for (i, (later, _)) in CAPABILITY_TABLE.iter().enumerate() {
             for (earlier, _) in &CAPABILITY_TABLE[..i] {
                 assert!(
-                    !later.starts_with(earlier),
+                    !prefix_matches(later, earlier),
                     "{later:?} is unreachable — the earlier {earlier:?} row already \
                      prefix-matches it. Move the specific row above the broad one."
                 );
@@ -1307,6 +1483,43 @@ mod tests {
         // accepts image/video. The text-only M2.x family stays vision=false.
         assert!(capabilities_for("MiniMax-M3").unwrap().supports_vision);
         assert!(!capabilities_for("MiniMax-M2.7").unwrap().supports_vision);
+    }
+
+    /// Hosts disagree on how to spell a generation separator. Anthropic writes
+    /// `claude-opus-4-8`; GitHub Copilot writes `claude-opus-4.8` for the same
+    /// model. Both must reach the same row — the dotted spelling used to fall
+    /// past it to the broader `claude-opus-4` row and report a 200K window for
+    /// a 1M model, which silently mis-sizes every compaction decision on it.
+    #[test]
+    fn generation_separator_spelling_does_not_change_the_row() {
+        for (a, b) in [
+            ("claude-opus-4.8", "claude-opus-4-8"),
+            ("claude-sonnet-4.6", "claude-sonnet-4-6"),
+            ("claude-haiku-4.5", "claude-haiku-4-5"),
+            // ...and the mirror image: a table written in the vendor's dotted
+            // spelling must stay reachable from a relay's dashed one.
+            ("gpt-5-6", "gpt-5.6"),
+            ("glm-5-2", "glm-5.2"),
+            ("gemini-2-5-pro", "gemini-2.5-pro"),
+        ] {
+            assert_eq!(
+                capabilities_for(a),
+                capabilities_for(b),
+                "{a} and {b} name the same model"
+            );
+        }
+    }
+
+    /// A dashed host spelling of a dotted generation must land on the *specific*
+    /// row, not the family fallback. `llama-3-3-70b-instruct` resolved to the
+    /// generic `llama-3` row before separator folding.
+    #[test]
+    fn dashed_host_spelling_reaches_the_specific_generation_row() {
+        assert_eq!(
+            capabilities_for("llama-3-3-70b-instruct"),
+            capabilities_for("llama-3.3"),
+        );
+        assert_ne!(capabilities_for("llama-3.3"), capabilities_for("llama-3"));
     }
 
     #[test]

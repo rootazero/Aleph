@@ -12,6 +12,7 @@ use crate::components::markdown::TypewriterRenderer;
 use crate::components::tool_card::ToolCard;
 use crate::i18n::{t, t_string, use_i18n};
 use crate::state::layout::WorkspaceState;
+use crate::state::viewport::FormFactor;
 use leptos::prelude::*;
 use std::collections::HashMap;
 
@@ -28,7 +29,7 @@ struct AttributionMap(Memo<HashMap<String, bool>>);
 pub(super) fn ChatHero() -> impl IntoView {
     let i18n = use_i18n();
     let chat = expect_context::<ChatState>();
-    // Starter prompts — clicking seeds the composer via `chat.draft_seed` so the
+    // Starter prompts — clicking seeds the composer via `chat.seed_draft` so the
     // user lands on an editable draft instead of a blank box. Mirrors
     // hermes-desktop's `ChatEmptyState` suggestion cards. Small fixed set; each
     // tuple is (emoji, short label, seed prompt).
@@ -81,7 +82,7 @@ pub(super) fn ChatHero() -> impl IntoView {
                                        text-text-secondary glass-inset
                                        hover:text-text-primary hover:bg-surface-raised
                                        transition-colors"
-                                on:click=move |_| chat.draft_seed.set(Some(seed.to_string()))
+                                on:click=move |_| chat.seed_draft(seed.to_string(), Vec::new())
                             >
                                 <span>{icon}</span>
                                 <span>{label}</span>
@@ -366,7 +367,7 @@ fn PendingAskCard() -> impl IntoView {
 /// Pending follow-up prompts rendered as right-aligned "ghost" bubbles at the
 /// tail of the conversation stream. They stay here until inserted: at a turn
 /// boundary (Steer) they solidify into real user bubbles, or the user can ✕
-/// remove / click-to-edit (pull back into the composer via `draft_seed`) /
+/// remove / click-to-edit (pull back into the composer via `seed_draft`) /
 /// Esc·⚡ force-insert. Replaces the old above-the-input chip strip so the
 /// queue lives in the stream and never fights the sticky Todo panel for the
 /// fixed bottom slot.
@@ -374,6 +375,7 @@ fn PendingAskCard() -> impl IntoView {
 fn QueuedGhosts() -> impl IntoView {
     use crate::views::chat::state::queue_preview_label;
     let chat = expect_context::<ChatState>();
+    let form_factor = expect_context::<crate::state::viewport::FormFactorState>();
     let i18n = use_i18n();
 
     let enumerated = move || {
@@ -387,13 +389,9 @@ fn QueuedGhosts() -> impl IntoView {
             <div class="space-y-2 pt-1">
                 <For
                     each=enumerated
-                    // Identity is the id; `idx` rides along only so the
-                    // position badge re-renders when an earlier row leaves.
-                    // (Removal itself no longer uses `idx` — see the handlers.)
-                    key=|(idx, e)| (e.id, *idx)
+                    key=|(idx, e)| format!("{}:{}", idx, e.text)
                     children=move |(idx, entry)| {
                         let label = queue_preview_label(&entry);
-                        let entry_id = entry.id;
                         view! {
                             <div class="flex justify-end group">
                                 <div
@@ -402,14 +400,14 @@ fn QueuedGhosts() -> impl IntoView {
                                            cursor-text transition-colors hover:bg-primary/15"
                                     title=move || t_string!(i18n, chat.queued).to_string()
                                     on:click=move |_| {
-                                        // Edit: ask the composer to retract this prompt (the same
-                                        // path the ↑ key uses). It has to be the composer's job:
-                                        // only it owns the draft, and the retract must fold that
-                                        // draft back into the queue instead of destroying it.
-                                        // Writing `draft_seed` + `pending_attachments` from here
-                                        // used to overwrite whatever the user had typed and
-                                        // REPLACE their staged files, with no undo anywhere.
-                                        chat.retract_request.set(Some(entry_id));
+                                        // Edit: pull the full prompt (text + attachments) back
+                                        // into the composer, dropping it from the queue in the
+                                        // same step. Take-then-seed (rather than seed-then-remove
+                                        // from a captured clone) means the prompt can never be
+                                        // dropped from the queue without something receiving it.
+                                        if let Some(entry) = chat.take_queued_prompt(idx) {
+                                            chat.seed_draft(entry.text, entry.attachments);
+                                        }
                                     }
                                 >
                                     <span class="absolute -top-2 right-2 text-[9px] px-1.5 rounded-full
@@ -424,7 +422,7 @@ fn QueuedGhosts() -> impl IntoView {
                                         title=move || t_string!(i18n, chat.remove).to_string()
                                         on:click=move |ev: web_sys::MouseEvent| {
                                             ev.stop_propagation();
-                                            chat.remove_queued_prompt(entry_id);
+                                            chat.remove_queued_prompt(idx);
                                         }
                                     >
                                         "✕"
@@ -436,7 +434,21 @@ fn QueuedGhosts() -> impl IntoView {
                 />
                 <div class="flex justify-end">
                     <span class="text-[10px] text-text-tertiary pr-1">
-                        {move || t_string!(i18n, chat.queue_hint).to_string()}
+                        // `QueuedGhosts` is shared with the phone surface, which
+                        // has no ArrowUp binding (and no arrow keys). Advertising
+                        // a key that does nothing there is the "advertised but
+                        // disabled" trap in reverse — the pointer affordance is
+                        // real on both, the keyboard one only on wide.
+                        {move || {
+                            // `!= Phone`, not `== Wide`: `app.rs` picks the
+                            // composer on exactly that predicate, so a tablet
+                            // runs the wide composer — and has the binding.
+                            if form_factor.form_factor.get() != FormFactor::Phone {
+                                t_string!(i18n, chat.queue_hint_keyboard).to_string()
+                            } else {
+                                t_string!(i18n, chat.queue_hint).to_string()
+                            }
+                        }}
                     </span>
                 </div>
             </div>

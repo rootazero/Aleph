@@ -30,7 +30,6 @@ pub mod events;
 pub mod explain;
 pub mod extensions;
 pub mod flush;
-pub mod ingestion;
 pub mod insights;
 pub mod namespace;
 pub mod note_retrieval;
@@ -39,7 +38,6 @@ pub mod project_scope;
 pub mod reembed;
 pub mod reflector;
 pub mod rerank;
-pub mod retrieval;
 pub mod ripple;
 pub mod scratchpad;
 pub mod session_compactor;
@@ -96,10 +94,8 @@ pub use events::{
     EventActor, MemoryEvent, MemoryEventEnvelope,
 };
 pub use explain::{ExplainedEvent, FactExplanation};
-pub use ingestion::MemoryIngestion;
 pub use insights::{aggregate_tool_usage, ToolBreakdown, ToolUsageReport};
 pub use namespace::NamespaceScope;
-pub use retrieval::MemoryRetrieval;
 pub use ripple::{RippleConfig, RippleResult, RippleTask};
 pub use scratchpad::{
     PlanItem, PlanItemStatus, ScratchpadConfig, ScratchpadManager, ScratchpadSnapshot,

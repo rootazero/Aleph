@@ -98,6 +98,16 @@ pub struct SendResponse {
 pub(crate) struct AbortParams {
     /// Run ID to abort
     pub run_id: String,
+    /// Session whose waiting backlog should be abandoned along with the run.
+    ///
+    /// Optional so older clients keep working, but a client that omits it stops
+    /// one run and leaves the lane loaded: cancelling frees the session slot,
+    /// the lane wakes its front waiter, and the messages the user just said they
+    /// did not want start firing one full agent run at a time. `/stop` has
+    /// purged the lane since Round-5; Panel and CLI were given the same lane in
+    /// the same round but no way to reach `purge`.
+    #[serde(default)]
+    pub session_key: Option<String>,
 }
 
 /// Parameters for chat.history request
@@ -261,16 +271,31 @@ pub async fn handle_abort(
         Err(e) => return e,
     };
 
+    // Drop the backlog before cancelling, never after: cancelling releases the
+    // session slot, which wakes the lane's front waiter, which can be admitted
+    // (and so leave the lane) before a later purge could mark it. Same ordering
+    // rule as `/stop` in `inbound_router::command_handler::handle_stop`.
+    let dropped = params
+        .session_key
+        .as_deref()
+        .map_or(0, crate::gateway::busy_queue::purge);
+
     // Cancel the run
     let cancelled = run_manager.cancel_run(&params.run_id).await;
 
-    debug!(run_id = %params.run_id, cancelled = cancelled, "Chat abort requested");
+    debug!(
+        run_id = %params.run_id,
+        cancelled = cancelled,
+        dropped = dropped,
+        "Chat abort requested"
+    );
 
     JsonRpcResponse::success(
         request.id,
         json!({
             "run_id": params.run_id,
             "aborted": cancelled,
+            "dropped": dropped,
         }),
     )
 }
@@ -518,6 +543,43 @@ pub async fn handle_context_estimate(
 mod tests {
     use super::*;
     use serde_json::json;
+
+    /// The wire contract Panel Stop depends on. An older client that sends only
+    /// `run_id` must still parse (the field is optional), and a client that
+    /// scopes the stop must have its session key actually arrive — this is the
+    /// half that reaches `busy_queue::purge`.
+    #[test]
+    fn abort_params_carry_the_session_to_purge_and_stay_backward_compatible() {
+        let scoped: AbortParams =
+            serde_json::from_value(json!({"run_id": "run-1", "session_key": "agent:main:main"}))
+                .unwrap();
+        assert_eq!(scoped.session_key.as_deref(), Some("agent:main:main"));
+
+        let legacy: AbortParams = serde_json::from_value(json!({"run_id": "run-1"})).unwrap();
+        assert!(legacy.session_key.is_none());
+    }
+
+    /// Stop must empty the lane, not just cancel the run. Asserts the effect at
+    /// the consumer — the tickets are marked, so `deliver_with_ticket` bails
+    /// before attempting — rather than that `purge` was called.
+    #[test]
+    fn a_session_scoped_abort_abandons_everything_waiting_on_that_session() {
+        use crate::gateway::busy_queue;
+        let session = "abort-test:purges-the-lane";
+        let waiting =
+            busy_queue::register(session, 8, "queued-1").expect("lane has room for the first");
+        let behind =
+            busy_queue::register(session, 8, "queued-2").expect("lane has room for the second");
+
+        let dropped = busy_queue::purge(session);
+
+        assert_eq!(dropped, 2, "both waiting messages are reported to the user");
+        assert!(
+            waiting.is_cancelled() && behind.is_cancelled(),
+            "a purged ticket must read as cancelled to its own waiter, which is \
+             what stops it being delivered once the cancel frees the slot"
+        );
+    }
 
     #[test]
     fn test_send_params_deserialization() {

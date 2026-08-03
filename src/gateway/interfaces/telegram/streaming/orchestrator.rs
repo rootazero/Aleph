@@ -127,13 +127,22 @@ impl StreamOrchestrator {
                     // `final_response` via the same single-source sanitizer the
                     // inbound `ReplyEmitter` uses, so the final Telegram edit
                     // matches the reasoning-split streamed preview rather than
-                    // leaking the raw assistant text. Falls back to the raw text
-                    // only when sanitization leaves nothing, so a pure-reasoning
-                    // turn never blanks an already-streamed message.
+                    // leaking the raw assistant text.
+                    //
+                    // `None` means the sanitizer found nothing deliverable — a
+                    // pure-reasoning turn. This used to fall back to the RAW text
+                    // in that case, i.e. it posted the chain-of-thought precisely
+                    // when sanitisation had said not to. Settle on what was
+                    // already streamed instead: it is clean, and the promise that
+                    // a pure-reasoning turn never blanks an existing message is
+                    // kept without delivering what the sanitiser refused.
                     let raw = summary.final_response.as_deref().unwrap_or("");
-                    let cleaned = crate::gateway::reply_emitter::sanitize_final_response(raw);
-                    let final_text = cleaned.as_deref().unwrap_or(raw);
-                    if let Err(e) = answer_lane.finalize(final_text).await {
+                    let outcome = match crate::gateway::reply_emitter::sanitize_final_response(raw)
+                    {
+                        Some(text) => answer_lane.finalize(&text).await,
+                        None => answer_lane.finalize_streamed().await,
+                    };
+                    if let Err(e) = outcome {
                         tracing::warn!("Failed to finalize answer lane: {}", e);
                     }
                     break;

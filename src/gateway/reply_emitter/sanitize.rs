@@ -19,7 +19,9 @@ use std::sync::LazyLock;
 pub(crate) fn sanitize_llm_output(text: &str) -> Cow<'_, str> {
     // Fast path: quick probe for any tag-like pattern before doing real work.
     static QUICK_PROBE: LazyLock<Regex> = LazyLock::new(|| {
-        Regex::new(r"<(?:think|thinking|thought|antthinking|completion-check|task-complete)[\s/>]")
+        Regex::new(
+            r"<(?:think|thinking|thought|antthinking|completion-check|task-complete|memory-context)[\s/>]",
+        )
             .unwrap_or_else(|_| unreachable!("quick probe regex is statically valid"))
     });
     static BLANK_LINES_RE: LazyLock<Regex> = LazyLock::new(|| {
@@ -49,7 +51,22 @@ pub(crate) fn sanitize_llm_output(text: &str) -> Cow<'_, str> {
 
 /// Tag names that should be stripped (all ASCII, case-insensitive).
 const THINKING_TAGS: &[&str] = &["think", "thinking", "thought", "antthinking"];
-const OTHER_STRIP_TAGS: &[&str] = &["completion-check"];
+/// Non-reasoning spans the model may echo that must not reach a user.
+///
+/// `memory-context` is the fence `memory::assembler::context_block::wrap_memory_context`
+/// puts around recalled long-term memory. The live stream already discards it
+/// (`streaming_scrubber::DISCARD_TAG_PAIRS`, applied by `MessageAssembler`), but
+/// the terminal answer is raw model text — `RunSummary.final_response` is copied
+/// verbatim from `content.text` — and this list is the only thing standing
+/// between it and every terminal surface. It was missing here, so a model that
+/// echoed the fence had the recalled memory scrubbed from the live bubble and
+/// then written back over it by `finalize_answer`, and posted to Telegram /
+/// Slack / the group transcript / cron results. Exactly the `<think>`
+/// resurrection Round-4 closed, one tag later.
+///
+/// `discard_tag_pairs_are_all_stripped_from_the_terminal_answer` keeps the two
+/// lists from drifting apart again.
+const OTHER_STRIP_TAGS: &[&str] = &["completion-check", "memory-context"];
 
 /// Strip tags while respecting code block boundaries.
 ///

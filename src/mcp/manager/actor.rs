@@ -156,6 +156,25 @@ impl McpManagerActor {
         self
     }
 
+    /// Install the host's sampling callback, so servers that auto-start at boot
+    /// can be told the truth about the `sampling` capability.
+    ///
+    /// Must be set before `run()`: the capability is declared during each
+    /// server's handshake, and `SetSamplingCallback` arriving later can only
+    /// reach servers that already introduced themselves without it.
+    ///
+    /// The callback resolves its provider lazily (see
+    /// [`crate::mcp::sampling_bridge`]) — the manager spawns well before the
+    /// agent's LLM exists, so anything eager would be installed too late to be
+    /// declared.
+    #[must_use]
+    pub fn with_sampling_bridge(mut self) -> Self {
+        let callback: crate::mcp::sampling::SamplingCallback =
+            Box::new(|req| Box::pin(crate::mcp::sampling_bridge::serve_sampling(req)));
+        self.sampling_callback = Some(Arc::new(callback));
+        self
+    }
+
     /// Run the actor's main loop
     ///
     /// This method:
@@ -678,6 +697,22 @@ impl McpManagerActor {
         client.set_tool_filter(config.tool_filter.clone());
         let client = Arc::new(client);
 
+        // Install the sampling callback BEFORE any transport starts. The
+        // handshake declares the `sampling` capability from
+        // `McpServerConnection::can_sample`, which asks whether a callback is
+        // registered — installing it after the connect (where it used to live)
+        // guaranteed every server was told this host cannot sample, or, before
+        // `can_sample` was made honest, told the opposite of the truth.
+        if let Some(ref callback) = self.sampling_callback {
+            let cb = Arc::clone(callback);
+            client
+                .set_sampling_callback(move |req| {
+                    let cb = Arc::clone(&cb);
+                    async move { cb(req).await }
+                })
+                .await;
+        }
+
         // Start based on transport type
         match config.transport {
             McpTransportType::Stdio => {
@@ -771,17 +806,6 @@ impl McpManagerActor {
         client
             .set_notification_handler(&config.id, notification_handler)
             .await;
-
-        // Set sampling callback if one is registered
-        if let Some(ref callback) = self.sampling_callback {
-            let cb = Arc::clone(callback);
-            client
-                .set_sampling_callback(move |req| {
-                    let cb = Arc::clone(&cb);
-                    async move { cb(req).await }
-                })
-                .await;
-        }
 
         // Get tool count for event
         let tool_count = client.list_tools().await.len();

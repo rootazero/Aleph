@@ -121,6 +121,11 @@ pub struct EnvDecl {
     pub default: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub placeholder: Option<String>,
+    /// Where the user obtains this value (a console / signup page). Surfaced in
+    /// the install Configure step next to the field — without it the user is
+    /// asked for a key with no clue where it comes from.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub how_to_get_url: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

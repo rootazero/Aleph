@@ -83,6 +83,27 @@ impl LaneHandle {
 
     /// Finalize the lane with final text.
     /// Returns the Telegram message ID of the finalized message.
+    /// Settle the lane on the text it has already streamed.
+    ///
+    /// For the case where the run produced nothing deliverable — a pure-thinking
+    /// turn, where `sanitize_final_response` returns `None`. Finalising with the
+    /// raw `final_response` there posts the model's internal reasoning to the
+    /// chat: sanitisation returning `None` means "there is no answer here", not
+    /// "use the unsanitised text". The already-streamed preview is clean (the
+    /// drain scrubbed it), so settling on it keeps the promise that a
+    /// pure-reasoning turn never blanks an existing message without delivering
+    /// anything the sanitiser refused.
+    pub async fn finalize_streamed(&self) -> ChannelResult<i64> {
+        let streamed = {
+            let tracker = self.tracker.lock().await;
+            tracker
+                .get(self.lane_id)
+                .map(|state| state.accumulated.clone())
+                .unwrap_or_default()
+        };
+        self.finalize(&streamed).await
+    }
+
     pub async fn finalize(&self, final_text: &str) -> ChannelResult<i64> {
         let mut tracker = self.tracker.lock().await;
         let state = tracker

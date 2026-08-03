@@ -221,10 +221,8 @@ pub fn render_session_topology(session: &str) -> Option<String> {
 
 /// Store-taking form of [`render_session_topology`].
 ///
-/// `pub(crate)` because `loop_graph::store`'s tests assert store-level
-/// invariants (e.g. a label-only upsert must not drop the human root
-/// reference) through the rendered bytes, which is the surface those
-/// invariants actually have to hold on.
+/// `pub(crate)` for a real consumer: `store.rs`'s topology test drives it
+/// against a local store, which the global-reading wrapper cannot do.
 #[must_use]
 pub(crate) fn render_session_topology_in(
     store: &crate::loop_graph::LoopGraphStore,

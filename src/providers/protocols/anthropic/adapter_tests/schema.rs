@@ -74,7 +74,10 @@ fn build_request_keeps_tagged_enum_tool_parameters_for_anthropic() {
 
     let body = build_body(&payload, &config);
     let schema = &body["tools"][0]["input_schema"];
-    assert!(schema.get("oneOf").is_none(), "union must not reach the wire");
+    assert!(
+        schema.get("oneOf").is_none(),
+        "union must not reach the wire"
+    );
     assert_eq!(schema["type"], "object");
 
     let props = schema["properties"]

@@ -52,6 +52,10 @@ pub struct SecretDisclosure {
     pub purpose: String,
     #[serde(default)]
     pub sensitive: bool,
+    /// Where the catalog says this value comes from; rendered as a link next to
+    /// the field so the user is not asked for a key with no source.
+    #[serde(default)]
+    pub how_to_get_url: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Deserialize)]

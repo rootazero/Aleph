@@ -6,7 +6,6 @@
     "description": "把版本精确的最新库文档注入上下文，少幻觉。",
     "vendor": "Upstash",
     "official": true,
-    "reachability": "cn-unreliable",
     "transports": [
       { "kind": "http", "url": "https://mcp.context7.com/mcp" },
       { "kind": "stdio", "command": "npx", "args": ["-y", "@upstash/context7-mcp"], "requires_runtime": "node" }
@@ -21,7 +20,6 @@
     "description": "截图转代码 / OCR / 报错诊断 / 图表与架构图理解（GLM-4.6V，给代码 agent 加视觉，智谱官方）。",
     "vendor": "智谱 AI Z.AI",
     "official": true,
-    "reachability": "cn-native",
     "transports": [
       { "kind": "stdio", "command": "npx", "args": ["-y", "@z_ai/mcp-server"], "requires_runtime": "node" }
     ],
@@ -38,7 +36,6 @@
     "description": "地理编码、POI 搜索、路线规划、天气（大陆原生）。",
     "vendor": "高德 AutoNavi",
     "official": true,
-    "reachability": "cn-native",
     "transports": [
       { "kind": "http", "url": "https://mcp.amap.com/mcp?key=<AMAP_MAPS_API_KEY>" },
       { "kind": "stdio", "command": "npx", "args": ["-y", "@amap/amap-maps-mcp-server"], "requires_runtime": "node" }
@@ -55,7 +52,6 @@
     "description": "图像 / 视频 / 语音合成（MiniMax 官方）。",
     "vendor": "MiniMax",
     "official": true,
-    "reachability": "cn-native",
     "transports": [
       { "kind": "stdio", "command": "uvx", "args": ["minimax-mcp", "-y"], "requires_runtime": "python" }
     ],
@@ -72,7 +68,6 @@
     "description": "文生图 / 超分 / 外扩 / OCR 等图像能力（火山官方）。",
     "vendor": "火山引擎 ByteDance",
     "official": true,
-    "reachability": "cn-native",
     "transports": [
       { "kind": "stdio", "command": "uvx", "args": ["--from", "git+https://github.com/volcengine/mcp-server#subdirectory=server/mcp_server_veimagex", "mcp-server-veimagex"], "requires_runtime": "python" }
     ],
@@ -91,7 +86,6 @@
     "description": "文生图 / 图生视频 / 语音合成（Aleph 自建官方 MCP）。",
     "vendor": "硅基流动 SiliconFlow",
     "official": true,
-    "reachability": "cn-native",
     "transports": [
       { "kind": "stdio", "command": "npx", "args": ["-y", "aleph-siliconflow-mcp@0.2.2"], "requires_runtime": "node" }
     ],
@@ -110,7 +104,6 @@
     "description": "聚合中转：图像 / 语音 生成 + 模型列表 / 账户余额（Aleph 自建官方 MCP，视频迭代加入）。",
     "vendor": "T8star · 贞贞的AI工坊",
     "official": true,
-    "reachability": "cn-native",
     "transports": [
       { "kind": "stdio", "command": "npx", "args": ["-y", "aleph-t8star-mcp@0.2.2"], "requires_runtime": "node" }
     ],
@@ -129,7 +122,6 @@
     "description": "驱动正在运行的 Unreal Editor 5.8+：生成 Actor、配置光照、材质实例、运行自动化测试等。",
     "vendor": "Epic Games",
     "official": true,
-    "reachability": "cn-native",
     "transports": [
       { "kind": "http", "url": "http://127.0.0.1:8000/mcp" }
     ],

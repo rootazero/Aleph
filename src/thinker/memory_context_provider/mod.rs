@@ -130,8 +130,7 @@ type CuratedSnapshotCache =
 /// session instead of re-reading disk every prompt build. Same invalidation
 /// points as [`CuratedSnapshotCache`]; see
 /// [`MemoryContextProvider::build_orientation_message_cached`].
-type OrientationSnapshotCache =
-    Arc<TokioRwLock<HashMap<SnapshotKey, FrozenEntry<Option<String>>>>>;
+type OrientationSnapshotCache = Arc<TokioRwLock<HashMap<SnapshotKey, FrozenEntry<Option<String>>>>>;
 
 /// Provides pre-fetched memory context for prompt injection.
 pub struct MemoryContextProvider {

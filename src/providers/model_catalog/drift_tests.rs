@@ -127,7 +127,7 @@ fn byo_model_presets_do_not_also_ship_a_default() {
 fn no_preset_defaults_to_a_retired_model() {
     let mut stale = Vec::new();
     for (name, preset) in PRESETS.iter() {
-        let life = lifecycle_for(preset.default_model);
+        let life = lifecycle_for(Some(name), preset.default_model);
         if life.is_deprecated() {
             stale.push(format!(
                 "{name} defaults to {} (retired; successor {:?})",
@@ -141,6 +141,31 @@ fn no_preset_defaults_to_a_retired_model() {
     );
 }
 
+/// A fallback chain is also the picker roster and the failover walk order, so
+/// a repeated id is a wasted retry and a duplicated menu line.
+///
+/// This is the shape a bad merge leaves behind: two revisions of the same
+/// chain concatenated rather than reconciled. That is exactly how the three
+/// Moonshot presets came to list `kimi-k3` and `kimi-k2.7-code` twice each and
+/// to resurrect the retired `kimi-k2.5` between them — `git` reported no
+/// conflict, because appending to a list is a clean textual merge.
+#[test]
+fn no_preset_repeats_a_fallback_model() {
+    let mut dupes = Vec::new();
+    for (name, preset) in PRESETS.iter() {
+        let mut seen = std::collections::HashSet::new();
+        for model in preset.fallback_models {
+            if !seen.insert(*model) {
+                dupes.push(format!("{name} → {model}"));
+            }
+        }
+    }
+    assert!(
+        dupes.is_empty(),
+        "duplicate entries in fallback chains: {dupes:#?}"
+    );
+}
+
 /// A preset's curated fallback chain exists to be tried when the default
 /// fails; a retired id in it just burns a retry.
 #[test]
@@ -148,7 +173,7 @@ fn no_preset_lists_a_retired_fallback() {
     let mut stale = Vec::new();
     for (name, preset) in PRESETS.iter() {
         for model in preset.fallback_models {
-            if lifecycle_for(model).is_deprecated() {
+            if lifecycle_for(Some(name), model).is_deprecated() {
                 stale.push(format!("{name} → {model}"));
             }
         }
@@ -157,6 +182,46 @@ fn no_preset_lists_a_retired_fallback() {
         stale.is_empty(),
         "retired models in fallback chains: {stale:#?}"
     );
+}
+
+/// The aux model was the one advertised slot no guard covered. It is what
+/// summarisation and classification run on — a retired id there fails in the
+/// background, on a code path nobody is watching, which is precisely the shape
+/// of failure this file exists to convert into a build error.
+#[test]
+fn no_preset_points_its_aux_model_at_a_retired_id() {
+    let mut stale = Vec::new();
+    for (name, preset) in PRESETS.iter() {
+        let Some(aux) = preset.default_aux_model else {
+            continue;
+        };
+        let life = lifecycle_for(Some(name), aux);
+        if life.is_deprecated() {
+            stale.push(format!(
+                "{name}: aux={aux} (retired; successor {:?})",
+                life.successor
+            ));
+        }
+    }
+    assert!(
+        stale.is_empty(),
+        "presets whose cheap aux model has been retired: {stale:#?}"
+    );
+}
+
+/// Host scopes are matched **exactly** against the provider id, with no alias
+/// walking. That is a deliberate simplification, and it is only safe while every
+/// scope names something real — a typo'd or renamed scope produces a row that
+/// can never fire, silently, and the retirement it recorded is simply lost.
+#[test]
+fn lifecycle_scopes_name_a_real_preset() {
+    for scope in super::lifecycle::declared_provider_scopes() {
+        assert!(
+            get_preset(scope).is_some(),
+            "LIFECYCLE_TABLE scopes a row to provider {scope:?}, but no such preset \
+             exists — that row can never match (scopes are compared exactly)"
+        );
+    }
 }
 
 /// The first fallback is the default by convention across every preset that

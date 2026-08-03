@@ -17,6 +17,9 @@ pub struct SecretDisclosure {
     pub name: String,
     pub purpose: String,
     pub sensitive: bool,
+    /// Where to obtain the value, when the catalog entry declares it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub how_to_get_url: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -54,8 +57,11 @@ fn secrets_of(spec: &InstallSpec) -> Vec<SecretDisclosure> {
                 name: e.name.clone(),
                 purpose: e.description.clone().unwrap_or_default(),
                 sensitive: e.secret,
+                how_to_get_url: e.how_to_get_url.clone(),
             })
             .collect(),
+        // `HeaderDecl` carries no guidance field — a remote endpoint's auth
+        // header has no catalog-declared source to point at.
         InstallSpec::McpRemote { headers, .. } => headers
             .iter()
             .filter(|h| h.secret)
@@ -63,6 +69,7 @@ fn secrets_of(spec: &InstallSpec) -> Vec<SecretDisclosure> {
                 name: h.name.clone(),
                 purpose: String::new(),
                 sensitive: true,
+                how_to_get_url: None,
             })
             .collect(),
         _ => vec![],
@@ -202,6 +209,28 @@ mod tests {
         assert_eq!(d.secrets.len(), 1);
         assert!(d.secrets[0].sensitive);
         assert!(d.ack_required); // Community + stdio => ack
+    }
+
+    /// The guidance URL has to survive `EnvDecl` → `SecretDisclosure`: that is
+    /// the hop the Panel's Configure step reads it from.
+    #[test]
+    fn secret_disclosure_carries_how_to_get_url() {
+        let spec = InstallSpec::McpStdio {
+            command: "npx".into(),
+            args: vec![],
+            env: vec![EnvDecl {
+                name: "AMAP_MAPS_API_KEY".into(),
+                required: true,
+                secret: true,
+                how_to_get_url: Some("https://console.amap.com/dev/key/app".into()),
+                ..Default::default()
+            }],
+        };
+        let d = build_disclosure(&mcp_entry(), &spec);
+        assert_eq!(
+            d.secrets[0].how_to_get_url.as_deref(),
+            Some("https://console.amap.com/dev/key/app")
+        );
     }
 
     #[test]

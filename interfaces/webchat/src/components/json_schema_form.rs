@@ -28,6 +28,8 @@ pub struct FieldSpec {
     pub placeholder: String,
     pub default: Option<String>,
     pub field_type: FieldType,
+    /// Console / signup page for this value, when the catalog declares one.
+    pub how_to_get_url: Option<String>,
 }
 
 /// Build the form's fields. Field set = union of `disclosure.secrets` names and
@@ -117,9 +119,19 @@ pub fn fields_from(
                 placeholder,
                 default,
                 field_type,
+                how_to_get_url: secret_decl.and_then(|s| s.how_to_get_url.clone()),
             }
         })
         .collect()
+}
+
+/// Host portion of a URL, for use as link text. Falls back to the whole string
+/// when it does not parse as `scheme://host/…` — the catalog is curated, but a
+/// malformed entry should still render something clickable rather than nothing.
+#[must_use]
+pub fn link_host(url: &str) -> &str {
+    url.split_once("://")
+        .map_or(url, |(_, rest)| rest.split('/').next().unwrap_or(rest))
 }
 
 /// Renders a JSON-Schema–derived form, dispatching each field to an existing
@@ -237,9 +249,30 @@ pub fn JsonSchemaForm(
                     }
                 };
 
+                // The catalog's "where do I get this" link, rendered under the
+                // input. Without it the Configure step asks for a key and says
+                // nothing about where it comes from.
+                // Link text is the URL's host, not a translated phrase: it needs
+                // no locale file and it tells the user which console they are
+                // about to open.
+                let source_link = f.how_to_get_url.clone().map(|url| {
+                    let label = format!("{} ↗", link_host(&url));
+                    view! {
+                        <a
+                            href=url
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            class="block text-xs text-primary hover:underline"
+                        >
+                            {label}
+                        </a>
+                    }
+                });
+
                 view! {
                     <FormField label=label help_text=(!help.is_empty()).then(|| help.clone())>
                         {widget}
+                        {source_link}
                     </FormField>
                 }
             }).collect_view()}
@@ -258,7 +291,29 @@ mod tests {
             name: name.into(),
             purpose: format!("{name} purpose"),
             sensitive,
+            how_to_get_url: None,
         }
+    }
+
+    /// Last hop of the catalog→form chain: a declared source URL has to reach
+    /// the rendered field, and a field with no declared source stays bare.
+    #[test]
+    fn how_to_get_url_reaches_the_field() {
+        let mut with_url = sd("AMAP_MAPS_API_KEY", true);
+        with_url.how_to_get_url = Some("https://console.amap.com/dev/key/app".into());
+        let fields = fields_from(None, &[with_url, sd("REGION", false)], &[]);
+        assert_eq!(
+            fields[0].how_to_get_url.as_deref(),
+            Some("https://console.amap.com/dev/key/app")
+        );
+        assert!(fields[1].how_to_get_url.is_none());
+    }
+
+    #[test]
+    fn link_host_strips_scheme_and_path() {
+        assert_eq!(link_host("https://console.amap.com/dev/key/app"), "console.amap.com");
+        assert_eq!(link_host("https://platform.minimaxi.com"), "platform.minimaxi.com");
+        assert_eq!(link_host("not a url"), "not a url");
     }
 
     #[test]
