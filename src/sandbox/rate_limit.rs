@@ -92,10 +92,13 @@ impl Default for SandboxRateLimitConfig {
 #[must_use]
 pub fn categorize_tool(tool_name: &str) -> ToolCategory {
     match tool_name {
-        "config.patch" | "config.set" | "plugins.install" | "plugins.uninstall"
-        | "skills.install" | "skills.remove" => ToolCategory::Admin,
-        "code_exec" | "exec" | "bash_exec" => ToolCategory::Dangerous,
-        "file_write" | "file_edit" | "file_delete" | "folder_write" => ToolCategory::Write,
+        // NOTE: `tool_name` currently carries `command.program`, not the
+        // AlephTool::NAME constant. These match arms target the real
+        // AlephTool::NAME values that will arrive once the SandboxHookContext
+        // is threaded with the real tool name.
+        "self_config" | "skill_install" => ToolCategory::Admin,
+        "code_exec" | "bash" => ToolCategory::Dangerous,
+        "file_ops" | "apply_patch" => ToolCategory::Write,
         _ => ToolCategory::Read,
     }
 }
@@ -257,20 +260,19 @@ mod tests {
     #[test]
     fn categorize_tool_dangerous() {
         assert_eq!(categorize_tool("code_exec"), ToolCategory::Dangerous);
-        assert_eq!(categorize_tool("bash_exec"), ToolCategory::Dangerous);
-        assert_eq!(categorize_tool("exec"), ToolCategory::Dangerous);
+        assert_eq!(categorize_tool("bash"), ToolCategory::Dangerous);
     }
 
     #[test]
     fn categorize_tool_admin() {
-        assert_eq!(categorize_tool("config.patch"), ToolCategory::Admin);
-        assert_eq!(categorize_tool("plugins.install"), ToolCategory::Admin);
+        assert_eq!(categorize_tool("self_config"), ToolCategory::Admin);
+        assert_eq!(categorize_tool("skill_install"), ToolCategory::Admin);
     }
 
     #[test]
     fn categorize_tool_write() {
-        assert_eq!(categorize_tool("file_write"), ToolCategory::Write);
-        assert_eq!(categorize_tool("file_edit"), ToolCategory::Write);
+        assert_eq!(categorize_tool("file_ops"), ToolCategory::Write);
+        assert_eq!(categorize_tool("apply_patch"), ToolCategory::Write);
     }
 
     #[test]

