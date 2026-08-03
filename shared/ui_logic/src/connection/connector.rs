@@ -26,8 +26,6 @@ pub enum ConnectionError {
     SendFailed(String),
     #[error("Receive failed: {0}")]
     ReceiveFailed(String),
-    #[error("Url parse error: {0}")]
-    UrlError(String),
 }
 
 #[async_trait(?Send)]

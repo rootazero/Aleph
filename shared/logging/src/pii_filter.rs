@@ -19,6 +19,10 @@ static PASSTHROUGH_WARNED: AtomicBool = AtomicBool::new(false);
 /// [`create_pii_scrubbing_layer`] (or compose it via
 /// `SubscriberExt::with(...)`). The first time this no-op observes an event
 /// it emits a `warn!` so misconfiguration shows up in operator logs.
+#[deprecated(
+    since = "2026.08.04",
+    note = "PiiScrubbingLayer is a passthrough — install PII scrubbing via create_pii_scrubbing_layer() (a FormatEvent) instead."
+)]
 pub struct PiiScrubbingLayer;
 
 impl<S: Subscriber> Layer<S> for PiiScrubbingLayer {
