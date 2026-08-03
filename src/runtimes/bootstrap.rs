@@ -88,12 +88,6 @@ pub async fn install(name: &str) -> Result<BootstrapResult, BootstrapError> {
         InstallStrategy::Shell(script) => run_shell(script).await?,
         InstallStrategy::PowerShell(script) => run_powershell(script).await?,
         InstallStrategy::Via { parent, subcommand } => run_via_parent(parent, subcommand).await?,
-        InstallStrategy::Unsupported { reason } => {
-            return Ok(BootstrapResult::Unsupported {
-                capability: name.into(),
-                reason: (*reason).into(),
-            });
-        }
     };
 
     if let CmdOutcome::Failed { stderr } = cmd_result {
@@ -303,8 +297,8 @@ fn prepend_existing_dirs(candidates: Vec<PathBuf>) {
 async fn enrich_path_for_via_parent(parent: &str) {
     let bin_dir = match parent {
         "fnm" | "node" => fnm_lts_bin_dir().await,
-        // uv/cargo Via-parents install onto PATH-visible dirs already covered
-        // by enrich_path_for_reprobe; nothing extra to resolve.
+        // fnm/node Via-parents land in version-manager-controlled dirs not on PATH;
+        // enrich_path_for_reprobe already covers the well-known dirs.
         _ => None,
     };
     if let Some(dir) = bin_dir {
@@ -353,8 +347,6 @@ async fn run_via_parent(parent: &str, subcommand: &[&str]) -> Result<CmdOutcome,
             cmd.args(["exec", "--using", "lts", "--"]);
             return run_cmd(cmd.args(subcommand)).await;
         }
-        "uv" => Command::new("uv"),
-        "cargo" => Command::new("cargo"),
         _ => {
             return Ok(CmdOutcome::Failed {
                 stderr: format!("unknown Via parent: {parent}"),

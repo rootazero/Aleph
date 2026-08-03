@@ -35,7 +35,7 @@ pub fn RuntimesView() -> impl IntoView {
     }
 
     // Subscribe to live install progress and reflect it on the cards. The
-    // backend pushes `started`/`log`/`done`/`failed` events; on `done` we
+    // backend pushes `started`/`done`/`failed` events; on `done` we
     // refresh the ledger so the card flips to its new (Ready/Stale) status.
     {
         let handler_id = state.subscribe_events(move |ev| {
@@ -160,14 +160,13 @@ fn RuntimeCard(
         installing.get()
             || my_progress
                 .get()
-                .is_some_and(|p| matches!(p.status.as_str(), "started" | "log"))
+                .is_some_and(|p| p.status == "started")
     });
 
     let (icon, icon_class) = match info.status {
         RuntimeStatus::Ready => ("✓", "text-success"),
         RuntimeStatus::Missing if info.supported_on_current_os => ("✗", "text-text-tertiary"),
         RuntimeStatus::Missing => ("⊘", "text-text-tertiary"),
-        RuntimeStatus::Probing => ("…", "text-text-tertiary"),
         RuntimeStatus::Bootstrapping => ("…", "text-info"),
         RuntimeStatus::Stale => ("?", "text-warning"),
     };
@@ -240,8 +239,8 @@ fn RuntimeCard(
                     <span class="text-xs text-text-tertiary italic">{t!(i18n, runtimes.install_manually)}</span>
                 })}
             </div>
-            // Live install progress strip: an indeterminate bar + latest log line
-            // while running, or the real error/stderr on failure.
+            // Live install progress strip: an indeterminate bar while
+            // running, or the real error/stderr on failure.
             {move || my_progress.get().map(|p| {
                 if p.status == "failed" {
                     let detail = p.error.clone().or(p.stderr).unwrap_or_default();
@@ -249,14 +248,14 @@ fn RuntimeCard(
                         <div class="mt-3 text-xs text-danger break-words">{detail}</div>
                     }.into_any()
                 } else {
-                    let line = p.log_line
-                        .unwrap_or_else(|| t_string!(i18n, runtimes.installing).to_string());
                     view! {
                         <div class="mt-3 space-y-1">
                             <div class="h-1 w-full bg-surface-sunken rounded overflow-hidden">
                                 <div class="h-full w-1/3 bg-primary rounded animate-pulse"></div>
                             </div>
-                            <div class="text-xs text-text-tertiary truncate">{line}</div>
+                            <div class="text-xs text-text-tertiary truncate">
+                                {t!(i18n, runtimes.installing)}
+                            </div>
                         </div>
                     }.into_any()
                 }

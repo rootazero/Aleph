@@ -45,10 +45,8 @@ pub const RUNTIME_INSTALL_PROGRESS_TOPIC: &str = "runtimes.install.progress";
 pub struct RuntimeInstallProgressEvent {
     /// Install step: capability name being installed (e.g. "fnm", "node", "playwright-cli")
     pub step: String,
-    /// Step status: "started" | "log" | "done" | "failed"
+    /// Step status: "started" | "done" | "failed"
     pub status: String,
-    /// Log line (present when status == "log")
-    pub log_line: Option<String>,
     /// Error message (present when status == "failed")
     pub error: Option<String>,
     /// Raw stderr captured from the failing install command. Populated only

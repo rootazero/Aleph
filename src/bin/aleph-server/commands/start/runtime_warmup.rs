@@ -6,7 +6,9 @@
 
 pub(super) async fn runtime_startup_warmup() {
     use alephcore::runtimes::{
-        self, ledger::CapabilityEntry, CapabilityLedger, CapabilityStatus, SPECS,
+        self,
+        ledger::{migrate_from_legacy, CapabilityEntry},
+        CapabilityLedger, CapabilityStatus, SPECS,
     };
     use std::sync::Arc;
     use std::time::{SystemTime, UNIX_EPOCH};
@@ -24,7 +26,13 @@ pub(super) async fn runtime_startup_warmup() {
         return;
     }
     let ledger_path = runtimes_dir.join("ledger.json");
-    let ledger = Arc::new(RwLock::new(CapabilityLedger::load_or_create(ledger_path)));
+    let ledger: Arc<RwLock<CapabilityLedger>> = match migrate_from_legacy(&runtimes_dir) {
+        Ok(ledger) => Arc::new(RwLock::new(ledger)),
+        Err(e) => {
+            tracing::warn!("Legacy manifest migration failed: {e}, falling back to ledger load_or_create");
+            Arc::new(RwLock::new(CapabilityLedger::load_or_create(&ledger_path)))
+        }
+    };
 
     let now = SystemTime::now()
         .duration_since(UNIX_EPOCH)
