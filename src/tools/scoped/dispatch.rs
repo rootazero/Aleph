@@ -1099,17 +1099,21 @@ impl ScopedToolService {
         }
 
         // Settle any `_media` the tool declared into the durable artifact store
-        // while the value is still structured — the lines below flatten it to
-        // text and truncate it to the result budget, after which the items are
-        // gone. Read-only (the items stay in `out.value` for the existing
-        // delivery path) and best-effort by construction: it returns `()`, so a
-        // storage failure can never surface as a tool error.
-        super::artifact_harvest::harvest_outbound_media(
+        // and the run's channel-delivery buffer while the value is still
+        // structured — the lines below flatten it to text and truncate it to
+        // the result budget, after which the items are gone.
+        let media_failures = super::artifact_harvest::harvest_outbound_media(
             name,
             &out.value,
             self.turn_context.as_ref(),
         )
         .await;
+        // An item that could not be resolved has to be said out loud here or
+        // nowhere: the delivery leg runs at `RunComplete`, after the loop has
+        // ended, so this is the last point at which the model can still pick a
+        // different URL or re-encode the payload. Absent failures write
+        // nothing, so the success path stays byte-identical.
+        super::artifact_harvest::annotate_media_failures(&mut out.value, &media_failures);
 
         // Compress first: hands JSON to the per-tool summarizer that
         // already exists in `tool_output::compressor`. The text we feed

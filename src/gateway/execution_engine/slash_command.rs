@@ -283,7 +283,11 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
                 // a task-local, so it hands its own `RunRequest`'s buffer over
                 // explicitly. Best-effort by construction: the harvest swallows
                 // its own failures and cannot fail the command.
-                crate::tools::scoped::artifact_harvest::harvest_media_for_session(
+                // The failures it returns are dropped on purpose: a slash
+                // command has no model turn to correct anything in, and its own
+                // response text is already on its way to the user. They are
+                // logged inside the harvest.
+                let _ = crate::tools::scoped::artifact_harvest::harvest_media_for_session(
                     tool_id,
                     &result,
                     &request.session_key.to_key_string(),
