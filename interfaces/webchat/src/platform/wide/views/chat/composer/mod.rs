@@ -612,25 +612,15 @@ pub(super) fn InputArea() -> impl IntoView {
         });
     }
 
-    // Empty-state suggestion chips, the queued-ghost "click to edit", and the
-    // composer's own ↑ retraction all drop a starter string on
-    // `chat.draft_seed`; drain it into this local `input_text` here so none of
-    // them needs a handle on the composer. Same shape as the retry plumbing
-    // above. Writing the signal back to `None` inside the Effect that reads it
-    // is safe — the re-run sees `None` and stops.
-    //
-    // The seed is MERGED with whatever is already typed, never substituted for
-    // it: clicking a queued ghost to edit it used to wipe a half-written draft
-    // with no way back. Chips only fire from the empty state, so for them the
-    // merge is the identity.
-    {
-        Effect::new(move |_| {
-            if let Some(seed) = chat.draft_seed.get() {
-                input_text.set(merge_draft(&seed, &input_text.get_untracked()));
-                chat.draft_seed.set(None);
-            }
-        });
-    }
+    // NOTE: there is deliberately no "drain the prefill channel" Effect here.
+    // Chips, the queued-ghost tap and keyboard recall all go through
+    // `ChatState::seed_draft`, which writes `chat.draft` — the very signal this
+    // composer binds as `input_text` above — and merges rather than overwrites.
+    // A separate `draft_seed` signal used to sit in between, and the version of
+    // it that survived a merge referenced fields `ChatState` no longer has;
+    // reviving it would recreate a second prefill path competing for one draft,
+    // plus the failure mode it was removed for (a platform with no drain site
+    // silently swallowing a recalled message).
 
     // Queue auto-drain — when a run settles naturally (busy → idle), replay
     // the head of the queue through the normal send pipeline. An explicit
