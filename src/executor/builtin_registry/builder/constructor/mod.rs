@@ -328,19 +328,23 @@ impl BuiltinToolRegistry {
             Arc::clone(&vision_pipeline),
         ));
 
-        // Media pipeline — powers media_understand / document_extract. These
-        // were advertised-but-disabled: their schema is gated on
-        // `config.media_pipeline` (constructor below) and their dispatch errors
-        // when it is None, yet nothing ever constructed one outside tests. Wire
-        // the LLM-free providers so the tools actually run: document text
-        // extraction stands alone; image understanding shares the vision
-        // pipeline (OCR text today, scene description once a multimodal vision
-        // provider is registered — no change here). No audio stub provider is
-        // registered: it would only return `NoProvider`, so adding one would
-        // make the pipeline *claim* audio support while still failing —
-        // audio_transcribe stays honestly unsupported until a real transcription
-        // provider (e.g. a Whisper MCP) is wired. Only construct when the caller
-        // did not supply a pipeline.
+        // Media pipeline — powers media_understand / audio_transcribe /
+        // document_extract. These were advertised-but-disabled: their schema is
+        // gated on `config.media_pipeline` (constructor below) and their
+        // dispatch errors when it is None, yet nothing ever constructed one
+        // outside tests. Wire the LLM-free providers so the tools actually run:
+        // document text extraction stands alone; image understanding shares the
+        // vision pipeline (OCR text today, scene description once a multimodal
+        // vision provider is registered — no change here).
+        //
+        // Audio is registered only when `[generation] transcription_providers`
+        // actually resolves a backend — the same `media::resolve` the server's
+        // `MediaProcessor` uses, so the tool and attachment transcription can
+        // never disagree about whether transcription exists. An unconditional
+        // stub would make the pipeline *claim* audio support and still fail;
+        // registering nothing when a backend *is* configured is the mirror
+        // fault, and that is the one that was live. Only construct when the
+        // caller did not supply a pipeline.
         if config.media_pipeline.is_none() {
             let mut mp = crate::media::MediaPipeline::new();
             mp.add_provider(Box::new(crate::media::ImageMediaProvider::new(
@@ -348,6 +352,15 @@ impl BuiltinToolRegistry {
                 10,
             )));
             mp.add_provider(Box::new(crate::media::TextDocumentProvider));
+            if let Some(resolved) = resolve_transcription(&config).await {
+                tracing::info!(
+                    backend = resolved.label,
+                    "audio_transcribe: transcription backend registered"
+                );
+                mp.add_provider(Box::new(crate::media::AudioMediaProvider::new(
+                    resolved.service,
+                )));
+            }
             config.media_pipeline = Some(Arc::new(mp));
         }
         // `[desktop] allow_global_pointer` — the one input-rail policy knob. Left
@@ -1257,4 +1270,24 @@ impl BuiltinToolRegistry {
             tools,
         })
     }
+}
+
+/// Resolve the configured transcription backend for the `audio_transcribe`
+/// provider, reading the same `[generation]` config and the same vault keys the
+/// server's `MediaProcessor` reads.
+///
+/// `None` when no config handle is available (registry built standalone, as in
+/// tests) or when nothing is configured — the pipeline then registers no audio
+/// provider, and the tool says so instead of pretending.
+async fn resolve_transcription(
+    config: &BuiltinToolConfig,
+) -> Option<crate::media::ResolvedTranscription> {
+    let cfg = config.config.as_ref()?;
+    let generation = cfg.read().await.generation.clone();
+    let vault = config.shared_token_manager.clone();
+    crate::media::transcription_service(&generation, &move |name: &str| {
+        let vault = vault.as_ref()?;
+        let secret = vault.get_secret(&format!("gen:{name}")).ok()??;
+        Some(secret.expose().to_string())
+    })
 }

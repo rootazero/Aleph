@@ -25,8 +25,6 @@ pub struct McpPreset {
     pub vendor: String,
     /// First-party official server (vs community).
     pub official: bool,
-    /// Mainland-China reachability hint (display only).
-    pub reachability: Reachability,
     /// Launch options, ranked: remote first, stdio fallback.
     pub transports: Vec<PresetTransport>,
     /// Env vars the user must/should provide.
@@ -48,17 +46,6 @@ pub struct McpPreset {
 pub enum PresetCategory {
     Developer,
     Daily,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "kebab-case")]
-pub enum Reachability {
-    /// Built for mainland China, fully reachable.
-    CnNative,
-    /// Global service, mainland reachability not guaranteed.
-    Global,
-    /// Reported unreliable behind the GFW.
-    CnUnreliable,
 }
 
 /// One launch option for a preset. `kind` reuses the manager transport enum.
@@ -169,7 +156,6 @@ mod tests {
         let json = r#"{
             "id": "x", "name": "X", "category": "developer",
             "description": "d", "vendor": "V", "official": true,
-            "reachability": "global",
             "transports": [{ "kind": "http", "url": "https://x/mcp" }]
         }"#;
         let p: McpPreset = serde_json::from_str(json).expect("parse");

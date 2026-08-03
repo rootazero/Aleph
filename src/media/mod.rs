@@ -33,6 +33,7 @@ pub mod policy;
 pub mod processor;
 pub mod processors;
 pub mod provider;
+pub mod resolve;
 pub mod transcription;
 pub mod types;
 pub mod whisper;
@@ -41,7 +42,8 @@ pub use detect::{detect_by_extension, detect_by_magic, detect_from_path};
 pub use error::MediaError;
 pub use pipeline::MediaPipeline;
 pub use policy::MediaPolicy;
-pub use processors::{ImageMediaProvider, TextDocumentProvider};
+pub use processors::{AudioMediaProvider, ImageMediaProvider, TextDocumentProvider};
+pub use resolve::{transcription_service, ResolvedTranscription};
 pub use provider::MediaProvider;
 pub use types::{
     AudioFormat, DocFormat, MediaImageFormat, MediaInput, MediaOutput, MediaType, VideoFormat,

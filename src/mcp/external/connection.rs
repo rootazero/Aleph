@@ -260,8 +260,19 @@ impl McpServerConnection {
 
     /// Whether this connection can service a server's request for an LLM
     /// completion — and therefore whether it may declare the capability.
+    ///
+    /// The predicate is "is a callback registered", not "was a handler struct
+    /// passed in": every connection is constructed with a handler, so the
+    /// latter is structurally true and made the declaration unconditional. A
+    /// server that believed it answered `sampling/createMessage` and got back
+    /// "No sampling callback registered" — a declared capability the host could
+    /// not honour. The callback is installed on the client before any transport
+    /// starts, so this reads the settled answer at handshake time.
     async fn can_sample(&self) -> bool {
-        self.sampling.read().await.is_some()
+        match self.sampling.read().await.as_ref() {
+            Some(handler) => handler.has_callback().await,
+            None => false,
+        }
     }
 
     /// Whether this connection speaks the stateless `2026-07-28` shape.

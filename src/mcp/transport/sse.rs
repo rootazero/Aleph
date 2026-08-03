@@ -94,6 +94,9 @@ pub struct SseTransport {
     notification_handler: Arc<crate::sync_primitives::Mutex<Option<NotificationCallback>>>,
     /// Handler for server-initiated requests (sampling, etc.)
     request_handler: Arc<crate::sync_primitives::Mutex<Option<RequestCallback>>>,
+    /// POST target announced by the server's `endpoint` event, once it arrives.
+    /// `None` until then — see [`SseTransport::post_url`].
+    post_endpoint: Arc<RwLock<Option<String>>>,
     /// Shutdown signal sender
     shutdown_tx: RwLock<Option<mpsc::Sender<()>>>,
     /// Handle for the spawned SSE listener task
@@ -119,6 +122,7 @@ impl SseTransport {
             alive: Arc::new(RwLock::new(true)),
             notification_handler: Arc::new(crate::sync_primitives::Mutex::new(None)),
             request_handler: Arc::new(crate::sync_primitives::Mutex::new(None)),
+            post_endpoint: Arc::new(RwLock::new(None)),
             shutdown_tx: RwLock::new(None),
             listener_handle: RwLock::new(None),
         })
@@ -152,6 +156,42 @@ impl SseTransport {
         Ok((url, client))
     }
 
+    /// Resolve an `endpoint` event payload against the stream URL.
+    ///
+    /// Legacy SSE servers announce the POST target as a relative reference
+    /// (`/messages?sessionId=…`), so it has to be joined onto the stream URL
+    /// rather than parsed standalone.
+    ///
+    /// Cross-origin announcements are refused: every POST carries
+    /// `config.headers` — the server's auth material — so honouring a foreign
+    /// origin here would hand those credentials to a host the user never
+    /// configured. A server that wants a different origin is not a server we
+    /// can keep a secret for.
+    #[must_use]
+    pub(crate) fn resolve_endpoint(stream_url: &str, announced: &str) -> Option<String> {
+        let base = reqwest::Url::parse(stream_url).ok()?;
+        let resolved = base.join(announced).ok()?;
+        if resolved.origin() == base.origin() {
+            Some(resolved.into())
+        } else {
+            None
+        }
+    }
+
+    /// Where a POST goes: the server-announced endpoint once it has arrived,
+    /// otherwise the configured URL.
+    ///
+    /// The fallback is what keeps servers that never send an `endpoint` event
+    /// working — the pre-spec shape this transport used to assume
+    /// unconditionally.
+    async fn post_url(&self) -> String {
+        self.post_endpoint
+            .read()
+            .await
+            .clone()
+            .unwrap_or_else(|| self.config.url.clone())
+    }
+
     /// Start the SSE event listener
     ///
     /// This spawns a background task that listens for server-sent events
@@ -183,11 +223,16 @@ impl SseTransport {
             }
         }
 
-        let sse_url = format!("{}/events", validated_url.as_str().trim_end_matches('/'));
+        // The configured URL *is* the SSE stream endpoint. This used to append
+        // an invented `/events` segment, which no MCP revision specifies — a
+        // spec-compliant legacy server answers that path with 404 and the
+        // handshake never starts.
+        let sse_url = validated_url.as_str().to_string();
         let server_name = self.server_name.clone();
         let headers = self.config.headers.clone();
         let notification_handler = Arc::clone(&self.notification_handler);
         let request_handler = Arc::clone(&self.request_handler);
+        let post_endpoint = Arc::clone(&self.post_endpoint);
         let alive = Arc::clone(&self.alive);
 
         let handle = tokio::spawn(async move {
@@ -203,7 +248,7 @@ impl SseTransport {
                         tracing::info!(server = %server_name, "SSE listener shutdown requested");
                         break;
                     }
-                    result = Self::listen_for_events(&sse_client, &sse_url, &headers, &notification_handler, &request_handler, &server_name) => {
+                    result = Self::listen_for_events(&sse_client, &sse_url, &headers, &notification_handler, &request_handler, &post_endpoint, &server_name) => {
                         match result {
                             Ok(()) => {
                                 tracing::debug!(server = %server_name, "SSE stream ended normally");
@@ -249,6 +294,7 @@ impl SseTransport {
         headers: &HashMap<String, String>,
         notification_handler: &Arc<crate::sync_primitives::Mutex<Option<NotificationCallback>>>,
         request_handler: &Arc<crate::sync_primitives::Mutex<Option<RequestCallback>>>,
+        post_endpoint: &Arc<RwLock<Option<String>>>,
         server_name: &str,
     ) -> Result<()> {
         // Build request with headers
@@ -274,6 +320,8 @@ impl SseTransport {
                         sse_event,
                         notification_handler,
                         request_handler,
+                        post_endpoint,
+                        url,
                         server_name,
                     )
                     .await;
@@ -296,6 +344,8 @@ impl SseTransport {
         event: SseEvent,
         notification_handler: &Arc<crate::sync_primitives::Mutex<Option<NotificationCallback>>>,
         request_handler: &Arc<crate::sync_primitives::Mutex<Option<RequestCallback>>>,
+        post_endpoint: &Arc<RwLock<Option<String>>>,
+        stream_url: &str,
         server_name: &str,
     ) {
         match event {
@@ -341,11 +391,26 @@ impl SseTransport {
                 }
             }
             SseEvent::Endpoint { url } => {
-                tracing::info!(
-                    server = %server_name,
-                    endpoint = %url,
-                    "Received endpoint URL from server"
-                );
+                match Self::resolve_endpoint(stream_url, &url) {
+                    Some(resolved) => {
+                        tracing::info!(
+                            server = %server_name,
+                            endpoint = %resolved,
+                            "Adopted server-announced POST endpoint"
+                        );
+                        *post_endpoint.write().await = Some(resolved);
+                    }
+                    None => {
+                        // Keep POSTing to the configured URL rather than to a
+                        // host the user never named.
+                        tracing::warn!(
+                            server = %server_name,
+                            announced = %url,
+                            stream = %stream_url,
+                            "Ignoring endpoint event: unresolvable or cross-origin"
+                        );
+                    }
+                }
             }
             SseEvent::Ping => {
                 tracing::trace!(server = %server_name, "Received SSE ping");
@@ -366,7 +431,7 @@ impl SseTransport {
 impl McpTransport for SseTransport {
     async fn send_request(&self, request: &JsonRpcRequest) -> Result<JsonRpcResponse> {
         let (validated_url, client) =
-            Self::build_pinned_client(&self.config.url, Some(self.config.timeout))
+            Self::build_pinned_client(&self.post_url().await, Some(self.config.timeout))
                 .await
                 .map_err(|e| {
                     AlephError::IoError(format!("SSRF blocked for '{}': {}", self.server_name, e))
@@ -418,7 +483,7 @@ impl McpTransport for SseTransport {
 
     async fn send_notification(&self, notification: &JsonRpcNotification) -> Result<()> {
         let (validated_url, client) =
-            Self::build_pinned_client(&self.config.url, Some(self.config.timeout))
+            Self::build_pinned_client(&self.post_url().await, Some(self.config.timeout))
                 .await
                 .map_err(|e| {
                     AlephError::IoError(format!("SSRF blocked for '{}': {}", self.server_name, e))
@@ -529,7 +594,7 @@ impl SseTransport {
         result: serde_json::Value,
     ) -> Result<()> {
         let (validated_url, client) =
-            Self::build_pinned_client(&self.config.url, Some(self.config.timeout))
+            Self::build_pinned_client(&self.post_url().await, Some(self.config.timeout))
                 .await
                 .map_err(|e| {
                     AlephError::IoError(format!("SSRF blocked for '{}': {}", self.server_name, e))
@@ -619,6 +684,60 @@ mod tests {
         assert!(transport.is_alive().await);
         transport.close().await.unwrap();
         assert!(!transport.is_alive().await);
+    }
+
+    /// The spec's own shape: a relative reference joined onto the stream URL,
+    /// query string and all (session id lives there).
+    #[test]
+    fn endpoint_event_resolves_relative_against_stream_url() {
+        assert_eq!(
+            SseTransport::resolve_endpoint(
+                "https://api.example.com/mcp/sse",
+                "/messages?sessionId=abc"
+            ),
+            Some("https://api.example.com/messages?sessionId=abc".to_string())
+        );
+        assert_eq!(
+            SseTransport::resolve_endpoint("https://api.example.com/mcp/sse", "messages"),
+            Some("https://api.example.com/mcp/messages".to_string())
+        );
+    }
+
+    /// Every POST carries the configured auth headers, so an endpoint pointing
+    /// at another origin is refused rather than followed.
+    #[test]
+    fn endpoint_event_refuses_cross_origin() {
+        for announced in [
+            "https://evil.example.net/messages",
+            "http://api.example.com/messages", // scheme differs
+            "https://api.example.com:8443/messages", // port differs
+        ] {
+            assert_eq!(
+                SseTransport::resolve_endpoint("https://api.example.com/mcp/sse", announced),
+                None,
+                "should refuse {announced}"
+            );
+        }
+    }
+
+    /// Until the server announces one, POSTs keep going to the configured URL —
+    /// servers that never send `endpoint` must keep working.
+    #[tokio::test]
+    async fn post_url_falls_back_to_configured_url() {
+        let config = SseTransportConfig {
+            url: "https://api.example.com/mcp".to_string(),
+            headers: HashMap::new(),
+            timeout: Duration::from_secs(300),
+        };
+        let transport = SseTransport::new("test", config).unwrap();
+        assert_eq!(transport.post_url().await, "https://api.example.com/mcp");
+
+        *transport.post_endpoint.write().await =
+            Some("https://api.example.com/messages?sessionId=abc".to_string());
+        assert_eq!(
+            transport.post_url().await,
+            "https://api.example.com/messages?sessionId=abc"
+        );
     }
 
     #[test]

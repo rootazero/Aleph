@@ -52,6 +52,7 @@ pub mod protocol;
 mod redact;
 mod resources;
 pub mod sampling;
+pub mod sampling_bridge;
 mod tool_bridge;
 mod tool_sanitize;
 pub mod transport;
@@ -74,6 +75,7 @@ pub use protocol::IncludeContext;
 pub use redact::redact_mcp_error;
 pub use resources::ResourceContent;
 pub use sampling::{SamplingCallback, SamplingHandler};
+pub use sampling_bridge::{register_sampling_llm, sampling_llm_registered, serve_sampling};
 pub use tool_bridge::spawn_tool_bridge;
 #[cfg(test)]
 pub(crate) use tool_bridge::CAPABILITY_READ_BUILTIN_NAMES;
@@ -92,4 +94,4 @@ pub use manager::{
     McpManagerEvent, McpManagerHandle, McpPersistentConfig, McpServerInfo, McpServerStatusDetail,
     McpTransportType, ServerHealth,
 };
-pub use presets::{McpPreset, PresetCategory, PresetEnvVar, PresetTransport, Reachability};
+pub use presets::{McpPreset, PresetCategory, PresetEnvVar, PresetTransport};

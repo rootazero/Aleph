@@ -955,9 +955,10 @@ async fn dispatch_chat_control(
             )
             .await
         }
-        ChatControlAction::Abort { run_id } => {
-            chat_cmd::abort(server_url, &run_id, config, json).await
-        }
+        ChatControlAction::Abort {
+            run_id,
+            session_key,
+        } => chat_cmd::abort(server_url, &run_id, session_key.as_deref(), config, json).await,
         ChatControlAction::History { session_key, limit } => {
             chat_cmd::history(server_url, &session_key, limit, config, json).await
         }

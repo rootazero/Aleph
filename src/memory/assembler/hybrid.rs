@@ -95,7 +95,10 @@ impl AiProviderSummaryLlm {
 impl crate::memory::session_search_summary::synthesizer::SummaryLlm for AiProviderSummaryLlm {
     async fn complete(&self, prompt: &str) -> Result<String, AlephError> {
         let messages = vec![UnifiedMessage::user(prompt.to_string())];
-        let response = self.provider.process(RequestPayload::new(&messages)).await?;
+        let response = self
+            .provider
+            .process(RequestPayload::new(&messages))
+            .await?;
         Ok(response.text_content())
     }
 }
@@ -532,7 +535,9 @@ mod tests {
         // a target token length). Any system message demanding JSON would make
         // every one of those unparseable.
         let prose = AiProviderSummaryLlm::new(provider.clone());
-        SummaryLlm::complete(&*prose, "LESSONS:\n...").await.unwrap();
+        SummaryLlm::complete(&*prose, "LESSONS:\n...")
+            .await
+            .unwrap();
         let sys = provider.last_system();
         assert!(
             sys.is_none(),

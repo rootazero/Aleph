@@ -63,7 +63,7 @@ pub const PRESETS: &[ProviderPreset] = &[
     ProviderPreset {
         name: "moonshot",
         protocol: "openai",
-        model: "moonshot-v1-8k",
+        model: "kimi-k2.6",
         base_url: "https://api.moonshot.cn/v1",
         description: "Kimi by Moonshot AI",
         api_key_placeholder: "sk-...",
@@ -74,7 +74,8 @@ pub const PRESETS: &[ProviderPreset] = &[
     ProviderPreset {
         name: "kimi-for-coding",
         protocol: "anthropic",
-        model: "Kimi-K2.6",
+        // The coding endpoint's own namespace — `k3` is its flagship id.
+        model: "k3",
         base_url: "https://api.kimi.com/coding/v1",
         description: "Kimi for Coding - Optimized for IDE and agent tool use",
         api_key_placeholder: "sk-...",

@@ -562,10 +562,39 @@ const CAPABILITY_TABLE: &[(&str, ModelCapabilities)] = &[
         },
     ),
     // ── Moonshot / Kimi ──────────────────────────────────────────────────
-    // K3 is Moonshot's current flagship: 1M window. Its own catalog reports
-    // `maxTokens == contextWindow`; the Kimi-for-coding catalog publishes a
-    // separate 131K output cap for the same model, which is the figure to
-    // record (see the note on `ModelCapabilities`).
+    // Kimi ships K3 under TWO id namespaces: the open platform serves
+    // `kimi-k3` (api.moonshot.ai), the Kimi Code subscription endpoint serves
+    // bare `k3` / `k3-256k` (api.kimi.com/coding). Both are the same model;
+    // both need a row, because neither shape is reachable from the other's
+    // prefix. Max output is the API schema's documented 131072
+    // `max_completion_tokens` default for K3.
+    //
+    // `k3-256k` MUST precede `k3` — `k3` is a prefix of it, and the scan takes
+    // the first match.
+    (
+        "k3-256k",
+        ModelCapabilities {
+            // Lower-consumption K3 variant: same model, 256K window,
+            // images only (no video).
+            context_window: 262_144,
+            max_output_tokens: 131_072,
+            supports_vision: true,
+            supports_tools: true,
+            supports_reasoning: true,
+        },
+    ),
+    (
+        "k3",
+        ModelCapabilities {
+            context_window: 1_048_576,
+            max_output_tokens: 131_072,
+            supports_vision: true,
+            supports_tools: true,
+            supports_reasoning: true,
+        },
+    ),
+    // Open-platform K3. Must precede the broad `kimi` row below, which would
+    // size this 1M-window model at 200K and trigger premature compaction.
     (
         "kimi-k3",
         ModelCapabilities {
@@ -576,9 +605,10 @@ const CAPABILITY_TABLE: &[(&str, ModelCapabilities)] = &[
             supports_reasoning: true,
         },
     ),
-    // Kimi-for-coding endpoint model (256K/32K, multimodal). Distinct prefix
-    // that would otherwise fall to the broad `kimi` 200K/8K row and under-size
-    // its window — must precede it.
+    // Kimi-for-coding endpoint model (256K/32K, multimodal). Also covers
+    // `kimi-for-coding-highspeed`, which is the same model served faster.
+    // Distinct prefix that would otherwise fall to the broad `kimi` 200K/8K
+    // row and under-size its window — must precede it.
     (
         "kimi-for-coding",
         ModelCapabilities {
@@ -1246,6 +1276,48 @@ mod tests {
         );
     }
 
+    /// K3 arrives under two id shapes and both must size at 1M. The failure
+    /// this guards is silent: `kimi-k3` starts with `kimi`, so without its own
+    /// row it lands on the broad 200K row and the context budget compacts a
+    /// 1M-window model at a fifth of its capacity.
+    #[test]
+    fn kimi_k3_sizes_at_one_million_under_both_id_shapes() {
+        // Open platform (api.moonshot.ai).
+        assert_eq!(
+            capabilities_for("kimi-k3").unwrap().context_window,
+            1_048_576
+        );
+        // Kimi Code subscription endpoint (api.kimi.com/coding).
+        assert_eq!(capabilities_for("k3").unwrap().context_window, 1_048_576);
+        // Both are multimodal reasoning models.
+        let k3 = capabilities_for("k3").unwrap();
+        assert!(k3.supports_vision && k3.supports_tools && k3.supports_reasoning);
+    }
+
+    /// `k3` is a prefix of `k3-256k`; declaration order is the only thing
+    /// keeping the 256K variant from being sized at 1M.
+    #[test]
+    fn k3_256k_wins_over_the_bare_k3_prefix() {
+        assert_eq!(
+            capabilities_for("k3-256k").unwrap().context_window,
+            262_144,
+            "k3-256k must precede k3 in the table"
+        );
+        assert_eq!(resolve_context_window("K3-256K"), 262_144);
+    }
+
+    /// The highspeed K2.7 variant is the same model served faster — it must
+    /// inherit the 256K `kimi-for-coding` row, not the broad 200K `kimi` row.
+    #[test]
+    fn kimi_for_coding_highspeed_inherits_the_coding_row() {
+        assert_eq!(
+            capabilities_for("kimi-for-coding-highspeed")
+                .unwrap()
+                .context_window,
+            262_144
+        );
+    }
+
     #[test]
     fn llama_family_resolves_across_hosting_presets() {
         // Vendor-tagged ids (HuggingFace/DeepInfra/Hyperbolic) peel `meta-llama/`.
@@ -1369,6 +1441,8 @@ mod tests {
     fn kimi_k2_7_resolves_to_256k_window() {
         assert_eq!(resolve_context_window("Kimi-K2.7"), 262_144);
         assert_eq!(resolve_context_window("kimi-k2.7"), 262_144);
+        // `kimi-k2.7-code` (open platform) shares the K2 row.
+        assert_eq!(resolve_context_window("kimi-k2.7-code"), 262_144);
     }
 
     #[test]

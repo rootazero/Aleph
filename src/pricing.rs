@@ -647,6 +647,27 @@ const PRICE_TABLE: &[(&str, &[Rates])] = &[
     (
         "moonshot",
         &[
+            // K3 flagship, published USD rates (platform.kimi.ai
+            // /docs/pricing/chat-k3): $3 in / $15 out, $0.30 on a cache hit.
+            // Must precede the broad `kimi` row, which would price it 5x low.
+            //
+            // No `TIER_TABLE` row on purpose: unlike Gemini 2.5/3.1 Pro and
+            // Claude Sonnet, K3 publishes *no* long-context premium above
+            // 200K — the rate is flat across the full 1,048,576-token window.
+            //
+            // Only the *open platform* meters tokens. The Kimi Code
+            // subscription ids are excluded by `QUOTA_BILLED_MODELS` — and
+            // they have to be excluded by name, because three of them
+            // (`kimi-for-coding*`, `kimi-code`) would otherwise be caught by
+            // the broad `kimi` row below.
+            Rates {
+                model_prefix: "kimi-k3",
+                input_per_mtok: Some(3.0),
+                output_per_mtok: Some(15.0),
+                cache_read_per_mtok: Some(0.30),
+                cache_creation_per_mtok: None,
+                reasoning_per_mtok: None,
+            },
             // K2.5/K2.6/K2.7 published USD rates (platform.kimi.ai) differ from
             // the legacy family fallback below. K2.7-code shares K2.6's tier.
             Rates {
@@ -1022,6 +1043,39 @@ struct ResolvedRates {
     basis: RateBasis,
 }
 
+/// Model ids whose endpoint bills a **plan quota**, not tokens.
+///
+/// [`PRICE_TABLE`] can say "this id costs $X"; it cannot say "this id has no
+/// per-token price at all", and the difference is the whole point of this
+/// list. Every entry is served only by Kimi Code (`api.kimi.com/coding`),
+/// whose docs quote a *consumption multiplier* against a subscription — there
+/// is no USD/Mtok figure to record, and inventing one is worse than
+/// [`CostStatus::Unknown`].
+///
+/// `k3` / `k3-256k` / `k2p5` were already unpriced, but only because no prefix
+/// happened to match them. `kimi-for-coding`, `kimi-for-coding-highspeed` and
+/// `kimi-code` start with `kimi`, so they landed on the open platform's K2-era
+/// family row and were quoted at $0.60/$2.50 — a rate the subscriber is not
+/// being charged, on an endpoint that does not meter tokens.
+///
+/// Matched **exactly** against the canonicalised id, so it can never shadow an
+/// open-platform model: `kimi-k3` and `kimi-k2.6` are genuinely per-token and
+/// stay priced.
+///
+/// Deliberate consequence: these ids report [`CostStatus::Unknown`], which the
+/// failover layer maps to the `u64::MAX` "unpriced cloud" sentinel, so
+/// `cost_aware` ranks them last rather than ahead of a confirmable price. That
+/// is the honest ordering for a cost we cannot quote, and it already applied to
+/// this endpoint's default model (`k3`) before the list existed.
+const QUOTA_BILLED_MODELS: &[&str] = &[
+    "k3",
+    "k3-256k",
+    "kimi-for-coding",
+    "kimi-for-coding-highspeed",
+    "kimi-code",
+    "k2p5",
+];
+
 /// Find the first [`Rates`] row in `vendor`'s section that prefix-matches an
 /// already-canonicalised model id.
 fn rates_in(vendor: &str, canonical_model: &str) -> Option<&'static Rates> {
@@ -1044,8 +1098,15 @@ fn rates_in(vendor: &str, canonical_model: &str) -> Option<&'static Rates> {
 /// 2. **Vendor-inferred** — otherwise, the *model* id names its vendor
 ///    ([`infer_vendor`]). This is what makes aggregators, Bedrock and private
 ///    relays priceable instead of permanently `Unknown`.
+///
+/// [`QUOTA_BILLED_MODELS`] short-circuits ahead of both, because the second
+/// pass is the one that would otherwise re-price them: those ids name Kimi as
+/// their vendor no matter which provider id is asked about.
 fn lookup_rates(provider: &str, model: &str) -> Option<ResolvedRates> {
     let canonical = canonicalize_model(model);
+    if QUOTA_BILLED_MODELS.contains(&canonical.as_str()) {
+        return None;
+    }
 
     let provider_key = canonical_provider(provider);
     if !provider_key.is_empty() {
@@ -1942,6 +2003,84 @@ mod tests {
             "expected $0.95, got ${}",
             k26.usd
         );
+    }
+
+    /// `kimi-k3` starts with `kimi`, so without its own row it silently
+    /// inherited the $0.60/$2.50 family fallback — a 5x under-report on the
+    /// flagship. The row must also not be shadowed by the K2.x rows above it.
+    #[test]
+    fn kimi_k3_priced_at_its_own_rate_not_the_family_fallback() {
+        let card = rate_card("moonshot", "kimi-k3").expect("kimi-k3 priced");
+        assert_eq!(card.input_per_mtok, Some(3.0));
+        assert_eq!(card.output_per_mtok, Some(15.0));
+        assert_eq!(card.cache_read_per_mtok, Some(0.30));
+
+        // The K2 rows must not be dragged in by, nor drag in, the K3 prefix.
+        assert_eq!(
+            rate_card("moonshot", "kimi-k2.7-code")
+                .unwrap()
+                .input_per_mtok,
+            Some(0.95)
+        );
+
+        let io_1m = TokenBreakdown {
+            input: 1_000_000,
+            output: 1_000_000,
+            ..Default::default()
+        };
+        let k3 = estimate("moonshot", "kimi-k3", &io_1m);
+        assert_eq!(k3.status, CostStatus::Complete);
+        assert!(
+            (k3.usd - 18.0).abs() < 1e-6,
+            "expected $18.00, got ${}",
+            k3.usd
+        );
+    }
+
+    /// The Kimi Code subscription ids bill plan quota, not tokens. Reporting
+    /// an invented per-token figure would be worse than saying "unknown", so
+    /// every id that endpoint serves must stay unpriced.
+    ///
+    /// The `kimi-`prefixed three are the ones this gets silently wrong: they
+    /// were quoted at the open platform's $0.60/$2.50 family rate, which is
+    /// not a number anyone on this endpoint is billed. Asserted through both
+    /// lookup passes — the vendor-inferred pass reaches the same table from the
+    /// *model* id, so guarding only the provider-keyed pass guards nothing.
+    #[test]
+    fn kimi_code_subscription_ids_stay_unpriced() {
+        let io = TokenBreakdown {
+            input: 1_000_000,
+            output: 1_000_000,
+            ..Default::default()
+        };
+        for model in [
+            "k3",
+            "k3-256k",
+            "kimi-for-coding",
+            "kimi-for-coding-highspeed",
+            "kimi-code",
+            "k2p5",
+        ] {
+            assert!(
+                rate_card("kimi-for-coding", model).is_none(),
+                "{model} carries a per-token rate on a quota-billed endpoint"
+            );
+            assert!(
+                rate_card("some-relay", model).is_none(),
+                "{model} re-priced through the vendor-inferred pass"
+            );
+            assert_eq!(
+                estimate("kimi-for-coding", model, &io).status,
+                CostStatus::Unknown,
+                "{model} should report Unknown, not a fabricated figure"
+            );
+        }
+
+        // Exact match, not a prefix: the open platform meters tokens and its
+        // ids must keep their rates, including the family fallback row.
+        assert!(rate_card("moonshot", "kimi-k3").is_some());
+        assert!(rate_card("moonshot", "kimi-k2.6").is_some());
+        assert!(rate_card("moonshot", "kimi-latest").is_some());
     }
 
     #[test]

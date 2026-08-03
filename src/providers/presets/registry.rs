@@ -171,10 +171,16 @@ const PROFILES: &[(&str, ProviderPreset)] = &[
         .with_aux_model("kimi-k2.6")
         // Kimi server-manages temperature — sending one returns a fixed-value error.
         .with_temperature_policy(super::TemperaturePolicy::Omit)
+        // `kimi-k3` is the open platform's K3 flagship (1M window, $3/$15) —
+        // offered, not defaulted to: it is ~3.5x the K2.6 rate. `kimi-k2.7-code`
+        // is the code-tuned K2.7 the price table already anticipates.
         .with_fallback_models(&[
             "kimi-k3",
             "kimi-k2.7-code",
             "kimi-k2.6",
+            "kimi-k3",
+            "kimi-k2.7-code",
+            "kimi-k2.5",
             "kimi-latest",
             "moonshot-v1-128k",
             "moonshot-v1-32k",
@@ -201,6 +207,9 @@ const PROFILES: &[(&str, ProviderPreset)] = &[
             "kimi-k3",
             "kimi-k2.7-code",
             "kimi-k2.6",
+            "kimi-k3",
+            "kimi-k2.7-code",
+            "kimi-k2.5",
             "kimi-latest",
             "moonshot-v1-128k",
             "moonshot-v1-32k",
@@ -228,30 +237,51 @@ const PROFILES: &[(&str, ProviderPreset)] = &[
             "kimi-k3",
             "kimi-k2.7-code",
             "kimi-k2.6",
+            "kimi-k3",
+            "kimi-k2.7-code",
+            "kimi-k2.5",
             "kimi-latest",
             "moonshot-v1-128k",
             "moonshot-v1-32k",
             "moonshot-v1-8k",
         ]),
     ),
+    // ─── Kimi for Coding (subscription endpoint, own model-id namespace) ──────
+    // The coding endpoint does NOT share the open platform's ids: it serves
+    // `k3` / `k3-256k` / `kimi-for-coding` / `kimi-for-coding-highspeed`
+    // (www.kimi.com/code/docs/kimi-code/models). `kimi-k3` and `Kimi-K2.*` are
+    // open-platform / display ids and are translated on the wire by
+    // `anthropic::provider_policy::normalize_kimi_coding_model_id`.
+    //
+    // Billing is plan quota, not per token — the ids carry no rate rows
+    // (see `model_catalog::drift_tests::ENDPOINT_LOCAL_ALIASES`).
     (
         "kimi-for-coding",
         ProviderPreset::new(
             "https://api.kimi.com/coding/v1",
             "anthropic",
             "#6366f1",
-            "kimi-for-coding",
+            // K3 is the flagship of this endpoint (up to 1M window).
+            "k3",
         )
         .with_aliases(&["kimi-coding"])
         .with_display("Kimi for Coding")
-        .with_homepage("https://platform.moonshot.ai")
-        .with_signup("https://platform.moonshot.ai")
+        .with_homepage("https://www.kimi.com/code")
+        .with_signup("https://www.kimi.com/code")
         .with_description("Anthropic-protocol endpoint for IDE agents")
         // Server manages temperature — sending one returns a fixed-value error.
         .with_temperature_policy(super::TemperaturePolicy::Omit)
-        // `kimi-code` and `k2p5` appear on no published Kimi roster; the
-        // highspeed tier is the endpoint's real second rung.
-        .with_fallback_models(&["kimi-for-coding", "kimi-for-coding-highspeed"]),
+        // Order is the picker roster as well as the failover ladder:
+        // K3 → the 256K lower-consumption K3 → K2.7 Code → its highspeed
+        // variant (5-6x output speed at 3x consumption) → legacy aliases.
+        .with_fallback_models(&[
+            "k3",
+            "k3-256k",
+            "kimi-for-coding",
+            "kimi-for-coding-highspeed",
+            "kimi-code",
+            "k2p5",
+        ]),
     ),
     // ─── Chinese commercial LLMs ──────────────────────────────────────────────
     (

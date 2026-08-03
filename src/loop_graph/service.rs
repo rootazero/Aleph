@@ -219,10 +219,10 @@ pub fn render_session_topology(session: &str) -> Option<String> {
     render_session_topology_in(&store, session)
 }
 
-/// Store-taking form of [`render_session_topology`]. `pub(crate)` because the
-/// store's own tests drive it against a fixture store — `cargo check` does not
-/// compile `#[cfg(test)]`, so narrowing this to private broke the lib test
-/// target without any signal on the usual loop.
+/// Store-taking form of [`render_session_topology`].
+///
+/// `pub(crate)` for a real consumer: `store.rs`'s topology test drives it
+/// against a local store, which the global-reading wrapper cannot do.
 #[must_use]
 pub(crate) fn render_session_topology_in(
     store: &crate::loop_graph::LoopGraphStore,

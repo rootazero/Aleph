@@ -159,6 +159,33 @@ fn moonshot_fallbacks_include_current_lineup() {
     assert!(p.fallback_models.contains(&"kimi-k2.6"));
     assert!(!p.fallback_models.contains(&"kimi-k2.5"));
     assert!(p.fallback_models.contains(&"moonshot-v1-8k"));
+    // K3 is offered but not defaulted to: ~3.5x the K2.6 rate. The chain is
+    // also the picker roster, so this is what makes K3 selectable at all.
+    assert!(p.fallback_models.contains(&"kimi-k3"));
+    assert!(p.fallback_models.contains(&"kimi-k2.7-code"));
+}
+
+/// The Kimi Code endpoint has its own model-id namespace; the roster must
+/// carry all four ids the vendor documents, spelled the way that endpoint
+/// spells them (`k3`, not `kimi-k3`).
+#[test]
+fn kimi_for_coding_advertises_the_documented_lineup() {
+    let p = get_preset("kimi-for-coding").expect("kimi-for-coding preset");
+    assert_eq!(p.default_model, "k3");
+    for id in [
+        "k3",
+        "k3-256k",
+        "kimi-for-coding",
+        "kimi-for-coding-highspeed",
+    ] {
+        assert!(
+            p.fallback_models.contains(&id),
+            "{id} is documented on the Kimi Code endpoint but absent from the roster"
+        );
+    }
+    // Open-platform ids must NOT leak into this preset — the coding endpoint
+    // 400s on them (the wire-level translation is a separate safety net).
+    assert!(!p.fallback_models.contains(&"kimi-k3"));
 }
 
 // =========================================================================
