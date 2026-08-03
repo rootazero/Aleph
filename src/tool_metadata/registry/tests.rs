@@ -69,13 +69,11 @@ async fn test_register_skills() {
             id: "refine-text".to_string(),
             name: "Refine Text".to_string(),
             description: "Improve and polish writing".to_string(),
-            ecosystem: "aleph".to_string(),
         },
         SkillInfo {
             id: "code-review".to_string(),
             name: "Code Review".to_string(),
             description: "Review code for issues".to_string(),
-            ecosystem: "aleph".to_string(),
         },
     ];
 

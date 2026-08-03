@@ -162,7 +162,6 @@ pub(super) async fn init_tool_catalog(
                         id: s.id().as_str().to_string(),
                         name: s.name().to_string(),
                         description: s.description().to_string(),
-                        ecosystem: "aleph".to_string(),
                     })
                     .collect();
                 tool_catalog.register_skills(&skill_infos).await;
@@ -190,7 +189,6 @@ pub(super) async fn init_tool_catalog(
                             id,
                             name: cmd.name.clone(),
                             description: cmd.description.clone(),
-                            ecosystem: "plugin".to_string(),
                         }
                     })
                     .collect();
