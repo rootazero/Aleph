@@ -21,7 +21,6 @@
 use std::collections::HashMap;
 
 use crate::exec::leak_detector::LeakDetector as ExecLeakDetector;
-use crate::exec::SecretMasker;
 use crate::pii::engine::{FilterResult, PiiEngine};
 use crate::secrets::injection::{AsyncSecretResolver, InjectedSecret};
 use crate::secrets::leak_detector::{LeakDecision, LeakDetector as SecretLeakDetector};
@@ -34,17 +33,12 @@ use tokio::sync::Mutex;
 pub enum SecurityGuardError {
     #[error("Secret resolution failed: {0}")]
     SecretResolutionFailed(#[from] crate::secrets::types::SecretError),
-    #[error("Sanitization failed: {0}")]
-    SanitizationFailed(String),
-    #[error("PII engine unavailable")]
-    PiiEngineUnavailable,
 }
 
 /// Configuration for the runtime security guard.
 #[derive(Debug, Clone)]
 pub struct SecurityGuardConfig {
     pub pii_filtering: bool,
-    pub content_sanitization: bool,
     pub leak_detection: bool,
     pub secret_injection: bool,
     pub audit_enabled: bool,
@@ -56,7 +50,6 @@ impl Default for SecurityGuardConfig {
     fn default() -> Self {
         Self {
             pii_filtering: true,
-            content_sanitization: true,
             leak_detection: true,
             secret_injection: true,
             audit_enabled: true,
@@ -71,7 +64,6 @@ pub struct SecurityContext {
     pub provider_name: Option<String>,
     pub platform_name: Option<String>,
     pub session_id: Option<String>,
-    pub injected_secrets: Vec<InjectedSecret>,
 }
 
 /// Result of guard processing.
@@ -87,7 +79,6 @@ pub enum GuardResult {
     },
     Blocked {
         reason: String,
-        redacted_text: Option<String>,
     },
     Warned {
         text: String,
@@ -186,7 +177,7 @@ impl RuntimeSecurityGuard {
         &self,
         text: &str,
         resolver: Option<&dyn AsyncSecretResolver>,
-        mut context: SecurityContext,
+        context: SecurityContext,
     ) -> Result<GuardResult, SecurityGuardError> {
         let mut current_text = text.to_string();
         let mut reasons = Vec::new();
@@ -211,7 +202,6 @@ impl RuntimeSecurityGuard {
                             detector.register_injected(std::slice::from_ref(secret), &[]);
                         }
                     }
-                    context.injected_secrets.extend(injected);
                 }
             }
         }
@@ -232,17 +222,6 @@ impl RuntimeSecurityGuard {
                 exec_scan.has_blocks() || matches!(secret_scan, LeakDecision::Block { .. });
 
             if has_blocks {
-                // The returned text must be safe to log/display — mask every
-                // known secret class. An exec-only block previously returned the
-                // raw, unmasked text in a field literally named `redacted_text`.
-                let masker = SecretMasker::new();
-                let redacted_text = match secret_scan {
-                    LeakDecision::Block {
-                        ref redacted_content,
-                        ..
-                    } => Some(masker.mask(redacted_content)),
-                    _ => Some(masker.mask(&current_text)),
-                };
                 let detail = format!(
                     "outbound leak blocked; exec_findings={}, secret_block={}",
                     exec_scan.findings.len(),
@@ -256,7 +235,6 @@ impl RuntimeSecurityGuard {
                 );
                 return Ok(GuardResult::Blocked {
                     reason: "Leak detector found sensitive data in outbound content".to_string(),
-                    redacted_text,
                 });
             }
 
@@ -396,10 +374,7 @@ impl RuntimeSecurityGuard {
         };
 
         // Handle secret leak detector block
-        if let LeakDecision::Block {
-            reason,
-            redacted_content,
-        } = secret_scan
+        if let LeakDecision::Block { reason, .. } = secret_scan
         {
             self.log_audit(
                 context,
@@ -409,7 +384,6 @@ impl RuntimeSecurityGuard {
             );
             return Ok(GuardResult::Blocked {
                 reason: format!("Secret leak detector: {reason}"),
-                redacted_text: Some(redacted_content),
             });
         }
 
@@ -426,9 +400,6 @@ impl RuntimeSecurityGuard {
             );
             return Ok(GuardResult::Blocked {
                 reason: "Leak detector found sensitive data in inbound content".to_string(),
-                // Mask before handing back — never return the raw secret in a
-                // field named `redacted_text`.
-                redacted_text: Some(SecretMasker::new().mask(text)),
             });
         }
 

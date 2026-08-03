@@ -49,6 +49,31 @@ pub fn queue_preview_label(entry: &QueuedPrompt) -> String {
     }
 }
 
+/// Reconciliation key for one queued-ghost row.
+///
+/// The queue is addressed **by position** — [`ChatState::take_queued_prompt`]
+/// and [`ChatState::remove_queued_prompt`] take an index, and a ghost row's
+/// click handler closes over the index it was built with. That is only sound
+/// because this key moves with the position: every mutation that shifts a row
+/// (turn-boundary flush, busy→idle auto-drain, ✕, recall) re-keys it, so
+/// Leptos rebuilds the row and its handler closes over the new index.
+///
+/// Keying on the text alone would keep the stale handlers alive and silently
+/// reintroduce the two failures that costs the most: removing the wrong row,
+/// and restoring into the composer a prompt that has already been sent (which
+/// the user then sends twice). Keying on the index alone would leave a row
+/// rendering a prompt that no longer sits at that position.
+///
+/// Pinned by `queue_tests::{a_shifted_row_never_keeps_its_key,
+/// two_identical_prompts_get_distinct_keys,
+/// editing_the_text_at_one_position_changes_the_key}` — and, because none of
+/// those can see a Leptos view, by
+/// `queue_tests::the_ghost_row_view_actually_uses_the_shared_key`.
+#[must_use]
+pub fn queue_row_key(idx: usize, entry: &QueuedPrompt) -> String {
+    format!("{idx}:{}", entry.text)
+}
+
 /// Stable, machine-readable code for a chat send / delivery failure.
 ///
 /// Mirrors openhuman's `chatSendError.ts` taxonomy so analytics and tests
@@ -2441,6 +2466,85 @@ mod queue_tests {
             "an out-of-range index must not disturb the queue"
         );
         assert_eq!(chat.prompt_queue.get_untracked().len(), 1);
+    }
+
+    // --- The four guards behind index-addressed ghost rows -----------------
+    //
+    // `take_queued_prompt(idx)` / `remove_queued_prompt(idx)` trust an index a
+    // row's click handler captured when it was built. Nothing in `ChatState`
+    // enforces that the index is still current — the property lives entirely in
+    // the `<For>` key over in `messages.rs`, which is what these pin.
+
+    #[test]
+    fn a_shifted_row_never_keeps_its_key() {
+        // Draining the head (turn-boundary flush / busy→idle auto-drain) shifts
+        // every survivor down by one. Each must get a key it did not hold
+        // before, or Leptos keeps the old row — and with it a handler pointing
+        // one slot past the prompt the user is looking at.
+        let before: Vec<String> = ["a", "b", "c"]
+            .iter()
+            .enumerate()
+            .map(|(i, t)| queue_row_key(i, &prompt(t, 0)))
+            .collect();
+        let after: Vec<String> = ["b", "c"]
+            .iter()
+            .enumerate()
+            .map(|(i, t)| queue_row_key(i, &prompt(t, 0)))
+            .collect();
+
+        for key in &after {
+            assert!(
+                !before.contains(key),
+                "row key {key} survived a head drain unchanged — its handler \
+                 would keep the stale index and address the wrong prompt"
+            );
+        }
+    }
+
+    #[test]
+    fn two_identical_prompts_get_distinct_keys() {
+        // Two identical follow-ups are ordinary ("go on" twice). Keyed on the
+        // text alone they collapse into one row: the second is never built, and
+        // the survivor answers for whichever index reconciled first.
+        assert_ne!(
+            queue_row_key(0, &prompt("same", 0)),
+            queue_row_key(1, &prompt("same", 0)),
+            "the row key must depend on the position, not only on the text"
+        );
+    }
+
+    #[test]
+    fn editing_the_text_at_one_position_changes_the_key() {
+        // The mirror failure: keyed on the index alone, removing row 0 leaves
+        // row 0 rendering the prompt that was just taken away.
+        assert_ne!(
+            queue_row_key(0, &prompt("before", 0)),
+            queue_row_key(0, &prompt("after", 0)),
+            "the row key must depend on the text, not only on the position"
+        );
+    }
+
+    #[test]
+    fn the_ghost_row_view_actually_uses_the_shared_key() {
+        // The three above pin what `queue_row_key` returns; this one pins that
+        // the view asks for it. Without it, inlining a different key expression
+        // back into `messages.rs` leaves all of them green while the property
+        // they describe stops holding in the browser — this repo's recurring
+        // shape, where the guard asserted the call and not the effect. A source
+        // assertion is the only handle a host test has on a Leptos view.
+        let src = include_str!("messages.rs");
+        let body = src
+            .split("fn QueuedGhosts()")
+            .nth(1)
+            .expect("messages.rs must still define QueuedGhosts");
+        let body = body.split("#[component]").next().unwrap_or(body);
+        let compact: String = body.chars().filter(|c| !c.is_whitespace()).collect();
+
+        assert!(
+            compact.contains("key=|(idx,e)|queue_row_key(*idx,e)"),
+            "QueuedGhosts must key its <For> with `queue_row_key` — see that \
+             function's doc for why the captured index depends on it"
+        );
     }
 }
 

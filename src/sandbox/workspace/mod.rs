@@ -94,13 +94,6 @@ impl WorkspaceSandbox {
         self
     }
 
-    /// Override the default hooks (empty by default).
-    #[must_use]
-    pub fn with_hooks(mut self, hooks: SandboxHooks) -> Self {
-        self.hooks = hooks;
-        self
-    }
-
     /// Resolve the per-session workspace, creating the directory on first call.
     /// Idempotent — subsequent calls return the cached `Arc<SessionWorkspace>`.
     async fn for_session(&self, sid: &SessionId) -> Result<Arc<SessionWorkspace>, SandboxError> {

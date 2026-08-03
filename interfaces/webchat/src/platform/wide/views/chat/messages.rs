@@ -373,7 +373,7 @@ fn PendingAskCard() -> impl IntoView {
 /// fixed bottom slot.
 #[component]
 fn QueuedGhosts() -> impl IntoView {
-    use crate::views::chat::state::queue_preview_label;
+    use crate::views::chat::state::{queue_preview_label, queue_row_key};
     let chat = expect_context::<ChatState>();
     let form_factor = expect_context::<crate::state::viewport::FormFactorState>();
     let i18n = use_i18n();
@@ -389,7 +389,7 @@ fn QueuedGhosts() -> impl IntoView {
             <div class="space-y-2 pt-1">
                 <For
                     each=enumerated
-                    key=|(idx, e)| format!("{}:{}", idx, e.text)
+                    key=|(idx, e)| queue_row_key(*idx, e)
                     children=move |(idx, entry)| {
                         let label = queue_preview_label(&entry);
                         view! {

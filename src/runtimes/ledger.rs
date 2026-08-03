@@ -1,7 +1,7 @@
 //! Capability Ledger — lightweight state tracker for runtime capabilities
 //!
 //! The `CapabilityLedger` replaces the heavy `RuntimeRegistry` by tracking only
-//! the *state* of each capability (Missing, Probing, Bootstrapping, Ready, Stale).
+//! the *state* of each capability (Missing, Bootstrapping, Ready, Stale).
 //! It never downloads or installs anything — that responsibility belongs to
 //! the Prober and Bootstrapper (separate modules).
 //!
@@ -28,9 +28,6 @@ pub enum CapabilityStatus {
     /// Not known / not yet probed.
     #[serde(alias = "Missing")]
     Missing,
-    /// A probe is in progress (version check running).
-    #[serde(alias = "Probing")]
-    Probing,
     /// Download / bootstrap is in progress.
     #[serde(alias = "Bootstrapping")]
     Bootstrapping,
@@ -61,7 +58,7 @@ pub struct CapabilityEntry {
     pub name: String,
     /// Absolute path to the executable binary.
     pub bin_path: PathBuf,
-    /// Detected version string (may be empty during Probing).
+    /// Detected version string (may be empty during Bootstrapping).
     pub version: String,
     /// Current lifecycle status.
     pub status: CapabilityStatus,
@@ -473,7 +470,7 @@ mod tests {
         assert_eq!(ledger.status("ffmpeg"), CapabilityStatus::Stale);
 
         // Updating unknown name is a no-op
-        ledger.update_status("ghost", CapabilityStatus::Probing);
+        ledger.update_status("ghost", CapabilityStatus::Stale);
         assert_eq!(ledger.status("ghost"), CapabilityStatus::Missing);
     }
 

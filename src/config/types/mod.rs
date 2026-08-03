@@ -7,7 +7,7 @@
 //! - `provider`: AI provider settings (`ProviderConfig`)
 //! - `routing`: Routing rules (`RoutingRuleConfig`)
 //! - `memory`: Memory/RAG settings (`MemoryConfig`)
-//! - `search`: Search capability settings (`SearchConfigInternal`, `PIIConfig`)
+//! - `search`: Search capability settings (`SearchConfigInternal`)
 //! - `tools`: Native and MCP tools (`ToolsConfig`, `UnifiedToolsConfig`)
 //! - `skills`: Claude Agent Skills settings (`SkillsConfig`)
 //! - `orchestrator`: Three-Layer Control orchestrator settings (`OrchestratorConfig`, `OrchestratorGuards`)

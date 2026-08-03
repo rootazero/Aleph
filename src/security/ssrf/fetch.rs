@@ -16,7 +16,7 @@ use super::hostname::{
     has_url_credentials, is_allowlisted, is_blocked_hostname, is_blocklisted, is_legacy_ip_literal,
 };
 use super::policy::SsrfPolicy;
-use super::SsrfError;
+use super::{validate_scheme, SsrfError};
 
 /// Request configuration for `safe_fetch`.
 pub struct SafeFetchRequest {
@@ -87,20 +87,9 @@ pub struct SafeFetchResponse {
     pub status: StatusCode,
     pub headers: HeaderMap,
     pub body: Vec<u8>,
-    pub final_url: String,
 }
 
 // --- Internal helpers ---
-
-/// Validates the URL scheme (only http and https are allowed).
-fn validate_scheme(url: &Url) -> Result<(), SsrfError> {
-    match url.scheme() {
-        "http" | "https" => Ok(()),
-        other => Err(SsrfError::InvalidUrl(format!(
-            "unsupported scheme: {other}"
-        ))),
-    }
-}
 
 /// Returns true if two URLs have different origins (scheme + host + port).
 fn is_cross_origin(a: &Url, b: &Url) -> bool {
@@ -331,14 +320,12 @@ pub async fn safe_fetch(
     let status = response.status();
     // rust-doctor-disable-next-line excessive-clone
     let headers = response.headers().clone();
-    let final_url = current_url.to_string();
     let body = read_body_capped(response, request.max_body_bytes).await?;
 
     Ok(SafeFetchResponse {
         status,
         headers,
         body,
-        final_url,
     })
 }
 
@@ -370,14 +357,12 @@ async fn bypass_fetch(
     let status = response.status();
     // rust-doctor-disable-next-line excessive-clone
     let headers = response.headers().clone();
-    let final_url = response.url().to_string();
     let body = read_body_capped(response, max_body_bytes).await?;
 
     Ok(SafeFetchResponse {
         status,
         headers,
         body,
-        final_url,
     })
 }
 
@@ -423,6 +408,7 @@ async fn read_body_capped(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use super::super::validate_scheme;
     use reqwest::header::HeaderValue;
 
     #[test]

@@ -694,7 +694,7 @@ Aleph's SSRF engine validates ALL outbound HTTP requests before they leave the s
 
 ```
 src/security/ssrf/
-├── mod.rs        — Public API: validate_url, validate_url_async, safe_fetch, SsrfError
+├── mod.rs        — Public API: validate_url_async, safe_fetch, SsrfError
 ├── policy.rs     — SsrfPolicy configuration struct
 ├── ip.rs         — IPv4/IPv6 classification against blocked ranges
 ├── hostname.rs   — Hostname blocklist, allowlist, legacy IP detection
@@ -822,8 +822,8 @@ All outbound HTTP requests go through the SSRF engine:
 | Web fetch tool | `builtin_tools/web_fetch.rs` | `safe_fetch()` |
 | Webhook delivery | `tasks/cron/webhook_target.rs` | `safe_fetch()` |
 | Media downloader | `gateway/pipeline/media_download.rs` | `safe_fetch()` |
-| MCP HTTP transport | `mcp/transport/http.rs` | `validate_url()` |
-| Browser navigation | `browser/network_policy.rs` | `validate_url()` via `BrowserSsrfGuard` |
+| MCP HTTP transport | `mcp/transport/http.rs` | `validate_url_async()` |
+| Browser navigation | `browser/network_policy.rs` | `validate_url_async()` via `BrowserSsrfGuard` |
 
 ### Browser SSRF Guard
 
@@ -840,7 +840,7 @@ pub struct BrowserSsrfGuard {
 
 impl BrowserSsrfGuard {
     pub fn check_url(&self, url: &str) -> Result<(), PolicyViolation> {
-        // Delegates to ssrf::validate_url() with converted policy
+        // Delegates to ssrf::validate_url_async() with converted policy
         // Adds browser-specific allowlist-only mode
     }
 }
@@ -926,9 +926,9 @@ blocked_hosts = ["*.malware.com"]
 ### For Developers
 
 1. **Always use `safe_fetch()`** for outbound HTTP requests — never use `reqwest::Client` directly
-2. **Use `validate_url()`** for URL-only validation without fetching (e.g., browser navigation)
+2. **Use `validate_url_async()`** for URL-only validation without fetching (e.g., browser navigation)
 3. **Construct caller-specific policies** — tools and webhooks may have different `allow_private_network` settings based on user configuration
-4. **Add new callers** — any new outbound HTTP code must go through `safe_fetch()` or `validate_url()`
+4. **Add new callers** — any new outbound HTTP code must go through `safe_fetch()` or `validate_url_async()`
 5. **Test coverage** — add tests for new IP ranges or bypass vectors in `ip.rs` and `hostname.rs`
 
 ---

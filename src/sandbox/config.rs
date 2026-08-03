@@ -75,7 +75,7 @@ impl Default for WindowsSandboxConfig {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, Default)]
 pub struct WindowConfigSchema {
     #[serde(default = "default_max_requests")]
     pub max_requests: u32,
