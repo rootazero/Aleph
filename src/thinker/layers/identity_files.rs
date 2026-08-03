@@ -88,12 +88,33 @@ impl PromptLayer for IdentityFilesLayer {
         "identity_files"
     }
 
+    /// @80, between `ProfileLayer` (AGENTS.md, 75) and `RoleLayer` (100).
+    ///
+    /// Moved down from 1730 (FEATURE_LOCATOR §2.18 ledger item 10). These files
+    /// are loaded off disk once per prompt build and are the single largest
+    /// thing this pipeline can render — the default cap is 100 000 chars, and a
+    /// large-window model raises it to 480 000. At 1730 all of that sat in the
+    /// dynamic system block, which carries no `cache_control` marker of its own
+    /// and is therefore covered only by the message-level breakpoints that sit
+    /// after it. Every time an actually-volatile neighbour moved
+    /// (`runtime_context`'s clock, `execution_plan`'s per-turn edits, a pill
+    /// flip) those tens of thousands of tokens were re-written at 1.25x instead
+    /// of read at 0.1x.
+    ///
+    /// The new slot is also the honest one: IDENTITY.md / TOOLS.md / HEARTBEAT.md
+    /// are the same kind of thing as SOUL.md (@50) and AGENTS.md (@75) and are
+    /// loaded by the same pass — they belonged next to them all along.
     fn priority(&self) -> u32 {
-        1730
+        80
     }
 
     fn stability(&self) -> LayerStability {
-        LayerStability::Dynamic
+        // A mid-session `write_identity_file` re-keys the prefix once, exactly as
+        // editing SOUL.md or MEMORY.md already does. That is the correct
+        // behaviour and not a reason to stay Dynamic: the content genuinely
+        // changed. What Dynamic buys is nothing — it does not avoid a re-key, it
+        // only forfeits the one breakpoint guaranteed to hit.
+        LayerStability::Stable
     }
 
     fn paths(&self) -> &'static [AssemblyPath] {
@@ -167,7 +188,8 @@ mod tests {
     fn metadata() {
         let layer = IdentityFilesLayer;
         assert_eq!(layer.name(), "identity_files");
-        assert_eq!(layer.priority(), 1730);
+        assert_eq!(layer.priority(), 80);
+        assert_eq!(layer.stability(), LayerStability::Stable);
         assert_eq!(layer.paths().len(), 2);
         assert!(layer.paths().contains(&AssemblyPath::Basic));
         assert!(layer.paths().contains(&AssemblyPath::Cached));

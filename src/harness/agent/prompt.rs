@@ -30,6 +30,21 @@ pub(crate) fn build_prompt(
     events: &[SessionEventRecord],
     tail_start: usize,
 ) -> Vec<UnifiedMessage> {
+    build_prompt_with_transient_tail(events, tail_start).0
+}
+
+/// As [`build_prompt`], plus how many of the trailing messages are **transient**
+/// — the `<system-reminder>` nudges below, recomputed every Think and never
+/// persisted. Consumed by the preflight protected-tail boundary (see the
+/// `transient_tail` comment in `think.rs`).
+///
+/// Derived here rather than recomputed by the caller: each nudge fires on its
+/// own condition, so a second evaluation would be a second source of truth for
+/// "did this one speak" and the two would drift.
+pub(crate) fn build_prompt_with_transient_tail(
+    events: &[SessionEventRecord],
+    tail_start: usize,
+) -> (Vec<UnifiedMessage>, usize) {
     let mut messages = Vec::new();
     // Whether an assistant turn has already been emitted. Drives the G2
     // wrap decision: the conversation-opening user message (before any
@@ -228,6 +243,11 @@ pub(crate) fn build_prompt(
         messages.append(&mut deferred_user_msgs);
     }
 
+    // Everything emitted from here down is transient: recomputed each Think from
+    // the visible window, never written back to the log. The boundary is taken
+    // before the first of them so the count cannot miss one that is added later.
+    let persisted_len = messages.len();
+
     // P2: run-level tool-failure aggregator. Returns `Some(text)` only
     // when ≥ SUMMARY_THRESHOLD failures have accumulated in the tail
     // window — below that, each error's own persistence_hint is enough
@@ -283,7 +303,8 @@ pub(crate) fn build_prompt(
         messages.push(UnifiedMessage::user(&notice));
     }
 
-    messages
+    let transient_tail = messages.len() - persisted_len;
+    (messages, transient_tail)
 }
 
 /// `call_id` of a `ToolResult` / `ToolError` that belongs to `turn`.

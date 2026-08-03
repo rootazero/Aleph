@@ -14,10 +14,13 @@
 
 **「顶层」二字是本条最重要的部分**——见下方警告。**口径现在由测试执行**：`src/harness/tests/budget.rs`（跑在 `cargo test -p alephcore --lib` 里），同时守 12 文件与行数；出现第 13 个文件或行数上涨即 FAIL。**改这里的数字就得改那里的 `CEILING`，反之亦然。**
 
-**当前测量（2026-08-03 复测）：5109 行。这就是红线本身。** 由 `tests/budget.rs` 的棘轮守（`CEILING = 5109`，实测非手算，只减不增，增必答下方 3 问）。**代码是权威**——这里的数字只是 `CEILING` 的副本，对不上时信代码。
+**当前测量（2026-08-03 Round 10 复测）：5142 行。这就是红线本身。** 由 `tests/budget.rs` 的棘轮守（`CEILING = 5142`，实测非手算，只减不增，增必答下方 3 问）。**代码是权威**——这里的数字只是 `CEILING` 的副本，对不上时信代码。
 
 > **文档订正（2026-07-25）**：本行此前写 5008，而代码里的 `CEILING` 早在 `396c6d200`（"harness: adjust line budget CEILING…"）就抬到 5082，本文与根 CLAUDE.md 都没跟上。这正是本文件开头那段"手写的状态行会撒谎、所以改用测量"要防的失效模式——它在**文档层**复发了一次。**以 `budget.rs::CEILING` 为唯一权威**，任何文档里的数字都只是它的副本；发现不一致时改文档，不要改代码去迁就文档。抬闸那次提交未在正文作答 R10 三问，欠账在此记录。
 
+> **Round 10（2026-08-03）：5109 → 5142（+33）。** 付清 FEATURE_LOCATOR §2.18 follow-up 账本的**最后一项**（第 2 项）——账本自己把它记成「触碰 R10 预算，单独提案」，这就是那份提案的落地。完整作答在 `tests/budget.rs::CEILING` 的 Round 10 段，摘要：
+> - **+~24 `prompt.rs` / +~9 `think.rs`：保护尾重新只数持久化消息。** preflight cheap pass 改写 `len - fresh_tail` 以下的一切，而它量的那个向量尾部**不是历史**：`build_prompt` 追加最多 4 条 `<system-reminder>`，`think.rs` 随后再 push recall。5 条合成消息对上 6 条的保护尾，最坏只剩 1 条真实消息受保护——于是 cheap pass 会去改写模型**上一轮刚读过**的消息，整段消息前缀按 `cache_creation` 重付，换来的只是一条一轮前的内容。新增 `build_prompt_with_transient_tail` 返回条数，原 `build_prompt` 保留为丢弃该值的形式，~20 个测试调用点不动、diff 只显示真正的改动。副效果值得单记：cut 变成 `persisted_len - fresh_tail`，**与本轮触发了几条提示无关**，于是也不再在 Round 2 装的 `quantized_tail` 量子边界上抖——账本把那条列为本项未解决的余波。三问：① **脚手架**——一个边界计算的 off-by-N，不判断任何消息，只数哪些下一轮还在日志里；② **模型升级仍需要**——哪些消息被持久化是事件日志的属性，与模型无关，更强的模型同样不该被喂一份它一轮前读过内容的改写版；③ **一个真实消费者** `PreflightPipeline::run` 的 `fresh_tail_count`，且它是唯一需要这个数的调用方——这正是该数由第二个函数返回、而不是强加给所有调用方的理由。
+>
 > **Round 9（2026-08-03）：5084 → 5109（+25）。** 付清 FEATURE_LOCATOR §2.18 follow-up 账本的第 3、7 项——两笔都是**线上字节形状**的修正，所以只能落在组装请求的这两个文件里。完整作答在 `tests/budget.rs::CEILING` 的 Round 9 段，摘要：
 > - **+~19 `prompt.rs`：orphan 前向扫描收敛到本 turn。** 此前扫到日志末尾，于是**后面某个 turn 复用的 call id**（弱模型/代理会复用）能回头把一条早已缓存的 assistant 消息里的 `tool_use` 从孤儿变回有主——同一段历史在后续 turn 渲染出不同字节，整个消息前缀按 `cache_creation` 重付，而那个被复活的块在 wire 上依然无配对。收紧安全的前提**先验证过**：`act::emit_deferred_tool_results` 与 `think::close_unexecuted_tool_uses` 合成的结果都带**原 turn_id**。+19 里大半是那个自由函数的 doc，记的正是这条前提——把它删薄去凑数字就是本文件要防的账目粉饰。
 > - **+~6 `think.rs`：边界宽限轮保留 tools 数组。** 它此前发 `tools: None`，而自己的注释宣称这一发"变成缓存命中"——不可能：Anthropic 按 tools → system → messages 建前缀，没有 tools 数组的请求与刚跑完那一轮**零共享前缀**，而宽限轮恰好重放整段历史。现改为穿线 schema + `ToolChoice::None`（四个 adapter 都认）。⚠️ §2.18 账本给的正解（只改 `tool_choice`）**不够**：Anthropic adapter 对 `None` 的实现就是**删掉 tools 数组**，同一个 wire 形状——那一处同批修好，落在本预算之外。

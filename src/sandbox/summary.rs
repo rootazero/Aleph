@@ -189,8 +189,55 @@ impl SandboxSummary {
     /// Render bullet lines for the system prompt. Returns one line per
     /// fact — the caller wraps them in whatever section header it prefers.
     /// Format mirrors codex's `summarize_sandbox_policy()` output.
+    ///
+    /// **Prompt layers must not call this.** It mixes two things with different
+    /// cache lifetimes: the session-stable *posture* and the per-run *identity*
+    /// (`writable_roots`, which for [`Self::isolated_worktree`] carries a fresh
+    /// UUID on every isolated run). Layers take [`Self::posture_lines`] and
+    /// [`Self::writable_roots_line`] separately so each lands in the zone it
+    /// belongs to. This full-picture form is for operator-facing surfaces
+    /// (`aleph-server sandbox-debug`) that have no cache to break.
     #[must_use]
     pub fn to_prompt_lines(&self) -> Vec<String> {
+        self.lines(true)
+    }
+
+    /// The session-stable half: which enforcer, which tier, which network, which
+    /// memory ceiling. Everything here is fixed for the life of the process, so
+    /// it belongs in the cacheable prefix (`SecurityLayer` @600, Stable).
+    #[must_use]
+    pub fn posture_lines(&self) -> Vec<String> {
+        self.lines(false)
+    }
+
+    /// The per-run half: *where* the agent may write.
+    ///
+    /// Split out of the posture because [`Self::isolated_worktree`] mints a new
+    /// worktree path — with a fresh UUID — for every isolated run. Rendered from
+    /// a Stable layer that path welded a run-unique byte into the cacheable
+    /// prefix, so no two isolated runs (a team fan-out of N sub-agents, say)
+    /// could ever share it: each one paid `cache_creation` for the whole prefix
+    /// instead of `cache_read`. It now rides the dynamic tail
+    /// (`OperatingEnvelopeLayer` @1758), which is the same move
+    /// `ExecTier`/`SessionMode` already made out of `SecurityLayer`.
+    ///
+    /// `None` when the tier grants no write access (`read-only`).
+    #[must_use]
+    pub fn writable_roots_line(&self) -> Option<String> {
+        if self.writable_roots.is_empty() {
+            return None;
+        }
+        let paths: Vec<String> = self
+            .writable_roots
+            .iter()
+            .map(|p| p.display().to_string())
+            .collect();
+        Some(format!("Writable roots: {}", paths.join(", ")))
+    }
+
+    /// Single source for both renderings, so the operator view and the two
+    /// prompt halves can never drift in wording or order.
+    fn lines(&self, include_writable_roots: bool) -> Vec<String> {
         let mut lines = Vec::with_capacity(5);
         lines.push(format!("Sandbox: {} ({})", self.backend, self.policy_tier));
 
@@ -205,13 +252,8 @@ impl SandboxSummary {
             );
         }
 
-        if !self.writable_roots.is_empty() {
-            let paths: Vec<String> = self
-                .writable_roots
-                .iter()
-                .map(|p| p.display().to_string())
-                .collect();
-            lines.push(format!("Writable roots: {}", paths.join(", ")));
+        if include_writable_roots {
+            lines.extend(self.writable_roots_line());
         }
 
         let net_line = match &self.network {
@@ -318,6 +360,52 @@ mod tests {
         let lines = summary.to_prompt_lines();
         assert!(lines[0].contains("git/worktree"));
         assert!(lines[0].contains("isolated"));
+    }
+
+    /// The posture half must carry no path. A worktree root is minted per
+    /// isolated run, so a single path leaking into `posture_lines` puts a
+    /// run-unique byte back into the Stable prefix — the exact regression this
+    /// split exists to prevent, and one that shows up only on a bill.
+    #[test]
+    fn posture_lines_never_carry_the_per_run_writable_root() {
+        let summary = SandboxSummary::isolated_worktree(PathBuf::from(
+            "/wt/aleph-6f1c2e9a-4b77-4d51-9a0e-2c8b5f3d17ab",
+        ));
+
+        let posture = summary.posture_lines();
+        assert!(
+            !posture.iter().any(|l| l.contains("6f1c2e9a")),
+            "the per-run worktree identity reached the stable posture half: {posture:?}"
+        );
+        assert!(posture.iter().any(|l| l.contains("git/worktree")));
+
+        let roots = summary
+            .writable_roots_line()
+            .expect("an isolated worktree is writable");
+        assert!(roots.contains("6f1c2e9a"));
+
+        // The operator view stays whole, and the two halves reconstruct it in
+        // the original order — so the split cannot silently drop or reorder a
+        // fact behind `sandbox-debug`'s back.
+        let full = summary.to_prompt_lines();
+        assert_eq!(full.len(), posture.len() + 1);
+        assert!(full.contains(&roots));
+        assert_eq!(
+            full.iter().filter(|l| **l != roots).count(),
+            posture.len(),
+            "full view = posture ∪ writable roots, nothing else: {full:?}"
+        );
+    }
+
+    /// Read-only tiers have no writable root, so the dynamic half renders
+    /// nothing at all rather than an empty bullet.
+    #[test]
+    fn writable_roots_line_is_none_when_read_only() {
+        let summary =
+            SandboxSummary::from_baseline("macos/seatbelt", &SandboxCapabilities::strict());
+        assert_eq!(summary.policy_tier, "read-only");
+        assert!(summary.writable_roots_line().is_none());
+        assert_eq!(summary.to_prompt_lines(), summary.posture_lines());
     }
 
     #[test]

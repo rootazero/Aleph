@@ -52,8 +52,17 @@ impl PromptLayer for SecurityLayer {
         // Sandbox posture (codex-inspired): tells the LLM which enforcer
         // it is running under so it can plan accordingly instead of
         // discovering limits through trial-and-error.
+        //
+        // `posture_lines()`, never `to_prompt_lines()`: the latter also carries
+        // `Writable roots`, and for an isolated run that path holds a UUID minted
+        // per run. This layer declares no `stability()` and therefore renders into
+        // the CACHEABLE prefix, so a run-unique byte here means no two isolated
+        // runs ever share it — a team fan-out of N sub-agents pays
+        // `cache_creation` N times for a prefix that is otherwise identical.
+        // `OperatingEnvelopeLayer` @1758 (Dynamic) states the roots, exactly as it
+        // already does for the approval tier and session mode.
         if let Some(summary) = sandbox_summary {
-            for line in summary.to_prompt_lines() {
+            for line in summary.posture_lines() {
                 let line = sanitize_for_prompt(&line, SanitizeLevel::Light);
                 output.push_str(&format!("- {line}\n"));
             }
@@ -147,8 +156,47 @@ mod tests {
         assert!(out.contains("## Security & Constraints"));
         assert!(out.contains("macos/seatbelt"));
         assert!(out.contains("workspace-write"));
-        assert!(out.contains("/ws/abc"));
         assert!(out.contains("512 MiB"));
+        // The writable root is the per-run half and belongs to
+        // `OperatingEnvelopeLayer` @1758 — see `never_renders_the_per_run_writable_root`.
+        assert!(!out.contains("/ws/abc"), "{out}");
+    }
+
+    /// A worktree root carries a fresh UUID per isolated run. This layer is
+    /// Stable, so rendering it re-keys the cacheable prefix for every run and no
+    /// two isolated runs can share it. Regression for FEATURE_LOCATOR §2.18
+    /// ledger item 9.
+    #[test]
+    fn never_renders_the_per_run_writable_root() {
+        use crate::sandbox::SandboxSummary;
+        use crate::thinker::context::ContextAggregator;
+        use crate::thinker::security_context::SecurityContext;
+        use crate::thinker::InteractionManifest;
+        use crate::thinker::InteractionParadigm;
+
+        let mut ctx = ContextAggregator::resolve(
+            &InteractionManifest::new(InteractionParadigm::Background),
+            &SecurityContext::permissive(),
+        );
+        ctx.sandbox_summary = Some(SandboxSummary::isolated_worktree(std::path::PathBuf::from(
+            "/wt/aleph-6f1c2e9a-4b77-4d51-9a0e-2c8b5f3d17ab",
+        )));
+
+        let config = PromptConfig::default();
+        let mut out = String::new();
+        SecurityLayer.inject(
+            &mut out,
+            &LayerInput::basic(&config, &[]).with_resolved_context_opt(Some(&ctx)),
+        );
+
+        assert!(
+            out.contains("git/worktree"),
+            "the posture itself must still ship: {out}"
+        );
+        assert!(
+            !out.contains("6f1c2e9a"),
+            "a per-run worktree id reached the cacheable prefix: {out}"
+        );
     }
 
     /// The volatile envelope knobs belong to `OperatingEnvelopeLayer` @1758
