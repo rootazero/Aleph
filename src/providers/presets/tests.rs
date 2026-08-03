@@ -134,7 +134,7 @@ fn moonshot_cn_preset_uses_cn_endpoint() {
     let p = get_preset("moonshot-cn").expect("moonshot-cn preset");
     assert_eq!(p.base_url, "https://api.moonshot.cn/v1");
     assert_eq!(p.protocol, "openai");
-    assert_eq!(p.default_model, "kimi-k2.6");
+    assert_eq!(p.default_model, "kimi-k3");
 }
 
 #[test]
@@ -150,11 +150,14 @@ fn kimi_cn_alias_resolves_to_moonshot_cn() {
 #[test]
 fn moonshot_fallbacks_include_current_lineup() {
     let p = get_preset("moonshot").expect("moonshot preset");
-    // Lineup refreshed to the K2.6/K2.5 flagship pair (previews retired), with
-    // the moonshot-v1-* legacy tail retained.
-    assert_eq!(p.default_model, "kimi-k2.6");
+    // Lineup refreshed to K3 (Moonshot's own catalog default) with the K2.7
+    // coding tier and K2.6 below it; K2.5 is retired. The moonshot-v1-* legacy
+    // tail is retained.
+    assert_eq!(p.default_model, "kimi-k3");
+    assert!(p.fallback_models.contains(&"kimi-k3"));
+    assert!(p.fallback_models.contains(&"kimi-k2.7-code"));
     assert!(p.fallback_models.contains(&"kimi-k2.6"));
-    assert!(p.fallback_models.contains(&"kimi-k2.5"));
+    assert!(!p.fallback_models.contains(&"kimi-k2.5"));
     assert!(p.fallback_models.contains(&"moonshot-v1-8k"));
 }
 

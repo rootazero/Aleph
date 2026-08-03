@@ -85,6 +85,9 @@ const MODEL_VENDOR_PREFIXES: &[(&str, &str)] = &[
     ("command", "cohere"),
     ("sonar", "perplexity"),
     ("step", "stepfun"),
+    ("ernie", "baidu"),
+    ("mimo", "xiaomi"),
+    ("longcat", "meituan"),
 ];
 
 /// Strip a leading vendor tag and a trailing `YYYYMMDD` date stamp from a
@@ -94,7 +97,7 @@ const MODEL_VENDOR_PREFIXES: &[(&str, &str)] = &[
 /// "anthropic/Claude-Sonnet-4-6-20250520" -> "claude-sonnet-4-6"
 /// "gpt-4o-2024-11-20"                     -> "gpt-4o-2024-11-20" (non-8-digit tail kept)
 /// "deepseek-ai/DeepSeek-V3"               -> "deepseek-v3"       (org path collapsed)
-/// "accounts/fireworks/models/llama-v3p3"  -> "llama-v3p3"        (host path collapsed)
+/// "accounts/fireworks/models/kimi-k2p6"   -> "kimi-k2.6"         (host path + `p` separator)
 /// "llama3.3:70b"                          -> "llama3.3"          (ollama size tag)
 /// ```
 ///
@@ -146,7 +149,36 @@ pub fn canonicalize_model_id(model: &str) -> String {
             m.truncate(idx);
         }
     }
+    // Fireworks writes the generation separator as `p` because its ids double as
+    // URL path segments: `kimi-k2p6` is Kimi K2.6, `glm-5p2-fast` is GLM-5.2
+    // Fast. Same class of fact as the host-path collapse above — how one host
+    // spells an id, not a claim about the model — and the same blast radius,
+    // since the result is a lookup key that never goes back on the wire.
+    //
+    // Without it, `glm-5p2-fast` fell past the `glm-5.2` rate to the GLM-4
+    // family fallback (a third of the real price) and `kimi-k2p6` past
+    // `kimi-k2.6` to the legacy Moonshot rate.
+    m = restore_dotted_generation(&m);
     m
+}
+
+/// Rewrite `<digit>p<digit>` as `<digit>.<digit>` — Fireworks' URL-safe
+/// spelling of a version separator.
+///
+/// Only fires between two ASCII digits, so ordinary words keep their `p`
+/// (`llama-v3p3` → `llama-v3.3` is the intended case; `gpt-oss-120b` and
+/// `deepseek-v4-pro` have no digit-`p`-digit run and are returned untouched).
+fn restore_dotted_generation(id: &str) -> String {
+    let bytes = id.as_bytes();
+    let mut out = String::with_capacity(id.len());
+    for (i, ch) in id.char_indices() {
+        let is_separator = ch == 'p'
+            && i > 0
+            && bytes[i - 1].is_ascii_digit()
+            && bytes.get(i + 1).is_some_and(u8::is_ascii_digit);
+        out.push(if is_separator { '.' } else { ch });
+    }
+    out
 }
 
 /// Infer the canonical vendor slug for a *bare model name*.
@@ -219,6 +251,14 @@ pub fn canonical_provider_id(provider: &str) -> Option<&'static str> {
         Some("perplexity")
     } else if p.contains("stepfun") || p.contains("step") {
         Some("stepfun")
+    } else if p.contains("qianfan") || p.contains("ernie") || p.contains("baidu") {
+        // Baidu's Qianfan platform serves the ERNIE line. Matches the preset
+        // name and both of its aliases.
+        Some("baidu")
+    } else if p.contains("xiaomi") || p.contains("mimo") {
+        Some("xiaomi")
+    } else if p.contains("longcat") {
+        Some("meituan")
     } else if p.contains("meta") || p.contains("llama") {
         // Parity with [`infer_vendor`]'s `llama -> meta` row. Open-weight
         // Llama is multi-hosted (Groq/Together/…), so the *provider* alias
@@ -362,8 +402,10 @@ mod tests {
             "deepseek-v3"
         );
         assert_eq!(
+            // `p` between digits is Fireworks' version separator; see
+            // `canonicalize_restores_fireworks_p_separator`.
             canonicalize_model_id("accounts/fireworks/models/llama-v3p3-70b-instruct"),
-            "llama-v3p3-70b-instruct"
+            "llama-v3.3-70b-instruct"
         );
         assert_eq!(
             canonicalize_model_id("@cf/meta/llama-3.3-70b-instruct-fp8-fast"),
@@ -371,6 +413,32 @@ mod tests {
         );
         // Listed tags keep working (peeled before the collapse, same result).
         assert_eq!(canonicalize_model_id("openai/gpt-4o"), "gpt-4o");
+    }
+
+    #[test]
+    fn canonicalize_restores_fireworks_p_separator() {
+        // Both Fireworks defaults used to miss their curated rows entirely.
+        assert_eq!(
+            canonicalize_model_id("accounts/fireworks/models/kimi-k2p6"),
+            "kimi-k2.6"
+        );
+        assert_eq!(
+            canonicalize_model_id("accounts/fireworks/routers/glm-5p2-fast"),
+            "glm-5.2-fast"
+        );
+        assert_eq!(
+            canonicalize_model_id("accounts/fireworks/models/llama-v3p3-70b-instruct"),
+            "llama-v3.3-70b-instruct"
+        );
+        // A `p` that is not between two digits is left alone — otherwise every
+        // `-pro` / `gpt-oss` / `-preview` id would be mangled.
+        assert_eq!(canonicalize_model_id("deepseek-v4-pro"), "deepseek-v4-pro");
+        assert_eq!(canonicalize_model_id("gpt-oss-120b"), "gpt-oss-120b");
+        assert_eq!(
+            canonicalize_model_id("gemini-3.1-pro-preview"),
+            "gemini-3.1-pro-preview"
+        );
+        assert_eq!(canonicalize_model_id("sonar-pro"), "sonar-pro");
     }
 
     #[test]
