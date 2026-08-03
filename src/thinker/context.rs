@@ -139,6 +139,26 @@ pub struct TurnEnvelope {
     /// advertised a path where no tool ran and, in project mode, reported the
     /// daemon's git branch as the project's.
     pub cwd: Option<std::path::PathBuf>,
+    /// The model actually serving this turn, as `RuntimeContext`'s `model=`
+    /// segment.
+    ///
+    /// Must be the resolved serving model, never `provider.name()`. Every
+    /// production `llm` is a `FailoverProvider` (often wrapped again in
+    /// Metering / ModelOverride, which delegate `name()`), so `name()` is the
+    /// literal string `"failover"` — which is what the envelope shipped to the
+    /// model on every turn. The envelope exists to be the single source of
+    /// truth for facts the model cannot otherwise know, and this is the one
+    /// fact it was stating wrongly: the model could not tell which model it
+    /// was, so it could not pace itself against its own context window or
+    /// answer honestly when asked. Silent in both directions — the string is
+    /// well-formed and constant, so nothing looks broken.
+    ///
+    /// `runner_impl` resolves this as `gauge_model` (serving-model hint →
+    /// routing model id → provider name) before the loop, and the gauge and
+    /// cost estimate key off the same value, so all three agree by
+    /// construction. `None` leaves the previous behaviour for dispatch paths
+    /// that resolve no model.
+    pub serving_model: Option<String>,
 }
 
 impl TurnEnvelope {

@@ -16,9 +16,19 @@
 //! adapter's own comment asserted the opposite was true.
 //!
 //! It is per-request state, so it belongs in the Dynamic suffix zone
-//! (priority >= 1700) alongside the other live-state layers, where changing
-//! bytes cost only themselves. The pipeline's `stable_layers_come_before_dynamic`
-//! invariant is what pins that zoning.
+//! (priority >= 1700) alongside the other live-state layers. The pipeline's
+//! `stable_layers_come_before_dynamic` invariant is what pins that zoning.
+//!
+//! Dynamic is the correct zone — but it is not a free one, and the earlier
+//! wording here ("where changing bytes cost only themselves") was wrong in the
+//! same way the adapter comment was. The Dynamic block is emitted as an
+//! unmarked system block, which Anthropic still orders ahead of every
+//! *message-level* breakpoint, so churn here re-keys the conversation prefix
+//! even though it leaves the stable system block's own breakpoint intact. See
+//! `providers/protocols/anthropic/adapter.rs::build_request` and the rule
+//! stated in `harness/deps.rs`. Concretely: a 30s-TTL health flip costs the
+//! whole history at `cache_creation` rates, not just these few bytes — which
+//! is why this layer's snapshot is deliberately coarse.
 
 use crate::thinker::prompt_layer::{AssemblyPath, LayerInput, LayerStability, PromptLayer};
 use crate::thinker::prompt_mode::PromptMode;

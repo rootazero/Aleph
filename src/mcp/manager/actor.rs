@@ -952,6 +952,17 @@ impl McpManagerActor {
     // ===== Aggregation Methods =====
 
     /// Aggregate items from all healthy servers using the provided accessor.
+    ///
+    /// Servers are visited in sorted id order, not `HashMap` iteration order.
+    /// Every one of these aggregations reaches the provider request: tools and
+    /// instructions land in the prompt directly, and `HashMap` order is stable
+    /// only while the map is untouched — a server reconnecting after a health
+    /// blip, a lazy connect, an `mcp install`/`remove`, or a rehash on growth
+    /// permutes it. That would re-emit byte-identical content in a different
+    /// order, which the provider's prompt cache reads as a different prefix:
+    /// the whole conversation re-billed as `cache_creation` for a reordering
+    /// that changed no information. Sorting also makes the prompt reproducible
+    /// across daemon restarts inside the cache TTL.
     async fn aggregate_from_healthy<T, F, Fut>(&self, accessor: F) -> Vec<T>
     where
         F: Fn(Arc<McpClient>) -> Fut,
@@ -959,7 +970,14 @@ impl McpManagerActor {
     {
         let mut result = Vec::new();
 
-        for (server_id, client) in &self.clients {
+        let mut server_ids: Vec<&String> = self.clients.keys().collect();
+        server_ids.sort_unstable();
+
+        for server_id in server_ids {
+            // rust-doctor-disable-next-line unwrap-in-production
+            let Some(client) = self.clients.get(server_id) else {
+                continue;
+            };
             if let Some(health) = self.health_states.get(server_id) {
                 if !matches!(
                     health.status,

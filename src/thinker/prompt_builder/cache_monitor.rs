@@ -31,6 +31,11 @@ struct AgentCacheState {
     /// Set once this agent has observed any cache activity (read or write).
     /// Miss counting (and the warn) is gated on it — see module docs.
     armed: bool,
+    /// Latch so the warn fires on the RISING edge of a streak rather than on
+    /// every call past the threshold. Without it a genuinely broken agent
+    /// emits one WARN per LLM call, which is how a line gets filtered out —
+    /// and this is the only alarm this domain has. Cleared by a healthy call.
+    warned: bool,
 }
 
 /// Bound on tracked agent ids. Subagent spawns can mint fresh ids over a
@@ -89,22 +94,42 @@ impl CacheMonitor {
 
         agent.total_calls += 1;
 
-        let read = cache_read_tokens.is_some_and(|t| t > 0);
-        let wrote = cache_creation_tokens.is_some_and(|t| t > 0);
-        if read || wrote {
+        let reads = u64::from(cache_read_tokens.unwrap_or(0));
+        let writes = u64::from(cache_creation_tokens.unwrap_or(0));
+        if reads > 0 || writes > 0 {
             agent.armed = true;
         }
 
-        if read {
+        // A call counts as healthy only when the cache was read *at least as
+        // much as* it was written.
+        //
+        // Treating any non-zero read as healthy made the watchdog blind to the
+        // failure mode this codebase actually ships into. The layout is one
+        // breakpoint on the small stable system block and three on the
+        // conversation; when a prefix ahead of the message breakpoints churns,
+        // the system block still hits on every call, so `reads > 0` held
+        // forever, the streak reset on every call, and the warn could never
+        // accumulate — while 100% of the history was re-created at 1.25x.
+        // Read-dominance separates "hitting" from "re-creating and hitting a
+        // few hundred bytes".
+        let healthy = reads > 0 && reads >= writes;
+
+        if healthy {
             agent.consecutive_misses = 0;
+            agent.warned = false;
         } else if agent.armed {
             agent.consecutive_misses += 1;
-            if agent.consecutive_misses >= 3 && agent.total_calls > 3 {
+            if agent.consecutive_misses >= 3 && agent.total_calls > 3 && !agent.warned {
+                agent.warned = true;
                 tracing::warn!(
                     agent_id = %agent_id,
                     consecutive_misses = agent.consecutive_misses,
                     total_calls = agent.total_calls,
-                    "prompt cache consecutive misses detected — stable prefix may have changed"
+                    cache_read_tokens = reads,
+                    cache_creation_tokens = writes,
+                    "prompt cache is being re-created rather than read — a prefix \
+                     ahead of the message breakpoints is churning, or the stable \
+                     prefix changed"
                 );
             }
         }
@@ -125,11 +150,13 @@ impl CacheMonitor {
             Some(id) => {
                 if let Some(agent) = state.get_mut(id) {
                     agent.consecutive_misses = 0;
+                    agent.warned = false;
                 }
             }
             None => {
                 for agent in state.values_mut() {
                     agent.consecutive_misses = 0;
+                    agent.warned = false;
                 }
             }
         }

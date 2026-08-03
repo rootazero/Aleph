@@ -263,6 +263,17 @@ pub struct AppState {
     /// surface a misleading 0%. Last-call (not cumulative) on purpose: a
     /// sudden drop is what tells you a prefix bust just happened.
     pub cache_stat: Option<(u64, u64)>,
+    /// Agent id behind `cache_stat` when it did *not* come from the session's
+    /// root agent — sub-agents and MoA advisors are metered on the same trace
+    /// stream, so a delegated cold start would otherwise silently overwrite
+    /// the root agent's healthy reading with someone else's number. Rendered
+    /// as a suffix so a mixed reading is labelled rather than misattributed.
+    pub cache_stat_agent: Option<String>,
+    /// First agent id observed since the session was (re)set. The root agent
+    /// necessarily makes the first LLM call — it cannot delegate before it has
+    /// taken a turn — so this identifies it without the TUI needing to know
+    /// the run topology.
+    cache_root_agent: Option<String>,
     pub is_connected: bool,
 
     // -- Run tracking --
@@ -316,6 +327,8 @@ impl AppState {
             total_tokens: 0,
             context_gauge: None,
             cache_stat: None,
+            cache_stat_agent: None,
+            cache_root_agent: None,
             is_connected: true,
 
             current_run: None,
@@ -654,6 +667,9 @@ impl AppState {
         // a different prefix, and a cache-less provider would otherwise show
         // it indefinitely (the stat only updates on real cache activity).
         self.cache_stat = None;
+        self.cache_stat_agent = None;
+        // The next session's first reporting agent becomes its new root.
+        self.cache_root_agent = None;
         self.dialog = None;
         self.palette = None;
         // Any approval prompt belonged to the old session's run; drop it.

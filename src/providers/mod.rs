@@ -58,7 +58,6 @@ use std::pin::Pin;
 // Sub-modules
 pub mod adapter;
 pub mod anthropic;
-pub mod bridge;
 pub mod capability_gate;
 pub mod catalog;
 pub mod codex;
@@ -284,7 +283,12 @@ pub trait AiProvider: Send + Sync {
     /// Downcast to `HttpProvider` for streaming access.
     ///
     /// Returns Some(&HttpProvider) only for `HttpProvider` instances.
-    /// Used by `AiProviderBridge` to call `stream_raw()`.
+    ///
+    /// Used by the OpenAI-compatible gateway passthrough to reach
+    /// `stream_raw()` (`gateway::openai_api::completions::passthrough` and
+    /// `gateway::openai_api::responses`). NOT a streaming path for the agent
+    /// loop — that goes through `AiProvider::execute_streaming_dyn` so the
+    /// failover/metering decorators stay in the chain.
     fn as_http_provider(&self) -> Option<&http_provider::HttpProvider> {
         None
     }

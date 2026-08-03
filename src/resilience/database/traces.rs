@@ -34,7 +34,26 @@ impl AgentUsageTotal {
     /// observed (cumulative `cache_read` == 0 AND input == 0); `Some(0.0)`
     /// when input was non-zero but no cache reads occurred. See
     /// [`crate::providers::adapter::TokenUsage::cache_hit_ratio`] for the
-    /// per-call counterpart and the cross-protocol denominator logic.
+    /// per-call counterpart, which enforces the same disjoint-counter
+    /// invariant this function relies on.
+    ///
+    /// The denominator is unconditionally `input + cache_read`. Every adapter
+    /// normalises its provider's usage into *disjoint* counters before it is
+    /// persisted (Anthropic reports them that way natively;
+    /// `openai_chat/sse.rs`, `openai_responses/mod.rs` and `gemini/sse.rs` each
+    /// subtract the cached portion out of the inclusive prompt total), so
+    /// `input_tokens` never contains `cache_read_tokens` in any stored row.
+    ///
+    /// This used to guess the protocol from the magnitudes
+    /// (`cache_read > input ⇒ Anthropic, else assume inclusive`) — the same
+    /// heuristic the per-call twin deleted as a bug. The guess was wrong for
+    /// every provider, and wrong in the direction that hides trouble: it took
+    /// the else-branch exactly when `cache_read <= input`, i.e. when less than
+    /// half the prompt came from cache, and reported `cache_read / input`
+    /// instead of `cache_read / (input + cache_read)`. A true 50% hit rate
+    /// read as 100%; a true 20% read as 25%. The rollup therefore flattered
+    /// the cache monotonically harder as the prefix broke — the one number a
+    /// user checks after a suspicious bill.
     #[must_use]
     pub fn cache_hit_ratio(&self) -> Option<f64> {
         if self.cache_read_tokens == 0 && self.input_tokens == 0 {
@@ -43,13 +62,7 @@ impl AgentUsageTotal {
         if self.cache_read_tokens == 0 {
             return Some(0.0);
         }
-        let total_prompt = if self.cache_read_tokens > self.input_tokens {
-            // Anthropic-style protocols dominate the rollup: disjoint sum.
-            self.input_tokens.saturating_add(self.cache_read_tokens)
-        } else {
-            // OpenAI-family: input_tokens already includes cache_read.
-            self.input_tokens
-        };
+        let total_prompt = self.input_tokens.saturating_add(self.cache_read_tokens);
         if total_prompt == 0 {
             return None;
         }
@@ -896,9 +909,17 @@ mod tests {
         assert!(empty.is_none());
     }
 
-    /// Rollup ratio matches the per-call formula across both protocol shapes.
+    /// The denominator is always `input + cache_read` — there is no
+    /// per-protocol shape, because every adapter stores disjoint counters.
+    ///
+    /// This case is the regression guard: it used to assert `800/1000 = 0.8`
+    /// on the theory that an OpenAI-family row carries `cache_read` *inside*
+    /// `input`. No adapter can produce that row (see
+    /// `TokenUsage::cache_hit_ratio`), and asserting it locked in a rollup
+    /// that over-reported the hit rate by up to 2x in exactly the degraded
+    /// regime. The disjoint answer is 800/1800.
     #[test]
-    fn agent_usage_total_cache_hit_ratio_openai_shape() {
+    fn agent_usage_total_cache_hit_ratio_uses_disjoint_prompt_total() {
         let total = AgentUsageTotal {
             agent_id: "alice".into(),
             call_count: 5,
@@ -909,7 +930,26 @@ mod tests {
             reasoning_tokens: 0,
         };
         let ratio = total.cache_hit_ratio().expect("ratio present");
-        assert!((ratio - 0.8).abs() < 1e-9, "expected 0.8, got {ratio}");
+        assert!(
+            (ratio - 800.0 / 1800.0).abs() < 1e-9,
+            "expected 0.444…, got {ratio}"
+        );
+    }
+
+    /// A genuine 50% hit rate must read as 50%, not 100%. `cache_read ==
+    /// input` was the exact boundary the old `>` comparison put on the wrong
+    /// side of the branch.
+    #[test]
+    fn agent_usage_total_cache_hit_ratio_half_cached_reads_as_half() {
+        let total = AgentUsageTotal {
+            agent_id: "alice".into(),
+            call_count: 3,
+            input_tokens: 50_000,
+            cache_read_tokens: 50_000,
+            ..Default::default()
+        };
+        let ratio = total.cache_hit_ratio().expect("ratio present");
+        assert!((ratio - 0.5).abs() < 1e-9, "expected 0.5, got {ratio}");
     }
 
     #[test]

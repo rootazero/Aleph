@@ -11,8 +11,6 @@
 //!   chunk compressible messages, generate d0 summaries, and trigger hierarchical
 //!   condensation (d0→d1→d2) when fanout thresholds are met.
 
-use crate::sync_primitives::AtomicU64;
-
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
@@ -41,22 +39,18 @@ mod tests;
 #[cfg(test)]
 mod chunker_tests;
 
-// ---------------------------------------------------------------------------
-// CompactorMetrics
-// ---------------------------------------------------------------------------
-
-/// Atomic counters for observing session compactor activity.
-///
-/// All fields use `Relaxed` ordering — these are best-effort counters with no
-/// cross-thread ordering requirements.
-#[derive(Debug, Default)]
-pub struct CompactorMetrics {
-    pub d0_summaries_created: AtomicU64,
-    pub d1_condensations: AtomicU64,
-    pub d2_condensations: AtomicU64,
-    pub fallback_count: AtomicU64,
-    pub prepare_history_calls: AtomicU64,
-}
+// NOTE: `CompactorMetrics` used to live here — five atomics incremented on
+// every compaction, with no `load()` anywhere and an accessor
+// (`SessionCompactor::metrics()`) that had no callers. Removed per R10 YAGNI:
+// zero real consumers ⇒ CUT, not CONNECT.
+//
+// Deliberately NOT "rescued" by wiring a reader. These counted *memory-layer*
+// fact condensation (d0/d1/d2), not the `ContextCompactor` rewrites in
+// `src/context/compact/` that actually break the provider prompt prefix — so a
+// reader would have produced a plausible-looking number about the wrong
+// subsystem. If a prefix-break counter is ever wanted, it belongs on
+// `ContextCompactor::compact`'s outcome, where `CompactStrategy::{Skipped,
+// CacheReuse}` are already distinguished from the rewriting strategies.
 
 // ---------------------------------------------------------------------------
 // SessionCompactorConfig
@@ -104,7 +98,6 @@ pub struct SessionCompactor {
     pub(crate) database: MemoryBackend,
     pub(crate) provider: Option<Arc<dyn AiProvider>>,
     pub(crate) config: SessionCompactorConfig,
-    pub(crate) metrics: Arc<CompactorMetrics>,
     pub(crate) indexer: Option<crate::memory::transcript_indexer::TranscriptIndexer>,
     pub(crate) raw_memory_writer: Option<Arc<dyn RawMemoryStore>>,
     pub(crate) capture_registry: Option<Arc<MemoryExtensionRegistry>>,

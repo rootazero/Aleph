@@ -223,6 +223,18 @@ impl ContextCompactor {
         self
     }
 
+    /// The agent this compactor scopes its watchdog reset to, if any.
+    ///
+    /// Test-only: it exists so a construction site can assert the scoping
+    /// actually arrived, rather than asserting that `with_monitor_agent` was
+    /// called. An unscoped reset is silent — it mutes the prefix watchdog for
+    /// every other agent in the process and nothing observable changes.
+    #[cfg(test)]
+    #[must_use]
+    pub fn monitor_agent(&self) -> Option<&str> {
+        self.monitor_agent.as_deref()
+    }
+
     /// Enable cross-run fingerprint-cache carry-over keyed by `session_key`.
     ///
     /// Seeds the fingerprint cache from the process-wide per-session slot
