@@ -4,60 +4,6 @@
 //! This allows the AI to understand which runtimes are available and how to use them.
 
 use super::ledger::CapabilityEntry;
-use std::path::PathBuf;
-
-/// Runtime capability description for AI system prompt injection
-#[derive(Debug, Clone)]
-pub struct RuntimeCapability {
-    /// Unique identifier (e.g., "yt-dlp", "uv", "fnm")
-    pub id: String,
-    /// Human-readable name
-    pub name: String,
-    /// Description of what this runtime provides
-    pub description: String,
-    /// Path to the executable (if installed)
-    pub executable_path: Option<PathBuf>,
-    /// Whether the runtime is installed
-    pub installed: bool,
-    /// Installed version (if available)
-    pub version: Option<String>,
-}
-
-impl RuntimeCapability {
-    /// Format runtime capabilities for system prompt injection
-    ///
-    /// Generates a markdown-formatted section describing available runtimes.
-    #[must_use]
-    pub fn format_for_prompt(capabilities: &[Self]) -> String {
-        if capabilities.is_empty() {
-            return String::new();
-        }
-
-        use std::fmt::Write;
-        let mut output = String::new();
-        output.push_str("You can execute code using these installed runtimes:\n\n");
-
-        for cap in capabilities {
-            let _ = writeln!(output, "**{}**", cap.name);
-            let _ = writeln!(output, "- {}", cap.description);
-
-            if let Some(ref version) = cap.version {
-                let _ = writeln!(output, "- Version: {version}");
-            }
-
-            if let Some(ref path) = cap.executable_path {
-                let _ = writeln!(output, "- Executable: `{}`", path.display());
-            }
-
-            if let Some(hint) = get_hint_from_spec(&cap.id) {
-                let _ = writeln!(output, "- {hint}");
-            }
-            output.push('\n');
-        }
-
-        output
-    }
-}
 
 /// Get the LLM usage hint for a runtime from its spec.
 ///
@@ -100,40 +46,7 @@ pub fn format_entries_for_prompt(entries: &[&CapabilityEntry]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn test_format_empty_capabilities() {
-        let capabilities: Vec<RuntimeCapability> = vec![];
-        let result = RuntimeCapability::format_for_prompt(&capabilities);
-        assert!(result.is_empty());
-    }
-
-    #[test]
-    fn test_format_single_capability() {
-        let capabilities = vec![RuntimeCapability {
-            id: "uv".to_string(),
-            name: "uv (Python)".to_string(),
-            description: "Python package manager".to_string(),
-            executable_path: Some(PathBuf::from("/path/to/python")),
-            installed: true,
-            version: Some("3.11.0".to_string()),
-        }];
-
-        let result = RuntimeCapability::format_for_prompt(&capabilities);
-
-        assert!(result.contains("uv (Python)"));
-        assert!(result.contains("Python package manager"));
-        assert!(result.contains("3.11.0"));
-        assert!(result.contains("/path/to/python"));
-        assert!(
-            result.contains("Python package manager (uv)"),
-            "should contain SPECS hint for uv"
-        );
-        assert!(
-            result.contains("uv pip install"),
-            "should contain uv pip install hint"
-        );
-    }
+    use std::path::PathBuf;
 
     // -- format_entries_for_prompt tests -----------------------------------
 

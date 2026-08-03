@@ -27,18 +27,6 @@ impl DecryptedSecret {
     pub fn expose(&self) -> &str {
         self.value.expose_secret()
     }
-
-    /// Get the length of the secret value in bytes.
-    #[must_use]
-    pub fn len(&self) -> usize {
-        self.value.expose_secret().len()
-    }
-
-    /// Check if the secret is empty.
-    #[must_use]
-    pub fn is_empty(&self) -> bool {
-        self.value.expose_secret().is_empty()
-    }
 }
 
 impl fmt::Debug for DecryptedSecret {
@@ -103,9 +91,6 @@ pub enum SecretError {
     #[error("Secret '{0}' not found")]
     NotFound(String),
 
-    #[error("Master key not available. Ensure a token is set before accessing secrets")]
-    MasterKeyMissing,
-
     #[error("Decryption failed: vault may be corrupted or master key is wrong")]
     DecryptionFailed,
 
@@ -121,20 +106,11 @@ pub enum SecretError {
     #[error("Vault serialization error: {0}")]
     Serialization(String),
 
-    #[error("Migration failed for provider '{provider}': {reason}")]
-    MigrationFailed { provider: String, reason: String },
-
     #[error("Provider '{provider}' requires authentication: {message}")]
     ProviderAuthRequired { provider: String, message: String },
 
     #[error("Provider '{provider}' error: {message}")]
     ProviderError { provider: String, message: String },
-
-    #[error("Access denied for secret '{name}': {reason}")]
-    AccessDenied { name: String, reason: String },
-
-    #[error("Provider '{provider}' not configured")]
-    ProviderNotFound { provider: String },
 
     #[error("Invalid secret placeholder: {0}")]
     InvalidPlaceholder(String),
@@ -164,19 +140,6 @@ mod tests {
         let display = format!("{}", secret);
         assert_eq!(display, "[REDACTED]");
         assert!(!display.contains("sk-ant"));
-    }
-
-    #[test]
-    fn test_decrypted_secret_len() {
-        let secret = DecryptedSecret::new("12345");
-        assert_eq!(secret.len(), 5);
-        assert!(!secret.is_empty());
-    }
-
-    #[test]
-    fn test_decrypted_secret_empty() {
-        let secret = DecryptedSecret::new("");
-        assert!(secret.is_empty());
     }
 
     #[test]
@@ -226,22 +189,5 @@ mod tests {
             message: "item not found".into(),
         };
         assert!(format!("{}", err).contains("1password"));
-    }
-
-    #[test]
-    fn test_access_denied_error() {
-        let err = SecretError::AccessDenied {
-            name: "bank_password".into(),
-            reason: "User denied".into(),
-        };
-        assert!(format!("{}", err).contains("bank_password"));
-    }
-
-    #[test]
-    fn test_provider_not_found_error() {
-        let err = SecretError::ProviderNotFound {
-            provider: "bitwarden".into(),
-        };
-        assert!(format!("{}", err).contains("bitwarden"));
     }
 }

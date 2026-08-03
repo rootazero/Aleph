@@ -235,8 +235,6 @@ pub enum MessageMeta {
         /// Plain-text body of the quoted message.
         body: String,
     },
-    /// Matrix thread root event ID — message is part of a thread.
-    ThreadRoot(MessageId),
     /// Telegram poll answer — user selected options in a poll.
     PollAnswer {
         poll_id: String,
@@ -246,7 +244,6 @@ pub enum MessageMeta {
     Reaction {
         emojis: Vec<String>,
     },
-    ThreadId(i64),
     /// Sender of this inbound message is itself a bot.
     ///
     /// Channel adapters that can detect bot authorship (Telegram `User.is_bot`,

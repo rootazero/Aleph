@@ -1,79 +1,10 @@
 //! Rate limit configuration types and TOML I/O.
 
-use serde::{Deserialize, Serialize};
 use std::path::Path;
 
 use crate::config::patcher::ConfigPatcher;
-
-// ============================================================================
-
-/// Window configuration for a single rate-limit bucket.
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
-pub struct WindowConfigSchema {
-    #[serde(default = "default_max_requests")]
-    pub max_requests: u32,
-    #[serde(default = "default_window_secs")]
-    pub window_secs: u64,
-    #[serde(default = "default_burst_allow")]
-    pub burst_allow: u32,
-}
-
-const fn default_max_requests() -> u32 {
-    60
-}
-const fn default_window_secs() -> u64 {
-    60
-}
-const fn default_burst_allow() -> u32 {
-    20
-}
-
-/// Sandbox rate limit configuration (mirrors `SandboxRateLimitConfigSchema` from sandbox/config.rs).
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
-pub struct SandboxRateLimitConfigSchema {
-    #[serde(default = "default_rate_limit_enabled")]
-    pub enabled: bool,
-    #[serde(default = "default_rate_limit_read")]
-    pub read: WindowConfigSchema,
-    #[serde(default = "default_rate_limit_write")]
-    pub write: WindowConfigSchema,
-    #[serde(default = "default_rate_limit_dangerous")]
-    pub dangerous: WindowConfigSchema,
-    #[serde(default = "default_rate_limit_admin")]
-    pub admin: WindowConfigSchema,
-}
-
-const fn default_rate_limit_enabled() -> bool {
-    true
-}
-const fn default_rate_limit_read() -> WindowConfigSchema {
-    WindowConfigSchema {
-        max_requests: 60,
-        window_secs: 60,
-        burst_allow: 20,
-    }
-}
-const fn default_rate_limit_write() -> WindowConfigSchema {
-    WindowConfigSchema {
-        max_requests: 30,
-        window_secs: 60,
-        burst_allow: 10,
-    }
-}
-const fn default_rate_limit_dangerous() -> WindowConfigSchema {
-    WindowConfigSchema {
-        max_requests: 10,
-        window_secs: 60,
-        burst_allow: 5,
-    }
-}
-const fn default_rate_limit_admin() -> WindowConfigSchema {
-    WindowConfigSchema {
-        max_requests: 5,
-        window_secs: 60,
-        burst_allow: 2,
-    }
-}
+// Re-export canonical schema types from the sandbox config module.
+pub use crate::sandbox::config::{SandboxRateLimitConfigSchema, WindowConfigSchema};
 
 /// Read sandbox rate limit config from [`sandbox.rate_limit`] in config TOML.
 pub(super) fn read_sandbox_rate_limit_from_toml(

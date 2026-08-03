@@ -4,12 +4,11 @@
 //! Supports both interactive sessions and service account tokens.
 
 use async_trait::async_trait;
-use chrono::Utc;
 use secrecy::{ExposeSecret, SecretString};
 use tracing::debug;
 
-use super::{ProviderStatus, SecretMetadata, SecretProvider};
-use crate::secrets::types::{DecryptedSecret, SecretError};
+use super::{ProviderStatus, SecretProvider};
+use crate::secrets::types::SecretError;
 use crate::utils::no_window::NoWindow;
 
 /// Secret provider backed by the 1Password CLI (`op`).
@@ -83,37 +82,6 @@ impl SecretProvider for OnePasswordProvider {
         "1password"
     }
 
-    async fn get(&self, reference: &str) -> Result<DecryptedSecret, SecretError> {
-        let mut cmd = self.base_command();
-        cmd.arg("read").arg(reference).arg("--no-newline");
-
-        debug!(reference = reference, "Fetching secret from 1Password");
-
-        let output = cmd.output().await.map_err(|e| {
-            if e.kind() == std::io::ErrorKind::NotFound {
-                SecretError::ProviderError {
-                    provider: "1password".into(),
-                    message: "1Password CLI (`op`) not found. Install from https://1password.com/downloads/command-line/".into(),
-                }
-            } else {
-                SecretError::ProviderError {
-                    provider: "1password".into(),
-                    message: format!("Failed to execute `op`: {e}"),
-                }
-            }
-        })?;
-
-        if output.status.success() {
-            Ok(DecryptedSecret::new(
-                String::from_utf8_lossy(&output.stdout).into_owned(),
-            ))
-        } else {
-            Err(Self::classify_error(&String::from_utf8_lossy(
-                &output.stderr,
-            )))
-        }
-    }
-
     async fn health_check(&self) -> Result<ProviderStatus, SecretError> {
         let mut cmd = self.base_command();
         cmd.arg("whoami");
@@ -146,45 +114,6 @@ impl SecretProvider for OnePasswordProvider {
                     reason: format!("1Password CLI error: {err}"),
                 }),
             }
-        }
-    }
-
-    async fn list(&self) -> Result<Vec<SecretMetadata>, SecretError> {
-        let mut cmd = self.base_command();
-        cmd.arg("item").arg("list").arg("--format=json");
-
-        let output = cmd.output().await.map_err(|e| SecretError::ProviderError {
-            provider: "1password".into(),
-            message: format!("Failed to execute `op item list`: {e}"),
-        })?;
-
-        if output.status.success() {
-            let stdout = String::from_utf8_lossy(&output.stdout);
-            let items: Vec<serde_json::Value> =
-                serde_json::from_str(&stdout).map_err(|e| SecretError::ProviderError {
-                    provider: "1password".into(),
-                    message: format!("Failed to parse `op item list` JSON output: {e}"),
-                })?;
-            Ok(items
-                .iter()
-                .filter_map(|item| {
-                    let name = item.get("title")?.as_str()?.to_string();
-                    let updated_at = item
-                        .get("updated_at")
-                        .and_then(|v| v.as_str())
-                        .and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok())
-                        .map_or_else(Utc::now, |dt| dt.with_timezone(&Utc));
-                    Some(SecretMetadata {
-                        name,
-                        provider: "1password".into(),
-                        updated_at,
-                    })
-                })
-                .collect())
-        } else {
-            Err(Self::classify_error(&String::from_utf8_lossy(
-                &output.stderr,
-            )))
         }
     }
 }

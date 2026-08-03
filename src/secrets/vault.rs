@@ -10,7 +10,7 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use tracing::{debug, info};
 
-use super::types::{EncryptedEntry, EntryMetadata, SecretError, VaultData};
+use super::types::{EncryptedEntry, SecretError, VaultData};
 use crate::utils::vault_io::VaultIo;
 
 /// Current vault format version.
@@ -112,7 +112,7 @@ impl SecretVault {
     }
 
     /// Create an empty vault (for when `open()` fails).
-    pub fn empty(path: impl Into<PathBuf>) -> Self {
+    fn empty(path: impl Into<PathBuf>) -> Self {
         Self {
             data: VaultData {
                 version: VAULT_VERSION,
@@ -201,16 +201,6 @@ impl SecretVault {
         self.data.entries.contains_key(name)
     }
 
-    /// List all secret names with their metadata.
-    #[must_use]
-    pub fn list(&self) -> Vec<(String, &EntryMetadata)> {
-        self.data
-            .entries
-            .iter()
-            .map(|(name, entry)| (name.clone(), &entry.metadata))
-            .collect()
-    }
-
     /// List all entry names.
     #[must_use]
     pub fn list_names(&self) -> Vec<String> {
@@ -232,22 +222,10 @@ impl SecretVault {
         self.save()
     }
 
-    /// Get the vault file path.
-    #[must_use]
-    pub fn path(&self) -> &Path {
-        &self.path
-    }
-
     /// Get the number of entries.
     #[must_use]
     pub fn len(&self) -> usize {
         self.data.entries.len()
-    }
-
-    /// Check if vault is empty.
-    #[must_use]
-    pub fn is_empty(&self) -> bool {
-        self.data.entries.is_empty()
     }
 
     /// Get the default vault path.
@@ -273,6 +251,7 @@ impl SecretVault {
 #[cfg(test)]
 mod tests {
     use super::super::crypto::SecretsCrypto;
+    use super::types::EntryMetadata;
     use super::*;
     use tempfile::TempDir;
 
@@ -363,35 +342,6 @@ mod tests {
     }
 
     #[test]
-    fn test_list() {
-        let dir = TempDir::new().unwrap();
-        let mut vault = test_vault(&dir);
-        let crypto = SecretsCrypto::new("test-master-key");
-
-        vault
-            .set(
-                "key1",
-                make_entry_with_metadata(
-                    &crypto,
-                    "v1",
-                    EntryMetadata {
-                        provider: Some("anthropic".into()),
-                        ..Default::default()
-                    },
-                ),
-            )
-            .unwrap();
-        vault.set("key2", make_entry(&crypto, "v2")).unwrap();
-
-        let list = vault.list();
-        assert_eq!(list.len(), 2);
-
-        let names: Vec<&str> = list.iter().map(|(n, _)| n.as_str()).collect();
-        assert!(names.contains(&"key1"));
-        assert!(names.contains(&"key2"));
-    }
-
-    #[test]
     fn test_persistence_across_reopen() {
         let dir = TempDir::new().unwrap();
         let vault_path = dir.path().join("persist.vault");
@@ -435,16 +385,14 @@ mod tests {
     }
 
     #[test]
-    fn test_len_and_is_empty() {
+    fn test_len() {
         let dir = TempDir::new().unwrap();
         let mut vault = test_vault(&dir);
         let crypto = SecretsCrypto::new("test-master-key");
 
-        assert!(vault.is_empty());
         assert_eq!(vault.len(), 0);
 
         vault.set("key", make_entry(&crypto, "val")).unwrap();
-        assert!(!vault.is_empty());
         assert_eq!(vault.len(), 1);
     }
 
@@ -468,8 +416,8 @@ mod tests {
             )
             .unwrap();
 
-        let list = vault.list();
-        let (_, meta) = list.iter().find(|(n, _)| n == "key").unwrap();
+        let entry = vault.get("key").unwrap();
+        let meta = &entry.metadata;
         assert_eq!(meta.description.as_deref(), Some("My Anthropic key"));
         assert_eq!(meta.provider.as_deref(), Some("anthropic"));
     }
@@ -477,7 +425,6 @@ mod tests {
     #[test]
     fn test_empty_vault() {
         let vault = SecretVault::empty("/tmp/nonexistent.vault");
-        assert!(vault.is_empty());
         assert_eq!(vault.len(), 0);
     }
 
@@ -544,7 +491,7 @@ mod tests {
         // overwrite it on the next save. `open_or_backup` must instead move it
         // aside and start fresh, leaving the original bytes recoverable.
         let mut vault = SecretVault::open_or_backup(&path);
-        assert!(vault.is_empty());
+        assert_eq!(vault.len(), 0);
 
         // A write after recovery must not have destroyed the original data.
         let crypto = SecretsCrypto::new("k");
@@ -573,7 +520,7 @@ mod tests {
         let path = dir.path().join("absent.vault");
         // A missing file is not an error path — no backup, just a fresh vault.
         let vault = SecretVault::open_or_backup(&path);
-        assert!(vault.is_empty());
+        assert_eq!(vault.len(), 0);
         assert!(!path.exists());
     }
 

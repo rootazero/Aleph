@@ -101,14 +101,13 @@ async fn ensure_capability_recursive(
     // Probe phase
     info!("Probing for capability: {}", capability);
     {
-        let mut guard = ledger.write().await;
+        let guard = ledger.read().await;
         // Re-check: another task may have resolved this while we waited for the lock
         if guard.status(capability) == CapabilityStatus::Ready {
             if let Some(path) = guard.executable(capability) {
                 return Ok(path.to_path_buf());
             }
         }
-        guard.update_status(capability, CapabilityStatus::Probing);
     }
 
     let mut probe_result = probe::probe(capability);

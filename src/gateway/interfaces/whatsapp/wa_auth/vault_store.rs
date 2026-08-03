@@ -40,7 +40,7 @@ impl WaAuthManager {
         Self::with_vault_and_crypto(vault, account_id, None)
     }
 
-    pub fn with_vault_and_crypto(
+    fn with_vault_and_crypto(
         vault: SecretVault,
         account_id: impl Into<String>,
         crypto: Option<SecretsCrypto>,

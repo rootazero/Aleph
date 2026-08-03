@@ -111,7 +111,6 @@ pub async fn handle_update(
                 max_results: 5,
                 timeout_seconds: 10,
                 backends: std::collections::HashMap::new(),
-                pii: Some(crate::config::types::PIIConfig::default()),
                 web_fetch_fallback: crate::config::types::search::default_web_fetch_fallback(),
             });
         }

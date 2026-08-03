@@ -32,36 +32,36 @@ const PREFLIGHT_TIMEOUT: Duration = Duration::from_secs(5);
 /// endpoint, and `Err` only when the server unambiguously returns an HTML page.
 /// The SSRF policy is enforced before any network access.
 pub async fn preflight_remote_url(url: &str, headers: &HashMap<String, String>) -> Result<()> {
-    validate_url_async(url, &SsrfPolicy::default())
+    let (validated_url, pinned) = validate_url_async(url, &SsrfPolicy::default())
         .await
-        .map(|(_, _pinned)| ())
         .map_err(|e| AlephError::IoError(format!("SSRF blocked for '{url}': {e}")))?;
 
-    let client = match reqwest::Client::builder()
+    let host = validated_url
+        .host_str()
+        .ok_or_else(|| AlephError::IoError(format!("no host in URL: {url}")))?
+        .to_string();
+
+    let mut client_builder = reqwest::Client::builder()
         .redirect(reqwest::redirect::Policy::none())
-        .timeout(PREFLIGHT_TIMEOUT)
-        .build()
-    {
+        .timeout(PREFLIGHT_TIMEOUT);
+    if let Some(addr) = pinned {
+        client_builder = client_builder.resolve(&host, addr);
+    }
+    let client = match client_builder.build() {
         Ok(c) => c,
-        // If we cannot even build a client, skip the probe — the real
-        // connection path will surface the failure with full context.
         Err(_) => return Ok(()),
     };
 
-    let mut req = client.get(url);
+    let mut req = client.get(validated_url.as_str());
     for (key, value) in headers {
         req = req.header(key, value);
     }
 
     let resp = match req.send().await {
         Ok(r) => r,
-        // Timeouts, DNS failures, refused connections: not the probe's call to
-        // make. Defer to the real connection so its retry/backoff applies.
         Err(_) => return Ok(()),
     };
 
-    // A real MCP server commonly guards a bare GET with 401/403/405/406 or a
-    // redirect. Only a *successful* HTML response is a clear misconfiguration.
     if !resp.status().is_success() {
         return Ok(());
     }

@@ -32,9 +32,6 @@ pub enum InstallStrategy {
         parent: &'static str,
         subcommand: &'static [&'static str],
     },
-    Unsupported {
-        reason: &'static str,
-    },
 }
 
 pub enum PostInstallAction {
@@ -278,7 +275,7 @@ pub fn select_install(installs: &[OsInstall], current: TargetOs) -> Option<&OsIn
 pub fn supported_on_current_os(name: &str) -> bool {
     find_spec(name)
         .and_then(|s| TargetOs::current().and_then(|os| select_install(s.install, os)))
-        .is_some_and(|oi| !matches!(oi.strategy, InstallStrategy::Unsupported { .. }))
+        .is_some()
 }
 
 #[cfg(test)]

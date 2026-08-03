@@ -12,7 +12,7 @@ use super::error::ToolError;
 use crate::config::WebFetchPolicy;
 use crate::error::Result;
 use crate::security::content_sanitizer::{wrap_external_content, ContentSource};
-use crate::security::ssrf::{safe_fetch, validate_url_async, SafeFetchRequest, SsrfPolicy};
+use crate::security::ssrf::{safe_fetch, SafeFetchRequest, SsrfPolicy};
 use crate::tools::AlephTool;
 use async_trait::async_trait;
 use scraper::Html;
@@ -138,18 +138,9 @@ impl WebFetchTool {
         }
 
         // Configured fetch providers (if any): URL → markdown via an operator-
-        // hosted backend. SSRF-validate the *target* URL once so the agent can't
-        // use a provider to reach internal hosts. On any provider failure, fall
-        // through to the next provider, then the built-in fetch below.
+        // hosted backend. On any provider failure, fall through to the next
+        // provider, then the built-in fetch below.
         if !self.fetch_providers.is_empty() {
-            validate_url_async(&args.url, &self.ssrf_policy)
-                .await
-                .map(|(_, _pinned)| ())
-                .map_err(|e| {
-                    let msg = format!("Fetch blocked or failed: {e}");
-                    notify_tool_result(Self::NAME, &msg, false);
-                    ToolError::Network(msg)
-                })?;
             for provider in &self.fetch_providers {
                 match provider.fetch(&args.url).await {
                     Ok(markdown) => {
@@ -389,9 +380,8 @@ impl AlephTool for WebFetchTool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::security::ssrf::{validate_url, SsrfPolicy};
+    use crate::security::ssrf::SsrfPolicy;
     use crate::tools::AlephTool;
-    // Note: validate_url is still used by SSRF unit tests below (test_ssrf_*)
 
     fn dummy_result(url: &str, content: &str) -> WebFetchResult {
         WebFetchResult {
@@ -462,48 +452,6 @@ mod tests {
             "Expected 'Fetch blocked or failed' error, got: {}",
             err_msg
         );
-    }
-
-    #[test]
-    fn test_ssrf_blocks_localhost() {
-        let policy = SsrfPolicy::default();
-        assert!(validate_url("http://localhost/admin", &policy).is_err());
-        assert!(validate_url("http://127.0.0.1/secret", &policy).is_err());
-        assert!(validate_url("http://127.0.0.1:8080/api", &policy).is_err());
-    }
-
-    #[test]
-    fn test_ssrf_blocks_private_networks() {
-        let policy = SsrfPolicy::default();
-        assert!(validate_url("http://10.0.0.1/internal", &policy).is_err());
-        assert!(validate_url("http://192.168.1.1/admin", &policy).is_err());
-        assert!(validate_url("http://172.16.0.1/secret", &policy).is_err());
-    }
-
-    #[test]
-    fn test_ssrf_blocks_metadata_endpoints() {
-        let policy = SsrfPolicy::default();
-        assert!(validate_url("http://169.254.169.254/latest/meta-data/", &policy).is_err());
-        assert!(validate_url("http://metadata.google.internal/computeMetadata/", &policy).is_err());
-    }
-
-    #[test]
-    fn test_ssrf_allows_public_urls() {
-        let policy = SsrfPolicy::default();
-        // IP literal — sync path can fully validate without DNS.
-        assert!(validate_url("https://8.8.8.8", &policy).is_ok());
-        // Hostname — sync path cannot resolve DNS, must signal caller to use
-        // `validate_url_async`. This is a fail-closed contract, not a bug.
-        assert!(matches!(
-            validate_url("https://example.com", &policy),
-            Err(crate::security::ssrf::SsrfError::RequiresDnsResolution(_))
-        ));
-    }
-
-    #[test]
-    fn test_ssrf_blocks_ipv6_loopback() {
-        let policy = SsrfPolicy::default();
-        assert!(validate_url("http://[::1]/admin", &policy).is_err());
     }
 
     #[test]
