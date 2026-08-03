@@ -344,6 +344,24 @@ pub async fn compact_session(
             return Err(e.into());
         }
     };
+    // Tell the prompt-cache watchdog this break was deliberate.
+    //
+    // Retiring the prefix guarantees the next turns are cache-cold — that is
+    // the entire point of the operation. Without this the watchdog counts them
+    // as evidence and warns "the stable prefix may have changed" about a
+    // change the user just asked for. That is the same false-positive class
+    // the armed gate and per-prefix keying were introduced to eliminate, and an
+    // alarm that cries wolf after every `/compact` is one operators learn to
+    // ignore — it is the only early signal this domain has. Scoped to THIS
+    // conversation, never the process-wide reset: only this session's prefix was
+    // retired, so silencing the agent's other sessions would hide a real break.
+    crate::thinker::prompt_builder::cache_monitor::global_cache_monitor().notify_compaction(Some(
+        &crate::thinker::prompt_builder::cache_monitor::cache_scope(
+            session_id.agent_id(),
+            Some(&session_id.to_key_string()),
+        ),
+    ));
+
     tracing::info!(
         ?session_id,
         retired,

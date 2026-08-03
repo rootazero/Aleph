@@ -226,9 +226,17 @@ impl ContextBudget {
   `[0.25, 4.0]` (rejecting transient noise — mid-flight resends, degenerate
   usage reports) and EWMA-smoothed (`α = 0.3`) into the running multiplier.
 - `TokenUsage::prompt_tokens_total()` (`src/providers/adapter.rs`) folds the
-  cached + cache-creation portions back in using the same Anthropic-vs-OpenAI
-  convention detection as `cache_hit_ratio`, so a warm cache hit (tiny
-  `input_tokens`) doesn't look like the prompt shrank.
+  cached + cache-creation portions back in — unconditionally summing all three
+  counters — so a warm cache hit (tiny `input_tokens`) doesn't look like the
+  prompt shrank. There is no Anthropic-vs-OpenAI convention detection: every
+  adapter normalises its provider's usage into **disjoint** counters before
+  they are recorded (Anthropic reports them that way natively; the OpenAI and
+  Gemini paths subtract the cached portion out of the inclusive prompt total).
+  Guessing the convention from token magnitudes was deleted as a bug — it
+  misclassified every Anthropic turn whose cached prefix was smaller than its
+  fresh input, and the same heuristic survived in the usage rollup until
+  §2.18, where it over-reported the hit rate by up to 2x in exactly the
+  degraded regime.
 - `compact_to_fit` (`src/context/compact/fit.rs`) divides its floor target by
   `budget.calibration()` to convert back into raw-estimate space — the
   eviction loop measures raw, so a calibrated-space target would stall the

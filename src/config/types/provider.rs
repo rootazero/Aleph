@@ -104,16 +104,25 @@ pub struct ProviderConfig {
     /// currently honored only by the Anthropic protocol adapter.
     #[serde(default)]
     pub stream_idle_timeout_secs: Option<u64>,
-    /// Prompt cache retention policy. Currently honored only by the Anthropic
-    /// protocol adapter; other protocols ignore this field.
+    /// Prompt cache retention policy. See [`CacheRetention`] for the
+    /// per-protocol mapping — it is honored on the Anthropic protocol (1h
+    /// `ttl` on the official endpoint) *and* on official `OpenAI` endpoints
+    /// (`prompt_cache_retention: "24h"` on Chat and Responses).
     ///
-    /// `None` (unset) means "use hostname-gated default":
-    ///   - host == api.anthropic.com → Short
-    ///   - host == anything else     → Off (third-party backends require
-    ///     explicit opt-in to avoid breaking custom Anthropic-compatible APIs
-    ///     that may not accept `cache_control`).
+    /// `None` (unset) means "provider default retention", NOT "off": the
+    /// Anthropic adapter resolves it to `Short` (the standard 5-minute
+    /// ephemeral marker) and `OpenAI` simply omits the retention field, which
+    /// leaves its implicit prefix caching on.
     ///
-    /// An explicit value (`Off` / `Short` / `Long`) is always respected.
+    /// Whether markers may be emitted at all is a separate, endpoint-level
+    /// decision: `policy.capabilities.supports_cache_control`, which is false
+    /// by default for `Custom`-class hosts and opted back in per family
+    /// (Bedrock, Azure). An endpoint without that capability is treated
+    /// exactly like `Off`.
+    ///
+    /// An explicit value (`Off` / `Short` / `Long`) is always respected, and
+    /// `Off` means what it says: no `cache_control` anywhere on the request,
+    /// pre-placed markers stripped included.
     #[serde(default)]
     pub cache_retention: Option<CacheRetention>,
     /// Whether the provider is enabled/active

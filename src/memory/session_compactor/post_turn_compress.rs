@@ -5,7 +5,7 @@ use crate::gateway::router::SessionKey;
 use crate::memory::extensions::insert_with_capture_filter;
 use crate::memory::extensions::types::CaptureCtx;
 use crate::memory::store::raw_memory::{RawMemory, RawMemorySource, RawMemoryStore};
-use crate::sync_primitives::{Arc, Ordering};
+use crate::sync_primitives::Arc;
 use std::path::Path;
 use tracing::{info, warn};
 
@@ -211,9 +211,6 @@ impl SessionCompactor {
             };
             if insert_ok {
                 d0_created += 1;
-                self.metrics
-                    .d0_summaries_created
-                    .fetch_add(1, Ordering::Relaxed);
 
                 let raw_content: String = chunk
                     .iter()
@@ -256,11 +253,6 @@ impl SessionCompactor {
             d1_created = self
                 .try_condense(&session_id, &agent_id, 0, 1, self.config.d1_min_fanout)
                 .await?;
-            if d1_created > 0 {
-                self.metrics
-                    .d1_condensations
-                    .fetch_add(u64::from(d1_created), Ordering::Relaxed);
-            }
         }
 
         let mut d2_created = 0u32;
@@ -272,11 +264,6 @@ impl SessionCompactor {
                 d2_created = self
                     .try_condense(&session_id, &agent_id, 1, 2, self.config.d2_min_fanout)
                     .await?;
-                if d2_created > 0 {
-                    self.metrics
-                        .d2_condensations
-                        .fetch_add(u64::from(d2_created), Ordering::Relaxed);
-                }
             }
         }
 

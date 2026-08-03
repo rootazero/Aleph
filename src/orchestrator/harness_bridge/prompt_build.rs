@@ -754,9 +754,16 @@ async fn resolve_prompt_context(
     // checkout. `repo_root` resolution is cached per directory (no `git`
     // subprocess); the branch is re-read from `.git/HEAD` on every render so a
     // mid-session `checkout` shows up next turn.
+    // `envelope.serving_model` is the model actually answering this turn, as
+    // resolved by `runner_impl` (serving-model hint → routing model id →
+    // provider name). `provider.name()` is NOT usable here and was the bug:
+    // every production `llm` is a `FailoverProvider`, so it rendered the
+    // literal `model=failover` in the one block whose purpose is to state
+    // facts the model cannot otherwise know. The fallback keeps the old
+    // behaviour only for dispatch paths that resolve no model at all.
     resolved_context.runtime_context =
         Some(crate::thinker::runtime_context::RuntimeContext::collect_in(
-            provider.name(),
+            envelope.serving_model.as_deref().unwrap_or(provider.name()),
             envelope.cwd.as_deref(),
         ));
     // Populate runtime-state fragments from the tool catalog's

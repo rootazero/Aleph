@@ -18,7 +18,7 @@
 
 use serde::Serialize;
 
-use super::alias::canonicalize_model_id;
+use super::alias::{canonicalize_model_id, prefix_matches};
 
 /// Capability metadata for one model family.
 ///
@@ -1042,7 +1042,7 @@ pub fn capabilities_for(model: &str) -> Option<ModelCapabilities> {
     let canon = canonicalize_model_id(model);
     CAPABILITY_TABLE
         .iter()
-        .find(|(prefix, _)| canon.starts_with(prefix))
+        .find(|(prefix, _)| prefix_matches(&canon, prefix))
         .map(|(_, caps)| *caps)
 }
 
@@ -1138,12 +1138,17 @@ mod tests {
     /// matches, so a broad row above a specific one makes the specific row
     /// unreachable — it still compiles and still reads correctly, it just never
     /// runs. Table order is load-bearing and nothing else enforces it.
+    ///
+    /// Compared with [`prefix_matches`], the same predicate the lookup uses: a
+    /// guard on plain `starts_with` would be blind to separator-folded
+    /// shadowing (a `gpt-5-6` row hidden behind an earlier `gpt-5.6` one) and
+    /// would report a clean table while the lookup silently skipped a row.
     #[test]
     fn no_capability_row_is_shadowed_by_an_earlier_broader_prefix() {
         for (i, (later, _)) in CAPABILITY_TABLE.iter().enumerate() {
             for (earlier, _) in &CAPABILITY_TABLE[..i] {
                 assert!(
-                    !later.starts_with(earlier),
+                    !prefix_matches(later, earlier),
                     "{later:?} is unreachable — the earlier {earlier:?} row already \
                      prefix-matches it. Move the specific row above the broad one."
                 );
@@ -1478,6 +1483,43 @@ mod tests {
         // accepts image/video. The text-only M2.x family stays vision=false.
         assert!(capabilities_for("MiniMax-M3").unwrap().supports_vision);
         assert!(!capabilities_for("MiniMax-M2.7").unwrap().supports_vision);
+    }
+
+    /// Hosts disagree on how to spell a generation separator. Anthropic writes
+    /// `claude-opus-4-8`; GitHub Copilot writes `claude-opus-4.8` for the same
+    /// model. Both must reach the same row — the dotted spelling used to fall
+    /// past it to the broader `claude-opus-4` row and report a 200K window for
+    /// a 1M model, which silently mis-sizes every compaction decision on it.
+    #[test]
+    fn generation_separator_spelling_does_not_change_the_row() {
+        for (a, b) in [
+            ("claude-opus-4.8", "claude-opus-4-8"),
+            ("claude-sonnet-4.6", "claude-sonnet-4-6"),
+            ("claude-haiku-4.5", "claude-haiku-4-5"),
+            // ...and the mirror image: a table written in the vendor's dotted
+            // spelling must stay reachable from a relay's dashed one.
+            ("gpt-5-6", "gpt-5.6"),
+            ("glm-5-2", "glm-5.2"),
+            ("gemini-2-5-pro", "gemini-2.5-pro"),
+        ] {
+            assert_eq!(
+                capabilities_for(a),
+                capabilities_for(b),
+                "{a} and {b} name the same model"
+            );
+        }
+    }
+
+    /// A dashed host spelling of a dotted generation must land on the *specific*
+    /// row, not the family fallback. `llama-3-3-70b-instruct` resolved to the
+    /// generic `llama-3` row before separator folding.
+    #[test]
+    fn dashed_host_spelling_reaches_the_specific_generation_row() {
+        assert_eq!(
+            capabilities_for("llama-3-3-70b-instruct"),
+            capabilities_for("llama-3.3"),
+        );
+        assert_ne!(capabilities_for("llama-3.3"), capabilities_for("llama-3"));
     }
 
     #[test]

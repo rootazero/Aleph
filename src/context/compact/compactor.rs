@@ -182,11 +182,13 @@ pub struct ContextCompactor {
     /// preflight passes pruning differently) is a miss that falls through to
     /// a full recompaction.
     cache: Mutex<Option<CompactionCache>>,
-    /// Agent id for scoping cache-watchdog resets (`CacheMonitor` keys its
-    /// consecutive-miss counters per agent; a compaction here must reset only
-    /// THIS agent's streak, not mute every other agent's watchdog). `None`
+    /// Watchdog scope for compaction resets — build it with
+    /// [`cache_scope`](crate::thinker::prompt_builder::cache_monitor::cache_scope),
+    /// which is `(agent, session)` because the provider's prompt-cache prefix
+    /// is per conversation. A compaction here must reset only THIS
+    /// conversation's streak, not mute every other one's watchdog. `None`
     /// (bare `new()`) falls back to the monitor's global reset.
-    monitor_agent: Option<String>,
+    monitor_scope: Option<String>,
     /// Cross-run carry-over key (the session key). The compactor itself is
     /// constructed fresh per run, which used to discard the fingerprint cache
     /// at every run boundary — a long high-pressure conversation then paid a
@@ -209,18 +211,32 @@ impl ContextCompactor {
             summary_reuse: None,
             cheap_provider: None,
             cache: Mutex::new(None),
-            monitor_agent: None,
+            monitor_scope: None,
             carryover_key: None,
         }
     }
 
-    /// Scope cache-watchdog compaction resets to `agent_id` (see
-    /// [`CacheMonitor::notify_compaction`]).
+    /// Scope cache-watchdog compaction resets to `scope` (see
+    /// [`CacheMonitor::notify_compaction`]). Callers build `scope` through
+    /// [`cache_scope`](crate::thinker::prompt_builder::cache_monitor::cache_scope)
+    /// so it matches the key `MeteringProvider` records under.
     ///
     /// [`CacheMonitor::notify_compaction`]: crate::thinker::prompt_builder::cache_monitor::CacheMonitor::notify_compaction
-    pub fn with_monitor_agent(mut self, agent_id: impl Into<String>) -> Self {
-        self.monitor_agent = Some(agent_id.into());
+    pub fn with_monitor_scope(mut self, scope: impl Into<String>) -> Self {
+        self.monitor_scope = Some(scope.into());
         self
+    }
+
+    /// The scope this compactor resets its watchdog under, if any.
+    ///
+    /// Test-only: it exists so a construction site can assert the scoping
+    /// actually arrived, rather than asserting that `with_monitor_scope` was
+    /// called. An unscoped reset is silent — it mutes the prefix watchdog for
+    /// every other conversation in the process and nothing observable changes.
+    #[cfg(test)]
+    #[must_use]
+    pub fn monitor_scope(&self) -> Option<&str> {
+        self.monitor_scope.as_deref()
     }
 
     /// Enable cross-run fingerprint-cache carry-over keyed by `session_key`.
@@ -304,7 +320,7 @@ impl ContextCompactor {
             CompactStrategy::Skipped { .. } | CompactStrategy::CacheReuse
         ) {
             crate::thinker::prompt_builder::cache_monitor::global_cache_monitor()
-                .notify_compaction(self.monitor_agent.as_deref());
+                .notify_compaction(self.monitor_scope.as_deref());
         }
         Ok(result)
     }

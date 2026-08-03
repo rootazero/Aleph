@@ -291,6 +291,9 @@ pub async fn handle_list(
             "due_now": q.due_now,
             "oldest_age_secs": q.oldest_age_secs,
             "dead_lettered": q.dead_lettered,
+            // Redrive only replays failures that are provably not duplicates,
+            // so the count that matters to "can I get these back?" is this one.
+            "dead_lettered_replayable": q.dead_lettered_replayable,
             "per_channel": per_channel,
         })
     });
@@ -900,8 +903,6 @@ pub async fn handle_health(
     }
 }
 
-/// Handle `channels.dead_letters` RPC request.
-///
 #[cfg(test)]
 mod tests {
     use super::*;

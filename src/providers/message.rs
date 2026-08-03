@@ -366,7 +366,7 @@ impl ContentBlock {
 ///
 /// 1. Normalizes the tool-call/tool-result pairing invariant (see
 ///    [`normalize_tool_pairs`]) — the wire-level safety net that every provider
-///    call passes through (`providers::bridge`).
+///    call passes through.
 /// 2. Normalizes cross-model content (no-op for now, reserved for thinking signatures)
 #[must_use]
 pub fn transform_messages(

@@ -1,4 +1,4 @@
-use super::{CompactorMetrics, SessionCompactor, SessionCompactorConfig};
+use super::{SessionCompactor, SessionCompactorConfig};
 use crate::memory::store::MemoryBackend;
 use crate::providers::AiProvider;
 use crate::sync_primitives::Arc;
@@ -10,7 +10,6 @@ impl SessionCompactor {
             database,
             provider: None,
             config,
-            metrics: Arc::new(CompactorMetrics::default()),
             indexer: None,
             raw_memory_writer: None,
             capture_registry: None,
@@ -25,12 +24,6 @@ impl SessionCompactor {
     pub const fn with_project_scoping(mut self, enabled: bool) -> Self {
         self.project_scoped = enabled;
         self
-    }
-
-    /// Return a reference to the compactor metrics.
-    #[must_use]
-    pub const fn metrics(&self) -> &Arc<CompactorMetrics> {
-        &self.metrics
     }
 
     /// Attach an AI provider for LLM-based summary generation.

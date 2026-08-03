@@ -9,6 +9,7 @@
 
 use std::hash::{Hash, Hasher};
 
+use crate::context::budget::pressure::chars_for_token_budget;
 use crate::providers::message::{ContentBlock, UnifiedMessage};
 
 /// Per-tool-result character budget for the advisory copy. The acting
@@ -16,13 +17,93 @@ use crate::providers::message::{ContentBlock, UnifiedMessage};
 /// disposable advisory view.
 pub(crate) const TOOL_RESULT_BUDGET: usize = 4000;
 
-/// Whole-view character budget (round-6 G3). Per-result truncation alone
-/// leaves the view growing without bound across a long agentic run; an
-/// advisor on a smaller-context model than the aggregator then 4xx's on every
-/// later iteration and MoA silently stops working in exactly the scenario it
-/// exists for. This is a guardrail against a hard failure, not a tuning knob —
-/// hence a constant, like [`TOOL_RESULT_BUDGET`], rather than config surface.
+/// Whole-view character CEILING (round-6 G3, demoted to a ceiling in round-8).
+///
+/// Per-result truncation alone leaves the view growing without bound across a
+/// long agentic run; an advisor on a smaller-context model than the aggregator
+/// then 4xx's on every later iteration and MoA silently stops working in
+/// exactly the scenario it exists for.
+///
+/// Round-6 answered that with this one flat number for every advisor. Round-8
+/// derives the real budget from the advisor's own context window
+/// ([`view_budget_chars`]) and keeps this as the upper bound: a million-token
+/// advisor consulted on every tool iteration is a cost problem even when it
+/// would technically fit. Not config surface — a guardrail, like
+/// [`TOOL_RESULT_BUDGET`].
 pub(crate) const ADVISORY_VIEW_BUDGET: usize = 120_000;
+
+/// Fraction of an advisor's context window deliberately left unbudgeted.
+///
+/// [`chars_for_token_budget`] is a content-ratio heuristic, and providers
+/// tokenize code/JSON-heavy transcripts less favourably than it assumes. The
+/// cost of guessing high is the exact 4xx this budget exists to prevent, so
+/// the slack is one-sided on purpose.
+const VIEW_SAFETY_FRACTION: f64 = 0.10;
+
+/// Output headroom reserved inside the advisor's window when the preset does
+/// not cap advisor output — roughly one long-form advisory answer.
+const DEFAULT_ADVISOR_OUTPUT_RESERVE_TOKENS: u32 = 8_192;
+
+/// Headroom for the advisor system prompt plus the tool roster, which ride
+/// outside the view (`RequestPayload::with_system`) but inside the window.
+/// [`ADVISOR_SYSTEM_PROMPT`] + `ROSTER_TOTAL_BUDGET` is ~3.4 K chars.
+///
+/// [`ADVISOR_SYSTEM_PROMPT`]: super::prompts::ADVISOR_SYSTEM_PROMPT
+const ADVISOR_SYSTEM_RESERVE_TOKENS: u32 = 1_024;
+
+/// Floor under the derived budget. A mis-catalogued or genuinely tiny window
+/// must still leave a view worth sending — an advisor that sees three stub
+/// messages gives worse advice than one that sees a short but real transcript,
+/// and the provider's own error is a better signal than us pre-emptying it.
+const MIN_VIEW_TOKENS: u32 = 2_000;
+
+/// Characters of view text sampled to detect the content ratio.
+///
+/// Taken from the HEAD of the view, which is stable across a run (the advisory
+/// view is append-only and is rebuilt from the untouched transcript every
+/// iteration), so the derived budget does not oscillate mid-run and perturb
+/// the fan-out cache key.
+const RATIO_SAMPLE_CHARS: usize = 8_192;
+
+/// How many characters of advisory view fit inside `window_tokens`.
+///
+/// `window_tokens` is the SMALLEST context window among the preset's advisors
+/// — one view is built per turn and shared by the whole fan-out (one
+/// signature, one cache entry, one stable prompt prefix), so it has to fit the
+/// weakest link. Resolving it is a plain catalogue lookup
+/// ([`resolve_context_window`]); this function only does the arithmetic.
+///
+/// Content-aware by construction: the same token budget buys ~3.5 chars per
+/// token of English prose but ~1 of CJK, so a flat character constant
+/// over-allocates a Chinese conversation by ~3.5x — which is the 4xx this
+/// budget exists to prevent, in the language its user is speaking.
+///
+/// [`resolve_context_window`]: crate::providers::model_catalog::resolve_context_window
+pub(crate) fn view_budget_chars(
+    view: &[UnifiedMessage],
+    window_tokens: u32,
+    advisor_max_tokens: Option<u32>,
+) -> usize {
+    let reserve = advisor_max_tokens
+        .unwrap_or(DEFAULT_ADVISOR_OUTPUT_RESERVE_TOKENS)
+        .saturating_add(ADVISOR_SYSTEM_RESERVE_TOKENS);
+    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+    let after_safety = (f64::from(window_tokens) * (1.0 - VIEW_SAFETY_FRACTION)) as u32;
+    let usable = after_safety.saturating_sub(reserve).max(MIN_VIEW_TOKENS);
+
+    let mut sample = String::new();
+    'outer: for msg in view {
+        for block in msg.content_blocks() {
+            if let ContentBlock::Text { text, .. } = block {
+                sample.push_str(text);
+                if sample.chars().count() >= RATIO_SAMPLE_CHARS {
+                    break 'outer;
+                }
+            }
+        }
+    }
+    chars_for_token_budget(&sample, usable as usize).min(ADVISORY_VIEW_BUDGET)
+}
 
 /// Per-message allowance once [`ADVISORY_VIEW_BUDGET`] is exhausted. Older
 /// messages shrink to a head+tail preview at this size rather than
@@ -651,6 +732,81 @@ mod tests {
         assert_ne!(
             view_signature(&build_advisory_view(&base)),
             view_signature(&build_advisory_view(&with_image))
+        );
+    }
+
+    fn prose_view(chars: usize) -> Vec<UnifiedMessage> {
+        build_advisory_view(&[UnifiedMessage::user("word ".repeat(chars / 5))])
+    }
+
+    #[test]
+    fn budget_scales_with_the_advisor_window() {
+        let view = prose_view(50_000);
+        let small = view_budget_chars(&view, 16_000, None);
+        let large = view_budget_chars(&view, 200_000, None);
+        assert!(
+            small < large,
+            "a 16 K-window advisor must get a smaller view than a 200 K one \
+             ({small} vs {large})"
+        );
+        // The old flat constant is now a ceiling, not the answer.
+        assert!(small < ADVISORY_VIEW_BUDGET);
+    }
+
+    #[test]
+    fn budget_never_exceeds_the_ceiling_however_large_the_window() {
+        // A million-token advisor consulted on every tool iteration is a cost
+        // problem even when the view would technically fit.
+        let view = prose_view(10_000);
+        assert_eq!(
+            view_budget_chars(&view, 1_050_000, None),
+            ADVISORY_VIEW_BUDGET
+        );
+    }
+
+    #[test]
+    fn budget_is_content_aware_so_cjk_is_not_over_allocated() {
+        // The same token budget buys ~3.5 chars per token of English prose but
+        // ~1 of CJK. A flat character budget over-allocates a Chinese
+        // conversation ~3.5x — i.e. the exact 4xx this budget prevents, in the
+        // language its user is speaking.
+        let latin = build_advisory_view(&[UnifiedMessage::user("word ".repeat(4_000))]);
+        let cjk = build_advisory_view(&[UnifiedMessage::user("顾问视图预算".repeat(4_000))]);
+        let latin_budget = view_budget_chars(&latin, 64_000, None);
+        let cjk_budget = view_budget_chars(&cjk, 64_000, None);
+        assert!(
+            cjk_budget < latin_budget,
+            "CJK must be budgeted fewer characters for the same window \
+             ({cjk_budget} vs {latin_budget})"
+        );
+    }
+
+    #[test]
+    fn budget_reserves_output_headroom_and_never_collapses_to_nothing() {
+        let view = prose_view(10_000);
+        // A generous advisor output cap eats into the input budget...
+        let capped = view_budget_chars(&view, 32_000, Some(16_000));
+        let uncapped = view_budget_chars(&view, 32_000, None);
+        assert!(capped < uncapped, "{capped} vs {uncapped}");
+        // ...but a pathological window/reserve combination still leaves a view
+        // worth sending: the provider's own error beats us pre-emptying it.
+        let squeezed = view_budget_chars(&view, 1_000, Some(60_000));
+        assert!(squeezed > 0, "budget collapsed to {squeezed}");
+    }
+
+    #[test]
+    fn budget_is_stable_as_the_view_grows_within_a_run() {
+        // The ratio sample is taken from the HEAD of the view, which is
+        // append-only across a run, so the derived budget does not oscillate
+        // mid-run and perturb the fan-out cache key.
+        let short = build_advisory_view(&[UnifiedMessage::user("word ".repeat(3_000))]);
+        let grown = build_advisory_view(&[
+            UnifiedMessage::user("word ".repeat(3_000)),
+            UnifiedMessage::assistant("word ".repeat(9_000)),
+        ]);
+        assert_eq!(
+            view_budget_chars(&short, 64_000, None),
+            view_budget_chars(&grown, 64_000, None)
         );
     }
 }

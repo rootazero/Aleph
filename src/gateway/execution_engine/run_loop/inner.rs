@@ -1248,6 +1248,12 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
                     session_mode: Some(session_mode),
                     // rust-doctor-disable-next-line excessive-clone
                     cwd: Some(effective_workspace.clone()),
+                    //   - `serving_model` is NOT resolvable here: which model
+                    //     actually answers is decided after the provider chain
+                    //     is built. `runner_impl` fills it in from the same
+                    //     `gauge_model` the context gauge and cost estimate
+                    //     use, so all three agree.
+                    serving_model: None,
                 },
                 // This turn's explicit model pick. Cloned because the request is
                 // rebuilt on each retry iteration of the enclosing loop.

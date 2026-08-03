@@ -24,7 +24,7 @@ use crate::providers::message::UnifiedMessage;
 use crate::providers::protocols::anthropic::provider_policy::strip_cache_control;
 use crate::thinker::prompt_builder::SystemPromptPart;
 
-use super::helpers::build_body;
+use super::helpers::{build_body, marker_count};
 
 fn official_config() -> ProviderConfig {
     let mut config = ProviderConfig::test_config("claude-3-5-sonnet");
@@ -63,18 +63,6 @@ fn normalize_message_content(messages: &mut serde_json::Value) {
         if let serde_json::Value::String(s) = content {
             *content = serde_json::json!([{ "type": "text", "text": std::mem::take(s) }]);
         }
-    }
-}
-
-/// Count `cache_control` markers anywhere in a JSON value.
-fn marker_count(value: &serde_json::Value) -> usize {
-    match value {
-        serde_json::Value::Object(map) => {
-            usize::from(map.contains_key("cache_control"))
-                + map.values().map(marker_count).sum::<usize>()
-        }
-        serde_json::Value::Array(items) => items.iter().map(marker_count).sum(),
-        _ => 0,
     }
 }
 
@@ -235,5 +223,130 @@ fn tools_serialization_is_byte_stable_across_turns() {
     assert_eq!(
         body1["tools"], body2["tools"],
         "tool schema serialization must be byte-stable across turns"
+    );
+}
+
+/// `ToolChoice::None` must disable tool use WITHOUT dropping the tools array.
+///
+/// Anthropic builds its cache prefix tools → system → messages, so a request
+/// that omits the array shares no prefix with the conversation's other calls.
+/// The one production caller is the boundary grace turn, which fires right
+/// after a turn that warmed the prefix and replays the entire history — exactly
+/// the request that can least afford to re-bill it. Dropping the array is what
+/// made the grace path's own "this turns into a cache hit" comment impossible.
+#[test]
+fn tool_choice_none_keeps_the_tools_array_in_the_prefix() {
+    use crate::providers::adapter::ToolChoice;
+    use crate::tool_metadata::{ToolCategory, ToolDefinition};
+
+    let config = official_config();
+    let tools = [ToolDefinition::new(
+        "file_read",
+        "Read a file",
+        serde_json::json!({"type": "object", "properties": {"path": {"type": "string"}}}),
+        ToolCategory::Builtin,
+    )];
+    let msgs = [UnifiedMessage::user("hi")];
+    let parts = system_parts("time=2026-08-03T10");
+
+    let acting = RequestPayload::new(&msgs)
+        .with_system_blocks(Some(&parts))
+        .with_tools(Some(&tools));
+    let salvaging = RequestPayload::new(&msgs)
+        .with_system_blocks(Some(&parts))
+        .with_tools(Some(&tools))
+        .with_tool_choice(Some(ToolChoice::None));
+
+    let acting_body = build_body(&acting, &config);
+    let salvaging_body = build_body(&salvaging, &config);
+
+    assert_eq!(
+        acting_body["tools"], salvaging_body["tools"],
+        "the grace turn must share the acting turn's tools prefix"
+    );
+    assert_eq!(
+        salvaging_body["tool_choice"],
+        serde_json::json!({"type": "none"}),
+        "tool use is disabled by tool_choice, not by deleting the array"
+    );
+}
+
+// ── the "no caching means no markers" gate ────────────────────────────────
+//
+// These replace a test that lived in `adapter/cache.rs` under the name
+// `build_request_retention_off_no_cache_control_anywhere` and never called
+// `build_request` — it cloned a hand-written payload and asserted the clone
+// equalled the original. It was green, it could not fail under any
+// regression, and its greenness is why a real wire defect survived the
+// dedicated cache-hardening round: `SystemBlock::cached_text` stamps the
+// stable system block unconditionally, long before retention is consulted, so
+// `off` still shipped a marker and still paid `cache_creation` at 1.25x.
+//
+// Both tests below drive the real `build_request` and must use
+// `with_system_blocks` — the legacy `with_system` path routes to
+// `SystemBlock::text`, carries no pre-placed marker, and would pass green
+// while never touching the defect.
+
+/// `cache_retention = "off"` must mean what its config doc says: no
+/// `cache_control` anywhere on the request, pre-placed markers included.
+#[test]
+fn retention_off_strips_the_preplaced_system_marker() {
+    let mut config = official_config();
+    config.cache_retention = Some(crate::config::types::provider::CacheRetention::Off);
+
+    let msgs = [UnifiedMessage::user("hi")];
+    let parts = system_parts("time=2026-07-17T10");
+    let payload = RequestPayload::new(&msgs).with_system_blocks(Some(&parts));
+
+    let body = build_body(&payload, &config);
+    assert_eq!(
+        marker_count(&body),
+        0,
+        "retention=off must ship zero cache_control markers, but the stable \
+         system block is stamped by split_system_blocks_for_cache before the \
+         retention gate is reached: {body}"
+    );
+}
+
+/// An endpoint that does not advertise `supports_cache_control` must not
+/// receive markers either — strict-schema Anthropic-compatible proxies reject
+/// the whole request. That failure was observed once, on Kimi, and was patched
+/// with a hardcoded per-host strip; the gate now covers every such endpoint,
+/// so the next one does not need its own branch.
+#[test]
+fn endpoint_without_cache_capability_strips_markers() {
+    let mut config = ProviderConfig::test_config("claude-3-5-sonnet");
+    config.api_key = Some("test-key".to_string());
+    // Any non-official, non-Bedrock/Azure host classifies as Custom, whose
+    // capability default is supports_cache_control = false.
+    config.base_url = Some("https://proxy.example.com".to_string());
+
+    let msgs = [UnifiedMessage::user("hi")];
+    let parts = system_parts("time=2026-07-17T10");
+    let payload = RequestPayload::new(&msgs).with_system_blocks(Some(&parts));
+
+    let body = build_body(&payload, &config);
+    assert_eq!(
+        marker_count(&body),
+        0,
+        "a Custom endpoint declares supports_cache_control=false; no marker \
+         may reach it: {body}"
+    );
+}
+
+/// The gate must not over-reach: the official endpoint at default retention
+/// still gets its breakpoints. Without this, "strip everything" would pass
+/// both tests above while destroying the cache entirely.
+#[test]
+fn official_endpoint_default_retention_still_marks() {
+    let config = official_config();
+    let msgs = [UnifiedMessage::user("hi")];
+    let parts = system_parts("time=2026-07-17T10");
+    let payload = RequestPayload::new(&msgs).with_system_blocks(Some(&parts));
+
+    let body = build_body(&payload, &config);
+    assert!(
+        marker_count(&body) > 0,
+        "default retention on the official host must still place breakpoints"
     );
 }

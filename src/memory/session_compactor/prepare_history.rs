@@ -5,7 +5,6 @@ use crate::gateway::agent_instance::AgentInstance;
 use crate::gateway::router::SessionKey;
 use crate::memory::store::raw_memory::RawMemoryStore;
 use crate::providers::message::UnifiedMessage;
-use crate::sync_primitives::Ordering;
 use crate::thinker::xml_util::escape_xml_attr;
 use tracing::{debug, warn};
 
@@ -30,9 +29,6 @@ impl SessionCompactor {
         token_budget: u64,
         hooks: Option<&HookExecutor>,
     ) -> Vec<UnifiedMessage> {
-        self.metrics
-            .prepare_history_calls
-            .fetch_add(1, Ordering::Relaxed);
         tracing::info!(target: "session_compactor", "prepare");
 
         if !self.config.enabled {

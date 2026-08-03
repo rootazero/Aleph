@@ -663,11 +663,26 @@ fn MessageBubble(message: ChatMessage, clock: String) -> impl IntoView {
             if money.is_none() && tokens.is_none() {
                 return None;
             }
+            // Prefix reuse is the one cache number a user can act on: a session
+            // that keeps re-creating its prefix is paying 1.25x for history it
+            // already sent. Shown cumulatively as well as per-run, because the
+            // first run of any session necessarily reads 0%.
+            let cache = match (cost.prefix_reuse(), chat.session_prefix_reuse()) {
+                (Some(run), Some(session)) => format!(
+                    " · cache {} read / {} created · prefix reuse {:.0}% (session {:.0}%)",
+                    cost.cache_read_tokens,
+                    cost.cache_creation_tokens,
+                    run * 100.0,
+                    session * 100.0
+                ),
+                _ => String::new(),
+            };
             let title = format!(
-                "input {} · output {} · total {} tokens{}",
+                "input {} · output {} · total {} tokens{}{}",
                 cost.input_tokens,
                 cost.output_tokens,
                 cost.total_tokens,
+                cache,
                 if cost.is_exact() {
                     String::new()
                 } else {

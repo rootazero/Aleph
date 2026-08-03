@@ -454,6 +454,11 @@ fn apply_run_cost(chat: ChatState, run_id: &str, summary: &serde_json::Value) {
             total_tokens,
             input_tokens: field("input"),
             output_tokens: field("output"),
+            // Same object, same wire shape — these two were simply not read,
+            // which left the panel unable to say whether a session was
+            // re-billing its history at `cache_creation`.
+            cache_read_tokens: field("cache_read"),
+            cache_creation_tokens: field("cache_creation"),
         },
     );
 }

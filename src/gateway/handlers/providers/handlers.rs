@@ -161,11 +161,16 @@ async fn update_provider_inner(
             );
         }
 
-        // Convert JSON config to ProviderConfig
+        // Convert JSON config to ProviderConfig. The stored entry is the
+        // baseline so fields the DTO cannot carry (cache_retention,
+        // stop_sequences, thinking_level, service_tier, effort, …) survive an
+        // edit to an unrelated field.
+        let prior = cfg.providers.get(&params.name).cloned();
         let mut provider_config = build_provider_config_for_persistence(
             &params.name,
             params.config,
             &cfg.presets_override,
+            prior.as_ref(),
         );
 
         // Store new API key in vault if provided; otherwise vault retains the old one
@@ -293,11 +298,14 @@ async fn create_provider_inner(
             );
         }
 
-        // Convert JSON config to ProviderConfig
+        // Convert JSON config to ProviderConfig. `create` has no prior entry
+        // (the guard above rejects an existing name), so there is nothing to
+        // carry forward.
         let mut provider_config = build_provider_config_for_persistence(
             &params.name,
             params.config,
             &cfg.presets_override,
+            None,
         );
 
         // Store API key in vault (then clear from config so it's never persisted)

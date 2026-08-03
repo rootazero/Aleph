@@ -268,7 +268,12 @@ mod tests {
     fn context_triple_is_all_or_nothing_and_follows_the_config() {
         let llm: Arc<dyn AiProvider> = Arc::new(crate::providers::mock::MockProvider::new("ok"));
 
-        let (budget, compactor, preflight) = super::super::build_context_triple(None, &llm);
+        let (budget, compactor, preflight) = super::super::build_context_triple(
+            None,
+            &llm,
+            "child-agent",
+            &ephemeral_for("child-agent"),
+        );
         assert!(
             budget.is_none() && compactor.is_none() && preflight.is_none(),
             "no [context_budget] config → child stays unmanaged, like the main harness",
@@ -285,11 +290,27 @@ mod tests {
             diminishing_threshold: 500,
             max_splits: 3,
         };
-        let (budget, compactor, preflight) = super::super::build_context_triple(Some(&cfg), &llm);
+        let child_id = ephemeral_for("child-agent");
+        let (budget, compactor, preflight) =
+            super::super::build_context_triple(Some(&cfg), &llm, "child-agent", &child_id);
         assert!(
             budget.is_some() && compactor.is_some() && preflight.is_some(),
             "a configured child must get budget AND compactor AND preflight — \
              any one missing is the gap this test exists for",
+        );
+        assert_eq!(
+            compactor.as_ref().and_then(|c| c.monitor_scope()),
+            Some(
+                crate::thinker::prompt_builder::cache_monitor::cache_scope(
+                    "child-agent",
+                    Some(&child_id.to_key_string())
+                )
+                .as_str()
+            ),
+            "the child's compactor must scope its cache-watchdog reset to its OWN \
+             conversation — an unscoped reset zeroes every other agent's miss streak \
+             in a swarm, and an agent-only scope zeroes its own siblings', which in a \
+             fan-out are all the same agent id",
         );
     }
 

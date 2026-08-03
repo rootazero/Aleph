@@ -37,7 +37,7 @@ pub mod record;
 #[cfg(test)]
 mod drift_tests;
 
-pub use alias::{canonical_provider_id, canonicalize_model_id, infer_vendor};
+pub use alias::{canonical_provider_id, canonicalize_model_id, infer_vendor, prefix_matches};
 pub use capabilities::{
     capabilities_for, resolve_context_window, resolve_context_window_with_override,
     ModelCapabilities, CONSERVATIVE_CONTEXT_WINDOW,

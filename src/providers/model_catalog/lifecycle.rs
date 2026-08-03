@@ -50,7 +50,7 @@
 
 use serde::Serialize;
 
-use super::alias::canonicalize_model_id;
+use super::alias::{canonicalize_model_id, prefix_matches};
 
 /// Vendor lifecycle state of a model family.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -338,7 +338,7 @@ pub fn lifecycle_for(provider: Option<&str>, model: &str) -> ModelLifecycle {
             LIFECYCLE_TABLE.iter().find(|row| {
                 row.provider
                     .is_some_and(|scope| scope.eq_ignore_ascii_case(p))
-                    && canon.starts_with(row.prefix)
+                    && prefix_matches(&canon, row.prefix)
             })
         });
     if let Some(row) = scoped {
@@ -346,7 +346,7 @@ pub fn lifecycle_for(provider: Option<&str>, model: &str) -> ModelLifecycle {
     }
     if let Some(row) = LIFECYCLE_TABLE
         .iter()
-        .find(|row| row.provider.is_none() && canon.starts_with(row.prefix))
+        .find(|row| row.provider.is_none() && prefix_matches(&canon, row.prefix))
     {
         return row.life;
     }
@@ -482,6 +482,59 @@ mod tests {
         // preset's own aux model.
         assert!(!lifecycle_for(Some("minimax"), "MiniMax-M2.7").is_deprecated());
         assert!(!lifecycle_for(None, "MiniMax-M2.7").is_deprecated());
+    }
+
+    /// Prefix-shadow guard for the retirement table — the one prefix table that
+    /// never had one. Lookup takes the first matching row *within a scope*
+    /// (provider-scoped rows first, then vendor-wide), so declaration order is
+    /// load-bearing per scope: a broad row above a specific one leaves the
+    /// specific one unreachable, and the symptom is a model that keeps being
+    /// offered with the wrong successor rather than any kind of failure.
+    ///
+    /// Buckets by scope for exactly that reason: a `groq` row cannot shadow a
+    /// `github-copilot` row, so comparing across scopes would reject correct
+    /// tables. Uses [`prefix_matches`], the lookup's own predicate.
+    #[test]
+    fn no_lifecycle_row_is_shadowed_by_an_earlier_broader_prefix_in_its_scope() {
+        let same_scope = |a: Option<&str>, b: Option<&str>| match (a, b) {
+            (Some(x), Some(y)) => x.eq_ignore_ascii_case(y),
+            (None, None) => true,
+            _ => false,
+        };
+        for (i, later) in LIFECYCLE_TABLE.iter().enumerate() {
+            for earlier in &LIFECYCLE_TABLE[..i] {
+                if !same_scope(later.provider, earlier.provider) {
+                    continue;
+                }
+                assert!(
+                    !prefix_matches(later.prefix, earlier.prefix),
+                    "{:?} scope {:?}: unreachable — the earlier {:?} row already \
+                     prefix-matches it. Move the specific row above the broad one.",
+                    later.prefix,
+                    later.provider,
+                    earlier.prefix
+                );
+            }
+        }
+    }
+
+    /// Retirement rows are recorded in the spelling the host itself publishes —
+    /// Copilot's roster is dotted. A relay handing us the dashed spelling of the
+    /// same id must still be seen as retired, or `select_model` cheerfully dials
+    /// a model the host stopped serving.
+    #[test]
+    fn generation_separator_spelling_does_not_change_the_row() {
+        let dashed = lifecycle_for(Some("github-copilot"), "gpt-5-4-mini");
+        let dotted = lifecycle_for(Some("github-copilot"), "gpt-5.4-mini");
+        assert!(dashed.is_deprecated());
+        assert_eq!(dashed.successor, dotted.successor);
+
+        let dashed_gemini = lifecycle_for(Some("github-copilot"), "gemini-2-5-pro");
+        assert!(dashed_gemini.is_deprecated());
+        assert_eq!(
+            dashed_gemini.successor,
+            lifecycle_for(Some("github-copilot"), "gemini-2.5-pro").successor
+        );
     }
 
     #[test]

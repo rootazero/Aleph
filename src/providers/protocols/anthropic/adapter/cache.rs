@@ -114,6 +114,41 @@ pub(super) fn inject_cache_control_into_system_array(
     }
 }
 
+/// True for a message that exists only in *this* turn's rendered array and is
+/// regenerated — or absent — on the next one.
+///
+/// The harness appends up to four `<system-reminder>` nudges after the real
+/// history (`harness/agent/prompt.rs`: attempt summary, no-progress,
+/// gather budget, redundant calls). They are never persisted to
+/// `session_events`, so next turn those indices are occupied by the real
+/// assistant message and tool results the turn actually produced.
+///
+/// That matters here because the breakpoint budget is spent from the tail
+/// inwards. With three notices firing, all three message breakpoints would
+/// land on positions whose bytes cannot recur — every one of them a
+/// guaranteed miss, and precisely on the long failure-heavy runs that trigger
+/// the notices and have the most history to re-bill. Skipping them moves each
+/// breakpoint to the nearest real message instead. Anchoring a breakpoint
+/// *earlier* is always safe: it only shortens the cached span, never
+/// invalidates it.
+fn is_ephemeral_notice(msg: &serde_json::Value) -> bool {
+    if msg.get("role").and_then(|v| v.as_str()) != Some("user") {
+        return false;
+    }
+    let text = match msg.get("content") {
+        Some(serde_json::Value::String(s)) => s.as_str(),
+        Some(serde_json::Value::Array(blocks)) => match blocks.as_slice() {
+            [only] => match only.get("text").and_then(|v| v.as_str()) {
+                Some(t) => t,
+                None => return false,
+            },
+            _ => return false,
+        },
+        _ => return false,
+    };
+    text.trim_start().starts_with("<system-reminder>")
+}
+
 /// Inject `cache_control` into the trailing content block of up to
 /// `max_breakpoints` of the most-recent messages in `payload["messages"]`.
 ///
@@ -129,6 +164,10 @@ pub(super) fn inject_cache_control_into_system_array(
 /// blocks are all thinking-type is skipped and does not consume a breakpoint.
 /// A message that already carries a `cache_control` marker counts as one
 /// breakpoint and is left untouched, so the total never exceeds the budget.
+///
+/// Trailing *ephemeral* messages are skipped too, for the same reason and
+/// without consuming budget — see [`is_ephemeral_notice`]. A breakpoint is
+/// only worth spending on bytes that will still be at that index next turn.
 pub(super) fn inject_cache_control_into_recent_messages(
     payload: &mut serde_json::Value,
     cc: CacheControl,
@@ -148,6 +187,11 @@ pub(super) fn inject_cache_control_into_recent_messages(
     for msg in messages.iter_mut().rev() {
         if remaining == 0 {
             break;
+        }
+        // Never anchor a breakpoint on a message that will not be at this
+        // index next turn — the marker would be guaranteed dead on arrival.
+        if is_ephemeral_notice(msg) {
+            continue;
         }
         match msg.get_mut("content") {
             None | Some(serde_json::Value::Null) => {}
@@ -437,24 +481,19 @@ mod tests {
 
     // ── retention / header signaling ──────────────────────────────────────────
 
-    #[test]
-    fn build_request_retention_off_no_cache_control_anywhere() {
-        let mut config = crate::config::ProviderConfig::test_config("claude-3-5-sonnet");
-        config.cache_retention = Some(CacheRetention::Off);
-        let retention = effective_cache_retention(&config, "https://api.anthropic.com/v1/messages");
-        assert_eq!(retention, CacheRetention::Off);
-        let mut payload = serde_json::json!({
-            "system": [{"type": "text", "text": "sys"}],
-            "messages": [{"role": "user", "content": [{"type": "text", "text": "hi"}]}],
-        });
-        let snapshot = payload.clone();
-        // Off means build_request skips injection; payload unchanged.
-        assert_eq!(payload, snapshot);
-        // Sanity: injectors WOULD change it otherwise.
-        let cc = CacheControl::Ephemeral { ttl: None };
-        inject_cache_control_into_system_array(&mut payload, cc);
-        assert_ne!(payload, snapshot);
-    }
+    // NOTE: `build_request_retention_off_no_cache_control_anywhere` used to
+    // live here. It never called `build_request` — it cloned a hand-written
+    // payload and asserted the clone equalled the original, which no
+    // regression can falsify. Its surviving resolver assertion duplicated
+    // `effective_retention_explicit_off_always_off` above.
+    //
+    // The property it was named for is now asserted against the real wire in
+    // `adapter_tests::prefix_stability`
+    // (`retention_off_strips_the_preplaced_system_marker` and
+    // `endpoint_without_cache_capability_strips_markers`), which is where
+    // `build_body` and a `cache: true` system-block fixture are in scope. Both
+    // of those failed before the gate in `build_request` learned to strip
+    // pre-placed markers.
 
     #[test]
     fn long_ttl_implies_extended_cache_beta_token() {
@@ -463,5 +502,97 @@ mod tests {
         let retention = effective_cache_retention(&config, "https://api.anthropic.com/v1/messages");
         let extended_cache_ttl = matches!(retention, CacheRetention::Long);
         assert!(extended_cache_ttl, "Long retention must signal beta header");
+    }
+
+    // ── ephemeral <system-reminder> notices must not absorb breakpoints ──
+
+    #[test]
+    fn recent_messages_skips_trailing_system_reminders() {
+        // Shape of a failure-heavy turn: real history, then three harness
+        // nudges that are never persisted. All three breakpoints must land on
+        // the real messages, not on bytes that cannot exist next turn.
+        let mut payload = serde_json::json!({
+            "messages": [
+                {"role": "user", "content": [{"type": "text", "text": "m0"}]},
+                {"role": "assistant", "content": [{"type": "text", "text": "m1"}]},
+                {"role": "user", "content": [{"type": "text", "text": "m2"}]},
+                {"role": "user", "content": [{"type": "text", "text": "<system-reminder>\nattempt summary\n</system-reminder>"}]},
+                {"role": "user", "content": [{"type": "text", "text": "<system-reminder>\nno progress\n</system-reminder>"}]},
+                {"role": "user", "content": "<system-reminder>\ngather budget\n</system-reminder>"},
+            ]
+        });
+        inject_cache_control_into_recent_messages(
+            &mut payload,
+            CacheControl::Ephemeral { ttl: None },
+            3,
+        );
+        let msgs = payload["messages"].as_array().unwrap();
+        for (i, m) in msgs.iter().enumerate().take(3) {
+            assert!(
+                m["content"][0].get("cache_control").is_some(),
+                "real message {i} must carry a breakpoint"
+            );
+        }
+        for (i, m) in msgs.iter().enumerate().skip(3) {
+            assert_eq!(
+                marker_count_in(m),
+                0,
+                "ephemeral notice {i} must not absorb a breakpoint"
+            );
+        }
+    }
+
+    #[test]
+    fn ephemeral_predicate_ignores_non_reminder_user_turns() {
+        // A real user turn that merely mentions the tag is not ephemeral, and
+        // neither is a multi-block message.
+        let real = serde_json::json!({
+            "role": "user",
+            "content": [{"type": "text", "text": "why did <system-reminder> appear?"}]
+        });
+        assert!(!is_ephemeral_notice(&real));
+
+        let assistant = serde_json::json!({
+            "role": "assistant",
+            "content": [{"type": "text", "text": "<system-reminder>x</system-reminder>"}]
+        });
+        assert!(!is_ephemeral_notice(&assistant));
+
+        let multi = serde_json::json!({
+            "role": "user",
+            "content": [
+                {"type": "text", "text": "<system-reminder>x</system-reminder>"},
+                {"type": "text", "text": "and a real question"}
+            ]
+        });
+        assert!(!is_ephemeral_notice(&multi));
+    }
+
+    /// An all-ephemeral tail must not deadlock the walk or place markers.
+    #[test]
+    fn all_ephemeral_messages_place_no_breakpoints() {
+        let mut payload = serde_json::json!({
+            "messages": [
+                {"role": "user", "content": "<system-reminder>a</system-reminder>"},
+                {"role": "user", "content": "<system-reminder>b</system-reminder>"},
+            ]
+        });
+        inject_cache_control_into_recent_messages(
+            &mut payload,
+            CacheControl::Ephemeral { ttl: None },
+            3,
+        );
+        assert_eq!(cached_message_count(&payload), 0);
+    }
+
+    fn marker_count_in(value: &serde_json::Value) -> usize {
+        match value {
+            serde_json::Value::Object(map) => {
+                usize::from(map.contains_key("cache_control"))
+                    + map.values().map(marker_count_in).sum::<usize>()
+            }
+            serde_json::Value::Array(items) => items.iter().map(marker_count_in).sum(),
+            _ => 0,
+        }
     }
 }

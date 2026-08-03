@@ -1107,6 +1107,18 @@ impl ToolRegistry for BuiltinToolRegistry {
                 tool.call_json(arguments).await
             }),
 
+            // Channel outbox tool (deferred — same ChannelRegistry cell)
+            "channel_outbox" => Box::pin(async move {
+                let cr = self.channel_registry_cell.get().ok_or_else(|| {
+                    AlephError::tool(
+                        "channel_outbox not available: ChannelRegistry not yet injected",
+                    )
+                })?;
+                let tool =
+                    crate::builtin_tools::channel_outbox::ChannelOutboxTool::new(Arc::clone(cr));
+                tool.call_json(arguments).await
+            }),
+
             // Google Meet tool — forwards the action to the configured
             // out-of-core transport bridge over JSON-RPC.
             "google_meet" => {
@@ -1666,5 +1678,49 @@ mod recall_context_identity_tests {
             ..Default::default()
         })));
         assert_eq!(registry.caller_agent_id("fallback"), "bob");
+    }
+}
+
+#[cfg(test)]
+mod channel_tool_dispatch_tests {
+    use super::*;
+
+    /// Every `channel_*` tool advertised to the model must have a dispatch arm.
+    ///
+    /// The failure this guards is silent and one-sided: `optional_tools.rs`
+    /// registers the name + JSON schema (so the model sees the tool and calls
+    /// it), while dispatch lives in a *different* file's `match`. Miss the arm
+    /// and the call falls through to `_ =>` and returns "Unknown tool" — a
+    /// capability that is advertised, tested at the tool level, and
+    /// unreachable in production.
+    ///
+    /// Asserting on the *injection* error rather than success is deliberate:
+    /// it is the proof that the arm ran. A bare "did not error" would also
+    /// pass for a tool that never reached its arm at all.
+    #[tokio::test]
+    async fn advertised_channel_tools_reach_their_dispatch_arm() {
+        let _home = crate::utils::paths::IsolatedAlephHome::new();
+        let registry = BuiltinToolRegistry::new().await.unwrap();
+
+        for name in [
+            "channel_pairing",
+            "channel_message",
+            "channel_directory",
+            "channel_outbox",
+        ] {
+            let err = registry
+                .execute_tool(name, serde_json::json!({}))
+                .await
+                .expect_err("no ChannelRegistry is injected in this test");
+            let msg = err.to_string();
+            assert!(
+                !msg.contains("Unknown tool"),
+                "{name} is advertised to the model but has no dispatch arm: {msg}"
+            );
+            assert!(
+                msg.contains("ChannelRegistry not yet injected"),
+                "{name} should report the missing injection, got: {msg}"
+            );
+        }
     }
 }

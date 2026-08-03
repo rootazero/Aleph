@@ -64,7 +64,6 @@ const ENDPOINT_LOCAL_ALIASES: &[(&str, &str)] = &[(
     "kimi-for-coding subscription endpoint alias; no published window to record",
 )];
 
-
 fn is_uncatalogued(preset_id: &str) -> bool {
     UNCATALOGUED_FAMILIES.iter().any(|(id, _)| *id == preset_id)
 }
@@ -139,6 +138,31 @@ fn no_preset_defaults_to_a_retired_model() {
     assert!(
         stale.is_empty(),
         "presets defaulting to retired models: {stale:#?}"
+    );
+}
+
+/// A fallback chain is also the picker roster and the failover walk order, so
+/// a repeated id is a wasted retry and a duplicated menu line.
+///
+/// This is the shape a bad merge leaves behind: two revisions of the same
+/// chain concatenated rather than reconciled. That is exactly how the three
+/// Moonshot presets came to list `kimi-k3` and `kimi-k2.7-code` twice each and
+/// to resurrect the retired `kimi-k2.5` between them — `git` reported no
+/// conflict, because appending to a list is a clean textual merge.
+#[test]
+fn no_preset_repeats_a_fallback_model() {
+    let mut dupes = Vec::new();
+    for (name, preset) in PRESETS.iter() {
+        let mut seen = std::collections::HashSet::new();
+        for model in preset.fallback_models {
+            if !seen.insert(*model) {
+                dupes.push(format!("{name} → {model}"));
+            }
+        }
+    }
+    assert!(
+        dupes.is_empty(),
+        "duplicate entries in fallback chains: {dupes:#?}"
     );
 }
 
