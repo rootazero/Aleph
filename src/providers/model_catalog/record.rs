@@ -108,7 +108,9 @@ impl ModelRecord {
             capabilities: capabilities_for(model),
             cost: rate_card(provider, model),
             endpoint: endpoint_kind_for_base_url(base_url),
-            lifecycle: lifecycle_for(model),
+            // Retirement is scoped: some rows are one host's word about its own
+            // catalog, so the provider has to travel with the id.
+            lifecycle: lifecycle_for(Some(provider), model),
             source,
         }
     }
@@ -175,6 +177,71 @@ mod tests {
         let r = ModelRecord::resolve("deepseek", "deepseek-chat", None, ModelSource::Configured);
         assert!(r.lifecycle.is_deprecated());
         assert_eq!(r.lifecycle.successor, Some("deepseek-v4-flash"));
+    }
+
+    /// End-of-pipe check for the 2026-08 refresh: a table row is only worth
+    /// something if it arrives at the join point every surface reads. Each of
+    /// these is a model Aleph now advertises and previously had nothing on.
+    #[test]
+    fn refreshed_flagships_resolve_completely() {
+        for (provider, model, window) in [
+            ("anthropic", "claude-opus-5", 1_000_000),
+            ("moonshot", "kimi-k3", 1_048_576),
+            ("openai", "gpt-5.6-terra", 1_050_000),
+            ("cohere", "command-a-plus-05-2026", 128_000),
+            ("qianfan", "ernie-5.1", 128_000),
+            ("doubao", "doubao-seed-evolving", 1_024_000),
+            ("stepfun", "step-3.7-flash", 262_144),
+        ] {
+            let r = ModelRecord::resolve(provider, model, None, ModelSource::PresetDefault);
+            let caps = r
+                .capabilities
+                .unwrap_or_else(|| panic!("{provider}/{model} has no capability row"));
+            assert_eq!(
+                caps.context_window, window,
+                "{provider}/{model} window drifted"
+            );
+            assert!(
+                !r.lifecycle.is_deprecated(),
+                "{provider}/{model} is advertised but recorded as retired"
+            );
+        }
+    }
+
+    /// Retirement scope, seen from the surface that consumes it rather than
+    /// from the table. Groq dropped both Llama tiers; Together did not.
+    #[test]
+    fn host_scoped_retirement_reaches_the_record() {
+        let on_groq = ModelRecord::resolve(
+            "groq",
+            "llama-3.3-70b-versatile",
+            None,
+            ModelSource::Configured,
+        );
+        assert!(on_groq.lifecycle.is_deprecated());
+        assert_eq!(on_groq.lifecycle.successor, Some("openai/gpt-oss-120b"));
+
+        let on_together = ModelRecord::resolve(
+            "together",
+            "meta-llama/Llama-3.3-70B-Instruct-Turbo",
+            None,
+            ModelSource::Configured,
+        );
+        assert!(!on_together.lifecycle.is_deprecated());
+    }
+
+    /// Fireworks' `p` separator is only fixed if it survives the whole join —
+    /// both defaults used to arrive here with the wrong family's rate.
+    #[test]
+    fn fireworks_ids_join_against_their_own_rows() {
+        let r = ModelRecord::resolve(
+            "fireworks",
+            "accounts/fireworks/models/kimi-k2p6",
+            Some("https://api.fireworks.ai/inference/v1"),
+            ModelSource::PresetDefault,
+        );
+        assert_eq!(r.capabilities.unwrap().context_window, 262_144);
+        assert_eq!(r.cost.expect("k2p6 prices").input_per_mtok, Some(0.95));
     }
 
     #[test]
