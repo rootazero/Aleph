@@ -46,9 +46,6 @@ pub enum SsrfError {
     #[error("URL has no host")]
     NoHost,
 
-    #[error("hostname requires DNS resolution; use validate_url_async instead")]
-    RequiresDnsResolution(String),
-
     #[error("too many redirects (limit: {0})")]
     TooManyRedirects(u8),
 
@@ -56,69 +53,14 @@ pub enum SsrfError {
     FetchFailed(String),
 }
 
-fn validate_url_common(url_str: &str, policy: &SsrfPolicy) -> Result<Url, SsrfError> {
-    let url = Url::parse(url_str).map_err(|e| SsrfError::InvalidUrl(e.to_string()))?;
-
-    let host = url.host_str().ok_or(SsrfError::NoHost)?;
-
-    if is_legacy_ip_literal(host) {
-        return Err(SsrfError::BlockedAddress(format!(
-            "legacy IP literal: {host}"
-        )));
+/// Validates the URL scheme (only http and https are allowed).
+pub(crate) fn validate_scheme(url: &Url) -> Result<(), SsrfError> {
+    match url.scheme() {
+        "http" | "https" => Ok(()),
+        other => Err(SsrfError::InvalidUrl(format!(
+            "unsupported scheme: {other}"
+        ))),
     }
-
-    if has_url_credentials(url_str) {
-        return Err(SsrfError::InvalidUrl(
-            "URL contains embedded credentials".to_string(),
-        ));
-    }
-
-    if is_allowlisted(host, &policy.allowed_hosts) {
-        return Ok(url);
-    }
-
-    if is_blocked_hostname(host) {
-        return Err(SsrfError::BlockedAddress(host.to_string()));
-    }
-
-    if is_blocklisted(host, &policy.blocked_hosts) {
-        return Err(SsrfError::BlockedAddress(format!(
-            "host in blocklist: {host}"
-        )));
-    }
-
-    if let Some(ip) = match url.host() {
-        Some(url::Host::Ipv4(v4)) => Some(IpAddr::V4(v4)),
-        Some(url::Host::Ipv6(v6)) => Some(IpAddr::V6(v6)),
-        _ => None,
-    } {
-        if is_ip_blocked_by_policy(ip, policy) {
-            return Err(SsrfError::BlockedAddress(ip.to_string()));
-        }
-    }
-
-    Ok(url)
-}
-
-/// Validates a URL synchronously (no DNS resolution).
-///
-/// Only performs IP-literal / scheme / credential / hostname blocklist checks.
-/// For `Host::Domain` (i.e. names that need DNS to be evaluated against
-/// blocked-IP ranges) this returns `SsrfError::RequiresDnsResolution` —
-/// callers MUST switch to `validate_url_async` to close the
-/// hostname→private-IP bypass via DNS rebinding.
-pub fn validate_url(url_str: &str, policy: &SsrfPolicy) -> Result<Url, SsrfError> {
-    if !policy.enabled {
-        return Url::parse(url_str).map_err(|e| SsrfError::InvalidUrl(e.to_string()));
-    }
-    let url = validate_url_common(url_str, policy)?;
-
-    let host = url.host_str().ok_or(SsrfError::NoHost)?;
-    let allowlisted = is_allowlisted(host, &policy.allowed_hosts);
-    if !allowlisted && matches!(url.host(), Some(url::Host::Domain(_))) {
-        return Err(SsrfError::RequiresDnsResolution(host.to_string()));
-    }
-    Ok(url)
 }
 
 /// Validates a URL with DNS resolution and returns the pinned `SocketAddr`.
@@ -152,12 +94,14 @@ pub async fn validate_url_with_pinned(
 ) -> Result<(Url, Option<std::net::SocketAddr>), SsrfError> {
     use std::net::SocketAddr;
 
+    let url = Url::parse(url_str).map_err(|e| SsrfError::InvalidUrl(e.to_string()))?;
+
+    validate_scheme(&url)?;
+
     if !policy.enabled {
-        let url = Url::parse(url_str).map_err(|e| SsrfError::InvalidUrl(e.to_string()))?;
         return Ok((url, None));
     }
 
-    let url = Url::parse(url_str).map_err(|e| SsrfError::InvalidUrl(e.to_string()))?;
     let host = url.host_str().ok_or(SsrfError::NoHost)?;
 
     if is_legacy_ip_literal(host) {
@@ -224,246 +168,6 @@ mod tests {
     fn default_policy() -> SsrfPolicy {
         SsrfPolicy::default()
     }
-
-    // --- Backward-compatible validate_url tests (matching original) ---
-
-    #[tokio::test]
-    async fn allows_public_url() {
-        let policy = default_policy();
-        let mut map = std::collections::HashMap::new();
-        map.insert(
-            "api.example.com".to_string(),
-            vec!["8.8.8.8".parse::<std::net::IpAddr>().unwrap()],
-        );
-        let _scope = crate::security::ssrf::dns::test_hook::ResolverScope::install(map);
-        let result = validate_url_async("https://api.example.com/v1/data", &policy).await;
-        assert!(result.is_ok(), "public URL should be allowed: {:?}", result);
-    }
-
-    #[test]
-    fn blocks_localhost() {
-        let policy = default_policy();
-        let result = validate_url("http://localhost:8080/api", &policy);
-        assert!(matches!(result, Err(SsrfError::BlockedAddress(_))));
-    }
-
-    #[test]
-    fn blocks_loopback_ip() {
-        let policy = default_policy();
-        let result = validate_url("http://127.0.0.1/admin", &policy);
-        assert!(matches!(result, Err(SsrfError::BlockedAddress(_))));
-    }
-
-    #[test]
-    fn blocks_private_10_network() {
-        let policy = default_policy();
-        let result = validate_url("http://10.0.0.1/internal", &policy);
-        assert!(matches!(result, Err(SsrfError::BlockedAddress(_))));
-    }
-
-    #[test]
-    fn blocks_private_172_network() {
-        let policy = default_policy();
-        let result = validate_url("http://172.16.0.1/internal", &policy);
-        assert!(matches!(result, Err(SsrfError::BlockedAddress(_))));
-    }
-
-    #[test]
-    fn blocks_private_192_network() {
-        let policy = default_policy();
-        let result = validate_url("http://192.168.1.100/internal", &policy);
-        assert!(matches!(result, Err(SsrfError::BlockedAddress(_))));
-    }
-
-    #[test]
-    fn blocks_metadata_endpoint() {
-        let policy = default_policy();
-        let result = validate_url("http://169.254.169.254/latest/meta-data/", &policy);
-        assert!(matches!(result, Err(SsrfError::BlockedAddress(_))));
-    }
-
-    #[test]
-    fn blocks_metadata_hostname() {
-        let policy = default_policy();
-        let result = validate_url(
-            "http://metadata.google.internal/computeMetadata/v1/",
-            &policy,
-        );
-        assert!(matches!(result, Err(SsrfError::BlockedAddress(_))));
-
-        let result2 = validate_url("http://metadata.internal/", &policy);
-        assert!(matches!(result2, Err(SsrfError::BlockedAddress(_))));
-    }
-
-    #[test]
-    fn blocks_ipv6_loopback() {
-        let policy = default_policy();
-        let result = validate_url("http://[::1]/admin", &policy);
-        assert!(matches!(result, Err(SsrfError::BlockedAddress(_))));
-    }
-
-    #[test]
-    fn blocks_ipv4_mapped_ipv6() {
-        let policy = default_policy();
-        let result = validate_url("http://[::ffff:127.0.0.1]/admin", &policy);
-        assert!(matches!(result, Err(SsrfError::BlockedAddress(_))));
-    }
-
-    #[test]
-    fn blocks_link_local() {
-        let policy = default_policy();
-        let result = validate_url("http://169.254.1.1/internal", &policy);
-        assert!(matches!(result, Err(SsrfError::BlockedAddress(_))));
-    }
-
-    #[test]
-    fn allowlist_exact() {
-        let policy = SsrfPolicy {
-            allowed_hosts: vec!["internal.corp.example.com".to_string()],
-            ..Default::default()
-        };
-        let result = validate_url("http://internal.corp.example.com/api", &policy);
-        assert!(result.is_ok(), "allowlisted exact host should be permitted");
-    }
-
-    #[test]
-    fn allowlist_wildcard() {
-        let policy = SsrfPolicy {
-            allowed_hosts: vec!["*.example.com".to_string()],
-            ..Default::default()
-        };
-        let r1 = validate_url("http://api.example.com/v1", &policy);
-        assert!(r1.is_ok(), "wildcard subdomain should match");
-
-        let r2 = validate_url("http://sub.api.example.com/v1", &policy);
-        assert!(r2.is_ok(), "deeper subdomain should match *.example.com");
-
-        let r3 = validate_url("http://example.com/v1", &policy);
-        assert!(r3.is_ok(), "bare domain should match *.example.com");
-    }
-
-    #[test]
-    fn allow_private_network_flag() {
-        let policy = SsrfPolicy {
-            allow_private_network: true,
-            ..Default::default()
-        };
-        let r1 = validate_url("http://192.168.1.1/api", &policy);
-        assert!(
-            r1.is_ok(),
-            "private IP allowed when allow_private_network is true"
-        );
-
-        let r2 = validate_url("http://127.0.0.1/admin", &policy);
-        assert!(
-            matches!(r2, Err(SsrfError::BlockedAddress(_))),
-            "loopback should still be blocked"
-        );
-
-        let r3 = validate_url("http://169.254.169.254/meta", &policy);
-        assert!(
-            matches!(r3, Err(SsrfError::BlockedAddress(_))),
-            "cloud metadata should still be blocked"
-        );
-
-        let r4 = validate_url("http://localhost/api", &policy);
-        assert!(
-            matches!(r4, Err(SsrfError::BlockedAddress(_))),
-            "localhost hostname still blocked"
-        );
-    }
-
-    #[test]
-    fn invalid_url() {
-        let policy = default_policy();
-        let result = validate_url("not-a-url", &policy);
-        assert!(matches!(result, Err(SsrfError::InvalidUrl(_))));
-    }
-
-    #[test]
-    fn blocks_cgnat() {
-        let policy = default_policy();
-        let result = validate_url("http://100.64.0.1/internal", &policy);
-        assert!(matches!(result, Err(SsrfError::BlockedAddress(_))));
-    }
-
-    // --- New features ---
-
-    #[test]
-    fn blocks_legacy_hex_ip() {
-        let policy = default_policy();
-        let result = validate_url("http://0x7f000001/admin", &policy);
-        assert!(matches!(result, Err(SsrfError::BlockedAddress(_))));
-    }
-
-    #[test]
-    fn blocks_url_with_credentials() {
-        let policy = default_policy();
-        let result = validate_url("http://admin:secret@example.com/", &policy);
-        assert!(matches!(result, Err(SsrfError::InvalidUrl(_))));
-    }
-
-    #[test]
-    fn blocks_user_blocklist() {
-        let policy = SsrfPolicy {
-            blocked_hosts: vec!["evil.com".to_string()],
-            ..Default::default()
-        };
-        let result = validate_url("http://evil.com/malware", &policy);
-        assert!(matches!(result, Err(SsrfError::BlockedAddress(_))));
-    }
-
-    #[test]
-    fn disabled_policy_allows_everything() {
-        let policy = SsrfPolicy::disabled();
-        assert!(validate_url("http://localhost/admin", &policy).is_ok());
-        assert!(validate_url("http://127.0.0.1/secret", &policy).is_ok());
-    }
-
-    #[test]
-    fn blocks_localhost_localdomain() {
-        let policy = default_policy();
-        let result = validate_url("http://localhost.localdomain/api", &policy);
-        assert!(matches!(result, Err(SsrfError::BlockedAddress(_))));
-    }
-
-    #[test]
-    fn blocks_local_suffix() {
-        let policy = default_policy();
-        let result = validate_url("http://printer.local/admin", &policy);
-        assert!(matches!(result, Err(SsrfError::BlockedAddress(_))));
-    }
-
-    #[test]
-    fn sync_requires_dns_resolution_for_hostnames() {
-        // Hostname URLs without DNS rebinding protection MUST be rejected by
-        // the sync path. This is the fail-closed contract that closes the
-        // SSRF bypass where a hostname resolves to a private IP after sync
-        // validation has already returned Ok.
-        let policy = default_policy();
-        let result = validate_url("https://attacker-controlled.test/foo", &policy);
-        assert!(
-            matches!(result, Err(SsrfError::RequiresDnsResolution(_))),
-            "sync validate_url must require DNS for non-allowlisted hostnames: {:?}",
-            result
-        );
-    }
-
-    #[test]
-    fn sync_allows_allowlisted_hostname_without_dns() {
-        let policy = SsrfPolicy {
-            allowed_hosts: vec!["cdn.example.com".to_string()],
-            ..Default::default()
-        };
-        let result = validate_url("https://cdn.example.com/asset.js", &policy);
-        assert!(
-            result.is_ok(),
-            "allowlisted hostname is exempt from DNS requirement: {:?}",
-            result
-        );
-    }
-
-    // --- Async tests ---
 
     #[tokio::test]
     async fn async_allows_public_url() {

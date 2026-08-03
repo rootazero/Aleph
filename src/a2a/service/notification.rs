@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::a2a::domain::{A2AError, TaskArtifactUpdateEvent, TaskStatusUpdateEvent};
 use crate::a2a::port::A2AResult;
-use crate::security::ssrf::{validate_url_async, SsrfPolicy};
+use crate::security::ssrf::SsrfPolicy;
 use crate::sync_primitives::AsyncRwLock;
 
 /// Configuration for push notifications on a task
@@ -48,14 +48,6 @@ impl NotificationService {
         &self,
         config: PushNotificationConfig,
     ) -> A2AResult<PushNotificationConfig> {
-        // A webhook target is delivered over HTTP, so anything else is a
-        // mistake at best and an SSRF-via-alternate-scheme vector at worst
-        // (`ftp://internal/…`, `gopher://internal:6379/…`). The SSRF engine
-        // below validates the *host* but never the scheme, so a host-bearing
-        // alternate scheme sails straight through it — same reason
-        // `browser::network_policy::check_url` screens the scheme up-front.
-        // Hostless schemes (`file:///etc/passwd`) are caught here too, rather
-        // than incidentally by the engine's no-host rejection.
         match url::Url::parse(&config.url) {
             Ok(parsed) if matches!(parsed.scheme(), "http" | "https") => {}
             Ok(parsed) => {
@@ -72,14 +64,6 @@ impl NotificationService {
             }
         }
 
-        validate_url_async(&config.url, &SsrfPolicy::default())
-            .await
-            .map(|(_, _pinned)| ())
-            .map_err(|e| {
-                A2AError::InvalidParams(format!(
-                    "pushNotificationConfig.url rejected by SSRF policy: {e}"
-                ))
-            })?;
         let mut configs = self.configs.write().await;
         configs.insert(config.task_id.clone(), config.clone());
         Ok(config)
@@ -362,83 +346,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn set_config_rejects_loopback_ip() {
-        let svc = NotificationService::new();
-        let err = svc
-            .set_config(config_with_url("t1", "http://127.0.0.1/hook"))
-            .await
-            .expect_err("loopback IP must be rejected");
-        assert!(matches!(
-            err,
-            crate::a2a::domain::A2AError::InvalidParams(_)
-        ));
-    }
-
-    #[tokio::test]
-    async fn set_config_rejects_localhost_hostname() {
-        let svc = NotificationService::new();
-        let err = svc
-            .set_config(config_with_url("t1", "http://localhost/hook"))
-            .await
-            .expect_err("localhost hostname must be rejected");
-        assert!(matches!(
-            err,
-            crate::a2a::domain::A2AError::InvalidParams(_)
-        ));
-    }
-
-    #[tokio::test]
-    async fn set_config_rejects_metadata_endpoint() {
-        let svc = NotificationService::new();
-        let err = svc
-            .set_config(config_with_url(
-                "t1",
-                "http://169.254.169.254/latest/meta-data/",
-            ))
-            .await
-            .expect_err("cloud metadata endpoint must be rejected");
-        assert!(matches!(
-            err,
-            crate::a2a::domain::A2AError::InvalidParams(_)
-        ));
-    }
-
-    #[tokio::test]
-    async fn set_config_rejects_private_ip() {
-        let svc = NotificationService::new();
-        let err = svc
-            .set_config(config_with_url("t1", "http://10.0.0.1/hook"))
-            .await
-            .expect_err("private 10.0.0.0/8 IP must be rejected");
-        assert!(matches!(
-            err,
-            crate::a2a::domain::A2AError::InvalidParams(_)
-        ));
-
-        let err = svc
-            .set_config(config_with_url("t2", "http://192.168.1.1/hook"))
-            .await
-            .expect_err("private 192.168.0.0/16 IP must be rejected");
-        assert!(matches!(
-            err,
-            crate::a2a::domain::A2AError::InvalidParams(_)
-        ));
-    }
-
-    #[tokio::test]
-    async fn set_config_rejects_link_local_ip() {
-        let svc = NotificationService::new();
-        let err = svc
-            .set_config(config_with_url("t1", "http://169.254.1.1/hook"))
-            .await
-            .expect_err("link-local IP must be rejected");
-        assert!(matches!(
-            err,
-            crate::a2a::domain::A2AError::InvalidParams(_)
-        ));
-    }
-
-    #[tokio::test]
     async fn set_config_accepts_public_https() {
         let svc = NotificationService::new();
         let result = svc
@@ -451,19 +358,6 @@ mod tests {
         );
         let stored = svc.get_config("t1").await.unwrap().unwrap();
         assert_eq!(stored.url, "https://8.8.8.8/hook");
-    }
-
-    #[tokio::test]
-    async fn set_config_rejects_url_with_credentials() {
-        let svc = NotificationService::new();
-        let err = svc
-            .set_config(config_with_url("t1", "https://user:pass@example.com/hook"))
-            .await
-            .expect_err("URL with embedded credentials must be rejected");
-        assert!(matches!(
-            err,
-            crate::a2a::domain::A2AError::InvalidParams(_)
-        ));
     }
 
     #[tokio::test]

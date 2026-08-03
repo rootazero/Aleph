@@ -15,34 +15,19 @@ use tracing::error;
 pub enum AuditEventType {
     AuthFailure,
     RateLimited,
-    SsrfBlocked,
     ExecBlocked,
-    ExecApprovalDenied,
-    InvisibleCharsDetected,
-    TokenizerMarkerScrubbed,
-    InjectionPatternDetected,
     EnvInjectionDetected,
-    PathTraversalBlocked,
-    PermissionDenied,
     PiiDetected,
     LeakWarning,
 }
 
 impl fmt::Display for AuditEventType {
-    // rust-doctor-disable-next-line high-cyclomatic-complexity
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let s = match self {
             Self::AuthFailure => "auth_failure",
             Self::RateLimited => "rate_limited",
-            Self::SsrfBlocked => "ssrf_blocked",
             Self::ExecBlocked => "exec_blocked",
-            Self::ExecApprovalDenied => "exec_approval_denied",
-            Self::InvisibleCharsDetected => "invisible_chars",
-            Self::TokenizerMarkerScrubbed => "tokenizer_marker_scrubbed",
-            Self::InjectionPatternDetected => "injection_pattern",
             Self::EnvInjectionDetected => "env_injection",
-            Self::PathTraversalBlocked => "path_traversal_blocked",
-            Self::PermissionDenied => "permission_denied",
             Self::PiiDetected => "pii_detected",
             Self::LeakWarning => "leak_warning",
         };
@@ -54,7 +39,6 @@ impl fmt::Display for AuditEventType {
 pub enum AuditSeverity {
     Critical,
     Warn,
-    Info,
 }
 
 impl fmt::Display for AuditSeverity {
@@ -62,7 +46,6 @@ impl fmt::Display for AuditSeverity {
         match self {
             Self::Critical => write!(f, "critical"),
             Self::Warn => write!(f, "warn"),
-            Self::Info => write!(f, "info"),
         }
     }
 }
@@ -106,7 +89,7 @@ impl AuditEntry {
 #[derive(Clone)]
 pub struct SecurityAuditLog {
     sender: mpsc::Sender<AuditEntry>,
-    dropped_count: Arc<AtomicU64>,
+    pub(crate) dropped_count: Arc<AtomicU64>,
 }
 
 impl SecurityAuditLog {
@@ -132,22 +115,6 @@ impl SecurityAuditLog {
                 );
             }
         }
-    }
-
-    pub fn log_event(&self, event_type: AuditEventType, severity: AuditSeverity, detail: String) {
-        self.log(AuditEntry {
-            event_type,
-            severity,
-            source_ip: None,
-            session_id: None,
-            detail,
-        });
-    }
-
-    /// Returns the number of audit entries dropped due to channel backpressure.
-    #[must_use]
-    pub fn dropped_count(&self) -> u64 {
-        self.dropped_count.load(Ordering::Acquire)
     }
 }
 
@@ -182,13 +149,15 @@ mod tests {
     #[tokio::test]
     async fn test_audit_log_send_receive() {
         let (log, mut rx) = SecurityAuditLog::new(100);
-        log.log_event(
-            AuditEventType::SsrfBlocked,
-            AuditSeverity::Warn,
-            "Blocked request to 10.0.0.1".to_string(),
-        );
+        log.log(AuditEntry {
+            event_type: AuditEventType::ExecBlocked,
+            severity: AuditSeverity::Warn,
+            source_ip: None,
+            session_id: None,
+            detail: "Blocked request to 10.0.0.1".to_string(),
+        });
         let entry = rx.recv().await.unwrap();
-        assert_eq!(entry.event_type, AuditEventType::SsrfBlocked);
+        assert_eq!(entry.event_type, AuditEventType::ExecBlocked);
         assert_eq!(entry.severity, AuditSeverity::Warn);
         assert!(entry.detail.contains("10.0.0.1"));
     }
@@ -196,26 +165,29 @@ mod tests {
     #[tokio::test]
     async fn test_audit_log_drops_when_full() {
         let (log, _rx) = SecurityAuditLog::new(1);
-        log.log_event(
-            AuditEventType::AuthFailure,
-            AuditSeverity::Critical,
-            "first".into(),
-        );
-        // Channel has capacity 1; second message should be dropped.
-        log.log_event(
-            AuditEventType::AuthFailure,
-            AuditSeverity::Critical,
-            "second".into(),
-        );
-        assert_eq!(log.dropped_count(), 1);
+        log.log(AuditEntry {
+            event_type: AuditEventType::AuthFailure,
+            severity: AuditSeverity::Critical,
+            source_ip: None,
+            session_id: None,
+            detail: "first".into(),
+        });
+        log.log(AuditEntry {
+            event_type: AuditEventType::AuthFailure,
+            severity: AuditSeverity::Critical,
+            source_ip: None,
+            session_id: None,
+            detail: "second".into(),
+        });
+        assert_eq!(log.dropped_count.load(Ordering::Acquire), 1);
     }
 
     #[test]
     fn test_event_type_display() {
-        assert_eq!(AuditEventType::SsrfBlocked.to_string(), "ssrf_blocked");
+        assert_eq!(AuditEventType::ExecBlocked.to_string(), "exec_blocked");
         assert_eq!(
-            AuditEventType::InvisibleCharsDetected.to_string(),
-            "invisible_chars"
+            AuditEventType::EnvInjectionDetected.to_string(),
+            "env_injection"
         );
     }
 
