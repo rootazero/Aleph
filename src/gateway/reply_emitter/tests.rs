@@ -282,6 +282,43 @@ mod tests {
         }
     }
     // ── sanitize_llm_output tests ──────────────────────────────────────
+
+    /// The live stream and the terminal answer encode ONE contract in two
+    /// lists. They drifted: `memory-context` was discarded from the stream and
+    /// kept in the final answer, so a model that echoed the recall fence had it
+    /// scrubbed from the live bubble and then written back over it by the
+    /// Panel's `finalize_answer` — and posted to Telegram / Slack / the group
+    /// transcript / cron results.
+    ///
+    /// Asserts the effect at the consumer (the span is gone from the output),
+    /// not that a name appears in a list, so a tag added to `DISCARD_TAG_PAIRS`
+    /// with no terminal counterpart fails here rather than leaking silently.
+    #[test]
+    fn discard_tag_pairs_are_all_stripped_from_the_terminal_answer() {
+        for (open, close) in crate::memory::streaming_scrubber::DISCARD_TAG_PAIRS {
+            let text = format!("Before. {open}SECRET{close} After.");
+            let cleaned = sanitize_llm_output(&text);
+            assert!(
+                !cleaned.contains("SECRET"),
+                "{open} is discarded from the live stream but survives into the \
+                 final answer — the terminal surfaces would show what the stream \
+                 already hid. Got: {cleaned}"
+            );
+            assert!(
+                !cleaned.contains(*open) && !cleaned.contains(*close),
+                "{open} fence itself must not reach the user. Got: {cleaned}"
+            );
+        }
+    }
+
+    /// The fence must survive inside code — a user asking *about* the tag is
+    /// not the model echoing it.
+    #[test]
+    fn a_memory_fence_inside_code_is_left_alone() {
+        let text = "Use `<memory-context>` to wrap recalled memory.";
+        assert!(sanitize_llm_output(text).contains("memory-context"));
+    }
+
     #[test]
     fn sanitize_no_tags_returns_borrowed() {
         let input = "Hello, this is a normal response.";

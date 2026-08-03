@@ -17,7 +17,7 @@
 //! desktop Panel and a `shared_*` pool used by every other client (bots,
 //! CLI, ...). A request tagged [`ChannelClass::Desktop`] tries the desktop
 //! pool first and only falls back to the shared pool when the desktop pool
-//! is empty. Requests tagged [`ChannelClass::Bot`] or [`ChannelClass::Cli`]
+//! is empty. Requests tagged [`ChannelClass::Bot`]
 //! can only ever land on the shared pool, so a flood of long-running bot
 //! traffic cannot starve interactive Panel sessions.
 //!
@@ -168,12 +168,19 @@ pub enum ChannelClass {
     /// May draw from the reserved desktop pool first, with a shared-pool
     /// fallback.
     Desktop,
-    /// Remote bot / chat adapter. Only ever uses the shared pool.
+    /// Anything that is not the local Panel — remote bots, chat adapters, a
+    /// CLI reaching the gateway over the network. Only ever uses the shared
+    /// pool.
+    ///
+    /// There is deliberately no separate CLI variant. One existed, documented
+    /// as "kept so future policy can differentiate", and nothing ever produced
+    /// it: the sole derivation site classifies purely on `client_ip`, so a
+    /// local CLI on loopback is `Desktop` and a remote one is `Bot`. Its only
+    /// effect was a test that read as coverage of a live policy path. If
+    /// loopback-CLI ever needs to differ from Panel, adding the variant back is
+    /// a two-line change at the derivation site — cheaper than carrying a
+    /// permanently dead one.
     Bot,
-    /// Local CLI. Treated like a bot today (shared-pool only); kept as a
-    /// distinct variant so future policy can differentiate without
-    /// breaking the API again.
-    Cli,
 }
 
 impl ChannelClass {
@@ -373,7 +380,7 @@ impl LaneManager {
         };
 
         // Desktop class tries the reserved pool first, non-blocking.
-        // Bot/Cli never touch the desktop pool.
+        // Bot never touches the desktop pool.
         if channel_class.uses_desktop_pool() {
             if let Some(desktop_sem) = pool.desktop.as_ref() {
                 if let Ok(permit) = desktop_sem.clone().try_acquire_owned() {
@@ -777,32 +784,6 @@ mod tests {
             Err(LaneError::Congested(Lane::Execute)) => {}
             other => panic!(
                 "Bot should be Congested when shared pool saturates, got {:?}",
-                other
-            ),
-        }
-    }
-
-    /// CLI shares the bot policy today — confirm it also cannot reach
-    /// the desktop pool.
-    #[tokio::test]
-    async fn cli_cannot_borrow_from_desktop_pool() {
-        let config = LaneConfig {
-            desktop_execute_concurrency: 10,
-            shared_execute_concurrency: 1,
-            acquire_timeout_secs: 1,
-            ..Default::default()
-        };
-        let manager = LaneManager::new(config);
-
-        let _cli = manager
-            .acquire("agent.run", ChannelClass::Cli)
-            .await
-            .expect("cli should acquire shared");
-        let result = manager.acquire("chat.send", ChannelClass::Cli).await;
-        match result {
-            Err(LaneError::Congested(Lane::Execute)) => {}
-            other => panic!(
-                "Cli should be Congested when shared pool saturates, got {:?}",
                 other
             ),
         }

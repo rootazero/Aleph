@@ -63,12 +63,54 @@ pub(super) fn find_steering_target_id(
 /// Decide whether `session_key` already has *another* `Running` sibling run.
 /// Thin boolean wrapper over [`find_steering_target_id`] for the `Steer` path,
 /// which does not need the id.
+/// Test-only: the boolean shape of [`find_steering_target_id`]. Production now
+/// needs the id itself (to read the target run's model override), so this stays
+/// as the readable spelling the target-selection tests are written against.
+#[cfg(test)]
 pub(super) fn find_steering_target(
     runs: &HashMap<String, ActiveRun>,
     new_run_id: &str,
     session_key: &SessionKey,
 ) -> bool {
     find_steering_target_id(runs, new_run_id, session_key).is_some()
+}
+
+/// Whether `request` is asking for anything the steering seam cannot carry.
+///
+/// A steering event is a plain-text `SessionEvent::UserMessage`
+/// (`blocks: Vec::new()`), appended to the live log for the running loop to read
+/// at its next turn. Everything else a `RunRequest` can carry is resolved
+/// **after** the admission gate in `execute()`, so `GateOutcome::HandledInline`
+/// skips all of it — the extra intent is silently discarded and the request
+/// returns success having done only half of what was asked.
+///
+/// Two things are known to ride requests that reach this path:
+///
+/// * **Attachments.** The injection path has no media-processor seam, so a file
+///   would degrade to a text marker the model cannot see (the harness replays
+///   media only from `content.blocks`). The busy queue redelivers it as a fresh
+///   run that processes media normally (`inner.rs` media_processor →
+///   `FlowInput::Multimodal`).
+/// * **Slash commands.** The L0 fast path and the skill/allowed-tools overlay
+///   both read `SLASH_COMMAND_MODE_KEY` in `execute()`, *after* the gate. A
+///   steered `/moa on` therefore never executes: it lands in the transcript as
+///   the literal string `/moa on`, the running loop reads it as a mid-task
+///   interjection, and the client gets zero events and no error. This module
+///   already knew the metadata was load-bearing in the other direction —
+///   [`build_steering_rescue_request`] strips it so a rescue cannot re-enter the
+///   fast path — but nothing checked the reverse. Reachable only since the lane
+///   stopped holding the running message's ticket (`mark_admitted`): before
+///   that, a follow-up command parked and ran as a fresh run, which is exactly
+///   the behaviour deferring restores.
+///
+/// Scoped to injection, NOT to [`has_steering_content`], so the `Interrupt`
+/// branch still cancels a sibling for an attachment-only or command-only
+/// message.
+fn carries_more_than_text(request: &RunRequest) -> bool {
+    !request.attachments.is_empty()
+        || request
+            .metadata
+            .contains_key(crate::gateway::inbound_router::SLASH_COMMAND_MODE_KEY)
 }
 
 /// Whether `request` carries actual user steering content (non-blank text or at
@@ -372,23 +414,28 @@ pub(super) async fn try_inject_steering(
         return false;
     }
 
-    // A steering event is a plain text `UserMessage` (blocks: Vec::new()); the
-    // injection path has no media-processor seam, so an attachment would degrade
-    // to a text marker the model cannot see (the harness replays media only from
-    // `content.blocks`). Defer an attachment-bearing steer to the FIFO busy
-    // queue, which redelivers it as a fresh run that processes media normally
-    // (inner.rs media_processor → FlowInput::Multimodal). Never dropped. Scoped
-    // to injection, NOT `has_steering_content`, so the Interrupt branch still
-    // cancels a sibling for an attachment-only message.
-    if !request.attachments.is_empty() {
+    // A steering event carries TEXT AND NOTHING ELSE. Anything else the request
+    // is asking for has to be deferred to the FIFO busy queue, which redelivers
+    // it as a fresh run through the full pipeline. Never dropped — deferred.
+    if carries_more_than_text(request) {
         return false;
     }
 
-    {
+    let target_model = {
         let runs = active_runs.read().await;
-        if !find_steering_target(&runs, new_run_id, &request.session_key) {
-            return false;
+        match find_steering_target_id(&runs, new_run_id, &request.session_key) {
+            Some(id) => runs.get(&id).and_then(|r| r.request.model_override.clone()),
+            None => return false,
         }
+    };
+
+    // The sibling is already committed to its model for this run; a steer cannot
+    // change it. Folding in a message that asked for a different one would apply
+    // the text and silently drop the directive — the composer's model pill would
+    // read `opus` while the answer came from `sonnet`, with no banner and no
+    // error. Defer instead, so the request gets the model it asked for.
+    if request.model_override != target_model {
+        return false;
     }
 
     let Some(orchestrator) = orchestrator.get() else {
@@ -479,6 +526,49 @@ pub(super) async fn try_inject_steering(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A steering event is a plain-text `UserMessage`; everything else a request
+    /// asks for is resolved after the admission gate, so `HandledInline` skips
+    /// it. Anything carrying more than text must be deferred to the lane, which
+    /// redelivers it as a fresh run through the whole pipeline.
+    #[test]
+    fn a_slash_command_is_never_folded_into_a_running_sibling() {
+        assert!(
+            !carries_more_than_text(&run_request("s1", "keep going but be careful")),
+            "ordinary text is exactly what the steering seam carries"
+        );
+
+        let mut command = run_request("s1", "/moa on");
+        command.metadata.insert(
+            crate::gateway::inbound_router::SLASH_COMMAND_MODE_KEY.to_string(),
+            "{}".to_string(),
+        );
+        assert!(
+            carries_more_than_text(&command),
+            "the L0 fast path and the skill overlay both read this key AFTER the \
+             gate, so a steered command lands in the transcript as the literal \
+             string `/moa on` and never runs"
+        );
+        // The text alone is indistinguishable — only the metadata says it is a
+        // command, which is why this cannot be a look-at-the-string check.
+        assert!(!carries_more_than_text(&run_request("s1", "/moa on")));
+    }
+
+    #[test]
+    fn an_attachment_bearing_steer_is_still_deferred() {
+        let mut with_file = run_request("s1", "look at this");
+        with_file.attachments = vec![Attachment {
+            id: "att-1".to_string(),
+            mime_type: "image/png".to_string(),
+            filename: Some("a.png".to_string()),
+            size: None,
+            url: None,
+            path: None,
+            data: None,
+        }];
+        assert!(carries_more_than_text(&with_file));
+    }
+
     use crate::gateway::channel::Attachment;
     use crate::sync_primitives::{AtomicU32, AtomicU64};
 

@@ -353,7 +353,7 @@ pub async fn handle(
         input,
         session_key,
         timeout_secs: None,
-        metadata: HashMap::new(),
+        metadata: busy_input_metadata(),
         attachments: Vec::new(),
         pending_media,
         sandbox_override: None,
@@ -434,6 +434,46 @@ async fn handle_streaming(
         .body(body)
         .map_err(|e| ApiError::BadGateway(format!("failed to build response: {e}")))?
         .into_response())
+}
+
+/// Busy-input policy for the OpenAI-compat surface.
+///
+/// A synchronous request/response call cannot be answered by somebody else's
+/// run, so it must never be steered. The engine's default when the key is
+/// absent is `Steer`, and this surface sent no metadata at all — while the
+/// single-message session key is *stable* (`SessionKey::peer`), so every client
+/// that omits `x-aleph-user` shares one. Two overlapping calls therefore folded
+/// the second one's text into the first one's run and answered it with HTTP 200
+/// and an empty completion: a successful-looking reply to a question that had
+/// silently been given to someone else.
+fn busy_input_metadata() -> HashMap<String, String> {
+    let mut metadata = HashMap::new();
+    metadata.insert(
+        crate::gateway::execution_engine::BUSY_INPUT_MODE_KEY.to_string(),
+        "queue".to_string(),
+    );
+    metadata
+}
+
+#[cfg(test)]
+mod busy_input_tests {
+    use super::busy_input_metadata;
+    use crate::gateway::execution_engine::BusyInputMode;
+
+    /// Asserts what the engine actually resolves, not that a key was written:
+    /// the wire spelling and the default both live in `BusyInputMode`.
+    #[test]
+    fn an_openai_compat_call_is_queued_never_steered() {
+        assert!(matches!(
+            BusyInputMode::from_metadata(&busy_input_metadata()),
+            BusyInputMode::Queue
+        ));
+        // The bug this guards: absent metadata resolves to Steer.
+        assert!(matches!(
+            BusyInputMode::from_metadata(&std::collections::HashMap::new()),
+            BusyInputMode::Steer
+        ));
+    }
 }
 
 /// Non-streaming response — execute, collect events, return JSON.

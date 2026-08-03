@@ -226,18 +226,30 @@ where
             _permit: None,
         };
 
-        // Acquire a run-lifetime concurrency permit — try non-blocking first;
-        // if both caps (global + per-agent) are currently full, queue (await)
-        // rather than fail the run (audit 1.2). The wait is now visible via
-        // `ConcurrencySnapshot::waiting`; if this future is dropped while
-        // parked here, `slot` drops → the session claim is released (no leak).
-        let agent_id = request.session_key.agent_id().to_string();
-        slot._permit = Some(match self.concurrency.try_acquire(&agent_id) {
-            Some(p) => p,
-            None => self.concurrency.acquire(&agent_id).await,
-        });
-
-        // Register the run.
+        // Register the run BEFORE acquiring the concurrency permit, because the
+        // acquire below is an unbounded wait and `active_runs` is the only
+        // registry any stop path consults.
+        //
+        // The run has already left the busy lane at this point — `try_claim`
+        // calls `busy_queue::mark_admitted`, which withdraws its ticket
+        // unconditionally. Registering after the permit therefore left a window,
+        // as long as the per-agent cap keeps it waiting, in which the run
+        // existed nowhere: `cancel` and `cancel_session` read `active_runs` and
+        // miss, `cancel_queued_run` and `purge` find no ticket. Stop answered
+        // "no run is active" and then the cancelled turn ran anyway, minutes
+        // later, when a permit freed up. Defaults make that easy to hit — one
+        // agent serves every session, and `max_runs_per_agent` is 3.
+        //
+        // Registering early also makes the waiting run a legitimate steer
+        // target: a follow-up injected into the session log while it parks is
+        // read when it starts, instead of being queued behind it.
+        //
+        // (`active_runs` has no RAII guard, so a future dropped mid-wait leaves
+        // a stale row. That exposure already existed for the whole run — the
+        // entry is removed on the completion path — so this widens an existing
+        // window rather than opening a new kind; the session claim itself is
+        // guarded by `slot` above, which is the leak that actually wedges a
+        // session.)
         {
             let mut runs = self.active_runs.write().await;
             runs.insert(
@@ -255,6 +267,20 @@ where
                 },
             );
         }
+
+        // Acquire a run-lifetime concurrency permit — try non-blocking first;
+        // if both caps (global + per-agent) are currently full, queue (await)
+        // rather than fail the run (audit 1.2). The wait is visible via
+        // `ConcurrencySnapshot::waiting`; if this future is dropped while
+        // parked here, `slot` drops → the session claim is released (no leak).
+        // A cancel arriving during the wait is buffered by the capacity-1
+        // `cancel_tx` and consumed by the run loop's `cancel_rx` arm as soon as
+        // the permit lands.
+        let agent_id = request.session_key.agent_id().to_string();
+        slot._permit = Some(match self.concurrency.try_acquire(&agent_id) {
+            Some(p) => p,
+            None => self.concurrency.acquire(&agent_id).await,
+        });
 
         Ok(GateOutcome::Admitted(slot))
     }

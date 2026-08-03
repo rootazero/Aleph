@@ -15,9 +15,7 @@ use crate::api::chat::ChatApi;
 use crate::context::DashboardState;
 use crate::views::chat::state::{ChatPhase, ChatSendError, QueuedPrompt};
 use crate::views::chat::ChatState;
-use shared_ui_logic::state::{
-    should_auto_drain_on_settle, should_flush_on_turn_boundary, should_retract_on_up,
-};
+use shared_ui_logic::state::{should_auto_drain_on_settle, should_flush_on_turn_boundary};
 
 #[component]
 #[must_use]
@@ -25,10 +23,17 @@ pub fn PhoneComposer() -> impl IntoView {
     let dashboard = expect_context::<DashboardState>();
     let chat = expect_context::<ChatState>();
 
-    let input_text = RwSignal::new(String::new());
+    // Shared with the wide composer via ChatState: the shared `MessageList`
+    // renders the starter chips and the queued-ghost bubbles on phone too, and
+    // both restore their text by writing this signal. While the draft was a
+    // composer-local signal, a tap on a ghost took the prompt out of the queue
+    // and dropped it on the floor here.
+    let input_text = chat.draft;
     let is_sending = RwSignal::new(false);
     // Set by Stop to suppress exactly one auto-drain (B6 — Stop keeps ghosts).
-    let user_interrupted = RwSignal::new(false);
+    // On ChatState, not local: the queue it gates is per-conversation, so the
+    // suppression has to swap with the conversation the way the queue does.
+    let user_interrupted = chat.stop_suppresses_next_drain;
 
     // True while a run is in flight → the composer shows Queue/Force/Stop.
     let running = move || {
@@ -99,48 +104,22 @@ pub fn PhoneComposer() -> impl IntoView {
 
     // Queue a follow-up while a run is active → it becomes a ghost bubble.
     // No client-side prompt-injection guard (server is the authority).
-    //
-    // Attachments ride through `chat.pending_attachments` even though this
-    // surface has no attach button: a prompt retracted back into the composer
-    // may carry files (queued from the wide surface in the same session), and
-    // re-queueing it must not drop them. Phone's *send* path still cannot
-    // transmit attachments — that is the documented phone limitation above,
-    // untouched here.
     let enqueue = move || {
         let text = input_text.get_untracked().trim().to_string();
+        // The tray lives on ChatState and the shared surfaces can fill it — a
+        // recalled prompt puts its files back there. Phone has no paperclip, but
+        // it must still carry what is staged rather than drop it on the floor.
         let files = chat.pending_attachments.get_untracked();
         if text.is_empty() && files.is_empty() {
             return;
         }
-        chat.enqueue_prompt(QueuedPrompt::new(text, files));
+        chat.enqueue_prompt(QueuedPrompt {
+            text,
+            attachments: files,
+        });
         input_text.set(String::new());
         chat.pending_attachments.set(Vec::new());
     };
-
-    // Retract: the phone half of the same single path the wide composer owns.
-    // Without this the ghost bubble's click-to-edit was silently DESTRUCTIVE
-    // here — it wrote `draft_seed`, which no phone component reads, and then
-    // removed the row, so the queued prompt simply disappeared.
-    let retract = move |id: u64| {
-        let draft = QueuedPrompt::new(
-            input_text.get_untracked().trim().to_string(),
-            chat.pending_attachments.get_untracked(),
-        );
-        let Some(entry) = chat.retract_queued_prompt(id, Some(draft)) else {
-            return;
-        };
-        input_text.set(entry.text);
-        chat.pending_attachments.set(entry.attachments);
-    };
-
-    {
-        Effect::new(move |_| {
-            if let Some(id) = chat.retract_request.get() {
-                chat.retract_request.set(None);
-                retract(id);
-            }
-        });
-    }
 
     // Answer a pending `ask_user` with the current draft. Returns `true` when a
     // question was pending — the caller must then NOT fall through to send/queue.
@@ -205,13 +184,24 @@ pub fn PhoneComposer() -> impl IntoView {
         let project_root = chat.active_project_root.get_untracked();
         let dash = dashboard;
         spawn_local(async move {
-            for entry in batch {
-                chat.push_user_message(&entry.text);
+            let mut pending = batch.into_iter();
+            while let Some(entry) = pending.next() {
+                let api_attachments: Vec<crate::api::chat::ChatAttachment> = entry
+                    .attachments
+                    .iter()
+                    .cloned()
+                    .map(|f| crate::api::chat::ChatAttachment {
+                        name: f.name,
+                        mime_type: f.mime_type,
+                        data_base64: f.data_base64,
+                        size: f.size,
+                    })
+                    .collect();
                 match ChatApi::send(
                     &dash,
                     &entry.text,
                     session_key.as_deref(),
-                    Vec::new(),
+                    api_attachments,
                     agent_id.as_deref(),
                     project_root.as_deref(),
                     None,
@@ -222,8 +212,21 @@ pub fn PhoneComposer() -> impl IntoView {
                 )
                 .await
                 {
-                    Ok(resp) => chat.session_key.set(Some(resp.session_key)),
-                    Err(e) => chat.set_send_error(ChatSendError::classify(e)),
+                    Ok(resp) => {
+                        // Only once it is really sent — the bubble used to go up
+                        // first, so a failed send left the transcript claiming a
+                        // prompt had been delivered that the queue had already
+                        // thrown away.
+                        chat.push_user_message(&entry.text);
+                        chat.session_key.set(Some(resp.session_key));
+                    }
+                    Err(e) => {
+                        chat.set_send_error(ChatSendError::classify(e));
+                        let mut unsent = vec![entry];
+                        unsent.extend(pending);
+                        chat.requeue_front(unsent);
+                        break;
+                    }
                 }
             }
         });
@@ -241,9 +244,21 @@ pub fn PhoneComposer() -> impl IntoView {
         enqueue(); // no-op when the draft is empty
         user_interrupted.set(false); // ensure the upcoming settle is NOT suppressed
         if let Some(run_id) = chat.active_run_id.get_untracked() {
+            let is_team = chat.team_id.get_untracked().is_some();
             let dash = dashboard;
             spawn_local(async move {
-                let _ = ChatApi::abort(&dash, &run_id).await;
+                if is_team {
+                    let _ = crate::api::team_chat::TeamChatApi::cancel(&dash, &run_id).await;
+                    // The busy->idle edge released here is what drains the queue
+                    // this just folded the draft into.
+                    chat.active_run_id.set(None);
+                    chat.phase.set(ChatPhase::Idle);
+                } else {
+                    // Not session-scoped on purpose: force-insert is "run this
+                    // now", not "drop this work" — purging the lane would throw
+                    // away the prompts it just folded the draft into.
+                    let _ = ChatApi::abort(&dash, &run_id, None).await;
+                }
             });
         }
     };
@@ -255,9 +270,25 @@ pub fn PhoneComposer() -> impl IntoView {
         let Some(run_id) = chat.active_run_id.get_untracked() else {
             return;
         };
+        let session_key = chat.session_key.get_untracked();
+        // In team chat the id is a fan-out TREE, not an engine run: `chat.abort`
+        // looks it up in `active_runs`, misses, and the group keeps talking with
+        // the button stuck on Stop. Same split the wide composer makes.
+        let is_team = chat.team_id.get_untracked().is_some();
         let dash = dashboard;
         spawn_local(async move {
-            let _ = ChatApi::abort(&dash, &run_id).await;
+            if is_team {
+                let _ = crate::api::team_chat::TeamChatApi::cancel(&dash, &run_id).await;
+                // No `settled` event follows a poisoned tree — release the slot
+                // here or the composer stays stuck on Stop.
+                chat.active_run_id.set(None);
+                chat.phase.set(ChatPhase::Idle);
+            } else {
+                // Stop must reach the session's server-side backlog too, or the
+                // freed slot lets the lane fire the queued messages one run at a
+                // time — exactly what the user just refused.
+                let _ = ChatApi::abort(&dash, &run_id, session_key.as_deref()).await;
+            }
         });
     };
 
@@ -299,26 +330,7 @@ pub fn PhoneComposer() -> impl IntoView {
 
     // Enter sends (idle) or queues (running); Shift+Enter inserts a newline.
     // A pending question outranks both — the turn is blocked on the answer.
-    // ↑ on an empty draft takes the newest queued prompt back (see the wide
-    // composer for the full rationale). Phone has no palettes, so nothing else
-    // competes for the arrow keys.
     let on_keydown = move |ev: leptos::ev::KeyboardEvent| {
-        if ev.key() == "ArrowUp" {
-            let draft_is_empty = input_text.get_untracked().trim().is_empty()
-                && chat.pending_attachments.get_untracked().is_empty();
-            if should_retract_on_up(
-                chat.prompt_queue.get_untracked().len(),
-                draft_is_empty,
-                false,
-                ev.alt_key(),
-            ) {
-                if let Some(id) = chat.last_queued_id() {
-                    ev.prevent_default();
-                    retract(id);
-                    return;
-                }
-            }
-        }
         if ev.key() == "Enter" && !ev.shift_key() {
             ev.prevent_default();
             if answer_pending_ask() {

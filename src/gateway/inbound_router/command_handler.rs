@@ -369,6 +369,32 @@ impl InboundMessageRouter {
         msg: &InboundMessage,
         ctx: &InboundContext,
     ) -> Result<(), RoutingError> {
+        // An explicit stop means "I do not want this work" — a queued backlog
+        // firing one message at a time right after the stop is the opposite of
+        // that (codex clears pending input on `Op::Interrupt` for the same
+        // reason). Scoped to this handler on purpose: the `Interrupt`
+        // busy-input mode *depends* on the lane to restart its own message
+        // after cancelling the sibling, so `cancel_session` itself must not
+        // purge.
+        //
+        // Purge BEFORE cancelling, not after. Cancelling releases the session
+        // slot, `release` notifies the lane, and the woken front waiter can win
+        // `try_claim` — whose `mark_admitted` pulls its ticket out of the lane
+        // unconditionally — before the purge is reached. That message then
+        // escapes the stop *and* is missing from the "N dropped" the receipt
+        // promises. While the sibling still holds the claim no waiter can be
+        // admitted, so purging first marks every ticket that was waiting when
+        // the user asked to stop, and `deliver_with_ticket` checks
+        // `is_cancelled` ahead of `is_front`, so the wake finds it already dead.
+        let dropped = crate::gateway::busy_queue::purge(&ctx.session_key.to_key_string());
+        if dropped > 0 {
+            info!(
+                session = %ctx.session_key.to_key_string(),
+                dropped,
+                "[Router] /stop: dropped queued messages waiting on this session"
+            );
+        }
+
         let cancelled = match self.execution_adapter.as_ref() {
             Some(adapter) => adapter
                 .cancel_session(&ctx.session_key)
@@ -389,22 +415,6 @@ impl InboundMessageRouter {
                 session = %ctx.session_key.to_key_string(),
                 run_id = %run_id,
                 "[Router] /stop: cancelled running run"
-            );
-        }
-
-        // An explicit stop means "I do not want this work" — a queued backlog
-        // firing one message at a time right after the stop is the opposite of
-        // that (codex clears pending input on `Op::Interrupt` for the same
-        // reason). Scoped to this handler on purpose: the `Interrupt`
-        // busy-input mode *depends* on the lane to restart its own message
-        // after cancelling the sibling, so `cancel_session` itself must not
-        // purge.
-        let dropped = crate::gateway::busy_queue::purge(&ctx.session_key.to_key_string());
-        if dropped > 0 {
-            info!(
-                session = %ctx.session_key.to_key_string(),
-                dropped,
-                "[Router] /stop: dropped queued messages waiting on this session"
             );
         }
 

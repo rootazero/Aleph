@@ -74,12 +74,16 @@ pub async fn send(
 pub async fn abort(
     server_url: &str,
     run_id: &str,
+    session_key: Option<&str>,
     config: &CliConfig,
     json: bool,
 ) -> CliResult<()> {
     let (client, _events) = AlephClient::connect(server_url, config).await?;
 
-    let params = serde_json::json!({ "run_id": run_id });
+    // With a session key the abort also empties that session's wait lane.
+    // Without one it stops a single run and leaves the backlog to fire the
+    // moment the slot frees — see `chat.abort`'s `session_key` doc.
+    let params = serde_json::json!({ "run_id": run_id, "session_key": session_key });
     let result: Value = client.call("chat.abort", Some(params)).await?;
 
     if json {
@@ -93,6 +97,15 @@ pub async fn abort(
             println!("Run '{run_id}' aborted.");
         } else {
             println!("Run '{run_id}' was not running or already completed.");
+        }
+        match result
+            .get("dropped")
+            .and_then(serde_json::Value::as_u64)
+            .unwrap_or(0)
+        {
+            0 => {}
+            1 => println!("1 queued message dropped."),
+            n => println!("{n} queued messages dropped."),
         }
     }
 
