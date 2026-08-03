@@ -8,7 +8,6 @@ use crate::context::DashboardState;
 #[serde(rename_all = "snake_case")]
 pub enum RuntimeStatus {
     Missing,
-    Probing,
     Bootstrapping,
     Ready,
     Stale,
@@ -40,10 +39,8 @@ pub const RUNTIME_INSTALL_PROGRESS_TOPIC: &str = "runtimes.install.progress";
 pub struct InstallProgress {
     /// Capability being installed (matches `RuntimeInfo::name`).
     pub step: String,
-    /// "started" | "log" | "done" | "failed".
+    /// "started" | "done" | "failed".
     pub status: String,
-    #[serde(default)]
-    pub log_line: Option<String>,
     #[serde(default)]
     pub error: Option<String>,
     #[serde(default)]

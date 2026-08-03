@@ -147,7 +147,6 @@ pub async fn handle_install(
             RuntimeInstallProgressEvent {
                 step: cap_for_event.clone(),
                 status: "started".into(),
-                log_line: None,
                 error: None,
                 stderr: None,
                 timestamp: chrono::Utc::now().timestamp_millis(),
@@ -158,7 +157,6 @@ pub async fn handle_install(
             Ok(_) => RuntimeInstallProgressEvent {
                 step: cap_for_event,
                 status: "done".into(),
-                log_line: None,
                 error: None,
                 stderr: None,
                 timestamp: chrono::Utc::now().timestamp_millis(),
@@ -174,7 +172,6 @@ pub async fn handle_install(
                 RuntimeInstallProgressEvent {
                     step: cap_for_event,
                     status: "failed".into(),
-                    log_line: None,
                     error: Some(err_str),
                     stderr,
                     timestamp: chrono::Utc::now().timestamp_millis(),

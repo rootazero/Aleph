@@ -27,7 +27,7 @@ pub mod specs;
 
 // Re-exports
 pub use bootstrap::{dependencies, has_spec, install, BootstrapError, BootstrapResult};
-pub use capability::{format_entries_for_prompt, RuntimeCapability};
+pub use capability::format_entries_for_prompt;
 pub use ensure::ensure_capability;
 pub use ledger::{CapabilityEntry, CapabilityLedger, CapabilitySource, CapabilityStatus};
 pub use os::TargetOs;
