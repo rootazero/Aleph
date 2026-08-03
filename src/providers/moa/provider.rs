@@ -23,10 +23,11 @@ use crate::sync_primitives::{Arc, Mutex};
 
 use super::advisor_health::AdvisorHealth;
 use super::advisory_view::{
-    apply_view_budget, build_advisory_view, mark_cache_breakpoints, view_signature,
-    ADVISORY_VIEW_BUDGET,
+    apply_view_budget, build_advisory_view, mark_cache_breakpoints, view_budget_chars,
+    view_signature,
 };
 use super::prompts::{advisor_system_prompt, attach_guidance, build_guidance, AdvisorOutcome};
+use crate::providers::model_catalog::{resolve_context_window, CONSERVATIVE_CONTEXT_WINDOW};
 
 /// One resolved advisor: label + provider chain + identity for pricing.
 pub(crate) struct AdvisorSlot {
@@ -36,8 +37,17 @@ pub(crate) struct AdvisorSlot {
     pub(crate) chain: Arc<dyn AiProvider>,
 }
 
-struct AdvisorCache {
-    signature: u64,
+/// The run's fan-out memory: the last advice produced, plus enough state to
+/// answer "should this iteration re-consult?" for every [`MoaFanout`].
+struct FanoutState {
+    /// Signature of the most recent advisory view this run has seen — updated
+    /// on every turn, fan-out or reuse. Distinguishes "the task advanced" from
+    /// "the harness re-issued an identical request", which is the difference
+    /// between consuming a cadence slot and not.
+    last_seen_signature: u64,
+    /// State advances observed this run; the first is `1`. Only
+    /// [`MoaFanout::EveryN`] reads it.
+    advances: u32,
     outcomes: Vec<AdvisorOutcome>,
 }
 
@@ -56,15 +66,20 @@ pub struct MoaProvider {
     advisor_max_tokens: Option<u32>,
     advisor_temperature: Option<f32>,
     aggregator_temperature: Option<f32>,
+    /// Smallest context window (tokens) among the advisor slots, from the
+    /// model catalogue. One advisory view is built per turn and shared by the
+    /// whole fan-out, so it must fit the weakest link (round-8).
+    advisor_window_tokens: u32,
     save_traces: bool,
     sink: Option<Arc<dyn TraceSink>>,
-    /// Fan-out cache. INVARIANT: a MoaProvider is run-scoped and the Think
-    /// loop drives `process()` strictly sequentially, so the read (cache
-    /// decision) and write (post-fan-out) never race. If an instance were
-    /// ever shared across concurrent calls, two MISSes could both fan out
-    /// (duplicate advisor spend, last-writer-wins) — the check-then-act gap
-    /// is deliberate, not an oversight (round-2 R3).
-    cache: Mutex<Option<AdvisorCache>>,
+    /// Fan-out cache + cadence bookkeeping. INVARIANT: a MoaProvider is
+    /// run-scoped and the Think loop drives `process()` strictly
+    /// sequentially, so the read (cadence decision) and write (post-fan-out)
+    /// never race. If an instance were ever shared across concurrent calls,
+    /// two MISSes could both fan out (duplicate advisor spend,
+    /// last-writer-wins) — the check-then-act gap is deliberate, not an
+    /// oversight (round-2 R3).
+    cache: Mutex<Option<FanoutState>>,
     /// Run-scoped per-advisor circuit breaker (round-6 G1). Same run-scoped,
     /// strictly-sequential invariant as `cache` above.
     health: Mutex<AdvisorHealth>,
@@ -147,11 +162,22 @@ pub fn try_build_for_run(
     let aggregator = resolve_slot(&preset.aggregator)?;
     let aggregator_label = format!("{}:{}", preset.aggregator.provider, preset.aggregator.model);
 
+    // The advisory view is shared by the whole fan-out, so its budget is set
+    // by the SMALLEST advisor window — a 262 K advisor next to a 1 M one still
+    // 4xx's on a view sized for the 1 M. Derived from the slots we actually
+    // consult (not `preset.advisors`) so the two can never diverge.
+    let advisor_window_tokens = advisors
+        .iter()
+        .map(|a| resolve_context_window(&a.model))
+        .min()
+        .unwrap_or(CONSERVATIVE_CONTEXT_WINDOW);
+
     Ok(MoaProvider {
         display_name: format!("moa:{preset_name}"),
         preset_name,
         health: Mutex::new(AdvisorHealth::new(advisors.len())),
         advisors,
+        advisor_window_tokens,
         aggregator,
         aggregator_label,
         fanout: preset.fanout,
@@ -221,6 +247,54 @@ impl MoaProvider {
             cost_usd: cost,
         }
     }
+
+    /// The cadence gate: `Some(advice)` reuses this run's last fan-out,
+    /// `None` means consult the advisors now.
+    ///
+    /// Called exactly once per turn and it MUTATES the run's cadence
+    /// bookkeeping — a step, not a query.
+    ///
+    /// * [`MoaFanout::PerIteration`] — consult whenever the view changed.
+    /// * [`MoaFanout::UserTurn`] — consult once, then reuse for the run.
+    /// * [`MoaFanout::EveryN`] — consult on state advance 1, then every
+    ///   `n`-th after it; the iterations between reuse the last advice, so the
+    ///   aggregator is never advice-less, it just is not refreshed against the
+    ///   very latest tool result.
+    ///
+    /// A turn whose view signature is UNCHANGED is a re-issue of the same
+    /// request, not task progress: it always reuses, and never consumes a
+    /// cadence slot. Without that distinction one internal retry would shift
+    /// every later cadence position for the rest of the run.
+    fn reuse_cached(&self, sig: u64) -> Option<Vec<AdvisorOutcome>> {
+        let mut guard = self.cache.lock().unwrap_or_else(|e| e.into_inner());
+        // No entry = nothing consulted yet this run, so nothing to reuse.
+        let state = guard.as_mut()?;
+        let advanced = state.last_seen_signature != sig;
+        if advanced {
+            state.last_seen_signature = sig;
+            state.advances = state.advances.saturating_add(1);
+        } else {
+            // rust-doctor-disable-next-line excessive-clone
+            return Some(state.outcomes.clone());
+        }
+        match self.fanout {
+            // rust-doctor-disable-next-line excessive-clone
+            MoaFanout::UserTurn => Some(state.outcomes.clone()),
+            MoaFanout::PerIteration => None,
+            MoaFanout::EveryN(n) => {
+                // `n >= 2` is guaranteed by `MoaFanout::from_str` and by
+                // `MoaToml::validation_errors` (which `try_build_for_run`
+                // runs on the resolved preset). Clamp anyway: the cost of
+                // being wrong here is a divide-by-zero panic that takes the
+                // turn down, and the clamp is free (P7).
+                let n = n.max(2);
+                // Advance 1 is what created this entry, so re-consult on
+                // advances 1, 1+n, 1+2n, …
+                // rust-doctor-disable-next-line excessive-clone
+                ((state.advances - 1) % n != 0).then(|| state.outcomes.clone())
+            }
+        }
+    }
 }
 
 impl MoaProvider {
@@ -252,29 +326,22 @@ impl MoaProvider {
         let metadata = payload.metadata.clone();
 
         Box::pin(async move {
-            // 1. Advisory view + whole-view budget + signature. The budget
-            //    runs BEFORE the signature so the cache key describes what is
-            //    actually sent (round-6 G3).
+            // 1. Advisory view + whole-view budget + signature. The budget is
+            //    derived from the weakest advisor's real context window
+            //    (round-8) and runs BEFORE the signature so the cache key
+            //    describes what is actually sent (round-6 G3).
             let mut view = build_advisory_view(&messages);
-            apply_view_budget(&mut view, ADVISORY_VIEW_BUDGET);
+            let budget =
+                view_budget_chars(&view, self.advisor_window_tokens, self.advisor_max_tokens);
+            apply_view_budget(&mut view, budget);
             let sig = view_signature(&view);
 
             // 1b. Prompt-cache breakpoints (round-2 E1) — AFTER the signature
             //     (which ignores marks) so the cache key is never perturbed.
             mark_cache_breakpoints(&mut view);
 
-            // 2. Cache decision (per_iteration: same-signature repeat calls
-            //    — harness internal retries — are HITs; user_turn: any
-            //    existing cache is a HIT for the rest of this run).
-            let cached: Option<Vec<AdvisorOutcome>> = {
-                let guard = self.cache.lock().unwrap_or_else(|e| e.into_inner());
-                guard.as_ref().and_then(|c| match self.fanout {
-                    // rust-doctor-disable-next-line excessive-clone
-                    MoaFanout::UserTurn => Some(c.outcomes.clone()),
-                    // rust-doctor-disable-next-line excessive-clone
-                    MoaFanout::PerIteration => (c.signature == sig).then(|| c.outcomes.clone()),
-                })
-            };
+            // 2. Cadence decision — see `reuse_cached`.
+            let cached: Option<Vec<AdvisorOutcome>> = self.reuse_cached(sig);
 
             // Round-2 B3: pending turn-trace payload, filled in on a MISS
             // (below) and emitted only after the aggregator returns — see
@@ -361,31 +428,34 @@ impl MoaProvider {
 
                 {
                     let mut guard = self.cache.lock().unwrap_or_else(|e| e.into_inner());
-                    // R3 cache invariant guard: this branch only runs after a
-                    // MISS was decided above without holding this lock across
-                    // the fan-out `.await` (see invariant doc on `cache`).
-                    // A MISS means, for `PerIteration`, the prior entry's
-                    // signature (if any) differed from `sig`; for
-                    // `UserTurn`, that no entry existed yet. Finding either
-                    // condition broken here means another `process()` call
-                    // wrote the cache while this one was fanning out — the
-                    // run-scoped, strictly sequential invariant was violated.
-                    debug_assert!(
-                        match self.fanout {
-                            MoaFanout::PerIteration => {
-                                guard.as_ref().is_none_or(|c| c.signature != sig)
-                            }
-                            MoaFanout::UserTurn => guard.is_none(),
-                        },
-                        "MoaProvider cache invariant violated: a concurrent \
-                         process() call raced this fan-out and wrote the \
-                         cache before this write-back"
-                    );
-                    *guard = Some(AdvisorCache {
-                        signature: sig,
-                        // rust-doctor-disable-next-line excessive-clone
-                        outcomes: outcomes.clone(),
-                    });
+                    match guard.as_mut() {
+                        Some(state) => {
+                            // R3 invariant guard: `reuse_cached` stamped
+                            // `last_seen_signature = sig` before this fan-out
+                            // started, and the lock was NOT held across the
+                            // `.await` (see the invariant doc on `cache`).
+                            // Finding a different signature here means another
+                            // `process()` call advanced the run's state while
+                            // this one was consulting — the run-scoped,
+                            // strictly sequential invariant was violated.
+                            debug_assert_eq!(
+                                state.last_seen_signature, sig,
+                                "MoaProvider cache invariant violated: a concurrent \
+                                 process() call advanced the fan-out state while \
+                                 this one was consulting advisors"
+                            );
+                            // rust-doctor-disable-next-line excessive-clone
+                            state.outcomes = outcomes.clone();
+                        }
+                        None => {
+                            *guard = Some(FanoutState {
+                                last_seen_signature: sig,
+                                advances: 1,
+                                // rust-doctor-disable-next-line excessive-clone
+                                outcomes: outcomes.clone(),
+                            });
+                        }
+                    }
                 }
                 outcomes
             };
@@ -525,6 +595,7 @@ impl AiProvider for MoaProvider {
 
 #[cfg(test)]
 mod tests {
+    use super::super::advisory_view::ADVISORY_VIEW_BUDGET;
     use super::*;
     use crate::providers::mock::MockProvider;
     use std::sync::atomic::{AtomicUsize, Ordering};
@@ -602,6 +673,7 @@ mod tests {
             advisor_max_tokens: None,
             advisor_temperature: None,
             aggregator_temperature: None,
+            advisor_window_tokens: CONSERVATIVE_CONTEXT_WINDOW,
             save_traces: false,
             sink: None,
             cache: Mutex::new(None),
@@ -896,6 +968,165 @@ mod tests {
         ];
         p.process(RequestPayload::new(&grown)).await.unwrap();
         assert_eq!(calls.load(Ordering::SeqCst), 1); // run-scoped: once only
+    }
+
+    #[tokio::test]
+    async fn every_n_consults_on_the_first_advance_then_every_nth() {
+        // The middle ground between per_iteration (advisor spend x tool-loop
+        // depth) and user_turn (advice frozen at the top of the run).
+        let calls = Arc::new(AtomicUsize::new(0));
+        let counting: Arc<dyn AiProvider> = Arc::new(CountingProvider {
+            text: "advice".into(),
+            delay: None,
+            calls: calls.clone(),
+        });
+        let p = make_provider(
+            vec![(counting, "c:1")],
+            Arc::new(MockProvider::new("ok")),
+            MoaFanout::EveryN(3),
+            30,
+        );
+        // 7 state advances -> fan out on advances 1, 4, 7.
+        for step in 0..7 {
+            let msgs = iteration_msgs(step);
+            p.process(RequestPayload::new(&msgs)).await.unwrap();
+        }
+        assert_eq!(
+            calls.load(Ordering::SeqCst),
+            3,
+            "every_n:3 over 7 advances must consult on 1, 4 and 7"
+        );
+    }
+
+    #[tokio::test]
+    async fn every_n_does_not_let_an_identical_reissue_consume_a_cadence_slot() {
+        // A repeat `process()` with a byte-identical view is the harness
+        // re-issuing the same request, not the task advancing. Counting it
+        // would shift every later cadence position for the rest of the run.
+        let calls = Arc::new(AtomicUsize::new(0));
+        let counting: Arc<dyn AiProvider> = Arc::new(CountingProvider {
+            text: "advice".into(),
+            delay: None,
+            calls: calls.clone(),
+        });
+        let p = make_provider(
+            vec![(counting, "c:1")],
+            Arc::new(MockProvider::new("ok")),
+            MoaFanout::EveryN(2),
+            30,
+        );
+        let first = iteration_msgs(0);
+        // Advance 1: consults.
+        p.process(RequestPayload::new(&first)).await.unwrap();
+        // Three identical re-issues: all reuse, none advance the cadence.
+        for _ in 0..3 {
+            p.process(RequestPayload::new(&first)).await.unwrap();
+        }
+        assert_eq!(
+            calls.load(Ordering::SeqCst),
+            1,
+            "an identical re-issue must reuse the run's advice"
+        );
+        // Advance 2 (off-cadence for n=2) still reuses...
+        let second = iteration_msgs(1);
+        p.process(RequestPayload::new(&second)).await.unwrap();
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
+        // ...and advance 3 is on-cadence again. Had the re-issues consumed
+        // slots, this would already have fired earlier.
+        let third = iteration_msgs(2);
+        p.process(RequestPayload::new(&third)).await.unwrap();
+        assert_eq!(calls.load(Ordering::SeqCst), 2);
+    }
+
+    #[tokio::test]
+    async fn all_advisors_down_drops_the_use_these_framing() {
+        // Wrapping a wall of failure notes in "use the advisor responses
+        // below as private context" told the acting model to consult advice
+        // that does not exist — on EVERY iteration, since the breaker keeps
+        // the slots retired and the wall is reprinted verbatim each time.
+        let seen = Arc::new(Mutex::new(String::new()));
+        let dead_a: Arc<dyn AiProvider> = Arc::new(FailingCounter(Arc::new(AtomicUsize::new(0))));
+        let dead_b: Arc<dyn AiProvider> = Arc::new(FailingCounter(Arc::new(AtomicUsize::new(0))));
+        let p = make_provider(
+            vec![(dead_a, "mock:a"), (dead_b, "mock:b")],
+            Arc::new(CapturingAggregator(seen.clone())),
+            MoaFanout::PerIteration,
+            30,
+        );
+        let msgs = user_msgs("go");
+        p.process(RequestPayload::new(&msgs)).await.unwrap();
+
+        let guidance = seen.lock().unwrap_or_else(|e| e.into_inner()).clone();
+        assert!(
+            !guidance.contains("Use the advisor responses below"),
+            "{guidance}"
+        );
+        assert!(
+            guidance.contains("No advisor returned usable guidance"),
+            "{guidance}"
+        );
+        // Both slots are still disclosed, so the aggregator can say it ran
+        // degraded rather than silently pretending it had advice.
+        assert!(guidance.contains("mock:a [failed:"), "{guidance}");
+        assert!(guidance.contains("mock:b [failed:"), "{guidance}");
+    }
+
+    /// An advisor that answers, recording the number of view characters it saw.
+    struct ViewSizeProbe(Arc<Mutex<usize>>);
+    impl AiProvider for ViewSizeProbe {
+        fn process<'a>(
+            &'a self,
+            p: RequestPayload<'a>,
+        ) -> Pin<Box<dyn Future<Output = Result<ProviderResponse>> + Send + 'a>> {
+            let chars: usize = p
+                .messages
+                .iter()
+                .flat_map(UnifiedMessage::content_blocks)
+                .filter_map(|b| match b {
+                    crate::providers::message::ContentBlock::Text { text, .. } => {
+                        Some(text.chars().count())
+                    }
+                    _ => None,
+                })
+                .sum();
+            *self.0.lock().unwrap_or_else(|e| e.into_inner()) = chars;
+            Box::pin(async { Ok(ProviderResponse::text_only("advice".into())) })
+        }
+        fn name(&self) -> &str {
+            "view-size-probe"
+        }
+        fn color(&self) -> &str {
+            "#000"
+        }
+    }
+
+    #[tokio::test]
+    async fn advisory_view_is_sized_by_the_smallest_advisor_window() {
+        // One view is shared by the whole fan-out, so a 1 M-window aggregator
+        // sitting next to a small-window advisor must not size it for the
+        // aggregator — that is a hard 4xx on the advisor, every iteration,
+        // in exactly the long-run scenario MoA exists for.
+        let seen = Arc::new(Mutex::new(0usize));
+        let probe: Arc<dyn AiProvider> = Arc::new(ViewSizeProbe(seen.clone()));
+        let mut p = make_provider(
+            vec![(probe, "small:advisor")],
+            Arc::new(MockProvider::new("ok")),
+            MoaFanout::PerIteration,
+            30,
+        );
+        p.advisor_window_tokens = 16_000;
+        // Far more prose than a 16 K window can hold.
+        let msgs = vec![UnifiedMessage::user("word ".repeat(200_000))];
+        p.process(RequestPayload::new(&msgs)).await.unwrap();
+
+        let chars = *seen.lock().unwrap_or_else(|e| e.into_inner());
+        assert!(chars > 0, "the advisor must still receive a usable view");
+        // 16 K tokens of prose is well under the 120 K-char ceiling the flat
+        // constant would have handed it.
+        assert!(
+            chars < ADVISORY_VIEW_BUDGET,
+            "a 16 K-window advisor got {chars} chars — the window was ignored"
+        );
     }
 
     #[tokio::test]
@@ -1223,12 +1454,23 @@ aggregator = { provider = "ghost", model = "n" }
             p.process(RequestPayload::new(&msgs)).await.unwrap();
         }
         let guidance = seen.lock().unwrap_or_else(|e| e.into_inner()).clone();
+        // The slot is still disclosed, with its reason — in the roster line,
+        // which is where round-8 moved every non-advising slot.
         assert!(guidance.contains("[skipped:"), "{guidance}");
         assert!(guidance.contains("retired for this run"), "{guidance}");
-        // Slot order intact: the dead advisor is still Advisor 1.
-        assert!(guidance.contains("Advisor 1 — mock:dead"), "{guidance}");
+        assert!(
+            guidance.contains("Advisors: mock:dead [skipped:"),
+            "the dead slot must stay visible to the aggregator:\n{guidance}"
+        );
+        // Slot order intact: the survivor is still Advisor 2, NOT renumbered
+        // to 1. This is the anti-drift property round-6 G1 副则 exists for.
         assert!(guidance.contains("Advisor 2 — mock:live"), "{guidance}");
         assert!(guidance.contains("real advice"), "{guidance}");
+        // ...and a dead slot is not numbered as if it were advice to read.
+        assert!(
+            !guidance.contains("Advisor 1 —"),
+            "a retired slot must not be presented as a numbered response:\n{guidance}"
+        );
     }
 
     #[tokio::test]

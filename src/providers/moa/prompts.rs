@@ -7,11 +7,55 @@ use crate::providers::message::{ContentBlock, UnifiedMessage};
 // lighter `tools::runtime` struct of the same name.
 use crate::tool_metadata::ToolDefinition;
 
-/// One advisor's consultation outcome (text or a labelled failure note).
+/// Characters of a provider error that reach the AGGREGATOR'S PROMPT.
+///
+/// `AdvisorResult.error` — the trace/panel channel a human reads — stays
+/// full; this budget only bounds the copy that rides into the model's
+/// context. A provider that answers with a 2 KB HTML error page from a proxy
+/// otherwise injects all 2 KB of it into every prompt for the rest of the run
+/// (the breaker retires the slot, but the note it leaves behind is reprinted
+/// every iteration).
+const ADVISOR_NOTE_BUDGET: usize = 240;
+
+/// One advisor's consultation outcome: either real advice, or the labelled
+/// placeholder a failed / timed-out / breaker-skipped / empty slot leaves
+/// behind so the aggregator can tell "one advisor configured" from "three
+/// configured, two dead" (round-6 G1 副则).
 #[derive(Clone, Debug)]
 pub(crate) struct AdvisorOutcome {
     pub label: String,
     pub text: String,
+    /// `true` only when `text` is advice the aggregator can act on.
+    ///
+    /// Set at construction from the branch that produced the outcome — never
+    /// re-derived by sniffing `text` for a `[failed:` prefix. hermes sniffs
+    /// (`_is_failed_reference`), which makes an advisor that legitimately
+    /// opens its answer with a bracketed note indistinguishable from a dead
+    /// one, and silently mis-classifies the moment a note's wording drifts.
+    pub advised: bool,
+}
+
+impl AdvisorOutcome {
+    /// A slot that answered with usable advice.
+    pub(crate) fn advice(label: &str, text: String) -> Self {
+        Self {
+            label: label.to_string(),
+            text,
+            advised: true,
+        }
+    }
+
+    /// A slot that produced no advice. `note` is the bracketed placeholder the
+    /// aggregator sees (`[failed: …]`, `[timeout after 120s]`, `[skipped: …]`,
+    /// `[empty response]`); it is clamped to [`ADVISOR_NOTE_BUDGET`] because it
+    /// may embed raw provider error text.
+    pub(crate) fn unavailable(label: &str, note: &str) -> Self {
+        Self {
+            label: label.to_string(),
+            text: crate::utils::text_format::truncate_text(note, ADVISOR_NOTE_BUDGET),
+            advised: false,
+        }
+    }
 }
 
 /// System prompt for every advisor call. Ported from hermes
@@ -115,27 +159,62 @@ pub(crate) fn advisor_system_prompt(tools: Option<&[ToolDefinition]>) -> Cow<'st
 }
 
 /// Build the guidance block injected at the END of the aggregator's prompt.
+///
+/// Two shapes, chosen by whether ANY slot actually advised:
+///
+/// * **some advice** — the roster names every slot (unavailable ones carry
+///   their note inline, so the aggregator can still tell "one advisor
+///   configured" from "three configured, two dead"), then the numbered
+///   responses list only the slots that advised. Numbering is the SLOT index,
+///   not a re-count over the survivors, so an advisor's number never shifts
+///   mid-run and lines up with the `i/n` the panel shows.
+/// * **no advice at all** — the "use the advisor responses below" framing is
+///   dropped entirely. Wrapping a wall of `[failed: …]` notes in an
+///   instruction to use them as context is worse than saying nothing: it
+///   spends tokens telling the acting model to consult advice that does not
+///   exist, on every iteration for the rest of the run (the breaker keeps the
+///   slots retired, so the wall is reprinted verbatim each time).
 pub(crate) fn build_guidance(
     preset: &str,
     aggregator_label: &str,
     outcomes: &[AdvisorOutcome],
 ) -> String {
-    let joined = outcomes
+    let roster = outcomes
         .iter()
-        .enumerate()
-        .map(|(idx, o)| format!("Advisor {} — {}:\n{}", idx + 1, o.label, o.text))
-        .collect::<Vec<_>>()
-        .join("\n\n");
-    let labels = outcomes
-        .iter()
-        .map(|o| o.label.as_str())
+        .map(|o| {
+            if o.advised {
+                // rust-doctor-disable-next-line excessive-clone
+                o.label.clone()
+            } else {
+                format!("{} {}", o.label, o.text)
+            }
+        })
         .collect::<Vec<_>>()
         .join(", ");
-    format!(
+    let header = format!(
         "[Mixture of Agents advisory context]\n\
          Preset: {preset}\n\
          Aggregator/acting model: {aggregator_label}\n\
-         Advisors: {labels}\n\n\
+         Advisors: {roster}\n\n"
+    );
+
+    let joined = outcomes
+        .iter()
+        .enumerate()
+        .filter(|(_, o)| o.advised)
+        .map(|(idx, o)| format!("Advisor {} — {}:\n{}", idx + 1, o.label, o.text))
+        .collect::<Vec<_>>()
+        .join("\n\n");
+
+    if joined.is_empty() {
+        return format!(
+            "{header}\
+             No advisor returned usable guidance this turn. You are the acting \
+             model: proceed on your own judgment."
+        );
+    }
+    format!(
+        "{header}\
          Use the advisor responses below as private context. You are the \
          aggregator and acting model: answer the user directly or call tools \
          as needed.\n\n\
@@ -170,26 +249,75 @@ mod tests {
 
     fn outcomes() -> Vec<AdvisorOutcome> {
         vec![
-            AdvisorOutcome {
-                label: "openai:gpt-5.5".into(),
-                text: "advice A".into(),
-            },
-            AdvisorOutcome {
-                label: "deepseek:v4".into(),
-                text: "[failed: timeout]".into(),
-            },
+            AdvisorOutcome::advice("openai:gpt-5.5", "advice A".into()),
+            AdvisorOutcome::unavailable("deepseek:v4", "[failed: timeout]"),
         ]
     }
 
     #[test]
-    fn guidance_lists_all_advisors_in_order() {
-        let g = build_guidance("default", "anthropic:opus", &outcomes());
-        let a = g.find("Advisor 1 — openai:gpt-5.5").unwrap();
-        let b = g.find("Advisor 2 — deepseek:v4").unwrap();
-        assert!(a < b);
-        assert!(g.contains("advice A"));
-        assert!(g.contains("[failed: timeout]"));
+    fn guidance_numbers_advisors_by_slot_and_keeps_dead_slots_in_the_roster() {
+        let mut three = outcomes();
+        three.push(AdvisorOutcome::advice("xai:grok-5", "advice C".into()));
+        let g = build_guidance("default", "anthropic:opus", &three);
+
         assert!(g.contains("Preset: default"));
+        // The roster names every slot, so "3 configured, 2 alive" stays legible.
+        assert!(g.contains("Advisors: openai:gpt-5.5, deepseek:v4 [failed: timeout], xai:grok-5"));
+        // Only slots that ADVISED get a numbered response block...
+        assert!(g.contains("Advisor 1 — openai:gpt-5.5"));
+        assert!(g.contains("Advisor 3 — xai:grok-5"));
+        // ...and the dead slot is not presented as advice to read.
+        assert!(
+            !g.contains("Advisor 2 — deepseek:v4"),
+            "a failure note must not be numbered as if it were advice:\n{g}"
+        );
+        // Numbering is the SLOT index — the survivor keeps slot 3, it is not
+        // re-counted to 2, so an advisor's number never shifts mid-run.
+        assert!(g.contains("advice A") && g.contains("advice C"));
+        assert!(g.contains("Use the advisor responses below"));
+    }
+
+    #[test]
+    fn guidance_drops_the_use_these_framing_when_nothing_advised() {
+        let all_dead = vec![
+            AdvisorOutcome::unavailable("openai:gpt-5.5", "[failed: 401 unauthorized]"),
+            AdvisorOutcome::unavailable("deepseek:v4", "[timeout after 120s]"),
+        ];
+        let g = build_guidance("default", "anthropic:opus", &all_dead);
+        assert!(
+            !g.contains("Use the advisor responses below"),
+            "must not tell the acting model to use advice that does not exist:\n{g}"
+        );
+        assert!(g.contains("No advisor returned usable guidance"));
+        assert!(g.contains("proceed on your own judgment"));
+        // The roster still discloses WHICH slots were down and why.
+        assert!(g.contains("openai:gpt-5.5 [failed: 401 unauthorized]"));
+        assert!(g.contains("deepseek:v4 [timeout after 120s]"));
+        // No numbered response blocks at all.
+        assert!(!g.contains("Advisor 1 —"), "{g}");
+    }
+
+    #[test]
+    fn unavailable_clamps_raw_provider_error_text_bound_for_the_prompt() {
+        // A proxy answering with an HTML error page must not ride into the
+        // aggregator's context in full, every iteration, for the rest of the run.
+        let huge = format!("[failed: {}]", "x".repeat(10_000));
+        let o = AdvisorOutcome::unavailable("openai:gpt-5.5", &huge);
+        assert!(!o.advised);
+        assert!(
+            o.text.chars().count() <= ADVISOR_NOTE_BUDGET + 3,
+            "note grew to {} chars",
+            o.text.chars().count()
+        );
+        assert!(o.text.starts_with("[failed: xxx"));
+    }
+
+    #[test]
+    fn unavailable_clamp_is_utf8_safe() {
+        let note = format!("[failed: {}]", "顾问挂了".repeat(500));
+        // Must not panic on a multi-byte boundary.
+        let o = AdvisorOutcome::unavailable("a:b", &note);
+        assert!(o.text.chars().count() <= ADVISOR_NOTE_BUDGET + 3);
     }
 
     #[test]

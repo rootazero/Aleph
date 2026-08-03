@@ -33,6 +33,46 @@ fn blank_preset() -> MoaPresetDto {
     }
 }
 
+/// Default N offered when the user switches the cadence to `every_n`. The
+/// server rejects N < 2 (`every_n:1` IS per-iteration), so the picker never
+/// offers one.
+const DEFAULT_EVERY_N: u32 = 3;
+
+/// Which cadence family a wire `fanout` string names.
+///
+/// `fanout` is one scalar on the wire (`per_iteration` / `user_turn` /
+/// `every_n:<N>`), but the form needs two controls: a family `<select>` and,
+/// for `every_n`, an N. Splitting here and re-joining in [`join_fanout`] keeps
+/// the DTO a single string — the shape core, TOML and the `moa` tool all
+/// agree on — instead of leaking a panel-only representation onto the wire.
+fn fanout_family(fanout: &str) -> &'static str {
+    if fanout.starts_with("every_n:") {
+        "every_n"
+    } else if fanout == "user_turn" {
+        "user_turn"
+    } else {
+        "per_iteration"
+    }
+}
+
+/// The N in `every_n:<N>`, or [`DEFAULT_EVERY_N`] for any other cadence.
+fn fanout_every_n(fanout: &str) -> u32 {
+    fanout
+        .strip_prefix("every_n:")
+        .and_then(|n| n.trim().parse::<u32>().ok())
+        .filter(|n| *n >= 2)
+        .unwrap_or(DEFAULT_EVERY_N)
+}
+
+/// Inverse of [`fanout_family`] + [`fanout_every_n`].
+fn join_fanout(family: &str, every_n: u32) -> String {
+    if family == "every_n" {
+        format!("every_n:{}", every_n.max(2))
+    } else {
+        family.to_string()
+    }
+}
+
 /// All slots currently occupied in a preset (advisors + aggregator) — the
 /// `used` list passed to [`available_options`] so every dropdown excludes
 /// what's already picked elsewhere (its own value is unblocked via `keep`).
@@ -258,17 +298,53 @@ pub(super) fn MoaPresetEditor(
                             <div>
                                 <label class="block text-sm font-medium text-text-secondary mb-1">"Fanout"</label>
                                 <select
-                                    prop:value=move || preset.get().fanout
+                                    prop:value=move || fanout_family(&preset.get().fanout)
                                     on:change=move |ev| {
-                                        let v = event_target_value(&ev);
-                                        preset.update(|p| p.fanout = v);
+                                        let family = event_target_value(&ev);
+                                        preset
+                                            .update(|p| {
+                                                let n = fanout_every_n(&p.fanout);
+                                                p.fanout = join_fanout(&family, n);
+                                            });
                                     }
                                     class="w-full px-3 py-2 bg-surface-sunken border border-border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-primary/30"
                                 >
-                                    <option value="per_iteration">"Per iteration"</option>
-                                    <option value="user_turn">"Per user turn"</option>
+                                    <option value="per_iteration">"Every tool iteration"</option>
+                                    <option value="user_turn">"Once per run"</option>
+                                    <option value="every_n">"Every Nth tool iteration"</option>
                                 </select>
+                                <p class="mt-1 text-xs text-text-tertiary">
+                                    "Advisor cost and latency multiply by how often they are re-consulted."
+                                </p>
                             </div>
+
+                            {move || {
+                                if fanout_family(&preset.get().fanout) != "every_n" {
+                                    return view! { <div></div> }.into_any();
+                                }
+                                view! {
+                                    <div>
+                                        <label class="block text-sm font-medium text-text-secondary mb-1">"N (re-consult every Nth iteration)"</label>
+                                        <input
+                                            type="number"
+                                            min="2"
+                                            prop:value=move || fanout_every_n(&preset.get().fanout).to_string()
+                                            on:input=move |ev| {
+                                                // Reject N < 2 (mirrors the server rule): `every_n:1`
+                                                // IS per-iteration and `every_n:0` never consults.
+                                                // Ignore it so the last valid value stays.
+                                                if let Ok(v) = event_target_value(&ev).trim().parse::<u32>() {
+                                                    if v >= 2 {
+                                                        preset.update(|p| p.fanout = join_fanout("every_n", v));
+                                                    }
+                                                }
+                                            }
+                                            class="w-full px-3 py-2 bg-surface-sunken border border-border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-primary/30"
+                                        />
+                                    </div>
+                                }
+                                    .into_any()
+                            }}
 
                             <div>
                                 <label class="block text-sm font-medium text-text-secondary mb-1">"Advisor timeout (seconds)"</label>

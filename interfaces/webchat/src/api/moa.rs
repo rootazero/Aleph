@@ -18,8 +18,12 @@ pub struct MoaPresetDto {
     #[serde(default)]
     pub advisors: Vec<MoaSlotDto>,
     pub aggregator: MoaSlotDto,
-    #[serde(default)]
-    pub fanout: String, // "per_iteration" | "user_turn"
+    /// One scalar on the wire, matching core's `MoaFanout`:
+    /// `"per_iteration"` | `"user_turn"` | `"every_n:<N>"` (N >= 2).
+    /// Defaults to the core default rather than `""`, which the server would
+    /// reject on save with an opaque parse error.
+    #[serde(default = "per_iteration")]
+    pub fanout: String,
     #[serde(default)]
     pub advisor_timeout_secs: u64,
     #[serde(default)]
@@ -32,6 +36,10 @@ pub struct MoaPresetDto {
 
 fn yes() -> bool {
     true
+}
+
+fn per_iteration() -> String {
+    "per_iteration".to_string()
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]

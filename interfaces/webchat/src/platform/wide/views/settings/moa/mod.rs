@@ -272,12 +272,27 @@ fn PresetCard(
     let slot_chip = |slot: &MoaSlotDto| format!("{} / {}", slot.provider, slot.model);
     let aggregator_chip = slot_chip(&preset.aggregator);
     let enabled = preset.enabled;
-    // Model calls per turn: each advisor + the aggregator (disabled = aggregator
-    // acts alone). Surfaces the cost the `moa` tool warns about, per preset.
+    // Model calls on a CONSULTATION iteration: each advisor + the aggregator
+    // (disabled = aggregator acts alone). Deliberately not "per turn" — how
+    // many turns cost this is the `fanout` cadence's business, so the badge
+    // states the unit it actually knows and the tooltip names the multiplier.
     let call_count = if enabled {
         preset.advisors.len() + 1
     } else {
         1
+    };
+    let cadence_hint = if !enabled {
+        "Advisors disabled — the aggregator acts alone.".to_string()
+    } else if preset.fanout == "user_turn" {
+        format!("{call_count} model calls (advisors + aggregator) on the one consultation per run.")
+    } else if let Some(n) = preset.fanout.strip_prefix("every_n:") {
+        format!(
+            "{call_count} model calls (advisors + aggregator) on each consultation — every {n} tool iterations."
+        )
+    } else {
+        format!(
+            "{call_count} model calls (advisors + aggregator) on each consultation — every tool iteration."
+        )
     };
 
     view! {
@@ -359,9 +374,9 @@ fn PresetCard(
                 <span class="px-2 py-1 rounded bg-primary/10 text-primary">{format!("Σ {aggregator_chip}")}</span>
                 <span
                     class="px-2 py-1 rounded bg-surface-sunken text-text-tertiary"
-                    title="Model calls per turn (advisors + aggregator)"
+                    title=cadence_hint
                 >
-                    {format!("×{call_count}/turn")}
+                    {format!("×{call_count}/consult")}
                 </span>
             </div>
         </div>
