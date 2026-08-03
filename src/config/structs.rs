@@ -7,8 +7,8 @@ use crate::config::types::{
     FallbackProviderToml, FetchConfigInternal, GeneralConfig, GenerationConfig, GroupChatConfig,
     GuardrailsToml, McpConfig, MemoryConfig, OrchestratorConfig, PersonaConfig, PoliciesConfig,
     PrivacyConfig, ProfileConfig, PromptSectionConfig, ProviderConfig, RoutingRuleConfig,
-    SearchConfigInternal, SecretMapping, SecretProviderConfig, SecretsConfig, ShellSecurityConfig,
-    SkillsConfig, StabilityToml, StopHookConfig, TeamBroadcastConfigToml, TeamDispatcherConfigToml,
+    SearchConfigInternal, SecretProviderConfig, SecretsConfig, ShellSecurityConfig, SkillsConfig,
+    StabilityToml, StopHookConfig, TeamBroadcastConfigToml, TeamDispatcherConfigToml,
     TeamMessagesConfigToml, ToolServiceConfig, ToolsConfig, UnifiedToolsConfig, VoiceLocalConfig,
     VoiceSection,
 };
@@ -148,9 +148,6 @@ pub struct Config {
     /// Secret provider backends (e.g., `local_vault`, 1password, bitwarden)
     #[serde(default, skip_serializing_if = "HashMap::is_empty")]
     pub secret_providers: HashMap<String, SecretProviderConfig>,
-    /// Logical secret name -> provider mapping
-    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
-    pub secrets: HashMap<String, SecretMapping>,
     /// Top-level secrets subsystem settings
     #[serde(default)]
     pub secrets_config: SecretsConfig,
@@ -389,7 +386,6 @@ impl Default for Config {
             ssrf: crate::security::ssrf::SsrfPolicy::default(),
             profiles: HashMap::new(),
             secret_providers: HashMap::new(),
-            secrets: HashMap::new(),
             secrets_config: SecretsConfig::default(),
             prompt: PromptSectionConfig::default(),
             channels: HashMap::new(),
