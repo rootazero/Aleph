@@ -92,7 +92,6 @@ impl MediaProvider for ImageMediaProvider {
             {
                 Ok(result) => Ok(MediaOutput::Description {
                     text: result.description,
-                    confidence: result.confidence,
                 }),
                 Err(VisionError::NoProvider) => Err(MediaError::NoProvider {
                     media_type: "image".to_string(),
@@ -175,9 +174,8 @@ mod tests {
         };
         let result = p.process(&input, &mt, Some("what is this?")).await.unwrap();
         match result {
-            MediaOutput::Description { text, confidence } => {
+            MediaOutput::Description { text } => {
                 assert!(text.contains("Vision: what is this?"));
-                assert!((confidence - 0.95).abs() < f64::EPSILON);
             }
             _ => panic!("Expected Description"),
         }
