@@ -304,7 +304,10 @@ impl AgentHarness {
                     "deferred": true,
                     "reason": DEFERRED_TOOL_RESULT_REASON,
                 }),
-                metadata: crate::session::events::ToolOutputMetadata::default(),
+                metadata: crate::session::events::ToolOutputMetadata {
+                    latency_ms: 0,
+                    ..Default::default()
+                },
             };
             let event = SessionEvent::ToolResult {
                 turn_id,
@@ -514,7 +517,8 @@ impl AgentHarness {
                     "duplicate tool call deduplicated within batch (no re-execution)",
                 );
                 executed_count = executed_count.saturating_add(1);
-                let output = cached.clone();
+                let mut output = cached.clone();
+                output.metadata.latency_ms = 0;
                 let output_value = output.value.clone();
                 let result_event = SessionEvent::ToolResult {
                     turn_id,
@@ -1088,10 +1092,11 @@ impl AgentHarness {
         session_id: &SessionId,
         turn_id: TurnId,
         call: &NativeToolCall,
-        output: ToolOutput,
+        mut output: ToolOutput,
         dur_ms: u64,
         iteration: usize,
     ) -> Result<(), HarnessError> {
+        output.metadata.latency_ms = dur_ms;
         let output_value = output.value.clone();
         let result_event = SessionEvent::ToolResult {
             turn_id,

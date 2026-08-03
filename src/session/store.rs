@@ -665,12 +665,9 @@ const fn extract_turn_id(event: &SessionEvent) -> Option<uuid::Uuid> {
         | SessionEvent::ToolError { turn_id, .. }
         | SessionEvent::SubagentSpawned { turn_id, .. }
         | SessionEvent::SubagentReturned { turn_id, .. }
-        | SessionEvent::BudgetUpdated { turn_id, .. }
         | SessionEvent::AssistantRunMeta { turn_id, .. } => Some(*turn_id),
         SessionEvent::Error { turn_id, .. } => *turn_id,
-        SessionEvent::SessionCreated { .. }
-        | SessionEvent::SessionWoken { .. }
-        | SessionEvent::SessionDetached { .. }
+        SessionEvent::SessionWoken { .. }
         | SessionEvent::SessionForked { .. }
         | SessionEvent::RunStarted { .. }
         | SessionEvent::RunFinished { .. }
@@ -685,9 +682,7 @@ const fn extract_turn_id(event: &SessionEvent) -> Option<uuid::Uuid> {
 // rust-doctor-disable-next-line high-cyclomatic-complexity
 const fn event_type_tag(event: &SessionEvent) -> &'static str {
     match event {
-        SessionEvent::SessionCreated { .. } => "session_created",
         SessionEvent::SessionWoken { .. } => "session_woken",
-        SessionEvent::SessionDetached { .. } => "session_detached",
         SessionEvent::RunStarted { .. } => "run_started",
         SessionEvent::RunFinished { .. } => "run_finished",
         SessionEvent::TurnStarted { .. } => "turn_started",
@@ -703,7 +698,6 @@ const fn event_type_tag(event: &SessionEvent) -> &'static str {
         SessionEvent::ToolError { .. } => "tool_error",
         SessionEvent::SubagentSpawned { .. } => "subagent_spawned",
         SessionEvent::SubagentReturned { .. } => "subagent_returned",
-        SessionEvent::BudgetUpdated { .. } => "budget_updated",
         SessionEvent::CompactionPerformed { .. } => "compaction_performed",
         SessionEvent::SessionForked { .. } => "session_forked",
         SessionEvent::Error { .. } => "error",

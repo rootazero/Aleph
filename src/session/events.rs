@@ -1,6 +1,5 @@
 //! Event types for the session log.
 
-use crate::gateway::session_manager::SessionIdentityMeta;
 use serde::{Deserialize, Serialize};
 
 pub type Timestamp = i64; // unix milliseconds
@@ -123,23 +122,16 @@ pub enum RunOutcome {
 }
 
 // NOTE: `PartialEq` is intentionally omitted from `SessionEvent` because
-// `SessionIdentityMeta` (used by `SessionCreated`) does not implement it.
+// some variants carry types that do not implement it.
 // Tests that need comparison should compare on the serialized JSON form.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 #[non_exhaustive]
 // rust-doctor-disable-next-line large-enum-variant
 pub enum SessionEvent {
-    SessionCreated {
-        identity: SessionIdentityMeta,
-        at: Timestamp,
-    },
     SessionWoken {
         at: Timestamp,
         prior_head: EventSeq,
-    },
-    SessionDetached {
-        at: Timestamp,
     },
 
     /// A harness run began on this session.
@@ -296,12 +288,6 @@ pub enum SessionEvent {
         at: Timestamp,
     },
 
-    BudgetUpdated {
-        turn_id: TurnId,
-        tokens_used: u32,
-        tokens_budget: u32,
-        at: Timestamp,
-    },
     CompactionPerformed {
         from_seq: EventSeq,
         to_seq: EventSeq,

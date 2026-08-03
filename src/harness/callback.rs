@@ -71,8 +71,8 @@ pub trait HarnessCallback: Send {
 }
 
 /// Drop-in `HarnessCallback` that ignores every event. Used by call sites
-/// that don't need streaming (e.g. `SessionDriver::drive`, unit tests that
-/// only assert session-event shape).
+/// that don't need streaming (e.g. unit tests that only assert session-event
+/// shape).
 #[derive(Default)]
 pub struct NoopHarnessCallback;
 
