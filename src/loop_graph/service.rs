@@ -218,8 +218,11 @@ pub fn render_session_topology(session: &str) -> Option<String> {
 }
 
 /// Store-taking form of [`render_session_topology`].
+///
+/// `pub(crate)` for a real consumer: `store.rs`'s topology test drives it
+/// against a local store, which the global-reading wrapper cannot do.
 #[must_use]
-fn render_session_topology_in(
+pub(crate) fn render_session_topology_in(
     store: &crate::loop_graph::LoopGraphStore,
     session: &str,
 ) -> Option<String> {

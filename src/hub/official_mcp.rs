@@ -32,6 +32,7 @@ fn map_env(ev: &PresetEnvVar) -> EnvDecl {
         secret: ev.secret,
         default: ev.default.clone(),
         placeholder: None,
+        how_to_get_url: ev.how_to_get_url.clone(),
     }
 }
 
@@ -181,6 +182,33 @@ mod tests {
             other => panic!("expected McpRemote, got {other:?}"),
         }
         assert!(!ue.requires_config);
+    }
+
+    /// `map_env` used to drop `how_to_get_url`, so the Configure step asked for
+    /// a key with nowhere to get it. This is the first of the five hops between
+    /// the catalog and the Panel form field — the one that was cut.
+    #[test]
+    fn projected_env_carries_how_to_get_url() {
+        let e = primer_entries();
+        let zhipu = by_id(&e, "aleph-hub:zhipu-vision");
+        let InstallSpec::McpStdio { env, .. } = zhipu.install_spec.unwrap() else {
+            panic!("expected McpStdio");
+        };
+        let key = env
+            .iter()
+            .find(|d| d.name == "Z_AI_API_KEY")
+            .expect("Z_AI_API_KEY declared");
+        assert_eq!(
+            key.how_to_get_url.as_deref(),
+            Some("https://bigmodel.cn/coding-plan/personal/overview")
+        );
+        // A preset that declares no source for a var leaves it unset.
+        assert!(env
+            .iter()
+            .find(|d| d.name == "Z_AI_MODE")
+            .expect("Z_AI_MODE declared")
+            .how_to_get_url
+            .is_none());
     }
 
     #[test]

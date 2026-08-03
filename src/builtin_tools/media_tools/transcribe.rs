@@ -110,12 +110,13 @@ Example:
         }
 
         let input = MediaInput::FilePath { path };
-        let prompt = args.language.as_deref().map_or_else(
-            || "Transcribe this audio.".to_string(),
-            |lang| format!("Transcribe this audio. Language: {lang}"),
-        );
+        // The pipeline's `prompt` slot carries the ISO 639-1 hint verbatim for
+        // audio: `TranscriptionService::transcribe` takes `language` as a native
+        // argument and sends it to the STT API as a parameter. Wrapping it in an
+        // English sentence put it somewhere no backend reads.
+        let language = args.language.as_deref();
 
-        match self.pipeline.process(&input, &mt, Some(&prompt)).await {
+        match self.pipeline.process(&input, &mt, language).await {
             Ok(output) => {
                 let data = serde_json::to_value(&output).unwrap_or_default();
                 match &output {

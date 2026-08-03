@@ -557,26 +557,6 @@ pub(super) fn InputArea() -> impl IntoView {
         });
     }
 
-    // ↑ retraction — take the most recently queued prompt back into the
-    // composer for editing (codex `edit_queued_message`). Restores the whole
-    // prompt: the text merges above the current draft, the files rejoin the
-    // pending list. Shared by the plain-↑ and Alt+↑ key paths below so both
-    // behave identically. Returns whether anything was actually taken back, so
-    // the caller only swallows the keystroke when it did something.
-    //
-    // Writes `input_text` directly rather than routing through `draft_seed`:
-    // the seed is a ONE-SHOT slot drained by an Effect, so two ↑ presses inside
-    // one frame would overwrite the first prompt before it ever reached the
-    // textarea — silently eating a message the user asked to get back.
-    let retract_latest_queued = move || -> bool {
-        let Some(entry) = chat.retract_latest_queued() else {
-            return false;
-        };
-        chat.add_pending_attachments(entry.attachments);
-        input_text.set(merge_draft(&entry.text, &input_text.get_untracked()));
-        true
-    };
-
     // Queue auto-drain — when a run settles naturally (busy → idle), replay
     // the head of the queue through the normal send pipeline. An explicit
     // Stop sets `user_interrupted`, which suppresses exactly one drain so
