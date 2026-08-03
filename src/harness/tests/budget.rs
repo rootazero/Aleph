@@ -454,7 +454,35 @@ const BUDGETED: [&str; 12] = [
 ///     too, outside this budget.) Three questions: (1) scaffolding — request
 ///     shape, no judgement; (2) yes — prefix construction is a provider fact;
 ///     (3) one real consumer, all six grace sites funnel through here.
-const CEILING: usize = 5109;
+/// **Round 10 (2026-08-03): 5109 → 5142 (+33).** The last of FEATURE_LOCATOR
+/// §2.18's follow-up ledger (item 2), and the one the ledger itself deferred as
+/// "touches the R10 budget, needs its own proposal". Measured, not arithmetic.
+///   - **+~24 `prompt.rs` / +~9 `think.rs`: the protected tail counts persisted
+///     messages again.** The preflight cheap passes rewrite everything below
+///     `len - fresh_tail`, and they were measuring that on a vector whose last
+///     entries are not history: `build_prompt` appends up to four
+///     `<system-reminder>` nudges and `think.rs` then pushes the recall message.
+///     Five synthetic entries against a six-message guard means the guard could
+///     shrink to one, and the passes would rewrite a message the model had just
+///     read — re-billing the whole message prefix at `cache_creation` for
+///     content that was one turn old. `build_prompt_with_transient_tail` returns
+///     the count; the plain `build_prompt` stays as the form that discards it,
+///     so the ~20 test call sites are untouched and the diff shows only the
+///     change. A second effect worth naming: the cut becomes
+///     `persisted_len - fresh_tail`, i.e. independent of how many nudges fired,
+///     so it also stops jittering across the quantum edge that Round 2's
+///     `quantized_tail` installed — the ledger flagged that as unresolved fallout
+///     of this same item.
+///     Three questions: (1) **scaffolding** — it is an off-by-N in a boundary
+///     computation; nothing here judges a message, it only counts which ones the
+///     log will still have next turn. (2) **Yes after a model upgrade** — which
+///     messages are persisted is a property of the event log, not of the model;
+///     a stronger model still must not be shown a rewritten copy of what it read
+///     one turn ago. (3) **One real consumer**, `PreflightPipeline::run`'s
+///     `fresh_tail_count`, and it is the only caller that needs the count — which
+///     is exactly why the count is returned by a second function rather than
+///     forced on every caller.
+const CEILING: usize = 5142;
 
 fn repo_root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))

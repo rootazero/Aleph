@@ -692,11 +692,9 @@ mod stability_tests {
 
         assert!(dynamic_names.contains(&"voice_mode"));
         assert!(dynamic_names.contains(&"runtime_context"));
-        assert!(dynamic_names.contains(&"identity_files"));
         assert!(dynamic_names.contains(&"memory_protocol"));
         assert!(dynamic_names.contains(&"session_context_guide"));
         assert!(dynamic_names.contains(&"mcp_instructions"));
-        assert!(dynamic_names.contains(&"agent_catalog"));
         // Live tool health is per-request state. Classified Stable (by omission)
         // at priority 502, it rode the cached prefix and let a 30s-TTL probe flip
         // invalidate the entire conversation's prompt cache.
@@ -710,9 +708,11 @@ mod stability_tests {
         assert!(dynamic_names.contains(&"standing_goal"));
         // TimerLoopLayer re-surfaces the active watch loop per turn.
         assert!(dynamic_names.contains(&"timer_loop"));
-        // ExtraFilesLayer renders user-configured `[prompt.extra_files]`
-        // content, re-read off disk per prompt build — naturally dynamic.
-        assert!(dynamic_names.contains(&"extra_files"));
+        // `extra_files` and `identity_files` used to be asserted here, on the
+        // reasoning that content "re-read off disk per prompt build" is dynamic.
+        // That reads the wrong property: re-reading a file that has not changed
+        // produces the same bytes, and this classification is about whether the
+        // bytes vary — see the note on the count below.
         // StrategyPointerLayer echoes the Strategy guardrails near the read
         // head per turn — Dynamic. (StrategyLayer @70 is Stable, not counted.)
         assert!(dynamic_names.contains(&"strategy_pointer"));
@@ -735,20 +735,41 @@ mod stability_tests {
         // (2026-07-17) — its eager resource/prompt index emitted single-prefix
         // ids that did not round-trip through the two-strip read path; discovery
         // converged on the on-demand mcp_list_resources/mcp_list_prompts tools.
-        // → 16: GraphTopologyLayer (@1754, one slot after TimerLoopLayer
-        // @1753) — session-scoped governance
-        // topology; deterministic bytes (graph rows only, no clocks), so the
-        // Dynamic classification is about content ownership, not volatility.
+        // → 16: GraphTopologyLayer (@1754, one slot after TimerLoopLayer @1753) —
+        // session-scoped governance topology. It carries no clock, but the `graph`
+        // tool can add or retire an edge mid-session, so the rows do vary within a
+        // session. (This comment used to say the classification was "about content
+        // ownership, not volatility" — see the → 14 note below for why that
+        // reasoning was retired.)
         assert!(dynamic_names.contains(&"graph_topology"));
         // → 17: OperatingEnvelopeLayer (@1758) — the approval tier and usage mode
         // are per-turn pills, so they must NOT sit in the Stable cacheable prefix
-        // where `SecurityLayer` @600 used to render them.
+        // where `SecurityLayer` @600 used to render them. It also took the sandbox
+        // `Writable roots` line (2026-08-03): an isolated run mints a worktree path
+        // with a fresh UUID, so rendering it from Stable meant no two isolated runs
+        // could share a prefix at all.
         assert!(dynamic_names.contains(&"operating_envelope"));
-        // Every name above is asserted individually; the count pins the set.
+        // → 14 (2026-08-03, FEATURE_LOCATOR §2.18 ledger item 10): `agent_catalog`,
+        // `identity_files` and `extra_files` moved to the Stable zone.
+        //
+        // This is the round that fixed the *criterion*, not just three layers.
+        // Classification had drifted to "priority ≥ 1700 belongs to the dynamic
+        // zone" plus reasons like content ownership or being re-read off disk —
+        // neither of which is about whether the bytes change. The cost was real:
+        // the dynamic system block gets no `cache_control` marker of its own
+        // (`split_system_blocks_for_cache` stamps only the stable block), so it is
+        // covered solely by message-level breakpoints that all sit after it.
+        // Session-stable content parked here does not *cause* a cache miss, but it
+        // is re-written at 1.25x whenever a genuinely volatile neighbour moves —
+        // and `identity_files` alone can render 100 000 chars by default.
+        //
+        // The criterion is now: **does this layer's content vary within a
+        // session?** Yes → Dynamic. No → Stable, and give it a priority below
+        // 1700. `prompt_contract::dynamic_tail_bytes_ratchet` holds the line.
         assert_eq!(
             dynamic_names.len(),
-            17,
-            "Exactly 17 dynamic layers expected"
+            14,
+            "Exactly 14 dynamic layers expected"
         );
     }
 

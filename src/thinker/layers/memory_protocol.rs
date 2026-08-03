@@ -57,13 +57,33 @@ impl PromptLayer for MemoryProtocolLayer {
     }
 
     fn stability(&self) -> LayerStability {
-        // Convention in `prompt_pipeline.rs`: priority ≥ 1700 belongs in the
-        // dynamic zone, which is enforced by `stable_layers_come_before_dynamic`.
-        // The text is identical across requests, so a Dynamic rating costs no
-        // provider-cache stability (byte-identical dynamic bytes never re-key
-        // the prefix); priority 1745 keeps the guidance adjacent to the other
-        // per-request memory/session context. `SessionContextGuideLayer` makes
-        // the same call.
+        // Dynamic because the text is NOT identical across requests: the window
+        // claim below is one of four strings chosen from
+        // `(curated_block_present, has_recalled_memory)`, and the second of those
+        // flips turn to turn (`build_memory_user_message` returns `Ok(None)` for
+        // an empty query). A per-turn-varying layer belongs in the dynamic tail.
+        //
+        // The previous comment here gave a different reason, and it was wrong
+        // twice over — worth recording because it was cited as precedent
+        // ("`SessionContextGuideLayer` makes the same call") and so was
+        // propagating. It read: *"The text is identical across requests, so a
+        // Dynamic rating costs no provider-cache stability (byte-identical
+        // dynamic bytes never re-key the prefix)."*
+        //
+        //   1. The text is not identical — see above.
+        //   2. Even if it were, Dynamic is not free. The dynamic system block
+        //      carries no `cache_control` marker of its own; it is covered only
+        //      by the message-level breakpoints, and those all sit *after* it.
+        //      So unchanged bytes parked there do not *cause* a miss but still
+        //      *pay* for one: whenever any other dynamic layer moves, the whole
+        //      dynamic block is re-written at 1.25x. Session-stable content in
+        //      this zone pays its neighbours' volatility tax — which is exactly
+        //      why `agent_catalog`, `identity_files` and `extra_files` moved out
+        //      (FEATURE_LOCATOR §2.18 ledger item 10).
+        //
+        // The rule that survives: `stability()` states whether the content
+        // varies. Priority states reading order. Deciding one from the other —
+        // in either direction — is how layers end up in the wrong zone.
         LayerStability::Dynamic
     }
 

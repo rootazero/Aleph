@@ -1,4 +1,4 @@
-//! `ExtraFilesLayer` — inject `[prompt.extra_files]` content (priority 1735)
+//! `ExtraFilesLayer` — inject `[prompt.extra_files]` content (priority 90)
 //!
 //! Renders the user-configured extra files (`config.prompt.extra_files`)
 //! that the harness bridge loads off disk, size-capped, per prompt build.
@@ -22,12 +22,17 @@ impl PromptLayer for ExtraFilesLayer {
         "extra_files"
     }
 
+    /// @90, immediately after `IdentityFilesLayer` (80) — same trust boundary,
+    /// same loader, same lifetime. Moved down from 1735 for the reason spelled
+    /// out on `IdentityFilesLayer::priority`: user-configured files are fixed
+    /// for the life of a prompt build, and session-stable content in the dynamic
+    /// tail is re-written at 1.25x whenever a genuinely volatile neighbour moves.
     fn priority(&self) -> u32 {
-        1735
+        90
     }
 
     fn stability(&self) -> LayerStability {
-        LayerStability::Dynamic
+        LayerStability::Stable
     }
 
     fn paths(&self) -> &'static [AssemblyPath] {
@@ -79,8 +84,8 @@ mod tests {
     fn metadata() {
         let layer = ExtraFilesLayer;
         assert_eq!(layer.name(), "extra_files");
-        assert_eq!(layer.priority(), 1735);
-        assert_eq!(layer.stability(), LayerStability::Dynamic);
+        assert_eq!(layer.priority(), 90);
+        assert_eq!(layer.stability(), LayerStability::Stable);
         assert_eq!(layer.paths().len(), 2);
     }
 

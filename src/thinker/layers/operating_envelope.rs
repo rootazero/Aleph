@@ -1,5 +1,5 @@
-//! `OperatingEnvelopeLayer` — the two per-turn envelope knobs (approval tier,
-//! usage mode) at priority 1758 (Dynamic).
+//! `OperatingEnvelopeLayer` — the per-run/per-turn envelope facts (approval
+//! tier, usage mode, writable roots) at priority 1758 (Dynamic).
 //!
 //! These two lines used to live in `SecurityLayer` (@600), which declares no
 //! `stability()` and therefore inherits `LayerStability::Stable` — putting them in
@@ -20,6 +20,19 @@
 //!
 //! `SecurityLayer` keeps the genuinely session-stable half: the paradigm-derived
 //! security notes and the sandbox posture.
+//!
+//! **`Writable roots` joined them later (§2.18 ledger item 9), for the same
+//! reason one layer down.** `SandboxSummary::isolated_worktree` mints a worktree
+//! path — with a fresh UUID — for every isolated run, and `SecurityLayer` was
+//! rendering it from inside the cacheable prefix. That is worse than the tier
+//! flip above: the tier at least stays put unless someone touches a pill, while
+//! the worktree id is guaranteed to differ on every isolated run, so no two of
+//! them could share a prefix at all. A team fan-out of N sub-agents wrote the
+//! same prefix N times. The posture (`Sandbox: git/worktree (isolated)`,
+//! network, memory ceiling) is process-invariant and stays Stable; only the
+//! *where* moves here. The two halves come from one source —
+//! `SandboxSummary::{posture_lines, writable_roots_line}` — so they cannot drift
+//! in wording, and `sandbox-debug` still prints the whole picture.
 //!
 //! R10/R9-safe: both strings are constants owned by the enum that defines the rule
 //! they describe (`ExecTier::approval_prompt_line`, `SessionMode::prompt_line`), so
@@ -61,9 +74,18 @@ impl PromptLayer for OperatingEnvelopeLayer {
         let Some(ctx) = input.context else {
             return;
         };
-        // Neither knob resolved (internal / sub-agent / estimate dispatch): emit
+        // The writable-root bullet is computed before the gate so the gate can
+        // ask the same question the body answers — a section that renders
+        // nothing must not print a header, and a fact that renders must not be
+        // gated out by an unrelated knob being absent.
+        let writable_roots = ctx
+            .sandbox_summary
+            .as_ref()
+            .and_then(crate::sandbox::SandboxSummary::writable_roots_line);
+
+        // Nothing resolved (internal / sub-agent / estimate dispatch): emit
         // nothing rather than a guessed default.
-        if ctx.approval_tier.is_none() && ctx.session_mode.is_none() {
+        if ctx.approval_tier.is_none() && ctx.session_mode.is_none() && writable_roots.is_none() {
             return;
         }
 
@@ -81,6 +103,14 @@ impl PromptLayer for OperatingEnvelopeLayer {
         // behind `tool_search` instead of discovering absences by failed calls.
         if let Some(mode) = ctx.session_mode {
             output.push_str(&format!("- {}\n", mode.prompt_line()));
+        }
+
+        // Where the agent may write. Tagged `(sandbox)` because its other half —
+        // which enforcer, which tier — is stated far earlier by `SecurityLayer`
+        // @600, and the two are only apart for cache reasons the model has no
+        // business knowing about.
+        if let Some(line) = writable_roots {
+            output.push_str(&format!("- {line} (sandbox)\n"));
         }
         output.push('\n');
     }
@@ -146,6 +176,42 @@ mod tests {
         let mut out = String::new();
         OperatingEnvelopeLayer.inject(&mut out, &LayerInput::basic(&config, &[]));
         assert!(out.is_empty());
+    }
+
+    /// The per-run worktree root renders here, and on its own is enough to open
+    /// the section — an isolated sub-agent run resolves neither knob (internal
+    /// dispatch), so gating it behind them would have left the fact unstated on
+    /// exactly the runs that have one.
+    #[test]
+    fn writable_roots_render_here_and_alone_open_the_section() {
+        use crate::sandbox::SandboxSummary;
+
+        let mut c = ctx();
+        assert!(c.approval_tier.is_none() && c.session_mode.is_none());
+        c.sandbox_summary = Some(SandboxSummary::isolated_worktree(std::path::PathBuf::from(
+            "/wt/aleph-6f1c2e9a",
+        )));
+
+        let out = render(&c);
+        assert!(out.contains("## Operating Envelope"), "{out}");
+        assert!(out.contains("Writable roots: /wt/aleph-6f1c2e9a"), "{out}");
+        // The posture half stays with `SecurityLayer`; restating it here would
+        // put the same fact in two layers.
+        assert!(!out.contains("git/worktree"), "{out}");
+    }
+
+    /// A read-only posture has no writable root, so it must not open the section
+    /// with a bare header.
+    #[test]
+    fn read_only_sandbox_alone_stays_silent() {
+        use crate::sandbox::{SandboxCapabilities, SandboxSummary};
+
+        let mut c = ctx();
+        c.sandbox_summary = Some(SandboxSummary::from_baseline(
+            "macos/seatbelt",
+            &SandboxCapabilities::strict(),
+        ));
+        assert!(render(&c).is_empty());
     }
 
     /// The whole reason this layer exists: the volatile knobs must NOT be in the
