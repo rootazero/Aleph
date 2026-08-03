@@ -11,7 +11,6 @@ mod events;
 mod group_chat;
 mod memory_events;
 pub mod migration;
-mod paired_users;
 mod state_database;
 mod tasks;
 mod traces;
