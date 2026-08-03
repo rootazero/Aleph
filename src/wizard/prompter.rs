@@ -14,16 +14,6 @@ use tracing::debug;
 use super::session::WizardSessionError;
 use super::types::{StepType, WizardOption, WizardStep};
 
-/// Progress handle for tracking long-running operations
-pub trait ProgressHandle: Send + Sync {
-    /// Update progress message
-    fn update(&self, message: &str);
-    /// Finish with success message
-    fn finish(&self, message: &str);
-    /// Finish with error message
-    fn finish_error(&self, message: &str);
-}
-
 /// A wizard prompter that can collect user input
 #[async_trait]
 pub trait WizardPrompter: Send + Sync {
@@ -60,9 +50,6 @@ pub trait WizardPrompter: Send + Sync {
 
     /// Confirmation
     async fn confirm(&self, message: &str, default: bool) -> Result<bool, WizardSessionError>;
-
-    /// Progress indicator
-    fn progress(&self, label: &str) -> Box<dyn ProgressHandle>;
 }
 
 /// Pending answer state
@@ -74,7 +61,6 @@ pub(crate) struct PendingAnswer {
 pub struct RpcPrompter {
     step_tx: mpsc::Sender<WizardStep>,
     answers: Arc<RwLock<HashMap<String, PendingAnswer>>>,
-    finish_data: Arc<RwLock<Option<Value>>>,
     step_counter: AtomicU64,
 }
 
@@ -83,12 +69,10 @@ impl RpcPrompter {
     pub(crate) const fn new(
         step_tx: mpsc::Sender<WizardStep>,
         answers: Arc<RwLock<HashMap<String, PendingAnswer>>>,
-        finish_data: Arc<RwLock<Option<Value>>>,
     ) -> Self {
         Self {
             step_tx,
             answers,
-            finish_data,
             step_counter: AtomicU64::new(0),
         }
     }
@@ -131,13 +115,6 @@ impl RpcPrompter {
                 "Answer channel closed unexpectedly (flow may have panicked)".to_string(),
             )
         })
-    }
-
-    /// Mark the flow as complete with a payload that propagates back through
-    /// the next `wizard.next` response in `WizardNextResult.data`.
-    pub async fn finish(&self, data: Value) -> Result<(), WizardSessionError> {
-        *self.finish_data.write().unwrap_or_else(|e| e.into_inner()) = Some(data);
-        Ok(())
     }
 
     /// Send a step without waiting (for notes)
@@ -219,31 +196,6 @@ impl WizardPrompter for RpcPrompter {
             .as_bool()
             .ok_or_else(|| WizardSessionError::InvalidAnswer("Expected boolean".to_string()))
     }
-
-    fn progress(&self, label: &str) -> Box<dyn ProgressHandle> {
-        Box::new(RpcProgressHandle {
-            label: label.to_string(),
-        })
-    }
-}
-
-/// RPC progress handle
-struct RpcProgressHandle {
-    label: String,
-}
-
-impl ProgressHandle for RpcProgressHandle {
-    fn update(&self, message: &str) {
-        tracing::info!(label = %self.label, message = %message, "Progress update");
-    }
-
-    fn finish(&self, message: &str) {
-        tracing::info!(label = %self.label, message = %message, "Progress finished");
-    }
-
-    fn finish_error(&self, message: &str) {
-        tracing::info!(label = %self.label, message = %message, "Progress error");
-    }
 }
 
 #[cfg(test)]
@@ -254,33 +206,12 @@ mod tests {
     fn test_rpc_prompter_id_generation() {
         let (tx, _rx) = mpsc::channel(16);
         let answers = Arc::new(RwLock::new(HashMap::new()));
-        let finish_data = Arc::new(RwLock::new(None));
-        let prompter = RpcPrompter::new(tx, answers, finish_data);
+        let prompter = RpcPrompter::new(tx, answers);
 
         let id1 = prompter.next_id();
         let id2 = prompter.next_id();
 
         assert_eq!(id1, "step-1");
         assert_eq!(id2, "step-2");
-    }
-
-    #[tokio::test]
-    async fn finish_stores_payload() {
-        let (tx, _rx) = mpsc::channel(16);
-        let answers = Arc::new(RwLock::new(HashMap::new()));
-        let finish_data = Arc::new(RwLock::new(None));
-        let prompter = RpcPrompter::new(tx, answers, finish_data.clone());
-
-        prompter
-            .finish(serde_json::json!({ "token": "secret" }))
-            .await
-            .unwrap();
-
-        let stored = finish_data
-            .read()
-            .unwrap_or_else(|e| e.into_inner())
-            .clone()
-            .unwrap();
-        assert_eq!(stored["token"], "secret");
     }
 }
