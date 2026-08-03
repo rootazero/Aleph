@@ -119,11 +119,19 @@ struct ModelLifecycle { status, successor: Option<&str>, note: Option<&str> }
 
 `groq` / `together` / `fireworks` 上的 Llama **仍然 unpriced**，并且这条限制被测试钉死。理由：Meta 不卖 Llama 推理，各宿主价差极大（Groq / Together / Cerebras / Fireworks 全不一样），编一个"Meta 价"比 `Unknown` 更糟——`Unknown` 至少是诚实的，且 `unpriced_cost` 仍按 endpoint tier 给它一个位置。
 
+同理**刻意不定价：订阅制端点**。Kimi Code（`api.kimi.com/coding`）按套餐额度计费，其文档给的是**消耗倍率**（highspeed 3x）而不是费率——**没有一个 USD/Mtok 数字可记**。开放平台的 `kimi-k3` 按 token 计费，正常定价。
+
+⚠️ **"不写 rate 行"不等于"不定价"**。`PRICE_TABLE` 是前缀扫描：它能说"这个 id 值 $X"，说不出"这个 id 根本没有单价"。`k3` / `k3-256k` / `k2p5` 恰好不匹配任何前缀，于是看起来没问题；而 `kimi-for-coding` / `kimi-for-coding-highspeed` / `kimi-code` 以 `kimi` 开头，**落进开放平台的 K2 时代家族兜底行，被报成 $0.60/$2.50** ——一个订阅用户根本不会被收的价。前缀表表达不了否定，所以这条事实只能显式写出来：单一源 `pricing::QUOTA_BILLED_MODELS`，在两条查找路（provider-keyed 与 vendor-inferred）**之前**短路。**按整串精确匹配**，所以永远不会遮蔽开放平台的 `kimi-k3` / `kimi-k2.6`。
+
+两个配套结论：① 该端点的模型报 `CostStatus::Unknown` → failover 层映射成 `u64::MAX` "unpriced cloud" 哨兵 → `cost_aware` 把它们排在**最后**。对一个报不出价的成本，这是诚实的排序，且在这份清单存在之前就已经是它默认模型 `k3` 的处境。② **配额端点不需要逐 id 的价格豁免**：整个 preset 一个模型都不定价 ⇒ `advertised_models_of_priced_vendors_have_rates` 的 `vendor_is_priced` 自然为假、整条跳过。真留了逐 id 豁免，反而会让将来**误加**到 Kimi Code 上的一个 rate 静默通过——所以 `ENDPOINT_LOCAL_ALIASES` 现在只管 capability（仅剩 `k2p5`，厂商没公布窗口）。
+
 ### 4.3 长上下文 tier
 
 `TIER_TABLE` 在**输入 token 轴**上覆盖基础价。当前覆盖：`gemini-3.1-pro`、`gemini-2.5-pro`、`claude-sonnet-5`、`claude-sonnet-4`（均 >200K 阈值）。
 
 **刻意不做**：`claude-opus-4-6/7/8` 与 `claude-fable-5` 同样是 1M 窗口，但其 >200K 倍率没有可核实的公开值。把 Sonnet 的 2x/1.5x 外推上去是**编数据**；它们保持平价，并在表内注明这是一个已知的低估。
+
+`kimi-k3` 也是 1M 窗口但**同样不设 tier，理由相反**：厂商明确说明 >200K 不加价，费率在整个 1,048,576 窗口内是平的。两种"没有 tier"要分清——一种是查不到，一种是查到了且确实没有。
 
 ---
 
@@ -134,6 +142,33 @@ struct ModelLifecycle { status, successor: Option<&str>, note: Option<&str> }
 第二步是本轮新增的。`VENDOR_TAGS` 只认识它被写下来时存在的 tag，而宿主一直在发明新形状：`deepseek-ai/…`、`accounts/fireworks/models/…`、`@cf/meta/…`。每一种没列进去的形状都**同时**落空能力表（⇒ 保守 128K ⇒ 过早压缩）和价格表（⇒ Unknown ⇒ `u64::MAX`）。折末段是把固定表泛化，而不是继续追着它补。
 
 > **安全边界**：该函数的产物**只做查表 key**，永远不回到线上。出站请求始终携带 operator 的原始 model id，所以折叠 host 路径不可能把请求发错地方。
+
+### 5.1 ⚠️ 同一个模型两套 id：归一解决不了，得靠线上翻译
+
+Kimi 是目前唯一一个把**同一个模型**放在两套 id 命名空间下的厂商：开放平台（`api.moonshot.ai`）叫 `kimi-k3`，Kimi Code 订阅端点（`api.kimi.com/coding`）叫 **`k3`**，后者还多一个开放平台没有的 `k3-256k`。`canonicalize_model_id` **对此无能为力**——两个 id 不是同一个字符串的装饰变体，没有可剥的 tag。
+
+后果分两侧，都要处理：
+- **表侧**：四张表按前缀查，所以 `k3` / `k3-256k` / `kimi-k3` 各要一行。`k3-256k` 必须排在 `k3` 之前（前者以后者为前缀）；`kimi-k3` 必须排在宽泛的 `kimi` 行之前，否则这个 1M 模型会被当成 200K，上下文过早压缩。
+- **线上侧**：唯一的翻译点是 `anthropic::provider_policy::normalize_kimi_coding_model_id`——它是请求出门前的最后一道关。该函数历史上写作"一切都变成 `kimi-for-coding`"（当时端点确实只有一个 id），**这个形状在 K3 之后是致命的**：折叠掉 `k3` 不会报错，只会让预设、picker、能力表都说 K3，而每一次请求跑的是 K2.7 Code。守卫测试因此断言的是"四个原生 id 逐字节穿过"，不是"函数被调用了"。
+
+**推论**：往任何"单一 id 端点"加第二个 id 之前，先看它的归一/翻译函数是不是写成了折叠式。
+
+### 5.2 ⚠️ `reasoning_effort` 有两层闸，写错层会静默吞掉一个旋钮
+
+"这个字段能不能发"在两个地方回答，**问的不是同一个问题**：
+
+| 层 | 位置 | 问的是 |
+|---|---|---|
+| 端点闸 | `openai_common/provider_policy.rs::ProviderCapabilities::supports_reasoning_effort` → `PayloadPolicy::strip_reasoning` | **这个端点认不认识这个字段** |
+| 模型矩阵 | `openai_common/reasoning_effort.rs::supported_efforts` → `clamp_effort` | **这个模型接受它，且接受哪几个值** |
+
+Moonshot 的闸曾经写 `false`——那在只有 K2.x 的时代是对的，K3 之后就变成**在最后一步把已经算好的 `reasoning_effort` 删掉**：`map_think_level` 发了、`clamp_effort` 夹了、`PayloadPolicy::apply` 一句 `payload.remove` 全丢。用户设的 think level 无声消失，每次请求都跑厂商默认档，**没有报错也没有日志**。
+
+现在闸开在端点（端点确实认识这个字段），约束落在模型家族：`supported_efforts` 对 K3 返回 `["low","high","max"]`，对**其它任何 kimi/moonshot id 返回空集**（空集 ⇒ `clamp_effort` 返 `None` ⇒ 不发这个字段）。空集分支是 fail-closed 的兜底——将来的 `kimi-k4` 也走它，不会继承通用阶梯去撞 400。
+
+两条配套：
+- **`xhigh` 与 `max` 是同一格，只是两家拼法不同**（OpenAI / Anthropic 4.7+ 叫 `xhigh`，Kimi / Anthropic 4.6 叫 `max`），所以它们在 `effort_ordinal` 里共用序号 5。给两个不同序号的话，请求 `xhigh` 会和 `high` 并列距离 1、按"平手取便宜"落到 `high`——`max` 就成了**列在支持表里却没有任何请求能到达的值**，和不支持它是同一种缺陷。
+- **K3 的支持表刻意不含 `none`**。在 Kimi 上"关闭 thinking"不是一个档位而是**换模型**——厂商文档明说关掉 thinking 的请求会被路由到 K2.6。所以 `ThinkLevel::Off` 向上夹到 `low`（thinking 开着、最便宜的一档、仍然是 K3），而不是发 `none` 让用户在毫不知情的情况下拿到另一个模型的回答。
 
 ---
 

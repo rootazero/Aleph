@@ -531,6 +531,60 @@ mod build_request_tests {
         c
     }
 
+    fn kimi_body(model: &str, level: crate::agents::thinking::ThinkLevel) -> serde_json::Value {
+        let protocol = OpenAiProtocol::new(reqwest::Client::new());
+        let config = kimi_config();
+        let messages = [UnifiedMessage::user("hi")];
+        let payload = RequestPayload::new(&messages)
+            .with_model(Some(model.to_string()))
+            .with_think_level(Some(level));
+        let req = protocol
+            .build_request(&payload, &config)
+            .unwrap()
+            .build()
+            .unwrap();
+        serde_json::from_slice(req.body().unwrap().as_bytes().unwrap()).unwrap()
+    }
+
+    /// K3's headline control has to survive the whole path: `map_think_level`
+    /// → `clamp_effort` → `PayloadPolicy::apply`. The endpoint gate used to
+    /// delete it at the last step, so the think level vanished with no error
+    /// and every request ran the vendor default. Asserting on the request body
+    /// is the point — the tables agreeing proves nothing about the wire.
+    #[test]
+    fn kimi_k3_reasoning_effort_reaches_the_request_body() {
+        use crate::agents::thinking::ThinkLevel;
+        assert_eq!(
+            kimi_body("k3", ThinkLevel::High)["reasoning_effort"],
+            "high"
+        );
+        assert_eq!(
+            kimi_body("k3", ThinkLevel::XHigh)["reasoning_effort"],
+            "max"
+        );
+        assert_eq!(
+            kimi_body("k3-256k", ThinkLevel::Low)["reasoning_effort"],
+            "low"
+        );
+        // "Off" must not become `none`: on Kimi that reroutes to K2.6.
+        assert_eq!(kimi_body("k3", ThinkLevel::Off)["reasoning_effort"], "low");
+    }
+
+    /// The other half of opening the endpoint gate: models that do not take
+    /// the field must still never receive it.
+    #[test]
+    fn non_k3_kimi_models_get_no_reasoning_effort() {
+        use crate::agents::thinking::ThinkLevel;
+        for model in ["kimi-k2.6", "kimi-for-coding", "moonshot-v1-128k"] {
+            assert!(
+                kimi_body(model, ThinkLevel::High)
+                    .get("reasoning_effort")
+                    .is_none(),
+                "{model} must not receive reasoning_effort"
+            );
+        }
+    }
+
     #[test]
     fn kimi_tool_schema_derefs_refs_and_has_object_type() {
         let protocol = OpenAiProtocol::new(reqwest::Client::new());

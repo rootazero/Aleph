@@ -48,13 +48,20 @@ const UNCATALOGUED_FAMILIES: &[(&str, &str)] = &[
     ("lepton", "relay preset: model chosen per deployment"),
 ];
 
-/// Model ids that only exist on one vendor-specific endpoint and have no
-/// public capability or price data. They are kept in their preset's fallback
-/// chain because the endpoint accepts them; they are exempt from the coverage
-/// guards because there is nothing verifiable to record.
+/// Model ids that only exist on one vendor-specific endpoint and whose window
+/// the vendor never published. They are kept in their preset's fallback chain
+/// because the endpoint accepts them; they are exempt from the capability
+/// guard because there is nothing verifiable to record.
+///
+/// Price is **not** exempted here. A quota-billed endpoint is a property of the
+/// endpoint, not of one id, so it is stated once in
+/// `pricing::QUOTA_BILLED_MODELS`; `advertised_models_of_priced_vendors_have_rates`
+/// then skips such a preset on its own, because no model in it prices. Keeping
+/// per-id price exemptions as well would mean a rate wrongly added to Kimi Code
+/// later passes silently instead of tripping that guard.
 const ENDPOINT_LOCAL_ALIASES: &[(&str, &str)] = &[(
     "k2p5",
-    "kimi-for-coding subscription endpoint alias; not on the public Kimi catalog",
+    "kimi-for-coding subscription endpoint alias; no published window to record",
 )];
 
 fn is_uncatalogued(preset_id: &str) -> bool {
@@ -209,6 +216,11 @@ fn advertised_models_have_capability_rows() {
 /// new default model added to an already-priced vendor without its price row,
 /// leaving the flagship at `CostStatus::Unknown` while its predecessor was
 /// priced.
+///
+/// Endpoints that bill a plan quota rather than tokens need no exemption: none
+/// of their models price, so `vendor_is_priced` is false and the preset drops
+/// out on its own. Exempting them per-id as well would let a rate wrongly added
+/// to such an endpoint pass in silence.
 #[test]
 fn advertised_models_of_priced_vendors_have_rates() {
     let mut missing = Vec::new();
@@ -220,7 +232,7 @@ fn advertised_models_of_priced_vendors_have_rates() {
             let vendor_is_priced = advertised_models(preset)
                 .iter()
                 .any(|m| rate_card(name, m).is_some());
-            if vendor_is_priced && !is_endpoint_local(model) && rate_card(name, model).is_none() {
+            if vendor_is_priced && rate_card(name, model).is_none() {
                 missing.push(format!("{name} → {model}"));
             }
         }

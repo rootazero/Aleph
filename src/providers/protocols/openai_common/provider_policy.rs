@@ -343,9 +343,19 @@ pub const fn resolve_capabilities(class: EndpointClass) -> ProviderCapabilities 
             requires_derefed_refs: false,
             context_window: Some(128_000),
         },
+        // Moonshot / Kimi. `supports_reasoning_effort` answers "does this
+        // endpoint understand the field", and since K3 it does — the flag was
+        // written when no Kimi model took an effort, and left K3's headline
+        // knob stripped on the wire: the user's think level vanished and every
+        // request ran the vendor default.
+        //
+        // Which *models* accept it is a separate, finer question, answered by
+        // `reasoning_effort::supported_efforts` — which returns an empty set
+        // for every non-K3 Kimi id (including ids it has never seen), so the
+        // field is still never sent to a model that would 400 on it.
         EndpointClass::MoonshotNative => ProviderCapabilities {
             supports_responses_store: false,
-            supports_reasoning_effort: false,
+            supports_reasoning_effort: true,
             supports_prompt_cache: false,
             supports_service_tier: false,
             supports_strict_schema: false,
@@ -589,6 +599,33 @@ mod tests {
         let caps = resolve_capabilities(EndpointClass::MoonshotNative);
         assert!(caps.requires_derefed_refs);
         assert!(caps.requires_object_properties);
+    }
+
+    /// The endpoint understands `reasoning_effort` since K3, so the blanket
+    /// strip must be off — it was silently discarding the one control K3
+    /// exposes. Per-model admission is `reasoning_effort::supported_efforts`.
+    #[test]
+    fn kimi_endpoint_no_longer_strips_reasoning_effort() {
+        let policy =
+            build_payload_policy(Some("https://api.kimi.com/coding/v1"), "openai-chat", None);
+        assert_eq!(policy.endpoint_class, EndpointClass::MoonshotNative);
+        assert!(!policy.strip_reasoning);
+
+        let mut payload = serde_json::Map::new();
+        payload.insert(
+            "reasoning_effort".into(),
+            serde_json::Value::String("max".into()),
+        );
+        policy.apply(&mut payload);
+        assert_eq!(
+            payload.get("reasoning_effort").and_then(|v| v.as_str()),
+            Some("max"),
+            "the effort the adapter clamped must survive to the wire"
+        );
+
+        // Same for the open platform, which is the same endpoint class.
+        let open = build_payload_policy(Some("https://api.moonshot.ai/v1"), "openai-chat", None);
+        assert!(!open.strip_reasoning);
     }
 
     #[test]
