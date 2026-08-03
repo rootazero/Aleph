@@ -6,10 +6,10 @@
 //! 502 — intelligence lives in the prompt (R9), not in wire-format JSON
 //! schema.
 //!
-//! Tools opt in by implementing [`ToolRuntimeState`] and returning a
-//! `RuntimeStateFragment` describing live state. The fragments are
-//! aggregated by the orchestrator before prompt assembly and rendered
-//! by `ToolRuntimeStateLayer`.
+//! Fragments are produced by the orchestrator from the `ToolHealthCache`
+//! (see `orchestrator::harness_bridge::context_blocks::compute_runtime_state_blocks`)
+//! and rendered by `ToolRuntimeStateLayer` into the prompt block. Tools
+//! do not implement any opt-in trait — the cache is the single source.
 
 use serde::{Deserialize, Serialize};
 
@@ -94,17 +94,6 @@ impl RuntimeStateFragment {
         buf.push_str("  </tool>\n");
         buf
     }
-}
-
-/// Opt-in trait for tools that want to surface live state.
-///
-/// The orchestrator calls `describe()` once per turn before prompt
-/// assembly. Tools returning `None` produce no entry in the
-/// `<tool_runtime_state>` block — useful when there's nothing
-/// noteworthy to say this turn.
-#[async_trait::async_trait]
-pub trait ToolRuntimeState: Send + Sync {
-    async fn describe(&self) -> Option<RuntimeStateFragment>;
 }
 
 #[cfg(test)]
