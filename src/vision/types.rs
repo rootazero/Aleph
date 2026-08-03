@@ -150,29 +150,6 @@ impl Rect {
 pub struct VisionResult {
     /// Natural-language description of the image.
     pub description: String,
-
-    /// Detected visual elements (objects, UI components, text regions, etc.).
-    #[serde(default)]
-    pub elements: Vec<VisualElement>,
-
-    /// Overall confidence score in [0.0, 1.0].
-    pub confidence: f64,
-}
-
-/// A single visual element detected in an image.
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
-pub struct VisualElement {
-    /// Human-readable label for this element.
-    pub label: String,
-
-    /// Semantic type of the element (e.g. "button", "text", "icon", "image").
-    pub element_type: String,
-
-    /// Bounding box in pixel coordinates, if available.
-    pub bounds: Option<Rect>,
-
-    /// Detection confidence in [0.0, 1.0].
-    pub confidence: f64,
 }
 
 // ---------------------------------------------------------------------------
@@ -184,23 +161,6 @@ pub struct VisualElement {
 pub struct OcrResult {
     /// Full recognized text concatenated from all lines.
     pub full_text: String,
-
-    /// Individual recognized text lines with optional spatial information.
-    #[serde(default)]
-    pub lines: Vec<OcrLine>,
-}
-
-/// A single line of text recognized by OCR.
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
-pub struct OcrLine {
-    /// Recognized text content.
-    pub text: String,
-
-    /// Bounding box of this line in pixel coordinates, if available.
-    pub bounding_box: Option<Rect>,
-
-    /// Recognition confidence in [0.0, 1.0].
-    pub confidence: f64,
 }
 
 // ---------------------------------------------------------------------------
@@ -215,17 +175,6 @@ pub struct VisionCapabilities {
 
     /// Can perform OCR (text extraction from images).
     pub ocr: bool,
-
-    /// Can detect and localise objects with bounding boxes.
-    pub object_detection: bool,
-}
-
-/// Validate that a confidence value is within the valid range [0.0, 1.0].
-pub fn validate_confidence(confidence: f64) -> Result<f64, &'static str> {
-    if !(0.0..=1.0).contains(&confidence) {
-        return Err("confidence must be in [0.0, 1.0]");
-    }
-    Ok(confidence)
 }
 
 impl VisionCapabilities {
@@ -235,7 +184,6 @@ impl VisionCapabilities {
         Self {
             image_understanding: true,
             ocr: true,
-            object_detection: true,
         }
     }
 
@@ -245,7 +193,6 @@ impl VisionCapabilities {
         Self {
             image_understanding: false,
             ocr: false,
-            object_detection: false,
         }
     }
 }

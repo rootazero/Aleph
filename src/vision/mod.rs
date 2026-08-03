@@ -1,4 +1,4 @@
-//! Vision module — image understanding, OCR, and object detection.
+//! Vision module — image understanding and OCR.
 //!
 //! This module defines the [`VisionProvider`] trait and a [`VisionPipeline`]
 //! that orchestrates one or more providers in a fallback chain.
@@ -11,8 +11,7 @@ pub mod types;
 pub use error::VisionError;
 pub use provider::VisionProvider;
 pub use types::{
-    validate_confidence, ImageFormat, ImageInput, OcrLine, OcrResult, Rect, VisionCapabilities,
-    VisionResult, VisualElement,
+    ImageFormat, ImageInput, OcrResult, Rect, VisionCapabilities, VisionResult,
 };
 
 /// Orchestrates multiple [`VisionProvider`] instances in a fallback chain.
@@ -135,7 +134,6 @@ impl VisionPipeline {
             let pc = p.capabilities();
             caps.image_understanding |= pc.image_understanding;
             caps.ocr |= pc.ocr;
-            caps.object_detection |= pc.object_detection;
         }
         caps
     }
@@ -175,24 +173,12 @@ mod tests {
         ) -> Result<VisionResult, VisionError> {
             Ok(VisionResult {
                 description: format!("[{}] {}", self.tag, prompt),
-                elements: vec![],
-                confidence: 0.95,
             })
         }
 
         async fn ocr(&self, _image: &ImageInput) -> Result<OcrResult, VisionError> {
             Ok(OcrResult {
                 full_text: format!("[{}] recognized text", self.tag),
-                lines: vec![OcrLine {
-                    text: "Hello World".to_string(),
-                    bounding_box: Some(Rect {
-                        x: 0.0,
-                        y: 0.0,
-                        width: 100.0,
-                        height: 20.0,
-                    }),
-                    confidence: 0.99,
-                }],
             })
         }
 
@@ -273,12 +259,9 @@ mod tests {
             .unwrap();
         assert!(result.description.contains("[mock]"));
         assert!(result.description.contains("what is this?"));
-        assert!((result.confidence - 0.95).abs() < f64::EPSILON);
 
         let ocr = pipeline.ocr(&sample_image()).await.unwrap();
         assert!(ocr.full_text.contains("[mock]"));
-        assert_eq!(ocr.lines.len(), 1);
-        assert_eq!(ocr.lines[0].text, "Hello World");
     }
 
     #[tokio::test]
@@ -317,7 +300,6 @@ mod tests {
             caps: VisionCapabilities {
                 image_understanding: false,
                 ocr: true,
-                object_detection: false,
             },
         }));
 
@@ -335,7 +317,6 @@ mod tests {
             caps: VisionCapabilities {
                 image_understanding: true,
                 ocr: false,
-                object_detection: false,
             },
         }));
 
@@ -353,7 +334,6 @@ mod tests {
             caps: VisionCapabilities {
                 image_understanding: false,
                 ocr: true,
-                object_detection: false,
             },
         }));
         // Provider that supports image understanding
@@ -362,7 +342,6 @@ mod tests {
             caps: VisionCapabilities {
                 image_understanding: true,
                 ocr: false,
-                object_detection: false,
             },
         }));
 
@@ -388,7 +367,6 @@ mod tests {
             caps: VisionCapabilities {
                 image_understanding: true,
                 ocr: false,
-                object_detection: false,
             },
         }));
         pipeline.add_provider(Box::new(SuccessProvider {
@@ -396,14 +374,12 @@ mod tests {
             caps: VisionCapabilities {
                 image_understanding: false,
                 ocr: true,
-                object_detection: false,
             },
         }));
 
         let caps = pipeline.capabilities();
         assert!(caps.image_understanding);
         assert!(caps.ocr);
-        assert!(!caps.object_detection);
     }
 
     #[test]
@@ -457,16 +433,6 @@ mod tests {
     }
 
     #[test]
-    fn confidence_validation() {
-        assert_eq!(validate_confidence(0.0).unwrap(), 0.0);
-        assert_eq!(validate_confidence(1.0).unwrap(), 1.0);
-        assert_eq!(validate_confidence(0.5).unwrap(), 0.5);
-
-        assert!(validate_confidence(-0.1).is_err());
-        assert!(validate_confidence(1.1).is_err());
-    }
-
-    #[test]
     fn image_format_mime_and_extension() {
         assert_eq!(ImageFormat::Png.mime_type(), "image/png");
         assert_eq!(ImageFormat::Png.extension(), "png");
@@ -481,12 +447,10 @@ mod tests {
         let all = VisionCapabilities::all();
         assert!(all.image_understanding);
         assert!(all.ocr);
-        assert!(all.object_detection);
 
         let none = VisionCapabilities::none();
         assert!(!none.image_understanding);
         assert!(!none.ocr);
-        assert!(!none.object_detection);
 
         assert_eq!(VisionCapabilities::default(), VisionCapabilities::none());
     }
@@ -526,37 +490,17 @@ mod tests {
         // VisionResult
         let result = VisionResult {
             description: "A cat on a mat".to_string(),
-            elements: vec![VisualElement {
-                label: "cat".to_string(),
-                element_type: "animal".to_string(),
-                bounds: Some(Rect {
-                    x: 10.0,
-                    y: 20.0,
-                    width: 100.0,
-                    height: 80.0,
-                }),
-                confidence: 0.92,
-            }],
-            confidence: 0.95,
         };
         let json = serde_json::to_value(&result).unwrap();
         let round_trip: VisionResult = serde_json::from_value(json).unwrap();
         assert_eq!(round_trip.description, "A cat on a mat");
-        assert_eq!(round_trip.elements.len(), 1);
-        assert_eq!(round_trip.elements[0].label, "cat");
 
         // OcrResult
         let ocr = OcrResult {
             full_text: "Hello World".to_string(),
-            lines: vec![OcrLine {
-                text: "Hello World".to_string(),
-                bounding_box: None,
-                confidence: 0.98,
-            }],
         };
         let json = serde_json::to_value(&ocr).unwrap();
         let round_trip: OcrResult = serde_json::from_value(json).unwrap();
         assert_eq!(round_trip.full_text, "Hello World");
-        assert_eq!(round_trip.lines.len(), 1);
     }
 }

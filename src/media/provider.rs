@@ -76,7 +76,6 @@ mod tests {
         ) -> Result<MediaOutput, MediaError> {
             Ok(MediaOutput::Description {
                 text: format!("[{}] described", self.name),
-                confidence: 0.9,
             })
         }
     }
