@@ -28,7 +28,9 @@ const PROFILES: &[(&str, ProviderPreset)] = &[
             .with_homepage("https://platform.openai.com")
             .with_signup("https://platform.openai.com/api-keys")
             .with_aux_model("gpt-5.4-mini")
-            .with_fallback_models(&["gpt-5.6", "gpt-5.5", "gpt-5.4-mini", "o4-mini"]),
+            // `gpt-5.5` was retired in favour of 5.6; `gpt-5.6-terra` is the
+            // mid-priced 5.6 tier and the natural second rung.
+            .with_fallback_models(&["gpt-5.6", "gpt-5.6-terra", "gpt-5.4-mini", "o4-mini"]),
     ),
     (
         "chatgpt",
@@ -70,7 +72,9 @@ const PROFILES: &[(&str, ProviderPreset)] = &[
         .with_signup("https://console.anthropic.com/settings/keys")
         .with_aux_model("claude-haiku-4-5")
         .with_models_url("https://api.anthropic.com/v1/models")
-        .with_fallback_models(&["claude-sonnet-5", "claude-opus-4-8", "claude-haiku-4-5"]),
+        // Opus 5 replaces Opus 4.8, which Anthropic's catalog now marks
+        // superseded — it sat in this chain as a retry that could only fail.
+        .with_fallback_models(&["claude-sonnet-5", "claude-opus-5", "claude-haiku-4-5"]),
     ),
     (
         "amazon-bedrock",
@@ -120,8 +124,12 @@ const PROFILES: &[(&str, ProviderPreset)] = &[
         .with_homepage("https://ai.google.dev")
         .with_signup("https://aistudio.google.com/app/apikey")
         .with_aux_model("gemini-3-flash-preview")
+        // `gemini-3.6-flash` is the current *stable* flash id; both rungs above
+        // it are `-preview` ids that can change without notice, so a stable
+        // middle rung is what makes this chain a real recovery path.
         .with_fallback_models(&[
             "gemini-3.1-pro-preview",
+            "gemini-3.6-flash",
             "gemini-3-flash-preview",
             "gemini-2.5-flash",
         ]),
@@ -151,20 +159,24 @@ const PROFILES: &[(&str, ProviderPreset)] = &[
             "https://api.moonshot.cn/anthropic",
             "anthropic",
             "#6366f1",
-            "kimi-k2.6",
+            // K3 is Moonshot's current flagship (their own catalog's
+            // default); K2.6 stays the cheap aux tier.
+            "kimi-k3",
         )
         .with_aliases(&["kimi"])
         .with_display("Moonshot / Kimi")
         .with_homepage("https://platform.moonshot.ai")
         .with_signup("https://platform.moonshot.ai/console/api-keys")
         .with_description("Anthropic-compatible endpoint (recommended)")
-        .with_aux_model("kimi-k2.5")
+        .with_aux_model("kimi-k2.6")
         // Kimi server-manages temperature — sending one returns a fixed-value error.
         .with_temperature_policy(super::TemperaturePolicy::Omit)
         // `kimi-k3` is the open platform's K3 flagship (1M window, $3/$15) —
         // offered, not defaulted to: it is ~3.5x the K2.6 rate. `kimi-k2.7-code`
         // is the code-tuned K2.7 the price table already anticipates.
         .with_fallback_models(&[
+            "kimi-k3",
+            "kimi-k2.7-code",
             "kimi-k2.6",
             "kimi-k3",
             "kimi-k2.7-code",
@@ -181,15 +193,19 @@ const PROFILES: &[(&str, ProviderPreset)] = &[
             "https://api.moonshot.ai/v1",
             "openai",
             "#6366f1",
-            "kimi-k2.6",
+            // K3 is Moonshot's current flagship (their own catalog's
+            // default); K2.6 stays the cheap aux tier.
+            "kimi-k3",
         )
         .with_aliases(&["kimi-openai"])
         .with_display("Moonshot / Kimi (OpenAI endpoint)")
         .with_homepage("https://platform.moonshot.ai")
         .with_signup("https://platform.moonshot.ai/console/api-keys")
         .with_description("OpenAI-compatible Kimi K2 / Moonshot chat models")
-        .with_aux_model("kimi-k2.5")
+        .with_aux_model("kimi-k2.6")
         .with_fallback_models(&[
+            "kimi-k3",
+            "kimi-k2.7-code",
             "kimi-k2.6",
             "kimi-k3",
             "kimi-k2.7-code",
@@ -207,15 +223,19 @@ const PROFILES: &[(&str, ProviderPreset)] = &[
             "https://api.moonshot.cn/v1",
             "openai",
             "#6366f1",
-            "kimi-k2.6",
+            // K3 is Moonshot's current flagship (their own catalog's
+            // default); K2.6 stays the cheap aux tier.
+            "kimi-k3",
         )
         .with_aliases(&["kimi-cn"])
         .with_display("Moonshot / Kimi (CN)")
         .with_homepage("https://platform.moonshot.cn")
         .with_signup("https://platform.moonshot.cn/console/api-keys")
         .with_description("China-region (api.moonshot.cn) Kimi K2 / Moonshot models")
-        .with_aux_model("kimi-k2.5")
+        .with_aux_model("kimi-k2.6")
         .with_fallback_models(&[
+            "kimi-k3",
+            "kimi-k2.7-code",
             "kimi-k2.6",
             "kimi-k3",
             "kimi-k2.7-code",
@@ -270,15 +290,20 @@ const PROFILES: &[(&str, ProviderPreset)] = &[
             "https://ark.cn-beijing.volces.com/api/v3",
             "openai",
             "#ff6b35",
-            // Doubao-Seed 1.8 (256K, multimodal) — current Ark flagship,
-            // two generations past the retired doubao-1.5 line.
-            "doubao-seed-1-8-251228",
+            // Doubao-Seed 2.1 Pro (256K, multimodal) — current Ark flagship.
+            "doubao-seed-2-1-pro-260628",
         )
         .with_aliases(&["volcengine", "ark"])
         .with_display("Volcengine Doubao")
         .with_homepage("https://www.volcengine.com/product/ark")
         .with_signup("https://console.volcengine.com/ark")
-        .with_fallback_models(&["doubao-seed-1-8-251228", "doubao-1.5-pro-256k"]),
+        .with_aux_model("doubao-seed-2-1-turbo-260628")
+        .with_fallback_models(&[
+            "doubao-seed-2-1-pro-260628",
+            "doubao-seed-2-1-turbo-260628",
+            // The one Seed model on a 1M window.
+            "doubao-seed-evolving",
+        ]),
     ),
     (
         "siliconflow",
@@ -307,7 +332,9 @@ const PROFILES: &[(&str, ProviderPreset)] = &[
         .with_homepage("https://open.bigmodel.cn")
         .with_signup("https://bigmodel.cn/usercenter/apikeys")
         .with_aux_model("glm-4.7")
-        .with_fallback_models(&["GLM-5.2", "glm-5.1", "glm-4.7"]),
+        // GLM-5.1 is retired in Z.ai's own catalog; GLM-5-Turbo is the live
+        // mid tier that replaces it in the chain.
+        .with_fallback_models(&["GLM-5.2", "glm-5-turbo", "glm-4.7"]),
     ),
     (
         "minimax",
@@ -362,6 +389,25 @@ const PROFILES: &[(&str, ProviderPreset)] = &[
         ]),
     ),
     (
+        "qianfan",
+        ProviderPreset::new(
+            "https://qianfan.baidubce.com/v2",
+            "openai",
+            "#2932e1",
+            "ernie-5.1",
+        )
+        .with_aliases(&["ernie", "baidu"])
+        .with_display("Baidu Qianfan / ERNIE")
+        .with_homepage("https://cloud.baidu.com/product/wenxinworkshop")
+        .with_signup("https://console.bce.baidu.com/qianfan")
+        .with_description("Baidu Qianfan OpenAI-compatible endpoint")
+        .with_aux_model("ernie-5.1")
+        // Qianfan also fronts DeepSeek V4, but mixing a priced rung into an
+        // otherwise vendor-priced chain is what the rate-coverage guard reads
+        // as drift — the ERNIE pair is the vendor's own line.
+        .with_fallback_models(&["ernie-5.1", "ernie-5.0"]),
+    ),
+    (
         "baichuan",
         ProviderPreset::new(
             "https://api.baichuan-ai.com/v1",
@@ -405,11 +451,16 @@ const PROFILES: &[(&str, ProviderPreset)] = &[
             "https://api.stepfun.com/v1",
             "openai",
             "#0ea5e9",
-            "step-1-8k",
+            // The Step-3.x Flash line supersedes the Step-1 generation whose
+            // window was encoded in the id; `step-1-8k` gave the agent an 8K
+            // window to plan against.
+            "step-3.7-flash",
         )
         .with_display("Stepfun")
         .with_homepage("https://stepfun.com")
-        .with_signup("https://platform.stepfun.com"),
+        .with_signup("https://platform.stepfun.com")
+        .with_aux_model("step-3.5-flash")
+        .with_fallback_models(&["step-3.7-flash", "step-3.5-flash"]),
     ),
     (
         "t8star",
@@ -426,13 +477,16 @@ const PROFILES: &[(&str, ProviderPreset)] = &[
             "https://api.groq.com/openai/v1",
             "openai",
             "#f55036",
-            "llama-3.3-70b-versatile",
+            // Groq retired both Llama tiers in favour of the gpt-oss pair.
+            // The same Llama ids stay current on Together / Cerebras /
+            // DeepInfra, which is why the lifecycle rows are Groq-scoped.
+            "openai/gpt-oss-120b",
         )
         .with_display("Groq")
         .with_homepage("https://groq.com")
         .with_signup("https://console.groq.com/keys")
         .with_description("Ultra-fast LPU inference")
-        .with_fallback_models(&["llama-3.3-70b-versatile", "llama-3.1-8b-instant"]),
+        .with_fallback_models(&["openai/gpt-oss-120b", "openai/gpt-oss-20b"]),
     ),
     (
         "cerebras",
@@ -440,12 +494,13 @@ const PROFILES: &[(&str, ProviderPreset)] = &[
             "https://api.cerebras.ai/v1",
             "openai",
             "#f97316",
-            "llama-3.3-70b",
+            "gpt-oss-120b",
         )
         .with_display("Cerebras")
         .with_homepage("https://cerebras.ai")
         .with_signup("https://cloud.cerebras.ai")
-        .with_description("Ultra-fast Llama inference"),
+        .with_description("Ultra-fast open-weight inference")
+        .with_fallback_models(&["gpt-oss-120b", "zai-glm-4.7"]),
     ),
     (
         "together",
@@ -453,11 +508,20 @@ const PROFILES: &[(&str, ProviderPreset)] = &[
             "https://api.together.xyz/v1",
             "openai",
             "#6366f1",
-            "meta-llama/Llama-3.3-70B-Instruct-Turbo",
+            "moonshotai/Kimi-K2.6",
         )
         .with_display("Together.ai")
         .with_homepage("https://www.together.ai")
-        .with_signup("https://api.together.xyz/settings/api-keys"),
+        .with_signup("https://api.together.xyz/settings/api-keys")
+        // Deliberately homogeneous w.r.t. priceability: Together also serves
+        // Llama-3.3, but open weights are (correctly) unpriced, and mixing an
+        // unpriced rung into a chain whose other rungs price is exactly what
+        // `advertised_models_of_priced_vendors_have_rates` reports as drift.
+        .with_fallback_models(&[
+            "moonshotai/Kimi-K2.6",
+            "deepseek-ai/DeepSeek-V4-Pro",
+            "zai-org/GLM-5.2",
+        ]),
     ),
     (
         "perplexity",
@@ -503,13 +567,15 @@ const PROFILES: &[(&str, ProviderPreset)] = &[
             "https://api.cohere.ai/compatibility/v1",
             "openai",
             "#39594d",
-            "command-a-03-2025",
+            // Cohere folded Command A / A-Reasoning / A-Vision into one
+            // flagship; the previous default here was among the retired three.
+            "command-a-plus-05-2026",
         )
         .with_display("Cohere")
         .with_homepage("https://docs.cohere.com/docs/compatibility-api")
         .with_signup("https://dashboard.cohere.com/api-keys")
         .with_description("OpenAI-compatible endpoint (/compatibility/v1)")
-        .with_fallback_models(&["command-a-03-2025", "command-r-plus", "command-r"]),
+        .with_fallback_models(&["command-a-plus-05-2026", "north-mini-code-1-0"]),
     ),
     (
         "fireworks",
@@ -517,11 +583,18 @@ const PROFILES: &[(&str, ProviderPreset)] = &[
             "https://api.fireworks.ai/inference/v1",
             "openai",
             "#ff6b35",
-            "accounts/fireworks/models/llama-v3p3-70b-instruct",
+            // Fireworks writes the generation separator as `p`
+            // (`kimi-k2p6` = Kimi K2.6); `canonicalize_model_id` normalises it
+            // so these still reach the curated capability / price rows.
+            "accounts/fireworks/models/kimi-k2p6",
         )
         .with_display("Fireworks.ai")
         .with_homepage("https://fireworks.ai")
-        .with_signup("https://fireworks.ai/account/api-keys"),
+        .with_signup("https://fireworks.ai/account/api-keys")
+        .with_fallback_models(&[
+            "accounts/fireworks/models/kimi-k2p6",
+            "accounts/fireworks/routers/glm-5p2-fast",
+        ]),
     ),
     (
         "anyscale",
@@ -637,12 +710,18 @@ const PROFILES: &[(&str, ProviderPreset)] = &[
             "https://api.deepinfra.com/v1/openai",
             "openai",
             "#5b8def",
-            "meta-llama/Llama-3.3-70B-Instruct",
+            "deepseek-ai/DeepSeek-V4-Flash",
         )
         .with_display("DeepInfra")
         .with_homepage("https://deepinfra.com/docs")
         .with_signup("https://deepinfra.com/dash/api_keys")
-        .with_description("Open-model inference, OpenAI-compatible"),
+        .with_description("Open-model inference, OpenAI-compatible")
+        .with_fallback_models(&[
+            "deepseek-ai/DeepSeek-V4-Flash",
+            "deepseek-ai/DeepSeek-V4-Pro",
+            "zai-org/GLM-5.2",
+            "moonshotai/Kimi-K2.6",
+        ]),
     ),
     (
         "github-copilot",
@@ -650,13 +729,17 @@ const PROFILES: &[(&str, ProviderPreset)] = &[
             "https://api.githubcopilot.com",
             "openai",
             "#24292f",
-            "gpt-4o-2025-04-09",
+            // Copilot rotates its roster independently of the vendors; the
+            // ids it drops are recorded as `github-copilot`-scoped lifecycle
+            // rows rather than vendor-wide ones.
+            "gpt-5.6-sol",
         )
         .with_aliases(&["copilot"])
         .with_display("GitHub Copilot")
         .with_homepage("https://docs.github.com/copilot")
         .with_signup("https://github.com/settings/copilot")
-        .with_description("Requires Copilot subscription token"),
+        .with_description("Requires Copilot subscription token")
+        .with_fallback_models(&["gpt-5.6-sol", "claude-sonnet-5", "gemini-3.6-flash"]),
     ),
     (
         "lmstudio",
@@ -685,13 +768,17 @@ const PROFILES: &[(&str, ProviderPreset)] = &[
             "https://integrate.api.nvidia.com/v1",
             "openai",
             "#76b900",
-            "meta/llama-3.3-70b-instruct",
+            "nvidia/nemotron-3-ultra-550b-a55b",
         )
         .with_aliases(&["nvidia"])
         .with_display("NVIDIA NIM")
         .with_homepage("https://docs.nvidia.com/nim")
         .with_signup("https://build.nvidia.com")
-        .with_description("NGC-hosted inference catalog"),
+        .with_description("NGC-hosted inference catalog")
+        .with_fallback_models(&[
+            "nvidia/nemotron-3-ultra-550b-a55b",
+            "nvidia/nemotron-3-super-120b-a12b",
+        ]),
     ),
     (
         "inflection",
@@ -711,12 +798,18 @@ const PROFILES: &[(&str, ProviderPreset)] = &[
             "https://api.novita.ai/v3/openai",
             "openai",
             "#0ea5e9",
-            "meta-llama/llama-3.3-70b-instruct",
+            "deepseek/deepseek-v4-pro",
         )
         .with_display("Novita AI")
         .with_homepage("https://novita.ai/docs")
         .with_signup("https://novita.ai/settings/key-management")
-        .with_description("Serverless open-model inference"),
+        .with_description("Serverless open-model inference")
+        .with_fallback_models(&[
+            "deepseek/deepseek-v4-pro",
+            "moonshotai/kimi-k3",
+            "zai-org/glm-5.2",
+            "minimax/minimax-m3",
+        ]),
     ),
     (
         "chutes",
@@ -724,12 +817,18 @@ const PROFILES: &[(&str, ProviderPreset)] = &[
             "https://llm.chutes.ai/v1",
             "openai",
             "#a855f7",
-            "deepseek-ai/DeepSeek-V3-0324",
+            // Chutes serves every model inside a TEE and marks the id `-TEE`.
+            "zai-org/GLM-5.2-TEE",
         )
         .with_display("Chutes")
         .with_homepage("https://chutes.ai")
         .with_signup("https://chutes.ai")
-        .with_description("Bittensor-backed open inference"),
+        .with_description("Bittensor-backed open inference (TEE)")
+        .with_fallback_models(&[
+            "zai-org/GLM-5.2-TEE",
+            "moonshotai/Kimi-K2.6-TEE",
+            "deepseek-ai/DeepSeek-V3.2-TEE",
+        ]),
     ),
     // ─── New presets brought over from hermes-agent plugins/model-providers ───
     (
@@ -766,12 +865,17 @@ const PROFILES: &[(&str, ProviderPreset)] = &[
             "https://api.gmi-serving.com/v1",
             "openai",
             "#0ea5e9",
-            "deepseek-ai/DeepSeek-V3",
+            "deepseek-ai/DeepSeek-V4-Pro",
         )
         .with_display("GMI Cloud")
         .with_homepage("https://www.gmicloud.ai")
         .with_signup("https://www.gmicloud.ai")
-        .with_description("Multi-model direct API"),
+        .with_description("Multi-model direct API")
+        .with_fallback_models(&[
+            "deepseek-ai/DeepSeek-V4-Pro",
+            "zai-org/GLM-5.2-FP8",
+            "openai/gpt-5.6-sol",
+        ]),
     ),
     (
         "nous",
@@ -799,20 +903,64 @@ const PROFILES: &[(&str, ProviderPreset)] = &[
         .with_signup("https://z.ai")
         .with_description("International gateway for Zhipu / GLM models")
         .with_aux_model("glm-4.7")
-        .with_fallback_models(&["glm-5.2", "glm-5", "glm-4.6"]),
+        // Z.ai's roster is 5.2 / 5-Turbo / 5V-Turbo; `glm-5` and `glm-4.6`
+        // have both rolled off it.
+        .with_fallback_models(&["glm-5.2", "glm-5-turbo", "glm-4.7"]),
+    ),
+    (
+        "baseten",
+        ProviderPreset::new(
+            "https://inference.baseten.co/v1",
+            "openai",
+            "#0f172a",
+            "moonshotai/Kimi-K2.6",
+        )
+        .with_display("Baseten")
+        .with_homepage("https://www.baseten.co")
+        .with_signup("https://app.baseten.co/settings/api_keys")
+        .with_description("Dedicated deployments for hosted open models")
+        .with_fallback_models(&[
+            "moonshotai/Kimi-K2.6",
+            "zai-org/GLM-5.2",
+            "deepseek-ai/DeepSeek-V4-Pro",
+        ]),
+    ),
+    (
+        "xiaomi",
+        ProviderPreset::new(
+            "https://api.xiaomimimo.com/v1",
+            "openai",
+            "#ff6900",
+            "mimo-v2.5-pro",
+        )
+        .with_aliases(&["mimo"])
+        .with_display("Xiaomi MiMo")
+        .with_homepage("https://xiaomimimo.com")
+        .with_signup("https://xiaomimimo.com")
+        .with_description("MiMo v2.5 — 1M window, multimodal")
+        .with_aux_model("mimo-v2.5")
+        .with_fallback_models(&["mimo-v2.5-pro", "mimo-v2.5"]),
+    ),
+    (
+        "longcat",
+        ProviderPreset::new(
+            "https://api.longcat.chat/openai",
+            "openai",
+            "#f43f5e",
+            "LongCat-2.0",
+        )
+        .with_display("LongCat (Meituan)")
+        .with_homepage("https://longcat.chat")
+        .with_signup("https://longcat.chat"),
     ),
     (
         "ollama-cloud",
-        ProviderPreset::new(
-            "https://ollama.com/api/v1",
-            "openai",
-            "#0c0c0d",
-            "llama3.3:70b",
-        )
-        .with_display("Ollama Cloud")
-        .with_homepage("https://ollama.com")
-        .with_signup("https://ollama.com")
-        .with_description("Cloud-hosted Ollama (vs. local default)"),
+        ProviderPreset::new("https://ollama.com/api/v1", "openai", "#0c0c0d", "glm-5.2")
+            .with_display("Ollama Cloud")
+            .with_homepage("https://ollama.com")
+            .with_signup("https://ollama.com")
+            .with_description("Cloud-hosted Ollama (vs. local default)")
+            .with_fallback_models(&["glm-5.2", "minimax-m2.7"]),
     ),
 ];
 

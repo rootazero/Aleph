@@ -156,7 +156,7 @@ impl AlephTool for SelectModelTool {
         // turn fail at the provider with an opaque 400 — one turn removed from
         // the tool call that caused it, and with no successor named. The two
         // arms of one selector now behave the same way.
-        if let Some(refusal) = refuse_unusable_model(&args.model) {
+        if let Some(refusal) = refuse_unusable_model(&args.model, args.provider.as_deref()) {
             notify_tool_result(Self::NAME, &refusal, false);
             return Ok(SelectModelOutput {
                 ok: false,
@@ -212,11 +212,15 @@ impl AlephTool for SelectModelTool {
 /// their own names, and refusing the unknown would make Aleph unable to reach
 /// any model released since the binary was built. Only two cases are certain
 /// enough to block: an empty selection, and an id the vendor has retired.
-fn refuse_unusable_model(model: &str) -> Option<String> {
+fn refuse_unusable_model(model: &str, provider: Option<&str>) -> Option<String> {
     if model.trim().is_empty() {
         return Some("No model id given; model unchanged.".to_string());
     }
-    let life = crate::providers::model_catalog::lifecycle_for(model);
+    // `provider` matters: half the retirements Aleph records are one host's word
+    // about its own catalog (Groq dropped both Llama tiers; Together still
+    // serves them). Dropping it here would have meant either refusing ids that
+    // work, or never refusing the ones that do not.
+    let life = crate::providers::model_catalog::lifecycle_for(provider, model);
     if !life.is_deprecated() {
         return None;
     }
@@ -423,16 +427,30 @@ mod tests {
 
     #[test]
     fn refusals_cover_empty_and_retired_only() {
-        assert!(refuse_unusable_model("   ").is_some());
-        assert!(refuse_unusable_model("deepseek-reasoner").is_some());
+        assert!(refuse_unusable_model("   ", None).is_some());
+        assert!(refuse_unusable_model("deepseek-reasoner", None).is_some());
         // Current ids and unknown ids both pass the hard gate.
-        assert!(refuse_unusable_model("claude-sonnet-5").is_none());
-        assert!(refuse_unusable_model("some-brand-new-model").is_none());
+        assert!(refuse_unusable_model("claude-sonnet-5", None).is_none());
+        assert!(refuse_unusable_model("some-brand-new-model", None).is_none());
+    }
+
+    /// The `provider` argument is not decoration: half of Aleph's retirement
+    /// records are one host's word about its own catalog. Dropping it (as this
+    /// call site did) meant a pin that is certain to 404 sailed through.
+    #[test]
+    fn host_scoped_retirement_is_refused_only_for_that_host() {
+        let refusal = refuse_unusable_model("llama-3.3-70b-versatile", Some("groq"))
+            .expect("Groq retired this id");
+        assert!(refusal.contains("gpt-oss-120b"), "{refusal}");
+        // Same id, a host that still serves it.
+        assert!(refuse_unusable_model("llama-3.3-70b-versatile", Some("together")).is_none());
+        // …and with no provider named we cannot attribute the retirement.
+        assert!(refuse_unusable_model("llama-3.3-70b-versatile", None).is_none());
     }
 
     #[test]
     fn preview_ids_get_a_caveat_but_not_a_refusal() {
-        assert!(refuse_unusable_model("gemini-3.1-pro-preview").is_none());
+        assert!(refuse_unusable_model("gemini-3.1-pro-preview", Some("gemini")).is_none());
         let caveat = caveat_for_model("gemini-3.1-pro-preview", Some("gemini")).unwrap();
         assert!(caveat.contains("preview"), "{caveat}");
         // A fully catalogued stable model gets no noise at all.

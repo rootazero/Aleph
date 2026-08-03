@@ -74,15 +74,39 @@ ModelRecord {
 ```rust
 enum ModelStatus { Active, Preview, Deprecated }
 struct ModelLifecycle { status, successor: Option<&str>, note: Option<&str> }
+struct LifecycleRow { provider: Option<&str>, prefix: &str, life: ModelLifecycle }
 ```
 
-**解析顺序**：显式 `LIFECYCLE_TABLE` ▸ id 的 preview 后缀（`-preview` / `-exp` / `-experimental` / `-beta` / `-alpha` / `-rc`）▸ `ACTIVE`。
+**解析顺序**：本 provider 的 scoped 行 ▸ 厂商级（`provider: None`）行 ▸ id 的 preview 后缀（`-preview` / `-exp` / `-experimental` / `-beta` / `-alpha` / `-rc`）▸ `ACTIVE`。
 
 设计要点：
 
-- **兄弟表，不是新字段**。只放非 `Active` 行，`CAPABILITY_TABLE` 的 58 条字面量零改动。同款 pattern：`pricing::TIER_TABLE` 傍 `PRICE_TABLE`。
+- **兄弟表，不是新字段**。只放非 `Active` 行，`CAPABILITY_TABLE` 的字面量零改动。同款 pattern：`pricing::TIER_TABLE` 傍 `PRICE_TABLE`。
 - **preview 是词法派生，不进表**。厂商在 id 里自己写了 `-preview`；这跟剥尾部日期戳同一类（关于命名的事实），不是对模型的推断。
 - **不返回 `Option`**。"没记录"和"正常在服务"对每个消费者都是同一个答案，`Option` 只会把这个塌缩推给五个调用点。
+
+### 3.1 退役是有作用域的 (2026-08 round-2)
+
+> **这张表长期只有 2 行，原因不是厂商不下线模型，而是它知道的退役里有一半"说不出口"。**
+
+`llama-3.3-70b-versatile` 在 **Groq 上**退役、在 Together / Cerebras / DeepInfra 上活得好好的；`deepseek-v3` 从 DeepSeek 自家 API 消失、在所有托管开放权重的地方仍在服务。只按 model id 记，等于在"记下一条真事实顺带记下一条假的"（全局行 ⇒ `select_model` 的硬拒会拒掉能用的 id）和"什么都不记"（守卫恒空转）之间二选一。**两个都不是答案。**
+
+于是行带一个可选 `provider` scope：
+
+| scope | 含义 | 判据 |
+|-------|------|------|
+| `None` | **厂商自己的话** —— 这个模型在任何地方都不该再用 | 该 vendor 自家 catalog 标了 deprecated |
+| `Some(preset_id)` | **某一家宿主对自己目录的话** | 只有转售商 catalog 标了 deprecated |
+
+scoped 行**先查**，所以一家宿主可以早于厂商退役某个 id 而不与全局行打架。
+
+反例同样重要：**三家转售商**（Novita / NVIDIA / opencode）把 `minimax-m2.7` 标为 deprecated，而 **MiniMax 自己的文档仍把它列为在售**——所以表里没有这一行。若按转售商的话写成全局行，`select_model` 会拒掉 `minimax` preset **自己的 aux 模型**。
+
+匹配是**精确比较** provider id（不走别名、不做 substring），由 `lifecycle_scopes_name_a_real_preset` 守卫兜底：scope 打错字 ⇒ 那一行**永远不会触发**，而且是静默的。
+
+### 3.2 provider 必须一路带到查询点
+
+`lifecycle_for(provider, model)` 的四个调用点全都手里有 provider——但 `select_model::refuse_unusable_model` 曾经把它丢掉（同一个函数体两行之后的 `caveat_for_model` 又用了它）。丢掉的后果不是少一个字段，而是**这一类退役整个查不出来**：给 Groq 钉一个必定 404 的 llama id 会一路放行。
 
 ### 消费面
 
@@ -137,13 +161,19 @@ struct ModelLifecycle { status, successor: Option<&str>, note: Option<&str> }
 
 ## 5. id 归一 (`alias.rs::canonicalize_model_id`)
 
-顺序：剥已知 vendor tag（循环，处理嵌套）→ **剩余 host 路径折成末段** → 剥 `:tag` → 剥尾部 8 位日期戳。
+顺序：剥已知 vendor tag（循环，处理嵌套）→ **剩余 host 路径折成末段** → 剥 `:tag` → 剥尾部 8 位日期戳 → **`<数字>p<数字>` 还原为 `<数字>.<数字>`**。
 
-第二步是本轮新增的。`VENDOR_TAGS` 只认识它被写下来时存在的 tag，而宿主一直在发明新形状：`deepseek-ai/…`、`accounts/fireworks/models/…`、`@cf/meta/…`。每一种没列进去的形状都**同时**落空能力表（⇒ 保守 128K ⇒ 过早压缩）和价格表（⇒ Unknown ⇒ `u64::MAX`）。折末段是把固定表泛化，而不是继续追着它补。
+第二步是 2026-07-25 那一轮新增的。`VENDOR_TAGS` 只认识它被写下来时存在的 tag，而宿主一直在发明新形状：`deepseek-ai/…`、`accounts/fireworks/models/…`、`@cf/meta/…`。每一种没列进去的形状都**同时**落空能力表（⇒ 保守 128K ⇒ 过早压缩）和价格表（⇒ Unknown ⇒ `u64::MAX`）。折末段是把固定表泛化，而不是继续追着它补。
+
+最后一步是 2026-08 round-2 新增的：**Fireworks 把版本分隔符写成 `p`**（id 同时是 URL path 段），`kimi-k2p6` 就是 Kimi K2.6、`glm-5p2-fast` 就是 GLM-5.2 Fast。这和折 host 路径是同一类事实（某一家宿主怎么拼这个 id），后果也同一类：`glm-5p2-fast` 曾越过 `glm-5.2` 掉进 GLM-4 家族兜底（**约三分之一的真实价格**），`kimi-k2p6` 越过 `kimi-k2.6` 掉进 Moonshot 旧价。只在**两个数字之间**触发，所以 `-pro` / `gpt-oss` / `-preview` 一律不动。
 
 > **安全边界**：该函数的产物**只做查表 key**，永远不回到线上。出站请求始终携带 operator 的原始 model id，所以折叠 host 路径不可能把请求发错地方。
 
-### 5.1 ⚠️ 同一个模型两套 id：归一解决不了，得靠线上翻译
+### 5.1 已知未闭合：点号 vs 短横的代际拼写
+
+同一个模型，Anthropic 写 `claude-opus-4-8`，GitHub Copilot 写 `claude-opus-4.8`。canonicalise 不统一这两种拼法（全局把 `.` 换成 `-` 会让 `gpt-5.6` / `glm-5.2` / `kimi-k2.6` 这些**表里就是点号**的前缀集体失配）。后果被限制在"手工配置了点号拼法"的情况：那样的 id 会落到更宽的 `claude-opus-4` 行（200K/32K 而不是 1M/128K）。Aleph **自己广告的 id 里没有点号代际拼法**，所以这条今天不咬人。真正的解法是把三张表的查表从"首个前缀命中"改成"最长前缀命中"，那是一次独立的改动，不该和刷新混在一起。
+
+### 5.2 ⚠️ 同一个模型两套 id：归一解决不了，得靠线上翻译
 
 Kimi 是目前唯一一个把**同一个模型**放在两套 id 命名空间下的厂商：开放平台（`api.moonshot.ai`）叫 `kimi-k3`，Kimi Code 订阅端点（`api.kimi.com/coding`）叫 **`k3`**，后者还多一个开放平台没有的 `k3-256k`。`canonicalize_model_id` **对此无能为力**——两个 id 不是同一个字符串的装饰变体，没有可剥的 tag。
 
@@ -153,7 +183,7 @@ Kimi 是目前唯一一个把**同一个模型**放在两套 id 命名空间下�
 
 **推论**：往任何"单一 id 端点"加第二个 id 之前，先看它的归一/翻译函数是不是写成了折叠式。
 
-### 5.2 ⚠️ `reasoning_effort` 有两层闸，写错层会静默吞掉一个旋钮
+### 5.3 ⚠️ `reasoning_effort` 有两层闸，写错层会静默吞掉一个旋钮
 
 "这个字段能不能发"在两个地方回答，**问的不是同一个问题**：
 
@@ -231,6 +261,8 @@ kimi-cli 问每个已配置平台 `GET {base_url}/models`。数据少（基本�
 | `advertised_models_have_capability_rows` | 缺能力行 ⇒ 128K 保守窗口 ⇒ 过早压缩 |
 | `advertised_models_of_priced_vendors_have_rates` | 已定价 vendor 的新模型没补价格行 |
 | `aux_model_is_not_pricier_than_the_default` | 廉价档比主模型贵（**抓出了 grok-3-mini 的 5 倍超收**） |
+| `no_preset_points_its_aux_model_at_a_retired_id` | **aux 槽此前无人守** —— 摘要/分类跑在死 id 上，在没人看的后台路径失败 |
+| `lifecycle_scopes_name_a_real_preset` | scope 打错字 ⇒ 那一行永远不触发，且静默 |
 | `declared_aliases_resolve_to_their_profile` | 别名展开断裂 |
 | `exemptions_still_name_something_real` | 豁免比它豁免的东西活得久 |
 
@@ -241,13 +273,33 @@ kimi-cli 问每个已配置平台 `GET {base_url}/models`。数据少（基本�
 两张显式清单，都带理由，且被 `exemptions_still_name_something_real` 钉住：
 
 - `UNCATALOGUED_FAMILIES` — 按 preset id。"这家的窗口我们没有可核实的数据"。删一条是进步；加一条要写清为什么核实不了。这张表本身就是"哪些 provider 在 picker 里不会显示上下文窗口，以及为什么"的答案。
-- `ENDPOINT_LOCAL_ALIASES` — 按模型 id。只存在于某一个厂商端点、没有公开能力/价格数据的别名（当前只有 `k2p5`）。
+- `ENDPOINT_LOCAL_ALIASES` — 按模型 id。只存在于某一个厂商端点、没有公开能力/价格数据的别名。**当前为空**，而这正是目标状态：唯一的那条（`k2p5`）随着广告它的 `kimi-for-coding` 链一起消失，`exemptions_still_name_something_real` 让"留着一条死豁免"变得不可能。
+
+> **链要在"可定价性"上同质**。`advertised_models_of_priced_vendors_have_rates` 对"已定价 vendor"的定义是**按结果**的（这个 provider 的**另一个**模型能定价 ⇒ 这个也该能）。所以往一条全部走 vendor-inferred 定价的链里加一根开放权重的横杠（Together 的 Llama-3.3、Qianfan 的 DeepSeek V4）会被报成漂移——这不是守卫过严，而是"半条链能算钱、半条不能"本来就是个说不清的成本视图。
 
 ---
 
-## 8. opencode / kimi-cli 对照表 (Gap Analysis)
+## 8. 对照表 (Gap Analysis)
 
-> **改这一层之前先看这张表**。逐维度标注「映射 / 对齐 / 超越 / 有意不移植」。
+> **改这一层之前先看这两张表**。逐维度标注「映射 / 对齐 / 超越 / 有意不移植」。
+
+### 8.1 openclaw（2026-08 round-2）
+
+openclaw 把整份目录放在每个 provider 插件的 `openclaw.plugin.json` 里：`modelCatalog.providers.<id>.models[]`，每条带 `contextWindow` / `maxTokens` / `reasoning` / `input[]` / `cost{}`，**以及 `status: "deprecated"` + `replacedBy`**；另有 provider 级 `suppressions[]`（Google 全靠它记退役）。40 个 provider roster。
+
+| 维度 | openclaw | Aleph | 裁决 |
+|------|----------|-------|------|
+| 退役数据的**位置** | 与模型条目同处一行，加模型时不可能不看到它 | 兄弟表 `LIFECYCLE_TABLE` | **映射数据，不映射结构**。同处一行是 JSON 目录才有的便利；Rust 侧把它塞进 `CAPABILITY_TABLE` 会让 60+ 条 `Active` 字面量全部长出一个恒为 `None` 的字段 |
+| 退役的**作用域** | 天然按 provider（条目住在 provider 目录里） | `LifecycleRow.provider: Option<&str>` | **映射**（见 §3.1）。这是本轮真正的架构补齐——此前结构上说不出"Groq 退役了、Together 没有" |
+| 厂商话 vs 转售商话 | 不区分（每个 provider 各说各的，天然隔离） | `None` = 厂商，`Some(id)` = 宿主 | **超越**：Aleph 是单张表，必须显式区分，否则会把转售商的话当厂商的话（`minimax-m2.7` 就是那个反例） |
+| 目录规模 | 40 provider roster，`status` 覆盖 48 条 | 53 preset，`LIFECYCLE_TABLE` 24 行 | **对齐**（Aleph 只记非 Active 行） |
+| `p` 分隔符（Fireworks） | 每个 provider 自带 id 表，不需要归一 | canonicalise 还原（§5） | **映射到归一层**——Aleph 是共享前缀表，必须归一 |
+| 同一模型的多种拼写 | 每个 provider 目录各写各的 | 单一前缀表 | **已知未闭合**（§5.1） |
+| 价格粒度 | `cost{input,output,cacheRead,cacheWrite}` | 同上 + reasoning 独立费率 + 长上下文 tier | **超越** |
+| 订阅端点的 `cost: 0` | 照登 `0` | 记 `None`（未记录） | **有意不同**：`0` 会被读成"免费"并让 `cost_aware` 把它排第一 |
+| 远端目录 overlay | `remote-overlay.ts` / `remote-refresh.ts`（可拉线上目录覆盖本地） | 无 | **有意不移植**（R3，见 §9） |
+
+### 8.2 opencode / kimi-cli（2026-07-25 round-1）
 
 | 维度 | opencode | kimi-cli | Aleph | 裁决 |
 |------|----------|----------|-------|------|
@@ -280,6 +332,15 @@ kimi-cli 问每个已配置平台 `GET {base_url}/models`。数据少（基本�
 - **让 discovery 覆盖窗口/价格** — `/models` 响应基本不带这些；用它去覆盖策展数据是拿低质量数据换高质量数据。
 - **给 `providers.modelsRefresh` 单独加 RPC 权限层** — Gateway 的 RPC 面没有 per-method tier（授权即 operator，见 `method_authz.rs` 的模块注释）；它和 `providers.catalog` / `providers.healthcheck` 同在一道墙后。
 
+以下是 2026-08 round-2 评估后**明确不做**的（不是遗漏）：
+
+- **移植 openclaw 的远端目录 overlay**（`model-catalog/remote-overlay.ts` + `remote-refresh.ts`）— 与"拉 models.dev"同一条理由：R3。
+- **照抄 `cost: 0`** — 订阅制端点（`kimi-for-coding` / NVIDIA NIM 免费档 / Qwen Token Plan）在 openclaw 目录里价格全是 `0`。那是"未公布"，不是"免费"，而 `unpriced_cost` 会把真正的 `0` 当成最便宜的候选排第一。这些一律记 `None`。
+- **改 `novita` / `github-copilot` / `stepfun` 的 `base_url`** — openclaw 用的是 `api.novita.ai/openai/v1`、`api.individual.githubcopilot.com`、`api.stepfun.ai`，与 Aleph 现有的三个都不同。两边都可能是对的（这几家都有多条并存的兼容路径），而改 preset 默认 `base_url` 是**唯一一类能把已经在工作的配置弄坏**的改动。只刷新模型 id，端点不动。
+- **改 `xai` 默认** — Venice 转售 `grok-4-5`、openclaw 的 suppressions 提到 `grok-4.20-*`，但 openclaw 自己 xAI 那条链的 `targetModel` 仍然是 `grok-4.3`，和 Aleph 一致。没有比现状更强的证据，就不动。
+- **升级 `siliconflow` / `hunyuan`** — openclaw 没有对应 provider 条目（Tencent 那条走的是另一个 `tokenhub` 端点），凭猜测把默认改到 `deepseek-v4` / `hy3` 就是把"陈旧但能用"换成"可能 404"。
+- **把 `advertised_models_of_priced_vendors_have_rates` 放宽成"允许混合"** — 半条链能算钱半条不能，产生的成本视图比 `Unknown` 更难解释。正解是让链在可定价性上同质（§7）。
+
 ---
 
 ## 10. 常见修改的落点
@@ -292,7 +353,9 @@ kimi-cli 问每个已配置平台 `GET {base_url}/models`。数据少（基本�
 | 成本 | `pricing.rs`（`RateCard` = picker 的费率投影） |
 | 按成本路由 | `[route] load_balance = "cost_aware"`；连线点 `failover/provider.rs::price_hint`，sort 在 `route_policy::balance_group`。**候选的 tier 从 `with_tier_catalog` 来**（2026-07-27）——此前 live 派生的候选一律 `Unknown`，`unpriced_cost` 因此把**免费本地端点排最后**，与本表第二次修复的方向正好相反 |
 | **给模型记录加一个新维度** | **`model_catalog/record.rs::resolve` 一处** |
-| **某模型被厂商下线** | **`lifecycle.rs::LIFECYCLE_TABLE` 加一行（带 successor）** |
+| **某模型被厂商下线** | **`lifecycle.rs::LIFECYCLE_TABLE` 加一行，`provider: None`（带 successor）** |
+| **某模型只在一家宿主上下线** | **同表，`provider: Some("<preset id>")`** —— 别写成全局行，那会拒掉别处能用的 id（§3.1） |
+| 某宿主用了别的 id 拼法 | `alias.rs::canonicalize_model_id`（host 路径折末段 / `p` 分隔符）；点号-短横见 §5.1 |
 | **默认模型过期了？** | **先跑 `cargo test -p alephcore --lib drift_tests`** |
 | **要一个表里没有的新模型** | **`list_models { refresh: true }` 或 `providers.modelsRefresh`** |
 | 子代理 / MoA 扇出跨厂商 | `provider/model` 限定名；消费点 `agents/runtime.rs::resolve_spawn_route`（见 §4.5 round-7）。守卫是"前缀须命中已配置 provider 才剥离"，**别改成无守卫剥离**。主循环侧同型解析是 `thinker/mod.rs::MultiProviderRegistry::get`（同一守卫；此前并排的 `resolve_model_to_provider_and_model` 只服务那条已 CUT 的预测式 `resolve_with_fallback`，见 §3.6 round-3） |

@@ -173,6 +173,25 @@ const PRICE_TABLE: &[(&str, &[Rates])] = &[
                 cache_creation_per_mtok: Some(12.50),
                 reasoning_per_mtok: None,
             },
+            Rates {
+                // Mythos 5 shares Fable 5's rate card.
+                model_prefix: "claude-mythos-5",
+                input_per_mtok: Some(10.0),
+                output_per_mtok: Some(50.0),
+                cache_read_per_mtok: Some(1.0),
+                cache_creation_per_mtok: Some(12.50),
+                reasoning_per_mtok: None,
+            },
+            Rates {
+                // Opus 5 — supersedes the (now retired) Opus 4.8 at the same
+                // $5/$25 the 4.5+ line moved to.
+                model_prefix: "claude-opus-5",
+                input_per_mtok: Some(5.0),
+                output_per_mtok: Some(25.0),
+                cache_read_per_mtok: Some(0.50),
+                cache_creation_per_mtok: Some(6.25),
+                reasoning_per_mtok: None,
+            },
             // Opus 4.5+ dropped to $5/$25; the broad `claude-opus-4`
             // fallback below keeps the 4.0/4.1-era $15/$75.
             Rates {
@@ -266,12 +285,34 @@ const PRICE_TABLE: &[(&str, &[Rates])] = &[
         &[
             // GPT-5 family (openclaw catalog). Dotted specifics precede the
             // broad `gpt-5` fallback. 5.6 is the current default.
+            //
+            // The 5.6 tiers are NOT flat-rated: Terra is half the flagship and
+            // Luna a fifth of it. Capabilities can share one `gpt-5.6` row
+            // because the shape is identical; rates cannot, and these two must
+            // precede `gpt-5.6` or they would silently bill at 5x.
             Rates {
+                model_prefix: "gpt-5.6-terra",
+                input_per_mtok: Some(2.50),
+                output_per_mtok: Some(15.0),
+                cache_read_per_mtok: Some(0.25),
+                cache_creation_per_mtok: Some(3.125),
+                reasoning_per_mtok: None,
+            },
+            Rates {
+                model_prefix: "gpt-5.6-luna",
+                input_per_mtok: Some(1.0),
+                output_per_mtok: Some(6.0),
+                cache_read_per_mtok: Some(0.10),
+                cache_creation_per_mtok: Some(1.25),
+                reasoning_per_mtok: None,
+            },
+            Rates {
+                // Covers plain `gpt-5.6` and the `-sol` tier, which share it.
                 model_prefix: "gpt-5.6",
                 input_per_mtok: Some(5.0),
                 output_per_mtok: Some(30.0),
                 cache_read_per_mtok: Some(0.50),
-                cache_creation_per_mtok: None,
+                cache_creation_per_mtok: Some(6.25),
                 reasoning_per_mtok: None,
             },
             Rates {
@@ -421,6 +462,49 @@ const PRICE_TABLE: &[(&str, &[Rates])] = &[
                 cache_creation_per_mtok: None,
                 reasoning_per_mtok: Some(12.0),
             },
+            // The Gemini 3.x **flash** tiers are ~20x the 2.0-flash rate the
+            // broad `gemini` row below carries. Without these rows every 3.x
+            // flash id — including the `gemini` preset's own aux model — priced
+            // at $0.075/$0.30, which is not a rounding error: it is the figure
+            // `cost_aware` sorts on and the one a run's cost estimate reports.
+            // `-lite` must precede `-flash`, being a longer prefix of neither.
+            Rates {
+                model_prefix: "gemini-3.6-flash",
+                input_per_mtok: Some(1.50),
+                output_per_mtok: Some(7.50),
+                cache_read_per_mtok: Some(0.15),
+                cache_creation_per_mtok: None,
+                reasoning_per_mtok: Some(7.50),
+            },
+            Rates {
+                model_prefix: "gemini-3.5-flash-lite",
+                input_per_mtok: Some(0.30),
+                output_per_mtok: Some(2.50),
+                cache_read_per_mtok: Some(0.03),
+                cache_creation_per_mtok: None,
+                reasoning_per_mtok: Some(2.50),
+            },
+            Rates {
+                model_prefix: "gemini-3.5-flash",
+                input_per_mtok: Some(1.50),
+                output_per_mtok: Some(9.0),
+                cache_read_per_mtok: Some(0.15),
+                cache_creation_per_mtok: None,
+                reasoning_per_mtok: Some(9.0),
+            },
+            Rates {
+                // `gemini-3-flash-preview` (the aux model): Google has not
+                // published a rate for the preview id separately, so the 3.x
+                // flash tier rate stands in. That errs *high* rather than 20x
+                // low, which is the safe direction for both a cost estimate and
+                // for `cost_aware` (it can never rank an expensive model first).
+                model_prefix: "gemini-3-flash",
+                input_per_mtok: Some(1.50),
+                output_per_mtok: Some(7.50),
+                cache_read_per_mtok: Some(0.15),
+                cache_creation_per_mtok: None,
+                reasoning_per_mtok: Some(7.50),
+            },
             Rates {
                 model_prefix: "gemini-2.5-pro",
                 input_per_mtok: Some(1.25),
@@ -457,9 +541,9 @@ const PRICE_TABLE: &[(&str, &[Rates])] = &[
             Rates {
                 // ¥3 in / ¥6 out / ¥0.025 cache-hit.
                 model_prefix: "deepseek-v4-pro",
-                input_per_mtok: Some(0.42),
-                output_per_mtok: Some(0.83),
-                cache_read_per_mtok: Some(0.0035),
+                input_per_mtok: Some(0.435),
+                output_per_mtok: Some(0.87),
+                cache_read_per_mtok: Some(0.003_625),
                 cache_creation_per_mtok: None,
                 reasoning_per_mtok: None,
             },
@@ -586,6 +670,15 @@ const PRICE_TABLE: &[(&str, &[Rates])] = &[
             },
             // K2.5/K2.6/K2.7 published USD rates (platform.kimi.ai) differ from
             // the legacy family fallback below. K2.7-code shares K2.6's tier.
+            Rates {
+                // K3 — Moonshot's current flagship, a tier above the K2 line.
+                model_prefix: "kimi-k3",
+                input_per_mtok: Some(3.0),
+                output_per_mtok: Some(15.0),
+                cache_read_per_mtok: Some(0.30),
+                cache_creation_per_mtok: None,
+                reasoning_per_mtok: None,
+            },
             Rates {
                 model_prefix: "kimi-k2.7",
                 input_per_mtok: Some(0.95),
@@ -738,6 +831,31 @@ const PRICE_TABLE: &[(&str, &[Rates])] = &[
             },
         ],
     ),
+    // ── Baidu ERNIE (Qianfan) ────────────────────────────────────────────
+    // Qianfan publishes in RMB; these are its own USD figures. ERNIE 5.0 (the
+    // multimodal reasoning tier) costs more than 5.1, so 5.1 must precede it
+    // only for readability — the prefixes do not overlap.
+    (
+        "baidu",
+        &[
+            Rates {
+                model_prefix: "ernie-5.1",
+                input_per_mtok: Some(0.591),
+                output_per_mtok: Some(2.658),
+                cache_read_per_mtok: None,
+                cache_creation_per_mtok: None,
+                reasoning_per_mtok: None,
+            },
+            Rates {
+                model_prefix: "ernie-5.0",
+                input_per_mtok: Some(0.886),
+                output_per_mtok: Some(3.544),
+                cache_read_per_mtok: None,
+                cache_creation_per_mtok: None,
+                reasoning_per_mtok: None,
+            },
+        ],
+    ),
     // ── Volcengine Doubao (Ark) ──────────────────────────────────────────
     // Previously ABSENT: `canonical_provider_id` had no doubao branch, so every
     // doubao run reported CostStatus::Unknown. Now wired (alias.rs) + priced.
@@ -746,11 +864,31 @@ const PRICE_TABLE: &[(&str, &[Rates])] = &[
         "doubao",
         &[
             Rates {
-                // Doubao-Seed flagship line (Seed 1.x/2.x). Mid-tier estimate.
+                // Seed 2.1 Pro and Seed Evolving share the top tier — 2x the
+                // Turbo rate the family row below carries, so both need to
+                // precede it.
+                model_prefix: "doubao-seed-2-1-pro",
+                input_per_mtok: Some(0.885),
+                output_per_mtok: Some(4.427),
+                cache_read_per_mtok: Some(0.177),
+                cache_creation_per_mtok: None,
+                reasoning_per_mtok: None,
+            },
+            Rates {
+                model_prefix: "doubao-seed-evolving",
+                input_per_mtok: Some(0.885),
+                output_per_mtok: Some(4.427),
+                cache_read_per_mtok: Some(0.177),
+                cache_creation_per_mtok: None,
+                reasoning_per_mtok: None,
+            },
+            Rates {
+                // Doubao-Seed Turbo tier — the published Seed 2.1 Turbo rate,
+                // and the family default for other Seed ids.
                 model_prefix: "doubao-seed",
-                input_per_mtok: Some(0.42),
-                output_per_mtok: Some(2.08),
-                cache_read_per_mtok: Some(0.083),
+                input_per_mtok: Some(0.443),
+                output_per_mtok: Some(2.214),
+                cache_read_per_mtok: Some(0.0885),
                 cache_creation_per_mtok: None,
                 reasoning_per_mtok: None,
             },
@@ -1251,6 +1389,84 @@ mod tests {
         assert!(rate_card("groq", "llama-3.3-70b-versatile").is_none());
     }
 
+    /// The open-weight stance, pinned across every family that now reaches a
+    /// preset's advertised set.
+    ///
+    /// `gpt-oss` is the one that needs a guard rather than a comment: it infers
+    /// vendor `openai` (OpenAI did release the weights), so the day somebody
+    /// adds a broad `gpt` row to the OpenAI section, Groq-, Cerebras- and
+    /// Baseten-hosted gpt-oss would silently start billing at OpenAI's hosted
+    /// rate. Nemotron has the same shape via NVIDIA.
+    #[test]
+    fn open_weight_families_stay_unpriced() {
+        for (provider, model) in [
+            ("groq", "openai/gpt-oss-120b"),
+            ("groq", "openai/gpt-oss-20b"),
+            ("cerebras", "gpt-oss-120b"),
+            ("baseten", "openai/gpt-oss-120b"),
+            ("nvidia-nim", "nvidia/nemotron-3-ultra-550b-a55b"),
+            ("together", "meta-llama/Llama-3.3-70B-Instruct-Turbo"),
+        ] {
+            assert!(
+                rate_card(provider, model).is_none(),
+                "{provider}/{model} must stay unpriced: no vendor sells this \
+                 inference, and each host charges its own rate"
+            );
+        }
+    }
+
+    /// The Fireworks `p` separator is a pricing correctness issue, not just a
+    /// tidiness one — both of its shipped ids used to fall past their own rate
+    /// row into a much cheaper family fallback.
+    #[test]
+    fn fireworks_p_separator_ids_reach_their_own_rate() {
+        let kimi = rate_card("fireworks", "accounts/fireworks/models/kimi-k2p6")
+            .expect("kimi-k2p6 must price");
+        assert_eq!(kimi.input_per_mtok, Some(0.95));
+        let glm = rate_card("fireworks", "accounts/fireworks/routers/glm-5p2-fast")
+            .expect("glm-5p2-fast must price");
+        assert_eq!(glm.input_per_mtok, Some(1.40));
+    }
+
+    /// Gemini 3.x flash used to inherit the 2.0-flash rate from the broad
+    /// `gemini` row — a 20x under-report on the tier the `gemini` preset's own
+    /// aux model sits in.
+    #[test]
+    fn gemini_3x_flash_is_not_priced_as_2_0_flash() {
+        for model in [
+            "gemini-3.6-flash",
+            "gemini-3.5-flash",
+            "gemini-3-flash-preview",
+        ] {
+            let card = rate_card("gemini", model).unwrap_or_else(|| panic!("{model} must price"));
+            assert!(
+                card.input_per_mtok.unwrap_or(0.0) > 1.0,
+                "{model} priced at {:?}/Mtok — that is the 2.0-flash rate",
+                card.input_per_mtok
+            );
+        }
+        // …and the lite tier is genuinely cheaper, so its longer prefix has to
+        // win over `gemini-3.5-flash`.
+        let lite = rate_card("gemini", "gemini-3.5-flash-lite").expect("lite must price");
+        assert_eq!(lite.input_per_mtok, Some(0.30));
+    }
+
+    /// The three GPT-5.6 tiers share one capability row but not one rate card.
+    #[test]
+    fn gpt_5_6_tiers_price_separately() {
+        let flagship = rate_card("openai", "gpt-5.6").expect("gpt-5.6");
+        let terra = rate_card("openai", "gpt-5.6-terra").expect("terra");
+        let luna = rate_card("openai", "gpt-5.6-luna").expect("luna");
+        assert_eq!(flagship.input_per_mtok, Some(5.0));
+        assert_eq!(terra.input_per_mtok, Some(2.50));
+        assert_eq!(luna.input_per_mtok, Some(1.0));
+        // `-sol` deliberately shares the flagship row.
+        assert_eq!(
+            rate_card("openai", "gpt-5.6-sol").unwrap().input_per_mtok,
+            Some(5.0)
+        );
+    }
+
     #[test]
     fn minimax_pricing_reachable_after_vendor_wiring() {
         // The `minimax` preset previously priced as Unknown because
@@ -1436,8 +1652,9 @@ mod tests {
 
     #[test]
     fn deepseek_v4_pro_more_specific_prefix_wins() {
-        // v4-pro ($0.42 in + $0.83 out = $1.25 for 1M each) is a more specific
-        // prefix than the broad `deepseek` fallback ($0.14 + $0.28 = $0.42).
+        // v4-pro ($0.435 in + $0.87 out = $1.305 for 1M each) is a more
+        // specific prefix than the broad `deepseek` fallback
+        // ($0.14 + $0.28 = $0.42).
         let breakdown = TokenBreakdown {
             input: 1_000_000,
             output: 1_000_000,
@@ -1445,8 +1662,8 @@ mod tests {
         };
         let pro = estimate("deepseek", "deepseek-v4-pro", &breakdown);
         assert!(
-            (pro.usd - 1.25).abs() < 1e-6,
-            "expected $1.25, got ${}",
+            (pro.usd - 1.305).abs() < 1e-6,
+            "expected $1.305, got ${}",
             pro.usd
         );
         let broad = estimate("deepseek", "deepseek-chat", &breakdown);
