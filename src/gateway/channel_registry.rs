@@ -464,11 +464,29 @@ impl ChannelRegistry {
     /// background retry — then the original error is still returned so callers
     /// observe unchanged semantics. When no store is attached this is a
     /// zero-overhead passthrough to [`send_attempt`](Self::send_attempt).
+    ///
+    /// When a store *is* attached, this message's conversation gets its queued
+    /// backlog flushed first
+    /// ([`flush_conversation`](super::delivery_queue::flush_conversation)) so a
+    /// live send cannot overtake replies that failed earlier. That flush is
+    /// deliberately invisible from here: it settles nothing this call reports
+    /// on, and whether it ran or was skipped, the value returned below is the
+    /// same one this method has always returned.
     pub async fn send(
         &self,
         channel_id: &ChannelId,
         message: OutboundMessage,
     ) -> ChannelResult<SendResult> {
+        if let Some(store) = &self.delivery_store {
+            super::delivery_queue::flush_conversation(
+                self,
+                store,
+                channel_id.as_str(),
+                message.conversation_id.as_str(),
+            )
+            .await;
+        }
+
         // `send_attempt` borrows the message (it clones once per transport
         // attempt internally), so the persist-on-failure path costs no extra
         // deep copy of the payload — which for a message carrying inline
@@ -477,7 +495,7 @@ impl ChannelRegistry {
         match self.send_attempt(channel_id, &message).await {
             Ok(sent) => Ok(sent),
             Err(e) => {
-                self.maybe_enqueue(channel_id, &message, &e);
+                self.maybe_enqueue(channel_id, &message, &e).await;
                 Err(e)
             }
         }
@@ -487,13 +505,24 @@ impl ChannelRegistry {
     /// attached and the error is duplicate-safe to retry. Best-effort: a
     /// persistence failure is logged and swallowed (the original send error is
     /// what the caller sees).
-    fn maybe_enqueue(&self, channel_id: &ChannelId, message: &OutboundMessage, err: &ChannelError) {
+    async fn maybe_enqueue(
+        &self,
+        channel_id: &ChannelId,
+        message: &OutboundMessage,
+        err: &ChannelError,
+    ) {
         let Some(store) = &self.delivery_store else {
             return;
         };
         if !super::delivery_queue::should_enqueue(err) {
             return;
         }
+        // Ordered after the two cheap refusals above so a message that is never
+        // going to be queued never pays for a file read.
+        let custody =
+            super::delivery_queue::take_media_custody(message, store.config().max_payload_bytes)
+                .await;
+        let message = custody.as_ref().unwrap_or(message);
         let next =
             super::delivery_queue::now_secs() + store.config().initial_backoff.as_secs() as i64;
         match store.enqueue(channel_id.as_str(), message, &format!("{err:?}"), next) {

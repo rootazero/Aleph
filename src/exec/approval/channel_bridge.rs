@@ -269,15 +269,20 @@ impl ChannelApprovalBridge {
     }
 
     /// Send a friendly timeout notice to the channel (best-effort).
+    ///
+    /// Through `ChannelRegistry::send`, not the channel handle directly: the
+    /// registry is the chokepoint that owns rate-limit retry, the durable queue
+    /// and per-conversation ordering. Reaching past it made this notice the one
+    /// outbound message with none of those — dropped outright if the channel
+    /// happened to be reconnecting, and able to overtake queued replies for the
+    /// same chat. "Best-effort" is the `let _ =` here, not a reason to bypass
+    /// the send path.
     async fn send_timeout_notice(&self, channel_id: &ChannelId, conversation_id: &ConversationId) {
-        if let Some(channel) = self.registry.get(channel_id).await {
-            let ch = channel.read().await;
-            let msg = OutboundMessage::text(
-                conversation_id.as_str(),
-                "\u{23f1} 审批请求已超时，操作被拒绝。",
-            );
-            let _ = ch.send(msg).await;
-        }
+        let msg = OutboundMessage::text(
+            conversation_id.as_str(),
+            "\u{23f1} 审批请求已超时，操作被拒绝。",
+        );
+        let _ = self.registry.send(channel_id, msg).await;
     }
 
     /// Test helper: a bridge that always returns `ApprovalOutcome::Approved`.
