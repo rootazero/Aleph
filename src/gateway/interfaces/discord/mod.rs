@@ -803,14 +803,27 @@ impl Channel for DiscordChannel {
             }
         }
 
-        // Add attachments
+        // Add attachments. `data` first, then `path` — the same precedence
+        // telegram and slack use. The `path` arm used to be missing entirely,
+        // which made every path-backed attachment (TTS output, harvested media)
+        // vanish without a word while `ChannelCapabilities::attachments` kept
+        // promising Discord could carry them.
         for attachment in &message.attachments {
+            let filename = attachment
+                .filename
+                .clone()
+                .unwrap_or_else(|| "attachment".to_string());
             if let Some(data) = &attachment.data {
-                let filename = attachment
-                    .filename
-                    .clone()
-                    .unwrap_or_else(|| "attachment".to_string());
                 builder = builder.add_file(CreateAttachment::bytes(data.clone(), filename));
+            } else if let Some(path) = &attachment.path {
+                match CreateAttachment::path(path).await {
+                    Ok(file) => builder = builder.add_file(file),
+                    Err(e) => {
+                        return Err(ChannelError::SendFailed(format!(
+                            "Failed to read attachment {path}: {e}"
+                        )))
+                    }
+                }
             }
         }
 

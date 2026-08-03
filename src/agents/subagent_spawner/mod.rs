@@ -364,6 +364,26 @@ pub async fn spawn(base: &SpawnerBase, req: SpawnRequest<'_>) -> Result<LoopRunR
             .await
             .map_err(|e| format!("sub-agent failed: emit UserMessage: {e}"))?;
 
+        // Emit SubagentSpawned to the parent session.
+        let child_key = child_id.clone();
+        let flow_name = req.agent_def.id.clone();
+        if let Some(ref parent_str) = base.parent_session_id {
+            if let Ok(parent_id) = serde_json::from_str::<SessionId>(parent_str) {
+                let _ = base
+                    .session
+                    .emit_event(
+                        &parent_id,
+                        SessionEvent::SubagentSpawned {
+                            turn_id: turn,
+                            child_id: child_key,
+                            flow: flow_name,
+                            at: now_ms(),
+                        },
+                    )
+                    .await;
+            }
+        }
+
         // 4. Build the agent-scoped system prompt. `PromptBuilder::with_agent`
         //    pulls in the AgentRoleLayer; `build_system_prompt(&[])` is fine —
         //    tool schemas are delivered via native tool_use, not the prompt.
@@ -598,6 +618,25 @@ pub async fn spawn(base: &SpawnerBase, req: SpawnRequest<'_>) -> Result<LoopRunR
                 let result =
                     extract_run_result(base.session.as_ref(), &child_id, hit_limit, total_tokens)
                         .await?;
+
+                // Emit SubagentReturned to the parent session.
+                let summary = result.final_text.clone().unwrap_or_default();
+                if let Some(ref parent_str) = base.parent_session_id {
+                    if let Ok(parent_id) = serde_json::from_str::<SessionId>(parent_str) {
+                        let _ = base
+                            .session
+                            .emit_event(
+                                &parent_id,
+                                SessionEvent::SubagentReturned {
+                                    turn_id: turn,
+                                    child_id: child_id.clone(),
+                                    summary: summary.clone(),
+                                    at: now_ms(),
+                                },
+                            )
+                            .await;
+                    }
+                }
 
                 // 9. Spec 1 G2 — fire-and-forget Delegation emit so CompressionService
                 //    can distil parent-side lessons. Skipped silently when no writer is

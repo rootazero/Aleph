@@ -20,8 +20,10 @@ use tokio::sync::Notify;
 #[repr(u8)]
 pub enum WakePriority {
     /// Triggered by the regular interval timer
+    #[allow(dead_code)]
     Interval = 0,
     /// Triggered by a system event (e.g. network change, OS wake)
+    #[allow(dead_code)]
     SystemEvent = 1,
     /// Triggered by explicit user action (highest priority)
     UserAction = 2,

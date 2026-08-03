@@ -9,5 +9,4 @@ pub mod delivery;
 pub mod reaper;
 pub mod retry_hint;
 pub mod schedule;
-pub mod store;
 pub mod targets;

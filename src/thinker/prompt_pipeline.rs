@@ -7,12 +7,12 @@ use super::layers::{
     AgentCatalogLayer, AgentRoleLayer, ChainContextLayer, CitationStandardsLayer,
     CuratedMemoryLayer, DoctorRepairHintLayer, EnvironmentLayer, ExecutionPlanLayer,
     ExtraFilesLayer, GraphTopologyLayer, GuidelinesLayer, IdentityFilesLayer, LanguageLayer,
-    McpInstructionsLayer, MemoryProtocolLayer, MultiStepConductLayer, OperatingEnvelopeLayer,
-    OperationalGuidelinesLayer, ProfileLayer, ProtocolTokensLayer, ProviderGuidanceLayer,
-    RoleLayer, RuntimeCapabilitiesLayer, RuntimeContextLayer, SecurityLayer, SessionBudgetLayer,
-    SessionContextGuideLayer, SkillInstructionsLayer, SoulLayer, SpecialActionsLayer,
-    StandingGoalLayer, StrategyLayer, StrategyPointerLayer, TimerLoopLayer, ToolRuntimeStateLayer,
-    VoiceModeLayer,
+    McpInstructionsLayer, MemoryProtocolLayer, MemoryWindowLayer, MultiStepConductLayer,
+    OperatingEnvelopeLayer, OperationalGuidelinesLayer, ProfileLayer, ProtocolTokensLayer,
+    ProviderGuidanceLayer, RoleLayer, RuntimeCapabilitiesLayer, RuntimeContextLayer, SecurityLayer,
+    SessionBudgetLayer, SessionContextGuideLayer, SkillInstructionsLayer, SoulLayer,
+    SpecialActionsLayer, StandingGoalLayer, StrategyLayer, StrategyPointerLayer, TimerLoopLayer,
+    ToolRuntimeStateLayer, VoiceModeLayer,
 };
 use super::prompt_layer::{AssemblyPath, LayerInput, LayerStability, PromptLayer};
 use super::prompt_mode::PromptMode;
@@ -290,6 +290,10 @@ impl PromptPipeline {
             // discovery reaches the model through the `list_models` tool.
             Box::new(SkillInstructionsLayer),
             Box::new(SpecialActionsLayer),
+            // @1105, beside `special_actions` — the two layers that rank tools
+            // against each other. It was @1745/Dynamic until 2026-08-03; see
+            // `MemoryWindowLayer` below for why the pair split.
+            Box::new(MemoryProtocolLayer),
             Box::new(DoctorRepairHintLayer),
             // ResponseFormatLayer was removed (2026-05-10..06-08): it mandated
             // the legacy `{reasoning, action}` JSON envelope, which had no live
@@ -308,7 +312,15 @@ impl PromptPipeline {
             // message (`HarnessDeps::recall_context`) instead of the system
             // prompt — varying bytes here re-keyed the conversation-prefix
             // cache every run. Curated memory stays at @60 (Stable).
-            Box::new(MemoryProtocolLayer),
+            //
+            // `MemoryProtocolLayer` used to sit here too, at @1745/Dynamic. It
+            // carried two things with opposite cache profiles — a constant
+            // destination ladder and the per-turn window claim below — and was
+            // rated by the volatile half, so ~1,037 B of never-changing text
+            // rode the unmarked dynamic block. The ladder moved to @1105/Stable
+            // and only the claim stayed. A layer is classified as one thing;
+            // when its halves disagree, the answer is two layers.
+            Box::new(MemoryWindowLayer),
             Box::new(SessionContextGuideLayer),
             Box::new(TimerLoopLayer),
             Box::new(GraphTopologyLayer),
@@ -501,7 +513,16 @@ mod tests {
         // by default — so flipping a composer pill mid-conversation rewrote a byte
         // in the cacheable prefix and invalidated the whole conversation's prompt
         // cache. Net prompt bytes unchanged; only the cache zone differs.
-        assert_eq!(pipeline.layer_count(), 36);
+        // → 37 (MemoryWindowLayer @1745 Dynamic, 2026-08-03): `memory_protocol`
+        // split in two. It carried a constant destination ladder AND a per-turn
+        // window claim, and a layer gets one `stability()` for both — so the
+        // whole thing was rated Dynamic and ~1,037 B of never-changing text rode
+        // the system block that carries no `cache_control` marker of its own.
+        // The ladder stayed `memory_protocol` and moved to @1105/Stable; only
+        // the claim is still Dynamic. Net prompt bytes unchanged, and the
+        // dynamic-layer COUNT unchanged too (one left, one arrived) — the whole
+        // effect is in `prompt_contract::dynamic_tail_bytes_ratchet`.
+        assert_eq!(pipeline.layer_count(), 37);
     }
 
     #[test]
@@ -692,11 +713,19 @@ mod stability_tests {
 
         assert!(dynamic_names.contains(&"voice_mode"));
         assert!(dynamic_names.contains(&"runtime_context"));
-        assert!(dynamic_names.contains(&"identity_files"));
-        assert!(dynamic_names.contains(&"memory_protocol"));
+        // `memory_window` is the per-turn half of what used to be one
+        // `memory_protocol` layer: the claim that `<CuratedMemory>` /
+        // `<memory-context>` are already in this request's window, chosen from
+        // `(curated_block_present, has_recalled_memory)`. The constant
+        // destination ladder is NOT here — it moved to @1105/Stable, which is
+        // the whole point of the split.
+        assert!(dynamic_names.contains(&"memory_window"));
+        assert!(
+            !dynamic_names.contains(&"memory_protocol"),
+            "the constant ladder is back in the 1.25x zone"
+        );
         assert!(dynamic_names.contains(&"session_context_guide"));
         assert!(dynamic_names.contains(&"mcp_instructions"));
-        assert!(dynamic_names.contains(&"agent_catalog"));
         // Live tool health is per-request state. Classified Stable (by omission)
         // at priority 502, it rode the cached prefix and let a 30s-TTL probe flip
         // invalidate the entire conversation's prompt cache.
@@ -710,9 +739,11 @@ mod stability_tests {
         assert!(dynamic_names.contains(&"standing_goal"));
         // TimerLoopLayer re-surfaces the active watch loop per turn.
         assert!(dynamic_names.contains(&"timer_loop"));
-        // ExtraFilesLayer renders user-configured `[prompt.extra_files]`
-        // content, re-read off disk per prompt build — naturally dynamic.
-        assert!(dynamic_names.contains(&"extra_files"));
+        // `extra_files` and `identity_files` used to be asserted here, on the
+        // reasoning that content "re-read off disk per prompt build" is dynamic.
+        // That reads the wrong property: re-reading a file that has not changed
+        // produces the same bytes, and this classification is about whether the
+        // bytes vary — see the note on the count below.
         // StrategyPointerLayer echoes the Strategy guardrails near the read
         // head per turn — Dynamic. (StrategyLayer @70 is Stable, not counted.)
         assert!(dynamic_names.contains(&"strategy_pointer"));
@@ -735,20 +766,49 @@ mod stability_tests {
         // (2026-07-17) — its eager resource/prompt index emitted single-prefix
         // ids that did not round-trip through the two-strip read path; discovery
         // converged on the on-demand mcp_list_resources/mcp_list_prompts tools.
-        // → 16: GraphTopologyLayer (@1754, one slot after TimerLoopLayer
-        // @1753) — session-scoped governance
-        // topology; deterministic bytes (graph rows only, no clocks), so the
-        // Dynamic classification is about content ownership, not volatility.
+        // → 16: GraphTopologyLayer (@1754, one slot after TimerLoopLayer @1753) —
+        // session-scoped governance topology. It carries no clock, but the `graph`
+        // tool can add or retire an edge mid-session, so the rows do vary within a
+        // session. (This comment used to say the classification was "about content
+        // ownership, not volatility" — see the → 14 note below for why that
+        // reasoning was retired.)
         assert!(dynamic_names.contains(&"graph_topology"));
         // → 17: OperatingEnvelopeLayer (@1758) — the approval tier and usage mode
         // are per-turn pills, so they must NOT sit in the Stable cacheable prefix
-        // where `SecurityLayer` @600 used to render them.
+        // where `SecurityLayer` @600 used to render them. It also took the sandbox
+        // `Writable roots` line (2026-08-03): an isolated run mints a worktree path
+        // with a fresh UUID, so rendering it from Stable meant no two isolated runs
+        // could share a prefix at all.
         assert!(dynamic_names.contains(&"operating_envelope"));
-        // Every name above is asserted individually; the count pins the set.
+        // → 14 (2026-08-03, FEATURE_LOCATOR §2.18 ledger item 10): `agent_catalog`,
+        // `identity_files` and `extra_files` moved to the Stable zone.
+        //
+        // This is the round that fixed the *criterion*, not just three layers.
+        // Classification had drifted to "priority ≥ 1700 belongs to the dynamic
+        // zone" plus reasons like content ownership or being re-read off disk —
+        // neither of which is about whether the bytes change. The cost was real:
+        // the dynamic system block gets no `cache_control` marker of its own
+        // (`split_system_blocks_for_cache` stamps only the stable block), so it is
+        // covered solely by message-level breakpoints that all sit after it.
+        // Session-stable content parked here does not *cause* a cache miss, but it
+        // is re-written at 1.25x whenever a genuinely volatile neighbour moves —
+        // and `identity_files` alone can render 100 000 chars by default.
+        //
+        // The criterion is now: **does this layer's content vary within a
+        // session?** Yes → Dynamic. No → Stable, and give it a priority below
+        // 1700. `prompt_contract::dynamic_tail_bytes_ratchet` holds the line.
+        //
+        // → 14 again (same day, follow-up): `memory_protocol` left this zone and
+        // `memory_window` took its place, so the COUNT did not move while ~1 KB
+        // did. That is the case this number cannot see, and the reason the two
+        // `contains` assertions above are spelled out by name: applying the
+        // criterion above to a layer whose halves disagree does not produce a
+        // reclassification, it produces a split. Total layer count therefore
+        // grew by one while this stayed put — see `test_default_layers_count`.
         assert_eq!(
             dynamic_names.len(),
-            17,
-            "Exactly 17 dynamic layers expected"
+            14,
+            "Exactly 14 dynamic layers expected"
         );
     }
 

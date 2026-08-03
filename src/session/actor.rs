@@ -2,8 +2,8 @@
 //!
 //! The actor replays the event log from storage on startup, then serves
 //! `ActorCommand`s until its inbox closes or the idle timeout fires. It owns
-//! the in-memory `SessionState` reducer and a `broadcast` channel used to
-//! fan out newly-appended events to any subscribers (e.g. UI live views).
+//! a `broadcast` channel used to fan out newly-appended events to any
+//! subscribers (e.g. UI live views).
 
 use std::sync::Arc;
 
@@ -13,7 +13,6 @@ use tokio::time::{Duration, Instant};
 use crate::session::events::{now_ms, EventSeq, SessionEvent, SessionEventRecord};
 use crate::session::observer::SessionEventObserver;
 use crate::session::service::{SessionError, SessionId};
-use crate::session::state::SessionState;
 use crate::session::store::SessionEventStore;
 
 /// How long an idle actor survives before self-terminating.
@@ -40,7 +39,6 @@ pub enum ActorCommand {
 pub struct SessionActor {
     pub(crate) id: SessionId,
     pub(crate) store: Arc<dyn SessionEventStore>,
-    state: SessionState,
     head_seq: EventSeq,
     inbox: mpsc::Receiver<ActorCommand>,
     broadcaster: broadcast::Sender<SessionEventRecord>,
@@ -60,7 +58,6 @@ impl SessionActor {
         Self {
             id,
             store,
-            state: SessionState::default(),
             head_seq: 0,
             inbox,
             broadcaster,
@@ -69,11 +66,10 @@ impl SessionActor {
         }
     }
 
-    /// Replays all persisted events and rebuilds `state` + `head_seq`.
+    /// Replays all persisted events and rebuilds `head_seq`.
     async fn replay(&mut self) -> Result<(), SessionError> {
         let records = self.store.load_all_events(&self.id).await?;
         for record in &records {
-            self.state.apply(&record.event);
             self.head_seq = record.seq;
         }
         Ok(())
@@ -118,7 +114,6 @@ impl SessionActor {
                                     event,
                                     created_at_ms: at,
                                 };
-                                self.state.apply(&record.event);
                                 self.head_seq = seq;
                                 if let Some(obs) = &self.observer {
                                     obs.on_appended(&self.id, &record);

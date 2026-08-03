@@ -1,28 +1,21 @@
-//! Helper that wires `ToolService` dispatch + `SessionService` event emission.
+//! Session-scoping helper for tool-call dispatch.
 //!
-//! Bundles the canonical Phase 2 tool-call trace:
-//!   `ToolCallRequested` (pre) → `ToolResult` | `ToolCallDenied` | `ToolError` (post).
-//!
-//! Emission failures are intentionally ignored (`let _ = ...`) so dual-write
-//! problems never break tool dispatch.
+//! Provides [`with_session_scope`], the single entry point for attaching the
+//! active session to the `tokio` task-local that exec-class tools read via
+//! `sandbox::context::current_session()`.
 
 use std::future::Future;
-use std::sync::Arc;
 
-use serde_json::Value;
-
-use crate::session::events::{now_ms, SessionEvent, ToolOutput, TurnId};
-use crate::session::service::{SessionId, SessionService};
-use crate::tools::service::{ToolError, ToolService};
+use crate::session::service::SessionId;
 
 /// Run `fut` with `SESSION_ID` scoped to `session_id`.
 ///
 /// This is the single entry point for attaching the active session to the
 /// `tokio` task-local that exec-class tools read via
 /// `sandbox::context::current_session()`. Every tool-dispatch call site —
-/// `invoke_with_session_trace`, cron wakeups, heartbeat ticks, direct
-/// dispatches — must funnel through this helper so `CodeExecTool` and
-/// friends never see a missing session context.
+/// cron wakeups, heartbeat ticks, direct dispatches — must funnel through
+/// this helper so `CodeExecTool` and friends never see a missing session
+/// context.
 pub async fn with_session_scope<F, T>(session_id: &SessionId, fut: F) -> T
 where
     F: Future<Output = T>,
@@ -33,198 +26,19 @@ where
         .await
 }
 
-pub async fn invoke_with_session_trace(
-    tool_svc: &Arc<dyn ToolService>,
-    session_svc: &Arc<dyn SessionService>,
-    session_id: &SessionId,
-    turn_id: TurnId,
-    call_id: String,
-    name: String,
-    input: Value,
-) -> Result<ToolOutput, ToolError> {
-    // Scope SESSION_ID so exec-class tools (reached via tool_svc.execute below)
-    // can discover the current session via sandbox::context::current_session()
-    // without threading the id through the AlephTool trait.
-    with_session_scope(session_id, async move {
-        if let Err(e) = session_svc
-            .emit_event(
-                session_id,
-                SessionEvent::ToolCallRequested {
-                    turn_id,
-                    // rust-doctor-disable-next-line excessive-clone
-                    call_id: call_id.clone(),
-                    // rust-doctor-disable-next-line excessive-clone
-                    name: name.clone(),
-                    // rust-doctor-disable-next-line excessive-clone
-                    input: input.clone(),
-                    at: now_ms(),
-                },
-            )
-            .await
-        {
-            tracing::warn!(
-                session_id = ?session_id,
-                turn_id = ?turn_id,
-                call_id = %call_id,
-                tool_name = %name,
-                error = ?e,
-                "Failed to emit ToolCallRequested event — session trace may be incomplete"
-            );
-        }
-
-        let result = tool_svc.execute(&name, input).await;
-
-        match &result {
-            Ok(output) => {
-                if let Err(e) = session_svc
-                    .emit_event(
-                        session_id,
-                        SessionEvent::ToolResult {
-                            turn_id,
-                            // rust-doctor-disable-next-line excessive-clone
-                            call_id: call_id.clone(),
-                            // rust-doctor-disable-next-line excessive-clone
-                            output: output.clone(),
-                            at: now_ms(),
-                        },
-                    )
-                    .await
-                {
-                    tracing::warn!(
-                        session_id = ?session_id,
-                        turn_id = ?turn_id,
-                        call_id = %call_id,
-                        error = ?e,
-                        "Failed to emit ToolResult event — session trace may be incomplete"
-                    );
-                }
-            }
-            Err(ToolError::PermissionDenied { reason, .. }) => {
-                if let Err(e) = session_svc
-                    .emit_event(
-                        session_id,
-                        SessionEvent::ToolCallDenied {
-                            turn_id,
-                            // rust-doctor-disable-next-line excessive-clone
-                            call_id: call_id.clone(),
-                            // rust-doctor-disable-next-line excessive-clone
-                            reason: reason.clone(),
-                            at: now_ms(),
-                        },
-                    )
-                    .await
-                {
-                    tracing::warn!(
-                        session_id = ?session_id,
-                        turn_id = ?turn_id,
-                        call_id = %call_id,
-                        error = ?e,
-                        "Failed to emit ToolCallDenied event — session trace may be incomplete"
-                    );
-                }
-            }
-            Err(e) => {
-                if let Err(e) = session_svc
-                    .emit_event(
-                        session_id,
-                        SessionEvent::ToolError {
-                            turn_id,
-                            // rust-doctor-disable-next-line excessive-clone
-                            call_id: call_id.clone(),
-                            error: e.to_string(),
-                            at: now_ms(),
-                        },
-                    )
-                    .await
-                {
-                    tracing::warn!(
-                        session_id = ?session_id,
-                        turn_id = ?turn_id,
-                        call_id = %call_id,
-                        error = ?e,
-                        "Failed to emit ToolError event — session trace may be incomplete"
-                    );
-                }
-            }
-        }
-
-        result
-    })
-    .await
-}
-
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use std::sync::Arc;
 
     use async_trait::async_trait;
 
+    use crate::session::events::ToolOutput;
     use crate::session::in_process::InProcessActorSessionService;
+    use crate::session::service::{SessionId, SessionService};
     use crate::session::store::{migrate_add_session_events, SessionEventStore, SqliteEventStore};
     use crate::tools::service::{ToolDefinition, ToolError, ToolService};
 
-    struct AlwaysOk;
-
-    #[async_trait]
-    impl ToolService for AlwaysOk {
-        async fn execute(&self, _name: &str, _input: Value) -> Result<ToolOutput, ToolError> {
-            Ok(ToolOutput {
-                value: serde_json::json!({"ok": true}),
-                metadata: Default::default(),
-            })
-        }
-        async fn list(&self) -> Vec<ToolDefinition> {
-            vec![]
-        }
-        async fn describe(&self, _name: &str) -> Option<ToolDefinition> {
-            None
-        }
-        fn metadata_schema(&self) -> std::sync::Arc<[crate::tool_metadata::ToolDefinition]> {
-            std::sync::Arc::from([])
-        }
-    }
-
-    struct AlwaysDenied;
-
-    #[async_trait]
-    impl ToolService for AlwaysDenied {
-        async fn execute(&self, name: &str, _input: Value) -> Result<ToolOutput, ToolError> {
-            Err(ToolError::PermissionDenied {
-                name: name.to_string(),
-                reason: "policy: blocked".into(),
-            })
-        }
-        async fn list(&self) -> Vec<ToolDefinition> {
-            vec![]
-        }
-        async fn describe(&self, _name: &str) -> Option<ToolDefinition> {
-            None
-        }
-        fn metadata_schema(&self) -> std::sync::Arc<[crate::tool_metadata::ToolDefinition]> {
-            std::sync::Arc::from([])
-        }
-    }
-
-    struct AlwaysBoom;
-
-    #[async_trait]
-    impl ToolService for AlwaysBoom {
-        async fn execute(&self, name: &str, _input: Value) -> Result<ToolOutput, ToolError> {
-            Err(ToolError::Execution {
-                name: name.to_string(),
-                cause: "exploded".into(),
-            })
-        }
-        async fn list(&self) -> Vec<ToolDefinition> {
-            vec![]
-        }
-        async fn describe(&self, _name: &str) -> Option<ToolDefinition> {
-            None
-        }
-        fn metadata_schema(&self) -> std::sync::Arc<[crate::tool_metadata::ToolDefinition]> {
-            std::sync::Arc::from([])
-        }
-    }
+    use super::with_session_scope;
 
     async fn fresh_session_svc() -> Arc<dyn SessionService> {
         let conn = rusqlite::Connection::open_in_memory().unwrap();
@@ -237,127 +51,6 @@ mod tests {
         crate::routing::session_key::SessionKey::ephemeral(label)
     }
 
-    #[tokio::test]
-    async fn invoke_emits_requested_and_result_on_success() {
-        let session_svc = fresh_session_svc().await;
-        let tool_svc: Arc<dyn ToolService> = Arc::new(AlwaysOk);
-        let id = sample_id("trace-ok");
-        session_svc.attach(id.clone()).await.unwrap();
-        let tid = uuid::Uuid::new_v4();
-
-        let out = invoke_with_session_trace(
-            &tool_svc,
-            &session_svc,
-            &id,
-            tid,
-            "call-1".into(),
-            "noop".into(),
-            serde_json::json!({}),
-        )
-        .await
-        .expect("success");
-
-        assert_eq!(out.value, serde_json::json!({"ok": true}));
-
-        let events = session_svc.get_events(&id, None, None).await.unwrap();
-        let kinds: Vec<&'static str> = events
-            .iter()
-            .map(|r| match &r.event {
-                SessionEvent::ToolCallRequested { .. } => "requested",
-                SessionEvent::ToolResult { .. } => "result",
-                SessionEvent::ToolCallDenied { .. } => "denied",
-                SessionEvent::ToolError { .. } => "error",
-                _ => "other",
-            })
-            .collect();
-        assert!(
-            kinds.contains(&"requested") && kinds.contains(&"result"),
-            "expected requested+result in log, got {kinds:?}",
-        );
-        assert!(!kinds.contains(&"denied"));
-        assert!(!kinds.contains(&"error"));
-    }
-
-    #[tokio::test]
-    async fn invoke_emits_denied_on_permission_denied() {
-        let session_svc = fresh_session_svc().await;
-        let tool_svc: Arc<dyn ToolService> = Arc::new(AlwaysDenied);
-        let id = sample_id("trace-denied");
-        session_svc.attach(id.clone()).await.unwrap();
-        let tid = uuid::Uuid::new_v4();
-
-        let err = invoke_with_session_trace(
-            &tool_svc,
-            &session_svc,
-            &id,
-            tid,
-            "call-2".into(),
-            "restricted".into(),
-            serde_json::json!({}),
-        )
-        .await
-        .expect_err("denied");
-        assert!(matches!(err, ToolError::PermissionDenied { .. }));
-
-        let events = session_svc.get_events(&id, None, None).await.unwrap();
-        let kinds: Vec<&'static str> = events
-            .iter()
-            .map(|r| match &r.event {
-                SessionEvent::ToolCallRequested { .. } => "requested",
-                SessionEvent::ToolResult { .. } => "result",
-                SessionEvent::ToolCallDenied { .. } => "denied",
-                SessionEvent::ToolError { .. } => "error",
-                _ => "other",
-            })
-            .collect();
-        assert!(
-            kinds.contains(&"requested") && kinds.contains(&"denied"),
-            "expected requested+denied in log, got {kinds:?}",
-        );
-        assert!(!kinds.contains(&"result"));
-        assert!(!kinds.contains(&"error"));
-    }
-
-    #[tokio::test]
-    async fn invoke_emits_error_on_generic_failure() {
-        let session_svc = fresh_session_svc().await;
-        let tool_svc: Arc<dyn ToolService> = Arc::new(AlwaysBoom);
-        let id = sample_id("trace-err");
-        session_svc.attach(id.clone()).await.unwrap();
-        let tid = uuid::Uuid::new_v4();
-
-        let err = invoke_with_session_trace(
-            &tool_svc,
-            &session_svc,
-            &id,
-            tid,
-            "call-3".into(),
-            "boom".into(),
-            serde_json::json!({}),
-        )
-        .await
-        .expect_err("execution error");
-        assert!(matches!(err, ToolError::Execution { .. }));
-
-        let events = session_svc.get_events(&id, None, None).await.unwrap();
-        let kinds: Vec<&'static str> = events
-            .iter()
-            .map(|r| match &r.event {
-                SessionEvent::ToolCallRequested { .. } => "requested",
-                SessionEvent::ToolResult { .. } => "result",
-                SessionEvent::ToolCallDenied { .. } => "denied",
-                SessionEvent::ToolError { .. } => "error",
-                _ => "other",
-            })
-            .collect();
-        assert!(
-            kinds.contains(&"requested") && kinds.contains(&"error"),
-            "expected requested+error in log, got {kinds:?}",
-        );
-        assert!(!kinds.contains(&"result"));
-        assert!(!kinds.contains(&"denied"));
-    }
-
     /// Spy tool that captures the SESSION_ID task-local visible during
     /// `execute` via `sandbox::context::current_session()`.
     struct SessionSpy {
@@ -366,7 +59,11 @@ mod tests {
 
     #[async_trait]
     impl ToolService for SessionSpy {
-        async fn execute(&self, _name: &str, _input: Value) -> Result<ToolOutput, ToolError> {
+        async fn execute(
+            &self,
+            _name: &str,
+            _input: serde_json::Value,
+        ) -> Result<ToolOutput, ToolError> {
             *self.seen.lock().unwrap_or_else(|e| e.into_inner()) =
                 crate::sandbox::context::current_session();
             Ok(ToolOutput {
@@ -386,28 +83,22 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn session_id_task_local_is_visible_inside_invoke() {
+    async fn session_id_task_local_is_visible_inside_with_session_scope() {
         let session_svc = fresh_session_svc().await;
         let seen = crate::sync_primitives::Arc::new(crate::sync_primitives::Mutex::new(None));
         let tool_svc: Arc<dyn ToolService> = Arc::new(SessionSpy { seen: seen.clone() });
-        let id = sample_id("trace-taskloc");
+        let id = sample_id("scope-taskloc");
         session_svc.attach(id.clone()).await.unwrap();
-        let tid = uuid::Uuid::new_v4();
 
-        // Sanity: outside any scope, current_session() is None.
         assert!(crate::sandbox::context::current_session().is_none());
 
-        invoke_with_session_trace(
-            &tool_svc,
-            &session_svc,
-            &id,
-            tid,
-            "call-spy".into(),
-            "spy".into(),
-            serde_json::json!({}),
-        )
-        .await
-        .expect("success");
+        with_session_scope(&id, async {
+            tool_svc
+                .execute("spy", serde_json::json!({}))
+                .await
+                .expect("success");
+        })
+        .await;
 
         let captured = seen.lock().unwrap_or_else(|e| e.into_inner()).clone();
         assert_eq!(
@@ -416,7 +107,6 @@ mod tests {
             "SESSION_ID scope did not leak into tool execution",
         );
 
-        // After the scope exits, current_session() is None again.
         assert!(crate::sandbox::context::current_session().is_none());
     }
 }

@@ -212,10 +212,22 @@ fn shell_command_of(name: &str, input: &Value) -> Option<String> {
 
 /// A compact, one-line rendering of a tool call's arguments.
 ///
-/// `file_ops` gets the operation-first shape because that is the argument the
-/// tier's hard filter gates on (`delete` / `move` / …) and the one the human
-/// must see. Everything else falls back to `key=value` pairs — the object's
-/// keys are already `BTreeMap`-ordered, so the rendering is stable.
+/// `file_ops` and `loop_graph` get an identity-first shape because those are
+/// the arguments their tier rule gates on and the ones the human must see.
+/// Everything else falls back to `key=value` pairs — the object's keys are
+/// already `BTreeMap`-ordered, so the rendering is stable.
+///
+/// Why the second case is not cosmetic: the whole output is capped at
+/// [`MAX_SUMMARY_CHARS`] and `BTreeMap` order is alphabetical, so for
+/// `loop_graph` the gated identifiers sort BEHIND unbounded model-authored
+/// prose — `to_id` last of all, `id` behind `body`. A `link` carrying 200+
+/// characters of plausible rationale in `note` therefore raised a card reading
+/// `action=link edge=owns_reference from_id=… note=<prose>…` with
+/// `to_id=root:aleph` truncated clean off, under the generic reason line "Tool
+/// `loop_graph` requires your confirmation to run". The gate fired correctly
+/// and the human was shown a card containing no evidence of what it fired on —
+/// and `grant_fingerprint` then bound a session grant to that exact call.
+/// Identity first means the cap can only ever eat prose.
 fn preview(name: &str, input: &Value) -> String {
     if let Some(cmd) = shell_command_of(name, input) {
         return cmd;
@@ -240,6 +252,25 @@ fn preview(name: &str, input: &Value) -> String {
             .map(|d| format!(" destination={d}"))
             .unwrap_or_default();
         return format!("operation={op} path={path}{dest}");
+    }
+    if name == "loop_graph" {
+        let mut out = String::new();
+        // Identity first, in gate order — every key the tier rule inspects.
+        for k in ["action", "id", "kind", "from_id", "to_id", "edge", "origin"] {
+            if let Some(v) = obj.get(k).and_then(Value::as_str) {
+                if !out.is_empty() {
+                    out.push(' ');
+                }
+                out.push_str(&format!("{k}={v}"));
+            }
+        }
+        // Then the free text, which is the only thing the cap may eat.
+        for k in ["label", "cadence", "cron_expr", "note", "body", "prompt"] {
+            if let Some(v) = obj.get(k).and_then(Value::as_str) {
+                out.push_str(&format!(" {k}={v}"));
+            }
+        }
+        return out;
     }
     obj.iter()
         .map(|(k, v)| match v {
@@ -270,6 +301,43 @@ pub fn redact_and_cap(s: &str) -> String {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    /// The card must contain the thing the gate fired on, even when the model
+    /// fills the free-text fields with enough prose to blow the cap.
+    #[test]
+    fn loop_graph_card_shows_the_gated_id_before_any_prose() {
+        let long = "合理的理由".repeat(80); // >> MAX_SUMMARY_CHARS
+        let summary = redact_and_cap(&preview(
+            "loop_graph",
+            &json!({
+                "action": "link",
+                "edge": "owns_reference",
+                "from_id": "cron:x",
+                "note": long,
+                "to_id": "root:aleph",
+            }),
+        ));
+        assert!(
+            summary.contains("to_id=root:aleph"),
+            "the gated id must survive the cap: {summary}"
+        );
+        assert!(summary.contains("action=link"));
+
+        // Same for a `node` write whose body is a long root reference.
+        let summary = redact_and_cap(&preview(
+            "loop_graph",
+            &json!({
+                "action": "node",
+                "body": "什么算更好".repeat(80),
+                "id": "root:aleph",
+                "kind": "root",
+                "origin": "human",
+            }),
+        ));
+        assert!(summary.contains("id=root:aleph"), "{summary}");
+        assert!(summary.contains("kind=root"), "{summary}");
+        assert!(summary.contains("origin=human"), "{summary}");
+    }
 
     #[test]
     fn shell_tool_summary_is_the_command_and_analysis_is_real() {

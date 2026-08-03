@@ -76,8 +76,13 @@ mod curated_memory;
 
 // --- Memory augmentation layer ---
 
-// --- Memory protocol guidance layer ---
+// --- Memory protocol guidance layer (constant destination ladder, Stable, prio 1105) ---
 mod memory_protocol;
+
+// --- Memory window claim (which memory blocks are already in front of the
+// model this turn; the per-turn half split out of `memory_protocol`, Dynamic,
+// prio 1745) ---
+mod memory_window;
 
 // --- Session context guide layer ---
 mod session_context_guide;
@@ -110,6 +115,7 @@ pub use extra_files::ExtraFilesLayer;
 pub(crate) use identity_files::sanitize_identity_content;
 pub use identity_files::IdentityFilesLayer;
 pub use memory_protocol::MemoryProtocolLayer;
+pub use memory_window::MemoryWindowLayer;
 pub use multi_step_conduct::MultiStepConductLayer;
 pub use operational_guidelines::OperationalGuidelinesLayer;
 pub use protocol_tokens::ProtocolTokensLayer;

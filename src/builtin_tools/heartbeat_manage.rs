@@ -17,6 +17,7 @@ use crate::tasks::heartbeat::{
     config::{HeartbeatTask, HeartbeatTaskView, ProbeConfig, TriggerCondition},
     SharedHeartbeatService,
 };
+use crate::tasks::shared::active_hours::ActiveHoursSchedule;
 use crate::tasks::shared::clock::SystemClock;
 use crate::tools::AlephTool;
 
@@ -217,6 +218,9 @@ pub struct HeartbeatUpdateArgs {
     /// Enable or disable the task (optional)
     #[serde(default)]
     pub enabled: Option<bool>,
+    /// Active hours schedule to restrict task execution windows (optional)
+    #[serde(default)]
+    pub active_hours: Option<ActiveHoursSchedule>,
 }
 
 /// Output from `heartbeat_update`
@@ -265,6 +269,7 @@ impl AlephTool for HeartbeatUpdateTool {
             agent_id: args.agent_id,
             interval_ms: args.interval_ms,
             enabled: args.enabled,
+            active_hours: args.active_hours.map(Some),
             ..Default::default()
         };
 

@@ -34,10 +34,38 @@ use crate::thinker::PromptConfig;
 /// that says "no fixed input makes this layer speak, and here is the session
 /// content that does". A layer that cannot be justified in one line does not
 /// belong in the pipeline.
+///
+/// **What an entry here does NOT say — and the hole that opens under a Dynamic
+/// layer.** It says only "no *fixed* input wakes this". It says nothing about
+/// how big the layer gets when session content *does* wake it, and
+/// [`dynamic_tail_bytes_ratchet`] measures the same fixed input, so for a
+/// Dynamic layer on this list the answer is always 0 B — a number that cannot
+/// distinguish "renders one short sentence" from "renders whatever the user
+/// pasted". `graph_topology` sat here for two weeks interpolating uncapped
+/// human-authored root bodies straight into the zone that re-writes at 1.25x,
+/// and the placement was defended as correct — which it is; it was the
+/// *unboundedness* that nothing had ever measured.
+///
+/// So a Dynamic entry on this list owes a bound of its own, asserted wherever
+/// the waking input is cheap to construct — which is the layer's own module when
+/// the layer builds its own text, and the *producer's* module when the layer is
+/// a pass-through. Both shapes exist:
+///
+/// * `layers::memory_window::worst_case_render_is_bounded` — bounded by
+///   construction; the layer picks one of three consts and interpolates nothing.
+/// * `loop_graph::service::render_is_bounded_against_oversized_graph_rows` —
+///   bounded by cap. `GraphTopologyLayer` only escapes and emits whatever
+///   `render_session_topology` handed it, so the bound has to live at the
+///   producer; asserting it on the layer would only pin that a `String` is as
+///   long as it is.
 const CONDITIONALLY_SILENT: &[(&str, &str)] = &[
     ("soul", "agent SOUL.md on disk"),
     ("agent_role", "a registered sub-agent's AgentDef"),
     ("curated_memory", "a non-empty MEMORY.md hot zone"),
+    (
+        "memory_window",
+        "a non-empty MEMORY.md hot zone, or an auto-recalled <memory-context>",
+    ),
     ("strategy", "an active StraTA strategy"),
     ("strategy_pointer", "an active strategy's guardrails"),
     ("chain_context", "a sub-agent delegation chain (depth > 0)"),
@@ -52,7 +80,6 @@ const CONDITIONALLY_SILENT: &[(&str, &str)] = &[
         "detected Python / Node / FFmpeg runtimes",
     ),
     ("tool_runtime_state", "a tool-health probe result"),
-    ("agent_catalog", "at least one switchable agent registered"),
     ("provider_guidance", "a model_behaviors/{family}.md delta"),
     ("skill_instructions", "an eligible skill in the snapshot"),
     (
@@ -157,6 +184,46 @@ fn fixed_runtime_context() -> crate::thinker::runtime_context::RuntimeContext {
     }
 }
 
+/// The `PromptConfig` half of the production-shaped input.
+///
+/// Only `available_agents` is populated, and only with the **builtin** sub-agent
+/// set — the compiled-in floor every install has, so the measurement stays
+/// machine-independent for the same reason [`fixed_runtime_context`] does.
+/// Registry and plugin agents fold into the same field in production
+/// (`harness_bridge::prompt_build`) but vary per install, so they are left out:
+/// this measures the floor, not one developer's machine.
+///
+/// **Why it is here at all.** `AgentCatalogLayer` sat in [`CONDITIONALLY_SILENT`]
+/// excused as "at least one switchable agent registered" — but the production
+/// builder seeds the field from `builtin_agents()`, which is never empty, so the
+/// layer is *always on* and its ~1.7 KB was outside the ratchet's field of view.
+/// Same shape as the `runtime_context` excuse this module's history already
+/// records: an entry on that list is a claim that no fixed input makes the layer
+/// speak, and the claim was false.
+fn production_config() -> PromptConfig {
+    use crate::agents::AgentMode;
+    let available_agents: Vec<crate::thinker::prompt_layer::AgentCatalogEntry> =
+        crate::agents::builtin_agents()
+            .into_iter()
+            .filter(|a| a.mode == AgentMode::SubAgent)
+            .map(|a| crate::thinker::prompt_layer::AgentCatalogEntry {
+                id: a.id,
+                description: a.description,
+                when_to_use: a.when_to_use,
+            })
+            .collect();
+    assert!(
+        !available_agents.is_empty(),
+        "the builtin sub-agent set is empty, so this fixture no longer measures the \
+         always-on agent catalog. Either the builtins moved (update this) or the catalog \
+         really is conditional (put it back in CONDITIONALLY_SILENT with the reason)."
+    );
+    PromptConfig {
+        available_agents: Some(available_agents),
+        ..Default::default()
+    }
+}
+
 /// The input the main loop builds, minus per-session content — the same shape
 /// `aleph-server prompt-size` reports on.
 fn production_shaped<'a>(config: &'a PromptConfig, context: &'a ResolvedContext) -> LayerInput<'a> {
@@ -176,7 +243,7 @@ fn production_shaped<'a>(config: &'a PromptConfig, context: &'a ResolvedContext)
 #[test]
 fn reachable_layers() {
     let pipeline = PromptPipeline::default_layers();
-    let config = PromptConfig::default();
+    let config = production_config();
 
     let mut ever_spoke: Vec<&'static str> = Vec::new();
     for &paradigm in PARADIGMS {
@@ -254,6 +321,27 @@ fn reachable_layers() {
 ///   3. **A stronger model still needs them.** They are environment state, not
 ///      scaffolding for weak reasoning; a better model uses them better.
 ///
+/// **7,495 B measured 2026-08-03 (§2.18 ledger item 8), worst paradigm still
+/// WebRich.** Same kind of raise as the one below and for the same reason: not
+/// one new byte of prompt content, just bytes production always sent finally
+/// inside the ratchet's field of view. `AgentCatalogLayer` — measured **1,705 B**,
+/// the single largest layer in the prompt — was excused in `CONDITIONALLY_SILENT`
+/// as "at least one switchable agent registered", but the production builder
+/// seeds `available_agents` from `builtin_agents()`, which is never empty. The
+/// layer is always on; the excuse was simply false, and an arbitrarily long
+/// agent catalog could have been added with this test green. `production_config`
+/// now supplies the builtin floor.
+/// The three answers for the raise:
+///   1. **Runtime fact, not teaching.** Which sub-agents this install has, and
+///      what each is for, is state the model cannot derive. Without it the model
+///      discovered agents reactively — guess an id, read the error.
+///   2. **No single tool owns it.** `delegate` is the nearest candidate, but a
+///      tool `DESCRIPTION` is a `const &str` and this is a per-install registry
+///      (builtins ∪ user/project defs ∪ plugin agents). A constant cannot
+///      enumerate it.
+///   3. **A stronger model still needs it.** It is an inventory, not reasoning
+///      scaffolding; a better model uses a catalog better, it does not infer one.
+///
 /// The ceiling is now honest, so the next real growth is catchable. Prior entry:
 /// 5,140 B measured 2026-07-26 — the **worst paradigm**, WebRich
 /// (`aleph-server prompt-size --path cached --paradigm webrich`); Background,
@@ -267,13 +355,13 @@ fn reachable_layers() {
 /// `special_actions` 1,234 → 313 and `memory_protocol` 2,938 → 1,187, both by
 /// moving per-tool how-to into the tool `DESCRIPTION`s that already stated it,
 /// less 75 B for the parallel-dispatch fact rescued into `role`.
-const SCAFFOLD_CEILING_BYTES: usize = 5_913;
+const SCAFFOLD_CEILING_BYTES: usize = 7_495;
 
 /// No paradigm's fixed scaffold may grow past the ceiling.
 #[test]
 fn scaffold_bytes_ratchet() {
     let pipeline = PromptPipeline::default_layers();
-    let config = PromptConfig::default();
+    let config = production_config();
 
     let mut worst: Option<(InteractionParadigm, usize, Vec<(&str, usize)>)> = None;
     for &paradigm in PARADIGMS {
@@ -296,6 +384,91 @@ fn scaffold_bytes_ratchet() {
         "always-on prompt scaffold grew to {total} B under {paradigm:?} \
          (ceiling {SCAFFOLD_CEILING_BYTES}). Largest layers: {largest:?}. Answer the three \
          questions documented on SCAFFOLD_CEILING_BYTES before raising it."
+    );
+}
+
+/// Byte ceiling for the **dynamic** system block — the half that no
+/// `cache_control` marker of its own ever covers.
+///
+/// This ratchet exists because "it's only in the dynamic tail" was used as a
+/// reason to stop worrying about a layer's size, and that reasoning is wrong.
+/// Anthropic builds its prefix tools → system → messages, and
+/// `split_system_blocks_for_cache` stamps the marker on the **stable** block
+/// only. So the dynamic block is covered by nothing but the message-level
+/// breakpoints, every one of which sits *after* it: unchanged bytes parked here
+/// do not *cause* a cache miss, but they are re-written at 1.25x every time any
+/// genuinely volatile neighbour moves. A big session-stable layer in this zone
+/// pays its neighbours' volatility tax forever.
+///
+/// That is not hypothetical — `agent_catalog`, `identity_files` (default cap
+/// 100 000 chars) and `extra_files` all sat here until 2026-08-03, and
+/// `memory_protocol`'s `stability()` carried a comment asserting the placement
+/// was free, cited as precedent by another layer. See FEATURE_LOCATOR §2.18
+/// ledger item 10.
+///
+/// **Measured, never hand-computed. Only ever lowered** — with one honest
+/// exception: raising it because a layer genuinely varies per turn and had to
+/// move *out* of the stable prefix (that is a correctness fix, and the raise is
+/// the price). Raising it to park static content here is the thing this guard
+/// forbids; move the content below priority 1700 instead.
+/// Prior entry: 2,054 B measured 2026-08-03, worst paradigm WebRich, immediately
+/// after `agent_catalog` / `identity_files` / `extra_files` moved out.
+/// `memory_protocol` (1,037 B) and `operating_envelope` (633 B) were most of
+/// what was left.
+///
+/// **1,017 B measured 2026-08-03**, same day, worst paradigm still WebRich —
+/// the follow-up the entry above deferred, now taken. `memory_protocol` carried
+/// two things with opposite cache profiles: a constant destination ladder and a
+/// per-turn window claim. A layer gets one `stability()` for both, so the pair
+/// was rated by its volatile half and the constant rode the unmarked block. It
+/// is now two layers — the ladder at @1105/Stable keeping the name, the claim at
+/// @1745/Dynamic as `memory_window`. **Not one byte of prompt content changed**;
+/// this is the same text billed differently.
+///
+/// The measurement is worth recording because it inverted the intuition that
+/// justified the split: under this test's input **both** window-claim gates are
+/// false, so the entire 1,037 B was the constant, and the volatile sentence that
+/// earned the layer its Dynamic rating contributed **nothing** to the number it
+/// was blamed for. A layer's rating is about the bytes that *can* vary; its
+/// measured size here is about the bytes that *do* render. Those are different
+/// questions, and this ratchet only ever answers the second one.
+const DYNAMIC_TAIL_CEILING_BYTES: usize = 1_017;
+
+/// The uncached half of the system prompt may not grow past its ceiling.
+#[test]
+fn dynamic_tail_bytes_ratchet() {
+    let pipeline = PromptPipeline::default_layers();
+    let config = production_config();
+
+    let mut worst: Option<(InteractionParadigm, usize, Vec<&'static str>)> = None;
+    for &paradigm in PARADIGMS {
+        let context = resolve(paradigm);
+        let input = production_shaped(&config, &context);
+        let total = pipeline
+            .execute_dynamic_with_mode(AssemblyPath::Cached, &input, PromptMode::Full)
+            .len();
+        if worst.as_ref().is_none_or(|(_, w, _)| total > *w) {
+            let dynamic_names: Vec<&'static str> = pipeline
+                .layer_info()
+                .into_iter()
+                .filter(|(_, _, stability)| {
+                    *stability == crate::thinker::prompt_layer::LayerStability::Dynamic
+                })
+                .map(|(_, name, _)| name)
+                .collect();
+            worst = Some((paradigm, total, dynamic_names));
+        }
+    }
+
+    let (paradigm, total, dynamic_names) = worst.expect("PARADIGMS is non-empty");
+    assert!(
+        total <= DYNAMIC_TAIL_CEILING_BYTES,
+        "the uncached dynamic system block grew to {total} B under {paradigm:?} \
+         (ceiling {DYNAMIC_TAIL_CEILING_BYTES}). Dynamic layers: {dynamic_names:?}. \
+         Before raising this: does the layer that grew actually vary per turn? If it is \
+         session-stable, give it a priority below 1700 and declare \
+         `LayerStability::Stable` — in this zone it is re-written at 1.25x every time a \
+         volatile neighbour moves."
     );
 }
 
@@ -341,7 +514,7 @@ fn scaffold_bytes_ratchet() {
 #[test]
 fn no_sentence_is_stated_twice() {
     let pipeline = PromptPipeline::default_layers();
-    let config = PromptConfig::default();
+    let config = production_config();
     let context = resolve(InteractionParadigm::Background);
     let input = production_shaped(&config, &context);
 
@@ -421,7 +594,7 @@ fn no_sentence_is_stated_twice() {
 #[test]
 fn no_environment_fact_is_stated_twice() {
     let pipeline = PromptPipeline::default_layers();
-    let config = PromptConfig::default();
+    let config = production_config();
     let rt = fixed_runtime_context();
     let context = resolve(InteractionParadigm::WebRich);
     let input = production_shaped(&config, &context);
@@ -488,12 +661,13 @@ fn no_environment_fact_is_stated_twice() {
 #[test]
 fn stable_prefix_is_byte_identical_when_built_twice() {
     let pipeline = PromptPipeline::default_layers();
-    let config = PromptConfig::default();
+    let config = production_config();
 
     for &paradigm in PARADIGMS {
         let context = resolve(paradigm);
         let input = production_shaped(&config, &context);
-        let first = pipeline.execute_stable_with_mode(AssemblyPath::Cached, &input, PromptMode::Full);
+        let first =
+            pipeline.execute_stable_with_mode(AssemblyPath::Cached, &input, PromptMode::Full);
         let second =
             pipeline.execute_stable_with_mode(AssemblyPath::Cached, &input, PromptMode::Full);
         assert_eq!(
@@ -508,18 +682,27 @@ fn stable_prefix_is_byte_identical_when_built_twice() {
 
 /// Facts that vary within a session must not reach the cacheable prefix.
 ///
-/// Two contexts differing ONLY in per-run machine facts (time, cwd, repo root,
-/// serving model) must produce a byte-identical stable prefix. The dynamic
-/// suffix is where those belong, and it is asserted to actually differ so the
-/// test cannot pass by the facts having been dropped everywhere.
+/// Two contexts differing ONLY in per-run facts (time, cwd, repo root, serving
+/// model, **sandbox writable roots**) must produce a byte-identical stable
+/// prefix. The dynamic suffix is where those belong, and it is asserted to
+/// actually differ so the test cannot pass by the facts having been dropped
+/// everywhere.
 ///
-/// This is the guard that fails the moment someone welds a `RuntimeContext`
-/// field into a `Stable` layer — the exact regression class that is otherwise
-/// invisible until a monthly bill.
+/// This is the guard that fails the moment someone welds a per-run input into a
+/// `Stable` layer — the exact regression class that is otherwise invisible until
+/// a monthly bill.
+///
+/// **It shifted only `runtime_context` for its first two months, and that gap
+/// cost a real defect** (§2.18 ledger item 9): `SandboxSummary::writable_roots`
+/// is *also* per-run — `isolated_worktree` mints a fresh UUID path on every
+/// isolated run — and `SecurityLayer` @600 was rendering it from inside the
+/// cacheable prefix the whole time. The guard was present, watching the wrong
+/// half of the input. Anything added to `resolve()` because "every production
+/// turn sets it" must be shifted here too, or it re-opens the same blind spot.
 #[test]
 fn stable_prefix_ignores_per_run_facts() {
     let pipeline = PromptPipeline::default_layers();
-    let config = PromptConfig::default();
+    let config = production_config();
 
     for &paradigm in PARADIGMS {
         let baseline = resolve(paradigm);
@@ -535,6 +718,17 @@ fn stable_prefix_ignores_per_run_facts() {
             // the stable `environment` layer.
             ..fixed_runtime_context()
         });
+        // Per-run sandbox identity: an isolated run gets its own worktree, so
+        // `writable_roots` differs run to run while the posture around it does
+        // not. Held-equal posture is the point — if the whole summary were
+        // swapped, a layer that legitimately renders the backend tag would fail
+        // this and the test would be asserting the wrong invariant.
+        shifted.sandbox_summary = Some(crate::sandbox::SandboxSummary {
+            writable_roots: vec![std::path::PathBuf::from(
+                "/home/u/.aleph/worktrees/6f1c2e9a-4b77-4d51-9a0e-2c8b5f3d17ab",
+            )],
+            ..fixed_sandbox_summary()
+        });
 
         let input_a = production_shaped(&config, &baseline);
         let input_b = production_shaped(&config, &shifted);
@@ -545,9 +739,10 @@ fn stable_prefix_ignores_per_run_facts() {
             pipeline.execute_stable_with_mode(AssemblyPath::Cached, &input_b, PromptMode::Full);
         assert_eq!(
             stable_a, stable_b,
-            "a per-run fact (cwd / repo / model / time) reached the cacheable prefix \
-             under {paradigm:?}. It belongs in the dynamic suffix — see RuntimeContext's \
-             module docs for the split."
+            "a per-run fact (cwd / repo / model / time / sandbox writable roots) reached \
+             the cacheable prefix under {paradigm:?}. It belongs in the dynamic suffix — \
+             see RuntimeContext's module docs for the machine facts and \
+             OperatingEnvelopeLayer's for the sandbox half."
         );
 
         let dynamic_a =

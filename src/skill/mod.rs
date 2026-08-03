@@ -8,7 +8,6 @@ pub mod compat;
 pub mod config;
 pub mod cooccurrence;
 pub mod eligibility;
-pub mod events;
 pub mod guard;
 pub mod installer;
 pub mod manifest;
@@ -22,11 +21,10 @@ pub mod usage;
 
 pub use compat::SkillInfo;
 pub use config::{
-    InstallPreferences, NodeManager, SkillConfigUpdate, SkillEntryConfig, SkillsConfig,
+    InstallPreferences, SkillConfigUpdate, SkillEntryConfig, SkillsConfig,
 };
 pub use cooccurrence::{cluster_chains, CoOccurrenceLog, RecentUse};
 pub use eligibility::{EligibilityResult, EligibilityService, IneligibilityReason};
-pub use events::SkillSystemEvent;
 pub use guard::{
     install_allowed, merge_verdicts, scan_content, scan_skill_directory, ScanVerdict, ThreatLevel,
     TrustLevel,
@@ -61,15 +59,12 @@ use crate::domain::Entity;
 pub enum SkillSystemError {
     /// Error parsing a skill file.
     Parse(SkillParseError),
-    /// I/O error.
-    Io(std::io::Error),
 }
 
 impl std::fmt::Display for SkillSystemError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Parse(e) => write!(f, "skill parse error: {e}"),
-            Self::Io(e) => write!(f, "I/O error: {e}"),
         }
     }
 }
@@ -78,7 +73,6 @@ impl std::error::Error for SkillSystemError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
             Self::Parse(e) => Some(e),
-            Self::Io(e) => Some(e),
         }
     }
 }
@@ -86,12 +80,6 @@ impl std::error::Error for SkillSystemError {
 impl From<SkillParseError> for SkillSystemError {
     fn from(e: SkillParseError) -> Self {
         Self::Parse(e)
-    }
-}
-
-impl From<std::io::Error> for SkillSystemError {
-    fn from(e: std::io::Error) -> Self {
-        Self::Io(e)
     }
 }
 
@@ -117,7 +105,6 @@ struct Inner {
     eligibility: EligibilityService,
     config: RwLock<SkillsConfig>,
     config_path: PathBuf,
-    event_tx: tokio::sync::broadcast::Sender<SkillSystemEvent>,
 }
 
 impl SkillSystem {
@@ -133,7 +120,6 @@ impl SkillSystem {
             .join("data");
         let config_path = data_dir.join("skills.toml");
         let config = SkillsConfig::load(&config_path);
-        let (event_tx, _) = tokio::sync::broadcast::channel(64);
 
         Self {
             inner: Arc::new(Inner {
@@ -144,7 +130,6 @@ impl SkillSystem {
                 eligibility: EligibilityService::new(),
                 config: RwLock::new(config),
                 config_path,
-                event_tx,
             }),
         }
     }
@@ -162,30 +147,16 @@ impl SkillSystem {
         Ok(())
     }
 
-    /// Rebuild the snapshot from the current registry state.
-    ///
-    /// Re-scans all directories, increments the version counter, and builds a new snapshot.
-    pub async fn rebuild(&self) -> Result<(), SkillSystemError> {
-        self.rescan_dirs().await;
-        Ok(())
-    }
-
     /// Reload a single skill file into the registry and rebuild the snapshot.
-    ///
-    /// Emits `SkillLoaded` when the registry accepts the manifest so
-    /// subscribers (tool index coordinator, Panel) pick up hot-loaded skills
-    /// without a full rescan.
     pub async fn reload_file(&self, path: impl AsRef<Path>) -> Result<(), SkillSystemError> {
         let path = path.as_ref();
         let source = guess_source(path);
         let manifest = parse_skill_file(path, source)?;
-        let event = SkillSystemEvent::loaded(manifest.id().as_str(), manifest.name());
 
         let mut registry = self.inner.registry.write().await;
         registry.replace(manifest);
         drop(registry);
 
-        self.emit_event(event);
         self.rebuild_snapshot().await;
 
         Ok(())
@@ -240,25 +211,6 @@ impl SkillSystem {
             .is_some_and(|env| std::env::var(env).is_ok())
     }
 
-    /// Build status entries for all registered skills.
-    pub async fn skill_status(&self) -> Vec<SkillStatusEntry> {
-        let config_value = crate::config::Config::load()
-            .ok()
-            .and_then(|c| serde_json::to_value(&c).ok())
-            .unwrap_or_else(|| serde_json::json!({}));
-        let registry = self.inner.registry.read().await;
-        let mut entries: Vec<SkillStatusEntry> = registry
-            .list_all()
-            .into_iter()
-            .map(|m| {
-                let result = self.inner.eligibility.evaluate(m, &config_value);
-                SkillStatusEntry::build(m, &result, None, Self::api_key_present(m), None)
-            })
-            .collect();
-        entries.sort_by(|a, b| a.id.as_str().cmp(b.id.as_str()));
-        entries
-    }
-
     /// Test-only helper: seed pre-built manifests straight into the registry.
     ///
     /// Production plugin/markdown skills are NOT registered this way — they flow
@@ -266,32 +218,15 @@ impl SkillSystem {
     /// `skill_system.init` skill_dirs + `publish_plugin_skill_dirs` ->
     /// `get_all_skills_dirs`), which `rescan_dirs` rebuilds from scratch (and
     /// would therefore wipe any manifest inserted here). This helper exists only
-    /// to seed unit tests that exercise `full_status` / `remove_skill` / events
+    /// to seed unit tests that exercise `full_status` / `remove_skill`
     /// without touching the filesystem; it is compiled out of production builds.
     #[cfg(test)]
     pub(crate) async fn insert_manifests_for_test(&self, manifests: Vec<SkillManifest>) {
         let mut registry = self.inner.registry.write().await;
-
-        // Only emit events for manifests that were actually accepted by the registry
-        // (higher priority sources replace lower ones; equal priority rejects newcomers).
-        let events: Vec<SkillSystemEvent> = manifests
-            .into_iter()
-            .filter_map(|m| {
-                let id = m.id().as_str().to_string();
-                let name = m.name().to_string();
-                if registry.register(m) {
-                    Some(SkillSystemEvent::loaded(id, name))
-                } else {
-                    None
-                }
-            })
-            .collect();
-
-        drop(registry);
-
-        for event in events {
-            self.emit_event(event);
+        for m in manifests {
+            registry.register(m);
         }
+        drop(registry);
 
         self.rebuild_snapshot().await;
     }
@@ -565,16 +500,9 @@ impl SkillSystem {
             for dir in &dirs {
                 UsageStore::new(dir).forget(id.as_str());
             }
-            self.emit_event(SkillSystemEvent::removed(id.as_str()));
             self.rebuild_snapshot().await;
         }
         Ok(removed)
-    }
-
-    /// Subscribe to skill system events.
-    #[must_use]
-    pub fn subscribe(&self) -> tokio::sync::broadcast::Receiver<SkillSystemEvent> {
-        self.inner.event_tx.subscribe()
     }
 
     // --- Private helpers ---
@@ -598,11 +526,6 @@ impl SkillSystem {
         drop(registry);
 
         self.rebuild_snapshot().await;
-    }
-
-    /// Emit a skill system event to all subscribers.
-    fn emit_event(&self, event: SkillSystemEvent) {
-        let _ = self.inner.event_tx.send(event);
     }
 
     /// Increment the version counter and build a new snapshot.
@@ -653,19 +576,11 @@ impl SkillSystem {
         // the authoritative index with it; `build` only computes the
         // default-budget preview).
         new_snapshot.prompt_budget = prompt_budget;
-        let skill_ids: Vec<String> = registry
-            .list_all()
-            .iter()
-            .map(|m| m.id().as_str().to_string())
-            .collect();
-        let count = skill_ids.len();
         drop(registry);
 
         let mut snapshot = self.inner.snapshot.write().await;
         *snapshot = new_snapshot;
         drop(snapshot);
-
-        self.emit_event(SkillSystemEvent::all_reloaded(count, skill_ids));
     }
 }
 
@@ -941,34 +856,6 @@ You are a test expert."#;
     }
 
     #[tokio::test]
-    async fn rebuild_increments_version() {
-        let _home = crate::utils::paths::IsolatedAlephHome::new();
-        let dir = tempfile::TempDir::new().unwrap();
-        let skill_file = dir.path().join("SKILL.md");
-
-        let content = r#"---
-name: Version Test
-description: Tests version increments
----
-Content."#;
-        tokio::fs::write(&skill_file, content).await.unwrap();
-
-        let system = SkillSystem::new();
-        system.init(vec![dir.path().to_path_buf()]).await.unwrap();
-
-        let v1 = system.current_snapshot().await.version;
-
-        system.rebuild().await.unwrap();
-        let v2 = system.current_snapshot().await.version;
-
-        system.rebuild().await.unwrap();
-        let v3 = system.current_snapshot().await.version;
-
-        assert!(v2 > v1);
-        assert!(v3 > v2);
-    }
-
-    #[tokio::test]
     async fn list_skills() {
         let _home = crate::utils::paths::IsolatedAlephHome::new();
         let dir = tempfile::TempDir::new().unwrap();
@@ -1009,31 +896,6 @@ Content two."#,
         let names: Vec<&str> = skills.iter().map(|s| s.name()).collect();
         assert!(names.contains(&"Skill One"));
         assert!(names.contains(&"Skill Two"));
-    }
-
-    #[tokio::test]
-    async fn skill_status_reports() {
-        let _home = crate::utils::paths::IsolatedAlephHome::new();
-        let dir = tempfile::TempDir::new().unwrap();
-        let skill_file = dir.path().join("SKILL.md");
-
-        tokio::fs::write(
-            &skill_file,
-            r#"---
-name: Status Test
-description: Tests status reporting
----
-Content."#,
-        )
-        .await
-        .unwrap();
-
-        let system = SkillSystem::new();
-        system.init(vec![dir.path().to_path_buf()]).await.unwrap();
-
-        let statuses = system.skill_status().await;
-        assert_eq!(statuses.len(), 1);
-        assert!(statuses[0].eligible);
     }
 
     #[test]
@@ -1201,24 +1063,4 @@ Content."#,
         assert_eq!(system.list_skills().await.len(), 1);
     }
 
-    #[tokio::test]
-    async fn subscribe_receives_events() {
-        use crate::domain::skill::SkillContent;
-        let _home = crate::utils::paths::IsolatedAlephHome::new();
-        let system = SkillSystem::new();
-        let mut rx = system.subscribe();
-
-        let manifest = SkillManifest::new(
-            "test:event",
-            "Event Test",
-            "desc",
-            SkillContent::new("c"),
-            SkillSource::Global,
-        );
-        system.insert_manifests_for_test(vec![manifest]).await;
-
-        // Should receive an event
-        let event = tokio::time::timeout(std::time::Duration::from_millis(100), rx.recv()).await;
-        assert!(event.is_ok());
-    }
 }

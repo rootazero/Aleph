@@ -11,7 +11,6 @@ pub struct SkillInfo {
     pub id: String,
     pub name: String,
     pub description: String,
-    pub ecosystem: String,
 }
 
 impl From<SkillManifest> for SkillInfo {
@@ -20,7 +19,6 @@ impl From<SkillManifest> for SkillInfo {
             id: manifest.id().as_str().to_string(),
             name: manifest.name().to_string(),
             description: manifest.description().to_string(),
-            ecosystem: "aleph".to_string(),
         }
     }
 }
@@ -48,6 +46,5 @@ mod tests {
         let info: SkillInfo = manifest.into();
         assert_eq!(info.id, "test:skill");
         assert_eq!(info.name, "Test Skill");
-        assert_eq!(info.ecosystem, "aleph");
     }
 }

@@ -68,7 +68,7 @@ pub async fn handle_update(request: JsonRpcRequest) -> JsonRpcResponse {
     }
 
     if let Some(scope_str) = &params.scope {
-        let scope = match scope_str.as_str() {
+        let scope = match scope_str.to_lowercase().as_str() {
             "system" => PromptScope::System,
             "tool" => PromptScope::Tool,
             "standalone" => PromptScope::Standalone,

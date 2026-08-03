@@ -1,4 +1,23 @@
-//! `AgentCatalogLayer` — sub-agent catalog index for primary agent awareness (priority 1704)
+//! `AgentCatalogLayer` — sub-agent catalog index for primary agent awareness (priority 1060)
+//!
+//! **Stable, and it sits next to `SkillInstructionsLayer` @1050 on purpose**:
+//! "which sub-agents can I delegate to" and "which skills do I have" are the same
+//! kind of index, and both are fixed for the life of a prompt build.
+//!
+//! It used to sit at 1704 — inside the Dynamic tail — for adjacency reasons, and
+//! that placement cost real money (FEATURE_LOCATOR §2.18 ledger item 10). The
+//! dynamic system block carries no `cache_control` marker of its own: it is
+//! covered only by the message-level breakpoints, which all sit *after* it. So a
+//! byte-identical block parked there is not free — it is re-written at 1.25x
+//! every time any *other* dynamic layer changes (`runtime_context`'s clock,
+//! `execution_plan`'s per-turn edits, a pill flip). Session-stable content pays
+//! its neighbours' volatility tax. In the Stable block it rides the one
+//! breakpoint that is guaranteed to hit.
+//!
+//! The rule that follows, and the one that put this layer in the wrong zone:
+//! **`stability()` states whether the content varies, not where the author
+//! wanted it to render.** Priority is for reading order; stability is a fact
+//! about the bytes.
 
 use crate::thinker::prompt_layer::{
     AgentCatalogEntry, AssemblyPath, LayerInput, LayerStability, PromptLayer,
@@ -13,10 +32,14 @@ impl PromptLayer for AgentCatalogLayer {
         "agent_catalog"
     }
     fn priority(&self) -> u32 {
-        1704
+        1060
     }
     fn stability(&self) -> LayerStability {
-        LayerStability::Dynamic
+        // Declared, not inherited. The default IS `Stable`, but a layer that
+        // rides the cacheable prefix by omission is the failure this module set
+        // has already suffered once (`ToolRuntimeStateLayer`), so every layer in
+        // the prefix says so out loud.
+        LayerStability::Stable
     }
     fn supports_mode(&self, mode: PromptMode) -> bool {
         matches!(mode, PromptMode::Full)
@@ -177,9 +200,16 @@ mod tests {
         assert!(out.contains("when &gt; threshold"));
     }
 
+    /// Session-stable content must sit in the cacheable prefix, not the dynamic
+    /// tail where it pays 1.25x every time a volatile neighbour moves.
     #[test]
-    fn priority_is_1704() {
-        assert_eq!(AgentCatalogLayer.priority(), 1704);
+    fn lives_in_the_cacheable_prefix_next_to_the_skill_index() {
+        assert_eq!(AgentCatalogLayer.priority(), 1060);
+        assert_eq!(AgentCatalogLayer.stability(), LayerStability::Stable);
+        assert!(
+            AgentCatalogLayer.priority() < 1700,
+            "the Stable zone runs below 1700; see stable_layers_come_before_dynamic"
+        );
     }
 
     #[test]
