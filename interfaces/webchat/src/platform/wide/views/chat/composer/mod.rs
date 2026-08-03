@@ -131,8 +131,23 @@ pub(super) fn InputArea() -> impl IntoView {
     // `auto` first so the box can shrink, then to `scroll_height`; CSS
     // `max-h-[140px]` caps it and `overflow-y-auto` scrolls beyond the cap.
     Effect::new(move |_| {
-        let _ = input_text.get();
+        let text = input_text.get();
         if let Some(ta) = textarea_ref.get() {
+            // Ordering, and why this needs an explicit write. Typing updates
+            // the DOM *first* (the browser does it) and the signal second, so
+            // `scroll_height` already measures the new text. A programmatic
+            // rewrite is the mirror image: the signal changes first and Leptos
+            // flushes `prop:value` into the element *after* this effect runs,
+            // so the node still holds the previous text and we would size the
+            // box to it. That is why none of the rewrites this comment claims
+            // to cover actually resized — an emptied composer stayed tall, and
+            // a multi-line recall was clipped to its first line. Write the
+            // value ourselves, but only when it differs: on the typing path it
+            // already matches, and assigning `value` would drop the caret to
+            // the end mid-word.
+            if ta.value() != text {
+                ta.set_value(&text);
+            }
             // Cast to HtmlElement so `.style()` resolves to the web-sys
             // inherent method, not Leptos's `ElementExt::style` (which is in
             // scope and would otherwise shadow it on HtmlTextAreaElement).

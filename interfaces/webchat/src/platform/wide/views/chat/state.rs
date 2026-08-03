@@ -1337,6 +1337,30 @@ impl ChatState {
         self.session_mode.set(None);
     }
 
+    /// Reset only the per-session state that [`SessionSnapshot`] does *not*
+    /// carry.
+    ///
+    /// Opening another session in the same tab goes through
+    /// `SessionMap::activate` first, which snapshots the outgoing conversation
+    /// and restores the incoming one — every signal listed in
+    /// `SessionSnapshot` is already correct by then. Calling the full
+    /// [`Self::clear_session`] afterwards threw all of it away again: the
+    /// draft and the prompt queue vanished (so a recalled or queued message
+    /// was lost for good on one sidebar click), and `active_run_id` was
+    /// nulled, which is the signal that tells the composer the conversation is
+    /// still running — the Stop button disappeared, new input stopped queueing,
+    /// and the next Enter started a second concurrent run on the same session.
+    ///
+    /// Team state is the part no snapshot holds, so it is the part that still
+    /// has to be reset by hand — otherwise leaving group A for group B shows
+    /// A's roster and tasks under B's name.
+    pub fn clear_team_context(&self) {
+        self.team_id.set(None);
+        self.team_members.set(Vec::new());
+        self.team_tasks.set(Vec::new());
+        self.strip_open.set(std::collections::HashMap::new());
+    }
+
     /// Clear session state but keep `agent_id` (for new chat within same agent).
     pub fn clear_session(&self) {
         self.messages.set(Vec::new());
