@@ -44,6 +44,7 @@
 use serde::{Deserialize, Serialize};
 
 use crate::orchestrator::dispatch::TokenBreakdown;
+use crate::providers::model_catalog::prefix_matches;
 
 /// Estimated USD cost for a single agent run.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -1075,7 +1076,7 @@ fn rates_in(vendor: &str, canonical_model: &str) -> Option<&'static Rates> {
         .find(|(p, _)| *p == vendor)?
         .1
         .iter()
-        .find(|r| canonical_model.starts_with(r.model_prefix))
+        .find(|r| prefix_matches(canonical_model, r.model_prefix))
 }
 
 /// Resolve the [`Rates`] entry for a `(provider, model)` pair, or `None` when
@@ -1128,7 +1129,7 @@ fn lookup_tiers(provider_key: &str, canonical_model: &str) -> Option<&'static [P
     }
     TIER_TABLE
         .iter()
-        .find(|(p, prefix, _)| *p == provider_key && canonical_model.starts_with(*prefix))
+        .find(|(p, prefix, _)| *p == provider_key && prefix_matches(canonical_model, prefix))
         .map(|(_, _, tiers)| *tiers)
 }
 
@@ -1277,13 +1278,16 @@ mod tests {
     /// specific row still compiles, still reads correctly, and is simply never
     /// reached. Every `claude-opus-4-*` rate would vanish behind a stray
     /// `claude` row, and nothing but a hand-computed estimate would notice.
+    ///
+    /// Uses [`prefix_matches`] — the lookup's own predicate — so the guard also
+    /// sees shadowing that only exists once separators are folded.
     #[test]
     fn no_price_row_is_shadowed_by_an_earlier_broader_prefix() {
         for (vendor, rows) in PRICE_TABLE {
             for (i, later) in rows.iter().enumerate() {
                 for earlier in &rows[..i] {
                     assert!(
-                        !later.model_prefix.starts_with(earlier.model_prefix),
+                        !prefix_matches(later.model_prefix, earlier.model_prefix),
                         "{vendor}: {:?} is unreachable — the earlier {:?} row \
                          already prefix-matches it. Move the specific row up.",
                         later.model_prefix,
@@ -1292,6 +1296,41 @@ mod tests {
                 }
             }
         }
+    }
+
+    /// Rate rows are written in the vendor's own spelling of a generation
+    /// separator, but a host may publish the other one — Copilot serves
+    /// Anthropic models as `claude-opus-4.8`. The dotted id used to fall past
+    /// the `claude-opus-4-8` row onto the broader `claude-opus-4` rate and bill
+    /// every run on it at the wrong number, with nothing to notice but a
+    /// hand-computed estimate.
+    #[test]
+    fn generation_separator_spelling_reaches_the_same_rate_row() {
+        for (a, b) in [
+            ("claude-opus-4.8", "claude-opus-4-8"),
+            ("claude-haiku-4.5", "claude-haiku-4-5"),
+        ] {
+            assert_eq!(
+                rate_card("anthropic", a),
+                rate_card("anthropic", b),
+                "{a} and {b} name the same model"
+            );
+        }
+        // Mirror image, through the tier table as well as the rate table: the
+        // dashed spelling of a dotted row must reach it.
+        assert_eq!(
+            rate_card("openai", "gpt-5-6"),
+            rate_card("openai", "gpt-5.6")
+        );
+        // `PriceTier` is not `PartialEq` (nothing in production compares two),
+        // so identity of the resolved static slice is the assertion.
+        let dashed = lookup_tiers("google", &canonicalize_model("gemini-2-5-pro"));
+        let dotted = lookup_tiers("google", &canonicalize_model("gemini-2.5-pro"));
+        assert!(dotted.is_some(), "the dotted spelling is the table's own");
+        assert!(
+            matches!((dashed, dotted), (Some(a), Some(b)) if std::ptr::eq(a, b)),
+            "gemini-2-5-pro missed the long-context tier its dotted twin gets"
+        );
     }
 
     /// Same hazard on the tier axis, where the entries are `(vendor, prefix)`
@@ -1304,7 +1343,7 @@ mod tests {
                     continue;
                 }
                 assert!(
-                    !prefix.starts_with(earlier_prefix),
+                    !prefix_matches(prefix, earlier_prefix),
                     "{vendor}: tier {prefix:?} is unreachable behind {earlier_prefix:?}"
                 );
             }

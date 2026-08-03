@@ -169,9 +169,27 @@ scoped 行**先查**，所以一家宿主可以早于厂商退役某个 id 而�
 
 > **安全边界**：该函数的产物**只做查表 key**，永远不回到线上。出站请求始终携带 operator 的原始 model id，所以折叠 host 路径不可能把请求发错地方。
 
-### 5.1 已知未闭合：点号 vs 短横的代际拼写
+### 5.1 点号 vs 短横的代际拼写：折叠在**比较**时，不在 canonicalise 里
 
-同一个模型，Anthropic 写 `claude-opus-4-8`，GitHub Copilot 写 `claude-opus-4.8`。canonicalise 不统一这两种拼法（全局把 `.` 换成 `-` 会让 `gpt-5.6` / `glm-5.2` / `kimi-k2.6` 这些**表里就是点号**的前缀集体失配）。后果被限制在"手工配置了点号拼法"的情况：那样的 id 会落到更宽的 `claude-opus-4` 行（200K/32K 而不是 1M/128K）。Aleph **自己广告的 id 里没有点号代际拼法**，所以这条今天不咬人。真正的解法是把三张表的查表从"首个前缀命中"改成"最长前缀命中"，那是一次独立的改动，不该和刷新混在一起。
+同一个模型，Anthropic 写 `claude-opus-4-8`，GitHub Copilot 写 `claude-opus-4.8`。**canonicalise 两个方向都不能统一它们**：全局 `.`→`-` 会让 `gpt-5.6` / `glm-5.2` / `kimi-k2.6` 这些**表里就是点号**的前缀集体失配；全局 `-`→`.` 会毁掉数字间的横杠**不是**版本分隔符的 id（`llama-3-70b` 是 Llama 3 的 70B，不是 Llama 3.70）。
+
+解法是把折叠放到**比较**那一刻——`alias.rs::prefix_matches`，比较时 `.` ≡ `-`，零分配，四张表全部保留厂商自己发布的拼写（这正是它们能对着厂商文档肉眼核对的前提）。
+
+> **round-2 记的解法是错的，勿沿用**：那里写的是"把三张表改成最长前缀命中"。最长前缀命中**解决不了这个问题**——`claude-opus-4.8` 在任何排序规则下都不 `starts_with("claude-opus-4-8")`，那一行从来没进过候选集，改"哪个候选赢"没有意义。同时它也**不需要**推翻 prefix-shadow 守卫：守卫改用同一个谓词即可（见 §7）。
+
+无条件等同这两个字符（而非只在数字之间）是安全的：`.`/`-` 在同一位置互换从未指代过不同的模型，而且表被禁止依赖这个区分——只差分隔符的两行是折叠相等的，prefix-shadow 守卫（用同一个谓词）会拒绝它们。
+
+**它咬人的程度比 round-2 估计的重**（下列为实测值，非推演）：
+
+| id | 折叠前 | 应为 |
+|---|---|---|
+| `claude-opus-4.8` 上下文 | 200K / 32K | 1M / 128K |
+| `claude-opus-4.8` 计价 | $15 / $75 | $5 / $25（**3 倍**） |
+| `llama-3-3-70b-instruct` 上下文 | 8K | 128K（**16 倍低报**） |
+| `gemini-2-5-pro` 长上下文档 | 不命中 | 命中 |
+| Copilot `gpt-5-4-mini` 退役 | 看不见 | 已退役 |
+
+round-2 判断"今天不咬人"的依据是"Aleph 自己广告的 id 里没有点号代际拼法"——那句话本身没错，但**广告面不是唯一入口**：按需 `/models` 发现（§6）会把宿主自己的拼写交到用户手里，而 `llama-3-3-*` 这一族是托管方的常规拼法，压根不需要 Copilot 参与。
 
 ### 5.2 ⚠️ 同一个模型两套 id：归一解决不了，得靠线上翻译
 
@@ -266,7 +284,9 @@ kimi-cli 问每个已配置平台 `GET {base_url}/models`。数据少（基本�
 | `declared_aliases_resolve_to_their_profile` | 别名展开断裂 |
 | `exemptions_still_name_something_real` | 豁免比它豁免的东西活得久 |
 
-另有两个 **prefix-shadow 守卫**（在 `pricing.rs` / `capabilities.rs` 各自的测试模块里，因为表是私有的）：查表是"首个前缀命中者胜"，一条广义行插在特化行之前会让后者**永远不可达**——它照常编译、读起来也对，只是从不执行。
+另有**五个 prefix-shadow 守卫**（分散在 `pricing.rs`（rate + tier）/ `capabilities.rs` / `alias.rs` / `lifecycle.rs` 各自的测试模块里，因为表是私有的）：查表是"首个前缀命中者胜"，一条广义行插在特化行之前会让后者**永远不可达**——它照常编译、读起来也对，只是从不执行。
+
+**五个守卫必须全部用 `prefix_matches` 比较，即查表自己用的那个谓词**（§5.1）。用裸 `starts_with` 的守卫对折叠后才出现的遮蔽是瞎的（一条 `gpt-5-6` 行藏在更早的 `gpt-5.6` 行后面），会在查表已经跳过某行时报告"表是干净的"。`MODEL_VENDOR_PREFIXES` 与 `LIFECYCLE_TABLE` 这两张表**此前根本没有守卫**，2026-08-03 补上；lifecycle 那个**按 scope 分桶**——`groq` 行遮蔽不了 `github-copilot` 行，跨 scope 比较会错杀正确的表。
 
 ### 怎么加豁免
 
@@ -294,7 +314,7 @@ openclaw 把整份目录放在每个 provider 插件的 `openclaw.plugin.json` �
 | 厂商话 vs 转售商话 | 不区分（每个 provider 各说各的，天然隔离） | `None` = 厂商，`Some(id)` = 宿主 | **超越**：Aleph 是单张表，必须显式区分，否则会把转售商的话当厂商的话（`minimax-m2.7` 就是那个反例） |
 | 目录规模 | 40 provider roster，`status` 覆盖 48 条 | 53 preset，`LIFECYCLE_TABLE` 24 行 | **对齐**（Aleph 只记非 Active 行） |
 | `p` 分隔符（Fireworks） | 每个 provider 自带 id 表，不需要归一 | canonicalise 还原（§5） | **映射到归一层**——Aleph 是共享前缀表，必须归一 |
-| 同一模型的多种拼写 | 每个 provider 目录各写各的 | 单一前缀表 | **已知未闭合**（§5.1） |
+| 同一模型的多种拼写 | 每个 provider 目录各写各的 | 单一前缀表 + 比较时折叠分隔符 | **已闭合**（§5.1，2026-08-03） |
 | 价格粒度 | `cost{input,output,cacheRead,cacheWrite}` | 同上 + reasoning 独立费率 + 长上下文 tier | **超越** |
 | 订阅端点的 `cost: 0` | 照登 `0` | 记 `None`（未记录） | **有意不同**：`0` 会被读成"免费"并让 `cost_aware` 把它排第一 |
 | 远端目录 overlay | `remote-overlay.ts` / `remote-refresh.ts`（可拉线上目录覆盖本地） | 无 | **有意不移植**（R3，见 §9） |

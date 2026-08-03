@@ -181,6 +181,56 @@ fn restore_dotted_generation(id: &str) -> String {
     out
 }
 
+/// Prefix match over a canonicalised model id, treating `.` and `-` as the
+/// same separator.
+///
+/// Hosts disagree on how to spell a generation. Anthropic publishes
+/// `claude-opus-4-8`; GitHub Copilot publishes `claude-opus-4.8` for the very
+/// same model. Canonicalisation cannot fold one form into the other, because
+/// the fold has no safe direction: rewriting `.`→`-` in the *id* alone breaks
+/// every table prefix that is natively dotted (`gpt-5.6`, `kimi-k2.6`,
+/// `glm-5.2`), and rewriting `-`→`.` corrupts ids where a dash between digits
+/// is not a version separator at all (`llama-3-70b` is Llama 3 at 70B, not
+/// Llama 3.70). Folding at *comparison* time sidesteps both: it is symmetric by
+/// construction, needs no allocation, and lets every table keep the spelling
+/// its vendor actually publishes — which is what makes the tables checkable
+/// against vendor docs by eye.
+///
+/// Equating the two characters unconditionally (rather than only between
+/// digits) is safe because a `.`/`-` swap at the same position has never named
+/// a different model, and the tables are barred from relying on the
+/// distinction: two rows that differ only by separator are fold-equal, so the
+/// prefix-shadow guards — which use this same predicate — reject them.
+///
+/// This is the single matching predicate for all four prefix tables
+/// ([`MODEL_VENDOR_PREFIXES`], the capability table, the lifecycle table, and
+/// pricing's rate/tier tables). A guard that compares prefixes with anything
+/// else goes blind to exactly the shadowing this introduces.
+#[must_use]
+pub fn prefix_matches(canonical_id: &str, prefix: &str) -> bool {
+    let (id, pre) = (canonical_id.as_bytes(), prefix.as_bytes());
+    // `zip` stops at the shorter side, so the length check is what keeps a
+    // prefix longer than the id from matching vacuously.
+    pre.len() <= id.len()
+        && id
+            .iter()
+            .zip(pre)
+            .all(|(a, b)| fold_sep(*a) == fold_sep(*b))
+}
+
+/// Collapse the two interchangeable separator spellings onto one byte.
+///
+/// Byte-wise is sound for ids that are not pure ASCII: `.` and `-` cannot occur
+/// inside a UTF-8 multi-byte sequence, so no continuation byte is ever rewritten
+/// and a byte-prefix match remains a character-prefix match.
+const fn fold_sep(b: u8) -> u8 {
+    if b == b'.' {
+        b'-'
+    } else {
+        b
+    }
+}
+
 /// Infer the canonical vendor slug for a *bare model name*.
 ///
 /// Returns `None` when no prefix matches — callers should treat that as
@@ -192,7 +242,7 @@ pub fn infer_vendor(model: &str) -> Option<&'static str> {
     let canon = canonicalize_model_id(model);
     MODEL_VENDOR_PREFIXES
         .iter()
-        .find(|(prefix, _)| canon.starts_with(prefix))
+        .find(|(prefix, _)| prefix_matches(&canon, prefix))
         .map(|(_, vendor)| *vendor)
 }
 
@@ -272,6 +322,38 @@ pub fn canonical_provider_id(provider: &str) -> Option<&'static str> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn separator_spellings_are_interchangeable_in_a_prefix_match() {
+        assert!(prefix_matches("claude-opus-4.8", "claude-opus-4-8"));
+        assert!(prefix_matches("claude-opus-4-8", "claude-opus-4.8"));
+        assert!(prefix_matches("llama-3-3-70b-instruct", "llama-3.3"));
+        // A longer prefix must never match vacuously — `zip` alone would stop
+        // at the shorter side and report success.
+        assert!(!prefix_matches("gpt-5", "gpt-5.6"));
+        // Folding must not reach across a differing digit.
+        assert!(!prefix_matches("llama-3-70b", "llama-3.3"));
+        assert!(!prefix_matches("grok-4-fast", "grok-4.3"));
+    }
+
+    /// Prefix-shadow guard for the vendor table. Its rows are alphabetic today,
+    /// so separator folding cannot change any outcome here — the guard exists
+    /// because nothing else enforces the declaration order this lookup depends
+    /// on, and because the day a versioned vendor prefix is added (`llama-4`)
+    /// the hazard arrives with it, silently.
+    #[test]
+    fn no_vendor_prefix_is_shadowed_by_an_earlier_broader_one() {
+        for (i, (later, vendor)) in MODEL_VENDOR_PREFIXES.iter().enumerate() {
+            for (earlier, earlier_vendor) in &MODEL_VENDOR_PREFIXES[..i] {
+                assert!(
+                    !prefix_matches(later, earlier),
+                    "{later:?} ({vendor}) is unreachable — the earlier \
+                     {earlier:?} ({earlier_vendor}) row already prefix-matches \
+                     it. Move the specific row above the broad one."
+                );
+            }
+        }
+    }
 
     #[test]
     fn canonicalize_strips_vendor_tag_and_date() {
