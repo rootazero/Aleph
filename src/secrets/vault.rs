@@ -251,7 +251,7 @@ impl SecretVault {
 #[cfg(test)]
 mod tests {
     use super::super::crypto::SecretsCrypto;
-    use super::types::EntryMetadata;
+    use super::super::types::EntryMetadata;
     use super::*;
     use tempfile::TempDir;
 

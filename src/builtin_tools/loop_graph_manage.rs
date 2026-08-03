@@ -104,6 +104,22 @@ pub struct LoopGraphArgs {
     /// which adversarial angle) — appended to the watch template
     #[serde(default)]
     pub prompt: Option<String>,
+
+    // ── Internal (injected by the dispatcher, not LLM-visible) ─────
+    /// Source channel id, injected from turn context. Stamped onto the cron
+    /// jobs `enable_audit` / `pair` install so their output has somewhere to
+    /// go — the audit template's step 7 is "上报: 通知用户", and `cron_manage`
+    /// has plumbed this since it was written. Without it both governance loops
+    /// run, reach a verdict, and deliver it nowhere (R5).
+    #[serde(default, rename = "__channel")]
+    #[schemars(skip)]
+    pub __channel: Option<String>,
+
+    /// Source conversation id (e.g. a Telegram `chat_id`), injected from turn
+    /// context — the channel alone does not identify where to deliver.
+    #[serde(default, rename = "__conversation_id")]
+    #[schemars(skip)]
+    pub __conversation_id: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -160,6 +176,47 @@ impl LoopGraphTool {
             NodeKind::Frozen => "frozen:",
             NodeKind::Root => "root:",
         }
+    }
+
+    /// Fan `audits` edges from the audit node onto every optimization loop and
+    /// frozen rule. Returns how many landed.
+    ///
+    /// A per-edge failure is logged and skipped rather than propagated: by the
+    /// time this runs the cron job and the marker node are committed, so
+    /// returning `Err` reports total failure over a LIVE audit ring — and the
+    /// caller's only documented next step ("重装") then hits the idempotency
+    /// guard. The edges are advisory wiring the audit template is told to
+    /// re-check anyway ("后续新登记的环需手动补 audits 边或由审计环自查接线"),
+    /// so a missing one degrades coverage; a bogus error message destroys the
+    /// operator's model of what exists.
+    fn wire_audit_edges(
+        &self,
+        agent_id: &str,
+        audit_node_id: &str,
+        origin: Origin,
+    ) -> Result<usize> {
+        let targets: Vec<GraphNode> = self
+            .store
+            .list_nodes(agent_id)?
+            .into_iter()
+            .filter(|n| {
+                n.id != audit_node_id
+                    && (n.kind.is_optimization_loop() || n.kind == NodeKind::Frozen)
+            })
+            .collect();
+        let mut wired = 0usize;
+        for t in &targets {
+            match self.store.upsert_edge(
+                &GraphEdge::new(agent_id, audit_node_id, &t.id, EdgeKind::Audits, origin)
+                    .with_note("enable_audit 自动接线"),
+            ) {
+                Ok(()) => wired += 1,
+                Err(e) => warn!(target = %t.id, error = %e,
+                    "loop_graph enable_audit: audits edge not wired — \
+                     the audit ring is live but does not cover this node yet"),
+            }
+        }
+        Ok(wired)
     }
 
     async fn render_status(&self, agent_id: &str) -> Result<String> {
@@ -355,6 +412,7 @@ impl AlephTool for LoopGraphTool {
         // wiring real scoping means teaching the readers, not re-adding an arg.
         let agent_id = crate::routing::DEFAULT_AGENT_ID.to_string();
         let origin = args.origin.unwrap_or(Origin::Llm);
+        let delivery = (args.__channel.clone(), args.__conversation_id.clone());
 
         match args.action {
             LoopGraphAction::Node => {
@@ -388,11 +446,29 @@ impl AlephTool for LoopGraphTool {
                 node.cadence = args.cadence;
                 self.store.upsert_node(&node)?;
                 info!(id = %id, kind = %kind.as_str(), "loop_graph node upserted");
+                // Report the origin the STORE now holds, not the one that was
+                // passed. `origin` is write-once by design (it is the
+                // provenance the audit template checks), so re-registering an
+                // existing node with `origin='human'` keeps `llm` — and echoing
+                // the argument told the caller a human attested a row that
+                // still says otherwise. The write-once rule is the right one;
+                // the message was the part that lied.
+                let stored_origin = self.store.get_node(&agent_id, &id)?.map_or_else(
+                    || origin.as_str().to_string(),
+                    |n| n.origin.as_str().to_string(),
+                );
+                let note = if stored_origin == origin.as_str() {
+                    String::new()
+                } else {
+                    format!(
+                        "（本次传入 origin={}，但 provenance 写一次不改写——要改须先 drop_node 再重建）",
+                        origin.as_str()
+                    )
+                };
                 Ok(LoopGraphOutput {
                     message: format!(
-                        "节点 {id} 已登记（{}，origin={}）",
-                        kind.as_str(),
-                        origin.as_str()
+                        "节点 {id} 已登记（{}，origin={stored_origin}）{note}",
+                        kind.as_str()
                     ),
                     nodes: None,
                     edges: None,
@@ -405,7 +481,23 @@ impl AlephTool for LoopGraphTool {
                 let removed = self.store.delete_node(&agent_id, &id)?;
                 Ok(LoopGraphOutput {
                     message: if removed {
-                        format!("节点 {id} 已移除；指向它的边将作为悬空审计信号保留，用 gc 清理")
+                        // The node is a BINDING to a live entity, never a copy
+                        // of it — so dropping it unbinds, it does not stop
+                        // anything. For `cron:` that distinction is expensive:
+                        // the job keeps running its governance prompt weekly
+                        // while `status`/`list`/`lint`/doctor, which all iterate
+                        // graph rows, can no longer see it.
+                        let mut m = format!(
+                            "节点 {id} 已移除；指向它的边将作为悬空审计信号保留，用 gc 清理"
+                        );
+                        if let Some(job) = id.strip_prefix("cron:") {
+                            m.push_str(&format!(
+                                "。注意：cron job '{job}' 仍在按原时间表运行——图里只是不再登记它，\
+                                 status/list/lint 从此看不见它。确需停掉请用 \
+                                 cron_manage(action='delete', id='{job}')"
+                            ));
+                        }
+                        m
                     } else {
                         format!("节点 {id} 不存在")
                     },
@@ -499,13 +591,32 @@ impl AlephTool for LoopGraphTool {
             }
 
             LoopGraphAction::Gc => {
-                let removed = self.store.gc(&agent_id)?;
+                let report = self.store.gc(&agent_id)?;
+                let mut message = if report.removed.is_empty() {
+                    "无悬空边".to_string()
+                } else {
+                    format!(
+                        "已清理 {} 条悬空边: {}",
+                        report.removed.len(),
+                        report.removed.join("; ")
+                    )
+                };
+                // Say what was deliberately kept. A caller who asked to clear
+                // dangling rows and is told "无悬空边" while an owns_reference
+                // row still enforces would go looking for a bug that is not
+                // there — and the honest line is also the one that names the
+                // single sanctioned way out.
+                if !report.retained_acl.is_empty() {
+                    message.push_str(&format!(
+                        "。保留 {} 条治理边（owns_reference 悬空但仍在生效——\
+                         被治理环的 objective 写保护不会因为治理者消失而自动解除）: {}。\
+                         确需解除请用 action='unlink'（会向用户请示）",
+                        report.retained_acl.len(),
+                        report.retained_acl.join("; ")
+                    ));
+                }
                 Ok(LoopGraphOutput {
-                    message: if removed.is_empty() {
-                        "无悬空边".to_string()
-                    } else {
-                        format!("已清理 {} 条悬空边: {}", removed.len(), removed.join("; "))
-                    },
+                    message,
                     nodes: None,
                     edges: None,
                     rendered: None,
@@ -530,14 +641,21 @@ impl AlephTool for LoopGraphTool {
                 // `cron:ratchet -[audits]-> frozen:budget`) blocked the
                 // installer while naming a node that has nothing to do with
                 // the audit ring.
-                let nodes = self.store.list_nodes(&agent_id)?;
-                let live = nodes
-                    .iter()
-                    .find(|n| n.body.as_deref() == Some(crate::loop_graph::AUDIT_NODE_BODY));
-                if let Some(existing) = live {
+                // Raw-column read, not `list_nodes`: this is an EXISTENCE
+                // question and `list_nodes` fail-softs an unparseable row to
+                // nothing, which here reads as "no audit ring" and mints a
+                // second one — the outcome the guard exists to prevent.
+                let live = self
+                    .store
+                    .node_ids_with_body(&agent_id, crate::loop_graph::AUDIT_NODE_BODY)?;
+                if let Some(existing) = live.first() {
                     return Err(AlephError::tool(format!(
-                        "审计环已存在（{}）。如需重装：先 drop_node 它，再 gc 清掉它留下的悬空 audits 边。",
-                        existing.id
+                        "审计环已存在（{existing}）。只改时间表用 \
+                         cron_manage(action='update', id='{job}', schedule=…)，不必重装。\
+                         确需重装：先 cron_manage(action='delete', id='{job}') 删掉它的 cron job，\
+                         再 drop_node 它、gc 清悬空边——只 drop_node 会留下一个仍在按周跑、\
+                         但 status/list/lint 都看不见的审计环。",
+                        job = existing.trim_start_matches("cron:")
                     )));
                 }
                 let Some(cron) = &self.cron else {
@@ -545,13 +663,68 @@ impl AlephTool for LoopGraphTool {
                         "loop_graph enable_audit: cron service unavailable",
                     ));
                 };
+                // Idempotency against REALITY, not only against the graph.
+                // `drop_node` removes the binding but never the cron job, so
+                // the graph check alone cannot see an audit ring whose row was
+                // dropped — and minting a second one gives two seven-step
+                // audits filing verdicts that supersede each other forever
+                // (exactly what the rollback below is written to avoid). Adopt
+                // the survivor instead: re-register the node and re-wire, which
+                // is also what a re-`enable_audit` after a crash should do.
+                let orphan = {
+                    let service = cron.lock().await;
+                    match service.list_jobs().await {
+                        Ok(jobs) => jobs
+                            .into_iter()
+                            .find(|j| j.prompt == AUDIT_TEMPLATE)
+                            .map(|j| j.id),
+                        Err(e) => {
+                            // Unreadable roster: do NOT proceed to create. "I
+                            // could not find out" must not become "there is
+                            // none" on the one path whose duplicate is a
+                            // self-perpetuating LLM loop.
+                            return Err(AlephError::tool(format!(
+                                "loop_graph enable_audit: 读不到 cron 名册（{e}）——\
+                                 拒绝安装，否则可能装出第二个审计环。请稍后重试。"
+                            )));
+                        }
+                    }
+                };
                 let expr = args
                     .cron_expr
                     .unwrap_or_else(|| AUDIT_DEFAULT_CRON_EXPR.to_string());
                 crate::tasks::shared::schedule::compute_next_cron(&expr, None, chrono::Utc::now())
                     .map_err(|e| AlephError::tool(format!("Invalid cron schedule: {e}")))?;
 
-                let job = CronJob::new(
+                if let Some(job_id) = orphan {
+                    let audit_node_id = format!("cron:{job_id}");
+                    self.store.upsert_node(
+                        &GraphNode::new(
+                            &agent_id,
+                            &audit_node_id,
+                            NodeKind::LoopCron,
+                            "循环治理·审计环",
+                            origin,
+                        )
+                        .with_cadence("weekly")
+                        .with_body(crate::loop_graph::AUDIT_NODE_BODY),
+                    )?;
+                    let rewired = self.wire_audit_edges(&agent_id, &audit_node_id, origin)?;
+                    info!(job_id = %job_id, "orphaned audit cron re-adopted");
+                    return Ok(LoopGraphOutput {
+                        message: format!(
+                            "发现一个已在运行、但图里没有对应节点的审计 cron（{job_id}）——\
+                             已重新登记并接线 {rewired} 个节点，而不是再装一个（两个审计环会互相 \
+                             supersede 裁决）。它的时间表沿用原来的；要改用 \
+                             cron_manage(action='update', id='{job_id}', schedule=…)。"
+                        ),
+                        nodes: None,
+                        edges: None,
+                        rendered: None,
+                    });
+                }
+
+                let mut job = CronJob::new(
                     "循环治理·审计环",
                     &agent_id,
                     AUDIT_TEMPLATE,
@@ -561,6 +734,10 @@ impl AlephTool for LoopGraphTool {
                         stagger_ms: None,
                     },
                 );
+                // Step 7 of AUDIT_TEMPLATE is "上报: 通知用户". A channel-less
+                // cron has nowhere to report to.
+                job.source_channel_id = delivery.0.clone();
+                job.source_conversation_id = delivery.1.clone();
                 let job_id = {
                     let service = cron.lock().await;
                     service.add_job(job).await.map_err(|e| {
@@ -596,27 +773,12 @@ impl AlephTool for LoopGraphTool {
                     return Err(e);
                 }
 
-                let targets: Vec<GraphNode> = self
-                    .store
-                    .list_nodes(&agent_id)?
-                    .into_iter()
-                    .filter(|n| {
-                        n.id != audit_node_id
-                            && (n.kind.is_optimization_loop() || n.kind == NodeKind::Frozen)
-                    })
-                    .collect();
-                for t in &targets {
-                    self.store.upsert_edge(
-                        &GraphEdge::new(&agent_id, &audit_node_id, &t.id, EdgeKind::Audits, origin)
-                            .with_note("enable_audit 自动接线"),
-                    )?;
-                }
-                info!(job_id = %job_id, targets = targets.len(), "audit loop installed");
+                let wired = self.wire_audit_edges(&agent_id, &audit_node_id, origin)?;
+                info!(job_id = %job_id, targets = wired, "audit loop installed");
                 Ok(LoopGraphOutput {
                     message: format!(
-                        "审计环已安装（cron {job_id}，{expr}），audits 接线 {} 个节点。\
-                         后续新登记的环需手动补 audits 边或由审计环自查接线。",
-                        targets.len()
+                        "审计环已安装（cron {job_id}，{expr}），audits 接线 {wired} 个节点。\
+                         后续新登记的环需手动补 audits 边或由审计环自查接线。"
                     ),
                     nodes: None,
                     edges: None,
@@ -649,7 +811,7 @@ impl AlephTool for LoopGraphTool {
                     crate::loop_graph::templates::WATCH_TEMPLATE_HEADER,
                     crate::loop_graph::templates::WATCH_TEMPLATE_FOOTER
                 );
-                let job = CronJob::new(
+                let mut job = CronJob::new(
                     &label,
                     &agent_id,
                     &full_prompt,
@@ -659,6 +821,10 @@ impl AlephTool for LoopGraphTool {
                         stagger_ms: None,
                     },
                 );
+                // WATCH_TEMPLATE_FOOTER: "发现便宜赢法 → 裁决写 note 并简短通知
+                // 用户". Same delivery route as the audit ring.
+                job.source_channel_id = delivery.0.clone();
+                job.source_conversation_id = delivery.1.clone();
                 let job_id = {
                     let service = cron.lock().await;
                     service.add_job(job).await.map_err(|e| {
@@ -699,10 +865,24 @@ impl AlephTool for LoopGraphTool {
                     return Err(e);
                 }
                 info!(job_id = %job_id, target = %to_id, "watcher paired");
+                // `pair` always builds a `cron:` watcher, so the watcher half
+                // of the promise always holds — but the TARGET half does not.
+                // Only `goal:` and `team:` have a victory-claim call site;
+                // pairing onto `daemon:dreaming` or a `cron:` loop produces a
+                // perfectly real watcher that this sentence used to advertise
+                // as instantly reviewable, and it can never be. Same disclosure
+                // `link` makes about unpokeable watchers, mirrored onto the
+                // side that was missed.
+                let trigger_line = if crate::loop_graph::service::target_has_victory_claim(&to_id) {
+                    "被看守目标的胜利宣称（goal 完成 / team 解散）还会即时触发本看守\
+                     （post-run 钩子，去抖 60s）。"
+                } else {
+                    "注意：本看守只按上面的时间表跑——只有 goal:/team: 目标有胜利宣称触发点，\
+                     其它环没有终态时刻可挂，所以不会有即时评审。"
+                };
                 Ok(LoopGraphOutput {
                     message: format!(
-                        "看守环已配对: {watcher_id} -[watches]-> {to_id}（{expr}）。\
-                         被看守 goal/team 的胜利宣称（goal 完成 / team 解散）还会即时触发本看守（post-run 钩子，去抖 60s）。"
+                        "看守环已配对: {watcher_id} -[watches]-> {to_id}（{expr}）。{trigger_line}"
                     ),
                     nodes: None,
                     edges: None,
@@ -753,6 +933,8 @@ mod tests {
             note: None,
             cron_expr: None,
             prompt: None,
+            __channel: None,
+            __conversation_id: None,
         }
     }
 

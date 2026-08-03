@@ -20,6 +20,16 @@ pub struct LoopGraphStore {
     conn: Mutex<rusqlite::Connection>,
 }
 
+/// What one `gc` pass did. `retained_acl` is not an error and not a leftover:
+/// dangling `owns_reference` rows are deliberately kept (see
+/// [`LoopGraphStore::gc`]), and the tool has to say so — silently keeping a row
+/// the caller asked to clear is the same class of lie as silently deleting one.
+#[derive(Debug, Default, PartialEq, Eq)]
+pub struct GcReport {
+    pub removed: Vec<String>,
+    pub retained_acl: Vec<String>,
+}
+
 impl LoopGraphStore {
     /// Open (creating if needed) the graph DB at `path`.
     pub fn open(path: &Path) -> Result<Self> {
@@ -216,18 +226,34 @@ impl LoopGraphStore {
             )));
         }
         let conn = self.lock();
-        for endpoint in [&edge.from_id, &edge.to_id] {
-            let exists: bool = conn
+        let mut from_kind: Option<String> = None;
+        for (endpoint, is_source) in [(&edge.from_id, true), (&edge.to_id, false)] {
+            use rusqlite::OptionalExtension;
+            let kind: Option<String> = conn
                 .query_row(
-                    "SELECT EXISTS(SELECT 1 FROM graph_nodes WHERE agent_id = ?1 AND id = ?2)",
+                    "SELECT kind FROM graph_nodes WHERE agent_id = ?1 AND id = ?2",
                     rusqlite::params![edge.agent_id, endpoint],
                     |r| r.get(0),
                 )
+                .optional()
                 .map_err(|e| AlephError::other(format!("loop_graph edge check: {e}")))?;
-            if !exists {
+            let Some(kind) = kind else {
                 return Err(AlephError::other(format!(
                     "loop_graph edge: node '{endpoint}' does not exist — register it first \
                      with action='node'"
+                )));
+            };
+            if is_source {
+                from_kind = Some(kind);
+            }
+        }
+        if let Some(kind) = from_kind.as_deref().and_then(NodeKind::parse) {
+            if let Some(reason) = coverage_source_rejection(kind, edge.kind) {
+                return Err(AlephError::other(format!(
+                    "loop_graph invariant: '{}' cannot {} '{}' — {reason}",
+                    edge.from_id,
+                    edge.kind.as_str(),
+                    edge.to_id
                 )));
             }
         }
@@ -302,6 +328,27 @@ impl LoopGraphStore {
     /// Existence questions read the columns that cannot fail to parse, exactly
     /// as [`node_ids_present`] does.
     pub fn owns_reference_sources(&self, agent_id: &str, to_id: &str) -> Result<Vec<String>> {
+        self.edge_sources(agent_id, to_id, EdgeKind::OwnsReference, "owns_reference")
+    }
+
+    /// Ids of the loops watching `to_id`, read from raw columns.
+    ///
+    /// Same discipline as [`Self::owns_reference_sources`], and for a cost that
+    /// is just as one-way: this feeds the victory-claim poke, whose caller
+    /// treats an empty answer as "nothing to review, keep the one-shot claim".
+    /// A dropped row therefore does not degrade the review, it CANCELS it, for
+    /// a completion whose claim key can never change again.
+    pub fn watches_sources(&self, agent_id: &str, to_id: &str) -> Result<Vec<String>> {
+        self.edge_sources(agent_id, to_id, EdgeKind::Watches, "watches")
+    }
+
+    fn edge_sources(
+        &self,
+        agent_id: &str,
+        to_id: &str,
+        kind: EdgeKind,
+        ctx: &str,
+    ) -> Result<Vec<String>> {
         let conn = self.lock();
         let mut stmt = conn
             .prepare(
@@ -309,22 +356,48 @@ impl LoopGraphStore {
                  WHERE agent_id = ?1 AND to_id = ?2 AND kind = ?3
                  ORDER BY from_id",
             )
-            .map_err(|e| AlephError::other(format!("loop_graph owns_reference prepare: {e}")))?;
+            .map_err(|e| AlephError::other(format!("loop_graph {ctx} prepare: {e}")))?;
         let rows = stmt
-            .query_map(
-                rusqlite::params![agent_id, to_id, EdgeKind::OwnsReference.as_str()],
-                |r| r.get::<_, String>(0),
-            )
-            .map_err(|e| AlephError::other(format!("loop_graph owns_reference query: {e}")))?;
+            .query_map(rusqlite::params![agent_id, to_id, kind.as_str()], |r| {
+                r.get::<_, String>(0)
+            })
+            .map_err(|e| AlephError::other(format!("loop_graph {ctx} query: {e}")))?;
         let mut out = Vec::new();
         for r in rows {
-            out.push(r.map_err(|e| AlephError::other(format!("loop_graph owns_reference: {e}")))?);
+            out.push(r.map_err(|e| AlephError::other(format!("loop_graph {ctx}: {e}")))?);
+        }
+        Ok(out)
+    }
+
+    /// Ids of the nodes whose `body` is exactly `body`, read from raw columns.
+    ///
+    /// Same reasoning as [`node_ids_present`] / `owns_reference_sources`: this
+    /// answers an EXISTENCE question (`enable_audit`'s "is an audit ring
+    /// already installed"), and `list_nodes` fail-softs an unreadable row to
+    /// nothing. An audit node this build cannot parse — a downgrade past a new
+    /// `NodeKind`, which `#[non_exhaustive]` says to expect — would read as "no
+    /// audit ring" and mint a second one, the exact outcome the guard exists to
+    /// prevent. `id`/`body` are TEXT columns that cannot fail to decode.
+    pub fn node_ids_with_body(&self, agent_id: &str, body: &str) -> Result<Vec<String>> {
+        let conn = self.lock();
+        let mut stmt = conn
+            .prepare(
+                "SELECT id FROM graph_nodes
+                 WHERE agent_id = ?1 AND body = ?2 ORDER BY id",
+            )
+            .map_err(|e| AlephError::other(format!("loop_graph body scan prepare: {e}")))?;
+        let rows = stmt
+            .query_map(rusqlite::params![agent_id, body], |r| r.get::<_, String>(0))
+            .map_err(|e| AlephError::other(format!("loop_graph body scan query: {e}")))?;
+        let mut out = Vec::new();
+        for r in rows {
+            out.push(r.map_err(|e| AlephError::other(format!("loop_graph body scan: {e}")))?);
         }
         Ok(out)
     }
 
     /// Remove dangling edges (endpoint node gone). Explicit only — never
-    /// automatic. Returns human-readable descriptions of what was removed.
+    /// automatic.
     ///
     /// "Gone" is decided by [`node_ids_present`] — raw `id` text, not a parsed
     /// row. `row_to_node` fail-softs an unknown `kind`/`origin` to `Ok(None)`
@@ -333,7 +406,16 @@ impl LoopGraphStore {
     /// does not exist" and irreversibly deletes every edge touching it. Both
     /// enums are `#[non_exhaustive]`, i.e. the vocabulary is expected to grow,
     /// so a downgrade after a new kind ships is the realistic trigger.
-    pub fn gc(&self, agent_id: &str) -> Result<Vec<String>> {
+    ///
+    /// **`owns_reference` is never collected.** It is not decoration: it is the
+    /// row `governing_owner` reads to refuse a governed loop's rewrite of its
+    /// own objective. Deleting the governor node leaves that edge dangling but
+    /// still ENFORCING — which is correct, "my governor vanished" must not be a
+    /// self-service unlock. A gc that swept it turned `drop_node` + `gc`, two
+    /// calls neither of which names a protected id, into the second door out of
+    /// §6.2 write protection, right next to the `unlink` door the Auto-tier card
+    /// now covers. The one way out stays the carded `unlink`.
+    pub fn gc(&self, agent_id: &str) -> Result<GcReport> {
         let conn = self.lock();
         let ids = node_ids_present(&conn, agent_id, "gc")?;
 
@@ -349,24 +431,25 @@ impl LoopGraphStore {
         let edges: Vec<GraphEdge> = rows.filter_map(|r| r.ok().and_then(|e| e)).collect();
         drop(stmt);
 
-        let mut removed = Vec::new();
+        let mut report = GcReport::default();
         for e in &edges {
-            if !ids.contains(&e.from_id) || !ids.contains(&e.to_id) {
-                conn.execute(
-                    "DELETE FROM graph_edges
-                     WHERE agent_id = ?1 AND from_id = ?2 AND to_id = ?3 AND kind = ?4",
-                    rusqlite::params![agent_id, e.from_id, e.to_id, e.kind.as_str()],
-                )
-                .map_err(|err| AlephError::other(format!("loop_graph gc: {err}")))?;
-                removed.push(format!(
-                    "{} -[{}]-> {}",
-                    e.from_id,
-                    e.kind.as_str(),
-                    e.to_id
-                ));
+            if ids.contains(&e.from_id) && ids.contains(&e.to_id) {
+                continue;
             }
+            let described = format!("{} -[{}]-> {}", e.from_id, e.kind.as_str(), e.to_id);
+            if e.kind == EdgeKind::OwnsReference {
+                report.retained_acl.push(described);
+                continue;
+            }
+            conn.execute(
+                "DELETE FROM graph_edges
+                     WHERE agent_id = ?1 AND from_id = ?2 AND to_id = ?3 AND kind = ?4",
+                rusqlite::params![agent_id, e.from_id, e.to_id, e.kind.as_str()],
+            )
+            .map_err(|err| AlephError::other(format!("loop_graph gc: {err}")))?;
+            report.removed.push(described);
         }
-        Ok(removed)
+        Ok(report)
     }
 
     /// Structural lint — pure graph checks, zero semantics (semantic verdicts
@@ -423,11 +506,56 @@ impl LoopGraphStore {
         let present = node_ids_present(&conn, agent_id, "lint")?;
 
         let mut findings = lint_dangling_edges(&edges, &present);
-        findings.extend(lint_naked_loops(&nodes, &edges));
+        findings.extend(lint_naked_loops(&nodes, &edges, &by_id));
         findings.extend(lint_forged_coverage(&nodes, &edges, &by_id));
         findings.extend(lint_governance_chain(&nodes, &edges, &by_id));
         findings.extend(lint_cadence_mismatch(&edges, &by_id));
         Ok(findings)
+    }
+}
+
+/// May a node of `source` kind be the SOURCE of a `watches` / `audits` edge?
+/// `Some(reason)` rejects.
+///
+/// Round 9 made the coverage exemption unforgeable at length 1 (no self-edge),
+/// round 10 at length 2 (`lint_forged_coverage` walks the ring). Both closed
+/// holes in the *shape* of the coverage graph while leaving its *vocabulary*
+/// open, and the third instance of the same failure is cheaper than either: an
+/// `anchor:` node costs one un-carded `node` call (the approval card matches
+/// only `root:`/`frozen:` ids), and one un-carded `link anchor:x -[watches]->
+/// daemon:dreaming` satisfies `lint_naked_loops` AND grounds
+/// `lint_forged_coverage` — the graph's whole self-certification detector goes
+/// quiet, permanently, for two calls that raise nothing.
+///
+/// The rule is what "watching" means: a watcher has to RUN. `Anchor` is a
+/// measurement declaration and `Frozen` is a rule enforced somewhere else —
+/// neither has a session, a schedule or a turn, so neither can review anything.
+/// `Root` stays allowed and means what GRAPH_LAYER.md §4.4 documents it to
+/// mean: a person reads the digest — the third and topmost layer of the
+/// 三层封顶, supplied from outside the graph by a human-origin node the store
+/// itself attests.
+/// Can a node of this kind cover another one (be a `watches`/`audits` source)?
+/// The positive form of [`coverage_source_rejection`], for readers that filter
+/// legacy rows rather than reject writes. One vocabulary, two directions.
+fn can_cover(kind: NodeKind) -> bool {
+    kind.is_optimization_loop() || kind == NodeKind::Root
+}
+
+fn coverage_source_rejection(source: NodeKind, edge: EdgeKind) -> Option<&'static str> {
+    if !matches!(edge, EdgeKind::Watches | EdgeKind::Audits) {
+        return None;
+    }
+    match source {
+        NodeKind::Anchor => Some(
+            "anchor 节点是一次测量声明，没有会话也没有节奏，跑不起来 —— \
+             它只能作为 anchored_by 的目标。要看守就接一个能跑的环（cron:/goal:/daemon:/…），\
+             或由人接 root: 一条（三层封顶的第三层）",
+        ),
+        NodeKind::Frozen => Some(
+            "frozen 节点登记的是别处执法的规则，它自己不运行，复核不了任何东西 —— \
+             正确形状是反过来：让一个能跑的环 audits 这条冻结规则",
+        ),
+        _ => None,
     }
 }
 
@@ -480,17 +608,25 @@ fn lint_dangling_edges(
 ///
 /// A self `watches`/`audits` edge does NOT count as being watched. New ones
 /// are rejected by `upsert_edge`; discounting them here keeps any legacy row
-/// from silencing the check.
+/// from silencing the check. Same for a coverage edge whose SOURCE cannot run
+/// (`anchor:`/`frozen:` — see [`coverage_source_rejection`]): the write path
+/// now refuses those, and this reader discounts the ones already on disk, so
+/// closing the hole does not depend on a migration.
 ///
 /// Deliberately NOT exempted: a node that merely HAS an outgoing `audits`
 /// edge. That would make the exemption edge-grantable — `daemon:dreaming` could
 /// audit anything and permanently excuse itself from the one check that says
 /// nobody is watching it, which is the same hole as the self-edge above. The
-/// only exemptions are by KIND (`Anchor`/`Frozen`/`Root`), which no edge write
-/// can forge. The audit loop `enable_audit` installs therefore does name itself
-/// until a human grounds it (`root:<slug> -[watches]-> cron:<audit>`), which is
-/// the documented 三层封顶 and clears the finding with no code.
-fn lint_naked_loops(nodes: &[GraphNode], edges: &[GraphEdge]) -> Vec<String> {
+/// only exemption is a watcher that can actually run, or a `Root` (a human),
+/// neither of which an edge write can forge. The audit loop `enable_audit`
+/// installs therefore does name itself until a human grounds it
+/// (`root:<slug> -[watches]-> cron:<audit>`), which is the documented 三层封顶
+/// and clears the finding with no code.
+fn lint_naked_loops(
+    nodes: &[GraphNode],
+    edges: &[GraphEdge],
+    by_id: &std::collections::HashMap<&str, &GraphNode>,
+) -> Vec<String> {
     let mut findings = Vec::new();
     for n in nodes {
         if !n.kind.is_optimization_loop() {
@@ -500,6 +636,9 @@ fn lint_naked_loops(nodes: &[GraphNode], edges: &[GraphEdge]) -> Vec<String> {
             e.to_id == n.id
                 && e.from_id != n.id
                 && matches!(e.kind, EdgeKind::Watches | EdgeKind::Audits)
+                && by_id
+                    .get(e.from_id.as_str())
+                    .is_some_and(|s| can_cover(s.kind))
         });
         if !watched {
             findings.push(format!(
@@ -522,18 +661,32 @@ fn lint_naked_loops(nodes: &[GraphNode], edges: &[GraphEdge]) -> Vec<String> {
 /// exists to detect.
 ///
 /// The predicate is deliberately narrow: a ring is only reported when NOTHING
-/// above it is unforgeable. `Root`/`Frozen`/`Anchor` are kinds a loop cannot
-/// award itself (root writes are human-origin by store invariant and gated at
-/// the tool boundary), so a ring with one of them upstream is genuinely
-/// covered. A merely *un-anchored* linear chain is not reported here — its top
-/// element already shows up as a naked loop, and repeating the same root cause
-/// once per node below it would drown the real finding.
+/// above it is unforgeable. `Root` is the one kind a loop cannot award itself
+/// (root writes are human-origin by store invariant and gated at the tool
+/// boundary), so a ring with a root upstream is genuinely covered — that is the
+/// documented 三层封顶 (优化环 → 审计环 → 人). A merely *un-anchored* linear
+/// chain is not reported here — its top element already shows up as a naked
+/// loop, and repeating the same root cause once per node below it would drown
+/// the real finding.
+///
+/// Round 11 note: `Frozen`/`Anchor` used to count as grounding here too, which
+/// was the hole — they cost one un-carded `node` call, so the "unforgeable"
+/// exemption was one `link` away for any optimizer. Now they cannot be coverage
+/// SOURCES at all ([`coverage_source_rejection`]), and the upward walk only
+/// ever visits sources, so `Root` is the whole grounding set by construction.
 fn lint_forged_coverage(
     nodes: &[GraphNode],
     edges: &[GraphEdge],
     by_id: &std::collections::HashMap<&str, &GraphNode>,
 ) -> Vec<String> {
-    let is_coverage = |e: &GraphEdge| matches!(e.kind, EdgeKind::Watches | EdgeKind::Audits);
+    // Legacy rows with a non-runnable source are discounted here exactly as in
+    // `lint_naked_loops`, so both checks agree on what "covered" means.
+    let is_coverage = |e: &GraphEdge| {
+        matches!(e.kind, EdgeKind::Watches | EdgeKind::Audits)
+            && by_id
+                .get(e.from_id.as_str())
+                .is_some_and(|s| can_cover(s.kind))
+    };
     let mut findings = Vec::new();
     for n in nodes {
         if !n.kind.is_optimization_loop() {
@@ -558,9 +711,7 @@ fn lint_forged_coverage(
             if !visited.insert(current) {
                 continue;
             }
-            if by_id.get(current).is_some_and(|c| {
-                matches!(c.kind, NodeKind::Root | NodeKind::Frozen | NodeKind::Anchor)
-            }) {
+            if by_id.get(current).is_some_and(|c| c.kind == NodeKind::Root) {
                 grounded = true;
                 break;
             }
@@ -574,7 +725,7 @@ fn lint_forged_coverage(
         if returns_to_self && !grounded {
             findings.push(format!(
                 "伪造的看守覆盖: {}（'{}'）的 watches/audits 覆盖绕回它自己，\
-                 且这个环之上没有 root/frozen/anchor —— 等于它自己给自己发了豁免。\
+                 且这个环之上没有任何 root —— 等于它自己给自己发了豁免。\
                  请由人接一条 root:… -[watches]-> 该环",
                 n.id, n.label
             ));
@@ -743,6 +894,165 @@ mod tests {
     /// two `link` calls make an optimizer and its auditor watch each other and
     /// both go quiet. The exemption must come from something a loop cannot
     /// award itself.
+    /// Round 11's hole, and the third instance of the same shape rounds 9 and
+    /// 10 closed: the exemption was unforgeable by node KIND, but nothing said
+    /// which kinds may SOURCE a coverage edge. An `anchor:` node costs one
+    /// un-carded `node` call (the approval card matches only `root:`/`frozen:`),
+    /// so two free calls used to silence `lint_naked_loops` AND ground
+    /// `lint_forged_coverage` for any loop, permanently.
+    #[test]
+    fn a_thing_that_cannot_run_cannot_be_a_watcher() {
+        let (_d, s) = store();
+        s.upsert_node(&node("daemon:dreaming", NodeKind::Daemon, Origin::Llm))
+            .unwrap();
+        let mut anchor = node("anchor:tests", NodeKind::Anchor, Origin::Llm);
+        anchor.body = Some("probe=cargo test, truth=exit_code".into());
+        s.upsert_node(&anchor).unwrap();
+        let mut frozen = node("frozen:budget", NodeKind::Frozen, Origin::Llm);
+        frozen.body = Some("budget.rs ratchet".into());
+        s.upsert_node(&frozen).unwrap();
+
+        for (from, kind) in [
+            ("anchor:tests", EdgeKind::Watches),
+            ("anchor:tests", EdgeKind::Audits),
+            ("frozen:budget", EdgeKind::Watches),
+            ("frozen:budget", EdgeKind::Audits),
+        ] {
+            let err = s
+                .upsert_edge(&GraphEdge::new(
+                    "main",
+                    from,
+                    "daemon:dreaming",
+                    kind,
+                    Origin::Llm,
+                ))
+                .unwrap_err()
+                .to_string();
+            assert!(
+                err.contains("loop_graph invariant"),
+                "{from} {kind:?}: {err}"
+            );
+        }
+        // The shapes that DO make sense still work: a loop audits a frozen rule,
+        // a loop anchors itself, and a human root watches a loop.
+        s.upsert_edge(&GraphEdge::new(
+            "main",
+            "daemon:dreaming",
+            "frozen:budget",
+            EdgeKind::Audits,
+            Origin::Llm,
+        ))
+        .unwrap();
+        s.upsert_edge(&GraphEdge::new(
+            "main",
+            "daemon:dreaming",
+            "anchor:tests",
+            EdgeKind::AnchoredBy,
+            Origin::Llm,
+        ))
+        .unwrap();
+        s.upsert_node(&node("root:aleph", NodeKind::Root, Origin::Human))
+            .unwrap();
+        s.upsert_edge(&GraphEdge::new(
+            "main",
+            "root:aleph",
+            "daemon:dreaming",
+            EdgeKind::Watches,
+            Origin::Llm,
+        ))
+        .unwrap();
+        assert!(
+            !s.lint("main")
+                .unwrap()
+                .iter()
+                .any(|f| f.contains("裸奔优化环")),
+            "a human root IS a valid watcher — that is the documented 三层封顶"
+        );
+    }
+
+    /// The write guard above only protects rows written from now on. A row
+    /// already on disk must not silence the lint either — same belt-and-braces
+    /// as the self-edge rule.
+    #[test]
+    fn a_legacy_anchor_sourced_watch_row_does_not_count_as_coverage() {
+        let (_d, s) = store();
+        s.upsert_node(&node("daemon:dreaming", NodeKind::Daemon, Origin::Llm))
+            .unwrap();
+        let mut anchor = node("anchor:tests", NodeKind::Anchor, Origin::Llm);
+        anchor.body = Some("probe=cargo test, truth=exit_code".into());
+        s.upsert_node(&anchor).unwrap();
+        // Written the way a build without the invariant would have.
+        s.lock()
+            .execute(
+                "INSERT INTO graph_edges (agent_id, from_id, to_id, kind, note, origin, created_at_ms)
+                 VALUES ('main', 'anchor:tests', 'daemon:dreaming', 'watches', NULL, 'llm', 0)",
+                [],
+            )
+            .unwrap();
+        let findings = s.lint("main").unwrap();
+        assert!(
+            findings.iter().any(|f| f.contains("裸奔优化环")),
+            "a stored anchor-sourced watch row must not read as 'watched': {findings:?}"
+        );
+    }
+
+    /// `owns_reference` is the row the objective ACL reads. Sweeping it because
+    /// its source node vanished turns `drop_node` + `gc` — two calls neither of
+    /// which names a protected id — into a self-service unlock of §6.2 write
+    /// protection, right beside the `unlink` door the approval card covers.
+    #[test]
+    fn gc_never_collects_the_objective_acl() {
+        let (_d, s) = store();
+        s.upsert_node(&node("goal:sess-1", NodeKind::LoopGoal, Origin::Llm))
+            .unwrap();
+        s.upsert_node(&node("cron:steward", NodeKind::LoopCron, Origin::Llm))
+            .unwrap();
+        s.upsert_edge(&GraphEdge::new(
+            "main",
+            "cron:steward",
+            "goal:sess-1",
+            EdgeKind::OwnsReference,
+            Origin::Llm,
+        ))
+        .unwrap();
+        assert!(s.delete_node("main", "cron:steward").unwrap());
+
+        let report = s.gc("main").unwrap();
+        assert!(report.removed.is_empty());
+        assert_eq!(report.retained_acl.len(), 1, "{report:?}");
+        assert_eq!(
+            s.owns_reference_sources("main", "goal:sess-1").unwrap(),
+            vec!["cron:steward".to_string()],
+            "the ACL must still answer after gc — the governed loop stays governed"
+        );
+    }
+
+    /// `enable_audit`'s idempotency reads this, and it must answer from raw
+    /// columns: an audit node this build cannot parse reading as "no audit
+    /// ring" mints a second one.
+    #[test]
+    fn body_scan_sees_a_row_list_nodes_would_drop() {
+        let (_d, s) = store();
+        let mut n = node("cron:auditor", NodeKind::LoopCron, Origin::Llm);
+        n.body = Some(crate::loop_graph::AUDIT_NODE_BODY.to_string());
+        s.upsert_node(&n).unwrap();
+        s.lock()
+            .execute(
+                "UPDATE graph_nodes SET kind = 'loop_from_the_future' WHERE id = 'cron:auditor'",
+                [],
+            )
+            .unwrap();
+        assert!(
+            s.list_nodes("main").unwrap().is_empty(),
+            "list_nodes is fail-soft — that is what makes it the wrong reader here"
+        );
+        assert_eq!(
+            s.node_ids_with_body("main", crate::loop_graph::AUDIT_NODE_BODY)
+                .unwrap(),
+            vec!["cron:auditor".to_string()]
+        );
+    }
+
     #[test]
     fn mutual_watching_between_two_loops_is_not_a_valid_exemption() {
         let (_d, store) = store();
@@ -987,13 +1297,14 @@ mod tests {
             EdgeKind::Watches,
             Origin::Llm,
         );
+        let dreaming = node("daemon:dreaming", NodeKind::Daemon, Origin::Llm);
+        let nodes = [dreaming];
+        let by_id: std::collections::HashMap<&str, &GraphNode> =
+            nodes.iter().map(|n| (n.id.as_str(), n)).collect();
         assert!(
-            lint_naked_loops(
-                &[node("daemon:dreaming", NodeKind::Daemon, Origin::Llm)],
-                &[self_edge]
-            )
-            .iter()
-            .any(|f| f.contains("裸奔优化环")),
+            lint_naked_loops(&nodes, &[self_edge], &by_id)
+                .iter()
+                .any(|f| f.contains("裸奔优化环")),
             "a stored self-edge must not read as 'watched'"
         );
     }
@@ -1217,7 +1528,7 @@ mod tests {
             .unwrap();
 
         assert!(
-            s.gc("main").unwrap().is_empty(),
+            s.gc("main").unwrap().removed.is_empty(),
             "gc must not delete edges into a node it merely failed to parse"
         );
         assert_eq!(
@@ -1252,7 +1563,8 @@ mod tests {
         assert!(lint.iter().any(|f| f.contains("悬空边")), "lint: {lint:?}");
 
         let removed = s.gc("main").unwrap();
-        assert_eq!(removed.len(), 1);
+        assert_eq!(removed.removed.len(), 1);
+        assert!(removed.retained_acl.is_empty());
         assert!(s.list_edges("main").unwrap().is_empty());
     }
 
