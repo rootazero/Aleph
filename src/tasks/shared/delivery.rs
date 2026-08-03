@@ -228,24 +228,6 @@ impl DeliveryEngine {
     }
 }
 
-// ── Helper ───────────────────────────────────────────────────────────
-
-/// Classify whether delivery should be skipped before attempting it.
-///
-/// Returns `NotRequested` for `None` mode, `AlreadySentByAgent` when the agent
-/// already handled it, and `NotDelivered` otherwise — the caller must then
-/// perform actual delivery and overwrite the status with the real outcome.
-#[must_use]
-pub const fn pre_delivery_status(agent_already_sent: bool, mode: &DeliveryMode) -> DeliveryStatus {
-    if matches!(mode, DeliveryMode::None) {
-        return DeliveryStatus::NotRequested;
-    }
-    if agent_already_sent {
-        return DeliveryStatus::AlreadySentByAgent;
-    }
-    DeliveryStatus::NotDelivered
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -458,24 +440,6 @@ mod tests {
         );
     }
 
-    #[test]
-    fn should_skip_when_agent_sent() {
-        let status = pre_delivery_status(true, &DeliveryMode::Primary);
-        assert_eq!(status, DeliveryStatus::AlreadySentByAgent);
-    }
-
-    #[test]
-    fn should_not_skip_normally() {
-        let status = pre_delivery_status(false, &DeliveryMode::Primary);
-        assert_eq!(status, DeliveryStatus::NotDelivered);
-    }
-
-    #[test]
-    fn none_mode_always_skips() {
-        let status = pre_delivery_status(false, &DeliveryMode::None);
-        assert_eq!(status, DeliveryStatus::NotRequested);
-
-        let status = pre_delivery_status(true, &DeliveryMode::None);
-        assert_eq!(status, DeliveryStatus::NotRequested);
-    }
 }
+
+
