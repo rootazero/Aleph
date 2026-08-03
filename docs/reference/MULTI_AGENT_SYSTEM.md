@@ -648,11 +648,22 @@ reusable), then calls the aggregator, which IS the acting model. The harness
 sees one ordinary provider (R10); none of this touches `src/harness/`.
 
 - **Config**: `[moa]` (`src/config/types/moa.rs`) — named presets
-  (`advisors: Vec<MoaSlot>` + `aggregator: MoaSlot`), `fanout` cadence
-  (`per_iteration` re-runs advisors every tool iteration, hermes default;
-  `user_turn` runs once per run and reuses the advice),
+  (`advisors: Vec<MoaSlot>` + `aggregator: MoaSlot`), `fanout` cadence,
   `advisor_timeout_secs`, `advisor_max_tokens`/temperatures,
   `default_preset`, `save_traces`.
+- **Fan-out cadence** (`fanout`, one wire string) — how often advisors are
+  re-consulted within a run. Advisor spend and latency multiply by this, so it
+  is the subsystem's main cost lever:
+  - `per_iteration` (default) — re-consult whenever the advisory view changes,
+    i.e. every tool iteration. Most informed, most expensive.
+  - `user_turn` — consult once per run and reuse that advice. Cheapest; the
+    original MoA shape.
+  - `every_n:<N>` (N >= 2) — consult on the first state advance, then every
+    Nth; the iterations between reuse the last advice, so the aggregator is
+    never advice-less, just not refreshed against the very latest tool result.
+  A turn whose advisory view is byte-identical to the previous one is the
+  harness re-issuing a request, not the task advancing: it always reuses and
+  never consumes a cadence slot (`FanoutState.last_seen_signature`).
 - **Activation**: `moa` builtin tool (`src/builtin_tools/moa_manage.rs`,
   operator-tier gated via `method_authz`) — `on`/`off`/`once`/`status`/
   `list`/`set_preset`/`delete_preset`. Per-session state lives in
@@ -705,6 +716,25 @@ added four pieces on top of the port above:
   prefix instead of re-billing it every tool step (hermes measured 0/1227
   cache reads without this). Image content renders as a `"[image: <mime>]"`
   placeholder in the advisor view instead of being silently dropped.
+- **Advisory-view sizing**: one view is built per turn and shared by the whole
+  fan-out, so it is budgeted against the SMALLEST advisor context window
+  (`advisory_view.rs::view_budget_chars` over
+  `model_catalog::resolve_context_window`), converted to characters through
+  the content-aware `pressure::chars_for_token_budget` — the same token budget
+  buys ~3.5x more characters of English prose than of CJK, so a flat character
+  limit over-allocates a Chinese conversation into the exact 4xx it exists to
+  prevent. Over-budget messages SHRINK head+tail rather than disappear, so the
+  message count, order and role sequence are invariant and "first message must
+  be user" cannot break. `ADVISORY_VIEW_BUDGET` remains as an upper bound.
+- **Degraded fan-out**: an advisor that fails, times out, is skipped by the
+  breaker, or answers empty is carried as a non-advising `AdvisorOutcome`
+  (`advised: false`, set at construction — never re-derived by sniffing the
+  text for a `[failed:` prefix). Those slots stay visible to the aggregator in
+  the guidance roster, with their reason, but are not numbered as responses to
+  read; when NO slot advised, the "use the advisor responses below" framing is
+  dropped entirely. Provider error text riding into the prompt is clamped
+  (`ADVISOR_NOTE_BUDGET`); the trace/panel copy (`AdvisorResult.error`) keeps
+  the full message.
 - **Audit replay**: when `save_traces = true`, the persisted `MoaTurnTrace`
   event now carries the aggregator's own output/status
   (`aggregator_output`/`aggregator_status`, emitted only after the
