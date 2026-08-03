@@ -104,9 +104,9 @@ pub fn binding_problems(bindings: &[RouteBinding]) -> Vec<String> {
         let r = &b.match_rule;
         if let Some(peer) = &r.peer {
             let kind = peer.kind.trim();
-            if !["dm", "group", "channel"].contains(&kind.to_ascii_lowercase().as_str()) {
+            if !["dm", "group"].contains(&kind.to_ascii_lowercase().as_str()) {
                 out.push(format!(
-                    "{who}: match.peer.kind = \"{}\" is not one of dm|group|channel — \
+                    "{who}: match.peer.kind = \"{}\" is not one of dm|group — \
                      this binding can never match",
                     peer.kind
                 ));

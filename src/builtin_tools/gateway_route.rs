@@ -159,10 +159,9 @@ impl AlephTool for GatewayRouteTool {
                 let kind = match args.peer_kind.as_deref() {
                     None | Some("dm") => RoutePeerKind::Dm,
                     Some("group") => RoutePeerKind::Group,
-                    Some("channel") => RoutePeerKind::Channel,
                     Some(other) => {
                         return Err(crate::error::AlephError::tool(format!(
-                            "Invalid peer_kind '{other}'. Expected one of: dm, group, channel."
+                            "Invalid peer_kind '{other}'. Expected one of: dm, group."
                         )));
                     }
                 };

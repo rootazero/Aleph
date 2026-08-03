@@ -99,8 +99,6 @@ pub(crate) async fn convert_message(
         ConversationId::new(msg.chat.id.0.to_string())
     };
 
-    let thread_id = msg.thread_id.map(|t| i64::from(t.0 .0));
-
     // Extract platform-specific metadata
     let mut metadata: Vec<MessageMeta> = Vec::new();
 
@@ -157,10 +155,6 @@ pub(crate) async fn convert_message(
             mime_types = %mime_types.join(","),
             "Inbound message with attachments"
         );
-    }
-
-    if let Some(tid) = thread_id {
-        metadata.push(MessageMeta::ThreadId(tid));
     }
 
     Some(InboundMessage {
