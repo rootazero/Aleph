@@ -122,6 +122,35 @@ impl AlephTool for MediaSendTool {
 /// One degradation is deliberately left un-pre-flighted: a URL that clears SSRF
 /// and then 404s, times out, or exceeds the 50 MB cap. Knowing that costs the
 /// fetch itself, and the fetch is what we would be pre-flighting.
+///
+/// # Why this tool and not the other `_media` producers
+///
+/// `image_generate` / `video_generate` / `audio_generate` / `speech_generate`
+/// declare `_media` too and deliberately do **not** pre-flight. The asymmetry
+/// is the trust posture, not an oversight, and it is worth stating because the
+/// symmetry is what an audit reaches for first:
+///
+/// * This tool's `url` is a string **the model typed**. It can name
+///   `/etc/passwd` or the metadata IP, it can be corrected by the model, and a
+///   refusal costs nothing because a refused `media_send` had no other product.
+/// * A generator's `url` is whatever its configured provider returned — one of
+///   exactly two things. `GenerationData::Bytes` becomes a `data:` URL this
+///   process base64-encoded three lines earlier, so "does it decode" is true by
+///   construction. `GenerationData::Url` is fetched through the same
+///   `safe_fetch` under the same [`SsrfPolicy`] that enforces this pre-flight's
+///   only real check — so re-asking here changes no outcome. (The third arm,
+///   `GenerationData::LocalPath`, has no producer anywhere in the tree; it is
+///   constructed only in `generation::types` tests.)
+/// * Failing a generator's call would be the wrong move even when the item is
+///   genuinely undeliverable: the image was generated and paid for, and an
+///   `Err` discards `image_location` / `revised_prompt` / provider / model
+///   along with it — the model could not even hand the user the link. Their
+///   channel is `_media_delivery`, which the harvest writes onto the same tool
+///   result in the same turn (`tools::scoped::artifact_harvest`).
+///
+/// Short form: **pre-flight belongs where the item is model-authored.** For a
+/// provider-authored item the post-resolution report is both sufficient and
+/// the only non-destructive option.
 async fn preflight(url: &str, ssrf_policy: &SsrfPolicy) -> Result<()> {
     if is_data_url(url) {
         MediaCache::decode_data_url(url).map_err(|e| {

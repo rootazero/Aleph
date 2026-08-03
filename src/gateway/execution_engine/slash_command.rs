@@ -287,12 +287,24 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
                 // command has no model turn to correct anything in, and its own
                 // response text is already on its way to the user. They are
                 // logged inside the harvest.
+                // This path wraps the execution in no wall clock of its own, so
+                // without a deadline the harvest here is genuinely unbounded —
+                // up to `MAX_MEDIA_PER_RUN` fetches of 60 s in front of a user
+                // who is watching a `/image` finish. The bound comes from the
+                // same `tools::budget` the agent-loop chokepoint's timeout is
+                // built from, so "how long may this tool take" keeps one answer
+                // across both entry points.
+                let deadline = std::time::Instant::now()
+                    + std::time::Duration::from_millis(
+                        crate::tools::budget::resolve_tool_budget_ms(tool_id, None),
+                    );
                 let _ = crate::tools::scoped::artifact_harvest::harvest_media_for_session(
                     tool_id,
                     &result,
                     &request.session_key.to_key_string(),
                     Some(run_id),
                     Some(&request.pending_media),
+                    deadline,
                 )
                 .await;
 

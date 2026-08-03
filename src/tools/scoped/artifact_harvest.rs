@@ -49,12 +49,51 @@
 //!   *reported*, not raised: the return type carries failures, it is not a
 //!   `Result`, and storage failures are not even reported — the tool call
 //!   itself succeeded and losing the durable copy must not undo that.
+//!   Returning no error is not enough to keep that promise — see the deadline
+//!   below, which is what stops the harvest from *indirectly* failing the call
+//!   by outrunning the caller's own clock.
 //! * **Delivery is not gated on storage.** A run with no `ArtifactStore`
 //!   installed must still be able to send the user a picture.
 //! * **The live event is a content-free ping.** `session.artifact` carries only
 //!   the session key. The stream that carries it is deliberately lossy, so a
 //!   consumer must treat [`ArtifactStore::list`] as the settlement and the ping
 //!   as nothing more than "re-read now".
+//!
+//! # The deadline, and why it is not a number of its own
+//!
+//! Moving the resolution here bought visibility at the cost of spending the
+//! fetch *inside* the tool call rather than after the loop — and the fetch is
+//! up to [`MAX_MEDIA_PER_RUN`] items of 60 s each. That is not merely slow: the
+//! chokepoint runs inside `ScopedToolService::execute_inner`'s
+//! `tokio::time::timeout(budget, …)`, so a harvest that overruns turns the
+//! whole call into a `ToolError::Timeout` — discarding every item that *did*
+//! resolve (the lanes are filled only after the loop finishes) and, for a
+//! generator, discarding a successfully generated and already-paid-for image
+//! along with the URL the model could otherwise have handed the user. The
+//! contract above says this harvest never fails the tool call; without a
+//! deadline it could, just at one remove.
+//!
+//! So every entry point takes the instant **the caller's own clock fires** and
+//! guarantees to return before it, reserving [`HARVEST_RETURN_MARGIN`] for the
+//! work that follows it in `apply_layer_two`. Items the budget did not reach
+//! are [`MediaFailure`]s on the same channel every other failure uses — and a
+//! remote URL still degrades to a bare link, which is exactly the case where a
+//! link is worth most (a slow origin is one Telegram may well fetch itself).
+//!
+//! There is deliberately **no `MEDIA_HARVEST_TIMEOUT` constant**. "How long may
+//! this call take" is a question `crate::tools::budget` already owns for every
+//! tool, and a second ceiling here would be a second answer free to drift from
+//! it. An operator who wants media settled faster tightens `media_send`'s row
+//! in `BUILTIN_TOOL_BUDGETS_MS` — same single source, and it bounds the tool's
+//! own work at the same time. The margin below is not that second ceiling: it
+//! is slack, not policy.
+//!
+//! What the deadline covers is the **resolution** — the network, which is the
+//! unbounded part. The two lanes that follow it are local file I/O over bytes
+//! already on disk; bounding those mid-way would strand half-written artifacts
+//! to save a bounded cost.
+
+use std::time::{Duration, Instant};
 
 use serde_json::Value;
 use tracing::{debug, warn};
@@ -73,6 +112,20 @@ const MEDIA_FIELD: &str = "_media";
 
 /// Characters of a random id mixed into a derived filename.
 const FILENAME_SUFFIX_LEN: usize = 8;
+
+/// Slack reserved between the last fetch this harvest starts and the instant
+/// the caller's own wall clock fires.
+///
+/// Not a media policy — see the module doc for why there is no such number
+/// here. It covers what `apply_layer_two` still has to do after the harvest
+/// returns (annotate, compress, hygiene, persist the result), all of which is
+/// CPU-bound string work over an already-resolved value.
+///
+/// A caller whose budget is smaller than this margin gets a stop instant in the
+/// past, and every item is reported as un-fetched without a socket being
+/// opened. That is the honest answer: when the caller is about to be cut off,
+/// starting a 60 s download is the one move guaranteed to lose everything.
+const HARVEST_RETURN_MARGIN: Duration = Duration::from_secs(5);
 
 /// One `_media` item that could not be turned into deliverable bytes.
 ///
@@ -96,10 +149,19 @@ pub(crate) struct MediaFailure {
 ///
 /// `turn` is the dispatch's routing context; without one there is no session to
 /// attribute the bytes to (direct calls, unit tests) and the harvest is skipped.
+///
+/// `caller_deadline` is the instant the caller's own wall clock fires — for the
+/// chokepoint, the `tokio::time::timeout` this call is already running inside.
+/// It is passed rather than derived here on purpose: derived at this depth it
+/// would read `Instant::now() + budget` and so believe it had the *whole*
+/// budget, when a slow generator may have spent nearly all of it upstream —
+/// leaving the overrun this argument exists to prevent exactly where it hurts
+/// most.
 pub(super) async fn harvest_outbound_media(
     tool: &str,
     value: &Value,
     turn: Option<&TurnContext>,
+    caller_deadline: Instant,
 ) -> Vec<MediaFailure> {
     let Some(turn) = turn else {
         // Cheap pre-check so a context-less dispatch does not pay for parsing.
@@ -122,6 +184,7 @@ pub(super) async fn harvest_outbound_media(
         &turn.session_key.to_key_string(),
         run_id,
         delivery.as_ref(),
+        caller_deadline,
     )
     .await
 }
@@ -141,6 +204,7 @@ pub(crate) async fn harvest_media_for_session(
     session_key: &str,
     run_id: Option<&str>,
     delivery: Option<&PendingMedia>,
+    caller_deadline: Instant,
 ) -> Vec<MediaFailure> {
     let items = media_items(value);
     if items.is_empty() {
@@ -165,7 +229,7 @@ pub(crate) async fn harvest_media_for_session(
 
     let (media_session, ours_to_clean) = media_session_for(run_id, delivery.is_some());
 
-    let resolved = resolve_media_items(tool, items, &media_session).await;
+    let resolved = resolve_media_items(tool, items, &media_session, stop_by(caller_deadline)).await;
 
     // Channel lane first: it must not depend on an `ArtifactStore` being
     // installed, nor on the store call succeeding.
@@ -230,16 +294,45 @@ struct ResolvedMedia {
     failures: Vec<MediaFailure>,
 }
 
+/// The instant the harvest must have stopped fetching by, given when the
+/// caller's own clock fires.
+///
+/// `checked_sub` rather than `-`: a caller whose budget is shorter than the
+/// margin yields a stop instant in the past, which the loop reads as "no time
+/// at all" — the intended answer, and one an `Instant` subtraction would panic
+/// on instead.
+fn stop_by(caller_deadline: Instant) -> Instant {
+    caller_deadline
+        .checked_sub(HARVEST_RETURN_MARGIN)
+        .unwrap_or(caller_deadline)
+}
+
+/// What the model is told about an item the budget never reached.
+///
+/// Phrased as a move it can make. The two things that actually help are fewer
+/// items per call (the budget is per call, not per item) and a smaller source;
+/// "try again" is not on the list, because a retry costs the same budget.
+fn deadline_reason() -> String {
+    "not fetched: this tool call's wall-clock budget ran out before this item's turn. \
+     The budget covers the whole call, so declare fewer media items per call, or point \
+     at a smaller/faster source."
+        .to_string()
+}
+
 /// The single resolution both lanes are built from — one fetch per item, into
-/// `media_session`.
+/// `media_session`, and never past `stop_by`.
 ///
 /// Sequential rather than `join_all`: this now runs on the tool-dispatch path,
 /// where up to [`MAX_MEDIA_PER_RUN`] concurrent 50 MB downloads would be a
-/// worse neighbour than a slightly slower tool call.
+/// worse neighbour than a slightly slower tool call. Sequential is also what
+/// makes the budget spendable in declaration order — the early items get their
+/// full 60 s and land, rather than ten parallel fetches all being cut off
+/// together with nothing to show.
 async fn resolve_media_items(
     tool: &str,
     items: Vec<MediaItem>,
     media_session: &str,
+    stop_by: Instant,
 ) -> ResolvedMedia {
     let cache = MediaCache::new();
     let mut out = ResolvedMedia {
@@ -249,12 +342,27 @@ async fn resolve_media_items(
     };
 
     for item in items.into_iter().take(MAX_MEDIA_PER_RUN) {
-        match cache.download_media_item(&item, media_session).await {
+        // Re-read the clock per item: the budget is shared across the call, so
+        // what the previous fetch spent is what this one no longer has.
+        let remaining = stop_by.saturating_duration_since(Instant::now());
+        let outcome = if remaining.is_zero() {
+            Err(deadline_reason())
+        } else {
+            match tokio::time::timeout(remaining, cache.download_media_item(&item, media_session))
+                .await
+            {
+                Ok(Ok(attachment)) => Ok(attachment),
+                Ok(Err(e)) => Err(e.to_string()),
+                Err(_elapsed) => Err(deadline_reason()),
+            }
+        };
+
+        match outcome {
             Ok(attachment) => {
                 out.deliver.push(attachment.clone());
                 out.store.push((item, attachment));
             }
-            Err(e) => {
+            Err(reason) => {
                 // A remote URL we could not fetch may still be one the channel
                 // can: Telegram uploads from a URL itself, and a file over our
                 // own 50 MB cap is a perfectly good link. The other two
@@ -262,6 +370,11 @@ async fn resolve_media_items(
                 // decode has no link, and a refused local path would go out as
                 // an attachment whose `url` is a filesystem path, which no
                 // channel can send.
+                //
+                // This is also where running out of budget pays for itself: the
+                // items the clock cut off are overwhelmingly the remote ones,
+                // and a link is worth most precisely when the origin was too
+                // slow for us.
                 let offer_url = is_remote_fetch_url(&item.url);
                 if offer_url {
                     out.deliver.push(MediaCache::url_only_attachment(&item));
@@ -269,13 +382,13 @@ async fn resolve_media_items(
                 warn!(
                     tool,
                     url = %item.url,
-                    error = %e,
+                    error = %reason,
                     url_still_offered = offer_url,
                     "media item could not be resolved"
                 );
                 out.failures.push(MediaFailure {
                     url: item.url,
-                    reason: e.to_string(),
+                    reason,
                     url_still_offered: offer_url,
                 });
             }
@@ -508,6 +621,13 @@ mod tests {
         PendingMedia::default()
     }
 
+    /// A caller deadline far enough out that it never fires — the shape of a
+    /// tool with its full budget left. Tests that are *about* the deadline
+    /// build their own.
+    fn ample() -> Instant {
+        Instant::now() + Duration::from_secs(300)
+    }
+
     /// Run the real resolution, then the store lane — the two halves
     /// `harvest_media_for_session` runs back to back. Tests own a local
     /// `ArtifactStore` while production reads a global one, so they cannot go
@@ -520,7 +640,7 @@ mod tests {
         tool: &str,
     ) -> usize {
         let session = format!("harvest-test-{}", uuid::Uuid::new_v4().simple());
-        let resolved = resolve_media_items(tool, media_items(value), &session).await;
+        let resolved = resolve_media_items(tool, media_items(value), &session, ample()).await;
         let stored = store_resolved_media(store, SESSION, run_id, tool, &resolved.store).await;
         let _ = MediaCache::cleanup_session(&session);
         stored
@@ -553,7 +673,7 @@ mod tests {
         // Exactly how a normal turn runs: the run loop publishes the buffer,
         // `apply_layer_two` calls the harvest many frames below.
         crate::gateway::media::with_pending_media(Some(queue.clone()), async {
-            harvest_outbound_media("media_send", &value, Some(&turn())).await;
+            harvest_outbound_media("media_send", &value, Some(&turn()), ample()).await;
         })
         .await;
 
@@ -568,7 +688,7 @@ mod tests {
         // absent task-local, and must still take the artifact-store lane.
         let value = media_value(json!([item(HELLO_PNG, None)]));
         assert!(crate::gateway::media::current_pending_media().is_none());
-        harvest_outbound_media("media_send", &value, Some(&turn())).await;
+        harvest_outbound_media("media_send", &value, Some(&turn()), ample()).await;
     }
 
     #[tokio::test]
@@ -578,7 +698,7 @@ mod tests {
         let queue = buffer();
         let value = media_value(json!([item(HELLO_PNG, Some("cat.png"))]));
 
-        harvest_media_for_session("media_send", &value, SESSION, None, Some(&queue)).await;
+        harvest_media_for_session("media_send", &value, SESSION, None, Some(&queue), ample()).await;
 
         assert_eq!(queue.lock().await.len(), 1);
     }
@@ -593,8 +713,24 @@ mod tests {
                 .collect(),
         ));
 
-        harvest_media_for_session("image_generate", &value, SESSION, None, Some(&queue)).await;
-        harvest_media_for_session("image_generate", &value, SESSION, None, Some(&queue)).await;
+        harvest_media_for_session(
+            "image_generate",
+            &value,
+            SESSION,
+            None,
+            Some(&queue),
+            ample(),
+        )
+        .await;
+        harvest_media_for_session(
+            "image_generate",
+            &value,
+            SESSION,
+            None,
+            Some(&queue),
+            ample(),
+        )
+        .await;
 
         assert_eq!(
             queue.lock().await.len(),
@@ -607,7 +743,7 @@ mod tests {
     async fn a_tool_without_media_leaves_the_queue_alone() {
         let queue = buffer();
         let value = json!({ "_display": "ok", "stdout": "hello" });
-        harvest_media_for_session("bash", &value, SESSION, None, Some(&queue)).await;
+        harvest_media_for_session("bash", &value, SESSION, None, Some(&queue), ample()).await;
         assert!(queue.lock().await.is_empty());
     }
 
@@ -659,7 +795,8 @@ mod tests {
         let value = media_value(json!([item("/etc/hosts", Some("hosts"))]));
 
         let failures =
-            harvest_media_for_session("media_send", &value, SESSION, None, Some(&queue)).await;
+            harvest_media_for_session("media_send", &value, SESSION, None, Some(&queue), ample())
+                .await;
 
         assert_eq!(failures.len(), 1);
         assert_eq!(failures[0].url, "/etc/hosts");
@@ -679,7 +816,8 @@ mod tests {
         let value = media_value(json!([item("data:image/png;base64,!!!bad!!!", None)]));
 
         let failures =
-            harvest_media_for_session("media_send", &value, SESSION, None, Some(&queue)).await;
+            harvest_media_for_session("media_send", &value, SESSION, None, Some(&queue), ample())
+                .await;
 
         assert_eq!(failures.len(), 1);
         assert!(
@@ -695,7 +833,8 @@ mod tests {
         let value = media_value(json!([item(HELLO_PNG, Some("cat.png"))]));
 
         let failures =
-            harvest_media_for_session("media_send", &value, SESSION, None, Some(&queue)).await;
+            harvest_media_for_session("media_send", &value, SESSION, None, Some(&queue), ample())
+                .await;
 
         assert!(failures.is_empty(), "the success path reports nothing");
         assert_eq!(queue.lock().await.len(), 1);
@@ -716,6 +855,7 @@ mod tests {
             SESSION,
             Some("run-resolved"),
             Some(&queue),
+            ample(),
         )
         .await;
 
@@ -756,6 +896,121 @@ mod tests {
         // ours — the buffer holds paths into it — so `cleanup_stale` sweeps it.
         let (_, ours) = media_session_for(None, true);
         assert!(!ours);
+    }
+
+    // ── The deadline ────────────────────────────────────────────────────
+    //
+    // The regression these guard: the resolution moved onto the tool-dispatch
+    // path, where it runs inside the call's own `tokio::time::timeout`. Ten
+    // items at 60 s outruns any budget the repo ships, and the overrun does not
+    // merely delay — it converts the whole call into `ToolError::Timeout`,
+    // taking the items that DID resolve and the generator's own successful
+    // result down with it.
+
+    #[test]
+    fn the_harvest_always_stops_before_the_caller_does() {
+        // THE invariant. If this ever inverts, the harvest becomes the thing
+        // that trips the clock it was handed to respect.
+        let caller = Instant::now() + Duration::from_secs(300);
+        assert!(
+            stop_by(caller) < caller,
+            "the harvest must give the caller room to finish"
+        );
+
+        // A caller with less budget than the margin: the stop instant lands in
+        // the past rather than panicking on the `Instant` subtraction, and the
+        // loop reads that as no time at all.
+        let tight = Instant::now() + Duration::from_millis(1);
+        assert!(stop_by(tight) <= Instant::now());
+    }
+
+    #[tokio::test]
+    async fn an_expired_budget_reports_every_item_instead_of_dropping_it() {
+        let queue = buffer();
+        // A remote URL, so the degrade-to-link branch is in play too.
+        let value = media_value(json!([item("https://example.com/big.mp4", None)]));
+
+        let failures = harvest_media_for_session(
+            "media_send",
+            &value,
+            SESSION,
+            None,
+            Some(&queue),
+            // Already fired: the caller is out of time before we start.
+            Instant::now(),
+        )
+        .await;
+
+        assert_eq!(failures.len(), 1, "silence is the one unacceptable answer");
+        assert!(
+            failures[0].reason.contains("budget"),
+            "the model has to be able to tell this from a 404; got: {}",
+            failures[0].reason
+        );
+        assert!(
+            failures[0].url_still_offered,
+            "an origin too slow for us is exactly when a bare link is worth most"
+        );
+        assert_eq!(
+            queue.lock().await.len(),
+            1,
+            "and that link is actually queued"
+        );
+    }
+
+    #[tokio::test]
+    async fn an_expired_budget_opens_no_socket() {
+        // Not just "reports the failure" — it must report it *without* spending
+        // the time. An unroutable host would sit in connect() for seconds.
+        let value = media_value(json!([
+            item("https://10.255.255.1/a.png", None),
+            item("https://10.255.255.1/b.png", None),
+        ]));
+
+        // A delivery buffer, not `None`: with neither lane present the harvest
+        // returns before it ever reaches the resolver, and whether the *store*
+        // lane exists depends on `ArtifactStore::shared()` — a `OnceLock` over
+        // the real data dir that a unit test cannot inject. Passing the buffer
+        // is what keeps this measuring the deadline rather than the machine.
+        let queue = buffer();
+        let started = Instant::now();
+        let failures = harvest_media_for_session(
+            "media_send",
+            &value,
+            SESSION,
+            None,
+            Some(&queue),
+            Instant::now(),
+        )
+        .await;
+
+        assert_eq!(failures.len(), 2);
+        assert!(
+            started.elapsed() < Duration::from_secs(2),
+            "an expired budget must short-circuit, not fetch; took {:?}",
+            started.elapsed()
+        );
+    }
+
+    #[tokio::test]
+    async fn the_budget_is_spent_in_declaration_order_not_forfeited_wholesale() {
+        // The point of resolving sequentially against a shared deadline: what
+        // fits still lands. Under the old unbounded loop the whole call was
+        // killed by the outer timeout and even the resolved items were lost.
+        let queue = buffer();
+        let value = media_value(json!([
+            item(HELLO_PNG, Some("first.png")),
+            item(HELLO_PNG, Some("second.png")),
+        ]));
+
+        let failures =
+            harvest_media_for_session("media_send", &value, SESSION, None, Some(&queue), ample())
+                .await;
+
+        assert!(failures.is_empty());
+        let queued = queue.lock().await;
+        assert_eq!(queued.len(), 2);
+        assert_eq!(queued[0].filename.as_deref(), Some("first.png"));
     }
 
     #[test]
@@ -848,7 +1103,8 @@ mod tests {
 
         // …and the one that did not resolve is reported rather than dropped.
         let session = "harvest-partial-failure";
-        let resolved = resolve_media_items("media_send", media_items(&value), session).await;
+        let resolved =
+            resolve_media_items("media_send", media_items(&value), session, ample()).await;
         assert_eq!(resolved.failures.len(), 1);
         assert_eq!(resolved.failures[0].url, "/etc/hosts");
         let _ = MediaCache::cleanup_session(session);

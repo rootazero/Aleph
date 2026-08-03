@@ -268,10 +268,18 @@ impl ScopedToolService {
         };
         let budget_ms = crate::tools::budget::resolve_tool_budget_ms(name, declared_ms);
         let budget = std::time::Duration::from_millis(budget_ms);
+        // The same instant the timeout below fires, handed to the one thing
+        // inside it that does unbounded network I/O of its own — the `_media`
+        // harvest in `apply_layer_two`. It has to be *this* instant rather than
+        // one the harvest derives for itself: derived down there it would read
+        // `now + budget` and believe it had a full budget a slow generator has
+        // already spent, and the overrun would kill the very call whose result
+        // it was settling.
+        let deadline = std::time::Instant::now() + budget;
 
         let mut result = match tokio::time::timeout(
             budget,
-            self.route_and_execute(routing, name, &effective_input, cancel),
+            self.route_and_execute(routing, name, &effective_input, cancel, deadline),
         )
         .await
         {
@@ -472,6 +480,7 @@ impl ScopedToolService {
         name: &str,
         effective_input: &Value,
         cancel: CancellationToken,
+        deadline: std::time::Instant,
     ) -> Result<ToolOutput, ToolError> {
         match routing {
             RoutingTarget::Missing => Err(ToolError::NotFound {
@@ -529,7 +538,7 @@ impl ScopedToolService {
                     })
                     .await;
                 match raw_outcome {
-                    Ok(output) => Ok(self.apply_layer_two(name, output).await),
+                    Ok(output) => Ok(self.apply_layer_two(name, output, deadline).await),
                     // Attribute anything that came back after the run was
                     // stopped to the stop, whatever the tool said. The tool
                     // layer's own cancel arm reports a generic execution error,
@@ -1086,7 +1095,12 @@ impl ScopedToolService {
     /// per-tool compression hook (`compress_tool_output`) and the shared
     /// `result_store` if one is wired; falls back to head+tail truncation
     /// otherwise.
-    async fn apply_layer_two(&self, name: &str, mut out: ToolOutput) -> ToolOutput {
+    async fn apply_layer_two(
+        &self,
+        name: &str,
+        mut out: ToolOutput,
+        deadline: std::time::Instant,
+    ) -> ToolOutput {
         // Rescue any inline image payload (e.g. a `desktop` screenshot) into the
         // out-of-band metadata channel BEFORE the structured value is flattened
         // to text and truncated below. Otherwise the base64 is destroyed by the
@@ -1106,6 +1120,7 @@ impl ScopedToolService {
             name,
             &out.value,
             self.turn_context.as_ref(),
+            deadline,
         )
         .await;
         // An item that could not be resolved has to be said out loud here or
