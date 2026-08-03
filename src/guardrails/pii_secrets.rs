@@ -101,15 +101,6 @@ impl PiiSecretsGuardrail {
                 reason: format!("Secret resolution failed: {e}"),
                 class: ErrorClass::Unexpected,
             },
-            Err(e) => {
-                tracing::error!(error = %e, "RuntimeSecurityGuard error; failing closed");
-                GuardrailDecision::Block {
-                    // Keep the internal error text in the trace only — the
-                    // block reason can reach the model/user.
-                    reason: "Security check unavailable".to_string(),
-                    class: ErrorClass::Unexpected,
-                }
-            }
         }
     }
 

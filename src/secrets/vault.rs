@@ -10,7 +10,7 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use tracing::{debug, info};
 
-use super::types::{EncryptedEntry, EntryMetadata, SecretError, VaultData};
+use super::types::{EncryptedEntry, SecretError, VaultData};
 use crate::utils::vault_io::VaultIo;
 
 /// Current vault format version.
@@ -251,6 +251,7 @@ impl SecretVault {
 #[cfg(test)]
 mod tests {
     use super::super::crypto::SecretsCrypto;
+    use super::types::EntryMetadata;
     use super::*;
     use tempfile::TempDir;
 

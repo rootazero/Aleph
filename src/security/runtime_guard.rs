@@ -374,10 +374,7 @@ impl RuntimeSecurityGuard {
         };
 
         // Handle secret leak detector block
-        if let LeakDecision::Block {
-            reason,
-            redacted_content,
-        } = secret_scan
+        if let LeakDecision::Block { reason, .. } = secret_scan
         {
             self.log_audit(
                 context,

@@ -22,7 +22,6 @@ pub(super) const fn classify_search_error(e: &AlephError) -> &'static str {
 ///
 /// This module manages multiple search providers and routes requests
 use std::collections::HashMap;
-use std::time::{Duration, Instant};
 
 /// Registry for managing multiple search providers
 ///

@@ -4,7 +4,6 @@
 //! This allows the AI to understand which runtimes are available and how to use them.
 
 use super::ledger::CapabilityEntry;
-use std::path::PathBuf;
 
 /// Get the LLM usage hint for a runtime from its spec.
 ///
@@ -47,6 +46,7 @@ pub fn format_entries_for_prompt(entries: &[&CapabilityEntry]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::path::PathBuf;
 
     // -- format_entries_for_prompt tests -----------------------------------
 
