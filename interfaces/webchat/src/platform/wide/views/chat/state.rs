@@ -211,6 +211,32 @@ pub struct RunCost {
     pub input_tokens: u64,
     #[serde(default)]
     pub output_tokens: u64,
+    /// Prompt tokens served from the provider's prefix cache (~0.1x price).
+    #[serde(default)]
+    pub cache_read_tokens: u64,
+    /// Prompt tokens *written* to the prefix cache (1.25x price) — i.e. the
+    /// bytes the provider did not find in its cache. Arrives in the same
+    /// `token_breakdown` object as `input`/`output`.
+    #[serde(default)]
+    pub cache_creation_tokens: u64,
+}
+
+/// Share of cacheable prompt bytes the provider actually reused —
+/// `read / (read + created)`. `None` when the run touched no cache at all (a
+/// provider without prompt caching, or a run that never got that far).
+///
+/// This answers "did the prefix hold?" and is deliberately NOT core's
+/// [`AgentUsageTotal::cache_hit_ratio`], which answers the different question
+/// "what share of the prompt came from cache" over `input + cache_read`.
+/// Creation tokens are the misses here precisely because a stable prefix would
+/// have made them reads.
+#[must_use]
+pub fn prefix_reuse_ratio(cache_read: u64, cache_creation: u64) -> Option<f64> {
+    let total = cache_read.saturating_add(cache_creation);
+    if total == 0 {
+        return None;
+    }
+    Some(cache_read as f64 / total as f64)
 }
 
 impl RunCost {
@@ -231,6 +257,12 @@ impl RunCost {
         } else {
             Some(format!("{sigil}${usd:.4}"))
         }
+    }
+
+    /// This run's prefix reuse — see [`prefix_reuse_ratio`].
+    #[must_use]
+    pub fn prefix_reuse(&self) -> Option<f64> {
+        prefix_reuse_ratio(self.cache_read_tokens, self.cache_creation_tokens)
     }
 
     /// Compact token label ("12.3k tok"). `None` when core reported no tokens
@@ -1209,6 +1241,26 @@ impl ChatState {
         self.run_costs.update(|m| {
             m.insert(run_id.to_string(), cost);
         });
+    }
+
+    /// Prefix reuse across every priced run of *this* conversation.
+    ///
+    /// A single run's figure is noisy — the first run of a session writes the
+    /// cache and reads nothing, so it always reads 0%. The question worth
+    /// answering ("is this session re-billing its history?") is cumulative, and
+    /// `run_costs` already holds the per-run split and is cleared on every
+    /// session switch, so no extra bookkeeping is needed.
+    #[must_use]
+    pub fn session_prefix_reuse(&self) -> Option<f64> {
+        let (read, created) = self.run_costs.with(|m| {
+            m.values().fold((0u64, 0u64), |(r, c), cost| {
+                (
+                    r.saturating_add(cost.cache_read_tokens),
+                    c.saturating_add(cost.cache_creation_tokens),
+                )
+            })
+        });
+        prefix_reuse_ratio(read, created)
     }
 
     /// Finalize current run (mark message as not streaming).
@@ -2434,7 +2486,41 @@ mod run_cost_tests {
             total_tokens: total,
             input_tokens: 0,
             output_tokens: 0,
+            cache_read_tokens: 0,
+            cache_creation_tokens: 0,
         }
+    }
+
+    fn cached(read: u64, created: u64) -> RunCost {
+        RunCost {
+            cache_read_tokens: read,
+            cache_creation_tokens: created,
+            ..cost(None, "complete", 0)
+        }
+    }
+
+    #[test]
+    fn prefix_reuse_is_read_over_read_plus_created() {
+        // A run that found everything in cache; a run that found nothing.
+        assert_eq!(cached(900, 100).prefix_reuse(), Some(0.9));
+        assert_eq!(cached(0, 5_000).prefix_reuse(), Some(0.0));
+        // No cache activity at all is not "0% reuse" — it is no answer. A
+        // provider without prompt caching must not render as a broken cache.
+        assert_eq!(cached(0, 0).prefix_reuse(), None);
+    }
+
+    #[test]
+    fn session_prefix_reuse_sums_every_priced_run() {
+        // The first run of a session writes the prefix and reads nothing, so
+        // per-run it reads 0% — only the cumulative figure is meaningful.
+        let owner = Owner::new();
+        owner.set();
+        let chat = ChatState::new();
+        chat.set_run_cost("r1", cached(0, 1_000));
+        assert_eq!(chat.session_prefix_reuse(), Some(0.0));
+
+        chat.set_run_cost("r2", cached(3_000, 0));
+        assert_eq!(chat.session_prefix_reuse(), Some(0.75));
     }
 
     #[test]

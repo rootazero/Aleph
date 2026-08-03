@@ -14,10 +14,14 @@
 
 **「顶层」二字是本条最重要的部分**——见下方警告。**口径现在由测试执行**：`src/harness/tests/budget.rs`（跑在 `cargo test -p alephcore --lib` 里），同时守 12 文件与行数；出现第 13 个文件或行数上涨即 FAIL。**改这里的数字就得改那里的 `CEILING`，反之亦然。**
 
-**当前测量（2026-08-02 复测）：5084 行。这就是红线本身。** 由 `tests/budget.rs` 的棘轮守（`CEILING = 5084`，实测非手算，只减不增，增必答下方 3 问）。**代码是权威**——这里的数字只是 `CEILING` 的副本，对不上时信代码。
+**当前测量（2026-08-03 复测）：5109 行。这就是红线本身。** 由 `tests/budget.rs` 的棘轮守（`CEILING = 5109`，实测非手算，只减不增，增必答下方 3 问）。**代码是权威**——这里的数字只是 `CEILING` 的副本，对不上时信代码。
 
 > **文档订正（2026-07-25）**：本行此前写 5008，而代码里的 `CEILING` 早在 `396c6d200`（"harness: adjust line budget CEILING…"）就抬到 5082，本文与根 CLAUDE.md 都没跟上。这正是本文件开头那段"手写的状态行会撒谎、所以改用测量"要防的失效模式——它在**文档层**复发了一次。**以 `budget.rs::CEILING` 为唯一权威**，任何文档里的数字都只是它的副本；发现不一致时改文档，不要改代码去迁就文档。抬闸那次提交未在正文作答 R10 三问，欠账在此记录。
 
+> **Round 9（2026-08-03）：5084 → 5109（+25）。** 付清 FEATURE_LOCATOR §2.18 follow-up 账本的第 3、7 项——两笔都是**线上字节形状**的修正，所以只能落在组装请求的这两个文件里。完整作答在 `tests/budget.rs::CEILING` 的 Round 9 段，摘要：
+> - **+~19 `prompt.rs`：orphan 前向扫描收敛到本 turn。** 此前扫到日志末尾，于是**后面某个 turn 复用的 call id**（弱模型/代理会复用）能回头把一条早已缓存的 assistant 消息里的 `tool_use` 从孤儿变回有主——同一段历史在后续 turn 渲染出不同字节，整个消息前缀按 `cache_creation` 重付，而那个被复活的块在 wire 上依然无配对。收紧安全的前提**先验证过**：`act::emit_deferred_tool_results` 与 `think::close_unexecuted_tool_uses` 合成的结果都带**原 turn_id**。+19 里大半是那个自由函数的 doc，记的正是这条前提——把它删薄去凑数字就是本文件要防的账目粉饰。
+> - **+~6 `think.rs`：边界宽限轮保留 tools 数组。** 它此前发 `tools: None`，而自己的注释宣称这一发"变成缓存命中"——不可能：Anthropic 按 tools → system → messages 建前缀，没有 tools 数组的请求与刚跑完那一轮**零共享前缀**，而宽限轮恰好重放整段历史。现改为穿线 schema + `ToolChoice::None`（四个 adapter 都认）。⚠️ §2.18 账本给的正解（只改 `tool_choice`）**不够**：Anthropic adapter 对 `None` 的实现就是**删掉 tools 数组**，同一个 wire 形状——那一处同批修好，落在本预算之外。
+>
 > **Round 8（2026-08-02）：5062 → 5084（+22）。** 付清 2026-08-02 工具层轮记在 FEATURE_LOCATOR §3.3 ⑥ 的两笔 Act 欠账（当时就写明「落在本预算里，需先答 3 问」）。完整作答在 `tests/budget.rs::CEILING` 的 Round 8 段，摘要：
 > - **+~16 `act.rs`：组循环查 `run_cancel`。** `/stop` 之后剩余每个分组照旧发 `ToolCallRequested`、登记 in-flight、派发（立刻拿到取消错误）、发 `ToolError` —— 那些幽灵失败会进下一轮 prompt（模型读成「跑过并失败」）、进 `RunSummary.tool_summaries`、进 `tool_signal_sink`。剩余 `tool_use` 块仍需配对，**那趟注定失败的派发此前正是配对的来源**，所以检查点必须调既有的 `close_unexecuted_tool_uses` 再 break。三问：① 脚手架 —— 遵从一个外部停止信号是管道活，且**不是** R10 禁止的完成度判断（不是模型判断，是用户按了停）；② 模型升级仍需要 —— 取消是运行时事实；③ 三个真实消费者。
 > - **+~6 `act.rs`：并行时钟改在首次 poll 起表。** PASS 0 每调用盖一个 `Instant`，而 PASS 1 走 `buffer_unordered(parallelism)`，超出并发上限的调用先排队 —— 于是它们的时长里含着**没在跑**的那段。完成序驱动环自己的注释早就写着相反的话（“its `duration_ms` is the tool's real wall clock”），是本仓反复吃亏的那个形状：注释断言了一个代码不成立的不变量。三问：① 度量不是决策；② 墙钟与模型能力无关；③ 两个真实消费者。

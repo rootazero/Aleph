@@ -7,9 +7,10 @@
 //! Two grain rules keep the signal honest (both were real false-positive /
 //! masking sources when the monitor was a single flat counter):
 //!
-//! - **Per-agent tracking.** Each agent id gets its own consecutive-miss
-//!   counter, so an interleaved cache-hitting agent can no longer reset the
-//!   counter and mask another agent's genuine prefix breakage.
+//! - **Per-prefix tracking.** Each `(agent, session)` pair gets its own
+//!   consecutive-miss counter — see [`cache_scope`] — so neither an interleaved
+//!   cache-hitting agent nor a second healthy session of the *same* agent can
+//!   reset the counter and mask a genuine prefix breakage.
 //! - **Armed only after observed cache activity.** Misses are counted only
 //!   once an agent has reported at least one non-zero `cache_read` or
 //!   `cache_creation` value. Endpoints that never report cache usage (mock
@@ -38,10 +39,36 @@ struct AgentCacheState {
     warned: bool,
 }
 
-/// Bound on tracked agent ids. Subagent spawns can mint fresh ids over a
+/// Bound on tracked scopes. Subagent spawns can mint fresh ids over a
 /// long daemon lifetime; past the cap an arbitrary entry is evicted (the
 /// monitor is a best-effort watchdog, not an accounting ledger).
 const MAX_TRACKED_AGENTS: usize = 64;
+
+/// Separator for the composite tracking key. A unit separator cannot occur in
+/// an agent id or a serialized `SessionKey`, so no two distinct pairs collide.
+const SCOPE_SEP: char = '\u{1f}';
+
+/// The watchdog's tracking key: one counter per prompt-cache **prefix**.
+///
+/// A provider's prefix is scoped to the conversation, not to the agent. Keying
+/// on the agent alone meant two concurrent sessions of the same agent shared a
+/// counter, so a healthy session zeroed the broken one's streak on every call.
+/// That failure is silent and one-directional — the watchdog under-reports, it
+/// never cries wolf — which is exactly why it needed finding by hand.
+///
+/// **Both sides must build the key through here.** The recording side
+/// (`MeteringProvider`) and the reset side (compaction) disagreeing about the
+/// key shape would be strictly worse than the bug it replaces: resets would
+/// stop landing and the watchdog would start warning about compactions the user
+/// asked for. `None` (no session in scope) degrades to the historical
+/// agent-only key rather than inventing one.
+#[must_use]
+pub fn cache_scope(agent_id: &str, session_key: Option<&str>) -> String {
+    session_key.map_or_else(
+        || agent_id.to_string(),
+        |session| format!("{agent_id}{SCOPE_SEP}{session}"),
+    )
+}
 
 // =============================================================================
 // CacheMonitor
@@ -69,7 +96,8 @@ impl CacheMonitor {
         }
     }
 
-    /// Record cache usage from a completed LLM call attributed to `agent_id`.
+    /// Record cache usage from a completed LLM call attributed to `scope`
+    /// (build it with [`cache_scope`] — one counter per prompt-cache prefix).
     ///
     /// A `cache_read_tokens` value of `None` or `Some(0)` counts as a miss —
     /// but only once the agent is *armed* (has ever reported non-zero cache
@@ -78,19 +106,19 @@ impl CacheMonitor {
     /// investigate a possible stable-prefix change.
     pub fn record_cache_usage(
         &self,
-        agent_id: &str,
+        scope: &str,
         cache_read_tokens: Option<u32>,
         cache_creation_tokens: Option<u32>,
     ) {
         let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
 
-        if !state.contains_key(agent_id) && state.len() >= MAX_TRACKED_AGENTS {
+        if !state.contains_key(scope) && state.len() >= MAX_TRACKED_AGENTS {
             // Evict an arbitrary entry to stay bounded.
             if let Some(k) = state.keys().next().cloned() {
                 state.remove(&k);
             }
         }
-        let agent = state.entry(agent_id.to_string()).or_default();
+        let agent = state.entry(scope.to_string()).or_default();
 
         agent.total_calls += 1;
 
@@ -122,7 +150,7 @@ impl CacheMonitor {
             if agent.consecutive_misses >= 3 && agent.total_calls > 3 && !agent.warned {
                 agent.warned = true;
                 tracing::warn!(
-                    agent_id = %agent_id,
+                    scope = %scope,
                     consecutive_misses = agent.consecutive_misses,
                     total_calls = agent.total_calls,
                     cache_read_tokens = reads,
@@ -135,18 +163,19 @@ impl CacheMonitor {
         }
     }
 
-    /// Notify the monitor that a compaction has occurred for `agent_id`.
+    /// Notify the monitor that a compaction has occurred for `scope`
+    /// ([`cache_scope`] — the same key the recording side uses).
     ///
     /// Compaction legitimately breaks the prompt cache (the message list is
     /// rewritten), so consecutive-miss tracking is reset to avoid false
     /// positive warnings immediately after compaction. The reset is scoped
-    /// to the compacting agent when its id is known — a global reset would
-    /// wipe every OTHER agent's in-progress miss streak on each compaction
+    /// to the compacting conversation when it is known — a global reset would
+    /// wipe every OTHER scope's in-progress miss streak on each compaction
     /// and mute the watchdog process-wide in a busy swarm. `None` falls back
-    /// to the global reset for call sites without an agent identity.
-    pub fn notify_compaction(&self, agent_id: Option<&str>) {
+    /// to the global reset for call sites without an identity.
+    pub fn notify_compaction(&self, scope: Option<&str>) {
         let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
-        match agent_id {
+        match scope {
             Some(id) => {
                 if let Some(agent) = state.get_mut(id) {
                     agent.consecutive_misses = 0;
@@ -281,6 +310,48 @@ mod tests {
         // Global fallback (no identity) still resets everyone.
         monitor.notify_compaction(None);
         assert_eq!(misses(&monitor, "b"), 0);
+    }
+
+    #[test]
+    fn one_agents_healthy_session_cannot_mask_its_broken_one() {
+        // The provider's prefix is per conversation. Keyed on the agent alone,
+        // the interleaved healthy session below zeroed the broken session's
+        // streak on every call, so the streak never reached 3 and the only
+        // alarm in this domain never fired. Silent and one-directional: the
+        // watchdog under-reports, it never cries wolf.
+        let monitor = CacheMonitor::new();
+        let broken = cache_scope("writer", Some("agent:writer:main"));
+        let healthy = cache_scope("writer", Some("agent:writer:review"));
+
+        monitor.record_cache_usage(&broken, Some(10), None); // arm
+        for _ in 0..3 {
+            monitor.record_cache_usage(&broken, None, Some(50_000)); // re-creating
+            monitor.record_cache_usage(&healthy, Some(50_000), None); // interleaved, fine
+        }
+
+        assert_eq!(
+            misses(&monitor, &broken),
+            3,
+            "the broken prefix kept its streak"
+        );
+        assert_eq!(misses(&monitor, &healthy), 0);
+
+        // And a compaction in the healthy session does not silence the broken one.
+        monitor.notify_compaction(Some(&healthy));
+        assert_eq!(misses(&monitor, &broken), 3);
+    }
+
+    #[test]
+    fn a_scope_without_a_session_is_the_bare_agent_id() {
+        // Call sites with no conversation in hand degrade to the historical
+        // key rather than inventing one — a scope that does not match what the
+        // recording side uses would stop resets landing, which is the strictly
+        // worse direction (warning about compactions the user asked for).
+        assert_eq!(cache_scope("solo", None), "solo");
+        assert_ne!(
+            cache_scope("solo", Some("s1")),
+            cache_scope("solo", Some("s2"))
+        );
     }
 
     #[test]

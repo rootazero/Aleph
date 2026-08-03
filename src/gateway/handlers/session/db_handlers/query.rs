@@ -221,17 +221,34 @@ pub async fn handle_history_db(
     }
 }
 
-/// Best-effort USD cost for a session's token usage. `(None, "unknown")` when
-/// the provider/model is unpriced; otherwise the total USD and serialized
-/// status. Pure wrapper over `crate::pricing::estimate` so it is unit-testable
-/// without a SessionStore, and so all pricing stays in core (R4 — the shells
-/// no longer own a price table).
+/// USD cost for a session's token usage, and how much to trust it.
+///
+/// `accumulated_usd` — `SessionMetadata::estimated_cost_usd` — is authoritative
+/// and is returned as-is when present: the projector adds each run's own priced
+/// figure, computed from the **full** `TokenBreakdown` at the model that run
+/// actually used. Recomputing from the session row instead throws all of that
+/// away, because the row keeps only `input_tokens` / `output_tokens`: cached
+/// prompt bytes (~0.1x) and cache writes (1.25x) get re-priced as ordinary
+/// input, and a multi-model session collapses onto whichever model happened to
+/// be stamped last.
+///
+/// The recompute survives only as a fallback for rows that predate the
+/// accumulation (or a run that could not be priced), and it says so — a
+/// cache-blind derivation must never come back labelled `"complete"`, because
+/// that is exactly the word clients render without a `≈`.
+///
+/// Pure over its inputs so it stays unit-testable without a SessionStore, and
+/// so all pricing lives in core (R4 — the shells own no price table).
 fn session_usage_cost(
+    accumulated_usd: f64,
     provider: Option<&str>,
     model: Option<&str>,
     input_tokens: u64,
     output_tokens: u64,
 ) -> (Option<f64>, &'static str) {
+    if accumulated_usd > 0.0 {
+        return (Some(accumulated_usd), "complete");
+    }
     let (Some(provider), Some(model)) = (provider, model) else {
         return (None, "unknown");
     };
@@ -243,10 +260,17 @@ fn session_usage_cost(
     let est = crate::pricing::estimate(provider, model, &breakdown);
     match est.status {
         crate::pricing::CostStatus::Unknown => (None, "unknown"),
-        crate::pricing::CostStatus::Complete => (Some(est.usd), "complete"),
+        // Priced, but from a breakdown with no cache split — an estimate, and
+        // labelled as one so no client renders it as the exact figure.
+        crate::pricing::CostStatus::Complete => (Some(est.usd), CACHE_BLIND_ESTIMATE),
         crate::pricing::CostStatus::PartialMissingPrice => (Some(est.usd), "partial_missing_price"),
     }
 }
+
+/// `cost_status` for a figure derived from `input`/`output` alone. Any status
+/// other than `"complete"` is rendered as an approximation by clients, which is
+/// the whole point — see [`session_usage_cost`].
+const CACHE_BLIND_ESTIMATE: &str = "estimated_no_cache_split";
 
 /// Handle session.usage RPC request with database backend
 pub async fn handle_usage_db(
@@ -282,6 +306,7 @@ pub async fn handle_usage_db(
                 });
 
             let (cost_usd, cost_status) = session_usage_cost(
+                session_meta.map_or(0.0, |s| s.estimated_cost_usd),
                 session_meta.and_then(|s| s.model_provider.as_deref()),
                 session_meta.and_then(|s| s.model.as_deref()),
                 input_tokens,
@@ -418,7 +443,8 @@ pub async fn handle_preview_db(
 #[cfg(test)]
 mod tests {
     use super::{
-        clean_derived_title, handle_list_db, resolve_display_title, session_usage_cost, SessionInfo,
+        clean_derived_title, handle_list_db, resolve_display_title, session_usage_cost,
+        SessionInfo, CACHE_BLIND_ESTIMATE,
     };
     use crate::gateway::protocol::JsonRpcRequest;
     use crate::gateway::router::SessionKey;
@@ -579,22 +605,46 @@ mod tests {
     }
 
     #[test]
-    fn session_usage_cost_prices_known_model() {
+    fn session_usage_cost_prefers_the_accumulated_figure() {
+        // The projector already added each run's cache-aware price. That figure
+        // wins outright — it is the only one that ever saw `cache_read` /
+        // `cache_creation`, and it is the only one entitled to "complete".
         let (usd, status) = session_usage_cost(
+            4.25,
             Some("anthropic"),
             Some("claude-sonnet-4-6"),
             1_000_000,
             1_000_000,
         );
         assert_eq!(status, "complete");
+        assert_eq!(usd, Some(4.25));
+    }
+
+    #[test]
+    fn a_cache_blind_recompute_never_claims_to_be_complete() {
+        // No accumulated cost (a pre-accumulation row): the fallback may still
+        // price the tokens, but it priced cached bytes as full-rate input, so
+        // it must not come back wearing the word clients render without a `≈`.
+        let (usd, status) = session_usage_cost(
+            0.0,
+            Some("anthropic"),
+            Some("claude-sonnet-4-6"),
+            1_000_000,
+            1_000_000,
+        );
         assert!(usd.unwrap() > 0.0);
+        assert_ne!(status, "complete");
+        assert_eq!(status, CACHE_BLIND_ESTIMATE);
     }
 
     #[test]
     fn session_usage_cost_unknown_without_price() {
-        assert_eq!(session_usage_cost(None, None, 100, 100), (None, "unknown"));
         assert_eq!(
-            session_usage_cost(Some("anthropic"), Some("no-such-model"), 100, 100).1,
+            session_usage_cost(0.0, None, None, 100, 100),
+            (None, "unknown")
+        );
+        assert_eq!(
+            session_usage_cost(0.0, Some("anthropic"), Some("no-such-model"), 100, 100).1,
             "unknown"
         );
     }

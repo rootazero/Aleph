@@ -597,10 +597,25 @@ impl ProtocolAdapter for AnthropicProtocol {
                     body["tool_choice"] = serde_json::json!({"type": "tool", "name": name});
                 }
                 ToolChoice::None => {
-                    // Anthropic: remove tools array entirely to disable tool use
-                    if let Some(obj) = body.as_object_mut() {
-                        obj.remove("tools");
-                    }
+                    // Keep the tools array and say "don't use them". Removing it
+                    // disables tool use just as well, but Anthropic builds its
+                    // prompt-cache prefix as tools → system → messages, so a
+                    // request that drops the array shares NO prefix with the
+                    // conversation's other calls: the caller pays
+                    // `cache_creation` on the entire history for a turn whose
+                    // only job was to say something.
+                    //
+                    // A strict Anthropic-compatible proxy that predates
+                    // `{"type": "none"}` will reject this where deleting the
+                    // array would have been accepted. Two callers, both able to
+                    // take that: the boundary grace turn is fail-soft (it falls
+                    // through to the short-circuit as it does on any provider
+                    // error), and the OpenAI-compat ingress
+                    // (`openai_api::completions::passthrough`) is relaying a
+                    // client's own `tool_choice: "none"`, so a backend that
+                    // cannot honour it should say so rather than have the
+                    // request silently reshaped.
+                    body["tool_choice"] = serde_json::json!({"type": "none"});
                 }
             }
         }

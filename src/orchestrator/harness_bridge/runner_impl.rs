@@ -481,10 +481,16 @@ impl HarnessRunner for AgentHarnessRunner {
                 // Hash-validated on read, so a history rewritten between runs
                 // (post-turn compression, splits) simply misses.
                 .with_cache_carryover(session_id.to_key_string())
-                // Scope watchdog resets to this agent — same id the
-                // MeteringProvider records cache usage under, so reset and
-                // record hit the same CacheMonitor counter.
-                .with_monitor_agent(spec.agent.clone());
+                // Scope watchdog resets to this conversation — the same
+                // (agent, session) key the MeteringProvider records cache usage
+                // under, so reset and record hit the same CacheMonitor counter.
+                // Agent alone is too coarse: the prefix is per session, so a
+                // second healthy session of this agent would zero this one's
+                // miss streak.
+                .with_monitor_scope(crate::thinker::prompt_builder::cache_monitor::cache_scope(
+                    &spec.agent,
+                    Some(&session_id.to_key_string()),
+                ));
                 // Wire the zero-API-cost session-summary reuse path: the
                 // memory backend holding the d0/d1/d2 facts plus the owning
                 // agent id they were written under. The writes resolve the

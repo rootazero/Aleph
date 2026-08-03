@@ -9,7 +9,7 @@
 //! always `Ok`), so this is now an infallible sync fn.
 
 use crate::providers::message::{ContentBlock, UnifiedMessage};
-use crate::session::events::{RunOutcome, SessionEvent, SessionEventRecord};
+use crate::session::events::{RunOutcome, SessionEvent, SessionEventRecord, TurnId};
 use crate::thinker::nudges::{orphan_tool_result_note, user_interjection_note, INTERRUPTION_NOTE};
 
 /// Build the per-turn message vector handed to the provider. Walks the
@@ -74,7 +74,9 @@ pub(crate) fn build_prompt(
     // truncating the prompt here.
     for (idx, record) in events.iter().enumerate() {
         match &record.event {
-            SessionEvent::AssistantMessage { content, .. } => {
+            SessionEvent::AssistantMessage {
+                turn_id, content, ..
+            } => {
                 // A new assistant turn closes any prior turn's result window. If a
                 // user message is still buffered (the prior turn's results never
                 // all landed in this window), flush it now so it is never dropped.
@@ -88,11 +90,7 @@ pub(crate) fn build_prompt(
                 // compatible backends reject them with HTTP 400 — drop them.
                 let resolved: std::collections::HashSet<&str> = events[idx + 1..]
                     .iter()
-                    .filter_map(|r| match &r.event {
-                        SessionEvent::ToolResult { call_id, .. }
-                        | SessionEvent::ToolError { call_id, .. } => Some(call_id.as_str()),
-                        _ => None,
-                    })
+                    .filter_map(|r| result_call_id_of_turn(&r.event, *turn_id))
                     .collect();
                 if let Some(blocks) = reconstruct_assistant_blocks(content, &resolved) {
                     messages.push(UnifiedMessage::Assistant { content: blocks });
@@ -288,6 +286,28 @@ pub(crate) fn build_prompt(
     messages
 }
 
+/// `call_id` of a `ToolResult` / `ToolError` that belongs to `turn`.
+///
+/// The orphan scan walks *forward* from an assistant message, and it must stop
+/// at that turn's boundary. Unbounded, a later turn's result — a late arrival,
+/// or a call id a weaker model reused — retroactively un-orphans a `tool_use`
+/// block in an assistant message the provider has already cached: the same
+/// history renders differently on a later turn, so the whole prefix is re-billed
+/// at `cache_creation`. Narrowing cannot drop a legitimate pair, because every
+/// synthetic closure (`act::emit_deferred_tool_results`,
+/// `think::close_unexecuted_tool_uses`) is emitted with its *original* turn id.
+fn result_call_id_of_turn(event: &SessionEvent, turn: TurnId) -> Option<&str> {
+    match event {
+        SessionEvent::ToolResult {
+            call_id, turn_id, ..
+        }
+        | SessionEvent::ToolError {
+            call_id, turn_id, ..
+        } if *turn_id == turn => Some(call_id),
+        _ => None,
+    }
+}
+
 /// Downgrade an orphaned / duplicate tool result to a plain user text note
 /// (copy: `crate::thinker::nudges::orphan_tool_result_note`).
 fn orphan_result_note(
@@ -476,6 +496,75 @@ mod tests {
         let events: Vec<SessionEventRecord> = Vec::new();
         let out = build_prompt(&events, 0);
         assert!(out.is_empty(), "empty events → empty output");
+    }
+
+    /// REGRESSION: the orphan scan is bounded to the assistant's OWN turn.
+    ///
+    /// A weaker/proxied model can reuse a call id across turns. With an
+    /// unbounded forward scan, the later turn's result marked the earlier
+    /// turn's abandoned `tool_use` as resolved — so an assistant message the
+    /// provider had already cached started rendering with an extra block, and
+    /// the whole message prefix was re-billed at `cache_creation` (and the
+    /// replayed block was still unpaired on the wire).
+    #[test]
+    fn a_reused_call_id_cannot_un_orphan_an_earlier_turn() {
+        let turn_a = uuid::Uuid::new_v4();
+        let turn_b = uuid::Uuid::new_v4();
+        let assistant = |turn, text: &str| {
+            mk_record(SessionEvent::AssistantMessage {
+                turn_id: turn,
+                content: MessageContent {
+                    text: text.into(),
+                    blocks: vec![
+                        json!({"type": "tool_use", "id": "c1", "name": "file_read", "input": {}}),
+                    ],
+                    thinking: None,
+                    thinking_signature: None,
+                },
+                usage: None,
+                at: now_ms(),
+            })
+        };
+        let events: Vec<SessionEventRecord> = vec![
+            assistant(turn_a, "turn A — abandoned before any result landed"),
+            assistant(turn_b, "turn B — reuses the same call id"),
+            mk_record(SessionEvent::ToolResult {
+                turn_id: turn_b,
+                call_id: "c1".into(),
+                output: ToolOutput {
+                    value: json!("ok"),
+                    metadata: ToolOutputMetadata::default(),
+                },
+                at: now_ms(),
+            }),
+        ];
+
+        let out = build_prompt(&events, 0);
+        let tool_use_blocks: usize = out
+            .iter()
+            .filter_map(|m| match m {
+                UnifiedMessage::Assistant { content } => Some(content),
+                _ => None,
+            })
+            .flatten()
+            .filter(|b| matches!(b, ContentBlock::ToolCall { id, .. } if id == "c1"))
+            .count();
+        assert_eq!(
+            tool_use_blocks, 1,
+            "only turn B owns the result for c1 — turn A's block must stay an \
+             orphan and be dropped"
+        );
+        assert!(
+            out.iter().any(|m| matches!(
+                m,
+                UnifiedMessage::Assistant { content }
+                    if content.iter().any(|b| matches!(
+                        b,
+                        ContentBlock::Text { text, .. } if text.starts_with("turn A")
+                    ))
+            )),
+            "dropping the orphan must not erase turn A's text"
+        );
     }
 
     /// REGRESSION: in an autonomous tool loop (cron / subagent), the turn that
