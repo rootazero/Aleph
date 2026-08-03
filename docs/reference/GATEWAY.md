@@ -243,6 +243,37 @@ regression, but it cannot enumerate `impl ChannelFactory`, so it will not catch 
 *future* adapter that forgets to register — adding the name to that list is the
 same manual step as the registration.
 
+### Self-healing needs intent, not just status
+
+`ChannelHealthMonitor` sweeps for wedged channels and restarts them in place.
+Its predicate reads **two** facts, because one is not enough:
+
+- `ChannelRegistry`'s `DesiredChannelState` — `Running` after a successful
+  `start_channel` / `restart_channel`, `Stopped` after `stop_channel` or before
+  any start. Only the layer that serves start/stop knows this.
+- The live `ChannelStatus`, plus staleness.
+
+`ChannelStatus::Disconnected` means three unrelated things — never started,
+stopped on purpose, transport died — so a status-only predicate must either
+resurrect channels the operator stopped or never rescue a dead socket. The old
+predicate chose the latter (`status == Error` alone) and was consequently a
+**no-op for exactly the long-lived socket channels the monitor was written
+for**: `discord`, `irc` and `xmpp` all write `Disconnected` when their
+connection task exits, and Discord assigned `Error` and then unconditionally
+overwrote it on the next line. Registered, budgeted, tested, never fired.
+
+The predicate is now "supposed to be running AND down AND stale", where down
+covers `Error`, `Disconnected` and a hung `Connecting`. `Connected`-but-silent
+is still excluded — a quiet Slack workspace is not a broken one, and Aleph has
+no separate transport-liveness signal to tell them apart (openclaw restarts on
+`stale-socket` only because it tracks `lastTransportActivityAt`). `Disabled` is
+excluded as configuration. Mapped from openclaw's `isManagedAccount` +
+`lifecycle` in `gateway/channel-health-policy.ts`.
+
+**Adapter rule**: do not unconditionally overwrite `status` on a connection
+task's exit path. That one line erases the failure the line above just
+recorded, blinding both `channels.list` and the monitor.
+
 ### Addressing: channel vs conversation
 
 Three different things get called "channel". Keep them apart when reading an error:
@@ -310,6 +341,91 @@ were in exactly that state — `msteams.reactions` and `whatsapp.deletion` made
   }
 }
 ```
+
+---
+
+## Durable Outbound Delivery Queue
+
+**Location**: `src/gateway/delivery_queue.rs` (store + drain loop),
+`src/gateway/channel_registry.rs` (enqueue-on-failure + accessors),
+`src/builtin_tools/channel_outbox.rs` (operator/model surface).
+**Config**: `[gateway.delivery_queue]`. **Opt-out**: no store attached ⇒
+byte-identical pre-queue behaviour.
+
+`ChannelRegistry::send` retries only `RateLimited`, in memory, for a bounded
+window. Every other *definitely-not-delivered* failure — above all
+`NotConnected` while a channel reconnects — used to drop the message, and
+nothing survived a restart. For an assistant whose core promise is proactive
+push (R5), a lost Daemon notification is a silent correctness failure.
+
+### The three-way outcome, not two
+
+Delivery has three endings, and the queue used to model two:
+
+| Ending | Classifier | Action |
+|---|---|---|
+| Reported, definitely not delivered (`NotConnected` / `RateLimited`) | `should_enqueue` | persist, retry with backoff |
+| Reported, may already be on the wire (`SendFailed` / `Internal`) | `terminal_reason` → `Ambiguous` | never retried; dead-lettered for inspection |
+| **Not reported at all — the process vanished mid-send** | in-flight stamp | never retried; dead-lettered as `UnknownOutcome` |
+
+The third row is why `mark_inflight` stamps a row *before* the send crosses the
+transport boundary and `reconcile_inflight` runs once per process (from
+`spawn_drain`, at the moment it wins the drainer slot). Without it, a daemon
+that exits between a successful send and `mark_delivered` leaves a pending,
+already-due row that the next boot replays — a duplicate. Mapped from
+openclaw's `markDeliveryPlatformSendAttemptStarted` /
+`needsUnknownSendReconciliation`; Aleph skips its multi-process lease because
+the single-drainer invariant (`try_claim_drainer`) makes it unnecessary.
+
+### Ordering is per conversation
+
+`drain_once` groups a claimed batch by `(channel, conversation)`, preserves
+claim order, and stops a conversation at its first non-success. Grouping alone
+is not enough across ticks: the failed head backs off into the future while its
+followers stay due, so the next tick would claim a follower, never see the
+head, and deliver it first — permanently reordering the chat. The head's
+backoff is therefore carried to the rest of its conversation
+(`defer_conversation`, over an indexed `conversation_id` column backfilled at
+open). Different conversations never block each other.
+
+**Known limit (deliberate)**: this covers *queued* messages. A live `send` that
+succeeds while an older message for the same conversation is still queued can
+still arrive first. Fixing that would require `send` to enqueue rather than
+attempt whenever a backlog exists, changing what callers observe from a
+`ChannelResult<SendResult>` — out of scope here, and it is documented rather
+than silently half-solved.
+
+### Dead letters carry their own replay-safety
+
+`redrive_dead_letters` used to rest on "every dead letter is duplicate-safe by
+construction", which was true only while exhausted transient retries were the
+sole producer. With terminal failures and interrupted attempts also landing
+there, safety is per record: `DeadLetterReason::replay_safe` (single source in
+Rust, projected into SQL by `replay_safe_tokens`). Redrive moves `Exhausted` /
+`Permanent` and reports the rest as `skipped_unsafe`.
+
+Redrive also respects the live-queue bound by **moving fewer records**, never
+by evicting live ones. The previous implementation moved everything then
+trimmed by oldest `created_at` — and since redriven rows carry `created_at =
+now`, the rows evicted were the genuinely-older *pending* deliveries.
+
+### Bounds
+
+- `max_queue_len` — row count, oldest-first eviction, both tables.
+- `max_payload_bytes` — serialized size. `OutboundMessage` carries
+  `Attachment`s that may hold inline `data: Vec<u8>`, so a row-count cap alone
+  lets a few media pushes to a wedged channel grow `delivery.db` without bound.
+  Over-cap payloads are dead-lettered (`PayloadTooLarge`), not silently dropped.
+
+### Surfaces
+
+- `channels.list` → `delivery_queue`: counts only (depth, due, oldest age,
+  per-channel, dead-lettered, dead-lettered-replayable). Panel reads this.
+- `channel_outbox` tool → `status` / `dead_letters` / `redrive`. This is the
+  **only** production consumer of `recent_dead_letters` / `redrive_dead_letters`;
+  the `channels.dead_letters` / `channels.redrive_dead_letters` RPCs were
+  removed as orphans and must not be revived — no client ever called them, and
+  the consumer that exists is the model (R8).
 
 ---
 
