@@ -34,29 +34,3 @@ pub async fn list(json: bool) -> CliResult<()> {
     }
     Ok(())
 }
-
-pub async fn add(json: bool) -> CliResult<()> {
-    print_unimplemented("webhook.add", json);
-    Ok(())
-}
-
-pub async fn remove(json: bool) -> CliResult<()> {
-    print_unimplemented("webhook.remove", json);
-    Ok(())
-}
-
-fn print_unimplemented(method: &str, json: bool) {
-    let payload = serde_json::json!({
-        "status": "not_implemented",
-        "method": method,
-        "see": GAPS_DOC,
-    });
-    if json {
-        output::print_json(&payload);
-    } else {
-        eprintln!(
-            "{method} is not yet implemented; design lives in {GAPS_DOC}.\n\
-             Run `aleph webhook list` for what's available today."
-        );
-    }
-}

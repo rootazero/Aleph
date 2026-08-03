@@ -514,7 +514,12 @@
       "policies": "Policies",
       "routing_rules": "Routing Rules",
       "security": "Security",
-      "model_route": "Model Routing"
+      "model_route": "Model Routing",
+      "appearance": "Appearance",
+      "moa": "MoA",
+      "browser": "Browser",
+      "execution": "Execution",
+      "network": "Network & Cluster"
     },
     "general": {
       "title": "General Settings",

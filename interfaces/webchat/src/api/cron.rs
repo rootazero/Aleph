@@ -206,22 +206,6 @@ impl CronApi {
             })
     }
 
-    /// Toggle a cron job enabled/disabled
-    pub async fn toggle(
-        state: &DashboardState,
-        job_id: &str,
-        enabled: bool,
-    ) -> Result<CronJobInfo, String> {
-        let params = serde_json::json!({
-            "job_id": job_id,
-            "enabled": enabled,
-        });
-
-        let result = state.rpc_call("cron.toggle", params).await?;
-
-        serde_json::from_value(result).map_err(|e| format!("Failed to parse toggled cron job: {e}"))
-    }
-
     /// Trigger an immediate run of a cron job
     pub async fn run_now(state: &DashboardState, job_id: &str) -> Result<Value, String> {
         let params = serde_json::json!({ "job_id": job_id });
