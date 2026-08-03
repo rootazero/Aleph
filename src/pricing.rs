@@ -671,15 +671,6 @@ const PRICE_TABLE: &[(&str, &[Rates])] = &[
             // K2.5/K2.6/K2.7 published USD rates (platform.kimi.ai) differ from
             // the legacy family fallback below. K2.7-code shares K2.6's tier.
             Rates {
-                // K3 — Moonshot's current flagship, a tier above the K2 line.
-                model_prefix: "kimi-k3",
-                input_per_mtok: Some(3.0),
-                output_per_mtok: Some(15.0),
-                cache_read_per_mtok: Some(0.30),
-                cache_creation_per_mtok: None,
-                reasoning_per_mtok: None,
-            },
-            Rates {
                 model_prefix: "kimi-k2.7",
                 input_per_mtok: Some(0.95),
                 output_per_mtok: Some(4.0),
