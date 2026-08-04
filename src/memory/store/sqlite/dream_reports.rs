@@ -49,6 +49,12 @@ pub struct PersistedDreamReport {
     /// (e.g. a Conserve run). Stored as JSON so the schema stays forward-
     /// compatible if the outcome shape grows. Read by `dreaming.list_insights`.
     pub evolution_json: Option<String>,
+    /// Serialized `CycleDecision` — which strategy ran, why, what the churn gate
+    /// said, which stages executed, and whether validation passed. `None` on
+    /// pre-migration rows. This is what lets the Panel answer "why is dreaming
+    /// always conserving?"; before it existed the answer was only in
+    /// `dream_events.jsonl`, i.e. visible to the model but not to the operator.
+    pub decision_json: Option<String>,
 }
 
 /// One `GROUP BY pipeline_type` bucket of dream activity within a time window.
@@ -92,8 +98,8 @@ impl SqliteMemoryBackend {
             "INSERT INTO dream_reports \
              (id, pipeline_type, started_at, finished_at, duration_ms, \
               synthesis_count, notes_consolidated, notes_woven, notes_archived, \
-              feedback_distilled, errors, namespace, evolution_json) \
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)",
+              feedback_distilled, errors, namespace, evolution_json, decision_json) \
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)",
             params![
                 report.id,
                 report.pipeline_type,
@@ -108,6 +114,7 @@ impl SqliteMemoryBackend {
                 report.errors,
                 report.namespace,
                 report.evolution_json,
+                report.decision_json,
             ],
         )
         .map_err(|e| AlephError::config(format!("insert_dream_report: {e}")))?;
@@ -129,7 +136,7 @@ impl SqliteMemoryBackend {
             .prepare(
                 "SELECT id, pipeline_type, started_at, finished_at, duration_ms, \
                  synthesis_count, notes_consolidated, notes_woven, notes_archived, \
-                 feedback_distilled, errors, namespace, evolution_json \
+                 feedback_distilled, errors, namespace, evolution_json, decision_json \
                  FROM dream_reports ORDER BY started_at DESC LIMIT ?1",
             )
             .map_err(|e| AlephError::config(format!("recent_dream_reports prepare: {e}")))?;
@@ -150,6 +157,7 @@ impl SqliteMemoryBackend {
                     errors: row.get("errors")?,
                     namespace: row.get("namespace")?,
                     evolution_json: row.get("evolution_json")?,
+                    decision_json: row.get("decision_json")?,
                 })
             })
             .map_err(|e| AlephError::config(format!("recent_dream_reports query: {e}")))?;
@@ -265,6 +273,7 @@ mod tests {
             errors: None,
             namespace: "owner".to_string(),
             evolution_json: None,
+            decision_json: None,
         }
     }
 
@@ -345,6 +354,7 @@ mod tests {
             errors: None,
             namespace: "owner".to_string(),
             evolution_json: None,
+            decision_json: None,
         }
     }
 

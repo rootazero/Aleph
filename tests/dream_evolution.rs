@@ -128,18 +128,22 @@ async fn high_growth_selects_synthesize() {
 }
 
 /// Mutation gate forces Conserve on merge cycle.
+///
+/// The gate is now rebuilt from persisted cycle reports rather than
+/// accumulated in-process, so this drives it the way the daemon does: fold
+/// three past cycles' reports, then evaluate.
 #[tokio::test]
 async fn merge_cycle_forces_conserve() {
-    let mut gate = MutationGate::new();
-
-    // Simulate 3 cycles with same merge pair
-    for _ in 0..3 {
-        gate.record_merge_pair("note_a", "note_b");
-        if gate.evaluate() != GateDecision::Allow {
-            break; // Hit conserve early
-        }
-        gate.advance_cycle();
-    }
+    let repeated_merge = DreamReport {
+        merged_pairs: vec![("note_a".to_string(), "note_b".to_string())],
+        ..Default::default()
+    };
+    let history = [
+        repeated_merge.clone(),
+        repeated_merge.clone(),
+        repeated_merge,
+    ];
+    let gate = MutationGate::from_reports(&history);
 
     // After 3 cycles, the pair triggers conserve
     let gate_decision = gate.evaluate();

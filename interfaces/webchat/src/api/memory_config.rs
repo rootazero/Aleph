@@ -316,6 +316,59 @@ pub struct SynthesisNoteDto {
     pub updated_at: i64,
 }
 
+/// SkillOpt evolution-gate verdict for one dream cycle.
+///
+/// The server has emitted this since the gate landed, but `DreamRunDto` had no
+/// field for it, so serde silently dropped it and nothing ever rendered the
+/// verdict. Every field here must have a rendering site in `DreamInsightsPanel`.
+#[derive(Debug, Clone, Deserialize)]
+pub struct DreamEvolutionDto {
+    /// Memory-health score before this cycle's edits.
+    #[serde(default)]
+    pub baseline: f64,
+    /// Memory-health score after this cycle's edits.
+    #[serde(default)]
+    pub candidate: f64,
+    /// Best-ever health known at decision time.
+    #[serde(default)]
+    pub best: f64,
+    /// `accept_new_best` | `accept` | `reject`.
+    #[serde(default)]
+    pub outcome: String,
+    #[serde(default)]
+    pub merges_rejected: u32,
+}
+
+/// Churn-gate verdict (`MutationGate`) that constrained the strategy choice.
+#[derive(Debug, Clone, Deserialize)]
+pub struct DreamGateDto {
+    /// `allow` | `conserve`.
+    #[serde(rename = "type", default)]
+    pub kind: String,
+    #[serde(default)]
+    pub reason: Option<String>,
+    #[serde(default)]
+    pub cooldown_remaining: u32,
+}
+
+/// Why a cycle did what it did — the answer to "why is dreaming always
+/// conserving?", which until now existed only in the daemon's JSONL event log.
+#[derive(Debug, Clone, Deserialize)]
+pub struct DreamDecisionDto {
+    #[serde(default)]
+    pub strategy: String,
+    #[serde(default)]
+    pub rationale: String,
+    #[serde(default)]
+    pub personality_adjustment: f64,
+    #[serde(default)]
+    pub gate: Option<DreamGateDto>,
+    #[serde(default)]
+    pub stages: Vec<String>,
+    #[serde(default)]
+    pub validation_passed: bool,
+}
+
 #[derive(Debug, Clone, Deserialize)]
 pub struct DreamRunDto {
     #[serde(default)]
@@ -331,7 +384,17 @@ pub struct DreamRunDto {
     #[serde(default)]
     pub synthesis_count: u32,
     #[serde(default)]
+    pub notes_consolidated: u32,
+    #[serde(default)]
+    pub notes_archived: u32,
+    #[serde(default)]
     pub errors: Option<String>,
+    /// `None` on pre-migration rows.
+    #[serde(default)]
+    pub evolution: Option<DreamEvolutionDto>,
+    /// `None` on pre-migration rows.
+    #[serde(default)]
+    pub decision: Option<DreamDecisionDto>,
 }
 
 /// Response from `memory.list_corrections` RPC.

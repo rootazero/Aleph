@@ -120,11 +120,21 @@ impl DreamStage for NoteSynthesisStage {
                 .write_note(&ctx.agent_id, "synthesis", &note)
                 .await
             {
-                Ok(_) => {
+                Ok(written) => {
                     synthesis_count += 1;
-                    // Record the assertion so the post-pipeline drain feeds
-                    // MutationGate's oscillation detector (was never fed before).
-                    ctx.report.synthesis_assertions.push(synthesis_text);
+                    // Record (note path, body digest) so the *next* cycle's
+                    // MutationGate can tell a stable synthesis from one that
+                    // flip-flops. Digest the body, not the rendered markdown:
+                    // frontmatter carries an `updated` date that moves on every
+                    // write, which would report churn every night.
+                    let note_path = written.file_stem().map_or_else(
+                        || format!("synthesis/{category}"),
+                        |stem| format!("synthesis/{}", stem.to_string_lossy()),
+                    );
+                    ctx.report.synthesis_rewrites.push((
+                        note_path,
+                        crate::memory::notes::indexer::sha2_hash(&synthesis_text),
+                    ));
                     tracing::info!(
                         category,
                         notes = note_count,
