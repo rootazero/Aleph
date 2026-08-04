@@ -52,9 +52,9 @@ use super::evolution::{
 };
 use super::validation::{self, DreamValidationReport};
 use super::{
-    compute_raw_metrics, l1_over_corpus, now_timestamp, DreamContext, DreamEvent, DreamPipeline,
-    DreamReport, DreamReportStatus, EventLog, MutationGate, NoteEntry, SignalSnapshot,
-    StrategySelector, DREAM_HISTORY_WINDOW,
+    compute_raw_metrics, l1_over_corpus, now_timestamp, CycleDecision, DreamContext,
+    DreamCycleOutcome, DreamEvent, DreamPipeline, DreamReport, DreamReportStatus, DreamRunStatus,
+    EventLog, MutationGate, NoteEntry, SignalSnapshot, StrategySelector, DREAM_HISTORY_WINDOW,
 };
 
 /// Everything a project sub-cycle borrows from the daemon.
@@ -80,10 +80,16 @@ pub(super) struct ProjectCycleDeps<'a> {
 /// evolution gate → solidify) keyed on `agent_id` instead of the base agent. The
 /// caller treats a failure as non-fatal: one bad namespace must never abort the
 /// night.
+///
+/// Returns the same [`DreamCycleOutcome`] the base cycle produces, decision
+/// included. The decision used to be computed here and dropped on the floor,
+/// which is why a project corpus's history was legible to the model (it reads
+/// the namespace's own event log) and to nobody else: the audit row the Panel
+/// reads is written by the caller, and the caller had nothing to write.
 pub(super) async fn run_namespace_cycle(
     deps: &ProjectCycleDeps<'_>,
     agent_id: &str,
-) -> Result<DreamReport, AlephError> {
+) -> Result<DreamCycleOutcome, AlephError> {
     let started_at = now_timestamp();
     let log = EventLog::new(deps.memory_dir.join(agent_id));
 
@@ -225,16 +231,34 @@ pub(super) async fn run_namespace_cycle(
         merges_rejected: report.merges_rejected,
     });
 
-    // --- Solidify (event log) ---
-    //
-    // A cycle that yielded to the user before running a single stage produced
-    // nothing to account for. Recording it anyway would spend one of the gate's
-    // few window slots on an empty night and push real churn history out of
-    // range — the detectors would disarm precisely when the user is most
-    // active. A *partially* executed cycle IS recorded: its merges are real,
-    // and unrecorded merges are exactly what this module exists to prevent.
-    if report.status == DreamReportStatus::Interrupted && report.stages_executed.is_empty() {
-        return Ok(report);
+    // --- Solidify (event log + the caller's audit row) ---
+    let decision = CycleDecision {
+        strategy,
+        // rust-doctor-disable-next-line excessive-clone
+        rationale: selection.rationale.clone(),
+        personality_adjustment: selection.personality_adjustment,
+        // rust-doctor-disable-next-line excessive-clone
+        gate: gate_decision.clone(),
+        // rust-doctor-disable-next-line excessive-clone
+        stages: report.stages_executed.clone(),
+        validation_passed: validation_report.overall_ok(),
+    };
+    let status = if report.status == DreamReportStatus::Interrupted {
+        DreamRunStatus::Cancelled
+    } else {
+        DreamRunStatus::Success
+    };
+
+    // A cycle that yielded before running a single stage produced nothing to
+    // account for — see `DreamReport::is_vacuous_interruption` for why neither
+    // durable record wants it. The caller reads the same predicate before
+    // writing its audit row.
+    if report.is_vacuous_interruption() {
+        return Ok(DreamCycleOutcome {
+            status,
+            report,
+            decision,
+        });
     }
 
     let cycle = log.next_cycle().await.unwrap_or(1);
@@ -262,5 +286,9 @@ pub(super) async fn run_namespace_cycle(
         );
     }
 
-    Ok(report)
+    Ok(DreamCycleOutcome {
+        status,
+        report,
+        decision,
+    })
 }

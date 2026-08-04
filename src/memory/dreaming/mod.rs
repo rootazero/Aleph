@@ -791,7 +791,7 @@ impl DreamDaemon {
                 // was invisible both to the Panel's run history and to the
                 // governance audit's "did dreaming do anything" probe — a
                 // forced consolidation night read as "the daemon did nothing".
-                self.persist_run_row(outcome, run_start, duration_ms);
+                self.persist_run_row(outcome, DEFAULT_AGENT_ID, run_start, duration_ms);
             }
             Err(_) => {
                 if let Err(e) = self
@@ -813,15 +813,27 @@ impl DreamDaemon {
 
     /// Append one completed cycle to the `dream_reports` audit table.
     ///
-    /// Single writer for both the scheduled (`check_and_run`) and the forced
-    /// (`run_now`) paths — the counters, the SkillOpt gate verdict
-    /// (`evolution_json`) and the cycle decision (`decision_json`) must not
-    /// depend on *how* the cycle was triggered. Best-effort: a failed insert
-    /// (e.g. a PK clash on a same-second re-run) is logged, never fatal.
-    fn persist_run_row(&self, outcome: &DreamCycleOutcome, run_start: i64, duration_ms: u64) {
+    /// Single writer for the scheduled (`check_and_run`) path, the forced
+    /// (`run_now`) path, and every project sub-cycle — the counters, the
+    /// SkillOpt gate verdict (`evolution_json`) and the cycle decision
+    /// (`decision_json`) must not depend on *which* corpus ran or on how the
+    /// cycle was triggered. Best-effort: a failed insert (e.g. a PK clash on a
+    /// same-second re-run) is logged, never fatal.
+    ///
+    /// `namespace` is the corpus's real storage partition key — the base agent
+    /// id, or `{base}__proj-*`. It is also part of the row id, because the base
+    /// cycle and its sub-cycles routinely finish within the same second and the
+    /// id is the primary key.
+    fn persist_run_row(
+        &self,
+        outcome: &DreamCycleOutcome,
+        namespace: &str,
+        run_start: i64,
+        duration_ms: u64,
+    ) {
         let report = &outcome.report;
         let persisted = crate::memory::store::sqlite::dream_reports::PersistedDreamReport {
-            id: format!("dream_{run_start}"),
+            id: format!("dream_{run_start}_{namespace}"),
             // rust-doctor-disable-next-line excessive-clone
             pipeline_type: report.pipeline_type.clone(),
             started_at: run_start,
@@ -838,7 +850,7 @@ impl DreamDaemon {
             feedback_distilled: feedback_rules_landed(report),
             // rust-doctor-disable-next-line excessive-clone
             errors: report.errors.clone(),
-            namespace: "owner".to_string(),
+            namespace: namespace.to_string(),
             // Serialize the SkillOpt gate verdict so the accept/reject
             // decision is queryable, not just buried in the event log.
             // A serialization failure degrades to NULL (non-fatal).
@@ -976,7 +988,7 @@ impl DreamDaemon {
                     tracing::warn!(error = %e, "failed to persist dream status (completed)");
                 }
 
-                self.persist_run_row(&outcome, run_start, duration_ms);
+                self.persist_run_row(&outcome, DEFAULT_AGENT_ID, run_start, duration_ms);
             }
             Ok(Err(err)) => {
                 warn!(error = %err, "DreamDaemon run failed");
@@ -1172,7 +1184,8 @@ impl DreamDaemon {
                     };
                     for ns in &scoped {
                         match project_cycle::run_namespace_cycle(&deps, ns).await {
-                            Ok(r) => {
+                            Ok(outcome) => {
+                                let r = &outcome.report;
                                 let interrupted = r.status == DreamReportStatus::Interrupted;
                                 info!(
                                     agent = %ns,
@@ -1180,6 +1193,16 @@ impl DreamDaemon {
                                     interrupted,
                                     "project namespace dream complete"
                                 );
+                                // The audit row the operator reads. Its absence
+                                // is why a project corpus's nightly history was
+                                // legible to the model — which reads that
+                                // namespace's own event log — and to no one
+                                // else. Same writer as the base cycle, so the
+                                // two can't drift; the sub-cycle's own clock,
+                                // because it is its own run.
+                                if !r.is_vacuous_interruption() {
+                                    self.persist_run_row(&outcome, ns, r.started_at, r.duration_ms);
+                                }
                                 // The activity checker fired: the user is back.
                                 // Walking the remaining namespaces would only
                                 // produce a burst of cycles that interrupt at
@@ -2254,8 +2277,14 @@ mod tests {
 
         daemon.run_now().await.expect("forced cycle succeeds");
 
-        let rows = store.recent_dream_reports(10).expect("query audit table");
+        let rows = store
+            .recent_dream_reports(Some(DEFAULT_AGENT_ID), 10)
+            .expect("query audit table");
         assert_eq!(rows.len(), 1, "a forced cycle must be recorded");
+        assert_eq!(
+            rows[0].namespace, DEFAULT_AGENT_ID,
+            "the base cycle files under the base agent, not a placeholder"
+        );
         let decision_json = rows[0]
             .decision_json
             .as_deref()
@@ -2464,15 +2493,110 @@ mod tests {
         let fx = ProjectFixture::new("dream_proj_intr", true);
         let ns = format!("{DEFAULT_AGENT_ID}__proj-busy");
 
-        let report = project_cycle::run_namespace_cycle(&fx.deps(), &ns)
+        let outcome = project_cycle::run_namespace_cycle(&fx.deps(), &ns)
             .await
             .expect("an interrupted sub-cycle is not an error");
 
-        assert_eq!(report.status, DreamReportStatus::Interrupted);
-        assert!(report.stages_executed.is_empty(), "nothing ran");
+        assert_eq!(outcome.report.status, DreamReportStatus::Interrupted);
+        assert!(outcome.report.stages_executed.is_empty(), "nothing ran");
         assert!(
             !fx.event_log_path(&ns).exists(),
             "an empty night must not consume one of the gate's window slots"
         );
+        // The same predicate the caller reads before writing an audit row: the
+        // two skips have to agree, and a row with no matching event (or the
+        // reverse) is silent.
+        assert!(
+            outcome.report.is_vacuous_interruption(),
+            "the caller decides whether to persist by reading this"
+        );
+    }
+
+    /// The sub-cycle hands its decision back, which is what makes a project
+    /// corpus's history writable to the audit table at all.
+    ///
+    /// It used to be computed inside the sub-cycle and dropped: the strategy,
+    /// its rationale, the churn gate's verdict and the stage list all existed,
+    /// went into the namespace's own event log, and reached no operator-facing
+    /// surface, because the surface is fed by the caller and the caller had
+    /// nothing to write.
+    #[tokio::test]
+    async fn a_project_sub_cycle_returns_its_decision() {
+        let fx = ProjectFixture::new("dream_proj_decision", false);
+        let ns = format!("{DEFAULT_AGENT_ID}__proj-decide");
+
+        let outcome = project_cycle::run_namespace_cycle(&fx.deps(), &ns)
+            .await
+            .expect("project sub-cycle succeeds");
+
+        assert_eq!(outcome.status, DreamRunStatus::Success);
+        assert_eq!(
+            outcome.decision.strategy.to_string(),
+            outcome.report.pipeline_type,
+            "the decision must describe the pipeline that actually ran"
+        );
+        assert_eq!(
+            outcome.decision.stages, outcome.report.stages_executed,
+            "the stage list is the one the pipeline executed, not a plan"
+        );
+        assert!(
+            !outcome.decision.rationale.is_empty(),
+            "the rationale is the operator's answer to 'why did it do that'"
+        );
+    }
+
+    /// A project namespace's cycle lands in the `dream_reports` audit table
+    /// under **its own** namespace.
+    ///
+    /// This is the operator-facing half of per-namespace self-governance. The
+    /// model could already read a project corpus's history (it reads that
+    /// namespace's event log directly via `note_manage(action="evolution")`);
+    /// the Panel reads this table, and nothing wrote to it, so a project corpus
+    /// dreamed every night invisibly.
+    #[tokio::test]
+    async fn a_project_sub_cycle_lands_in_the_audit_table_under_its_namespace() {
+        let dir = std::env::temp_dir().join(format!("aleph_dream_row_{}", uuid::Uuid::new_v4()));
+        let ns = format!("{DEFAULT_AGENT_ID}__proj-audited");
+        // `list_scoped_agent_ids` discovers namespaces by directory listing.
+        std::fs::create_dir_all(dir.join(&ns)).unwrap();
+        let store = Arc::new(SqliteMemoryBackend::new(&dir).unwrap());
+
+        let cfg = MemoryConfig {
+            project_scoped: true,
+            ..MemoryConfig::default()
+        };
+        let daemon = DreamDaemon::from_config(store.clone(), &cfg)
+            .unwrap()
+            .with_provider(Arc::new(MockProvider::new("")))
+            .with_embedder(Arc::new(StubEmbedder))
+            .with_note_memory_dir(dir.clone());
+
+        daemon
+            .run_dream(now_timestamp(), "2026-08-04".to_string(), true)
+            .await
+            .expect("run_dream succeeds");
+
+        let rows = store
+            .recent_dream_reports(Some(&ns), 10)
+            .expect("audit table is queryable");
+        assert_eq!(
+            rows.len(),
+            1,
+            "the project namespace's cycle must be visible to the operator"
+        );
+        assert_eq!(rows[0].namespace, ns);
+        assert!(
+            rows[0].decision_json.is_some(),
+            "the 'why' travels with the row — that is the whole point of it"
+        );
+
+        // The base agent's own row is written by `run_dream`'s caller, so it is
+        // absent here. What must never happen is a sub-cycle filing under the
+        // base namespace: that would put a project corpus's counters into the
+        // base agent's history.
+        assert!(store
+            .recent_dream_reports(Some(DEFAULT_AGENT_ID), 10)
+            .expect("audit table is queryable")
+            .is_empty());
     }
 }

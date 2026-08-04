@@ -940,18 +940,24 @@ fn RetrievalDebugPanel() -> impl IntoView {
 #[component]
 fn DreamInsightsPanel() -> impl IntoView {
     use crate::api::memory_config::{DreamInsightsApi, DreamInsightsResponse};
+    use crate::platform::wide::views::memory::data::format_ts;
     let i18n = use_i18n();
     let expanded = RwSignal::new(false);
     let loading = RwSignal::new(false);
     let data = RwSignal::new(Option::<DreamInsightsResponse>::None);
     let error = RwSignal::new(Option::<String>::None);
+    // Which corpus the run list is scoped to. `None` = whatever the server
+    // considers the base agent; the corpus table below sets it to a
+    // `{base}__proj-*` namespace to read that project's nightly history.
+    let selected_ns = RwSignal::new(Option::<String>::None);
 
     let load = move || {
         let state = expect_context::<DashboardState>();
+        let ns = selected_ns.get_untracked();
         spawn_local(async move {
             loading.set(true);
             error.set(None);
-            match DreamInsightsApi::list(&state, None, Some(30)).await {
+            match DreamInsightsApi::list(&state, ns, Some(30)).await {
                 Ok(resp) => data.set(Some(resp)),
                 Err(e) => error.set(Some(e)),
             }
@@ -997,20 +1003,86 @@ fn DreamInsightsPanel() -> impl IntoView {
                             let runs = resp.runs.clone();
                             let daily = resp.daily.clone();
                             let synthesis = resp.synthesis.clone();
+                            let corpora = resp.namespaces.clone();
+                            let active_ns = resp.agent_id.clone();
                             let is_empty = runs.is_empty() && daily.is_empty() && synthesis.is_empty();
                             let latest_run_summary = runs.first().map(|latest| {
                                 let label = t_string!(i18n, settings.memory.dream_latest_run).to_string();
                                 format!("{}: {} · {}ms · {} synth",
                                     label, latest.pipeline_type, latest.duration_ms, latest.synthesis_count)
                             });
+                            // Only interesting once a project corpus exists: with
+                            // project scoping off there is exactly one corpus and
+                            // this table would be a row that says "you are here".
+                            let show_corpora = corpora.len() > 1;
                             view! {
                                 {if is_empty {
                                     view! { <div class="text-text-tertiary text-sm">{t!(i18n, settings.memory.dream_no_insights)}</div> }.into_any()
                                 } else { view! { <div></div> }.into_any() }}
 
+                                // Corpora. Project namespaces run their own nightly
+                                // cycle under their own churn gate; until this table
+                                // existed their history was reachable only by the
+                                // model, which reads their event log directly.
+                                {show_corpora.then(|| {
+                                    let rows = corpora.into_iter().map(|c| {
+                                        let ns = c.namespace.clone();
+                                        let is_active = ns == active_ns;
+                                        let conserved = c.last_decision.as_ref()
+                                            .and_then(|d| d.gate.as_ref())
+                                            .is_some_and(|g| g.kind == "conserve");
+                                        let strategy = c.last_decision.as_ref()
+                                            .map_or(c.last_pipeline_type.clone(), |d| d.strategy.clone());
+                                        let summary = format!(
+                                            "{} {} · {} · {}{}",
+                                            c.runs,
+                                            t_string!(i18n, settings.memory.dream_corpus_cycles),
+                                            format_ts(c.last_started_at),
+                                            strategy,
+                                            if conserved { " ⚠" } else { "" },
+                                        );
+                                        let target = ns.clone();
+                                        view! {
+                                            <button
+                                                on:click=move |_| {
+                                                    if !is_active {
+                                                        selected_ns.set(Some(target.clone()));
+                                                        load();
+                                                    }
+                                                }
+                                                class=move || if is_active {
+                                                    "flex justify-between w-full text-left p-2 rounded border border-accent bg-surface-sunken text-sm"
+                                                } else {
+                                                    "flex justify-between w-full text-left p-2 rounded border border-border text-sm hover:bg-surface-sunken"
+                                                }
+                                            >
+                                                <span class="font-mono">{ns}</span>
+                                                <span class=move || if conserved { "text-xs text-warning" } else { "text-xs text-text-tertiary" }>
+                                                    {summary}
+                                                </span>
+                                            </button>
+                                        }
+                                    }).collect::<Vec<_>>();
+                                    view! {
+                                        <div>
+                                            <h3 class="text-sm font-semibold mb-2">{t!(i18n, settings.memory.dream_corpora)}</h3>
+                                            <div class="space-y-1">{rows}</div>
+                                        </div>
+                                    }
+                                })}
+
                                 // Recent runs
                                 <div>
-                                    <h3 class="text-sm font-semibold mb-2">{t!(i18n, settings.memory.dream_runs)}</h3>
+                                    // The corpus chip appears only when there is
+                                    // more than one corpus to confuse it with —
+                                    // with project scoping off the default view
+                                    // is unchanged.
+                                    <h3 class="text-sm font-semibold mb-2">
+                                        {t!(i18n, settings.memory.dream_runs)}
+                                        {show_corpora.then(|| view! {
+                                            <span class="ml-2 font-mono font-normal text-xs text-text-tertiary">{active_ns.clone()}</span>
+                                        })}
+                                    </h3>
                                     {latest_run_summary.map(|summary| view! {
                                         <div class="mb-2 px-3 py-1.5 bg-info-subtle rounded text-sm font-medium text-info">
                                             {summary}

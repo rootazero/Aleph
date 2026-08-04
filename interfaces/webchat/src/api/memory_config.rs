@@ -284,12 +284,46 @@ pub struct TestRerankResponse {
 /// Response from `dreaming.list_insights` RPC.
 #[derive(Debug, Clone, Deserialize, Default)]
 pub struct DreamInsightsResponse {
+    /// Corpus the `synthesis` and `runs` lists were scoped to. Echoed by the
+    /// server so the corpus table can mark which row is being shown without the
+    /// client having to remember what it asked for.
+    #[serde(default)]
+    pub agent_id: String,
     #[serde(default)]
     pub daily: Vec<DailyInsightDto>,
     #[serde(default)]
     pub synthesis: Vec<SynthesisNoteDto>,
     #[serde(default)]
     pub runs: Vec<DreamRunDto>,
+    /// Every corpus that has ever dreamed, most recently active first.
+    #[serde(default)]
+    pub namespaces: Vec<DreamNamespaceDto>,
+}
+
+/// One corpus in the dream history: the base agent, or a `{base}__proj-*`
+/// project namespace.
+///
+/// Project namespaces run their own nightly maintenance under their own churn
+/// gate and personality, and used to leave no trace the operator could reach —
+/// their history lived in a per-namespace `dream_events.jsonl` that only the
+/// model reads. Every field here must have a rendering site in
+/// `DreamInsightsPanel`.
+#[derive(Debug, Clone, Deserialize)]
+pub struct DreamNamespaceDto {
+    #[serde(default)]
+    pub namespace: String,
+    /// Cycles this corpus has recorded, all time.
+    #[serde(default)]
+    pub runs: u64,
+    /// `started_at` of its most recent cycle (epoch **seconds**).
+    #[serde(default)]
+    pub last_started_at: i64,
+    #[serde(default)]
+    pub last_pipeline_type: String,
+    /// Latest cycle's decision — carries the churn gate's verdict, which is how
+    /// a corpus stuck in Conserve becomes visible at a glance.
+    #[serde(default)]
+    pub last_decision: Option<DreamDecisionDto>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -373,6 +407,11 @@ pub struct DreamDecisionDto {
 pub struct DreamRunDto {
     #[serde(default)]
     pub id: String,
+    /// Corpus this cycle ran over. Equal to the requested `agent_id` — the
+    /// server scopes the list — and rendered so a row can never be silently
+    /// attributed to the wrong corpus.
+    #[serde(default)]
+    pub namespace: String,
     #[serde(default)]
     pub pipeline_type: String,
     #[serde(default)]

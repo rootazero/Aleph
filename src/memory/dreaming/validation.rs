@@ -1,9 +1,22 @@
-//! Validation Layer — four-tier verification after Dream Pipeline execution.
+//! Validation Layer — verification after Dream Pipeline execution.
 //!
-//! - L1 Format: YAML frontmatter, wikilinks, categories, non-empty content
-//! - L2 Consistency: duplicate hashes, index-fs sync
-//! - L3 Semantic: LLM check (Synthesize mode only, run externally)
-//! - L4 Retrospective: recall hit rate from previous cycle (run externally)
+//! - **L1 Format** (produced): YAML frontmatter, categories, non-empty content,
+//!   over a bounded newest-first sample of the corpus.
+//! - **L2 Consistency** (produced): duplicate content hashes across the index.
+//! - **L3 Semantic** (never produced): reserved for an LLM coherence check.
+//! - **L4 Retrospective** (never produced): reserved for a recall hit-rate check
+//!   against the previous cycle.
+//!
+//! L3/L4 are `None` on **every** cycle in this repo — the base agent's and every
+//! project namespace's alike. That is parity, not a per-namespace gap: no
+//! producer exists anywhere, and [`DreamValidationReport::overall_ok`] gates on
+//! L1+L2 by design, so nothing downstream is waiting on them. This header used
+//! to say the two tiers were "run externally", which described an intended
+//! design as if it were a running one; there is no external runner.
+//!
+//! Deciding to build them is a real decision with real cost (an LLM call per
+//! cycle *per corpus*, and a semantic-coherence verdict overlaps what the
+//! `note_drift` stage already produces — R7), not a wiring gap to close.
 
 use std::collections::{HashMap, HashSet};
 
@@ -33,7 +46,9 @@ pub struct ValidationTier {
 pub struct DreamValidationReport {
     pub l1_format: ValidationTier,
     pub l2_consistency: ValidationTier,
+    /// Always `None` — no producer exists. See the module header.
     pub l3_semantic: Option<ValidationTier>,
+    /// Always `None` — no producer exists. See the module header.
     pub l4_retrospective: Option<ValidationTier>,
 }
 

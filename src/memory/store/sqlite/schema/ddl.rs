@@ -36,7 +36,11 @@ CREATE TABLE IF NOT EXISTS dream_reports (
     notes_archived     INTEGER NOT NULL DEFAULT 0,
     feedback_distilled INTEGER NOT NULL DEFAULT 0,
     errors          TEXT,
-    namespace       TEXT NOT NULL DEFAULT 'owner',
+    -- Storage partition key: the base agent id, or `{base}__proj-*` for a
+    -- project sub-cycle. The default must stay in step with `DEFAULT_AGENT_ID`
+    -- (guarded by `dream_reports_namespace_default_is_the_default_agent`); it
+    -- used to read `'owner'`, an id no agent has ever had.
+    namespace       TEXT NOT NULL DEFAULT 'main',
     evolution_json  TEXT,
     decision_json   TEXT
 );

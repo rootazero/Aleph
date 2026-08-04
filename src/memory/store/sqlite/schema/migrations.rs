@@ -232,6 +232,27 @@ pub fn migrate_dream_reports_add_evolution(conn: &Connection) -> Result<(), Alep
     Ok(())
 }
 
+/// Retire the `'owner'` sentinel from `dream_reports.namespace`.
+///
+/// The column shipped with a placeholder that matched no agent id: the daemon
+/// wrote the literal `"owner"` on every row while `DEFAULT_AGENT_ID` is `main`.
+/// That was harmless only while nothing read the column. Project sub-cycles now
+/// write rows under their real `{base}__proj-*` namespace and the Panel scopes
+/// its run history by namespace, so a row still stamped `'owner'` would fall
+/// outside the base agent's view — the operator's entire dream history would
+/// appear to vanish on upgrade.
+///
+/// Idempotent, and safe to re-run: the sentinel is not a legal `agent_id`, so no
+/// row can acquire it again.
+pub fn migrate_dream_reports_namespace_to_agent_id(conn: &Connection) -> Result<(), AlephError> {
+    conn.execute(
+        "UPDATE dream_reports SET namespace = ?1 WHERE namespace = 'owner'",
+        [crate::routing::DEFAULT_AGENT_ID],
+    )
+    .map_err(|e| AlephError::other(format!("backfill dream_reports.namespace: {e}")))?;
+    Ok(())
+}
+
 /// Add the nullable `relation` column to existing `notes_links` rows.
 ///
 /// Pre-existing edges keep `relation = NULL` (untyped body wikilinks). Typed

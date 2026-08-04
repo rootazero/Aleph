@@ -133,3 +133,27 @@ pub struct DreamReport {
     #[serde(skip)]
     pub extra: std::collections::BTreeMap<String, String>,
 }
+
+impl DreamReport {
+    /// A cycle that yielded to returning user activity before executing a
+    /// single stage.
+    ///
+    /// Nothing happened, so there is nothing to account for, and both durable
+    /// records skip it for reasons that point the same way:
+    ///
+    /// - the **event log**, because the churn gate's window is only a few
+    ///   cycles deep — an empty night would push real churn out of range and
+    ///   disarm the detectors exactly when the corpus is being touched most;
+    /// - the **`dream_reports` audit table**, because the governance probe reads
+    ///   run counts as a reality signal, and no-op runs inflate it.
+    ///
+    /// A *partially* executed cycle IS recorded in both: its merges are real,
+    /// and unrecorded merges are what the per-namespace history exists to stop.
+    /// One predicate rather than two copies — they have to agree, and the way
+    /// they would disagree (a row with no matching event, or the reverse) is
+    /// silent.
+    #[must_use]
+    pub fn is_vacuous_interruption(&self) -> bool {
+        self.status == DreamReportStatus::Interrupted && self.stages_executed.is_empty()
+    }
+}
