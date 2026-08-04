@@ -73,7 +73,14 @@ pub fn UsageView() -> impl IntoView {
             if let Ok(list) = TeamsApi::list(&state).await {
                 // Default-select the first team so the per-team panel has
                 // something to render without an extra click.
-                if selected_team.get_untracked().is_none() {
+                // Third `.await` in this block — navigating away from Usage
+                // before it resolves disposes these signals, and a plain read
+                // would panic the panel rather than just skip the default pick.
+                // Matches the `providers` view's shape.
+                let Some(current) = selected_team.try_get_untracked() else {
+                    return;
+                };
+                if current.is_none() {
                     selected_team.set(list.first().map(|t| t.id.clone()));
                 }
                 teams.set(list);

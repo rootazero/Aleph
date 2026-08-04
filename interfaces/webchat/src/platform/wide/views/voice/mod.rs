@@ -322,6 +322,22 @@ fn VoiceSession() -> impl IntoView {
                     return;
                 }
             };
+            // The `await` above parks on a browser permission prompt for as long
+            // as the user looks at it, so the overlay can be closed — and this
+            // component disposed — before it resolves. `on_cleanup` has then
+            // already drained both slots, and everything below would re-fill
+            // them for nobody: an interval no one will ever `clear()` (ticking
+            // every 50 ms on disposed signals) and a `MicSession` no one will
+            // ever `close()` — the OS recording indicator stays lit for the rest
+            // of the page's life. The panic is the loud half of that; the mic
+            // leak is the quiet half, and it is the one users notice.
+            //
+            // `try_get_untracked` on a component-owned signal (`phase` is an
+            // `RwSignal::new` in this function) is the disposal probe.
+            if phase.try_get_untracked().is_none() {
+                session.close();
+                return;
+            }
             mic.set_value(Some(Rc::clone(&session)));
             // Mic grant is a strong user activation — unlock the output context
             // now so the first reply's buffer source plays (a suspended context
@@ -345,7 +361,14 @@ fn VoiceSession() -> impl IntoView {
             let handle = set_interval_with_handle(
                 move || {
                     let rms = session.rms();
-                    let speaking = phase.get_untracked() == VoicePhase::Speaking;
+                    // Belt and braces: `on_cleanup` clears this interval, but it
+                    // does so from the same `Owner::cleanup()` that disposes the
+                    // signals, so the tick must not assume it wins that race.
+                    // Skipping a tick costs one 50 ms frame of orb animation.
+                    let Some(current_phase) = phase.try_get_untracked() else {
+                        return;
+                    };
+                    let speaking = current_phase == VoicePhase::Speaking;
                     // Orb level: perceptual dB mapping + fast-attack/slow-decay
                     // smoothing (level.rs) so ordinary speech (RMS ~0.06-0.2)
                     // fills the orb's range instead of an imperceptible nudge.
@@ -416,7 +439,10 @@ fn VoiceSession() -> impl IntoView {
                                     // END_OF_AUDIO). Then the whole-utterance
                                     // hallucination gate — the SAME shared filter
                                     // the batch STT path applies server-side.
-                                    let st = caption_state.get_untracked();
+                                    // Same tick, same race as `phase` above.
+                                    let Some(st) = caption_state.try_get_untracked() else {
+                                        return;
+                                    };
                                     let raw = aleph_protocol::voice_text::merge_utterance(
                                         &st.committed,
                                         &st.interim,

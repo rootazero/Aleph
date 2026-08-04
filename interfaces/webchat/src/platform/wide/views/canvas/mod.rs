@@ -64,7 +64,12 @@ fn GalaxyCanvasView() -> impl IntoView {
                         mem.agents.set(resp.agents);
                         let new_default = resp.default_id;
                         // Only override agent_id if it would actually change.
-                        if mem.agent_id.get_untracked() != new_default {
+                        // Post-`.await` (and inside a retry loop, so possibly
+                        // many seconds later) — see `crate::disposed_reads`.
+                        let Some(current) = mem.agent_id.try_get_untracked() else {
+                            return;
+                        };
+                        if current != new_default {
                             mem.agent_id.set(new_default);
                         }
                         break;

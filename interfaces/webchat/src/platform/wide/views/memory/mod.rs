@@ -93,7 +93,11 @@ pub fn Memory() -> impl IntoView {
         spawn_local(async move {
             if let Ok(resp) = AgentsApi::list(&state).await {
                 mem.agents.set(resp.agents);
-                if mem.agent_id.get_untracked() != resp.default_id {
+                // Post-`.await`: see `crate::disposed_reads`.
+                let Some(current) = mem.agent_id.try_get_untracked() else {
+                    return;
+                };
+                if current != resp.default_id {
                     mem.agent_id.set(resp.default_id);
                 }
             }
