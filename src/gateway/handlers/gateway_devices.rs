@@ -57,7 +57,10 @@ pub struct DevicesHandlerContext {
 ///
 /// Order matters — mirrors openclaw's `device.pair.remove`: invalidate first
 /// so anything already pipelined on that socket fails the login wall, then
-/// publish the close (gateway/CLAUDE.md mine 2).
+/// publish the close (gateway/CLAUDE.md mine 2). The RPC response itself is
+/// written by the same connection loop arm that dispatched this call, so a
+/// device revoking *itself* still receives its reply before the close frame
+/// is polled — no extra handling needed here for the self-revocation case.
 ///
 /// Shared by [`handle_devices_revoke`] and `users.update`'s deactivation path
 /// — the single "revoke one device" pipeline, never duplicated.

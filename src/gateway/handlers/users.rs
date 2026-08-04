@@ -122,12 +122,21 @@ pub struct CreateParams {
 
 /// `users.create { display_name, role? ("member") }` → `{ "user": UserView }`.
 /// `user_id` is server-generated (`u-<uuid v4>`). An unrecognized `role`
-/// string is rejected loudly (invalid params) rather than silently defaulted.
+/// string is rejected loudly (invalid params) rather than silently defaulted,
+/// as is an empty or whitespace-only `display_name`.
 pub async fn handle_create(request: JsonRpcRequest, store: Arc<SecurityStore>) -> JsonRpcResponse {
     let params: CreateParams = match parse_params(&request) {
         Ok(p) => p,
         Err(e) => return e,
     };
+
+    if params.display_name.trim().is_empty() {
+        return JsonRpcResponse::error(
+            request.id,
+            INVALID_PARAMS,
+            "display_name must not be empty".to_string(),
+        );
+    }
 
     let role = match params.role.as_deref() {
         Some(s) => match UserRole::from_str(s) {
@@ -292,7 +301,8 @@ pub async fn handle_update(
 
 /// Revoke every live device bound to `user_id`, one call per device through
 /// the shared [`revoke_device_and_kick`] pipeline. Best-effort: a single
-/// device's revoke failing is logged and does not abort the rest.
+/// device's revoke failing, or coming back a no-op for a device the store
+/// just listed as live, is logged and does not abort the rest.
 async fn deactivate_devices(
     store: &Arc<SecurityStore>,
     kick: &UserDeactivationKick,
@@ -312,7 +322,7 @@ async fn deactivate_devices(
 
     let device_token_mgr = DeviceTokenManager::new(store.clone());
     for device_id in device_ids {
-        if let Err(e) = revoke_device_and_kick(
+        match revoke_device_and_kick(
             &device_token_mgr,
             &kick.connections,
             &kick.event_bus,
@@ -320,12 +330,29 @@ async fn deactivate_devices(
         )
         .await
         {
-            tracing::warn!(
-                device_id = %device_id,
-                user_id = %user_id,
-                error = %e,
-                "users.update: failed to revoke device during deactivation"
-            );
+            Ok(true) => {}
+            // `list_device_ids_for_user` just reported this device as live
+            // (`revoked_at IS NULL`), so a no-op here means
+            // `revoke_panel_device` didn't recognize it as a panel device —
+            // e.g. a `devices` row whose `device_id` collides with the
+            // cluster-node namespace (`devices` is shared between panel and
+            // node rows, see gateway/CLAUDE.md mine 3). That's a silent skip
+            // worth a name in the logs, not a hard failure.
+            Ok(false) => {
+                tracing::warn!(
+                    device_id = %device_id,
+                    user_id = %user_id,
+                    "users.update: device listed as live for user but revoke was a no-op"
+                );
+            }
+            Err(e) => {
+                tracing::warn!(
+                    device_id = %device_id,
+                    user_id = %user_id,
+                    error = %e,
+                    "users.update: failed to revoke device during deactivation"
+                );
+            }
         }
     }
 }
@@ -373,10 +400,16 @@ mod tests {
     }
 
     /// Test double for `users.update`'s deactivation kick dependencies — an
-    /// empty connection map and a fresh event bus, so only the store effect
-    /// (devices revoked) is worth asserting; the socket-kick side is
-    /// `start/mod.rs` wiring, already covered by `gateway_devices.rs`'s own
-    /// tests.
+    /// empty connection map and a fresh event bus. `revoke_device_and_kick`
+    /// (called by `deactivate_devices` below) runs its full demote-then-kick
+    /// body against whatever is seeded here: most tests leave the map empty
+    /// and only assert the store effect (devices revoked), but
+    /// `deactivate_demotes_live_connections_for_kicked_devices` below seeds a
+    /// connection into `.connections` to pin the demote half from this call
+    /// site too. The physical socket-*close* reaction to the `DeviceRevoked`
+    /// event (severing the WS) is separate — it lives in the WS dispatch
+    /// loop (`server/handler.rs::device_revoked_should_close`), already
+    /// covered by that module's own tests, and isn't exercised here.
     fn test_kick_sink() -> UserDeactivationKick {
         UserDeactivationKick {
             connections: Arc::new(RwLock::new(HashMap::new())),
@@ -420,6 +453,21 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn create_rejects_empty_display_name() {
+        let store = seeded_store();
+        for name in ["", "   "] {
+            let resp = handle_create(
+                rpc_request("users.create", json!({"display_name": name})),
+                store.clone(),
+            )
+            .await;
+            assert!(response_is_error(&resp), "{name:?} must be rejected");
+        }
+        // Owner only — no half-created rows from the rejected calls.
+        assert_eq!(store.list_users().unwrap().len(), 1);
+    }
+
+    #[tokio::test]
     async fn deactivate_revokes_all_user_devices() {
         let store = seeded_store();
         store
@@ -427,6 +475,11 @@ mod tests {
             .unwrap();
         upsert_panel_device(&store, "dev-a1", "u-alice");
         upsert_panel_device(&store, "dev-a2", "u-alice");
+        assert_eq!(
+            store.list_device_ids_for_user("u-alice").unwrap().len(),
+            2,
+            "fixture must seed two live devices, or the post-update empty check below passes vacuously"
+        );
 
         let req = rpc_request(
             "users.update",
@@ -441,6 +494,47 @@ mod tests {
                 .is_empty(),
             "live (un-revoked) device list must be empty after deactivation"
         );
+    }
+
+    /// Pins the demote half of demote-before-kick (gateway/CLAUDE.md mine 2)
+    /// from the `users.update` call site: `revoke_device_and_kick` must
+    /// downgrade any connection bound to a revoked device to the login wall
+    /// (`caller_role = "guest"`, `caller_user = None`), not just flip the
+    /// store row. `gateway_devices.rs`'s own tests only exercise the RPC
+    /// response and store effect for `gateway.devices.revoke`; this is the
+    /// connection-state assertion for the shared function, reachable from
+    /// this (the `users.update`) call site.
+    #[tokio::test]
+    async fn deactivate_demotes_live_connections_for_kicked_devices() {
+        let store = seeded_store();
+        store
+            .create_user("u-alice", "Alice", UserRole::Member)
+            .unwrap();
+        upsert_panel_device(&store, "dev-a1", "u-alice");
+
+        let kick = test_kick_sink();
+        let connections = kick.connections.clone();
+        {
+            let mut conns = connections.write().await;
+            let mut state = ConnectionState::new(std::net::IpAddr::from([203, 0, 113, 7]));
+            state.caller_role = "operator".to_string();
+            state.caller_user = Some("u-alice".to_string());
+            state.device_id = Some("dev-a1".to_string());
+            conns.insert("conn-alice".to_string(), state);
+        }
+
+        let req = rpc_request(
+            "users.update",
+            json!({"user_id": "u-alice", "status": "deactivated"}),
+        );
+        handle_update(req, store.clone(), kick).await;
+
+        let conns = connections.read().await;
+        let demoted = conns
+            .get("conn-alice")
+            .expect("connection must still be present, only demoted");
+        assert_eq!(demoted.caller_role, "guest", "must be downgraded to guest");
+        assert_eq!(demoted.caller_user, None, "caller_user must be cleared");
     }
 
     #[tokio::test]

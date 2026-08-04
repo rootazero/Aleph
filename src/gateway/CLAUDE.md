@@ -16,17 +16,29 @@
 - **撤销**：① `gateway.token.rotate` = 核弹级（重生共享 token **并** `revoke_all_panel_devices`，
   cluster 节点不受影响）+ **强踢全部远程 socket**（`start/mod.rs` 发 `TokenRotated` 事件 →
   `handler.rs` 的 `is_token_rotated_frame` 关闭远程 session）。② `gateway.devices.revoke
-  {device_id}` = 单设备，**同样立即生效**：`start/mod.rs` 先 `invalidate_device_sessions`
-  （把该设备的活连接同步降回 guest）**再**发 `DeviceRevoked` 关它的 socket（4001/`device_revoked`）。
-  清单 `gateway.devices.list`（仅 `device_type='panel'`，带 `connected` 实时位）。handler 保持纯
-  I/O（R4）——会话副作用归拥有连接表与事件总线的接线处。
+  {device_id}` = 单设备，**同样立即生效**，且是 `users.update` 停用用户时吊销其全部设备**共用
+  的同一条**管线（P0 身份基础 Task 5，2026-08-04）——顺序、单一源、capability 注入的位置见下方
+  地雷 2。清单 `gateway.devices.list`（仅 `device_type='panel'`，带 `connected` 实时位）。
   ⚠️ **地雷 1（wire form）**：`is_token_rotated_frame` / `device_revoked_id` 读的是 `publish_frame`
   的 **wire `topic`**（非流事件包成 `{topic,data}`），**不是顶层 `type`**——读错字段谓词恒 false，
   `rotate` 变哑弹（曾静默失效，2026-07-17 修）；改它测试必须喂 `publish_frame` 真实输出。
-  ⚠️ **地雷 2（顺序）**：**先降权、后关 socket**。只关 socket 的话，那条 socket 上已经排队的帧
-  仍会以 operator 身份被服务完——`tokio::select!` 两条臂是伪随机调度，不存在"事件一定先到"。
-  （反过来不必担心自撤销收不到回包：响应由**派发它的那条 read 臂**同步写出，事件臂要下一轮
-  select 才被 poll。）
+  ⚠️ **地雷 2（顺序 + 单一源）**：**先降权、后关 socket**，且这是唯一一条管线——单一源
+  `gateway_devices::revoke_device_and_kick`：store revoke（`device_token_mgr.
+  revoke_panel_device`）**只有** `revoked == true`（未知 id / cluster 节点 / 已撤销都是
+  no-op）**才**继续，先 `invalidate_device_sessions`（把该设备的活连接同步降回 guest）**再**
+  发 `DeviceRevoked` 关它的 socket——两步严格顺序写死在这一个函数体内（`.await` 完了才
+  `publish_frame`），不是"handler 算完、接线处再补一刀"。只关 socket 的话，那条 socket 上
+  已经排队的帧仍会以 operator 身份被服务完——`tokio::select!` 两条臂是伪随机调度，不存在
+  "事件一定先到"。（反过来不必担心自撤销收不到回包：响应由**派发它的那条 read 臂**同步写出，
+  事件臂要下一轮 select 才被 poll。）连接表 (`connections`) 与事件总线 (`event_bus`) 两个
+  capability 由 `start/mod.rs` 接线处构造，经 `DevicesHandlerContext` 注入给
+  `handle_devices_revoke`；`users.update` 的停用路径对 `list_device_ids_for_user` 返回的每台
+  设备调用**同一个** `revoke_device_and_kick`（`UserDeactivationKick` 在接线处注入**同一份**
+  `connections`/`event_bus`），不另写第二份。⚠️ 这不是对 R1/R4 的开口：函数本身仍不直接碰
+  平台 API，只是把已经被注入的 capability 串成一次调用——旧版"handler 保持纯 I/O，会话副作用
+  归接线处"描述的是一个从未真正存在过的切分（`start/mod.rs` 的闭包此前一直在做业务判断，只是
+  物理位置在 handler 之外），Task 5 的抽取纠正的是文档而非架构；这里唯一要守的红线是两个
+  消费者共享同一个函数，不是"handler 该不该碰 capability"。
   ⚠️ **地雷 2b（关 socket 只做了一半）**：踢人的 close reason 必须同时登记进客户端的
   `shared/ui_logic/src/connection/failure.rs::AUTH_KICK_REASONS`。漏登记不会报错——Panel
   把这次踢当成普通掉线，先花一个 backoff 延迟拿**已经死掉的凭据**再连一次，然后才由握手
