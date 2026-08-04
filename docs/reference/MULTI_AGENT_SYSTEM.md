@@ -64,6 +64,8 @@ Subagents inherit the following from their parent via `SpawnerBase`:
 - `trace_sink` (Stage A) — observability sink
 - `context_budget_config` (2026-07-29) — the `[context_budget]` config, from which the
   spawner builds the child's **own** budget + compactor + preflight pipeline
+- `cheap_summary_provider` (2026-08-04) — the `[generation] cheap_model` tier, so the
+  child compacts on the flash-tier model the root agent already uses for the same job
 
 The context triple deserves its own note, because it was missing for a long time and
 failed loudly rather than gracefully. `context_budget`, `context_compactor` and
@@ -82,6 +84,19 @@ concurrently-running children. Construction is a single point
 (`subagent_spawner::build_context_triple`) and is all-or-nothing, which is the gating
 `HarnessDeps` documents: a compactor without a preflight pipeline would pay for LLM
 summarisation where free structural pruning was available.
+
+The **cheap tier is the exception to "the child's provider"**, and it was missed for the
+same reason the triple itself was: `ContextCompactor` has two construction sites, and only
+the root one (`runner_impl.rs`) called `.with_cheap_provider(...)`. A second construction
+site inherits no tier it is not explicitly handed, so every subagent billed its compaction
+to the main model — which a swarm multiplies by its fan-out, silently and only on the bill
+(§2.19 ④). It is asserted by **routing**, not by builder invocation:
+`compactor::summarizer_name()` names the provider the compactor would actually call.
+
+Two sibling builders are deliberately **not** called for children, and
+`build_context_triple`'s doc says why so nobody "completes the set" later:
+`with_cache_carryover` (a 16-slot LRU that one-shot child sessions would evict the parent
+out of) and `with_summary_reuse` (keyed on a session that ends with the child).
 
 Per the P1 zero-override decision, subagents do not currently support per-agent overrides for these fields. `AgentDef` may be extended with `Option<T>` overrides in P4 if needed, with full backward compatibility.
 

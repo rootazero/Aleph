@@ -761,6 +761,13 @@ authoritative list** — layer set, priorities, and assembly order all live ther
 and each layer self-declares its `priority()`, `stability()`, `paths()` and
 `supports_mode()`. This document deliberately does **not** reproduce that list.
 
+`stability()` has **no default body** (2026-08-04) — a new layer that says nothing
+about whether its bytes change per turn does not compile. It used to default to
+`Stable`, which meant omission silently placed the layer in the provider-cached
+prefix; `ToolRuntimeStateLayer` rode that default until a person reading the code
+noticed a 30-second health probe was re-keying whole sessions. The question is
+asked at the one moment its author knows the answer. See FEATURE_LOCATOR §2.19 ⑥.
+
 A hand-maintained priority table used to live here, and by 2026-07-26 it named
 eight layers that no longer existed (`HydratedToolsLayer`, `HeartbeatLayer`,
 `ResponseFormatLayer`, `SkillModeLayer`, `InboundContextLayer`,
