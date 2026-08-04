@@ -191,10 +191,19 @@ const INTERJECTION_LEAD_IN: &str = "The user sent the following message:";
 /// most recent instruction (the one thing it most needs), and the cache would
 /// skip a breakpoint whose index is in fact perfectly stable. So it is excluded
 /// by its lead-in line.
+///
+/// The lead-in is matched **at its position** — immediately after the fence —
+/// not merely "contained somewhere". [`orphan_tool_result_note`] interpolates
+/// raw tool output into the same fence, so a tool whose output happened to
+/// include that sentence would otherwise be read as a user interjection and the
+/// focus anchor would take a result blob for the user's request.
 #[must_use]
 pub fn is_synthetic_reminder(text: &str) -> bool {
     let trimmed = text.trim_start();
-    trimmed.starts_with(SYSTEM_REMINDER_OPEN) && !trimmed.contains(INTERJECTION_LEAD_IN)
+    let Some(after_fence) = trimmed.strip_prefix(SYSTEM_REMINDER_OPEN) else {
+        return false;
+    };
+    !after_fence.trim_start().starts_with(INTERJECTION_LEAD_IN)
 }
 
 /// Copy for an orphaned / duplicate tool result downgraded to plain user text
@@ -324,6 +333,25 @@ mod tests {
         assert!(is_synthetic_reminder(&orphan_tool_result_note(
             "call_1", "grep", "{}"
         )));
+    }
+
+    #[test]
+    fn tool_output_cannot_disguise_itself_as_a_user_interjection() {
+        // `orphan_tool_result_note` interpolates raw tool output into the same
+        // fence. A grep hit over this very file would carry the interjection
+        // lead-in, and a `contains` test would then read the result blob as the
+        // user's own words — handing the compaction focus anchor a tool dump.
+        // The lead-in only counts immediately after the fence, where
+        // `user_interjection_note` puts it.
+        let sneaky = orphan_tool_result_note(
+            "call_9",
+            "grep",
+            "nudges.rs:160: The user sent the following message:",
+        );
+        assert!(
+            is_synthetic_reminder(&sneaky),
+            "tool output quoting the lead-in is still harness-authored scaffolding"
+        );
     }
 
     #[test]
