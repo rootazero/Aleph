@@ -998,18 +998,35 @@ sees byte-identical behavior before and after.
   device bound to a **deactivated** user, or whose `user_id` points at a row
   no longer in `users` (dangling reference), fails **closed** to
   `("guest", None)` — a lookup that could not be performed, or a link known to
-  be broken, must never silently grant full authority. The pair rides
-  `CALLER_ROLE` / `CALLER_USER` task-locals (`src/gateway/caller_identity.rs`)
-  scoped around every `process_request` call.
+  be broken, must never silently grant full authority. The same fail-closed
+  rule covers the no-store degrade: no store **and** a presented `device_id`
+  ⇒ guest (a binding lookup that could not be performed is not "unbound"),
+  while no store and no device keeps the pre-P0 owner fallback.
+  The pair rides `CALLER_ROLE` / `CALLER_USER` task-locals
+  (`src/gateway/caller_identity.rs`) scoped around every `process_request`
+  call, and it is echoed back to the client in the `connect` response
+  (`role` / `authorized` / `needs_token`) — the **resolved** role, not the
+  credential-only verdict, so a member renders a member UI and a deactivated
+  user's still-valid device gets the ordinary walled response instead of a
+  false `operator` + a dead UI.
+- **Two gates, not one.** The login wall (`wall_admits`,
+  `src/gateway/server/handler.rs`) is the *guest* wall and admits both
+  authorized roles — `"operator"` and `"member"` — for every method; a walled
+  connection may only send `connect`. The admin/member split is the *separate*,
+  deeper gate below, at the `process_request` chokepoint. Conflating them
+  refuses real members everything and then flood-guard-kicks them as abusers.
 - **Admin / member method boundary** (spec §4.6). `method_admin.rs`'s
   `method_requires_admin` classifies RPC **methods** by prefix — sibling of
   the pre-existing `method_authz.rs`, which classifies **tools** for the
   channel chat-tier gate; the two are separate axes (method vs. tool) and
   don't substitute for each other. A prefix match gates the whole family by
   default (fail-closed for privilege); a short allowlist re-opens member-safe
-  reads inside an otherwise-admin family. Representative summary — the
-  authoritative, mechanically-enumerated 72-family table lives in
-  `method_admin.rs`'s own module doc, not duplicated here:
+  reads inside an otherwise-admin family. The table below is a **summary**;
+  the authoritative classification is `method_admin.rs`'s `ADMIN_PREFIXES` +
+  `MEMBER_CARVE_OUTS` themselves, whose module doc records the mechanical
+  sweep (**74 method families**) and the reasoning for every non-obvious open
+  ruling. That file is both the enforcement point and the audit trail — there
+  is no separate report artifact to consult.
 
   | Family | Verdict | Why |
   |---|---|---|
@@ -1020,7 +1037,8 @@ sees byte-identical behavior before and after.
   | `agents.*` (carve-outs `agents.list`/`agents.get`), `identity.*`, `moa.*`, `acp.*` | **admin** | Server-global persona/shared config, not per-user |
   | `cron.*`, `heartbeat.*` (carve-outs `.list`/`.get`/`.runs`) | **admin** | Scheduled automation — mirrors `method_authz.rs`'s existing tool-tier ruling, so the RPC surface isn't a lower-privilege bypass of it |
   | `daemon.*`, `wizard.*`, `diagnostics.*`, `pty.*`, `exec.*` | **admin** | Fleet lifecycle, raw interactive shell, exec-approval gate resolution |
-  | `connect`, `chat.*`, `sessions.*`, `memory.*`, `projects.*`, `artifacts.*`, `tools.*`, `fs.*`, `teams.*`, `workspace.*`, `voice.*`, `graph.*` | **open** | Member daily / caller's-own-data surfaces; per-user *visibility* filtering is P1's job, not this gate's |
+  | `tools.*` | **admin** | `tools.invoke` dispatches straight off the raw `ToolRegistry`, so none of the loop's gates run there — including the per-tool operator gate (`method_authz.rs`'s `OPERATOR_TOOLS`: `cron_manage`, `hooks_manage`, `agent_identity`, …), which its own hard floor does not cover. An RPC surface must not be a lower-privilege bypass of an existing tool-tier decision, and via `cron_manage` a member could schedule a run that executes as trusted-internal. The family is gated whole (E2E-oriented surface by its own module doc); a member-safe read carve-out is a P1 call |
+  | `connect`, `chat.*`, `sessions.*`, `memory.*`, `projects.*`, `artifacts.*`, `fs.*`, `teams.*`, `workspace.*`, `voice.*`, `graph.*` | **open** | Member daily / caller's-own-data surfaces; per-user *visibility* filtering is P1's job, not this gate's |
   | `users.me`, `users.list`, `agents.list`, `agents.get`, `heartbeat.list`/`.get`/`.runs` | **open** | Member-safe reads, carved out of otherwise-admin families |
 
   Enforced at **one chokepoint** inside `process_request`
@@ -1032,12 +1050,28 @@ sees byte-identical behavior before and after.
   connections. `None` (cron/internal) and `"operator"` pass every method; a
   `"guest"` connection never reaches this check for non-`connect` methods
   because the login wall above already refuses it first.
-- **Deactivation kicks live sessions.** `users.update { status: "deactivated"
-  }` revokes every live device bound to that user through the same
-  `revoke_device_and_kick` pipeline `gateway.devices.revoke` uses (demote the
-  connection to guest, then close the socket) — not a second implementation.
-  See `src/gateway/CLAUDE.md`'s revocation landmines for the ordering /
-  single-source discipline that pipeline depends on.
+- **Deactivation kicks live Panel sessions.** `users.update { status:
+  "deactivated" }` revokes every live **Panel device** bound to that user
+  through the same `revoke_device_and_kick` pipeline `gateway.devices.revoke`
+  uses (demote the connection to guest, then close the socket) — not a second
+  implementation. See `src/gateway/CLAUDE.md`'s revocation landmines for the
+  ordering / single-source discipline that pipeline depends on.
+  **Scope, precisely:** this covers `devices.user_id` bindings, i.e. WS/Panel
+  connections. Approved **channel senders** linked to the same user
+  (`approved_senders.user_id`) are *not* revoked in P0 — inbound channel access
+  control is unchanged (`inbound_router::check_permission` + `pairing_store`
+  remain the sole authority there), and `sender_user()` has no consumer yet, so
+  the link is recorded but carries no authority to withdraw. Cutting a
+  deactivated user off a chat channel is still `channel.pairing.revoke`.
+- **Role changes take effect on live connections.** `users.update { role }`
+  re-stamps `caller_role` on the user's already-open Panel connections
+  (`restamp_live_connections`), because the wire role is latched into
+  `ConnectionState` at the `connect` handshake and read from there on every
+  later frame — a store-only write would leave a demoted admin holding admin
+  authority on its open tab until it happened to reconnect. Promotion and
+  demotion both; a connection already walled at `"guest"` (revoked device /
+  deactivated user) is never promoted this way — only a fresh `connect` lifts
+  the wall.
 - **Implicit owner, zero migration.** `ensure_bootstrap_owner` runs at every
   store open: if `users` is empty it mints `u-owner` (`admin`, `active`) and
   adopts every un-owned **panel** device (`devices.user_id IS NULL AND

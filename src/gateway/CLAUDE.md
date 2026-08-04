@@ -16,6 +16,13 @@
   `connect::resolve_connection_identity` 把已授权连接进一步解析成 `(Option<user_id>, role)`
   （`"operator"` / `"member"` / `"guest"`），member 由 `method_admin.rs` 闸在 `process_request`
   单点强制（P0 身份基础，`src/gateway/caller_identity.rs` 模块 doc 有完整链路）。
+  ⚠️ **两道闸别混**：登录墙 `handler.rs::wall_admits` 是**访客墙**，`operator` 与 `member`
+  **都放行全部方法**；admin/member 的分野是**更深处**那道 `method_admin.rs` 闸。把 member
+  写进登录墙的拒绝分支，等于真 member 每一帧都吃 `AUTH_REQUIRED` 并被 flood-guard 当滥用者
+  踢掉，而所有把 task-local scope 在墙**下面**的测试都会保持全绿。另：`connect` 回包里的
+  `role`/`authorized`/`needs_token` 必须回**解析后**的角色（`connect_verdict`），不是凭据级
+  verdict——否则 member 拿到 operator UI，被停用用户的有效设备被告知 `authorized:true` 却
+  在墙上寸步难行。
 - **撤销**：① `gateway.token.rotate` = 核弹级（重生共享 token **并** `revoke_all_panel_devices`，
   cluster 节点不受影响）+ **强踢全部远程 socket**（`start/mod.rs` 发 `TokenRotated` 事件 →
   `handler.rs` 的 `is_token_rotated_frame` 关闭远程 session）。② `gateway.devices.revoke
