@@ -69,15 +69,18 @@ const MAX_PROTOCOL_BYTES: usize = 8192;
 const MAX_RECOVERY_RUNS: usize = 3;
 
 /// Truncate `s` to at most `max` bytes on a UTF-8 char boundary.
+///
+/// The budget is bytes (section sizes in the hand-off document), and the
+/// marker is appended past it — so the cap is soft by design, matching what
+/// callers have always emitted.
 fn truncate_utf8(s: &str, max: usize) -> String {
     if s.len() <= max {
         return s.to_string();
     }
-    let mut end = max;
-    while end > 0 && !s.is_char_boundary(end) {
-        end -= 1;
-    }
-    format!("{}… (truncated)", &s[..end])
+    format!(
+        "{}… (truncated)",
+        crate::utils::text_format::truncate_bytes(s, max)
+    )
 }
 
 /// Build the **recovery** section for a re-dispatched task.

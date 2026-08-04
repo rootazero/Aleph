@@ -107,7 +107,12 @@ pub fn ReplayView() -> impl IntoView {
     on_cleanup(move || dash.unsubscribe_events(sub_id));
 
     view! {
-        <div class="flex-1 flex h-full overflow-hidden">
+        // `aleph-md`: this is a master-detail, and it was the only one in the
+        // tree that never said so — a hand-rolled `w-72` + `flex-1` pair. Under
+        // 720 px (and inside `.phone-wrapped`) the shared rule stacks the panes;
+        // without it the 288 px list left the trace pane ~102 px on a 390 px
+        // screen, which is not "cramped", it is unreadable.
+        <div class="flex-1 flex h-full overflow-hidden aleph-md">
             <TaskListPane
                 tasks=tasks
                 journals=journals
@@ -140,7 +145,7 @@ fn TaskListPane(
 ) -> impl IntoView {
     let i18n = use_i18n();
     view! {
-        <div class="w-72 border-r border-border flex flex-col">
+        <div class="w-72 border-r border-border flex flex-col aleph-md-list">
             <div class="px-4 py-3 border-b border-border aleph-content-top">
                 <h2 class="text-sm font-semibold text-text-primary">{t!(i18n, teams.replay_title)}</h2>
                 <p class="text-xs text-text-tertiary mt-0.5">
@@ -230,7 +235,7 @@ fn TracePane(
 ) -> impl IntoView {
     let i18n = use_i18n();
     view! {
-        <div class="flex-1 flex flex-col overflow-hidden">
+        <div class="flex-1 flex flex-col overflow-hidden aleph-md-detail">
             <div class="px-6 py-4 border-b border-border flex items-center justify-between aleph-content-top">
                 <div>
                     <h1 class="text-lg font-semibold text-text-primary">{t!(i18n, teams.replay_audit_title)}</h1>

@@ -47,8 +47,14 @@ pub fn EmbeddingProvidersView() -> impl IntoView {
 
                 match (providers_result, presets_result) {
                     (Ok(list), Ok(preset_list)) => {
-                        // Auto-select the active provider on first load
-                        if selected_provider_id.get_untracked().is_none() {
+                        // Auto-select the active provider on first load.
+                        // Post-`.await` — same shape, same hazard, and the same
+                        // fix as the `providers` view (see
+                        // `crate::disposed_reads`).
+                        let Some(current) = selected_provider_id.try_get_untracked() else {
+                            return;
+                        };
+                        if current.is_none() {
                             if let Some(active) = list.iter().find(|p| p.is_active) {
                                 set_selected_provider_id.set(Some(active.id.clone()));
                             }

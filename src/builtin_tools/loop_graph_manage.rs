@@ -19,6 +19,7 @@ use crate::sync_primitives::Arc;
 use crate::tasks::cron::{CronJob, ScheduleKind, SharedCronService};
 use crate::teams::TeamStore;
 use crate::tools::AlephTool;
+use crate::utils::text_format::truncate_with_marker;
 
 /// Action to perform on the governance graph.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
@@ -292,7 +293,7 @@ impl LoopGraphTool {
                             Ok(Some(g)) => out.push_str(&format!(
                                 "\n    live: status={:?} objective={}",
                                 g.status,
-                                truncate(&g.objective, 80)
+                                truncate_with_marker(&g.objective, 80, "…")
                             )),
                             Ok(None) => {
                                 out.push_str("\n    live: ⚠ target missing（goal 已消失）");
@@ -327,7 +328,7 @@ impl LoopGraphTool {
                 }
                 NodeKind::Anchor | NodeKind::Frozen | NodeKind::Root => {
                     if let Some(b) = &n.body {
-                        out.push_str(&format!("\n    {}", truncate(b, 120)));
+                        out.push_str(&format!("\n    {}", truncate_with_marker(b, 120, "…")));
                     }
                 }
                 NodeKind::Team => {
@@ -339,7 +340,7 @@ impl LoopGraphTool {
                                 "\n    live: status={} leader={} name={}",
                                 t.status.as_str(),
                                 t.leader_id,
-                                truncate(&t.name, 40)
+                                truncate_with_marker(&t.name, 40, "…")
                             )),
                             Ok(None) => {
                                 out.push_str("\n    live: ⚠ target missing（team 记录已消失）");
@@ -365,7 +366,7 @@ impl LoopGraphTool {
                 e.to_id
             ));
             if let Some(note) = &e.note {
-                out.push_str(&format!("  ({})", truncate(note, 60)));
+                out.push_str(&format!("  ({})", truncate_with_marker(note, 60, "…")));
             }
             out.push('\n');
         }
@@ -841,7 +842,7 @@ impl AlephTool for LoopGraphTool {
                     .upsert_node(
                         &GraphNode::new(&agent_id, &watcher_id, NodeKind::LoopCron, &label, origin)
                             .with_cadence(args.cadence.unwrap_or_else(|| "nightly".to_string()))
-                            .with_body(truncate(&watch_prompt, 200)),
+                            .with_body(truncate_with_marker(&watch_prompt, 200, "…")),
                     )
                     .and_then(|()| {
                         self.store.upsert_edge(
@@ -896,16 +897,6 @@ impl AlephTool for LoopGraphTool {
 fn require(v: Option<String>, action: &str, field: &str) -> Result<String> {
     v.filter(|s| !s.trim().is_empty())
         .ok_or_else(|| AlephError::tool(format!("loop_graph {action}: '{field}' is required")))
-}
-
-fn truncate(s: &str, max_chars: usize) -> String {
-    // UTF-8 safe truncation (P7).
-    if s.chars().count() <= max_chars {
-        s.to_string()
-    } else {
-        let cut: String = s.chars().take(max_chars).collect();
-        format!("{cut}…")
-    }
 }
 
 #[cfg(test)]

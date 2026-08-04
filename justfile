@@ -38,11 +38,25 @@ swift-bridge:
     fi
     # --product: the package also holds the test-only AlephFixture (an AppKit app),
     # and the shipped build has no business compiling it.
-    cd desktop/macos/bridge && swift build -c release --product AlephBridge
+    #
+    # The `cd` MUST stay inside the subshell. Every line below is repo-relative
+    # (`{{release_dir}}`) or built from `$PWD`, so letting it leak wrote both
+    # links to `desktop/macos/bridge/target/release/` and pointed them at
+    # `…/bridge/desktop/macos/bridge/.build/…` — a doubled path, in a `target/`
+    # dir nothing reads. The bridge built fine and `_stage-shell-binaries` then
+    # failed on `install: target/release/aleph-bridge: No such file or
+    # directory`, so the error named the consumer and never the cause.
+    bridge=".build/release/AlephBridge"
+    ( cd desktop/macos/bridge && swift build -c release --product AlephBridge )
     mkdir -p {{release_dir}} {{debug_dir}}
-    ln -sf "$PWD/desktop/macos/bridge/.build/release/AlephBridge" {{release_dir}}/aleph-bridge
-    ln -sf "$PWD/desktop/macos/bridge/.build/release/AlephBridge" {{debug_dir}}/aleph-bridge
-    echo "✓ Swift bridge: desktop/macos/bridge/.build/release/AlephBridge"
+    ln -sf "$PWD/desktop/macos/bridge/$bridge" {{release_dir}}/aleph-bridge
+    ln -sf "$PWD/desktop/macos/bridge/$bridge" {{debug_dir}}/aleph-bridge
+    # Fail here rather than three recipes later: a dangling symlink resolves to
+    # "No such file" at the `install` in `_stage-shell-binaries`, which reads
+    # like the bridge was never built.
+    test -x "{{release_dir}}/aleph-bridge" \
+        || { echo "✗ Swift bridge: {{release_dir}}/aleph-bridge is missing or dangling"; exit 1; }
+    echo "✓ Swift bridge: desktop/macos/bridge/$bridge"
 
 # Build server (release)
 build: wasm swift-bridge

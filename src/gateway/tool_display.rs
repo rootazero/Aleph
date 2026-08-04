@@ -176,14 +176,10 @@ fn shorten_path(path: &str) -> String {
     format!(".../{}", last_two.join("/"))
 }
 
+/// Hard cap at `max_chars` INCLUDING the `...`: these render into a
+/// width-constrained tool-call line, so the marker is reserved, not appended.
 fn truncate_str(s: &str, max_chars: usize) -> String {
-    if s.chars().count() <= max_chars {
-        s.to_string()
-    } else {
-        let end_chars = max_chars.saturating_sub(3);
-        let boundary = s.char_indices().nth(end_chars).map_or(s.len(), |(i, _)| i);
-        format!("{}...", &s[..boundary])
-    }
+    crate::utils::text_format::truncate_reserving(s, max_chars, "...")
 }
 
 /// Group multiple paths by directory: /tmp/{file1.txt, file2.txt}

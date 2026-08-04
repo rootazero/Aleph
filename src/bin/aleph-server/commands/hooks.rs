@@ -250,13 +250,10 @@ const fn shell_invocation() -> (&'static str, &'static str) {
     }
 }
 
+/// Hard cap: these feed fixed-width table columns, so the ellipsis must fit
+/// inside `max` rather than push the column wider.
 fn truncate(s: &str, max: usize) -> String {
-    if s.chars().count() <= max {
-        s.to_string()
-    } else {
-        let head: String = s.chars().take(max.saturating_sub(1)).collect();
-        format!("{head}…")
-    }
+    alephcore::utils::text_format::truncate_reserving(s, max, "…")
 }
 
 fn prompt_yes(prompt: &str) -> io::Result<bool> {

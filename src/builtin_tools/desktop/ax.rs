@@ -23,6 +23,7 @@ use aleph_protocol::desktop_bridge::methods::ax::{
 use crate::error::Result;
 use crate::sync_primitives::Arc;
 use crate::tools::AlephTool;
+use crate::utils::text_format::truncate_with_marker;
 
 use super::interactable::{
     affordance_fields, collect_interactable, redact_secure_values, safe_value, usable_bounds,
@@ -349,16 +350,6 @@ fn round1(v: f64) -> f64 {
     (v * 10.0).round() / 10.0
 }
 
-/// Char-safe truncation with an ellipsis marker.
-fn truncate(s: &str, max_chars: usize) -> String {
-    if s.chars().count() > max_chars {
-        let kept: String = s.chars().take(max_chars).collect();
-        format!("{kept}…")
-    } else {
-        s.to_string()
-    }
-}
-
 /// Render one element as a compact JSON object with a pre-computed click
 /// `center`, so the model never has to derive coordinates itself.
 ///
@@ -376,10 +367,16 @@ pub(super) fn element_to_json(index: usize, el: &AxElement) -> serde_json::Value
         json!([round1(x + w / 2.0), round1(y + h / 2.0)]),
     );
     if let Some(name) = el.title.as_deref().filter(|s| !s.trim().is_empty()) {
-        map.insert("name".into(), json!(truncate(name, SNAPSHOT_TEXT_CAP)));
+        map.insert(
+            "name".into(),
+            json!(truncate_with_marker(name, SNAPSHOT_TEXT_CAP, "…")),
+        );
     }
     if let Some(value) = safe_value(el) {
-        map.insert("value".into(), json!(truncate(value, SNAPSHOT_TEXT_CAP)));
+        map.insert(
+            "value".into(),
+            json!(truncate_with_marker(value, SNAPSHOT_TEXT_CAP, "…")),
+        );
     }
     map.extend(affordance_fields(el));
     serde_json::Value::Object(map)

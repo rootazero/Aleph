@@ -45,6 +45,7 @@ use aleph_protocol::desktop_bridge::methods::ax::{AxElement, QueryTreeParams, DE
 use crate::error::Result;
 use crate::sync_primitives::Arc;
 use crate::tools::AlephTool;
+use crate::utils::text_format::truncate_with_marker;
 
 use super::interactable::{affordance_fields, collect_interactable, safe_value, usable_bounds};
 use super::types::DesktopOutput;
@@ -248,16 +249,6 @@ fn annotate(
     Ok(buf.into_inner())
 }
 
-/// Char-safe truncation with an ellipsis marker.
-fn truncate(s: &str, max_chars: usize) -> String {
-    if s.chars().count() > max_chars {
-        let kept: String = s.chars().take(max_chars).collect();
-        format!("{kept}…")
-    } else {
-        s.to_string()
-    }
-}
-
 fn round1(v: f64) -> f64 {
     (v * 10.0).round() / 10.0
 }
@@ -286,10 +277,16 @@ pub(super) fn build_marks(elements: &[&AxElement]) -> (Vec<Mark>, Vec<serde_json
             json!([round1(x + w / 2.0), round1(y + h / 2.0)]),
         );
         if let Some(name) = el.title.as_deref().filter(|s| !s.trim().is_empty()) {
-            map.insert("name".into(), json!(truncate(name, SOM_TEXT_CAP)));
+            map.insert(
+                "name".into(),
+                json!(truncate_with_marker(name, SOM_TEXT_CAP, "…")),
+            );
         }
         if let Some(value) = safe_value(el) {
-            map.insert("value".into(), json!(truncate(value, SOM_TEXT_CAP)));
+            map.insert(
+                "value".into(),
+                json!(truncate_with_marker(value, SOM_TEXT_CAP, "…")),
+            );
         }
         map.extend(affordance_fields(el));
         json.push(serde_json::Value::Object(map));

@@ -288,14 +288,10 @@ fn source_from_path(path: &str) -> SummarySource {
     }
 }
 
-/// UTF-8-safe truncation at `max_chars` characters, appending `…` when trimmed.
+/// Hard cap at `max_chars` INCLUDING the `…`, so a quote budget is a real
+/// ceiling rather than a hint.
 fn truncate(s: &str, max_chars: usize) -> String {
-    if s.chars().count() <= max_chars {
-        return s.to_string();
-    }
-    let mut out: String = s.chars().take(max_chars.saturating_sub(1)).collect();
-    out.push('…');
-    out
+    crate::utils::text_format::truncate_reserving(s, max_chars, "…")
 }
 
 #[async_trait]

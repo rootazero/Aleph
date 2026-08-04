@@ -7,13 +7,9 @@ use super::types::{
     UploadImageResponse, UserInfoResponse, WsEndpointResponse,
 };
 
-/// Truncate a string to at most `max_chars` characters, respecting UTF-8 boundaries.
-fn truncate_chars(s: &str, max_chars: usize) -> &str {
-    match s.char_indices().nth(max_chars) {
-        Some((idx, _)) => &s[..idx],
-        None => s,
-    }
-}
+// Hard cap with no marker: Feishu length-checks this field, so the budget is
+// the provider's, not ours to spend on an ellipsis.
+use crate::utils::text_format::truncate_chars;
 
 #[derive(Debug)]
 pub enum FeishuSendError {

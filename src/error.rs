@@ -5,25 +5,6 @@
 /// for automatic conversion to Swift/Kotlin exceptions.
 use thiserror::Error;
 
-/// Safely truncate a string at character boundaries (UTF-8 safe, single pass)
-fn truncate_str(s: &str, max_chars: usize) -> String {
-    let mut end_byte = s.len();
-    let mut exceeded = false;
-    for (i, (byte_pos, _)) in s.char_indices().enumerate() {
-        if i == max_chars {
-            end_byte = byte_pos;
-            exceeded = true;
-            break;
-        }
-    }
-    if !exceeded {
-        return s.to_string();
-    }
-    // Use .get() for defensive UTF-8 safety per project convention (P7)
-    let truncated = s.get(..end_byte).unwrap_or(s);
-    format!("{truncated}...")
-}
-
 #[derive(Debug, Error)]
 pub enum AlephError {
     /// Error occurred during clipboard operations
@@ -484,7 +465,7 @@ impl AlephError {
                     "任务 '{}' 需要更多信息才能继续执行。请提供所需内容后重试。\n详情: {}",
                     task_name,
                     // Truncate message if too long (UTF-8 safe)
-                    truncate_str(message, 100)
+                    crate::utils::text_format::truncate_text(message, 100)
                 )
             }
             Self::CorruptData(msg) => {

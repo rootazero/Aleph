@@ -121,14 +121,7 @@ pub struct NodeMatch {
 /// (P7 UTF-8 safety). Truncating short is always safe here: these are display
 /// affordances (ambiguity labels, device fingerprints), not identities.
 pub(crate) fn truncate_on_char_boundary(value: &str, max_bytes: usize) -> &str {
-    if value.len() <= max_bytes {
-        return value;
-    }
-    let mut end = max_bytes;
-    while end > 0 && !value.is_char_boundary(end) {
-        end -= 1;
-    }
-    &value[..end]
+    crate::utils::text_format::truncate_bytes(value, max_bytes)
 }
 
 #[derive(Default)]

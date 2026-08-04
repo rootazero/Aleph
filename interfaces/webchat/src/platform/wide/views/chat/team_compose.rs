@@ -116,7 +116,13 @@ pub fn TeamCompose(#[prop(into)] on_close: Callback<()>) -> impl IntoView {
                     // resolves both). Seeding `name` from the id showed raw
                     // handles like `risk_analyst` in the pills and avatars until
                     // the user left the group and came back.
-                    let agent_list = agents.get_untracked();
+                    // Post-`.await`: the compose sheet closes on success, and a
+                    // navigation during the create RPC disposes it first (see
+                    // `crate::disposed_reads`). The team exists either way; only
+                    // the local roster seeding is skipped.
+                    let Some(agent_list) = agents.try_get_untracked() else {
+                        return;
+                    };
                     let identity_of = |id: &str| -> (String, Option<String>) {
                         agent_list
                             .iter()

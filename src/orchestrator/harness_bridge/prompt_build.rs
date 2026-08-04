@@ -902,14 +902,7 @@ fn merge_stable_memory_envelopes(
 /// content was dropped. Cuts on a `char_indices` boundary so multi-byte
 /// UTF-8 content never panics the slice.
 fn truncate_chars(s: &str, max_chars: usize) -> String {
-    match s.char_indices().nth(max_chars) {
-        Some((idx, _)) => {
-            let mut t = s[..idx].to_string();
-            t.push_str("\n…[truncated]");
-            t
-        }
-        None => s.to_string(),
-    }
+    crate::utils::text_format::truncate_with_marker(s, max_chars, "\n…[truncated]")
 }
 
 /// Extract the user's most recent prompt text from a `FlowInput` for use as

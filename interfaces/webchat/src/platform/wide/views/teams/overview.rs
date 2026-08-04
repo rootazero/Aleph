@@ -124,8 +124,10 @@ pub fn OverviewView() -> impl IntoView {
                 return;
             }
             error_msg.set(None);
-            // Collapse if this team was expanded
-            if expanded_id.get_untracked().as_deref() == Some(&team_id) {
+            // Collapse if this team was expanded. Post-`.await`, so the view may
+            // be gone (see `crate::disposed_reads`); `.flatten()` keeps the
+            // comparison — and the control flow — byte-identical.
+            if expanded_id.try_get_untracked().flatten().as_deref() == Some(&team_id) {
                 expanded_id.set(None);
                 expanded_detail.set(None);
             }
@@ -148,7 +150,8 @@ pub fn OverviewView() -> impl IntoView {
                 return;
             }
             error_msg.set(None);
-            if expanded_id.get_untracked().as_deref() == Some(&team_id) {
+            // Same shape as `handle_disband` above.
+            if expanded_id.try_get_untracked().flatten().as_deref() == Some(&team_id) {
                 expanded_id.set(None);
                 expanded_detail.set(None);
             }
