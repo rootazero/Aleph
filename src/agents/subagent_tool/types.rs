@@ -19,6 +19,20 @@ pub(super) const MAX_WAIT_TIMEOUT_SECS: u64 = 600;
 /// `timeout_secs`. Must stay in sync with the schema's advertised default.
 pub(super) const DEFAULT_RUN_TIMEOUT_SECS: u64 = 120;
 
+/// Round-8 — how many finished sub-agents the `list` action renders, newest
+/// first. The full result text is one `check_status` away — `list` is a
+/// directory, not a payload. Lives in `types.rs` next to the timeout
+/// constants so a single module owns the sub-agent tool's shape
+/// (entropic-reduction; the old inline const in `loop_tool.rs` was the
+/// only Knob in the file not co-located with its peers).
+pub(super) const MAX_LISTED_COMPLETED: usize = 20;
+
+/// Round-8 — characters of a finished sub-agent's result kept on a `list`
+/// directory row AND on `SubagentNode.result_preview` (Panel tree view).
+/// Single source so the tree row and the `list` row read as the same
+/// preview width.
+pub(super) const LIST_RESULT_PREVIEW_CHARS: usize = 200;
+
 /// Gap between a child's own wall-clock timeout and the `subagent` tool's
 /// advertised budget, so the CHILD's `tokio::time::timeout` is what fires. The
 /// model then reads "Sub-agent timed out after Ns" (actionable: it knows which

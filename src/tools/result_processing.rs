@@ -481,12 +481,14 @@ fn distill_or_truncate(text: &str, budget_tokens: usize) -> String {
 /// blob first. Returns `None` when there is no error signal. Bounded to a
 /// handful of lines to preserve the offload's token saving.
 fn inline_error_digest(text: &str) -> Option<String> {
-    // A payload with no newline at all cannot be line-distilled, and this arm is
-    // the OPAQUE one — we do not know what the content is, so a prefix slice is
-    // a guess dressed up as a signal. `distill_output` declines single-line
-    // input itself (it is a line-oriented digester; the guard belongs with the
-    // thing it constrains, and every caller needs it), so this function is now
-    // just "distil if there is an error to show".
+    // A payload with no newline at all cannot be line-distilled — a flattened
+    // tool envelope is exactly one line, and a prefix slice of it is a guess
+    // dressed up as a signal. That precondition now lives on
+    // [`distill_output`](crate::tool_output::distill::distill_output) itself, so
+    // this arm and `tool_output::hygiene`'s tier-2 cannot disagree about it; the
+    // recovery marker stands alone instead. Typed results get their signal
+    // inlined through the other arm, where hygiene walked the value field by
+    // field and kept the line shape intact.
     let digest = crate::tool_output::distill::distill_output(text)?;
     if digest.error_count == 0 {
         return None;
@@ -1020,7 +1022,7 @@ mod tests {
         }
         original.push_str("test suite::case_boom ... FAILED\n");
         original.push_str("test result: FAILED. 2000 passed; 1 failed\n");
-        let reduced = crate::tool_output::structured::reduce(&original)
+        let reduced = crate::tool_output::structured::reduce_within(&original, None)
             .expect("a cargo test log must classify")
             .render();
 
@@ -1062,8 +1064,8 @@ mod tests {
         for i in 0..3000 {
             original.push_str(&format!("src/lib.rs:{i}: let target = {i};\n"));
         }
-        let reduced = crate::tool_output::structured::reduce(&original)
-            .expect("grep output must classify")
+        let reduced = crate::tool_output::structured::reduce_within(&original, None)
+            .expect("a cargo test log must classify")
             .render();
         assert!(
             estimate_tokens_smart(&reduced) <= 8_000,

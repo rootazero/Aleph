@@ -83,12 +83,6 @@ fn devtools_tool_name(name: &str) -> Option<&str> {
 
 /// Whether `name` has a per-tool compressor at all.
 ///
-/// Lets the ingress pass skip walking a result it could not compress, so every
-/// tool that is not one of these stays byte-identical for free.
-pub(crate) fn compresses(name: &str) -> bool {
-    devtools_tool_name(name).is_some()
-}
-
 /// Compress a `DevTools` tool output using a type-specific strategy.
 ///
 /// Non-DevTools tools are returned unchanged. Each `DevTools` tool gets a

@@ -1051,6 +1051,10 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
         }
     };
 
+    alephcore::tools::in_flight::set_global_in_flight_tool_calls(
+        alephcore::tools::in_flight::InFlightToolCalls::new(),
+    );
+
     let agent_result = register_agent_handlers(
         &mut server,
         session_store.clone(),
@@ -2688,14 +2692,6 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
                 max_turn_tokens,
             ));
             alephcore::tools::turn_budget::set_global_turn_result_budget(budget);
-            // Gap B follow-up — process-wide in-flight tool-call registry.
-            // The orchestrator's HarnessDeps and the gateway's
-            // `tools.cancel_call` RPC both read this same instance, so the
-            // RPC can cancel a single call by its `tool_call_id` without
-            // aborting the whole run.
-            alephcore::tools::in_flight::set_global_in_flight_tool_calls(
-                alephcore::tools::in_flight::InFlightToolCalls::new(),
-            );
             // TTL hygiene for crash-orphan spill dirs is owned by
             // `set_global_tool_result_store` (auto-spawns the periodic
             // sweeper since main's c1756ce80).

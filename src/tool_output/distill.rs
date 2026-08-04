@@ -50,9 +50,12 @@ const ERROR_MARKERS: &[&str] = &[
 /// (compiler `-->` source pointers, `note:` / `help:` follow-ups, warnings).
 const CONTEXT_MARKERS: &[&str] = &["-->", "note:", "help:", "warning:", "expected", "found:"];
 
-/// Hard cap on salient lines retained, independent of any token budget — a
-/// digest is meant to orient, not reproduce the log.
-const MAX_SALIENT_LINES: usize = 60;
+/// Hard cap on salient lines retained — a digest is meant to orient, not
+/// reproduce the log. `pub(crate)` because it is also the *default* the caller
+/// scales down from when it has a token budget: see
+/// [`OutputDigest::render`]'s `max_salient` and
+/// [`scale_to_budget`](super::scale_to_budget).
+pub(crate) const MAX_SALIENT_LINES: usize = 60;
 
 /// Hard cap on unique `file:line` references surfaced in the trailing index.
 const MAX_PATHS: usize = 20;
@@ -201,20 +204,21 @@ fn cap_chars(s: &str) -> String {
 /// Small inputs (`< MIN_INPUT_BYTES`) always return [`None`]: they are cheap to
 /// show in full and distillation would only lose context.
 ///
-/// Input with **no line structure at all** also returns [`None`]. This module is
-/// line-oriented by construction — it classifies each line and renders the
-/// salient ones — so given one enormous line it reports `total_lines: 1`,
-/// matches an `"error"` substring somewhere inside it, and renders a
-/// [`MAX_LINE_CHARS`]-capped *prefix* under an `[Output digest: 1 lines, 1
-/// error]` header. That is a guess dressed up as a signal, and it is how a
-/// flattened JSON envelope (`{"success":false,"stdout":"…`) came to be presented
-/// as though it were the compile errors. Every caller needs this guard, so it
-/// lives here rather than in each of them.
+/// A payload with **no newline at all** also returns [`None`], and that is a
+/// precondition rather than an optimisation. This distiller is line-oriented:
+/// it walks `text.lines()`, classifies each line, and renders the salient ones.
+/// Handed a single line it reports `total_lines: 1`, matches an `"error"`
+/// substring somewhere inside it, and renders `[Output digest: 1 lines, 1
+/// error]` above a 400-char *prefix* of that line — a guess dressed up as a
+/// signal. The shape is not hypothetical: a flattened tool envelope and a
+/// compact JSON API response are both exactly one line, and one of the two
+/// callers that knew this ([`inline_error_digest`](
+/// crate::tools::result_processing)) declined by hand while the other
+/// ([`hygiene::clean_result_value`](crate::tool_output::hygiene)) replaced a
+/// 300 KB response with 400 characters of its envelope. A predicate that both
+/// faces of the same distiller must honour belongs on the distiller.
 pub fn distill_output(text: &str) -> Option<OutputDigest> {
-    if text.len() < MIN_INPUT_BYTES {
-        return None;
-    }
-    if !text.contains('\n') {
+    if text.len() < MIN_INPUT_BYTES || !text.contains('\n') {
         return None;
     }
 
@@ -375,6 +379,24 @@ mod tests {
     fn small_input_returns_none() {
         let small = "error: boom\n--> src/x.rs:1:1";
         assert!(distill_output(small).is_none());
+    }
+
+    /// A single-line payload cannot be line-distilled. Before this precondition
+    /// lived on the distiller, a compact JSON API response containing the word
+    /// "error" anywhere reached the model as `[Output digest: 1 lines, 1 error]`
+    /// above 400 characters of its own envelope — a prefix slice presented as an
+    /// error preview, and a 99.9 % silent loss of the actual response.
+    #[test]
+    fn a_payload_with_no_newline_is_never_distilled() {
+        let one_line = format!(
+            r#"{{"error":null,"status":"ok","data":"{}"}}"#,
+            "d".repeat(8_000)
+        );
+        assert!(one_line.len() > MIN_INPUT_BYTES, "precondition: big enough");
+        assert!(
+            distill_output(&one_line).is_none(),
+            "a line-oriented distiller has nothing to say about one line"
+        );
     }
 
     #[test]

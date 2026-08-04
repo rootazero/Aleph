@@ -10,47 +10,49 @@
 //! is benign — the reducer keeps strictly more than the first-line placeholder
 //! it replaces.
 
-use super::{is_error_signal, render_selected, ContentKind, Reduction};
+use super::{
+    contains_ignore_ascii_case, is_error_signal, render_selected, ContentKind, Profile, Reduction,
+    Tally,
+};
 
 const KEEP_HEAD: usize = 2;
 const KEEP_TAIL: usize = 3;
-/// Max loud lines kept (prevents a flood of identical warnings dominating).
-const MAX_SIGNAL: usize = 24;
-/// How much of [`MAX_SIGNAL`] is reserved for a backwards scan from the tail.
-///
-/// A single forward pass is the wrong shape for test-runner output, which is
-/// where this reducer earns its keep. In `cargo test`, every `test x ... FAILED`
-/// line is loud, so the first `MAX_SIGNAL` failures exhausted the budget in the
-/// *roster* — and the `failures:` block, the `panicked at …` lines and the
-/// `assertion \`left == right\` failed` diffs all sit **after** that point, so
-/// they were dropped in their entirety. Every runner (cargo, pytest, jest, go
-/// test) puts its diagnostics and its summary at the end, so half the budget is
-/// spent scanning backwards from there.
-const SIGNAL_FROM_TAIL: usize = MAX_SIGNAL / 2;
 /// Lines kept after a loud line — captures the stack trace under an error.
+///
+/// Structural rather than a size knob: it is "how much of a diagnostic body
+/// hangs off its first line", which does not change because the caller has a
+/// smaller budget. [`Profile::log_signal`] is the knob that scales.
 const ERROR_CONTEXT: usize = 3;
-/// Below this kept/total ratio (×10) the reduction isn't worth the header.
-const MAX_KEPT_RATIO_X10: usize = 7; // keep only if kept < 70% of total
+
+/// Digit-and-status-keyword needles for [`is_summary_line`], pre-lowercased so
+/// they can be matched without allocating a lowercase copy of the line.
+const SUMMARY_NEEDLES: [&str; 9] = [
+    "passed",
+    "failed",
+    "tests",
+    "test result",
+    "errors",
+    "warnings",
+    "skipped",
+    "assertions",
+    "finished",
+];
 
 /// A test/build summary line: a digit alongside a status keyword. These usually
 /// sit at the very end, but `keep_tail` may miss them in noisy output.
+///
+/// Allocation-free, like [`is_error_signal`]. The obvious
+/// `line.to_ascii_lowercase()` was the exact copy-per-line that
+/// [`contains_ignore_ascii_case`] exists to eliminate, and this predicate is the
+/// hotter of the two: it runs on every line in `looks_like_log` *and* on every
+/// line in each of `reduce_log`'s two `mark_signal` passes. A 200 KB minified
+/// line inside a build log therefore cost 600 KB of copying just to decide it
+/// was not a summary.
 fn is_summary_line(line: &str) -> bool {
-    let l = line.to_ascii_lowercase();
-    let has_digit = l.bytes().any(|b| b.is_ascii_digit());
-    has_digit
-        && [
-            "passed",
-            "failed",
-            "tests",
-            "test result",
-            "errors",
-            "warnings",
-            "skipped",
-            "assertions",
-            "finished",
-        ]
-        .iter()
-        .any(|k| l.contains(k))
+    line.bytes().any(|b| b.is_ascii_digit())
+        && SUMMARY_NEEDLES
+            .iter()
+            .any(|k| contains_ignore_ascii_case(line, k))
 }
 
 fn is_loud(line: &str) -> bool {
@@ -184,7 +186,7 @@ fn mark_signal(
     spent
 }
 
-pub(super) fn reduce_log(text: &str) -> Option<Reduction> {
+pub(super) fn reduce_log(text: &str, profile: &Profile) -> Option<Reduction> {
     let lines: Vec<&str> = text.lines().collect();
     let total = lines.len();
     let mut keep = vec![false; total];
@@ -198,16 +200,23 @@ pub(super) fn reduce_log(text: &str) -> Option<Reduction> {
 
     // Loud lines + trailing context, with adjacent dedup so a burst of the same
     // warning doesn't eat the whole signal budget. Run backwards from the tail
-    // first — that half of the budget is reserved for the failure roster and
-    // summary a test runner writes last, and spending it first means a long
-    // stream of loud lines earlier in the log can no longer starve it.
-    let tail_budget = SIGNAL_FROM_TAIL.min(MAX_SIGNAL);
+    // first — half of the budget is reserved for the failure roster and summary
+    // a test runner writes last, and spending it first means a long stream of
+    // loud lines earlier in the log can no longer starve it.
+    //
+    // A single forward pass is the wrong shape for test-runner output, which is
+    // where this reducer earns its keep. In `cargo test`, every
+    // `test x ... FAILED` line is loud, so the first `log_signal` failures
+    // exhausted the budget in the *roster* — and the `failures:` block, the
+    // `panicked at …` lines and the ``assertion `left == right` failed`` diffs
+    // all sit **after** that point, so they were dropped in their entirety.
+    let tail_budget = profile.log_signal / 2;
     let spent_tail = mark_signal(&lines, &mut keep, (0..total).rev(), tail_budget);
     mark_signal(
         &lines,
         &mut keep,
         0..total,
-        MAX_SIGNAL.saturating_sub(spent_tail),
+        profile.log_signal.saturating_sub(spent_tail),
     );
 
     let selected: Vec<usize> = (0..total).filter(|&i| keep[i]).collect();
@@ -226,24 +235,32 @@ pub(super) fn reduce_log(text: &str) -> Option<Reduction> {
         prev = Some(i);
     }
     if kept.len() >= total {
-        return None;
+        return None; // nothing dropped
     }
-    // Worth the header only if it meaningfully shrinks the log.
-    if kept.len() * 10 >= total * MAX_KEPT_RATIO_X10 {
-        return None;
-    }
-    let body = render_selected(&lines, &kept, total);
+    // Whether this is *smaller* is not decided here. A local kept/total **line**
+    // ratio used to stand in this spot, and it was both redundant and wrong in
+    // the same way the module doc calls out: it rejected a log whose 8 kept lines
+    // dropped two 200 KB noise lines (a 96 % byte win read as "kept 80 % of the
+    // lines"), while accepting reductions that shrank no bytes at all. The
+    // central `Reduction::is_meaningful_shrink` measures bytes, once.
+    let body = render_selected(&lines, &kept, total, profile);
     Some(Reduction {
         kind: ContentKind::Log,
         body,
-        kept_lines: kept.len(),
-        total_lines: total,
+        tally: Tally::Lines {
+            kept: kept.len(),
+            total,
+        },
     })
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn reduce(text: &str) -> Option<Reduction> {
+        reduce_log(text, &Profile::DEFAULT)
+    }
 
     #[test]
     fn detects_test_log() {
@@ -270,7 +287,7 @@ mod tests {
             s.push_str(&format!("   more noise {i}\n"));
         }
         s.push_str("error: could not compile `app` due to previous error\n");
-        let r = reduce_log(&s).expect("should reduce");
+        let r = reduce(&s).expect("should reduce");
         assert_eq!(r.kind, ContentKind::Log);
         assert!(
             r.body.contains("error[E0382]"),
@@ -287,7 +304,7 @@ mod tests {
             "tail/summary error must survive"
         );
         assert!(r.body.contains("lines omitted"), "noise must be dropped");
-        assert!(r.kept_lines < r.total_lines);
+        assert!(r.tally.kept() < r.tally.total());
     }
 
     #[test]
@@ -297,7 +314,7 @@ mod tests {
             s.push_str("warning: unused variable: `y`\n");
         }
         s.push_str("Build finished with 40 warnings\n");
-        let r = reduce_log(&s).expect("should reduce");
+        let r = reduce(&s).expect("should reduce");
         // Adjacent dedup means we keep far fewer than 40 warning lines.
         let warns = r.body.matches("warning: unused variable").count();
         assert!(
@@ -307,12 +324,51 @@ mod tests {
     }
 
     #[test]
-    fn quiet_clean_log_not_worth_reducing() {
-        // Mostly-signal short output shouldn't trip the ratio guard into a
-        // pointless header. Here nearly every line is loud.
+    fn an_all_signal_log_has_nothing_to_drop() {
+        // Every line is loud, so head + tail + signal marks all of them and the
+        // "nothing was dropped" guard declines. (The byte guard in `reduce`
+        // would decline too, but this one is what keeps a pointless header off
+        // an output that is already all signal.)
         let s = "error a\nerror b\nerror c\nerror d\nerror e\nerror f\nerror g\nerror h\n";
-        // All 8 lines are loud → kept >= 70% → no reduction.
-        assert!(reduce_log(s).is_none());
+        assert!(reduce(s).is_none());
+    }
+
+    /// The local kept/total **line** ratio that used to guard this reducer
+    /// rejected exactly the case where reduction pays most: a log that is short
+    /// in lines and enormous in bytes. Six lines, five of them kept — an 83 %
+    /// line ratio, so the old guard returned `None` and all 180 KB reached the
+    /// model verbatim — while the per-line clamp and the one dropped line take
+    /// the body to about a kilobyte. Whether a reduction is worth emitting is a
+    /// byte question, and it is answered once, centrally.
+    #[test]
+    fn a_log_that_is_short_in_lines_and_huge_in_bytes_still_reduces() {
+        // Eight lines — the log reducer's own minimum — of which head+tail+the
+        // one loud line keep six. A 75 % line ratio, and 120 KB of the 180 KB
+        // dropped outright with the rest clamped per line.
+        let huge = "x".repeat(60_000);
+        let s = format!(
+            "$ build\nnoise a {huge}\nnoise b {huge}\nerror: boom\nnoise c {huge}\n\
+             linking\nstripping\nBuild finished with 1 errors\n"
+        );
+        let r = reduce(&s).expect("a 180 KB log must reduce");
+        assert!(
+            r.tally.kept() * 10 >= r.tally.total() * 7,
+            "precondition: the line ratio is high ({}/{}), which is what the old \
+             guard rejected on",
+            r.tally.kept(),
+            r.tally.total()
+        );
+        assert!(
+            r.body.len() < s.len() / 100,
+            "byte-wise it is a >99 % reduction, got {} of {}",
+            r.body.len(),
+            s.len()
+        );
+        assert!(r.body.contains("error: boom"), "the signal survives");
+        assert!(
+            super::super::reduce(&s).is_some(),
+            "and the central byte guard must accept it"
+        );
     }
 
     /// pytest writes its assertion block at column 0, so an indentation-only
@@ -345,7 +401,7 @@ mod tests {
         );
         s.push_str("1 failed, 5 passed in 0.03s\n");
 
-        let r = reduce_log(&s).expect("a pytest run must reduce");
+        let r = reduce(&s).expect("a pytest run must reduce");
         for needle in [
             "AssertionError: assert {'a': 1} == {'a': 2}",
             "Differing items",
@@ -378,7 +434,7 @@ mod tests {
             }
         }
         s.push_str("test result: FAILED. 399 passed; 1 failed\n");
-        let r = reduce_log(&s).expect("must reduce");
+        let r = reduce(&s).expect("must reduce");
         assert!(r.body.contains("suite::boom"), "the failure must survive");
         // The `... ok` lines that legitimately appear are the head/tail anchors;
         // what must NOT appear is the failure's immediate followers being dragged
@@ -394,5 +450,39 @@ mod tests {
             "only head/tail anchors may be passing-test lines, got {oks} in:\n{}",
             r.body
         );
+    }
+
+    /// A tight budget must reach the reducer as fewer kept signal lines, not as a
+    /// blind cut of a default-sized body afterwards.
+    #[test]
+    fn a_tight_budget_keeps_fewer_signal_lines() {
+        let mut s = String::from("$ cargo test\n");
+        for i in 0..60 {
+            s.push_str(&format!("error[E{i:04}]: distinct failure {i}\n"));
+            for q in 0..6 {
+                s.push_str(&format!("   Compiling quiet-{i}-{q} v1.0.0\n"));
+            }
+        }
+        s.push_str("test result: FAILED. 0 passed; 60 failed\n");
+        let wide = reduce(&s).expect("default profile must reduce");
+        let tight = reduce_log(&s, &Profile::for_token_budget(400)).expect("tight must reduce");
+        assert!(
+            tight.tally.kept() < wide.tally.kept(),
+            "tight kept {} vs default {}",
+            tight.tally.kept(),
+            wide.tally.kept()
+        );
+        assert!(tight.body.len() < wide.body.len());
+    }
+
+    #[test]
+    fn summary_detection_is_allocation_free_and_case_insensitive() {
+        assert!(is_summary_line("test result: FAILED. 3 passed; 1 failed"));
+        assert!(is_summary_line("Finished in 12 seconds"));
+        assert!(is_summary_line("1 FAILED, 5 PASSED"));
+        // A keyword with no digit is not a summary…
+        assert!(!is_summary_line("running the tests now"));
+        // …and a digit with no keyword is not either.
+        assert!(!is_summary_line("   Compiling dep-42 v1.0.0"));
     }
 }

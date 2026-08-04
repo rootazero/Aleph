@@ -639,7 +639,17 @@ impl McpManagerActor {
         // (via `health_check_pass`), so blocking here would stall command
         // processing. The restart-window cap (`max_restarts`) bounds churn
         // instead.
-        self.start_server_internal(&config).await?;
+        if let Err(error) = self.start_server_internal(&config).await {
+            if let Some(health) = self.health_states.get_mut(server_id) {
+                health.mark_dead();
+            }
+            let _ = self.event_tx.send(McpManagerEvent::ServerCrashed {
+                server_id: server_id.to_string(),
+                server_name: config.name.clone(),
+                error: format!("restart failed: {error}"),
+            });
+            return Err(error);
+        }
 
         tracing::info!(server_id = %server_id, "Server restarted");
         Ok(())

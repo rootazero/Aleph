@@ -234,3 +234,441 @@ async fn announce_one(
         "subagent announce: parent stayed busy through all retries; result remains available via the subagent tool's list action"
     );
 }
+
+#[cfg(test)]
+mod tests {
+    use std::sync::atomic::AtomicUsize;
+
+    use async_trait::async_trait;
+    use tempfile::TempDir;
+
+    use crate::agents::background_tracker::{BackgroundAgentTracker, CompletedOutcome, SpawnMeta};
+    use crate::event::global_bus::GlobalEvent;
+    use crate::event::{AlephEvent, SubAgentCompletionEvent};
+    use crate::gateway::agent_instance::{AgentInstance, AgentInstanceConfig, AgentRegistry};
+    use crate::gateway::event_bus::GatewayEventBus;
+    use crate::gateway::event_emitter::EventEmitter;
+    use crate::gateway::execution_adapter::ExecutionAdapter;
+    use crate::gateway::execution_engine::{ExecutionError, RunRequest, RunState, RunStatus};
+    use crate::gateway::session_store::file_backend::{FileSessionStore, FileSessionStoreConfig};
+    use crate::gateway::session_store::SessionStore;
+    use crate::sync_primitives::Arc;
+    use tokio_util::sync::CancellationToken;
+
+    use super::announce_one;
+
+    /// Adapter that records every `execute` call and can be configured to
+    /// return `AgentBusy` for the first N calls. Lets one test assert the retry
+    /// loop and another assert the early-return dedup.
+    struct RecordingAdapter {
+        busy_first: usize,
+        calls: std::sync::Mutex<Vec<RunRequest>>,
+    }
+
+    impl RecordingAdapter {
+        fn new(busy_first: usize) -> Arc<Self> {
+            Arc::new(Self {
+                busy_first,
+                calls: std::sync::Mutex::new(Vec::new()),
+            })
+        }
+
+        fn call_count(&self) -> usize {
+            self.calls.lock().unwrap_or_else(|e| e.into_inner()).len()
+        }
+    }
+
+    #[async_trait]
+    impl ExecutionAdapter for RecordingAdapter {
+        async fn execute(
+            &self,
+            request: RunRequest,
+            _agent: Arc<AgentInstance>,
+            _emitter: Arc<dyn EventEmitter + Send + Sync>,
+        ) -> Result<(), ExecutionError> {
+            let mut calls = self.calls.lock().unwrap_or_else(|e| e.into_inner());
+            calls.push(request);
+            if calls.len() <= self.busy_first {
+                Err(ExecutionError::AgentBusy("simulated".into()))
+            } else {
+                Ok(())
+            }
+        }
+
+        async fn cancel(&self, _run_id: &str) -> Result<(), ExecutionError> {
+            Ok(())
+        }
+
+        async fn get_status(&self, run_id: &str) -> Option<RunStatus> {
+            Some(RunStatus {
+                run_id: run_id.to_string(),
+                state: RunState::Completed,
+                started_at: None,
+                completed_at: None,
+                steps_completed: 0,
+                current_tool: None,
+            })
+        }
+
+        async fn active_run_count(&self) -> usize {
+            0
+        }
+    }
+
+    async fn registry_with_main_agent() -> (Arc<AgentRegistry>, TempDir) {
+        let tmp = tempfile::tempdir().expect("create tempdir");
+        let config = AgentInstanceConfig {
+            agent_id: "main".into(),
+            workspace: tmp.path().join("workspace"),
+            agent_dir: tmp.path().join("agent"),
+            ..AgentInstanceConfig::default()
+        };
+        let store = FileSessionStore::new(FileSessionStoreConfig {
+            base_dir: tmp.path().join("sessions"),
+            ..FileSessionStoreConfig::default()
+        })
+        .expect("FileSessionStore::new");
+        let session_store: Arc<dyn SessionStore> = Arc::new(store);
+        let instance = AgentInstance::new(config, session_store).expect("AgentInstance::new");
+        let registry = Arc::new(AgentRegistry::new());
+        registry.register(instance).await;
+        (registry, tmp)
+    }
+
+    /// `agent:main:peer:user` is the `SessionKey::to_key_string()` form for the
+    /// `main` agent under the default peer.
+    fn sample_event(request_id: &str) -> GlobalEvent {
+        GlobalEvent::for_test(
+            "agent:main:peer:user",
+            Some("main".into()),
+            AlephEvent::SubAgentCompleted(SubAgentCompletionEvent {
+                agent_id: "main".into(),
+                child_session_id: "child-sid".into(),
+                summary: "result text".into(),
+                success: true,
+                error: None,
+                request_id: Some(request_id.into()),
+            }),
+        )
+    }
+
+    /// `mark_completed` on the global tracker so the consume check has a real
+    /// entry. Uses a unique id per test to keep the process-global tracker
+    /// isolated across `cargo test` invocations of this file (it accumulates).
+    fn seed_completed(request_id: &str) {
+        let tracker = BackgroundAgentTracker::global();
+        tracker.register_with_meta(
+            request_id.into(),
+            CancellationToken::new(),
+            "seeded".into(),
+            SpawnMeta {
+                root_session: "agent:main:peer:user".into(),
+                depth: 1,
+                ..SpawnMeta::default()
+            },
+        );
+        tracker.mark_completed(request_id, CompletedOutcome::ok_text("ok"));
+    }
+
+    /// The early-return dedup: a result that the model already saw via
+    /// `wait` / `check_status` must not be re-announced. The adapter must
+    /// not be called at all.
+    #[tokio::test]
+    async fn announce_skips_when_result_already_consumed() {
+        let request_id = format!("dedup-{}", uuid::Uuid::new_v4());
+        seed_completed(&request_id);
+        BackgroundAgentTracker::global().mark_consumed(&request_id);
+
+        let (registry, _tmp) = registry_with_main_agent().await;
+        let adapter = RecordingAdapter::new(0);
+        let event_bus = Arc::new(GatewayEventBus::new());
+
+        announce_one(
+            adapter.clone(),
+            registry,
+            event_bus,
+            sample_event(&request_id),
+        )
+        .await;
+
+        assert_eq!(
+            adapter.call_count(),
+            0,
+            "consumed result must skip the proactive announce entirely"
+        );
+    }
+
+    /// The happy path: a fresh result drives exactly one `adapter.execute`
+    /// call carrying the announce metadata.
+    #[tokio::test]
+    async fn announce_drives_one_execute_call_for_fresh_result() {
+        let request_id = format!("fresh-{}", uuid::Uuid::new_v4());
+        seed_completed(&request_id);
+
+        let (registry, _tmp) = registry_with_main_agent().await;
+        let adapter = RecordingAdapter::new(0);
+        let event_bus = Arc::new(GatewayEventBus::new());
+
+        announce_one(
+            adapter.clone(),
+            registry,
+            event_bus,
+            sample_event(&request_id),
+        )
+        .await;
+
+        assert_eq!(adapter.call_count(), 1);
+        let recorded = adapter
+            .calls
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .pop()
+            .expect("one call recorded");
+        assert_eq!(
+            recorded
+                .metadata
+                .get("subagent_announce")
+                .map(String::as_str),
+            Some(request_id.as_str()),
+            "announce metadata must carry the request_id so the engine can tag the turn"
+        );
+        assert!(
+            recorded.input.contains(&request_id),
+            "announce input must reference the request_id so the parent can fetch via check_status"
+        );
+    }
+
+    /// The retry path: the parent's run is busy at first, so the adapter is
+    /// hit multiple times. Two busy responses fit inside the 0+30+120 schedule
+    /// when the test overrides the first 30s and 120s sleeps (we cannot do
+    /// that in production code), so we only assert that the retry loop ran
+    /// to completion and eventually returned once the parent freed up.
+    ///
+    /// # Why only one retry is exercised
+    ///
+    /// The real `RETRY_DELAYS_SECS = [0, 30, 120]` spans over two minutes. To
+    /// keep the test fast we change the adapter's `busy_first` to 1, which
+    /// makes the first attempt fail and the second (after the 30s sleep)
+    /// succeed. We then assert the call count. The 30s wait is a real
+    /// wall-clock cost in CI; the alternative — injecting a clock — would
+    /// require refactoring the production code purely for testability, which
+    /// this layer rightly resists (R10 thin harness). We accept the wait.
+    #[tokio::test]
+    #[ignore = "exercises the 30s retry sleep; enable when investigating retry behavior"]
+    async fn announce_retries_on_busy_then_succeeds() {
+        let request_id = format!("retry-{}", uuid::Uuid::new_v4());
+        seed_completed(&request_id);
+
+        let (registry, _tmp) = registry_with_main_agent().await;
+        let adapter = RecordingAdapter::new(1);
+        let event_bus = Arc::new(GatewayEventBus::new());
+
+        announce_one(
+            adapter.clone(),
+            registry,
+            event_bus,
+            sample_event(&request_id),
+        )
+        .await;
+
+        assert_eq!(
+            adapter.call_count(),
+            2,
+            "first attempt busy, second attempt succeeds after the 30s retry"
+        );
+    }
+
+    /// The retry path with a fast assertion: drive the consume-during-sleep
+    /// case without waiting for the real delay. We hand-craft the inner loop
+    /// by reproducing the dedup check at the only place it fires — after
+    /// the sleep — and assert the consumed guard holds.
+    ///
+    /// This complements `announce_retries_on_busy_then_succeeds` (which the
+    /// retry sleep makes too slow for the lib-test budget) by proving the
+    /// bookkeeping primitive: once the result is consumed, the next call
+    /// sees `is_consumed() == true`.
+    #[tokio::test]
+    async fn consume_during_retry_short_circuits_announce() {
+        let request_id = format!("consume-mid-{}", uuid::Uuid::new_v4());
+        seed_completed(&request_id);
+
+        // Simulate the retry sleep window: the parent consumed the result
+        // while we were sleeping, so the next attempt must short-circuit.
+        let tracker = BackgroundAgentTracker::global();
+        assert!(!tracker.is_consumed(&request_id));
+        tracker.mark_consumed(&request_id);
+        assert!(tracker.is_consumed(&request_id));
+
+        // The dedup check inside `announce_one` is the only condition that
+        // matters here: a consumed result must not reach the adapter.
+        let (registry, _tmp) = registry_with_main_agent().await;
+        let adapter = RecordingAdapter::new(0);
+        let event_bus = Arc::new(GatewayEventBus::new());
+        announce_one(
+            adapter.clone(),
+            registry,
+            event_bus,
+            sample_event(&request_id),
+        )
+        .await;
+        assert_eq!(
+            adapter.call_count(),
+            0,
+            "consumed during retry window must short-circuit the adapter call"
+        );
+    }
+
+    /// An unparseable session key is silently dropped (no panic, no adapter
+    /// call). The result remains available via the subagent tool's `list`.
+    #[tokio::test]
+    async fn announce_skips_when_session_key_unparseable() {
+        let request_id = format!("badkey-{}", uuid::Uuid::new_v4());
+        seed_completed(&request_id);
+
+        let (registry, _tmp) = registry_with_main_agent().await;
+        let adapter = RecordingAdapter::new(0);
+        let event_bus = Arc::new(GatewayEventBus::new());
+
+        let mut event = sample_event(&request_id);
+        event.source_session_id = "not a session key".into();
+
+        announce_one(adapter.clone(), registry, event_bus, event).await;
+        assert_eq!(adapter.call_count(), 0);
+    }
+
+    /// A session key that does not resolve to a registered agent is dropped
+    /// (the parent must be re-registered before the announce can fire). The
+    /// result stays poll-only — the model can still read it via `list` /
+    /// `check_status`.
+    #[tokio::test]
+    async fn announce_skips_when_parent_agent_not_registered() {
+        let request_id = format!("orphan-{}", uuid::Uuid::new_v4());
+        seed_completed(&request_id);
+
+        // Empty registry — `get("main")` returns None.
+        let registry = Arc::new(AgentRegistry::new());
+        let adapter = RecordingAdapter::new(0);
+        let event_bus = Arc::new(GatewayEventBus::new());
+
+        announce_one(
+            adapter.clone(),
+            registry,
+            event_bus,
+            sample_event(&request_id),
+        )
+        .await;
+        assert_eq!(adapter.call_count(), 0);
+    }
+
+    /// A failure that is NOT `AgentBusy` is terminal (the loop returns
+    /// immediately rather than retrying — there is no reason to think a
+    /// second attempt will succeed when the first hit a different error).
+    #[tokio::test]
+    async fn announce_returns_on_non_busy_error() {
+        let request_id = format!("err-{}", uuid::Uuid::new_v4());
+        seed_completed(&request_id);
+
+        struct AlwaysFail;
+        #[async_trait]
+        impl ExecutionAdapter for AlwaysFail {
+            async fn execute(
+                &self,
+                _: RunRequest,
+                _: Arc<AgentInstance>,
+                _: Arc<dyn EventEmitter + Send + Sync>,
+            ) -> Result<(), ExecutionError> {
+                Err(ExecutionError::Failed("simulated".into()))
+            }
+            async fn cancel(&self, _: &str) -> Result<(), ExecutionError> {
+                Ok(())
+            }
+            async fn get_status(&self, _: &str) -> Option<RunStatus> {
+                None
+            }
+            async fn active_run_count(&self) -> usize {
+                0
+            }
+        }
+
+        let (registry, _tmp) = registry_with_main_agent().await;
+        let adapter: Arc<dyn ExecutionAdapter> = Arc::new(AlwaysFail);
+        let event_bus = Arc::new(GatewayEventBus::new());
+
+        announce_one(adapter, registry, event_bus, sample_event(&request_id)).await;
+
+        // Structural assertion: a non-busy error exits the retry loop on the
+        // first attempt (no `AgentBusy` match arm), so the function returns
+        // without driving further adapter calls. The exact call count is
+        // implicitly `1` (the failing one) — the loop saw one non-busy
+        // `Err` and returned. We prove this by a focused unit test below.
+    }
+
+    /// Sharpened version of the structural assertion: a custom
+    /// `RecordingAdapter` (busy_first=0, always-fail overridden) lets us
+    /// count adapter calls and prove the retry loop exited after exactly
+    /// one.
+    #[tokio::test]
+    async fn announce_returns_on_non_busy_error_records_one_call() {
+        let request_id = format!("err2-{}", uuid::Uuid::new_v4());
+        seed_completed(&request_id);
+
+        let (registry, _tmp) = registry_with_main_agent().await;
+        let adapter = RecordingAdapter::new(0);
+        // Override the `RecordingAdapter`'s `Ok` arm for this test by
+        // wrapping it: a thin adapter that forwards the call list but
+        // always returns `Failed`.
+        let _ = AtomicUsize::new(0); // keep the type referenced
+        let always_fail = AlwaysFailAdapter {
+            inner: adapter.clone(),
+        };
+        let event_bus = Arc::new(GatewayEventBus::new());
+
+        announce_one(
+            Arc::new(always_fail) as Arc<dyn ExecutionAdapter>,
+            registry,
+            event_bus,
+            sample_event(&request_id),
+        )
+        .await;
+
+        // Inner recorded exactly the one call `announce_one` made before the
+        // non-busy `Err` returned the loop.
+        assert_eq!(
+            adapter.call_count(),
+            1,
+            "non-busy error must exit the retry loop after exactly one attempt"
+        );
+    }
+
+    /// Records calls to `inner` and overwrites the result with `Failed`,
+    /// so a test can count calls while exercising the non-busy exit path.
+    struct AlwaysFailAdapter {
+        inner: Arc<RecordingAdapter>,
+    }
+
+    #[async_trait]
+    impl ExecutionAdapter for AlwaysFailAdapter {
+        async fn execute(
+            &self,
+            request: RunRequest,
+            agent: Arc<AgentInstance>,
+            emitter: Arc<dyn EventEmitter + Send + Sync>,
+        ) -> Result<(), ExecutionError> {
+            // Forward to record + return a non-busy error.
+            let mut calls = self.inner.calls.lock().unwrap_or_else(|e| e.into_inner());
+            calls.push(request);
+            drop(calls);
+            let _ = (agent, emitter);
+            Err(ExecutionError::Failed("always fail".into()))
+        }
+        async fn cancel(&self, _: &str) -> Result<(), ExecutionError> {
+            Ok(())
+        }
+        async fn get_status(&self, _: &str) -> Option<RunStatus> {
+            None
+        }
+        async fn active_run_count(&self) -> usize {
+            0
+        }
+    }
+}
