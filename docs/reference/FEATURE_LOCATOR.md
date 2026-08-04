@@ -951,6 +951,34 @@
   6. **`WaitAnyOutcome::NotFound` 携带 unknown 列表**（修 NotFound=静音）——原 `NotFound` 是 bool，模型只在 `NotFound` 时看到一句"all unknown"，要诊断 typo 得逐个 `wait`；现 `NotFound { unknown_ids: Vec<String> }`，handler 把列表印进错误消息（`tool` 报错：`None of the given request_ids matches a known background sub-agent: typo-a, typo-b`）。单 id `wait` 折叠为旧 `WaitOutcome::NotFound`（不变），因为单 id 的"全 unknown"无列表语义。
   7. **`MAX_LISTED_COMPLETED` / `LIST_RESULT_PREVIEW_CHARS` 移至 `types.rs`**（熵减）——`loop_tool.rs` 唯二内联常量提到 `types.rs` 与 timeout 同列；`LIST_RESULT_PREVIEW_CHARS` 与 `background_tracker::RESULT_PREVIEW_CHARS` 同源（都是 200），tree 预览行和 list 目录行读作同一宽度。**改 `MAX_LISTED_COMPLETED` 只改一处**，漂移守卫 = 编译。
 - **打磨话术增量**：「**Panel 怎么让一次冷启动看见 'completed: xxx'** = `flat_nodes` 出来的 `SubagentNode.result_preview`（`shared/protocol/src/subagent_tree.rs`）；旧 Panel 不识别新字段会丢 key，不报错。**'N/M 子代理槽在用、哪个 session 占用、completed 但没消费几个'** = `gateway.metrics.subagent_concurrency`（同 §4.10 `run_concurrency` 形，handler `gateway/handlers/gateway_metrics.rs`，WASM `interfaces/webchat/src/api/system.rs::subagent_concurrency(state, scope)`）。**'我 wait 了一组 id 全是错的'** = `WaitAnyOutcome::NotFound { unknown_ids }`，错误消息逐字列出（`loop_tool.rs` 把列表拼进 `ToolResult::Error`）。**'我 cancel 了一个含 typo 的 wait'** = `wait_cancelled` 也走 `annotate_unknown`，typo 不再被 cancel 吞掉。**改 `list` 渲染行数 / 预览长度** = `subagent_tool::types.rs::MAX_LISTED_COMPLETED` / `LIST_RESULT_PREVIEW_CHARS`（与 timeout 同源）。**改 `flat_nodes` 排序** = `background_tracker.rs::flat_nodes` 末尾 sort（`started_at_ms, node_id`），改后 `protocol::build_tree` 兄弟排序契约同步检查。」**详见 round-9** ——（CLAUDE.md §318 引用的「§4.11 round-8」是**前一轮**的 list/cancel/park 纪律，与本轮 round-9 同 §4.11 但不重叠，按数字索引取对应本轮）。
+- **🔄 Round-10（2026-08-04，cross-verification）**——读 `smb://mac-mini-m4.local/tbu4/Github/codex` 与 `…/pi` 真源后做的**逐项对位**（前轮 round-9 差距分析基于 FEATURE_LOCATOR 已记录的对标项 + 推测，本轮用真源校正）：
+
+  | 维度 | Aleph §4.11 现状 | codex `codex-rs/core/src/agent/` | pi `packages/agent/` | 结论 |
+  |---|---|---|---|---|
+  | ID 空间 | `request_id: String` (UUID) | `AgentPath` (slash-separated) | (无多代理) | Aleph 命名更直白；codex 用层级路径更结构化 |
+  | 并发上限 | `subagent_semaphore` in `SubagentTool`（局部） | `AgentExecutionLimiter` + `AgentExecutionGuard` RAII（per-`AgentControl` 全树共享） | (n/a) | **codex 全树共享** vs Aleph 局部（无跨 session 共享）— Aleph 不做，但 §4.10 的 `ConcurrencyLimiter` 全局信号已存在，可补 |
+  | wait 原语 | `wait`/`wait_any` + Notify + arm-before-check + `AllDelivered` 终止符 | **无 `wait` 工具/动作** — V2 通过 `SessionIo` 流订阅获取子代理结果；V1 用 `maybe_start_completion_watcher` + `tokio::sync::watch` | (n/a) | **Aleph 独自拥有 `wait` + `wait_any` + `AllDelivered` 终止符**，codex/pi 都无对位 |
+  | consumed 去重 | `consumed: bool` on `CompletedAgent` + `is_consumed` 守卫（announce 投递前早退） | 无 — codex V2 通过 `SessionIo` 直接流到父，**V2 不需要** dedup；V1 watcher 也不 dedup | (n/a) | Aleph 独有（announce 与 wait/check_status 两条独立完成路径的交叉） |
+  | 主动到达 (R5) | `subagent_announce.rs` + `GlobalBus::SubAgentCompleted` + retry `[0,30,120]s` | 无独立 announce 通道；V2 用 SessionIo 事件流；V1 改 watcher 状态后**直接 inject 到父对话** | (n/a) | Aleph 的全局 bus + retry 调度是独立形状，codex V2 直接接入更紧但**无 cross-§ 复用** |
+  | `wait_any` 终止符 | `AllDelivered { request_ids }` — drain loop 不再 spin | 无对位 | (n/a) | Aleph 独有（codex 无 first-completion 概念） |
+  | `unknown_ids` 显式列出 | `background_tracker::unknown_ids(&[String])` + `WaitAnyOutcome::NotFound { unknown_ids }` + `annotate_unknown` 三处 | 无对位 | (n/a) | Aleph 独有（typo 防误判 slow） |
+  | `wait_cancelled` 集成 | `loop_tool.rs` 在 `cancel.cancelled()` 触发时返 `wait_interrupted`（park 听令牌） | 无 wait 原语，无 cancel 集成 | (n/a) | Aleph 独有 |
+  | 类型化 lifecycle | `lifecycle_from_outcome`（`Cancelled`/`TimedOut`/`Failed` 严格按 producer 字串分类） | `AgentStatus = PendingInit | Running | Interrupted | Completed | Errored | Shutdown`（枚举 6 值） | (n/a) | **形态不同** — codex 枚举提前定型（编译时防误判），Aleph 字串后验（运行期严判）。codex 更优：编译期保证；Aleph 的「字符串到 enum」映射是耦合点 |
+  | **V2 常驻 / 卸出** | **无** — `BackgroundAgentTracker` 纯完成日志；TTL=1h + count cap=256 是唯一边界 | `V2Residency` (`core/src/agent/control/residency.rs`) + `try_unload_one_resident` — V2 把子代理线程**常驻**在内存，cap 满时按 LRU 卸出，**可再次 `ensure_v2_agent_loaded` 复活** | (n/a) | **Aleph 真落后** — 长寿命 V2 部署下 `BackgroundAgentTracker` 内存只增不减（虽 256 cap 但仍线性涨）；codex 的 residency pattern 是真参照 |
+  | **声明式角色 / 工具面** | `subagent` Rust 工具 + `ACCEPTED_ARG_KEYS` 漂移守卫 | `agent/builtins/{awaiter,explorer}.toml` (角色定义) + `codex-rs/core/src/tools/` 工具注册 | `packages/agent/src/harness/tools/{bash,edit,read,write}.ts`（无子代理） | codex **声明式角色**（TOML 配 agent_role）比 Aleph **编译时定义** 更灵活，但 Aleph 的漂移守卫更严 |
+  | `SessionSource::SubAgent` 枚举 | `ChainContext.depth: u32` + `SpawnMeta.root_session: String` | `SessionSource::SubAgent(SubAgentSource::ThreadSpawn { depth, ... })` | (n/a) | codex 用枚举保证来源类型安全；Aleph 用字符串 + 数字字段 |
+  | `Cancelled` vs `Errored` | 字串严判（`sub-agent failed: cancelled`） | 类型层 `Interrupted` vs `Errored(String)` 分离 | (n/a) | **codex 更优**（编译期保证） |
+  | 完成事件流 | `SubAgentCompleted` 单一事件，payload 含 `request_id` | `SessionIo: Receiver<EventMsg>` 持续流；每个事件都是 `EventMsg` 变体 | (n/a) | codex 流粒度更细；Aleph 单一事件 + `result_preview` 折中 |
+  | 上限 | TTL (1h) + count (256) 二重 | residency 软上限 + `try_unload_one_resident` LRU | (n/a) | codex 更适合长寿命；Aleph 的 count cap 简单但无情 |
+  | **pi 多代理** | (n/a) | (n/a) | **pi 没有 sub-agent 工具**（仅 bash/edit/read/write + extensions） | pi 不构成 §4.11 参照 |
+
+  **结论与 todo**：
+  - Aleph **wait 原语 + 终止符 + 去重 + 错误报告**这一族是**业界独有**（codex V2 都不做 wait；codex 走 SessionIo 直接流），不需要改 — 这部分设计与 codex 形成**正交**而非"落后"：codex 把子代理当成 in-process stream；Aleph 把子代理当成 fire-and-forget 句柄。
+  - Aleph **真正落后**的只有一项：`V2Residency` 常驻 LRU。**短寿命单会话部署**无所谓，**长寿命 V2 daemon 部署**（24×7，多用户 session 并发上限接近 cap）会线性涨直至 256 cap。**建议在 round-11 或之后补**：`BackgroundAgentTracker` 加 `Residency` 字段 + `try_unload_oldest_running` + `ensure_loaded(request_id)` 复活路径。改动面仅 tracker 内部 + 1 个新模块，不影响 wire/API。**未在本轮做**，因为：① 256 cap 在 V1 部署下足够（已观察到测试与生产典型 session 数 < 64）；② 真正的长寿命 V2 部署改造应在 §4.7（V2 lifecycle）/ §4.12（governance） 同轮评估，不应单点引入。
+  - **类型化 lifecycle 的形态差距**（字符串严判 vs codex 枚举）值得在 round-12+ 跟进——把 `CompletedOutcome::Err(String)` 升成 `CompletedFailure { kind: FailureKind, message: String }`，让所有严判位置变成编译期保证。**不在本轮做**，因为：① 这是公共 API 形变；② 需先决策 FailureKind 的判定口径（按消息前缀 vs 按 ErrPayload 字段 vs 混合），不属本轮范围。
+  - `SessionSource::SubAgent` 枚举化同理 — 是 §4.7 V2 长期规划的副产品。
+
+  **方法学注**：本轮 cross-verification 通过 `gio mount + gio cat` 读 SMB 真源（Linux 下 `smb://...` URL 不直接可访问，需 `gio mount` 路径或 `mount -t cifs`，本机前者已工作）。**建议把这一步记入 CLAUDE.md 的"读参考项目"段**——同一台 Linux 工作站后续做 R2 轮 polish 不必再撞 macOS URL 形式的坑。
 
 ### 4.12 循环治理图 (Loop-Graph Governance)
 - **口语关键词**：loop graph、循环治理、配看守、反指标、审计环、Goodhart、锚点、冻结节点、根参照、graph engineering、环看环
