@@ -3,6 +3,7 @@
 //! Manages pairing requests for unknown senders.
 //! Stores pending pairing codes and approved senders.
 
+use crate::gateway::security::store::OWNER_USER_ID;
 use crate::sync_primitives::Arc;
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
@@ -57,8 +58,18 @@ pub trait PairingStore: Send + Sync {
         metadata: HashMap<String, String>,
     ) -> Result<(String, bool), PairingError>;
 
-    /// Approve a pairing request by code, adding sender to allowlist
-    async fn approve(&self, channel: &str, code: &str) -> Result<PairingRequest, PairingError>;
+    /// Approve a pairing request by code, adding sender to allowlist.
+    ///
+    /// `user_id` links the approved sender to an Aleph user id; `None`
+    /// adopts the single-machine owner ([`OWNER_USER_ID`]). Re-approving an
+    /// already-approved sender with `user_id: None` does NOT clobber an
+    /// existing explicit link — only an explicit `Some` overrides one.
+    async fn approve(
+        &self,
+        channel: &str,
+        code: &str,
+        user_id: Option<&str>,
+    ) -> Result<PairingRequest, PairingError>;
 
     /// Reject/delete a pairing request
     async fn reject(&self, channel: &str, code: &str) -> Result<(), PairingError>;
@@ -150,7 +161,79 @@ impl SqlitePairingStore {
             CREATE INDEX IF NOT EXISTS idx_approved_channel ON approved_senders(channel);
             "#,
         )?;
+        Self::migrate_approved_senders_user_id(conn)?;
         Ok(())
+    }
+
+    /// Adds `approved_senders.user_id` if missing (databases created before
+    /// this column existed) and backfills any row still missing a value to
+    /// the single-machine owner.
+    ///
+    /// Idempotent — safe to call on every open. SQLite has no
+    /// `ALTER TABLE ... ADD COLUMN IF NOT EXISTS`, so the probe
+    /// (`pragma_table_info`) guards the `ALTER TABLE` by hand. The adoption
+    /// `UPDATE` runs unconditionally (not gated on the column having just
+    /// been added) so it also catches rows written via a codepath that
+    /// doesn't set `user_id` even after the column exists — a no-op once
+    /// every row already has a value.
+    fn migrate_approved_senders_user_id(conn: &Connection) -> Result<(), PairingError> {
+        let has_user_col: bool = {
+            let mut stmt = conn.prepare(
+                "SELECT 1 FROM pragma_table_info('approved_senders') WHERE name = 'user_id'",
+            )?;
+            stmt.exists([])?
+        };
+        if !has_user_col {
+            conn.execute("ALTER TABLE approved_senders ADD COLUMN user_id TEXT", [])?;
+        }
+        // Every pre-existing approved sender belonged to the single user.
+        conn.execute(
+            "UPDATE approved_senders SET user_id = ?1 WHERE user_id IS NULL",
+            params![OWNER_USER_ID],
+        )?;
+        Ok(())
+    }
+
+    /// Re-runs [`Self::migrate_approved_senders_user_id`] against the
+    /// already-open connection. Idempotent. Construction (`new`/`in_memory`)
+    /// already runs the migration once, so production code never needs to
+    /// call this explicitly — it exists so tests can exercise the adoption
+    /// path against a live connection that already holds data (an
+    /// in-memory database can't be "reopened" the way a file-backed one
+    /// can).
+    pub async fn run_migrations(&self) -> Result<(), PairingError> {
+        let conn = self.conn.lock().await;
+        Self::migrate_approved_senders_user_id(&conn)
+    }
+
+    /// Looks up the Aleph user id linked to an approved channel sender.
+    ///
+    /// Returns `None` when the sender has not been approved (unknown
+    /// `channel`/`sender_id` pair) — including on an internal DB error, so
+    /// callers can treat "no link" and "lookup failed" the same way. P1's
+    /// inbound-session-attribution consumer degrades to no attribution
+    /// rather than failing the whole request.
+    pub async fn sender_user(&self, channel: &str, sender_id: &str) -> Option<String> {
+        let conn = self.conn.lock().await;
+        match conn
+            .query_row(
+                "SELECT user_id FROM approved_senders WHERE channel = ?1 AND sender_id = ?2",
+                params![channel, sender_id],
+                |row| row.get::<_, Option<String>>(0),
+            )
+            .optional()
+        {
+            Ok(user_id) => user_id.flatten(),
+            Err(e) => {
+                tracing::warn!(
+                    "sender_user lookup failed for {}:{}: {}",
+                    channel,
+                    sender_id,
+                    e
+                );
+                None
+            }
+        }
     }
 
     /// Generate a random 6-character alphanumeric code
@@ -212,7 +295,12 @@ impl PairingStore for SqlitePairingStore {
         Ok((code, true))
     }
 
-    async fn approve(&self, channel: &str, code: &str) -> Result<PairingRequest, PairingError> {
+    async fn approve(
+        &self,
+        channel: &str,
+        code: &str,
+        user_id: Option<&str>,
+    ) -> Result<PairingRequest, PairingError> {
         let conn = self.conn.lock().await;
 
         // Find the request
@@ -249,11 +337,26 @@ impl PairingStore for SqlitePairingStore {
         // Approve + consume atomically: a crash between the INSERT and the
         // DELETE would otherwise leave the request pending while the sender is
         // already approved (an orphaned, re-approvable row).
+        //
+        // `user_id = COALESCE(?4, approved_senders.user_id, ?5)`: an unbound
+        // (`None`) re-approval must leave an existing explicit link
+        // untouched, not silently reassign it back to the owner — mirrors
+        // the `devices` table's `COALESCE(excluded.user_id, devices.user_id)`
+        // invariant (`src/gateway/security/store/devices.rs`). `?4` is the
+        // raw `user_id` param (not pre-resolved), so SQL — not Rust — is the
+        // single place that decides "explicit override" vs "keep existing".
+        // A brand-new row (no conflict) has no prior value to preserve, so
+        // its `VALUES` clause defaults straight to the owner via the same
+        // `COALESCE(?4, ?5)`.
         let now = Utc::now().to_rfc3339();
         let tx = conn.unchecked_transaction()?;
         tx.execute(
-            "INSERT OR REPLACE INTO approved_senders (channel, sender_id, approved_at) VALUES (?1, ?2, ?3)",
-            params![channel, sender_id, now],
+            "INSERT INTO approved_senders (channel, sender_id, approved_at, user_id)
+             VALUES (?1, ?2, ?3, COALESCE(?4, ?5))
+             ON CONFLICT(channel, sender_id) DO UPDATE SET
+                 approved_at = excluded.approved_at,
+                 user_id = COALESCE(?4, approved_senders.user_id, ?5)",
+            params![channel, sender_id, now, user_id, OWNER_USER_ID],
         )?;
         tx.execute(
             "DELETE FROM pairing_requests WHERE channel = ?1 AND code = ?2",
@@ -400,6 +503,21 @@ impl PairingStore for SqlitePairingStore {
 }
 
 #[cfg(test)]
+impl SqlitePairingStore {
+    /// Raw INSERT into `approved_senders` that omits the `user_id` column —
+    /// simulates a row written before this migration existed, to exercise
+    /// [`Self::run_migrations`]'s adoption path.
+    async fn raw_insert_approved(&self, channel: &str, sender_id: &str) {
+        let conn = self.conn.lock().await;
+        conn.execute(
+            "INSERT INTO approved_senders (channel, sender_id, approved_at) VALUES (?1, ?2, ?3)",
+            params![channel, sender_id, Utc::now().to_rfc3339()],
+        )
+        .expect("raw_insert_approved");
+    }
+}
+
+#[cfg(test)]
 mod tests {
     use super::*;
 
@@ -442,7 +560,7 @@ mod tests {
             .await
             .unwrap();
 
-        let request = store.approve("imessage", &code).await.unwrap();
+        let request = store.approve("imessage", &code, None).await.unwrap();
         assert_eq!(request.sender_id, "+15551234567");
 
         // Should be approved now
@@ -503,7 +621,7 @@ mod tests {
             .upsert("imessage", "+15551234567", HashMap::new())
             .await
             .unwrap();
-        store.approve("imessage", &code).await.unwrap();
+        store.approve("imessage", &code, None).await.unwrap();
 
         assert!(store.is_approved("imessage", "+15551234567").await.unwrap());
 
@@ -535,7 +653,7 @@ mod tests {
 
         // Approval is rejected as expired...
         assert!(matches!(
-            store.approve("imessage", &code).await,
+            store.approve("imessage", &code, None).await,
             Err(PairingError::Expired)
         ));
         // ...the stale row is consumed so a later retry can't approve it...
@@ -567,7 +685,71 @@ mod tests {
             .unwrap();
         }
 
-        assert!(store.approve("imessage", &code).await.is_ok());
+        assert!(store.approve("imessage", &code, None).await.is_ok());
         assert!(store.is_approved("imessage", "+15551234567").await.unwrap());
+    }
+
+    /// Upserts a pairing request then approves it, optionally linking an
+    /// explicit user id — mirrors the two-step `upsert` + `approve` flow
+    /// real callers use (there is no direct "approve by sender_id" path;
+    /// approval always consumes a pairing code).
+    async fn approve_fixture(
+        store: &SqlitePairingStore,
+        channel: &str,
+        sender_id: &str,
+        user_id: Option<&str>,
+    ) {
+        let (code, _) = store
+            .upsert(channel, sender_id, HashMap::new())
+            .await
+            .unwrap();
+        store.approve(channel, &code, user_id).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn approve_links_owner_by_default_and_honors_explicit_user() {
+        let store = SqlitePairingStore::in_memory().unwrap();
+        approve_fixture(&store, "telegram", "12345", None).await;
+        assert_eq!(
+            store.sender_user("telegram", "12345").await.as_deref(),
+            Some(OWNER_USER_ID)
+        );
+
+        approve_fixture(&store, "telegram", "67890", Some("u-alice")).await;
+        assert_eq!(
+            store.sender_user("telegram", "67890").await.as_deref(),
+            Some("u-alice")
+        );
+    }
+
+    #[tokio::test]
+    async fn migration_adopts_existing_approved_senders_to_owner() {
+        let store = SqlitePairingStore::in_memory().unwrap();
+        // Simulate a pre-migration row (raw SQL insert without user_id).
+        store.raw_insert_approved("telegram", "old-peer").await;
+        store.run_migrations().await.unwrap();
+        assert_eq!(
+            store.sender_user("telegram", "old-peer").await.as_deref(),
+            Some(OWNER_USER_ID)
+        );
+    }
+
+    #[tokio::test]
+    async fn approve_reapproval_does_not_clobber_explicit_link_with_owner_default() {
+        // Task 6 resolution 4: a later owner-default approval (user_id=None)
+        // must not overwrite an existing explicit user link.
+        let store = SqlitePairingStore::in_memory().unwrap();
+        approve_fixture(&store, "telegram", "12345", Some("u-alice")).await;
+        approve_fixture(&store, "telegram", "12345", None).await;
+        assert_eq!(
+            store.sender_user("telegram", "12345").await.as_deref(),
+            Some("u-alice")
+        );
+    }
+
+    #[tokio::test]
+    async fn sender_user_returns_none_for_unknown_pair() {
+        let store = SqlitePairingStore::in_memory().unwrap();
+        assert_eq!(store.sender_user("telegram", "never-approved").await, None);
     }
 }
