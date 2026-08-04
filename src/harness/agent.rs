@@ -26,11 +26,10 @@ use crate::sync_primitives::{AtomicBool, AtomicU32, AtomicU64, Mutex, Ordering};
 use std::sync::OnceLock;
 use std::time::Instant;
 
-use async_trait::async_trait;
 use serde_json::{json, Value};
 use tokio_util::sync::CancellationToken;
 
-use crate::harness::callback::{HarnessCallback, NoopHarnessCallback};
+use crate::harness::callback::HarnessCallback;
 use crate::harness::deps::HarnessDeps;
 use crate::harness::trait_def::{HarnessError, TurnState, TurnStep};
 use crate::orchestrator::dispatch::{TerminateReason, TokenBreakdown, ToolInvocation};
@@ -461,29 +460,6 @@ impl AgentHarness {
                 SessionEvent::UserMessage { synthetic, .. } if !*synthetic
             )
         })
-    }
-}
-
-#[async_trait]
-impl crate::session::SessionDriver for AgentHarness {
-    async fn drive(&self, session_id: &SessionId) -> crate::error::Result<()> {
-        let mut cb = NoopHarnessCallback;
-        let cancel = tokio_util::sync::CancellationToken::new();
-        self.run(session_id, &mut cb, &cancel)
-            .await
-            .map_err(|e| match e {
-                HarnessError::Cancelled => crate::error::AlephError::Cancelled,
-                HarnessError::Llm(inner) => inner,
-                HarnessError::Tool(tool_err) => {
-                    crate::error::AlephError::provider(format!("harness tool error: {tool_err}"))
-                }
-                HarnessError::Session(sess_err) => {
-                    crate::error::AlephError::provider(format!("harness session error: {sess_err}"))
-                }
-                HarnessError::StalledTurn { elapsed } => crate::error::AlephError::provider(
-                    format!("agent turn stalled in Think after {elapsed:?}"),
-                ),
-            })
     }
 }
 

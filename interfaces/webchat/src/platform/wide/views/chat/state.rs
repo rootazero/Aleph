@@ -103,20 +103,6 @@ pub enum ChatSendErrorCode {
     Unknown,
 }
 
-impl ChatSendErrorCode {
-    /// CSS modifier class for the inline banner. Lives here so the UI
-    /// layer can theme severity by code without a giant match table.
-    #[must_use]
-    pub const fn severity_class(self) -> &'static str {
-        match self {
-            // Soft warning — yellow accent
-            Self::PromptReview => "warning",
-            // Hard block — red accent (default for everything else too)
-            _ => "danger",
-        }
-    }
-}
-
 /// Structured chat send error — preferred over the legacy bare
 /// `error_message` string. Both are populated in lock-step so existing
 /// readers keep working unchanged.
@@ -1110,20 +1096,6 @@ impl ChatState {
                 msg.model_info = Some(info);
             }
         });
-    }
-
-    /// Resolved model id for `run_id`, read from the assistant bubble's
-    /// `model_info`. Used by the context gauge to pick a window size.
-    #[must_use]
-    pub fn model_for_run(&self, run_id: &str) -> Option<String> {
-        let target_id = format!("assistant-{run_id}");
-        self.messages.with(|msgs| {
-            msgs.iter()
-                .rev()
-                .find(|m| m.id == target_id)
-                .and_then(|m| m.model_info.as_ref())
-                .map(|info| info.model.clone())
-        })
     }
 
     /// Append a response text chunk to the current assistant message.

@@ -51,12 +51,27 @@ pub fn PhoneTabBar() -> impl IntoView {
 /// back + title), scroll body, shared bottom tab bar. `back=None` = landing
 /// (left-aligned title, no back); `back=Some(route)` = detail (centered title +
 /// back button). Root uses `h-dvh` so the tab bar clears the mobile browser bar.
+///
+/// `title` is `impl Into<String>` (not `&'static str`) so a caller can hand it a
+/// runtime-resolved label — the settings drill-down titles its screens from
+/// `SettingsTab::i18n_label`, which is a `String`. Literals still work verbatim.
+/// `back` / `back_label` stay `&'static str`: they are route constants.
+///
+/// `wrapped` marks the case where `children` is a **desktop page body** rather
+/// than hand-built iOS content (the settings drill-down's 17 pages without a
+/// native screen, and every `PhoneDashboard` leaf). Those pages bring their own
+/// `p-6` gutters and their own inner scroll, so the shell's 16 px padding and
+/// 20 px gap were stacked on top of desktop padding — 40 px of gutter on a
+/// 390 px viewport. It also scopes the `.phone-wrapped` shim (`styles/ios.css`),
+/// which stacks the desktop two-column layouts, collapses multi-column grids and
+/// drops the macOS traffic-light inset that is meaningless inside this shell.
 #[component]
 #[must_use]
 pub fn PhoneShell(
-    title: &'static str,
+    #[prop(into)] title: String,
     #[prop(optional)] back: Option<&'static str>,
     #[prop(optional)] back_label: Option<&'static str>,
+    #[prop(optional)] wrapped: bool,
     children: Children,
 ) -> impl IntoView {
     let navigate = use_navigate();
@@ -92,8 +107,16 @@ pub fn PhoneShell(
                 <span style=title_style>{title}</span>
             </div>
             <div
-                class="cc-hide-scroll"
-                style="flex:1; min-height:0; overflow-y:auto; display:flex; flex-direction:column; gap:20px; padding:16px 16px 18px;"
+                class=if wrapped {
+                    "cc-hide-scroll phone-wrapped"
+                } else {
+                    "cc-hide-scroll"
+                }
+                style=if wrapped {
+                    "flex:1; min-height:0; overflow-y:auto; display:flex; flex-direction:column;"
+                } else {
+                    "flex:1; min-height:0; overflow-y:auto; display:flex; flex-direction:column; gap:20px; padding:16px 16px 18px;"
+                }
             >
                 {children()}
             </div>

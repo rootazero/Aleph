@@ -8,30 +8,16 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::Path;
 
-/// Node.js package manager preference.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
-#[serde(rename_all = "lowercase")]
-pub enum NodeManager {
-    #[default]
-    Npm,
-    Pnpm,
-    Yarn,
-    Bun,
-}
-
 /// Global install preferences.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct InstallPreferences {
     #[serde(default)]
     pub prefer_brew: bool,
-    #[serde(default)]
-    pub node_manager: NodeManager,
 }
 impl Default for InstallPreferences {
     fn default() -> Self {
         Self {
             prefer_brew: cfg!(target_os = "macos"),
-            node_manager: NodeManager::Npm,
         }
     }
 }
@@ -120,7 +106,6 @@ mod tests {
     fn default_config() {
         let config = SkillsConfig::default();
         assert!(config.entries.is_empty());
-        assert_eq!(config.install_preferences.node_manager, NodeManager::Npm);
     }
 
     #[test]

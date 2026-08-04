@@ -5,7 +5,10 @@
 use crate::platform::phone::shell::PhoneShell;
 use leptos::prelude::*;
 
-fn current_host() -> String {
+/// The host this Panel is served from. `pub(crate)` because the Settings
+/// landing shows the same value in its Connection row — one source, so the row
+/// can never drift from the detail screen it drills into.
+pub(crate) fn current_host() -> String {
     web_sys::window()
         .and_then(|w| w.location().host().ok())
         .unwrap_or_default()
@@ -16,7 +19,7 @@ fn host_only(host: &str) -> &str {
     }
     host.split(':').next().unwrap_or(host)
 }
-fn is_loopback_host(host: &str) -> bool {
+pub(crate) fn is_loopback_host(host: &str) -> bool {
     let h = host_only(host);
     h.eq_ignore_ascii_case("localhost") || h == "::1" || h.starts_with("127.")
 }

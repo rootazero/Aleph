@@ -45,7 +45,11 @@ use crate::platform::phone::settings::connection::PhoneConnection;
 use crate::platform::phone::settings::embeddings::PhoneEmbeddings;
 use crate::platform::phone::settings::model_route::PhoneModelRoute;
 use crate::platform::phone::settings::providers::PhoneProviders;
-use crate::platform::phone::settings::PhoneSettings;
+use crate::platform::phone::settings::{
+    screen_for_path as phone_settings_screen, title_for_path as phone_settings_title, NativeScreen,
+    PhoneSettings, PhoneSettingsScreen,
+};
+use crate::platform::phone::shell::PhoneShell;
 use crate::platform::phone::teams::PhoneTeams;
 use crate::state::hotkey::{self as hotkey, HotkeyState};
 use crate::state::layout::{LayoutMode, WorkspaceState};
@@ -266,6 +270,19 @@ fn AppContent() -> impl IntoView {
     let mem_for_shell = expect_context::<MemoryState>();
     let ff_for_shell = expect_context::<FormFactorState>();
 
+    // Desktop shell chrome is mounted only OUTSIDE the phone band.
+    //
+    // Every phone screen is a `fixed h-dvh z-[70]` overlay, so the sidebar
+    // (z-auto, in flow), the fixed collapse toggle (z-60), the macOS drag band
+    // (z-50) and the alerts bell (z-50 / popover z-55) were covered purely by
+    // z-order while still being mounted, laid out and painted underneath — one
+    // stacking accident away from showing through the phone's translucent glass
+    // chrome, and paying full layout/effect cost for UI no phone user can reach
+    // (the bell in particular is unreachable: nothing on phone rises above 70).
+    // Gating them here removes the whole class by construction rather than
+    // relying on the overlay staying opaque and on top.
+    let not_phone = move || ff_for_shell.form_factor.get() != FormFactor::Phone;
+
     view! {
         // Two-column shell (Codex) floating on the drifting light-field.
         <div
@@ -296,32 +313,37 @@ fn AppContent() -> impl IntoView {
             //     SidebarBrand handles it.
             // `data-tauri-drag-region="false"` opts out of the parent drag
             // strip so clicks aren't swallowed by the window-drag handler.
-            <button
-                type="button"
-                class="aleph-sidebar-toggle"
-                data-tauri-drag-region="false"
-                on:click={
-                    let mem = mem_for_shell;
-                    move |_| {
-                        let s = &mem.sidebar_collapsed;
-                        s.set(!s.get());
+            <Show when=not_phone>
+                <button
+                    type="button"
+                    class="aleph-sidebar-toggle"
+                    data-tauri-drag-region="false"
+                    on:click={
+                        let mem = mem_for_shell;
+                        move |_| {
+                            let s = &mem.sidebar_collapsed;
+                            s.set(!s.get());
+                        }
                     }
-                }
-                title="Toggle sidebar (Esc)"
-                aria-label="Toggle sidebar"
-            >
-                <svg
-                    width="16" height="16" viewBox="0 0 24 24" fill="none"
-                    stroke="currentColor" stroke-width="1.8"
-                    stroke-linecap="round" stroke-linejoin="round"
+                    title="Toggle sidebar (Esc)"
+                    aria-label="Toggle sidebar"
                 >
-                    <rect x="3" y="5" width="18" height="14" rx="2.5" />
-                    <line x1="9" y1="5" x2="9" y2="19" />
-                </svg>
-            </button>
+                    <svg
+                        width="16" height="16" viewBox="0 0 24 24" fill="none"
+                        stroke="currentColor" stroke-width="1.8"
+                        stroke-linecap="round" stroke-linejoin="round"
+                    >
+                        <rect x="3" y="5" width="18" height="14" rx="2.5" />
+                        <line x1="9" y1="5" x2="9" y2="19" />
+                    </svg>
+                </button>
+            </Show>
             <Router>
-                // Left column — context-aware sidebar, full window height
-                <ModeSidebar />
+                // Left column — context-aware sidebar, full window height.
+                // Phone has its own tab bar; see `not_phone` above.
+                <Show when=not_phone>
+                    <ModeSidebar />
+                </Show>
 
                 // Main content area — `relative` is the positioning
                 // ancestor for the absolutely-floating drag band below.
@@ -342,12 +364,14 @@ fn AppContent() -> impl IntoView {
                     // `z-50` keeps the band's chrome chips above
                     // tab content; the band itself is transparent
                     // so any text scrolling beneath is fine.
-                    <div
-                        class="aleph-main-drag-band z-50"
-                        data-tauri-drag-region=""
-                    >
-                        <ChatBandChrome />
-                    </div>
+                    <Show when=not_phone>
+                        <div
+                            class="aleph-main-drag-band z-50"
+                            data-tauri-drag-region=""
+                        >
+                            <ChatBandChrome />
+                        </div>
+                    </Show>
                     <MainContent />
                 </main>
 
@@ -358,7 +382,14 @@ fn AppContent() -> impl IntoView {
 
                 // Aggregate alert surface — bell + popover anchored top-right.
                 // Reads DashboardState.alerts (already wired via alerts.**).
-                <NotificationCenter />
+                // Desktop/tablet only: its bell is z-50 and its popover z-55,
+                // both below every phone screen's z-70 overlay, so on phone it
+                // has never been clickable. Rendering it there bought nothing
+                // and put live desktop chrome under the phone's glass bars. A
+                // phone-native alerts entry point is separate work.
+                <Show when=not_phone>
+                    <NotificationCenter />
+                </Show>
 
                 // Runtime recovery overlay — engages when the panel was live
                 // but lost the Gateway and exhausted automatic reconnects.
@@ -546,99 +577,108 @@ fn DashboardRouter() -> impl IntoView {
     }
 }
 
-/// Settings sub-routing
+/// Settings sub-routing.
+///
+/// Two form factors, one path table. Wide renders the desktop page body
+/// directly; Phone asks [`phone_settings_screen`] which of its screens serves
+/// the path — a hand-built iOS screen where one exists, otherwise the *same*
+/// desktop body wrapped in `PhoneShell` so it gets a title, a `‹ Settings` back
+/// button and the tab bar. Wrapping is what makes the 17 settings pages without
+/// a native phone screen usable at all on a phone: before it, they rendered the
+/// 256 px desktop sidebar into a 390 px viewport with no way back.
 #[component]
 fn SettingsRouter() -> impl IntoView {
     let location = use_location();
     let form_factor = expect_context::<FormFactorState>();
+    let i18n = use_i18n();
 
     move || {
         let path = location.pathname.get();
-        match path.as_str() {
-            // Single-tier Gateway-token model: any connection that can reach
-            // these settings is already authorized (operator) — loopback or a
-            // token-validated remote — so there is no per-page ConfigGate; the
-            // login wall (TokenWall) is the one and only gate.
-            "/settings" => {
-                if form_factor.form_factor.get() == FormFactor::Phone {
-                    view! { <PhoneSettings /> }.into_any()
-                } else {
-                    view! { <Settings /> }.into_any()
-                }
-            }
-            "/settings/general" => view! { <GeneralView /> }.into_any(),
-            "/settings/appearance" => {
-                if form_factor.form_factor.get() == FormFactor::Phone {
-                    view! { <PhoneAppearance /> }.into_any()
-                } else {
-                    view! { <AppearanceView /> }.into_any()
-                }
-            }
-            "/settings/behavior" => view! { <BehaviorView /> }.into_any(),
-
-            // AI
-            "/settings/search" => view! { <SearchView /> }.into_any(),
-            "/settings/providers" => {
-                if form_factor.form_factor.get() == FormFactor::Phone {
-                    view! { <PhoneProviders /> }.into_any()
-                } else {
-                    view! { <ProvidersView /> }.into_any()
-                }
-            }
-            "/settings/embedding-providers" => {
-                if form_factor.form_factor.get() == FormFactor::Phone {
-                    view! { <PhoneEmbeddings /> }.into_any()
-                } else {
-                    view! { <EmbeddingProvidersView /> }.into_any()
-                }
-            }
-            "/settings/reranking-providers" => view! { <RerankingProvidersView /> }.into_any(),
-            "/settings/generation-providers" => view! { <GenerationProvidersView /> }.into_any(),
-            "/settings/moa" => view! { <MoaView /> }.into_any(),
-            "/settings/model-route" => {
-                if form_factor.form_factor.get() == FormFactor::Phone {
-                    view! { <PhoneModelRoute /> }.into_any()
-                } else {
-                    view! { <RouteView /> }.into_any()
-                }
-            }
-            "/settings/memory" => view! { <MemoryView /> }.into_any(),
-
-            // Browser
-            "/settings/browser" => view! { <BrowserView /> }.into_any(),
-            "/settings/network" => {
-                if form_factor.form_factor.get() == FormFactor::Phone {
-                    view! { <PhoneConnection /> }.into_any()
-                } else {
-                    view! { <NetworkView /> }.into_any()
-                }
-            }
-
-            // Extensions
-            "/settings/routing" => view! { <RoutingRulesView /> }.into_any(),
-            "/settings/mcp" => view! { <McpView /> }.into_any(),
-            "/settings/plugins" => view! { <PluginsView /> }.into_any(),
-            "/settings/skills" => view! { <SkillsView /> }.into_any(),
-            "/settings/acp" => view! { <AcpHarnessesView /> }.into_any(),
-
-            // Security
-            "/settings/security" => view! { <SecurityView /> }.into_any(),
-            "/settings/policies" => view! { <PoliciesView /> }.into_any(),
-            "/settings/execution" => view! { <ExecutionView /> }.into_any(),
-            // Channels
-            "/settings/channels" => view! { <ChannelsOverview /> }.into_any(),
-            _ if path.starts_with("/settings/channels/") => {
-                let platform_type = path
-                    .strip_prefix("/settings/channels/")
-                    .unwrap_or("")
-                    .to_string();
-                let platform_type = StoredValue::new(platform_type);
-                view! { <ChannelPlatformPage platform_type=platform_type.get_value() /> }.into_any()
-            }
-
-            // Not in settings mode or unknown path — render nothing (div is hidden)
-            _ => ().into_any(),
+        if form_factor.form_factor.get() != FormFactor::Phone {
+            return desktop_settings_body(&path);
         }
+        match phone_settings_screen(&path) {
+            // Not in settings mode — render nothing (div is hidden).
+            PhoneSettingsScreen::NotSettings => ().into_any(),
+            PhoneSettingsScreen::Landing => view! { <PhoneSettings /> }.into_any(),
+            PhoneSettingsScreen::Native(NativeScreen::Appearance) => {
+                view! { <PhoneAppearance /> }.into_any()
+            }
+            PhoneSettingsScreen::Native(NativeScreen::Connection) => {
+                view! { <PhoneConnection /> }.into_any()
+            }
+            PhoneSettingsScreen::Native(NativeScreen::Embeddings) => {
+                view! { <PhoneEmbeddings /> }.into_any()
+            }
+            PhoneSettingsScreen::Native(NativeScreen::ModelRoute) => {
+                view! { <PhoneModelRoute /> }.into_any()
+            }
+            PhoneSettingsScreen::Native(NativeScreen::Providers) => {
+                view! { <PhoneProviders /> }.into_any()
+            }
+            PhoneSettingsScreen::Wrapped => view! {
+                <PhoneShell title=phone_settings_title(&path, i18n) back="/settings" wrapped=true>
+                    {desktop_settings_body(&path)}
+                </PhoneShell>
+            }
+            .into_any(),
+        }
+    }
+}
+
+/// The desktop page body for a `/settings…` path — the single path table both
+/// form factors read. Returns nothing for non-settings paths (the container div
+/// is hidden then anyway).
+///
+/// Single-tier Gateway-token model: any connection that can reach these settings
+/// is already authorized (operator) — loopback or a token-validated remote — so
+/// there is no per-page ConfigGate; the login wall (TokenWall) is the one and
+/// only gate.
+fn desktop_settings_body(path: &str) -> AnyView {
+    match path {
+        "/settings" => view! { <Settings /> }.into_any(),
+        "/settings/general" => view! { <GeneralView /> }.into_any(),
+        "/settings/appearance" => view! { <AppearanceView /> }.into_any(),
+        "/settings/behavior" => view! { <BehaviorView /> }.into_any(),
+
+        // AI
+        "/settings/search" => view! { <SearchView /> }.into_any(),
+        "/settings/providers" => view! { <ProvidersView /> }.into_any(),
+        "/settings/embedding-providers" => view! { <EmbeddingProvidersView /> }.into_any(),
+        "/settings/reranking-providers" => view! { <RerankingProvidersView /> }.into_any(),
+        "/settings/generation-providers" => view! { <GenerationProvidersView /> }.into_any(),
+        "/settings/moa" => view! { <MoaView /> }.into_any(),
+        "/settings/model-route" => view! { <RouteView /> }.into_any(),
+        "/settings/memory" => view! { <MemoryView /> }.into_any(),
+
+        // Browser
+        "/settings/browser" => view! { <BrowserView /> }.into_any(),
+        "/settings/network" => view! { <NetworkView /> }.into_any(),
+
+        // Extensions
+        "/settings/routing" => view! { <RoutingRulesView /> }.into_any(),
+        "/settings/mcp" => view! { <McpView /> }.into_any(),
+        "/settings/plugins" => view! { <PluginsView /> }.into_any(),
+        "/settings/skills" => view! { <SkillsView /> }.into_any(),
+        "/settings/acp" => view! { <AcpHarnessesView /> }.into_any(),
+
+        // Security
+        "/settings/security" => view! { <SecurityView /> }.into_any(),
+        "/settings/policies" => view! { <PoliciesView /> }.into_any(),
+        "/settings/execution" => view! { <ExecutionView /> }.into_any(),
+        // Channels
+        "/settings/channels" => view! { <ChannelsOverview /> }.into_any(),
+        _ if path.starts_with("/settings/channels/") => {
+            let platform_type = path
+                .strip_prefix("/settings/channels/")
+                .unwrap_or("")
+                .to_string();
+            let platform_type = StoredValue::new(platform_type);
+            view! { <ChannelPlatformPage platform_type=platform_type.get_value() /> }.into_any()
+        }
+
+        // Not in settings mode or unknown path — render nothing (div is hidden)
+        _ => ().into_any(),
     }
 }
 

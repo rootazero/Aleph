@@ -565,28 +565,6 @@ impl StreamEvent {
             | Self::ContextGauge { run_id, .. } => run_id,
         }
     }
-
-    /// Get the JSON-RPC method name for this event
-    #[must_use]
-    pub const fn method_name(&self) -> &'static str {
-        match self {
-            Self::RunAccepted { .. } => "stream.run_accepted",
-            Self::Reasoning { .. } => "stream.reasoning",
-            Self::ToolStart { .. } => "stream.tool_start",
-            Self::ToolUpdate { .. } => "stream.tool_update",
-            Self::ToolEnd { .. } => "stream.tool_end",
-            Self::AgentTrace { .. } => "stream.agent_trace",
-            Self::ResponseChunk { .. } => "stream.response_chunk",
-            Self::RunComplete { .. } => "stream.run_complete",
-            Self::RunError { .. } => "stream.run_error",
-            Self::AskUser { .. } => "stream.ask_user",
-            Self::ReasoningBlock { .. } => "stream.reasoning_block",
-            Self::UncertaintySignal { .. } => "stream.uncertainty_signal",
-            Self::RunRetrying { .. } => "stream.run_retrying",
-            Self::ModelResolved { .. } => "stream.model_resolved",
-            Self::ContextGauge { .. } => "stream.context_gauge",
-        }
-    }
 }
 
 /// Result of a tool execution
@@ -616,12 +594,6 @@ impl ToolResult {
             error: Some(error.into()),
             metadata: None,
         }
-    }
-
-    #[must_use]
-    pub fn with_metadata(mut self, metadata: Value) -> Self {
-        self.metadata = Some(metadata);
-        self
     }
 }
 
@@ -711,18 +683,6 @@ pub struct TokenBreakdownView {
     pub reasoning: u32,
 }
 
-/// Configuration changed event
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct ConfigChangedEvent {
-    /// Changed section path (e.g., "ui.theme")
-    pub section: Option<String>,
-    /// New config value (full config if section is None)
-    pub value: Value,
-    /// Change timestamp
-    pub timestamp: i64,
-}
-
 /// Tool execution summary item
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ToolSummaryItem {
@@ -762,30 +722,6 @@ mod tests {
     }
 
     #[test]
-    fn test_stream_event_method_names() {
-        let event = StreamEvent::Reasoning {
-            run_id: "".to_string(),
-            seq: 0,
-            content: "".to_string(),
-            is_complete: false,
-        };
-        assert_eq!(event.method_name(), "stream.reasoning");
-
-        let event = StreamEvent::ToolStart {
-            run_id: "".to_string(),
-            seq: 0,
-            tool_name: "".to_string(),
-            tool_id: "".to_string(),
-            params: serde_json::json!({}),
-        };
-        assert_eq!(event.method_name(), "stream.tool_start");
-
-        let event =
-            StreamEvent::agent_trace("run-1", 1, AgentTraceEvent::TurnStarted { iteration: 1 });
-        assert_eq!(event.method_name(), "stream.agent_trace");
-    }
-
-    #[test]
     fn run_retrying_deserializes_from_gateway_frame_shape() {
         // Wire-compat guard: this is the exact params shape the gateway's
         // `GatewayEventFrame::RunRetrying` serializes (tag = "type",
@@ -815,7 +751,6 @@ mod tests {
             other => panic!("expected RunRetrying, got {other:?}"),
         }
         assert_eq!(event.run_id(), "run-9");
-        assert_eq!(event.method_name(), "stream.run_retrying");
     }
 
     #[test]
@@ -844,7 +779,6 @@ mod tests {
             other => panic!("expected ModelResolved, got {other:?}"),
         }
         assert_eq!(event.run_id(), "run-3");
-        assert_eq!(event.method_name(), "stream.model_resolved");
     }
 
     #[test]
@@ -876,7 +810,6 @@ mod tests {
             other => panic!("expected ContextGauge, got {other:?}"),
         }
         assert_eq!(event.run_id(), "run-7");
-        assert_eq!(event.method_name(), "stream.context_gauge");
     }
 
     #[test]
@@ -929,18 +862,6 @@ mod tests {
         assert!(UncertaintyAction::AskForClarification
             .description()
             .contains("clarification"));
-    }
-
-    #[test]
-    fn test_config_changed_event_serde() {
-        let event = ConfigChangedEvent {
-            section: Some("ui.theme".to_string()),
-            value: serde_json::json!({"color": "dark"}),
-            timestamp: 1735689600,
-        };
-        let json = serde_json::to_string(&event).unwrap();
-        let parsed: ConfigChangedEvent = serde_json::from_str(&json).unwrap();
-        assert_eq!(parsed.section, Some("ui.theme".to_string()));
     }
 
     #[test]

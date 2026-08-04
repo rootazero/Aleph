@@ -143,6 +143,10 @@ pub fn render_gather_notice(events: &[SessionEventRecord]) -> Option<String> {
     Some(out)
 }
 
+/// Sum `cost_cents` from all successful gather-tool results in `events`.
+///
+/// Reads `ToolOutputMetadata::cost_cents` — the same field the harness now
+/// populates from provider metering data at tool-result construction time.
 #[cfg(test)]
 mod tests {
     use super::*;

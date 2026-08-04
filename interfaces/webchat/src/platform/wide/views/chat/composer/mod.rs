@@ -7,7 +7,11 @@
 //! (high cohesion, low coupling) — each submodule is independently
 //! testable and the orchestrator now fits inside the 400 LOC ceiling.
 
-mod attachments;
+// `pub(crate)`: the phone composer reuses the same file reader and preview bar
+// rather than growing a second attachment pipeline (`PendingAttachment` and the
+// tray on `ChatState` are already shared, so a second reader would only be a
+// second place for the base64 dance to drift).
+pub(crate) mod attachments;
 mod palette;
 mod voice;
 
@@ -33,8 +37,8 @@ use shared_ui_logic::safety::{
     check_prompt_injection, prompt_guard_message, PromptInjectionVerdict,
 };
 use shared_ui_logic::state::{
-    should_auto_drain_on_settle, should_flush_on_turn_boundary, should_recall_on_bare_arrow_up,
-    was_busy_across_switch,
+    session_dials_for_send, should_auto_drain_on_settle, should_flush_on_turn_boundary,
+    should_recall_on_bare_arrow_up, was_busy_across_switch,
 };
 use wasm_bindgen::closure::Closure;
 use wasm_bindgen::JsCast;
@@ -255,20 +259,14 @@ pub(super) fn InputArea() -> impl IntoView {
         // Per-turn model override stamped on ChatState → daemon's run
         // loop short-circuits its provider-fallback chain.
         let model_override = chat.selected_model.get();
-        // The composer's exec tier. Carried on every send, because on the FIRST
-        // send there is no session row to have written it to — and that is the
-        // turn the picker was armed for. The server stamps it onto the session.
-        let tier = chat.session_exec_tier.get();
-        // The composer's usage mode. Unlike the tier it is carried ONLY on
-        // the first send (no session row exists yet to have been patched):
-        // once a session exists the store is authoritative, and re-carrying
-        // the pill's cached value would out-rank and silently revert a
-        // `session_set_mode` switch the model made mid-conversation.
-        let mode = if session_key.is_some() {
-            None
-        } else {
-            chat.session_mode.get()
-        };
+        // The two per-session dials. The rule (tier every send, mode only on
+        // the first) is `session_dials_for_send` — shared with the phone
+        // composer, which has to agree with this one exactly.
+        let (tier, mode) = session_dials_for_send(
+            session_key.is_some(),
+            chat.session_exec_tier.get(),
+            chat.session_mode.get(),
+        );
         // Capture the conversation active at *send* time. Binding the run to
         // this (rather than to whichever tab is focused when `run_accepted`
         // arrives) is what lets the user send in A, switch to B, and still have
@@ -450,14 +448,13 @@ pub(super) fn InputArea() -> impl IntoView {
         let agent_id = chat.agent_id.get_untracked();
         let project_root = chat.active_project_root.get_untracked();
         let model_override = chat.selected_model.get_untracked();
-        let tier = chat.session_exec_tier.get_untracked();
-        // First-send-only carriage — see the typed-send path above. Queue
-        // flush always has a live session, so this is None in practice.
-        let mode = if session_key.is_some() {
-            None
-        } else {
-            chat.session_mode.get_untracked()
-        };
+        // Same rule as the typed send above. A queue flush all but always has
+        // a live session, so `mode` is None in practice.
+        let (tier, mode) = session_dials_for_send(
+            session_key.is_some(),
+            chat.session_exec_tier.get_untracked(),
+            chat.session_mode.get_untracked(),
+        );
         // Bind the run to the conversation that is active *now*, exactly as the
         // typed path does: a flush on the busy->idle settle starts a fresh run,
         // and if the user has switched tabs by the time `run_accepted` arrives,

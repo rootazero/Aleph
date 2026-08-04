@@ -322,7 +322,7 @@ mod tests {
     use crate::gateway::channel_registry::ChannelRegistry;
     use crate::gateway::event_emitter::RunSummary;
     use crate::gateway::interfaces::feishu::auth::TokenManager;
-    use crate::gateway::media::{MediaItem, PendingMedia};
+    use crate::gateway::media::PendingMedia;
 
     /// Emitter in the state that used to lose media: a card already streamed
     /// (and closed, so finishing it needs no API call) and a run's worth of
@@ -375,13 +375,7 @@ mod tests {
     /// for any run that got a streaming card.
     #[tokio::test]
     async fn run_complete_with_a_card_still_drains_the_media_buffer() {
-        let pending: PendingMedia = Arc::new(tokio::sync::Mutex::new(vec![MediaItem {
-            // Inline data URL — resolved without touching the network.
-            url: "data:image/png;base64,SGVsbG8=".to_string(),
-            media_type: "image".to_string(),
-            mime_type: None,
-            filename: None,
-        }]));
+        let pending: PendingMedia = Arc::new(tokio::sync::Mutex::new(vec![crate::gateway::media::resolved_test_attachment()]));
         let emitter = emitter_with_closed_card(pending.clone()).await;
 
         emitter.emit(run_complete()).await.unwrap();

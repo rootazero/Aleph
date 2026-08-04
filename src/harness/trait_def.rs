@@ -1,8 +1,8 @@
 //! Loop-control types for the Think→Act driver.
 //!
 //! The driver itself is `AgentHarness` (an inherent `impl`, `agent.rs`). The
-//! polymorphic seams are `SessionDriver` and `Arc<dyn HarnessRunner>` — not a
-//! `Harness` trait, which was deleted as a zero-consumer abstraction.
+//! polymorphic seam is `Arc<dyn HarnessRunner>` — not a `Harness` trait,
+//! which was deleted as a zero-consumer abstraction.
 
 use crate::session::service::{SessionError, SessionId};
 use crate::tools::service::ToolError;
@@ -74,7 +74,7 @@ impl TurnStep {
 /// `#[must_use]` (inherited from `std::error::Error` via thiserror is not
 /// automatic — declare explicitly): a dropped harness error silently
 /// loses both the failure cause and the `ErrorClass` classification,
-/// which downstream `SessionDriver::drive` consumers need to branch on.
+/// which downstream harness consumers need to branch on.
 #[must_use = "HarnessError carries the failure cause + ErrorClass; dropping silently loses both"]
 #[derive(Debug, thiserror::Error)]
 pub enum HarnessError {

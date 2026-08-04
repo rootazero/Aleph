@@ -15,7 +15,6 @@ use std::collections::HashSet;
 use async_trait::async_trait;
 use tokio_util::sync::CancellationToken;
 
-use crate::error::ErrorClass;
 use crate::sync_primitives::Mutex;
 use crate::thinker::nudges::MUTATION_EVIDENCE_NUDGE;
 use crate::verification::turn_verifier::{TurnVerifier, TurnVerifyContext, VerifierVerdict};
@@ -42,9 +41,6 @@ pub struct MutationEvidenceVerifier {
 
 #[async_trait]
 impl TurnVerifier for MutationEvidenceVerifier {
-    fn name(&self) -> &str {
-        "mutation_evidence"
-    }
 
     async fn verify(
         &self,
@@ -84,7 +80,6 @@ impl TurnVerifier for MutationEvidenceVerifier {
         nudged.insert(sid.to_string());
         VerifierVerdict::Veto {
             reason: MUTATION_EVIDENCE_NUDGE.to_string(),
-            class: ErrorClass::Recoverable,
         }
     }
 }

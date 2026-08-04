@@ -12,7 +12,7 @@ pub async fn list(server_url: &str, config: &CliConfig, json: bool) -> CliResult
     let result: Value = client.call("providers.list", None::<()>).await?;
 
     let mut rows = Vec::new();
-    if let Some(providers) = result.as_array() {
+    if let Some(providers) = result.get("providers").and_then(|v| v.as_array()) {
         for p in providers {
             let name = p.get("name").and_then(|v| v.as_str()).unwrap_or("-");
             let ptype = p.get("type").and_then(|v| v.as_str()).unwrap_or("-");

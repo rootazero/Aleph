@@ -42,6 +42,7 @@ fn task_view_to_json(view: &HeartbeatTaskView) -> Value {
             "trigger_condition": view.probe.trigger_condition,
         },
         "dedup": view.dedup,
+        "active_hours": view.active_hours,
         "state": {
             "next_due_ms": view.state.next_due_ms,
             "running_at_ms": view.state.running_at_ms,
@@ -239,6 +240,11 @@ pub async fn handle_create(
         task.enabled = enabled;
     }
 
+    // Optional: active_hours
+    if let Some(val) = params.get("active_hours") {
+        task.active_hours = serde_json::from_value(val.clone()).ok().flatten();
+    }
+
     let clock = SystemClock;
     let service = service.lock().await;
     let task_id = match service.add_task(task, &clock).await {
@@ -314,6 +320,9 @@ pub async fn handle_update(
                 );
             }
         }
+    }
+    if let Some(val) = params.get("active_hours") {
+        updates.active_hours = serde_json::from_value(val.clone()).ok();
     }
 
     let clock = SystemClock;

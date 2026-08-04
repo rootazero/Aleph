@@ -1022,20 +1022,12 @@ pub enum ChatControlAction {
 pub enum WebhookAction {
     /// List configured webhook endpoints (currently TOML-driven)
     List,
-    /// Add a webhook subscription (backend not yet implemented)
-    Add,
-    /// Remove a webhook subscription by id (backend not yet implemented)
-    Remove,
 }
 
 #[derive(Subcommand)]
 pub enum ProxyAction {
     /// Show effective proxy configuration (backend not yet implemented)
     Show,
-    /// Set proxy URL (backend not yet implemented)
-    Set,
-    /// Clear proxy URL (backend not yet implemented)
-    Clear,
 }
 
 #[derive(Subcommand)]

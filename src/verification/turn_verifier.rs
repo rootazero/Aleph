@@ -8,20 +8,16 @@
 //!   `StopHookVerifier` only fires when `stop_reason.is_some()`).
 //! - `VerifierVerdict::Veto` short-circuits the chain and forces the
 //!   harness to inject a feedback message and Continue.
-//! - `VerifierChain::disable_all()` is an `AtomicBool` kill-switch with
-//!   sequential consistency — same shape as `GuardrailRegistry`.
 //!
 //! R10 note: this is *scaffolding*, not cognition. Each impl encodes a
 //! structural pattern (shell hook exit code, repeated-call count) that
 //! a stronger model would never trigger; verifiers are watchdogs, not
 //! judges. See Stage 6a plan §9.
 
-use crate::sync_primitives::{Arc, AtomicBool, Ordering};
+use crate::sync_primitives::Arc;
 
 use async_trait::async_trait;
 use tokio_util::sync::CancellationToken;
-
-use crate::error::ErrorClass;
 
 /// Capacity of the harness's recent-tool-call ring buffer (the source of
 /// `TurnVerifyContext::recent_tool_calls`). This is the single source of
@@ -79,13 +75,12 @@ pub enum VerifierVerdict {
     /// Verifier vetoes the next harness action. The harness MUST
     /// inject `reason` as a `[verifier veto]` user message and force
     /// the loop to Continue (no Act, no Done) for one iteration.
-    Veto { reason: String, class: ErrorClass },
+    Veto { reason: String },
     /// Verifier halts the loop permanently. The harness MUST exit
     /// immediately with `TerminateReason::StopHookHalt { reason }`.
     /// Mirrors claude-code's `preventContinuation: true` semantics:
     /// distinct from `Veto` which retries, `Halt` is a final stop signal.
-    /// Class is metadata only (the harness never retries on Halt).
-    Halt { reason: String, class: ErrorClass },
+    Halt { reason: String },
 }
 
 impl VerifierVerdict {
@@ -105,7 +100,6 @@ impl VerifierVerdict {
 
 #[async_trait]
 pub trait TurnVerifier: Send + Sync {
-    fn name(&self) -> &str;
     async fn verify(
         &self,
         ctx: &TurnVerifyContext<'_>,
@@ -113,13 +107,12 @@ pub trait TurnVerifier: Send + Sync {
     ) -> VerifierVerdict;
 }
 
-/// Sequentially-evaluated chain of verifiers with a kill-switch.
+/// Sequentially-evaluated chain of verifiers.
 ///
 /// First non-`Continue` verdict wins. The chain itself is `Arc`-shareable
 /// across subagents (mirrors `GuardrailRegistry`).
 pub struct VerifierChain {
     verifiers: Vec<Arc<dyn TurnVerifier>>,
-    enabled: AtomicBool,
 }
 
 impl VerifierChain {
@@ -129,7 +122,6 @@ impl VerifierChain {
     pub fn empty() -> Self {
         Self {
             verifiers: Vec::new(),
-            enabled: AtomicBool::new(true),
         }
     }
 
@@ -146,28 +138,11 @@ impl VerifierChain {
         self.verifiers.is_empty()
     }
 
-    pub fn is_enabled(&self) -> bool {
-        self.enabled.load(Ordering::Acquire)
-    }
-
-    /// Operations kill-switch — flip OFF to bypass every verifier
-    /// (chain becomes equivalent to `empty()` until `enable_all`).
-    pub fn disable_all(&self) {
-        self.enabled.store(false, Ordering::Release);
-    }
-
-    pub fn enable_all(&self) {
-        self.enabled.store(true, Ordering::Release);
-    }
-
     pub async fn verify(
         &self,
         ctx: &TurnVerifyContext<'_>,
         cancel: &CancellationToken,
     ) -> VerifierVerdict {
-        if !self.is_enabled() {
-            return VerifierVerdict::Continue;
-        }
         for v in &self.verifiers {
             match v.verify(ctx, cancel).await {
                 VerifierVerdict::Continue => continue,
@@ -193,7 +168,6 @@ impl VerifierChainBuilder {
     pub fn build(self) -> VerifierChain {
         VerifierChain {
             verifiers: self.verifiers,
-            enabled: AtomicBool::new(true),
         }
     }
 }

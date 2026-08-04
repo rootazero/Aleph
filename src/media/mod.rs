@@ -68,14 +68,11 @@ mod integration_tests {
         ) -> std::result::Result<VisionResult, VisionError> {
             Ok(VisionResult {
                 description: format!("Described: {}", prompt),
-                elements: vec![],
-                confidence: 0.9,
             })
         }
         async fn ocr(&self, _: &ImageInput) -> std::result::Result<OcrResult, VisionError> {
             Ok(OcrResult {
                 full_text: "Extracted text".into(),
-                lines: vec![],
             })
         }
         fn capabilities(&self) -> VisionCapabilities {
@@ -116,9 +113,8 @@ mod integration_tests {
             .unwrap();
 
         match result {
-            MediaOutput::Description { text, confidence } => {
+            MediaOutput::Description { text } => {
                 assert!(text.contains("Described"));
-                assert!(confidence > 0.0);
             }
             _ => panic!("Expected Description output"),
         }

@@ -128,6 +128,7 @@ mod role_map {
 // the same frameworks (Electron / Qt editors that never set the native
 // "this is a password" signal), and it cannot reach into this crate. Imported
 // under its own name so `is_secure_element` below reads unchanged.
+#[cfg(windows)]
 use aleph_desktop::is_password_like;
 
 /// The AX action names a UIA element's available patterns can honour.

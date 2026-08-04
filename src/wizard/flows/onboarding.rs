@@ -123,22 +123,6 @@ impl OnboardingFlow {
         ]
     }
 
-    /// Create iMessage transport options.
-    ///
-    /// Seam for future per-channel config persistence: once the wizard `run()`
-    /// gains config-write capability, this selection can drive which transport
-    /// section the wizard writes into TOML. Currently the wizard is a
-    /// non-persisting multi-select stub; BlueBubbles credentials are configured
-    /// via `[imessage.bluebubbles]` TOML directly.
-    pub fn imessage_transport_options() -> Vec<WizardOption> {
-        vec![
-            WizardOption::new(json!("local"), "Local (macOS)")
-                .with_hint("chat.db + AppleScript — same Mac as Aleph"),
-            WizardOption::new(json!("bluebubbles"), "BlueBubbles")
-                .with_hint("REST server — any OS, richer features"),
-        ]
-    }
-
     /// Create messaging app options
     fn messaging_options() -> Vec<WizardOption> {
         vec![
@@ -336,12 +320,11 @@ impl OnboardingFlow {
             return Err(WizardSessionError::Cancelled);
         }
 
-        let progress = prompter.progress("Applying configuration");
-        progress.update("Validating API keys...");
-        tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
-        progress.update("Saving configuration...");
-        tokio::time::sleep(tokio::time::Duration::from_millis(300)).await;
-        progress.finish("Configuration saved");
+        // Note: actual config persistence is owned by the gateway boot path
+        // (`src/bin/aleph-server/commands/start/mod.rs`); the wizard
+        // collects the answers, the caller routes them onto the live
+        // `Config`. The previous `progress()` stub here has been removed
+        // (the trait had no real client-visible progress channel).
 
         prompter
             .outro("Aleph is ready! Run 'aleph chat' to start.")
@@ -374,133 +357,6 @@ impl WizardFlow for OnboardingFlow {
 
     fn name(&self) -> &str {
         "onboarding"
-    }
-}
-
-/// Quick setup flow (minimal configuration)
-pub struct QuickSetupFlow;
-
-impl QuickSetupFlow {
-    #[must_use]
-    pub const fn new() -> Self {
-        Self
-    }
-}
-
-impl Default for QuickSetupFlow {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-#[async_trait]
-impl WizardFlow for QuickSetupFlow {
-    async fn run(&self, prompter: &RpcPrompter) -> Result<(), WizardSessionError> {
-        prompter.intro("Quick Setup").await?;
-
-        let api_key = prompter
-            .text("Enter your Anthropic API key:", Some("sk-ant-..."), true)
-            .await?;
-
-        if api_key.is_empty() {
-            return Err(WizardSessionError::InvalidAnswer(
-                "API key is required".to_string(),
-            ));
-        }
-
-        tracing::warn!(
-            "QuickSetupFlow: API key collected but configuration persistence is not yet implemented"
-        );
-
-        let progress = prompter.progress("Setting up");
-        progress.update("Configuring Claude Sonnet 4...");
-        tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
-        progress.finish("Ready");
-
-        prompter
-            .outro("Quick setup complete! Run 'aleph chat' to start.")
-            .await?;
-
-        Ok(())
-    }
-
-    fn name(&self) -> &str {
-        "quick-setup"
-    }
-}
-
-/// Provider setup flow (add a new provider)
-pub struct ProviderSetupFlow {
-    provider: Option<String>,
-}
-
-impl ProviderSetupFlow {
-    #[must_use]
-    pub const fn new(provider: Option<String>) -> Self {
-        Self { provider }
-    }
-}
-
-#[async_trait]
-impl WizardFlow for ProviderSetupFlow {
-    async fn run(&self, prompter: &RpcPrompter) -> Result<(), WizardSessionError> {
-        prompter.intro("Provider Setup").await?;
-
-        let provider = if let Some(ref p) = self.provider {
-            p.clone()
-        } else {
-            prompter
-                .select(
-                    "Select provider to configure:",
-                    OnboardingFlow::provider_options(),
-                )
-                .await?
-        };
-
-        if provider != "ollama" {
-            let _api_key = prompter
-                .text(
-                    &format!("Enter your {provider} API key:"),
-                    Some("sk-..."),
-                    true,
-                )
-                .await?;
-            tracing::warn!(
-                "ProviderSetupFlow: API key collected for provider '{provider}' but configuration persistence is not yet implemented"
-            );
-        }
-
-        let _model: String = prompter
-            .select(
-                "Select default model:",
-                OnboardingFlow::model_options(&provider),
-            )
-            .await?;
-
-        tracing::warn!(
-            "ProviderSetupFlow: model selection collected for provider '{provider}' but configuration persistence is not yet implemented"
-        );
-
-        let confirmed = prompter
-            .confirm("Save this provider configuration?", true)
-            .await?;
-
-        if !confirmed {
-            return Err(WizardSessionError::Cancelled);
-        }
-
-        let progress = prompter.progress("Saving");
-        progress.update("Validating...");
-        tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
-        progress.finish("Saved");
-
-        prompter.outro("Provider configured successfully!").await?;
-
-        Ok(())
-    }
-
-    fn name(&self) -> &str {
-        "provider-setup"
     }
 }
 
@@ -550,16 +406,5 @@ mod tests {
         let data = OnboardingData::default();
         assert!(data.primary_provider.is_none());
         assert!(data.messaging_apps.is_empty());
-    }
-
-    #[test]
-    fn imessage_offers_both_transports() {
-        let opts = OnboardingFlow::imessage_transport_options();
-        let vals: Vec<_> = opts
-            .iter()
-            .map(|o| o.value.as_str().unwrap().to_string())
-            .collect();
-        assert!(vals.contains(&"bluebubbles".to_string()));
-        assert!(vals.contains(&"local".to_string()));
     }
 }

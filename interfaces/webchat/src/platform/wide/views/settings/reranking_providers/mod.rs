@@ -92,9 +92,15 @@ pub fn RerankingProvidersView() -> impl IntoView {
                 loading.set(true);
                 match RerankConfigApi::get(&state).await {
                     Ok(cfg) => {
-                        // Auto-select the current provider
+                        // Auto-select the current provider. `try_get_untracked`:
+                        // this view can be disposed while the RPC is in flight,
+                        // and reading a disposed signal panics the whole panel
+                        // (see `acp_harnesses` for the reproduction).
                         let current = cfg.provider.as_str().to_string();
-                        if selected_provider.get_untracked().is_none() {
+                        let Some(picked) = selected_provider.try_get_untracked() else {
+                            return;
+                        };
+                        if picked.is_none() {
                             selected_provider.set(Some(current));
                         }
                         config.set(Some(cfg));

@@ -28,5 +28,7 @@ pub mod retention;
 
 pub use file_appender::{get_log_directory, init_component_logging, set_log_level};
 pub use pii::scrub_pii;
-pub use pii_filter::{create_pii_scrubbing_layer, PiiScrubbingFormat, PiiScrubbingLayer};
+pub use pii_filter::{create_pii_scrubbing_layer, PiiScrubbingFormat};
+#[allow(deprecated)]
+pub use pii_filter::PiiScrubbingLayer;
 pub use retention::cleanup_old_logs;

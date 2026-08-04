@@ -13,7 +13,6 @@ use crate::sync_primitives::Arc;
 use async_trait::async_trait;
 use tokio_util::sync::CancellationToken;
 
-use crate::error::ErrorClass;
 use crate::verification::stop_hooks::{execute_stop_hooks_arc, StopHookContext, StopHookHandler};
 use crate::verification::turn_verifier::{TurnVerifier, TurnVerifyContext, VerifierVerdict};
 
@@ -30,10 +29,6 @@ impl StopHookVerifier {
 
 #[async_trait]
 impl TurnVerifier for StopHookVerifier {
-    fn name(&self) -> &str {
-        "stop_hook"
-    }
-
     async fn verify(
         &self,
         ctx: &TurnVerifyContext<'_>,
@@ -61,19 +56,29 @@ impl TurnVerifier for StopHookVerifier {
             stop_reason: stop_reason.to_string(),
         };
         let result = execute_stop_hooks_arc(&self.hooks, &hctx, cancel).await;
+        // Surface hook execution errors at warn level so a misconfigured
+        // hook (spawn failure, signal, timeout, cancellation) does not
+        // vanish into the void. The verdict is still fail-open — these
+        // never block or halt the turn — but the user must at least see
+        // a record that the hook did not actually run.
+        for (hook_name, message) in result.errors() {
+            tracing::warn!(
+                hook = %hook_name,
+                error = %message,
+                "stop hook failed to execute; turn proceeding without its verdict"
+            );
+        }
         // Halt outranks Block — when both fire, the loop must exit
         // (claude-code's preventContinuation semantics). A Halt verdict
         // is permanent; a Block verdict triggers a Continue+retry.
         if let Some(reason) = result.halt_reason() {
             return VerifierVerdict::Halt {
                 reason: reason.to_string(),
-                class: ErrorClass::Recoverable,
             };
         }
         match result.blocking_reason() {
             Some(reason) => VerifierVerdict::Veto {
                 reason: reason.to_string(),
-                class: ErrorClass::Recoverable,
             },
             None => VerifierVerdict::Continue,
         }

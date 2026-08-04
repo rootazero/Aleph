@@ -35,7 +35,6 @@ use std::collections::HashMap;
 use async_trait::async_trait;
 use tokio_util::sync::CancellationToken;
 
-use crate::error::ErrorClass;
 use crate::extension::hooks::{HookContext, HookExecutor, HookResult};
 use crate::extension::HookEvent;
 use crate::sync_primitives::Mutex;
@@ -184,10 +183,7 @@ impl ExtensionStopHookVerifier {
         match decide(&hr) {
             StopDecision::Halt(reason) => {
                 self.clear(session);
-                VerifierVerdict::Halt {
-                    reason,
-                    class: ErrorClass::Recoverable,
-                }
+                VerifierVerdict::Halt { reason }
             }
             StopDecision::Veto(reason) => {
                 let count = self.record_veto(session);
@@ -205,10 +201,7 @@ impl ExtensionStopHookVerifier {
                     self.clear(session);
                     return VerifierVerdict::Continue;
                 }
-                VerifierVerdict::Veto {
-                    reason,
-                    class: ErrorClass::Recoverable,
-                }
+                VerifierVerdict::Veto { reason }
             }
             StopDecision::Allow => {
                 self.clear(session);
@@ -220,9 +213,6 @@ impl ExtensionStopHookVerifier {
 
 #[async_trait]
 impl TurnVerifier for ExtensionStopHookVerifier {
-    fn name(&self) -> &str {
-        "extension_stop_hook"
-    }
 
     async fn verify(
         &self,

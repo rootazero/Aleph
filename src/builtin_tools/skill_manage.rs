@@ -325,7 +325,7 @@ impl SkillManageTool {
         }
 
         if let Some(scope_str) = &args.scope {
-            let scope = match scope_str.as_str() {
+            let scope = match scope_str.to_lowercase().as_str() {
                 "system" => PromptScope::System,
                 "tool" => PromptScope::Tool,
                 "standalone" => PromptScope::Standalone,

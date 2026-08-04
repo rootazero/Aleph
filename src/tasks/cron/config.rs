@@ -245,14 +245,14 @@ pub enum SessionTarget {
 
 // ── TriggerSource ───────────────────────────────────────────────────────
 
-/// What triggered a job run
+/// What triggered a job run.
+///
+/// Chain and Catchup were removed as orphan variants (no production constructor).
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub enum TriggerSource {
     #[default]
     Schedule,
-    Chain,
     Manual,
-    Catchup,
 }
 
 impl TriggerSource {
@@ -260,18 +260,14 @@ impl TriggerSource {
     pub const fn as_str(&self) -> &str {
         match self {
             Self::Schedule => "schedule",
-            Self::Chain => "chain",
             Self::Manual => "manual",
-            Self::Catchup => "catchup",
         }
     }
 
     #[must_use]
     pub fn parse(s: &str) -> Self {
         match s {
-            "chain" => Self::Chain,
             "manual" => Self::Manual,
-            "catchup" => Self::Catchup,
             _ => Self::Schedule,
         }
     }
@@ -582,126 +578,6 @@ pub use crate::tasks::shared::delivery::{
     DeliveryConfig, DeliveryMode, DeliveryOutcome, DeliveryStatus, DeliveryTargetConfig,
 };
 
-// ── JobRun ──────────────────────────────────────────────────────────────
-
-/// Job execution record (kept for history)
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct JobRun {
-    /// Run identifier
-    pub id: String,
-
-    /// Job ID this run belongs to
-    pub job_id: String,
-
-    /// Run status
-    pub status: RunStatus,
-
-    /// Start timestamp (Unix seconds)
-    pub started_at: i64,
-
-    /// End timestamp (Unix seconds, 0 if still running)
-    pub ended_at: i64,
-
-    /// Duration in milliseconds
-    pub duration_ms: u64,
-
-    /// Error message if failed
-    pub error: Option<String>,
-
-    /// Agent response (truncated)
-    pub response: Option<String>,
-
-    /// Number of retry attempts for this run
-    #[serde(default)]
-    pub retry_count: u32,
-
-    /// What triggered this run
-    #[serde(default)]
-    pub trigger_source: TriggerSource,
-
-    /// JSON summary of delivery outcomes
-    #[serde(default)]
-    pub delivery_status: Option<String>,
-
-    /// Delivery error message
-    #[serde(default)]
-    pub delivery_error: Option<String>,
-}
-
-impl JobRun {
-    /// Create a new job run.
-    /// All timestamps use milliseconds since epoch for consistency with the rest of the cron system.
-    pub fn new(job_id: impl Into<String>) -> Self {
-        Self {
-            id: uuid::Uuid::new_v4().to_string(),
-            job_id: job_id.into(),
-            status: RunStatus::Ok, // Will be updated on completion
-            started_at: chrono::Utc::now().timestamp_millis(),
-            ended_at: 0,
-            duration_ms: 0,
-            error: None,
-            response: None,
-            retry_count: 0,
-            trigger_source: TriggerSource::default(),
-            delivery_status: None,
-            delivery_error: None,
-        }
-    }
-
-    /// Set the trigger source
-    #[must_use]
-    pub const fn with_trigger(mut self, source: TriggerSource) -> Self {
-        self.trigger_source = source;
-        self
-    }
-
-    /// Mark as success
-    #[must_use]
-    pub fn success(mut self, response: Option<String>) -> Self {
-        let now = chrono::Utc::now().timestamp_millis();
-        self.status = RunStatus::Ok;
-        self.ended_at = now;
-        self.duration_ms = now.saturating_sub(self.started_at) as u64;
-        self.response = response.map(|r| truncate_string(&r, 1000));
-        self
-    }
-
-    /// Mark as failed
-    #[must_use]
-    pub fn failed(mut self, error: String) -> Self {
-        let now = chrono::Utc::now().timestamp_millis();
-        self.status = RunStatus::Error;
-        self.ended_at = now;
-        self.duration_ms = now.saturating_sub(self.started_at) as u64;
-        self.error = Some(truncate_string(&error, 500));
-        self
-    }
-
-    /// Mark as timeout
-    #[must_use]
-    pub fn timeout(mut self) -> Self {
-        let now = chrono::Utc::now().timestamp_millis();
-        self.status = RunStatus::Timeout;
-        self.ended_at = now;
-        self.duration_ms = now.saturating_sub(self.started_at) as u64;
-        self.error = Some("Job execution timed out".to_string());
-        self
-    }
-}
-
-/// Truncate to `max_len` BYTES (UTF-8 safe), reserving 3 bytes for the `...`
-/// so the stored value never exceeds the column budget.
-fn truncate_string(s: &str, max_len: usize) -> String {
-    if s.len() <= max_len {
-        s.to_string()
-    } else {
-        format!(
-            "{}...",
-            crate::utils::text_format::truncate_bytes(s, max_len.saturating_sub(3))
-        )
-    }
-}
-
 // ── Tests ───────────────────────────────────────────────────────────────
 
 #[cfg(test)]
@@ -910,27 +786,6 @@ mod tests {
     }
 
     #[test]
-    fn test_job_run_lifecycle() {
-        let run = JobRun::new("job-1");
-        assert_eq!(run.status, RunStatus::Ok);
-        assert!(run.ended_at == 0);
-
-        let run = run.success(Some("Done!".to_string()));
-        assert_eq!(run.status, RunStatus::Ok);
-        assert!(run.ended_at > 0);
-
-        let run2 = JobRun::new("job-2").failed("Error occurred".to_string());
-        assert_eq!(run2.status, RunStatus::Error);
-        assert!(run2.error.is_some());
-    }
-
-    #[test]
-    fn test_truncate_string() {
-        assert_eq!(truncate_string("hello", 10), "hello");
-        assert_eq!(truncate_string("hello world!", 8), "hello...");
-    }
-
-    #[test]
     fn test_delivery_config_serde() {
         let config = DeliveryConfig {
             mode: DeliveryMode::Primary,
@@ -950,9 +805,7 @@ mod tests {
     fn test_trigger_source_roundtrip() {
         for (s, v) in [
             ("schedule", TriggerSource::Schedule),
-            ("chain", TriggerSource::Chain),
             ("manual", TriggerSource::Manual),
-            ("catchup", TriggerSource::Catchup),
         ] {
             assert_eq!(TriggerSource::parse(s), v);
             assert_eq!(v.as_str(), s);

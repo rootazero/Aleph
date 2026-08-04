@@ -16,10 +16,6 @@ pub enum VisionError {
     #[error("Image decode error: {0}")]
     ImageError(String),
 
-    /// OCR functionality is not available on this platform.
-    #[error("OCR not available on this platform")]
-    OcrNotAvailable,
-
     /// The provided image format is not supported.
     #[error("Unsupported image format: {0}")]
     UnsupportedFormat(String),

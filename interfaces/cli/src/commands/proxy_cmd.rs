@@ -35,26 +35,3 @@ pub async fn show(json: bool) -> CliResult<()> {
     }
     Ok(())
 }
-
-pub async fn set(json: bool) -> CliResult<()> {
-    print_unimplemented("proxy.set", json);
-    Ok(())
-}
-
-pub async fn clear(json: bool) -> CliResult<()> {
-    print_unimplemented("proxy.clear", json);
-    Ok(())
-}
-
-fn print_unimplemented(method: &str, json: bool) {
-    let payload = serde_json::json!({
-        "status": "not_implemented",
-        "method": method,
-        "see": GAPS_DOC,
-    });
-    if json {
-        output::print_json(&payload);
-    } else {
-        eprintln!("{method} is not yet implemented; design lives in {GAPS_DOC}.");
-    }
-}

@@ -514,7 +514,12 @@
       "policies": "策略",
       "routing_rules": "路由规则",
       "security": "安全",
-      "model_route": "模型路由"
+      "model_route": "模型路由",
+      "appearance": "外观",
+      "moa": "MoA",
+      "browser": "浏览器",
+      "execution": "执行",
+      "network": "服务与集群"
     },
     "general": {
       "title": "通用设置",

@@ -6,5 +6,4 @@ final class InMemoryConnectionStore: ConnectionStoring {
     init(_ initial: URL? = nil) { stored = initial }
     func load() -> URL? { stored }
     func save(_ url: URL) throws { stored = url }
-    func clear() { stored = nil }
 }

@@ -16,7 +16,7 @@ pub async fn pending(server_url: &str, config: &CliConfig, json: bool) -> CliRes
     if json {
         output::print_json(&result);
     } else {
-        let approvals = result.as_array();
+        let approvals = result.get("pending").and_then(|v| v.as_array());
         if let Some(items) = approvals {
             if items.is_empty() {
                 println!("No pending approval requests.");

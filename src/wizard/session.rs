@@ -69,9 +69,6 @@ pub struct WizardSession {
     step_rx: Arc<tokio::sync::Mutex<mpsc::Receiver<WizardStep>>>,
     answers: Arc<RwLock<HashMap<String, PendingAnswer>>>,
     error: Arc<RwLock<Option<String>>>,
-    /// Final payload set by `RpcPrompter::finish(...)` before the flow returns.
-    /// `next()` reads from this when surfacing the Done result.
-    finish_data: Arc<RwLock<Option<serde_json::Value>>>,
     cancel_tx: Arc<RwLock<Option<oneshot::Sender<()>>>>,
 }
 
@@ -83,8 +80,6 @@ impl WizardSession {
         let (step_tx, step_rx) = mpsc::channel(16);
         let (cancel_tx, cancel_rx) = oneshot::channel();
 
-        let finish_data = Arc::new(RwLock::new(None));
-
         let answers: Arc<RwLock<HashMap<String, PendingAnswer>>> =
             Arc::new(RwLock::new(HashMap::new()));
 
@@ -92,7 +87,7 @@ impl WizardSession {
         // step_tx is moved into the prompter; WizardSession does NOT keep a copy.
         // This ensures the channel closes when the flow task ends (prompter drop),
         // which lets session.next()'s rx.recv() return None and surface Done/Error.
-        let prompter = RpcPrompter::new(step_tx, answers.clone(), finish_data.clone());
+        let prompter = RpcPrompter::new(step_tx, answers.clone());
 
         let session = Self {
             id: id.clone(),
@@ -101,7 +96,6 @@ impl WizardSession {
             step_rx: Arc::new(tokio::sync::Mutex::new(step_rx)),
             answers,
             error: Arc::new(RwLock::new(None)),
-            finish_data,
             cancel_tx: Arc::new(RwLock::new(Some(cancel_tx))),
         };
 
@@ -148,9 +142,8 @@ impl WizardSession {
     ///
     /// Terminal states are sticky: once `Done`/`Cancelled`/`Error` is set, later
     /// transitions are ignored. This guarantees the first settled outcome wins,
-    /// so a late `cancel()` cannot clobber a completed flow's `Done` status (and
-    /// the `finish_data` payload `next()` surfaces with it). Returns `true` iff
-    /// this call performed the transition.
+    /// so a late `cancel()` cannot clobber a completed flow's `Done` status.
+    /// Returns `true` iff this call performed the transition.
     fn settle(status: &RwLock<WizardStatus>, terminal: WizardStatus) -> bool {
         let mut guard = status.write().unwrap_or_else(|e| e.into_inner());
         if *guard == WizardStatus::Running {
@@ -173,33 +166,20 @@ impl WizardSession {
         *self.status.read().unwrap_or_else(|e| e.into_inner())
     }
 
-    /// Build a Done result, carrying `finish_data` payload if set.
-    pub(crate) fn done_result(&self) -> WizardNextResult {
-        match self
-            .finish_data
-            .read()
-            .unwrap_or_else(|e| e.into_inner())
-            .clone()
-        {
-            Some(data) => WizardNextResult::done_with_data(data),
-            None => WizardNextResult::done(),
-        }
-    }
-
     /// Get the next step (blocks until a step is available or done)
     pub async fn next(&self) -> WizardNextResult {
         // Check if already done
         let status = self.status();
         if status != WizardStatus::Running {
             return match status {
-                WizardStatus::Done => self.done_result(),
+                WizardStatus::Done => WizardNextResult::done(),
                 WizardStatus::Cancelled => WizardNextResult::cancelled(),
                 WizardStatus::Error => {
                     let error = self.error.read().unwrap_or_else(|e| e.into_inner()).clone();
                     WizardNextResult::error(error.unwrap_or_else(|| "Unknown error".to_string()))
                 }
                 // Running (or future variants) cannot appear here because of the guard above.
-                _ => self.done_result(),
+                _ => WizardNextResult::done(),
             };
         }
 
@@ -215,7 +195,7 @@ impl WizardSession {
                 // Channel closed, check final status
                 let status = self.status();
                 match status {
-                    WizardStatus::Done => self.done_result(),
+                    WizardStatus::Done => WizardNextResult::done(),
                     WizardStatus::Cancelled => WizardNextResult::cancelled(),
                     WizardStatus::Error => {
                         let error = self.error.read().unwrap_or_else(|e| e.into_inner()).clone();
@@ -275,7 +255,7 @@ impl WizardSession {
             let _ = tx.send(());
         }
         // Only cancel a still-running flow; never clobber a flow that already
-        // settled as Done/Error (which would discard its result/finish_data).
+        // settled as Done/Error (which would discard its result).
         Self::settle(&self.status, WizardStatus::Cancelled);
     }
 
@@ -338,7 +318,7 @@ mod tests {
     async fn cancel_after_done_preserves_terminal_status() {
         // A completed flow that is later cancelled (e.g. client-disconnect
         // cleanup arriving in the result-pending window) must keep its Done
-        // status — otherwise its finish_data result would be discarded.
+        // status.
         let flow = TestFlow { steps: vec![] };
         let session = WizardSession::new(Box::new(flow));
 

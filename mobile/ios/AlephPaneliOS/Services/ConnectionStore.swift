@@ -7,7 +7,6 @@ import Security
 protocol ConnectionStoring {
     func load() -> URL?
     func save(_ url: URL) throws
-    func clear()
 }
 
 enum KeychainError: Error {
@@ -63,9 +62,5 @@ struct KeychainConnectionStore: ConnectionStoring {
             return
         }
         throw KeychainError.unexpectedStatus(updateStatus)
-    }
-
-    func clear() {
-        SecItemDelete(baseQuery as CFDictionary)
     }
 }

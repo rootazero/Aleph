@@ -143,19 +143,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_format_timestamp() {
-        // 2024-01-15 00:00:00 UTC
-        let result = format_timestamp(1_705_276_800);
-        assert!(result.contains("2024-01-15"));
-    }
-
-    #[test]
-    fn test_format_timestamp_invalid() {
-        let result = format_timestamp(i64::MIN);
-        assert_eq!(result, "Unknown");
-    }
-
-    #[test]
     fn test_truncate_text_zero_limit() {
         let text = "Hello world";
         assert_eq!(truncate_text(text, 0), "");

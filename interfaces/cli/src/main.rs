@@ -198,8 +198,6 @@ async fn dispatch_webhook(action: WebhookAction, json: bool) -> CliResult<()> {
     use commands::webhook_cmd;
     match action {
         WebhookAction::List => webhook_cmd::list(json).await,
-        WebhookAction::Add => webhook_cmd::add(json).await,
-        WebhookAction::Remove => webhook_cmd::remove(json).await,
     }
 }
 
@@ -207,8 +205,6 @@ async fn dispatch_proxy(action: ProxyAction, json: bool) -> CliResult<()> {
     use commands::proxy_cmd;
     match action {
         ProxyAction::Show => proxy_cmd::show(json).await,
-        ProxyAction::Set => proxy_cmd::set(json).await,
-        ProxyAction::Clear => proxy_cmd::clear(json).await,
     }
 }
 

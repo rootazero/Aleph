@@ -208,9 +208,15 @@ pub fn ChannelPlatformPage(platform_type: String) -> impl IntoView {
             </div>
 
             // ---- Master-detail body ----
-            <div class="flex flex-1 overflow-hidden">
+            // `aleph-md` trio: the narrow-width rule (tailwind.css @720px) and
+            // the phone shim (`.phone-wrapped`, ios.css) stack these two columns
+            // vertically. Without the markers the 224 px `w-56` list plus the
+            // detail pane stayed side by side at 390 px, so the phone showed a
+            // squeezed instance list next to an unreadable config form — the
+            // provider pages were already tagged; this one had been missed.
+            <div class="flex flex-1 overflow-hidden aleph-md">
                 // ---- Left sidebar: instance list ----
-                <div class="w-56 border-r border-border overflow-y-auto p-3 space-y-1 flex-shrink-0">
+                <div class="w-56 border-r border-border overflow-y-auto p-3 space-y-1 flex-shrink-0 aleph-md-list">
                     // Instance items
                     <For
                         each=move || instances.get()
@@ -300,7 +306,7 @@ pub fn ChannelPlatformPage(platform_type: String) -> impl IntoView {
                 </div>
 
                 // ---- Right panel: config or empty state ----
-                <div class="flex-1 overflow-y-auto p-6">
+                <div class="flex-1 overflow-y-auto p-6 aleph-md-detail">
                     <div class="max-w-3xl">
                         {move || {
                             match selected_id.get() {

@@ -126,7 +126,7 @@ pub enum MediaOutput {
     /// Plain text result (transcription, extracted text).
     Text { text: String },
     /// Natural-language description.
-    Description { text: String, confidence: f64 },
+    Description { text: String },
 }
 
 #[cfg(test)]
@@ -184,7 +184,6 @@ mod tests {
 
         let output = MediaOutput::Description {
             text: "A cat".into(),
-            confidence: 0.95,
         };
         let json = serde_json::to_value(&output).unwrap();
         assert_eq!(json["output_type"], "description");

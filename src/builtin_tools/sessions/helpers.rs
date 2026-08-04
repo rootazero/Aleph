@@ -434,6 +434,7 @@ mod tests {
             // `PeerKind::Channel` tokens in this file but missed this case
             // because it is a bare string literal.
             "agent:main:slack:thread:c123",
+            "agent:main:slack:group:c123",
             "agent:main:cron:daily",
             "agent:main:webhook:hook-1",
             "agent:main:ephemeral:uuid-abc",

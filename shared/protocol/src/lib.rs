@@ -11,17 +11,13 @@
 //! - [`events`] - Streaming event types
 //! - [`thinking`] - Reasoning and confidence types
 //! - [`auth`] - Authentication and authorization types
-//! - [`invitation`] - Guest invitation types
-//! - [`discovery`] - Service discovery types
 
 pub mod artifact;
 pub mod auth;
 pub mod canvas_format;
 pub mod desktop_bridge;
-pub mod discovery;
 pub mod events;
 mod ids;
-pub mod invitation;
 pub mod jsonrpc;
 pub mod plan;
 pub mod subagent_tree;
@@ -32,14 +28,11 @@ pub mod voice_text;
 
 // Re-export commonly used types at crate root
 pub use auth::{GuestScope, IdentityContext, Role};
-pub use discovery::DiscoveredInstance;
 pub use events::{
     AgentTraceEvent, AgentTraceSessionOutcome, AgentTraceState, AgentTraceTextKind,
     AgentTraceToolCallEnd, AgentTraceToolCallStart, AgentTraceToolResult, AgentTraceTurnMetrics,
-    AgentTraceTurnOutcome, ConfigChangedEvent, ModelInfo, RunSummary, StreamEvent,
-    TokenBreakdownView, ToolErrorItem, ToolResult, ToolSummaryItem, UncertaintyAction,
+    AgentTraceTurnOutcome, RunSummary, StreamEvent, TokenBreakdownView, ToolResult,
 };
-pub use invitation::{ActivateInvitationRequest, CreateInvitationRequest, GuestToken, Invitation};
 pub use jsonrpc::{
     JsonRpcError, JsonRpcRequest, JsonRpcResponse, ToolCallContext, ToolCallParams, ToolCallResult,
 };

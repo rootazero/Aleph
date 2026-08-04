@@ -8,9 +8,6 @@ pub enum CliError {
     #[error("Connection error: {0}")]
     Connection(String),
 
-    #[error("WebSocket error: {0}")]
-    WebSocket(String),
-
     #[error("JSON error: {0}")]
     Json(#[from] serde_json::Error),
 
@@ -36,14 +33,14 @@ pub enum CliError {
 /// Result type alias for CLI operations
 pub type CliResult<T> = Result<T, CliError>;
 
-impl From<anyhow::Error> for CliError {
-    fn from(err: anyhow::Error) -> Self {
-        Self::Other(err.to_string())
+impl From<tokio_tungstenite::tungstenite::Error> for CliError {
+    fn from(err: tokio_tungstenite::tungstenite::Error) -> Self {
+        Self::Connection(err.to_string())
     }
 }
 
-impl From<tokio_tungstenite::tungstenite::Error> for CliError {
-    fn from(err: tokio_tungstenite::tungstenite::Error) -> Self {
-        Self::WebSocket(err.to_string())
+impl From<anyhow::Error> for CliError {
+    fn from(err: anyhow::Error) -> Self {
+        Self::Other(err.to_string())
     }
 }

@@ -24,7 +24,6 @@ mod tests {
     mod agent;
     mod budget;
     mod chain;
-    mod driver;
     mod guardrails;
     mod harness_ext;
     mod prompt;

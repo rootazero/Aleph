@@ -48,7 +48,7 @@ pub use crate::tasks::shared::schedule;
 pub use crate::tasks::shared::delivery::{DeliveryEngine, DeliveryPayload, DeliveryTarget};
 pub use config::{
     CronConfig, CronJob, CronJobView, DeliveryConfig, DeliveryMode, DeliveryOutcome,
-    DeliveryStatus, DeliveryTargetConfig, ErrorReason, ExecutionResult, FailureAlertConfig, JobRun,
+    DeliveryStatus, DeliveryTargetConfig, ErrorReason, ExecutionResult, FailureAlertConfig,
     JobSnapshot, JobStateV2, RunStatus, ScheduleKind, SessionTarget, TriggerSource,
 };
 
