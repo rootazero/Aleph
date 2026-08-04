@@ -815,6 +815,7 @@ git commit -m "gateway: add member/admin method gate at the process_request chok
 - `users.list` → `{ users: [UserView] }`（member 可见——项目名册选人要用）
 - `users.create { display_name, role? ("member") }` → `{ user: UserView }`；`user_id` 服务端生成 `format!("u-{}", Uuid::new_v4())`
 - `users.update { user_id, display_name?, role?, status? }` → `{ user: UserView }`；`status="deactivated"` 时**同时**吊销该用户全部设备（下述接线）
+- **Owner 不可停用/降级守卫**：`user_id == OWNER_USER_ID` 时拒绝 `status="deactivated"` 与 `role="member"`（`JsonRpcResponse::error`，invalid params 语义）。理由：Task 2 的 loopback 臂**不查 user status**、恒解析 (u-owner, operator)——那是恢复路径（等价 root console），所以「停用 owner」只会产生半生效状态（远程设备被踢、本机不受影响），语义不自洽；直接禁止。这也顺带保证系统永远至少有一个 admin。
 
 **Deactivation 语义**（spec §10：设备 token 即时拒绝）：handler 层只做两件纯事——store 置 status + `list_device_ids_for_user` 逐个走**与 `gateway.devices.revoke` 完全相同的路径**（store revoke + 发同一个 `DeviceRevoked` 事件）。这复用 start/mod.rs 既有的「先 `invalidate_device_sessions` 降权、再关 socket」顺序与客户端已登记的 `device_revoked` 关闭原因（gateway/CLAUDE.md 地雷 2/2b——**零新增关闭原因，零 Panel 改动**）。实现方式：把 devices.revoke handler 里「吊销一台设备」的那段提为 `pub(crate) fn revoke_device_and_kick(...)` 供两处调用，**不复制第二份**。
 
@@ -866,6 +867,21 @@ mod tests {
         assert!(store.list_device_ids_for_user("u-alice").unwrap().is_empty(),
             "live (un-revoked) device list must be empty after deactivation");
     }
+
+    #[tokio::test]
+    async fn owner_cannot_be_deactivated_or_demoted() {
+        let store = seeded_store();
+        for body in [
+            serde_json::json!({"user_id": OWNER_USER_ID, "status": "deactivated"}),
+            serde_json::json!({"user_id": OWNER_USER_ID, "role": "member"}),
+        ] {
+            let resp = handle_update(rpc_request("users.update", body), store.clone(), test_kick_sink()).await;
+            assert!(response_is_error(&resp), "owner must stay an active admin");
+        }
+        let owner = store.get_user(OWNER_USER_ID).unwrap().expect("owner exists");
+        assert_eq!(owner.status, UserStatus::Active);
+        assert_eq!(owner.role, UserRole::Admin);
+    }
 }
 ```
 
@@ -881,7 +897,7 @@ Expected: 编译错误。
 - [ ] **Step 4: 跑测试确认通过**
 
 Run: `cargo test -p alephcore --lib handlers::users`
-Expected: 3 个 PASS。
+Expected: 4 个 PASS。
 
 - [ ] **Step 5: 提交**
 
