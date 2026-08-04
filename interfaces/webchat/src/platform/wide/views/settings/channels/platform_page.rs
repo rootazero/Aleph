@@ -107,8 +107,14 @@ pub fn ChannelPlatformPage(platform_type: String) -> impl IntoView {
 
                     // Auto-select first instance if nothing is selected or
                     // the previously selected instance no longer exists
-                    let current = selected_id.get_untracked();
-                    let list = instances.get_untracked();
+                    // Post-`.await`: navigating off the channel page disposes
+                    // both signals (see `crate::disposed_reads`).
+                    let (Some(current), Some(list)) = (
+                        selected_id.try_get_untracked(),
+                        instances.try_get_untracked(),
+                    ) else {
+                        return;
+                    };
                     let should_reselect = match &current {
                         None => true,
                         Some(id) => !list.iter().any(|i| &i.channel_id == id),
