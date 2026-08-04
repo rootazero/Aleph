@@ -710,30 +710,6 @@ Actions:
 
 Held inputs — a `press` on key_button / mouse_button stays physically down on the user's keyboard and mouse until you release it, so always send the matching `release` for every key and button you pressed before you finish a step.
 
-Examples:
-{"action":"click","x":500,"y":300}
-{"action":"double_click","x":500,"y":300}
-{"action":"drag","start_x":100,"start_y":100,"end_x":500,"end_y":500,"duration_ms":300}
-{"action":"hover","x":250,"y":250}
-{"action":"cursor_position"}
-{"action":"clipboard_read"}
-{"action":"scroll","delta_y":-300}
-{"action":"type_text","text":"Hello"}
-{"action":"type_text","text":"Hello","force":true}
-{"action":"screen_record","duration":3.0,"fps":30}
-{"action":"screen_record","duration":5.0,"fps":30,"region":{"x":0,"y":0,"width":1280,"height":720}}
-{"action":"display_list"}
-{"action":"move_window","window_id":1234,"x":100,"y":80}
-{"action":"resize_window","window_id":1234,"width":1280,"height":800}
-{"action":"batch","app":"Notes","actions":[{"action":"click","x":100,"y":200},{"action":"type_text","text":"hello"}]}
-{"action":"paste","text":"line1\nline2\nline3"}
-{"action":"wait_visual","timeout_ms":3000}
-{"action":"wait_visual","timeout_ms":8000,"region":{"x":0,"y":0,"width":1280,"height":800}}
-{"action":"screenshot","format":"jpeg","quality":0.9,"max_width":1920}
-{"action":"screenshot","describe":true}
-{"action":"set_value","role":"AXTextField","element_title":"Email","text":"a@b.c"}
-{"action":"ax_action","ax_action_name":"AXPress","element_title":"Save"}
-
 Coordinate space — by default, `x` / `y` / `start_x` / `end_x` / `region` are pixels (top-left origin). Two other spaces exist:
 - `coord_space:"normalized"` — UI-TARS-style [0, 1000] × [0, 1000] coordinates that scale to any display (override the 1000×1000 default with `coord_factors:[w,h]`). Resolved against the primary display (or `display_id`).
 - `coord_space:"window"` — pixels of a WINDOW capture. Requires `window_id`. Their origin is the window's top-left, not the screen's, so the runtime maps them back through that window's frame. Use this for every point you read off a `screenshot {window_id}` — resolving them against the display instead would miss by the window's offset.

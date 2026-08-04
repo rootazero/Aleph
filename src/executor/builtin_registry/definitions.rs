@@ -17,6 +17,29 @@
 //! here is only needed when it should also have a command surface and be
 //! advertised even before its dependencies are configured.
 //!
+//! # Invariant: `description` is never a literal here
+//!
+//! Every entry's `description` must reference the named tool's own
+//! `DESCRIPTION` const. Writing the text inline instead does not "duplicate"
+//! it — it **replaces** it: `agent_init` builds the model's tool list from this
+//! catalog and then appends only names the catalog did not already claim
+//! (`filter(|t| !existing.contains(&t.name))`), so a literal here silently
+//! shadows both the tool's `AlephTool::DESCRIPTION` and whatever the registry
+//! constructor registers under that name. The failure is invisible from every
+//! direction: the tool compiles, its const has tests, the catalog has tests,
+//! and the model simply never receives a word of it.
+//!
+//! That was not hypothetical. Until 2026-08-04, 143 of 155 entries were
+//! literals; `no_sentence_is_stated_twice` recorded that the memory writers'
+//! `AFTER A SUCCESSFUL WRITE` contract "ships zero times" for exactly this
+//! reason, and the 2026-07-26 prompt-prune round moved ~750 tokens out of a
+//! prompt layer and into tool descriptions that were not connected — deleting
+//! the text while believing it had been relocated.
+//!
+//! Guarded by `no_catalog_entry_inlines_its_description`. A tool with no
+//! `DESCRIPTION` const gets one (see `NoteOrientTool`), rather than an entry
+//! here growing a literal.
+//!
 //! # Usage
 //!
 //! - `BUILTIN_TOOL_DEFINITIONS` - List of all tool definitions
@@ -60,20 +83,14 @@ pub struct BuiltinToolDefinition {
 pub const BUILTIN_TOOL_DEFINITIONS: &[BuiltinToolDefinition] = &[
     BuiltinToolDefinition {
         name: "search",
-        description: "Search the internet using Tavily API",
+        description: <crate::builtin_tools::search::SearchTool as crate::tools::AlephTool>::DESCRIPTION,
         requires_config: false, // Optional API key
     },
     BuiltinToolDefinition {
         name: "web_fetch",
-        description: "Fetch and read content from a URL",
+        description: <crate::builtin_tools::web_fetch::WebFetchTool as crate::tools::AlephTool>::DESCRIPTION,
         requires_config: false,
     },
-    // File-tool descriptions are the canonical `AlephTool::DESCRIPTION` consts —
-    // the same rich usage guidance the tools document themselves. This is the
-    // LLM-facing list (agent_init maps `BUILTIN_TOOL_DEFINITIONS` straight into
-    // the model's tool list), so referencing the consts both delivers that
-    // guidance to the model (R9 — intelligence lives in the prompt) and keeps a
-    // single source of truth instead of a terse literal that silently drifts.
     BuiltinToolDefinition {
         name: "file_ops",
         description: <FileOpsTool as crate::tools::AlephTool>::DESCRIPTION,
@@ -101,163 +118,163 @@ pub const BUILTIN_TOOL_DEFINITIONS: &[BuiltinToolDefinition] = &[
     },
     BuiltinToolDefinition {
         name: "bash",
-        description: "Execute bash/shell commands (convenience wrapper for code_exec with shell)",
+        description: <crate::builtin_tools::bash_exec::BashExecTool as crate::tools::AlephTool>::DESCRIPTION,
         requires_config: false,
     },
     BuiltinToolDefinition {
         name: "code_exec",
-        description: "Execute code in various programming languages (Python, JavaScript, Shell)",
+        description: <crate::builtin_tools::code_exec::CodeExecTool as crate::tools::AlephTool>::DESCRIPTION,
         requires_config: false,
     },
     BuiltinToolDefinition {
         name: "code_check",
-        description: "Run the project's type-checker/linter (auto-detected: cargo/tsc/go/ruff) and return structured diagnostics",
+        description: <crate::builtin_tools::code_check::CodeCheckTool as crate::tools::AlephTool>::DESCRIPTION,
         requires_config: false,
     },
     BuiltinToolDefinition {
         name: "ctx_search",
-        description: "BM25-search large tool outputs that were offloaded out of the context window; retrieve only the relevant sections instead of re-reading whole files",
+        description: <crate::builtin_tools::ctx_search::CtxSearchTool as crate::tools::AlephTool>::DESCRIPTION,
         requires_config: false,
     },
     BuiltinToolDefinition {
         name: "recall_events",
-        description: "BM25-search this session's own event timeline (tool calls, results, errors, messages) that compaction dropped from context; restore continuity by retrieving only the relevant past events",
+        description: <crate::builtin_tools::recall_events::RecallEventsTool as crate::tools::AlephTool>::DESCRIPTION,
         requires_config: false,
     },
     BuiltinToolDefinition {
         name: "pdf_generate",
-        description: "Generate PDF documents from text/Markdown",
+        description: <crate::builtin_tools::pdf_generate::PdfGenerateTool as crate::tools::AlephTool>::DESCRIPTION,
         requires_config: false,
     },
     BuiltinToolDefinition {
         name: "image_generate",
-        description: "Generate images from text prompts",
+        description: <crate::builtin_tools::ImageGenerateTool as crate::tools::AlephTool>::DESCRIPTION,
         requires_config: true, // Requires generation registry
     },
     BuiltinToolDefinition {
         name: "skill_list",
-        description: "List all installed skills",
+        description: <crate::builtin_tools::ListSkillsTool as crate::tools::AlephTool>::DESCRIPTION,
         requires_config: false,
     },
     BuiltinToolDefinition {
         name: "skill_read",
-        description: "Read the full instructions of an installed skill. Call this before executing any skill-based task.",
+        description: <crate::builtin_tools::ReadSkillTool as crate::tools::AlephTool>::DESCRIPTION,
         requires_config: false,
     },
     BuiltinToolDefinition {
         name: "gateway_route",
-        description: "Query Aleph's routing engine to determine which agent and session a message would be routed to. Returns the target agent, session key, and how the match was made — a deterministic channel→agent lookup, not intent classification.",
+        description: <crate::builtin_tools::gateway_route::GatewayRouteTool as crate::tools::AlephTool>::DESCRIPTION,
         requires_config: false,
     },
     BuiltinToolDefinition {
         name: "desktop",
-        description: "Control the desktop via platform-native capabilities: screenshots, OCR, keyboard/mouse, app launch, windows, and screen recording",
+        description: <crate::builtin_tools::desktop::DesktopTool as crate::tools::AlephTool>::DESCRIPTION,
         requires_config: false,
     },
     BuiltinToolDefinition {
         name: "desktop_ax_query_focused",
-        description: "Return the UI element currently holding keyboard focus via the OS accessibility API (macOS)",
+        description: <crate::builtin_tools::DesktopAxQueryFocused as crate::tools::AlephTool>::DESCRIPTION,
         requires_config: false,
     },
     BuiltinToolDefinition {
         name: "desktop_ax_query_tree",
-        description: "Return the AX element tree for a process (frontmost if pid omitted); bounded by max_depth (default 6)",
+        description: <crate::builtin_tools::DesktopAxQueryTree as crate::tools::AlephTool>::DESCRIPTION,
         requires_config: false,
     },
     BuiltinToolDefinition {
         name: "desktop_ax_query_by_role",
-        description: "Collect all AX elements whose role matches `role` (e.g. \"AXButton\") in a process",
+        description: <crate::builtin_tools::DesktopAxQueryByRole as crate::tools::AlephTool>::DESCRIPTION,
         requires_config: false,
     },
     BuiltinToolDefinition {
         name: "desktop_ax_snapshot",
-        description: "Snapshot an app's interactable UI as a flat indexed element list with pre-computed click centers (set-of-marks GUI targeting)",
+        description: <crate::builtin_tools::DesktopAxSnapshot as crate::tools::AlephTool>::DESCRIPTION,
         requires_config: false,
     },
     BuiltinToolDefinition {
         name: "desktop_som",
-        description: "Capture the screen with every clickable element outlined and numbered (visual set-of-marks); returns the annotated image plus an indexed element list with ready-to-click centers",
+        description: <crate::builtin_tools::DesktopSom as crate::tools::AlephTool>::DESCRIPTION,
         requires_config: false,
     },
     BuiltinToolDefinition {
         name: "desktop_gui_locate",
-        description: "Resolve a human-readable on-screen target (e.g. \"Send\", \"Login button\") into clickable pixel coordinates via AX tree fuzzy match + OCR fallback",
+        description: <crate::builtin_tools::DesktopGuiLocate as crate::tools::AlephTool>::DESCRIPTION,
         requires_config: false,
     },
     BuiltinToolDefinition {
         name: "desktop_check_permissions",
-        description: "Check macOS TCC permission status for the kinds Aleph needs (accessibility, input monitoring, screen recording, camera, microphone)",
+        description: <crate::builtin_tools::DesktopCheckPermissions as crate::tools::AlephTool>::DESCRIPTION,
         requires_config: false,
     },
     BuiltinToolDefinition {
         name: "read_config_guide",
-        description: "Get Aleph configuration manual for self-management operations",
+        description: <crate::builtin_tools::config_guide::ReadConfigGuideTool as crate::tools::AlephTool>::DESCRIPTION,
         requires_config: false,
     },
     BuiltinToolDefinition {
         name: "config_audit",
-        description: "Audit the live security posture (SSRF, sandbox, shell safety, PII filtering) and return structured findings — read-only",
+        description: <crate::builtin_tools::config_audit::ConfigAuditTool as crate::tools::AlephTool>::DESCRIPTION,
         requires_config: true, // Requires the live Config handle
     },
     BuiltinToolDefinition {
         name: "doctor",
-        description: "Self-diagnose runtime health (data dir, instance lock, config parse, hook consent, live provider connectivity) with structured findings; fix=true applies safe deterministic repairs — read-only by default; also use it to verify your repairs",
+        description: <crate::builtin_tools::doctor::DoctorTool as crate::tools::AlephTool>::DESCRIPTION,
         requires_config: false,
     },
     BuiltinToolDefinition {
         name: "select_model",
-        description: "Switch the LLM model for the rest of this conversation (larger context, vision, reasoning, or cheaper chat); applies from the next turn",
+        description: <crate::builtin_tools::select_model::SelectModelTool as crate::tools::AlephTool>::DESCRIPTION,
         requires_config: false,
     },
     BuiltinToolDefinition {
         name: "list_models",
-        description: "Discover switchable LLM models with their context window, vision/tool/reasoning support, and price per million tokens — pair with select_model to choose on capability/cost grounds",
+        description: <crate::builtin_tools::list_models::ListModelsTool as crate::tools::AlephTool>::DESCRIPTION,
         requires_config: true, // Reads injected config + vault for provider/credential state
     },
     BuiltinToolDefinition {
         name: "self_manage",
-        description: "Enter self-management mode when user wants to configure, modify, or fix Aleph",
+        description: <crate::builtin_tools::self_manage::SelfManageTool as crate::tools::AlephTool>::DESCRIPTION,
         requires_config: false,
     },
     BuiltinToolDefinition {
         name: "hooks_manage",
-        description: "Inspect and edit event hooks; action='list' reports why a hook cannot fire (dead matcher, observer-only event, consent still pending)",
+        description: <crate::builtin_tools::hooks_manage::HooksManageTool as crate::tools::AlephTool>::DESCRIPTION,
         // Reads the process-global extension manager, not injected config.
         requires_config: false,
     },
     BuiltinToolDefinition {
         name: "self_config",
-        description: "Read/write Aleph identity files and config.toml with validation and natural-language preview; route_status surfaces live provider health (circuit breakers, cooldowns, load)",
+        description: <crate::builtin_tools::self_config::SelfConfigTool as crate::tools::AlephTool>::DESCRIPTION,
         requires_config: true, // Requires per-agent agent_id (injected at construction)
     },
     BuiltinToolDefinition {
         name: "moa",
-        description: "Mixture-of-Agents advisory mode: parallel advisor models consult on the live conversation and feed private guidance to the acting aggregator; manage per-session activation and presets",
+        description: <crate::builtin_tools::moa_manage::MoaManageTool as crate::tools::AlephTool>::DESCRIPTION,
         requires_config: true, // needs injected config + patcher handles
     },
     BuiltinToolDefinition {
         name: "vault_store",
-        description: "Manage encrypted secret vault (store/delete/list API keys)",
+        description: <crate::builtin_tools::vault_store::VaultStoreTool as crate::tools::AlephTool>::DESCRIPTION,
         requires_config: true, // Requires SharedTokenManager
     },
     BuiltinToolDefinition {
         name: "memory_search",
-        description: "Search personal memory for relevant facts and conversation history with workspace-scoped retrieval",
+        description: <crate::builtin_tools::memory_search::MemorySearchTool as crate::tools::AlephTool>::DESCRIPTION,
         requires_config: true, // Requires memory_db + embedder
     },
     BuiltinToolDefinition {
         name: "memory_browse",
-        description: "Browse personal memory via hierarchical VFS navigation (ls, read, glob on aleph:// paths)",
+        description: <crate::builtin_tools::memory_browse::MemoryBrowseTool as crate::tools::AlephTool>::DESCRIPTION,
         requires_config: true, // Requires memory_db
     },
     BuiltinToolDefinition {
         name: "memory_explore",
-        description: "Explore related knowledge by following semantic connections from a starting query across multiple hops",
+        description: <crate::builtin_tools::memory_explore::MemoryExploreTool as crate::tools::AlephTool>::DESCRIPTION,
         requires_config: true, // Requires memory_db + embedder
     },
     BuiltinToolDefinition {
         name: "memory_timeline",
-        description: "View the complete lifecycle of a memory fact — creation, modification, decay, invalidation timeline",
+        description: <crate::builtin_tools::memory_timeline::MemoryTimelineTool as crate::tools::AlephTool>::DESCRIPTION,
         requires_config: true, // Requires StateDatabase
     },
     BuiltinToolDefinition {
@@ -274,22 +291,22 @@ pub const BUILTIN_TOOL_DEFINITIONS: &[BuiltinToolDefinition] = &[
     },
     BuiltinToolDefinition {
         name: "node_list",
-        description: "List the online cluster nodes (remote execution arms): id, name, declared commands, tags, connected-at. Optionally filter by tags (AND match) to preview which nodes a node_invoke_many fan-out would hit.",
+        description: <crate::builtin_tools::node_list::NodeListTool as crate::tools::AlephTool>::DESCRIPTION,
         requires_config: true, // Requires NodeRegistry (deferred via OnceCell)
     },
     BuiltinToolDefinition {
         name: "node_invoke",
-        description: "Run a command on a connected cluster node (a remote execution arm). Address the node by name or id; the command must be one the node declares (e.g. \"bash\"), and `args` is that command's JSON payload passed through verbatim.",
+        description: <crate::builtin_tools::node_invoke::NodeInvokeTool as crate::tools::AlephTool>::DESCRIPTION,
         requires_config: true, // Requires NodeRegistry (deferred via OnceCell)
     },
     BuiltinToolDefinition {
         name: "node_invoke_many",
-        description: "Fan a command out concurrently to every online cluster node carrying ALL the given tags (empty tags = all online nodes). Per-node results are aggregated; one node's failure doesn't stop the others.",
+        description: <crate::builtin_tools::node_invoke_many::NodeInvokeManyTool as crate::tools::AlephTool>::DESCRIPTION,
         requires_config: true, // Requires NodeRegistry (deferred via OnceCell)
     },
     BuiltinToolDefinition {
         name: "node_manage",
-        description: "Change cluster membership: enroll a node slot by name (idempotent, returns its node_id and the command to run on that machine), or deregister a node so it is evicted now and refused if it reconnects. Fleet management by conversation; `node_list` reads the fleet, this writes it.",
+        description: <crate::builtin_tools::node_manage::NodeManageTool as crate::tools::AlephTool>::DESCRIPTION,
         requires_config: true, // Requires NodeRegistry + SecurityStore (deferred via OnceCell)
     },
     BuiltinToolDefinition {
@@ -306,19 +323,19 @@ pub const BUILTIN_TOOL_DEFINITIONS: &[BuiltinToolDefinition] = &[
     },
     BuiltinToolDefinition {
         name: "node_file",
-        description: "Transfer a file between the center and a connected cluster node by path (push/pull). Bytes move host-to-host over the cluster channel and never enter the conversation; 8 MB cap; the node must declare file.read/file.write.",
+        description: <crate::builtin_tools::node_file::NodeFileTool as crate::tools::AlephTool>::DESCRIPTION,
         requires_config: true, // Requires NodeRegistry (deferred via OnceCell)
     },
     // Memory lifecycle & knowledge-wiki tools — require a memory backend / wiki /
     // profile synthesizer; created dynamically in BuiltinToolRegistry::with_config().
     BuiltinToolDefinition {
         name: "memory_reflect",
-        description: "Synthesise a distilled answer from long-term memory with cited note paths (vs memory_search's raw hits)",
+        description: <crate::builtin_tools::memory_reflect::MemoryReflectTool as crate::tools::AlephTool>::DESCRIPTION,
         requires_config: true,
     },
     BuiltinToolDefinition {
         name: "recall_context",
-        description: "Retrieve pre-compression conversation details — specific code, error messages, or decisions from earlier in the conversation",
+        description: crate::builtin_tools::recall_context::RecallContextTool::DESCRIPTION,
         requires_config: true,
     },
     BuiltinToolDefinition {
@@ -331,7 +348,7 @@ pub const BUILTIN_TOOL_DEFINITIONS: &[BuiltinToolDefinition] = &[
     },
     BuiltinToolDefinition {
         name: "note_graph_query",
-        description: "Interrogate the long-term memory knowledge graph (read-only): `schema` introspection (categories, edge relation-types, totals), N-hop `neighbors`, `community` members, and top `related` peers.",
+        description: crate::builtin_tools::note_graph_query::NoteGraphQueryTool::DESCRIPTION,
         requires_config: true,
     },
     BuiltinToolDefinition {
@@ -348,22 +365,22 @@ pub const BUILTIN_TOOL_DEFINITIONS: &[BuiltinToolDefinition] = &[
     },
     BuiltinToolDefinition {
         name: "note_orient",
-        description: "Fetch a compact orientation snapshot of the memory wiki: SCHEMA, index, and recent log entries",
+        description: crate::builtin_tools::note_orient::NoteOrientTool::DESCRIPTION,
         requires_config: true,
     },
     BuiltinToolDefinition {
         name: "note_schema",
-        description: "Read or write SCHEMA.md, the file describing the structure of the agent's long-term memory wiki",
+        description: crate::builtin_tools::note_schema::NoteSchemaTool::DESCRIPTION,
         requires_config: true,
     },
     BuiltinToolDefinition {
         name: "user_profile",
-        description: "Read the current user profile (interests, preferences, context) or view its revision history",
+        description: crate::builtin_tools::user_profile::UserProfileTool::DESCRIPTION,
         requires_config: true,
     },
     BuiltinToolDefinition {
         name: "session_complete",
-        description: "Signal that a self-contained task has completed, triggering a memory retrospective for future similar tasks",
+        description: <crate::builtin_tools::session_complete::SessionCompleteTool as crate::tools::AlephTool>::DESCRIPTION,
         requires_config: true,
     },
     BuiltinToolDefinition {
@@ -375,407 +392,407 @@ pub const BUILTIN_TOOL_DEFINITIONS: &[BuiltinToolDefinition] = &[
     },
     BuiltinToolDefinition {
         name: "session_list",
-        description: "List sessions accessible to this agent for cross-session communication",
+        description: <crate::builtin_tools::sessions::list_tool::SessionsListTool as crate::tools::AlephTool>::DESCRIPTION,
         requires_config: true, // Requires gateway_context
     },
     BuiltinToolDefinition {
         name: "session_send",
-        description: "Send messages to other sessions (same or different agent)",
+        description: <crate::builtin_tools::sessions::send_tool::SessionsSendTool as crate::tools::AlephTool>::DESCRIPTION,
         requires_config: true, // Requires gateway_context
     },
     BuiltinToolDefinition {
         name: "session_new",
-        description: "Start a new conversation session, closing the current one",
+        description: <crate::builtin_tools::sessions::new_tool::SessionNewTool as crate::tools::AlephTool>::DESCRIPTION,
         requires_config: true, // Requires SessionManager (via gateway_context)
     },
     BuiltinToolDefinition {
         name: "session_compact",
-        description: "Compact the current conversation: summarize the older turns, keep the recent ones",
+        description: <crate::builtin_tools::sessions::compact_tool::SessionCompactTool as crate::tools::AlephTool>::DESCRIPTION,
         requires_config: true, // Requires SessionManager (via gateway_context)
     },
     BuiltinToolDefinition {
         name: "session_rename",
-        description: "Rename the current session's topic/title",
+        description: <crate::builtin_tools::sessions::set_topic_tool::SessionSetTopicTool as crate::tools::AlephTool>::DESCRIPTION,
         requires_config: true, // Requires SessionManager (via gateway_context)
     },
     BuiltinToolDefinition {
         name: "session_set_mode",
-        description: "Switch this session's usage mode (chat / work / code)",
+        description: <crate::builtin_tools::sessions::set_mode_tool::SessionSetModeTool as crate::tools::AlephTool>::DESCRIPTION,
         requires_config: true, // Requires SessionManager (via gateway_context)
     },
     BuiltinToolDefinition {
         name: "session_search",
-        description: "Search past conversation transcripts across all sessions using full-text search",
+        description: <crate::builtin_tools::session_search::SessionSearchTool as crate::tools::AlephTool>::DESCRIPTION,
         requires_config: true, // Requires SessionManager
     },
     BuiltinToolDefinition {
         name: "cron_manage",
-        description: "Manage scheduled tasks — create, list, delete, enable/disable cron jobs",
+        description: <crate::builtin_tools::cron_manage::CronManageTool as crate::tools::AlephTool>::DESCRIPTION,
         requires_config: true, // Requires SharedCronService
     },
     // Heartbeat management tools — require SharedHeartbeatService
     BuiltinToolDefinition {
         name: "heartbeat_list",
-        description: "List all heartbeat monitoring tasks",
+        description: <crate::builtin_tools::heartbeat_manage::HeartbeatListTool as crate::tools::AlephTool>::DESCRIPTION,
         requires_config: true, // Requires SharedHeartbeatService
     },
     BuiltinToolDefinition {
         name: "heartbeat_create",
-        description: "Create a new heartbeat monitoring task",
+        description: <crate::builtin_tools::heartbeat_manage::HeartbeatCreateTool as crate::tools::AlephTool>::DESCRIPTION,
         requires_config: true, // Requires SharedHeartbeatService
     },
     BuiltinToolDefinition {
         name: "heartbeat_update",
-        description: "Update an existing heartbeat monitoring task",
+        description: <crate::builtin_tools::heartbeat_manage::HeartbeatUpdateTool as crate::tools::AlephTool>::DESCRIPTION,
         requires_config: true, // Requires SharedHeartbeatService
     },
     BuiltinToolDefinition {
         name: "heartbeat_delete",
-        description: "Delete a heartbeat monitoring task",
+        description: <crate::builtin_tools::heartbeat_manage::HeartbeatDeleteTool as crate::tools::AlephTool>::DESCRIPTION,
         requires_config: true, // Requires SharedHeartbeatService
     },
     BuiltinToolDefinition {
         name: "heartbeat_toggle",
-        description: "Enable or disable a heartbeat monitoring task",
+        description: <crate::builtin_tools::heartbeat_manage::HeartbeatToggleTool as crate::tools::AlephTool>::DESCRIPTION,
         requires_config: true, // Requires SharedHeartbeatService
     },
     // Heartbeat report tool — always available, used during L2 heartbeat execution
     BuiltinToolDefinition {
         name: "heartbeat_report",
-        description: "Report results of a heartbeat monitoring analysis (silent or notify user)",
+        description: <crate::builtin_tools::heartbeat_manage::HeartbeatReportTool as crate::tools::AlephTool>::DESCRIPTION,
         requires_config: false,
     },
     BuiltinToolDefinition {
         name: "agent_create",
-        description: "Create a new agent with an isolated workspace and register it for use",
+        description: <crate::builtin_tools::agent_manage::create::AgentCreateTool as crate::tools::AlephTool>::DESCRIPTION,
         requires_config: true, // Requires agent_registry + workspace_manager
     },
 
     BuiltinToolDefinition {
         name: "agent_list",
-        description: "List all registered agents and show which is active for the current session",
+        description: <crate::builtin_tools::agent_manage::list::AgentListTool as crate::tools::AlephTool>::DESCRIPTION,
         requires_config: true, // Requires agent_registry
     },
     BuiltinToolDefinition {
         name: "agent_delete",
-        description: "Delete an agent and archive its workspace (cannot delete 'main')",
+        description: <crate::builtin_tools::agent_manage::delete::AgentDeleteTool as crate::tools::AlephTool>::DESCRIPTION,
         requires_config: true, // Requires agent_registry + workspace_manager
     },
     BuiltinToolDefinition {
         name: "agent_switch",
-        description: "Switch the active agent bound to the current channel to another existing agent",
+        description: <crate::builtin_tools::agent_manage::switch::AgentSwitchTool as crate::tools::AlephTool>::DESCRIPTION,
         requires_config: true, // Requires agent_registry + workspace_manager
     },
     BuiltinToolDefinition {
         name: "agent_info",
-        description: "Get detailed capabilities and configuration of a registered agent (allowed/denied tools, iteration limits, context mode, usage hints)",
+        description: <crate::builtin_tools::agent_manage::info::AgentInfoTool as crate::tools::AlephTool>::DESCRIPTION,
         requires_config: false, // Always available — builds its own agent-definition catalog
     },
     // Browser tools — always available, share a ProfileManager
     BuiltinToolDefinition {
         name: "browser_open",
-        description: "Open URL in browser",
+        description: <crate::builtin_tools::browser_tools::open::BrowserOpenTool as crate::tools::AlephTool>::DESCRIPTION,
         requires_config: false,
     },
     BuiltinToolDefinition {
         name: "browser_click",
-        description: "Click or double-click element in browser",
+        description: <crate::builtin_tools::browser_tools::click::BrowserClickTool as crate::tools::AlephTool>::DESCRIPTION,
         requires_config: false,
     },
     BuiltinToolDefinition {
         name: "browser_type",
-        description: "Type text in browser element",
+        description: <crate::builtin_tools::browser_tools::type_text::BrowserTypeTool as crate::tools::AlephTool>::DESCRIPTION,
         requires_config: false,
     },
     BuiltinToolDefinition {
         name: "browser_screenshot",
-        description: "Capture browser screenshot",
+        description: <crate::builtin_tools::browser_tools::screenshot::BrowserScreenshotTool as crate::tools::AlephTool>::DESCRIPTION,
         requires_config: false,
     },
     BuiltinToolDefinition {
         name: "browser_snapshot",
-        description: "Get browser ARIA accessibility tree",
+        description: <crate::builtin_tools::browser_tools::snapshot::BrowserSnapshotTool as crate::tools::AlephTool>::DESCRIPTION,
         requires_config: false,
     },
     BuiltinToolDefinition {
         name: "browser_navigate",
-        description: "Navigate browser back/forward/refresh",
+        description: <crate::builtin_tools::browser_tools::navigate::BrowserNavigateTool as crate::tools::AlephTool>::DESCRIPTION,
         requires_config: false,
     },
     BuiltinToolDefinition {
         name: "browser_tabs",
-        description: "List, switch, or close browser tabs",
+        description: <crate::builtin_tools::browser_tools::tabs::BrowserTabsTool as crate::tools::AlephTool>::DESCRIPTION,
         requires_config: false,
     },
     BuiltinToolDefinition {
         name: "browser_select",
-        description: "Select dropdown option in browser",
+        description: <crate::builtin_tools::browser_tools::select::BrowserSelectTool as crate::tools::AlephTool>::DESCRIPTION,
         requires_config: false,
     },
     BuiltinToolDefinition {
         name: "browser_evaluate",
-        description: "Execute JavaScript in browser",
+        description: <crate::builtin_tools::browser_tools::evaluate::BrowserEvaluateTool as crate::tools::AlephTool>::DESCRIPTION,
         requires_config: false,
     },
     BuiltinToolDefinition {
         name: "browser_fill_form",
-        description: "Fill multiple form fields in browser",
+        description: <crate::builtin_tools::browser_tools::fill_form::BrowserFillFormTool as crate::tools::AlephTool>::DESCRIPTION,
         requires_config: false,
     },
     BuiltinToolDefinition {
         name: "browser_press_key",
-        description: "Press a keyboard key in the browser",
+        description: <crate::builtin_tools::browser_tools::press_key::BrowserPressKeyTool as crate::tools::AlephTool>::DESCRIPTION,
         requires_config: false,
     },
     BuiltinToolDefinition {
         name: "browser_wait_for",
-        description: "Wait for specific text to appear on the page",
+        description: <crate::builtin_tools::browser_tools::wait_for::BrowserWaitForTool as crate::tools::AlephTool>::DESCRIPTION,
         requires_config: false,
     },
     BuiltinToolDefinition {
         name: "browser_console",
-        description: "Read browser console messages for debugging",
+        description: <crate::builtin_tools::browser_tools::console::BrowserConsoleTool as crate::tools::AlephTool>::DESCRIPTION,
         requires_config: false,
     },
     BuiltinToolDefinition {
         name: "browser_hover",
-        description: "Hover the pointer over an element in the browser",
+        description: <crate::builtin_tools::browser_tools::hover::BrowserHoverTool as crate::tools::AlephTool>::DESCRIPTION,
         requires_config: false,
     },
     BuiltinToolDefinition {
         name: "browser_scroll",
-        description: "Scroll the browser viewport up/down/left/right",
+        description: <crate::builtin_tools::browser_tools::scroll::BrowserScrollTool as crate::tools::AlephTool>::DESCRIPTION,
         requires_config: false,
     },
     BuiltinToolDefinition {
         name: "browser_pdf",
-        description: "Print the current browser page to a PDF file",
+        description: <crate::builtin_tools::browser_tools::pdf::BrowserPdfTool as crate::tools::AlephTool>::DESCRIPTION,
         requires_config: false,
     },
     BuiltinToolDefinition {
         name: "browser_network",
-        description: "Read the browser network request log for debugging",
+        description: <crate::builtin_tools::browser_tools::network::BrowserNetworkTool as crate::tools::AlephTool>::DESCRIPTION,
         requires_config: false,
     },
     BuiltinToolDefinition {
         name: "browser_dialog",
-        description: "Respond to a native browser dialog (alert/confirm/prompt)",
+        description: <crate::builtin_tools::browser_tools::dialog::BrowserDialogTool as crate::tools::AlephTool>::DESCRIPTION,
         requires_config: false,
     },
     BuiltinToolDefinition {
         name: "browser_drag",
-        description: "Drag one element onto another in the browser",
+        description: <crate::builtin_tools::browser_tools::drag::BrowserDragTool as crate::tools::AlephTool>::DESCRIPTION,
         requires_config: false,
     },
     BuiltinToolDefinition {
         name: "browser_upload",
-        description: "Attach local files to a file input in the browser",
+        description: <crate::builtin_tools::browser_tools::upload::BrowserUploadTool as crate::tools::AlephTool>::DESCRIPTION,
         requires_config: false,
     },
     BuiltinToolDefinition {
         name: "browser_resize",
-        description: "Resize the browser viewport",
+        description: <crate::builtin_tools::browser_tools::resize::BrowserResizeTool as crate::tools::AlephTool>::DESCRIPTION,
         requires_config: false,
     },
     BuiltinToolDefinition {
         name: "browser_emulate",
-        description: "Emulate color scheme, geolocation, network/CPU throttling, HTTP headers, or user-agent on the active tab",
+        description: <crate::builtin_tools::browser_tools::emulate::BrowserEmulateTool as crate::tools::AlephTool>::DESCRIPTION,
         requires_config: false,
     },
     BuiltinToolDefinition {
         name: "browser_cookies",
-        description: "List, get, set, delete, or clear cookies in the managed browser session",
+        description: <crate::builtin_tools::browser_tools::cookies::BrowserCookiesTool as crate::tools::AlephTool>::DESCRIPTION,
         requires_config: false,
     },
     BuiltinToolDefinition {
         name: "browser_session",
-        description: "Save or restore a browser login session (cookies + localStorage) by name",
+        description: <crate::builtin_tools::browser_tools::session::BrowserSessionTool as crate::tools::AlephTool>::DESCRIPTION,
         requires_config: false,
     },
     BuiltinToolDefinition {
         name: "browser_profile",
-        description: "List and manage browser profiles",
+        description: <crate::builtin_tools::browser_tools::profile_tool::BrowserProfileTool as crate::tools::AlephTool>::DESCRIPTION,
         requires_config: false,
     },
     // Media tools — require MediaPipeline
     BuiltinToolDefinition {
         name: "media_understand",
-        description: "Understand media content (images, audio, video, documents) with auto-detection and multi-provider fallback",
+        description: <crate::builtin_tools::media_tools::understand::MediaUnderstandTool as crate::tools::AlephTool>::DESCRIPTION,
         requires_config: true, // Requires media_pipeline
     },
     BuiltinToolDefinition {
         name: "audio_transcribe",
-        description: "Transcribe audio files to text with language detection",
+        description: <crate::builtin_tools::media_tools::transcribe::AudioTranscribeTool as crate::tools::AlephTool>::DESCRIPTION,
         requires_config: true, // Requires media_pipeline
     },
     BuiltinToolDefinition {
         name: "document_extract",
-        description: "Extract text and structured data from documents",
+        description: <crate::builtin_tools::media_tools::extract::DocumentExtractTool as crate::tools::AlephTool>::DESCRIPTION,
         requires_config: true, // Requires media_pipeline
     },
     // Aleph Hub tools — require CatalogCache
     BuiltinToolDefinition {
         name: "hub_catalog_search",
-        description: "Search or browse the Aleph Hub catalog of installable extensions; returns the entry_id that hub_resolve_spec and hub_install_run require, plus installed / update-available / config / consent state per hit.",
+        description: <crate::builtin_tools::hub::catalog_search::HubCatalogSearchTool as crate::tools::AlephTool>::DESCRIPTION,
         requires_config: true, // Requires CatalogCache
     },
     BuiltinToolDefinition {
         name: "hub_catalog_sync",
-        description: "Refresh the local cache from the published Aleph Hub catalog. Keeps the last-good cache on failure.",
+        description: <crate::builtin_tools::hub::catalog_sync::HubCatalogSyncTool as crate::tools::AlephTool>::DESCRIPTION,
         requires_config: true, // Requires CatalogCache
     },
     BuiltinToolDefinition {
         name: "hub_resolve_spec",
-        description: "Resolve the install spec for a catalog entry by its id from the local catalog cache.",
+        description: <crate::builtin_tools::hub::resolve_spec::HubResolveSpecTool as crate::tools::AlephTool>::DESCRIPTION,
         requires_config: true, // Requires CatalogCache
     },
     BuiltinToolDefinition {
         name: "hub_install_run",
-        description: "Install a catalog entry by id (trust-gated). Clean specs install directly; ack-required specs bounce to the user for consent via the Extensions UI; OCI is rejected.",
+        description: <crate::builtin_tools::hub::install_run::HubInstallRunTool as crate::tools::AlephTool>::DESCRIPTION,
         requires_config: true, // Requires CatalogCache + marketplace configs + vault
     },
     BuiltinToolDefinition {
         name: "hub_install_verify",
-        description: "Verify that a just-installed extension is healthy. For MCP servers: checks the server is running and exposes ≥1 tool. For plugins and skills: checks the artifact is present on disk.",
+        description: <crate::builtin_tools::hub::install_verify::HubInstallVerifyTool as crate::tools::AlephTool>::DESCRIPTION,
         requires_config: true, // Requires live McpManagerHandle for MCP verification
     },
     BuiltinToolDefinition {
         name: "hub_fetch_docs",
-        description: "Fetch a text document (README / manifest) over HTTP with SSRF protection and a 64 KiB cap, and scan it for prompt-injection patterns before returning it.",
+        description: <crate::builtin_tools::hub::fetch_docs::HubFetchDocsTool as crate::tools::AlephTool>::DESCRIPTION,
         requires_config: false, // No CatalogCache needed; HTTP-only
     },
     // Team management tools — require TeamStore
     BuiltinToolDefinition {
         name: "team_create",
-        description: "Create a new team with the calling agent as leader, enrolling existing or inline-created members",
+        description: <crate::builtin_tools::TeamCreateTool as crate::tools::AlephTool>::DESCRIPTION,
         requires_config: true,
     },
     BuiltinToolDefinition {
         name: "team_delegate",
-        description: "Delegate a task to a team member, execute it, and return the result",
+        description: <crate::builtin_tools::TeamDelegateTool as crate::tools::AlephTool>::DESCRIPTION,
         requires_config: true,
     },
     BuiltinToolDefinition {
         name: "team_status",
-        description: "Query the current state of a team, including members and task history",
+        description: <crate::builtin_tools::TeamStatusTool as crate::tools::AlephTool>::DESCRIPTION,
         requires_config: true,
     },
     BuiltinToolDefinition {
         name: "team_disband",
-        description: "Mark a team as disbanded (preserved for history, cannot be undone)",
+        description: <crate::builtin_tools::TeamDisbandTool as crate::tools::AlephTool>::DESCRIPTION,
         requires_config: true,
     },
     BuiltinToolDefinition {
         name: "team_set_protocol",
-        description: "Set or clear a team's operating protocol (role definitions, hand-off rules, quality standards) injected into every member's launch context. Pass an empty protocol to clear.",
+        description: <crate::builtin_tools::TeamSetProtocolTool as crate::tools::AlephTool>::DESCRIPTION,
         requires_config: true,
     },
     BuiltinToolDefinition {
         name: "team_member_add",
-        description: "Add a member to an existing team (leader only). Accepts native agent IDs OR ACP harness refs like 'acp:claude-code' or 'acp:codex/backend' to bring external CLI agents (Claude Code / Codex / Gemini CLI / …) into the shared team session.",
+        description: <crate::builtin_tools::TeamMemberAddTool as crate::tools::AlephTool>::DESCRIPTION,
         requires_config: true,
     },
     BuiltinToolDefinition {
         name: "team_member_remove",
-        description: "Remove a member from a team (leader only, cannot remove self)",
+        description: <crate::builtin_tools::TeamMemberRemoveTool as crate::tools::AlephTool>::DESCRIPTION,
         requires_config: true,
     },
     BuiltinToolDefinition {
         name: "team_digest",
-        description: "Generate a summary of recent team activity for the specified time period",
+        description: <crate::builtin_tools::TeamDigestTool as crate::tools::AlephTool>::DESCRIPTION,
         requires_config: true,
     },
     BuiltinToolDefinition {
         name: "team_from_template",
-        description: "Materialize a team from a TOML blueprint in one shot — leader + workers + initial task DAG. Use `teams.list_templates` RPC to discover available templates.",
+        description: <crate::builtin_tools::team::from_template::TeamFromTemplateTool as crate::tools::AlephTool>::DESCRIPTION,
         requires_config: true,
     },
     BuiltinToolDefinition {
         name: "team_snapshot",
-        description: "Manage team snapshots — create / list / get / restore (dry-run by default) / delete. Restore is conservative: InProgress tasks are never clobbered.",
+        description: <crate::builtin_tools::team::snapshot::TeamSnapshotTool as crate::tools::AlephTool>::DESCRIPTION,
         requires_config: true,
     },
     BuiltinToolDefinition {
         name: "team_usage",
-        description: "Aggregate LLM provider token usage for a team over an optional time window. Returns the team total plus a per-agent breakdown. Cost is not computed — tokens are factual, cost is a rate-card concern.",
+        description: <crate::builtin_tools::team::usage::TeamUsageTool as crate::tools::AlephTool>::DESCRIPTION,
         requires_config: true,
     },
     BuiltinToolDefinition {
         name: "team_workflow_canvas",
-        description: "Convert between a team's CoordTask DAG and an Obsidian-compatible JSON Canvas document. action='export' renders the team's tasks as a canvas; action='import' materializes a canvas into coord-tasks (dry_run=true previews without writing).",
+        description: <crate::builtin_tools::team::workflow_canvas::TeamWorkflowCanvasTool as crate::tools::AlephTool>::DESCRIPTION,
         requires_config: true,
     },
     // Team messaging tools — require MessageRouter / Inbox
     BuiltinToolDefinition {
         name: "message_send",
-        description: "Send a message to team members with to/cc routing",
+        description: <crate::builtin_tools::team::message_send::MessageSendTool as crate::tools::AlephTool>::DESCRIPTION,
         requires_config: true,
     },
     BuiltinToolDefinition {
         name: "plan_submit",
-        description: "Submit a plan for team-leader approval before starting significant work",
+        description: <crate::builtin_tools::team::plan_submit::PlanSubmitTool as crate::tools::AlephTool>::DESCRIPTION,
         requires_config: true,
     },
     BuiltinToolDefinition {
         name: "plan_resolve",
-        description: "Approve or reject a plan submitted via plan_submit (team leader only)",
+        description: <crate::builtin_tools::team::plan_resolve::PlanResolveTool as crate::tools::AlephTool>::DESCRIPTION,
         requires_config: true,
     },
     BuiltinToolDefinition {
         name: "inbox_read",
-        description: "Read inbox messages or a full thread. Use mode='inbox' (default) to read your messages, mode='thread' with thread_id to read a conversation thread.",
+        description: <crate::builtin_tools::team::inbox_read::InboxReadTool as crate::tools::AlephTool>::DESCRIPTION,
         requires_config: true,
     },
     // Worker lifecycle tools — require MessageRouter + TeamStore
     BuiltinToolDefinition {
         name: "lifecycle_idle",
-        description: "Report that this worker is idle and awaiting work. Sends an `idle` message to the team leader.",
+        description: <crate::builtin_tools::team::lifecycle_idle::LifecycleIdleTool as crate::tools::AlephTool>::DESCRIPTION,
         requires_config: true,
     },
     BuiltinToolDefinition {
         name: "lifecycle_request_shutdown",
-        description: "Request the team leader's permission to terminate this worker. Pair with lifecycle_resolve_shutdown.",
+        description: <crate::builtin_tools::team::lifecycle_request_shutdown::LifecycleRequestShutdownTool as crate::tools::AlephTool>::DESCRIPTION,
         requires_config: true,
     },
     BuiltinToolDefinition {
         name: "lifecycle_resolve_shutdown",
-        description: "Approve or reject a shutdown request from a worker. Sets decision to 'approve' or 'reject'.",
+        description: <crate::builtin_tools::team::lifecycle_resolve_shutdown::LifecycleResolveShutdownTool as crate::tools::AlephTool>::DESCRIPTION,
         requires_config: true,
     },
     // Task coordination tools — require CoordTaskStore
     BuiltinToolDefinition {
         name: "task_create",
-        description: "Create a coordination task with optional dependencies and team assignment",
+        description: <crate::builtin_tools::task_manage::create::TaskCreateTool as crate::tools::AlephTool>::DESCRIPTION,
         requires_config: true,
     },
     BuiltinToolDefinition {
         name: "task_update",
-        description: "Update a coordination task's status, owner, result, or metadata",
+        description: <crate::builtin_tools::task_manage::update::TaskUpdateTool as crate::tools::AlephTool>::DESCRIPTION,
         requires_config: true,
     },
     BuiltinToolDefinition {
         name: "task_list",
-        description: "List coordination tasks with optional filtering by team, status, or owner",
+        description: <crate::builtin_tools::task_manage::list::TaskListTool as crate::tools::AlephTool>::DESCRIPTION,
         requires_config: true,
     },
     BuiltinToolDefinition {
         name: "task_wait",
-        description: "Wait for specific tasks or all team tasks to complete",
+        description: <crate::builtin_tools::task_manage::wait::TaskWaitTool as crate::tools::AlephTool>::DESCRIPTION,
         requires_config: true,
     },
     BuiltinToolDefinition {
         name: "task_comment",
-        description: "Append a free-text handoff note to a coordination task — survives retries and is visible in the kanban drawer",
+        description: <crate::builtin_tools::team::task_comment::TaskCommentTool as crate::tools::AlephTool>::DESCRIPTION,
         requires_config: true,
     },
     BuiltinToolDefinition {
         name: "team_acp_member",
-        description: "Attach / detach / list external coding CLI sessions (Claude Code, Codex, Gemini CLI) as ACP-backed team members",
+        description: <crate::builtin_tools::team::acp_member::TeamAcpMemberTool as crate::tools::AlephTool>::DESCRIPTION,
         requires_config: true,
     },
     BuiltinToolDefinition {
         name: "workflow_step_review",
-        description: "Approve / reject / retry / skip a single workflow step. Lead-agent step control between dependent tasks (openteams parity).",
+        description: <crate::builtin_tools::team::workflow_step::WorkflowStepReviewTool as crate::tools::AlephTool>::DESCRIPTION,
         requires_config: true,
     },
     BuiltinToolDefinition {
@@ -792,66 +809,66 @@ pub const BUILTIN_TOOL_DEFINITIONS: &[BuiltinToolDefinition] = &[
     // Task artifact tools — require ArtifactStore
     BuiltinToolDefinition {
         name: "task_submit",
-        description: "Submit a structured artifact as task output",
+        description: <crate::builtin_tools::team::task_submit::TaskSubmitTool as crate::tools::AlephTool>::DESCRIPTION,
         requires_config: true,
     },
     BuiltinToolDefinition {
         name: "task_read_artifact",
-        description: "Read artifacts submitted for a task",
+        description: <crate::builtin_tools::team::task_read_artifact::TaskReadArtifactTool as crate::tools::AlephTool>::DESCRIPTION,
         requires_config: true,
     },
     BuiltinToolDefinition {
         name: "task_review",
-        description: "Leader accepts/rejects a member's submitted task (approve→completed, reject→in_progress)",
+        description: <crate::builtin_tools::team::task_review::TaskReviewTool as crate::tools::AlephTool>::DESCRIPTION,
         requires_config: true,
     },
     // Collaborative session tools — require SessionCoordinator / SessionStore
     BuiltinToolDefinition {
         name: "session_collaborate",
-        description: "Start a collaborative session between team members for real-time multi-turn discussion",
+        description: <crate::builtin_tools::team::session_collaborate::SessionCollaborateTool as crate::tools::AlephTool>::DESCRIPTION,
         requires_config: true,
     },
     BuiltinToolDefinition {
         name: "session_turn",
-        description: "Respond in a collaborative session or propose its conclusion",
+        description: <crate::builtin_tools::team::session_turn::SessionTurnTool as crate::tools::AlephTool>::DESCRIPTION,
         requires_config: true,
     },
     BuiltinToolDefinition {
         name: "session_read",
-        description: "Read a collaborative session's transcript, status, and outcome",
+        description: <crate::builtin_tools::team::session_read::SessionReadTool as crate::tools::AlephTool>::DESCRIPTION,
         requires_config: true,
     },
     // Channel management tools — require ChannelRegistry
     BuiltinToolDefinition {
         name: "channel_pairing",
-        description: "Manage channel pairing codes — generate new codes or list active ones for Telegram/other channels",
+        description: <crate::builtin_tools::channel_manage::ChannelPairingTool as crate::tools::AlephTool>::DESCRIPTION,
         requires_config: true, // Requires ChannelRegistry (deferred injection)
     },
     // Google Meet — thin contract over an out-of-core transport bridge.
     // Always available; reports "bridge not configured" when no bridge is set.
     BuiltinToolDefinition {
         name: "google_meet",
-        description: "Join, create, leave, speak into, or query a Google Meet call via the configured transport bridge",
+        description: <crate::builtin_tools::google_meet::GoogleMeetTool as crate::tools::AlephTool>::DESCRIPTION,
         requires_config: false, // bridge optional; tool degrades gracefully
     },
     // Media send tool — no dependencies, just passes URLs through to ReplyEmitter
     BuiltinToolDefinition {
         name: "media_send",
-        description: "Send media files (images, videos, audio) directly to the user in the chat",
+        description: <crate::builtin_tools::media_send::MediaSendTool as crate::tools::AlephTool>::DESCRIPTION,
         requires_config: false,
     },
     // Deliverable publisher — needs only the artifact store, which resolves
     // from the data directory at first use.
     BuiltinToolDefinition {
         name: "artifact_publish",
-        description: "Publish the finished work product (report, analysis, plan) as a standalone document that opens in the user's browser",
+        description: <crate::builtin_tools::artifact_publish::ArtifactPublishTool as crate::tools::AlephTool>::DESCRIPTION,
         requires_config: false,
     },
     // Human-in-the-loop clarification tool — requires ChannelRegistry +
     // ClarificationManager (deferred injection).
     BuiltinToolDefinition {
         name: "ask_user",
-        description: "Ask the user a clarifying question and wait for their reply before continuing — use instead of guessing when the task is ambiguous or a required detail is missing",
+        description: <crate::builtin_tools::ask_user::AskUserTool as crate::tools::AlephTool>::DESCRIPTION,
         requires_config: true,
     },
     // voice_mode_set is a LLM tool only — NOT a slash command.
@@ -864,17 +881,17 @@ pub const BUILTIN_TOOL_DEFINITIONS: &[BuiltinToolDefinition] = &[
     // Skill management tools — LLM-callable tools for querying and configuring skills
     BuiltinToolDefinition {
         name: "skill_status",
-        description: "Query skill system status — list all skills with readiness, missing deps, and install options",
+        description: <crate::builtin_tools::skill_status::SkillStatusTool as crate::tools::AlephTool>::DESCRIPTION,
         requires_config: false,
     },
     BuiltinToolDefinition {
         name: "skill_install",
-        description: "Install missing dependencies for a skill",
+        description: <crate::builtin_tools::skill_install::SkillInstallTool as crate::tools::AlephTool>::DESCRIPTION,
         requires_config: false,
     },
     BuiltinToolDefinition {
         name: "skill_manage",
-        description: "Configure, author, and curate skills — enable/disable, change scope, create/edit/patch skills, write supporting files, pin/archive/delete",
+        description: <crate::builtin_tools::skill_manage::SkillManageTool as crate::tools::AlephTool>::DESCRIPTION,
         requires_config: false,
     },
     BuiltinToolDefinition {
@@ -889,24 +906,24 @@ pub const BUILTIN_TOOL_DEFINITIONS: &[BuiltinToolDefinition] = &[
     // Requires AcpAdapterManager; execution returns clear error if harness unavailable.
     BuiltinToolDefinition {
         name: "acp_delegate",
-        description: "Delegate a task to an external CLI agent via ACP. Use 'claude-code', 'codex', or 'gemini' as the harness parameter, or any custom harness registered via acp.create.",
+        description: <crate::builtin_tools::acp_tools::AcpDelegateTool as crate::tools::AlephTool>::DESCRIPTION,
         requires_config: true,
     },
     BuiltinToolDefinition {
         name: "acp_switch",
-        description: "Switch to direct conversation with an external CLI agent (Claude Code, Codex, or Gemini), or switch back to Aleph.",
+        description: <crate::builtin_tools::acp_tools::AcpSwitchTool as crate::tools::AlephTool>::DESCRIPTION,
         requires_config: true,
     },
     // A2A outbound tools — delegate to / manage remote Agent-to-Agent agents.
     // Require the A2A subsystem ([a2a] enabled); execution returns a clear error otherwise.
     BuiltinToolDefinition {
         name: "a2a_delegate",
-        description: "Delegate a task to a remote agent over the A2A (Agent-to-Agent) protocol.",
+        description: <crate::builtin_tools::a2a_tools::A2ADelegateTool as crate::tools::AlephTool>::DESCRIPTION,
         requires_config: true,
     },
     BuiltinToolDefinition {
         name: "a2a_agents",
-        description: "List, add, or remove the remote A2A agents Aleph can delegate to.",
+        description: <crate::builtin_tools::a2a_tools::A2AAgentsTool as crate::tools::AlephTool>::DESCRIPTION,
         requires_config: true,
     },
 ];
@@ -1196,6 +1213,129 @@ pub fn is_builtin_tool(name: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// No entry may spell its description out here — see the module invariant.
+    ///
+    /// This has to be a source-level assertion. Nothing at runtime can tell a
+    /// description that came from `SomeTool::DESCRIPTION` apart from a literal
+    /// that happens to hold the same bytes today, and the failure mode is
+    /// precisely that they *stop* holding the same bytes while every test stays
+    /// green. `include_str!` is the only witness to which one was written.
+    #[test]
+    fn no_catalog_entry_inlines_its_description() {
+        let src = include_str!("definitions.rs");
+
+        // Scan statements, not lines: rustfmt wraps a long path onto the line
+        // after `description:`, and a line-only scan reads that as a value with
+        // no const in it. Accumulate from the field name to the terminating
+        // comma so both shapes are one site.
+        let mut sites: Vec<String> = Vec::new();
+        let mut pending: Option<String> = None;
+        for line in src.lines().map(str::trim) {
+            match pending.as_mut() {
+                Some(acc) => {
+                    acc.push(' ');
+                    acc.push_str(line);
+                }
+                None if line.starts_with("description:") => pending = Some(line.to_string()),
+                None => continue,
+            }
+            let done = pending.as_ref().is_some_and(|acc| acc.ends_with(','));
+            if done {
+                sites.push(pending.take().unwrap_or_default());
+            }
+        }
+
+        // The scan must see exactly one site per entry. If an entry is ever
+        // written in a shape this scan does not match, the count drifts and the
+        // offender check below would be certifying a surface that no longer
+        // covers the catalog — passing by not looking, which is the failure
+        // this whole invariant exists to prevent.
+        assert_eq!(
+            sites.len(),
+            BUILTIN_TOOL_DEFINITIONS.len(),
+            "the source scan found {} `description:` sites for {} catalog entries — it is no \
+             longer reading every entry, so the check below proves nothing",
+            sites.len(),
+            BUILTIN_TOOL_DEFINITIONS.len()
+        );
+
+        let offenders: Vec<&str> = sites
+            .iter()
+            .map(String::as_str)
+            .filter(|site| !site.contains("DESCRIPTION"))
+            .collect();
+        assert!(
+            offenders.is_empty(),
+            "these entries inline their description instead of referencing the tool's own \
+             `DESCRIPTION` const. A literal here does not duplicate that const — it replaces \
+             it, and the model receives this text instead of anything the tool documents. If \
+             the tool has no `DESCRIPTION` const, add one (see `NoteOrientTool`) and point \
+             both this catalog and the registry constructor at it:\n{}",
+            offenders.join("\n")
+        );
+    }
+
+    /// Total description bytes this catalog puts in every request.
+    ///
+    /// Measured, not computed: `cargo test catalog_description_bytes` prints the
+    /// live number on failure. Raising it is a real cost — descriptions ship
+    /// with the tool list, and `[tools] core` is non-empty by default while
+    /// `truncate_tool_descriptions` is not, so a non-core tool's schema is
+    /// collapsed but its **description is sent in full**. There is no mode in
+    /// which these bytes are free.
+    ///
+    /// Before raising, answer the same three questions the harness budget asks:
+    /// 1. Is this a runtime fact the model cannot infer (an action name, a
+    ///    platform gate, a refusal condition), or is it teaching a strong model
+    ///    how to think? The second belongs nowhere.
+    /// 2. Would a stronger model still need it? Few-shot example blocks are the
+    ///    usual answer of "no" — the schema already carries the parameters, and
+    ///    examples become a cage (R9).
+    /// 3. Does some other tool already say it? `no_sentence_is_stated_twice`
+    ///    catches exact repeats; near-repeats it cannot see are still waste.
+    ///
+    /// History: 2026-08-04, the sweep that pointed all 155 entries at their
+    /// tools' consts. 29,854 B -> 81,274 B, and the increase is the point: 143
+    /// of the 155 entries were terse literals totalling 13,508 B that shadowed
+    /// 64,866 B of documentation the tools had written and the model had never
+    /// been shown. Trimmed in the same pass, under the questions above: the
+    /// `desktop` and `bash` few-shot example blocks (-1,756 B), one `bash`
+    /// sentence reworded from an instruction into the runtime fact behind it
+    /// (-88 B), and four copies of the AX platform-support sentence down to
+    /// one (-690 B).
+    const CATALOG_DESCRIPTION_CEILING_BYTES: usize = 81_274;
+
+    #[test]
+    fn catalog_description_bytes_ratchet() {
+        let total: usize = BUILTIN_TOOL_DEFINITIONS
+            .iter()
+            .map(|def| def.description.len())
+            .sum();
+        let mut largest: Vec<(&str, usize)> = BUILTIN_TOOL_DEFINITIONS
+            .iter()
+            .map(|def| (def.name, def.description.len()))
+            .collect();
+        largest.sort_by_key(|(_, len)| std::cmp::Reverse(*len));
+        largest.truncate(5);
+
+        assert!(
+            total <= CATALOG_DESCRIPTION_CEILING_BYTES,
+            "catalog descriptions total {total} B, over the ceiling of \
+             {CATALOG_DESCRIPTION_CEILING_BYTES} B. These bytes ship in every request that \
+             lists these tools. Largest: {largest:?}. Answer the three questions documented \
+             on CATALOG_DESCRIPTION_CEILING_BYTES before raising it."
+        );
+
+        // A ceiling over an empty measurement is not a ceiling. If the catalog
+        // ever stops carrying descriptions, this guard must fail loudly rather
+        // than certify zero bytes.
+        assert!(
+            total > 10_000,
+            "catalog descriptions measured only {total} B — the guard is no longer reading \
+             the descriptions it exists to bound"
+        );
+    }
 
     #[test]
     fn strategy_tool_is_listed_in_a_group() {

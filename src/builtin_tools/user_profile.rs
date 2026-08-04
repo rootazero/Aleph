@@ -34,6 +34,16 @@ impl Clone for UserProfileTool {
 }
 
 impl UserProfileTool {
+    /// Model-facing description — the single source for both the static
+    /// catalog (`BUILTIN_TOOL_DEFINITIONS`) and the registry constructor.
+    /// A catalog entry shadows whatever the constructor registers under the
+    /// same name, so a second copy of this text anywhere is a copy the model
+    /// never sees.
+    pub const DESCRIPTION: &'static str =
+        "Read the current user profile (interests, preferences, context) or view \
+         its revision history. Use 'read' to get the latest profile, 'history' to \
+         inspect the revision log.";
+
     pub fn new(synthesizer: Arc<dyn ProfileSynthesizer>) -> Self {
         Self { synthesizer }
     }
