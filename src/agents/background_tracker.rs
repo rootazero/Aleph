@@ -2168,14 +2168,11 @@ mod tests {
     async fn wait_any_not_found_carries_the_unknown_id_list() {
         // Round-8 — `NotFound` is no longer a bool; it carries the id list
         // so a caller can fix a typo in one round-trip instead of fishing
-        // by issuing single-id waits.
+        // by issuing single-id waits. The variant means what its doc says:
+        // *every* id in the set is unknown, so there is nothing to wait for.
         let tracker = BackgroundAgentTracker::new();
         tracker.register("known".into(), CancellationToken::new(), "live".into());
-        let ids = vec![
-            "known".to_string(),
-            "ghost1".to_string(),
-            "ghost2".to_string(),
-        ];
+        let ids = vec!["ghost1".to_string(), "ghost2".to_string()];
         match tracker.wait_any(&ids, Duration::from_millis(10)).await {
             WaitAnyOutcome::NotFound { unknown_ids } => {
                 let mut got = unknown_ids.clone();
@@ -2184,6 +2181,38 @@ mod tests {
             }
             other => panic!("expected NotFound, got {other:?}"),
         }
+    }
+
+    /// A typo does **not** abort a wait that still has live children in it.
+    ///
+    /// The tempting reading — "any unknown id ⇒ `NotFound`" — is actively
+    /// harmful: the tool layer maps `NotFound` to a non-retryable
+    /// `ToolResult::Error`, so one mistyped id in a five-way fan-out would
+    /// throw away the wait on the four real children *and* record a verdict
+    /// about the call in the cross-batch failure memo. The set keeps waiting;
+    /// the typo is diagnosed out-of-band by [`unknown_ids`](BackgroundAgentTracker::unknown_ids),
+    /// which `loop_tool` folds into every outcome as `unknown_request_ids`
+    /// (`annotate_unknown`) — including the interrupted-wait report.
+    #[tokio::test]
+    async fn wait_any_keeps_waiting_when_ghosts_share_the_set_with_a_live_id() {
+        let tracker = BackgroundAgentTracker::new();
+        tracker.register("known".into(), CancellationToken::new(), "live".into());
+        let ids = vec![
+            "known".to_string(),
+            "ghost1".to_string(),
+            "ghost2".to_string(),
+        ];
+        match tracker.wait_any(&ids, Duration::from_millis(10)).await {
+            WaitAnyOutcome::TimedOut { still_running } => {
+                assert_eq!(still_running, vec!["known".to_string()]);
+            }
+            other => panic!("expected TimedOut, got {other:?}"),
+        }
+        // …and the ghosts are still nameable, which is what the tool layer
+        // reports alongside the timeout.
+        let mut unknown = tracker.unknown_ids(&ids);
+        unknown.sort();
+        assert_eq!(unknown, vec!["ghost1".to_string(), "ghost2".to_string()]);
     }
 
     #[test]

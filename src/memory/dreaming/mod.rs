@@ -8,6 +8,7 @@ pub mod distill_action;
 pub mod event_log;
 pub mod evolution;
 pub mod mutation_gate;
+mod project_cycle;
 pub mod report;
 pub mod selector;
 pub mod signals;
@@ -31,7 +32,7 @@ use crate::sync_primitives::{AtomicBool, AtomicI64, Ordering};
 use chrono::{Local, NaiveTime, TimeZone};
 use once_cell::sync::{Lazy, OnceCell};
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tokio::task::JoinHandle;
 use tokio::time::interval;
@@ -1145,69 +1146,54 @@ impl DreamDaemon {
                 // `note_manage` under `{base}__proj-*` get the note-maintenance
                 // subset so their notes are linted/consolidated/synthesised too.
                 // The global-only stages (feedback floor, skill lifecycle, daily
-                // digest) are excluded — those stay cross-project. Per-namespace
-                // failures are logged, never aborting the base cycle.
+                // digest) are excluded — those stay cross-project.
+                //
+                // Each namespace governs *itself*: it folds its own event log
+                // into its own gate, personality and best-health checkpoint, and
+                // appends its own event — it does not inherit this cycle's
+                // strategy and its churn never joins the base agent's history.
+                // See `project_cycle` for why joining them would be worse than
+                // the drop it replaces. Per-namespace failures are logged, never
+                // aborting the base cycle.
                 if self.project_scoped {
                     let scoped = crate::memory::project_scope::list_scoped_agent_ids(
                         &memory_dir,
                         DEFAULT_AGENT_ID,
                     );
-                    if !scoped.is_empty() {
-                        let project_pipeline = DreamPipeline::from_strategy(
-                            strategy,
-                            &self.config,
-                            &self.decay_policy,
-                        )
-                        .retain_project_stages();
-                        for ns in &scoped {
-                            let ns_index = self.database.list_notes(ns).await.unwrap_or_else(|e| {
-                                warn!(agent = %ns, error = %e, "failed to list notes for project namespace, proceeding with empty index");
-                                Vec::new()
-                            });
-                            let ns_notes: Vec<NoteEntry> =
-                                ns_index.iter().map(NoteEntry::from_index_entry).collect();
-                            let mut ns_indexer =
-                                // rust-doctor-disable-next-line excessive-clone
-                                NoteIndexer::new(memory_dir.clone(), self.database.clone());
-                            // rust-doctor-disable-next-line excessive-clone
-                            ns_indexer = ns_indexer.with_embedder(embedder.clone());
-                            let ns_ctx = DreamContext {
-                                notes: ns_notes,
-                                note_contents: HashMap::new(),
-                                // rust-doctor-disable-next-line excessive-clone
-                                agent_id: ns.clone(),
-                                // rust-doctor-disable-next-line excessive-clone
-                                database: self.database.clone(),
-                                indexer: ns_indexer,
-                                // rust-doctor-disable-next-line excessive-clone
-                                provider: provider.clone(),
-                                // rust-doctor-disable-next-line excessive-clone
-                                embedder: embedder.clone(),
-                                report: DreamReport {
-                                    pipeline_type: strategy.to_string(),
-                                    started_at: run_start,
-                                    ..Default::default()
-                                },
-                                pipeline_type: strategy.to_string(),
-                                // rust-doctor-disable-next-line excessive-clone
-                                activity_checker: activity_checker.clone(),
-                                strategy,
-                                // rust-doctor-disable-next-line excessive-clone
-                                orientation: self.orientation.clone(),
-                                evolution_budget: EditBudget::default(),
-                            };
-                            match project_pipeline.run(ns_ctx).await {
-                                Ok(r) => info!(
+                    let deps = project_cycle::ProjectCycleDeps {
+                        memory_dir: &memory_dir,
+                        database: &self.database,
+                        provider: &provider,
+                        embedder: &embedder,
+                        config: &self.config,
+                        decay_policy: &self.decay_policy,
+                        orientation: &self.orientation,
+                        activity_checker: &activity_checker,
+                    };
+                    for ns in &scoped {
+                        match project_cycle::run_namespace_cycle(&deps, ns).await {
+                            Ok(r) => {
+                                let interrupted = r.status == DreamReportStatus::Interrupted;
+                                info!(
                                     agent = %ns,
                                     stages = ?r.stages_executed,
+                                    interrupted,
                                     "project namespace dream complete"
-                                ),
-                                Err(e) => warn!(
-                                    agent = %ns,
-                                    error = %e,
-                                    "project namespace dream failed"
-                                ),
+                                );
+                                // The activity checker fired: the user is back.
+                                // Walking the remaining namespaces would only
+                                // produce a burst of cycles that interrupt at
+                                // their first stage — stop, because stopping is
+                                // what yielding means.
+                                if interrupted {
+                                    break;
+                                }
                             }
+                            Err(e) => warn!(
+                                agent = %ns,
+                                error = %e,
+                                "project namespace dream failed"
+                            ),
                         }
                     }
                 }
@@ -1268,40 +1254,8 @@ impl DreamDaemon {
             // rust-doctor-disable-next-line excessive-clone
             .map(|n| (n.path.clone(), n.content_hash.clone()))
             .collect();
-        // L1 format validation: read a bounded, newest-first sample of the
-        // post-cycle corpus off disk and check frontmatter / category / non-empty
-        // body. Previously hardcoded to a vacuous pass (`checks_run: 0`), leaving
-        // `run_l1_validation` — a fully-implemented, tested function — with zero
-        // production callers. Bounded by `L1_MAX_NOTES` so a large corpus can't
-        // turn the nightly cycle into thousands of reads; newest-first because a
-        // malformed note is almost always one this cycle just wrote. A failed
-        // L1 only nudges the selector's personality pass-rate down (non-
-        // destructive), matching L2's existing contract.
-        const L1_MAX_NOTES: usize = 200;
-        let l1_format = {
-            let mut by_recency: Vec<&NoteIndexEntry> = post_index.iter().collect();
-            by_recency.sort_by_key(|e| std::cmp::Reverse(e.updated_at));
-            let mut contents: HashMap<String, String> = HashMap::new();
-            for entry in by_recency.into_iter().take(L1_MAX_NOTES) {
-                let file_path = memory_dir
-                    .join(&entry.agent_id)
-                    .join(&entry.category)
-                    .join(format!("{}.md", entry.filename));
-                if let Ok(content) = tokio::fs::read_to_string(&file_path).await {
-                    contents.insert(entry.path.clone(), content);
-                }
-            }
-            validation::run_l1_validation(&contents)
-        };
-        if !l1_format.passed {
-            warn!(
-                checks_run = l1_format.checks_run,
-                issues = l1_format.issues.len(),
-                "Dream L1 validation found malformed notes"
-            );
-        }
         let validation_report = DreamValidationReport {
-            l1_format,
+            l1_format: l1_over_corpus(&memory_dir, DEFAULT_AGENT_ID, &post_index).await,
             l2_consistency: validation::run_l2_validation(&l2_pairs),
             l3_semantic: None,
             l4_retrospective: None,
@@ -1422,6 +1376,53 @@ impl DreamDaemon {
             decision,
         })
     }
+}
+
+/// Run L1 format validation over a bounded, newest-first sample of one agent's
+/// corpus: read the notes off disk and check frontmatter / category / non-empty
+/// body.
+///
+/// Bounded by `L1_MAX_NOTES` so a large corpus can't turn the nightly cycle into
+/// thousands of reads; newest-first because a malformed note is almost always
+/// one this cycle just wrote. A failed L1 only nudges the selector's personality
+/// pass-rate down (non-destructive), matching L2's contract.
+///
+/// Shared by the base cycle and every project sub-cycle. Two copies would drift
+/// silently in the direction that hurts: a namespace whose L1 quietly degraded
+/// to a vacuous pass would rubber-stamp `passed` forever and freeze its
+/// personality — the exact failure this validation was wired to end.
+async fn l1_over_corpus(
+    memory_dir: &Path,
+    agent_id: &str,
+    index: &[NoteIndexEntry],
+) -> ValidationTier {
+    /// Cap on notes read off disk per cycle, per agent.
+    const L1_MAX_NOTES: usize = 200;
+
+    let mut by_recency: Vec<&NoteIndexEntry> = index.iter().collect();
+    by_recency.sort_by_key(|e| std::cmp::Reverse(e.updated_at));
+    let mut contents: HashMap<String, String> = HashMap::new();
+    for entry in by_recency.into_iter().take(L1_MAX_NOTES) {
+        let file_path = memory_dir
+            .join(&entry.agent_id)
+            .join(&entry.category)
+            .join(format!("{}.md", entry.filename));
+        if let Ok(content) = tokio::fs::read_to_string(&file_path).await {
+            // rust-doctor-disable-next-line excessive-clone
+            contents.insert(entry.path.clone(), content);
+        }
+    }
+
+    let tier = validation::run_l1_validation(&contents);
+    if !tier.passed {
+        warn!(
+            agent = %agent_id,
+            checks_run = tier.checks_run,
+            issues = tier.issues.len(),
+            "Dream L1 validation found malformed notes"
+        );
+    }
+    tier
 }
 
 /// Skill notes younger than this are excluded from `MutationGate`'s
@@ -2285,5 +2286,193 @@ mod tests {
 
         assert_eq!(outcome.status, DreamRunStatus::Success);
         assert!(outcome.report.stages_executed.is_empty());
+    }
+
+    // -----------------------------------------------------------------------
+    // Per-project-namespace sub-cycles
+    // -----------------------------------------------------------------------
+
+    /// The owned half of a project sub-cycle's dependencies. `ProjectCycleDeps`
+    /// borrows all of it, so it has to outlive the call in the test's frame.
+    struct ProjectFixture {
+        dir: PathBuf,
+        store: Arc<SqliteMemoryBackend>,
+        provider: Arc<dyn AiProvider>,
+        embedder: Arc<dyn EmbeddingProvider>,
+        cfg: MemoryConfig,
+        orientation: Option<Arc<dyn crate::memory::notes::orientation::NoteOrientation>>,
+        activity: Arc<dyn Fn() -> bool + Send + Sync>,
+    }
+
+    impl ProjectFixture {
+        /// `user_active` drives the activity checker: `true` makes every stage
+        /// yield, which is how an interrupted cycle is forced deterministically.
+        fn new(tag: &str, user_active: bool) -> Self {
+            let dir = std::env::temp_dir().join(format!("aleph_{tag}_{}", uuid::Uuid::new_v4()));
+            std::fs::create_dir_all(&dir).unwrap();
+            let store = Arc::new(SqliteMemoryBackend::new(&dir).unwrap());
+            Self {
+                dir,
+                store,
+                provider: Arc::new(MockProvider::new("")),
+                embedder: Arc::new(StubEmbedder),
+                cfg: MemoryConfig::default(),
+                orientation: None,
+                activity: Arc::new(move || user_active),
+            }
+        }
+
+        fn deps(&self) -> project_cycle::ProjectCycleDeps<'_> {
+            project_cycle::ProjectCycleDeps {
+                memory_dir: &self.dir,
+                database: &self.store,
+                provider: &self.provider,
+                embedder: &self.embedder,
+                config: &self.cfg.dreaming,
+                decay_policy: &self.cfg.memory_decay,
+                orientation: &self.orientation,
+                activity_checker: &self.activity,
+            }
+        }
+
+        fn event_log_path(&self, agent_id: &str) -> PathBuf {
+            self.dir.join(agent_id).join("dream_events.jsonl")
+        }
+    }
+
+    /// A project namespace's cycle lands in **its own** event log, and never in
+    /// the base agent's.
+    ///
+    /// Both halves matter. Before this, the sub-pipeline's report was
+    /// `info!`-logged and dropped, so a project corpus could merge A→B and B→A
+    /// every night with nothing able to see it. But appending to the *base* log
+    /// would have been worse than the drop: a note `path` is relative within an
+    /// agent, so `proj-a`'s `skill/foo` and the base agent's `skill/foo` are the
+    /// same string and the base gate would inherit phantom merge cycles for
+    /// notes it does not own.
+    #[tokio::test]
+    async fn project_namespace_cycle_writes_only_its_own_event_log() {
+        let fx = ProjectFixture::new("dream_proj_log", false);
+        let ns = format!("{DEFAULT_AGENT_ID}__proj-abc123");
+
+        project_cycle::run_namespace_cycle(&fx.deps(), &ns)
+            .await
+            .expect("project sub-cycle succeeds");
+
+        let events = EventLog::new(fx.dir.join(&ns))
+            .read_last(10)
+            .await
+            .expect("the namespace log is readable");
+        assert_eq!(
+            events.len(),
+            1,
+            "the namespace must record its own cycle: this log is what its next \
+             gate and personality fold over"
+        );
+
+        assert!(
+            !fx.event_log_path(DEFAULT_AGENT_ID).exists(),
+            "a project namespace must not write into the base agent's history"
+        );
+    }
+
+    /// A namespace's gate is folded from the namespace's own log — not the base
+    /// agent's, and not a process-local accumulator.
+    ///
+    /// Seeded with one degrading cycle, the next sub-cycle must open in
+    /// Conserve. This is the whole reason the namespaces get their own logs
+    /// rather than staying ungoverned: the cooldown has to survive the restart
+    /// that a once-a-day cycle almost always straddles.
+    #[tokio::test]
+    async fn project_namespace_gate_folds_its_own_history() {
+        let fx = ProjectFixture::new("dream_proj_gate", false);
+        let ns = format!("{DEFAULT_AGENT_ID}__proj-degraded");
+        let log = EventLog::new(fx.dir.join(&ns));
+
+        // A prior cycle that degraded this namespace's memory health.
+        let report = DreamReport {
+            evolution: Some(EvolutionOutcome {
+                baseline: 0.8,
+                candidate: 0.4,
+                best: 0.8,
+                outcome: GateOutcome::Reject,
+                merges_rejected: 0,
+            }),
+            ..Default::default()
+        };
+        assert!(
+            report
+                .evolution
+                .as_ref()
+                .is_some_and(EvolutionOutcome::degraded),
+            "fixture must actually be a degrading cycle"
+        );
+        log.append(&DreamEvent {
+            id: "dream_seed_1".into(),
+            cycle: 1,
+            strategy: DreamStrategy::Consolidate,
+            selection: SelectionDecision {
+                strategy: DreamStrategy::Consolidate,
+                rationale: "seed".into(),
+                personality_adjustment: 0.0,
+            },
+            gate_decision: GateDecision::Allow,
+            report,
+            validation: DreamValidationReport {
+                l1_format: ValidationTier {
+                    passed: true,
+                    checks_run: 1,
+                    checks_passed: 1,
+                    issues: vec![],
+                },
+                l2_consistency: ValidationTier {
+                    passed: true,
+                    checks_run: 1,
+                    checks_passed: 1,
+                    issues: vec![],
+                },
+                l3_semantic: None,
+                l4_retrospective: None,
+            },
+            duration_ms: 0,
+            created_at: now_timestamp(),
+        })
+        .await
+        .expect("seed append succeeds");
+
+        project_cycle::run_namespace_cycle(&fx.deps(), &ns)
+            .await
+            .expect("project sub-cycle succeeds");
+
+        let events = log.read_last(10).await.expect("log is readable");
+        assert_eq!(events.len(), 2, "the new cycle appends to the same log");
+        assert!(
+            matches!(events[1].gate_decision, GateDecision::Conserve { .. }),
+            "the degrading seed must arm this namespace's cooldown, got {:?}",
+            events[1].gate_decision
+        );
+    }
+
+    /// A sub-cycle that yielded before running a single stage records nothing.
+    ///
+    /// The gate window is only a few cycles deep. An evening where the user
+    /// stays active would otherwise append one empty event per namespace and
+    /// push real churn history out of range — disarming the detectors exactly
+    /// when the corpus is being touched most.
+    #[tokio::test]
+    async fn an_immediately_interrupted_project_cycle_spends_no_window_slot() {
+        let fx = ProjectFixture::new("dream_proj_intr", true);
+        let ns = format!("{DEFAULT_AGENT_ID}__proj-busy");
+
+        let report = project_cycle::run_namespace_cycle(&fx.deps(), &ns)
+            .await
+            .expect("an interrupted sub-cycle is not an error");
+
+        assert_eq!(report.status, DreamReportStatus::Interrupted);
+        assert!(report.stages_executed.is_empty(), "nothing ran");
+        assert!(
+            !fx.event_log_path(&ns).exists(),
+            "an empty night must not consume one of the gate's window slots"
+        );
     }
 }

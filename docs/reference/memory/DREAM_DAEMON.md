@@ -49,6 +49,21 @@ let sel   = StrategySelector::from_outcomes(history.iter().map(|e| e.validation.
 
 **Detector inputs are identifiers, never prose.** The merge detector keys on note-pair ids; the synthesis-churn detector keys on `(synthesis note path, digest of its body)` and fires only when the same note is rewritten to a *different* body for `SYNTHESIS_CHURN_THRESHOLD` consecutive cycles. Its predecessor matched regex negation pairs (`should` vs `should not`) against whole LLM-written synthesis essays: dead in production, and had it been live it would have been a rule-based re-judgement of a semantic question `NoteDrift` already answers (R7/P8) — that verdict already reaches the selector as `contradictions_found` → `contradiction_rate` → the stability veto. Digest the **body**, not the rendered markdown: frontmatter carries an `updated` date that moves on every write, so a whole-file hash would report churn every night.
 
+### 3.3 Every project namespace governs itself
+
+With `memory.project_scoped` on, `note_manage` writes project-local notes under `{base}__proj-*`, and the daemon fans the note-maintenance subset (`DreamPipeline::retain_project_stages`) over each namespace after the base cycle. **Each namespace is a full dream subject with its own everything** — `src/memory/dreaming/project_cycle.rs` mirrors §3.2 keyed on the namespace id:
+
+| per namespace | where |
+|---|---|
+| event log | `{memory_dir}/{base}__proj-*/dream_events.jsonl` |
+| churn gate + personality | folded from that log, same one-read-three-consumers shape as §3.2 |
+| strategy | selected from its **own** signals + gate — it does **not** inherit the base cycle's |
+| best-health checkpoint | `dream_best_health__{ns}` (the KV is already agent-keyed) — read and written each cycle, no in-daemon `Mutex`, because namespaces come and go with their projects |
+
+**Why not one shared log.** Until 2026-08-04 the sub-pipeline's `DreamReport` was `info!`-logged and dropped, so a project corpus could merge A→B and B→A every night with nothing able to see it — and the maintenance subset is *exactly* the part that produces churn signals (`note_consolidate` → `merged_pairs`, `note_synthesis` → `synthesis_rewrites`). But appending to the **base** agent's log would have been worse than the drop: a note `path` is relative *within* an agent (`"reference/rust-ownership"`), so `proj-a`'s `skill/foo` and the base agent's `skill/foo` are the same string. Merging the histories hands the base gate phantom merge cycles for notes it does not own — and phantom churn conserves the corpus that was behaving.
+
+**An empty night is not recorded.** A sub-cycle that yields to user activity before running a single stage returns without appending. The gate window is only a few cycles deep; one empty event per namespace on a busy evening would push real churn history out of range and disarm the detectors exactly when the corpus is being touched most. A *partially* executed cycle **is** recorded — its merges are real. For the same reason the fan-out stops at the first interrupted namespace rather than walking the rest to collect interruptions.
+
 ## 4. Core Types
 
 ### 4.1 `DreamContext`
