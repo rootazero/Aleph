@@ -185,6 +185,13 @@ fn extend_path(base: &OsStr, candidates: &[PathBuf]) -> OsString {
 /// (the fnm-managed `<root>/aliases/<alias>/bin`).
 fn install_dir_candidates() -> Vec<PathBuf> {
     let mut dirs: Vec<PathBuf> = Vec::new();
+    // Where *we* put global npm CLIs. Read from the same helper the installer
+    // uses rather than restating its answer: the platform defaults below happen
+    // to coincide with it, but an operator-set `npm_config_prefix` does not, and
+    // then the install succeeds somewhere this probe never looks.
+    if let Some(dir) = super::npm_global::bin_dir() {
+        dirs.push(dir);
+    }
     // Explicit `CARGO_HOME` override: rustup honors it and drops binaries in
     // `$CARGO_HOME/bin` instead of `~/.cargo/bin`. Honor it before the default.
     if let Some(cargo_home) = std::env::var_os("CARGO_HOME") {

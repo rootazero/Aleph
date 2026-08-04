@@ -7,6 +7,7 @@ use tokio::process::Command;
 use tokio::time::{timeout, Duration};
 use tracing::warn;
 
+use super::npm_global;
 use super::os::TargetOs;
 use super::post_install;
 use super::probe;
@@ -88,6 +89,7 @@ pub async fn install(name: &str) -> Result<BootstrapResult, BootstrapError> {
         InstallStrategy::Shell(script) => run_shell(script).await?,
         InstallStrategy::PowerShell(script) => run_powershell(script).await?,
         InstallStrategy::Via { parent, subcommand } => run_via_parent(parent, subcommand).await?,
+        InstallStrategy::NpmGlobal { package } => run_npm_global(package).await?,
     };
 
     if let CmdOutcome::Failed { stderr } = cmd_result {
@@ -105,8 +107,16 @@ pub async fn install(name: &str) -> Result<BootstrapResult, BootstrapError> {
     // a version-manager-controlled bin dir that is never on the daemon's PATH.
     // Resolve and prepend it so the re-probe `which`/`where` lookup below finds
     // the binary and records its absolute path (which then feeds build_path()).
-    if let InstallStrategy::Via { parent, .. } = &os_install.strategy {
-        enrich_path_for_via_parent(parent).await;
+    match &os_install.strategy {
+        InstallStrategy::Via { parent, .. } => enrich_path_for_via_parent(parent).await,
+        // npm globals land at a prefix we chose, which is precisely why the
+        // daemon's PATH need not contain it yet.
+        InstallStrategy::NpmGlobal { .. } => {
+            if let Some(dir) = npm_global::bin_dir() {
+                prepend_existing_dirs(vec![dir]);
+            }
+        }
+        InstallStrategy::Shell(_) | InstallStrategy::PowerShell(_) => {}
     }
 
     // 2. Re-probe to get binary path + version.
@@ -336,6 +346,48 @@ async fn fnm_lts_bin_dir() -> Option<PathBuf> {
         None
     } else {
         Some(PathBuf::from(path))
+    }
+}
+
+/// Install a global npm CLI at the user-level prefix from [`npm_global`].
+///
+/// npm is reached through fnm first: Aleph installs node via fnm and that node
+/// is almost never on the daemon's PATH. A system/distro node has no `fnm` at
+/// all, so a plain `npm` is the fallback — the previous `fnm exec`-only path
+/// could not install anything on such a machine. Only a *missing fnm* earns the
+/// fallback; an npm that ran and failed must surface its own error rather than
+/// be retried against a different npm.
+async fn run_npm_global(package: &str) -> Result<CmdOutcome, BootstrapError> {
+    let mut args: Vec<String> = vec!["install".into(), "-g".into()];
+    match npm_global::prefix() {
+        Some(prefix) => {
+            args.push("--prefix".into());
+            args.push(prefix.to_string_lossy().into_owned());
+        }
+        None => warn!(
+            "no home directory for an npm global prefix; \
+             falling back to npm's default (may live inside the node version tree)"
+        ),
+    }
+    args.push(package.to_string());
+
+    let mut via_fnm = Command::new("fnm");
+    via_fnm
+        .args(["exec", "--using", "lts", "--", "npm"])
+        .args(&args);
+    match run_cmd(&mut via_fnm).await {
+        Err(BootstrapError::Io(e)) if e.kind() == std::io::ErrorKind::NotFound => {
+            // `which` resolves the PATHEXT form on Windows (`npm.cmd`), which a
+            // bare `Command::new("npm")` would not find.
+            let Ok(npm) = which::which("npm") else {
+                return Ok(CmdOutcome::Failed {
+                    stderr: "neither fnm nor npm is available to install a global npm package"
+                        .into(),
+                });
+            };
+            run_cmd(Command::new(npm).args(&args)).await
+        }
+        other => other,
     }
 }
 
