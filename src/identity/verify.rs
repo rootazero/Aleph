@@ -120,6 +120,47 @@ pub struct ChainReport {
     /// Highest sequence actually present.
     pub last_seq: i64,
     pub faults: Vec<ChainFault>,
+    /// `revoked_at` as the mutable `agent_identities` row holds it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub revoked_at: Option<i64>,
+    /// The same question, answered by the chain itself
+    /// ([`revoked_per_chain`]). `None` when the chain makes no lifecycle
+    /// statement at all.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub revoked_in_chain: Option<bool>,
+}
+
+impl ChainReport {
+    /// The mutable column and the chain disagree about revocation.
+    ///
+    /// This is the executable form of "editing `revoked_at` back to NULL cannot
+    /// erase a revocation" — a claim that was previously only ever *stated*,
+    /// with nothing anywhere comparing the two. Deliberately **not** folded into
+    /// [`Self::ok`]: the disagreement has a benign cause as well as a malicious
+    /// one (a lifecycle record lost before it was written, which
+    /// `failed_appends` counts), and a fault that cries wolf on a real
+    /// installation stops being read.
+    #[must_use]
+    pub fn revocation_disagrees(&self) -> bool {
+        self.revoked_in_chain
+            .is_some_and(|in_chain| in_chain != self.revoked_at.is_some())
+    }
+}
+
+/// What the chain's own lifecycle records say about whether this identity is
+/// revoked: the last of them wins, because activating a key clears the mark
+/// ([`SecurityStore::upsert_agent_identity`](crate::gateway::security::store::SecurityStore::upsert_agent_identity)).
+///
+/// `None` when the chain contains no lifecycle statement — a chain that has not
+/// spoken is not the same as one that says "active", and reporting it as such
+/// would invent a disagreement out of silence.
+#[must_use]
+pub fn revoked_per_chain(rows: &[LedgerRecord]) -> Option<bool> {
+    rows.iter().rev().find_map(|r| match r.action {
+        LedgerAction::IdentityRevoked => Some(true),
+        LedgerAction::IdentityCreated | LedgerAction::IdentityRotated => Some(false),
+        _ => None,
+    })
 }
 
 /// What checking one row's signer found.
@@ -408,7 +449,9 @@ pub fn verify_chain(keys: &AgentKeystore, agent_id: &str) -> Result<ChainReport,
         agent_id: agent_id.to_string(),
         ok: faults.is_empty(),
         records: rows.len(),
-        anchor_seq: identity.map_or(0, |i| i.head_seq),
+        revoked_in_chain: revoked_per_chain(&rows),
+        anchor_seq: identity.as_ref().map_or(0, |i| i.head_seq),
+        revoked_at: identity.and_then(|i| i.revoked_at),
         last_seq: rows.last().map_or(0, |r| r.seq),
         faults,
     })

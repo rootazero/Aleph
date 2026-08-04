@@ -45,9 +45,15 @@ pub mod schema;
 pub mod verify;
 
 pub use actor::{as_actor, current_actor};
-pub use export::{export_chain, verify_export, ChainExport, ExportError, ExportReport};
+pub use export::{
+    export_chain, verify_export, ChainExport, ExportError, ExportPins, ExportReport, HeadPin,
+    PinnedHead,
+};
 pub use keystore::{AgentIdentityRow, AgentKeyRow, AgentKeystore, KeyError};
-pub use ledger::{global, install, record as record_action, AgentLedger};
+pub use ledger::{
+    flush, global, install, record as record_action, revoke_identity, rotate_identity, AgentLedger,
+    LedgerCommandError, Rotation,
+};
 pub use record::{LedgerAction, LedgerOutcome, LedgerRecord, NewRecord};
 pub use schema::IDENTITY_SCHEMA;
 pub use verify::{verify_chain, ChainFault, ChainReport};

@@ -294,7 +294,14 @@ pub const BUILTIN_TOOL_DEFINITIONS: &[BuiltinToolDefinition] = &[
     },
     BuiltinToolDefinition {
         name: "agent_identity",
-        description: "Per-agent Ed25519 signing keys and the tamper-evident record of what each agent did: list/show identities, read the signed operation ledger, verify a chain end to end (detects edited rows, broken links, forged signatures, deleted prefixes, sequence gaps and truncated tails), and keygen/rotate/revoke a key.",
+        // Points at the const, and must keep doing so. A literal here SHADOWS
+        // `AgentIdentityTool::DESCRIPTION` outright — `agent_init` only appends
+        // registry tools whose name the catalog does not already carry — and the
+        // literal that used to sit here did not so much as mention `export`,
+        // so the whole pin-the-root-fingerprint contract shipped to nobody.
+        // Pinned by `agent_identity::tests::the_catalog_ships_the_tools_own_description`.
+        description: <crate::builtin_tools::agent_identity::AgentIdentityTool
+            as crate::tools::AlephTool>::DESCRIPTION,
         requires_config: false,
     },
     BuiltinToolDefinition {
