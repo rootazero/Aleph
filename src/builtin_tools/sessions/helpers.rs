@@ -427,7 +427,13 @@ mod tests {
             "agent:main:peer:user123",
             "agent:main:telegram:dm:user456",
             "agent:main:discord:group:guild789",
-            "agent:main:slack:channel:c123",
+            // `PeerKind::Channel` was cut in 42512e6da as a severed wire, so
+            // `to_key_string` can no longer emit `:channel:` and `parse_rest`
+            // has no arm for it. Cover the surviving second group shape
+            // (`PeerKind::Thread`) instead — the cut updated the two
+            // `PeerKind::Channel` tokens in this file but missed this case
+            // because it is a bare string literal.
+            "agent:main:slack:thread:c123",
             "agent:main:cron:daily",
             "agent:main:webhook:hook-1",
             "agent:main:ephemeral:uuid-abc",

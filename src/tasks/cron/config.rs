@@ -689,19 +689,16 @@ impl JobRun {
     }
 }
 
-/// Truncate string to max length (UTF-8 safe)
+/// Truncate to `max_len` BYTES (UTF-8 safe), reserving 3 bytes for the `...`
+/// so the stored value never exceeds the column budget.
 fn truncate_string(s: &str, max_len: usize) -> String {
     if s.len() <= max_len {
         s.to_string()
     } else {
-        let target = max_len.saturating_sub(3);
-        let boundary = s
-            .char_indices()
-            .map(|(i, _)| i)
-            .take_while(|&i| i <= target)
-            .last()
-            .unwrap_or(0);
-        format!("{}...", s.get(..boundary).unwrap_or(s))
+        format!(
+            "{}...",
+            crate::utils::text_format::truncate_bytes(s, max_len.saturating_sub(3))
+        )
     }
 }
 

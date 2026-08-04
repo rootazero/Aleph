@@ -27,8 +27,9 @@ pub struct MediaItem {
 /// Single source of truth for "is this a remote fetch": mirrors the branching
 /// in [`crate::media::cache::MediaCache::download_media_item`] (`data:` → decode
 /// inline, `/`·`./`·`~/` → local path, else → HTTP fetch). Only the remote
-/// branch is an SSRF vector — a bare local path (what `camera_clip`/`record_audio` return) or a
-/// `data:` URL must not be rejected by the SSRF host check.
+/// branch is an SSRF vector, so `media_send` runs `validate_url_async` on
+/// exactly these — a bare local path (what `camera_clip`/`record_audio` return)
+/// or a `data:` URL must not be rejected by the SSRF host check.
 #[must_use]
 pub fn is_remote_fetch_url(url: &str) -> bool {
     !(url.to_ascii_lowercase().starts_with("data:")

@@ -272,15 +272,19 @@ fn render_element(el: &ElementRef<'_>, mode: &ExtractMode, base_url: &str) -> St
     }
 }
 
-/// Truncate content to maximum length
+/// Truncate content to maximum length.
+///
+/// Takes the `String` by value and hands it back untouched when it fits: this
+/// runs on whole fetched pages, so routing the common path through a `&str`
+/// helper would copy the entire document to produce an identical result.
 pub(crate) fn truncate_content(content: String, max_content_length: usize) -> String {
     if content.chars().count() <= max_content_length {
-        content
-    } else {
-        // Truncate at character boundary
-        let truncated: String = content.chars().take(max_content_length).collect();
-        format!("{truncated}...")
+        return content;
     }
+    format!(
+        "{}...",
+        crate::utils::text_format::truncate_chars(&content, max_content_length)
+    )
 }
 
 #[cfg(test)]

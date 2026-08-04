@@ -11,6 +11,9 @@ use crate::sync_primitives::Arc;
 use crate::teams::events::{EventLogStore, TeamEvent};
 use crate::teams::TeamStore;
 use crate::tools::AlephTool;
+// UTF-8 safe truncation by character count, no marker — digest lines are
+// reassembled downstream, so a stray ellipsis would leak into the payload.
+use crate::utils::text_format::truncate_chars as truncate_str;
 
 // =============================================================================
 // Args / Output
@@ -65,14 +68,6 @@ impl TeamDigestTool {
             event_store,
             current_agent_id,
         }
-    }
-}
-
-/// UTF-8 safe string truncation by character count.
-fn truncate_str(s: &str, max_chars: usize) -> &str {
-    match s.char_indices().nth(max_chars) {
-        Some((idx, _)) => &s[..idx],
-        None => s,
     }
 }
 

@@ -333,15 +333,11 @@ fn emoji_for(name: &str) -> &'static str {
 
 /// UTF-8-safe truncation. Hermes-agent does the same to avoid byte-slicing
 /// in the middle of a multi-byte character on Telegram payloads.
+///
+/// Hard cap: the `…` is reserved inside `max_chars`, not appended past it, so
+/// the rendered line never outgrows its budget.
 fn truncate_with_ellipsis(s: &str, max_chars: usize) -> String {
-    if s.chars().count() <= max_chars {
-        return s.to_string();
-    }
-    let cutoff = s
-        .char_indices()
-        .nth(max_chars.saturating_sub(1))
-        .map_or(s.len(), |(i, _)| i);
-    format!("{}\u{2026}", &s[..cutoff])
+    crate::utils::text_format::truncate_reserving(s, max_chars, "\u{2026}")
 }
 
 #[cfg(test)]
