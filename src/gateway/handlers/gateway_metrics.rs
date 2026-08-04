@@ -1,14 +1,18 @@
-//! `gateway.metrics.lanes` / `gateway.metrics.run_concurrency` — live
-//! occupancy gauges for diagnostics.
+//! `gateway.metrics.lanes` / `gateway.metrics.run_concurrency` /
+//! `gateway.metrics.subagent_concurrency` — live occupancy gauges for
+//! diagnostics.
 //!
 //! `lanes` returns the snapshot produced by [`LaneManager::snapshot`] as a
-//! JSON array, and `run_concurrency` returns the engine's run-lifetime
+//! JSON array, `run_concurrency` returns the engine's run-lifetime
 //! `ConcurrencyLimiter` snapshot (Task 4/8, audit 3.4) — "N/M run slots in
-//! use". Both are suitable for ops dashboards / panel UIs to detect
-//! saturation before it manifests as user-visible timeouts.
-//!
-//! Both live on the Query lane (registered in `Lane::override_for`).
+//! use" — and `subagent_concurrency` (Round-8, §4.11) returns the
+//! `BackgroundAgentTracker` occupancy: live sub-agents per session plus
+//! completed / consumed counts so a panel can surface the
+//! `consumed / completed` dedup-hygiene ratio without scraping
+//! `subagent.list`. All three live on the Query lane (registered in
+//! `Lane::override_for`).
 
+use crate::agents::background_tracker::BackgroundAgentTracker;
 use crate::sync_primitives::Arc;
 
 use serde_json::json;
@@ -61,6 +65,29 @@ pub async fn handle_gateway_metrics_run_concurrency(
             },
         }),
     )
+}
+
+/// Round-8 (§4.11) — Handle `gateway.metrics.subagent_concurrency`. Returns
+/// the live background-sub-agent occupancy snapshot from
+/// [`BackgroundAgentTracker::subagent_snapshot`]: live sub-agents per
+/// session (sorted by session key), the presence-only subtotal (sync
+/// fan-out seats that are not enumerated by the `subagent` tool but DO
+/// count against the parent's Interrupt-demote budget), and the
+/// `completed_total` / `consumed_total` pair so a panel can surface the
+/// `consumed / completed` dedup-hygiene ratio.
+///
+/// Process-wide by default; pass `params = {"scope": "agent:<id>:peer:user"}`
+/// to limit to one session.
+pub async fn handle_gateway_metrics_subagent_concurrency(
+    request: JsonRpcRequest,
+) -> JsonRpcResponse {
+    let scope = request
+        .params
+        .as_ref()
+        .and_then(|p| p.get("scope"))
+        .and_then(|v| v.as_str());
+    let snap = BackgroundAgentTracker::global().subagent_snapshot(scope);
+    JsonRpcResponse::success(request.id, json!({ "subagent_concurrency": snap }))
 }
 
 #[cfg(test)]
@@ -168,5 +195,86 @@ mod tests {
             .as_array()
             .expect("running_sessions is an array")
             .is_empty());
+    }
+
+    /// Round-8 — `gateway.metrics.subagent_concurrency` reads the
+    /// process-global `BackgroundAgentTracker` directly. We seed a couple of
+    /// entries (with unique ids so the process-global map stays isolated
+    /// across cargo-test invocations) and assert the snapshot reflects them.
+    #[tokio::test]
+    async fn subagent_concurrency_reports_tracker_occupancy() {
+        use crate::agents::background_tracker::{CompletedOutcome, SpawnMeta};
+        use tokio_util::sync::CancellationToken;
+
+        let tracker = crate::agents::background_tracker::BackgroundAgentTracker::global();
+        let live_id = format!("gmc-live-{}", uuid::Uuid::new_v4());
+        let done_id = format!("gmc-done-{}", uuid::Uuid::new_v4());
+        tracker.register_with_meta(
+            live_id.clone(),
+            CancellationToken::new(),
+            "live task".into(),
+            SpawnMeta {
+                root_session: "agent:main:peer:user".into(),
+                depth: 1,
+                ..SpawnMeta::default()
+            },
+        );
+        tracker.register_with_meta(
+            done_id.clone(),
+            CancellationToken::new(),
+            "done task".into(),
+            SpawnMeta {
+                root_session: "agent:main:peer:user".into(),
+                depth: 1,
+                ..SpawnMeta::default()
+            },
+        );
+        tracker.mark_completed(&done_id, CompletedOutcome::ok_text("x"));
+        tracker.mark_consumed(&done_id);
+
+        // Process-wide view.
+        let req = JsonRpcRequest::with_id("gateway.metrics.subagent_concurrency", None, json!(1));
+        let resp = handle_gateway_metrics_subagent_concurrency(req).await;
+        assert!(resp.is_success());
+        let result = resp.result.expect("ok");
+        let snap = &result["subagent_concurrency"];
+        // `running_total` reflects the process-global set, which other
+        // tests in this run may have populated; the exact number is
+        // unstable. Instead we assert OUR id is in `running_per_session`.
+        let per_session = snap["running_per_session"]
+            .as_array()
+            .expect("running_per_session is an array");
+        let own_session = per_session
+            .iter()
+            .find(|r| r["session"] == "agent:main:peer:user")
+            .expect("our seeded session must appear");
+        assert!(
+            own_session["count"].as_u64().unwrap() >= 1,
+            "seeded live id must count toward the session's running tally"
+        );
+        // Completed / consumed are also process-global, so we just check
+        // our id was seen by the dedup counter:
+        assert!(snap["consumed_total"].as_u64().unwrap() >= 1);
+
+        // Scoped view: ask for the seeded session and assert the count
+        // matches.
+        let req_scoped = JsonRpcRequest::with_id(
+            "gateway.metrics.subagent_concurrency",
+            Some(json!({ "scope": "agent:main:peer:user" })),
+            json!(2),
+        );
+        let resp_scoped = handle_gateway_metrics_subagent_concurrency(req_scoped).await;
+        assert!(resp_scoped.is_success());
+        let snap_scoped = resp_scoped.result.unwrap();
+        let own_session_scoped = snap_scoped["subagent_concurrency"]["running_per_session"]
+            .as_array()
+            .expect("array")
+            .iter()
+            .find(|r| r["session"] == "agent:main:peer:user")
+            .expect("our session in scoped view");
+        assert_eq!(
+            own_session_scoped["count"], own_session["count"],
+            "scoped view must report the same per-session count for the seeded session"
+        );
     }
 }

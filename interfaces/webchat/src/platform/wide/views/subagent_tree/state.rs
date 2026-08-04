@@ -205,6 +205,7 @@ mod tests {
             tool_count: 1,
             last_tool: None,
             last_activity: None,
+            result_preview: None,
         }
     }
 
