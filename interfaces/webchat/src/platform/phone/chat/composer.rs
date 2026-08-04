@@ -100,8 +100,11 @@ pub fn PhoneComposer() -> impl IntoView {
         attachments.set(Vec::new());
         chat.push_user_message(&text);
 
+        // `iter().cloned()`, not `into_iter()`: `files` has to survive the send
+        // so a failure can hand it back (see the `Err` arm below).
         let api_attachments: Vec<crate::api::chat::ChatAttachment> = files
-            .into_iter()
+            .iter()
+            .cloned()
             .map(|f| crate::api::chat::ChatAttachment {
                 name: f.name,
                 mime_type: f.mime_type,
@@ -137,7 +140,15 @@ pub fn PhoneComposer() -> impl IntoView {
             .await;
             match res {
                 Ok(resp) => chat.session_key.set(Some(resp.session_key)),
-                Err(e) => chat.set_send_error(ChatSendError::classify(e)),
+                Err(e) => {
+                    chat.set_send_error(ChatSendError::classify(e));
+                    // Nothing reached the server, so the payload comes back.
+                    // Retry rebuilds the text from the transcript but is
+                    // text-only, so without this the files are lost silently.
+                    // Same fix, same reasoning as the desktop composer — the
+                    // two paths have to agree on what a failed send costs.
+                    chat.seed_draft(String::new(), files);
+                }
             }
             is_sending.set(false);
         });
@@ -225,7 +236,14 @@ pub fn PhoneComposer() -> impl IntoView {
                     dash.pending_clarifications
                         .update(|l| l.retain(|p| p.session_key != ask.session_key));
                     input_text.set(reply);
-                    if chat.active_run_id.get_untracked().is_some() {
+                    // Probe a *component-owned* signal, not `chat`: `send()` and
+                    // `enqueue()` below both read several of these, and `chat`
+                    // is root-owned, so it would answer "alive" long after this
+                    // composer was disposed (see `crate::disposed_reads`).
+                    if is_sending.try_get_untracked().is_none() {
+                        return;
+                    }
+                    if chat.active_run_id.try_get_untracked().flatten().is_some() {
                         enqueue();
                     } else {
                         send();
@@ -544,15 +562,33 @@ mod tests {
     /// queue path always did; the idle path hard-coded an empty vec and left
     /// the tray full, so files staged by a recalled ghost were dropped from the
     /// send *and* stuck to whatever was queued next.
-    fn idle_send_drains_the_tray(src: &str) -> bool {
+    fn idle_send_body(src: &str) -> Option<&str> {
         let src = production_half(src);
-        let Some((_, after)) = src.split_once("let send = move || {") else {
-            return false;
-        };
-        let Some((body, _)) = after.split_once("\n    // The question this conversation") else {
+        let (_, after) = src.split_once("let send = move || {")?;
+        let (body, _) = after.split_once("\n    // The question this conversation")?;
+        Some(body)
+    }
+
+    fn idle_send_drains_the_tray(src: &str) -> bool {
+        let Some(body) = idle_send_body(src) else {
             return false;
         };
         body.contains("attachments.get_untracked()") && body.contains("attachments.set(Vec::new())")
+    }
+
+    /// …and a send that *fails* must hand the tray back.
+    ///
+    /// The tray is drained before the request goes out, and the Retry button
+    /// rebuilds only the text (`ChatState::last_user_text`). So a send that
+    /// errors used to destroy the attachment while leaving on screen a button
+    /// that claims it will re-send the message — the loss is total, silent, and
+    /// disguised as a recovery affordance. The queue path never had this bug
+    /// (`requeue_front` hands back the whole entry); only the typed path did.
+    fn failed_send_restores_the_tray(src: &str) -> bool {
+        let Some(body) = idle_send_body(src) else {
+            return false;
+        };
+        body.contains("set_send_error") && body.contains("seed_draft(")
     }
 
     #[test]
@@ -597,6 +633,37 @@ mod tests {
             };
     // The question this conversation";
         assert!(!idle_send_drains_the_tray(before));
+    }
+
+    #[test]
+    fn a_failed_send_gives_the_attachments_back() {
+        assert!(
+            failed_send_restores_the_tray(include_str!("composer.rs")),
+            "a failed phone send no longer restores the tray — the files are \
+             destroyed behind a Retry button that only rebuilds the text"
+        );
+    }
+
+    /// RED proof: the shape this file had, where the error arm only reported.
+    #[test]
+    fn restore_check_rejects_an_error_arm_that_only_reports() {
+        let before = r"
+            let send = move || {
+                let files = attachments.get_untracked();
+                attachments.set(Vec::new());
+                spawn_local(async move {
+                    match res {
+                        Ok(resp) => chat.session_key.set(Some(resp.session_key)),
+                        Err(e) => chat.set_send_error(ChatSendError::classify(e)),
+                    }
+                });
+            };
+    // The question this conversation";
+        assert!(
+            idle_send_drains_the_tray(before),
+            "fixture must still drain"
+        );
+        assert!(!failed_send_restores_the_tray(before));
     }
 
     /// The toolbar row's class has to name something in the stylesheet, on both
