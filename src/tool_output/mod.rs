@@ -19,6 +19,7 @@ use crate::tools::result_processing::DEFAULT_RESULT_BUDGET_TOKENS;
 
 pub(crate) mod compressor;
 pub mod distill;
+mod fence;
 pub mod hygiene;
 pub mod sanitize;
 pub mod structured;

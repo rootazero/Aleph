@@ -287,6 +287,22 @@ impl ProviderResponse {
         self.text.clone().unwrap_or_default()
     }
 
+    pub fn validate_tool_calls(&self) -> std::result::Result<(), String> {
+        let mut ids = std::collections::HashSet::with_capacity(self.tool_calls.len());
+        for call in &self.tool_calls {
+            if call.id.trim().is_empty() {
+                return Err(format!("tool call '{}' has an empty call_id", call.name));
+            }
+            if !ids.insert(call.id.as_str()) {
+                return Err(format!(
+                    "provider returned duplicate tool call id '{}'",
+                    call.id
+                ));
+            }
+        }
+        Ok(())
+    }
+
     /// Validate response completeness — warns on missing usage or unknown stop reason
     pub fn validate(&self, protocol_name: &str) {
         if self.usage.is_none() {
@@ -539,6 +555,41 @@ mod tests {
         assert!(resp.has_tool_calls());
         assert_eq!(resp.tool_calls[0].name, "search");
         assert_eq!(resp.stop_reason, StopReason::ToolUse);
+    }
+
+    #[test]
+    fn validate_tool_calls_rejects_duplicate_ids() {
+        let call = NativeToolCall {
+            id: "call_123".into(),
+            name: "search".into(),
+            arguments: serde_json::json!({}),
+            thought_signature: None,
+        };
+        let response = ProviderResponse {
+            tool_calls: vec![call.clone(), call],
+            ..Default::default()
+        };
+        assert_eq!(
+            response.validate_tool_calls().unwrap_err(),
+            "provider returned duplicate tool call id 'call_123'"
+        );
+    }
+
+    #[test]
+    fn validate_tool_calls_rejects_empty_ids() {
+        let response = ProviderResponse {
+            tool_calls: vec![NativeToolCall {
+                id: "  ".into(),
+                name: "search".into(),
+                arguments: serde_json::json!({}),
+                thought_signature: None,
+            }],
+            ..Default::default()
+        };
+        assert_eq!(
+            response.validate_tool_calls().unwrap_err(),
+            "tool call 'search' has an empty call_id"
+        );
     }
 
     #[test]

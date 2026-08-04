@@ -445,6 +445,23 @@ mod tests {
         assert!(digest.salient.len() <= 2);
     }
 
+    /// A line-oriented digester cannot digest a single line. Without this guard
+    /// a flattened envelope produced a `[Output digest: 1 lines, 1 error]`
+    /// header over the first 400 chars of JSON — the exact shape the ingress
+    /// pass exists to prevent, reachable from every caller.
+    #[test]
+    fn single_line_input_is_never_distilled() {
+        let flat = serde_json::json!({
+            "success": false,
+            "exit_code": 101,
+            "stdout": "running tests\nerror[E0308]: mismatched types\n".repeat(200),
+        })
+        .to_string();
+        assert!(flat.len() > MIN_INPUT_BYTES);
+        assert!(!flat.contains('\n'), "precondition: one line");
+        assert!(distill_output(&flat).is_none());
+    }
+
     #[test]
     fn no_signal_returns_none() {
         // Large but signal-free output: caller should truncate instead.

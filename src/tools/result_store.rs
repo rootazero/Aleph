@@ -166,18 +166,24 @@ pub struct ToolResultStore {
 
 impl ToolResultStore {
     /// Create the process-wide store rooted at
-    /// `~/.aleph/data/tool_results/{root}/`.
+    /// `<config_dir>/data/tool_results/{root}/`.
     ///
     /// `root` names the *directory*, not a session: the returned handle is
     /// unscoped. Boot installs it as the shared singleton and the two seams
     /// that own session context ([`crate::gateway::execution_engine`]'s tool
     /// service builder and the orchestrator's harness bridge) narrow it with
     /// [`Self::for_session`].
+    ///
+    /// The root comes from [`crate::utils::paths::get_data_dir`], which is the
+    /// single place `ALEPH_HOME` is honored. Re-deriving it from
+    /// `dirs::home_dir()` — as this did until 2026-08-04 — put every offloaded
+    /// tool result in the *real* `~/.aleph` no matter which home the operator
+    /// selected, so two instances with different `ALEPH_HOME`s shared one
+    /// `tool_results/` tree and the isolation knob silently did not cover the
+    /// one artifact on this path that outlives the run.
     pub fn new(root: &str) -> std::io::Result<Self> {
-        let base_dir = dirs::home_dir()
-            .unwrap_or_else(|| PathBuf::from("/tmp"))
-            .join(".aleph")
-            .join("data")
+        let base_dir = crate::utils::paths::get_data_dir()
+            .unwrap_or_else(|_| PathBuf::from("/tmp").join(".aleph").join("data"))
             .join("tool_results")
             .join(root);
 

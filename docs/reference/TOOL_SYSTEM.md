@@ -467,6 +467,49 @@ pub struct ToolResult {
 }
 ```
 
+### Ingress: 结果在进入上下文之前要经过什么
+
+唯一入口 `src/tool_output/ingress.rs::clean_for_ingress`，由
+`tools/scoped/dispatch.rs::apply_layer_two` 调用一次：
+
+```text
+value (serde_json::Value —— 文本字段仍带真换行)
+  │
+  ├─ hoist_inline_images        图片 → 带外 vision 通道（含 MCP content 块）
+  ├─ harvest_outbound_media     _media → 产物库
+  ├─ 1. 每工具压缩              无条件，字段级
+  ├─ 2. 内容类型清洗            仅在已超预算时，字段级
+  └─ 3. 扁平化 → apply_result_budget（persist 原文 / 内联信号 / 截断）
+```
+
+**给写新工具或新 adapter 的人的四条硬约束**（每一条都对应一次真实的静默失效）：
+
+1. **不要在交给 dispatcher 之前把自己的结果 `to_string`。** `Value::to_string()`
+   转义每一个 `\n` 并把整个结果压成一行，而这条链上的**每一个**清洗器都按行路由——
+   log / search / diff / json 四个缩减器、错误蒸馏器、以及 `compressor.rs` 的三个
+   DevTools 策略。MCP adapter 曾这么做，结果那四条路全是死的，而且蒸馏器还会拿 JSON
+   信封的前 400 字符冒充"关键错误"替换整个结果。
+2. **图片要留在结构里、留在 `hoist_inline_images` 认得的位置。**
+   支持 `{image_base64, format}`（顶层或 `data` 下）与 MCP 的
+   `content[].{type:"image", data, mimeType}`。字符串里的 base64 找不回来，只会被
+   当文本计费然后截断成解不开的片段。
+3. **要重写文本字段就走 `tool_output::fence::rewrite_interior`**，别整体替换——
+   不可信内容围栏是结构不是内容，见 [SECURITY.md](SECURITY.md#content-sanitization)。
+4. **任何会丢内容的 stage 都欠调用方一份原文。** `clean_for_ingress` 的
+   `full_original` 是 `apply_result_budget` 落盘的那一份，它决定被丢掉的行还能不能
+   靠 `ctx_search` / `read_file` 挖回来。压缩器一度不设它，理由是"压缩产物按构造小于
+   预算所以落盘走不到"——真实 `take_snapshot` 压缩后 13 585 token / 8 000 预算，当场
+   走到，落盘的是压缩正文，被丢掉的 443 个节点就此不可恢复。**只有"从不删内容"的
+   stage 才可以传 `None`**（剥 ANSI 转义是唯一的例子）。
+
+**真机 QA（2026-08-04）**：隔离 `ALEPH_HOME` + 真实 `chrome-devtools-mcp` + 记录请求体的
+mock LLM，实测确认 MCP 截图作为可解码 PNG 到达模型、三个工具结果围栏开闭配对、快照压缩
+保住全部 660 个控件、落盘的是未压缩原文。**未覆盖**：`metadata.images` 只有 Anthropic
+协议消费，OpenAI 系（`openai_chat` / `responses`）的 ToolResult 臂丢弃图片（API 约束，见
+FEATURE_LOCATOR §3.14「已定位·未做」）。
+
+详见 [FEATURE_LOCATOR §3.14](FEATURE_LOCATOR.md)。
+
 ---
 
 ## Memory System Components (Phase 2)

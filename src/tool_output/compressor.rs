@@ -81,11 +81,24 @@ fn devtools_tool_name(name: &str) -> Option<&str> {
     DEVTOOLS_TOOLS.contains(&bare).then_some(bare)
 }
 
+/// Whether `name` has a per-tool compressor at all.
+///
 /// Compress a `DevTools` tool output using a type-specific strategy.
 ///
 /// Non-DevTools tools are returned unchanged. Each `DevTools` tool gets a
 /// tailored compression that preserves actionable information while
 /// drastically reducing token count.
+///
+/// **Input shape matters.** Every strategy here reads either lines
+/// ([`compress_snapshot`], [`compress_console_messages`]) or a bare JSON array
+/// ([`compress_network_requests`]) — i.e. the payload a server actually sent,
+/// not a serialized envelope around it. Handed the latter, `compress_snapshot`
+/// sees three lines, matches no interactive role, and falls into its
+/// "structural summary" arm, where [`cap_line`] silently amputates the one line
+/// that holds the whole snapshot at 500 chars; `compress_network_requests`
+/// fails to parse and degrades to a blind head cut. That is why the ingress pass
+/// applies this **per text field** rather than to the flattened result — see
+/// [`crate::tool_output::ingress`].
 pub(crate) fn compress_tool_output(tool_name: &str, output: &str) -> String {
     let Some(tool_name) = devtools_tool_name(tool_name) else {
         return output.to_owned();
@@ -145,11 +158,38 @@ fn compress_screenshot(output: &str) -> String {
     result
 }
 
+/// The role token of one snapshot line: leading indentation, list dashes and a
+/// node handle removed.
+///
+/// **Two grammars reach this compressor and only one of them was ever matched.**
+/// Playwright-style aria trees put the role first (`- button "Save"`), which is
+/// what the original matcher assumed. chrome-devtools-mcp — the server
+/// [`DEVTOOLS_TOOLS`] is actually named after — prefixes every node with its
+/// handle instead:
+///
+/// ```text
+///   uid=1_4 button "Apply 0"
+///   uid=1_5 textbox "filter 0"
+/// ```
+///
+/// So a real `take_snapshot` never produced a single interactive line, every
+/// snapshot fell into the structural-summary arm below, and the model was handed
+/// 20 of 1103 nodes with none of the controls it needs a snapshot *for*. That
+/// went unseen until the ingress pass started feeding this function real lines
+/// (see [`crate::tool_output::ingress`]); before that it only ever saw a
+/// serialized envelope, where every grammar fails alike.
+fn role_token(line: &str) -> &str {
+    let trimmed = line.trim_start().trim_start_matches('-').trim_start();
+    trimmed
+        .strip_prefix("uid=")
+        .and_then(|rest| rest.split_once(' '))
+        .map_or(trimmed, |(_, after)| after.trim_start())
+}
+
 /// Compress accessibility snapshot by keeping only interactive elements.
 ///
-/// Lines are considered interactive if, after stripping leading whitespace
-/// and dashes, they start with a known interactive role name followed by
-/// a space or quote character.
+/// Lines are considered interactive if their [`role_token`] starts with a known
+/// interactive role name followed by a space or quote character.
 fn compress_snapshot(output: &str) -> String {
     // Small snapshots pass through unchanged
     if output.len() < 4 * 1024 {
@@ -161,7 +201,7 @@ fn compress_snapshot(output: &str) -> String {
     let mut kept: Vec<String> = Vec::new();
 
     for line in &lines {
-        let trimmed = line.trim_start().trim_start_matches('-').trim_start();
+        let trimmed = role_token(line);
         let is_interactive = INTERACTIVE_ROLES.iter().any(|role| {
             trimmed.starts_with(role)
                 && (trimmed.len() == role.len()
@@ -441,6 +481,54 @@ mod tests {
 
         // Summary should be present
         assert!(result.contains("Snapshot compressed: kept 4 interactive elements out of"));
+    }
+
+    /// The grammar chrome-devtools-mcp actually emits, transcribed from a live
+    /// `take_snapshot` against a real page (2026-08-04 ingress QA). Every node
+    /// carries its `uid=` handle before the role; matching only the
+    /// Playwright-style role-first form put *every* real snapshot into the
+    /// no-interactive-elements arm, where the model got 20 lines out of 1103 and
+    /// not one of the controls.
+    #[test]
+    fn a_uid_prefixed_snapshot_still_finds_its_controls() {
+        let mut lines: Vec<String> =
+            vec!["uid=1_0 RootWebArea \"Ingress QA fixture\" url=\"http://x/\"".to_owned()];
+        for i in 0..120 {
+            lines.push(format!(
+                "  uid=1_{} link \"Release note {i}\" url=\"http://x/#r{i}\"",
+                i * 4 + 1
+            ));
+            lines.push(format!("  uid=1_{} button \"Apply {i}\"", i * 4 + 2));
+            lines.push(format!("  uid=1_{} textbox \"filter {i}\"", i * 4 + 3));
+            lines.push(format!(
+                "  uid=1_{} StaticText \"Paragraph {i}: prose that is not a control.\"",
+                i * 4 + 4
+            ));
+        }
+        let input = lines.join("\n");
+        assert!(input.len() > 4 * 1024);
+
+        let result = compress_tool_output("take_snapshot", &input);
+
+        assert!(result.contains("button \"Apply 7\""), "controls kept");
+        assert!(result.contains("textbox \"filter 7\""));
+        assert!(result.contains("link \"Release note 7\""));
+        assert!(!result.contains("StaticText"), "prose dropped");
+        assert!(
+            result.contains("Snapshot compressed: kept 360 interactive elements out of 481"),
+            "got tail: {}",
+            &result[result.len().saturating_sub(120)..]
+        );
+    }
+
+    /// A handle-looking token must not be mistaken for a role by itself: the
+    /// role is what follows it, and a non-interactive node stays dropped.
+    #[test]
+    fn stripping_the_handle_does_not_promote_a_non_control() {
+        assert_eq!(role_token("  uid=1_9 StaticText \"x\""), "StaticText \"x\"");
+        assert_eq!(role_token("  - button \"Save\""), "button \"Save\"");
+        assert_eq!(role_token("  uid=1_9"), "uid=1_9", "no role token to take");
+        assert_eq!(role_token("plain"), "plain");
     }
 
     #[test]

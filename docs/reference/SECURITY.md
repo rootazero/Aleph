@@ -886,6 +886,30 @@ Wraps fetched external content with boundary markers to prevent prompt injection
 pub fn wrap_external_content(content: &str, source: ContentSource) -> String
 ```
 
+**⚠️ 围栏是结构，不是内容 (the boundary is structure, not content)。** 两行标记
+（`<<<EXTERNAL_UNTRUSTED_CONTENT id="…">` / `<<<END_…>`）是**唯一**告诉模型"以下不可信、
+到此为止"的东西，因此**任何重写文本的下游 stage 都不许碰它**。2026-08-04 之前，§3.14 的
+ingress 清洗**整体替换字段**，于是被清洗过的 `web_fetch.content` / 浏览器抓取正文 / MCP
+结果的标记随之消失——或者更糟，只剩开头那条（`reduce_log` 的 `KEEP_HEAD` 恰好会留下它），
+模型读到一个**没有终点的不可信区**。而它只在这些载荷**大到触发清洗**时才发生，也就是最该
+有围栏的时候。
+
+三条纪律：
+
+1. **重写走 `tool_output::fence::rewrite_interior`**，只改内部、标记逐字节重发；不配对
+   就整体弃权。
+2. **解析走单一源 `split_external_fence`**，判据严格：开/闭标记**各恰好一次**、都在行首、
+   id 配对。两段拼接的围栏、被截断的一半，一律拒绝——重新缝在错误的边界上比不缝更糟。
+   围栏**之外**的自有文本（`web_fetch` 的 `[fetch_focus: …]` 行）按 prefix/suffix 原样保留。
+3. **把一个大围栏拆成若干小围栏时，必须回答"落在小围栏之间的字节还被谁覆盖"**。
+   `wrap_external_content` 做两件事：加标记 **和** 归一化/剥不可见字符/转义/清洗
+   chat-template 标记。后者对短元数据同样必要，故拆分方使用
+   `sanitize_external_text`（＝同一份变换，不加标记）。MCP adapter 逐 text 块围栏时
+   就是这么保住覆盖面的；`data` / `blob` 刻意不碰（base64 要能解码，且它的字母表表达不出
+   chat-template 标记）。
+
+详见 [FEATURE_LOCATOR §3.14](FEATURE_LOCATOR.md)。
+
 ### Audit Logging
 
 **Location**: `src/security/audit.rs`

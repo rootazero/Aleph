@@ -302,10 +302,21 @@ pub(crate) fn recovery_footer(
 /// metadata: size, format, OCR text), and return the images for re-emission as
 /// `ContentBlock::Image` when the tool result is rendered into the prompt.
 ///
-/// Targets the `{ image_base64, format, .. }` shape, whether at the top level
-/// (a `desktop` screenshot, or a `file_read` of an image file) or nested under
-/// a `data` wrapper (`DesktopOutput { data }`). Non-matching values are left
-/// untouched, so this is a no-op for the ~all tool calls that produce no image.
+/// Targets two shapes:
+///
+/// - `{ image_base64, format, .. }` — Aleph's own, whether at the top level (a
+///   `desktop` screenshot, or a `file_read` of an image file) or nested under a
+///   `data` wrapper (`DesktopOutput { data }`);
+/// - `{ content: [ { type: "image", data, mimeType }, … ] }` — the MCP tool
+///   result shape (`mcp/external/connection.rs::call_tool`). Every
+///   browser-automation and screenshot MCP server returns images this way, and
+///   until the adapter stopped pre-serializing its result there was nothing here
+///   to recognize: the base64 arrived already stringified inside a JSON
+///   envelope, got counted against the result budget, and was truncated into an
+///   undecodable fragment. The model acted on a screen it never saw.
+///
+/// Non-matching values are left untouched, so this is a no-op for the ~all tool
+/// calls that produce no image.
 #[must_use]
 pub fn hoist_inline_images(value: &mut serde_json::Value) -> Vec<ToolImage> {
     let mut images = Vec::new();
@@ -316,7 +327,69 @@ pub fn hoist_inline_images(value: &mut serde_json::Value) -> Vec<ToolImage> {
         extract_image_in_place(data, &mut images);
     }
     extract_image_in_place(value, &mut images);
+    extract_mcp_content_images(value, &mut images);
     images
+}
+
+/// Cap on images lifted out of one tool result.
+///
+/// A tool that returns a page of thumbnails would otherwise attach dozens of
+/// image blocks to a single request — each one billed in full, and none of them
+/// individually over the size guard. Overflow keeps its base64 in the text
+/// channel, where the result budget bounds it as usual.
+const MAX_HOISTED_IMAGES: usize = 4;
+
+/// Lift `{"type":"image","data":…,"mimeType":…}` blocks out of an MCP result's
+/// `content` array, replacing each payload with the same short marker the
+/// single-image path uses (which is also what makes a second pass a no-op).
+fn extract_mcp_content_images(value: &mut serde_json::Value, out: &mut Vec<ToolImage>) {
+    let Some(blocks) = value
+        .get_mut("content")
+        .and_then(serde_json::Value::as_array_mut)
+    else {
+        return;
+    };
+    for block in blocks {
+        if out.len() >= MAX_HOISTED_IMAGES {
+            return;
+        }
+        let Some(obj) = block.as_object_mut() else {
+            continue;
+        };
+        if obj.get("type").and_then(serde_json::Value::as_str) != Some("image") {
+            continue;
+        }
+        let data = match obj.get("data").and_then(serde_json::Value::as_str) {
+            Some(s) if s.len() > 256 && s.len() <= MAX_INLINE_IMAGE_BASE64_CHARS => s.to_string(),
+            _ => continue,
+        };
+        // The server names the media type directly, but it is untrusted input:
+        // only the types the providers actually accept are forwarded, and the
+        // rest keep their base64 in the text channel rather than being handed to
+        // a provider that will reject the whole request.
+        let Some(mime_type) = supported_image_mime(obj.get("mimeType").and_then(|m| m.as_str()))
+        else {
+            continue;
+        };
+        let chars = data.len();
+        out.push(ToolImage { data, mime_type });
+        obj.insert(
+            "data".to_string(),
+            serde_json::Value::String(format!(
+                "<{chars} base64 chars returned to the model as a viewable image block>"
+            )),
+        );
+    }
+}
+
+/// The media types Aleph forwards as image blocks, from a MIME string.
+fn supported_image_mime(mime: Option<&str>) -> Option<String> {
+    let mime = mime?.trim().to_ascii_lowercase();
+    matches!(
+        mime.as_str(),
+        "image/png" | "image/jpeg" | "image/webp" | "image/gif" | "image/avif"
+    )
+    .then_some(mime)
 }
 
 /// Extract a single `{ image_base64, format }` payload from an object in place,
@@ -358,7 +431,15 @@ fn extract_image_in_place(value: &mut serde_json::Value, out: &mut Vec<ToolImage
 /// few section titles as orientation. Kept to a few hundred bytes so the
 /// offload's token saving is preserved.
 fn search_hint(outcome: &IndexOutcome) -> String {
-    let preview = outcome.previews.join(" · ");
+    // With a single section the "First sections:" preview is the head of the one
+    // section — i.e. text the model already has immediately above this hint.
+    // Orientation is only worth its bytes when there is something to choose
+    // between.
+    let preview = if outcome.sections > 1 {
+        outcome.previews.join(" · ")
+    } else {
+        String::new()
+    };
     if preview.is_empty() {
         format!(
             "[Indexed {} sections — use ctx_search(query=\"…\") to retrieve only \
@@ -609,6 +690,53 @@ mod tests {
         assert_eq!(first[0].mime_type, "image/jpeg");
         // Second pass finds nothing — the short marker is below the 256 guard.
         assert!(hoist_inline_images(&mut value).is_empty());
+    }
+
+    /// Every browser-automation / screenshot MCP server returns images this
+    /// way. Until the adapter stopped pre-serializing its result there was
+    /// nothing here to recognize, so the base64 was billed as text, truncated
+    /// into an undecodable fragment, and the model acted on a screen it never
+    /// saw.
+    #[test]
+    fn hoists_images_out_of_an_mcp_content_array() {
+        let mut value = serde_json::json!({
+            "content": [
+                { "type": "text", "text": "clicked the button" },
+                { "type": "image", "data": "C".repeat(9000), "mimeType": "image/png" },
+            ]
+        });
+
+        let images = hoist_inline_images(&mut value);
+
+        assert_eq!(images.len(), 1);
+        assert_eq!(images[0].data.len(), 9000);
+        assert_eq!(images[0].mime_type, "image/png");
+        // The text block is untouched; the base64 leaves the text channel.
+        assert_eq!(value["content"][0]["text"], "clicked the button");
+        assert!(value["content"][1]["data"].as_str().unwrap().len() < 256);
+        // Idempotent: the marker is below the size guard.
+        assert!(hoist_inline_images(&mut value).is_empty());
+    }
+
+    #[test]
+    fn mcp_hoist_caps_the_number_of_images_and_rejects_unknown_media_types() {
+        let blocks: Vec<_> = (0..MAX_HOISTED_IMAGES + 3)
+            .map(|_| {
+                serde_json::json!({
+                    "type": "image", "data": "D".repeat(1000), "mimeType": "image/png",
+                })
+            })
+            .collect();
+        let mut value = serde_json::json!({ "content": blocks });
+        assert_eq!(hoist_inline_images(&mut value).len(), MAX_HOISTED_IMAGES);
+
+        // A media type no provider accepts keeps its payload in the text
+        // channel rather than being handed over to be rejected wholesale.
+        let mut exotic = serde_json::json!({
+            "content": [ { "type": "image", "data": "E".repeat(1000), "mimeType": "image/tiff" } ]
+        });
+        assert!(hoist_inline_images(&mut exotic).is_empty());
+        assert_eq!(exotic["content"][0]["data"].as_str().unwrap().len(), 1000);
     }
 
     #[test]
@@ -894,7 +1022,7 @@ mod tests {
         }
         original.push_str("test suite::case_boom ... FAILED\n");
         original.push_str("test result: FAILED. 2000 passed; 1 failed\n");
-        let reduced = crate::tool_output::structured::reduce(&original)
+        let reduced = crate::tool_output::structured::reduce_within(&original, None)
             .expect("a cargo test log must classify")
             .render();
 
@@ -936,8 +1064,8 @@ mod tests {
         for i in 0..3000 {
             original.push_str(&format!("src/lib.rs:{i}: let target = {i};\n"));
         }
-        let reduced = crate::tool_output::structured::reduce(&original)
-            .expect("grep output must classify")
+        let reduced = crate::tool_output::structured::reduce_within(&original, None)
+            .expect("a cargo test log must classify")
             .render();
         assert!(
             estimate_tokens_smart(&reduced) <= 8_000,

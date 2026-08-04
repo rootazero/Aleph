@@ -14,10 +14,12 @@
 
 **「顶层」二字是本条最重要的部分**——见下方警告。**口径现在由测试执行**：`src/harness/tests/budget.rs`（跑在 `cargo test -p alephcore --lib` 里），同时守 12 文件与行数；出现第 13 个文件或行数上涨即 FAIL。**改这里的数字就得改那里的 `CEILING`，反之亦然。**
 
-**当前测量（2026-08-03 Round 10 复测）：5142 行。这就是红线本身。** 由 `tests/budget.rs` 的棘轮守（`CEILING = 5142`，实测非手算，只减不增，增必答下方 3 问）。**代码是权威**——这里的数字只是 `CEILING` 的副本，对不上时信代码。
+**当前测量（2026-08-04 Tool Calling 2.0）：5146 行。这就是红线本身。** 由 `tests/budget.rs` 的棘轮守（`CEILING = 5146`，实测非手算，只减不增，增必答下方 3 问）。**代码是权威**——这里的数字只是 `CEILING` 的副本，对不上时信代码。
 
 > **文档订正（2026-07-25）**：本行此前写 5008，而代码里的 `CEILING` 早在 `396c6d200`（"harness: adjust line budget CEILING…"）就抬到 5082，本文与根 CLAUDE.md 都没跟上。这正是本文件开头那段"手写的状态行会撒谎、所以改用测量"要防的失效模式——它在**文档层**复发了一次。**以 `budget.rs::CEILING` 为唯一权威**，任何文档里的数字都只是它的副本；发现不一致时改文档，不要改代码去迁就文档。抬闸那次提交未在正文作答 R10 三问，欠账在此记录。
 
+> **Tool Calling 2.0（2026-08-04）：5142 → 5146（+4）。** provider 返回空或重复 `call_id` 时，旧链路会先持久化两个不可一一配对的 `tool_use`，再执行并产生重复终态；prompt/resume/UI 分别用集合、map、timeline 解释同一 ID，最终各说各话。现于 assistant event 持久化前 fail-closed。三问：① **脚手架**——只验证传输关联键的一一性，不判断意图或恢复策略；② **模型升级仍需要**——关联键唯一性是协议不变量；③ **四个真实消费者**——prompt 配对、resume repair、in-flight cancel、gateway tool state。
+>
 > **Round 10（2026-08-03）：5109 → 5142（+33）。** 付清 FEATURE_LOCATOR §2.18 follow-up 账本的**最后一项**（第 2 项）——账本自己把它记成「触碰 R10 预算，单独提案」，这就是那份提案的落地。完整作答在 `tests/budget.rs::CEILING` 的 Round 10 段，摘要：
 > - **+~24 `prompt.rs` / +~9 `think.rs`：保护尾重新只数持久化消息。** preflight cheap pass 改写 `len - fresh_tail` 以下的一切，而它量的那个向量尾部**不是历史**：`build_prompt` 追加最多 4 条 `<system-reminder>`，`think.rs` 随后再 push recall。5 条合成消息对上 6 条的保护尾，最坏只剩 1 条真实消息受保护——于是 cheap pass 会去改写模型**上一轮刚读过**的消息，整段消息前缀按 `cache_creation` 重付，换来的只是一条一轮前的内容。新增 `build_prompt_with_transient_tail` 返回条数，原 `build_prompt` 保留为丢弃该值的形式，~20 个测试调用点不动、diff 只显示真正的改动。副效果值得单记：cut 变成 `persisted_len - fresh_tail`，**与本轮触发了几条提示无关**，于是也不再在 Round 2 装的 `quantized_tail` 量子边界上抖——账本把那条列为本项未解决的余波。三问：① **脚手架**——一个边界计算的 off-by-N，不判断任何消息，只数哪些下一轮还在日志里；② **模型升级仍需要**——哪些消息被持久化是事件日志的属性，与模型无关，更强的模型同样不该被喂一份它一轮前读过内容的改写版；③ **一个真实消费者** `PreflightPipeline::run` 的 `fresh_tail_count`，且它是唯一需要这个数的调用方——这正是该数由第二个函数返回、而不是强加给所有调用方的理由。
 >
