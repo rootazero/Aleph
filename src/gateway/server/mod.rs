@@ -1079,6 +1079,32 @@ mod tests {
         );
     }
 
+    /// Over-gating guard, sibling of `member_is_refused_admin_methods_at_the_chokepoint`:
+    /// a `"member"` caller hitting a real, registered, member-open method
+    /// (`health` — not in `method_admin::ADMIN_PREFIXES`) must reach the
+    /// real handler and succeed, not be collaterally refused by the gate.
+    #[tokio::test]
+    async fn member_passes_a_member_open_method_at_the_chokepoint() {
+        let handlers_arc = Arc::new(HandlerRegistry::new());
+        let chain = MiddlewareChain::new(
+            handlers_arc.clone(),
+            Arc::new(RateLimiter::new(RateLimitConfig::default())),
+        );
+        let req = r#"{"jsonrpc":"2.0","id":1,"method":"health","params":{}}"#;
+
+        let resp_member = crate::gateway::caller_identity::CALLER_ROLE
+            .scope(
+                Some("member".to_string()),
+                handler::process_request(req, &chain),
+            )
+            .await;
+        let parsed_member: JsonRpcResponse = serde_json::from_str(&resp_member).unwrap();
+        assert!(
+            parsed_member.is_success(),
+            "member must reach a member-open method: {resp_member}"
+        );
+    }
+
     #[test]
     fn test_gateway_config_default() {
         let config = GatewayConfig::default();

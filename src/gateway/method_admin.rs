@@ -11,18 +11,25 @@
 //!
 //! ## Enumeration evidence (Task 4, spec §4.6)
 //!
-//! Every method here was found via `registry.register("...")` /
-//! `handlers_mut().register("...")` / `register_handler!(...)` /
-//! `reg!(...)` call sites across `src/gateway/handlers/mod.rs` (the
-//! placeholder registry built at `HandlerRegistry::new()`) AND the real
-//! boot-time wiring in `src/bin/aleph-server/commands/start/**` (which
-//! overrides most placeholders with live handlers — several families,
-//! e.g. `gateway.token.rotate`, `providers.*`, `mcp.*`, `secrets.*`, are
-//! ONLY registered there, never in `handlers/mod.rs`). The brief's seed
-//! prefix list named `hub.` as the extension-install family; no `hub.`
-//! method is registered anywhere — the real family is `extensions.*`
-//! (`extensions.catalog/installed/toggle/uninstall/disclosure/install`),
-//! so `hub.` was replaced with `extensions.` below.
+//! Every method here was found by a MECHANICAL sweep (fix-round, not the
+//! original hand sweep) of all four registration call patterns across the
+//! whole `src/` tree (which includes `src/bin/`): `.register("literal")`
+//! (covers both `registry.register(...)` in the placeholder registry built
+//! at `HandlerRegistry::new()` and `handlers_mut().register(...)` at boot
+//! time), `register_handler!(server, "literal", ...)`, and `reg!("literal",
+//! ...)` (file-local macro in `builder/handlers/mcp.rs`). Non-RPC
+//! `.register(...)` call sites (provider registries, tool registries,
+//! background-agent trackers, cluster node-command registries, test-only
+//! registries) were identified by source and excluded — they share the
+//! method name `.register(` but register into a different table, not the
+//! JSON-RPC `HandlerRegistry`. The full family list this produced (72
+//! families) is diffed against the classification table in the Task 4
+//! report — every family has a ruling there, not just the ones gated here.
+//!
+//! The brief's seed prefix list named `hub.` as the extension-install
+//! family; no `hub.` method is registered anywhere — the real family is
+//! `extensions.*` (`extensions.catalog/installed/toggle/uninstall/
+//! disclosure/install`), so `hub.` was replaced with `extensions.` below.
 //!
 //! Classification rule applied per family: server-global config /
 //! credentials / fleet / user management ⇒ admin; surfaces scoped to the
@@ -31,7 +38,35 @@
 //! `artifacts.*` are member daily surfaces and deliberately absent — their
 //! per-user filtering is P1's visibility chokepoint, not this gate's job.
 //!
-//! Full per-family table (including families deliberately left OPEN, with
+//! Two families were read (not guessed) and deliberately left OPEN despite
+//! looking admin-shaped at first glance:
+//!
+//! - `fs.*` (Panel directory-picker browse/read/create) — every
+//!   traversal/mutation is bounded by `ProjectsConfig::allowed_roots` and
+//!   canonicalisation-checked before touching the filesystem; a path outside
+//!   the configured roots never reaches `fs::read_dir`/`fs::create_dir` and
+//!   returns `-32600`. See `src/gateway/handlers/fs.rs:14-17` (doc) and
+//!   `:93-106` (`validate_in_scope`, called from every handler). This is the
+//!   RPC-surface equivalent of member tool execution, which the trust model
+//!   already concedes — not a server-global config surface.
+//! - `clarification.*` / `subagent.tree` — genuinely member's-own-session
+//!   surfaces by *purpose* (answering the agent's own parked question;
+//!   viewing your own run's subagent tree for the Panel dashboard), but
+//!   verification found neither is actually scoped to the caller's session:
+//!   `clarification.pending` (`src/gateway/handlers/clarification.rs:100-106`)
+//!   lists every pending question process-wide with no session filter;
+//!   `clarification.resolve` (`:77-93`) takes a caller-supplied `session_key`
+//!   with no ownership check; `subagent.tree`'s `root_session` param
+//!   (`src/gateway/handlers/subagent.rs:11-35`) is optional — omitted means
+//!   "whole process." Gating these methods would break the Panel's ONLY path
+//!   to answer a clarifying question and to view a running subagent tree
+//!   (chat.*-equivalent member necessity), so they stay open per the same
+//!   precedent as `sessions.*`/`memory.*` — but this cross-session reach is
+//!   NOT fixed by this gate and is flagged in the Task 4 report as a
+//!   follow-up for the per-user visibility work (P1-adjacent, not P1 itself
+//!   since these aren't in its named scope).
+//!
+//! Full per-family table (all 72 families, including every OPEN ruling with
 //! rationale) is in the Task 4 report, not duplicated here — this file is
 //! the enforcement source of truth, not the audit trail.
 
@@ -44,11 +79,20 @@ const ADMIN_PREFIXES: &[&str] = &[
     // identity.get, metrics.*, credentials, flow.reload — no read-only
     // member-safe carve-out exists in this family (verified: no
     // `gateway.status` method is registered anywhere).
-    // --- Principal / fleet management ---
+    // --- Principal / fleet / process management ---
     "users.", // principal management (carve-outs: me / list) — not yet
     // registered (lands in Task 5); gated pre-emptively so the gate
     // precedes the surface.
-    "cluster.", // enroll / deregister — fleet membership.
+    "cluster.",  // enroll / deregister — fleet membership.
+    "services.", // background service lifecycle (start/stop/list/status) —
+    // server process control, not caller's-own-data.
+    // --- Agent persona management: server-global roster, not per-user ---
+    "agents.", // create/update/delete/set_default/bindings/files.*/tools_schema/
+    // teams — carve-outs: agents.list / agents.get (spec §7: "agent 人格
+    // 目录 v1 保持全局、admin 治理"; read-only roster browsing stays open,
+    // matching the tool-tier gate's own asymmetry — `agent_create`/
+    // `agent_delete`/`agent_switch` are OPERATOR_TOOLS in method_authz.rs
+    // while `agent_list` is explicitly chat-safe there).
     // --- Provider & channel configuration (shared, server-global) ---
     "providers.",            // LLM provider CRUD + credentials.
     "embedding_providers.",  // sibling of providers. — embedding backend CRUD.
@@ -73,6 +117,10 @@ const ADMIN_PREFIXES: &[&str] = &[
     "search_config.",
     "route_config.",
     "routing_rules.",
+    "logs.", // getLevel/setLevel/getDirectory — setLevel mutates the process-wide
+    // tracing verbosity for every caller; getDirectory discloses a server
+    // filesystem path. No read-only carve-out: getLevel alone isn't worth
+    // splitting out of a 3-method family for.
     // --- Extension / capability install surfaces ---
     "extensions.", // Aleph Hub install surface (catalog/installed/toggle/
     // uninstall/disclosure/install) — replaces the brief's placeholder
@@ -85,20 +133,48 @@ const ADMIN_PREFIXES: &[&str] = &[
     "plugin.",     // plugin lifecycle, canonical singular namespace (both registered).
     "hooks.",      // server-wide hook file admin (~/.aleph/hooks.json).
     "runtimes.",   // sandbox/runtime capability install (list/refresh/install).
-    // --- Agent / persona configuration (server-global, not per-user) ---
+    // --- Agent-persona / shared config (server-global, not per-user) ---
     "identity.", // agent SOUL.md / persona file admin (get/set/clear/list).
-    "moa.",      // shared mixture-of-agents presets (save/delete/setDefault/…).
-    "acp.",      // agent-client-protocol integration presets/config.
+    "moa.",      // shared mixture-of-agents presets (save/delete/setDefault/…) —
+    // matches `moa` in method_authz.rs's OPERATOR_TOOLS.
+    "acp.", // agent-client-protocol integration presets/config.
+    // --- Scheduled automation: cross-checked against method_authz.rs's
+    // tool-tier gate, which already treats mutation here as operator-only
+    // (`cron_manage`, `heartbeat_{create,update,delete,toggle}` are all
+    // OPERATOR_TOOLS) — the RPC surface must not be a lower-privilege
+    // bypass of that existing decision. ---
+    "cron.", // no read-only LLM-tool counterpart exists (unlike heartbeat_list),
+    // so no carve-out: the whole family is gated.
+    "heartbeat.", // carve-outs: list/get/runs (heartbeat_list is explicitly
+    // chat-safe in method_authz.rs; get/runs are read-only siblings).
+    // create/update/delete/toggle/wake stay gated.
     // --- Fleet lifecycle / process control ---
     "daemon.",      // status/logs/shutdown — shutdown affects every connected caller.
     "wizard.",      // first-run setup wizard (walks through server-wide config).
     "diagnostics.", // diagnostics.run — whole-host diagnostic dump (paths, env, …).
+    // --- Interactive shell: NOT the same trust story as the `bash` LLM tool ---
+    "pty.", // full interactive terminal on the server host. Its own doc
+    // comment ("open to all connections" — `src/gateway/handlers/pty.rs:10`)
+    // is a pre-multi-user LAN-trust holdover. Unlike the `bash` tool (open
+    // to chat tier in method_authz.rs), a PTY session is NOT mediated by
+    // `[sandbox.command_policy]` pattern matching or exec-tier approval —
+    // it is a raw shell, so the two are not comparable; this is strictly
+    // more dangerous, not equally protected by a different layer.
+    // --- Exec-tier approval resolution: a member resolving these is a
+    // privilege escalation over the approval gate itself (event_scope.rs
+    // already restricts approval.* events to admin). No carve-outs — ---
+    "exec.", // exec.approval.resolve, exec.approvals.pending.
 ];
 
 /// Member-safe reads inside otherwise-admin families.
 const MEMBER_CARVE_OUTS: &[&str] = &[
-    "users.me",   // a member reading their own principal record.
-    "users.list", // project roster picking needs the member list.
+    "users.me",       // a member reading their own principal record.
+    "users.list",     // project roster picking needs the member list.
+    "agents.list",    // browsing the shared agent-persona roster (read-only).
+    "agents.get",     // reading a single persona's detail (read-only).
+    "heartbeat.list", // matches chat-safe `heartbeat_list` in method_authz.rs.
+    "heartbeat.get",  // read-only sibling of heartbeat.list.
+    "heartbeat.runs", // read-only run history, sibling of heartbeat.list.
 ];
 
 #[must_use]
@@ -114,10 +190,13 @@ mod tests {
     use super::*;
 
     /// Tripwire subset — mirrors method_authz::MUST_STAY_GATED's philosophy:
-    /// a curated pin, not a second source of truth. One representative
-    /// method per family in `ADMIN_PREFIXES`, each confirmed registered by
-    /// the Task 4 enumeration (or, for `users.*`, pre-emptively pinned ahead
-    /// of Task 5's surface).
+    /// a curated pin, not a second source of truth. This table intentionally
+    /// near-mirrors `ADMIN_PREFIXES` one-for-one (one representative real
+    /// method per family) rather than sampling a subset — for a security
+    /// gate, a deletion or typo in `ADMIN_PREFIXES` should fail a test by
+    /// name, not rely on a smaller sample happening to still cover it. Every
+    /// method below is confirmed registered by the Task 4 enumeration (or,
+    /// for `users.*`, pre-emptively pinned ahead of Task 5's surface).
     #[test]
     fn credential_and_config_methods_require_admin() {
         for m in [
@@ -129,8 +208,14 @@ mod tests {
             // users. (given — pre-emptive, Task 5 surface)
             "users.create",
             "users.update",
-            // cluster.
+            // cluster. / services.
             "cluster.enroll",
+            "services.start",
+            // agents. (fix round — Finding 1)
+            "agents.create",
+            "agents.update",
+            "agents.delete",
+            "agents.set_default",
             // providers. family
             "providers.create",
             "embedding_providers.add",
@@ -140,7 +225,7 @@ mod tests {
             "channel.create",
             "channel.pairing.revoke",
             "discord.validate_token",
-            // config. + settings-page *_config. families + secrets.
+            // config. + settings-page *_config. families + secrets. + logs.
             "config.patch",
             "secrets.set",
             "security_config.update",
@@ -155,6 +240,7 @@ mod tests {
             "search_config.update",
             "route_config.update",
             "routing_rules.create",
+            "logs.setLevel",
             // extension / capability install
             "extensions.install",
             "mcp.add",
@@ -169,10 +255,17 @@ mod tests {
             "identity.set",
             "moa.savePreset",
             "acp.create",
+            // scheduled automation (fix round — method_authz.rs cross-check)
+            "cron.create",
+            "heartbeat.create",
             // fleet lifecycle
             "daemon.shutdown",
             "wizard.start",
             "diagnostics.run",
+            "pty.spawn",
+            // exec approval (fix round — Finding 3)
+            "exec.approval.resolve",
+            "exec.approvals.pending",
         ] {
             assert!(method_requires_admin(m), "{m} must require admin");
         }
@@ -191,15 +284,42 @@ mod tests {
             "artifacts.list",
             "tools.invoke",
             "agents.list",
+            "agents.get",
+            "heartbeat.list",
+            "heartbeat.get",
+            "heartbeat.runs",
             "teams.list",
             "workspace.list",
             "voice.transcribe",
             "fs.read_file",
+            "fs.allowed_roots",
             "group_chat.start",
             "graph.query",
             "dreaming.list_insights",
+            "clarification.resolve",
+            "clarification.pending",
+            "subagent.tree",
+            "agent.run",
+            "session.compact",
+            "command.execute",
+            "commands.list",
         ] {
             assert!(!method_requires_admin(m), "{m} must stay open to members");
+        }
+    }
+
+    /// Prefix false-positive safety: a method whose name merely SHARES a
+    /// prefix's leading characters, but does not have the trailing `.`, must
+    /// stay open. `starts_with("gateway.")` on `"gatewayx.foo"` is false
+    /// because the literal dot is part of the match — this pins that the
+    /// trailing dot is load-bearing and not accidentally droppable.
+    #[test]
+    fn prefix_match_requires_the_trailing_dot() {
+        for m in ["gatewayx.foo", "configx.get", "usersx.list", "mcpx.add"] {
+            assert!(
+                !method_requires_admin(m),
+                "{m} must NOT match on a bare prefix without the trailing dot"
+            );
         }
     }
 }
