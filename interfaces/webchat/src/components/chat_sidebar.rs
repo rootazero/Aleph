@@ -832,8 +832,20 @@ pub fn ChatSidebar() -> impl IntoView {
             });
             match dash.rpc_call("sessions.delete", params).await {
                 Ok(_) => {
-                    // If deleting the active session, clear it
-                    if chat.session_key.get_untracked().as_deref() == Some(&session_key) {
+                    // If deleting the active session, clear it.
+                    //
+                    // `try_get_untracked` past every `.await` in this file: the
+                    // sidebar unmounts with the phone history drawer, and a
+                    // plain read of a disposed signal panics the whole panel.
+                    // `ChatState` is root-owned (`app.rs` provides it), so this
+                    // particular `None` arm is unreachable today — the rule is
+                    // kept uniform so the guard in `disposed_reads` needs no
+                    // allowlist to rot, and so scoping `ChatState` per-tab later
+                    // cannot reintroduce the crash silently. `.flatten()` leaves
+                    // the comparison and the control flow byte-identical.
+                    if chat.session_key.try_get_untracked().flatten().as_deref()
+                        == Some(&session_key)
+                    {
                         chat.clear_session();
                         if let Some(ws) = workspace {
                             ws.reset();
@@ -888,7 +900,8 @@ pub fn ChatSidebar() -> impl IntoView {
             if let Err(e) = TeamsApi::disband(&dash, &team_id).await {
                 web_sys::console::error_1(&format!("Failed to delete team: {e}").into());
             } else {
-                if chat.team_id.get_untracked().as_deref() == Some(&team_id) {
+                // Root-owned like `session_key` above; uniform rule.
+                if chat.team_id.try_get_untracked().flatten().as_deref() == Some(&team_id) {
                     chat.clear_session();
                 }
                 reload(dash);
@@ -922,7 +935,9 @@ pub fn ChatSidebar() -> impl IntoView {
         if let Some(k) = key {
             leptos::task::spawn_local(async move {
                 gloo_timers::future::TimeoutFuture::new(5000).await;
-                if deleting_key.get_untracked().as_deref() == Some(&k) {
+                // Component-owned signal + a 5 s timer: closing the drawer
+                // inside that window is the ordinary case, not the edge case.
+                if deleting_key.try_get_untracked().flatten().as_deref() == Some(&k) {
                     deleting_key.set(None);
                 }
             });
@@ -935,7 +950,8 @@ pub fn ChatSidebar() -> impl IntoView {
         if let Some(k) = key {
             leptos::task::spawn_local(async move {
                 gloo_timers::future::TimeoutFuture::new(5000).await;
-                if group_deleting_id.get_untracked().as_deref() == Some(&k) {
+                // Same 5 s window as the session row above.
+                if group_deleting_id.try_get_untracked().flatten().as_deref() == Some(&k) {
                     group_deleting_id.set(None);
                 }
             });
@@ -1262,8 +1278,18 @@ pub fn ChatSidebar() -> impl IntoView {
                                                         let r = r_blur.clone();
                                                         leptos::task::spawn_local(async move {
                                                             gloo_timers::future::TimeoutFuture::new(100).await;
-                                                            if group_editing_id.get_untracked().as_deref() == Some(&id) {
-                                                                let t = group_edit_text.get_untracked();
+                                                            // Blur is very often the *last* thing that
+                                                            // happens before this row goes away, so the
+                                                            // 100 ms delay lands after disposal routinely.
+                                                            let Some(cur) = group_editing_id.try_get_untracked()
+                                                            else {
+                                                                return;
+                                                            };
+                                                            if cur.as_deref() == Some(&id) {
+                                                                let Some(t) = group_edit_text.try_get_untracked()
+                                                                else {
+                                                                    return;
+                                                                };
                                                                 if t.trim().is_empty() {
                                                                     group_editing_id.set(None);
                                                                     group_edit_text.set(String::new());
@@ -1552,8 +1578,17 @@ pub fn ChatSidebar() -> impl IntoView {
                                                         let do_rename_c = do_rename_blur.clone();
                                                         leptos::task::spawn_local(async move {
                                                             gloo_timers::future::TimeoutFuture::new(100).await;
-                                                            if editing_key.get_untracked().as_deref() == Some(&key_c) {
-                                                                let text = edit_text.get_untracked();
+                                                            // Same blur-then-unmount ordering as the group
+                                                            // row above.
+                                                            let Some(cur) = editing_key.try_get_untracked()
+                                                            else {
+                                                                return;
+                                                            };
+                                                            if cur.as_deref() == Some(&key_c) {
+                                                                let Some(text) = edit_text.try_get_untracked()
+                                                                else {
+                                                                    return;
+                                                                };
                                                                 if text.trim().is_empty() {
                                                                     editing_key.set(None);
                                                                     edit_text.set(String::new());

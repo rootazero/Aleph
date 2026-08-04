@@ -83,7 +83,13 @@ pub fn AgentBindingSelector(
                     selected.set(value.clone());
                     // Update local bindings cache: this channel moves from its
                     // old agent (if any) to the newly selected one.
-                    let mut b = bindings.get_untracked();
+                    // The selector can be unmounted while `set_channel_agent` is
+                    // in flight (the settings page it lives on is a route). The
+                    // write already landed server-side; only the local cache
+                    // refresh is skipped, and there is no cache to refresh.
+                    let Some(mut b) = bindings.try_get_untracked() else {
+                        return;
+                    };
                     for chs in b.values_mut() {
                         chs.retain(|ch| ch != &ch_id);
                     }
