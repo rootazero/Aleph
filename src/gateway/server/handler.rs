@@ -384,6 +384,50 @@ fn device_revoked_should_close(event_json: &str, session_device_id: Option<&str>
     }
 }
 
+/// The guest login wall: may a connection stamped with `role` send `method`?
+///
+/// The wall is the *guest* wall and nothing else — it separates "this
+/// connection presented a credential" from "it did not." Both authorized roles
+/// pass every method: `"operator"` (loopback, legacy shared token, or a device
+/// bound to an `admin` user) and `"member"` (a device bound to a `member`-role
+/// user). The admin/member split for server-global methods is decided further
+/// in, at the `process_request` chokepoint (`method_admin.rs`) — teaching this
+/// predicate about it would put the same decision in two places.
+///
+/// Anything else — `"guest"`, an unrecognized role string, or absent
+/// connection state — may only send `connect` to authorize (fail closed).
+///
+/// Pure so the wall's own logic is host-testable. The
+/// `resolve_stamped_identity` tests below cover *what role gets stamped*; the
+/// class of bug this function exists to prevent lives in the *predicate* — a
+/// correctly-stamped `"member"` being refused every method and then
+/// flood-guard-kicked as an abuser stays green under any test that scopes
+/// task-locals below the wall.
+#[must_use]
+fn wall_admits(role: Option<&str>, method: &str) -> bool {
+    matches!(role, Some("operator" | "member")) || method == "connect"
+}
+
+/// The authorization verdict echoed back in a `connect` response:
+/// `(role, authorized, needs_token)`.
+///
+/// Derived from the **resolved** identity, never from the raw credential
+/// verdict alone. "Was the credential valid" and "does this connection hold
+/// any authority" are different questions, and P0 made them come apart: a
+/// device token that is still valid but whose bound user was deactivated (or
+/// whose `user_id` dangles) is a valid credential that grants nothing. It must
+/// be reported with the shape the Panel already knows — `("guest", false,
+/// true)`, i.e. the login wall — rather than a new close reason or verdict
+/// word no client parses.
+///
+/// Pure so the exact wire triple is host-testable; the surrounding JSON
+/// insertion has no seam (it edits a response inside the live WS loop).
+#[must_use]
+fn connect_verdict(credential_ok: bool, resolved_role: &str) -> (&str, bool, bool) {
+    let holds_authority = credential_ok && resolved_role != "guest";
+    (resolved_role, holds_authority, !holds_authority)
+}
+
 /// Resolve the `(caller_role, caller_user)` pair stamped onto
 /// `ConnectionState` at a `connect` handshake, given the authorization
 /// verdict `resolve_connect_auth` already decided. Pure — host-testable
@@ -395,9 +439,18 @@ fn device_revoked_should_close(event_json: &str, session_device_id: Option<&str>
 /// when a security store is available — loopback and legacy unbound-device
 /// paths still resolve to the implicit owner as operator (zero-change
 /// guarantee), but a device bound to a deactivated user is walled here even
-/// though its token was valid. With no store wired (probe/test server),
-/// authorized falls back to the implicit owner as operator, unchanged from
-/// before per-user resolution existed.
+/// though its token was valid.
+///
+/// With **no store wired** (probe/test server) the arm splits on whether the
+/// connection is device-bound. No device and no store is the pre-P0 shape
+/// (loopback / legacy shared token) and keeps resolving to the implicit owner
+/// as operator — unchanged from before per-user resolution existed. A device
+/// *is* presented but there is no store to resolve it against ⇒ `("guest",
+/// None)`, fail-closed, mirroring the ruled `Err` semantics inside
+/// `resolve_connection_identity`: a binding lookup that could not be
+/// performed must never be read as "unbound, therefore owner" — that is the
+/// one input a remote caller controls, and it would otherwise buy full
+/// operator authority on any deployment whose store failed to wire.
 fn resolve_stamped_identity(
     authorized: bool,
     is_loopback: bool,
@@ -413,6 +466,8 @@ fn resolve_stamped_identity(
             device_id,
             store,
         ),
+        // Device-bound but unresolvable: fail closed (see doc above).
+        None if device_id.is_some() => (None, "guest"),
         None => (
             Some(crate::gateway::security::store::OWNER_USER_ID.to_string()),
             "operator",
@@ -734,13 +789,15 @@ async fn handle_connection(
                                     // that has not presented a valid Gateway
                                     // token — may only (re)issue `connect` to
                                     // authorize. Every other method is refused
-                                    // until a valid token is presented. Loopback
-                                    // and token-authorized connections are
-                                    // operator and pass freely; once authorized,
-                                    // authority equals local (single tier).
-                                    if caller_role.as_deref() != Some("operator")
-                                        && req.method != "connect"
-                                    {
+                                    // until a valid credential is presented.
+                                    // Loopback, token-authorized and
+                                    // member-resolved connections pass freely
+                                    // here; the admin/member split is a
+                                    // *separate*, deeper gate (`method_admin.rs`
+                                    // inside `process_request`). See
+                                    // `wall_admits` for the predicate and why it
+                                    // is extracted (host-testable).
+                                    if !wall_admits(caller_role.as_deref(), &req.method) {
                                         let resp = JsonRpcResponse::error(
                                             req.id.clone(),
                                             AUTH_REQUIRED,
@@ -996,10 +1053,16 @@ async fn handle_connection(
                                                         }
                                                     };
 
-                                                    let (authorized, panel_role, issued_device_token, authed_device_id) = match &auth_outcome {
-                                                        crate::gateway::handlers::connect::ConnectAuthOutcome::Authorized { device_id } => (true, "operator", None, device_id.clone()),
-                                                        crate::gateway::handlers::connect::ConnectAuthOutcome::BootstrapExchanged { device_token, device_id } => (true, "operator", Some(device_token.clone()), Some(device_id.clone())),
-                                                        crate::gateway::handlers::connect::ConnectAuthOutcome::Unauthorized => (false, "guest", None, None),
+                                                    // Credential verdict only — "did this connection
+                                                    // present something valid". The *role* it maps to
+                                                    // is no longer decided here: per-user resolution
+                                                    // (`resolve_stamped_identity`, below) owns that
+                                                    // for both the stamp and the response, so there
+                                                    // is exactly one answer to "who is this".
+                                                    let (authorized, issued_device_token, authed_device_id) = match &auth_outcome {
+                                                        crate::gateway::handlers::connect::ConnectAuthOutcome::Authorized { device_id } => (true, None, device_id.clone()),
+                                                        crate::gateway::handlers::connect::ConnectAuthOutcome::BootstrapExchanged { device_token, device_id } => (true, Some(device_token.clone()), Some(device_id.clone())),
+                                                        crate::gateway::handlers::connect::ConnectAuthOutcome::Unauthorized => (false, None, None),
                                                     };
                                                     // Bind this session to the paired device it authenticated
                                                     // as, so `gateway.devices.revoke` can close exactly this
@@ -1033,6 +1096,38 @@ async fn handle_connection(
                                                             ));
                                                         }
                                                     }
+                                                    // Role + user for the login-wall gate and the
+                                                    // config-tier tool gate. See
+                                                    // `resolve_stamped_identity` (pure, unit-tested)
+                                                    // for the decision rules. Resolved BEFORE taking
+                                                    // the connection-map lock (it is a pure function;
+                                                    // holding the lock across it buys nothing) so the
+                                                    // very same verdict can be echoed to the client
+                                                    // in the response overlay below.
+                                                    let (resolved_user, resolved_role) = resolve_stamped_identity(
+                                                        authorized,
+                                                        ctx.client_ip.is_loopback(),
+                                                        authed_device_id.as_deref(),
+                                                        ctx.security_store.as_deref(),
+                                                    );
+                                                    // What the client is told, and what the event
+                                                    // scope grants. A connect can be
+                                                    // credential-authorized yet resolve to no
+                                                    // principal (deactivated / dangling user); the
+                                                    // login wall already treats that as guest, so the
+                                                    // response and the scope must agree — otherwise
+                                                    // the client is told `authorized: true` and
+                                                    // handed a dead UI in which every later frame is
+                                                    // refused, while a wildcard scope keeps streaming
+                                                    // guarded topics (approval banners,
+                                                    // config.changed) to a principal that no longer
+                                                    // exists. For every pre-P0 shape (loopback,
+                                                    // shared token, unbound device, unauthorized)
+                                                    // this triple is byte-identical to what the old
+                                                    // credential-only `panel_role`/`authorized` pair
+                                                    // produced.
+                                                    let (echo_role, holds_authority, needs_token) =
+                                                        connect_verdict(authorized, resolved_role);
                                                     {
                                                         let mut conns = ctx.connections.write().await;
                                                         if let Some(state) = conns.get_mut(&conn_id) {
@@ -1055,22 +1150,13 @@ async fn handle_connection(
                                                             // Authorized ⇒ wildcard scope so
                                                             // EventScopeGuard delivers guarded topics
                                                             // (approval banners, config.changed).
-                                                            // Unauthorized ⇒ no scopes (walled).
-                                                            state.permissions = if authorized {
+                                                            // Walled (unauthorized, or authorized but
+                                                            // resolving to no principal) ⇒ no scopes.
+                                                            state.permissions = if holds_authority {
                                                                 vec!["*".to_string()]
                                                             } else {
                                                                 Vec::new()
                                                             };
-                                                            // Role + user for the login-wall gate and the
-                                                            // config-tier tool gate. See
-                                                            // `resolve_stamped_identity` (pure, unit-tested)
-                                                            // for the decision rules.
-                                                            let (resolved_user, resolved_role) = resolve_stamped_identity(
-                                                                authorized,
-                                                                ctx.client_ip.is_loopback(),
-                                                                authed_device_id.as_deref(),
-                                                                ctx.security_store.as_deref(),
-                                                            );
                                                             state.caller_role = resolved_role.to_string();
                                                             state.caller_user = resolved_user;
                                                             // Device binding for the per-device revoke.
@@ -1200,7 +1286,17 @@ async fn handle_connection(
 
                                                     // Echo the verdict so the Panel renders the login
                                                     // wall / token box when unauthorized, and unlocks
-                                                    // the full app (same as local) when authorized.
+                                                    // the app when authorized. The echoed role is the
+                                                    // RESOLVED one (`resolve_stamped_identity`), not
+                                                    // the credential-only `panel_role` guess — the
+                                                    // client must be told the authority it actually
+                                                    // holds, or a member renders an operator UI whose
+                                                    // admin surfaces all fail, and a deactivated
+                                                    // user's still-valid device is told it is a fully
+                                                    // authorized operator while the wall refuses
+                                                    // every frame it sends. No new vocabulary: a
+                                                    // walled resolution reuses the existing
+                                                    // guest/needs_token shape.
                                                     if let Some(obj) = resp
                                                         .result
                                                         .as_mut()
@@ -1209,16 +1305,16 @@ async fn handle_connection(
                                                         obj.insert(
                                                             "role".to_string(),
                                                             serde_json::Value::String(
-                                                                panel_role.to_string(),
+                                                                echo_role.to_string(),
                                                             ),
                                                         );
                                                         obj.insert(
                                                             "authorized".to_string(),
-                                                            serde_json::Value::Bool(authorized),
+                                                            serde_json::Value::Bool(holds_authority),
                                                         );
                                                         obj.insert(
                                                             "needs_token".to_string(),
-                                                            serde_json::Value::Bool(!authorized),
+                                                            serde_json::Value::Bool(needs_token),
                                                         );
                                                         if let Some(dt) = issued_device_token {
                                                             obj.insert(
@@ -1875,14 +1971,136 @@ mod tests {
     }
 
     #[test]
-    fn no_store_wired_falls_back_to_owner_when_authorized() {
-        // probe/test server with no security store: LAN-trust degrade.
+    fn no_store_and_no_device_falls_back_to_owner_when_authorized() {
+        // probe/test server with no security store, and a connection that is
+        // not device-bound (loopback / legacy shared token): the pre-P0 shape,
+        // LAN-trust degrade preserved.
         let (user, role) = resolve_stamped_identity(true, false, None, None);
         assert_eq!(
             user.as_deref(),
             Some(crate::gateway::security::store::OWNER_USER_ID)
         );
         assert_eq!(role, "operator");
+    }
+
+    #[test]
+    fn no_store_but_device_bound_fails_closed_to_guest() {
+        // The other half of the same arm: a device id WAS presented but there
+        // is no store to resolve its binding against. "Could not look it up"
+        // must not read as "unbound, therefore owner" — the device id is
+        // remote-controlled input, so fail closed exactly like the store-`Err`
+        // arm inside `resolve_connection_identity`.
+        let (user, role) = resolve_stamped_identity(true, false, Some("dev-x"), None);
+        assert_eq!(user, None);
+        assert_eq!(role, "guest");
+    }
+
+    // ── The connect response's echoed verdict (connect_verdict) ──────────
+    // Composed with `resolve_stamped_identity` so each case runs the real
+    // chain the handshake runs: credential verdict + store → resolved role →
+    // wire triple.
+
+    #[test]
+    fn connect_response_reports_member_authority_to_a_member() {
+        // The regression: the response used to be computed from the
+        // credential verdict alone, so a member was told `role: "operator"`
+        // and rendered an operator UI whose every admin surface then failed.
+        let store = store_with_device_user(
+            "dev-a",
+            "u-alice",
+            crate::gateway::security::store::UserRole::Member,
+        );
+        let (_, role) = resolve_stamped_identity(true, false, Some("dev-a"), Some(&store));
+        assert_eq!(connect_verdict(true, role), ("member", true, false));
+    }
+
+    #[test]
+    fn connect_response_walls_a_deactivated_users_valid_device() {
+        // Valid credential, no principal. Reported with the EXISTING walled
+        // shape — no new vocabulary, no new close reason.
+        use crate::gateway::security::store::UserStatus;
+        let store = store_with_device_user(
+            "dev-a",
+            "u-alice",
+            crate::gateway::security::store::UserRole::Member,
+        );
+        store
+            .update_user("u-alice", None, None, Some(UserStatus::Deactivated))
+            .unwrap();
+        let (user, role) = resolve_stamped_identity(true, false, Some("dev-a"), Some(&store));
+        assert_eq!(user, None);
+        assert_eq!(
+            connect_verdict(true, role),
+            ("guest", false, true),
+            "a credential that grants nothing must not claim operator authority"
+        );
+    }
+
+    #[test]
+    fn connect_response_is_unchanged_for_operator_and_walled_connections() {
+        // Zero-change guarantee: every pre-P0 shape produces exactly the
+        // triple the old credential-only overlay produced.
+        // Loopback / legacy shared token (no store, no device).
+        let (_, lo_role) = resolve_stamped_identity(true, true, None, None);
+        assert_eq!(connect_verdict(true, lo_role), ("operator", true, false));
+        // Remote, admin-bound device.
+        let store = store_with_device_user(
+            "dev-r",
+            "u-root",
+            crate::gateway::security::store::UserRole::Admin,
+        );
+        let (_, adm_role) = resolve_stamped_identity(true, false, Some("dev-r"), Some(&store));
+        assert_eq!(connect_verdict(true, adm_role), ("operator", true, false));
+        // Rejected credential.
+        let (_, guest_role) = resolve_stamped_identity(false, false, None, Some(&store));
+        assert_eq!(connect_verdict(false, guest_role), ("guest", false, true));
+    }
+
+    // ── The login wall's own predicate (wall_admits) ──────────────────────
+    // These drive the ACTUAL wall expression the dispatch loop evaluates.
+    // The `resolve_stamped_identity` tests above prove a member connection is
+    // *stamped* "member"; only these prove the wall then lets it through —
+    // the distinction is not academic, it is precisely how "member is refused
+    // every method and then flood-kicked as an abuser" stayed green.
+
+    #[test]
+    fn wall_admits_member_on_a_daily_method() {
+        assert!(
+            wall_admits(Some("member"), "chat.send"),
+            "a member connection must clear the guest wall; the admin/member \
+             split is method_admin.rs's job, deeper in"
+        );
+        assert!(wall_admits(Some("member"), "sessions.list"));
+        assert!(wall_admits(Some("member"), "connect"));
+    }
+
+    #[test]
+    fn wall_admits_operator_on_everything() {
+        assert!(wall_admits(Some("operator"), "chat.send"));
+        assert!(wall_admits(Some("operator"), "connect"));
+        assert!(wall_admits(Some("operator"), "config.patch"));
+    }
+
+    #[test]
+    fn wall_refuses_guest_except_connect() {
+        assert!(
+            !wall_admits(Some("guest"), "chat.send"),
+            "the wall must stay the guest wall"
+        );
+        assert!(
+            wall_admits(Some("guest"), "connect"),
+            "connect is the only way to authorize, so it is always admitted"
+        );
+    }
+
+    #[test]
+    fn wall_fails_closed_on_absent_or_unknown_roles() {
+        // Pre-handshake / vanished connection state, and any role string the
+        // wall does not know, are refused everything but `connect`.
+        assert!(!wall_admits(None, "chat.send"));
+        assert!(wall_admits(None, "connect"));
+        assert!(!wall_admits(Some("admin"), "chat.send")); // wire word is "operator"
+        assert!(!wall_admits(Some(""), "chat.send"));
     }
 
     #[test]

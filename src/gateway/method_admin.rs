@@ -22,9 +22,13 @@
 //! background-agent trackers, cluster node-command registries, test-only
 //! registries) were identified by source and excluded — they share the
 //! method name `.register(` but register into a different table, not the
-//! JSON-RPC `HandlerRegistry`. The full family list this produced (72
-//! families) is diffed against the classification table in the Task 4
-//! report — every family has a ruling there, not just the ones gated here.
+//! JSON-RPC `HandlerRegistry`. That sweep produced **74 method families**.
+//! Every one of them has a ruling in this file: a family is admin iff it
+//! prefix-matches [`ADMIN_PREFIXES`] and is not listed in
+//! [`MEMBER_CARVE_OUTS`]; every other family is open, and the non-obvious
+//! open rulings are written out below. There is no second table anywhere —
+//! re-running the sweep above and diffing it against these two constants is
+//! the whole audit.
 //!
 //! The brief's seed prefix list named `hub.` as the extension-install
 //! family; no `hub.` method is registered anywhere — the real family is
@@ -61,14 +65,14 @@
 //!   "whole process." Gating these methods would break the Panel's ONLY path
 //!   to answer a clarifying question and to view a running subagent tree
 //!   (chat.*-equivalent member necessity), so they stay open per the same
-//!   precedent as `sessions.*`/`memory.*` — but this cross-session reach is
-//!   NOT fixed by this gate and is flagged in the Task 4 report as a
-//!   follow-up for the per-user visibility work (P1-adjacent, not P1 itself
-//!   since these aren't in its named scope).
+//!   precedent as `sessions.*`/`memory.*`. **Known follow-up, recorded here
+//!   because this file is the durable home for it**: that cross-session reach
+//!   is not fixed by this gate and needs the per-user visibility work
+//!   (P1-adjacent — these methods aren't in P1's named scope, so they will not
+//!   be picked up for free).
 //!
-//! Full per-family table (all 72 families, including every OPEN ruling with
-//! rationale) is in the Task 4 report, not duplicated here — this file is
-//! the enforcement source of truth, not the audit trail.
+//! This file is the authoritative source for the classification — both the
+//! enforcement and the audit trail. Nothing here defers to a report artifact.
 
 /// Method prefixes that mutate or expose server-global state. A prefix match
 /// gates the whole family so newly-registered siblings are gated by default
@@ -160,6 +164,24 @@ const ADMIN_PREFIXES: &[&str] = &[
     // `[sandbox.command_policy]` pattern matching or exec-tier approval —
     // it is a raw shell, so the two are not comparable; this is strictly
     // more dangerous, not equally protected by a different layer.
+    // --- Direct tool-execution RPC: same cross-check as `cron.`/`heartbeat.`
+    // above, and the sharpest case of it. `tools.invoke` dispatches straight
+    // off the raw `ToolRegistry` — its own module doc says so, and its own
+    // hard floor exists precisely because none of the loop's gates run there.
+    // That floor covers RCE / `requires_confirmation` / continuation-driven
+    // tools, but NOT the OPERATOR_TOOLS family `method_authz.rs` already
+    // rules operator-only (`cron_manage`, `hooks_manage`, `agent_identity`,
+    // `agent_create`, `moa`, …), so a member could reach them here and, via
+    // `cron_manage`, schedule a run that executes with CALLER_ROLE=None
+    // (= trusted internal). Principle: an RPC surface must never be a
+    // lower-privilege bypass of the per-tool operator gate. The whole family
+    // is gated rather than carved down to `tools.invoke`: this surface is
+    // E2E-test-oriented by its own module doc ("production callers should
+    // still go through the agent loop"), the siblings are few
+    // (catalog/effective/cancel_call/in_flight), and fail-closed-for-privilege
+    // is this list's default. A member-safe read carve-out is a P1 decision
+    // to make with a member Panel in hand, not a P0 guess. ---
+    "tools.",
     // --- Exec-tier approval resolution: a member resolving these is a
     // privilege escalation over the approval gate itself (event_scope.rs
     // already restricts approval.* events to admin). No carve-outs — ---
@@ -266,6 +288,15 @@ mod tests {
             // exec approval (fix round — Finding 3)
             "exec.approval.resolve",
             "exec.approvals.pending",
+            // direct tool execution (final-review round — C2). `tools.invoke`
+            // is the escalation vector (raw-registry dispatch, no operator
+            // tool gate); the siblings are pinned too so the family stays
+            // whole and a future carve-out has to be deliberate.
+            "tools.invoke",
+            "tools.catalog",
+            "tools.effective",
+            "tools.cancel_call",
+            "tools.in_flight",
         ] {
             assert!(method_requires_admin(m), "{m} must require admin");
         }
@@ -282,7 +313,10 @@ mod tests {
             "projects.list",
             "memory.search",
             "artifacts.list",
-            "tools.invoke",
+            // NOTE: `tools.invoke` used to be pinned open here. It is now
+            // admin-gated (see ADMIN_PREFIXES) — a raw-registry dispatch
+            // surface must not be a lower-privilege bypass of the per-tool
+            // operator gate. The pin moved to the admin table above.
             "agents.list",
             "agents.get",
             "heartbeat.list",
