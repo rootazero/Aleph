@@ -1599,6 +1599,23 @@ pub(super) async fn process_request(text: &str, middleware_chain: &MiddlewareCha
         }
     };
 
+    // Multi-user role gate (spec §4.6): members cannot reach server-global
+    // config/credential methods. One chokepoint covers both dispatch paths —
+    // CALLER_ROLE is scoped around process_request at both call sites
+    // (`do_lane_dispatch` and the idempotency `Proceed` arm). `None`
+    // (internal/cron) and `"operator"` pass; `"guest"` never reaches here for
+    // non-connect methods (the login wall above refuses it first).
+    if crate::gateway::method_admin::method_requires_admin(&request.method)
+        && crate::gateway::caller_identity::current_caller_role().as_deref() == Some("member")
+    {
+        return serde_json::to_string(&JsonRpcResponse::error(
+            request.id.clone(),
+            AUTH_REQUIRED,
+            "Not authorized: this method requires operator privileges".to_string(),
+        ))
+        .unwrap_or_default();
+    }
+
     // Distributed-trace context: honour an inbound W3C `traceparent` (carried
     // in params) or mint a fresh root trace, so every log/span emitted while
     // handling this request is correlatable. See `trace_context` for why this

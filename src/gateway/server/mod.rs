@@ -1023,6 +1023,62 @@ mod tests {
         assert!(parsed.is_error());
     }
 
+    /// Multi-user role gate (spec §4.6), integration-level: a `"member"`
+    /// caller must be refused at the `process_request` chokepoint before
+    /// registry dispatch, on a real admin-family method
+    /// (`config.schema` — one of the `config.` prefix's registered
+    /// built-ins). An `"operator"` caller must reach the real handler and
+    /// get a normal success response — proving the gate does not
+    /// collaterally block the role it is supposed to pass.
+    #[tokio::test]
+    async fn member_is_refused_admin_methods_at_the_chokepoint() {
+        let handlers_arc = Arc::new(HandlerRegistry::new());
+        let chain = MiddlewareChain::new(
+            handlers_arc.clone(),
+            Arc::new(RateLimiter::new(RateLimitConfig::default())),
+        );
+        let req = r#"{"jsonrpc":"2.0","id":1,"method":"config.schema","params":{}}"#;
+
+        let resp_member = crate::gateway::caller_identity::CALLER_ROLE
+            .scope(
+                Some("member".to_string()),
+                handler::process_request(req, &chain),
+            )
+            .await;
+        let parsed_member: JsonRpcResponse = serde_json::from_str(&resp_member).unwrap();
+        assert!(
+            parsed_member.is_error(),
+            "member must be refused: {resp_member}"
+        );
+        assert_eq!(
+            parsed_member.error.unwrap().code,
+            crate::gateway::protocol::AUTH_REQUIRED,
+            "refusal must use the same error code as the login wall"
+        );
+
+        let resp_operator = crate::gateway::caller_identity::CALLER_ROLE
+            .scope(
+                Some("operator".to_string()),
+                handler::process_request(req, &chain),
+            )
+            .await;
+        let parsed_operator: JsonRpcResponse = serde_json::from_str(&resp_operator).unwrap();
+        assert!(
+            parsed_operator.is_success(),
+            "operator must pass the gate and reach the real handler: {resp_operator}"
+        );
+
+        // A caller with no CALLER_ROLE scope at all (internal/cron) is
+        // trusted by the same predicate as operator — `current_caller_role()`
+        // returns `None` outside a scope, and the gate only refuses `Some("member")`.
+        let resp_internal = handler::process_request(req, &chain).await;
+        let parsed_internal: JsonRpcResponse = serde_json::from_str(&resp_internal).unwrap();
+        assert!(
+            parsed_internal.is_success(),
+            "internal/cron callers (no CALLER_ROLE scope) must pass the gate: {resp_internal}"
+        );
+    }
+
     #[test]
     fn test_gateway_config_default() {
         let config = GatewayConfig::default();

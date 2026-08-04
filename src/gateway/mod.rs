@@ -104,6 +104,7 @@ pub mod identity_loader;
 pub mod inter_agent_policy;
 pub mod lane;
 pub mod media;
+pub mod method_admin;
 pub mod method_authz;
 pub mod openai_api;
 pub mod projection_reconciler;
