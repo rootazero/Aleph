@@ -228,6 +228,12 @@ impl SecretVault {
         self.data.entries.len()
     }
 
+    /// Whether the vault holds no entries.
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.data.entries.is_empty()
+    }
+
     /// Get the default vault path.
     ///
     /// Falls back to `secrets.vault` in the current working directory only
