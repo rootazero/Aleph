@@ -1,7 +1,7 @@
 //! `ProtocolTokensLayer` — structured LLM-to-system protocol tokens (priority 700)
 
 use crate::thinker::interaction::Capability;
-use crate::thinker::prompt_layer::{AssemblyPath, LayerInput, PromptLayer};
+use crate::thinker::prompt_layer::{AssemblyPath, LayerInput, LayerStability, PromptLayer};
 use crate::thinker::prompt_mode::PromptMode;
 
 pub struct ProtocolTokensLayer;
@@ -21,6 +21,9 @@ impl PromptLayer for ProtocolTokensLayer {
         // Basic / Cached production routes and the inject() guard keeps output
         // empty when it (or the `SilentReply` capability) is absent.
         &[AssemblyPath::Basic, AssemblyPath::Cached]
+    }
+    fn stability(&self) -> LayerStability {
+        LayerStability::Stable
     }
     fn inject(&self, output: &mut String, input: &LayerInput) {
         let ctx = match input.context {

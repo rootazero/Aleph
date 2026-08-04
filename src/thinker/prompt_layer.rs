@@ -344,13 +344,28 @@ pub trait PromptLayer: Send + Sync {
 
     /// Whether this layer produces stable or dynamic content.
     ///
-    /// Stable layers are grouped before dynamic layers in the assembled
-    /// prompt so that the stable prefix can be cached by the LLM provider.
-    /// The default is [`LayerStability::Stable`]; override to `Dynamic`
-    /// for layers whose output changes per request.
-    fn stability(&self) -> LayerStability {
-        LayerStability::Stable
-    }
+    /// Stable layers are grouped before dynamic layers in the assembled prompt
+    /// so the stable prefix can be cached by the LLM provider.
+    ///
+    /// **Deliberately has no default.** It used to default to
+    /// [`LayerStability::Stable`], which meant a layer that simply never
+    /// mentioned stability rode into the provider-cached prefix by omission —
+    /// and that is not a hypothetical: `ToolRuntimeStateLayer` sat at priority
+    /// 502 without declaring, so a 30-second tool-health probe silently
+    /// invalidated the cacheable prefix for entire sessions. A human reading the
+    /// code found that, not a mechanism. Requiring the method moves the catch to
+    /// the compiler: a new layer cannot be written without answering the
+    /// question, and the answer is visible at the layer instead of inferred from
+    /// its absence. (Ported idiom: codex forces the same triage on new request
+    /// fields via an exhaustive destructure — `codex-rs/core/src/client.rs`.)
+    ///
+    /// Answer it by asking **whether these bytes change within a session** —
+    /// not by priority, not by whether the content is re-read from disk each
+    /// build, and not by what the content is *about*. Using any of those to
+    /// infer this is how layers end up in the wrong region (FEATURE_LOCATOR
+    /// §2.18 Round 3). If one layer's two halves disagree, split the layer
+    /// rather than taking the worse rating for both (Round 4).
+    fn stability(&self) -> LayerStability;
 
     /// Append this layer's content to `output`.
     fn inject(&self, output: &mut String, input: &LayerInput);
