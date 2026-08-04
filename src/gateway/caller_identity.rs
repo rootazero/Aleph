@@ -29,6 +29,12 @@ task_local! {
     /// loopback, so this is the signal the project-folder gate keys on to allow
     /// a working-directory override without weakening the LAN trust boundary.
     pub static CALLER_IS_LOOPBACK: bool;
+
+    /// The authenticated user behind the originating connection (`users.user_id`),
+    /// resolved once at `connect` and scoped alongside [`CALLER_ROLE`] in the WS
+    /// dispatch loop. `None` outside a scope (cron, internal) and for walled
+    /// connections. Loopback resolves to the implicit owner.
+    pub static CALLER_USER: Option<String>;
 }
 
 /// The originating connection's role for the current task, or `None` outside a
@@ -43,6 +49,12 @@ pub fn current_caller_role() -> Option<String> {
 #[must_use]
 pub fn current_caller_is_loopback() -> bool {
     CALLER_IS_LOOPBACK.try_with(|b| *b).unwrap_or(false)
+}
+
+/// The authenticated user id for the current task, or `None` outside a scope.
+#[must_use]
+pub fn current_caller_user() -> Option<String> {
+    CALLER_USER.try_with(|u| u.clone()).ok().flatten()
 }
 
 #[cfg(test)]
@@ -60,5 +72,14 @@ mod tests {
     #[tokio::test]
     async fn unset_is_none() {
         assert_eq!(current_caller_role(), None);
+    }
+
+    #[tokio::test]
+    async fn caller_user_scope_round_trips() {
+        let seen = CALLER_USER
+            .scope(Some("u-alice".to_string()), async { current_caller_user() })
+            .await;
+        assert_eq!(seen.as_deref(), Some("u-alice"));
+        assert_eq!(current_caller_user(), None); // unset outside a scope
     }
 }

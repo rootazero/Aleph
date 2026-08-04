@@ -159,6 +159,42 @@ pub fn connect_authorized(
     matches!(token, Some(t) if !t.is_empty() && validate(t))
 }
 
+/// Resolve the (user, caller_role) pair for an authorized connection.
+///
+/// Rules (spec §4):
+/// - loopback ⇒ implicit owner, operator (zero-config, unchanged)
+/// - device token bound to a user ⇒ that user; role admin⇒"operator",
+///   member⇒"member"; deactivated ⇒ walled ("guest", no user)
+/// - authorized but unbound (legacy shared token, pre-v14 device) ⇒ implicit
+///   owner, operator — the zero-change guarantee for existing deployments
+#[must_use]
+pub fn resolve_connection_identity(
+    is_loopback: bool,
+    device_id: Option<&str>,
+    store: &crate::gateway::security::store::SecurityStore,
+) -> (Option<String>, &'static str) {
+    use crate::gateway::security::store::{UserRole, UserStatus, OWNER_USER_ID};
+
+    if is_loopback {
+        return (Some(OWNER_USER_ID.to_string()), "operator");
+    }
+    let linked_user = device_id
+        .and_then(|d| store.device_user(d).ok().flatten())
+        .and_then(|uid| store.get_user(&uid).ok().flatten());
+    match linked_user {
+        Some(u) if u.status == UserStatus::Deactivated => (None, "guest"),
+        Some(u) => {
+            let role = match u.role {
+                UserRole::Admin => "operator",
+                UserRole::Member => "member",
+            };
+            (Some(u.user_id), role)
+        }
+        // Authorized without a user binding: legacy paths keep full authority.
+        None => (Some(OWNER_USER_ID.to_string()), "operator"),
+    }
+}
+
 /// Whether a resolved `connect` outcome should be recorded as an
 /// [`AuditEventType::AuthFailure`](crate::security::audit::AuditEventType) in
 /// the security audit log.
@@ -192,6 +228,7 @@ pub async fn handle_connect(request: JsonRpcRequest, ctx: Arc<ConnectContext>) -
 mod tests {
     use super::*;
     use crate::gateway::handlers::auth::TransportPolicy;
+    use crate::gateway::security::store::{SecurityStore, UserRole, UserStatus};
 
     fn ctx() -> Arc<ConnectContext> {
         Arc::new(ConnectContext {
@@ -204,6 +241,30 @@ mod tests {
         DeviceTokenManager::new(Arc::new(
             crate::gateway::security::SecurityStore::in_memory().unwrap(),
         ))
+    }
+
+    /// `SecurityStore::in_memory()` runs migrations, including owner
+    /// bootstrap, so a fresh store already contains the owner user.
+    fn seeded_store() -> SecurityStore {
+        SecurityStore::in_memory().unwrap()
+    }
+
+    /// Upsert a panel device and bind it to `user_id` — `DeviceUpsertData`
+    /// doesn't carry `user_id` yet (that lands in a later task), so the
+    /// binding is a separate write via the test-only `set_device_user`.
+    fn upsert_panel_device(store: &SecurityStore, device_id: &str, user_id: &str) {
+        store
+            .upsert_device(&crate::gateway::security::store::DeviceUpsertData {
+                device_id,
+                device_name: "Test Device",
+                device_type: Some("panel"),
+                public_key: &[1u8; 32],
+                fingerprint: device_id,
+                role: "operator",
+                scopes: &[],
+            })
+            .unwrap();
+        store.set_device_user(device_id, user_id).unwrap();
     }
 
     #[test]
@@ -355,5 +416,54 @@ mod tests {
             matches!(outcome, ConnectAuthOutcome::Authorized { device_id: Some(ref d) } if d == "dev-1"),
             "expected Authorized with device_id dev-1, got {outcome:?}"
         );
+    }
+
+    #[test]
+    fn loopback_resolves_to_owner_operator() {
+        let store = seeded_store(); // in_memory + ensure_bootstrap_owner (ran in migrate)
+        let (user, role) = resolve_connection_identity(true, None, &store);
+        assert_eq!(user.as_deref(), Some(crate::gateway::security::store::OWNER_USER_ID));
+        assert_eq!(role, "operator");
+    }
+
+    #[test]
+    fn device_of_member_user_resolves_member_role() {
+        let store = seeded_store();
+        store.create_user("u-alice", "Alice", UserRole::Member).unwrap();
+        upsert_panel_device(&store, "dev-a", "u-alice"); // fixture: upsert + set user_id
+        let (user, role) = resolve_connection_identity(false, Some("dev-a"), &store);
+        assert_eq!(user.as_deref(), Some("u-alice"));
+        assert_eq!(role, "member");
+    }
+
+    #[test]
+    fn device_of_admin_user_resolves_operator_role() {
+        let store = seeded_store();
+        store.create_user("u-root", "Root", UserRole::Admin).unwrap();
+        upsert_panel_device(&store, "dev-r", "u-root");
+        let (user, role) = resolve_connection_identity(false, Some("dev-r"), &store);
+        assert_eq!(user.as_deref(), Some("u-root"));
+        assert_eq!(role, "operator");
+    }
+
+    #[test]
+    fn deactivated_user_resolves_guest() {
+        let store = seeded_store();
+        store.create_user("u-gone", "Gone", UserRole::Member).unwrap();
+        store.update_user("u-gone", None, None, Some(UserStatus::Deactivated)).unwrap();
+        upsert_panel_device(&store, "dev-g", "u-gone");
+        let (user, role) = resolve_connection_identity(false, Some("dev-g"), &store);
+        assert_eq!(user, None);
+        assert_eq!(role, "guest"); // walled — deactivation takes effect at next connect
+    }
+
+    #[test]
+    fn unlinked_device_and_shared_token_fall_back_to_owner() {
+        // Legacy shared-token / unlinked-device connections keep today's behavior:
+        // full operator as the implicit owner (zero-change guarantee).
+        let store = seeded_store();
+        let (user, role) = resolve_connection_identity(false, None, &store);
+        assert_eq!(user.as_deref(), Some(crate::gateway::security::store::OWNER_USER_ID));
+        assert_eq!(role, "operator");
     }
 }

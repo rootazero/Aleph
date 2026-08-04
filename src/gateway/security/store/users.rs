@@ -187,6 +187,16 @@ impl SecurityStore {
         )?;
         Ok(())
     }
+
+    #[cfg(test)]
+    pub fn set_device_user(&self, device_id: &str, user_id: &str) -> SqliteResult<()> {
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
+        conn.execute(
+            "UPDATE devices SET user_id = ?1 WHERE device_id = ?2",
+            params![user_id, device_id],
+        )?;
+        Ok(())
+    }
 }
 
 fn row_to_user(row: &rusqlite::Row<'_>) -> rusqlite::Result<UserRecord> {

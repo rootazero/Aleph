@@ -677,6 +677,22 @@ async fn handle_connection(
                                         )
                                     });
 
+                                    // Originating connection's authenticated user
+                                    // (`users.user_id`), latched at `connect`
+                                    // alongside `caller_role`. Pre-handshake /
+                                    // probe paths default by network position —
+                                    // loopback is the implicit owner, remote has
+                                    // no user until authorized.
+                                    let caller_user: Option<String> = {
+                                        let conns = ctx.connections.read().await;
+                                        conns.get(&conn_id).and_then(|s| s.caller_user.clone())
+                                    }
+                                    .or_else(|| {
+                                        ctx.client_ip
+                                            .is_loopback()
+                                            .then(|| crate::gateway::security::store::OWNER_USER_ID.to_string())
+                                    });
+
                                     // Login wall (Gateway-token model): an
                                     // unauthorized connection — a remote Panel
                                     // that has not presented a valid Gateway
@@ -785,12 +801,13 @@ async fn handle_connection(
                                         }
 
                                         // Helper closure: standard lane dispatch (no idempotency)
-                                        let do_lane_dispatch = |text: String, lm: Arc<LaneManager>, mc: MiddlewareChain, method: String, req_id: Option<serde_json::Value>, class: ChannelClass, caller_role: Option<String>, caller_is_loopback: bool| async move {
+                                        let do_lane_dispatch = |text: String, lm: Arc<LaneManager>, mc: MiddlewareChain, method: String, req_id: Option<serde_json::Value>, class: ChannelClass, caller_role: Option<String>, caller_user: Option<String>, caller_is_loopback: bool| async move {
                                             let lane_result = lm.acquire(&method, class).await;
                                             match lane_result {
-                                                Ok(_permit) => crate::gateway::caller_identity::CALLER_ROLE
-                                                    .scope(caller_role, crate::gateway::caller_identity::CALLER_IS_LOOPBACK
-                                                        .scope(caller_is_loopback, process_request(&text, &mc)))
+                                                Ok(_permit) => crate::gateway::caller_identity::CALLER_USER
+                                                    .scope(caller_user, crate::gateway::caller_identity::CALLER_ROLE
+                                                        .scope(caller_role, crate::gateway::caller_identity::CALLER_IS_LOOPBACK
+                                                            .scope(caller_is_loopback, process_request(&text, &mc))))
                                                     .await,
                                                 Err(_) => serde_json::to_string(&JsonRpcResponse::error(
                                                     req_id,
@@ -838,9 +855,10 @@ async fn handle_connection(
                                                         let lane_result = ctx.lane_manager.acquire(&req.method, ctx.channel_class).await;
                                                         match lane_result {
                                                             Ok(_permit) => {
-                                                                let resp = crate::gateway::caller_identity::CALLER_ROLE
-                                                                    .scope(caller_role.clone(), crate::gateway::caller_identity::CALLER_IS_LOOPBACK
-                                                                        .scope(ctx.client_ip.is_loopback(), process_request(&text, &ctx.middleware_chain)))
+                                                                let resp = crate::gateway::caller_identity::CALLER_USER
+                                                                    .scope(caller_user.clone(), crate::gateway::caller_identity::CALLER_ROLE
+                                                                        .scope(caller_role.clone(), crate::gateway::caller_identity::CALLER_IS_LOOPBACK
+                                                                            .scope(ctx.client_ip.is_loopback(), process_request(&text, &ctx.middleware_chain))))
                                                                     .await;
                                                                 if let Ok(parsed) = serde_json::from_str::<JsonRpcResponse>(&resp) {
                                                                     if parsed.is_success() {
@@ -870,11 +888,11 @@ async fn handle_connection(
                                                 }
                                             } else {
                                                 // Query lane — skip idempotency
-                                                do_lane_dispatch(text.to_string(), ctx.lane_manager.clone(), ctx.middleware_chain.clone(), req.method.clone(), req.id.clone(), ctx.channel_class, caller_role.clone(), ctx.client_ip.is_loopback()).await
+                                                do_lane_dispatch(text.to_string(), ctx.lane_manager.clone(), ctx.middleware_chain.clone(), req.method.clone(), req.id.clone(), ctx.channel_class, caller_role.clone(), caller_user.clone(), ctx.client_ip.is_loopback()).await
                                             }
                                         } else {
                                             // No idempotency key — standard lane dispatch
-                                            do_lane_dispatch(text.to_string(), ctx.lane_manager.clone(), ctx.middleware_chain.clone(), req.method.clone(), req.id.clone(), ctx.channel_class, caller_role.clone(), ctx.client_ip.is_loopback()).await
+                                            do_lane_dispatch(text.to_string(), ctx.lane_manager.clone(), ctx.middleware_chain.clone(), req.method.clone(), req.id.clone(), ctx.channel_class, caller_role.clone(), caller_user.clone(), ctx.client_ip.is_loopback()).await
                                         };
                                         // --- End idempotency + lane block ---
 
@@ -1007,9 +1025,39 @@ async fn handle_connection(
                                                             } else {
                                                                 Vec::new()
                                                             };
-                                                            // Single-tier role for the login-wall gate:
-                                                            // operator (authorized) or guest (walled).
-                                                            state.caller_role = panel_role.to_string();
+                                                            // Role + user for the login-wall gate and the
+                                                            // config-tier tool gate. Unauthorized stays
+                                                            // walled (guest, no user) exactly as before.
+                                                            // Authorized used to stamp the constant
+                                                            // "operator"; it now resolves the bound
+                                                            // device's user via
+                                                            // `resolve_connection_identity` — loopback and
+                                                            // legacy unbound-device paths still resolve to
+                                                            // the implicit owner as operator (zero-change
+                                                            // guarantee), but a device bound to a
+                                                            // deactivated user is walled here even though
+                                                            // its token was valid.
+                                                            let (resolved_user, resolved_role): (Option<String>, &'static str) = if authorized {
+                                                                match ctx.security_store.as_ref() {
+                                                                    Some(store) => crate::gateway::handlers::connect::resolve_connection_identity(
+                                                                        ctx.client_ip.is_loopback(),
+                                                                        authed_device_id.as_deref(),
+                                                                        store,
+                                                                    ),
+                                                                    // No store wired (probe/test server):
+                                                                    // LAN-trust degrade — keep the connection
+                                                                    // usable as the implicit owner, unchanged
+                                                                    // from before per-user resolution existed.
+                                                                    None => (
+                                                                        Some(crate::gateway::security::store::OWNER_USER_ID.to_string()),
+                                                                        "operator",
+                                                                    ),
+                                                                }
+                                                            } else {
+                                                                (None, "guest")
+                                                            };
+                                                            state.caller_role = resolved_role.to_string();
+                                                            state.caller_user = resolved_user;
                                                             // Device binding for the per-device revoke.
                                                             // Same value as the connection-local latch
                                                             // above, written under this one lock: the

@@ -71,6 +71,9 @@ pub struct ConnectionState {
     /// record. Read by [`invalidate_device_sessions`] so a per-device revoke can
     /// strip authority from exactly the right sockets.
     pub device_id: Option<String>,
+    /// Authenticated user behind this connection (`users.user_id`), resolved at
+    /// `connect` together with `caller_role`. `None` for walled connections.
+    pub caller_user: Option<String>,
 }
 
 impl ConnectionState {
@@ -92,6 +95,7 @@ impl ConnectionState {
                 "guest".to_string()
             },
             device_id: None,
+            caller_user: None,
         }
     }
 }
