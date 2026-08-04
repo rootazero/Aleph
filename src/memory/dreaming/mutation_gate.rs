@@ -176,8 +176,8 @@ impl MutationGate {
                     if is_oscillation {
                         return Some(format!(
                             "synthesis oscillation: '{}' vs '{}'",
-                            truncate(prev_assertion, 60),
-                            truncate(curr_assertion, 60),
+                            crate::utils::text_format::truncate_text(prev_assertion, 60),
+                            crate::utils::text_format::truncate_text(curr_assertion, 60),
                         ));
                     }
                 }
@@ -217,15 +217,6 @@ impl MutationGate {
 impl Default for MutationGate {
     fn default() -> Self {
         Self::new()
-    }
-}
-
-fn truncate(s: &str, max: usize) -> String {
-    if s.len() <= max {
-        s.to_string()
-    } else {
-        let end = s.char_indices().nth(max).map_or(s.len(), |(i, _)| i);
-        format!("{}...", &s[..end])
     }
 }
 

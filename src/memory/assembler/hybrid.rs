@@ -8,7 +8,7 @@ use super::error::AssemblerError;
 use super::fallback::{skeleton_pack, sort_by_pinned_relevance, Candidate};
 use super::feedback_floor::FeedbackFloorLoader;
 use super::gather::{GatherInputs, Gatherer};
-use super::hydration::{estimate_tokens, truncate_utf8_safe};
+use super::hydration::estimate_tokens;
 use super::profile::UserProfileLoader;
 use super::rerank::{build_prompt, parse_response};
 use super::{AssemblyBudget, WorkingMemoryAssembler};
@@ -436,7 +436,12 @@ fn hydrate(slots: &mut [EnvelopeSlot]) {
         let budget_chars = slot.tokens_budget.saturating_mul(4) as usize;
         for item in slot.items.iter_mut() {
             let remaining_chars = budget_chars.saturating_sub((used as usize).saturating_mul(4));
-            let truncated = truncate_utf8_safe(&item.content, remaining_chars);
+            // Cap by CHARACTERS, matching how `budget_chars` and
+            // `estimate_tokens` are both denominated. A byte cap here silently
+            // under-filled every non-ASCII envelope ~3x (CJK is 3 bytes/char).
+            let truncated =
+                crate::utils::text_format::truncate_chars(&item.content, remaining_chars)
+                    .to_string();
             item.tokens = estimate_tokens(&truncated);
             item.content = truncated;
             used = used.saturating_add(item.tokens);
@@ -579,5 +584,38 @@ mod tests {
         hydrate(&mut slots);
         assert!(slots[0].items[0].content.len() <= 400);
         assert!(slots[0].tokens_used <= 100);
+    }
+
+    /// The slot budget is denominated in CHARACTERS, not bytes: `budget_chars`
+    /// is `tokens_budget * 4` and [`estimate_tokens`] divides `chars().count()`
+    /// by 4. Feeding that number to a byte-capped truncator under-filled every
+    /// non-ASCII envelope roughly threefold (CJK is 3 bytes/char) — a silent
+    /// loss of recalled memory, invisible to the ASCII-only test above.
+    #[test]
+    fn hydrate_budget_is_chars_not_bytes() {
+        let mut slots = vec![EnvelopeSlot {
+            kind: SlotKind::RelevantNotes,
+            items: vec![EnvelopeItem {
+                id: "note://cjk".into(),
+                title: "cjk".into(),
+                // 1000 CJK chars = 3000 bytes, well past either reading.
+                content: "中".repeat(1000),
+                source: ItemSource::Note {
+                    path: "cjk".into(),
+                    category: "reference".into(),
+                },
+                relevance: 1.0,
+                tokens: 0,
+                updated_at: 0,
+                extra: Default::default(),
+            }],
+            tokens_used: 0,
+            tokens_budget: 100,
+        }];
+        hydrate(&mut slots);
+        // 100 tokens buys 400 chars by this module's heuristic. Byte-capping
+        // yielded ~133 chars (400 bytes backed off to a boundary) and 33 tokens.
+        assert_eq!(slots[0].items[0].content.chars().count(), 400);
+        assert_eq!(slots[0].tokens_used, 100);
     }
 }

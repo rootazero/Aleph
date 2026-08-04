@@ -72,7 +72,11 @@ impl AlephTool for AcpDelegateTool {
     type Output = AcpDelegateOutput;
 
     async fn call(&self, args: Self::Args) -> Result<Self::Output> {
-        let args_summary = format!("{}: {}", &args.harness, truncate(&args.prompt, 80));
+        let args_summary = format!(
+            "{}: {}",
+            &args.harness,
+            crate::utils::text_format::truncate_text(&args.prompt, 80)
+        );
         notify_tool_start(Self::NAME, &args_summary);
 
         // Trust level check
@@ -433,14 +437,6 @@ fn resolve_cwd(cwd: Option<&str>) -> String {
     )
 }
 
-/// Truncate a string to at most `max_len` characters, appending "..." if truncated.
-fn truncate(s: &str, max_len: usize) -> String {
-    match s.char_indices().nth(max_len) {
-        Some((idx, _)) => format!("{}...", &s[..idx]),
-        None => s.to_string(),
-    }
-}
-
 // =============================================================================
 // Tests
 // =============================================================================
@@ -448,23 +444,6 @@ fn truncate(s: &str, max_len: usize) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn test_truncate_short() {
-        assert_eq!(truncate("hello", 10), "hello");
-    }
-
-    #[test]
-    fn test_truncate_long() {
-        let result = truncate("hello world this is a long string", 11);
-        assert!(result.ends_with("..."));
-    }
-
-    #[test]
-    fn test_truncate_utf8() {
-        let result = truncate("你好世界这是一段中文", 4);
-        assert!(result.ends_with("..."));
-    }
 
     #[test]
     fn test_resolve_cwd_some() {

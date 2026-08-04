@@ -59,7 +59,6 @@ impl Default for ScratchpadGoalVerifier {
 
 #[async_trait]
 impl TurnVerifier for ScratchpadGoalVerifier {
-
     async fn verify(
         &self,
         ctx: &TurnVerifyContext<'_>,
@@ -124,9 +123,7 @@ impl TurnVerifier for ScratchpadGoalVerifier {
              fully achieved, call `scratchpad(action='clear', …)` to finish.",
             n = pending.len(),
         );
-        VerifierVerdict::Veto {
-            reason,
-        }
+        VerifierVerdict::Veto { reason }
     }
 }
 

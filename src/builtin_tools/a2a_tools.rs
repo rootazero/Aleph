@@ -62,14 +62,6 @@ fn load_deps(handle: &A2AToolHandle) -> Result<Arc<A2AToolDeps>> {
     })
 }
 
-/// Truncate a string to at most `max_len` characters, appending "..." if cut.
-fn truncate(s: &str, max_len: usize) -> String {
-    match s.char_indices().nth(max_len) {
-        Some((idx, _)) => format!("{}...", &s[..idx]),
-        None => s.to_string(),
-    }
-}
-
 // =============================================================================
 // A2ADelegateTool — delegate a task to a remote A2A agent
 // =============================================================================
@@ -122,7 +114,10 @@ impl AlephTool for A2ADelegateTool {
     type Output = A2ADelegateOutput;
 
     async fn call(&self, args: Self::Args) -> Result<Self::Output> {
-        notify_tool_start(Self::NAME, &truncate(&args.prompt, 80));
+        notify_tool_start(
+            Self::NAME,
+            &crate::utils::text_format::truncate_text(&args.prompt, 80),
+        );
         let deps = load_deps(&self.handle)?;
 
         // W16 — thread the delegating turn's real identity into the delegation
@@ -291,7 +286,10 @@ impl AlephTool for A2AAgentsTool {
                     .url
                     .clone()
                     .ok_or_else(|| AlephError::tool("`url` is required for action `add`"))?;
-                notify_tool_start(Self::NAME, &format!("add {}", truncate(&url, 60)));
+                notify_tool_start(
+                    Self::NAME,
+                    &format!("add {}", crate::utils::text_format::truncate_text(&url, 60)),
+                );
 
                 // Fetch the remote Agent Card so smart routing knows its skills.
                 let client = match args.token.clone() {
@@ -420,12 +418,6 @@ mod tests {
             health: AgentHealth::Healthy,
             auth_token: None,
         }
-    }
-
-    #[test]
-    fn truncate_is_utf8_safe() {
-        assert_eq!(truncate("hello", 10), "hello");
-        assert!(truncate("你好世界这是中文", 3).ends_with("..."));
     }
 
     #[test]

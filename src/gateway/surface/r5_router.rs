@@ -16,6 +16,7 @@ use crate::sync_primitives::Arc;
 
 use crate::gateway::event_bus::GatewayEventBus;
 use crate::gateway::events::GatewayEventFrame;
+use crate::utils::text_format::truncate_with_marker;
 
 use super::delivery::{OutboundInteraction, SurfaceApproval, SurfaceNotification, SurfaceRegistry};
 
@@ -39,7 +40,7 @@ pub fn notification_for(frame: &GatewayEventFrame) -> Option<SurfaceNotification
                 body: if q.is_empty() {
                     "Aleph is waiting for your reply.".to_string()
                 } else {
-                    truncate(q, MAX_BODY_CHARS)
+                    truncate_with_marker(q, MAX_BODY_CHARS, "…")
                 },
                 source_topic: frame.topic_name(),
             })
@@ -83,16 +84,6 @@ pub fn approval_for(frame: &GatewayEventFrame) -> Option<SurfaceApproval> {
         }),
         _ => None,
     }
-}
-
-/// Truncate to `max` chars on a char boundary, appending an ellipsis.
-fn truncate(s: &str, max: usize) -> String {
-    if s.chars().count() <= max {
-        return s.to_string();
-    }
-    let mut out: String = s.chars().take(max).collect();
-    out.push('…');
-    out
 }
 
 /// Subscribe the typed bus and route interrupt-worthy R5 frames to every

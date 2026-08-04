@@ -10,9 +10,7 @@ pub mod types;
 
 pub use error::VisionError;
 pub use provider::VisionProvider;
-pub use types::{
-    ImageFormat, ImageInput, OcrResult, Rect, VisionCapabilities, VisionResult,
-};
+pub use types::{ImageFormat, ImageInput, OcrResult, Rect, VisionCapabilities, VisionResult};
 
 /// Orchestrates multiple [`VisionProvider`] instances in a fallback chain.
 ///

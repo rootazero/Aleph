@@ -43,8 +43,8 @@ pub use error::MediaError;
 pub use pipeline::MediaPipeline;
 pub use policy::MediaPolicy;
 pub use processors::{AudioMediaProvider, ImageMediaProvider, TextDocumentProvider};
-pub use resolve::{transcription_service, ResolvedTranscription};
 pub use provider::MediaProvider;
+pub use resolve::{transcription_service, ResolvedTranscription};
 pub use types::{
     AudioFormat, DocFormat, MediaImageFormat, MediaInput, MediaOutput, MediaType, VideoFormat,
 };

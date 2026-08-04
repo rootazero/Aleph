@@ -20,9 +20,7 @@ pub mod status;
 pub mod usage;
 
 pub use compat::SkillInfo;
-pub use config::{
-    InstallPreferences, SkillConfigUpdate, SkillEntryConfig, SkillsConfig,
-};
+pub use config::{InstallPreferences, SkillConfigUpdate, SkillEntryConfig, SkillsConfig};
 pub use cooccurrence::{cluster_chains, CoOccurrenceLog, RecentUse};
 pub use eligibility::{EligibilityResult, EligibilityService, IneligibilityReason};
 pub use guard::{
@@ -1062,5 +1060,4 @@ Content two."#,
         // Skill should still be there
         assert_eq!(system.list_skills().await.len(), 1);
     }
-
 }

@@ -110,6 +110,4 @@ pub use store::types::{MemoryFilter, ScoredFact, SearchFilter};
 pub use store::MemoryBackend;
 // Workspace types are now canonical in gateway::agent_env; re-export for backward compatibility
 pub use crate::gateway::agent_env::{AgentEnv, AgentEnvContext, AgentEnvFilter, DEFAULT_AGENT};
-pub use session_compactor::{
-    CompressResult, SessionCompactor, SessionCompactorConfig,
-};
+pub use session_compactor::{CompressResult, SessionCompactor, SessionCompactorConfig};

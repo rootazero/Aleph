@@ -183,6 +183,46 @@
    just opened the keyboard to write a caption is exactly the wrong moment.
    500 px clears every iPhone landscape height (375–440) without reaching any
    portrait one (the shortest, iPhone SE, is 667). */
+/* Phone shell top bar. The layout lives here rather than in an inline `style=`
+   because an inline declaration outranks every non-`!important` stylesheet
+   rule, including the landscape block below — the rule would be in the build,
+   the media query would match, `getComputedStyle` would report the inline
+   value, and nothing anywhere would report a problem. That is exactly how the
+   first version of the composer-tools fold shipped dead.
+
+   ⚠️ And it must stay ABOVE that block. Both selectors are a single class, so
+   neither outranks the other and SOURCE ORDER decides — with this rule below,
+   its `min-height: 50px` silently won and the landscape height was measured at
+   50 px with the media query reporting `matches: true`. Same failure as the
+   inline `style`, different mechanism; only `getComputedStyle` catches either. */
+.phone-topbar {
+  position: relative;
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 50px;
+  padding: calc(4px + env(safe-area-inset-top)) 14px 8px;
+  z-index: 4;
+  background-color: color-mix(in oklch, var(--color-surface-overlay) 78%, transparent);
+}
+
 @media (orientation: landscape) and (max-height: 500px) {
   .phone-composer-tools { display: none; }
+
+  /* 44 px is the iOS HIG minimum touch target, so it is the floor rather than
+     a target — the top bar carries the back button and cannot go under it. */
+  .phone-topbar {
+    min-height: 44px;
+    padding-top: calc(2px + env(safe-area-inset-top));
+    padding-bottom: 4px;
+  }
+
+  /* Icon and label side by side instead of stacked, which removes the label's
+     whole line box from the bar's height. A landscape phone is ~844 px wide, so
+     each of the five items still has ~168 px — far more than the row needs.
+     Hiding the labels outright would have saved a few px more and cost the user
+     the only thing that says which tab is which. */
+  .tabbar { padding: 0.25rem 0 calc(0.25rem + var(--safe-area-bottom)); }
+  .tabitem { flex-direction: row; gap: 0.35rem; padding: 0.2rem 0.25rem; }
 }

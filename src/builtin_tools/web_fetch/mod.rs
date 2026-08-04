@@ -12,7 +12,7 @@ use super::error::ToolError;
 use crate::config::WebFetchPolicy;
 use crate::error::Result;
 use crate::security::content_sanitizer::{wrap_external_content, ContentSource};
-use crate::security::ssrf::{safe_fetch, SafeFetchRequest, SsrfPolicy};
+use crate::security::ssrf::{safe_fetch, validate_url_async, SafeFetchRequest, SsrfPolicy};
 use crate::tools::AlephTool;
 use async_trait::async_trait;
 use scraper::Html;
@@ -138,9 +138,25 @@ impl WebFetchTool {
         }
 
         // Configured fetch providers (if any): URL → markdown via an operator-
-        // hosted backend. On any provider failure, fall through to the next
-        // provider, then the built-in fetch below.
+        // hosted backend. SSRF-validate the *target* URL once so the agent can't
+        // use a provider to reach internal hosts. On any provider failure, fall
+        // through to the next provider, then the built-in fetch below.
+        //
+        // This is NOT redundant with the `safe_fetch` further down: that call is
+        // only reached when there are no providers or every provider failed. A
+        // provider is a confused deputy — `crawl4ai` is operator-hosted (its own
+        // config example is a LAN address), so it dereferences the URL from
+        // inside the network the SSRF policy exists to protect, using its own
+        // HTTP client that we do not control.
         if !self.fetch_providers.is_empty() {
+            validate_url_async(&args.url, &self.ssrf_policy)
+                .await
+                .map(|(_, _pinned)| ())
+                .map_err(|e| {
+                    let msg = format!("Fetch blocked or failed: {e}");
+                    notify_tool_result(Self::NAME, &msg, false);
+                    ToolError::Network(msg)
+                })?;
             for provider in &self.fetch_providers {
                 match provider.fetch(&args.url).await {
                     Ok(markdown) => {
@@ -631,6 +647,57 @@ mod tests {
             result.content.contains("FROM-PROVIDER"),
             "expected provider content in result; got: {:?}",
             &result.content[..result.content.len().min(200)]
+        );
+    }
+
+    /// A configured fetch provider is a confused deputy: `crawl4ai` is an
+    /// operator-hosted service (its own config example is `http://10.0.0.1:11235`
+    /// — a LAN address), so handing it an attacker-chosen URL makes *it* reach
+    /// the internal host on the agent's behalf. The built-in `safe_fetch` below
+    /// never runs on this path, so the target URL must be validated before the
+    /// provider is handed anything.
+    #[tokio::test]
+    async fn fetch_provider_path_still_validates_ssrf() {
+        use std::sync::atomic::{AtomicBool, Ordering};
+        use std::sync::Arc;
+
+        struct SpyProvider(Arc<AtomicBool>);
+        #[async_trait::async_trait]
+        impl crate::fetch::FetchProvider for SpyProvider {
+            async fn fetch(&self, _url: &str) -> crate::error::Result<String> {
+                self.0.store(true, Ordering::SeqCst);
+                Ok("# LEAKED-INTERNAL-CONTENT".into())
+            }
+            fn name(&self) -> &str {
+                "spy"
+            }
+            fn is_available(&self) -> bool {
+                true
+            }
+        }
+
+        let called = Arc::new(AtomicBool::new(false));
+        let tool =
+            WebFetchTool::new().with_fetch_providers(vec![Arc::new(SpyProvider(called.clone()))]);
+
+        let result = tool
+            .call_impl(WebFetchArgs {
+                // Cloud metadata endpoint: an IP literal, so the block decision
+                // needs no DNS and the test stays hermetic.
+                url: "http://169.254.169.254/latest/meta-data/".to_string(),
+                extract_mode: ExtractMode::Markdown,
+                prompt: None,
+            })
+            .await;
+
+        assert!(
+            result.is_err(),
+            "metadata endpoint must be refused, got: {result:?}"
+        );
+        assert!(
+            !called.load(Ordering::SeqCst),
+            "provider must never be handed a blocked URL — it fetches from \
+             inside the operator's network"
         );
     }
 }

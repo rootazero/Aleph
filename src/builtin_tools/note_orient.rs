@@ -37,6 +37,16 @@ impl Clone for NoteOrientTool {
 }
 
 impl NoteOrientTool {
+    /// Model-facing description — the single source for both the static
+    /// catalog (`BUILTIN_TOOL_DEFINITIONS`) and the registry constructor.
+    /// A catalog entry shadows whatever the constructor registers under the
+    /// same name, so a second copy of this text anywhere is a copy the model
+    /// never sees.
+    pub const DESCRIPTION: &'static str =
+        "Fetch a compact orientation snapshot of the agent's memory wiki: SCHEMA, \
+         index, and recent log entries. Call this at the start of a task to understand \
+         what structured memory is available before searching or writing notes.";
+
     pub fn new(wiki: Arc<dyn NoteOrientation>, default_budget: TokenBudget) -> Self {
         Self {
             wiki,

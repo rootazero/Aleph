@@ -2911,6 +2911,27 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
         broadcaster.shutdown();
     }
 
+    // Drain the signed operation ledger LAST — after everything that can still
+    // dispatch a tool has been told to stop. Appends are enqueued on a bounded
+    // channel and written by one task; exiting with records still in it loses
+    // them *and* the count of them, because nothing failed — the write simply
+    // never ran, and that is the one hole neither a chain check nor the loss
+    // counter can reveal. Bounded, because a wedged writer must not be able to
+    // hold the process open: a timeout here is reported, not waited out.
+    match tokio::time::timeout(
+        std::time::Duration::from_secs(5),
+        alephcore::identity::flush(),
+    )
+    .await
+    {
+        Ok(true) => tracing::debug!("agent ledger drained at shutdown"),
+        Ok(false) => {} // no ledger installed in this build/run
+        Err(_) => tracing::error!(
+            "agent ledger did not drain within 5s — records enqueued before shutdown may \
+             be missing from the chains, and no verification can see them"
+        ),
+    }
+
     run_result?;
 
     Ok(())

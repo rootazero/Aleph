@@ -148,11 +148,9 @@ struct RetrieveTraceParams {
 }
 
 /// UTF-8-safe truncation to `max` chars (no panic on multi-byte boundaries).
+/// No marker: this is trace payload, not display text.
 fn truncate_chars(s: &str, max: usize) -> String {
-    match s.char_indices().nth(max) {
-        Some((idx, _)) => s[..idx].to_string(),
-        None => s.to_string(),
-    }
+    crate::utils::text_format::truncate_chars(s, max).to_string()
 }
 
 /// Trim a raw query param; `None` when absent or blank.

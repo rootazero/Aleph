@@ -145,7 +145,10 @@ impl MemoryTimeTraveler {
 fn describe_event(env: &MemoryEventEnvelope) -> String {
     match &env.event {
         MemoryEvent::NoteCreated { content, .. } => {
-            format!("Fact created: \"{}\"", truncate(content, 50))
+            format!(
+                "Fact created: \"{}\"",
+                crate::utils::text_format::truncate_text(content, 50)
+            )
         }
         MemoryEvent::NoteContentUpdated { reason, .. } => {
             format!("Content updated: {reason}")
@@ -181,16 +184,6 @@ fn describe_event(env: &MemoryEventEnvelope) -> String {
             format!("Consolidated from {} source notes", source_note_paths.len())
         }
         MemoryEvent::NoteMigrated { .. } => "Migrated from legacy CRUD store".to_string(),
-    }
-}
-
-/// Truncate a string to `max` characters, appending "..." if truncated.
-fn truncate(s: &str, max: usize) -> String {
-    if s.chars().count() <= max {
-        s.to_string()
-    } else {
-        let truncated: String = s.chars().take(max).collect();
-        format!("{truncated}...")
     }
 }
 
@@ -574,30 +567,5 @@ mod tests {
         let desc = describe_event(&env);
         assert!(desc.contains("Invalidated"));
         assert!(desc.contains("outdated"));
-    }
-
-    // --- truncate (unit) -----------------------------------------------------
-
-    #[test]
-    fn test_truncate_short_string() {
-        assert_eq!(truncate("hello", 10), "hello");
-    }
-
-    #[test]
-    fn test_truncate_exact_length() {
-        assert_eq!(truncate("hello", 5), "hello");
-    }
-
-    #[test]
-    fn test_truncate_long_string() {
-        let result = truncate("hello world this is a long string", 10);
-        assert_eq!(result, "hello worl...");
-    }
-
-    #[test]
-    fn test_truncate_unicode() {
-        // Unicode-safe truncation
-        let result = truncate("你好世界测试", 4);
-        assert_eq!(result, "你好世界...");
     }
 }

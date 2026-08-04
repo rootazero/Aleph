@@ -95,7 +95,7 @@ pub struct CustomLeakPattern {
 // =============================================================================
 
 /// Top-level settings for the secrets subsystem
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
 pub struct SecretsConfig {
     /// Virtual key aliases: alias -> actual secret name
     #[serde(default, skip_serializing_if = "VirtualKeyMap::is_empty")]
@@ -103,15 +103,6 @@ pub struct SecretsConfig {
     /// Custom leak detection patterns (additive to built-ins)
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub custom_leak_patterns: Vec<CustomLeakPattern>,
-}
-
-impl Default for SecretsConfig {
-    fn default() -> Self {
-        Self {
-            virtual_keys: VirtualKeyMap::new(),
-            custom_leak_patterns: Vec::new(),
-        }
-    }
 }
 
 // =============================================================================

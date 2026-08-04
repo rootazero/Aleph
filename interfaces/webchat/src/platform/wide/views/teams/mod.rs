@@ -61,10 +61,12 @@ pub fn TeamsView() -> impl IntoView {
         if dash.is_connected.get() {
             spawn_local(async move {
                 if let Ok(list) = TeamsApi::list(&dash).await {
-                    let keep = tab_state
-                        .selected_team_id
-                        .get_untracked()
-                        .filter(|id| list.iter().any(|t| &t.id == id));
+                    // Post-`.await`: see `crate::disposed_reads`. Same shape as
+                    // the phone leaf, which is verbatim from this view.
+                    let Some(current) = tab_state.selected_team_id.try_get_untracked() else {
+                        return;
+                    };
+                    let keep = current.filter(|id| list.iter().any(|t| &t.id == id));
                     let new_sel = keep.or_else(|| list.first().map(|t| t.id.clone()));
                     tab_state.teams.set(list);
                     tab_state.selected_team_id.set(new_sel);

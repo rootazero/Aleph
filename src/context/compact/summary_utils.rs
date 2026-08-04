@@ -7,6 +7,7 @@
 use super::preserve::is_summary_text;
 use crate::memory::assembler::context_block::MEMORY_CONTEXT_OPEN;
 use crate::providers::message::UnifiedMessage;
+use crate::utils::text_format::truncate_with_marker;
 
 /// Maximum characters of the live-task focus anchor embedded in a summarization
 /// prompt. Bounds prompt growth so task-anchoring never bloats the side-channel
@@ -214,7 +215,10 @@ pub fn build_window_summary_prompt(
 fn render_focus_block(focus: Option<&str>) -> String {
     match focus {
         Some(task) if !task.trim().is_empty() => {
-            let anchor = truncate_chars(task.trim(), FOCUS_ANCHOR_MAX_CHARS);
+            // The focus anchor and the user-instruction block below both keep
+            // their head — the opening of a request carries the intent; the
+            // tail is usually elaboration.
+            let anchor = truncate_with_marker(task.trim(), FOCUS_ANCHOR_MAX_CHARS, "…");
             let anchor = escape_prompt_boundaries(&anchor);
             format!(
                 "The user is actively working on the task below. Bias the summary toward \
@@ -258,7 +262,8 @@ pub fn prepend_user_instructions(prompt: &str, instructions: Option<&str>) -> St
     let Some(directive) = instructions.map(str::trim).filter(|s| !s.is_empty()) else {
         return prompt.to_string();
     };
-    let directive = escape_prompt_boundaries(&truncate_chars(directive, INSTRUCTION_MAX_CHARS));
+    let directive =
+        escape_prompt_boundaries(&truncate_with_marker(directive, INSTRUCTION_MAX_CHARS, "…"));
     format!(
         "The user explicitly asked for this compaction and specified what the summary must \
          focus on. Treat the directive below as the HIGHEST priority when deciding what to \
@@ -464,18 +469,6 @@ pub(crate) fn cap_summary_lines(summary: String, max_lines: usize) -> String {
         "[{dropped} earlier summary lines elided]\n{}",
         kept.join("\n")
     )
-}
-
-/// Truncate `text` to `max_chars` Unicode scalar values on a UTF-8 boundary
-/// (P7: never slice mid-codepoint), appending an ellipsis when cut. Shared by
-/// the focus anchor and the user-instruction block: both keep their head — the
-/// opening of a request carries the intent; the tail is usually elaboration.
-fn truncate_chars(text: &str, max_chars: usize) -> String {
-    if text.chars().count() <= max_chars {
-        return text.to_string();
-    }
-    let head: String = text.chars().take(max_chars).collect();
-    format!("{head}…")
 }
 
 // ---------------------------------------------------------------------------

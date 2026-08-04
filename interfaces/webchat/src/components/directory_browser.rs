@@ -215,9 +215,14 @@ pub fn DirectoryBrowser(
                     // Re-list current dir to show the new entry, then auto-
                     // navigate into it (matches Finder/Files.app behaviour
                     // after "New Folder").
-                    if let Ok(res) =
-                        FsApi::list_dir(&dash, &parent, show_hidden.get_untracked()).await
-                    {
+                    // `show_hidden` is component-owned and the browser is a
+                    // modal: dismissing it while `create_dir` is in flight
+                    // disposes this signal, and a plain read would panic the
+                    // panel. Nothing left to re-list for, so bail.
+                    let Some(hidden) = show_hidden.try_get_untracked() else {
+                        return;
+                    };
+                    if let Ok(res) = FsApi::list_dir(&dash, &parent, hidden).await {
                         listing.set(Some(res));
                     }
                     current_path.set(Some(new_path));

@@ -375,7 +375,9 @@ mod tests {
     /// for any run that got a streaming card.
     #[tokio::test]
     async fn run_complete_with_a_card_still_drains_the_media_buffer() {
-        let pending: PendingMedia = Arc::new(tokio::sync::Mutex::new(vec![crate::gateway::media::resolved_test_attachment()]));
+        let pending: PendingMedia = Arc::new(tokio::sync::Mutex::new(vec![
+            crate::gateway::media::resolved_test_attachment(),
+        ]));
         let emitter = emitter_with_closed_card(pending.clone()).await;
 
         emitter.emit(run_complete()).await.unwrap();

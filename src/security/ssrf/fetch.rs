@@ -407,8 +407,8 @@ async fn read_body_capped(
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use super::super::validate_scheme;
+    use super::*;
     use reqwest::header::HeaderValue;
 
     #[test]

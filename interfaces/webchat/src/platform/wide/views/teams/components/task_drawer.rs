@@ -99,7 +99,13 @@ pub fn TaskDetailDrawer(
         spawn_local(async move {
             match TeamsApi::add_task_comment(&dash, &id, &author, &body).await {
                 Ok(c) => {
-                    let mut cur = comments.get_untracked();
+                    // Post-`.await`: closing the drawer while the comment POST
+                    // is in flight disposes these signals (see
+                    // `crate::disposed_reads`). The comment already landed
+                    // server-side; only the local echo is skipped.
+                    let Some(mut cur) = comments.try_get_untracked() else {
+                        return;
+                    };
                     cur.push(c);
                     comments.set(cur);
                     new_comment.set(String::new());

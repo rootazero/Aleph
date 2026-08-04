@@ -21,6 +21,9 @@ pub fn PhoneTabBar() -> impl IntoView {
     };
     let location = use_location();
     let mode = Memo::new(move |_| PanelMode::from_path(&location.pathname.get()));
+    // Same derivation the More menu's Alerts row reads — one source, so the dot
+    // and the row's number can never disagree about what is waiting.
+    let badge = crate::platform::phone::more::alert_badge_count();
     view! {
         <div class="tabbar glass" style="flex:none;">
             <button class="tabitem" class:tabitem-active=move || mode.get() == PanelMode::Chat on:click=go("/")>
@@ -39,8 +42,23 @@ pub fn PhoneTabBar() -> impl IntoView {
                 <svg width="23" height="23" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"></circle><path d="M19.4 15a1.6 1.6 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.6 1.6 0 0 0-2.7 1.1V21a2 2 0 1 1-4 0v-.1A1.6 1.6 0 0 0 6.6 19l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1A1.6 1.6 0 0 0 4 13.6H4a2 2 0 1 1 0-4h.1A1.6 1.6 0 0 0 5 6.6l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1A1.6 1.6 0 0 0 10.4 4V4a2 2 0 1 1 4 0v.1A1.6 1.6 0 0 0 17 5l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.6 1.6 0 0 0 1.1 2.7H21a2 2 0 1 1 0 4h-.1a1.6 1.6 0 0 0-1.5 1z"></path></svg>
                 "Settings"
             </button>
+            // Alerts live under ••• (iOS caps a tab bar at five and this is the
+            // fifth), so the badge has to ride here or an alert is invisible
+            // until the user happens to open More. Dot, not a count: a tab item
+            // is ~65 px wide and a number would collide with its label — the
+            // count itself is one tap away on the Alerts row.
             <button class="tabitem" class:tabitem-active=move || mode.get().under_more() on:click=go("/more")>
-                <svg width="23" height="23" viewBox="0 0 24 24" fill="currentColor"><circle cx="5" cy="12" r="1.7"></circle><circle cx="12" cy="12" r="1.7"></circle><circle cx="19" cy="12" r="1.7"></circle></svg>
+                <span style="position:relative; display:inline-flex;">
+                    <svg width="23" height="23" viewBox="0 0 24 24" fill="currentColor"><circle cx="5" cy="12" r="1.7"></circle><circle cx="12" cy="12" r="1.7"></circle><circle cx="19" cy="12" r="1.7"></circle></svg>
+                    // Braces required: bare `badge.get() > 0` lets the `view!`
+                    // macro read the `>` as the tag close.
+                    <Show when=move || { badge.get() > 0 }>
+                        <span
+                            aria-label="Unread alerts"
+                            style="position:absolute; top:-1px; right:-3px; width:8px; height:8px; border-radius:9999px; background:var(--color-danger); box-shadow:0 0 0 2px var(--color-surface-overlay);"
+                        ></span>
+                    </Show>
+                </span>
                 "More"
             </button>
         </div>
@@ -99,10 +117,12 @@ pub fn PhoneShell(
             class="fixed inset-x-0 top-0 h-dvh z-[70] flex flex-col"
             style="background:radial-gradient(120% 55% at 50% 0%, oklch(0.62 0.10 310 / 0.14), transparent 62%),radial-gradient(120% 45% at 50% 100%, oklch(0.60 0.09 250 / 0.10), transparent 60%),var(--color-surface);"
         >
-            <div
-                class="glass"
-                style="position:relative; flex:none; display:flex; align-items:center; gap:8px; min-height:50px; padding:calc(4px + env(safe-area-inset-top)) 14px 8px; z-index:4; background-color:color-mix(in oklch, var(--color-surface-overlay) 78%, transparent);"
-            >
+            // Layout is `.phone-topbar` in `styles/ios.css`, NOT an inline
+            // `style=`: an inline declaration outranks any non-`!important`
+            // stylesheet rule, so the landscape height rule would be present,
+            // matched, and silently overridden. Keep this attribute list free of
+            // `style` — a guard below asserts it.
+            <div class="glass phone-topbar">
                 {back_btn}
                 <span style=title_style>{title}</span>
             </div>
@@ -122,5 +142,95 @@ pub fn PhoneShell(
             </div>
             <PhoneTabBar/>
         </div>
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    const IOS_CSS: &str = include_str!("../../../styles/ios.css");
+    const SRC: &str = include_str!("shell.rs");
+
+    fn production_half(src: &str) -> &str {
+        src.split("#[cfg").next().unwrap_or(src)
+    }
+
+    /// The top bar's layout must be a class, and the class must exist.
+    ///
+    /// Both halves, because either one alone is silently useless: a class with
+    /// no rule renders an unstyled bar, and a rule with no class renders the
+    /// old inline one. CSS has no "unknown selector" error and Leptos has no
+    /// "unknown class" error, so neither half fails loudly.
+    #[test]
+    fn the_top_bar_layout_is_a_class_on_both_ends() {
+        assert!(
+            production_half(SRC).contains("class=\"glass phone-topbar\""),
+            "the phone shell top bar no longer carries `phone-topbar`"
+        );
+        assert!(
+            IOS_CSS.contains(".phone-topbar {"),
+            "styles/ios.css has no base rule for the phone shell top bar"
+        );
+    }
+
+    /// …and it must not carry an inline `style`.
+    ///
+    /// This is the specific regression, not a style preference: an inline
+    /// declaration outranks every non-`!important` stylesheet rule, so the
+    /// landscape height rule would be in the build, match the viewport, and be
+    /// overridden — with `getComputedStyle` reporting the inline value and
+    /// nothing anywhere reporting a fault. The composer-tools fold shipped
+    /// exactly this way once.
+    #[test]
+    fn the_top_bar_has_no_inline_style_to_outrank_the_media_query() {
+        let src = production_half(SRC);
+        let Some((_, after)) = src.split_once("class=\"glass phone-topbar\"") else {
+            panic!("top bar not found — this guard is no longer looking at it");
+        };
+        let attrs = after.split('>').next().unwrap_or("");
+        assert!(
+            !attrs.contains("style="),
+            "the phone shell top bar grew an inline `style`, which silently \
+             outranks the landscape rule in styles/ios.css: {attrs}"
+        );
+    }
+
+    /// Landscape compression is three rules in one block; any one of them
+    /// missing leaves height on the floor of a ~390 px-tall viewport.
+    #[test]
+    fn landscape_compresses_the_shell_chrome() {
+        let (_, landscape) = IOS_CSS
+            .split_once("@media (orientation: landscape) and (max-height: 500px) {")
+            .expect("the landscape block is gone");
+        let block = landscape.split("\n}").next().unwrap_or("");
+        for sel in [".phone-composer-tools", ".phone-topbar", ".tabitem"] {
+            assert!(
+                block.contains(sel),
+                "landscape block no longer compresses `{sel}`"
+            );
+        }
+    }
+
+    /// …and the base rule must sit ABOVE that block.
+    ///
+    /// Both are a single class, so neither outranks the other and source order
+    /// decides. With the base rule below, its `min-height: 50px` beat the
+    /// landscape `44px` — measured live at 50 px while the media query itself
+    /// reported `matches: true`. Nothing about that is visible in the CSS, in
+    /// the build output, or in a media-query check; only `getComputedStyle`
+    /// shows it. Cheap to pin, invisible to lose.
+    #[test]
+    fn the_base_top_bar_rule_precedes_the_landscape_override() {
+        let base = IOS_CSS
+            .find(".phone-topbar {\n  position: relative;")
+            .expect("the base .phone-topbar rule is gone");
+        let media = IOS_CSS
+            .find("@media (orientation: landscape) and (max-height: 500px) {")
+            .expect("the landscape block is gone");
+        assert!(
+            base < media,
+            "the base `.phone-topbar` rule moved below the landscape block — \
+             equal specificity means the later one wins, so the landscape \
+             height is silently ignored"
+        );
     }
 }
