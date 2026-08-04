@@ -12,7 +12,7 @@ mod tests {
         Channel, ChannelInfo, ChannelResult, ChannelState, ChannelStatus, MessageId,
         OutboundMessage, SendResult,
     };
-    use crate::gateway::media::{MediaItem, PendingMedia};
+    use crate::gateway::media::PendingMedia;
 
     /// Captures every `OutboundMessage` the registry hands it, so a test can
     /// assert what actually left for the chat rather than only what the emitter
@@ -75,14 +75,13 @@ mod tests {
         (emitter, sent)
     }
 
+    /// One buffer entry, already resolved — which is what the delivery buffer
+    /// now holds. The emitter no longer fetches anything; the tool-dispatch
+    /// chokepoint did that while the model could still hear about a failure.
     fn one_inline_image() -> PendingMedia {
-        Arc::new(tokio::sync::Mutex::new(vec![MediaItem {
-            // Inline data URL — resolved without touching the network.
-            url: "data:image/png;base64,SGVsbG8=".to_string(),
-            media_type: "image".to_string(),
-            mime_type: None,
-            filename: None,
-        }]))
+        Arc::new(tokio::sync::Mutex::new(vec![
+            crate::gateway::media::resolved_test_attachment(),
+        ]))
     }
 
     /// The single source every run-end path now shares: what is in the buffer
@@ -151,9 +150,7 @@ mod tests {
             registry,
             route.clone(),
             "run-123".to_string(),
-            Arc::new(tokio::sync::Mutex::new(Vec::<
-                crate::gateway::media::MediaItem,
-            >::new())),
+            PendingMedia::default(),
         );
         assert_eq!(emitter.run_id(), "run-123");
         assert_eq!(emitter.route().channel_id.as_str(), "imessage");
@@ -178,9 +175,7 @@ mod tests {
             route,
             "run-456".to_string(),
             config,
-            Arc::new(tokio::sync::Mutex::new(Vec::<
-                crate::gateway::media::MediaItem,
-            >::new())),
+            PendingMedia::default(),
         );
         assert_eq!(emitter.config.buffer_threshold, 1000);
         assert!(emitter.config.stream_enabled);
@@ -193,9 +188,7 @@ mod tests {
             registry,
             route,
             "run-789".to_string(),
-            Arc::new(tokio::sync::Mutex::new(Vec::<
-                crate::gateway::media::MediaItem,
-            >::new())),
+            PendingMedia::default(),
         );
         assert_eq!(emitter.next_seq(), 0);
         assert_eq!(emitter.next_seq(), 1);
@@ -209,9 +202,7 @@ mod tests {
             registry,
             route,
             "run-test".to_string(),
-            Arc::new(tokio::sync::Mutex::new(Vec::<
-                crate::gateway::media::MediaItem,
-            >::new())),
+            PendingMedia::default(),
         );
         emitter.buffer.lock().await.push_str("Hello ");
         emitter.buffer.lock().await.push_str("World!");

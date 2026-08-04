@@ -10,7 +10,6 @@ use crate::gateway::channel_registry::ChannelRegistry;
 use crate::gateway::inbound_context::ReplyRoute;
 use crate::gateway::media::PendingMedia;
 use crate::gateway::streaming::{StreamingConfig, StreamingController};
-use crate::media::cache::MediaCache;
 
 /// Streaming cursor appended to intermediate edits, removed on final.
 const STREAMING_CURSOR: &str = "▍";
@@ -47,10 +46,14 @@ pub struct ReplyEmitter {
     /// Per-channel voice state
     pub(crate) voice_state: Mutex<crate::gateway::voice::VoiceState>,
 
-    /// Pending media items from tool outputs (shared with `StreamCallback`)
+    /// Resolved attachments from tool outputs, filled by the tool-dispatch
+    /// chokepoint and drained by this emitter at run end.
+    ///
+    /// The emitter deliberately holds no `MediaCache`: it does not fetch. It
+    /// used to, which meant every URL was downloaded twice and — because every
+    /// drain site runs after the loop has ended — a failed fetch had no one
+    /// left to report to.
     pub(crate) pending_media: PendingMedia,
-    /// Media cache for downloading media items
-    pub(crate) media_cache: MediaCache,
     /// Real-time streaming state machine (replaces old typewriter mode)
     pub(crate) streaming: Mutex<StreamingController>,
 
@@ -103,7 +106,6 @@ impl ReplyEmitter {
             generation_config: None,
             voice_state: Mutex::new(Default::default()),
             pending_media,
-            media_cache: MediaCache::new(),
             streaming: Mutex::new(StreamingController::new(StreamingConfig {
                 min_initial_chars: 30,
                 debounce_interval: Duration::from_millis(300),
@@ -143,7 +145,6 @@ impl ReplyEmitter {
             generation_config: None,
             voice_state: Mutex::new(Default::default()),
             pending_media,
-            media_cache: MediaCache::new(),
             streaming: Mutex::new(StreamingController::new(StreamingConfig {
                 min_initial_chars,
                 debounce_interval: Duration::from_millis(debounce_ms),

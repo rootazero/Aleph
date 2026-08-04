@@ -135,6 +135,12 @@ pub fn ModePicker() -> impl IntoView {
                 </svg>
             </button>
 
+            // Click-outside catcher — see `exec_tier_picker` for why `mouseleave`
+            // alone strands this popover open on a touch surface.
+            {move || open.get().then(|| view! {
+                <div class="fixed inset-0 z-40" on:click=move |_| open.set(false) />
+            })}
+
             <Show when=move || open.get()>
                 <div class="absolute bottom-full mb-2 left-0 z-50 w-80 max-h-96 overflow-y-auto
                             glass rounded-xl border border-border bg-surface-overlay/85 shadow-xl

@@ -335,4 +335,46 @@ mod tests {
             );
         }
     }
+
+    /// Isolate the `Wrapped` arm of `SettingsRouter` from `app.rs`. Source text
+    /// again — the router is a Leptos view a host test cannot mount.
+    fn wrapped_arm(src: &str) -> Option<&str> {
+        let (_, after) = src.split_once("PhoneSettingsScreen::Wrapped => view! {")?;
+        let (arm, _) = after.split_once("</PhoneShell>")?;
+        Some(arm)
+    }
+
+    /// The wrapped arm must ask `PhoneShell` for wrapped chrome.
+    ///
+    /// Without `wrapped=true` the desktop page keeps the shell's own 16 px
+    /// padding *on top of* its 24 px `p-6` gutters (40 px of the 390 px
+    /// viewport), the macOS traffic-light inset stays, and none of the
+    /// `.phone-wrapped` shim in `styles/ios.css` applies — the two-column
+    /// settings pages go back to sitting side by side. All of that is silent:
+    /// the page still renders, still scrolls, still has a back button.
+    #[test]
+    fn the_wrapped_settings_arm_asks_for_wrapped_chrome() {
+        let arm = wrapped_arm(include_str!("../../../app.rs"))
+            .expect("SettingsRouter no longer has a recognisable Wrapped arm");
+        assert!(
+            arm.contains("wrapped=true"),
+            "the wrapped settings arm dropped `wrapped=true` — desktop pages are \
+             back to double padding and unstacked columns on phone"
+        );
+    }
+
+    /// Proves the check above can say no: the arm as it was before this change.
+    #[test]
+    fn wrapped_arm_check_rejects_an_unmarked_shell() {
+        let before = r#"
+            PhoneSettingsScreen::Wrapped => view! {
+                <PhoneShell title=phone_settings_title(&path, i18n) back="/settings">
+                    {desktop_settings_body(&path)}
+                </PhoneShell>
+            }
+        "#;
+        assert!(!wrapped_arm(before).unwrap().contains("wrapped=true"));
+        // A file with no wrapped arm at all is reported as missing, not as ok.
+        assert!(wrapped_arm("fn unrelated() {}").is_none());
+    }
 }

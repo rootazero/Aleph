@@ -270,6 +270,19 @@ fn AppContent() -> impl IntoView {
     let mem_for_shell = expect_context::<MemoryState>();
     let ff_for_shell = expect_context::<FormFactorState>();
 
+    // Desktop shell chrome is mounted only OUTSIDE the phone band.
+    //
+    // Every phone screen is a `fixed h-dvh z-[70]` overlay, so the sidebar
+    // (z-auto, in flow), the fixed collapse toggle (z-60), the macOS drag band
+    // (z-50) and the alerts bell (z-50 / popover z-55) were covered purely by
+    // z-order while still being mounted, laid out and painted underneath — one
+    // stacking accident away from showing through the phone's translucent glass
+    // chrome, and paying full layout/effect cost for UI no phone user can reach
+    // (the bell in particular is unreachable: nothing on phone rises above 70).
+    // Gating them here removes the whole class by construction rather than
+    // relying on the overlay staying opaque and on top.
+    let not_phone = move || ff_for_shell.form_factor.get() != FormFactor::Phone;
+
     view! {
         // Two-column shell (Codex) floating on the drifting light-field.
         <div
@@ -300,32 +313,37 @@ fn AppContent() -> impl IntoView {
             //     SidebarBrand handles it.
             // `data-tauri-drag-region="false"` opts out of the parent drag
             // strip so clicks aren't swallowed by the window-drag handler.
-            <button
-                type="button"
-                class="aleph-sidebar-toggle"
-                data-tauri-drag-region="false"
-                on:click={
-                    let mem = mem_for_shell;
-                    move |_| {
-                        let s = &mem.sidebar_collapsed;
-                        s.set(!s.get());
+            <Show when=not_phone>
+                <button
+                    type="button"
+                    class="aleph-sidebar-toggle"
+                    data-tauri-drag-region="false"
+                    on:click={
+                        let mem = mem_for_shell;
+                        move |_| {
+                            let s = &mem.sidebar_collapsed;
+                            s.set(!s.get());
+                        }
                     }
-                }
-                title="Toggle sidebar (Esc)"
-                aria-label="Toggle sidebar"
-            >
-                <svg
-                    width="16" height="16" viewBox="0 0 24 24" fill="none"
-                    stroke="currentColor" stroke-width="1.8"
-                    stroke-linecap="round" stroke-linejoin="round"
+                    title="Toggle sidebar (Esc)"
+                    aria-label="Toggle sidebar"
                 >
-                    <rect x="3" y="5" width="18" height="14" rx="2.5" />
-                    <line x1="9" y1="5" x2="9" y2="19" />
-                </svg>
-            </button>
+                    <svg
+                        width="16" height="16" viewBox="0 0 24 24" fill="none"
+                        stroke="currentColor" stroke-width="1.8"
+                        stroke-linecap="round" stroke-linejoin="round"
+                    >
+                        <rect x="3" y="5" width="18" height="14" rx="2.5" />
+                        <line x1="9" y1="5" x2="9" y2="19" />
+                    </svg>
+                </button>
+            </Show>
             <Router>
-                // Left column — context-aware sidebar, full window height
-                <ModeSidebar />
+                // Left column — context-aware sidebar, full window height.
+                // Phone has its own tab bar; see `not_phone` above.
+                <Show when=not_phone>
+                    <ModeSidebar />
+                </Show>
 
                 // Main content area — `relative` is the positioning
                 // ancestor for the absolutely-floating drag band below.
@@ -346,12 +364,14 @@ fn AppContent() -> impl IntoView {
                     // `z-50` keeps the band's chrome chips above
                     // tab content; the band itself is transparent
                     // so any text scrolling beneath is fine.
-                    <div
-                        class="aleph-main-drag-band z-50"
-                        data-tauri-drag-region=""
-                    >
-                        <ChatBandChrome />
-                    </div>
+                    <Show when=not_phone>
+                        <div
+                            class="aleph-main-drag-band z-50"
+                            data-tauri-drag-region=""
+                        >
+                            <ChatBandChrome />
+                        </div>
+                    </Show>
                     <MainContent />
                 </main>
 
@@ -362,7 +382,14 @@ fn AppContent() -> impl IntoView {
 
                 // Aggregate alert surface — bell + popover anchored top-right.
                 // Reads DashboardState.alerts (already wired via alerts.**).
-                <NotificationCenter />
+                // Desktop/tablet only: its bell is z-50 and its popover z-55,
+                // both below every phone screen's z-70 overlay, so on phone it
+                // has never been clickable. Rendering it there bought nothing
+                // and put live desktop chrome under the phone's glass bars. A
+                // phone-native alerts entry point is separate work.
+                <Show when=not_phone>
+                    <NotificationCenter />
+                </Show>
 
                 // Runtime recovery overlay — engages when the panel was live
                 // but lost the Gateway and exhausted automatic reconnects.
@@ -590,7 +617,7 @@ fn SettingsRouter() -> impl IntoView {
                 view! { <PhoneProviders /> }.into_any()
             }
             PhoneSettingsScreen::Wrapped => view! {
-                <PhoneShell title=phone_settings_title(&path, i18n) back="/settings">
+                <PhoneShell title=phone_settings_title(&path, i18n) back="/settings" wrapped=true>
                     {desktop_settings_body(&path)}
                 </PhoneShell>
             }

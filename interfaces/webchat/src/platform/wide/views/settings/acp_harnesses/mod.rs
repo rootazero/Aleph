@@ -61,7 +61,21 @@ pub fn AcpHarnessesView() -> impl IntoView {
                 loading.set(true);
                 match AcpApi::list(&state).await {
                     Ok(list) => {
-                        if selected_id.get_untracked().is_none() {
+                        // `try_get_untracked` — not `get_untracked`. These
+                        // signals belong to this view's reactive scope, and the
+                        // view can be disposed while the RPC above is in flight
+                        // (the user navigated away). Reading a disposed signal
+                        // PANICS, taking the whole panel down with the "Aleph
+                        // Panel crashed" overlay; `set` on one is a harmless
+                        // no-op, which is why only this read had to change.
+                        // Reproduced by opening this page and tapping back
+                        // within ~250 ms — an ordinary thing to do on a phone,
+                        // where these settings pages only recently became
+                        // reachable at all.
+                        let Some(current) = selected_id.try_get_untracked() else {
+                            return;
+                        };
+                        if current.is_none() {
                             if let Some(first) = list.first() {
                                 selected_id.set(Some(first.id.clone()));
                             }

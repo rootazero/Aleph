@@ -6,6 +6,11 @@
 //! Wide interaction on those dense views is deferred (Canvas precedent); this
 //! batch only builds the no-split navigation chrome. I/O-only (R4): the menu
 //! navigates; leaves reuse the views' own (app-wide context) data.
+//!
+//! Every leaf passes `wrapped=true`: its child is a *desktop* page that brings
+//! its own gutters and its own inner scroll, so the shell must not add a second
+//! set, and the `.phone-wrapped` shim (`styles/ios.css`) has to be in scope to
+//! stack the desktop columns. See `PhoneShell`'s doc for the full contract.
 
 pub mod menu;
 
@@ -68,50 +73,52 @@ pub(crate) fn screen_for_path(path: &str) -> DashScreen {
 #[must_use]
 pub fn PhoneDashboard() -> impl IntoView {
     let location = use_location();
-    move || match screen_for_path(&location.pathname.get()) {
+    move || {
+        match screen_for_path(&location.pathname.get()) {
         DashScreen::Menu => view! { <PhoneDashboardMenu/> }.into_any(),
         DashScreen::Overview => view! {
-            <PhoneShell title="Overview" back="/dashboard" back_label="Dashboard">
+            <PhoneShell title="Overview" back="/dashboard" back_label="Dashboard" wrapped=true>
                 <Home/>
             </PhoneShell>
         }
         .into_any(),
         DashScreen::Trace => view! {
-            <PhoneShell title="Agent Trace" back="/dashboard" back_label="Dashboard">
+            <PhoneShell title="Agent Trace" back="/dashboard" back_label="Dashboard" wrapped=true>
                 <AgentTrace/>
             </PhoneShell>
         }
         .into_any(),
         DashScreen::Subagents => view! {
-            <PhoneShell title="Subagents" back="/dashboard" back_label="Dashboard">
+            <PhoneShell title="Subagents" back="/dashboard" back_label="Dashboard" wrapped=true>
                 <SubagentTree/>
             </PhoneShell>
         }
         .into_any(),
         DashScreen::Tasks => view! {
-            <PhoneShell title="Scheduled Tasks" back="/dashboard" back_label="Dashboard">
+            <PhoneShell title="Scheduled Tasks" back="/dashboard" back_label="Dashboard" wrapped=true>
                 <TasksView/>
             </PhoneShell>
         }
         .into_any(),
         DashScreen::Logs => view! {
-            <PhoneShell title="Server Logs" back="/dashboard" back_label="Dashboard">
+            <PhoneShell title="Server Logs" back="/dashboard" back_label="Dashboard" wrapped=true>
                 <Logs/>
             </PhoneShell>
         }
         .into_any(),
         DashScreen::Runtimes => view! {
-            <PhoneShell title="Runtimes" back="/dashboard" back_label="Dashboard">
+            <PhoneShell title="Runtimes" back="/dashboard" back_label="Dashboard" wrapped=true>
                 <RuntimesView/>
             </PhoneShell>
         }
         .into_any(),
         DashScreen::Usage => view! {
-            <PhoneShell title="Usage" back="/dashboard" back_label="Dashboard">
+            <PhoneShell title="Usage" back="/dashboard" back_label="Dashboard" wrapped=true>
                 <UsageView/>
             </PhoneShell>
         }
         .into_any(),
+    }
     }
 }
 

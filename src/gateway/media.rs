@@ -59,8 +59,20 @@ pub fn is_remote_fetch_url(url: &str) -> bool {
     !(is_data_url(url) || is_local_media_path(url))
 }
 
-/// Shared media buffer between `StreamCallback` and `ReplyEmitter`.
-pub type PendingMedia = Arc<tokio::sync::Mutex<Vec<MediaItem>>>;
+/// Shared media buffer between the tool-dispatch chokepoint and `ReplyEmitter`.
+///
+/// Holds **already-resolved** attachments, not the model's raw [`MediaItem`]s.
+/// The buffer used to carry the items and let the emitter fetch them at
+/// `RunComplete`, which meant every URL was fetched twice — once by
+/// `artifact_harvest` for the artifact store, once here — and, worse, meant the
+/// fetch outcome was discovered *after* the loop had ended, where no turn
+/// remains in which the model could learn it failed. Resolving once at the
+/// chokepoint fixes both: the emitter now only drains and sends.
+///
+/// The files these attachments point at live under the run's own media session
+/// directory and are removed by `deliver_run_media`'s `cleanup_session`, which
+/// runs after the drain.
+pub type PendingMedia = Arc<tokio::sync::Mutex<Vec<crate::gateway::channel::Attachment>>>;
 
 /// Maximum number of media items allowed per run.
 pub const MAX_MEDIA_PER_RUN: usize = 10;
@@ -98,6 +110,31 @@ where
 #[must_use]
 pub fn current_pending_media() -> Option<PendingMedia> {
     RUN_PENDING_MEDIA.try_with(Clone::clone).ok().flatten()
+}
+
+/// A resolved [`Attachment`] shaped like one the harvest just produced.
+///
+/// Test-only, and shared rather than re-inlined per module so that "what the
+/// delivery buffer holds" has one answer: several emitter tests seed the buffer
+/// to prove they drain it, and they are seeding the *harvest's output*, not the
+/// model's input.
+#[cfg(test)]
+#[must_use]
+pub(crate) fn resolved_test_attachment() -> crate::gateway::channel::Attachment {
+    crate::gateway::channel::Attachment {
+        id: "resolved-test-attachment".to_string(),
+        mime_type: "image/png".to_string(),
+        filename: Some("hello.png".to_string()),
+        size: Some(5),
+        url: Some("data:image/png;base64,SGVsbG8=".to_string()),
+        path: Some(
+            std::env::temp_dir()
+                .join("aleph-resolved-test-attachment.png")
+                .to_string_lossy()
+                .into_owned(),
+        ),
+        data: None,
+    }
 }
 
 /// Detect MIME type from URL extension, with a fallback default based on `media_type`.
@@ -239,12 +276,7 @@ mod tests {
             // Many frames below the run loop — this is what the tool
             // chokepoint's harvest sees.
             let seen = current_pending_media().expect("scoped");
-            seen.lock().await.push(MediaItem {
-                url: "data:image/png;base64,SGVsbG8=".into(),
-                media_type: "image".into(),
-                mime_type: None,
-                filename: None,
-            });
+            seen.lock().await.push(resolved_test_attachment());
         })
         .await;
 

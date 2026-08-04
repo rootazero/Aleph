@@ -52,6 +52,14 @@ pub enum CacheError {
 
     #[error("HTTP download failed: {0}")]
     Download(String),
+
+    /// The source was well-formed but policy refused to read it.
+    ///
+    /// Distinct from [`Self::Io`] on purpose: "this path is outside the media
+    /// root" is a decision, not a failure to read, and the caller phrases it to
+    /// the model differently — a refusal is actionable, an I/O error is not.
+    #[error("refused: {0}")]
+    Refused(String),
 }
 
 /// Downloads/resolves channel attachments to local temp files and provides
@@ -242,10 +250,25 @@ impl MediaCache {
         }
     }
 
-    /// Convert a [`MediaItem`] (from tool `_media` output) to a channel [`Attachment`].
+    /// Convert a [`MediaItem`] (from tool `_media` output) to a channel
+    /// [`Attachment`] backed by a readable local file under `session_id`'s
+    /// directory.
     ///
-    /// Downloads to temp file on success, falls back to URL-only on failure.
-    pub async fn download_media_item(&self, item: &MediaItem, session_id: &str) -> Attachment {
+    /// # Why this returns the error instead of degrading
+    ///
+    /// It used to answer every failure with [`Self::url_only_attachment`] and
+    /// leave the reason in a `warn!`. That made three different problems —
+    /// an undecodable `data:` URL, a path outside the media root, a 404 —
+    /// indistinguishable to every caller, and the *reason* is precisely what
+    /// lets the model fix its next attempt. Degrading is still a legitimate
+    /// choice for a remote URL a channel might fetch on its own, so the
+    /// fallback constructor stayed — but it is now the **caller's** decision,
+    /// made per branch, rather than a policy buried in the cache.
+    pub async fn download_media_item(
+        &self,
+        item: &MediaItem,
+        session_id: &str,
+    ) -> Result<Attachment, CacheError> {
         let id = uuid::Uuid::new_v4().to_string();
         let mime = item
             .mime_type
@@ -262,10 +285,15 @@ impl MediaCache {
         );
 
         // Build a temporary Attachment to pass through resolve()
-        let temp_attachment = if is_data_url(&item.url) {
-            // Parse data URL: data:[<mediatype>][;base64],<data>
-            match Self::decode_data_url(&item.url) {
-                Ok((decoded_mime, bytes)) => Attachment {
+        let temp_attachment =
+            if is_data_url(&item.url) {
+                // Parse data URL: data:[<mediatype>][;base64],<data>
+                let (decoded_mime, bytes) = Self::decode_data_url(&item.url).map_err(|e| {
+                    let url_prefix: String = item.url.chars().take(30).collect();
+                    warn!(url_prefix = %url_prefix, error = %e, "Failed to decode data URL");
+                    e
+                })?;
+                Attachment {
                     // rust-doctor-disable-next-line excessive-clone
                     id: id.clone(),
                     // rust-doctor-disable-next-line excessive-clone
@@ -280,23 +308,27 @@ impl MediaCache {
                     url: None,
                     path: None,
                     data: Some(bytes),
-                },
-                Err(e) => {
-                    let url_prefix: String = item.url.chars().take(30).collect();
-                    warn!(url_prefix = %url_prefix, error = %e, "Failed to decode data URL, falling back to URL-only");
-                    return Self::url_only_attachment(&id, &item.url, &mime, &item.filename);
                 }
-            }
-        } else if is_local_media_path(&item.url) {
-            // Local file path. A `media_send` path is model-supplied and
-            // untrusted: only accept one that resolves inside the OS temp dir —
-            // the sole root where legitimate producers write (native
-            // camera_clip/record_audio via NSTemporaryDirectory, and this cache
-            // itself under `<temp_dir>/aleph/media`). Without this a crafted path
-            // like "~/.ssh/id_rsa" or "/etc/passwd" would be read and delivered
-            // outbound (arbitrary-file exfiltration).
-            match Self::safe_local_media_path(&item.url).await {
-                Some(safe) => Attachment {
+            } else if is_local_media_path(&item.url) {
+                // Local file path. A `media_send` path is model-supplied and
+                // untrusted: only accept one that resolves inside the OS temp dir —
+                // the sole root where legitimate producers write (native
+                // camera_clip/record_audio via NSTemporaryDirectory, and this cache
+                // itself under `<temp_dir>/aleph/media`). Without this a crafted path
+                // like "~/.ssh/id_rsa" or "/etc/passwd" would be read and delivered
+                // outbound (arbitrary-file exfiltration).
+                let safe = Self::safe_local_media_path(&item.url).await.ok_or_else(|| {
+                warn!(
+                    path = %item.url,
+                    "media local path escapes the allowed media root; refusing to attach file"
+                );
+                CacheError::Refused(format!(
+                    "local path does not resolve to an existing file inside the allowed media \
+                     root ({})",
+                    std::env::temp_dir().display()
+                ))
+            })?;
+                Attachment {
                     // rust-doctor-disable-next-line excessive-clone
                     id: id.clone(),
                     // rust-doctor-disable-next-line excessive-clone
@@ -307,57 +339,53 @@ impl MediaCache {
                     url: None,
                     path: Some(safe),
                     data: None,
-                },
-                None => {
-                    warn!(
-                        path = %item.url,
-                        "media_send local path escapes the allowed media root; refusing to attach file"
-                    );
-                    return Self::url_only_attachment(&id, &item.url, &mime, &item.filename);
                 }
-            }
-        } else {
-            // HTTP/HTTPS URL
-            Attachment {
-                // rust-doctor-disable-next-line excessive-clone
-                id: id.clone(),
-                // rust-doctor-disable-next-line excessive-clone
-                mime_type: mime.clone(),
-                filename: item.filename.as_deref().map(|s| s.to_string()).or_else(|| {
-                    Some(format!(
-                        "{}.bin",
-                        id.get(..FALLBACK_FILENAME_PREFIX_LEN).unwrap_or(&id)
-                    ))
-                }),
-                size: None,
-                // rust-doctor-disable-next-line excessive-clone
-                url: Some(item.url.clone()),
-                path: None,
-                data: None,
-            }
-        };
+            } else {
+                // HTTP/HTTPS URL
+                Attachment {
+                    // rust-doctor-disable-next-line excessive-clone
+                    id: id.clone(),
+                    // rust-doctor-disable-next-line excessive-clone
+                    mime_type: mime.clone(),
+                    filename: item.filename.as_deref().map(|s| s.to_string()).or_else(|| {
+                        Some(format!(
+                            "{}.bin",
+                            id.get(..FALLBACK_FILENAME_PREFIX_LEN).unwrap_or(&id)
+                        ))
+                    }),
+                    size: None,
+                    // rust-doctor-disable-next-line excessive-clone
+                    url: Some(item.url.clone()),
+                    path: None,
+                    data: None,
+                }
+            };
 
-        match self.resolve(&temp_attachment, session_id).await {
-            Ok(cached) => Attachment {
-                id,
-                mime_type: cached.mime_type,
-                // rust-doctor-disable-next-line excessive-clone
-                filename: item.filename.clone(),
-                size: Some(cached.size),
-                // rust-doctor-disable-next-line excessive-clone
-                url: Some(item.url.clone()),
-                path: Some(cached.local_path.to_string_lossy().to_string()),
-                data: None,
-            },
-            Err(e) => {
-                warn!(url = %item.url, error = %e, "Media download failed, falling back to URL-only");
-                Self::url_only_attachment(&id, &item.url, &mime, &item.filename)
-            }
-        }
+        let cached = self
+            .resolve(&temp_attachment, session_id)
+            .await
+            .inspect_err(|e| warn!(url = %item.url, error = %e, "Media download failed"))?;
+        Ok(Attachment {
+            id,
+            mime_type: cached.mime_type,
+            // rust-doctor-disable-next-line excessive-clone
+            filename: item.filename.clone(),
+            size: Some(cached.size),
+            // rust-doctor-disable-next-line excessive-clone
+            url: Some(item.url.clone()),
+            path: Some(cached.local_path.to_string_lossy().to_string()),
+            data: None,
+        })
     }
 
     /// Parse a data URL and decode its content.
-    fn decode_data_url(url: &str) -> Result<(Option<String>, Vec<u8>), CacheError> {
+    ///
+    /// `pub(crate)` so `media_send`'s pre-flight can ask the *same* decoder
+    /// whether an item will produce bytes. A second parser written to mirror
+    /// this one would be free to drift, and the drift would be silent: the
+    /// delivery path answers a decode failure with a url-only attachment, not
+    /// an error.
+    pub(crate) fn decode_data_url(url: &str) -> Result<(Option<String>, Vec<u8>), CacheError> {
         // Format: data:[<mediatype>][;base64],<data>
         let rest = url
             .strip_prefix("data:")
@@ -401,7 +429,11 @@ impl MediaCache {
     /// escape cannot slip past the prefix check. Returns `None` for any path
     /// outside that root (or one that cannot be resolved), which the caller
     /// treats as "do not attach this file".
-    async fn safe_local_media_path(raw: &str) -> Option<String> {
+    ///
+    /// `pub(crate)` so `media_send`'s pre-flight can ask this exact predicate
+    /// rather than a copy of it — see [`Self::decode_data_url`] for why a copy
+    /// would be the dangerous option.
+    pub(crate) async fn safe_local_media_path(raw: &str) -> Option<String> {
         let expanded = expand_tilde(raw);
         let canonical = tokio::fs::canonicalize(&expanded).await.ok()?;
         let root = tokio::fs::canonicalize(std::env::temp_dir()).await.ok()?;
@@ -410,20 +442,30 @@ impl MediaCache {
             .then(|| canonical.to_string_lossy().into_owned())
     }
 
-    /// Create a URL-only fallback Attachment (no local file).
-    fn url_only_attachment(
-        id: &str,
-        url: &str,
-        mime: &str,
-        filename: &Option<String>,
-    ) -> Attachment {
+    /// An [`Attachment`] that carries only the original URL — no bytes, no
+    /// local file.
+    ///
+    /// Worth something for exactly one kind of failure: a remote `http(s)` URL
+    /// we could not fetch but a channel might (Telegram uploads from a URL
+    /// itself, and a file over our own 50 MB cap is still a working link).
+    /// Worth nothing for the other two — a `data:` URL that did not decode has
+    /// no URL to hand on, and a refused local path yields an attachment whose
+    /// `url` is a **filesystem path** no channel can send. So the choice
+    /// belongs to the caller, which knows which branch it is in; see
+    /// [`Self::download_media_item`].
+    #[must_use]
+    pub(crate) fn url_only_attachment(item: &MediaItem) -> Attachment {
         Attachment {
-            id: id.to_string(),
-            mime_type: mime.to_string(),
+            id: uuid::Uuid::new_v4().to_string(),
+            mime_type: item
+                .mime_type
+                .clone()
+                .unwrap_or_else(|| detect_mime(&item.url, &item.media_type)),
             // rust-doctor-disable-next-line excessive-clone
-            filename: filename.clone(),
+            filename: item.filename.clone(),
             size: None,
-            url: Some(url.to_string()),
+            // rust-doctor-disable-next-line excessive-clone
+            url: Some(item.url.clone()),
             path: None,
             data: None,
         }
@@ -540,9 +582,10 @@ mod tests {
 
     #[tokio::test]
     async fn download_media_item_rejects_local_path_outside_temp_root() {
-        // A model-supplied path outside the OS temp dir must not be attached as a
-        // local file (arbitrary-file exfiltration guard): it falls back to
-        // URL-only, which carries no readable `path` for the channel to upload.
+        // A model-supplied path outside the OS temp dir must not be attached as
+        // a local file (arbitrary-file exfiltration guard), and the refusal
+        // must be legible to the caller rather than buried in a warn! — the
+        // caller is what decides whether anything is queued for the user.
         let cache = MediaCache::new();
         let item = MediaItem {
             url: "/etc/hosts".to_string(),
@@ -550,11 +593,13 @@ mod tests {
             mime_type: None,
             filename: None,
         };
-        let att = cache.download_media_item(&item, "sess-guard").await;
+        let err = cache
+            .download_media_item(&item, "sess-guard")
+            .await
+            .expect_err("a file outside the temp root must not be attached");
         assert!(
-            att.path.is_none(),
-            "file outside the temp root must not be attached, got {:?}",
-            att.path
+            matches!(err, CacheError::Refused(_)),
+            "a policy refusal must not masquerade as an I/O failure, got {err:?}"
         );
     }
 
@@ -573,11 +618,11 @@ mod tests {
             mime_type: Some("application/octet-stream".to_string()),
             filename: Some("clip.bin".to_string()),
         };
-        let att = cache.download_media_item(&item, "sess-guard").await;
-        assert!(
-            att.path.is_some(),
-            "file inside the temp root must be attached"
-        );
+        let att = cache
+            .download_media_item(&item, "sess-guard")
+            .await
+            .expect("file inside the temp root must be attached");
+        assert!(att.path.is_some());
         let _ = tokio::fs::remove_file(&path).await;
     }
 
@@ -661,7 +706,8 @@ mod tests {
 
         let att = cache
             .download_media_item(&item, "test-media-item-local")
-            .await;
+            .await
+            .expect("a local path under the temp root resolves");
         assert_eq!(att.mime_type, "image/png");
         assert!(att.path.is_some());
         assert!(att.url.is_some());
@@ -684,7 +730,8 @@ mod tests {
 
         let att = cache
             .download_media_item(&item, "test-media-item-data")
-            .await;
+            .await
+            .expect("a well-formed data: URL decodes");
         assert_eq!(att.mime_type, "text/plain");
         assert!(att.path.is_some(), "data URL should be decoded to file");
 
@@ -716,7 +763,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_download_media_item_invalid_url_fallback() {
+    async fn test_download_media_item_unreachable_url_reports_the_reason() {
         use crate::gateway::media::MediaItem;
         let cache = MediaCache::new();
 
@@ -727,13 +774,17 @@ mod tests {
             filename: None,
         };
 
-        let att = cache
+        let err = cache
             .download_media_item(&item, "test-media-item-fallback")
-            .await;
-        // Should fallback to URL-only
-        assert!(att.url.is_some());
-        assert!(att.path.is_none());
-        assert_eq!(att.mime_type, "image/png");
+            .await
+            .expect_err("an unreachable URL must surface as an error");
+        // The caller — not the cache — decides whether a remote URL it could
+        // not fetch is still worth handing to the channel.
+        let fallback = MediaCache::url_only_attachment(&item);
+        assert_eq!(fallback.url.as_deref(), Some(item.url.as_str()));
+        assert!(fallback.path.is_none());
+        assert_eq!(fallback.mime_type, "image/png");
+        assert!(!err.to_string().is_empty(), "the reason must be legible");
 
         let _ = MediaCache::cleanup_session("test-media-item-fallback");
     }
