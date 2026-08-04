@@ -179,7 +179,8 @@ Client Request (JSON-RPC)
 
 ```
 Thinker Decision (tool_use)
-    │
+    │ validate non-empty, response-unique call_id
+    │ persist AssistantMessage before side effects
     ▼
 ┌─────────────────────────────────────────────────────┐
 │ Dispatcher                                          │
@@ -207,6 +208,14 @@ Thinker Decision (tool_use)
     └─── Extension Tool (WASM / Node.js)
             • Plugin runtime execution
 ```
+
+`call_id` is the correlation key across the provider response, session log,
+approval identity, in-flight cancellation, tool result, trace, and UI projection.
+The harness rejects empty or duplicate IDs before persisting the assistant event;
+it never repairs IDs heuristically. The process-wide in-flight registry is installed
+before its Gateway RPC handlers, independently of the optional result store. MCP
+restart failures emit `ServerCrashed`, allowing the existing bridge to remove stale
+handlers before a later turn snapshots the tool surface.
 
 Exec-class tools (`code_exec`, `bash_exec`) route through an additional
 **Sandbox layer** (`src/sandbox/`) between the tool and process execution.
