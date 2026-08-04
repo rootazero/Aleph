@@ -116,6 +116,11 @@ pub struct SpawnerBase {
     /// per-run calibration and circuit-breaker counters that must not be shared
     /// between the parent and a child (nor between two concurrent children).
     pub context_budget_config: Option<crate::context::budget::ContextBudgetConfig>,
+    /// The parent runner's cheap-tier summarization provider. Handed to the
+    /// child's `ContextCompactor` so its side-channel summarization bills the
+    /// operator's flash sibling, not the main reasoning model. `None` keeps the
+    /// child summarizing on its own LLM.
+    pub cheap_summary_provider: Option<Arc<dyn AiProvider>>,
 }
 
 /// Per-spawn configuration. All lifetimes are scoped to a single `spawn` call.
@@ -460,6 +465,7 @@ pub async fn spawn(base: &SpawnerBase, req: SpawnRequest<'_>) -> Result<LoopRunR
         let (context_budget, context_compactor, preflight_pipeline) = build_context_triple(
             base.context_budget_config.as_ref(),
             &llm,
+            base.cheap_summary_provider.as_ref(),
             &req.agent_def.id,
             &child_id,
         );
@@ -822,9 +828,29 @@ type ContextTriple = (
 /// mirrors is `runner_impl.rs`'s on the root path — and it must be scoped the
 /// same way, since a fan-out spawns many children of the SAME agent id whose
 /// prefixes are entirely independent.
+///
+/// `cheap_summary` is the root runner's flash-tier summarizer, inherited for the
+/// same reason the budget config is: this is the *second* construction site of
+/// the same object, and it started life with none of the first one's tiering.
+///
+/// **Two builders on `ContextCompactor` are deliberately NOT called here**, so
+/// nobody "completes the set" later without re-deriving why:
+///
+/// - `with_cache_carryover` — the carry-over slot holds 16 sessions and evicts
+///   least-recently-written. Child sessions are overwhelmingly one-run and each
+///   gets a fresh id, so seeding them would push a flood of single-use keys
+///   through a 16-slot cache whose entire purpose is keeping the long-lived
+///   interactive session hot. That is the exact eviction pathology the slot's
+///   LRU-on-write ordering was chosen to prevent; feeding it from a fan-out
+///   would defeat the feature for the run that benefits most.
+/// - `with_summary_reuse` — reuse reads the hierarchical session summaries
+///   `SessionCompactor` accumulates over a conversation's life. A child session
+///   is born empty and dies within the spawn, so there is nothing to reuse; the
+///   wiring would be a lookup that always misses.
 fn build_context_triple(
     cfg: Option<&crate::context::budget::ContextBudgetConfig>,
     llm: &Arc<dyn AiProvider>,
+    cheap_summary: Option<&Arc<dyn AiProvider>>,
     agent_id: &str,
     child_id: &SessionId,
 ) -> ContextTriple {
@@ -846,7 +872,12 @@ fn build_context_triple(
         .with_monitor_scope(crate::thinker::prompt_builder::cache_monitor::cache_scope(
             agent_id,
             Some(&child_id.to_key_string()),
-        )),
+        ))
+        // Same flash-tier summarizer the root runner uses. Without it this
+        // second construction site quietly billed the main reasoning model for
+        // every child compaction — worst precisely in a fan-out, where the
+        // count is per child.
+        .with_cheap_provider(cheap_summary.cloned()),
     );
     let pipeline = Arc::new(crate::context::budget::preflight::default_pipeline(cfg));
     (Some(budget), Some(compactor), Some(pipeline))
