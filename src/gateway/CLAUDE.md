@@ -12,7 +12,10 @@
   ② `bootstrap_ticket`（`aleph-bt-*` 5min 一次性配对票，扫 `?bt=` QR，connect 时换取 device token）
   ③ legacy 共享 **Gateway token**（`aleph-<uuid>`，`SharedTokenManager`）。校验通过 = operator，
   权限与本地**完全一致**（单层）；未通过 = 登录墙（WS 派发仅放行 `connect`）。**长效凭据不进
-  URL/QR**——QR 只编码一次性配对票，修复 `?token=` 泄露向量。
+  URL/QR**——QR 只编码一次性配对票，修复 `?token=` 泄露向量。**授权之后连接携带 (user, role)**——
+  `connect::resolve_connection_identity` 把已授权连接进一步解析成 `(Option<user_id>, role)`
+  （`"operator"` / `"member"` / `"guest"`），member 由 `method_admin.rs` 闸在 `process_request`
+  单点强制（P0 身份基础，`src/gateway/caller_identity.rs` 模块 doc 有完整链路）。
 - **撤销**：① `gateway.token.rotate` = 核弹级（重生共享 token **并** `revoke_all_panel_devices`，
   cluster 节点不受影响）+ **强踢全部远程 socket**（`start/mod.rs` 发 `TokenRotated` 事件 →
   `handler.rs` 的 `is_token_rotated_frame` 关闭远程 session）。② `gateway.devices.revoke
@@ -72,7 +75,15 @@
   授权（loopback 或有效凭据）= operator 全权，与本地一致。**审计**：远程失败连接记
   `AuditEventType::AuthFailure`，flood-guard 关连接记 `RateLimited`，入
   `SecurityAuditLog`（专用 drain，`start/mod.rs`，与 guardrail 解耦）；loopback 永不审计
-  （`connect::should_audit_connect_failure` 守）。
+  （`connect::should_audit_connect_failure` 守）。⚠️ **地雷（新 dispatch 路径必须过
+  process_request）**：admin 闸（`method_admin.rs`）和 `CALLER_ROLE`/`CALLER_USER`/
+  `CALLER_IS_LOOPBACK` 的 task-local scope 都住在 `process_request` **周围**（两个 WS 派发
+  站点 `do_lane_dispatch` 与幂等 `Proceed` 臂，各自把三个 task-local 包在
+  `process_request(...)` 调用外层）——任何绕开 `process_request` 直接派发 RPC 的新路径
+  （新 WS 帧类型、新内部快路径、新后台产地）都拿不到已解析的 `(user, role)`，也扫不到
+  `method_requires_admin` 闸：对 admin 方法家族它是一条无身份旁路，对 member 专属逻辑
+  它读到的 `current_caller_role()`/`current_caller_user()` 恒为 `None`（task-local 未
+  scope）。新增派发路径必须复用 `process_request`，不得重新实现一遍它的解析+派发。
 - **channel 工具闸**（`method_authz.rs::tool_requires_operator` + `tools/scoped/dispatch.rs`）：
   **仅治理 channel**（Telegram / Slack…）——`inbound_router` 按 `ChannelPermissionLevel`
   （默认 Chat ⇒ `guest`）盖 `caller_role`，禁 chat-tier channel 跑自配置类工具。Panel

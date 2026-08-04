@@ -500,4 +500,30 @@ mod tests {
         assert_eq!(user.as_deref(), Some(crate::gateway::security::store::OWNER_USER_ID));
         assert_eq!(role, "operator");
     }
+
+    // ── Task 7: P0 acceptance guards (spec §8, "单用户体验零变化") ──────────
+
+    #[test]
+    fn zero_change_loopback_is_owner_operator_on_fresh_store() {
+        // The single-user guarantee: a fresh (or migrated) deployment touching
+        // nothing new behaves exactly as before — loopback is a full operator.
+        let store = seeded_store();
+        let (user, role) = resolve_connection_identity(true, None, &store);
+        assert_eq!(role, "operator");
+        assert_eq!(
+            user.as_deref(),
+            Some(crate::gateway::security::store::OWNER_USER_ID)
+        );
+    }
+
+    #[test]
+    fn zero_change_admin_gate_is_inert_for_operator_and_internal() {
+        // operator (single-user default) and None (cron/internal) pass every method.
+        for m in ["gateway.token.rotate", "users.create", "providers.update"] {
+            assert!(crate::gateway::method_admin::method_requires_admin(m));
+        }
+        // The gate predicate refuses ONLY Some("member") — asserted at the
+        // chokepoint test in Task 4; here we pin the classifier side.
+        assert!(!crate::gateway::method_admin::method_requires_admin("chat.send"));
+    }
 }

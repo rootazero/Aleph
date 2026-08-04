@@ -9,17 +9,34 @@
 //! (`server::handler`). Never crosses the run's spawn boundary (`start_run` reads
 //! it while still in-task). Unset for non-gateway callers (cron, internal).
 //!
-//! LAN-trust: the gateway no longer authenticates, so every connection is an
-//! implicit operator — the dispatch loop always scopes `Some("operator")`. The
-//! task-local is retained so the config-tier tool gate keeps a single source of
-//! truth for the caller role.
+//! Multi-user role model (P0 identity foundation, spec §4): the gateway
+//! resolves a `(user, role)` pair per connection at `connect` —
+//! [`resolve_connection_identity`](crate::gateway::handlers::connect::resolve_connection_identity),
+//! called from `server::handler::resolve_stamped_identity` — and the WS
+//! dispatch loop scopes `CALLER_ROLE` / `CALLER_USER` / `CALLER_IS_LOOPBACK`
+//! from that resolution around every `process_request` call, at both dispatch
+//! stations (`do_lane_dispatch` and the idempotency `Proceed` arm). Loopback
+//! and any authorized-but-unbound credential (legacy shared token, a pre-v14
+//! device row with no `user_id`) still resolve to the implicit owner as
+//! `"operator"` — the single-user zero-change guarantee — but a device bound
+//! to a `Member` user role resolves to `"member"`, and a device bound to a
+//! deactivated user, or one whose `user_id` dangles (points at a row no
+//! longer in `users`), is walled to `"guest"` / no user rather than
+//! defaulting to owner (fail-closed on any store error or broken link, never
+//! a silent grant of full authority). The task-local is the single source of
+//! truth the config-tier tool gate (`TurnContext::caller_is_operator`,
+//! `role_is_operator`) and the admin-method gate (`method_admin.rs`, enforced
+//! once inside `process_request`) both read.
 
 use tokio::task_local;
 
 task_local! {
-    /// Originating connection role. Under LAN-trust this is always
-    /// `Some("operator")` inside a dispatch, or `None` for non-gateway callers
-    /// (cron, internal) — the gate treats absent role as trusted.
+    /// Originating connection role — `Some("operator")`, `Some("member")`, or
+    /// `Some("guest")`, resolved per connection by
+    /// [`resolve_connection_identity`](crate::gateway::handlers::connect::resolve_connection_identity)
+    /// (single-user deployments always resolve to `"operator"`, the
+    /// zero-change guarantee). `None` for non-gateway callers (cron,
+    /// internal) — the gate treats absent role as trusted.
     pub static CALLER_ROLE: Option<String>;
 
     /// Whether the originating gateway connection's peer is a loopback address

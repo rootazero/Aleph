@@ -960,6 +960,93 @@ which devices are connected right now). Both take effect immediately rather
 than at the next handshake. Rejected remote connects and flood-guard
 closes are recorded in the security audit log (`AuthFailure` / `RateLimited`).
 
+### 多用户角色层（P0）{#multi-user-roles-p0}
+
+The trust boundary above answers "is this connection authorized at all";
+this layer answers "authorized as **whom**, and with **what** authority."
+Landed as the P0 identity foundation
+(`docs/superpowers/plans/2026-08-04-p0-identity-foundation.md`), it stays
+strictly additive to the single-tier model — a single-machine deployment
+sees byte-identical behavior before and after.
+
+- **Users table.** `src/gateway/security/store/users.rs` adds a `users` table
+  (schema v14): `user_id`, `display_name`, `role ∈ {admin, member}`,
+  `status ∈ {active, deactivated}`, `created_at`. `role` drives the
+  admin/member boundary below; `status = deactivated` walls every connection
+  bound to that user, immediately (see deactivation below).
+- **Device / pairing linking.** Two independent binding paths feed the same
+  `users` table, both with identical COALESCE semantics ("an unbound rebind
+  never clobbers an existing binding; a still-unbound row after the write
+  defaults to the owner"):
+  - **Panel devices** (`devices.user_id`): `gateway.ticket.create` can bind a
+    bootstrap ticket to a `user_id`; the device that exchanges it
+    (`DeviceTokenManager::exchange_bootstrap_ticket`) inherits the binding via
+    `upsert_device`'s `COALESCE(excluded.user_id, devices.user_id)`, and
+    `set_device_user_if_unbound` defaults a brand-new unbound pairing to the
+    owner.
+  - **Channel senders** (`pairing_store.approved_senders.user_id`): approving
+    a channel sender (`PairingStore::approve`) can bind the same way;
+    `sender_user(channel, sender_id)` resolves it with the same
+    bound-is-sticky / unbound-defaults-to-owner semantics.
+- **Resolved per connection**, not just per credential:
+  `handlers/connect.rs::resolve_connection_identity` turns an authorized
+  connection into `(Option<user_id>, role)` — loopback and any
+  authorized-but-unbound credential (legacy shared token, a pre-v14 device row
+  with no `user_id`) still resolve to the implicit owner as `"operator"` (the
+  zero-change guarantee); a device bound to an `admin`-role user resolves to
+  `"operator"`, one bound to a `member`-role user resolves to `"member"`; a
+  device bound to a **deactivated** user, or whose `user_id` points at a row
+  no longer in `users` (dangling reference), fails **closed** to
+  `("guest", None)` — a lookup that could not be performed, or a link known to
+  be broken, must never silently grant full authority. The pair rides
+  `CALLER_ROLE` / `CALLER_USER` task-locals (`src/gateway/caller_identity.rs`)
+  scoped around every `process_request` call.
+- **Admin / member method boundary** (spec §4.6). `method_admin.rs`'s
+  `method_requires_admin` classifies RPC **methods** by prefix — sibling of
+  the pre-existing `method_authz.rs`, which classifies **tools** for the
+  channel chat-tier gate; the two are separate axes (method vs. tool) and
+  don't substitute for each other. A prefix match gates the whole family by
+  default (fail-closed for privilege); a short allowlist re-opens member-safe
+  reads inside an otherwise-admin family. Representative summary — the
+  authoritative, mechanically-enumerated 72-family table lives in
+  `method_admin.rs`'s own module doc, not duplicated here:
+
+  | Family | Verdict | Why |
+  |---|---|---|
+  | `gateway.*`, `users.*`, `cluster.*`, `services.*` | **admin** | Trust-boundary credentials/tokens/devices, principal management, fleet membership, server process control |
+  | `providers.*`, `embedding_providers.*`, `generation_providers.*`, `channels.*`, `channel.*`, `discord.*` | **admin** | Server-global provider/channel credentials & config |
+  | `config.*`, `secrets.*`, and 11 Settings-page `*_config.*` families (`security_config.` … `route_config.`), `routing_rules.*`, `logs.*` | **admin** | Server configuration surfaces (Settings page) |
+  | `extensions.*`, `mcp.*`, `mcp_config.*`, `skills.*`, `bundled.*`, `plugins.*`/`plugin.*`, `hooks.*`, `runtimes.*` | **admin** | Install-class capability surfaces |
+  | `agents.*` (carve-outs `agents.list`/`agents.get`), `identity.*`, `moa.*`, `acp.*` | **admin** | Server-global persona/shared config, not per-user |
+  | `cron.*`, `heartbeat.*` (carve-outs `.list`/`.get`/`.runs`) | **admin** | Scheduled automation — mirrors `method_authz.rs`'s existing tool-tier ruling, so the RPC surface isn't a lower-privilege bypass of it |
+  | `daemon.*`, `wizard.*`, `diagnostics.*`, `pty.*`, `exec.*` | **admin** | Fleet lifecycle, raw interactive shell, exec-approval gate resolution |
+  | `connect`, `chat.*`, `sessions.*`, `memory.*`, `projects.*`, `artifacts.*`, `tools.*`, `fs.*`, `teams.*`, `workspace.*`, `voice.*`, `graph.*` | **open** | Member daily / caller's-own-data surfaces; per-user *visibility* filtering is P1's job, not this gate's |
+  | `users.me`, `users.list`, `agents.list`, `agents.get`, `heartbeat.list`/`.get`/`.runs` | **open** | Member-safe reads, carved out of otherwise-admin families |
+
+  Enforced at **one chokepoint** inside `process_request`
+  (`src/gateway/server/handler.rs`) — both WS dispatch stations (the
+  `do_lane_dispatch` closure and the idempotency `Proceed` arm) scope
+  `CALLER_ROLE` around `process_request`, so this single check covers both. A
+  `"member"` role hitting an admin-classified method is refused with the same
+  error code the login wall uses for non-`connect` methods on walled
+  connections. `None` (cron/internal) and `"operator"` pass every method; a
+  `"guest"` connection never reaches this check for non-`connect` methods
+  because the login wall above already refuses it first.
+- **Deactivation kicks live sessions.** `users.update { status: "deactivated"
+  }` revokes every live device bound to that user through the same
+  `revoke_device_and_kick` pipeline `gateway.devices.revoke` uses (demote the
+  connection to guest, then close the socket) — not a second implementation.
+  See `src/gateway/CLAUDE.md`'s revocation landmines for the ordering /
+  single-source discipline that pipeline depends on.
+- **Implicit owner, zero migration.** `ensure_bootstrap_owner` runs at every
+  store open: if `users` is empty it mints `u-owner` (`admin`, `active`) and
+  adopts every un-owned **panel** device (`devices.user_id IS NULL AND
+  device_type = 'panel'`; shared cluster-node rows are machines, never
+  adopted). Every pre-existing single-user deployment therefore ends up with
+  exactly one user, owning every device it already had — loopback and legacy
+  credentials keep resolving to that same owner as full operator, so the
+  single-user experience is unchanged.
+
 ### Network boundary = reachability
 
 - **Default — loopback only.** `aleph-server` binds `127.0.0.1`
