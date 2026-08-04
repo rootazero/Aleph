@@ -12,13 +12,14 @@
 
 ## 2. 为什么是这个形状（Gap Analysis vs buzz）
 
-参考项目 **buzz**（`T:/Github/buzz`，Nostr relay 工作区，"same audit trail, a different keypair"）。逐维度对照 —— **改这一层前先看这张表，不必重做对比**：
+参考项目 **buzz**（`T:/Github/buzz` / macOS `/Volumes/TBU4/Github/buzz`，Nostr relay 工作区，"same audit trail, a different keypair"）。逐维度对照 —— **改这一层前先看这张表，不必重做对比**：
 
-| 维度 | buzz | Aleph（第三轮后，2026-08-01） | 取舍 |
+| 维度 | buzz | Aleph（第四轮后，2026-08-04） | 取舍 |
 |---|---|---|---|
-| 身份载体 | secp256k1 keypair 即身份，`Keys::generate()` 单点铸造 | Ed25519 keypair，`AgentKeystore::mint` 单点铸造 | **映射**。曲线不同无实质差异；Ed25519 的原语（`gateway/security/crypto.rs`）Aleph 早已有，只是**零生产消费者**——本轮是它的第一个真实调用方 |
+| 身份载体 | secp256k1 keypair 即身份，`Keys::generate()` 单点铸造 | Ed25519 keypair，`AgentKeystore::mint_key` 单点铸造 | **映射**。曲线不同无实质差异；Ed25519 的原语（`gateway/security/crypto.rs`）Aleph 早已有，只是**零生产消费者**——本轮是它的第一个真实调用方 |
 | 私钥托管 | OS keyring / `0600` 文件 / env，best-effort scrub（自认 allocator 可能残留） | 既有 `SecretVault`：AES-256-GCM + 每条 HKDF salt + `Zeroizing` + `VaultIo` fcntl 原子写 | **Aleph 更强**。零新基建 |
-| 密钥轮转 | **不存在**（撤销＝不再签发 attestation） | `rotate` 保留旧钥（`retired_at`）以便旧记录仍可验，**不重置链锚** | **超越** |
+| 密钥轮转 | **不存在**（撤销＝不再签发 attestation） | `rotate_identity` 保留旧钥（`retired_at`）以便旧记录仍可验，**不重置链锚** | **超越** |
+| 轮转的原子性 | 无对位 | 铸钥 → 上链声明 → 绑定为活跃钥，**整个序列在单写者里**，调用方 await 结果 | **超越**（第四轮补）。两步协议的第二步一旦丢失就永久破链，而工具已经报了成功 |
 | 密钥生命周期的可信度 | 无生命周期 | 轮转/撤销**写进主体自己的链**（`IdentityRotated`/`IdentityRevoked`），链首恒为签名的 `IdentityCreated` | **超越**。`retired_at`/`revoked_at` 是普通可变列，只靠它们＝"能写库就能把撤销抹掉且验链照样过" |
 | 签名者归属 | 无签名 | 行声称的密钥必须**属于本链 agent**（`ForeignSigner`），退休钥算自己的 | **超越**。缺此检查时"伪造需要**该** agent 私钥"实为"需要**某个** agent 的私钥" |
 | 记录结构 | `audit_log`，`(community_id, seq)` 哈希链 | `agent_ledger`，`(agent_id, seq)` 哈希链 | 映射。租户位换成 agent 位 |
@@ -32,7 +33,10 @@
 | **密钥来源** | 无（无密钥） | 每个签名钥必须由**链自己**引入（首行 signer，或某条 `IdentityRotated` 的 target），否则 `UndeclaredSigner` | **超越**（第三轮补）。没有它，删掉身份行后下一次 append 会**静默新铸一把钥续链**，全链 ok=true |
 | 验证消费者 | **零**（`verify_chain` 无生产调用者；buzz-admin 全文无 "audit" 字样） | R8 工具 + 离线 CLI，**与链同批交付** | **超越**（这是 buzz 最大的实操缺口） |
 | **离站验证** | 无（`verify_chain` 读 Postgres，只能在 relay 侧跑） | `export` 自包含文档 + `verify --input` **零依赖**（无 DB / 无 vault / 无 daemon）+ 根指纹钉住 | **超越**（第三轮补）。此前三处文档都声称有，代码里没有 |
+| **离站检出尾部截断** | 无（`verify_chain(community, from, to)` 按区间验，对前缀/尾部双盲） | `--expect-head <seq>:<hash>` 钉上一份导出的链头，`HeadPin::{Extends,Truncated,Diverged}` 进 `ok` | **超越**（第四轮补）。此前它被三处文档点名为"唯一能发现截断的东西"却只是被**打印**出来供肉眼比对 |
 | 记录丢失可见性 | worker 失败只计 metric，不重试；链对"从未写入"的记录无话可说 | `AgentLedger::lost()` 随每次 `list`/`ledger`/`verify` 一起返回；写入端用 `send().await` **背压**而非 `try_send` 丢弃；计数**落库**（`agent_ledger_health`），故**离线验证器与重启后的 daemon 都看得见** | **超越** |
+| 关机时的队列 | 无对位（每条 append 同步过 advisory lock） | `identity::flush()` FIFO 屏障，优雅关机路径有界 await | **超越**（第四轮补）。排队未写＝**既丢记录又丢计数**，因为什么都没"失败" |
+| 撤销标记 vs 链 | 无（无生命周期概念） | `revoked_at` 列与链自己的 `IdentityRevoked` 两侧对账（`revoked_per_chain`），不一致就报出来 | **超越**（第四轮补）。"改回 NULL 抹不掉撤销"此前**没有任何代码在做这个比较** |
 | 委派身份 | 无子代理概念 | 子代理由 `AllowlistToolService` 就地开 `LEDGER_ACTOR` 作用域 → **自己的密钥、自己的链** | **超越**（参考实现无对位） |
 | 身份→权限 | `Scope` 16 条枚举，但生产恒发 `all_known()`（形同虚设）；真正差异在 membership / `MemberRole` / NIP-OA | 既有 `tool_permissions` 三级合并（global→agent→channel，`restrictive_min` 只收紧）× exec tier | **Aleph 领先，刻意不移植** buzz 的 scope 层：再加一套并行权限模型违 P2/P6 |
 | agent vs human | 只差**配额**不差权限 | 同（exec tier 与 agent 轴正交） | 平手 |
@@ -47,12 +51,13 @@
 - 伪造一条记录需要**该** agent 的私钥——仅有 DB 写权限不够（buzz 的 keyless 链在这一点上完全无防护：任何能写 DB 的人都能把整条链重算得天衣无缝）。「该」字是**执行出来的**：`ForeignSigner` 拒绝任何由别的 agent 的密钥签的行，哪怕签名在算术上完全有效。
 - 密钥生命周期本身也在链内：链首是签名的 `IdentityCreated`，轮转与撤销各是主体链上一条签名记录。把 `revoked_at` 列改回 NULL **不能**让撤销消失。
 - **换钥必须由链自己交代**。删掉可变的 `agent_identities` 行后，下一次 append 会新铸一把钥继续这条链——每一环有效、每一签名有效、密钥确属本 agent。`UndeclaredSigner` 抓的就是这一条：任何签名钥都必须被链内的 `IdentityCreated`/`IdentityRotated` 引入过。
-- **可以交给不信任本机的人验证**——`agent_identity(action="export")` / `aleph-server identity export` 产出自包含文档，`aleph-server identity verify --input` 在**没有 DB、没有 vault、没有 Aleph** 的机器上跑同一套走查。前提是**钉住根指纹**（下一节）。
+- **可以交给不信任本机的人验证**——`agent_identity(action="export")` / `aleph-server identity export` 产出自包含文档，`aleph-server identity verify --input` 在**没有 DB、没有 vault、没有 Aleph** 的机器上跑同一套走查。前提是**钉住两个值**（下一节）：`--pin` 钉血统，`--expect-head` 钉链头。
+- **换钥这件事本身也不会丢**。轮转是「铸钥 → 上链声明 → 绑定为活跃钥」，整个序列在单写者里跑完，调用方 await 结果。任何一步失败都**停在绑定之前**：出让方仍是活跃钥、仍被链声明，新钥无人指向。撤销反向同理（先上链、后打标），所以两半只能落一半时，活下来的是难以抹掉的那一半。
 
 **买不到：**
 - **不防拥有 `~/.aleph` 的对手**。vault、主密钥、数据库在同一块盘上。这是本地优先 daemon 的固有边界，没有 HSM 或远端公证就无法逾越。文档不假装它能。
 - **不防进程内冒充**（见 §6）。
-- **对"从未写入"的记录无话可说**。链只能证明它包含的东西。所以 `lost()` 计数与 `ok` 判定**并排返回**——干净的 `ok` 绝不可单独解读为"完整"。
+- **对"从未写入"的记录无话可说**。链只能证明它包含的东西。所以 `lost()` 计数与 `ok` 判定**并排返回**——干净的 `ok` 绝不可单独解读为"完整"。**注意"排队未写"是第三种结局**：什么都没失败，所以 `lost()` 也不会 +1。优雅关机路径 await `identity::flush()` 把它收窄到「被 `kill -9` 或超过 5 秒的写者」。
 - **没钉指纹的导出什么也不证明**。造这份文档的人同时也挑了里面的公钥，所以拥有本机的对手可以现铸一把钥、签一条完全捏造的链，`verify --input` 干干净净地通过。把它变成证据要两个**各抄一次**的离站定值：**根指纹**（链开篇那把钥 —— 钉住后没人能拿另一条血统冒充这个 agent，因为换钥必须有一条**由被换掉那把钥签名**的轮转记录）与**链头**（上一份导出的 `last_seq`/`last_hash` —— 这是**唯一**能发现尾部截断的东西，因为锚是随文档走的，对手改它和改行一样自由）。
 
 ## 4. 架构
@@ -73,12 +78,18 @@ tools/scoped/dispatch.rs::execute_inner        ← 唯一生产者（全库唯�
         │           它们在 confirm_with_memory 之上返回，此前零记录）
         ▼
 identity::record_action(NewRecord)             ← 有界 mpsc(1024)，send().await 背压
-        │       ▲
-        │       └─ builtin_tools/agent_identity.rs：rotate/revoke 后补一条
-        │          IdentityRotated / IdentityRevoked 到**主体自己**的链
+        │                                         （LedgerJob::Append，即发即忘）
         ▼
-单写者任务 AgentLedger::append                  ← 空链先落签名 IdentityCreated(seq 1)
+单写者任务 —— 四种 job，都在这一个队列里 FIFO
+        │  Append  → AgentLedger::append          空链先落签名 IdentityCreated(seq 1)
         │                                         → 定位 → 哈希 → 签名 → 插入 → 推锚（单事务）
+        │  Rotate  → perform_rotate               铸钥 → 上链声明（由新钥签）→ 绑定为活跃钥
+        │  Revoke  → perform_revoke               上链声明（由被撤那把钥签）→ 打 revoked_at
+        │  Flush   → 屏障，ack 即代表它之前的全部已落盘
+        │       ▲
+        │       └─ identity::{rotate_identity, revoke_identity, flush}（**await 结果**）
+        │          ← builtin_tools/agent_identity.rs（R8 工具，纯 I/O）
+        │          ← commands/start/mod.rs 优雅关机（flush，有界 5s）
         ▼
 security.db : agent_keys / agent_identities / agent_ledger / agent_ledger_health（schema v13）
         ▲
@@ -137,6 +148,13 @@ SHA256( "aleph-agent-ledger-v1"
 
 `verify` **报告全部** fault 而非首个即停：判断发生了什么需要损伤的**形状**，不只是存在性。
 
+两个**不是 fault** 但同样进报告的判定（它们各有一个良性成因，报成 fault 会喊狼）：
+
+| 字段 | 含义 | 良性成因 |
+|---|---|---|
+| `revocation_disagrees()` | `revoked_at` 列与链自己的 `IdentityRevoked` 说法不一 | 一条生命周期记录在写入前就丢了（`failed_appends` 已经计过） |
+| `head_pin`（仅离站） | 本文档相对**上一份导出**的关系：`Extends` / `Truncated` / `Diverged` | 无——`Truncated`/`Diverged` 直接进 `ok=false` |
+
 **`UndeclaredSigner` 判的是集合成员，不是相邻关系** —— 记录异步入队，所以一次在轮转**之前**发起的调用完全可能落在轮转记录**之后**、并由新钥签名（同 §4 的"归属的时间语义"）。要求轮转记录必须紧邻它覆盖的第一行，等于把这个竞态当成篡改报出来。判据是：链内出现过的每个 `signer_fp`，都必须是首行的签名钥、或某条 `IdentityCreated`/`IdentityRotated` 的 `target`。
 
 **枚举的是身份表 ∪ 链表**。`verify_all` 若只走身份表，删一行就让那条链**整个退出验证视野**，得到一句"全部链 OK"——它只是不再看那一条了。同理 `verify(agent)` 对"有记录无身份行"报 fault 而不是抛 `UnknownAgent`：只有既无身份又无记录才叫未知 agent。
@@ -151,10 +169,14 @@ SHA256( "aleph-agent-ledger-v1"
 4. **无 owner 层**。buzz 的 NIP-OA（owner 签名证明"谁授权了这个 agent"，作者身份永不改写）没有移植：Aleph 没有 owner 密钥概念，凭空造一个是没有消费者的抽象（YAGNI 撤回规则）。父子委派的**事实**已经落在父链上（`ToolCall(target="subagent")`，`detail` 带 `agent_type`），再加一个 `Delegation` 变体是零增量信息。
 5. **不做启动时验链**。全量验证要读遍每条链的每一行并逐行验签，那不该挂在启动路径上；而且"daemon 自己写的日志里有一行 warning"本来也不是任何人会据以行动的证据。验证属于被问到的时候——以及，对真正要紧的场景，属于**没写这些记录的那个进程**（`aleph-server identity verify`）。
 
-6. **导出的锚是随文档走的**。`ChainExport.anchor_seq` / `anchor_hash` 由产出文档的那台机器写，所以**尾部截断在离站验证里检不出来**——对手把行删掉、把锚一起改小即可。根指纹钉不住这个（截断后的链仍开在同一把钥下）。唯一的解是**钉链头**：把上一份导出的 `last_seq`/`last_hash` 记在别处，下一份必须是它的延长。这不是遗漏，是"自包含文档 + 敌方产出"这一组合的固有上限，写在这里以免它被当成 `--pin` 已经解决的事。
+6. **导出的锚是随文档走的**。`ChainExport.anchor_seq` / `anchor_hash` 由产出文档的那台机器写，所以**光靠文档自身检不出尾部截断**——对手把行删掉、把锚一起改小即可，根指纹也钉不住（截断后的链仍开在同一把钥下）。解法是**钉链头**（第四轮落地）：`--expect-head <seq>:<hash>` 要求本文档在那个 seq 上有那一行、那个哈希，`Truncated` / `Diverged` 直接判 `ok=false`。**仍然是外带定值**——它证明的是"这份是我上次见到那份的延长"，而不是"这份完整"；从没导出过第一份的人拿不到这个保证。这条边界因此没有消失，只是从"无法检出"变成"必须有人在链外记住一个值"。
 7. **不做增量/分段导出**。导出恒为整链：前缀与那条 `IdentityCreated` 正是"这条链从哪开始、开在哪把钥下"的依据，从中段起的片段两样都证明不了（并且会直接踩 `PrefixMissing`）。
 
 **已解决（勿再按旧结论行事）**：
+- ~~工具的 `DESCRIPTION` 随 schema 发给模型~~ → **它没有**（第四轮修）。`BUILTIN_TOOL_DEFINITIONS` 的手写字面量整体遮蔽了常量，而那条字面量连 `export` 都不提；第三轮写进 DESCRIPTION 的整套钉指纹说明因此一个模型都没收到。现指向常量，守卫断言在**目录那一侧**。
+- ~~rotate/revoke 之后那条链记录一定会写进去~~ → **它可能丢，且丢了就永久破链**（第四轮修：两半收进单写者并 await）。
+- ~~进程退出时队列里的记录至多是"丢了并被计数"~~ → **既没写也没计数**（第四轮修：`flush()` 屏障 + 关机 await）。
+- ~~离站验证已经能靠 `--pin` 兜住~~ → `--pin` 只兜血统；尾部截断要 `--expect-head`，而它第四轮才有实现。
 - ~~子代理的工具调用记在父 agent 名下~~ → 已修（§4 的身份注入）。团队成员从来不受影响：成员 run 自己拥有一个 turn（`SessionKey::task(agent_id, "team", …)`）。
 - ~~`lost()` 只在写入进程内可见~~ → 已落库（`agent_ledger_health`），离线验证器与重启后的 daemon 都读得到。
 - ~~删掉 `agent_identities` 一行即可让整条链退出验证~~ → 已修（第三轮：`verify_all` 枚举并集 + `IdentityMissing`）。
@@ -166,7 +188,8 @@ SHA256( "aleph-agent-ledger-v1"
 
 - **R10**：`src/harness/` **零改动**（三轮都是）。账本挂在 `tools/scoped/`，身份注入挂在 `agents/allowlist_tool_service.rs`；harness 只经 `Arc<dyn ToolService>` 多态调用，从不点名任何一个。棘轮以 `budget.rs::CEILING` 为准，本轮不动它。
 - **R3 / P6**：**零新依赖**（三轮都是）。`ed25519-dalek` / `sha2` / `hex` / `zeroize` 早已是直接依赖，Ed25519 原语早已存在且此前**零生产消费者**；导出格式用的 `serde` / `serde_json` 同理。
-- **R8**：第三轮只给 `agent_identity` **加了一个 action**（`export`），没有新工具 —— 所以下面那 6 个注册点一个都不用动。这是刻意的：新造一个 `agent_export` 工具会同时新增六处登记面和一条 `OPERATOR_TOOLS` 条目，换来的信息量为零。
+- **R8**：第三轮只给 `agent_identity` **加了一个 action**（`export`），第四轮一个 action 都没加 —— 所以下面那 6 个注册点两轮都不用动。⚠️ **但第 7 个登记面是第四轮才发现的**：`BUILTIN_TOOL_DEFINITIONS` 的 `description` 字段。写成字面量就**整体遮蔽** `AlephTool::DESCRIPTION`（`agent_init` 只追加目录里没有的名字），于是往 DESCRIPTION 里写的任何东西模型一个字都收不到。判据：**往 `DESCRIPTION` 里写模型必须看到的内容之前，先确认目录条目指向常量**——这条对全仓 156 个工具都成立，见 CLAUDE.md R9 前置条件段。
+- **R7**：第四轮新增的判定没有一个是推理：`HeadPin` 是三路哈希比较，`revoked_per_chain` 是取链上最后一条生命周期记录，`revocation_disagrees` 是两个布尔比大小。账本仍然只**记录**，不评分、不分类、不选恢复策略。
 - **R4**：`src/gateway/security/store/identity.rs` 纯 SQL I/O（对齐 `devices.rs`/`tokens.rs`），全部摘要/哈希/签名在 `src/identity/`。
 - **R7**：账本**记录**，不**评分**、不分类、不选恢复策略。"是否变更类"读工具**自己声明**的 `is_idempotent` 元数据（与 exec tier 同一个 `tool_facts` 缝），不猜意图、不查名单。
 - **R8**：能力经 `agent_identity` 工具对话式可达，`OPERATOR_TOOLS` 门控。**6 个注册点**（改工具时别漏）：`builtin_tools/mod.rs` · `builtin_registry/definitions.rs`（表项 + `create_tool_boxed`）· `builtin_registry/groups.rs`（**唯一有测试强制的一处**）· `builder/core_tools.rs`（元数据/schema）· `registry/tool_registry_impl.rs`（**真正的执行分派臂**）· `method_authz.rs::OPERATOR_TOOLS`。漏掉后两者中任何一个 ＝ 工具被通告给模型却在调用时报错或越权。
@@ -183,6 +206,8 @@ agent_identity(action="rotate", agent="main")      # 换钥；历史仍可验，
 agent_identity(action="export", agent="main")      # 写出自包含文档，回 path + 该钉的两个值
 ```
 
+`rotate` / `revoke` **会等**那条生命周期记录真的写进链才返回。写不进就报错——而不是回一句 `ok` 然后让新钥在一条从没声明过它的链上签下去（那会让此后每一行都 `UndeclaredSigner`，永久）。
+
 `export` **写文件、不内联返回**：链是无界的，而这份文档的用途是交给别人，不是给模型读——内联等于把上下文窗口花在这段对话里没人会看的字节上。落点是 `<data_dir>/exports/`，文件名派生自 agent id，**不接受调用方给的路径**（不新增任何文件系统触达面，也没有穿越可写错）。
 
 `list` 里出现的不只是顶层 agent：**做过变更类动作的子代理角色各有自己的一条链**（身份即 `AgentDef.id`，故同一角色跨多次委派共用一条链——这是想要的，角色就是身份）。密钥在**首次被记录的动作**时铸造，纯只读的角色永远不会铸钥。链首那条 `identity_created` 就是它开始的地方。
@@ -198,12 +223,22 @@ aleph-server identity export --agent main --out chain.json
 **在审计方的机器上**（没有 Aleph、没有 `security.db`、没有 vault —— 这一条在 `open_ledger` 之前分派，所以它是真的零依赖）：
 
 ```
-aleph-server identity verify --input chain.json --pin <第一次拿到的根指纹>
+aleph-server identity verify --input chain.json \
+    --pin <第一次拿到的根指纹> \
+    --expect-head <上一份导出报的 expect_head>
 ```
 
-不带 `--pin` 也能跑，但输出会**每次都说出来**它只证明了内部自洽。
+两个钉都可以省，但输出会**每次都把省掉的那个说出来**：没有 `--pin` 就只证明了内部自洽（造文档的人也挑了里面的公钥），没有 `--expect-head` 就**检不出尾部截断**（锚是随文档走的）。写不出格式的 `--expect-head` 会被**拒绝**而不是当成没给——一个被静默读成"没钉"的钉子看起来和成功一模一样。
 
 ## 9. 熵减
+
+### 第四轮（2026-08-04）
+
+- **`AgentKeystore::rotate` 删除**，替换为它一直藏着的两个原语 `mint_key` / `activate`。理由不是"更小"，而是**这两步之间必须放一条链记录**——合成一个方法就把那条记录变成了调用方事后要补的第二步，而那正是本轮 F1 修的 bug。组合现在只有一处：`AgentLedger::perform_rotate`。
+- **`ExportPins` 取代 `&[String]`**，两种钉法一个入口。加第三种钉法时不必再改一次签名。
+- **root fingerprint 只推导一次**。CLI 的 `export` 曾自己 `records.first().signer_fp` 算一遍；现在两张脸都读 `verify_export` 的报告。
+- **`ExportPins::is_empty` 当轮撤回**（写了、零消费者）。
+- **顺手修好两处先于本轮存在的损坏**（独立提交）：`shared/logging` 的 `#[deprecated(since = "2026.08.04")]` 不合 semver，让 `cargo clippy --all-targets` 对**整个 workspace** 失败；`tests/cron_probe/delivery_alert.rs` 引用已删的 `pre_delivery_status`——**第四次**同型（`cf6db395b` / `dc8d32e0d` / `8ee77389b`），这次藏在 `test-helpers` feature 门后面，`cargo check` 与不带 feature 的 `cargo test --test '*'` 都编不到它。
 
 ### 第三轮（2026-08-01）
 
