@@ -81,11 +81,30 @@ fn devtools_tool_name(name: &str) -> Option<&str> {
     DEVTOOLS_TOOLS.contains(&bare).then_some(bare)
 }
 
+/// Whether `name` has a per-tool compressor at all.
+///
+/// Lets the ingress pass skip walking a result it could not compress, so every
+/// tool that is not one of these stays byte-identical for free.
+pub(crate) fn compresses(name: &str) -> bool {
+    devtools_tool_name(name).is_some()
+}
+
 /// Compress a `DevTools` tool output using a type-specific strategy.
 ///
 /// Non-DevTools tools are returned unchanged. Each `DevTools` tool gets a
 /// tailored compression that preserves actionable information while
 /// drastically reducing token count.
+///
+/// **Input shape matters.** Every strategy here reads either lines
+/// ([`compress_snapshot`], [`compress_console_messages`]) or a bare JSON array
+/// ([`compress_network_requests`]) — i.e. the payload a server actually sent,
+/// not a serialized envelope around it. Handed the latter, `compress_snapshot`
+/// sees three lines, matches no interactive role, and falls into its
+/// "structural summary" arm, where [`cap_line`] silently amputates the one line
+/// that holds the whole snapshot at 500 chars; `compress_network_requests`
+/// fails to parse and degrades to a blind head cut. That is why the ingress pass
+/// applies this **per text field** rather than to the flattened result — see
+/// [`crate::tool_output::ingress`].
 pub(crate) fn compress_tool_output(tool_name: &str, output: &str) -> String {
     let Some(tool_name) = devtools_tool_name(tool_name) else {
         return output.to_owned();

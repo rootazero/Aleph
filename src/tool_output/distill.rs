@@ -200,8 +200,21 @@ fn cap_chars(s: &str) -> String {
 ///
 /// Small inputs (`< MIN_INPUT_BYTES`) always return [`None`]: they are cheap to
 /// show in full and distillation would only lose context.
+///
+/// Input with **no line structure at all** also returns [`None`]. This module is
+/// line-oriented by construction — it classifies each line and renders the
+/// salient ones — so given one enormous line it reports `total_lines: 1`,
+/// matches an `"error"` substring somewhere inside it, and renders a
+/// [`MAX_LINE_CHARS`]-capped *prefix* under an `[Output digest: 1 lines, 1
+/// error]` header. That is a guess dressed up as a signal, and it is how a
+/// flattened JSON envelope (`{"success":false,"stdout":"…`) came to be presented
+/// as though it were the compile errors. Every caller needs this guard, so it
+/// lives here rather than in each of them.
 pub fn distill_output(text: &str) -> Option<OutputDigest> {
     if text.len() < MIN_INPUT_BYTES {
+        return None;
+    }
+    if !text.contains('\n') {
         return None;
     }
 
@@ -408,6 +421,23 @@ mod tests {
         // salient regardless; assert the error survived and salient is tiny.
         assert_eq!(digest.error_count, 1);
         assert!(digest.salient.len() <= 2);
+    }
+
+    /// A line-oriented digester cannot digest a single line. Without this guard
+    /// a flattened envelope produced a `[Output digest: 1 lines, 1 error]`
+    /// header over the first 400 chars of JSON — the exact shape the ingress
+    /// pass exists to prevent, reachable from every caller.
+    #[test]
+    fn single_line_input_is_never_distilled() {
+        let flat = serde_json::json!({
+            "success": false,
+            "exit_code": 101,
+            "stdout": "running tests\nerror[E0308]: mismatched types\n".repeat(200),
+        })
+        .to_string();
+        assert!(flat.len() > MIN_INPUT_BYTES);
+        assert!(!flat.contains('\n'), "precondition: one line");
+        assert!(distill_output(&flat).is_none());
     }
 
     #[test]

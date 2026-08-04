@@ -1130,75 +1130,25 @@ impl ScopedToolService {
         // nothing, so the success path stays byte-identical.
         super::artifact_harvest::annotate_media_failures(&mut out.value, &media_failures);
 
-        // Compress first: hands JSON to the per-tool summarizer that
-        // already exists in `tool_output::compressor`. The text we feed
-        // into Layer 2 reflects what the LLM will ultimately see.
-        let mut raw = match &out.value {
-            Value::String(s) => s.clone(),
-            other => other.to_string(),
-        };
-        let compressed = crate::tool_output::compressor::compress_tool_output(name, &raw);
-
         let explicit = self.inner.max_result_tokens_for(name);
         let budget = crate::tools::result_processing::resolve_result_budget(name, explicit);
 
-        // Ingress hygiene — the local clean/trim/summarise pass, applied only
-        // when the result is already over the tool's declared budget so the
-        // common case stays byte-for-byte identical.
-        //
-        // It has to run on `out.value` rather than on `compressed`: flattening a
-        // typed tool result with `Value::to_string()` escapes every newline and
-        // collapses the whole thing onto one line, which blinds both
-        // content-aware cleaners (`structured::classify` needs lines;
-        // `distill_output` iterates `text.lines()`). See `tool_output::hygiene`.
-        //
-        // `reduced_from` hands Layer 2 the untouched original so the offloaded
-        // blob — the model's way back to the dropped detail — is the full output,
-        // not the reduction.
-        let mut model_facing = compressed;
-        let mut reduced_from: Option<String> = None;
-        if let Some(limit) = budget {
-            if crate::context::budget::pressure::estimate_tokens_smart(&model_facing) > limit {
-                let mut cleaned = out.value.clone();
-                let reductions = crate::tool_output::hygiene::clean_result_value(&mut cleaned);
-                if !reductions.is_empty() {
-                    let flattened = match &cleaned {
-                        Value::String(s) => s.clone(),
-                        other => other.to_string(),
-                    };
-                    // Hygiene's own "never grow" guard measures each field
-                    // against the RAW value it walked, which is not the string
-                    // it is about to displace. For the DevTools family the
-                    // compressor has already cut the output hard, so a
-                    // reduction that is a genuine 30% win over the raw field
-                    // can still be several times larger than `compressed` —
-                    // and swapping it in made an over-budget result bigger.
-                    // Compare against what we would otherwise send.
-                    let before =
-                        crate::context::budget::pressure::estimate_tokens_smart(&model_facing);
-                    let after = crate::context::budget::pressure::estimate_tokens_smart(&flattened);
-                    if after < before {
-                        for r in &reductions {
-                            tracing::debug!(
-                                tool = name,
-                                field = %r.field,
-                                method = ?r.method,
-                                tokens_before = r.tokens_before,
-                                tokens_after = r.tokens_after,
-                                "ingress hygiene reduced a tool-result field"
-                            );
-                        }
-                        model_facing = flattened;
-                        // The offloaded blob is the model's only way back to the
-                        // detail that was dropped, so it has to be the untouched
-                        // original — `compressed` is itself a lossy cut (a
-                        // head/tail byte slice for `compress_generic`), and
-                        // persisting it made the reduction irreversible while
-                        // still calling the file "Full output".
-                        reduced_from = Some(std::mem::take(&mut raw));
-                    }
-                }
-            }
+        // Ingress: per-tool compression, then the content-type hygiene pass, both
+        // applied to `out.value` **while its text fields still carry real
+        // newlines**. Flattening first (`Value::to_string()` escapes every `\n`
+        // and collapses the result onto one line) blinds every cleaner in that
+        // module tree — see `tool_output::ingress` for the ordering and why it is
+        // the whole design.
+        let ingress = crate::tool_output::ingress::clean_for_ingress(name, &mut out.value, budget);
+        for r in &ingress.reductions {
+            tracing::debug!(
+                tool = name,
+                field = %r.field,
+                method = ?r.method,
+                tokens_before = r.tokens_before,
+                tokens_after = r.tokens_after,
+                "ingress hygiene reduced a tool-result field"
+            );
         }
 
         // Per-call file name suffix, so concurrent calls to the same tool do
@@ -1220,10 +1170,10 @@ impl ScopedToolService {
         let processed = crate::tools::result_processing::apply_result_budget(
             &call_id,
             name,
-            &model_facing,
+            &ingress.model_facing,
             self.result_store.as_deref(),
             budget,
-            reduced_from.as_deref(),
+            ingress.full_original.as_deref(),
         );
 
         // Extension hooks observe large tool results offloaded to disk.

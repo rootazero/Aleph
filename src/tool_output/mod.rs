@@ -16,6 +16,9 @@
 
 pub(crate) mod compressor;
 pub mod distill;
+mod fence;
 pub mod hygiene;
+pub mod ingress;
 pub mod sanitize;
 pub mod structured;
+mod walk;

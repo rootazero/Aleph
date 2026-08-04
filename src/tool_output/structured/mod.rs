@@ -118,10 +118,20 @@ impl Reduction {
 #[must_use]
 pub fn reduce(text: &str) -> Option<Reduction> {
     let lines: Vec<&str> = text.lines().collect();
-    if lines.len() < MIN_LINES {
-        return None;
-    }
     for kind in candidates(&lines) {
+        // The line floor is about *line texture*, not size: log / search / diff
+        // all work by selecting lines, so below `MIN_LINES` there is nothing to
+        // select and the header costs more than it saves.
+        //
+        // JSON is exempt, because a compact document is one line **by
+        // construction** — `jq -c`, an API response, a `Value::to_string()`
+        // envelope — and that is exactly the shape whose only alternative is a
+        // head/tail cut through the middle of a structure, i.e. invalid syntax.
+        // Gating a structural reducer behind a line count made the one content
+        // type that does not need lines the one content type it could not reach.
+        if kind != ContentKind::Json && lines.len() < MIN_LINES {
+            continue;
+        }
         let reduced = match kind {
             ContentKind::Diff => diff::reduce_diff(text),
             ContentKind::Search => search::reduce_search(text),
@@ -184,10 +194,13 @@ fn candidates(lines: &[&str]) -> Vec<ContentKind> {
 #[must_use]
 pub fn classify(text: &str) -> Option<ContentKind> {
     let lines: Vec<&str> = text.lines().collect();
-    if lines.len() < MIN_LINES {
+    let first = candidates(&lines).first().copied()?;
+    // Mirror `reduce`'s per-kind line floor exactly, or this introspection
+    // answers a different question than production asks.
+    if first != ContentKind::Json && lines.len() < MIN_LINES {
         return None;
     }
-    candidates(&lines).first().copied()
+    Some(first)
 }
 
 /// Below this line count, structured reduction isn't worth the header cost;
@@ -331,6 +344,40 @@ mod tests {
     fn tiny_input_is_not_reduced() {
         let tiny = "error: boom\nwarning: x\n";
         assert_eq!(classify(tiny), None, "under MIN_LINES → no reduction");
+    }
+
+    /// A compact JSON document is one line by construction, and a head/tail cut
+    /// through it produces invalid syntax. The line floor is about line texture,
+    /// so it must not apply to the one reducer that parses instead of selecting.
+    #[test]
+    fn a_single_line_json_document_is_still_reduced() {
+        let payload = "y".repeat(4000);
+        let one_line = format!(
+            "{{\"status\":\"error\",\"message\":\"connection refused\",\"body\":\"{payload}\"}}"
+        );
+        assert_eq!(one_line.lines().count(), 1, "precondition: one line");
+
+        let r = reduce(&one_line).expect("a compact JSON document must still reduce");
+        assert_eq!(r.kind, ContentKind::Json);
+        assert!(
+            r.body.contains("\"status\": \"error\""),
+            "the salient scalars must survive; got:\n{}",
+            r.body
+        );
+        assert!(
+            serde_json::from_str::<serde_json::Value>(&r.body).is_ok(),
+            "the reduction must still be valid JSON"
+        );
+    }
+
+    /// …but the line-oriented kinds keep their floor, or a three-line snippet
+    /// gets a header that costs more than the lines it drops.
+    #[test]
+    fn the_line_floor_still_applies_to_the_line_oriented_kinds() {
+        let short_log =
+            "$ make\nerror: one\nerror: two\nerror: three\nBuild finished with 3 errors\n";
+        assert!(short_log.lines().count() < MIN_LINES);
+        assert!(reduce(short_log).is_none());
     }
 
     #[test]
