@@ -20,7 +20,8 @@ const MIN_PER_FILE: usize = 4;
 
 /// Cheap detector: a unified diff has unmistakable structural markers.
 pub(super) fn looks_like_diff(lines: &[&str]) -> bool {
-    let mut changes = 0usize;
+    let mut added = 0usize;
+    let mut removed = 0usize;
     for &l in lines {
         if l.starts_with("diff --git ") {
             return true;
@@ -29,12 +30,30 @@ pub(super) fn looks_like_diff(lines: &[&str]) -> bool {
             return true;
         }
         if is_change(l) {
-            changes += 1;
+            if l.starts_with('+') {
+                added += 1;
+            } else {
+                removed += 1;
+            }
         }
     }
     // A header-less fragment (e.g. a `diff -u` paste without `diff --git`) still
-    // qualifies if a solid fraction of lines are `+`/`-` changes.
-    changes >= 4 && changes * 2 >= lines.len()
+    // qualifies if a solid fraction of lines are `+`/`-` changes — but it must
+    // carry **both** directions.
+    //
+    // "Enough lines start with `-`" alone is the shape of a **markdown bullet
+    // list**: a changelog, a release-notes page or any fetched `- item` list is
+    // ~100 % dash-prefixed and sailed through. That misclassification is fatal
+    // rather than merely wasteful, because a Diff verdict is *exclusive* (see
+    // `candidates`): the log and search reducers never get a look, and the diff
+    // reducer — which keeps "change" lines and trims context — kept the first
+    // `MAX_KEPT` bullets and dropped the error lines at the end, under a header
+    // reading `[compacted diff: kept 240/603 lines]`.
+    //
+    // A header-less pure-deletion (or pure-addition) paste is genuinely rare and
+    // indistinguishable from a list, so it falls through to the log reducer or
+    // head/tail truncation — both of which are safe, unlike the reverse mistake.
+    added >= 1 && removed >= 1 && added + removed >= 4 && (added + removed) * 2 >= lines.len()
 }
 
 /// Structural diff metadata lines (file headers, hunk headers, mode/rename).
@@ -259,6 +278,44 @@ mod tests {
         let prose = "- a bullet point\nsome prose here\nmore prose\n";
         let lines: Vec<&str> = prose.lines().collect();
         assert!(!looks_like_diff(&lines), "a stray bullet is not a diff");
+    }
+
+    /// A markdown bullet list is ~100 % `-`-prefixed, which the old "enough
+    /// lines start with a change marker" gate accepted outright. Because a Diff
+    /// verdict is exclusive, a fetched changelog was then handed to the diff
+    /// reducer, which kept the first `MAX_KEPT` bullets and dropped the error
+    /// lines at the end — under a header claiming it had compacted a diff.
+    #[test]
+    fn a_markdown_bullet_list_is_not_a_diff() {
+        let mut page = String::from("Release notes\n");
+        for i in 0..600 {
+            page.push_str(&format!(
+                "- changelog entry {i} about nothing in particular\n"
+            ));
+        }
+        page.push_str("error: the build failed\n");
+        page.push_str("Total: 3 errors, 1 warning across 600 entries\n");
+        let lines: Vec<&str> = page.lines().collect();
+        assert!(
+            !looks_like_diff(&lines),
+            "a dash-prefixed list carries no additions and is not a diff"
+        );
+        // …and the log reducer, which does get a look now, keeps the signal.
+        let r = super::super::reduce(&page).expect("a page with a summary reduces");
+        assert_eq!(r.kind, ContentKind::Log);
+        assert!(
+            r.body.contains("error: the build failed"),
+            "got:\n{}",
+            r.body
+        );
+    }
+
+    /// The real header-less fragment the fallback exists for still qualifies.
+    #[test]
+    fn a_headerless_fragment_with_both_directions_is_still_a_diff() {
+        let frag = "-removed one\n-removed two\n+added one\n+added two\n+added three\n context\n";
+        let lines: Vec<&str> = frag.lines().collect();
+        assert!(looks_like_diff(&lines));
     }
 
     #[test]

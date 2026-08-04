@@ -76,12 +76,33 @@ pub(crate) const CAPABILITY_READ_BUILTIN_NAMES: &[&str] = &[
 /// in sync with every server's discovered tools. Returns the `JoinHandle` so
 /// callers may abort it on shutdown; dropping the handle merely detaches the
 /// task, which exits on its own once the manager's event channel closes.
+///
+/// # The subscription is not enough on its own
+///
+/// A `broadcast` receiver only delivers what is sent *after* it subscribes, and
+/// boot auto-starts every persisted server inside `McpManagerActor::run` — which
+/// is spawned long before this function is called, because the bridge waits for
+/// the tool catalog to exist so it can attach health probes. So by the time the
+/// subscription opens, the ordinary deployment has already emitted (and lost)
+/// one `ServerStarted` per configured server, and their tools would never reach
+/// the registry: the manager reports them healthy, `mcp.list` shows their tool
+/// counts, and the model is offered none of them. Only a later event — a manual
+/// restart, an add, a crash, or a server-sent `tools/list_changed` — would ever
+/// repair it.
+///
+/// The startup reconcile closes that window. It is also self-synchronising: the
+/// actor answers `ListServers` from its command loop, which it does not enter
+/// until auto-start has finished, so the first reconcile always observes the
+/// complete set rather than a half-started one.
 #[must_use]
 pub fn spawn_tool_bridge(
     handle: McpManagerHandle,
     registry: Arc<ToolHandlerRegistry>,
     tool_catalog: Option<Arc<ToolCatalog>>,
 ) -> JoinHandle<()> {
+    // Subscribe before the reconcile below, not after: anything that starts
+    // while the reconcile is in flight then arrives as an event, and
+    // `sync_server` is idempotent about the overlap.
     let mut events = handle.subscribe();
     tokio::spawn(async move {
         tracing::info!("MCP tool bridge started");
@@ -90,6 +111,15 @@ pub fn spawn_tool_bridge(
         let mut prompt_live = false;
         let mut login_live = false;
         let catalog = tool_catalog.as_ref();
+        resync_all(&handle, &registry, catalog).await;
+        reconcile_capability_tools(
+            &handle,
+            &registry,
+            &mut resource_live,
+            &mut prompt_live,
+            &mut login_live,
+        )
+        .await;
         loop {
             match events.recv().await {
                 Ok(event) => {
@@ -321,5 +351,123 @@ fn set_builtin(
         let _ = registry.unregister(name);
         tracing::info!(tool = name, "MCP tool bridge: capability builtin removed");
         false
+    }
+}
+
+// =============================================================================
+// Tests
+// =============================================================================
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::mcp::manager::{HealthStatus, McpCommand, McpServerInfo, McpTransportType};
+    use crate::mcp::McpTool;
+    use crate::tools::handlers::registration::register_mcp_tools;
+    use tokio::sync::{broadcast, mpsc};
+
+    fn server_info(id: &str) -> McpServerInfo {
+        McpServerInfo {
+            id: id.to_string(),
+            name: id.to_string(),
+            transport: McpTransportType::Stdio,
+            tool_count: 0,
+            resource_count: 0,
+            resource_template_count: 0,
+            prompt_count: 0,
+            health: HealthStatus::default(),
+        }
+    }
+
+    /// A manager that is already up with `servers` connected, answering only
+    /// what the bridge asks. It never emits an event — which is the whole point:
+    /// the real one emits them during `run()`, before any bridge exists.
+    fn fake_manager(servers: Vec<McpServerInfo>) -> (McpManagerHandle, JoinHandle<()>) {
+        let (tx, mut rx) = mpsc::channel::<McpCommand>(32);
+        let (event_tx, _) = broadcast::channel(32);
+        let handle = McpManagerHandle::new(tx, event_tx);
+        let task = tokio::spawn(async move {
+            while let Some(cmd) = rx.recv().await {
+                match cmd {
+                    McpCommand::ListServers { respond_to } => {
+                        let _ = respond_to.send(servers.clone());
+                    }
+                    McpCommand::GetClient { respond_to, .. } => {
+                        // A client with no transport: `list_tools()` is empty,
+                        // so a sync registers nothing and only the stale-entry
+                        // sweep is observable.
+                        let _ = respond_to.send(Some(Arc::new(crate::mcp::McpClient::new())));
+                    }
+                    McpCommand::ListServerConfigs { respond_to } => {
+                        let _ = respond_to.send(Vec::new());
+                    }
+                    _ => {}
+                }
+            }
+        });
+        (handle, task)
+    }
+
+    async fn eventually_absent(registry: &ToolHandlerRegistry, name: &str) -> bool {
+        for _ in 0..100 {
+            if !registry.snapshot().contains_key(name) {
+                return true;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        }
+        false
+    }
+
+    /// **The bridge must reconcile once at startup, not wait for an event.**
+    ///
+    /// Boot auto-starts every persisted server inside `McpManagerActor::run`,
+    /// which is spawned well before `spawn_tool_bridge` (the bridge waits for
+    /// the tool catalog). A `broadcast` receiver delivers nothing sent before it
+    /// subscribed, so an events-only bridge learns about *none* of the servers
+    /// the deployment actually has: the manager reports them healthy and
+    /// `mcp.list` shows their tool counts, while the model is offered none of
+    /// their tools until someone restarts a server by hand.
+    ///
+    /// Observed on a live daemon three boots running (2026-08-04, real
+    /// chrome-devtools-mcp: 29 tools healthy, 0 reaching the model).
+    ///
+    /// The assertion is on the registry, not on the call: a stale entry for an
+    /// already-connected server is swept only if `sync_server` actually ran for
+    /// it, and `sync_server` is reached at startup only through the reconcile.
+    #[tokio::test]
+    async fn a_server_that_connected_before_the_bridge_existed_is_still_reconciled() {
+        let registry = Arc::new(ToolHandlerRegistry::new());
+        register_mcp_tools(
+            &registry,
+            None,
+            Arc::new(crate::mcp::McpClient::new()),
+            "srv",
+            &[McpTool {
+                name: "ghost".into(),
+                description: "left over from a previous connection".into(),
+                input_schema: serde_json::json!({"type": "object"}),
+                requires_confirmation: false,
+                read_only: false,
+                idempotent: false,
+            }],
+            None,
+        )
+        .await;
+        assert!(
+            registry.snapshot().contains_key("srv__ghost"),
+            "precondition: the registry starts with a stale entry for srv"
+        );
+
+        let (handle, manager) = fake_manager(vec![server_info("srv")]);
+        let bridge = spawn_tool_bridge(handle, Arc::clone(&registry), None);
+
+        assert!(
+            eventually_absent(&registry, "srv__ghost").await,
+            "the bridge never reconciled the already-connected server: it is \
+             waiting for an event that was emitted before it subscribed"
+        );
+
+        bridge.abort();
+        manager.abort();
     }
 }

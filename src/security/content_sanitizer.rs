@@ -123,20 +123,143 @@ fn generate_boundary_id() -> String {
 pub fn wrap_external_content(content: &str, source: ContentSource) -> String {
     let id = generate_boundary_id();
     let source_label = source.as_label();
-
-    let normalized = normalize_homoglyphs(content);
-
-    let (cleaned, _) = crate::security::unicode_guard::strip_invisible_chars(&normalized);
-
-    let escaped = cleaned
-        .replace("<<<EXTERNAL_", "<<<ESCAPED_EXTERNAL_")
-        .replace("<<<END_EXTERNAL_", "<<<ESCAPED_END_EXTERNAL_");
-
-    let (scrubbed, _) = scrub_special_tokens(&escaped);
+    let scrubbed = sanitize_external_text(content);
 
     format!(
         "<<<EXTERNAL_UNTRUSTED_CONTENT id=\"{id}\" source=\"{source_label}\">\n{scrubbed}\n<<<END_EXTERNAL_UNTRUSTED_CONTENT id=\"{id}\">",
     )
+}
+
+/// The content transforms of [`wrap_external_content`] **without** the boundary
+/// markers: homoglyph folding, invisible-character stripping, fence-spoof
+/// escaping, and tokenizer/format-marker scrubbing.
+///
+/// The fence and the scrubbing defend different things. The fence tells the
+/// model where an untrusted region starts and stops; the scrubbing is what stops
+/// a hostile payload from smuggling a synthetic role switch even if the model
+/// ignores the fence. Short structured metadata (a resource URI, a link title)
+/// needs the second without earning the ~150 bytes of the first, and a caller
+/// that fences the payloads block-by-block still has to scrub what it did not
+/// fence — otherwise splitting one big fence into several smaller ones would
+/// quietly *lose* coverage on everything in between.
+#[must_use]
+pub fn sanitize_external_text(content: &str) -> String {
+    let normalized = normalize_homoglyphs(content);
+    let (cleaned, _) = crate::security::unicode_guard::strip_invisible_chars(&normalized);
+    let escaped = cleaned
+        .replace("<<<EXTERNAL_", "<<<ESCAPED_EXTERNAL_")
+        .replace("<<<END_EXTERNAL_", "<<<ESCAPED_END_EXTERNAL_");
+    scrub_special_tokens(&escaped).0
+}
+
+/// Opening line prefix of the boundary emitted by [`wrap_external_content`].
+pub const FENCE_OPEN_PREFIX: &str = "<<<EXTERNAL_UNTRUSTED_CONTENT id=\"";
+/// Closing line prefix of the same boundary.
+pub const FENCE_CLOSE_PREFIX: &str = "<<<END_EXTERNAL_UNTRUSTED_CONTENT id=\"";
+
+/// A fenced payload split into its structural markers and its interior.
+///
+/// The markers are *structure*, not content: they are what tells the model the
+/// interior is untrusted, and an unbalanced fence is strictly worse than no
+/// fence (the model reads an opening marker with no end and must guess where
+/// the untrusted region stops). Anything that rewrites fenced text therefore
+/// has to rewrite the interior only and re-emit the markers verbatim.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct FencedText<'a> {
+    /// Our own text ahead of the opening marker, if any.
+    ///
+    /// Not every fenced field is *only* a fence: `web_fetch` prepends a
+    /// `[fetch_focus: …]` line when the caller asked a question about the page.
+    /// That text is ours, not the server's, so it sits outside the boundary —
+    /// and a splitter that insisted the fence start at byte 0 would decline
+    /// exactly those results and go back to destroying the markers.
+    pub prefix: &'a str,
+    /// The opening marker line, without its trailing newline.
+    pub open: &'a str,
+    /// Everything between the markers.
+    pub interior: &'a str,
+    /// The closing marker line, without its trailing newline.
+    pub close: &'a str,
+    /// Our own text after the closing marker, if any.
+    pub suffix: &'a str,
+}
+
+impl FencedText<'_> {
+    /// Re-emit the fence around a (possibly rewritten) interior, in exactly the
+    /// layout it was parsed from — byte-identical when `interior` is unchanged.
+    #[must_use]
+    pub fn rewrap(&self, interior: &str) -> String {
+        format!(
+            "{}{}\n{}\n{}{}",
+            self.prefix, self.open, interior, self.close, self.suffix
+        )
+    }
+}
+
+/// Locate the single well-formed fence in `text`, or `None`.
+///
+/// Deliberately strict — `None` for anything it cannot put back together
+/// byte-for-byte:
+///
+/// - **exactly one** opening marker and **exactly one** closing marker, each at
+///   the start of a line. Two concatenated fences, a truncated pair, or a
+///   payload that merely *mentions* a marker are all refused rather than
+///   silently re-stitched around the wrong region. (The wrapper escapes such
+///   sequences on ingest, so their presence says the text was assembled some
+///   other way.)
+/// - the ids must match.
+///
+/// Text before / after the pair is preserved as [`FencedText::prefix`] /
+/// [`FencedText::suffix`] — it belongs to us, not to the untrusted source.
+#[must_use]
+pub fn split_external_fence(text: &str) -> Option<FencedText<'_>> {
+    let open_at = sole_line_start(text, FENCE_OPEN_PREFIX)?;
+    let close_at = sole_line_start(text, FENCE_CLOSE_PREFIX)?;
+    if close_at <= open_at {
+        return None;
+    }
+    let open_end = text[open_at..].find('\n')? + open_at;
+    // The closing marker is at a line start and follows the opening line, so the
+    // byte before it is the newline that terminates the interior.
+    let interior_end = close_at.checked_sub(1)?;
+    // `open_end + 1` is where the interior starts, so the two markers must be
+    // separated by at least the newline the wrapper always emits. Anything
+    // tighter is not a shape this function produced and must not be re-stitched.
+    if interior_end < open_end + 1 {
+        return None;
+    }
+    let close_end = text[close_at..]
+        .find('\n')
+        .map_or(text.len(), |i| i + close_at);
+
+    let open = &text[open_at..open_end];
+    let close = &text[close_at..close_end];
+    if fence_id(open, FENCE_OPEN_PREFIX)? != fence_id(close, FENCE_CLOSE_PREFIX)? {
+        return None;
+    }
+    Some(FencedText {
+        prefix: &text[..open_at],
+        open,
+        interior: &text[open_end + 1..interior_end],
+        close,
+        suffix: &text[close_end..],
+    })
+}
+
+/// Byte offset of `marker` when it occurs exactly once in `text` and sits at the
+/// start of a line; `None` otherwise.
+fn sole_line_start(text: &str, marker: &str) -> Option<usize> {
+    let at = text.find(marker)?;
+    if text[at + marker.len()..].contains(marker) {
+        return None;
+    }
+    (at == 0 || text.as_bytes()[at - 1] == b'\n').then_some(at)
+}
+
+/// The quoted id in a marker line.
+fn fence_id<'a>(line: &'a str, prefix: &str) -> Option<&'a str> {
+    let rest = line.strip_prefix(prefix)?;
+    rest.split_once('"').map(|(id, _)| id)
 }
 
 static ALL_MARKERS: Lazy<Vec<&'static str>> = Lazy::new(|| {

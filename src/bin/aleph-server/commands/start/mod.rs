@@ -1081,8 +1081,11 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
     // MCP tool bridge — now that `agent_result.tool_catalog` exists,
     // spawn the bridge with the tool-catalog handle so each registered MCP
     // tool also gets an `McpServerProbe` attached to the shared
-    // `ToolHealthCache`. The bridge subscribes to manager events; any
-    // servers that connect from this point on flow through it.
+    // `ToolHealthCache`. The bridge subscribes to manager events *and*
+    // reconciles once against the servers already running — the auto-start
+    // above happens inside `McpManagerActor::run`, i.e. long before this
+    // point, so an events-only bridge would never see the servers this
+    // deployment actually has (see `spawn_tool_bridge`).
     if let Some(ref h) = mcp_handle {
         std::mem::drop(alephcore::mcp::spawn_tool_bridge(
             h.clone(),
@@ -2640,10 +2643,11 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
     }
 
     // Tool-result budget — install Layer 2 store + Layer 3 turn-budget
-    // singletons. The store roots at `~/.aleph/data/tool_results/global/` and is
-    // deliberately *shared*: the per-session scope now rides on the handle, and
-    // the two seams that own session context (`build_request_tool_service`, the
-    // orchestrator harness bridge) narrow it with `ToolResultStore::for_session`.
+    // singletons. The store roots at `<config_dir>/data/tool_results/global/`
+    // (`ALEPH_HOME`-aware) and is deliberately *shared*: the per-session scope
+    // now rides on the handle, and the two seams that own session context
+    // (`build_request_tool_service`, the orchestrator harness bridge) narrow it
+    // with `ToolResultStore::for_session`.
     // Failure to create the store is not fatal — Layer 2 silently falls back to
     // in-line truncation.
     //
@@ -2698,7 +2702,7 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
             if !args.daemon {
                 println!(
                     "tool-result-budget: ToolResultStore + TurnResultBudget wired \
-                     (~/.aleph/data/tool_results/global/, session-scoped handles, \
+                     (<config_dir>/data/tool_results/global/, session-scoped handles, \
                      max_result_tokens={per_result_tokens}, max_turn_tokens={max_turn_tokens})"
                 );
             }
