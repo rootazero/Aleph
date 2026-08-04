@@ -1,7 +1,7 @@
 # Model Catalog — 预设 Provider 与模型参考数据
 
 > 对应 [FEATURE_LOCATOR.md §5.4](FEATURE_LOCATOR.md)。本文是**模型参考数据层的契约文档**：四张表怎么分工、怎么 join、什么时候允许陈旧、漂移由谁守。
-> 内含 **opencode / kimi-cli 对照表（Gap Analysis）**——**改这一层之前先看那张表，不必重做一遍对比**。
+> 内含 **openclaw / opencode / kimi-cli / pi 对照表（Gap Analysis）**——**改这一层之前先看那张表，不必重做一遍对比**。
 >
 > ⚠️ **本文只回答「这个模型是什么」，不回答「这一轮用哪个模型」**。后者只有一个决定点：
 > `src/orchestrator/harness_bridge/runner_impl.rs::effective_model_directive`
@@ -27,7 +27,7 @@ Aleph 的模型参考数据是**编译期静态表**：升级二进制才更新�
 
 | 表 | 位置 | 回答的问题 | 缺失时的后果 |
 |----|------|-----------|-------------|
-| Presets | `src/providers/presets/registry.rs` | 每个 provider 默认用哪个模型、备选链、廉价 aux 档 | 开箱不可用 |
+| Presets | `src/providers/presets/registry.rs` | 每个 provider 默认用哪个模型、备选链、廉价 aux 档 | 开箱不可用。`fallback_models` 同时是 picker roster、`list_models` roster **与 failover 的模型游走梯**（`deps_builder::provider_chain::provider_model_ladder` 把 operator 未列出的档位接进游走目录；operator 改过 `base_url` 则不接） |
 | Capabilities | `src/providers/model_catalog/capabilities.rs` | 窗口 / max-output / vision / tools / reasoning | 回落 `CONSERVATIVE_CONTEXT_WINDOW` (128K) ⇒ **过早压缩**（§2.2 消费方 `derive_token_budget`） |
 | Pricing | `src/pricing.rs` | USD/Mtok（含长上下文 tier） | `CostStatus::Unknown`；`cost_aware` 路由按 `unpriced_cost(tier)` 排 |
 | Lifecycle | `src/providers/model_catalog/lifecycle.rs` | 厂商还在不在服务这个 id | 模型被推荐一个已下线 id ⇒ 下一轮不透明 400 |
@@ -257,6 +257,8 @@ kimi-cli 问每个已配置平台 `GET {base_url}/models`。数据少（基本�
 
 扇出用 `tokio::task::JoinSet` **并发**（两个参考项目都是顺序 for 循环）。单个 provider 失败**不冒泡**——发现是对一个已经能工作的目录做增强，一家厂商不可达不该让整次调用失败；失败计数进 `list_models` 的 `message`，细节进 `tracing::debug`。
 
+**单飞与 stale 回退（2026-08 round-3，映射 pi）**：同一 provider 的并发 refresh 经 per-provider 锁单飞（`REFRESH_LOCKS`）——pi 的 `inflightRefresh ??=` 同款形状；输掉竞争的一方直接吃赢家刚写入的清单（按 `fetched_at >= 调用开始时刻` 判定，**不吃 TTL 缓存**，所以 operator RPC 的"强制真拉"语义不被稀释）。刷新失败时两个触发面都回退到磁盘上的旧快照而不是报空——pi 的"网络失败恢复持久化快照"同款；RPC 行带 `stale: true` 标注，picker 可以据此外显"这是上次的数据"。
+
 ### 6.5 边界
 
 - **只贡献 id**。窗口 / 价格 / 生命周期仍归策展表——`/models` 响应基本不带这些。一个没有策展行的 discovered id 诚实地显示为"能力未知"，跟今天的自定义中继模型一样。
@@ -337,6 +339,27 @@ openclaw 把整份目录放在每个 provider 插件的 `openclaw.plugin.json` �
 | 漂移防护 | 单一远端源，结构上无从漂移 | 每次刷新覆盖托管命名空间 | `drift_tests.rs` 十条交叉守卫 + 两条 prefix-shadow 守卫 | **超越**（静态表 + 编译期守卫，是"不引远端依赖"的对价） |
 | 并发 | 单次 models.dev 拉取 | 顺序 for 循环逐平台 | `JoinSet` 并发扇出 | **超越** |
 
+### 8.3 pi（`@earendil-works/pi-ai`，2026-08 round-3）
+
+pi 的目录是**生成期 hydrate**：`scripts/generate-models.ts`（2762 行）从 models.dev / OpenRouter / Vercel AI Gateway 三源拉数据，叠加散在脚本里的裸常量修正，烧进每 provider 一个 JSON shard 随包发布；运行时另有 per-provider `fetchModels` overlay。与 Aleph 的编译期四表是**同一代际的两种打包方式**，可比的维度如下。
+
+| 维度 | pi | Aleph | 裁决 |
+|------|-----|-------|------|
+| 目录打包 | 生成期三源在线 hydrate + JSON shard（非 strict 模式源失败**静默降级为空目录**） | 编译期静态四表 | **维持 Aleph**（R3；静默空目录比静态陈旧更糟） |
+| 人工修正的结构 | 裸常量 + 内联 if 散在生成器里，靠注释日期自觉 | 四表声明式 + 13 条编译期守卫 | **Aleph 超越** |
+| 模型生命周期 | ❌ 无；旧模型下次生成时静默消失，用户配置悬空无提示 | `lifecycle.rs` + scoped 行 + `select_model` 硬拒 + 守卫 | **Aleph 超越** |
+| 并发 refresh 去重 | per-provider `inflightRefresh ??=` 共享 promise | `REFRESH_LOCKS` per-provider 锁 + 赢家清单直接服务 | **映射**（round-3 补） |
+| 刷新失败回退 | 恢复持久化快照 + 静态基线 | 磁盘旧快照（stale 标注），两个触发面都接 | **映射**（round-3 补） |
+| 条件请求 | `ModelsStoreEntry` 预留 etag/lastModified 字段**无人写入**，纯 schema | 无 | **有意不移植**（pi 自己也没实现；厂商 `/models` 基本不发 ETag） |
+| 订阅端点定价 | 隐含定价（用等价 API 费率回填，"估算订阅用量的价值"） | `QUOTA_BILLED_MODELS` 显式 Unknown | **有意不同**：pi 估的是"价值"，Aleph 的数字喂 `cost_aware` 排序与 run 成本，编一个价会让订阅端点在成本排序里插队（§4.2） |
+| reasoning 档位 | `thinkingLevelMap` 三态（原生值/null/缺省）+ 就近夹取 | `supported_efforts` + `clamp_effort`，空集 fail-closed（§5.3） | **对齐** |
+| 长上下文跳档 | `tiers[].inputTokensAbove` 整请求跳档 | `TIER_TABLE` 输入轴 | **对齐** |
+| failover / 成本路由 | ❌ 完全外包给网关（请求体里塞路由偏好） | failover walk + `cost_aware` + 断路器 | **Aleph 超越** |
+| 溢出检测 | 20+ provider 的错误文案正则库（`utils/overflow.ts`） | 无 | **评估为不移植**：属错误分类层（§2.x 语境），非目录层；且正则启发式与 R8 的适用范围有张力 |
+| 模型可见性过滤 | `filterModels(credential)` + `getAvailable()` | `list_models` 默认只列已配置 provider | **对齐** |
+
+pi 侧独有但**本轮明确不收**的：`compat` 能力矩阵（30+ 字段的"同 API 不同方言"行为差异）——那是协议实现层的关注点，Aleph 的对应物是 `openai_common/provider_policy.rs` 的 `PayloadPolicy`，不进目录层。
+
 ---
 
 ## 9. 刻意不做清单
@@ -361,17 +384,28 @@ openclaw 把整份目录放在每个 provider 插件的 `openclaw.plugin.json` �
 - **升级 `siliconflow` / `hunyuan`** — openclaw 没有对应 provider 条目（Tencent 那条走的是另一个 `tokenhub` 端点），凭猜测把默认改到 `deepseek-v4` / `hy3` 就是把"陈旧但能用"换成"可能 404"。
 - **把 `advertised_models_of_priced_vendors_have_rates` 放宽成"允许混合"** — 半条链能算钱半条不能，产生的成本视图比 `Unknown` 更难解释。正解是让链在可定价性上同质（§7）。
 
+以下是 2026-08 round-3（对标 pi）评估后**明确不做**的：
+
+- **给 cohere 补价目** — openclaw 目录里 `command-a-plus-05-2026`（现旗舰）与 `north-mini-code-1-0` 的 cost 全是 `0`＝未公布；唯一有价的 `command-a-03-2025` 已退役。加任何一行都会触发守卫 10（同 preset 内可定价性必须同质），而退役行的价没有消费者。
+- **给 perplexity 补价目** — openclaw 的 perplexity 插件没有 `modelCatalog`，无 accepted 源；凭记忆写价违反"不靠猜"。
+- **pi 的订阅端点隐含定价**（`KIMI_CODING_IMPLIED_COSTS`：用等价 API 费率回填订阅模型）— pi 估的是"订阅用量的价值"，Aleph 的费率喂 `cost_aware` 排序与 run 成本估算；把订阅端点按 API 价排序是对 operator 说谎。维持 `QUOTA_BILLED_MODELS` 显式 Unknown（§4.2）。
+- **ETag / Last-Modified 条件请求** — pi 的 `ModelsStoreEntry` 预留了这两个字段但**没有任何代码写入它们**（纯 schema 预留）；且各家 `/models` 端点基本不发 ETag。300s TTL + 单飞已覆盖实际需求。
+- **pi 的溢出检测正则库**（`utils/overflow.ts`）— 那是"这一轮请求失败了没有"的错误分类层（§2.x/§3.6 语境），不是"这个模型是什么"的目录层；如需引入应在 failover/compaction 那侧单独立项评估。
+- **改 `hyperbolic` / `huggingface` 的默认模型**（仍是 Llama-3.3 时代）— 与 round-2 对 siliconflow 的判断同款：没有 accepted 源给出"应该改成什么"，`Llama-3.3-70B-Instruct` 是真实可用的 id（这两家是托管方不是厂商）。陈旧但能用 > 可能 404。
+- **pi 的 per-model `compat` 矩阵** — 协议方言差异属 `openai_common/provider_policy.rs` 的 `PayloadPolicy` 层，不进目录层。
+
 ---
 
 ## 10. 常见修改的落点
 
 | 想做的事 | 改哪儿 |
 |---------|--------|
-| 加/改预设别名 | `presets/registry.rs` |
+| 加/改预设别名 | `presets/registry.rs`（别名是**解析键不是展示行**：枚举面只迭代 `canonical_profiles()`；别名→canonical 归一走 `canonical_preset_id()`，别再在 handler 里硬编码特例） |
 | 某模型支不支持 vision/tool-use | `model_catalog/capabilities.rs` + `capability_gate.rs` |
 | 本地还是云端 | `model_catalog/endpoint.rs` |
 | 成本 | `pricing.rs`（`RateCard` = picker 的费率投影） |
 | 按成本路由 | `[route] load_balance = "cost_aware"`；连线点 `failover/provider.rs::price_hint`，sort 在 `route_policy::balance_group`。**候选的 tier 从 `with_tier_catalog` 来**（2026-07-27）——此前 live 派生的候选一律 `Unknown`，`unpriced_cost` 因此把**免费本地端点排最后**，与本表第二次修复的方向正好相反 |
+| 单 provider 内的 failover 游走梯 | preset `fallback_models` 即游走梯（`deps_builder/provider_chain.rs::provider_model_ladder` 合并：operator models 在前、未列档位在后；operator 改过 `base_url` 则不合并） |
 | **给模型记录加一个新维度** | **`model_catalog/record.rs::resolve` 一处** |
 | **某模型被厂商下线** | **`lifecycle.rs::LIFECYCLE_TABLE` 加一行，`provider: None`（带 successor）** |
 | **某模型只在一家宿主上下线** | **同表，`provider: Some("<preset id>")`** —— 别写成全局行，那会拒掉别处能用的 id（§3.1） |
