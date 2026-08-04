@@ -87,10 +87,13 @@ impl Lane {
             // gateway.identity.get matches the .get suffix; listed
             // defensively in case it's ever renamed.
             "gateway.identity.get" => Some(Self::Query),
-            // gateway.metrics.lanes / gateway.metrics.run_concurrency are
-            // read-only diagnostics gauges. Neither `.lanes` nor
-            // `.run_concurrency` matches the Query suffix heuristic.
-            "gateway.metrics.lanes" | "gateway.metrics.run_concurrency" => Some(Self::Query),
+            // gateway.metrics.lanes / gateway.metrics.run_concurrency /
+            // gateway.metrics.subagent_concurrency are read-only diagnostics
+            // gauges. None of the three suffixes match the Query suffix
+            // heuristic, so list them explicitly.
+            "gateway.metrics.lanes"
+            | "gateway.metrics.run_concurrency"
+            | "gateway.metrics.subagent_concurrency" => Some(Self::Query),
             // gateway.credentials returns a read-only auth-surface snapshot.
             // No `.get`/`.list` suffix to trip the heuristic, so list explicitly.
             "gateway.credentials" => Some(Self::Query),

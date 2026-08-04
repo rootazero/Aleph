@@ -19,22 +19,8 @@ use tokio_util::sync::CancellationToken;
 
 use super::parse::parse_args;
 use super::spawn::CancelGuard;
-use super::types::{BatchTask, SubagentAction};
+use super::types::{BatchTask, SubagentAction, LIST_RESULT_PREVIEW_CHARS, MAX_LISTED_COMPLETED};
 use super::SubagentTool;
-
-/// How many finished sub-agents `list` renders (newest first).
-///
-/// `list` used to render every retained completion with its **full** result
-/// text — up to `MAX_COMPLETED_RESULTS` (256) of them, each an entire
-/// sub-agent's output plus a progress tail. One call could swamp the parent's
-/// whole context window with material it did not ask for, and the generic
-/// result-budget truncation downstream would then chop that blob from the
-/// middle. `list` is a directory: it answers "which request_ids exist and how
-/// did they end", and `check_status` fetches the one the model actually wants.
-const MAX_LISTED_COMPLETED: usize = 20;
-
-/// Characters of a finished sub-agent's output kept in a `list` row.
-const LIST_RESULT_PREVIEW_CHARS: usize = 200;
 
 #[async_trait]
 impl LoopTool for SubagentTool {
@@ -466,13 +452,27 @@ impl LoopTool for SubagentTool {
                         annotate_unknown(&mut output, &unknown);
                         ToolResult::Success { output }
                     }
-                    WaitAnyOutcome::NotFound => ToolResult::Error {
-                        error:
+                    WaitAnyOutcome::NotFound { unknown_ids } => {
+                        // Round-8 — name the bad ids so the model fixes the
+                        // call instead of issuing it again blind. The base
+                        // "all unknown" message is preserved as a fallback
+                        // for any caller that hits an empty list.
+                        let error = if unknown_ids.is_empty() {
                             "None of the given request_ids matches a known background sub-agent \
                              (all unknown or expired)"
-                                .to_string(),
-                        retryable: false,
-                    },
+                                .to_string()
+                        } else {
+                            format!(
+                                "None of the given request_ids matches a known background sub-agent \
+                                 (all unknown or expired): {}. Use 'list' to recover valid ids.",
+                                unknown_ids.join(", ")
+                            )
+                        };
+                        ToolResult::Error {
+                            error,
+                            retryable: false,
+                        }
+                    }
                 };
             }
             SubagentAction::Cancel(request_id) => {
@@ -1096,6 +1096,16 @@ impl SubagentTool {
     /// consecutive-failure counter and the cross-batch memo a verdict about a
     /// call that never failed, the same trap `ToolError::Cancelled` exists to
     /// avoid one layer down.
+    ///
+    /// # Round-8 — surface unknown ids
+    ///
+    /// The wait that was just interrupted may have contained typo'd
+    /// `request_id`s. The model can see the interrupted state in
+    /// `still_running` but had no signal that some of its ids were never
+    /// registered at all — it would re-issue the same wait and hit the
+    /// cancel again without learning anything. Mirror the `annotate_unknown`
+    /// pattern the success path uses so the model sees its typo even on
+    /// cancel.
     fn wait_cancelled(&self, request_ids: &[String]) -> ToolResult {
         let still_running: Vec<Value> = request_ids
             .iter()
@@ -1109,13 +1119,14 @@ impl SubagentTool {
                 })
             })
             .collect();
-        ToolResult::Success {
-            output: json!({
-                "status": "wait_interrupted",
-                "still_running": still_running,
-                "note": "The wait was interrupted before any sub-agent finished. The sub-agents themselves were not cancelled by this — their completions are still announced to you, and 'check_status' still reads their results.",
-            }),
-        }
+        let unknown = self.background_tracker.unknown_ids(request_ids);
+        let mut output = json!({
+            "status": "wait_interrupted",
+            "still_running": still_running,
+            "note": "The wait was interrupted before any sub-agent finished. The sub-agents themselves were not cancelled by this — their completions are still announced to you, and 'check_status' still reads their results.",
+        });
+        annotate_unknown(&mut output, &unknown);
+        ToolResult::Success { output }
     }
 }
 

@@ -33,6 +33,13 @@ const MAX_COMPLETED_RESULTS: usize = 256;
 /// one of them now carries this many small structs.
 const PROGRESS_TAIL_LEN: usize = 10;
 
+/// Round-8 — characters of a finished sub-agent's result kept inline on
+/// `SubagentNode.result_preview` so the panel can render
+/// "completed: '...'" without a follow-up `check_status`. Matches
+/// `loop_tool::LIST_RESULT_PREVIEW_CHARS` (200) for visual consistency
+/// between the tree row and the `list` directory row.
+const RESULT_PREVIEW_CHARS: usize = 200;
+
 /// Process-global tracker. Every `ExecutionEngine` and the `subagent.tree` RPC
 /// share this one instance, so a panel sees every background sub-agent
 /// regardless of which run spawned it (the tracker was always documented as
@@ -96,6 +103,32 @@ pub(crate) fn lifecycle_from_outcome(outcome: &CompletedOutcome) -> NodeLifecycl
                 NodeLifecycle::Failed
             }
         }
+    }
+}
+
+/// Round-8 — bounded preview of a finished sub-agent's result for
+/// `SubagentNode.result_preview`. Returns `None` for empty results so the
+/// field is omitted from the wire entirely (panels that never heard of it
+/// see no key; new panels show a blank rather than an ellipsis for an
+/// empty result).
+///
+/// UTF-8 safe by character, not by byte: slicing on `char_indices` keeps
+/// CJK / emoji boundaries intact (P7 — the same trap `loop_tool::preview`
+/// exists to avoid). The preview is informational only; the full result
+/// is one `check_status` away.
+pub(crate) fn preview_from_outcome(outcome: &CompletedOutcome) -> Option<String> {
+    let raw = match outcome {
+        CompletedOutcome::Ok { final_text, .. } => final_text.as_str(),
+        CompletedOutcome::Err(msg) => msg.as_str(),
+    };
+    if raw.is_empty() {
+        return None;
+    }
+    let head: String = raw.chars().take(RESULT_PREVIEW_CHARS).collect();
+    if head.chars().count() < raw.chars().count() {
+        Some(format!("{head}\u{2026}"))
+    } else {
+        Some(head)
     }
 }
 
@@ -268,7 +301,56 @@ pub enum WaitAnyOutcome {
     AllDelivered {
         request_ids: Vec<String>,
     },
-    NotFound,
+    /// Round-8 — every id in the set was unknown to the tracker (never
+    /// registered, owned by another session, or TTL-pruned). `unknown_ids`
+    /// is the same list the call site gets from `unknown_ids(&request_ids)`,
+    /// so a single round-trip diagnoses typos even when the *whole* set is
+    /// bad — the previous bool-shaped `NotFound` lost the breakdown and
+    /// the model had to fish the typo out by re-issuing one id at a time.
+    NotFound {
+        unknown_ids: Vec<String>,
+    },
+}
+
+/// Round-8 — live occupancy snapshot for `gateway.metrics.subagent_concurrency`.
+/// Mirrors the §4.10 `ConcurrencySnapshot` shape so the same panel widget
+/// renders both gauges (run slots + sub-agent slots) without two card types.
+///
+/// `running_total` includes **all** live registrations (presence-only
+/// fan-out seats are counted in `presence_only_total` so the panel can
+/// surface "4 sync fan-out children + 1 background child = 5 running" —
+/// presence-only entries are not enumerated by the `subagent` tool, but
+/// they ARE occupying the parent's Interrupt-demote budget).
+#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
+pub struct SubagentSnapshot {
+    /// Live sub-agents across the whole process (or one session when
+    /// `scope = Some(session)`).
+    pub running_total: usize,
+    /// Per-session running count, sorted ascending by session key (stable
+    /// for stable JSON output). Idle sessions are omitted.
+    pub running_per_session: Vec<SessionRunning>,
+    /// Running registrations that are *presence-only* (sync fan-out
+    /// seams, MoA aggregators, team-chat members). Excluded from the
+    /// `subagent` tool's enumeration faces by design.
+    pub presence_only_total: usize,
+    /// Finished entries still retrievable via `check_status` / `wait`
+    /// (bounded by the TTL + count cap).
+    pub completed_total: usize,
+    /// Subset of `completed_total` whose result was already handed to the
+    /// parent via an on-demand `wait` / `check_status` (or whose cancel
+    /// carried the consume intent across the transition). The
+    /// `consumed / completed` ratio is the dedup-hygiene gauge: a high
+    /// completed count paired with a low consumed count means the parent
+    /// is ignoring its results.
+    pub consumed_total: usize,
+}
+
+/// One session's live sub-agent count. The session key is the
+/// `SessionKey::to_key_string()` form (`agent:<id>:peer:user`).
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct SessionRunning {
+    pub session: String,
+    pub count: usize,
 }
 
 impl BackgroundAgentTracker {
@@ -523,18 +605,26 @@ impl BackgroundAgentTracker {
     /// group-chat fan-out registers every member run under the RPC-minted
     /// parent run_id, and cancel enumerates them here to fire each engine
     /// per-run token. O(running) scan, same as `session_has_running`.
+    ///
+    /// Round-8 — sorted by `(started_at_ms, request_id)` for stable
+    /// enumeration across `teams.chat.cancel` re-walks and panel rebuilds.
+    /// The cancel walker iterates this list to fire each engine per-run
+    /// token; a stable order means the same fan-out tree always cancels in
+    /// the same sequence (helpful for `cancel_session` audit logs that
+    /// record the order of token fires).
     #[must_use]
     pub fn running_children_of(&self, parent_id: &str) -> Vec<String> {
-        self.running
-            .read()
-            .unwrap_or_else(|e| {
-                warn!("BackgroundAgentTracker lock poisoned, recovering");
-                e.into_inner()
-            })
+        let running = self.running.read().unwrap_or_else(|e| {
+            warn!("BackgroundAgentTracker lock poisoned, recovering");
+            e.into_inner()
+        });
+        let mut rows: Vec<(&String, u64)> = running
             .iter()
             .filter(|(_, agent)| agent.meta.parent_id.as_deref() == Some(parent_id))
-            .map(|(id, _)| id.clone())
-            .collect()
+            .map(|(id, agent)| (id, agent.started_at_ms))
+            .collect();
+        rows.sort_by(|a, b| a.1.cmp(&b.1).then_with(|| a.0.cmp(b.0)));
+        rows.into_iter().map(|(id, _)| id.clone()).collect()
     }
 
     /// Request-ids of still-running registrations owned by `root_session`
@@ -573,6 +663,71 @@ impl BackgroundAgentTracker {
             true
         } else {
             false
+        }
+    }
+
+    /// Round-8 — live sub-agent occupancy snapshot, the §4.11 mirror of
+    /// §4.10's `run_concurrency`. Drives the `gateway.metrics.subagent_concurrency`
+    /// RPC so a panel can render "N running / M completed / K consumed" with
+    /// a per-session breakdown of the in-flight set (which the
+    /// `subagent.tree` cold-start mirrors).
+    ///
+    /// `scope` mirrors [`flat_nodes`](Self::flat_nodes)'s filter: `Some` keeps
+    /// only entries owned by that session, `None` returns the process-wide
+    /// totals (for CLI / tests / cross-session ops dashboards).
+    ///
+    /// Cheap: two read locks (running + completed) per call, O(n) over the
+    /// small backing maps. No allocations beyond the per-session vec.
+    pub fn subagent_snapshot(&self, scope: Option<&str>) -> SubagentSnapshot {
+        let running = self.running.read().unwrap_or_else(|e| {
+            warn!("BackgroundAgentTracker lock poisoned, recovering");
+            e.into_inner()
+        });
+        let completed = self.completed.read().unwrap_or_else(|e| {
+            warn!("BackgroundAgentTracker lock poisoned, recovering");
+            e.into_inner()
+        });
+
+        // Per-session running counts (drives the per-agent breakdown; naming
+        // is the same as `ConcurrencyLimiter::per_agent` for cross-§ symmetry).
+        let mut per_session: std::collections::BTreeMap<String, usize> =
+            std::collections::BTreeMap::new();
+        let mut running_total = 0usize;
+        let mut presence_only_total = 0usize;
+        for agent in running.values() {
+            if scope.is_some_and(|s| agent.meta.root_session != s) {
+                continue;
+            }
+            running_total += 1;
+            if agent.presence_only {
+                presence_only_total += 1;
+            }
+            *per_session
+                .entry(agent.meta.root_session.clone())
+                .or_insert(0) += 1;
+        }
+
+        let mut completed_total = 0usize;
+        let mut consumed_total = 0usize;
+        for agent in completed.values() {
+            if scope.is_some_and(|s| agent.meta.root_session != s) {
+                continue;
+            }
+            completed_total += 1;
+            if agent.consumed {
+                consumed_total += 1;
+            }
+        }
+
+        SubagentSnapshot {
+            running_total,
+            running_per_session: per_session
+                .into_iter()
+                .map(|(session, count)| SessionRunning { session, count })
+                .collect(),
+            presence_only_total,
+            completed_total,
+            consumed_total,
         }
     }
 
@@ -624,7 +779,13 @@ impl BackgroundAgentTracker {
                     .map(|m| m.elapsed_secs)
                     .unwrap_or(0),
             },
-            WaitAnyOutcome::NotFound => WaitOutcome::NotFound,
+            // Single-id wait: a one-element set is by definition "every id
+            // is unknown" when we land here, so the unknown list has at
+            // most the one id. The caller-side distinction is collapsed
+            // to the existing `WaitOutcome::NotFound`; the per-id
+            // breakdown is not surfaced at this layer (only `wait_any`
+            // callers care about a list).
+            WaitAnyOutcome::NotFound { .. } => WaitOutcome::NotFound,
         }
     }
 
@@ -687,7 +848,13 @@ impl BackgroundAgentTracker {
             // fully drained, or every id is unknown.
             if !any_running {
                 return if delivered.is_empty() {
-                    WaitAnyOutcome::NotFound
+                    // Round-8 — every id is unknown; the previous bool
+                    // variant lost the breakdown. Carry the unknown list
+                    // through so the model can fix the call in one shot
+                    // (mirrors `annotate_unknown` on the success paths).
+                    WaitAnyOutcome::NotFound {
+                        unknown_ids: self.unknown_ids(request_ids),
+                    }
                 } else {
                     WaitAnyOutcome::AllDelivered {
                         request_ids: delivered,
@@ -947,6 +1114,12 @@ impl BackgroundAgentTracker {
                     tool_count: agent.tool_count,
                     last_tool: agent.last_tool.clone(),
                     last_activity: agent.last_activity.clone(),
+                    // Round-8 — inline preview so the panel renders
+                    // "completed: '...'" from this single RPC. A
+                    // failed/cancelled entry's `Err` is short enough to fit
+                    // verbatim, which the user actually wants to read in the
+                    // tree (the full text is one `check_status` away).
+                    result_preview: preview_from_outcome(&agent.outcome),
                 });
             }
             completed.keys().cloned().collect()
@@ -980,9 +1153,23 @@ impl BackgroundAgentTracker {
                     tool_count: agent.tool_count,
                     last_tool: agent.last_tool.clone(),
                     last_activity: agent.last_activity.clone(),
+                    // Running nodes have no terminal result yet.
+                    result_preview: None,
                 });
             }
         }
+        // Round-8 — deterministic cold-start order. The backing HashMaps iterate
+        // in random order, so two consecutive `flat_nodes` calls from a panel
+        // would otherwise shuffle siblings between rebuilds. Sort by spawn
+        // time (with id tiebreak) so a node's relative position in the tree is
+        // stable across reloads — same shape as `protocol::build_tree`'s
+        // sibling sort (started_at_ms, node_id), keeping the two ordering
+        // contracts in agreement.
+        out.sort_by(|a, b| {
+            a.started_at_ms
+                .cmp(&b.started_at_ms)
+                .then_with(|| a.node_id.cmp(&b.node_id))
+        });
         out
     }
 
@@ -1667,6 +1854,172 @@ mod tests {
         assert_eq!(nodes[0].last_activity.as_deref(), Some("tool_called"));
     }
 
+    /// Round-8 — a finished node's result preview rides `flat_nodes` so a
+    /// panel can render "completed: '...'" without a follow-up RPC. Empty
+    /// outcomes omit the field entirely.
+    #[test]
+    fn flat_nodes_completed_carries_result_preview() {
+        let tracker = BackgroundAgentTracker::new();
+        tracker.register("ok".into(), CancellationToken::new(), "task".into());
+        tracker.mark_completed(
+            "ok",
+            CompletedOutcome::ok_text("hello world, the quick brown fox jumps over"),
+        );
+        tracker.register("err".into(), CancellationToken::new(), "task".into());
+        tracker.mark_completed("err", CompletedOutcome::Err("connection refused".into()));
+        tracker.register("empty".into(), CancellationToken::new(), "task".into());
+        tracker.mark_completed("empty", CompletedOutcome::ok_text(""));
+        tracker.register("live".into(), CancellationToken::new(), "task".into());
+
+        let nodes = tracker.flat_nodes(None);
+        let by_id: std::collections::HashMap<&str, &SubagentNode> =
+            nodes.iter().map(|n| (n.node_id.as_str(), n)).collect();
+
+        let ok = by_id["ok"];
+        assert_eq!(
+            ok.result_preview.as_deref(),
+            Some("hello world, the quick brown fox jumps over"),
+            "short results pass through verbatim"
+        );
+        let err = by_id["err"];
+        assert_eq!(
+            err.result_preview.as_deref(),
+            Some("connection refused"),
+            "error messages ride the preview verbatim (always short)"
+        );
+        let empty = by_id["empty"];
+        assert!(
+            empty.result_preview.is_none(),
+            "empty outcomes omit the field so old panels see no key"
+        );
+        let live = by_id["live"];
+        assert!(
+            live.result_preview.is_none(),
+            "running nodes have no terminal result yet"
+        );
+    }
+
+    /// Round-8 — the preview truncates at the char boundary (CJK / emoji
+    /// safe) and ellipsises. The bug class: byte-slicing a model-authored
+    /// string is how this panics on multi-byte chars (P7).
+    #[test]
+    fn preview_truncates_on_char_boundary_with_ellipsis() {
+        use crate::agents::background_tracker::preview_from_outcome;
+        // 250 CJK chars; RESULT_PREVIEW_CHARS=200; expect 200 chars + ellipsis.
+        let long = "中".repeat(250);
+        let outcome = CompletedOutcome::ok_text(&long);
+        let preview = preview_from_outcome(&outcome).expect("non-empty");
+        let chars: Vec<char> = preview.chars().collect();
+        assert_eq!(
+            chars.len(),
+            RESULT_PREVIEW_CHARS + 1,
+            "head is RESULT_PREVIEW_CHARS chars plus an ellipsis"
+        );
+        assert_eq!(chars[RESULT_PREVIEW_CHARS], '\u{2026}');
+        // No mid-codepoint truncation: every char must be a complete '中'.
+        assert!(chars[..RESULT_PREVIEW_CHARS].iter().all(|&c| c == '中'));
+    }
+
+    /// Round-8 — `flat_nodes` returns a deterministic spawn order across
+    /// two calls. Before the sort, the backing HashMap iterated in random
+    /// order, so a panel rebuild would shuffle siblings between reloads.
+    #[test]
+    fn flat_nodes_is_stable_across_repeated_calls() {
+        let tracker = BackgroundAgentTracker::new();
+        for id in ["n3", "n1", "n4", "n2", "n5"] {
+            tracker.register(id.into(), CancellationToken::new(), "task".into());
+            // Force a distinguishable spawn time per id so the sort by
+            // `started_at_ms` (then id) is meaningful.
+            std::thread::sleep(std::time::Duration::from_millis(2));
+        }
+        let first: Vec<String> = tracker
+            .flat_nodes(None)
+            .into_iter()
+            .map(|n| n.node_id)
+            .collect();
+        let second: Vec<String> = tracker
+            .flat_nodes(None)
+            .into_iter()
+            .map(|n| n.node_id)
+            .collect();
+        assert_eq!(first, second, "flat_nodes order must be deterministic");
+        assert_eq!(
+            first,
+            vec![
+                "n3".to_string(),
+                "n1".to_string(),
+                "n4".to_string(),
+                "n2".to_string(),
+                "n5".to_string()
+            ],
+            "sort is by started_at_ms, then node_id (insertion order with tiebreak)"
+        );
+    }
+
+    /// Round-8 — `subagent_snapshot` reports running / completed / consumed
+    /// per session, plus the presence-only subtotal. Mirrors §4.10's
+    /// `ConcurrencySnapshot` shape so the same panel widget renders both
+    /// gauges.
+    #[test]
+    fn subagent_snapshot_reports_per_session_running_and_completed() {
+        let tracker = BackgroundAgentTracker::new();
+        // 2 running + 1 completed in sess-A
+        register_in(&tracker, "a-live-1", "sess-A");
+        register_in(&tracker, "a-live-2", "sess-A");
+        register_in(&tracker, "a-done", "sess-A");
+        tracker.mark_completed("a-done", CompletedOutcome::ok_text("x"));
+        // 1 running in sess-B
+        register_in(&tracker, "b-live", "sess-B");
+        // 1 presence-only in sess-A (sync fan-out seam). The public
+        // surface takes `&self` so we can hit the SAME tracker instance
+        // the snapshot reads from — no `Arc` round-trip needed.
+        tracker.register_presence_only(
+            "presence-only".into(),
+            CancellationToken::new(),
+            "fan-out".into(),
+            SpawnMeta {
+                root_session: "sess-A".into(),
+                depth: 1,
+                ..SpawnMeta::default()
+            },
+        );
+        // Consume one completed entry to drive `consumed_total`.
+        tracker.mark_consumed("a-done");
+
+        // Process-wide view.
+        let snap = tracker.subagent_snapshot(None);
+        assert_eq!(
+            snap.running_total, 4,
+            "2 sess-A + 1 sess-B + 1 presence-only"
+        );
+        assert_eq!(snap.presence_only_total, 1);
+        assert_eq!(snap.completed_total, 1);
+        assert_eq!(snap.consumed_total, 1);
+
+        // Per-session breakdown (BTreeMap → sorted ascending by session key).
+        let by_session: std::collections::HashMap<String, usize> = snap
+            .running_per_session
+            .iter()
+            .map(|r| (r.session.clone(), r.count))
+            .collect();
+        assert_eq!(by_session["sess-A"], 3, "2 live + 1 presence-only");
+        assert_eq!(by_session["sess-B"], 1);
+
+        // Scoped to sess-A only.
+        let a_only = tracker.subagent_snapshot(Some("sess-A"));
+        assert_eq!(a_only.running_total, 3);
+        assert_eq!(a_only.presence_only_total, 1);
+        assert_eq!(a_only.completed_total, 1);
+        assert_eq!(a_only.consumed_total, 1);
+        assert_eq!(a_only.running_per_session.len(), 1);
+
+        // Scoped to a session with nothing.
+        let empty = tracker.subagent_snapshot(Some("sess-none"));
+        assert_eq!(empty.running_total, 0);
+        assert_eq!(empty.completed_total, 0);
+        assert!(empty.running_per_session.is_empty());
+    }
+
     #[tokio::test]
     async fn wait_returns_completed_when_child_finishes() {
         let tracker = Arc::new(BackgroundAgentTracker::new());
@@ -1812,13 +2165,25 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn wait_any_not_found_when_all_unknown() {
+    async fn wait_any_not_found_carries_the_unknown_id_list() {
+        // Round-8 — `NotFound` is no longer a bool; it carries the id list
+        // so a caller can fix a typo in one round-trip instead of fishing
+        // by issuing single-id waits.
         let tracker = BackgroundAgentTracker::new();
-        let ids = vec!["ghost1".to_string(), "ghost2".to_string()];
-        assert!(matches!(
-            tracker.wait_any(&ids, Duration::from_millis(10)).await,
-            WaitAnyOutcome::NotFound
-        ));
+        tracker.register("known".into(), CancellationToken::new(), "live".into());
+        let ids = vec![
+            "known".to_string(),
+            "ghost1".to_string(),
+            "ghost2".to_string(),
+        ];
+        match tracker.wait_any(&ids, Duration::from_millis(10)).await {
+            WaitAnyOutcome::NotFound { unknown_ids } => {
+                let mut got = unknown_ids.clone();
+                got.sort();
+                assert_eq!(got, vec!["ghost1".to_string(), "ghost2".to_string()]);
+            }
+            other => panic!("expected NotFound, got {other:?}"),
+        }
     }
 
     #[test]
@@ -2148,5 +2513,38 @@ mod tests {
             "poison must fire the tree-level token"
         );
         assert_eq!(tracker.running_children_of("tree"), vec!["m1".to_string()]);
+    }
+
+    /// Round-8 — `running_children_of` returns a deterministic order
+    /// `(started_at_ms, request_id)`, so a `teams.chat.cancel` re-walk
+    /// reaches members in the same sequence and audit logs read stably.
+    #[test]
+    fn running_children_of_sorts_by_started_at_then_id() {
+        let tracker = BackgroundAgentTracker::new();
+        let tree = "tree";
+        for id in ["m2", "m1", "m3"] {
+            tracker.register_with_meta(
+                id.into(),
+                CancellationToken::new(),
+                "member".into(),
+                SpawnMeta {
+                    parent_id: Some(tree.into()),
+                    root_session: tree.into(),
+                    depth: 1,
+                    ..SpawnMeta::default()
+                },
+            );
+            // Force a distinguishable spawn time per id so the sort is
+            // meaningful (and not just falling back to the id tiebreak).
+            std::thread::sleep(std::time::Duration::from_millis(2));
+        }
+        let first = tracker.running_children_of(tree);
+        let second = tracker.running_children_of(tree);
+        assert_eq!(first, second, "running_children_of must be deterministic");
+        assert_eq!(
+            first,
+            vec!["m2".to_string(), "m1".to_string(), "m3".to_string()],
+            "sort is by started_at_ms (insertion order with 2ms gap) then id"
+        );
     }
 }

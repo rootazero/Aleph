@@ -230,6 +230,23 @@ pub(super) fn register_common_handlers(
         }
     }
 
+    // Round-8 (§4.11): register gateway.metrics.subagent_concurrency. The
+    // handler reaches the process-global `BackgroundAgentTracker` directly
+    // (no per-instance state), so registration is unconditional — unlike
+    // `run_concurrency` which depends on `run_manager` being wired. Reading
+    // the snapshot is O(running + completed) and lock-only; safe to call
+    // from any Query-lane caller (panel, CLI, doctor).
+    {
+        use alephcore::gateway::handlers::gateway_metrics::handle_gateway_metrics_subagent_concurrency;
+        server.handlers_mut().register(
+            "gateway.metrics.subagent_concurrency",
+            move |req| async move { handle_gateway_metrics_subagent_concurrency(req).await },
+        );
+        if !daemon {
+            println!("  gateway.metrics.subagent_concurrency: wired");
+        }
+    }
+
     // G2: signal readiness. /ready returns 200 from this point onward;
     // before this, it returns 503 so proxies don't route to a gateway
     // whose handler tree is still being wired.
