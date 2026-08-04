@@ -123,6 +123,10 @@ pub async fn invalidate_device_sessions(
     for state in conns.values_mut() {
         if state.device_id.as_deref() == Some(device_id) {
             state.caller_role = "guest".to_string();
+            // caller_user is resolved together with caller_role (see its doc
+            // comment) — a downgrade to guest must clear it too, or a walled
+            // connection would keep reading a stale authenticated user.
+            state.caller_user = None;
             state.permissions.clear();
             hit += 1;
         }
@@ -1243,6 +1247,7 @@ mod device_invalidation_tests {
     fn authorized(conn: &str, device_id: Option<&str>) -> (String, ConnectionState) {
         let mut cs = ConnectionState::new("10.0.0.9".parse().unwrap());
         cs.caller_role = "operator".to_string();
+        cs.caller_user = Some(format!("u-{conn}"));
         cs.permissions = vec!["*".to_string()];
         cs.device_id = device_id.map(String::from);
         (conn.to_string(), cs)
@@ -1268,12 +1273,22 @@ mod device_invalidation_tests {
         for hit in ["a", "b"] {
             let s = &map[hit];
             assert_eq!(s.caller_role, "guest", "{hit} must fall behind the wall");
+            assert_eq!(
+                s.caller_user, None,
+                "{hit} must lose its authenticated user alongside the role — \
+                 caller_user is resolved together with caller_role"
+            );
             assert!(s.permissions.is_empty(), "{hit} must lose event scope");
         }
         for spared in ["c", "d"] {
             assert_eq!(
                 map[spared].caller_role, "operator",
                 "{spared} must be untouched by a per-device revoke"
+            );
+            assert_eq!(
+                map[spared].caller_user,
+                Some(format!("u-{spared}")),
+                "{spared} must keep its authenticated user"
             );
         }
     }

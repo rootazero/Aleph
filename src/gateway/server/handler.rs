@@ -384,6 +384,42 @@ fn device_revoked_should_close(event_json: &str, session_device_id: Option<&str>
     }
 }
 
+/// Resolve the `(caller_role, caller_user)` pair stamped onto
+/// `ConnectionState` at a `connect` handshake, given the authorization
+/// verdict `resolve_connect_auth` already decided. Pure — host-testable
+/// without a live WS socket, unlike the handshake it's extracted from.
+///
+/// `authorized == false` stays walled (guest, no user) exactly as before
+/// per-user resolution existed. `authorized == true` resolves the bound
+/// device's user via [`resolve_connection_identity`](crate::gateway::handlers::connect::resolve_connection_identity)
+/// when a security store is available — loopback and legacy unbound-device
+/// paths still resolve to the implicit owner as operator (zero-change
+/// guarantee), but a device bound to a deactivated user is walled here even
+/// though its token was valid. With no store wired (probe/test server),
+/// authorized falls back to the implicit owner as operator, unchanged from
+/// before per-user resolution existed.
+fn resolve_stamped_identity(
+    authorized: bool,
+    is_loopback: bool,
+    device_id: Option<&str>,
+    store: Option<&crate::gateway::security::store::SecurityStore>,
+) -> (Option<String>, &'static str) {
+    if !authorized {
+        return (None, "guest");
+    }
+    match store {
+        Some(store) => crate::gateway::handlers::connect::resolve_connection_identity(
+            is_loopback,
+            device_id,
+            store,
+        ),
+        None => (
+            Some(crate::gateway::security::store::OWNER_USER_ID.to_string()),
+            "operator",
+        ),
+    }
+}
+
 /// Handle a single WebSocket connection
 async fn handle_connection(
     socket: WebSocket,
@@ -1026,36 +1062,15 @@ async fn handle_connection(
                                                                 Vec::new()
                                                             };
                                                             // Role + user for the login-wall gate and the
-                                                            // config-tier tool gate. Unauthorized stays
-                                                            // walled (guest, no user) exactly as before.
-                                                            // Authorized used to stamp the constant
-                                                            // "operator"; it now resolves the bound
-                                                            // device's user via
-                                                            // `resolve_connection_identity` — loopback and
-                                                            // legacy unbound-device paths still resolve to
-                                                            // the implicit owner as operator (zero-change
-                                                            // guarantee), but a device bound to a
-                                                            // deactivated user is walled here even though
-                                                            // its token was valid.
-                                                            let (resolved_user, resolved_role): (Option<String>, &'static str) = if authorized {
-                                                                match ctx.security_store.as_ref() {
-                                                                    Some(store) => crate::gateway::handlers::connect::resolve_connection_identity(
-                                                                        ctx.client_ip.is_loopback(),
-                                                                        authed_device_id.as_deref(),
-                                                                        store,
-                                                                    ),
-                                                                    // No store wired (probe/test server):
-                                                                    // LAN-trust degrade — keep the connection
-                                                                    // usable as the implicit owner, unchanged
-                                                                    // from before per-user resolution existed.
-                                                                    None => (
-                                                                        Some(crate::gateway::security::store::OWNER_USER_ID.to_string()),
-                                                                        "operator",
-                                                                    ),
-                                                                }
-                                                            } else {
-                                                                (None, "guest")
-                                                            };
+                                                            // config-tier tool gate. See
+                                                            // `resolve_stamped_identity` (pure, unit-tested)
+                                                            // for the decision rules.
+                                                            let (resolved_user, resolved_role) = resolve_stamped_identity(
+                                                                authorized,
+                                                                ctx.client_ip.is_loopback(),
+                                                                authed_device_id.as_deref(),
+                                                                ctx.security_store.as_deref(),
+                                                            );
                                                             state.caller_role = resolved_role.to_string();
                                                             state.caller_user = resolved_user;
                                                             // Device binding for the per-device revoke.
@@ -1795,6 +1810,115 @@ mod device_revocation_tests {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // ── Connect-time identity stamping (resolve_stamped_identity) ─────────
+    // These pin the branch logic extracted verbatim from the connect
+    // handshake's ConnectionState-stamping site (server::handler still calls
+    // this exact function). The surrounding WS glue — lock acquisition, the
+    // `state.caller_role = ..` / `state.caller_user = ..` assignment, and
+    // `handle_connection`'s dispatch loop itself — has no injectable seam
+    // (it operates on a live `axum::extract::ws::WebSocket`) and is not
+    // covered here; see the Task 2 fix report for what that would require.
+
+    fn store_with_device_user(
+        device_id: &str,
+        user_id: &str,
+        role: crate::gateway::security::store::UserRole,
+    ) -> crate::gateway::security::store::SecurityStore {
+        use crate::gateway::security::store::{DeviceUpsertData, SecurityStore};
+        let store = SecurityStore::in_memory().unwrap();
+        store.create_user(user_id, "Test User", role).unwrap();
+        store
+            .upsert_device(&DeviceUpsertData {
+                device_id,
+                device_name: "Test Device",
+                device_type: Some("panel"),
+                public_key: &[1u8; 32],
+                fingerprint: device_id,
+                role: "operator",
+                scopes: &[],
+            })
+            .unwrap();
+        store.set_device_user(device_id, user_id).unwrap();
+        store
+    }
+
+    #[test]
+    fn unauthorized_stays_walled_even_with_a_store_present() {
+        // A store being available never overrides an unauthorized verdict.
+        let store = store_with_device_user(
+            "dev-r",
+            "u-root",
+            crate::gateway::security::store::UserRole::Admin,
+        );
+        let (user, role) = resolve_stamped_identity(false, false, Some("dev-r"), Some(&store));
+        assert_eq!(user, None);
+        assert_eq!(role, "guest");
+    }
+
+    #[test]
+    fn no_store_wired_falls_back_to_owner_when_authorized() {
+        // probe/test server with no security store: LAN-trust degrade.
+        let (user, role) = resolve_stamped_identity(true, false, None, None);
+        assert_eq!(
+            user.as_deref(),
+            Some(crate::gateway::security::store::OWNER_USER_ID)
+        );
+        assert_eq!(role, "operator");
+    }
+
+    #[test]
+    fn admin_user_device_stamps_operator_and_user_id() {
+        let store = store_with_device_user(
+            "dev-r",
+            "u-root",
+            crate::gateway::security::store::UserRole::Admin,
+        );
+        let (user, role) = resolve_stamped_identity(true, false, Some("dev-r"), Some(&store));
+        assert_eq!(user.as_deref(), Some("u-root"));
+        assert_eq!(role, "operator");
+    }
+
+    #[test]
+    fn member_user_device_stamps_member_and_user_id() {
+        let store = store_with_device_user(
+            "dev-a",
+            "u-alice",
+            crate::gateway::security::store::UserRole::Member,
+        );
+        let (user, role) = resolve_stamped_identity(true, false, Some("dev-a"), Some(&store));
+        assert_eq!(user.as_deref(), Some("u-alice"));
+        assert_eq!(role, "member");
+    }
+
+    #[test]
+    fn deactivated_user_device_is_walled_at_connect_time() {
+        // The key behavior this task pins: a device bound to a deactivated
+        // user is walled at connect time even though its token was valid
+        // (authorized == true).
+        use crate::gateway::security::store::UserStatus;
+        let store = store_with_device_user(
+            "dev-r",
+            "u-root",
+            crate::gateway::security::store::UserRole::Admin,
+        );
+        store
+            .update_user("u-root", None, None, Some(UserStatus::Deactivated))
+            .unwrap();
+        let (user, role) = resolve_stamped_identity(true, false, Some("dev-r"), Some(&store));
+        assert_eq!(user, None);
+        assert_eq!(role, "guest");
+    }
+
+    #[test]
+    fn loopback_stamps_owner_operator_regardless_of_device() {
+        let (user, role) = resolve_stamped_identity(true, true, None, None);
+        assert_eq!(
+            user.as_deref(),
+            Some(crate::gateway::security::store::OWNER_USER_ID)
+        );
+        assert_eq!(role, "operator");
+    }
 
     // ── LAN-trust node-shape detection + cluster registration ────────────
 

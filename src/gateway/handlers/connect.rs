@@ -165,8 +165,15 @@ pub fn connect_authorized(
 /// - loopback ⇒ implicit owner, operator (zero-config, unchanged)
 /// - device token bound to a user ⇒ that user; role admin⇒"operator",
 ///   member⇒"member"; deactivated ⇒ walled ("guest", no user)
-/// - authorized but unbound (legacy shared token, pre-v14 device) ⇒ implicit
-///   owner, operator — the zero-change guarantee for existing deployments
+/// - authorized but unbound (legacy shared token, pre-v14 device — the device
+///   row carries no `user_id`) ⇒ implicit owner, operator — the zero-change
+///   guarantee for existing deployments
+/// - fail-closed: a store error on either the device→user or the user lookup,
+///   or a device's `user_id` pointing at a row no longer present in `users`
+///   (dangling reference), walls the connection ("guest", no user) instead of
+///   defaulting to owner. A lookup we could not actually perform, or a link
+///   we know is broken, must never silently grant full authority — the
+///   connection can simply reconnect once the store is healthy again.
 #[must_use]
 pub fn resolve_connection_identity(
     is_loopback: bool,
@@ -178,20 +185,34 @@ pub fn resolve_connection_identity(
     if is_loopback {
         return (Some(OWNER_USER_ID.to_string()), "operator");
     }
-    let linked_user = device_id
-        .and_then(|d| store.device_user(d).ok().flatten())
-        .and_then(|uid| store.get_user(&uid).ok().flatten());
-    match linked_user {
-        Some(u) if u.status == UserStatus::Deactivated => (None, "guest"),
-        Some(u) => {
+
+    let Some(device_id) = device_id else {
+        // No device at all (legacy shared token): unbound, zero-change guarantee.
+        return (Some(OWNER_USER_ID.to_string()), "operator");
+    };
+
+    let linked_user_id = match store.device_user(device_id) {
+        // Device row exists but carries no user_id: genuinely unbound
+        // (pre-v14 device, not yet adopted) — zero-change guarantee.
+        Ok(None) => return (Some(OWNER_USER_ID.to_string()), "operator"),
+        Ok(Some(uid)) => uid,
+        // Store error: fail-closed. We could not actually determine whether
+        // this device is bound, so never default to owner.
+        Err(_) => return (None, "guest"),
+    };
+
+    match store.get_user(&linked_user_id) {
+        Ok(Some(u)) if u.status == UserStatus::Deactivated => (None, "guest"),
+        Ok(Some(u)) => {
             let role = match u.role {
                 UserRole::Admin => "operator",
                 UserRole::Member => "member",
             };
             (Some(u.user_id), role)
         }
-        // Authorized without a user binding: legacy paths keep full authority.
-        None => (Some(OWNER_USER_ID.to_string()), "operator"),
+        // Dangling user_id (points at a row no longer in `users`), or a
+        // store error on this lookup: fail-closed, never default to owner.
+        Ok(None) | Err(_) => (None, "guest"),
     }
 }
 
@@ -444,6 +465,18 @@ mod tests {
         let (user, role) = resolve_connection_identity(false, Some("dev-r"), &store);
         assert_eq!(user.as_deref(), Some("u-root"));
         assert_eq!(role, "operator");
+    }
+
+    #[test]
+    fn dangling_user_link_resolves_guest() {
+        // Device row's user_id points at a user that was never created (or
+        // was deleted since) — fail-closed, never a silent grant of owner
+        // authority just because the link is broken.
+        let store = seeded_store();
+        upsert_panel_device(&store, "dev-ghost", "u-never-created");
+        let (user, role) = resolve_connection_identity(false, Some("dev-ghost"), &store);
+        assert_eq!(user, None);
+        assert_eq!(role, "guest");
     }
 
     #[test]
