@@ -548,7 +548,10 @@ mod tests {
         assert_eq!(r.kind, ContentKind::Json);
         let parsed: serde_json::Value =
             serde_json::from_str(&r.body).expect("the reduction must still be valid JSON");
-        assert_eq!(parsed["status"], "error", "the salient scalars must survive");
+        assert_eq!(
+            parsed["status"], "error",
+            "the salient scalars must survive"
+        );
         assert_eq!(
             parsed["message"], "connection refused",
             "the salient scalars must survive"
