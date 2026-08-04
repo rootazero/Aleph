@@ -150,6 +150,7 @@ mod tests {
         assert_eq!(
             sorted,
             vec![
+                "decision_json",
                 "duration_ms",
                 "errors",
                 "evolution_json",
@@ -168,7 +169,8 @@ mod tests {
             .map(String::from)
             .collect::<Vec<_>>(),
             "dream_reports must retain the 8 core columns, the 4 notes-era activity \
-             counters, and the evolution_json gate-verdict column"
+             counters, the evolution_json gate-verdict column and the decision_json \
+             cycle-decision column"
         );
 
         let row_count: i64 = conn

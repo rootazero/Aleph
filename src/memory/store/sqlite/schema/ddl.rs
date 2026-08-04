@@ -37,7 +37,8 @@ CREATE TABLE IF NOT EXISTS dream_reports (
     feedback_distilled INTEGER NOT NULL DEFAULT 0,
     errors          TEXT,
     namespace       TEXT NOT NULL DEFAULT 'owner',
-    evolution_json  TEXT
+    evolution_json  TEXT,
+    decision_json   TEXT
 );
 
 CREATE INDEX IF NOT EXISTS idx_dream_reports_started

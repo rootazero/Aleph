@@ -114,6 +114,21 @@ pub async fn handle_list_insights(request: JsonRpcRequest, db: MemoryBackend) ->
     };
 
     // 3. Dream-run audit trail.
+    //
+    // Pure I/O (R4): the stored JSON blobs are re-emitted as parsed values, not
+    // re-derived. `decision` is what makes the operator's first question ("why
+    // is dreaming always conserving?") answerable here — it carries the chosen
+    // strategy's rationale, the churn gate's verdict, the stages that ran and
+    // the validation result.
+    let parse_blob = |column: &'static str, raw: Option<String>| {
+        raw.and_then(|s| {
+            serde_json::from_str::<serde_json::Value>(&s)
+                .inspect_err(
+                    |e| tracing::warn!(%e, column, raw = %s, "corrupt JSON in dream report"),
+                )
+                .ok()
+        })
+    };
     let runs = match db.recent_dream_reports(limit) {
         Ok(reports) => reports
             .into_iter()
@@ -125,16 +140,17 @@ pub async fn handle_list_insights(request: JsonRpcRequest, db: MemoryBackend) ->
                     "finished_at": r.finished_at,
                     "duration_ms": r.duration_ms,
                     "synthesis_count": r.synthesis_count,
+                    "notes_consolidated": r.notes_consolidated,
+                    "notes_woven": r.notes_woven,
+                    "notes_archived": r.notes_archived,
+                    "feedback_distilled": r.feedback_distilled,
                     "errors": r.errors,
                     // SkillOpt gate verdict (baseline/candidate/best + accept/reject),
                     // parsed from the stored JSON; null on pre-migration rows or
                     // cycles without a gate decision.
-                    "evolution": r.evolution_json.as_deref()
-                        .and_then(|s| {
-                            serde_json::from_str::<serde_json::Value>(s)
-                                .inspect_err(|e| tracing::warn!(%e, evolution_json = %s, "corrupt evolution_json in dream report"))
-                                .ok()
-                        }),
+                    "evolution": parse_blob("evolution_json", r.evolution_json),
+                    // Serialized `CycleDecision`; null on pre-migration rows.
+                    "decision": parse_blob("decision_json", r.decision_json),
                 })
             })
             .collect::<Vec<_>>(),
@@ -209,20 +225,33 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn list_insights_surfaces_evolution_gate_verdict() {
-        use crate::memory::dreaming::{EvolutionOutcome, GateOutcome};
+    async fn list_insights_surfaces_evolution_gate_verdict_and_decision() {
+        use crate::memory::dreaming::{
+            CycleDecision, DreamStrategy, EvolutionOutcome, GateDecision, GateOutcome,
+        };
         use crate::memory::store::sqlite::dream_reports::PersistedDreamReport;
         use crate::memory::store::sqlite::SqliteMemoryBackend;
         use crate::sync_primitives::Arc;
 
         let backend = SqliteMemoryBackend::in_memory().expect("in-memory backend");
-        // Serialize an EvolutionOutcome exactly as the daemon does before insert.
+        // Serialize both blobs exactly as the daemon does before insert.
         let evolution = EvolutionOutcome {
             baseline: 0.5,
             candidate: 0.72,
             best: 0.72,
             outcome: GateOutcome::AcceptNewBest,
             merges_rejected: 1,
+        };
+        let decision = CycleDecision {
+            strategy: DreamStrategy::Conserve,
+            rationale: "gate forced conserve: wasted distillation: 0/10 recalled".into(),
+            personality_adjustment: -0.1,
+            gate: GateDecision::Conserve {
+                reason: "wasted distillation: 0/10 recalled".into(),
+                cooldown_remaining: 0,
+            },
+            stages: vec!["note_lint".into(), "index_refresher".into()],
+            validation_passed: true,
         };
         backend
             .insert_dream_report(&PersistedDreamReport {
@@ -239,6 +268,7 @@ mod tests {
                 errors: None,
                 namespace: "owner".into(),
                 evolution_json: Some(serde_json::to_string(&evolution).unwrap()),
+                decision_json: Some(serde_json::to_string(&decision).unwrap()),
             })
             .unwrap();
         let db: crate::memory::store::MemoryBackend = Arc::new(backend);
@@ -262,5 +292,63 @@ mod tests {
         );
         assert_eq!(evo["outcome"], "accept_new_best");
         assert_eq!(evo["candidate"], 0.72);
+
+        // The "why" half: without it the Panel can show that a cycle conserved
+        // but not why, which is the operator's very first question.
+        let dec = &run["decision"];
+        assert!(
+            dec.is_object(),
+            "decision must parse back to an object: {run}"
+        );
+        assert_eq!(dec["strategy"], "conserve");
+        assert_eq!(dec["gate"]["type"], "conserve");
+        assert!(dec["rationale"]
+            .as_str()
+            .unwrap()
+            .contains("wasted distillation"));
+        assert_eq!(dec["stages"].as_array().unwrap().len(), 2);
+        assert_eq!(dec["validation_passed"], true);
+    }
+
+    /// Pre-migration rows carry NULL blobs; the handler must degrade to `null`
+    /// rather than error the whole listing.
+    #[tokio::test]
+    async fn list_insights_tolerates_rows_without_decision() {
+        use crate::memory::store::sqlite::dream_reports::PersistedDreamReport;
+        use crate::memory::store::sqlite::SqliteMemoryBackend;
+        use crate::sync_primitives::Arc;
+
+        let backend = SqliteMemoryBackend::in_memory().expect("in-memory backend");
+        backend
+            .insert_dream_report(&PersistedDreamReport {
+                id: "legacy".into(),
+                pipeline_type: "consolidate".into(),
+                started_at: 10,
+                finished_at: 20,
+                duration_ms: 10,
+                synthesis_count: 0,
+                notes_consolidated: 3,
+                notes_woven: 0,
+                notes_archived: 0,
+                feedback_distilled: 0,
+                errors: None,
+                namespace: "owner".into(),
+                evolution_json: None,
+                decision_json: None,
+            })
+            .unwrap();
+        let db: crate::memory::store::MemoryBackend = Arc::new(backend);
+
+        let resp = handle_list_insights(
+            JsonRpcRequest::with_id("dreaming.list_insights", None, json!(7)),
+            db,
+        )
+        .await;
+        assert!(resp.is_success(), "expected success: {:?}", resp.error);
+        let v = resp.result.expect("result payload");
+        let run = &v["runs"][0];
+        assert!(run["decision"].is_null());
+        assert!(run["evolution"].is_null());
+        assert_eq!(run["notes_consolidated"], 3);
     }
 }

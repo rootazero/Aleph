@@ -1019,11 +1019,80 @@ fn DreamInsightsPanel() -> impl IntoView {
                                     <div class="space-y-1">
                                         {runs.into_iter().map(|r| {
                                             let err = r.errors.clone();
+                                            // The evolution-gate verdict and the cycle decision were
+                                            // both already on the wire; nothing rendered them, so the
+                                            // Panel could show *that* a cycle conserved but never why.
+                                            let health = r.evolution.as_ref().map(|e| {
+                                                let verdict = match e.outcome.as_str() {
+                                                    "accept_new_best" => t_string!(i18n, settings.memory.dream_verdict_accepted_best),
+                                                    "accept" => t_string!(i18n, settings.memory.dream_verdict_accepted),
+                                                    _ => t_string!(i18n, settings.memory.dream_verdict_rejected),
+                                                };
+                                                let accepted = e.outcome.starts_with("accept");
+                                                let text = format!(
+                                                    "{} {:.3} → {:.3} ({} {:.3}) — {}",
+                                                    t_string!(i18n, settings.memory.dream_health),
+                                                    e.baseline, e.candidate,
+                                                    t_string!(i18n, settings.memory.dream_best), e.best,
+                                                    verdict,
+                                                );
+                                                (text, accepted, e.merges_rejected)
+                                            });
+                                            let decision = r.decision.clone();
                                             view! {
-                                                <div class="p-2 bg-surface-sunken rounded border border-border text-sm flex justify-between">
-                                                    <span>{r.pipeline_type}</span>
-                                                    <span class="text-text-tertiary">{format!("{}ms · {} synth", r.duration_ms, r.synthesis_count)}</span>
-                                                    {err.map(|e| view! { <span class="text-danger">{e}</span> })}
+                                                <div class="p-2 bg-surface-sunken rounded border border-border text-sm space-y-1">
+                                                    <div class="flex justify-between">
+                                                        <span>{r.pipeline_type}</span>
+                                                        <span class="text-text-tertiary">
+                                                            {format!("{}ms · {} synth · {} merged · {} archived",
+                                                                r.duration_ms, r.synthesis_count,
+                                                                r.notes_consolidated, r.notes_archived)}
+                                                        </span>
+                                                    </div>
+                                                    {health.map(|(text, accepted, merges_rejected)| view! {
+                                                        <div class=move || if accepted { "text-xs text-success" } else { "text-xs text-warning" }>
+                                                            {text}
+                                                            {(merges_rejected > 0).then(|| format!(
+                                                                " · {} {}",
+                                                                merges_rejected,
+                                                                t_string!(i18n, settings.memory.dream_merges_rejected),
+                                                            ))}
+                                                        </div>
+                                                    })}
+                                                    {decision.map(|d| {
+                                                        let conserved = d.gate.as_ref().is_some_and(|g| g.kind == "conserve");
+                                                        let gate_line = d.gate.as_ref().and_then(|g| {
+                                                            (g.kind == "conserve").then(|| format!(
+                                                                "⚠ {}: {}{}",
+                                                                t_string!(i18n, settings.memory.dream_gate_conserve),
+                                                                g.reason.clone().unwrap_or_default(),
+                                                                if g.cooldown_remaining > 0 {
+                                                                    format!(" ({} {})", t_string!(i18n, settings.memory.dream_cooldown), g.cooldown_remaining)
+                                                                } else {
+                                                                    String::new()
+                                                                },
+                                                            ))
+                                                        });
+                                                        let stages = (!d.stages.is_empty()).then(|| format!(
+                                                            "{}: {}",
+                                                            t_string!(i18n, settings.memory.dream_stages),
+                                                            d.stages.join(" → "),
+                                                        ));
+                                                        let validation_failed = !d.validation_passed;
+                                                        view! {
+                                                            <div class="text-xs text-text-tertiary">{d.rationale}</div>
+                                                            {gate_line.map(|g| view! {
+                                                                <div class=move || if conserved { "text-xs text-warning" } else { "text-xs text-text-tertiary" }>{g}</div>
+                                                            })}
+                                                            {stages.map(|s| view! {
+                                                                <div class="text-xs font-mono text-text-tertiary">{s}</div>
+                                                            })}
+                                                            {validation_failed.then(|| view! {
+                                                                <div class="text-xs text-danger">{t!(i18n, settings.memory.dream_validation_failed)}</div>
+                                                            })}
+                                                        }
+                                                    })}
+                                                    {err.map(|e| view! { <div class="text-xs text-danger">{e}</div> })}
                                                 </div>
                                             }
                                         }).collect::<Vec<_>>()}

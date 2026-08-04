@@ -21,7 +21,7 @@
 //! * The daemon's window/idle/once-per-day checks (`super::DreamDaemon`) decide
 //!   *whether a cycle runs at all* — a pre-condition, orthogonal to this module.
 //! * [`super::mutation_gate::MutationGate`] detects *churn pathologies*
-//!   (oscillation, repeated merges) and enforces cooldown — reactive.
+//!   (synthesis churn, repeated merges) and enforces cooldown — reactive.
 //! * This module prevents *degrading* edits and provides monotonic-improvement
 //!   pressure — proactive. The three compose; none subsumes another.
 
@@ -51,6 +51,22 @@ pub struct EvolutionOutcome {
     pub outcome: GateOutcome,
     /// Number of proposed merges the per-edit gate rejected this cycle.
     pub merges_rejected: u32,
+}
+
+impl EvolutionOutcome {
+    /// Did this cycle make memory *worse*?
+    ///
+    /// A rejection alone is not a pathology — the gate also rejects ties and
+    /// candidates that merely fail to beat the historical best. Only a
+    /// rejection whose candidate scored below the cycle's own baseline means
+    /// the night's edits actively degraded the corpus, which is what arms
+    /// [`super::mutation_gate::MutationGate`]'s conserve cooldown. Single
+    /// source: the daemon's operator warning and the gate's cooldown read the
+    /// same predicate.
+    #[must_use]
+    pub fn degraded(&self) -> bool {
+        self.outcome == GateOutcome::Reject && self.candidate < self.baseline
+    }
 }
 
 /// Minimum local merge-safety score for a merge to be applied. Merges scoring

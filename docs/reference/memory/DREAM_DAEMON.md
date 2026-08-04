@@ -22,13 +22,32 @@ There is **no** standalone `DreamGate` type. Whether a cycle runs at all is deci
 
 Ported from SkillOpt (arXiv 2605.23904): a bounded, validation-gated edit loop layered over the LLM-proposed edits (R7: the *content* is the model's; this layer only enforces discipline).
 
-- **Strict-improvement gate** — `evolution/gate.rs::evaluate_gate(candidate, current, best, ε)` keeps an edit only when it *strictly* improves a score (`> current + ε`, ties rejected), returning `AcceptNewBest` / `Accept` / `Reject`. At cycle level (`mod.rs` Phase 5.5) it scores `memory_health_score` before vs after this cycle's edits; a degrading cycle arms a 2-cycle Conserve cooldown (it does not roll back — edits are already on disk).
+- **Strict-improvement gate** — `evolution/gate.rs::evaluate_gate(candidate, current, best, ε)` keeps an edit only when it *strictly* improves a score (`> current + ε`, ties rejected), returning `AcceptNewBest` / `Accept` / `Reject`. At cycle level (`mod.rs` Phase 5.5) it scores `memory_health_score` before vs after this cycle's edits; a degrading cycle (`EvolutionOutcome::degraded` — a `Reject` whose candidate fell *below* its own baseline, not merely below the historical best) buys a 2-cycle Conserve cooldown. It does not roll back — edits are already on disk. The cooldown is **not** armed imperatively: the next cycle derives it from this cycle's persisted outcome (see §3.2), so a restart in between cannot swallow it.
 - **Best-checkpoint persistence** — `best_health` is loaded from `dream_best_health__{agent}` (`dream_kv.rs`) in `from_config` and re-persisted on every `AcceptNewBest`, so the honest historical best survives a restart instead of resetting to 0.
 - **Edit budget ("textual learning rate")** — `evolution/budget.rs::EditBudget` (default 32 edits / 256 KiB) is shared across the **destructive** stages — `NoteConsolidate` (merges), `NoteDecay` (archival), and the distill `Supersede` action (`SkillDistill` / `FeedbackDistill`, via `stages::charge_distill_budget`). Additive growth (new synthesis notes, distill `New`/`Strengthen`, weave links) is **not** budgeted, so the growth path is never starved.
 - **Recall-evidence gate** — `evolution/evidence.rs::gate_supersede_evidence` demands the LLM's confidence strictly beat a note's saturating recall support before a destructive `Supersede` lands (production recall is Aleph's cheap stand-in for a held-out split).
 - **Rejected-edit buffer** — rejected supersedes are fingerprinted and stored as `DistillRejectRecord`s (`distill_rejects__{agent}`, backward-compatible with the legacy fingerprint-only list). They both drop re-proposals in code (`stages/mod.rs::gate_action_evidence`) *and* are replayed into the next distill prompt as negative feedback (`stages/mod.rs::render_rejected_block`) so the model stops re-proposing losing edits.
 
-The cycle-level gate outcome (`EvolutionOutcome`) is persisted to `dream_reports.evolution_json` (§8) and surfaced via `dreaming.list_insights`.
+The cycle-level gate outcome (`EvolutionOutcome`) is persisted to `dream_reports.evolution_json` (§8) and surfaced via `dreaming.list_insights` **and** rendered by the Panel's Dream Insights panel. Its sibling `decision_json` (a `CycleDecision`: strategy, rationale, churn-gate verdict, stages executed, validation result) answers the operator's first question — *why did this cycle conserve* — from the same read.
+
+### 3.2 Cross-cycle state is derived, not accumulated
+
+`MutationGate` (churn detection) and `StrategySelector` (personality window) hold **no** state of their own between cycles. At the start of every run the daemon reads the last `DREAM_HISTORY_WINDOW` events from `dream_events.jsonl` once and folds them:
+
+```rust
+let history = EventLog::new(agent_dir).read_last(DREAM_HISTORY_WINDOW).await?;
+let prior_report = history.last().map(|ev| ev.report.clone());          // rot signals
+let gate  = MutationGate::from_reports(history.iter().map(|e| &e.report)).evaluate();
+let sel   = StrategySelector::from_outcomes(history.iter().map(|e| e.validation.overall_ok()));
+```
+
+`DREAM_HISTORY_WINDOW` is derived from the consumers' own `HISTORY_WINDOW` constants, so widening a detector's window widens the read automatically.
+
+**Why**: these were in-process accumulators until 2026-08-04, and cycles run at most once a day. A five-cycle detector therefore needed five consecutive days of daemon uptime before it could *ever* fire, and the conserve cooldown evaporated on the next restart — while the identical history sat unread on disk. Same shape as evolver's `analyzeRecentHistory(recentEvents)` (a pure fold over durable events) and SkillOpt-Sleep's `state.json`; satisfies constitution A3.
+
+**Consequence to respect**: the Phase-6 event-log append is now load-bearing, not just an audit line. If it fails, the *next* cycle cannot see this one — hence it logs at `error!`.
+
+**Detector inputs are identifiers, never prose.** The merge detector keys on note-pair ids; the synthesis-churn detector keys on `(synthesis note path, digest of its body)` and fires only when the same note is rewritten to a *different* body for `SYNTHESIS_CHURN_THRESHOLD` consecutive cycles. Its predecessor matched regex negation pairs (`should` vs `should not`) against whole LLM-written synthesis essays: dead in production, and had it been live it would have been a rule-based re-judgement of a semantic question `NoteDrift` already answers (R7/P8) — that verdict already reaches the selector as `contradictions_found` → `contradiction_rate` → the stability veto. Digest the **body**, not the rendered markdown: frontmatter carries an `updated` date that moves on every write, so a whole-file hash would report churn every night.
 
 ## 4. Core Types
 
@@ -287,7 +306,7 @@ CREATE TABLE IF NOT EXISTS dream_status (
 
 The `CHECK (id = 1)` enforces singleton semantics. `last_status` transitions `running → success | error | timeout | cancelled` (§2).
 
-**`dream_reports`** — one row per run. Current writers populate `pipeline_type`, `started_at`, `finished_at`, `duration_ms`, `synthesis_count`, the notes-era activity counters (`notes_consolidated` / `notes_woven` / `notes_archived` / `feedback_distilled`, added by `migrate_dream_reports_add_activity_counters`), `errors`, and the nullable `evolution_json` (serialized `EvolutionOutcome` — the SkillOpt gate verdict, added by `migrate_dream_reports_add_evolution`; NULL on pre-migration rows or cycles with no gate decision). Legacy `facts_*` / `nodes_*` / `edges_*` columns from the pre-notes schema were dropped by `migrate_dream_reports_drop_legacy_cols`:
+**`dream_reports`** — one row per run. Current writers populate `pipeline_type`, `started_at`, `finished_at`, `duration_ms`, `synthesis_count`, the notes-era activity counters (`notes_consolidated` / `notes_woven` / `notes_archived` / `feedback_distilled`, added by `migrate_dream_reports_add_activity_counters`), `errors`, and the nullable `evolution_json` / `decision_json` (serialized `EvolutionOutcome` — the SkillOpt gate verdict — and `CycleDecision` — the cycle's strategy, rationale, churn-gate verdict, executed stages and validation result; both added by `migrate_dream_reports_add_evolution`, NULL on pre-migration rows). **Both the scheduled path (`check_and_run`) and the forced path (`run_now`) write rows, through the single writer `DreamDaemon::persist_run_row`** — a forced cycle used to leave no row at all, so it was invisible to both the Panel's run history and the governance audit's activity probe. Legacy `facts_*` / `nodes_*` / `edges_*` columns from the pre-notes schema were dropped by `migrate_dream_reports_drop_legacy_cols`:
 
 ```sql
 CREATE TABLE IF NOT EXISTS dream_reports (
@@ -303,7 +322,8 @@ CREATE TABLE IF NOT EXISTS dream_reports (
     feedback_distilled INTEGER NOT NULL DEFAULT 0,
     errors             TEXT,
     namespace          TEXT NOT NULL DEFAULT 'owner',
-    evolution_json     TEXT   -- serialized EvolutionOutcome (SkillOpt gate verdict), nullable
+    evolution_json     TEXT,  -- serialized EvolutionOutcome (SkillOpt gate verdict), nullable
+    decision_json      TEXT   -- serialized CycleDecision (strategy/rationale/gate/stages/validation), nullable
 );
 CREATE INDEX IF NOT EXISTS idx_dream_reports_started ON dream_reports(started_at);
 ```

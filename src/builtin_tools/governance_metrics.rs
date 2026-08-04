@@ -217,6 +217,7 @@ mod tests {
                 errors: None,
                 namespace: "owner".to_string(),
                 evolution_json: None,
+                decision_json: None,
             })
             .unwrap();
 

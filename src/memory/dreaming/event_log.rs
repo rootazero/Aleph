@@ -78,9 +78,21 @@ impl EventLog {
     }
 
     /// Read the last N events from the log. Returns them in chronological order.
+    ///
+    /// Parsing walks the file backwards and stops as soon as `n` events have
+    /// been recovered, so the cost is bounded by the window rather than by the
+    /// whole history. That matters because a `DreamEvent` carries the full
+    /// cycle report (synthesis assertions included) while every caller wants a
+    /// small tail: the daemon's per-cycle rehydration, `dreaming.list_insights`
+    /// and `note_manage(action="evolution")` would otherwise each deserialize
+    /// years of nightly cycles to throw all but a handful away.
+    ///
+    /// Semantics are unchanged: the result is the last `n` *parseable* events,
+    /// so a corrupt line in the tail is skipped rather than shortening the
+    /// window.
     pub async fn read_last(&self, n: usize) -> Result<Vec<DreamEvent>, AlephError> {
         let path = self.log_path();
-        if !path.exists() {
+        if !path.exists() || n == 0 {
             return Ok(Vec::new());
         }
 
@@ -88,14 +100,20 @@ impl EventLog {
             .await
             .map_err(|e| AlephError::config(format!("read event log: {e}")))?;
 
-        let events: Vec<DreamEvent> = content
-            .lines()
-            .filter(|line| !line.trim().is_empty())
-            .filter_map(|line| serde_json::from_str(line).ok())
-            .collect();
-
-        let skip = events.len().saturating_sub(n);
-        Ok(events.into_iter().skip(skip).collect())
+        let mut events: Vec<DreamEvent> = Vec::with_capacity(n);
+        for line in content.lines().rev() {
+            if line.trim().is_empty() {
+                continue;
+            }
+            if let Ok(event) = serde_json::from_str(line) {
+                events.push(event);
+                if events.len() == n {
+                    break;
+                }
+            }
+        }
+        events.reverse();
+        Ok(events)
     }
 
     /// Get the next cycle number (max existing + 1, or 1 if empty).
