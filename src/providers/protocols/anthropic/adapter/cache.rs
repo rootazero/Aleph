@@ -131,6 +131,16 @@ pub(super) fn inject_cache_control_into_system_array(
 /// breakpoint to the nearest real message instead. Anchoring a breakpoint
 /// *earlier* is always safe: it only shortens the cached span, never
 /// invalidates it.
+///
+/// The classification itself is **not** decided here: it comes from
+/// [`nudges::is_synthetic_reminder`](crate::thinker::nudges::is_synthetic_reminder),
+/// alongside the copy that emits the fence. This module used to answer the
+/// question with its own inline `starts_with`, which got the one exception
+/// wrong: `user_interjection_note` wraps a *real* mid-loop user message in the
+/// same fence, and that message **is** persisted — so its index is perfectly
+/// stable and skipping it needlessly shortened the cached span. The compaction
+/// focus anchor asks the identical question about the identical messages, so
+/// there is exactly one answer.
 fn is_ephemeral_notice(msg: &serde_json::Value) -> bool {
     if msg.get("role").and_then(|v| v.as_str()) != Some("user") {
         return false;
@@ -146,7 +156,7 @@ fn is_ephemeral_notice(msg: &serde_json::Value) -> bool {
         },
         _ => return false,
     };
-    text.trim_start().starts_with("<system-reminder>")
+    crate::thinker::nudges::is_synthetic_reminder(text)
 }
 
 /// Inject `cache_control` into the trailing content block of up to
@@ -566,6 +576,37 @@ mod tests {
             ]
         });
         assert!(!is_ephemeral_notice(&multi));
+    }
+
+    #[test]
+    fn a_wrapped_user_interjection_still_gets_a_breakpoint() {
+        // `user_interjection_note` wraps a REAL mid-loop user message in the same
+        // `<system-reminder>` fence, but that message is a persisted, replayed
+        // `SessionEvent::UserMessage` — its index is stable next turn, so it is a
+        // perfectly good breakpoint anchor. The old inline `starts_with` skipped
+        // it, silently shortening the cached span on every steered run.
+        let wrapped = crate::thinker::nudges::user_interjection_note("use staging instead");
+        let msg = serde_json::json!({
+            "role": "user",
+            "content": [{"type": "text", "text": wrapped}]
+        });
+        assert!(
+            !is_ephemeral_notice(&msg),
+            "a persisted user interjection is not an ephemeral notice"
+        );
+
+        let mut payload = serde_json::json!({ "messages": [msg] });
+        inject_cache_control_into_recent_messages(
+            &mut payload,
+            CacheControl::Ephemeral { ttl: None },
+            3,
+        );
+        assert_eq!(
+            cached_message_count(&payload),
+            1,
+            "the interjection must actually receive the breakpoint, not merely \
+             be classified as eligible"
+        );
     }
 
     /// An all-ephemeral tail must not deadlock the walk or place markers.

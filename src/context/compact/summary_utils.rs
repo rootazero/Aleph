@@ -354,10 +354,14 @@ pub fn build_summary_update_prompt(
 /// The compactor passes the kept fresh tail here — the live task is already in
 /// the message list it owns, so task-anchoring needs no new plumbing from the
 /// caller. Machinery riding the list as user turns is skipped: compaction
-/// summaries and the transient fenced recall strands (`<memory-context>` /
+/// summaries, the transient fenced recall strands (`<memory-context>` /
 /// `<live-status>`) the harness appends as the LAST user message before
-/// compaction runs — anchoring the focus to those would carry the recall fence
-/// into `<conversation_focus>` instead of the user's real request. Returns an
+/// compaction runs, and the synthetic `<system-reminder>` nudges `build_prompt`
+/// appends after them (classified by
+/// [`nudges::is_synthetic_reminder`](crate::thinker::nudges::is_synthetic_reminder),
+/// which deliberately does **not** cover a wrapped real user interjection) —
+/// anchoring the focus to any of those would carry harness scaffolding into
+/// `<conversation_focus>` instead of the user's real request. Returns an
 /// owned `String` because [`UnifiedMessage::text_content`] reconstructs the
 /// text from content blocks.
 #[must_use]
@@ -370,6 +374,7 @@ pub fn latest_user_task(tail: &[UnifiedMessage]) -> Option<String> {
                 || is_summary_text(&text)
                 || trimmed.starts_with(MEMORY_CONTEXT_OPEN)
                 || trimmed.starts_with(LIVE_STATUS_OPEN)
+                || crate::thinker::nudges::is_synthetic_reminder(trimmed)
             {
                 return None;
             }
@@ -611,6 +616,27 @@ mod tests {
             UnifiedMessage::user(
                 "<memory-context>\n[System note: recalled memory]\nfacts\n</memory-context>",
             ),
+        ];
+        assert_eq!(latest_user_task(&tail).as_deref(), Some("the real task"));
+    }
+
+    #[test]
+    fn latest_user_task_skips_trailing_system_reminder_nudges() {
+        // `build_prompt` appends up to four `<system-reminder>` nudges AFTER the
+        // real history, and `think.rs` compacts that same vector (think.rs:426).
+        // They are the third flavour of synthetic trailing user turn — the
+        // provider layer already skips them for cache breakpoints
+        // (`anthropic/adapter/cache.rs`), and the focus anchor must too:
+        // anchoring on a nudge tells the summarizer the user's active task is
+        // "you have retried this tool three times", and that mis-focused summary
+        // is then stored in the fingerprint cache and replayed every turn.
+        // Worst of all, the nudges fire precisely in the long, failure-dense
+        // runs where compaction is most likely.
+        let tail = vec![
+            UnifiedMessage::user("the real task"),
+            UnifiedMessage::assistant("working"),
+            UnifiedMessage::user(crate::thinker::nudges::SOFT_FAILURE_WARNING),
+            UnifiedMessage::user(crate::thinker::nudges::MAX_STEPS_HINT),
         ];
         assert_eq!(latest_user_task(&tail).as_deref(), Some("the real task"));
     }
