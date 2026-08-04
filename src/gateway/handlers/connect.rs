@@ -270,9 +270,14 @@ mod tests {
         SecurityStore::in_memory().unwrap()
     }
 
-    /// Upsert a panel device and bind it to `user_id` — `DeviceUpsertData`
-    /// doesn't carry `user_id` yet (that lands in a later task), so the
-    /// binding is a separate write via the test-only `set_device_user`.
+    /// Upsert a panel device and bind it to `user_id`. `DeviceUpsertData`
+    /// does carry a `user_id` (it landed with the ticket→device binding), but
+    /// its store-side semantics are `COALESCE(excluded.user_id,
+    /// devices.user_id)` — bound-is-sticky — so these fixtures pass `None`
+    /// there and bind with the unconditional, test-only `set_device_user`.
+    /// That keeps the fixture's intent ("this device belongs to exactly this
+    /// user") independent of the COALESCE rule the production pairing path
+    /// relies on.
     fn upsert_panel_device(store: &SecurityStore, device_id: &str, user_id: &str) {
         store
             .upsert_device(&crate::gateway::security::store::DeviceUpsertData {

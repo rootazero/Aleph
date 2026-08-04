@@ -7,11 +7,18 @@
 //! never re-check the caller's role (single-chokepoint discipline). `users.me`
 //! and `users.list` are member-safe carve-outs.
 //!
-//! Deactivation (`users.update { status: "deactivated" }`) revokes every live
-//! device bound to that user through [`revoke_device_and_kick`], the exact
-//! pipeline `gateway.devices.revoke` uses — same store write, same
-//! `DeviceRevoked` event, same demote-before-kick order. See that function's
-//! doc in `gateway_devices.rs` for why it isn't duplicated here.
+//! Both mutating verdicts reach **already-open sessions**, not just the next
+//! connect — the wire role is latched into `ConnectionState` at the handshake,
+//! so a store-only write would leave live connections stale indefinitely:
+//!
+//! - Deactivation (`users.update { status: "deactivated" }`) revokes every
+//!   live device bound to that user through [`revoke_device_and_kick`], the
+//!   exact pipeline `gateway.devices.revoke` uses — same store write, same
+//!   `DeviceRevoked` event, same demote-before-kick order. See that function's
+//!   doc in `gateway_devices.rs` for why it isn't duplicated here.
+//! - A role change (`users.update { role }`) re-stamps those same connections
+//!   in place via [`restamp_live_connections`] — promotion and demotion both,
+//!   except for connections already walled at `"guest"` (see that function).
 
 use std::collections::HashMap;
 
@@ -278,6 +285,13 @@ pub async fn handle_update(
         );
     }
 
+    // Order matters: re-stamp first, deactivate second. When one call does
+    // both (`role` + `status: "deactivated"`), the deactivation must have the
+    // last word — it demotes those same connections to guest and closes them.
+    if let Some(new_role) = role {
+        restamp_live_connections(&store, &kick, &params.user_id, new_role).await;
+    }
+
     if status == Some(UserStatus::Deactivated) {
         deactivate_devices(&store, &kick, &params.user_id).await;
     }
@@ -296,6 +310,85 @@ pub async fn handle_update(
             INTERNAL_ERROR,
             format!("failed to read updated user: {e}"),
         ),
+    }
+}
+
+/// Re-stamp `caller_role` on every live connection belonging to `user_id`'s
+/// devices, so a promotion/demotion takes effect on sessions that are already
+/// open.
+///
+/// Without this, a role change is latched-at-`connect` only: the wire role
+/// lives in `ConnectionState.caller_role`, written once at the handshake and
+/// read from there by the login wall and the admin gate on every later frame.
+/// A demoted admin would keep full admin authority on its open Panel tab
+/// indefinitely (until it happened to reconnect) — the exact indefinite window
+/// deactivation already closes via `revoke_device_and_kick`.
+///
+/// Same lock discipline as
+/// [`invalidate_device_sessions`](crate::gateway::server::invalidate_device_sessions):
+/// one write lock over the shared connection map, mutate in place, drop before
+/// logging. Connections are matched by `device_id` — the same key the revoke
+/// path uses — so a connection that merely carries a `caller_user` value it
+/// was never bound to cannot be re-stamped by someone else's role change.
+///
+/// **Never promotes a walled connection.** A connection already sitting at
+/// `"guest"` was put there deliberately (its device was revoked, or its user
+/// deactivated); only a fresh `connect` may lift that. Re-stamping it would
+/// resurrect a revoked device's authority through the back door.
+async fn restamp_live_connections(
+    store: &Arc<SecurityStore>,
+    kick: &UserDeactivationKick,
+    user_id: &str,
+    role: UserRole,
+) {
+    let device_ids = match store.list_device_ids_for_user(user_id) {
+        Ok(ids) => ids,
+        Err(e) => {
+            tracing::warn!(
+                user_id = %user_id,
+                error = %e,
+                "users.update: failed to list devices for the live role re-stamp"
+            );
+            return;
+        }
+    };
+    if device_ids.is_empty() {
+        return;
+    }
+
+    // Wire word, not the enum's storage word: `admin` ⇒ `"operator"` is the
+    // same mapping `resolve_connection_identity` applies at connect time.
+    let wanted = match role {
+        UserRole::Admin => "operator",
+        UserRole::Member => "member",
+    };
+    let bound: std::collections::HashSet<&str> =
+        device_ids.iter().map(String::as_str).collect();
+
+    let mut restamped = 0usize;
+    {
+        let mut conns = kick.connections.write().await;
+        for state in conns.values_mut() {
+            let Some(did) = state.device_id.as_deref() else {
+                continue;
+            };
+            if !bound.contains(did) || state.caller_role == "guest" {
+                continue;
+            }
+            if state.caller_role != wanted {
+                state.caller_role = wanted.to_string();
+                restamped += 1;
+            }
+        }
+    }
+
+    if restamped > 0 {
+        tracing::info!(
+            user_id = %user_id,
+            role = %wanted,
+            sessions = restamped,
+            "users.update: role change applied to live connections"
+        );
     }
 }
 
@@ -535,6 +628,136 @@ mod tests {
             .expect("connection must still be present, only demoted");
         assert_eq!(demoted.caller_role, "guest", "must be downgraded to guest");
         assert_eq!(demoted.caller_user, None, "caller_user must be cleared");
+    }
+
+    /// Seed one live connection bound to `device_id` at `role`, and return
+    /// the kick sink whose map holds it (so the caller can read it back).
+    async fn kick_with_live_connection(
+        conn_id: &str,
+        device_id: &str,
+        user_id: &str,
+        role: &str,
+    ) -> UserDeactivationKick {
+        let kick = test_kick_sink();
+        {
+            let mut conns = kick.connections.write().await;
+            let mut state = ConnectionState::new(std::net::IpAddr::from([203, 0, 113, 7]));
+            state.caller_role = role.to_string();
+            state.caller_user = Some(user_id.to_string());
+            state.device_id = Some(device_id.to_string());
+            conns.insert(conn_id.to_string(), state);
+        }
+        kick
+    }
+
+    /// Mirror of `deactivate_demotes_live_connections_for_kicked_devices` for
+    /// the role axis: a role change must reach sessions that are ALREADY open,
+    /// not merely the user's next connect. The stamped role is latched at the
+    /// handshake and read on every later frame, so a store-only write leaves a
+    /// demoted admin holding admin authority on its open tab indefinitely.
+    #[tokio::test]
+    async fn role_change_restamps_live_connections_both_directions() {
+        // Demote: admin → member.
+        {
+            let store = seeded_store();
+            store
+                .create_user("u-boss", "Boss", UserRole::Admin)
+                .unwrap();
+            upsert_panel_device(&store, "dev-b1", "u-boss");
+            let kick = kick_with_live_connection("conn-boss", "dev-b1", "u-boss", "operator").await;
+            let conns = kick.connections.clone();
+
+            let resp = handle_update(
+                rpc_request("users.update", json!({"user_id": "u-boss", "role": "member"})),
+                store,
+                kick,
+            )
+            .await;
+            assert!(resp.is_success(), "{resp:?}");
+
+            let c = conns.read().await;
+            assert_eq!(
+                c.get("conn-boss").unwrap().caller_role,
+                "member",
+                "a demoted admin's live session must lose operator authority immediately"
+            );
+        }
+
+        // Promote: member → admin.
+        {
+            let store = seeded_store();
+            store
+                .create_user("u-alice", "Alice", UserRole::Member)
+                .unwrap();
+            upsert_panel_device(&store, "dev-a1", "u-alice");
+            let kick = kick_with_live_connection("conn-alice", "dev-a1", "u-alice", "member").await;
+            let conns = kick.connections.clone();
+
+            handle_update(
+                rpc_request("users.update", json!({"user_id": "u-alice", "role": "admin"})),
+                store,
+                kick,
+            )
+            .await;
+
+            let c = conns.read().await;
+            assert_eq!(c.get("conn-alice").unwrap().caller_role, "operator");
+        }
+    }
+
+    /// The re-stamp must not become a back door around revocation: a
+    /// connection already demoted to the login wall stays there until it
+    /// re-`connect`s, even if its user is promoted in the meantime.
+    #[tokio::test]
+    async fn role_change_never_promotes_an_already_walled_connection() {
+        let store = seeded_store();
+        store
+            .create_user("u-alice", "Alice", UserRole::Member)
+            .unwrap();
+        upsert_panel_device(&store, "dev-a1", "u-alice");
+        // Already walled (its device was revoked a moment ago).
+        let kick = kick_with_live_connection("conn-alice", "dev-a1", "u-alice", "guest").await;
+        let conns = kick.connections.clone();
+
+        handle_update(
+            rpc_request("users.update", json!({"user_id": "u-alice", "role": "admin"})),
+            store,
+            kick,
+        )
+        .await;
+
+        let c = conns.read().await;
+        assert_eq!(
+            c.get("conn-alice").unwrap().caller_role,
+            "guest",
+            "only a fresh connect may lift the login wall"
+        );
+    }
+
+    /// Another user's live connection must be untouched — the re-stamp is
+    /// keyed by the updated user's own device ids, not by `caller_user`.
+    #[tokio::test]
+    async fn role_change_leaves_other_users_connections_alone() {
+        let store = seeded_store();
+        store
+            .create_user("u-alice", "Alice", UserRole::Member)
+            .unwrap();
+        store.create_user("u-bob", "Bob", UserRole::Admin).unwrap();
+        upsert_panel_device(&store, "dev-a1", "u-alice");
+        upsert_panel_device(&store, "dev-b1", "u-bob");
+
+        let kick = kick_with_live_connection("conn-bob", "dev-b1", "u-bob", "operator").await;
+        let conns = kick.connections.clone();
+
+        handle_update(
+            rpc_request("users.update", json!({"user_id": "u-alice", "role": "admin"})),
+            store,
+            kick,
+        )
+        .await;
+
+        let c = conns.read().await;
+        assert_eq!(c.get("conn-bob").unwrap().caller_role, "operator");
     }
 
     #[tokio::test]
