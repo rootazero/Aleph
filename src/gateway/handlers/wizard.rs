@@ -142,7 +142,7 @@ impl WizardSessionManager {
 
         // Check current status — return the terminal result and evict if already done.
         if session.is_done() {
-            let result = session.done_result();
+            let result = WizardNextResult::done();
             let mut sessions = self.sessions.write().unwrap_or_else(|e| e.into_inner());
             sessions.remove(session_id);
             return Ok(result);

@@ -176,28 +176,21 @@ impl ReplyEmitter {
         }
     }
 
-    /// Drain pending media, download in parallel via `MediaCache`, return Attachments.
+    /// Drain the run's pending media.
+    ///
+    /// A pure drain — no fetching. The attachments arrive already resolved from
+    /// the tool-dispatch chokepoint (`tools::scoped::artifact_harvest`), which
+    /// wrote them into this run's media session directory. This used to
+    /// re-download every item here, which was both a second fetch of a URL the
+    /// harvest had just fetched and the reason a failure was undiscoverable:
+    /// every caller of this method runs at `RunComplete` / `RunError` /
+    /// `AskUser`, i.e. after the loop has ended, so there was no turn left in
+    /// which the model could be told.
     pub(crate) async fn drain_and_send_media(&self) -> Vec<crate::gateway::channel::Attachment> {
-        let pending_count = self.pending_media.lock().await.len();
-        debug!(run_id = %self.run_id, pending_count = pending_count, "drain_and_send_media called");
-        let media_items = std::mem::take(&mut *self.pending_media.lock().await);
-        if media_items.is_empty() {
+        let attachments = std::mem::take(&mut *self.pending_media.lock().await);
+        if attachments.is_empty() {
             return vec![];
         }
-
-        info!(
-            run_id = %self.run_id,
-            count = media_items.len(),
-            urls = ?media_items.iter().map(|i| &i.url).collect::<Vec<_>>(),
-            "Draining pending media for download"
-        );
-
-        let attachments = futures::future::join_all(
-            media_items
-                .iter()
-                .map(|item| self.media_cache.download_media_item(item, &self.run_id)),
-        )
-        .await;
 
         for att in &attachments {
             info!(

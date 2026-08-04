@@ -226,7 +226,7 @@ fn cache_key(image_base64: &str, want_description: bool) -> u64 {
 mod tests {
     use super::*;
     use crate::vision::provider::VisionProvider;
-    use crate::vision::types::{OcrLine, OcrResult, Rect, VisionCapabilities, VisionResult};
+    use crate::vision::types::{OcrResult, VisionCapabilities, VisionResult};
     use crate::vision::VisionError;
     use async_trait::async_trait;
     use std::sync::atomic::{AtomicUsize, Ordering};
@@ -248,8 +248,6 @@ mod tests {
             self.understand_calls.fetch_add(1, Ordering::SeqCst);
             Ok(VisionResult {
                 description: "a window with an OK button".to_string(),
-                elements: vec![],
-                confidence: 0.9,
             })
         }
 
@@ -257,16 +255,6 @@ mod tests {
             self.ocr_calls.fetch_add(1, Ordering::SeqCst);
             Ok(OcrResult {
                 full_text: "OK Cancel".to_string(),
-                lines: vec![OcrLine {
-                    text: "OK".to_string(),
-                    bounding_box: Some(Rect {
-                        x: 0.0,
-                        y: 0.0,
-                        width: 10.0,
-                        height: 10.0,
-                    }),
-                    confidence: 0.99,
-                }],
             })
         }
 
@@ -344,7 +332,6 @@ mod tests {
         let (bridge, _, understand_calls) = bridge_with(VisionCapabilities {
             image_understanding: false,
             ocr: true,
-            object_detection: false,
         });
         let aug = bridge.augment("b2Nyb25seQ==", ImageFormat::Png, true).await;
         assert_eq!(aug.ocr_text.as_deref(), Some("OK Cancel"));

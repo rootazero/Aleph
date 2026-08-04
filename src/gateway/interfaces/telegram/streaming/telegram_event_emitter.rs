@@ -118,7 +118,7 @@ impl EventEmitter for TelegramEventEmitter {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::gateway::media::{MediaItem, PendingMedia};
+    use crate::gateway::media::PendingMedia;
 
     fn route() -> crate::gateway::inbound_context::ReplyRoute {
         crate::gateway::inbound_context::ReplyRoute::new(
@@ -161,13 +161,7 @@ mod tests {
     /// `draft_api_enabled` / `reasoning_lane_enabled` / `status_reactions`.
     #[tokio::test]
     async fn run_complete_drains_the_runs_media_buffer() {
-        let pending: PendingMedia = Arc::new(tokio::sync::Mutex::new(vec![MediaItem {
-            // Inline data URL — resolved without touching the network.
-            url: "data:image/png;base64,SGVsbG8=".to_string(),
-            media_type: "image".to_string(),
-            mime_type: None,
-            filename: None,
-        }]));
+        let pending: PendingMedia = Arc::new(tokio::sync::Mutex::new(vec![crate::gateway::media::resolved_test_attachment()]));
         let emitter = emitter_with("tg-media-run", pending.clone());
 
         emitter.emit(run_complete("tg-media-run")).await.unwrap();

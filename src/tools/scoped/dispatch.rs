@@ -268,10 +268,18 @@ impl ScopedToolService {
         };
         let budget_ms = crate::tools::budget::resolve_tool_budget_ms(name, declared_ms);
         let budget = std::time::Duration::from_millis(budget_ms);
+        // The same instant the timeout below fires, handed to the one thing
+        // inside it that does unbounded network I/O of its own — the `_media`
+        // harvest in `apply_layer_two`. It has to be *this* instant rather than
+        // one the harvest derives for itself: derived down there it would read
+        // `now + budget` and believe it had a full budget a slow generator has
+        // already spent, and the overrun would kill the very call whose result
+        // it was settling.
+        let deadline = std::time::Instant::now() + budget;
 
         let mut result = match tokio::time::timeout(
             budget,
-            self.route_and_execute(routing, name, &effective_input, cancel),
+            self.route_and_execute(routing, name, &effective_input, cancel, deadline),
         )
         .await
         {
@@ -472,6 +480,7 @@ impl ScopedToolService {
         name: &str,
         effective_input: &Value,
         cancel: CancellationToken,
+        deadline: std::time::Instant,
     ) -> Result<ToolOutput, ToolError> {
         match routing {
             RoutingTarget::Missing => Err(ToolError::NotFound {
@@ -529,7 +538,7 @@ impl ScopedToolService {
                     })
                     .await;
                 match raw_outcome {
-                    Ok(output) => Ok(self.apply_layer_two(name, output).await),
+                    Ok(output) => Ok(self.apply_layer_two(name, output, deadline).await),
                     // Attribute anything that came back after the run was
                     // stopped to the stop, whatever the tool said. The tool
                     // layer's own cancel arm reports a generic execution error,
@@ -1086,7 +1095,12 @@ impl ScopedToolService {
     /// per-tool compression hook (`compress_tool_output`) and the shared
     /// `result_store` if one is wired; falls back to head+tail truncation
     /// otherwise.
-    async fn apply_layer_two(&self, name: &str, mut out: ToolOutput) -> ToolOutput {
+    async fn apply_layer_two(
+        &self,
+        name: &str,
+        mut out: ToolOutput,
+        deadline: std::time::Instant,
+    ) -> ToolOutput {
         // Rescue any inline image payload (e.g. a `desktop` screenshot) into the
         // out-of-band metadata channel BEFORE the structured value is flattened
         // to text and truncated below. Otherwise the base64 is destroyed by the
@@ -1099,17 +1113,22 @@ impl ScopedToolService {
         }
 
         // Settle any `_media` the tool declared into the durable artifact store
-        // while the value is still structured — the lines below flatten it to
-        // text and truncate it to the result budget, after which the items are
-        // gone. Read-only (the items stay in `out.value` for the existing
-        // delivery path) and best-effort by construction: it returns `()`, so a
-        // storage failure can never surface as a tool error.
-        super::artifact_harvest::harvest_outbound_media(
+        // and the run's channel-delivery buffer while the value is still
+        // structured — the lines below flatten it to text and truncate it to
+        // the result budget, after which the items are gone.
+        let media_failures = super::artifact_harvest::harvest_outbound_media(
             name,
             &out.value,
             self.turn_context.as_ref(),
+            deadline,
         )
         .await;
+        // An item that could not be resolved has to be said out loud here or
+        // nowhere: the delivery leg runs at `RunComplete`, after the loop has
+        // ended, so this is the last point at which the model can still pick a
+        // different URL or re-encode the payload. Absent failures write
+        // nothing, so the success path stays byte-identical.
+        super::artifact_harvest::annotate_media_failures(&mut out.value, &media_failures);
 
         // Compress first: hands JSON to the per-tool summarizer that
         // already exists in `tool_output::compressor`. The text we feed

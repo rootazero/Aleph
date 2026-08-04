@@ -21,24 +21,58 @@ pub struct MediaItem {
     pub filename: Option<String>,
 }
 
+/// True when `url` is an inline `data:` URL, decoded locally rather than fetched.
+#[must_use]
+pub fn is_data_url(url: &str) -> bool {
+    url.to_ascii_lowercase().starts_with("data:")
+}
+
+/// True when `url` names a local file rather than something to fetch.
+///
+/// `Path::is_absolute` is what catches a Windows local path (`C:\…`,
+/// `\\server\share\…`), which matches none of the prefix arms. A real URL
+/// (`http://…`) is not an absolute path on any platform — a Windows drive
+/// prefix is a single ASCII letter, so `http:` cannot be mistaken for one —
+/// so this cannot swallow one.
+#[must_use]
+pub fn is_local_media_path(url: &str) -> bool {
+    url.starts_with('/')
+        || url.starts_with("./")
+        || url.starts_with("~/")
+        || std::path::Path::new(url).is_absolute()
+}
+
 /// True when `url` is fetched over the network by the media pipeline — i.e. it
 /// is neither an inline `data:` URL nor a local file path.
 ///
-/// Single source of truth for "is this a remote fetch": mirrors the branching
-/// in [`crate::media::cache::MediaCache::download_media_item`] (`data:` → decode
-/// inline, `/`·`./`·`~/` → local path, else → HTTP fetch). Only the remote
-/// branch is an SSRF vector — a bare local path (what `camera_clip`/`record_audio` return) or a
-/// `data:` URL must not be rejected by the SSRF host check.
+/// Single source of truth for "is this a remote fetch". Only the remote branch
+/// is an SSRF vector — a bare local path (what `camera_clip`/`record_audio`
+/// return) or a `data:` URL must not be rejected by the SSRF host check.
+///
+/// [`crate::media::cache::MediaCache::download_media_item`] dispatches on the
+/// same two predicates, so the classification cannot drift apart from the one
+/// the SSRF pre-flight is guarding. It drifted once already: the `is_absolute`
+/// arm was added to the cache alone, which would have made every Windows local
+/// clip look remote and be SSRF-rejected.
 #[must_use]
 pub fn is_remote_fetch_url(url: &str) -> bool {
-    !(url.to_ascii_lowercase().starts_with("data:")
-        || url.starts_with('/')
-        || url.starts_with("./")
-        || url.starts_with("~/"))
+    !(is_data_url(url) || is_local_media_path(url))
 }
 
-/// Shared media buffer between `StreamCallback` and `ReplyEmitter`.
-pub type PendingMedia = Arc<tokio::sync::Mutex<Vec<MediaItem>>>;
+/// Shared media buffer between the tool-dispatch chokepoint and `ReplyEmitter`.
+///
+/// Holds **already-resolved** attachments, not the model's raw [`MediaItem`]s.
+/// The buffer used to carry the items and let the emitter fetch them at
+/// `RunComplete`, which meant every URL was fetched twice — once by
+/// `artifact_harvest` for the artifact store, once here — and, worse, meant the
+/// fetch outcome was discovered *after* the loop had ended, where no turn
+/// remains in which the model could learn it failed. Resolving once at the
+/// chokepoint fixes both: the emitter now only drains and sends.
+///
+/// The files these attachments point at live under the run's own media session
+/// directory and are removed by `deliver_run_media`'s `cleanup_session`, which
+/// runs after the drain.
+pub type PendingMedia = Arc<tokio::sync::Mutex<Vec<crate::gateway::channel::Attachment>>>;
 
 /// Maximum number of media items allowed per run.
 pub const MAX_MEDIA_PER_RUN: usize = 10;
@@ -78,6 +112,31 @@ pub fn current_pending_media() -> Option<PendingMedia> {
     RUN_PENDING_MEDIA.try_with(Clone::clone).ok().flatten()
 }
 
+/// A resolved [`Attachment`] shaped like one the harvest just produced.
+///
+/// Test-only, and shared rather than re-inlined per module so that "what the
+/// delivery buffer holds" has one answer: several emitter tests seed the buffer
+/// to prove they drain it, and they are seeding the *harvest's output*, not the
+/// model's input.
+#[cfg(test)]
+#[must_use]
+pub(crate) fn resolved_test_attachment() -> crate::gateway::channel::Attachment {
+    crate::gateway::channel::Attachment {
+        id: "resolved-test-attachment".to_string(),
+        mime_type: "image/png".to_string(),
+        filename: Some("hello.png".to_string()),
+        size: Some(5),
+        url: Some("data:image/png;base64,SGVsbG8=".to_string()),
+        path: Some(
+            std::env::temp_dir()
+                .join("aleph-resolved-test-attachment.png")
+                .to_string_lossy()
+                .into_owned(),
+        ),
+        data: None,
+    }
+}
+
 /// Detect MIME type from URL extension, with a fallback default based on `media_type`.
 #[must_use]
 pub fn detect_mime(url: &str, media_type: &str) -> String {
@@ -112,6 +171,36 @@ pub fn detect_mime(url: &str, media_type: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn only_genuinely_remote_urls_are_classified_as_a_remote_fetch() {
+        // The SSRF pre-flight in `media_send` runs on exactly this predicate, so
+        // a local file misclassified here is a captured clip that can never be
+        // sent, and a remote URL misclassified here is a skipped guard.
+        for remote in [
+            "http://169.254.169.254/latest/meta-data/",
+            "https://example.com/cat.jpg",
+        ] {
+            assert!(is_remote_fetch_url(remote), "must be remote: {remote}");
+        }
+
+        for local in [
+            "data:image/png;base64,iVBORw0KGgo=",
+            "DATA:image/png;base64,iVBORw0KGgo=",
+            "/var/folders/tmp/clip.mp4",
+            "./clip.mp4",
+            "~/clip.mp4",
+        ] {
+            assert!(!is_remote_fetch_url(local), "must not be remote: {local}");
+        }
+
+        // A Windows local path matches none of the prefix arms — it is caught by
+        // `Path::is_absolute`, and only on Windows is it absolute at all.
+        #[cfg(windows)]
+        for local in [r"C:\Users\me\clip.mp4", r"\\server\share\clip.mp4"] {
+            assert!(!is_remote_fetch_url(local), "must not be remote: {local}");
+        }
+    }
 
     #[test]
     fn test_detect_mime_from_extension() {
@@ -187,12 +276,7 @@ mod tests {
             // Many frames below the run loop — this is what the tool
             // chokepoint's harvest sees.
             let seen = current_pending_media().expect("scoped");
-            seen.lock().await.push(MediaItem {
-                url: "data:image/png;base64,SGVsbG8=".into(),
-                media_type: "image".into(),
-                mime_type: None,
-                filename: None,
-            });
+            seen.lock().await.push(resolved_test_attachment());
         })
         .await;
 

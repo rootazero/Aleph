@@ -14,8 +14,8 @@
 //!     `args_hash` (identical, redundant calls — varied args reset the run)
 //!
 //! Two-tier escalation:
-//!   - at `repeat_threshold` identical trailing calls → emit a `Veto`
-//!     (`ErrorClass::Recoverable`). The harness injects it as a user message so
+//!   - at `repeat_threshold` identical trailing calls → emit a `Veto`.
+//!     The harness injects it as a user message so
 //!     the model sees explicit feedback and gets a chance to course-correct.
 //!   - at `halt_threshold` (≥ `repeat_threshold`) identical trailing calls → emit
 //!     a `Halt`. By this point the model has ignored several vetoes and is still
@@ -43,7 +43,6 @@
 use async_trait::async_trait;
 use tokio_util::sync::CancellationToken;
 
-use crate::error::ErrorClass;
 use crate::verification::turn_verifier::{
     ToolCallSummary, TurnVerifier, TurnVerifyContext, VerifierVerdict, TOOL_HISTORY_WINDOW,
 };
@@ -110,9 +109,6 @@ impl Default for ToolLoopVerifier {
 
 #[async_trait]
 impl TurnVerifier for ToolLoopVerifier {
-    fn name(&self) -> &str {
-        "tool_loop"
-    }
 
     async fn verify(
         &self,
@@ -139,7 +135,6 @@ impl TurnVerifier for ToolLoopVerifier {
                         "tool '{tool}' invoked {run} consecutive times with identical arguments \
                          despite repeated feedback — terminating an unproductive loop",
                     ),
-                    class: ErrorClass::Recoverable,
                 };
             }
             return VerifierVerdict::Veto {
@@ -147,7 +142,6 @@ impl TurnVerifier for ToolLoopVerifier {
                     "tool '{tool}' invoked {run} consecutive times with identical arguments — \
                      try a different approach or summarize what you've found",
                 ),
-                class: ErrorClass::Recoverable,
             };
         }
 
@@ -172,7 +166,6 @@ impl TurnVerifier for ToolLoopVerifier {
                      ({distinct} distinct) with no narration — stop and summarize, or take a \
                      different approach",
                 ),
-                class: ErrorClass::Recoverable,
             };
         }
 
