@@ -1,7 +1,4 @@
 {
-  "dependencies": {
-    "playwright": "^1.58.2"
-  },
   "devDependencies": {
     "@playwright/test": "^1.58.2",
     "@types/ws": "^8.18.1",
