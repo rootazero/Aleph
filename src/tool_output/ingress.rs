@@ -48,6 +48,10 @@ pub struct IngressOutcome {
     /// `None` when nothing was dropped — including the case where the only
     /// change was stripping ANSI escapes, which removes bytes that were never
     /// content and so must not trigger an offload.
+    ///
+    /// Both shortening stages set it: the content-type hygiene pass **and** the
+    /// per-tool compressor. The compressor was the later of the two, for a
+    /// reason worth keeping — see the comment at its assignment.
     pub full_original: Option<String>,
     /// One entry per field the hygiene pass shortened. Tracing only.
     pub reductions: Vec<FieldReduction>,
@@ -96,17 +100,34 @@ pub fn clean_for_ingress(tool: &str, value: &mut Value, budget: Option<usize>) -
     // the bytes without dropping a line, so persisting for it would write a file
     // the model has no reason to read — and would flip the caller onto its
     // "inline the signal" arm for a result that has no signal to inline.
+    //
+    // Compression counts as shortening. It was left out at first on the
+    // reasoning that a compressor's product is small enough that the offload
+    // path never fires — a live `take_snapshot` disproved that on 2026-08-04:
+    // 660 kept controls came to 13 585 tokens against an 8 000-token budget, so
+    // the caller persisted *the compressed body* and the 443 nodes
+    // `compress_snapshot` had already dropped became unrecoverable, which is the
+    // exact failure `reduced_from` exists to prevent. `compress_in_place` only
+    // reports `true` when a compressor actually rewrote a field, so results it
+    // passed through still pay nothing.
     let lossy = reductions.iter().any(|r| r.method.is_lossy());
     match cleaned {
         Some(model_facing) => IngressOutcome {
-            full_original: (lossy && raw != model_facing).then_some(raw),
+            full_original: ((lossy || compressed.is_some()) && raw != model_facing).then_some(raw),
             model_facing,
             reductions,
         },
-        None => IngressOutcome {
-            model_facing: compressed.unwrap_or(raw),
-            full_original: None,
-            reductions,
+        None => match compressed {
+            Some(model_facing) => IngressOutcome {
+                full_original: (raw != model_facing).then_some(raw),
+                model_facing,
+                reductions,
+            },
+            None => IngressOutcome {
+                model_facing: raw,
+                full_original: None,
+                reductions,
+            },
         },
     }
 }
@@ -257,6 +278,49 @@ mod tests {
             "the non-interactive bulk must be gone"
         );
         assert!(out.model_facing.len() < snapshot.len() / 4);
+        let full = out
+            .full_original
+            .expect("compression drops nodes, so the original must stay recoverable");
+        assert!(full.contains("filler node 250"));
+    }
+
+    /// Compression is a reduction, so it owes the caller the original.
+    ///
+    /// The rule was almost skipped here on the argument that a compressor's
+    /// product is always small enough that the offload never fires. A live
+    /// `take_snapshot` (2026-08-04 ingress QA) settled it: 660 kept controls
+    /// came to 13 585 tokens against an 8 000-token budget, the caller wrote
+    /// "Full output persisted", and what it persisted was the *compressed* body
+    /// — so the 443 nodes already dropped could not be recovered by
+    /// `ctx_search` or `read_file`, which is the one thing offloading is for.
+    #[test]
+    fn a_compressed_result_over_budget_still_offloads_the_uncompressed_original() {
+        let mut snapshot = String::new();
+        for i in 0..400 {
+            snapshot.push_str(&format!("  uid=1_{} button \"Apply {i}\"\n", i * 2));
+            snapshot.push_str(&format!(
+                "  uid=1_{} StaticText \"prose node {i} that is not a control\"\n",
+                i * 2 + 1
+            ));
+        }
+        let mut value = json!({ "content": [ { "type": "text", "text": snapshot } ] });
+        let out = clean_for_ingress("chrome__take_snapshot", &mut value, Some(500));
+
+        assert!(
+            out.model_facing.contains("kept 400 interactive elements"),
+            "precondition: the compressor ran"
+        );
+        assert!(
+            !out.model_facing.contains("StaticText"),
+            "precondition: it dropped the prose"
+        );
+        let full = out
+            .full_original
+            .expect("over-budget compressed output must persist the pre-compression original");
+        assert!(
+            full.contains("prose node 200"),
+            "the persisted blob is what makes the dropped nodes recoverable"
+        );
     }
 
     /// …and it must not break a fence to do it.
