@@ -94,18 +94,6 @@ pub struct ToolMetrics {
 }
 
 impl TraceNode {
-    /// Get CSS class for node type
-    #[must_use]
-    pub const fn type_class(&self) -> &'static str {
-        match self.node_type {
-            TraceNodeType::Thinking => "border-blue-500",
-            TraceNodeType::ToolCall => "border-amber-500",
-            TraceNodeType::ToolResult => "border-green-500",
-            TraceNodeType::Observation => "border-purple-500",
-            TraceNodeType::Decision => "border-pink-500",
-        }
-    }
-
     /// Get CSS class for status
     #[must_use]
     pub const fn status_class(&self) -> &'static str {
@@ -114,18 +102,6 @@ impl TraceNode {
             TraceStatus::InProgress => "bg-info-subtle",
             TraceStatus::Success => "bg-success-subtle",
             TraceStatus::Failed => "bg-danger-subtle",
-        }
-    }
-
-    /// Get icon for node type
-    #[must_use]
-    pub const fn type_icon(&self) -> &'static str {
-        match self.node_type {
-            TraceNodeType::Thinking => "🧠",
-            TraceNodeType::ToolCall => "🔧",
-            TraceNodeType::ToolResult => "✅",
-            TraceNodeType::Observation => "👁️",
-            TraceNodeType::Decision => "⚡",
         }
     }
 }

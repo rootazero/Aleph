@@ -102,15 +102,6 @@ pub fn human_size(bytes: u64) -> String {
     }
 }
 
-/// Result of `session.export_html` — the export is itself stored as an
-/// artifact, so it comes back as a byte URL like any other row.
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
-pub struct ExportResult {
-    pub url: String,
-    pub filename: String,
-    pub size: u64,
-}
-
 /// Result of `artifacts.read_text` — a bounded UTF-8 slice of one artifact.
 ///
 /// `truncated` is not decoration: a preview that silently stops is a preview
@@ -122,6 +113,15 @@ pub struct TextPreview {
     pub mime_type: String,
     pub content: String,
     pub truncated: bool,
+}
+
+/// Result of `session.export_html` — the export is itself stored as an
+/// artifact, so it comes back as a byte URL like any other row.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+pub struct ExportResult {
+    pub url: String,
+    pub filename: String,
+    pub size: u64,
 }
 
 pub struct ArtifactsApi;
@@ -272,6 +272,16 @@ mod tests {
         assert!(p.truncated);
     }
 
+    #[test]
+    fn a_ping_for_another_session_is_ignored() {
+        let mine = json!({ "session_key": "agent:main:main" });
+        let theirs = json!({ "session_key": "agent:main:other" });
+        assert!(ping_is_for_session(&mine, "agent:main:main"));
+        assert!(!ping_is_for_session(&theirs, "agent:main:main"));
+        // A malformed frame must not be read as "everyone".
+        assert!(!ping_is_for_session(&json!({}), "agent:main:main"));
+    }
+
     /// The three row kinds the pane routes a click on, and the rule that they
     /// are mutually exclusive: an image never offers a text preview (its bytes
     /// are the picture) and a PDF offers neither (it leaves for a real viewer).
@@ -314,15 +324,5 @@ mod tests {
             created_at: 0,
             url: "/artifact/c/a/f".into(),
         }
-    }
-
-    #[test]
-    fn a_ping_for_another_session_is_ignored() {
-        let mine = json!({ "session_key": "agent:main:main" });
-        let theirs = json!({ "session_key": "agent:main:other" });
-        assert!(ping_is_for_session(&mine, "agent:main:main"));
-        assert!(!ping_is_for_session(&theirs, "agent:main:main"));
-        // A malformed frame must not be read as "everyone".
-        assert!(!ping_is_for_session(&json!({}), "agent:main:main"));
     }
 }

@@ -175,23 +175,6 @@ impl AgentsApi {
         Ok(())
     }
 
-    pub async fn files_delete(
-        state: &DashboardState,
-        agent_id: &str,
-        filename: &str,
-    ) -> Result<(), String> {
-        state
-            .rpc_call(
-                "agents.files.delete",
-                json!({
-                    "agent_id": agent_id,
-                    "filename": filename,
-                }),
-            )
-            .await?;
-        Ok(())
-    }
-
     // Tools schema
 
     pub async fn tools_schema(state: &DashboardState) -> Result<ToolsSchemaResponse, String> {

@@ -24,20 +24,12 @@ pub const INTERNAL_ERROR: i32 = -32603;
 
 /// Authentication required
 pub const AUTH_REQUIRED: i32 = -32000;
-/// Session not found
-pub const SESSION_NOT_FOUND: i32 = -32001;
 /// Rate limit exceeded
 pub const RATE_LIMITED: i32 = -32002;
 /// Agent execution error
 pub const AGENT_ERROR: i32 = -32003;
 /// Tool execution error
 pub const TOOL_ERROR: i32 = -32004;
-/// Provider (LLM) error
-pub const PROVIDER_ERROR: i32 = -32005;
-/// Memory system error
-pub const MEMORY_ERROR: i32 = -32006;
-/// Configuration error
-pub const CONFIG_ERROR: i32 = -32007;
 /// Permission denied
 pub const PERMISSION_DENIED: i32 = -32008;
 /// Resource not found

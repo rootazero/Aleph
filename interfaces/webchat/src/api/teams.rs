@@ -456,24 +456,6 @@ impl TeamsApi {
             .await
     }
 
-    /// teams.task.journal.get — fetch the exit journal for a task, or
-    /// `Ok(None)` if no journal has been written yet.
-    pub async fn task_journal_get(
-        state: &DashboardState,
-        task_id: &str,
-    ) -> Result<Option<TaskExitJournalDto>, String> {
-        let result = state
-            .rpc_call("teams.task.journal.get", json!({ "task_id": task_id }))
-            .await?;
-        let v = result.get("journal").cloned().unwrap_or(Value::Null);
-        if v.is_null() {
-            return Ok(None);
-        }
-        serde_json::from_value(v)
-            .map(Some)
-            .map_err(|e| e.to_string())
-    }
-
     /// teams.task.journal.list — all journals for a team, newest first.
     pub async fn task_journal_list(
         state: &DashboardState,

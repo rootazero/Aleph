@@ -41,10 +41,6 @@ impl ReconnectStrategy {
         let cut = base.saturating_mul(permille) / 1000;
         Some(base.saturating_sub(cut))
     }
-
-    pub const fn reset(&mut self) {
-        self.current_attempt = 0;
-    }
 }
 
 #[cfg(test)]

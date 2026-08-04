@@ -349,10 +349,6 @@ pub struct DashboardState {
     /// belong to a background conversation whose `ChatState` isn't mounted.
     pub pending_clarifications: RwSignal<Vec<PendingAskView>>,
 
-    /// Feature flag: enable radial (TheBrain-style) navigation in the Canvas view.
-    /// Initialized from localStorage; mutated by the Settings panel toggle.
-    pub canvas_radial_navigation: RwSignal<bool>,
-
     /// Connection role captured from the `connect` response. `Some("operator")`
     /// once authorized (loopback, or a remote that presented a valid Gateway
     /// token); `None` before the first successful connect. Read by
@@ -584,9 +580,6 @@ impl DashboardState {
             pending_approvals: RwSignal::new(Vec::new()),
             approval_subscription_id: StoredValue::new(None),
             pending_clarifications: RwSignal::new(Vec::new()),
-            canvas_radial_navigation: RwSignal::new(
-                crate::api::settings::load_canvas_radial_navigation(),
-            ),
             role: RwSignal::new(None),
             needs_token: RwSignal::new(false),
             token_was_rejected: RwSignal::new(false),

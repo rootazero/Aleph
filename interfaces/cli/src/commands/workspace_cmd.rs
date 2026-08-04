@@ -12,7 +12,7 @@ pub async fn list(server_url: &str, config: &CliConfig, json: bool) -> CliResult
     let result: Value = client.call("workspace.list", None::<()>).await?;
 
     let mut rows = Vec::new();
-    if let Some(workspaces) = result.as_array() {
+    if let Some(workspaces) = result.get("workspaces").and_then(|v| v.as_array()) {
         for w in workspaces {
             let name = w.get("name").and_then(|v| v.as_str()).unwrap_or("-");
             let status = w.get("status").and_then(|v| v.as_str()).unwrap_or("-");

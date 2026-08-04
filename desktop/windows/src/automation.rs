@@ -15,6 +15,7 @@ use aleph_desktop::{DesktopError, Result};
 ///
 /// Resolved inside PowerShell (`$env:APPDATA` / `$env:ProgramData`) rather than
 /// interpolated, so the script text below stays a constant.
+#[cfg(windows)]
 const START_MENU_SUBPATH: &str = r"Microsoft\Windows\Start Menu\Programs";
 
 /// The two Start-menu roots, as a PowerShell array expression.
@@ -30,6 +31,7 @@ const START_MENU_SUBPATH: &str = r"Microsoft\Windows\Start Menu\Programs";
 /// Roots that do not exist are dropped here so `Get-ChildItem` is never handed a
 /// missing path (which, under `$ErrorActionPreference = 'Stop'`, would abort the
 /// whole script rather than skip one root).
+#[cfg(windows)]
 const START_MENU_ROOTS: &str = r"$roots = @(
     (Join-Path $env:APPDATA '{{SUBPATH}}'),
     (Join-Path $env:ProgramData '{{SUBPATH}}')
@@ -44,7 +46,9 @@ if (-not $roots) { exit 1 }";
 /// string `-Command` as being appended to that command — so tool input was
 /// concatenated into the script and executed. Environment variables have no
 /// quoting to get wrong.
+#[cfg(windows)]
 const ENV_SHORTCUT_NAME: &str = "ALEPH_SHORTCUT_NAME";
+#[cfg(windows)]
 const ENV_SHORTCUT_INPUT: &str = "ALEPH_SHORTCUT_INPUT";
 
 /// Resolve a Start-menu shortcut by exact base name and launch it.
@@ -61,6 +65,7 @@ const ENV_SHORTCUT_INPUT: &str = "ALEPH_SHORTCUT_INPUT";
 /// data files). `Start-Process` also returns as soon as the process starts,
 /// where `& $target` waited for a console application to exit — up to the full
 /// 120 s script ceiling for something whose whole purpose was to be launched.
+#[cfg(windows)]
 const RUN_SHORTCUT_SCRIPT: &str = r#"
 $ErrorActionPreference = 'Stop'
 {{ROOTS}}
@@ -80,6 +85,7 @@ Write-Output "launched $($lnk.FullName)"
 /// `Sort-Object -Unique` because an application installed for all users *and*
 /// pinned per user appears under both roots, and the same name twice reads as
 /// two applications.
+#[cfg(windows)]
 const LIST_SHORTCUTS_SCRIPT: &str = r#"
 {{ROOTS}}
 Get-ChildItem -LiteralPath $roots -Recurse -Filter *.lnk -ErrorAction SilentlyContinue |
@@ -91,6 +97,7 @@ Get-ChildItem -LiteralPath $roots -Recurse -Filter *.lnk -ErrorAction SilentlyCo
 /// `START_MENU_ROOTS` and `START_MENU_SUBPATH` are compile-time constants, so
 /// this is a spelling convenience, not an interpolation point — no caller value
 /// passes through it.
+#[cfg(windows)]
 fn shortcut_script(template: &str) -> String {
     template
         .replace("{{ROOTS}}", START_MENU_ROOTS)

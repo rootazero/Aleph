@@ -77,27 +77,27 @@ impl SettingsTab {
     pub fn i18n_label(&self, i18n: I18nContext<Locale>) -> String {
         match self {
             Self::General => t_string!(i18n, settings.tabs.general).to_string(),
-            Self::Appearance => "外观".to_string(),
+            Self::Appearance => t_string!(i18n, settings.tabs.appearance).to_string(),
             Self::Behavior => t_string!(i18n, settings.tabs.behavior).to_string(),
             Self::Providers => t_string!(i18n, settings.tabs.providers).to_string(),
             Self::EmbeddingProviders => t_string!(i18n, settings.tabs.embedding).to_string(),
             Self::RerankingProviders => t_string!(i18n, settings.tabs.reranking).to_string(),
             Self::GenerationProviders => t_string!(i18n, settings.tabs.generation).to_string(),
             Self::ModelRoute => t_string!(i18n, settings.tabs.model_route).to_string(),
-            Self::Moa => "MoA".to_string(),
+            Self::Moa => t_string!(i18n, settings.tabs.moa).to_string(),
             Self::Memory => t_string!(i18n, settings.tabs.memory).to_string(),
             Self::Mcp => t_string!(i18n, settings.tabs.mcp).to_string(),
             Self::Plugins => t_string!(i18n, settings.tabs.plugins).to_string(),
             Self::Skills => t_string!(i18n, settings.tabs.skills).to_string(),
             Self::Acp => t_string!(i18n, settings.tabs.acp).to_string(),
             Self::Channels => t_string!(i18n, settings.tabs.channels).to_string(),
-            Self::Browser => "Browser".to_string(),
+            Self::Browser => t_string!(i18n, settings.tabs.browser).to_string(),
             Self::Search => t_string!(i18n, settings.tabs.search).to_string(),
             Self::Policies => t_string!(i18n, settings.tabs.policies).to_string(),
             Self::RoutingRules => t_string!(i18n, settings.tabs.routing_rules).to_string(),
             Self::Security => t_string!(i18n, settings.tabs.security).to_string(),
-            Self::Execution => "Execution".to_string(),
-            Self::Network => "服务与集群".to_string(),
+            Self::Execution => t_string!(i18n, settings.tabs.execution).to_string(),
+            Self::Network => t_string!(i18n, settings.tabs.network).to_string(),
         }
     }
 

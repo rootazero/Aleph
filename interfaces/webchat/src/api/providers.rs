@@ -5,9 +5,13 @@ use serde_json::Value;
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ProviderInfo {
     pub name: String,
+    #[serde(default)]
     pub enabled: bool,
+    #[serde(default)]
     pub model: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(default)]
+    pub models: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub provider_type: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub api_key: Option<String>,
@@ -20,7 +24,10 @@ pub struct ProviderInfo {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub max_tokens: Option<u32>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub context_window: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub temperature: Option<f32>,
+    #[serde(default)]
     pub is_default: bool,
     #[serde(default)]
     pub verified: bool,

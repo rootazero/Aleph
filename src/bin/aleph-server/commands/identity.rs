@@ -16,7 +16,7 @@
 use std::error::Error;
 
 use alephcore::gateway::security::{store::SecurityStore, SharedTokenManager};
-use alephcore::identity::{AgentKeystore, AgentLedger};
+use alephcore::identity::{AgentKeystore, AgentLedger, ExportPins, HeadPin, PinnedHead};
 use alephcore::sync_primitives::Arc;
 use alephcore::utils::paths;
 
@@ -53,13 +53,25 @@ fn ms(v: i64) -> String {
     )
 }
 
+/// The document's head in the exact form `--expect-head` accepts, so the value
+/// an operator has to keep is one they can copy rather than assemble.
+fn head_pin_arg(report: &alephcore::identity::ExportReport) -> String {
+    report
+        .last_hash
+        .as_deref()
+        .map_or_else(|| "-".to_string(), |h| format!("{}:{h}", report.last_seq))
+}
+
 /// Verify an exported chain with nothing but the file.
 ///
 /// Split out and dispatched **before** [`open_ledger`] so it genuinely needs no
 /// database, no vault and no Aleph state — this is the form of the check that
 /// runs on the auditor's machine, and it would be worth very little if it
 /// quietly required the host it is checking.
-fn verify_exported_file(path: &str, pins: &[String]) -> Result<(), Box<dyn Error>> {
+fn verify_exported_file(
+    path: &str,
+    pins: &alephcore::identity::ExportPins,
+) -> Result<(), Box<dyn Error>> {
     let body = std::fs::read_to_string(path).map_err(|e| format!("cannot read {path}: {e}"))?;
     let doc: alephcore::identity::ChainExport =
         serde_json::from_str(&body).map_err(|e| format!("{path} is not a chain export: {e}"))?;
@@ -74,20 +86,58 @@ fn verify_exported_file(path: &str, pins: &[String]) -> Result<(), Box<dyn Error
         "root key   {}",
         report.root_fingerprint.as_deref().unwrap_or("(none)")
     );
-    println!("head hash  {}", report.last_hash.as_deref().unwrap_or("-"));
+    println!("head       {}", head_pin_arg(&report));
     println!("keys       {}", report.keys.join(", "));
     match report.root_pinned {
-        Some(true) => println!("pin        OK — the chain opens under a pinned key"),
+        Some(true) => println!("root pin   OK — the chain opens under a pinned key"),
         Some(false) => println!(
-            "pin        FAILED — the chain opens under {}, which is not pinned",
+            "root pin   FAILED — the chain opens under {}, which is not pinned",
             report.root_fingerprint.as_deref().unwrap_or("(nothing)")
         ),
         // Said out loud every time, because the reassuring half of this
         // sentence is the half people remember.
         None => println!(
-            "pin        none supplied — a clean result proves internal consistency only; \
+            "root pin   none supplied — a clean result proves internal consistency only; \
              whoever produced this file also chose the keys in it"
         ),
+    }
+    match &report.head_pin {
+        Some(HeadPin::Extends { pinned_seq, added }) => println!(
+            "head pin   OK — extends the head pinned at #{pinned_seq} by {added} record(s)"
+        ),
+        Some(HeadPin::Truncated {
+            pinned_seq,
+            last_seq,
+        }) => println!(
+            "head pin   FAILED — pinned head #{pinned_seq} is not in this document, which \
+             ends at #{last_seq}. The tail was cut."
+        ),
+        Some(HeadPin::Diverged { pinned_seq }) => println!(
+            "head pin   FAILED — record #{pinned_seq} does not carry the pinned hash. \
+             History at or below it was rewritten, or this is another chain."
+        ),
+        // The counterpart of the root-pin sentence, and the more important of
+        // the two to say: a root pin does not bound the tail at all.
+        None => println!(
+            "head pin   none supplied — a truncated tail cannot be detected without one; \
+             the anchor in this file was written by whoever produced it"
+        ),
+    }
+    if report.revocation_disagrees() {
+        println!(
+            "revocation MISMATCH — the identity row says {}, the chain says {}. The chain is \
+             the harder of the two to edit.",
+            if report.revoked_at.is_some() {
+                "revoked"
+            } else {
+                "active"
+            },
+            if report.revoked_in_chain == Some(true) {
+                "revoked"
+            } else {
+                "active"
+            }
+        );
     }
     if report.failed_appends > 0 {
         println!(
@@ -111,14 +161,20 @@ fn verify_exported_file(path: &str, pins: &[String]) -> Result<(), Box<dyn Error
 }
 
 pub fn handle_identity_command(action: IdentityAction) -> Result<(), Box<dyn Error>> {
-    // The one path that must not touch local state.
+    // The one path that must not touch local state. Dispatched before
+    // `open_ledger` so it genuinely needs no database and no vault.
     if let IdentityAction::Verify {
         input: Some(ref path),
         ref pin,
+        ref expect_head,
         ..
     } = action
     {
-        return verify_exported_file(path, pin);
+        let pins = ExportPins {
+            roots: pin.clone(),
+            head: expect_head.as_deref().map(PinnedHead::parse).transpose()?,
+        };
+        return verify_exported_file(path, &pins);
     }
 
     let ledger = open_ledger()?;
@@ -183,19 +239,43 @@ pub fn handle_identity_command(action: IdentityAction) -> Result<(), Box<dyn Err
 
         IdentityAction::Export { agent, out } => {
             let doc = alephcore::identity::export_chain(&ledger, &agent)?;
+            // Verified with the document's own keys before it is handed over —
+            // the same thing the `agent_identity` tool does, through the same
+            // call. The root fingerprint and head come out of the report rather
+            // than being derived a second time here; two faces of one verb that
+            // each compute the value they print is how they start disagreeing.
+            let report = alephcore::identity::verify_export(&doc, &ExportPins::default())?;
             let body = serde_json::to_string_pretty(&doc)?;
+            // To stderr, and on BOTH branches: piping the document somewhere
+            // must not be the reason an operator never sees the two values that
+            // are the whole basis for it proving anything.
+            let advice = format!(
+                "Keep these two off-box — they are what makes this file evidence:\n  \
+                 --pin {}\n  --expect-head {}",
+                report.root_fingerprint.as_deref().unwrap_or("-"),
+                head_pin_arg(&report)
+            );
             match out {
                 Some(path) => {
                     std::fs::write(&path, body).map_err(|e| format!("cannot write {path}: {e}"))?;
-                    let root = doc.records.first().map(|r| r.signer_fp.as_str());
                     println!(
                         "Wrote {} ({} records) to {path}",
                         doc.agent_id,
                         doc.records.len()
                     );
-                    println!("Pin this root fingerprint off-box: {}", root.unwrap_or("-"));
+                    println!("{advice}");
                 }
-                None => println!("{body}"),
+                None => {
+                    println!("{body}");
+                    eprintln!("{advice}");
+                }
+            }
+            if !report.ok {
+                // Learning this now beats learning it from the auditor.
+                for f in &report.faults {
+                    eprintln!("        {f:?}");
+                }
+                return Err("the exported chain does not verify".into());
             }
         }
 
@@ -224,6 +304,25 @@ pub fn handle_identity_command(action: IdentityAction) -> Result<(), Box<dyn Err
                     for f in &r.faults {
                         println!("        {f:?}");
                     }
+                }
+                // Not a fault (it has a benign cause too — see
+                // `ChainReport::revocation_disagrees`) but never silent: this is
+                // the only place the claim "editing `revoked_at` cannot erase a
+                // revocation" is actually acted on.
+                if r.revocation_disagrees() {
+                    println!(
+                        "      revocation mismatch: identity row says {}, chain says {}",
+                        if r.revoked_at.is_some() {
+                            "revoked"
+                        } else {
+                            "active"
+                        },
+                        if r.revoked_in_chain == Some(true) {
+                            "revoked"
+                        } else {
+                            "active"
+                        }
+                    );
                 }
             }
             // Records lost before they were ever written are invisible to any

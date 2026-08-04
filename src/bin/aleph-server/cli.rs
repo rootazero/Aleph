@@ -403,6 +403,13 @@ pub enum IdentityAction {
         /// whoever produced the document also chose the keys inside it.
         #[arg(long, value_name = "FINGERPRINT")]
         pin: Vec<String>,
+        /// The head of the PREVIOUS export of this chain, as `<seq>:<hash>`
+        /// (the `expect_head` value that export reported). The document must
+        /// extend it. This is the only check that can catch a truncated tail:
+        /// the anchor travels inside the file, so whoever produced the file
+        /// edits it as freely as the rows.
+        #[arg(long, value_name = "SEQ:HASH")]
+        expect_head: Option<String>,
     },
     /// Write one agent's whole chain, its public keys and its anchor to a
     /// self-contained JSON document. Contains no private key and no tool

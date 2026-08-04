@@ -565,15 +565,6 @@ pub fn ChatSidebar() -> impl IntoView {
             gloo_timers::future::TimeoutFuture::new(100).await;
         }
 
-        if let Err(e) = dash_for_topic
-            .subscribe_topic("stream.session_updated")
-            .await
-        {
-            web_sys::console::error_1(
-                &format!("Failed to subscribe to stream.session_updated: {e}").into(),
-            );
-        }
-
         // Run lifecycle topics drive the per-session running dot;
         // team.changed drives live group-chat name refresh after async auto-naming.
         for topic in [

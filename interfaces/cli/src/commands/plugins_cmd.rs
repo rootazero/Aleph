@@ -67,7 +67,7 @@ pub async fn list(server_url: &str, config: &CliConfig, json: bool) -> CliResult
     let result: Value = client.call("plugins.list", None::<()>).await?;
 
     let mut rows = Vec::new();
-    if let Some(plugins) = result.as_array() {
+    if let Some(plugins) = result.get("plugins").and_then(|v| v.as_array()) {
         for p in plugins {
             let name = p.get("name").and_then(|v| v.as_str()).unwrap_or("-");
             let version = p.get("version").and_then(|v| v.as_str()).unwrap_or("-");
