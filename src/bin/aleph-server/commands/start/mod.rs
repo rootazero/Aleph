@@ -545,9 +545,17 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
     // Paired-device management RPCs: list / revoke remote Panel devices paired
     // via the bootstrap-ticket flow. Authorized-only (login wall). Scope-guarded
     // to `device_type = "panel"` so they never touch cluster nodes.
+    //
+    // Both handlers now own the full revoke+kick pipeline internally (see
+    // `revoke_device_and_kick` in `gateway_devices.rs`), so this registration
+    // only has to build the context; the connection map and event bus are
+    // just two more fields on it, alongside the same store `users.update`'s
+    // deactivation path is wired with below.
     {
         let list_mgr = device_token_mgr.clone();
         let list_presence = server.presence.clone();
+        let list_conns = server.connections.clone();
+        let list_bus = event_bus.clone();
         server
             .handlers_mut()
             .register("gateway.devices.list", move |req| {
@@ -555,6 +563,8 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
                     alephcore::gateway::handlers::gateway_devices::DevicesHandlerContext {
                         device_token_mgr: list_mgr.clone(),
                         presence: list_presence.clone(),
+                        connections: list_conns.clone(),
+                        event_bus: list_bus.clone(),
                     },
                 );
                 async move {
@@ -575,55 +585,52 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
                     alephcore::gateway::handlers::gateway_devices::DevicesHandlerContext {
                         device_token_mgr: revoke_mgr.clone(),
                         presence: revoke_presence.clone(),
+                        connections: revoke_conns.clone(),
+                        event_bus: revoke_bus.clone(),
                     },
                 );
-                let bus = revoke_bus.clone();
-                let conns = revoke_conns.clone();
                 async move {
-                    let resp =
-                        alephcore::gateway::handlers::gateway_devices::handle_devices_revoke(
-                            req, ctx,
-                        )
-                        .await;
-                    // Kick the device's live sessions, but only once the store
-                    // write actually revoked something (an unknown id, a cluster
-                    // node, or an already-revoked device must not close sockets).
-                    // Order mirrors openclaw's `device.pair.remove`: invalidate
-                    // first so anything already pipelined on that socket fails the
-                    // login wall, then publish the close. The response is written
-                    // by the same connection loop arm that dispatched this call,
-                    // so a device revoking *itself* still receives its reply before
-                    // the close frame is polled.
-                    let revoked_id = resp
-                        .result
-                        .as_ref()
-                        .filter(|r| {
-                            r.get("revoked").and_then(serde_json::Value::as_bool) == Some(true)
-                        })
-                        .and_then(|r| r.get("device_id"))
-                        .and_then(serde_json::Value::as_str)
-                        .map(String::from);
-                    if let Some(device_id) = revoked_id {
-                        let downgraded = alephcore::gateway::server::invalidate_device_sessions(
-                            &conns, &device_id,
-                        )
-                        .await;
-                        if downgraded > 0 {
-                            tracing::info!(
-                                device_id = %device_id,
-                                sessions = downgraded,
-                                "device revoked: live sessions downgraded to the login wall"
-                            );
-                        }
-                        let _ = bus.publish_frame(
-                            &alephcore::gateway::events::GatewayEventFrame::DeviceRevoked {
-                                device_id,
-                            },
-                        );
-                    }
-                    resp
+                    alephcore::gateway::handlers::gateway_devices::handle_devices_revoke(req, ctx)
+                        .await
                 }
             });
+    }
+    // User (principal) management RPCs: me / list / create / update. Admin
+    // gate (create/update) is enforced upstream in `method_admin.rs`; me/list
+    // are member carve-outs. Store is the SAME `SecurityStore` Arc used for
+    // connect auth (`auth_bundle.security_store`) — one source of truth for
+    // who exists, not a second copy. `users.update`'s deactivation path
+    // reuses the exact same connection map / event bus as
+    // `gateway.devices.revoke` above, so a deactivated user's devices are
+    // kicked through the identical pipeline.
+    {
+        let users_store = auth_bundle.security_store.clone();
+        let users_kick = alephcore::gateway::handlers::users::UserDeactivationKick {
+            connections: server.connections.clone(),
+            event_bus: event_bus.clone(),
+        };
+        let s = users_store.clone();
+        server.handlers_mut().register("users.me", move |req| {
+            let s = s.clone();
+            async move { alephcore::gateway::handlers::users::handle_me(req, s).await }
+        });
+        let s = users_store.clone();
+        server.handlers_mut().register("users.list", move |req| {
+            let s = s.clone();
+            async move { alephcore::gateway::handlers::users::handle_list(req, s).await }
+        });
+        let s = users_store.clone();
+        server.handlers_mut().register("users.create", move |req| {
+            let s = s.clone();
+            async move { alephcore::gateway::handlers::users::handle_create(req, s).await }
+        });
+        let s = users_store;
+        let kick = users_kick;
+        server.handlers_mut().register("users.update", move |req| {
+            let s = s.clone();
+            let kick = kick.clone();
+            async move { alephcore::gateway::handlers::users::handle_update(req, s, kick).await }
+        });
     }
     // Wire the security store so the WS node connect/disconnect paths can
     // stamp enrolled-node last_seen_at (offline fleet view honesty).

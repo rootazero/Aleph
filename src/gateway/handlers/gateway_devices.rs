@@ -13,18 +13,25 @@
 //! connection — the WS login wall refuses every non-`connect` method to an
 //! unauthorized caller, so no extra per-method gate is needed.
 //!
-//! Revocation is immediate, not deferred to the next handshake: the store write
-//! stops future `connect`s, and the wiring site (`start/mod.rs`) then downgrades
-//! the device's live sessions to the login wall and publishes `DeviceRevoked` to
-//! close their sockets. This handler stays pure I/O (R4) — it reports *what* was
-//! revoked; the session side effects belong to the site that owns the connection
-//! map and the event bus.
+//! Revocation is immediate, not deferred to the next handshake: [`revoke_device_and_kick`]
+//! writes the store revoke, then (only when that write actually revoked
+//! something) downgrades the device's live sessions to the login wall and
+//! publishes `DeviceRevoked` to close their sockets — demote-before-kick, see
+//! `gateway/CLAUDE.md` mine 2. That function is the single source for "what
+//! does revoking a device actually do": `handle_devices_revoke` calls it, and
+//! so does `users.update`'s deactivation path (revokes every device owned by a
+//! newly-deactivated user) — one pipeline, never a second copy.
 
 use serde_json::json;
+use std::collections::HashMap;
+use tokio::sync::RwLock;
 
+use crate::gateway::event_bus::GatewayEventBus;
+use crate::gateway::events::GatewayEventFrame;
 use crate::gateway::presence::PresenceTracker;
 use crate::gateway::protocol::{JsonRpcRequest, JsonRpcResponse, INVALID_PARAMS};
-use crate::gateway::security::DeviceTokenManager;
+use crate::gateway::security::{DeviceTokenError, DeviceTokenManager};
+use crate::gateway::server::ConnectionState;
 use crate::sync_primitives::Arc;
 
 /// Context required by the device-management handlers.
@@ -35,6 +42,47 @@ pub struct DevicesHandlerContext {
     /// right now. Presence entries carry the `device_id` latched at the
     /// `connect` handshake, so this is a join, not a guess.
     pub presence: Arc<PresenceTracker>,
+    /// Live connection map — `revoke_device_and_kick` downgrades any open
+    /// session bound to the revoked device to the login wall.
+    pub connections: Arc<RwLock<HashMap<String, ConnectionState>>>,
+    /// Event bus — `revoke_device_and_kick` publishes `DeviceRevoked` on it to
+    /// close the device's live sockets.
+    pub event_bus: Arc<GatewayEventBus>,
+}
+
+/// Revoke one paired Panel device's store record and, if that write actually
+/// revoked something (an unknown id, a cluster node, or an already-revoked
+/// device is a no-op), kick its live sessions: downgrade any open connections
+/// to the login wall, then publish `DeviceRevoked` to close their sockets.
+///
+/// Order matters — mirrors openclaw's `device.pair.remove`: invalidate first
+/// so anything already pipelined on that socket fails the login wall, then
+/// publish the close (gateway/CLAUDE.md mine 2).
+///
+/// Shared by [`handle_devices_revoke`] and `users.update`'s deactivation path
+/// — the single "revoke one device" pipeline, never duplicated.
+pub(crate) async fn revoke_device_and_kick(
+    device_token_mgr: &DeviceTokenManager,
+    connections: &Arc<RwLock<HashMap<String, ConnectionState>>>,
+    event_bus: &GatewayEventBus,
+    device_id: &str,
+) -> Result<bool, DeviceTokenError> {
+    let revoked = device_token_mgr.revoke_panel_device(device_id)?;
+    if revoked {
+        let downgraded =
+            crate::gateway::server::invalidate_device_sessions(connections, device_id).await;
+        if downgraded > 0 {
+            tracing::info!(
+                device_id = %device_id,
+                sessions = downgraded,
+                "device revoked: live sessions downgraded to the login wall"
+            );
+        }
+        let _ = event_bus.publish_frame(&GatewayEventFrame::DeviceRevoked {
+            device_id: device_id.to_string(),
+        });
+    }
+    Ok(revoked)
 }
 
 /// `gateway.devices.list` — list paired remote Panel devices.
@@ -94,11 +142,10 @@ pub async fn handle_devices_list(
 /// Request params: `{ "device_id": "device-…" }` (required).
 /// Response: `{ "revoked": bool, "device_id": "device-…" }` — `revoked` is
 /// `false` when the id is unknown, already revoked, or is not a Panel device
-/// (e.g. a cluster node). `device_id` is echoed so the wiring site can drive the
-/// live-session kick (`invalidate_device_sessions` + `DeviceRevoked`) off the
-/// **response** rather than re-parsing the request — one source for "what was
-/// actually revoked", which is also what a no-op `revoked: false` must not
-/// trigger.
+/// (e.g. a cluster node). The store write and the live-session kick both
+/// happen inside [`revoke_device_and_kick`] before this handler responds, so
+/// `revoked: true` means the device is already gone by the time the caller
+/// sees the reply.
 pub async fn handle_devices_revoke(
     request: JsonRpcRequest,
     ctx: Arc<DevicesHandlerContext>,
@@ -119,7 +166,14 @@ pub async fn handle_devices_revoke(
         );
     };
 
-    match ctx.device_token_mgr.revoke_panel_device(device_id) {
+    match revoke_device_and_kick(
+        &ctx.device_token_mgr,
+        &ctx.connections,
+        &ctx.event_bus,
+        device_id,
+    )
+    .await
+    {
         Ok(revoked) => JsonRpcResponse::success(
             request.id,
             json!({ "revoked": revoked, "device_id": device_id }),
@@ -143,6 +197,8 @@ mod tests {
                 SecurityStore::in_memory().unwrap(),
             ))),
             presence: Arc::new(PresenceTracker::new()),
+            connections: Arc::new(RwLock::new(HashMap::new())),
+            event_bus: Arc::new(GatewayEventBus::new()),
         })
     }
 

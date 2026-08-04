@@ -118,6 +118,7 @@ pub mod tools_cancel;
 pub mod tools_invoke;
 pub mod tools_visibility;
 pub mod trace_replay;
+pub mod users;
 pub mod version;
 pub mod voice;
 pub mod wizard;
@@ -126,6 +127,8 @@ pub mod workspace;
 pub use config::{handle_get_full_config, handle_patch_config};
 pub use identity::{IdentityHandlerContext, SharedIdentityCtx};
 
+use crate::gateway::event_bus::GatewayEventBus;
+use crate::gateway::security::store::SecurityStore;
 use crate::gateway::security::SharedTokenManager;
 use crate::sync_primitives::{Arc, AsyncRwLock};
 use std::collections::HashMap;
@@ -528,6 +531,48 @@ impl HandlerRegistry {
             registry.register("projects.get", move |req| {
                 let s = s.clone();
                 async move { projects::handle_get(req, s).await }
+            });
+        }
+
+        // User (principal) catalogue — backed by `SecurityStore`'s `users`
+        // table (Task 1 of the P0 identity foundation). The store here is a
+        // fresh in-memory instance (owner auto-bootstrapped by
+        // `SecurityStore::in_memory()`); mirrors the `projects.*` default
+        // above — this keeps `users.*` usable in test harnesses that boot via
+        // `HandlerRegistry::new()` directly. Real wiring happens at boot with
+        // the SAME `SecurityStore` Arc used for connect auth, and the real
+        // connection map / event bus for the deactivation device kick (see
+        // `commands/start/mod.rs`).
+        {
+            let default_store = Arc::new(
+                SecurityStore::in_memory()
+                    .expect("in-memory SecurityStore for users.* default registration"),
+            );
+            let default_kick = users::UserDeactivationKick {
+                connections: Arc::new(AsyncRwLock::new(HashMap::new())),
+                event_bus: Arc::new(GatewayEventBus::new()),
+            };
+            let s = default_store.clone();
+            registry.register("users.me", move |req| {
+                let s = s.clone();
+                async move { users::handle_me(req, s).await }
+            });
+            let s = default_store.clone();
+            registry.register("users.list", move |req| {
+                let s = s.clone();
+                async move { users::handle_list(req, s).await }
+            });
+            let s = default_store.clone();
+            registry.register("users.create", move |req| {
+                let s = s.clone();
+                async move { users::handle_create(req, s).await }
+            });
+            let s = default_store;
+            let kick = default_kick;
+            registry.register("users.update", move |req| {
+                let s = s.clone();
+                let kick = kick.clone();
+                async move { users::handle_update(req, s, kick).await }
             });
         }
 
