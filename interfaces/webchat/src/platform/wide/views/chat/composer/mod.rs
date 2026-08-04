@@ -243,8 +243,11 @@ pub(super) fn InputArea() -> impl IntoView {
             return;
         }
 
+        // `iter().cloned()`, not `into_iter()`: `files` has to survive the send
+        // so a failure can hand it back (see the `Err` arm below).
         let api_attachments: Vec<ChatAttachment> = files
-            .into_iter()
+            .iter()
+            .cloned()
             .map(|f| ChatAttachment {
                 name: f.name,
                 mime_type: f.mime_type,
@@ -302,6 +305,20 @@ pub(super) fn InputArea() -> impl IntoView {
                     // Structured error → banner colour-codes (warn vs
                     // error); analytics can branch on the code.
                     chat.set_send_error(ChatSendError::classify(e));
+                    // Nothing reached the server, so the payload comes back.
+                    // The *text* already survives — the optimistic bubble is in
+                    // the transcript and Retry re-sends it from
+                    // `last_user_text()` — but that path is text-only, so the
+                    // files were gone for good: the user was shown a Retry
+                    // button that silently dropped the attachment they came
+                    // for. `seed_draft` is the single restore entry point and
+                    // merges rather than overwrites, so files staged while this
+                    // send was in flight survive too.
+                    //
+                    // The queue flush below has always done this (via
+                    // `requeue_front`, which hands back the whole entry). Only
+                    // the typed path was asymmetric.
+                    chat.seed_draft(String::new(), files);
                 }
             }
             is_sending.set(false);
@@ -389,7 +406,15 @@ pub(super) fn InputArea() -> impl IntoView {
                     dash.pending_clarifications
                         .update(|l| l.retain(|p| p.session_key != ask.session_key));
                     input_text.set(reply);
-                    if chat.active_run_id.get_untracked().is_some() {
+                    // Probe a *component-owned* signal, not `chat`: both calls
+                    // below read several of these, and `chat` (like `input_text`
+                    // = `chat.draft`) is root-owned, so it would answer "alive"
+                    // long after this composer was disposed. Same fix as the
+                    // phone composer's arm (see `crate::disposed_reads`).
+                    if is_sending.try_get_untracked().is_none() {
+                        return;
+                    }
+                    if chat.active_run_id.try_get_untracked().flatten().is_some() {
                         enqueue_message();
                     } else {
                         send_message();
@@ -709,9 +734,15 @@ pub(super) fn InputArea() -> impl IntoView {
                     commands_loaded.set(true);
                     // Refresh palette in case the user already typed `/`
                     // while we were waiting for the catalogue.
-                    let text = input_text.get_untracked();
+                    // Post-`.await`: `commands.list` can outlive this composer.
+                    // `current_namespace` is component-owned, so it is the
+                    // honest probe — `input_text` is `chat.draft` and root-owned
+                    // (see `crate::disposed_reads`).
+                    let Some(ns) = current_namespace.try_get_untracked() else {
+                        return;
+                    };
+                    let text = input_text.try_get_untracked().unwrap_or_default();
                     if let Some(query) = text.strip_prefix('/') {
-                        let ns = current_namespace.get_untracked();
                         let entries = build_palette_entries(&cmds, &ns, query, &labels);
                         palette_entries.set(entries);
                         selected_index.set(0);
@@ -1436,5 +1467,81 @@ fn SendErrorBanner() -> impl IntoView {
                 })
             }}
         </Show>
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    /// Only the production half of this file — an unscoped `include_str!` would
+    /// count the RED-proof fixtures below as real send sites.
+    fn production_half(src: &str) -> &str {
+        src.split("#[cfg").next().unwrap_or(src)
+    }
+
+    fn typed_send_body(src: &str) -> Option<&str> {
+        let src = production_half(src);
+        let (_, after) = src.split_once("let send_message = move || {")?;
+        let (body, _) = after.split_once("\n    // The question this conversation")?;
+        Some(body)
+    }
+
+    /// A send that fails must hand the attachment tray back.
+    ///
+    /// The tray is drained before the request goes out, and the Retry button
+    /// rebuilds only the text (`ChatState::last_user_text`). So a failed send
+    /// used to destroy the attachment while leaving on screen a button that
+    /// claims it will re-send the message — total loss, no error about it, and
+    /// disguised as a recovery affordance. The queue flush never had this bug
+    /// (`requeue_front` hands back the whole entry); only this typed path did.
+    ///
+    /// Guarded on both surfaces separately, because the bug was on both and the
+    /// fix has to stay on both: the phone twin is
+    /// `platform::phone::chat::composer`'s `failed_send_restores_the_tray`.
+    fn failed_send_restores_the_tray(src: &str) -> bool {
+        let Some(body) = typed_send_body(src) else {
+            return false;
+        };
+        body.contains("set_send_error") && body.contains("seed_draft(")
+    }
+
+    #[test]
+    fn a_failed_send_gives_the_attachments_back() {
+        assert!(
+            failed_send_restores_the_tray(include_str!("mod.rs")),
+            "a failed desktop send no longer restores the tray — the files are \
+             destroyed behind a Retry button that only rebuilds the text"
+        );
+    }
+
+    /// RED proof: the shape this file had, where the error arm only reported.
+    #[test]
+    fn restore_check_rejects_an_error_arm_that_only_reports() {
+        let before = r"
+            let send_message = move || {
+                let files = attachments.get_untracked();
+                attachments.set(Vec::new());
+                spawn_local(async move {
+                    match ChatApi::send(&dash).await {
+                        Ok(resp) => chat.session_key.set(Some(resp.session_key)),
+                        Err(e) => {
+                            chat.set_send_error(ChatSendError::classify(e));
+                        }
+                    }
+                });
+            };
+    // The question this conversation";
+        assert!(!failed_send_restores_the_tray(before));
+    }
+
+    /// …and the region scrape must actually find the send. Without this the
+    /// check above passes vacuously the day `send_message` is renamed.
+    #[test]
+    fn the_region_scrape_finds_the_typed_send() {
+        let body = typed_send_body(include_str!("mod.rs"))
+            .expect("could not locate the typed send — the guard is not looking at it");
+        assert!(
+            body.contains("ChatApi::send("),
+            "the scraped region is not the send path"
+        );
     }
 }

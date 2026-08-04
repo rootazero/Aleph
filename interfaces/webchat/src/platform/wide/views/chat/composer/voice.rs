@@ -105,17 +105,23 @@ fn transcribe_and_send(
                 // Send as a normal chat turn (R4: pure I/O — the core runs the
                 // agent loop). Mirror the composer's send inputs from ChatState.
                 chat.push_user_message(&text);
-                let sk = chat.session_key.get_untracked();
-                let aid = chat.agent_id.get_untracked();
-                let pr = chat.active_project_root.get_untracked();
-                let mo = chat.selected_model.get_untracked();
-                let tier = chat.session_exec_tier.get_untracked();
+                // Post-`.await`, so `crate::disposed_reads` applies. Every read
+                // below is on root-owned `ChatState`, and this path deliberately
+                // does NOT bail when the composer is gone: the user already
+                // finished speaking, and navigating away mid-transcription must
+                // not silently swallow the utterance. `.flatten()` therefore
+                // keeps the behaviour byte-identical rather than short-circuiting.
+                let sk = chat.session_key.try_get_untracked().flatten();
+                let aid = chat.agent_id.try_get_untracked().flatten();
+                let pr = chat.active_project_root.try_get_untracked().flatten();
+                let mo = chat.selected_model.try_get_untracked().flatten();
+                let tier = chat.session_exec_tier.try_get_untracked().flatten();
                 // First-send-only carriage (see composer/mod.rs typed path):
                 // an existing session's store value is authoritative.
                 let mode = if sk.is_some() {
                     None
                 } else {
-                    chat.session_mode.get_untracked()
+                    chat.session_mode.try_get_untracked().flatten()
                 };
                 // Bind to the conversation active at send time (I1), same as the
                 // typed-send path in `composer/mod.rs`.
