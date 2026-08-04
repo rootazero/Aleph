@@ -467,6 +467,37 @@ pub struct ToolResult {
 }
 ```
 
+### Ingress: 结果在进入上下文之前要经过什么
+
+唯一入口 `src/tool_output/ingress.rs::clean_for_ingress`，由
+`tools/scoped/dispatch.rs::apply_layer_two` 调用一次：
+
+```text
+value (serde_json::Value —— 文本字段仍带真换行)
+  │
+  ├─ hoist_inline_images        图片 → 带外 vision 通道（含 MCP content 块）
+  ├─ harvest_outbound_media     _media → 产物库
+  ├─ 1. 每工具压缩              无条件，字段级
+  ├─ 2. 内容类型清洗            仅在已超预算时，字段级
+  └─ 3. 扁平化 → apply_result_budget（persist 原文 / 内联信号 / 截断）
+```
+
+**给写新工具或新 adapter 的人的三条硬约束**（每一条都对应一次真实的静默失效）：
+
+1. **不要在交给 dispatcher 之前把自己的结果 `to_string`。** `Value::to_string()`
+   转义每一个 `\n` 并把整个结果压成一行，而这条链上的**每一个**清洗器都按行路由——
+   log / search / diff / json 四个缩减器、错误蒸馏器、以及 `compressor.rs` 的三个
+   DevTools 策略。MCP adapter 曾这么做，结果那四条路全是死的，而且蒸馏器还会拿 JSON
+   信封的前 400 字符冒充"关键错误"替换整个结果。
+2. **图片要留在结构里、留在 `hoist_inline_images` 认得的位置。**
+   支持 `{image_base64, format}`（顶层或 `data` 下）与 MCP 的
+   `content[].{type:"image", data, mimeType}`。字符串里的 base64 找不回来，只会被
+   当文本计费然后截断成解不开的片段。
+3. **要重写文本字段就走 `tool_output::fence::rewrite_interior`**，别整体替换——
+   不可信内容围栏是结构不是内容，见 [SECURITY.md](SECURITY.md#content-sanitization)。
+
+详见 [FEATURE_LOCATOR §3.14](FEATURE_LOCATOR.md)。
+
 ---
 
 ## Memory System Components (Phase 2)
