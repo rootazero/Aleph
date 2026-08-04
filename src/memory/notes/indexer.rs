@@ -1161,7 +1161,11 @@ impl<S: NoteStore> NoteIndexer<S> {
 }
 
 /// Compute SHA-256 hex digest.
-fn sha2_hash(content: &str) -> String {
+///
+/// `pub(crate)` so content-identity comparisons elsewhere in the memory layer
+/// (e.g. the dream cycle's synthesis-churn digest) agree with the note index's
+/// own `content_hash` rather than inventing a second hasher.
+pub(crate) fn sha2_hash(content: &str) -> String {
     let mut hasher = Sha256::new();
     hasher.update(content.as_bytes());
     format!("{:x}", hasher.finalize())

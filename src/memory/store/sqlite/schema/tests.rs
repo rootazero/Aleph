@@ -43,6 +43,67 @@ mod tests {
         }
     }
 
+    /// The column default and the agent id it stands for must not drift apart.
+    ///
+    /// They already did once: the DDL said `'owner'`, an id no agent has ever
+    /// had, and the daemon wrote that literal on every row. It cost nothing
+    /// while nobody read the column — and became a vanishing act the moment the
+    /// Panel started scoping run history by namespace.
+    #[test]
+    fn dream_reports_namespace_default_is_the_default_agent() {
+        let conn = Connection::open_in_memory().expect("in-memory db");
+        init_schema(&conn).expect("init_schema");
+        let default: String = conn
+            .query_row(
+                "SELECT dflt_value FROM pragma_table_info('dream_reports') WHERE name='namespace'",
+                [],
+                |row| row.get(0),
+            )
+            .expect("namespace column exists");
+        assert_eq!(
+            default.trim_matches('\''),
+            crate::routing::DEFAULT_AGENT_ID,
+            "dream_reports.namespace default must equal DEFAULT_AGENT_ID"
+        );
+    }
+
+    /// Rows written before the namespace column meant anything must land in the
+    /// base agent's corpus, not fall out of every scoped view.
+    #[test]
+    fn legacy_owner_namespace_rows_are_backfilled() {
+        let conn = Connection::open_in_memory().expect("in-memory db");
+        init_schema(&conn).expect("init_schema");
+        conn.execute(
+            "INSERT INTO dream_reports \
+             (id, pipeline_type, started_at, finished_at, duration_ms, errors, namespace) \
+             VALUES ('legacy', 'consolidate', 1, 2, 1000, NULL, 'owner')",
+            [],
+        )
+        .expect("insert legacy row");
+
+        migrations::migrate_dream_reports_namespace_to_agent_id(&conn).expect("backfill");
+
+        let ns: String = conn
+            .query_row(
+                "SELECT namespace FROM dream_reports WHERE id='legacy'",
+                [],
+                |row| row.get(0),
+            )
+            .expect("row survives");
+        assert_eq!(ns, crate::routing::DEFAULT_AGENT_ID);
+
+        // Idempotent: a second pass must not touch the now-correct row.
+        migrations::migrate_dream_reports_namespace_to_agent_id(&conn).expect("backfill again");
+        let ns_again: String = conn
+            .query_row(
+                "SELECT namespace FROM dream_reports WHERE id='legacy'",
+                [],
+                |row| row.get(0),
+            )
+            .expect("row survives");
+        assert_eq!(ns_again, crate::routing::DEFAULT_AGENT_ID);
+    }
+
     #[test]
     fn graph_tables_created() {
         let conn = Connection::open_in_memory().expect("in-memory db");
@@ -150,6 +211,7 @@ mod tests {
         assert_eq!(
             sorted,
             vec![
+                "decision_json",
                 "duration_ms",
                 "errors",
                 "evolution_json",
@@ -168,7 +230,8 @@ mod tests {
             .map(String::from)
             .collect::<Vec<_>>(),
             "dream_reports must retain the 8 core columns, the 4 notes-era activity \
-             counters, and the evolution_json gate-verdict column"
+             counters, the evolution_json gate-verdict column and the decision_json \
+             cycle-decision column"
         );
 
         let row_count: i64 = conn
@@ -203,7 +266,11 @@ mod tests {
         assert_eq!(r1.4, 1000);
         assert_eq!(r1.5, 1);
         assert_eq!(r1.6, None);
-        assert_eq!(r1.7, "owner");
+        // The legacy rebuild carries the row across as `'owner'`; the same
+        // `init_schema` pass then backfills it to the base agent id, because a
+        // row still stamped with the sentinel falls outside every
+        // namespace-scoped read (see `legacy_owner_namespace_rows_are_backfilled`).
+        assert_eq!(r1.7, crate::routing::DEFAULT_AGENT_ID);
 
         init_schema(&conn).expect("second init_schema should be idempotent");
 

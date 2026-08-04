@@ -141,7 +141,16 @@ last_run_status); for the loop topology use `loop_graph(action="status")`."#;
         let corrections = self
             .db
             .count_raw_by_path_prefix_since(CORRECTION_PATH_PREFIX, since_epoch_secs)?;
-        let dreaming = self.db.dream_report_distribution_since(since_epoch_secs)?;
+        // Base corpus only. Project sub-cycles now write rows of their own, and
+        // summing them here would inflate `runs` by the number of open projects
+        // while leaving `feedback_distilled_sum` flat — that stage is
+        // global-only and never runs in a sub-cycle. The Goodhart pairing this
+        // probe exists for would read healthier the more projects were open.
+        // Per-namespace history has its own surfaces: `dreaming.list_insights`
+        // for the operator, `note_manage(action="evolution")` for the model.
+        let dreaming = self
+            .db
+            .dream_report_distribution_since(crate::routing::DEFAULT_AGENT_ID, since_epoch_secs)?;
 
         Ok(GovernanceMetricsOutput {
             window_days,
@@ -215,8 +224,34 @@ mod tests {
                 notes_archived: 2,
                 feedback_distilled: 3,
                 errors: None,
-                namespace: "owner".to_string(),
+                namespace: crate::routing::DEFAULT_AGENT_ID.to_string(),
                 evolution_json: None,
+                decision_json: None,
+            })
+            .unwrap();
+
+        // A project sub-cycle in the same window must NOT be summed in. Its
+        // maintenance subset excludes the global-only `FeedbackDistill` stage,
+        // so folding project corpora in would raise `runs` by the number of open
+        // projects while `feedback_distilled_sum` stayed put — making the
+        // Dreaming × correction Goodhart pairing read healthier the more
+        // projects the user happens to have open.
+        backend
+            .insert_dream_report(&PersistedDreamReport {
+                id: "d2-project".to_string(),
+                pipeline_type: "full".to_string(),
+                started_at: now - 150,
+                finished_at: now - 50,
+                duration_ms: 100,
+                synthesis_count: 40,
+                notes_consolidated: 60,
+                notes_woven: 10,
+                notes_archived: 20,
+                feedback_distilled: 0,
+                errors: None,
+                namespace: format!("{}__proj-deadbeef", crate::routing::DEFAULT_AGENT_ID),
+                evolution_json: None,
+                decision_json: None,
             })
             .unwrap();
 

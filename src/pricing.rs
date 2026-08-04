@@ -895,6 +895,68 @@ const PRICE_TABLE: &[(&str, &[Rates])] = &[
             },
         ],
     ),
+    (
+        // StepFun Step-3.x Flash line. Source: openclaw `stepfun` plugin
+        // catalog (2026-08). `cacheWrite: 0` there means "not billed
+        // separately", recorded as None — not as free.
+        "stepfun",
+        &[
+            Rates {
+                model_prefix: "step-3.7-flash",
+                input_per_mtok: Some(0.2),
+                output_per_mtok: Some(1.15),
+                cache_read_per_mtok: Some(0.04),
+                cache_creation_per_mtok: None,
+                reasoning_per_mtok: None,
+            },
+            Rates {
+                model_prefix: "step-3.5-flash",
+                input_per_mtok: Some(0.1),
+                output_per_mtok: Some(0.3),
+                cache_read_per_mtok: Some(0.02),
+                cache_creation_per_mtok: None,
+                reasoning_per_mtok: None,
+            },
+        ],
+    ),
+    (
+        // Xiaomi MiMo v2.5. Source: openclaw `xiaomi` plugin catalog
+        // (2026-08). The `-pro` row must precede the family row — `mimo-v2.5`
+        // is a prefix of `mimo-v2.5-pro` and would otherwise underprice the
+        // flagship 3x (the prefix-shadow guard enforces the order).
+        "xiaomi",
+        &[
+            Rates {
+                model_prefix: "mimo-v2.5-pro",
+                input_per_mtok: Some(0.435),
+                output_per_mtok: Some(0.87),
+                cache_read_per_mtok: Some(0.0036),
+                cache_creation_per_mtok: None,
+                reasoning_per_mtok: None,
+            },
+            Rates {
+                model_prefix: "mimo-v2.5",
+                input_per_mtok: Some(0.14),
+                output_per_mtok: Some(0.28),
+                cache_read_per_mtok: Some(0.0028),
+                cache_creation_per_mtok: None,
+                reasoning_per_mtok: None,
+            },
+        ],
+    ),
+    (
+        // Meituan LongCat. Source: openclaw `longcat` plugin catalog
+        // (2026-08). Cache write is billed at the input rate.
+        "meituan",
+        &[Rates {
+            model_prefix: "longcat-2.0",
+            input_per_mtok: Some(0.75),
+            output_per_mtok: Some(2.95),
+            cache_read_per_mtok: Some(0.015),
+            cache_creation_per_mtok: Some(0.75),
+            reasoning_per_mtok: None,
+        }],
+    ),
 ];
 
 /// Long-context pricing tiers, parallel to [`PRICE_TABLE`] and keyed the same

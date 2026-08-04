@@ -11,6 +11,11 @@ use super::signals::SignalSnapshot;
 use super::strategy::DreamStrategy;
 
 /// Mutation gate decision (input to selector).
+///
+/// A third `Skip { reason }` variant existed with zero producers — the gate
+/// only ever returns `Allow` or `Conserve`, and "don't run a cycle at all" is
+/// decided upstream by the daemon's window/idle/once-per-day preconditions.
+/// Withdrawn under R10 (no abstractions kept open for a hypothetical future).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum GateDecision {
@@ -18,9 +23,6 @@ pub enum GateDecision {
     Conserve {
         reason: String,
         cooldown_remaining: u32,
-    },
-    Skip {
-        reason: String,
     },
 }
 
@@ -47,16 +49,36 @@ struct CycleRecord {
 }
 
 /// Deterministic strategy selector with sliding-window personality.
+///
+/// Like [`super::mutation_gate::MutationGate`], the window is **derived** from
+/// the persisted dream event log at the start of each cycle rather than
+/// accumulated in the process. Cycles run at most once a day, so an in-RAM
+/// ten-cycle window reset the daemon's personality to neutral on every restart
+/// and effectively never adapted.
 pub struct StrategySelector {
     history: VecDeque<CycleRecord>,
 }
 
 impl StrategySelector {
+    /// How many past cycles [`Self::from_outcomes`] needs to see.
+    pub const HISTORY_WINDOW: usize = PERSONALITY_WINDOW;
+
     #[must_use]
     pub fn new() -> Self {
         Self {
             history: VecDeque::with_capacity(PERSONALITY_WINDOW),
         }
+    }
+
+    /// Rebuild the personality window from past cycles' validation verdicts,
+    /// **oldest first**.
+    #[must_use]
+    pub fn from_outcomes<I: IntoIterator<Item = bool>>(validation_passed: I) -> Self {
+        let mut selector = Self::new();
+        for passed in validation_passed {
+            selector.record_cycle_outcome(passed);
+        }
+        selector
     }
 
     /// Record outcome of a completed Dream cycle for personality adaptation.
@@ -105,13 +127,6 @@ impl StrategySelector {
                 return SelectionDecision {
                     strategy: DreamStrategy::Conserve,
                     rationale: format!("gate forced conserve: {reason}"),
-                    personality_adjustment: adjustment,
-                };
-            }
-            GateDecision::Skip { reason } => {
-                return SelectionDecision {
-                    strategy: DreamStrategy::Conserve,
-                    rationale: format!("gate skip: {reason}"),
                     personality_adjustment: adjustment,
                 };
             }
@@ -198,14 +213,29 @@ mod tests {
         assert_eq!(decision.strategy, DreamStrategy::Conserve);
     }
 
+    /// Personality must be reconstructible from the persisted verdicts alone —
+    /// otherwise it silently resets to neutral on every daemon restart.
     #[test]
-    fn gate_skip_returns_conserve() {
-        let snapshot = snapshot_from(&RawMetrics::default());
-        let gate = GateDecision::Skip {
-            reason: "cooldown".into(),
-        };
-        let decision = StrategySelector::new().select(&snapshot, &gate);
-        assert_eq!(decision.strategy, DreamStrategy::Conserve);
+    fn from_outcomes_reproduces_an_accumulated_window() {
+        let verdicts = [true, false, true, true, true, true, true, true, true, true];
+        let mut accumulated = StrategySelector::new();
+        for v in verdicts {
+            accumulated.record_cycle_outcome(v);
+        }
+        let derived = StrategySelector::from_outcomes(verdicts);
+        assert!(
+            (derived.synthesize_threshold() - accumulated.synthesize_threshold()).abs() < 1e-9,
+            "derived personality must match the accumulated one"
+        );
+        assert!(derived.synthesize_threshold() < DEFAULT_SYNTHESIZE_THRESHOLD);
+    }
+
+    #[test]
+    fn from_outcomes_keeps_only_the_last_window() {
+        // Twenty failures then ten passes: only the passes are in the window.
+        let verdicts = std::iter::repeat_n(false, 20).chain(std::iter::repeat_n(true, 10));
+        let derived = StrategySelector::from_outcomes(verdicts);
+        assert!(derived.synthesize_threshold() < DEFAULT_SYNTHESIZE_THRESHOLD);
     }
 
     #[test]

@@ -8,6 +8,7 @@ pub mod distill_action;
 pub mod event_log;
 pub mod evolution;
 pub mod mutation_gate;
+mod project_cycle;
 pub mod report;
 pub mod selector;
 pub mod signals;
@@ -31,7 +32,7 @@ use crate::sync_primitives::{AtomicBool, AtomicI64, Ordering};
 use chrono::{Local, NaiveTime, TimeZone};
 use once_cell::sync::{Lazy, OnceCell};
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tokio::task::JoinHandle;
 use tokio::time::interval;
@@ -41,7 +42,7 @@ use tracing::{info, warn};
 pub use distill_action::{DistillAction, DistillActionRecord, DistillOutcome};
 
 // Re-export report types
-pub use report::{DreamReport, DreamReportStatus};
+pub use report::{CycleDecision, DreamReport, DreamReportStatus};
 
 // Re-export stage trait and shared types
 pub use event_log::{DreamEvent, EventLog};
@@ -55,6 +56,31 @@ pub use signals::{DreamSignal, RawMetrics, SignalSnapshot, SignalType};
 pub use stages::DreamStage;
 pub use strategy::DreamStrategy;
 pub use validation::{DreamValidationReport, ValidationIssue, ValidationTier};
+
+/// How many past dream cycles the daemon rehydrates at the start of each run.
+///
+/// Derived from the consumers' own declared windows so the read can never drift
+/// out of sync with what the detectors need: widening a detector's window
+/// widens this automatically.
+const DREAM_HISTORY_WINDOW: usize =
+    if MutationGate::HISTORY_WINDOW > StrategySelector::HISTORY_WINDOW {
+        MutationGate::HISTORY_WINDOW
+    } else {
+        StrategySelector::HISTORY_WINDOW
+    };
+
+/// Everything one completed dream cycle produced: the counters, the run status,
+/// and the decision that led to them.
+///
+/// The decision travels with the report because both persistence paths
+/// (`check_and_run` and `run_now`) must write it — a cycle's "why" is not a
+/// property of how it was triggered.
+#[derive(Debug, Clone)]
+pub(crate) struct DreamCycleOutcome {
+    pub status: DreamRunStatus,
+    pub report: DreamReport,
+    pub decision: CycleDecision,
+}
 
 // ---------------------------------------------------------------------------
 // NoteEntry — metadata for a single note in the dream pipeline
@@ -491,7 +517,7 @@ pub struct DreamStatus {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum DreamRunStatus {
+pub(crate) enum DreamRunStatus {
     Success,
     Cancelled,
 }
@@ -582,10 +608,6 @@ pub struct DreamDaemon {
     note_memory_dir: Option<PathBuf>,
     /// Optional wiki orientation — forwarded into `DreamContext` for `IndexRefresherStage`.
     orientation: Option<Arc<dyn crate::memory::notes::orientation::NoteOrientation>>,
-    /// Strategy selector with personality adaptation.
-    selector: crate::sync_primitives::Mutex<StrategySelector>,
-    /// Mutation gate tracking evolution pathologies.
-    mutation_gate: crate::sync_primitives::Mutex<MutationGate>,
     /// Best-ever memory-health score, tracked across cycles for the evolution
     /// gate (SkillOpt's best-checkpoint). Loaded from `dream_best_health__*` at
     /// construction and persisted on every `AcceptNewBest` so the honest
@@ -627,8 +649,6 @@ impl DreamDaemon {
             embedder: None,
             note_memory_dir: None,
             orientation: None,
-            selector: crate::sync_primitives::Mutex::new(StrategySelector::new()),
-            mutation_gate: crate::sync_primitives::Mutex::new(MutationGate::new()),
             best_health: crate::sync_primitives::Mutex::new(best_health),
             project_scoped: config.project_scoped,
         })
@@ -753,18 +773,25 @@ impl DreamDaemon {
         let duration_ms = ((now_timestamp() - run_start).max(0) as u64) * 1000;
 
         match &result {
-            Ok((status, _report)) => {
+            Ok(outcome) => {
                 if let Err(e) = self
                     .database
                     .set_dream_status(DreamStatus {
                         last_run_at: Some(run_start),
-                        last_status: Some(status.as_str().to_string()),
+                        last_status: Some(outcome.status.as_str().to_string()),
                         last_duration_ms: Some(duration_ms),
                     })
                     .await
                 {
                     tracing::warn!(error = %e, "failed to persist dream status (ok)");
                 }
+                // A forced cycle is a real cycle: it must land in the
+                // `dream_reports` audit table like a scheduled one. This writer
+                // used to live only on the scheduled path, so every `run_now`
+                // was invisible both to the Panel's run history and to the
+                // governance audit's "did dreaming do anything" probe — a
+                // forced consolidation night read as "the daemon did nothing".
+                self.persist_run_row(outcome, DEFAULT_AGENT_ID, run_start, duration_ms);
             }
             Err(_) => {
                 if let Err(e) = self
@@ -781,7 +808,61 @@ impl DreamDaemon {
             }
         }
 
-        result.map(|(_, report)| report)
+        result.map(|outcome| outcome.report)
+    }
+
+    /// Append one completed cycle to the `dream_reports` audit table.
+    ///
+    /// Single writer for the scheduled (`check_and_run`) path, the forced
+    /// (`run_now`) path, and every project sub-cycle — the counters, the
+    /// SkillOpt gate verdict (`evolution_json`) and the cycle decision
+    /// (`decision_json`) must not depend on *which* corpus ran or on how the
+    /// cycle was triggered. Best-effort: a failed insert (e.g. a PK clash on a
+    /// same-second re-run) is logged, never fatal.
+    ///
+    /// `namespace` is the corpus's real storage partition key — the base agent
+    /// id, or `{base}__proj-*`. It is also part of the row id, because the base
+    /// cycle and its sub-cycles routinely finish within the same second and the
+    /// id is the primary key.
+    fn persist_run_row(
+        &self,
+        outcome: &DreamCycleOutcome,
+        namespace: &str,
+        run_start: i64,
+        duration_ms: u64,
+    ) {
+        let report = &outcome.report;
+        let persisted = crate::memory::store::sqlite::dream_reports::PersistedDreamReport {
+            id: format!("dream_{run_start}_{namespace}"),
+            // rust-doctor-disable-next-line excessive-clone
+            pipeline_type: report.pipeline_type.clone(),
+            started_at: run_start,
+            finished_at: report.finished_at.max(run_start),
+            duration_ms: duration_ms as i64,
+            synthesis_count: report.synthesis_count,
+            notes_consolidated: report.notes_consolidated,
+            notes_woven: report.notes_woven,
+            notes_archived: report.notes_archived,
+            // Rules that LANDED — not every feedback-distill row. See
+            // `feedback_rules_landed`: this column is the Dreaming ×
+            // correction Goodhart counter-metric, so counting rejected
+            // and skipped actions inverts the very signal it exists for.
+            feedback_distilled: feedback_rules_landed(report),
+            // rust-doctor-disable-next-line excessive-clone
+            errors: report.errors.clone(),
+            namespace: namespace.to_string(),
+            // Serialize the SkillOpt gate verdict so the accept/reject
+            // decision is queryable, not just buried in the event log.
+            // A serialization failure degrades to NULL (non-fatal).
+            evolution_json: report
+                .evolution
+                .as_ref()
+                .and_then(|e| serde_json::to_string(e).ok()),
+            decision_json: serde_json::to_string(&outcome.decision).ok(),
+        };
+        if let Err(e) = self.database.insert_dream_report(&persisted) {
+            warn!(error = %e, "failed to persist dream report row");
+        }
     }
 
     async fn run_scheduler(self: Arc<Self>) {
@@ -882,13 +963,13 @@ impl DreamDaemon {
         let duration_ms = (now_timestamp() - run_start).max(0) as u64 * 1000;
 
         match run_result {
-            Ok(Ok((status, report))) => {
+            Ok(Ok(outcome)) => {
                 info!(
-                    notes_consolidated = report.notes_consolidated,
-                    synthesis_count = report.synthesis_count,
-                    notes_archived = report.notes_archived,
+                    notes_consolidated = outcome.report.notes_consolidated,
+                    synthesis_count = outcome.report.synthesis_count,
+                    notes_archived = outcome.report.notes_archived,
                     "DreamDaemon {}",
-                    if status == DreamRunStatus::Cancelled {
+                    if outcome.status == DreamRunStatus::Cancelled {
                         "cancelled"
                     } else {
                         "completed"
@@ -899,7 +980,7 @@ impl DreamDaemon {
                     .database
                     .set_dream_status(DreamStatus {
                         last_run_at: Some(run_start),
-                        last_status: Some(status.as_str().to_string()),
+                        last_status: Some(outcome.status.as_str().to_string()),
                         last_duration_ms: Some(duration_ms),
                     })
                     .await
@@ -907,43 +988,7 @@ impl DreamDaemon {
                     tracing::warn!(error = %e, "failed to persist dream status (completed)");
                 }
 
-                // Persist the run into the `dream_reports` audit table. This
-                // writer was orphaned during an earlier refactor (the run path
-                // moved to the JSON event log but the SQLite audit trail was
-                // never re-wired), leaving `dream_reports` frozen. Restore it
-                // so the run history is queryable again. Best-effort: a failed
-                // insert (e.g. PK clash on a same-second re-run) is logged but
-                // never blocks the daemon.
-                let persisted = crate::memory::store::sqlite::dream_reports::PersistedDreamReport {
-                    id: format!("dream_{run_start}"),
-                    // rust-doctor-disable-next-line excessive-clone
-                    pipeline_type: report.pipeline_type.clone(),
-                    started_at: run_start,
-                    finished_at: report.finished_at.max(run_start),
-                    duration_ms: duration_ms as i64,
-                    synthesis_count: report.synthesis_count,
-                    notes_consolidated: report.notes_consolidated,
-                    notes_woven: report.notes_woven,
-                    notes_archived: report.notes_archived,
-                    // Rules that LANDED — not every feedback-distill row. See
-                    // `feedback_rules_landed`: this column is the Dreaming ×
-                    // correction Goodhart counter-metric, so counting rejected
-                    // and skipped actions inverts the very signal it exists for.
-                    feedback_distilled: feedback_rules_landed(&report),
-                    // rust-doctor-disable-next-line excessive-clone
-                    errors: report.errors.clone(),
-                    namespace: "owner".to_string(),
-                    // Serialize the SkillOpt gate verdict so the accept/reject
-                    // decision is queryable, not just buried in the event log.
-                    // A serialization failure degrades to NULL (non-fatal).
-                    evolution_json: report
-                        .evolution
-                        .as_ref()
-                        .and_then(|e| serde_json::to_string(e).ok()),
-                };
-                if let Err(e) = self.database.insert_dream_report(&persisted) {
-                    warn!(error = %e, "failed to persist dream report row");
-                }
+                self.persist_run_row(&outcome, DEFAULT_AGENT_ID, run_start, duration_ms);
             }
             Ok(Err(err)) => {
                 warn!(error = %err, "DreamDaemon run failed");
@@ -994,7 +1039,7 @@ impl DreamDaemon {
         run_start: i64,
         _run_date: String,
         force: bool,
-    ) -> Result<(DreamRunStatus, DreamReport), AlephError> {
+    ) -> Result<DreamCycleOutcome, AlephError> {
         // --- Phase 0: Resolve note memory dir + load the note index ---
         // rust-doctor-disable-next-line excessive-clone
         let memory_dir = self.note_memory_dir.clone().unwrap_or_else(|| {
@@ -1010,19 +1055,36 @@ impl DreamDaemon {
                 Vec::new()
             });
 
-        // --- Phase 1: Collect signals ---
-        // The prior cycle's report carries the LLM-produced rot counts
-        // (contradictions / stale marks / merged duplicates). Read it once here
-        // and reuse it for both the baseline and post-cycle metric collection so
-        // the rot signals reflect real, model-judged corpus health rather than a
-        // structural zero. `read_last` failure (fresh install, corrupt log) is a
-        // graceful `None` → zero rates, never aborting the cycle.
-        let prior_report = EventLog::new(memory_dir.join(DEFAULT_AGENT_ID))
-            .read_last(1)
+        // --- Phase 1: Rehydrate cross-cycle state, then collect signals ---
+        // One read of the persisted event log serves three consumers:
+        //
+        //  * `prior_report` — the previous cycle's LLM-produced rot counts
+        //    (contradictions / stale marks / merged duplicates), which the
+        //    signal collector normalises into the rot rates;
+        //  * `MutationGate` — the churn-detection windows and the conserve
+        //    cooldown;
+        //  * `StrategySelector` — the validation pass-rate personality window.
+        //
+        // The latter two used to be in-process accumulators, which meant they
+        // could only ever see cycles that happened since the last restart.
+        // Cycles run at most once per day, so a five-cycle detector needed five
+        // consecutive days of uptime to arm and the cooldown evaporated on
+        // reboot — while this exact history sat unread on disk. Deriving them
+        // here makes the daemon's decision state reconstructible from a single
+        // persistent source (constitution A3), the same shape evolver uses
+        // (`analyzeRecentHistory` is a pure fold over its event log).
+        //
+        // Read failure (fresh install, corrupt log) degrades to an empty
+        // history: zero rot rates, disarmed detectors, neutral personality —
+        // never an aborted cycle.
+        let history = EventLog::new(memory_dir.join(DEFAULT_AGENT_ID))
+            .read_last(DREAM_HISTORY_WINDOW)
             .await
-            .ok()
-            .and_then(|mut evs| evs.pop())
-            .map(|ev| ev.report);
+            .unwrap_or_else(|e| {
+                warn!(error = %e, "failed to read dream event log; cross-cycle state starts empty");
+                Vec::new()
+            });
+        let prior_report = history.last().map(|ev| ev.report.clone());
         let raw_metrics = compute_raw_metrics(
             &note_index,
             self.database.as_ref(),
@@ -1033,16 +1095,13 @@ impl DreamDaemon {
         let signal_snapshot = SignalSnapshot::from_metrics(&raw_metrics);
 
         // --- Phase 2: Mutation gate evaluation ---
-        let gate_decision = {
-            let gate = self.mutation_gate.lock().unwrap_or_else(|e| e.into_inner());
-            gate.evaluate()
-        };
+        let gate_decision =
+            MutationGate::from_reports(history.iter().map(|ev| &ev.report)).evaluate();
 
         // --- Phase 3: Strategy selection ---
-        let selection = {
-            let selector = self.selector.lock().unwrap_or_else(|e| e.into_inner());
-            selector.select(&signal_snapshot, &gate_decision)
-        };
+        let selector =
+            StrategySelector::from_outcomes(history.iter().map(|ev| ev.validation.overall_ok()));
+        let selection = selector.select(&signal_snapshot, &gate_decision);
 
         let strategy = selection.strategy;
         info!(strategy = %strategy, rationale = %selection.rationale, "Dream strategy selected");
@@ -1099,69 +1158,65 @@ impl DreamDaemon {
                 // `note_manage` under `{base}__proj-*` get the note-maintenance
                 // subset so their notes are linted/consolidated/synthesised too.
                 // The global-only stages (feedback floor, skill lifecycle, daily
-                // digest) are excluded — those stay cross-project. Per-namespace
-                // failures are logged, never aborting the base cycle.
+                // digest) are excluded — those stay cross-project.
+                //
+                // Each namespace governs *itself*: it folds its own event log
+                // into its own gate, personality and best-health checkpoint, and
+                // appends its own event — it does not inherit this cycle's
+                // strategy and its churn never joins the base agent's history.
+                // See `project_cycle` for why joining them would be worse than
+                // the drop it replaces. Per-namespace failures are logged, never
+                // aborting the base cycle.
                 if self.project_scoped {
                     let scoped = crate::memory::project_scope::list_scoped_agent_ids(
                         &memory_dir,
                         DEFAULT_AGENT_ID,
                     );
-                    if !scoped.is_empty() {
-                        let project_pipeline = DreamPipeline::from_strategy(
-                            strategy,
-                            &self.config,
-                            &self.decay_policy,
-                        )
-                        .retain_project_stages();
-                        for ns in &scoped {
-                            let ns_index = self.database.list_notes(ns).await.unwrap_or_else(|e| {
-                                warn!(agent = %ns, error = %e, "failed to list notes for project namespace, proceeding with empty index");
-                                Vec::new()
-                            });
-                            let ns_notes: Vec<NoteEntry> =
-                                ns_index.iter().map(NoteEntry::from_index_entry).collect();
-                            let mut ns_indexer =
-                                // rust-doctor-disable-next-line excessive-clone
-                                NoteIndexer::new(memory_dir.clone(), self.database.clone());
-                            // rust-doctor-disable-next-line excessive-clone
-                            ns_indexer = ns_indexer.with_embedder(embedder.clone());
-                            let ns_ctx = DreamContext {
-                                notes: ns_notes,
-                                note_contents: HashMap::new(),
-                                // rust-doctor-disable-next-line excessive-clone
-                                agent_id: ns.clone(),
-                                // rust-doctor-disable-next-line excessive-clone
-                                database: self.database.clone(),
-                                indexer: ns_indexer,
-                                // rust-doctor-disable-next-line excessive-clone
-                                provider: provider.clone(),
-                                // rust-doctor-disable-next-line excessive-clone
-                                embedder: embedder.clone(),
-                                report: DreamReport {
-                                    pipeline_type: strategy.to_string(),
-                                    started_at: run_start,
-                                    ..Default::default()
-                                },
-                                pipeline_type: strategy.to_string(),
-                                // rust-doctor-disable-next-line excessive-clone
-                                activity_checker: activity_checker.clone(),
-                                strategy,
-                                // rust-doctor-disable-next-line excessive-clone
-                                orientation: self.orientation.clone(),
-                                evolution_budget: EditBudget::default(),
-                            };
-                            match project_pipeline.run(ns_ctx).await {
-                                Ok(r) => info!(
+                    let deps = project_cycle::ProjectCycleDeps {
+                        memory_dir: &memory_dir,
+                        database: &self.database,
+                        provider: &provider,
+                        embedder: &embedder,
+                        config: &self.config,
+                        decay_policy: &self.decay_policy,
+                        orientation: &self.orientation,
+                        activity_checker: &activity_checker,
+                    };
+                    for ns in &scoped {
+                        match project_cycle::run_namespace_cycle(&deps, ns).await {
+                            Ok(outcome) => {
+                                let r = &outcome.report;
+                                let interrupted = r.status == DreamReportStatus::Interrupted;
+                                info!(
                                     agent = %ns,
                                     stages = ?r.stages_executed,
+                                    interrupted,
                                     "project namespace dream complete"
-                                ),
-                                Err(e) => warn!(
-                                    agent = %ns,
-                                    error = %e,
-                                    "project namespace dream failed"
-                                ),
+                                );
+                                // The audit row the operator reads. Its absence
+                                // is why a project corpus's nightly history was
+                                // legible to the model — which reads that
+                                // namespace's own event log — and to no one
+                                // else. Same writer as the base cycle, so the
+                                // two can't drift; the sub-cycle's own clock,
+                                // because it is its own run.
+                                if !r.is_vacuous_interruption() {
+                                    self.persist_run_row(&outcome, ns, r.started_at, r.duration_ms);
+                                }
+                                // The activity checker fired: the user is back.
+                                // Walking the remaining namespaces would only
+                                // produce a burst of cycles that interrupt at
+                                // their first stage — stop, because stopping is
+                                // what yielding means.
+                                if interrupted {
+                                    break;
+                                }
                             }
+                            Err(e) => warn!(
+                                agent = %ns,
+                                error = %e,
+                                "project namespace dream failed"
+                            ),
                         }
                     }
                 }
@@ -1222,40 +1277,8 @@ impl DreamDaemon {
             // rust-doctor-disable-next-line excessive-clone
             .map(|n| (n.path.clone(), n.content_hash.clone()))
             .collect();
-        // L1 format validation: read a bounded, newest-first sample of the
-        // post-cycle corpus off disk and check frontmatter / category / non-empty
-        // body. Previously hardcoded to a vacuous pass (`checks_run: 0`), leaving
-        // `run_l1_validation` — a fully-implemented, tested function — with zero
-        // production callers. Bounded by `L1_MAX_NOTES` so a large corpus can't
-        // turn the nightly cycle into thousands of reads; newest-first because a
-        // malformed note is almost always one this cycle just wrote. A failed
-        // L1 only nudges the selector's personality pass-rate down (non-
-        // destructive), matching L2's existing contract.
-        const L1_MAX_NOTES: usize = 200;
-        let l1_format = {
-            let mut by_recency: Vec<&NoteIndexEntry> = post_index.iter().collect();
-            by_recency.sort_by_key(|e| std::cmp::Reverse(e.updated_at));
-            let mut contents: HashMap<String, String> = HashMap::new();
-            for entry in by_recency.into_iter().take(L1_MAX_NOTES) {
-                let file_path = memory_dir
-                    .join(&entry.agent_id)
-                    .join(&entry.category)
-                    .join(format!("{}.md", entry.filename));
-                if let Ok(content) = tokio::fs::read_to_string(&file_path).await {
-                    contents.insert(entry.path.clone(), content);
-                }
-            }
-            validation::run_l1_validation(&contents)
-        };
-        if !l1_format.passed {
-            warn!(
-                checks_run = l1_format.checks_run,
-                issues = l1_format.issues.len(),
-                "Dream L1 validation found malformed notes"
-            );
-        }
         let validation_report = DreamValidationReport {
-            l1_format,
+            l1_format: l1_over_corpus(&memory_dir, DEFAULT_AGENT_ID, &post_index).await,
             l2_consistency: validation::run_l2_validation(&l2_pairs),
             l3_semantic: None,
             l4_retrospective: None,
@@ -1309,29 +1332,52 @@ impl DreamDaemon {
             outcome: gate_outcome,
             merges_rejected: report.merges_rejected,
         });
-        if gate_outcome == GateOutcome::Reject && candidate_health < baseline_health {
-            let mut gate = self.mutation_gate.lock().unwrap_or_else(|e| e.into_inner());
-            gate.activate_cooldown(2);
+        // The cooldown itself is not armed here: it is *derived* next cycle from
+        // this outcome (`EvolutionOutcome::degraded` — the same predicate), so a
+        // restart between the two cycles cannot swallow it. The warning stays
+        // because a degrading night is something an operator should see now.
+        if report
+            .evolution
+            .as_ref()
+            .is_some_and(EvolutionOutcome::degraded)
+        {
             warn!(
                 baseline = baseline_health,
                 candidate = candidate_health,
-                "Dream cycle degraded memory health — activating conserve cooldown"
+                cooldown_cycles = mutation_gate::DEGRADED_HEALTH_COOLDOWN_CYCLES,
+                "Dream cycle degraded memory health — next cycles will conserve"
             );
         }
 
         // --- Phase 6: Solidify (event log) ---
+        //
+        // This append is what makes the *next* cycle's gate and personality
+        // possible: it is the single persistent source they fold over. A write
+        // failure is therefore not merely a lost audit line — the next cycle
+        // will not see this one at all — so it is logged at ERROR.
         let agent_dir = memory_dir.join(DEFAULT_AGENT_ID);
         let event_log = EventLog::new(&agent_dir);
         let cycle = event_log.next_cycle().await.unwrap_or(1);
+
+        let validation_passed = validation_report.overall_ok();
+        let decision = CycleDecision {
+            strategy,
+            // rust-doctor-disable-next-line excessive-clone
+            rationale: selection.rationale.clone(),
+            personality_adjustment: selection.personality_adjustment,
+            // rust-doctor-disable-next-line excessive-clone
+            gate: gate_decision.clone(),
+            // rust-doctor-disable-next-line excessive-clone
+            stages: report.stages_executed.clone(),
+            validation_passed,
+        };
 
         let event = DreamEvent {
             id: format!("dream_{run_start}_{cycle}"),
             cycle,
             strategy,
-            // rust-doctor-disable-next-line excessive-clone
-            selection: selection.clone(),
-            // rust-doctor-disable-next-line excessive-clone
-            gate_decision: gate_decision.clone(),
+            selection,
+            gate_decision,
             // rust-doctor-disable-next-line excessive-clone
             report: report.clone(),
             validation: validation_report,
@@ -1340,37 +1386,66 @@ impl DreamDaemon {
         };
 
         if let Err(e) = event_log.append(&event).await {
-            warn!(error = %e, "Failed to write dream event log");
+            tracing::error!(
+                error = %e,
+                "Failed to write dream event log — the next cycle's churn gate \
+                 and personality window will not see this cycle"
+            );
         }
 
-        // --- Phase 7: Update personality + mutation gate ---
-        {
-            let mut selector = self.selector.lock().unwrap_or_else(|e| e.into_inner());
-            selector.record_cycle_outcome(event.validation.overall_ok());
-        }
-        {
-            let mut gate = self.mutation_gate.lock().unwrap_or_else(|e| e.into_inner());
-            // Drain this cycle's mutations into the churn detector. Previously
-            // the recorders had NO callers, so the merge-cycle / oscillation /
-            // wasted-distillation detectors were structurally dead (always saw
-            // empty sets → always returned Allow). This is the missing wire.
-            for (a, b) in &report.merged_pairs {
-                gate.record_merge_pair(a, b);
-            }
-            for assertion in &report.synthesis_assertions {
-                gate.record_synthesis_assertion(assertion);
-            }
-            // Only feed the detector once a mature cohort exists; before then
-            // there is nothing to judge (feeding zeros would never arm it).
-            if report.distill_produced > 0 {
-                gate.record_skill_distill_output(report.distill_produced, report.distill_recalled);
-            }
-            gate.advance_cycle();
-            gate.tick_cooldown();
-        }
-
-        Ok((run_status, report))
+        Ok(DreamCycleOutcome {
+            status: run_status,
+            report,
+            decision,
+        })
     }
+}
+
+/// Run L1 format validation over a bounded, newest-first sample of one agent's
+/// corpus: read the notes off disk and check frontmatter / category / non-empty
+/// body.
+///
+/// Bounded by `L1_MAX_NOTES` so a large corpus can't turn the nightly cycle into
+/// thousands of reads; newest-first because a malformed note is almost always
+/// one this cycle just wrote. A failed L1 only nudges the selector's personality
+/// pass-rate down (non-destructive), matching L2's contract.
+///
+/// Shared by the base cycle and every project sub-cycle. Two copies would drift
+/// silently in the direction that hurts: a namespace whose L1 quietly degraded
+/// to a vacuous pass would rubber-stamp `passed` forever and freeze its
+/// personality — the exact failure this validation was wired to end.
+async fn l1_over_corpus(
+    memory_dir: &Path,
+    agent_id: &str,
+    index: &[NoteIndexEntry],
+) -> ValidationTier {
+    /// Cap on notes read off disk per cycle, per agent.
+    const L1_MAX_NOTES: usize = 200;
+
+    let mut by_recency: Vec<&NoteIndexEntry> = index.iter().collect();
+    by_recency.sort_by_key(|e| std::cmp::Reverse(e.updated_at));
+    let mut contents: HashMap<String, String> = HashMap::new();
+    for entry in by_recency.into_iter().take(L1_MAX_NOTES) {
+        let file_path = memory_dir
+            .join(&entry.agent_id)
+            .join(&entry.category)
+            .join(format!("{}.md", entry.filename));
+        if let Ok(content) = tokio::fs::read_to_string(&file_path).await {
+            // rust-doctor-disable-next-line excessive-clone
+            contents.insert(entry.path.clone(), content);
+        }
+    }
+
+    let tier = validation::run_l1_validation(&contents);
+    if !tier.passed {
+        warn!(
+            agent = %agent_id,
+            checks_run = tier.checks_run,
+            issues = tier.issues.len(),
+            "Dream L1 validation found malformed notes"
+        );
+    }
+    tier
 }
 
 /// Skill notes younger than this are excluded from `MutationGate`'s
@@ -2082,12 +2157,13 @@ mod tests {
         let store = Arc::new(SqliteMemoryBackend::new(&temp).unwrap());
         let daemon = test_daemon(store, temp.clone());
 
-        let (status, report) = daemon
+        let outcome = daemon
             .run_dream(now_timestamp(), "2026-05-21".to_string(), true)
             .await
             .expect("run_dream succeeds");
+        let report = &outcome.report;
 
-        assert_eq!(status, DreamRunStatus::Success);
+        assert_eq!(outcome.status, DreamRunStatus::Success);
         // The historical stub returned an empty `stages_executed`. A real
         // pipeline run always executes `note_lint` (first stage of every
         // strategy, no `should_run` override).
@@ -2097,6 +2173,129 @@ mod tests {
             report.stages_executed
         );
         assert!(report.finished_at >= report.started_at);
+        // The stage list must reach the persisted decision — it is `serde(skip)`
+        // on the report itself, so `CycleDecision` is its only route to any
+        // observer outside this process.
+        assert_eq!(
+            outcome.decision.stages, report.stages_executed,
+            "the cycle decision must carry the executed stages"
+        );
+        assert_eq!(outcome.decision.strategy.to_string(), report.pipeline_type);
+    }
+
+    /// The whole point of deriving the churn gate from the event log: a brand
+    /// new daemon (i.e. after a restart) must still honour a cooldown armed by
+    /// a cycle the previous process ran. With the old in-RAM accumulator this
+    /// conserve window silently evaporated on every reboot — and since cycles
+    /// run at most once a day, "every reboot" was usually "before it ever
+    /// applied".
+    #[tokio::test]
+    async fn a_restarted_daemon_still_honours_a_cooldown_from_the_log() {
+        let temp = std::env::temp_dir().join(format!("aleph_dream_cd_{}", uuid::Uuid::new_v4()));
+        // Create the note-memory dir up front: `SqliteMemoryBackend::new` only
+        // treats its argument as a directory if it already exists, otherwise the
+        // path becomes the DB *file* and the agent dir can never be created.
+        std::fs::create_dir_all(&temp).unwrap();
+        let store = Arc::new(SqliteMemoryBackend::new(&temp).unwrap());
+        let agent_dir = temp.join(DEFAULT_AGENT_ID);
+        let log = EventLog::new(&agent_dir);
+
+        // A previous process recorded a cycle that lowered memory health.
+        let degrading = DreamReport {
+            evolution: Some(EvolutionOutcome {
+                baseline: 0.70,
+                candidate: 0.30,
+                best: 0.70,
+                outcome: GateOutcome::Reject,
+                merges_rejected: 0,
+            }),
+            ..Default::default()
+        };
+        log.append(&DreamEvent {
+            id: "dream_1_1".into(),
+            cycle: 1,
+            strategy: DreamStrategy::Synthesize,
+            selection: SelectionDecision {
+                strategy: DreamStrategy::Synthesize,
+                rationale: "prior".into(),
+                personality_adjustment: 0.0,
+            },
+            gate_decision: GateDecision::Allow,
+            report: degrading,
+            validation: DreamValidationReport {
+                l1_format: ValidationTier {
+                    passed: true,
+                    checks_run: 1,
+                    checks_passed: 1,
+                    issues: vec![],
+                },
+                l2_consistency: ValidationTier {
+                    passed: true,
+                    checks_run: 1,
+                    checks_passed: 1,
+                    issues: vec![],
+                },
+                l3_semantic: None,
+                l4_retrospective: None,
+            },
+            duration_ms: 1,
+            created_at: now_timestamp(),
+        })
+        .await
+        .expect("append prior cycle");
+
+        // Fresh daemon = fresh process. It must read that cycle back and
+        // conserve rather than starting from a blank gate.
+        let daemon = test_daemon(store, temp.clone());
+        let outcome = daemon
+            .run_dream(now_timestamp(), "2026-05-21".to_string(), true)
+            .await
+            .expect("run_dream succeeds");
+
+        assert_eq!(
+            outcome.decision.strategy,
+            DreamStrategy::Conserve,
+            "a degrading prior cycle must force Conserve after a restart"
+        );
+        assert!(
+            matches!(outcome.decision.gate, GateDecision::Conserve { cooldown_remaining, .. } if cooldown_remaining > 0),
+            "expected an active cooldown, got {:?}",
+            outcome.decision.gate
+        );
+    }
+
+    /// Forced cycles (`dreaming.run_now`) are real cycles: they must land in the
+    /// `dream_reports` audit table like scheduled ones. This writer used to live
+    /// only on the scheduled path, so a forced consolidation night was invisible
+    /// to both the Panel's run history and the governance audit's activity probe.
+    #[tokio::test]
+    async fn run_now_persists_an_audit_row_with_its_decision() {
+        let temp = std::env::temp_dir().join(format!("aleph_dream_rn_{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&temp).unwrap();
+        let store = Arc::new(SqliteMemoryBackend::new(&temp).unwrap());
+        let daemon = test_daemon(store.clone(), temp.clone());
+
+        daemon.run_now().await.expect("forced cycle succeeds");
+
+        let rows = store
+            .recent_dream_reports(Some(DEFAULT_AGENT_ID), 10)
+            .expect("query audit table");
+        assert_eq!(rows.len(), 1, "a forced cycle must be recorded");
+        assert_eq!(
+            rows[0].namespace, DEFAULT_AGENT_ID,
+            "the base cycle files under the base agent, not a placeholder"
+        );
+        let decision_json = rows[0]
+            .decision_json
+            .as_deref()
+            .expect("the row must carry the cycle decision");
+        let decision: CycleDecision =
+            serde_json::from_str(decision_json).expect("decision round-trips");
+        assert!(
+            !decision.rationale.is_empty(),
+            "the decision must explain itself"
+        );
+        assert_eq!(decision.strategy.to_string(), rows[0].pipeline_type);
     }
 
     #[tokio::test]
@@ -2109,12 +2308,295 @@ mod tests {
             .unwrap()
             .with_note_memory_dir(temp.clone());
 
-        let (status, report) = daemon
+        let outcome = daemon
             .run_dream(now_timestamp(), "2026-05-21".to_string(), true)
             .await
             .expect("run_dream succeeds without a provider");
 
-        assert_eq!(status, DreamRunStatus::Success);
-        assert!(report.stages_executed.is_empty());
+        assert_eq!(outcome.status, DreamRunStatus::Success);
+        assert!(outcome.report.stages_executed.is_empty());
+    }
+
+    // -----------------------------------------------------------------------
+    // Per-project-namespace sub-cycles
+    // -----------------------------------------------------------------------
+
+    /// The owned half of a project sub-cycle's dependencies. `ProjectCycleDeps`
+    /// borrows all of it, so it has to outlive the call in the test's frame.
+    struct ProjectFixture {
+        dir: PathBuf,
+        store: Arc<SqliteMemoryBackend>,
+        provider: Arc<dyn AiProvider>,
+        embedder: Arc<dyn EmbeddingProvider>,
+        cfg: MemoryConfig,
+        orientation: Option<Arc<dyn crate::memory::notes::orientation::NoteOrientation>>,
+        activity: Arc<dyn Fn() -> bool + Send + Sync>,
+    }
+
+    impl ProjectFixture {
+        /// `user_active` drives the activity checker: `true` makes every stage
+        /// yield, which is how an interrupted cycle is forced deterministically.
+        fn new(tag: &str, user_active: bool) -> Self {
+            let dir = std::env::temp_dir().join(format!("aleph_{tag}_{}", uuid::Uuid::new_v4()));
+            std::fs::create_dir_all(&dir).unwrap();
+            let store = Arc::new(SqliteMemoryBackend::new(&dir).unwrap());
+            Self {
+                dir,
+                store,
+                provider: Arc::new(MockProvider::new("")),
+                embedder: Arc::new(StubEmbedder),
+                cfg: MemoryConfig::default(),
+                orientation: None,
+                activity: Arc::new(move || user_active),
+            }
+        }
+
+        fn deps(&self) -> project_cycle::ProjectCycleDeps<'_> {
+            project_cycle::ProjectCycleDeps {
+                memory_dir: &self.dir,
+                database: &self.store,
+                provider: &self.provider,
+                embedder: &self.embedder,
+                config: &self.cfg.dreaming,
+                decay_policy: &self.cfg.memory_decay,
+                orientation: &self.orientation,
+                activity_checker: &self.activity,
+            }
+        }
+
+        fn event_log_path(&self, agent_id: &str) -> PathBuf {
+            self.dir.join(agent_id).join("dream_events.jsonl")
+        }
+    }
+
+    /// A project namespace's cycle lands in **its own** event log, and never in
+    /// the base agent's.
+    ///
+    /// Both halves matter. Before this, the sub-pipeline's report was
+    /// `info!`-logged and dropped, so a project corpus could merge A→B and B→A
+    /// every night with nothing able to see it. But appending to the *base* log
+    /// would have been worse than the drop: a note `path` is relative within an
+    /// agent, so `proj-a`'s `skill/foo` and the base agent's `skill/foo` are the
+    /// same string and the base gate would inherit phantom merge cycles for
+    /// notes it does not own.
+    #[tokio::test]
+    async fn project_namespace_cycle_writes_only_its_own_event_log() {
+        let fx = ProjectFixture::new("dream_proj_log", false);
+        let ns = format!("{DEFAULT_AGENT_ID}__proj-abc123");
+
+        project_cycle::run_namespace_cycle(&fx.deps(), &ns)
+            .await
+            .expect("project sub-cycle succeeds");
+
+        let events = EventLog::new(fx.dir.join(&ns))
+            .read_last(10)
+            .await
+            .expect("the namespace log is readable");
+        assert_eq!(
+            events.len(),
+            1,
+            "the namespace must record its own cycle: this log is what its next \
+             gate and personality fold over"
+        );
+
+        assert!(
+            !fx.event_log_path(DEFAULT_AGENT_ID).exists(),
+            "a project namespace must not write into the base agent's history"
+        );
+    }
+
+    /// A namespace's gate is folded from the namespace's own log — not the base
+    /// agent's, and not a process-local accumulator.
+    ///
+    /// Seeded with one degrading cycle, the next sub-cycle must open in
+    /// Conserve. This is the whole reason the namespaces get their own logs
+    /// rather than staying ungoverned: the cooldown has to survive the restart
+    /// that a once-a-day cycle almost always straddles.
+    #[tokio::test]
+    async fn project_namespace_gate_folds_its_own_history() {
+        let fx = ProjectFixture::new("dream_proj_gate", false);
+        let ns = format!("{DEFAULT_AGENT_ID}__proj-degraded");
+        let log = EventLog::new(fx.dir.join(&ns));
+
+        // A prior cycle that degraded this namespace's memory health.
+        let report = DreamReport {
+            evolution: Some(EvolutionOutcome {
+                baseline: 0.8,
+                candidate: 0.4,
+                best: 0.8,
+                outcome: GateOutcome::Reject,
+                merges_rejected: 0,
+            }),
+            ..Default::default()
+        };
+        assert!(
+            report
+                .evolution
+                .as_ref()
+                .is_some_and(EvolutionOutcome::degraded),
+            "fixture must actually be a degrading cycle"
+        );
+        log.append(&DreamEvent {
+            id: "dream_seed_1".into(),
+            cycle: 1,
+            strategy: DreamStrategy::Consolidate,
+            selection: SelectionDecision {
+                strategy: DreamStrategy::Consolidate,
+                rationale: "seed".into(),
+                personality_adjustment: 0.0,
+            },
+            gate_decision: GateDecision::Allow,
+            report,
+            validation: DreamValidationReport {
+                l1_format: ValidationTier {
+                    passed: true,
+                    checks_run: 1,
+                    checks_passed: 1,
+                    issues: vec![],
+                },
+                l2_consistency: ValidationTier {
+                    passed: true,
+                    checks_run: 1,
+                    checks_passed: 1,
+                    issues: vec![],
+                },
+                l3_semantic: None,
+                l4_retrospective: None,
+            },
+            duration_ms: 0,
+            created_at: now_timestamp(),
+        })
+        .await
+        .expect("seed append succeeds");
+
+        project_cycle::run_namespace_cycle(&fx.deps(), &ns)
+            .await
+            .expect("project sub-cycle succeeds");
+
+        let events = log.read_last(10).await.expect("log is readable");
+        assert_eq!(events.len(), 2, "the new cycle appends to the same log");
+        assert!(
+            matches!(events[1].gate_decision, GateDecision::Conserve { .. }),
+            "the degrading seed must arm this namespace's cooldown, got {:?}",
+            events[1].gate_decision
+        );
+    }
+
+    /// A sub-cycle that yielded before running a single stage records nothing.
+    ///
+    /// The gate window is only a few cycles deep. An evening where the user
+    /// stays active would otherwise append one empty event per namespace and
+    /// push real churn history out of range — disarming the detectors exactly
+    /// when the corpus is being touched most.
+    #[tokio::test]
+    async fn an_immediately_interrupted_project_cycle_spends_no_window_slot() {
+        let fx = ProjectFixture::new("dream_proj_intr", true);
+        let ns = format!("{DEFAULT_AGENT_ID}__proj-busy");
+
+        let outcome = project_cycle::run_namespace_cycle(&fx.deps(), &ns)
+            .await
+            .expect("an interrupted sub-cycle is not an error");
+
+        assert_eq!(outcome.report.status, DreamReportStatus::Interrupted);
+        assert!(outcome.report.stages_executed.is_empty(), "nothing ran");
+        assert!(
+            !fx.event_log_path(&ns).exists(),
+            "an empty night must not consume one of the gate's window slots"
+        );
+        // The same predicate the caller reads before writing an audit row: the
+        // two skips have to agree, and a row with no matching event (or the
+        // reverse) is silent.
+        assert!(
+            outcome.report.is_vacuous_interruption(),
+            "the caller decides whether to persist by reading this"
+        );
+    }
+
+    /// The sub-cycle hands its decision back, which is what makes a project
+    /// corpus's history writable to the audit table at all.
+    ///
+    /// It used to be computed inside the sub-cycle and dropped: the strategy,
+    /// its rationale, the churn gate's verdict and the stage list all existed,
+    /// went into the namespace's own event log, and reached no operator-facing
+    /// surface, because the surface is fed by the caller and the caller had
+    /// nothing to write.
+    #[tokio::test]
+    async fn a_project_sub_cycle_returns_its_decision() {
+        let fx = ProjectFixture::new("dream_proj_decision", false);
+        let ns = format!("{DEFAULT_AGENT_ID}__proj-decide");
+
+        let outcome = project_cycle::run_namespace_cycle(&fx.deps(), &ns)
+            .await
+            .expect("project sub-cycle succeeds");
+
+        assert_eq!(outcome.status, DreamRunStatus::Success);
+        assert_eq!(
+            outcome.decision.strategy.to_string(),
+            outcome.report.pipeline_type,
+            "the decision must describe the pipeline that actually ran"
+        );
+        assert_eq!(
+            outcome.decision.stages, outcome.report.stages_executed,
+            "the stage list is the one the pipeline executed, not a plan"
+        );
+        assert!(
+            !outcome.decision.rationale.is_empty(),
+            "the rationale is the operator's answer to 'why did it do that'"
+        );
+    }
+
+    /// A project namespace's cycle lands in the `dream_reports` audit table
+    /// under **its own** namespace.
+    ///
+    /// This is the operator-facing half of per-namespace self-governance. The
+    /// model could already read a project corpus's history (it reads that
+    /// namespace's event log directly via `note_manage(action="evolution")`);
+    /// the Panel reads this table, and nothing wrote to it, so a project corpus
+    /// dreamed every night invisibly.
+    #[tokio::test]
+    async fn a_project_sub_cycle_lands_in_the_audit_table_under_its_namespace() {
+        let dir = std::env::temp_dir().join(format!("aleph_dream_row_{}", uuid::Uuid::new_v4()));
+        let ns = format!("{DEFAULT_AGENT_ID}__proj-audited");
+        // `list_scoped_agent_ids` discovers namespaces by directory listing.
+        std::fs::create_dir_all(dir.join(&ns)).unwrap();
+        let store = Arc::new(SqliteMemoryBackend::new(&dir).unwrap());
+
+        let cfg = MemoryConfig {
+            project_scoped: true,
+            ..MemoryConfig::default()
+        };
+        let daemon = DreamDaemon::from_config(store.clone(), &cfg)
+            .unwrap()
+            .with_provider(Arc::new(MockProvider::new("")))
+            .with_embedder(Arc::new(StubEmbedder))
+            .with_note_memory_dir(dir.clone());
+
+        daemon
+            .run_dream(now_timestamp(), "2026-08-04".to_string(), true)
+            .await
+            .expect("run_dream succeeds");
+
+        let rows = store
+            .recent_dream_reports(Some(&ns), 10)
+            .expect("audit table is queryable");
+        assert_eq!(
+            rows.len(),
+            1,
+            "the project namespace's cycle must be visible to the operator"
+        );
+        assert_eq!(rows[0].namespace, ns);
+        assert!(
+            rows[0].decision_json.is_some(),
+            "the 'why' travels with the row — that is the whole point of it"
+        );
+
+        // The base agent's own row is written by `run_dream`'s caller, so it is
+        // absent here. What must never happen is a sub-cycle filing under the
+        // base namespace: that would put a project corpus's counters into the
+        // base agent's history.
+        assert!(store
+            .recent_dream_reports(Some(DEFAULT_AGENT_ID), 10)
+            .expect("audit table is queryable")
+            .is_empty());
     }
 }

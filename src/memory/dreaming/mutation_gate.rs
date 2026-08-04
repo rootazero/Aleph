@@ -1,189 +1,247 @@
 //! `MutationGate` — detects evolution pathologies and enforces cooldown.
 //!
-//! Three detection mechanisms:
+//! Four detections, all keyed on **identifiers** (note pairs, synthesis paths,
+//! cohort counts) rather than on model prose — churn is a structural property,
+//! and re-judging semantics with rules would violate R7:
+//!
 //! 1. Merge cycle: same note pair merged 3+ consecutive cycles
-//! 2. Synthesis oscillation: negation patterns between recent syntheses
+//! 2. Synthesis churn: same synthesis note rewritten to a *different* body in
+//!    3+ consecutive cycles (the corpus flip-flopping on the same subject)
 //! 3. Wasted distillation: mature skill-notes that never get recalled
+//! 4. Degraded-health cooldown: a cycle whose evolution gate rejected a
+//!    health-lowering candidate parks the loop in Conserve for two cycles
+//!
+//! ## State is derived, never accumulated
+//!
+//! The gate holds no cross-cycle state of its own. Every field below is folded
+//! out of the persisted dream event log (`dream_events.jsonl`) at the start of
+//! each cycle via [`MutationGate::from_reports`]. This mirrors evolver's
+//! `analyzeRecentHistory(recentEvents)` — a pure function over durable events —
+//! and satisfies the constitution's A3 (state reconstructible from a single
+//! persistent source).
+//!
+//! The alternative — the in-process accumulator this type used to be — was
+//! structurally unable to fire: dream cycles run at most once per day, so a
+//! five-cycle detection window needed five consecutive days of daemon uptime
+//! before it could *ever* trip, and the conserve cooldown armed by a
+//! health-degrading cycle evaporated on the next restart. The identical history
+//! was already on disk the whole time, unread.
 
-use std::collections::{HashSet, VecDeque};
-
-use regex::Regex;
+use std::collections::{HashMap, HashSet, VecDeque};
 
 // Re-use GateDecision from selector
 pub use super::selector::GateDecision;
 
+use super::report::DreamReport;
+
 const MERGE_CYCLE_WINDOW: usize = 5;
 const MERGE_CYCLE_THRESHOLD: usize = 3;
+/// Consecutive cycles a synthesis note must be rewritten *with a different
+/// body* before it counts as flip-flopping. A stable rewrite (same digest) is
+/// not churn.
+const SYNTHESIS_CHURN_THRESHOLD: usize = 3;
 const DISTILL_WINDOW: usize = 5;
 const DISTILL_MIN_RECALL_RATE: f64 = 0.1;
+/// Cycles the loop stays in Conserve after the evolution gate rejected a
+/// health-lowering cycle.
+pub const DEGRADED_HEALTH_COOLDOWN_CYCLES: u32 = 2;
+
+/// One cycle's churn-relevant footprint — the unit [`MutationGate`] folds over.
+///
+/// Derived from the persisted [`DreamReport`] so a rehydrated gate and a live
+/// one see byte-identical input.
+#[derive(Debug, Clone, Default)]
+pub struct CycleFootprint {
+    /// Note pairs merged this cycle, order-normalised.
+    pub merges: HashSet<(String, String)>,
+    /// Synthesis notes rewritten this cycle: path → digest of the *body*.
+    pub synthesis_rewrites: HashMap<String, String>,
+    /// Mature skill-note cohort `(size, recalled)`, or `None` when no mature
+    /// cohort existed yet — feeding zeros would never arm the detector.
+    pub distill: Option<(u32, u32)>,
+    /// This cycle's evolution gate rejected a candidate that *lowered* memory
+    /// health. Arms the conserve cooldown.
+    pub degraded_health: bool,
+}
+
+impl CycleFootprint {
+    /// Project a cycle report onto the churn signals the gate consumes.
+    #[must_use]
+    pub fn from_report(report: &DreamReport) -> Self {
+        let merges = report
+            .merged_pairs
+            .iter()
+            .map(|(a, b)| normalize_pair(a, b))
+            .collect();
+        let synthesis_rewrites = report
+            .synthesis_rewrites
+            .iter()
+            // rust-doctor-disable-next-line excessive-clone
+            .map(|(path, digest)| (path.clone(), digest.clone()))
+            .collect();
+        Self {
+            merges,
+            synthesis_rewrites,
+            distill: (report.distill_produced > 0)
+                .then_some((report.distill_produced, report.distill_recalled)),
+            degraded_health: report
+                .evolution
+                .as_ref()
+                .is_some_and(super::evolution::EvolutionOutcome::degraded),
+        }
+    }
+}
+
+fn normalize_pair(a: &str, b: &str) -> (String, String) {
+    if a < b {
+        (a.to_string(), b.to_string())
+    } else {
+        (b.to_string(), a.to_string())
+    }
+}
 
 /// Tracks evolution pathology state across Dream cycles.
+#[derive(Debug, Default)]
 pub struct MutationGate {
     merge_history: VecDeque<HashSet<(String, String)>>,
-    current_merges: HashSet<(String, String)>,
-    synthesis_assertions: VecDeque<Vec<String>>,
-    current_assertions: Vec<String>,
+    synthesis_history: VecDeque<HashMap<String, String>>,
     distill_history: VecDeque<(u32, u32)>,
     cooldown: u32,
 }
 
 impl MutationGate {
+    /// How many past cycles [`Self::from_reports`] needs to see. The daemon
+    /// reads exactly this many events, so the window can never drift out of
+    /// sync with the detectors' thresholds.
+    pub const HISTORY_WINDOW: usize = MERGE_CYCLE_WINDOW;
+
     #[must_use]
     pub fn new() -> Self {
-        Self {
-            merge_history: VecDeque::with_capacity(MERGE_CYCLE_WINDOW),
-            current_merges: HashSet::new(),
-            synthesis_assertions: VecDeque::with_capacity(2),
-            current_assertions: Vec::new(),
-            distill_history: VecDeque::with_capacity(DISTILL_WINDOW),
-            cooldown: 0,
+        Self::default()
+    }
+
+    /// Rebuild the gate by folding past cycle reports **oldest first**.
+    ///
+    /// `reports` may be shorter than [`Self::HISTORY_WINDOW`] (fresh install,
+    /// truncated log) — the detectors simply stay disarmed until enough history
+    /// accumulates, exactly as they did on a cold process.
+    pub fn from_reports<'a, I>(reports: I) -> Self
+    where
+        I: IntoIterator<Item = &'a DreamReport>,
+    {
+        let mut gate = Self::new();
+        for report in reports {
+            gate.record_cycle(&CycleFootprint::from_report(report));
         }
+        gate
     }
 
-    pub fn record_merge_pair(&mut self, note_a: &str, note_b: &str) {
-        let pair = if note_a < note_b {
-            (note_a.to_string(), note_b.to_string())
-        } else {
-            (note_b.to_string(), note_a.to_string())
-        };
-        self.current_merges.insert(pair);
-    }
-
-    pub fn record_synthesis_assertion(&mut self, assertion: &str) {
-        self.current_assertions.push(assertion.to_string());
-    }
-
-    /// Record one cycle's mature skill-note cohort: `cohort_size` skill notes
-    /// old enough to have had a recall opportunity, `cohort_recalled` of which
-    /// were actually recalled. The detector fires when the recall rate across
-    /// the window stays below `DISTILL_MIN_RECALL_RATE`.
-    pub fn record_skill_distill_output(&mut self, cohort_size: u32, cohort_recalled: u32) {
-        if self.distill_history.len() >= DISTILL_WINDOW {
-            self.distill_history.pop_front();
-        }
-        self.distill_history
-            .push_back((cohort_size, cohort_recalled));
-    }
-
-    pub fn advance_cycle(&mut self) {
-        if self.merge_history.len() >= MERGE_CYCLE_WINDOW {
-            self.merge_history.pop_front();
-        }
-        self.merge_history
-            .push_back(std::mem::take(&mut self.current_merges));
-
-        if self.synthesis_assertions.len() >= 2 {
-            self.synthesis_assertions.pop_front();
-        }
-        self.synthesis_assertions
-            .push_back(std::mem::take(&mut self.current_assertions));
-    }
-
-    pub const fn activate_cooldown(&mut self, cycles: u32) {
-        self.cooldown = cycles;
-    }
-
-    pub const fn tick_cooldown(&mut self) {
+    /// Fold one completed cycle into the sliding windows.
+    ///
+    /// Cooldown bookkeeping happens here (not in a separate `tick`): recording
+    /// a cycle *is* the passage of a cycle, so the counter can never drift from
+    /// the history it is supposed to describe. A degrading cycle re-arms the
+    /// full cooldown after the decrement, so the two cycles it buys are the two
+    /// that follow it.
+    pub fn record_cycle(&mut self, footprint: &CycleFootprint) {
         self.cooldown = self.cooldown.saturating_sub(1);
+        if footprint.degraded_health {
+            self.cooldown = DEGRADED_HEALTH_COOLDOWN_CYCLES;
+        }
+
+        push_capped(
+            &mut self.merge_history,
+            // rust-doctor-disable-next-line excessive-clone
+            footprint.merges.clone(),
+            MERGE_CYCLE_WINDOW,
+        );
+        push_capped(
+            &mut self.synthesis_history,
+            // rust-doctor-disable-next-line excessive-clone
+            footprint.synthesis_rewrites.clone(),
+            SYNTHESIS_CHURN_THRESHOLD,
+        );
+        if let Some(cohort) = footprint.distill {
+            push_capped(&mut self.distill_history, cohort, DISTILL_WINDOW);
+        }
     }
 
     #[must_use]
     pub fn evaluate(&self) -> GateDecision {
         if self.cooldown > 0 {
             return GateDecision::Conserve {
-                reason: "cooldown active".into(),
+                reason: "memory health degraded in a recent cycle".into(),
                 cooldown_remaining: self.cooldown,
             };
         }
 
-        if let Some(reason) = self.detect_merge_cycle() {
-            return GateDecision::Conserve {
-                reason,
-                cooldown_remaining: 0,
-            };
-        }
-
-        if let Some(reason) = self.detect_oscillation() {
-            return GateDecision::Conserve {
-                reason,
-                cooldown_remaining: 0,
-            };
-        }
-
-        if let Some(reason) = self.detect_wasted_distillation() {
-            return GateDecision::Conserve {
-                reason,
-                cooldown_remaining: 0,
-            };
+        let detectors: [fn(&Self) -> Option<String>; 3] = [
+            Self::detect_merge_cycle,
+            Self::detect_synthesis_churn,
+            Self::detect_wasted_distillation,
+        ];
+        for detect in detectors {
+            if let Some(reason) = detect(self) {
+                return GateDecision::Conserve {
+                    reason,
+                    cooldown_remaining: 0,
+                };
+            }
         }
 
         GateDecision::Allow
     }
 
     fn detect_merge_cycle(&self) -> Option<String> {
-        let all_sets: Vec<&HashSet<(String, String)>> = self
-            .merge_history
-            .iter()
-            .chain(std::iter::once(&self.current_merges))
-            .collect();
-
-        if all_sets.len() < MERGE_CYCLE_THRESHOLD {
+        if self.merge_history.len() < MERGE_CYCLE_THRESHOLD {
             return None;
         }
+        let sets: Vec<&HashSet<(String, String)>> = self.merge_history.iter().collect();
 
-        for window in all_sets.windows(MERGE_CYCLE_THRESHOLD) {
-            let intersection: HashSet<_> = window[0]
+        for window in sets.windows(MERGE_CYCLE_THRESHOLD) {
+            let repeated = window[0]
                 .iter()
-                .filter(|pair| window[1..].iter().all(|set| set.contains(*pair)))
-                .cloned()
-                .collect();
-
-            if let Some(pair) = intersection.into_iter().next() {
+                .find(|pair| window[1..].iter().all(|set| set.contains(*pair)));
+            if let Some(pair) = repeated {
                 return Some(format!(
-                    "merge cycle: ({}, {}) repeated {} consecutive cycles",
-                    pair.0, pair.1, MERGE_CYCLE_THRESHOLD
+                    "merge cycle: ({}, {}) repeated {MERGE_CYCLE_THRESHOLD} consecutive cycles",
+                    pair.0, pair.1
                 ));
             }
         }
-
         None
     }
 
-    fn detect_oscillation(&self) -> Option<String> {
-        let prev = self.synthesis_assertions.back()?;
-        let curr = &self.current_assertions;
-
-        if prev.is_empty() || curr.is_empty() {
+    /// A synthesis note rewritten to a *different* body in every cycle of the
+    /// window is the corpus arguing with itself about the same subject.
+    ///
+    /// Keyed on `(path, body digest)` rather than on the prose itself: whether
+    /// two syntheses *contradict* is a semantic judgement the `note_drift` LLM
+    /// stage already makes (and reports as `contradictions_found`, which feeds
+    /// the selector's stability veto). What this detector adds is the structural
+    /// half the model cannot see: the same target churning night after night.
+    fn detect_synthesis_churn(&self) -> Option<String> {
+        if self.synthesis_history.len() < SYNTHESIS_CHURN_THRESHOLD {
             return None;
         }
+        let cycles: Vec<&HashMap<String, String>> = self.synthesis_history.iter().collect();
 
-        let negation_pairs = [
-            (r"should\s+", r"should\s+not\s+"),
-            (r"prefer\s+", r"avoid\s+"),
-            (r"use\s+", r"do\s+not\s+use\s+"),
-        ];
-
-        for prev_assertion in prev {
-            for curr_assertion in curr {
-                for (positive, negative) in &negation_pairs {
-                    let pos_re = Regex::new(positive).ok()?;
-                    let neg_re = Regex::new(negative).ok()?;
-
-                    let is_oscillation = (pos_re.is_match(prev_assertion)
-                        && neg_re.is_match(curr_assertion))
-                        || (neg_re.is_match(prev_assertion) && pos_re.is_match(curr_assertion));
-
-                    if is_oscillation {
-                        return Some(format!(
-                            "synthesis oscillation: '{}' vs '{}'",
-                            crate::utils::text_format::truncate_text(prev_assertion, 60),
-                            crate::utils::text_format::truncate_text(curr_assertion, 60),
-                        ));
-                    }
-                }
+        for (path, digest) in cycles[0] {
+            let mut previous = digest;
+            let flipped = cycles[1..].iter().all(|cycle| {
+                cycle.get(path).is_some_and(|d| {
+                    let changed = d != previous;
+                    previous = d;
+                    changed
+                })
+            });
+            if flipped {
+                return Some(format!(
+                    "synthesis churn: {path} rewritten with different content \
+                     {SYNTHESIS_CHURN_THRESHOLD} consecutive cycles"
+                ));
             }
         }
-
         None
     }
 
@@ -214,70 +272,121 @@ impl MutationGate {
     }
 }
 
-impl Default for MutationGate {
-    fn default() -> Self {
-        Self::new()
+fn push_capped<T>(queue: &mut VecDeque<T>, item: T, cap: usize) {
+    while queue.len() >= cap {
+        queue.pop_front();
     }
+    queue.push_back(item);
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::memory::dreaming::evolution::{EvolutionOutcome, GateOutcome};
+
+    fn merge_cycle(pairs: &[(&str, &str)]) -> CycleFootprint {
+        CycleFootprint {
+            merges: pairs.iter().map(|(a, b)| normalize_pair(a, b)).collect(),
+            ..Default::default()
+        }
+    }
+
+    fn synthesis_cycle(entries: &[(&str, &str)]) -> CycleFootprint {
+        CycleFootprint {
+            synthesis_rewrites: entries
+                .iter()
+                .map(|(p, d)| ((*p).to_string(), (*d).to_string()))
+                .collect(),
+            ..Default::default()
+        }
+    }
+
+    fn distill_cycle(size: u32, recalled: u32) -> CycleFootprint {
+        CycleFootprint {
+            distill: Some((size, recalled)),
+            ..Default::default()
+        }
+    }
 
     #[test]
     fn no_history_allows() {
-        let gate = MutationGate::new();
-        assert!(matches!(gate.evaluate(), GateDecision::Allow));
+        assert!(matches!(
+            MutationGate::new().evaluate(),
+            GateDecision::Allow
+        ));
     }
 
     #[test]
     fn merge_cycle_detected_after_three_repeats() {
         let mut gate = MutationGate::new();
-        gate.record_merge_pair("note_a", "note_b");
+        gate.record_cycle(&merge_cycle(&[("note_a", "note_b")]));
         assert!(matches!(gate.evaluate(), GateDecision::Allow));
-        gate.advance_cycle();
-        gate.record_merge_pair("note_a", "note_b");
+        gate.record_cycle(&merge_cycle(&[("note_a", "note_b")]));
         assert!(matches!(gate.evaluate(), GateDecision::Allow));
-        gate.advance_cycle();
-        gate.record_merge_pair("note_a", "note_b");
+        gate.record_cycle(&merge_cycle(&[("note_a", "note_b")]));
+        assert!(matches!(gate.evaluate(), GateDecision::Conserve { .. }));
+    }
+
+    #[test]
+    fn merge_pair_order_does_not_matter() {
+        let mut gate = MutationGate::new();
+        gate.record_cycle(&merge_cycle(&[("b", "a")]));
+        gate.record_cycle(&merge_cycle(&[("a", "b")]));
+        gate.record_cycle(&merge_cycle(&[("b", "a")]));
         assert!(matches!(gate.evaluate(), GateDecision::Conserve { .. }));
     }
 
     #[test]
     fn different_pairs_do_not_trigger() {
         let mut gate = MutationGate::new();
-        gate.record_merge_pair("a", "b");
-        gate.advance_cycle();
-        gate.record_merge_pair("c", "d");
-        gate.advance_cycle();
-        gate.record_merge_pair("e", "f");
+        gate.record_cycle(&merge_cycle(&[("a", "b")]));
+        gate.record_cycle(&merge_cycle(&[("c", "d")]));
+        gate.record_cycle(&merge_cycle(&[("e", "f")]));
+        assert!(matches!(gate.evaluate(), GateDecision::Allow));
+    }
+
+    /// The regression the old two-phase (`record_*` then `advance_cycle`)
+    /// protocol hid: production always evaluated with an empty "current" buffer,
+    /// so the oscillation detector short-circuited before looking at anything.
+    /// A gate folded purely from past cycles must still fire.
+    #[test]
+    fn synthesis_churn_fires_from_history_alone() {
+        let mut gate = MutationGate::new();
+        gate.record_cycle(&synthesis_cycle(&[("synthesis/rust", "h1")]));
+        gate.record_cycle(&synthesis_cycle(&[("synthesis/rust", "h2")]));
+        assert!(matches!(gate.evaluate(), GateDecision::Allow));
+        gate.record_cycle(&synthesis_cycle(&[("synthesis/rust", "h3")]));
+        let decision = gate.evaluate();
+        assert!(
+            matches!(&decision, GateDecision::Conserve { reason, .. } if reason.contains("synthesis churn")),
+            "expected synthesis churn, got {decision:?}"
+        );
+    }
+
+    #[test]
+    fn stable_synthesis_is_not_churn() {
+        // Rewritten every cycle but always to the same body — no flip-flop.
+        let mut gate = MutationGate::new();
+        for _ in 0..3 {
+            gate.record_cycle(&synthesis_cycle(&[("synthesis/rust", "same")]));
+        }
         assert!(matches!(gate.evaluate(), GateDecision::Allow));
     }
 
     #[test]
-    fn oscillation_detected_with_negation() {
+    fn synthesis_churn_needs_the_same_path_every_cycle() {
         let mut gate = MutationGate::new();
-        gate.record_synthesis_assertion("should use async");
-        gate.advance_cycle();
-        gate.record_synthesis_assertion("should not use async");
-        assert!(matches!(gate.evaluate(), GateDecision::Conserve { .. }));
-    }
-
-    #[test]
-    fn no_oscillation_without_negation() {
-        let mut gate = MutationGate::new();
-        gate.record_synthesis_assertion("should use async");
-        gate.advance_cycle();
-        gate.record_synthesis_assertion("should use traits");
+        gate.record_cycle(&synthesis_cycle(&[("synthesis/rust", "h1")]));
+        gate.record_cycle(&synthesis_cycle(&[("synthesis/python", "h2")]));
+        gate.record_cycle(&synthesis_cycle(&[("synthesis/rust", "h3")]));
         assert!(matches!(gate.evaluate(), GateDecision::Allow));
     }
 
     #[test]
     fn wasted_distillation_detected() {
         let mut gate = MutationGate::new();
-        for _ in 0..5 {
-            gate.record_skill_distill_output(2, 0);
-            gate.advance_cycle();
+        for _ in 0..DISTILL_WINDOW {
+            gate.record_cycle(&distill_cycle(2, 0));
         }
         assert!(matches!(gate.evaluate(), GateDecision::Conserve { .. }));
     }
@@ -285,37 +394,101 @@ mod tests {
     #[test]
     fn distillation_with_recalls_ok() {
         let mut gate = MutationGate::new();
-        for _ in 0..5 {
-            gate.record_skill_distill_output(2, 1);
-            gate.advance_cycle();
+        for _ in 0..DISTILL_WINDOW {
+            gate.record_cycle(&distill_cycle(2, 1));
         }
         assert!(matches!(gate.evaluate(), GateDecision::Allow));
     }
 
     #[test]
-    fn cooldown_prevents_reevaluation() {
+    fn cycles_without_a_mature_cohort_do_not_arm_the_detector() {
         let mut gate = MutationGate::new();
-        gate.activate_cooldown(3);
-        let d = gate.evaluate();
+        for _ in 0..DISTILL_WINDOW * 2 {
+            gate.record_cycle(&CycleFootprint::default());
+        }
+        assert!(matches!(gate.evaluate(), GateDecision::Allow));
+    }
+
+    #[test]
+    fn degraded_health_cools_down_for_exactly_two_cycles() {
+        let degraded = CycleFootprint {
+            degraded_health: true,
+            ..Default::default()
+        };
+        let mut gate = MutationGate::new();
+        gate.record_cycle(&degraded);
         assert!(matches!(
-            d,
-            GateDecision::Conserve {
-                cooldown_remaining: 3,
-                ..
-            }
-        ));
-        gate.tick_cooldown();
-        let d = gate.evaluate();
-        assert!(matches!(
-            d,
+            gate.evaluate(),
             GateDecision::Conserve {
                 cooldown_remaining: 2,
                 ..
             }
         ));
-        gate.tick_cooldown();
-        gate.tick_cooldown();
+        gate.record_cycle(&CycleFootprint::default());
+        assert!(matches!(
+            gate.evaluate(),
+            GateDecision::Conserve {
+                cooldown_remaining: 1,
+                ..
+            }
+        ));
+        gate.record_cycle(&CycleFootprint::default());
         assert!(matches!(gate.evaluate(), GateDecision::Allow));
+    }
+
+    /// The cooldown must survive a process restart, which it only can if it is
+    /// derived from the persisted reports rather than accumulated in RAM.
+    #[test]
+    fn cooldown_survives_rehydration_from_reports() {
+        let degrading = DreamReport {
+            evolution: Some(EvolutionOutcome {
+                baseline: 0.6,
+                candidate: 0.4,
+                best: 0.6,
+                outcome: GateOutcome::Reject,
+                merges_rejected: 0,
+            }),
+            ..Default::default()
+        };
+        let gate = MutationGate::from_reports([&degrading]);
+        assert!(matches!(
+            gate.evaluate(),
+            GateDecision::Conserve {
+                cooldown_remaining: 2,
+                ..
+            }
+        ));
+    }
+
+    /// A rejected candidate that did *not* lower health (a tie, or a rejection
+    /// against the historical best) is not a pathology — no cooldown.
+    #[test]
+    fn non_degrading_rejection_does_not_cool_down() {
+        let flat = DreamReport {
+            evolution: Some(EvolutionOutcome {
+                baseline: 0.6,
+                candidate: 0.6,
+                best: 0.8,
+                outcome: GateOutcome::Reject,
+                merges_rejected: 0,
+            }),
+            ..Default::default()
+        };
+        assert!(matches!(
+            MutationGate::from_reports([&flat]).evaluate(),
+            GateDecision::Allow
+        ));
+    }
+
+    #[test]
+    fn from_reports_folds_merge_history() {
+        let cycle = |a: &str, b: &str| DreamReport {
+            merged_pairs: vec![(a.to_string(), b.to_string())],
+            ..Default::default()
+        };
+        let reports = [cycle("x", "y"), cycle("x", "y"), cycle("x", "y")];
+        let gate = MutationGate::from_reports(&reports);
+        assert!(matches!(gate.evaluate(), GateDecision::Conserve { .. }));
     }
 
     #[test]

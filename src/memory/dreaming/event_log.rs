@@ -3,10 +3,11 @@
 //! Each Dream cycle produces one `DreamEvent` serialized as a JSON line
 //! in `{agent_dir}/dream_events.jsonl`.
 
+use std::io::SeekFrom;
 use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
-use tokio::io::AsyncWriteExt;
+use tokio::io::{AsyncReadExt, AsyncSeekExt, AsyncWriteExt};
 
 use crate::error::AlephError;
 use crate::memory::dreaming::report::DreamReport;
@@ -15,6 +16,15 @@ use crate::memory::dreaming::strategy::DreamStrategy;
 use crate::memory::dreaming::validation::DreamValidationReport;
 
 const EVENT_LOG_FILENAME: &str = "dream_events.jsonl";
+
+/// Bytes pulled from the end of the log on the first backwards step.
+///
+/// A `DreamEvent` line is counters plus digests — the synthesis *bodies* left
+/// this struct when the regex oscillation detector did, so a line runs 1–3 KB
+/// in practice and one step already covers the deepest window any caller asks
+/// for (`DREAM_HISTORY_WINDOW`). The loop expands geometrically rather than
+/// trusting that estimate.
+const TAIL_STEP_BYTES: u64 = 64 * 1024;
 
 /// A single Dream cycle event, the unit of the audit trail.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -78,24 +88,107 @@ impl EventLog {
     }
 
     /// Read the last N events from the log. Returns them in chronological order.
+    ///
+    /// Every caller wants a small tail — the daemon's per-cycle rehydration
+    /// (`DREAM_HISTORY_WINDOW`), `dreaming.list_insights`, and
+    /// `note_manage(action="evolution")` — while the file itself is append-only
+    /// and grows for the life of the corpus. So the read is a genuine tail:
+    /// seek to `len - window`, parse backwards, and expand the window
+    /// geometrically only if `n` parseable events were not recovered.
+    ///
+    /// This is load-bearing rather than cosmetic. The previous implementation
+    /// bounded the *parse* but read the whole file into a `String` first, so a
+    /// night with K project namespaces paid K × (whole history) — and the doc
+    /// comment claimed the opposite, which is the reasoning anyone would use to
+    /// decide the unbounded growth was affordable.
+    ///
+    /// Semantics are unchanged: the result is the last `n` *parseable* events,
+    /// so a corrupt line in the tail is skipped rather than shortening the
+    /// window.
     pub async fn read_last(&self, n: usize) -> Result<Vec<DreamEvent>, AlephError> {
-        let path = self.log_path();
-        if !path.exists() {
-            return Ok(Vec::new());
+        self.read_last_measured(n).await.map(|(events, _)| events)
+    }
+
+    /// [`Self::read_last`] plus the number of bytes actually pulled off disk.
+    ///
+    /// The byte count exists so the boundedness above is *testable*: a claim
+    /// about I/O cost that no test can see is exactly what regressed here once.
+    async fn read_last_measured(&self, n: usize) -> Result<(Vec<DreamEvent>, u64), AlephError> {
+        if n == 0 {
+            return Ok((Vec::new(), 0));
         }
-
-        let content = tokio::fs::read_to_string(&path)
+        let path = self.log_path();
+        let mut file = match tokio::fs::File::open(&path).await {
+            Ok(f) => f,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok((Vec::new(), 0)),
+            Err(e) => return Err(AlephError::config(format!("open event log: {e}"))),
+        };
+        let len = file
+            .metadata()
             .await
-            .map_err(|e| AlephError::config(format!("read event log: {e}")))?;
+            .map_err(|e| AlephError::config(format!("stat event log: {e}")))?
+            .len();
 
-        let events: Vec<DreamEvent> = content
-            .lines()
-            .filter(|line| !line.trim().is_empty())
-            .filter_map(|line| serde_json::from_str(line).ok())
-            .collect();
+        let mut events: Vec<DreamEvent> = Vec::with_capacity(n);
+        let mut window = 0u64;
+        let mut bytes_read = 0u64;
+        loop {
+            window = if window == 0 {
+                TAIL_STEP_BYTES
+            } else {
+                window.saturating_mul(2)
+            }
+            .min(len);
+            let start = len - window;
 
-        let skip = events.len().saturating_sub(n);
-        Ok(events.into_iter().skip(skip).collect())
+            file.seek(SeekFrom::Start(start))
+                .await
+                .map_err(|e| AlephError::config(format!("seek event log: {e}")))?;
+            let mut buf = vec![0u8; window as usize];
+            file.read_exact(&mut buf)
+                .await
+                .map_err(|e| AlephError::config(format!("read event log: {e}")))?;
+            bytes_read += window;
+
+            // Unless the window reaches the start of the file, its first line is
+            // the tail of a line that begins before it. Dropping that fragment is
+            // what keeps a partial read from looking like a corrupt line — the
+            // two are indistinguishable once parsing fails.
+            let tail: &[u8] = if start == 0 {
+                &buf
+            } else {
+                match buf.iter().position(|b| *b == b'\n') {
+                    Some(nl) => &buf[nl + 1..],
+                    // No newline anywhere in the window: every byte belongs to a
+                    // line that starts before it. Nothing to parse yet.
+                    None => &[],
+                }
+            };
+
+            events.clear();
+            for line in tail.split(|b| *b == b'\n').rev() {
+                // `\n` cannot appear inside a multi-byte UTF-8 sequence, so
+                // every split point is a character boundary.
+                let Ok(text) = std::str::from_utf8(line) else {
+                    continue;
+                };
+                if text.trim().is_empty() {
+                    continue;
+                }
+                if let Ok(event) = serde_json::from_str(text) {
+                    events.push(event);
+                    if events.len() == n {
+                        break;
+                    }
+                }
+            }
+
+            if events.len() == n || start == 0 {
+                break;
+            }
+        }
+        events.reverse();
+        Ok((events, bytes_read))
     }
 
     /// Get the next cycle number (max existing + 1, or 1 if empty).
@@ -174,6 +267,87 @@ mod tests {
         log.append(&make_event(1)).await.unwrap();
         let events = log.read_last(100).await.unwrap();
         assert_eq!(events.len(), 1);
+    }
+
+    /// The window, not the history, is what a read costs.
+    ///
+    /// This is the assertion the old doc comment made and the old code did not
+    /// keep: it read the whole file into a `String` first. With per-namespace
+    /// sub-cycles each rehydrating its own log every night, that cost is paid
+    /// K times per night and grows for the life of every corpus.
+    #[tokio::test]
+    async fn reading_a_small_tail_does_not_read_the_whole_history() {
+        let dir = tempdir().unwrap();
+        let log = EventLog::new(dir.path().join("test_agent"));
+
+        // >4 KB per line × 96 lines, i.e. several expansion steps deep.
+        for cycle in 1..=96 {
+            let mut event = make_event(cycle);
+            event.report.errors = Some("x".repeat(4000));
+            log.append(&event).await.unwrap();
+        }
+        let file_len = tokio::fs::metadata(dir.path().join("test_agent/dream_events.jsonl"))
+            .await
+            .unwrap()
+            .len();
+        assert!(
+            file_len > 4 * TAIL_STEP_BYTES,
+            "history must exceed several steps: {file_len}"
+        );
+
+        let (events, bytes_read) = log.read_last_measured(3).await.unwrap();
+
+        assert_eq!(events.len(), 3);
+        assert_eq!(events[2].cycle, 96, "the newest event must be last");
+        assert_eq!(events[0].cycle, 94);
+        assert_eq!(
+            bytes_read, TAIL_STEP_BYTES,
+            "a 3-event window must cost one step, not the whole {file_len}-byte history"
+        );
+    }
+
+    /// A line longer than one step must still be recoverable — the loop expands
+    /// rather than assuming the estimate behind `TAIL_STEP_BYTES` holds.
+    #[tokio::test]
+    async fn an_event_larger_than_one_step_still_reads() {
+        let dir = tempdir().unwrap();
+        let log = EventLog::new(dir.path().join("test_agent"));
+
+        let mut event = make_event(9);
+        event.report.errors = Some("y".repeat(200_000));
+        log.append(&event).await.unwrap();
+
+        let events = log.read_last(1).await.unwrap();
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].cycle, 9);
+        assert_eq!(events[0].report.errors.as_ref().unwrap().len(), 200_000);
+    }
+
+    /// Unparseable trailing lines are skipped, not counted — a torn write must
+    /// not silently shrink the gate's history window.
+    #[tokio::test]
+    async fn corrupt_tail_lines_do_not_shorten_the_window() {
+        let dir = tempdir().unwrap();
+        let agent_dir = dir.path().join("test_agent");
+        let log = EventLog::new(&agent_dir);
+
+        log.append(&make_event(1)).await.unwrap();
+        log.append(&make_event(2)).await.unwrap();
+        log.append(&make_event(3)).await.unwrap();
+        tokio::fs::write(agent_dir.join("dream_events.jsonl"), {
+            let mut s = tokio::fs::read_to_string(agent_dir.join("dream_events.jsonl"))
+                .await
+                .unwrap();
+            s.push_str("{\"id\":\"torn\",\"cycl\n");
+            s
+        })
+        .await
+        .unwrap();
+
+        let events = log.read_last(2).await.unwrap();
+        assert_eq!(events.len(), 2, "the corrupt line must not consume a slot");
+        assert_eq!(events[0].cycle, 2);
+        assert_eq!(events[1].cycle, 3);
     }
 
     #[tokio::test]

@@ -202,12 +202,16 @@ pub fn migrate_dream_reports_add_activity_counters(conn: &Connection) -> Result<
     Ok(())
 }
 
-/// Add the nullable `evolution_json` column to existing `dream_reports` rows.
+/// Add the nullable `evolution_json` / `decision_json` columns to existing
+/// `dream_reports` rows.
 ///
-/// Holds the serialized `EvolutionOutcome` (SkillOpt gate verdict) so the
-/// per-cycle accept/reject decision is queryable via `dreaming.list_insights`
-/// instead of living only in `dream_events.jsonl`. Pre-existing rows keep
-/// `evolution_json = NULL`. Idempotent: checks column existence first.
+/// `evolution_json` holds the serialized `EvolutionOutcome` (SkillOpt gate
+/// verdict); `decision_json` holds the serialized `CycleDecision` — the
+/// strategy, its rationale, the churn-gate verdict, the stages that ran and the
+/// validation result. Together they make `dreaming.list_insights` able to answer
+/// *why* a cycle did what it did without reading `dream_events.jsonl`, which is
+/// what left the Panel showing strictly less than the model could see.
+/// Pre-existing rows keep both `NULL`. Idempotent: checks column existence first.
 pub fn migrate_dream_reports_add_evolution(conn: &Connection) -> Result<(), AlephError> {
     let existing: std::collections::BTreeSet<String> = {
         let mut stmt = conn
@@ -218,13 +222,34 @@ pub fn migrate_dream_reports_add_evolution(conn: &Connection) -> Result<(), Alep
             .map_err(|e| AlephError::other(format!("pragma rows: {e}")))?;
         rows.filter_map(|r| r.ok()).collect()
     };
-    if !existing.contains("evolution_json") {
-        conn.execute(
-            "ALTER TABLE dream_reports ADD COLUMN evolution_json TEXT",
-            [],
-        )
-        .map_err(|e| AlephError::other(format!("add col evolution_json: {e}")))?;
+    for col in ["evolution_json", "decision_json"] {
+        if !existing.contains(col) {
+            let sql = format!("ALTER TABLE dream_reports ADD COLUMN {col} TEXT");
+            conn.execute(&sql, [])
+                .map_err(|e| AlephError::other(format!("add col {col}: {e}")))?;
+        }
     }
+    Ok(())
+}
+
+/// Retire the `'owner'` sentinel from `dream_reports.namespace`.
+///
+/// The column shipped with a placeholder that matched no agent id: the daemon
+/// wrote the literal `"owner"` on every row while `DEFAULT_AGENT_ID` is `main`.
+/// That was harmless only while nothing read the column. Project sub-cycles now
+/// write rows under their real `{base}__proj-*` namespace and the Panel scopes
+/// its run history by namespace, so a row still stamped `'owner'` would fall
+/// outside the base agent's view — the operator's entire dream history would
+/// appear to vanish on upgrade.
+///
+/// Idempotent, and safe to re-run: the sentinel is not a legal `agent_id`, so no
+/// row can acquire it again.
+pub fn migrate_dream_reports_namespace_to_agent_id(conn: &Connection) -> Result<(), AlephError> {
+    conn.execute(
+        "UPDATE dream_reports SET namespace = ?1 WHERE namespace = 'owner'",
+        [crate::routing::DEFAULT_AGENT_ID],
+    )
+    .map_err(|e| AlephError::other(format!("backfill dream_reports.namespace: {e}")))?;
     Ok(())
 }
 

@@ -63,9 +63,11 @@ impl CatalogEntry {
 /// Chat entries come first, then generation entries; within each group
 /// names are sorted alphabetically for deterministic UI ordering.
 pub fn all_presets() -> Vec<CatalogEntry> {
-    let mut chat: Vec<CatalogEntry> = chat_presets::PRESETS
-        .keys()
-        .map(|name| CatalogEntry {
+    // Canonical profiles only — aliases are resolution keys, not display
+    // rows (`kimi` must not render a second row next to `moonshot`).
+    let mut chat: Vec<CatalogEntry> = chat_presets::canonical_profiles()
+        .iter()
+        .map(|(name, _)| CatalogEntry {
             name,
             kind: CatalogKind::Chat,
             metadata: chat_presets::provider_metadata(name),
@@ -121,39 +123,6 @@ pub fn presets_for_modality(modality: Modality) -> Vec<CatalogEntry> {
     out.append(&mut gen);
 
     out
-}
-
-/// Look up a single entry by name across both subsystems.
-///
-/// Resolution order: chat first (lowercased), then generation (exact match,
-/// matching the underlying generation registry).
-pub fn lookup(name: &str) -> Option<CatalogEntry> {
-    let lower = name.to_lowercase();
-    if chat_presets::PRESETS.contains_key(lower.as_str()) {
-        return Some(CatalogEntry {
-            // We use the lowercased name as the canonical form for chat
-            // entries, matching the chat get_preset convention.
-            name: chat_presets::PRESETS
-                .keys()
-                .find(|k| **k == lower.as_str())
-                .copied()
-                .unwrap_or(""),
-            kind: CatalogKind::Chat,
-            metadata: chat_presets::provider_metadata(&lower),
-        });
-    }
-    if gen_presets::PRESETS.contains_key(name) {
-        return Some(CatalogEntry {
-            name: gen_presets::PRESETS
-                .keys()
-                .find(|k| **k == name)
-                .copied()
-                .unwrap_or(""),
-            kind: CatalogKind::Generation,
-            metadata: gen_presets::generation_metadata(name),
-        });
-    }
-    None
 }
 
 #[cfg(test)]
@@ -220,29 +189,11 @@ mod tests {
     }
 
     #[test]
-    fn lookup_resolves_chat_case_insensitive() {
-        let e = lookup("DeepSeek").unwrap();
-        assert_eq!(e.kind, CatalogKind::Chat);
-        assert_eq!(e.name, "deepseek");
-    }
-
-    #[test]
-    fn lookup_resolves_generation_exact() {
-        let e = lookup("fal-luma").unwrap();
-        assert_eq!(e.kind, CatalogKind::Generation);
-        assert_eq!(e.name, "fal-luma");
-        let meta = e.metadata.unwrap();
-        assert!(meta.supports(Modality::Video));
-    }
-
-    #[test]
-    fn lookup_returns_none_for_unknown() {
-        assert!(lookup("not-a-real-provider").is_none());
-    }
-
-    #[test]
     fn catalog_entry_supports_uses_metadata_when_present() {
-        let e = lookup("fal-musicgen").unwrap();
+        let e = presets_for_modality(Modality::Music)
+            .into_iter()
+            .find(|e| e.name == "fal-musicgen")
+            .unwrap();
         assert!(e.supports(Modality::Music));
         assert!(!e.supports(Modality::Video));
     }

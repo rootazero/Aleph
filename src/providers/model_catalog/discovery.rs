@@ -34,9 +34,12 @@
 //! * **Fail-soft.** Every error path degrades to the static catalog. Model
 //!   discovery is never on the request path.
 
+use std::collections::HashMap;
 use std::path::PathBuf;
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
+use once_cell::sync::Lazy;
 use serde::{Deserialize, Serialize};
 
 use crate::providers::presets;
@@ -55,6 +58,17 @@ const REQUEST_TIMEOUT: Duration = Duration::from_secs(10);
 /// anything past this is a misconfigured endpoint (or a captive portal), and
 /// parsing it unbounded would be a memory footgun on the tool path.
 const MAX_BODY_BYTES: usize = 1024 * 1024;
+
+/// In-flight refresh locks, one per provider.
+///
+/// pi's `Models.refresh()` dedupes concurrent refreshes per provider with an
+/// `inflightRefresh ??=` shared promise; this is the same single-flight
+/// shape. Without it, a `list_models { refresh: true }` racing a picker's
+/// `providers.modelsRefresh` (or two rapid tool calls) dials the same vendor
+/// twice with the operator's key. The lock is per provider, so disjoint
+/// providers still refresh concurrently.
+static REFRESH_LOCKS: Lazy<Mutex<HashMap<String, Arc<tokio::sync::Mutex<()>>>>> =
+    Lazy::new(|| Mutex::new(HashMap::new()));
 
 /// One model id as the provider itself reports it.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -122,6 +136,12 @@ pub enum DiscoveryError {
 /// `base_url` and `api_key` come from the caller's already-resolved provider
 /// config (config value ▸ vault), so this module never touches the vault or
 /// the config lock itself — it stays a leaf.
+///
+/// Concurrent refreshes for the same provider are single-flighted (see
+/// [`REFRESH_LOCKS`]): the loser of the race serves the winner's fresh
+/// listing. On failure the caller decides whether to fall back to
+/// [`cached_models`] (stale snapshot beats no snapshot — pi's
+/// snapshot-recovery shape); this function itself reports the error.
 pub async fn refresh_models(
     provider: &str,
     base_url: &str,
@@ -136,6 +156,28 @@ pub async fn refresh_models(
         return Err(DiscoveryError::Unsupported(provider.to_string()));
     }
     let url = models_url_for(provider, base_url);
+
+    // Single-flight: wait out any in-flight refresh for this provider, then
+    // serve the listing it just wrote instead of dialling again. The
+    // timestamp check (not the TTL) is what keeps this honest for the
+    // operator RPC's forced refresh — only a fetch that *raced* this call
+    // counts, so "go look now" still goes and looks when nobody else just
+    // did.
+    let started = now_secs();
+    let lock = {
+        let mut locks = REFRESH_LOCKS.lock().unwrap_or_else(|e| e.into_inner());
+        Arc::clone(
+            locks
+                .entry(provider.to_string())
+                .or_insert_with(|| Arc::new(tokio::sync::Mutex::new(()))),
+        )
+    };
+    let _permit = lock.lock().await;
+    if let Some(cached) = cached_models(provider) {
+        if cached.fetched_at >= started {
+            return Ok(cached);
+        }
+    }
 
     let client = crate::providers::protocols::http_client::build_provider_http_client();
     let request = auth_headers(client.get(&url), protocol, api_key);
@@ -434,6 +476,49 @@ mod tests {
             matches!(err, DiscoveryError::MissingCredential(_)),
             "{err:?}"
         );
+    }
+
+    #[tokio::test]
+    async fn concurrent_refreshes_are_single_flighted() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        use tokio::io::AsyncWriteExt;
+
+        // Tiny HTTP server counting `/models` hits, slow enough that two
+        // concurrent refreshes genuinely overlap.
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let hits = Arc::new(AtomicUsize::new(0));
+        let hits_server = Arc::clone(&hits);
+        let server = tokio::spawn(async move {
+            while let Ok((mut socket, _)) = listener.accept().await {
+                hits_server.fetch_add(1, Ordering::SeqCst);
+                tokio::time::sleep(Duration::from_millis(200)).await;
+                let body = r#"{"data":[{"id":"probe-model"}]}"#;
+                let response = format!(
+                    "HTTP/1.1 200 OK\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{}",
+                    body.len(),
+                    body
+                );
+                let _ = socket.write_all(response.as_bytes()).await;
+            }
+        });
+
+        let url = format!("http://{addr}/v1");
+        let (a, b) = tokio::join!(
+            refresh_models("singleflight-probe", &url, "openai", "k"),
+            refresh_models("singleflight-probe", &url, "openai", "k"),
+        );
+        server.abort();
+        assert!(a.is_ok(), "first refresh failed: {:?}", a.err());
+        assert!(b.is_ok(), "second refresh failed: {:?}", b.err());
+        assert_eq!(
+            hits.load(Ordering::SeqCst),
+            1,
+            "the losing refresh must serve the winner's listing, not redial"
+        );
+        if let Some(path) = cache_path("singleflight-probe") {
+            let _ = std::fs::remove_file(path);
+        }
     }
 
     #[test]
