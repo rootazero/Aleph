@@ -85,15 +85,15 @@ fn convert_list(text: &str) -> String {
     re.replace_all(&result, "• ").to_string()
 }
 
+/// `MAX_MESSAGE_LENGTH` is WeChat's limit and is counted in BYTES, so this
+/// cannot use a char-based cap. The marker is appended past the limit
+/// deliberately — the existing behaviour, preserved.
 fn truncate(text: &str) -> String {
     if text.len() > MAX_MESSAGE_LENGTH {
-        // Walk back to a char boundary so we never slice through a multi-byte
-        // (CJK) codepoint — `&text[..MAX_MESSAGE_LENGTH]` panics otherwise.
-        let mut end = MAX_MESSAGE_LENGTH;
-        while end > 0 && !text.is_char_boundary(end) {
-            end -= 1;
-        }
-        format!("{}...(truncated)", &text[..end])
+        format!(
+            "{}...(truncated)",
+            crate::utils::text_format::truncate_bytes(text, MAX_MESSAGE_LENGTH)
+        )
     } else {
         text.to_string()
     }

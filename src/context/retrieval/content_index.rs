@@ -47,6 +47,7 @@
 //! loading required.
 
 use crate::sync_primitives::Mutex;
+use crate::utils::text_format::truncate_with_marker;
 use std::path::Path;
 
 use rusqlite::{params, Connection};
@@ -797,16 +798,8 @@ fn chunk_lines(text: &str, lines_per_chunk: usize) -> Vec<String> {
 fn chunk_title(chunk: &str, title_hint: &str, ordinal: usize) -> String {
     let first_line = chunk.lines().map(str::trim).find(|l| !l.is_empty());
     match first_line {
-        Some(line) => truncate_chars(line, MAX_TITLE_CHARS),
+        Some(line) => truncate_with_marker(line, MAX_TITLE_CHARS, "…"),
         None => format!("{title_hint} #{}", ordinal + 1),
-    }
-}
-
-/// UTF-8-safe truncation to at most `max` characters (project rule P7).
-fn truncate_chars(s: &str, max: usize) -> String {
-    match s.char_indices().nth(max) {
-        Some((byte_idx, _)) => format!("{}…", &s[..byte_idx]),
-        None => s.to_string(),
     }
 }
 
@@ -984,11 +977,12 @@ mod tests {
     }
 
     #[test]
-    fn truncate_chars_is_utf8_safe() {
+    fn chunk_title_truncation_is_utf8_safe() {
+        // Titles come from arbitrary file content, so the cap must hold on
+        // multi-byte text without panicking mid-codepoint.
         let s = "日本語テキストがとても長い場合の切り詰め確認用テキスト";
-        let out = truncate_chars(s, 5);
+        let out = truncate_with_marker(s, 5, "…");
         assert!(out.ends_with('…'));
-        // Must not panic on multi-byte boundaries; prefix is 5 chars + ellipsis.
         assert_eq!(out.chars().count(), 6);
     }
 

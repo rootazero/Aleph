@@ -105,10 +105,7 @@ pub(super) fn parse_clarify_index(suffix: &str) -> Option<usize> {
 
 /// Truncate a string to `max_chars` at a char boundary
 pub(super) fn truncate_for_topic(s: &str, max_chars: usize) -> &str {
-    match s.char_indices().nth(max_chars) {
-        Some((idx, _)) => &s[..idx],
-        None => s,
-    }
+    crate::utils::text_format::truncate_chars(s, max_chars)
 }
 
 /// Serialize a `ParsedCommand` directly into the slash-command mode JSON used

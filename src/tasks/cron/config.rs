@@ -578,7 +578,6 @@ pub use crate::tasks::shared::delivery::{
     DeliveryConfig, DeliveryMode, DeliveryOutcome, DeliveryStatus, DeliveryTargetConfig,
 };
 
-
 // ── Tests ───────────────────────────────────────────────────────────────
 
 #[cfg(test)]

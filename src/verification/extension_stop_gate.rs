@@ -90,16 +90,10 @@ fn decide(hr: &HookResult) -> StopDecision {
     StopDecision::Allow
 }
 
-/// Truncate at a char boundary within `cap` bytes.
+/// Truncate at a char boundary within `cap` BYTES — the cap is an environment
+/// variable size limit, which is measured in bytes, not characters.
 fn truncate_chars(s: &str, cap: usize) -> &str {
-    if s.len() <= cap {
-        return s;
-    }
-    let mut end = cap;
-    while end > 0 && !s.is_char_boundary(end) {
-        end -= 1;
-    }
-    &s[..end]
+    crate::utils::text_format::truncate_bytes(s, cap)
 }
 
 pub struct ExtensionStopHookVerifier {

@@ -168,12 +168,9 @@ pub fn build_persona_prompt(
 
 /// Truncate a string to at most `max_len` characters.
 ///
-/// Uses `char_indices` to avoid panicking on multi-byte UTF-8 boundaries.
+/// Uses char counting to avoid panicking on multi-byte UTF-8 boundaries.
 fn truncate_str(s: &str, max_len: usize) -> &str {
-    match s.char_indices().nth(max_len) {
-        Some((byte_idx, _)) => &s[..byte_idx],
-        None => s, // fewer than max_len chars — return as-is
-    }
+    crate::utils::text_format::truncate_chars(s, max_len)
 }
 
 /// Strip markdown code fences (` ```json ... ``` `) from LLM output.

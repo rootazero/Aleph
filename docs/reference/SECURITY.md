@@ -822,7 +822,12 @@ All outbound HTTP requests go through the SSRF engine:
 | Web fetch tool | `builtin_tools/web_fetch.rs` | `safe_fetch()` |
 | Webhook delivery | `tasks/cron/webhook_target.rs` | `safe_fetch()` |
 | Media downloader | `gateway/pipeline/media_download.rs` | `safe_fetch()` |
-| MCP HTTP transport | `mcp/transport/http.rs` | `validate_url_async()` |
+| MCP HTTP transport | `mcp/transport/http.rs` | `safe_fetch()` |
+| MCP SSE transport | `mcp/transport/sse.rs` | `validate_url_with_pinned()` |
+| MCP preflight probe | `mcp/preflight.rs` | `validate_url_async()` + pinned `resolve()` |
+| A2A push webhook | `a2a/service/notification.rs` | `validate_url_async()` at register, `safe_fetch()` at send |
+| Fetch providers (crawl4ai/firecrawl) | `builtin_tools/web_fetch/mod.rs` | `validate_url_async()` before handing the URL to the provider |
+| Media pipeline URLs | `media/pipeline.rs` | `validate_url_async()` |
 | Browser navigation | `browser/network_policy.rs` | `validate_url_async()` via `BrowserSsrfGuard` |
 
 ### Browser SSRF Guard

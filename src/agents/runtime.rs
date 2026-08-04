@@ -344,7 +344,7 @@ impl AgentRuntime {
         let start = Instant::now();
         let agent_id = format!("{}-{}", config.agent_def.id, uuid::Uuid::new_v4());
         let agent_type = config.agent_def.id.clone();
-        let task_summary = truncate_for_log(&config.task, 120);
+        let task_summary = crate::utils::text_format::truncate_text(&config.task, 120);
 
         tracing::info!(
             agent_id = %agent_id,
@@ -648,20 +648,6 @@ fn split_provider_prefix(model: &str) -> Option<(&str, &str)> {
     (!prefix.is_empty() && !rest.is_empty()).then_some((prefix, rest))
 }
 
-/// Truncate a string for log output, appending "..." if truncated.
-#[must_use]
-fn truncate_for_log(s: &str, max_len: usize) -> String {
-    let char_count = s.chars().count();
-    if char_count <= max_len {
-        s.to_string()
-    } else {
-        match s.char_indices().nth(max_len) {
-            Some((idx, _)) => format!("{}...", &s[..idx]),
-            None => s.to_string(),
-        }
-    }
-}
-
 /// Format a `TranscriptOutcome` for log output.
 #[must_use]
 const fn format_outcome(outcome: &TranscriptOutcome) -> &str {
@@ -958,26 +944,6 @@ mod tests {
         assert_eq!(transcript.iterations, 5);
         assert_eq!(transcript.duration_ms, 1200);
         assert_eq!(transcript.tokens_used, 500);
-    }
-
-    #[test]
-    fn truncate_for_log_short_string() {
-        assert_eq!(truncate_for_log("hello", 10), "hello");
-    }
-
-    #[test]
-    fn truncate_for_log_long_string() {
-        let s = "a".repeat(200);
-        let result = truncate_for_log(&s, 50);
-        assert!(result.ends_with("..."));
-        assert_eq!(result.len(), 53);
-    }
-
-    #[test]
-    fn truncate_for_log_unicode_safe() {
-        let s = "你好世界这是一个很长的字符串用于测试截断功能";
-        let result = truncate_for_log(s, 5);
-        assert!(result.ends_with("..."));
     }
 
     #[test]
