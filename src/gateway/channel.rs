@@ -241,9 +241,7 @@ pub enum MessageMeta {
         option_ids: Vec<u8>,
     },
     /// Telegram message reaction — user reacted with these emojis.
-    Reaction {
-        emojis: Vec<String>,
-    },
+    Reaction { emojis: Vec<String> },
     /// Sender of this inbound message is itself a bot.
     ///
     /// Channel adapters that can detect bot authorship (Telegram `User.is_bot`,

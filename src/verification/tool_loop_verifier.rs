@@ -109,7 +109,6 @@ impl Default for ToolLoopVerifier {
 
 #[async_trait]
 impl TurnVerifier for ToolLoopVerifier {
-
     async fn verify(
         &self,
         ctx: &TurnVerifyContext<'_>,

@@ -165,8 +165,12 @@ pub(crate) const READ_ONLY_TOOLS: &[&str] = &[
 /// runtime dispatch properties this adapter self-declares. Mirrors the
 /// `AlephTool::requires_confirmation()` overrides on these tools (which feed
 /// the metadata/describe path); keep the two in sync.
-pub(crate) const CONFIRMATION_REQUIRED_TOOLS: &[&str] =
-    &["vault_store", "agent_delete", "team_disband", "skill_install"];
+pub(crate) const CONFIRMATION_REQUIRED_TOOLS: &[&str] = &[
+    "vault_store",
+    "agent_delete",
+    "team_disband",
+    "skill_install",
+];
 
 /// Extract the bounded target path for a single-path file mutator
 /// (`file_write` / `file_edit`). Returns `None` for any other tool (including
@@ -784,7 +788,12 @@ mod tests {
     fn test_confirmation_required_tools_list() {
         // The destructive builtins must self-declare confirmation,
         // replacing the deleted gateway `CONFIRMATION_REQUIRED_TOOLS` constant.
-        for tool in &["vault_store", "agent_delete", "team_disband", "skill_install"] {
+        for tool in &[
+            "vault_store",
+            "agent_delete",
+            "team_disband",
+            "skill_install",
+        ] {
             assert!(
                 CONFIRMATION_REQUIRED_TOOLS.contains(tool),
                 "{} should require confirmation",

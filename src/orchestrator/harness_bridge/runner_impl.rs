@@ -487,10 +487,12 @@ impl HarnessRunner for AgentHarnessRunner {
                 // Agent alone is too coarse: the prefix is per session, so a
                 // second healthy session of this agent would zero this one's
                 // miss streak.
-                .with_monitor_scope(crate::thinker::prompt_builder::cache_monitor::cache_scope(
-                    &spec.agent,
-                    Some(&session_id.to_key_string()),
-                ));
+                .with_monitor_scope(
+                    crate::thinker::prompt_builder::cache_monitor::cache_scope(
+                        &spec.agent,
+                        Some(&session_id.to_key_string()),
+                    ),
+                );
                 // Wire the zero-API-cost session-summary reuse path: the
                 // memory backend holding the d0/d1/d2 facts plus the owning
                 // agent id they were written under. The writes resolve the

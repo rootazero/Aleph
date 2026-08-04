@@ -311,8 +311,14 @@ mod tests {
 
     #[test]
     fn link_host_strips_scheme_and_path() {
-        assert_eq!(link_host("https://console.amap.com/dev/key/app"), "console.amap.com");
-        assert_eq!(link_host("https://platform.minimaxi.com"), "platform.minimaxi.com");
+        assert_eq!(
+            link_host("https://console.amap.com/dev/key/app"),
+            "console.amap.com"
+        );
+        assert_eq!(
+            link_host("https://platform.minimaxi.com"),
+            "platform.minimaxi.com"
+        );
         assert_eq!(link_host("not a url"), "not a url");
     }
 

@@ -213,7 +213,6 @@ impl ExtensionStopHookVerifier {
 
 #[async_trait]
 impl TurnVerifier for ExtensionStopHookVerifier {
-
     async fn verify(
         &self,
         ctx: &TurnVerifyContext<'_>,

@@ -41,7 +41,6 @@ pub struct MutationEvidenceVerifier {
 
 #[async_trait]
 impl TurnVerifier for MutationEvidenceVerifier {
-
     async fn verify(
         &self,
         ctx: &TurnVerifyContext<'_>,

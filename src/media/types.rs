@@ -69,7 +69,9 @@ pub enum DocFormat {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum MediaType {
-    Image { format: MediaImageFormat },
+    Image {
+        format: MediaImageFormat,
+    },
     Audio {
         format: AudioFormat,
         duration_secs: Option<f64>,

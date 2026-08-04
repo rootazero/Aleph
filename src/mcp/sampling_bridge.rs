@@ -148,9 +148,8 @@ mod tests {
     /// process asking to spend this user's tokens.
     #[test]
     fn server_max_tokens_is_capped() {
-        let clamp = |asked: Option<u32>| {
-            asked.map_or(MAX_SAMPLING_TOKENS, |n| n.min(MAX_SAMPLING_TOKENS))
-        };
+        let clamp =
+            |asked: Option<u32>| asked.map_or(MAX_SAMPLING_TOKENS, |n| n.min(MAX_SAMPLING_TOKENS));
         assert_eq!(clamp(None), MAX_SAMPLING_TOKENS);
         assert_eq!(clamp(Some(100)), 100);
         assert_eq!(clamp(Some(1_000_000)), MAX_SAMPLING_TOKENS);

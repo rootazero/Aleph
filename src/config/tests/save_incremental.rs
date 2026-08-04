@@ -95,4 +95,3 @@ similarity_threshold = 0.5
         "Memory config should be preserved"
     );
 }
-
