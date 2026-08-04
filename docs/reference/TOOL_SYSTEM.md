@@ -482,7 +482,7 @@ value (serde_json::Value —— 文本字段仍带真换行)
   └─ 3. 扁平化 → apply_result_budget（persist 原文 / 内联信号 / 截断）
 ```
 
-**给写新工具或新 adapter 的人的三条硬约束**（每一条都对应一次真实的静默失效）：
+**给写新工具或新 adapter 的人的四条硬约束**（每一条都对应一次真实的静默失效）：
 
 1. **不要在交给 dispatcher 之前把自己的结果 `to_string`。** `Value::to_string()`
    转义每一个 `\n` 并把整个结果压成一行，而这条链上的**每一个**清洗器都按行路由——
@@ -495,6 +495,18 @@ value (serde_json::Value —— 文本字段仍带真换行)
    当文本计费然后截断成解不开的片段。
 3. **要重写文本字段就走 `tool_output::fence::rewrite_interior`**，别整体替换——
    不可信内容围栏是结构不是内容，见 [SECURITY.md](SECURITY.md#content-sanitization)。
+4. **任何会丢内容的 stage 都欠调用方一份原文。** `clean_for_ingress` 的
+   `full_original` 是 `apply_result_budget` 落盘的那一份，它决定被丢掉的行还能不能
+   靠 `ctx_search` / `read_file` 挖回来。压缩器一度不设它，理由是"压缩产物按构造小于
+   预算所以落盘走不到"——真实 `take_snapshot` 压缩后 13 585 token / 8 000 预算，当场
+   走到，落盘的是压缩正文，被丢掉的 443 个节点就此不可恢复。**只有"从不删内容"的
+   stage 才可以传 `None`**（剥 ANSI 转义是唯一的例子）。
+
+**真机 QA（2026-08-04）**：隔离 `ALEPH_HOME` + 真实 `chrome-devtools-mcp` + 记录请求体的
+mock LLM，实测确认 MCP 截图作为可解码 PNG 到达模型、三个工具结果围栏开闭配对、快照压缩
+保住全部 660 个控件、落盘的是未压缩原文。**未覆盖**：`metadata.images` 只有 Anthropic
+协议消费，OpenAI 系（`openai_chat` / `responses`）的 ToolResult 臂丢弃图片（API 约束，见
+FEATURE_LOCATOR §3.14「已定位·未做」）。
 
 详见 [FEATURE_LOCATOR §3.14](FEATURE_LOCATOR.md)。
 
