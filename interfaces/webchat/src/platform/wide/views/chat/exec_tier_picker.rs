@@ -162,6 +162,16 @@ pub fn ExecTierPicker() -> impl IntoView {
                 </svg>
             </button>
 
+            // Click-outside catcher — the repo's standard popover dismissal
+            // (`theme_toggle`, `chat_sidebar`, `team_task_strip`). `mouseleave`
+            // below is a hover affordance and a finger never produces one, so
+            // without this the popover could not be dismissed at all on the
+            // phone composer: it stayed up, covering the thread, until the user
+            // guessed to tap the pill again.
+            {move || open.get().then(|| view! {
+                <div class="fixed inset-0 z-40" on:click=move |_| open.set(false) />
+            })}
+
             <Show when=move || open.get()>
                 <div class="absolute bottom-full mb-2 left-0 z-50 w-80 max-h-96 overflow-y-auto
                             glass rounded-xl border border-border bg-surface-overlay/85 shadow-xl
