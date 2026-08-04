@@ -28,15 +28,17 @@ mod identity;
 mod senders;
 mod tokens;
 mod types;
+mod users;
 
 #[cfg(test)]
 mod tests;
 
 pub use bootstrap_tickets::{BootstrapTicketError, ConsumedBootstrapTicket};
 pub use types::*;
+pub use users::{UserRecord, UserRole, UserStatus, OWNER_USER_ID};
 
 /// Schema version for migrations
-const SCHEMA_VERSION: i32 = 13;
+const SCHEMA_VERSION: i32 = 14;
 
 /// Unified security storage backed by `SQLite`
 pub struct SecurityStore {
@@ -247,6 +249,20 @@ impl SecurityStore {
             drop(conn);
             self.set_schema_version(13)?;
         }
+
+        if version < 14 {
+            info!("Migrating security store to v14 (users + identity linking)");
+            let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
+            conn.execute_batch(users::USERS_SCHEMA)?;
+            // ALTER TABLE ADD COLUMN is not idempotent in SQLite — the version gate
+            // guarantees single execution.
+            conn.execute("ALTER TABLE devices ADD COLUMN user_id TEXT", [])?;
+            conn.execute("ALTER TABLE bootstrap_tickets ADD COLUMN user_id TEXT", [])?;
+            drop(conn);
+            self.set_schema_version(14)?;
+        }
+        // After all versioned migrations (runs on every open, idempotent):
+        self.ensure_bootstrap_owner()?;
 
         // Final safety: ensure version is at latest
         self.set_schema_version(SCHEMA_VERSION)?;
