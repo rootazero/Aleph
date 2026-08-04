@@ -110,7 +110,9 @@ impl AgentKeystore {
     /// The agent's identity, minting one on first use. **Refuses a revoked
     /// agent** — this is the operator-facing provisioning call (`keygen`), and
     /// silently reinstating a key someone deliberately revoked would make the
-    /// revocation meaningless. `rotate` is the explicit way back.
+    /// revocation meaningless.
+    /// [`rotate_identity`](super::ledger::rotate_identity) is the explicit way
+    /// back, and it says so on the chain.
     pub fn ensure(&self, agent_id: &str) -> Result<AgentIdentityRow, KeyError> {
         let row = self.signing_identity(agent_id)?;
         if row.revoked_at.is_some() {
@@ -139,23 +141,8 @@ impl AgentKeystore {
         if let Some(row) = self.store.get_agent_identity(agent_id)? {
             return Ok(row);
         }
-        self.mint(agent_id)?;
-        self.store
-            .get_agent_identity(agent_id)?
-            .ok_or_else(|| KeyError::UnknownAgent(agent_id.to_string()))
-    }
-
-    /// Replace the active key. The old key is retired (kept, so its records
-    /// stay verifiable) and the chain anchor is deliberately untouched — see
-    /// [`SecurityStore::upsert_agent_identity`].
-    pub fn rotate(&self, agent_id: &str) -> Result<AgentIdentityRow, KeyError> {
-        if let Some(prev) = self.store.get_agent_identity(agent_id)? {
-            self.store.retire_agent_key(&prev.active_fingerprint)?;
-        }
-        self.mint(agent_id)?;
-        self.store
-            .get_agent_identity(agent_id)?
-            .ok_or_else(|| KeyError::UnknownAgent(agent_id.to_string()))
+        let fingerprint = self.mint_key(agent_id)?;
+        self.activate(agent_id, &fingerprint)
     }
 
     /// Mark an identity revoked and retire its keys. Its chain stays readable
@@ -194,14 +181,26 @@ impl AgentKeystore {
         &self.store
     }
 
-    /// Generate a keypair, persist the public half in the DB and the private
-    /// half in the vault, and bind it as the agent's active key.
+    /// Generate a keypair and persist it — the public half in the DB, the
+    /// private half in the vault — **without** binding it as the agent's active
+    /// key. It can sign from this moment on; nothing yet says it should.
     ///
-    /// Order matters: the private key is vaulted **before** the identity is
-    /// bound, so a crash between the two leaves an orphan vault entry (inert)
-    /// rather than an identity whose key cannot be loaded (a signer that fails
-    /// on every append).
-    fn mint(&self, agent_id: &str) -> Result<String, KeyError> {
+    /// Minting and activating are separate because the step between them is a
+    /// chain record. A rotation is not "swap the key, then mention it": the
+    /// mention is what makes the new key legitimate
+    /// ([`ChainFault::UndeclaredSigner`](super::verify::ChainFault::UndeclaredSigner)),
+    /// so the order that survives a failure is mint → declare → activate. Doing
+    /// it the other way round — what this module did while `rotate` owned both
+    /// halves — meant a lost declaration left the *active* key undeclared, and
+    /// every record it went on to sign faulted, permanently. Split like this,
+    /// a failure before [`Self::activate`] leaves an unused key nothing points
+    /// at and the outgoing key still signing.
+    ///
+    /// Order inside the mint matters too: the private key is vaulted **before**
+    /// the public row is written, so a crash between the two leaves an orphan
+    /// vault entry (inert) rather than a key row whose seed cannot be loaded (a
+    /// signer that fails on every append).
+    pub fn mint_key(&self, agent_id: &str) -> Result<String, KeyError> {
         let (signing, verifying) = generate_keypair();
         let seed = Zeroizing::new(signing);
         let fingerprint = DeviceFingerprint::from_public_key(&verifying).0;
@@ -211,7 +210,6 @@ impl AgentKeystore {
             .map_err(|e| KeyError::Vault(e.to_string()))?;
         self.store
             .insert_agent_key(&fingerprint, agent_id, &verifying)?;
-        self.store.upsert_agent_identity(agent_id, &fingerprint)?;
 
         self.cache
             .lock()
@@ -224,6 +222,30 @@ impl AgentKeystore {
             "minted agent signing key"
         );
         Ok(fingerprint)
+    }
+
+    /// Bind `fingerprint` as the agent's active key, retiring whatever it
+    /// replaces.
+    ///
+    /// The retired key is kept — records it signed must stay verifiable — and
+    /// the chain anchor is deliberately untouched, or activating a new key would
+    /// become a way to erase history undetectably (see
+    /// [`SecurityStore::upsert_agent_identity`]). Clearing `revoked_at` is part
+    /// of the same upsert: re-keying a revoked agent is the deliberate way back.
+    pub fn activate(
+        &self,
+        agent_id: &str,
+        fingerprint: &str,
+    ) -> Result<AgentIdentityRow, KeyError> {
+        if let Some(prev) = self.store.get_agent_identity(agent_id)? {
+            if prev.active_fingerprint != fingerprint {
+                self.store.retire_agent_key(&prev.active_fingerprint)?;
+            }
+        }
+        self.store.upsert_agent_identity(agent_id, fingerprint)?;
+        self.store
+            .get_agent_identity(agent_id)?
+            .ok_or_else(|| KeyError::UnknownAgent(agent_id.to_string()))
     }
 
     /// Load (and memoize) a private seed.
@@ -282,6 +304,14 @@ mod tests {
             })
     }
 
+    /// Mint-then-activate, the two halves a rotation is made of. Production
+    /// puts a chain record between them (`AgentLedger::perform_rotate`); these
+    /// tests exercise the keystore's half of the contract.
+    fn rotate(ks: &AgentKeystore, agent_id: &str) -> AgentIdentityRow {
+        let fingerprint = ks.mint_key(agent_id).unwrap();
+        ks.activate(agent_id, &fingerprint).unwrap()
+    }
+
     fn keystore() -> (AgentKeystore, TempDir) {
         let dir = TempDir::new().unwrap();
         let store = Arc::new(SecurityStore::in_memory().unwrap());
@@ -328,7 +358,7 @@ mod tests {
             .sign(&old.active_fingerprint, b"before rotation")
             .unwrap();
 
-        let new = ks.rotate("main").unwrap();
+        let new = rotate(&ks, "main");
         assert_ne!(old.active_fingerprint, new.active_fingerprint);
 
         // The retired key still verifies what it signed — this is why keys are
@@ -371,7 +401,7 @@ mod tests {
             })
             .unwrap();
 
-        ks.rotate("main").unwrap();
+        rotate(&ks, "main");
         let after = ks.identity("main").unwrap().unwrap();
         assert_eq!(after.head_seq, 1);
         assert_eq!(after.head_hash.as_deref(), Some(&[7u8; 32][..]));
@@ -420,7 +450,7 @@ mod tests {
         let (ks, _d) = keystore();
         ks.ensure("main").unwrap();
         ks.revoke("main").unwrap();
-        let back = ks.rotate("main").unwrap();
+        let back = rotate(&ks, "main");
         assert!(back.revoked_at.is_none());
     }
 }

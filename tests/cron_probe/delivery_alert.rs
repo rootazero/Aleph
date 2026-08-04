@@ -1,11 +1,18 @@
-//! P5 Delivery & Alert Probes — 6 scenarios covering delivery skip logic
-//! and failure alert threshold/cooldown behavior.
+//! P5 Alert Probes — failure alert threshold and cooldown behaviour.
+//!
+//! The three delivery-skip scenarios that used to live here tested
+//! `tasks::cron::delivery::pre_delivery_status`, which has been cut; they were
+//! removed rather than reconnected, because there is nothing left for them to
+//! test. This target is `test-helpers`-gated, so neither `cargo check` nor the
+//! default `cargo test --test '*'` compiles it — which is how it stayed broken:
+//! the same blind spot that has now orphaned tests four times (`cf6db395b`,
+//! `dc8d32e0d`, `8ee77389b`, here). A commit that cuts a `pub fn` owes a
+//! `cargo test --features test-helpers --test '*' --no-run`.
 
 use alephcore::tasks::cron::alert::should_send_alert;
 use alephcore::tasks::cron::config::{
-    CronJob, DeliveryMode, DeliveryStatus, DeliveryTargetConfig, FailureAlertConfig, ScheduleKind,
+    CronJob, DeliveryTargetConfig, FailureAlertConfig, ScheduleKind,
 };
-use alephcore::tasks::cron::delivery::pre_delivery_status;
 
 // ── Helpers ─────────────────────────────────────────────────────────────
 
@@ -35,47 +42,7 @@ fn make_alert_config(after: u32, cooldown_ms: i64) -> FailureAlertConfig {
     }
 }
 
-// ── 1. delivery_dedup_agent_sent ────────────────────────────────────────
-
-/// When the agent already sent results, delivery should return AlreadySentByAgent.
-#[test]
-fn delivery_dedup_agent_sent() {
-    let status = pre_delivery_status(true, &DeliveryMode::Primary);
-    assert_eq!(
-        status,
-        DeliveryStatus::AlreadySentByAgent,
-        "should return AlreadySentByAgent when agent already sent"
-    );
-}
-
-// ── 2. delivery_none_mode ───────────────────────────────────────────────
-
-/// When delivery mode is None, should return NotRequested regardless of agent state.
-#[test]
-fn delivery_none_mode() {
-    let status = pre_delivery_status(false, &DeliveryMode::None);
-    assert_eq!(
-        status,
-        DeliveryStatus::NotRequested,
-        "DeliveryMode::None should always return NotRequested"
-    );
-}
-
-// ── 3. delivery_normal_proceeds ─────────────────────────────────────────
-
-/// Normal delivery (agent hasn't sent, mode is Primary) should return NotDelivered,
-/// signalling the caller to proceed with actual delivery.
-#[test]
-fn delivery_normal_proceeds() {
-    let status = pre_delivery_status(false, &DeliveryMode::Primary);
-    assert_eq!(
-        status,
-        DeliveryStatus::NotDelivered,
-        "normal delivery should return NotDelivered, signalling caller to proceed"
-    );
-}
-
-// ── 4. alert_fires_after_threshold ──────────────────────────────────────
+// ── 1. alert_fires_after_threshold ──────────────────────────────────────
 
 /// Alert should fire when consecutive_errors >= threshold.
 #[test]
@@ -104,7 +71,7 @@ fn alert_fires_after_threshold() {
     );
 }
 
-// ── 5. alert_cooldown_blocks ────────────────────────────────────────────
+// ── 2. alert_cooldown_blocks ────────────────────────────────────────────
 
 /// Alert should be suppressed during cooldown period.
 #[test]
@@ -128,7 +95,7 @@ fn alert_cooldown_blocks() {
     );
 }
 
-// ── 6. alert_cooldown_expires ───────────────────────────────────────────
+// ── 3. alert_cooldown_expires ───────────────────────────────────────────
 
 /// Alert should fire again after cooldown expires.
 #[test]

@@ -20,7 +20,11 @@ static PASSTHROUGH_WARNED: AtomicBool = AtomicBool::new(false);
 /// `SubscriberExt::with(...)`). The first time this no-op observes an event
 /// it emits a `warn!` so misconfiguration shows up in operator logs.
 #[deprecated(
-    since = "2026.08.04",
+    // CalVer, in the repo's own `YY.M.D` form (VERSION) — which is also the
+    // only form here that is semver-compliant, and `deprecated_semver` is a
+    // deny-by-default clippy lint: `2026.08.04` broke `cargo clippy
+    // --all-targets` for the whole workspace.
+    since = "26.8.4",
     note = "PiiScrubbingLayer is a passthrough — install PII scrubbing via create_pii_scrubbing_layer() (a FormatEvent) instead."
 )]
 pub struct PiiScrubbingLayer;

@@ -25,7 +25,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
 use crate::error::{AlephError, Result};
-use crate::identity::{AgentIdentityRow, AgentLedger, LedgerRecord, NewRecord};
+use crate::identity::{AgentIdentityRow, AgentLedger, LedgerRecord};
 use crate::sync_primitives::Arc;
 use crate::tools::AlephTool;
 
@@ -150,11 +150,11 @@ Every agent holds its own Ed25519 keypair. Every mutating tool call, every refus
 - {"action": "keygen", "agent": "main"} — mint the key if the agent does not have one yet (agents get one automatically on first recorded action).
 - {"action": "rotate", "agent": "main"} — replace the signing key. History signed by the old key stays verifiable; the chain is NOT reset.
 - {"action": "revoke", "agent": "main"} — stop the agent signing. Its chain stays readable and verifiable. `rotate` brings a revoked agent back.
-- {"action": "export", "agent": "main"} — write the agent's whole chain, its public keys and its anchor to one self-contained JSON file, and report the path. Contains no private key and no tool arguments. Hand it to an auditor: `aleph-server identity verify --input <path> --pin <root_fingerprint>` checks it on a machine with no Aleph, no database and no daemon.
+- {"action": "export", "agent": "main"} — write the agent's whole chain, its public keys and its anchor to one self-contained JSON file, and report the path. Contains no private key and no tool arguments. Hand it to an auditor: `aleph-server identity verify --input <path> --pin <root_fingerprint> --expect-head <expect_head>` checks it on a machine with no Aleph, no database and no daemon.
 
-Rotation and revocation are themselves appended to the affected agent's chain, so key history cannot be quietly rewritten by editing the database. A delegated sub-agent holds its own key and signs its own work; it is a separate agent here, not a line on its parent's chain.
+Rotation and revocation are themselves appended to the affected agent's chain, so key history cannot be quietly rewritten by editing the database. Both wait for that record to be written and report a failure rather than claiming a success the chain does not know about. A delegated sub-agent holds its own key and signs its own work; it is a separate agent here, not a line on its parent's chain.
 
-What a clean verify does and does not prove: it proves no stored record was edited, reordered, deleted, re-signed under an undeclared key, or forged without the agent's private key. It does not defend against someone who controls the whole machine — key vault and database sit on the same disk. That is what `export` plus a pinned root fingerprint is for: pin the root once, off this host, and every later export is bound to the same lineage. Without a pin an export proves internal consistency only.
+What a clean verify does and does not prove: it proves no stored record was edited, reordered, deleted, re-signed under an undeclared key, or forged without the agent's private key. It does not defend against someone who controls the whole machine — key vault and database sit on the same disk. That is what `export` plus pinned values is for, and there are two, each covering what the other cannot. `root_fingerprint` pins the lineage: pin it once, off this host, and no later export can present a different chain as this agent's. `expect_head` pins where the chain had got to: the next export must extend it, which is the ONLY way a truncated tail can be caught — the anchor travels inside the file, so whoever produced the file can edit it as freely as the rows. Report both values to the user when you export, and tell them to keep them somewhere other than this machine. With neither, an export proves internal consistency only.
 
 Arguments are never stored; each record carries a fingerprint of them, plus a secret-redacted one-line summary."#;
 
@@ -236,57 +236,44 @@ Arguments are never stored; each record carries a fingerprint of them, plus a se
                 }))
             }
 
+            // Both lifecycle actions go through the ledger writer and are
+            // AWAITED. They used to mutate the keystore here and then enqueue
+            // the chain record fire-and-forget, which made the tool's `ok` a
+            // claim about something that had not happened yet: a declaration
+            // lost on the way to disk leaves the incoming key active and
+            // undeclared, and every record it goes on to sign faults as
+            // `UndeclaredSigner` forever. The writer now owns both halves,
+            // ordered so that a failure changes nothing (see
+            // `AgentLedger::perform_rotate`), and a failure is reported.
             "rotate" => {
                 let agent = Self::agent_of(&args, "rotate")?;
-                let previous = keys
-                    .identity(&agent)
-                    .map_err(|e| AlephError::tool(e.to_string()))?
-                    .map(|r| r.active_fingerprint);
-                let row = keys
-                    .rotate(&agent)
+                let rotation = crate::identity::rotate_identity(&agent)
+                    .await
                     .map_err(|e| AlephError::tool(e.to_string()))?;
-                // Into the SUBJECT's chain, not the operator's: `retired_at` is
-                // an ordinary mutable column, so without this the fact that a
-                // key was ever replaced can be erased and the chain still
-                // verifies clean. The operator's own chain separately carries
-                // the `agent_identity` tool call that caused it.
-                crate::identity::record_action(NewRecord::identity_rotated(
-                    &agent,
-                    &row.active_fingerprint,
-                    previous.as_deref(),
-                ))
-                .await;
                 Ok(json!({
                     "action": "rotate",
-                    "identity": identity_json(&row),
-                    "previous_fingerprint": previous,
+                    "identity": identity_json(&rotation.identity),
+                    "previous_fingerprint": rotation.previous_fingerprint,
+                    // The rotation is on the subject's own chain, not the
+                    // operator's: `retired_at` is an ordinary mutable column, so
+                    // without an in-chain statement the fact that a key was ever
+                    // replaced can be erased and the chain still verifies clean.
+                    // The operator's chain separately carries this tool call.
+                    "declared_in_chain": true,
                 }))
             }
 
             "revoke" => {
                 let agent = Self::agent_of(&args, "revoke")?;
-                // Read the key first: it is the one that will sign the
-                // revocation, and after this call it is retired.
-                let fingerprint = keys
-                    .identity(&agent)
-                    .map_err(|e| AlephError::tool(e.to_string()))?
-                    .map(|r| r.active_fingerprint);
-                let revoked = keys
-                    .revoke(&agent)
+                let retired = crate::identity::revoke_identity(&agent)
+                    .await
                     .map_err(|e| AlephError::tool(e.to_string()))?;
-                // Only when something was actually revoked — recording against
-                // an agent that has no identity would mint a key just to say it
-                // was taken away. The revocation is signed by the key being
-                // revoked (see `AgentKeystore::signing_identity`), which is the
-                // whole reason that method tolerates a revoked agent.
-                if let (true, Some(fp)) = (revoked, fingerprint.as_deref()) {
-                    crate::identity::record_action(NewRecord::identity_revoked(&agent, fp)).await;
-                }
                 Ok(json!({
                     "action": "revoke",
                     "agent": agent,
                     // false = there was no live identity to revoke.
-                    "revoked": revoked,
+                    "revoked": retired.is_some(),
+                    "retired_fingerprint": retired,
                 }))
             }
 
@@ -340,8 +327,9 @@ Arguments are never stored; each record carries a fingerprint of them, plus a se
                 // Verified here, with the document's own keys, before it is
                 // handed over: an export that does not verify at the moment it
                 // is produced is the single most useful thing to learn early.
-                let report = crate::identity::verify_export(&doc, &[])
-                    .map_err(|e| AlephError::tool(e.to_string()))?;
+                let report =
+                    crate::identity::verify_export(&doc, &crate::identity::ExportPins::default())
+                        .map_err(|e| AlephError::tool(e.to_string()))?;
 
                 // Written to a file rather than returned inline: a chain is
                 // unbounded, and the document exists to be handed to someone,
@@ -364,6 +352,14 @@ Arguments are never stored; each record carries a fingerprint of them, plus a se
                     AlephError::tool(format!("cannot write {}: {e}", path.display()))
                 })?;
 
+                // The head, in the exact form `--expect-head` accepts. Emitted
+                // ready to paste because the alternative — telling an auditor to
+                // note two numbers and compare them next time — is how the one
+                // defence against a truncated tail stays theoretical.
+                let expect_head = report
+                    .last_hash
+                    .as_ref()
+                    .map(|h| format!("{}:{h}", report.last_seq));
                 Ok(json!({
                     "action": "export",
                     "agent": agent,
@@ -376,9 +372,12 @@ Arguments are never stored; each record carries a fingerprint of them, plus a se
                     // prove to a third party rests on these having been taken
                     // from somewhere other than this machine.
                     "root_fingerprint": report.root_fingerprint,
-                    "head_hash": report.last_hash,
+                    "expect_head": expect_head,
+                    "revoked_at": report.revoked_at.map(at),
+                    "revocation_disagrees_with_chain": report.revocation_disagrees(),
                     "failed_appends": report.failed_appends,
-                    "verify_with": "aleph-server identity verify --input <path> --pin <root_fingerprint>",
+                    "verify_with": "aleph-server identity verify --input <path> \
+                                    --pin <root_fingerprint> --expect-head <expect_head>",
                 }))
             }
 
@@ -415,6 +414,40 @@ mod tests {
             err.contains("not installed"),
             "expected an explicit not-running message, got: {err}"
         );
+    }
+
+    #[test]
+    fn the_catalog_ships_the_tools_own_description() {
+        // `agent_init` builds the LLM tool list from `BUILTIN_TOOL_DEFINITIONS`
+        // and only *appends* registry tools whose name the catalog does not
+        // already carry — so a literal written into that entry SHADOWS this
+        // const outright, and nothing reports it. The literal that used to sit
+        // there listed seven actions and did not mention `export` at all: the
+        // whole pin-the-root-fingerprint contract was written, tested against
+        // the const, and shipped to nobody.
+        //
+        // Asserted on the catalog side, because that is the side that reaches
+        // the model. A test that read this const would stay green through
+        // exactly the regression it is here to catch.
+        let entry = crate::executor::BUILTIN_TOOL_DEFINITIONS
+            .iter()
+            .find(|d| d.name == AgentIdentityTool::NAME)
+            .expect("agent_identity must be registered");
+        assert_eq!(
+            entry.description,
+            AgentIdentityTool::DESCRIPTION,
+            "the catalog entry must point at the const, not restate it"
+        );
+        for action in [
+            "list", "show", "keygen", "rotate", "revoke", "ledger", "verify", "export",
+        ] {
+            assert!(
+                entry
+                    .description
+                    .contains(&format!("\"action\": \"{action}\"")),
+                "the model is never told about action `{action}`"
+            );
+        }
     }
 
     #[test]
