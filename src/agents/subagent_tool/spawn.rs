@@ -115,6 +115,11 @@ impl SubagentTool {
                     tool_count: 0,
                     last_tool: None,
                     last_activity: None,
+                    // Running nodes have no terminal result yet; the
+                    // Settled event + a follow-up `flat_nodes` rebuild
+                    // surfaces `result_preview` once `mark_completed`
+                    // folds the final text in.
+                    result_preview: None,
                 },
             },
         );
