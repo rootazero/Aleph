@@ -1081,8 +1081,11 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
     // MCP tool bridge — now that `agent_result.tool_catalog` exists,
     // spawn the bridge with the tool-catalog handle so each registered MCP
     // tool also gets an `McpServerProbe` attached to the shared
-    // `ToolHealthCache`. The bridge subscribes to manager events; any
-    // servers that connect from this point on flow through it.
+    // `ToolHealthCache`. The bridge subscribes to manager events *and*
+    // reconciles once against the servers already running — the auto-start
+    // above happens inside `McpManagerActor::run`, i.e. long before this
+    // point, so an events-only bridge would never see the servers this
+    // deployment actually has (see `spawn_tool_bridge`).
     if let Some(ref h) = mcp_handle {
         std::mem::drop(alephcore::mcp::spawn_tool_bridge(
             h.clone(),
