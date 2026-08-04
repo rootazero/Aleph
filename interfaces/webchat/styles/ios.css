@@ -77,3 +77,112 @@
 }
 .field::placeholder { color: var(--color-text-tertiary); }
 .field:focus { outline: none; border-color: var(--color-border-focus); box-shadow: var(--focus-ring); }
+
+/* ── Wrapped desktop page inside PhoneShell ──────────────────────────────
+   Scope class set by `PhoneShell(wrapped=true)` on its scroll body. The 17
+   settings pages without a native iOS screen — and every PhoneDashboard leaf —
+   are the *same* desktop view mounted in phone chrome (that reuse is what makes
+   them reachable at all; hand-writing 17 iOS pages would make the desktop the
+   second source of truth all over again). What it costs is that they arrive
+   dressed for a 1280 px column, so this block re-dresses them for 390 px. It is
+   deliberately a phone-scoped shim and NOT a set of edits to the desktop views:
+   nothing here can affect the wide/tablet form factors.
+
+   Unlayered, so it beats Tailwind's `@layer utilities` regardless of order —
+   same mechanism the `@media (hover:none)` block in tailwind.css relies on. */
+
+/* The macOS traffic-light inset. Inside PhoneShell the glass title bar already
+   owns the top of the screen, so this is pure dead space (up to 48 px). */
+.phone-wrapped .aleph-content-top { padding-top: 0; }
+
+/* Desktop page gutters. The shell contributes none in wrapped mode, so these
+   are the only horizontal padding — 24 px on a 390 px screen leaves 342 px. */
+.phone-wrapped .p-6  { padding: 0.75rem; }
+.phone-wrapped .px-6 { padding-left: 0.75rem; padding-right: 0.75rem; }
+.phone-wrapped .p-4  { padding: 0.625rem; }
+.phone-wrapped .px-4 { padding-left: 0.625rem; padding-right: 0.625rem; }
+
+/* Multi-column grids stack. Phones get one column; the desktop `md:`/`lg:`
+   variants are separate classes and are untouched above their breakpoints
+   (which a 390 px viewport never reaches anyway). */
+.phone-wrapped .grid-cols-2,
+.phone-wrapped .grid-cols-3,
+.phone-wrapped .grid-cols-4 { grid-template-columns: minmax(0, 1fr); }
+
+/* Width FLOORS are what actually push content off-screen: a `min-w-[400px]`
+   pane cannot shrink below the viewport, so the page scrolls sideways and the
+   right-hand column is simply unreachable. Releasing the floor lets flex do the
+   right thing; the accompanying `truncate` / `min-w-0` idioms the views already
+   use then take over. Ceilings (`max-w-*`) are left alone — they never overflow.
+
+   Deliberately blunt (any arbitrary `min-w-[…]`, not an enumerated list of the
+   four large ones) so a floor added to a desktop view later is covered without
+   anybody remembering this file. The cost is that the two badge floors
+   (`min-w-[14px]` / `min-w-[16px]`) also lose ~2 px of minimum width on phone —
+   accepted, because the alternative is a list that goes stale silently while an
+   unreleased 400 px floor makes a whole pane unreachable. */
+.phone-wrapped [class*="min-w-["] { min-width: 0; }
+
+/* Master-detail: the `aleph-md` trio already stacks under 720 px (tailwind.css).
+   Repeat it unconditionally inside the scope so a wrapped page is stacked even
+   if the phone shell is ever mounted at a wider width (tablet split, desktop
+   emulation), and so the rule does not depend on two files agreeing on 720. */
+.phone-wrapped .aleph-md { flex-direction: column; overflow-y: auto; }
+.phone-wrapped .aleph-md > .aleph-md-list,
+.phone-wrapped .aleph-md > .aleph-md-detail { width: 100%; min-width: 0; flex: none; }
+.phone-wrapped .aleph-md > .aleph-md-list { border-right: 0; border-bottom: 1px solid var(--color-border); }
+
+/* ── Composer pickers on phone ───────────────────────────────────────────
+   The mode / exec-tier pills in the phone composer are the desktop
+   `ModePicker` / `ExecTierPicker` verbatim — reused so the two surfaces cannot
+   drift on what a tier *means* or on how a pick is persisted. Their popovers,
+   though, are desktop-shaped: a fixed `w-80` (320 px) anchored `left-0` to the
+   pill. On a 390 px viewport the tier pill sits ~101 px in, so the popover ran
+   off the right edge and every description was clipped.
+
+   Fix without forking the components: take the pill's own wrapper out of the
+   positioning chain so the popover resolves against the toolbar ROW instead,
+   then let it span that row. The row is the only element that knows how much
+   width there actually is — CSS cannot express "shift left by the pill's own
+   offset", which is why constraining the width alone does not help. */
+/* The row's own layout lives HERE, not in a `style=` attribute on the element.
+   An inline declaration outranks every stylesheet rule short of `!important`,
+   so an inline `display:flex` would quietly win against the landscape media
+   query below — the rule loads, matches, and changes nothing. */
+.phone-composer-tools {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.phone-composer-tools > div.relative { position: static; }
+.phone-composer-tools .glass.absolute {
+  left: 0;
+  right: 0;
+  width: auto;
+  /* Room for the software keyboard: `max-h-96` (384 px) plus the composer and
+     the tab bar overruns a keyboard-shortened viewport. */
+  max-height: 50dvh;
+}
+
+/* Landscape: the toolbar row folds away.
+   A landscape iPhone is ~390 px TALL, and the fixed chrome already claims most
+   of it — top bar 50 + composer ~110 + tab bar 63 ≈ 223 px, leaving ~167 px of
+   transcript. The toolbar row is ~36 px of that (30 px controls + the column
+   gap), i.e. better than a fifth of what is left to read the conversation in.
+   Reading the reply is the thing you cannot do without; arming a tier or a mode
+   is a once-per-conversation act and attaching a file is deliberate — all three
+   are a rotation away, and none of them existed on this surface at all until
+   this round, so landscape is no worse off than it was.
+
+   Bounded by BOTH conditions on purpose. `max-height` alone would also fire in
+   portrait if a software keyboard ever shortened the layout viewport (Android
+   Chrome does resize it), and yanking the paperclip out from under a user who
+   just opened the keyboard to write a caption is exactly the wrong moment.
+   500 px clears every iPhone landscape height (375–440) without reaching any
+   portrait one (the shortest, iPhone SE, is 667). */
+@media (orientation: landscape) and (max-height: 500px) {
+  .phone-composer-tools { display: none; }
+}
