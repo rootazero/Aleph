@@ -169,6 +169,23 @@ impl SecurityStore {
         .map(Option::flatten)
     }
 
+    /// Bind `user_id` to a device **only if it has no binding yet**.
+    ///
+    /// Used by the bootstrap-ticket exchange after `upsert_device` runs: an
+    /// unbound ticket's first-time pairing (brand-new, still-NULL row)
+    /// defaults to the owner, but an unbound re-pair of an already-owned
+    /// device (owner preserved by `upsert_device`'s
+    /// `COALESCE(excluded.user_id, devices.user_id)`) must never be silently
+    /// reassigned — see `DeviceTokenManager::exchange_bootstrap_ticket`.
+    pub fn set_device_user_if_unbound(&self, device_id: &str, user_id: &str) -> SqliteResult<()> {
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
+        conn.execute(
+            "UPDATE devices SET user_id = ?1 WHERE device_id = ?2 AND user_id IS NULL",
+            params![user_id, device_id],
+        )?;
+        Ok(())
+    }
+
     /// Live (un-revoked) device ids linked to a user — deactivation revokes these.
     pub fn list_device_ids_for_user(&self, user_id: &str) -> SqliteResult<Vec<String>> {
         let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
@@ -234,6 +251,7 @@ mod tests {
             fingerprint: device_id,
             role,
             scopes: &[],
+            user_id: None,
         }
     }
 

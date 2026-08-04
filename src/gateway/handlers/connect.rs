@@ -283,6 +283,7 @@ mod tests {
                 fingerprint: device_id,
                 role: "operator",
                 scopes: &[],
+                user_id: None,
             })
             .unwrap();
         store.set_device_user(device_id, user_id).unwrap();
@@ -360,7 +361,7 @@ mod tests {
     #[test]
     fn bootstrap_ticket_exchanges_for_device_token() {
         let mgr = mgr();
-        let ticket = mgr.create_bootstrap_ticket(None).unwrap();
+        let ticket = mgr.create_bootstrap_ticket(None, None).unwrap();
 
         let outcome = resolve_connect_auth(
             false,
@@ -406,7 +407,7 @@ mod tests {
     #[test]
     fn device_token_authorizes_after_exchange() {
         let mgr = mgr();
-        let ticket = mgr.create_bootstrap_ticket(None).unwrap();
+        let ticket = mgr.create_bootstrap_ticket(None, None).unwrap();
 
         let ConnectAuthOutcome::BootstrapExchanged { device_token, .. } = resolve_connect_auth(
             false,

@@ -19,6 +19,7 @@ fn test_device_crud() {
             fingerprint: "abc123",
             role: "operator",
             scopes: &["*".to_string()],
+            user_id: None,
         })
         .unwrap();
 

@@ -127,6 +127,12 @@ pub fn pairing_urls(hosts: &[String], port: u16, tls_enabled: bool, ticket: &str
 ///
 /// Request params (all optional):
 /// - `ttl_seconds`: ticket lifetime in seconds (default 300, min 60)
+/// - `user_id`: bind the ticket to a user — the device that exchanges it
+///   inherits the binding. Admin-only surface; P0 does not validate that the
+///   user exists (a bad id just produces a device bound to a nonexistent
+///   user, which the fail-closed `connect` identity resolution already walls
+///   off). Omit for an unbound ticket (defaults the paired device to the
+///   owner).
 ///
 /// Response:
 /// - `ticket`: the bootstrap ticket string (`aleph-bt-<uuid>`)
@@ -142,6 +148,11 @@ pub async fn handle_ticket_create(
         .params
         .as_ref()
         .and_then(|p| p.get("ttl_seconds").and_then(serde_json::Value::as_u64));
+    let user_id: Option<String> = request
+        .params
+        .as_ref()
+        .and_then(|p| p.get("user_id").and_then(serde_json::Value::as_str))
+        .map(String::from);
 
     // Clamp caller-supplied ttl to a sane bounded range before the *1000 (raw
     // `s as i64 * 1000` overflows i64 for huge values) — and pass the SAME clamped
@@ -155,7 +166,10 @@ pub async fn handle_ticket_create(
         tracing::debug!("ticket.create: prune failed: {e}");
     }
 
-    match ctx.device_token_mgr.create_bootstrap_ticket(ttl_ms) {
+    match ctx
+        .device_token_mgr
+        .create_bootstrap_ticket(ttl_ms, user_id.as_deref())
+    {
         Ok(ticket) => {
             // Expiration is 5 minutes from now by default; compute client-facing value.
             let ttl_ms = ttl_ms.unwrap_or(5 * 60 * 1000);

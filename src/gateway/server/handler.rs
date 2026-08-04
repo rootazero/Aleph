@@ -1837,6 +1837,7 @@ mod tests {
                 fingerprint: device_id,
                 role: "operator",
                 scopes: &[],
+                user_id: None,
             })
             .unwrap();
         store.set_device_user(device_id, user_id).unwrap();
