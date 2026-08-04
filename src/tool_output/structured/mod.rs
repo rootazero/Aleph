@@ -10,10 +10,21 @@
 //!
 //! Everything here is deterministic line processing — no LLM, no tree-sitter,
 //! no regex engine, no new dependency (R3 core minimalism). It plugs into
-//! [`ToolResultPruningStage`](super::tool_result_pruning::ToolResultPruningStage)
-//! as a smarter alternative to the first-line placeholder: prose that doesn't
-//! match a recognized type returns `None`, and the caller keeps its existing
-//! behaviour.
+//! `ToolResultPruningStage` as a smarter alternative to the first-line
+//! placeholder: prose that doesn't match a recognized type returns `None`, and
+//! the caller keeps its existing behaviour.
+//!
+//! # Who decides what
+//!
+//! - **What counts as signal** is the individual reducer's, and only that.
+//! - **How small is small enough** is the *caller's*, expressed as a token
+//!   budget and handed to [`reduce_within`]. Every reducer's size knob then
+//!   comes from the resulting [`Profile`] instead of a module-private constant,
+//!   so a tool that declares a 6 000-token budget gets a reduction sized for
+//!   6 000 tokens rather than one sized for nothing in particular and then cut
+//!   by a blind truncator downstream.
+//! - **Whether the reduction was worth emitting** is neither: it is measured
+//!   once, in bytes, by [`Reduction::is_meaningful_shrink`].
 
 use std::borrow::Cow;
 
@@ -45,22 +56,88 @@ impl ContentKind {
             Self::Json => "json",
         }
     }
+
+    /// Minimum line count this reducer's *own shape* requires before it is
+    /// worth consulting.
+    ///
+    /// This used to be one global gate applied ahead of classification, and that
+    /// shape mismatch made the JSON reducer structurally unreachable for the
+    /// single most common large tool result there is. `Value::to_string()`,
+    /// `curl`, every `--format json` flag and every MCP text result emit
+    /// **compact JSON on one line** — one line is under any line-count floor, so
+    /// classification returned `None` before `looks_like_json` was ever asked,
+    /// and a 300 KB API response fell through to a head/tail byte slice that
+    /// cuts JSON into invalid syntax mid-structure. A line floor is a
+    /// precondition of the *line-oriented* reducers; JSON's floor is
+    /// [`MIN_INPUT_BYTES`], which applies to every kind anyway.
+    const fn min_lines(self) -> usize {
+        match self {
+            Self::Json => 1,
+            Self::Log | Self::Search | Self::Diff => MIN_LINES,
+        }
+    }
 }
 
-/// Outcome of a structured reduction: the kept body plus a kept/total tally,
-/// so the caller can emit an honest header telling the model the result was
-/// compacted (and roughly how much was dropped).
+/// What a [`Reduction`]'s kept/total tally counts.
+///
+/// The unit is not incidental and must not be inferred at render time. The
+/// line-oriented reducers select whole lines out of the input's own lines, so
+/// "kept 43/812 lines" states the same sequence twice. The JSON reducer
+/// re-serializes a value tree, so its output's line count bears no relation to
+/// the input's — a dense single-line blob re-renders as dozens of lines and the
+/// header read `kept 43/1 lines`, claiming to have kept more than existed.
+/// Carrying the unit in the value means [`Reduction::render`] cannot mismatch
+/// it, and a new reducer has to state its unit to compile.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Tally {
+    /// Whole lines selected out of the input's lines (log / search / diff).
+    Lines { kept: usize, total: usize },
+    /// Characters, for a reducer that re-serializes rather than selects (json).
+    Chars { kept: usize, total: usize },
+}
+
+impl Tally {
+    /// The honest header phrasing for this unit.
+    fn describe(self) -> String {
+        match self {
+            Self::Lines { kept, total } => format!("kept {kept}/{total} lines"),
+            Self::Chars { kept, total } => format!("reduced {total}→{kept} chars"),
+        }
+    }
+
+    /// Kept count, in this tally's own unit.
+    ///
+    /// Test-only. Production reads the tally through [`Tally::describe`] (the
+    /// header) and never needs the raw number; a `pub` accessor with no
+    /// production caller is a second way to ask a question nobody is asking
+    /// (R10). Assertions do need it, so it lives here rather than being deleted.
+    #[cfg(test)]
+    #[must_use]
+    pub const fn kept(self) -> usize {
+        match self {
+            Self::Lines { kept, .. } | Self::Chars { kept, .. } => kept,
+        }
+    }
+
+    /// Total count, in this tally's own unit. Test-only, see [`Tally::kept`].
+    #[cfg(test)]
+    #[must_use]
+    pub const fn total(self) -> usize {
+        match self {
+            Self::Lines { total, .. } | Self::Chars { total, .. } => total,
+        }
+    }
+}
+
+/// Outcome of a structured reduction: the kept body plus a [`Tally`], so the
+/// caller can emit an honest header telling the model the result was compacted
+/// (and roughly how much was dropped).
 pub struct Reduction {
     pub kind: ContentKind,
     /// The reduced body (signal-preserving), without the header line.
     pub body: String,
-    /// Kept tally for `body`. Unit depends on the reducer: lines for the
-    /// line-oriented kinds (log / search / diff, excluding omission markers),
-    /// chars for [`ContentKind::Json`] — its body is re-pretty-printed, so a
-    /// line tally would be dishonest ("kept 43/1 lines" for a dense blob).
-    pub kept_lines: usize,
-    /// Tally for the original input, in the same unit as `kept_lines`.
-    pub total_lines: usize,
+    /// Kept/total tally for `body`, carrying its own unit.
+    pub tally: Tally,
 }
 
 impl Reduction {
@@ -69,22 +146,10 @@ impl Reduction {
     /// partial, so it can re-run the tool if it needs the dropped detail.
     #[must_use]
     pub fn render(&self) -> String {
-        // JSON is tallied in chars (see `kept_lines`) — render the matching
-        // unit so the header counts what the reducer actually measured.
-        if matches!(self.kind, ContentKind::Json) {
-            return format!(
-                "[compacted {}: reduced {}→{} chars]\n{}",
-                self.kind.label(),
-                self.total_lines,
-                self.kept_lines,
-                self.body
-            );
-        }
         format!(
-            "[compacted {}: kept {}/{} lines]\n{}",
+            "[compacted {}: {}]\n{}",
             self.kind.label(),
-            self.kept_lines,
-            self.total_lines,
+            self.tally.describe(),
             self.body
         )
     }
@@ -92,7 +157,7 @@ impl Reduction {
     /// Whether this reduction is worth emitting: the body must be at most
     /// [`MAX_KEPT_BYTES_X10`] tenths of `input`'s bytes.
     ///
-    /// Measured in **bytes**, deliberately. Every reducer's own guard counts
+    /// Measured in **bytes**, deliberately. Every reducer's own guard counted
     /// lines (or, for JSON, allowed any strict improvement at all), and line
     /// count is exactly the unit that doesn't bound context: one kept 200 KB
     /// line is a 94 % "line reduction" and a 1 % token reduction.
@@ -101,32 +166,155 @@ impl Reduction {
     }
 }
 
-/// Classify then reduce a tool-result body.
+/// Every size knob the reducers read, derived once from the caller's budget.
+///
+/// Before this existed each reducer hard-coded its caps, so a reduction was
+/// sized for nothing in particular: the diff reducer could emit 240 lines of up
+/// to 500 chars each — 120 KB — into a context slot the caller had already
+/// measured at 6 000 tokens, and `apply_result_budget` then handed that
+/// carefully signal-selected body to a *blind* head/tail truncator. The
+/// component that knows which lines matter has to be the one that decides how
+/// many of them fit.
+///
+/// All fields are character or item counts, never bytes: the reducers clamp by
+/// characters (P7 — a byte cap slices multi-byte characters), and the
+/// budget→characters conversion is the project's single source, reached through
+/// [`super::scale_to_budget`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Profile {
+    /// Chars kept per rendered line by the line-oriented reducers.
+    pub line_chars: usize,
+    /// Loud lines the log reducer may keep.
+    pub log_signal: usize,
+    /// Lines the diff reducer may keep.
+    pub diff_lines: usize,
+    /// Match lines the search reducer may keep overall.
+    pub search_total: usize,
+    /// Match lines the search reducer may keep per file.
+    pub search_per_file: usize,
+    /// Distinct files the search reducer opens a group for.
+    pub search_files: usize,
+    /// Chars kept from an oversized JSON string leaf.
+    pub json_string_chars: usize,
+    /// Elements kept from an oversized JSON array.
+    pub json_array_elems: usize,
+    /// Keys kept from an oversized JSON object.
+    pub json_object_keys: usize,
+    /// Records kept from a JSONL / ndjson stream.
+    pub jsonl_records: usize,
+}
+
+impl Profile {
+    /// The caps the module shipped with, and the ceiling every derived profile
+    /// is clamped to. They are not merely a default: `log_signal = 24` also
+    /// encodes "a digest orients, it does not reproduce the log", so a caller
+    /// with an enormous budget still gets a digest.
+    pub const DEFAULT: Self = Self {
+        line_chars: 500,
+        log_signal: 24,
+        diff_lines: 240,
+        search_total: 60,
+        search_per_file: 5,
+        search_files: 20,
+        json_string_chars: 200,
+        json_array_elems: 8,
+        json_object_keys: 48,
+        jsonl_records: 12,
+    };
+
+    /// Floors: below these a reduction stops being a digest and becomes a
+    /// rumour. A caller whose budget cannot pay for even this gets a reduction
+    /// slightly over its budget rather than a body with no `+`/`-` line in it —
+    /// and [`Reduction::is_meaningful_shrink`] plus the caller's own token guard
+    /// still decide whether to take it.
+    const FLOOR: Self = Self {
+        line_chars: 80,
+        log_signal: 4,
+        diff_lines: 12,
+        search_total: 8,
+        search_per_file: 2,
+        search_files: 3,
+        json_string_chars: 40,
+        json_array_elems: 2,
+        json_object_keys: 8,
+        jsonl_records: 2,
+    };
+
+    /// Scale every cap linearly with `budget_tokens`, clamped to
+    /// `[FLOOR, DEFAULT]`.
+    ///
+    /// Scaling is [`super::scale_to_budget`], shared with the tier-2 digest cap,
+    /// so at the default result budget every knob equals [`Self::DEFAULT`] and
+    /// the reduction is byte-for-byte what it has always been. Only a tool
+    /// declaring a *smaller* budget (or the stale pass, which asks for an
+    /// aggressive one) sees tighter caps — and it sees them inside the reducer
+    /// rather than as a blind cut afterwards.
+    #[must_use]
+    pub fn for_token_budget(budget_tokens: usize) -> Self {
+        let d = Self::DEFAULT;
+        let f = Self::FLOOR;
+        let scaled = |default, floor| super::scale_to_budget(default, floor, budget_tokens);
+        Self {
+            line_chars: scaled(d.line_chars, f.line_chars),
+            log_signal: scaled(d.log_signal, f.log_signal),
+            diff_lines: scaled(d.diff_lines, f.diff_lines),
+            search_total: scaled(d.search_total, f.search_total),
+            search_per_file: scaled(d.search_per_file, f.search_per_file),
+            search_files: scaled(d.search_files, f.search_files),
+            json_string_chars: scaled(d.json_string_chars, f.json_string_chars),
+            json_array_elems: scaled(d.json_array_elems, f.json_array_elems),
+            json_object_keys: scaled(d.json_object_keys, f.json_object_keys),
+            jsonl_records: scaled(d.jsonl_records, f.jsonl_records),
+        }
+    }
+}
+
+/// Classify then reduce a tool-result body with the default profile.
+///
+/// Test-only, for the same reason as [`classify`]: both production callers know
+/// their budget and pass it, so a budget-less entry point is a second way to ask
+/// the question — and the one that answers it with caps sized for a budget the
+/// caller does not have. Kept because the reducers' own tests are about *what is
+/// signal*, which the default profile expresses most plainly.
+#[cfg(test)]
+#[must_use]
+pub fn reduce(text: &str) -> Option<Reduction> {
+    reduce_within(text, None)
+}
+
+/// Classify then reduce a tool-result body, sized for `budget_tokens`.
 ///
 /// Tries each candidate type in most-specific-first order and returns the first
 /// reducer that produces a **meaningful shrink**. Falling through matters: the
 /// cheap `looks_like_*` gates are heuristics, and a gate that fires on content
 /// its reducer then declines used to end the attempt outright. `rg --json` is
 /// the case that made this concrete — ndjson satisfies
-/// [`json::looks_like_json`] (first line `{`, last line `}`), then
-/// `serde_json::from_str` rejects the multi-document body, and the search/log
-/// reducers were never consulted at all.
+/// [`json::looks_like_json`], then `serde_json::from_str` rejects the
+/// multi-document body, and the search/log reducers were never consulted at all.
 ///
 /// Returns `None` when no candidate produces a worthwhile reduction — the
 /// caller then keeps its own fallback (a first-line placeholder for the stale
 /// pass, head/tail truncation at ingress), which is safe for prose.
 #[must_use]
-pub fn reduce(text: &str) -> Option<Reduction> {
-    let lines: Vec<&str> = text.lines().collect();
-    if lines.len() < MIN_LINES {
+pub fn reduce_within(text: &str, budget_tokens: Option<usize>) -> Option<Reduction> {
+    // One size floor for every kind. The line floor that used to stand here is a
+    // property of the *line-oriented* reducers and now lives on each kind (see
+    // [`ContentKind::min_lines`]); what is universally true is only that below
+    // some size a header costs more than the lines it drops.
+    if text.len() < MIN_INPUT_BYTES {
         return None;
     }
+    let profile = budget_tokens.map_or(Profile::DEFAULT, Profile::for_token_budget);
+    let lines: Vec<&str> = text.lines().collect();
     for kind in candidates(&lines) {
+        if lines.len() < kind.min_lines() {
+            continue;
+        }
         let reduced = match kind {
-            ContentKind::Diff => diff::reduce_diff(text),
-            ContentKind::Search => search::reduce_search(text),
-            ContentKind::Json => json::reduce_json(text),
-            ContentKind::Log => log::reduce_log(text),
+            ContentKind::Diff => diff::reduce_diff(text, &profile),
+            ContentKind::Search => search::reduce_search(text, &profile),
+            ContentKind::Json => json::reduce_json(text, &profile),
+            ContentKind::Log => log::reduce_log(text, &profile),
         };
         // Central size guard — the single place that decides whether a
         // reduction was worth it. Each reducer only has to decide *what* is
@@ -184,15 +372,18 @@ fn candidates(lines: &[&str]) -> Vec<ContentKind> {
 #[must_use]
 pub fn classify(text: &str) -> Option<ContentKind> {
     let lines: Vec<&str> = text.lines().collect();
-    if lines.len() < MIN_LINES {
-        return None;
-    }
-    candidates(&lines).first().copied()
+    candidates(&lines)
+        .into_iter()
+        .find(|kind| lines.len() >= kind.min_lines())
 }
 
-/// Below this line count, structured reduction isn't worth the header cost;
-/// the caller's first-line placeholder already handles tiny results.
+/// Below this line count, the line-oriented reducers have nothing to select
+/// that the caller's first-line placeholder doesn't already handle.
 const MIN_LINES: usize = 8;
+
+/// Below this many bytes, no reduction is worth its header line — the one size
+/// precondition that holds for every content type.
+const MIN_INPUT_BYTES: usize = 512;
 
 /// A reduction must leave at most this fraction (in tenths) of the input's
 /// bytes to be worth emitting. A hair under the input is not a reduction — it
@@ -200,35 +391,35 @@ const MIN_LINES: usize = 8;
 /// apply a real one.
 const MAX_KEPT_BYTES_X10: usize = 9;
 
-/// Char cap applied to every line a line-oriented reducer keeps.
+/// Clamp one line to `max_chars` characters, char-boundary safe (P7 — never
+/// slice a multi-byte character). Returns [`Cow::Borrowed`] for the
+/// overwhelmingly common short line, so clamping allocates nothing.
 ///
-/// Without it, all of the "kept N/M lines" arithmetic is measured in the one
-/// unit that doesn't matter: a `rg` hit inside a minified bundle is a single
+/// Without this cap, all of the "kept N/M lines" arithmetic is measured in the
+/// one unit that doesn't matter: a `rg` hit inside a minified bundle is a single
 /// 200 KB line, so "kept 5/40 lines" could still be a megabyte of context. pi
 /// clamps grep match lines at 500 chars for exactly this reason
 /// (`GREP_MAX_LINE_LENGTH`), and `file_ops/text.rs::clamp_line` is the same idea
 /// on the read path.
-const MAX_LINE_CHARS: usize = 500;
-
-/// Clamp one line to [`MAX_LINE_CHARS`] characters, char-boundary safe (P7 —
-/// never slice a multi-byte character). Returns [`Cow::Borrowed`] for the
-/// overwhelmingly common short line, so clamping allocates nothing.
-fn clamp_line(line: &str) -> Cow<'_, str> {
+fn clamp_line(line: &str, max_chars: usize) -> Cow<'_, str> {
     // `chars().count()` is O(n); skip it entirely when the byte length already
     // proves the line is short (a char is at least one byte).
-    if line.len() <= MAX_LINE_CHARS {
+    if line.len() <= max_chars {
         return Cow::Borrowed(line);
     }
-    let mut kept = String::with_capacity(MAX_LINE_CHARS + 16);
-    for (seen, c) in line.chars().enumerate() {
-        if seen == MAX_LINE_CHARS {
-            let dropped = line.chars().count() - MAX_LINE_CHARS;
-            kept.push_str(&format!("… (+{dropped} chars, line truncated)"));
-            return Cow::Owned(kept);
-        }
-        kept.push(c);
-    }
-    Cow::Owned(kept)
+    // One pass for the head, one for the tail. The obvious version called
+    // `chars().count()` over the *whole* line to compute the dropped count after
+    // having already walked its head — two and a half traversals of a line whose
+    // entire problem is that it is 200 KB long.
+    let Some((split, _)) = line.char_indices().nth(max_chars) else {
+        // Multi-byte content: more bytes than `max_chars` but fewer characters.
+        return Cow::Borrowed(line);
+    };
+    let dropped = line[split..].chars().count();
+    Cow::Owned(format!(
+        "{}… (+{dropped} chars, line truncated)",
+        &line[..split]
+    ))
 }
 
 /// Render a subset of `lines` identified by the sorted, deduped `kept` indices.
@@ -242,7 +433,12 @@ fn clamp_line(line: &str) -> Cow<'_, str> {
 ///
 /// `kept` must be ascending and in bounds. Shared by the log and diff reducers
 /// (search renders per file).
-pub(super) fn render_selected(lines: &[&str], kept: &[usize], total: usize) -> String {
+pub(super) fn render_selected(
+    lines: &[&str],
+    kept: &[usize],
+    total: usize,
+    profile: &Profile,
+) -> String {
     let mut out = String::new();
     let push_gap = |out: &mut String, gap: usize| {
         if gap == 0 {
@@ -264,7 +460,7 @@ pub(super) fn render_selected(lines: &[&str], kept: &[usize], total: usize) -> S
         if !out.is_empty() {
             out.push('\n');
         }
-        out.push_str(&clamp_line(lines[idx]));
+        out.push_str(&clamp_line(lines[idx], profile.line_chars));
         prev = Some(idx);
     }
     if let Some(last) = prev {
@@ -280,7 +476,7 @@ pub(super) fn render_selected(lines: &[&str], kept: &[usize], total: usize) -> S
 /// whole-line allocations per line, which for the 200 KB minified line above is
 /// 800 KB of copying to decide what to throw away. `needle` must already be
 /// lowercase.
-fn contains_ignore_ascii_case(haystack: &str, needle: &str) -> bool {
+pub(super) fn contains_ignore_ascii_case(haystack: &str, needle: &str) -> bool {
     let (h, n) = (haystack.as_bytes(), needle.as_bytes());
     if n.is_empty() || h.len() < n.len() {
         return n.is_empty();
@@ -331,20 +527,24 @@ mod tests {
     fn tiny_input_is_not_reduced() {
         let tiny = "error: boom\nwarning: x\n";
         assert_eq!(classify(tiny), None, "under MIN_LINES → no reduction");
+        assert!(
+            reduce(tiny).is_none(),
+            "under MIN_INPUT_BYTES → no reduction"
+        );
     }
 
     #[test]
     fn render_selected_marks_gaps() {
         let lines = vec!["a", "b", "c", "d", "e"];
         // Keep 0 and 4 — three lines (1,2,3) omitted between them.
-        let body = render_selected(&lines, &[0, 4], lines.len());
+        let body = render_selected(&lines, &[0, 4], lines.len(), &Profile::DEFAULT);
         assert_eq!(body, "a\n… (3 lines omitted) …\ne");
     }
 
     #[test]
     fn render_selected_contiguous_has_no_marker() {
         let lines = vec!["a", "b", "c"];
-        let body = render_selected(&lines, &[0, 1, 2], lines.len());
+        let body = render_selected(&lines, &[0, 1, 2], lines.len(), &Profile::DEFAULT);
         assert_eq!(body, "a\nb\nc");
     }
 
@@ -364,5 +564,117 @@ mod tests {
         // Log — most-specific-first ordering.
         let d = "diff --git a/x.rs b/x.rs\n@@ -1,3 +1,3 @@\n-let x = error();\n+let x = ok();\n context\n context2\n context3\n context4\n";
         assert_eq!(classify(d), Some(ContentKind::Diff));
+    }
+
+    /// A line whose byte length exceeds the cap but whose *character* count does
+    /// not must survive verbatim — the byte-length fast path is an optimisation,
+    /// not the predicate.
+    #[test]
+    fn clamp_line_does_not_cut_multibyte_lines_that_fit_in_chars() {
+        let cjk = "上".repeat(100); // 300 bytes, 100 chars
+        assert!(cjk.len() > 200);
+        assert!(matches!(clamp_line(&cjk, 200), Cow::Borrowed(_)));
+        // …and one that genuinely overflows is cut on a character boundary.
+        let long = "上".repeat(400);
+        let clamped = clamp_line(&long, 200);
+        assert!(clamped.starts_with(&"上".repeat(200)));
+        assert!(clamped.contains("+200 chars"), "got: {clamped}");
+    }
+
+    /// The reference budget reproduces the shipped caps exactly, so the
+    /// overwhelmingly common tool call is byte-for-byte unaffected by profiles
+    /// existing at all.
+    #[test]
+    fn the_default_budget_reproduces_the_default_profile() {
+        assert_eq!(
+            Profile::for_token_budget(
+                crate::tools::result_processing::DEFAULT_RESULT_BUDGET_TOKENS
+            ),
+            Profile::DEFAULT,
+        );
+        // A larger budget must not *raise* the caps: `log_signal` also encodes
+        // "a digest orients, it does not reproduce the log".
+        assert_eq!(Profile::for_token_budget(1_000_000), Profile::DEFAULT);
+    }
+
+    /// A smaller budget tightens every knob and never drops below the floor — a
+    /// reduction with no signal left in it is worse than no reduction.
+    #[test]
+    fn a_smaller_budget_tightens_every_knob_but_never_past_the_floor() {
+        let small = Profile::for_token_budget(600);
+        let d = Profile::DEFAULT;
+        let f = Profile::FLOOR;
+        for (label, got, def, floor) in [
+            ("line_chars", small.line_chars, d.line_chars, f.line_chars),
+            ("log_signal", small.log_signal, d.log_signal, f.log_signal),
+            ("diff_lines", small.diff_lines, d.diff_lines, f.diff_lines),
+            (
+                "search_total",
+                small.search_total,
+                d.search_total,
+                f.search_total,
+            ),
+            (
+                "search_per_file",
+                small.search_per_file,
+                d.search_per_file,
+                f.search_per_file,
+            ),
+            (
+                "search_files",
+                small.search_files,
+                d.search_files,
+                f.search_files,
+            ),
+            (
+                "json_string_chars",
+                small.json_string_chars,
+                d.json_string_chars,
+                f.json_string_chars,
+            ),
+            (
+                "json_array_elems",
+                small.json_array_elems,
+                d.json_array_elems,
+                f.json_array_elems,
+            ),
+            (
+                "json_object_keys",
+                small.json_object_keys,
+                d.json_object_keys,
+                f.json_object_keys,
+            ),
+            (
+                "jsonl_records",
+                small.jsonl_records,
+                d.jsonl_records,
+                f.jsonl_records,
+            ),
+        ] {
+            assert!(got < def, "{label}: a 600-token budget must tighten {def}");
+            assert!(got >= floor, "{label}: {got} fell below the floor {floor}");
+        }
+    }
+
+    /// The headline connection: compact single-line JSON — `curl`, every
+    /// `--format json` flag, every flattened tool envelope — used to be
+    /// structurally unreachable, because the line floor was applied to *all*
+    /// kinds and the one content type whose canonical wire form has no newline
+    /// therefore never reached its own reducer.
+    #[test]
+    fn compact_single_line_json_is_reachable() {
+        let payload = "y".repeat(4000);
+        let one_line =
+            format!(r#"{{"status":"error","code":503,"detail":"{payload}","retryable":true}}"#);
+        assert_eq!(one_line.lines().count(), 1, "precondition: one line");
+
+        assert_eq!(classify(&one_line), Some(ContentKind::Json));
+        let r = reduce(&one_line).expect("a 4 KB single-line API response must reduce");
+        assert_eq!(r.kind, ContentKind::Json);
+        // The salient short scalars survive; the bulk leaf does not.
+        assert!(r.body.contains("\"status\""), "got: {}", r.body);
+        assert!(r.body.contains("503"));
+        assert!(!r.body.contains(&payload));
+        assert!(r.body.len() < one_line.len() / 2);
     }
 }

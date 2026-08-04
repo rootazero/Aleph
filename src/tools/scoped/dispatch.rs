@@ -1160,7 +1160,13 @@ impl ScopedToolService {
         if let Some(limit) = budget {
             if crate::context::budget::pressure::estimate_tokens_smart(&model_facing) > limit {
                 let mut cleaned = out.value.clone();
-                let reductions = crate::tool_output::hygiene::clean_result_value(&mut cleaned);
+                // The tool's own declared budget sizes the reduction. It was
+                // already in scope here and thrown away: the reducers used
+                // fixed caps and the head/tail truncator downstream then cut
+                // whatever they produced, so a signal-aware selection was
+                // finished off by a blind one.
+                let reductions =
+                    crate::tool_output::hygiene::clean_result_value(&mut cleaned, Some(limit));
                 if !reductions.is_empty() {
                     let flattened = match &cleaned {
                         Value::String(s) => s.clone(),

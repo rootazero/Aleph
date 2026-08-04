@@ -2,7 +2,7 @@
 //! trim surrounding context to a couple of lines. The changes *are* the signal;
 //! the unchanged context is the noise a stale diff can shed.
 
-use super::{render_selected, ContentKind, Reduction};
+use super::{render_selected, ContentKind, Profile, Reduction, Tally};
 
 /// Context lines kept on each side of a run of changes.
 ///
@@ -11,11 +11,12 @@ use super::{render_selected, ContentKind, Reduction};
 /// anchor, so the old value of 2 kept 3011 of 3024 lines on a real 26-file diff
 /// and the only thing that shrank the output was the blind head truncate below.
 const MAX_CONTEXT: usize = 1;
-/// Hard cap on kept lines so a giant all-context diff still shrinks; the
-/// surrounding stage's token guard provides the final safety net.
-const MAX_KEPT: usize = 240;
 /// Floor on lines allotted to each file when the cap forces a per-file split, so
 /// every file keeps its header plus a little detail rather than vanishing.
+///
+/// Structural, not a size knob: below four lines a file's section cannot carry
+/// its own header *and* a change line, and a "diff" with no change line in it is
+/// not a diff. The cap it is measured against is [`Profile::diff_lines`].
 const MIN_PER_FILE: usize = 4;
 
 /// Cheap detector: a unified diff has unmistakable structural markers.
@@ -65,7 +66,7 @@ fn is_anchor(l: &str) -> bool {
     is_header(l) || is_change(l)
 }
 
-pub(super) fn reduce_diff(text: &str) -> Option<Reduction> {
+pub(super) fn reduce_diff(text: &str, profile: &Profile) -> Option<Reduction> {
     let lines: Vec<&str> = text.lines().collect();
     let total = lines.len();
     let mut keep = vec![false; total];
@@ -95,10 +96,10 @@ pub(super) fn reduce_diff(text: &str) -> Option<Reduction> {
         return None; // all signal — nothing to drop
     }
     let files_total = count_file_starts(&lines, 0..total);
-    if kept.len() > MAX_KEPT {
-        kept = trim_per_file(&lines, &kept);
+    if kept.len() > profile.diff_lines {
+        kept = trim_per_file(&lines, &kept, profile.diff_lines);
     }
-    let mut body = render_selected(&lines, &kept, total);
+    let mut body = render_selected(&lines, &kept, total, profile);
     let files_shown = count_file_starts(&lines, kept.iter().copied());
     if files_total > files_shown {
         body.push_str(&format!(
@@ -109,8 +110,10 @@ pub(super) fn reduce_diff(text: &str) -> Option<Reduction> {
     Some(Reduction {
         kind: ContentKind::Diff,
         body,
-        kept_lines: kept.len(),
-        total_lines: total,
+        tally: Tally::Lines {
+            kept: kept.len(),
+            total,
+        },
     })
 }
 
@@ -136,8 +139,8 @@ fn count_file_starts(lines: &[&str], idxs: impl Iterator<Item = usize>) -> usize
     idxs.filter(|&i| starts_file(lines, i, git_style)).count()
 }
 
-/// Spread [`MAX_KEPT`] across the files the diff touches instead of taking the
-/// first `MAX_KEPT` kept lines.
+/// Spread `max_kept` across the files the diff touches instead of taking the
+/// first `max_kept` kept lines.
 ///
 /// The head truncate this replaces was the reason a 26-file diff reached the
 /// model as **3 files** under a header (`kept 240/3024 lines`) that implied
@@ -145,7 +148,7 @@ fn count_file_starts(lines: &[&str], idxs: impl Iterator<Item = usize>) -> usize
 /// confidently report that it touched three files. Each file now keeps its
 /// section header plus a share of its own detail, and change lines are preferred
 /// over context lines inside that share.
-fn trim_per_file(lines: &[&str], kept: &[usize]) -> Vec<usize> {
+fn trim_per_file(lines: &[&str], kept: &[usize], max_kept: usize) -> Vec<usize> {
     let git_style = is_git_style(lines);
     // Split `kept` into per-file runs. Indices before the first file header
     // (a header-less fragment) form an initial run of their own.
@@ -159,13 +162,13 @@ fn trim_per_file(lines: &[&str], kept: &[usize]) -> Vec<usize> {
             .push(i);
     }
     // `MIN_PER_FILE` is a floor, so on a very wide diff a per-file share would
-    // push the total back past `MAX_KEPT` (500 files × 4 = 2000 lines, each
+    // push the total back past `max_kept` (500 files × 4 = 2000 lines, each
     // separated by its own omission marker). Bound the number of files that get
     // detail; the rest are reported by the trailing "N more files changed" note,
     // which is the honest answer at that width anyway.
-    let max_files = (MAX_KEPT / MIN_PER_FILE).max(1);
+    let max_files = (max_kept / MIN_PER_FILE).max(1);
     let runs = &runs[..runs.len().min(max_files)];
-    let quota = (MAX_KEPT / runs.len().max(1)).max(MIN_PER_FILE);
+    let quota = (max_kept / runs.len().max(1)).max(MIN_PER_FILE);
 
     let mut out: Vec<usize> = Vec::new();
     for run in runs {
@@ -222,6 +225,10 @@ fn trim_per_file(lines: &[&str], kept: &[usize]) -> Vec<usize> {
 mod tests {
     use super::*;
 
+    fn reduce(text: &str) -> Option<Reduction> {
+        reduce_diff(text, &Profile::DEFAULT)
+    }
+
     fn sample_diff() -> String {
         let mut s = String::from("diff --git a/src/x.rs b/src/x.rs\n");
         s.push_str("index abc1234..def5678 100644\n");
@@ -264,13 +271,13 @@ mod tests {
     #[test]
     fn keeps_changes_drops_context() {
         let d = sample_diff();
-        let r = reduce_diff(&d).expect("diff should reduce");
+        let r = reduce(&d).expect("diff should reduce");
         assert_eq!(r.kind, ContentKind::Diff);
         // The change lines survive.
         assert!(r.body.contains("-    let old = 1;"));
         assert!(r.body.contains("+    let new = 2;"));
         // The bulk of context is dropped.
-        assert!(r.kept_lines < r.total_lines);
+        assert!(r.tally.kept() < r.tally.total());
         assert!(
             r.body.contains("lines omitted"),
             "expected an omission marker; got:\n{}",
@@ -287,10 +294,7 @@ mod tests {
         for i in 0..10 {
             s.push_str(&format!("-old {i}\n+new {i}\n"));
         }
-        assert!(
-            reduce_diff(&s).is_none(),
-            "an all-change diff should not reduce"
-        );
+        assert!(reduce(&s).is_none(), "an all-change diff should not reduce");
     }
 
     /// A wide diff must stay bounded and must say how many files it dropped —
@@ -309,11 +313,11 @@ mod tests {
             }
             d.push_str("-let old = 1;\n+let new = 2;\n");
         }
-        let r = reduce_diff(&d).expect("a 400-file diff must reduce");
+        let r = reduce(&d).expect("a 400-file diff must reduce");
         assert!(
-            r.kept_lines <= MAX_KEPT + MIN_PER_FILE,
+            r.tally.kept() <= Profile::DEFAULT.diff_lines + MIN_PER_FILE,
             "kept must stay near the cap, got {}",
-            r.kept_lines
+            r.tally.kept()
         );
         assert!(
             r.body.contains("more files changed, not shown"),
@@ -355,10 +359,47 @@ mod tests {
                 changes > 0,
                 "files={files}: a diff reduction with no change lines is not a diff \
                  (kept {}/{})",
-                r.kept_lines,
-                r.total_lines
+                r.tally.kept(),
+                r.tally.total()
             );
         }
+    }
+
+    /// A tight budget must arrive as fewer kept lines *inside* the reducer, which
+    /// is the only component that knows a `+`/`-` line outranks a context line.
+    /// Before profiles, a 6 000-token tool got a 240-line body and
+    /// `apply_result_budget` then head/tail-cut it — amputating the trailing
+    /// "N more files changed" note along with the last files.
+    #[test]
+    fn a_tight_budget_keeps_fewer_lines_and_still_keeps_changes() {
+        let mut d = String::new();
+        for f in 0..60 {
+            d.push_str(&format!("diff --git a/f{f}.rs b/f{f}.rs\n"));
+            d.push_str("index 1111111..2222222 100644\n");
+            d.push_str(&format!("--- a/f{f}.rs\n+++ b/f{f}.rs\n"));
+            d.push_str("@@ -1,6 +1,6 @@\n");
+            for c in 0..6 {
+                d.push_str(&format!(" context {c}\n"));
+            }
+            d.push_str("-let old = 1;\n+let new = 2;\n");
+        }
+        let wide = reduce(&d).expect("default profile must reduce");
+        let tight = reduce_diff(&d, &Profile::for_token_budget(500)).expect("tight must reduce");
+        assert!(
+            tight.tally.kept() < wide.tally.kept(),
+            "tight kept {} vs default {}",
+            tight.tally.kept(),
+            wide.tally.kept()
+        );
+        assert!(
+            tight.body.lines().filter(|l| is_change(l)).count() > 0,
+            "a diff reduction with no change lines is not a diff:\n{}",
+            tight.body
+        );
+        assert!(
+            tight.body.contains("more files changed, not shown"),
+            "the dropped files must still be announced"
+        );
     }
 
     /// git's default is `-U3`; a context window of 2 made the whole pass a no-op

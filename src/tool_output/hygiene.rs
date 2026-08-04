@@ -42,13 +42,20 @@
 //! - **Opt-in by pressure.** The caller only runs this when the flattened result
 //!   is already over the tool's declared token budget, so the overwhelming
 //!   majority of tool calls are byte-for-byte unaffected.
+//! - **Sized by the caller's budget.** That same declared budget is handed down
+//!   to [`structured::reduce_within`], so a tool that declares 6 000 tokens gets
+//!   a reduction sized for 6 000 tokens. The budget was always in scope at the
+//!   call site and was simply dropped: the reducers used fixed caps and
+//!   `apply_result_budget` then head/tail-cut whatever came out, which is a
+//!   blind truncator undoing a signal-aware selection.
 
 use serde_json::Value;
 
 use crate::context::budget::pressure::estimate_tokens_smart;
 
-use super::distill::distill_output;
+use super::distill::{distill_output, MAX_SALIENT_LINES};
 use super::sanitize::sanitize_command_output;
+use super::scale_to_budget;
 use super::structured::{self, ContentKind};
 
 /// Token floor a single string field must clear before the content-type router
@@ -94,21 +101,34 @@ pub struct FieldReduction {
 /// Apply content-type-routed reduction to every reducible text field of a tool
 /// result, in place. Returns one entry per field actually shortened (empty when
 /// nothing matched, which is the common case and a strict no-op).
+///
+/// `budget_tokens` is the tool's declared result budget, used to size each
+/// reduction. It is applied per field rather than split across them: a result
+/// with two oversized fields is rare, and the alternative — dividing the budget
+/// by a field count discovered mid-walk — would size the first field against a
+/// denominator that does not exist yet. The final authority remains
+/// `apply_result_budget`, which sees the whole flattened value.
 #[must_use]
-pub fn clean_result_value(value: &mut Value) -> Vec<FieldReduction> {
+pub fn clean_result_value(value: &mut Value, budget_tokens: Option<usize>) -> Vec<FieldReduction> {
     let mut out = Vec::new();
     let mut path = Vec::new();
-    walk(value, &mut path, 0, &mut out);
+    walk(value, &mut path, 0, budget_tokens, &mut out);
     out
 }
 
-fn walk(value: &mut Value, path: &mut Vec<String>, depth: usize, out: &mut Vec<FieldReduction>) {
+fn walk(
+    value: &mut Value,
+    path: &mut Vec<String>,
+    depth: usize,
+    budget_tokens: Option<usize>,
+    out: &mut Vec<FieldReduction>,
+) {
     if depth > MAX_DEPTH {
         return;
     }
     match value {
         Value::String(s) => {
-            if let Some((method, before, after)) = reduce_field(s) {
+            if let Some((method, before, after)) = reduce_field(s, budget_tokens) {
                 out.push(FieldReduction {
                     field: if path.is_empty() {
                         // A bare `Value::String` root — an MCP text result.
@@ -125,14 +145,14 @@ fn walk(value: &mut Value, path: &mut Vec<String>, depth: usize, out: &mut Vec<F
         Value::Object(map) => {
             for (key, child) in map.iter_mut() {
                 path.push(key.clone());
-                walk(child, path, depth + 1, out);
+                walk(child, path, depth + 1, budget_tokens, out);
                 path.pop();
             }
         }
         Value::Array(items) => {
             for (idx, child) in items.iter_mut().enumerate() {
                 path.push(idx.to_string());
-                walk(child, path, depth + 1, out);
+                walk(child, path, depth + 1, budget_tokens, out);
                 path.pop();
             }
         }
@@ -140,10 +160,32 @@ fn walk(value: &mut Value, path: &mut Vec<String>, depth: usize, out: &mut Vec<F
     }
 }
 
+/// How many salient lines a tier-2 digest may emit under `budget_tokens`.
+///
+/// `OutputDigest::render` has taken this cap since it was written, and its own
+/// doc says the caller "can shrink this to honour a token budget" — yet every
+/// caller passed `salient.len()`, i.e. no cap at all. A documented budget hook
+/// with no caller using it as one is the reason a tool declaring 400 tokens and
+/// a tool declaring 8 000 got byte-identical digests. Scaled by the same
+/// [`scale_to_budget`] the structured reducers use, so tier 1 and tier 2 respond
+/// to a budget the same way and at the default budget neither changes.
+fn salient_cap(budget_tokens: Option<usize>) -> usize {
+    budget_tokens.map_or(MAX_SALIENT_LINES, |tokens| {
+        scale_to_budget(MAX_SALIENT_LINES, MIN_SALIENT_LINES, tokens)
+    })
+}
+
+/// Floor for [`salient_cap`]: fewer diagnostics than this and the digest stops
+/// naming the failure it exists to name.
+const MIN_SALIENT_LINES: usize = 4;
+
 /// Reduce one string field in place. `None` (and the field untouched) when the
 /// field is too small to bother with, carries neither recognizable structure nor
 /// error signal, or when the reduction wouldn't actually be smaller.
-fn reduce_field(field: &mut String) -> Option<(ReductionMethod, usize, usize)> {
+fn reduce_field(
+    field: &mut String,
+    budget_tokens: Option<usize>,
+) -> Option<(ReductionMethod, usize, usize)> {
     let tokens_before = estimate_tokens_smart(field);
     if tokens_before < MIN_FIELD_TOKENS {
         return None;
@@ -159,7 +201,7 @@ fn reduce_field(field: &mut String) -> Option<(ReductionMethod, usize, usize)> {
 
     // Tier 1: content-type-routed structural reduction. Preferred — it preserves
     // shape and works for successful output, not just failures.
-    let candidate = match structured::reduce(&cleaned) {
+    let candidate = match structured::reduce_within(&cleaned, budget_tokens) {
         Some(reduction) => Some((
             ReductionMethod::Structured(reduction.kind),
             reduction.render(),
@@ -167,13 +209,17 @@ fn reduce_field(field: &mut String) -> Option<(ReductionMethod, usize, usize)> {
         // Tier 2: an error + path digest. Complements tier 1 rather than
         // duplicating it: the router needs recognizable *structure*, the
         // distiller needs an error *signal*, and plenty of real output has one
-        // without the other.
+        // without the other. `distill_output` declines a payload with no
+        // newline — a single line cannot be line-distilled, and this arm used to
+        // replace a 300 KB compact JSON response with 400 characters of its own
+        // envelope under an `[Output digest: 1 lines, 1 error]` header. Tier 1
+        // is the one that handles that shape, now that it can see it.
         None => distill_output(&cleaned)
             .filter(|digest| digest.error_count > 0)
             .map(|digest| {
                 (
                     ReductionMethod::Distilled,
-                    digest.render(digest.salient.len()),
+                    digest.render(salient_cap(budget_tokens)),
                 )
             }),
     };
@@ -222,7 +268,7 @@ mod tests {
         let mut value = failing_build_output();
         let before = value.to_string().len();
 
-        let reductions = clean_result_value(&mut value);
+        let reductions = clean_result_value(&mut value, None);
 
         assert_eq!(reductions.len(), 1, "only `stdout` should reduce");
         assert_eq!(reductions[0].field, "stdout");
@@ -259,10 +305,22 @@ mod tests {
         assert_eq!(value["success"], false);
     }
 
-    /// The regression that motivated this module: flattening first makes the
-    /// content-type router blind, because compact JSON is one single line.
+    /// The regression that motivated this module: the router must see the
+    /// *fields*, not the flattened envelope.
+    ///
+    /// The evidence has changed shape since this test was written. Back then the
+    /// envelope was simply unroutable — one line was under the line floor, so
+    /// classification declined and the reducers never fired for any builtin
+    /// tool. That floor was itself the bug (it made compact JSON unreachable
+    /// everywhere, see `structured::ContentKind::min_lines`), and now the
+    /// envelope *does* route — as JSON, which is what it is. The ordering
+    /// argument is unchanged and stronger for being visible: reducing the
+    /// envelope reduces the wrong thing. `stdout` is a string leaf, so the JSON
+    /// reducer keeps its first couple of hundred characters and the compile
+    /// error 400 lines in is gone; reduced field-wise, the log reducer keeps
+    /// exactly that error.
     #[test]
-    fn flattened_json_is_one_line_so_reducers_must_run_before_flattening() {
+    fn the_flattened_envelope_reduces_the_wrong_thing() {
         let value = failing_build_output();
         let flattened = value.to_string();
         assert_eq!(
@@ -270,22 +328,125 @@ mod tests {
             1,
             "Value::to_string() escapes newlines — the whole log is one line"
         );
+
+        let whole = structured::reduce(&flattened).expect("the envelope routes as JSON");
+        assert_eq!(whole.kind, structured::ContentKind::Json);
         assert!(
-            structured::classify(&flattened).is_none(),
-            "classify() cannot route single-line input, which is why the \
-             reducers never fired for builtin tools"
+            !whole.render().contains("error[E0382]"),
+            "reducing the envelope keeps the head of `stdout`, not its signal"
         );
-        // …whereas the same content reached field-wise is cleanable: the
-        // distiller finds the compile error and its `file:line`, which it cannot
-        // do once every newline is an escape and the whole log is one line.
-        let field = value["stdout"].as_str().unwrap();
-        let digest = super::distill_output(field).expect("field-wise distill finds the error");
-        assert!(digest.error_count > 0);
-        assert!(digest.paths.iter().any(|p| p.contains("src/main.rs")));
+
+        // …whereas the same content reached field-wise keeps the error and its
+        // `file:line`, which is the whole reason this module runs before
+        // flattening. (This fixture takes tier 2: two loud lines is under
+        // `looks_like_log`'s deliberately conservative threshold, which is
+        // exactly the complementarity the two tiers are for.)
+        let mut per_field = value.clone();
+        let reductions = clean_result_value(&mut per_field, None);
+        assert_eq!(reductions.len(), 1);
+        assert_eq!(reductions[0].method, ReductionMethod::Distilled);
+        let stdout = per_field["stdout"].as_str().expect("stays a string");
+        assert!(stdout.contains("error[E0382]"), "got: {stdout}");
+        assert!(stdout.contains("src/main.rs:10:5"));
+    }
+
+    /// A compact JSON API response — one line, no structure a line-oriented
+    /// reducer can see — used to take the tier-2 arm and be replaced by a
+    /// 400-character prefix of itself under an `[Output digest: 1 lines, 1
+    /// error]` header, because the payload happened to contain the word
+    /// "error". It now takes tier 1 and comes back as JSON.
+    #[test]
+    fn a_compact_json_field_is_reduced_structurally_not_mislabelled_as_a_digest() {
+        let body = "b".repeat(30_000);
+        let mut value = json!({
+            "stdout": format!(
+                r#"{{"error":null,"status":"ok","request_id":"req-42","payload":"{body}"}}"#
+            )
+        });
+
+        let reductions = clean_result_value(&mut value, None);
+        assert_eq!(reductions.len(), 1, "a 30 KB JSON response must reduce");
         assert_eq!(
-            super::distill_output(&flattened).map(|d| d.total_lines),
-            Some(1),
-            "flattened JSON is one line, so the distiller sees one 'line'"
+            reductions[0].method,
+            ReductionMethod::Structured(ContentKind::Json),
+            "tier 1 must claim this shape, not the line-oriented distiller"
+        );
+
+        let out = value["stdout"].as_str().expect("stays a string");
+        assert!(!out.contains("[Output digest:"), "got: {out}");
+        assert!(
+            out.contains("\"status\""),
+            "the salient scalars survive: {out}"
+        );
+        assert!(out.contains("req-42"));
+        assert!(!out.contains(&body), "the bulk leaf does not");
+    }
+
+    /// The declared budget must reach **both** tiers. It was in scope at the
+    /// call site all along and simply dropped: tier 1's reducers used fixed caps
+    /// and tier 2 passed `salient.len()` to a parameter whose own doc calls it
+    /// the budget hook — so a tool declaring 400 tokens and one declaring 8 000
+    /// got byte-identical output, which the head/tail truncator then cut blind.
+    #[test]
+    fn a_tighter_budget_produces_a_smaller_reduction_in_both_tiers() {
+        // Tier 2 (an error digest). One loud line is under `looks_like_log`'s
+        // deliberately conservative threshold, so the router declines and the
+        // distiller answers — with 40 `note:` continuations that the cap binds
+        // on. (`failing_build_output` has only three salient lines, so no cap
+        // short of absurd would be visible on it.)
+        let mut rustc = String::from("error[E0308]: mismatched types\n");
+        for i in 0..40 {
+            rustc.push_str(&format!(
+                "   note: expected `Foo`, found `Bar` at arg {i}\n"
+            ));
+            rustc.push_str(&format!(
+                "   Compiling filler-{i} v1.0.0 in the workspace\n"
+            ));
+        }
+        let mut wide = json!({ "stdout": rustc.clone() });
+        let mut tight = json!({ "stdout": rustc });
+        assert_eq!(
+            clean_result_value(&mut wide, Some(8_000))[0].method,
+            ReductionMethod::Distilled
+        );
+        assert_eq!(clean_result_value(&mut tight, Some(400)).len(), 1);
+        let (w, t) = (
+            wide["stdout"].as_str().expect("string").len(),
+            tight["stdout"].as_str().expect("string").len(),
+        );
+        assert!(
+            t < w,
+            "tier 2: 400-token budget must be smaller ({t} vs {w})"
+        );
+        assert!(
+            tight["stdout"]
+                .as_str()
+                .expect("string")
+                .contains("more diagnostic lines omitted"),
+            "and the cap must say what it dropped"
+        );
+
+        // Tier 1 (a structured reduction): the same must hold for the router.
+        let mut hits = String::new();
+        for f in 0..40 {
+            for l in 0..8 {
+                hits.push_str(&format!("src/mod_{f}.rs:{}: let target = 1;\n", l + 1));
+            }
+        }
+        let mut wide = json!({ "stdout": hits.clone() });
+        let mut tight = json!({ "stdout": hits });
+        assert_eq!(
+            clean_result_value(&mut wide, Some(8_000))[0].method,
+            ReductionMethod::Structured(ContentKind::Search)
+        );
+        assert_eq!(clean_result_value(&mut tight, Some(400)).len(), 1);
+        let (w, t) = (
+            wide["stdout"].as_str().expect("string").len(),
+            tight["stdout"].as_str().expect("string").len(),
+        );
+        assert!(
+            t < w,
+            "tier 1: 400-token budget must be smaller ({t} vs {w})"
         );
     }
 
@@ -293,7 +454,7 @@ mod tests {
     fn small_fields_are_left_alone() {
         let mut value = json!({ "stdout": "ok\n", "stderr": "" });
         let before = value.clone();
-        assert!(clean_result_value(&mut value).is_empty());
+        assert!(clean_result_value(&mut value, None).is_empty());
         assert_eq!(value, before, "no-op must be byte-identical");
     }
 
@@ -303,7 +464,7 @@ mod tests {
         let mut value = json!({ "message": prose });
         let before = value.clone();
         assert!(
-            clean_result_value(&mut value).is_empty(),
+            clean_result_value(&mut value, None).is_empty(),
             "unrecognized content must fall through to the caller's truncator"
         );
         assert_eq!(value, before);
@@ -319,7 +480,7 @@ mod tests {
         log.push_str("test result: FAILED. 300 passed; 1 failed\n");
         let mut value = Value::String(log);
 
-        let reductions = clean_result_value(&mut value);
+        let reductions = clean_result_value(&mut value, None);
         assert_eq!(reductions.len(), 1);
         assert_eq!(reductions[0].field, "<result>", "root has no field name");
         let text = value.as_str().unwrap();
@@ -336,7 +497,7 @@ mod tests {
             ));
         }
         let mut value = json!({ "stdout": hits });
-        let reductions = clean_result_value(&mut value);
+        let reductions = clean_result_value(&mut value, None);
         assert_eq!(reductions.len(), 1, "colourised search output must reduce");
         let stdout = value["stdout"].as_str().unwrap();
         assert!(
@@ -355,7 +516,7 @@ mod tests {
         log.push_str("=== 1 failed, 299 passed in 12.4s ===\n");
         let mut value = json!({ "data": { "output": log } });
 
-        let reductions = clean_result_value(&mut value);
+        let reductions = clean_result_value(&mut value, None);
         assert_eq!(reductions.len(), 1);
         assert_eq!(reductions[0].field, "data.output");
         assert!(value["data"]["output"]
@@ -371,6 +532,6 @@ mod tests {
         for _ in 0..64 {
             value = json!({ "n": value });
         }
-        assert!(clean_result_value(&mut value).is_empty());
+        assert!(clean_result_value(&mut value, None).is_empty());
     }
 }

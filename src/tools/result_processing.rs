@@ -400,26 +400,14 @@ fn distill_or_truncate(text: &str, budget_tokens: usize) -> String {
 /// blob first. Returns `None` when there is no error signal. Bounded to a
 /// handful of lines to preserve the offload's token saving.
 fn inline_error_digest(text: &str) -> Option<String> {
-    // The distiller is line-oriented: it walks `text.lines()`, classifies each
-    // as error / context, and renders the salient ones. A builtin tool's result
-    // reaches Layer 2 already flattened by `Value::to_string()`, which escapes
-    // every newline and collapses the whole envelope onto ONE line — so the
-    // distiller saw a single "line", matched the `"error"` substring somewhere
-    // inside it, and rendered `[Output digest: 1 lines, 1 error]` followed by a
-    // char-capped prefix of the JSON envelope
-    // (`{"success":false,"exit_code":101,"stdout":"\n running 2001 tests…`).
-    // Not one compiler error or panic message, but formatted as though it were
-    // the error preview.
-    //
-    // A payload with no newline at all cannot be line-distilled, and this arm is
-    // the OPAQUE one — we do not know what the content is, so a prefix slice is
-    // a guess dressed up as a signal. Decline and let the recovery marker stand
-    // alone, which is what the invariant asks for. Typed results get their
-    // signal inlined through the other arm, where `tool_output::hygiene` walked
-    // the value field by field and kept the line shape intact.
-    if !text.contains('\n') {
-        return None;
-    }
+    // A payload with no newline at all cannot be line-distilled — a flattened
+    // tool envelope is exactly one line, and a prefix slice of it is a guess
+    // dressed up as a signal. That precondition now lives on
+    // [`distill_output`](crate::tool_output::distill::distill_output) itself, so
+    // this arm and `tool_output::hygiene`'s tier-2 cannot disagree about it; the
+    // recovery marker stands alone instead. Typed results get their signal
+    // inlined through the other arm, where hygiene walked the value field by
+    // field and kept the line shape intact.
     let digest = crate::tool_output::distill::distill_output(text)?;
     if digest.error_count == 0 {
         return None;
