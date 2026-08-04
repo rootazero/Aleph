@@ -34,6 +34,16 @@ pub struct NoteSchemaTool {
 }
 
 impl NoteSchemaTool {
+    /// Model-facing description — the single source for both the static
+    /// catalog (`BUILTIN_TOOL_DEFINITIONS`) and the registry constructor.
+    /// A catalog entry shadows whatever the constructor registers under the
+    /// same name, so a second copy of this text anywhere is a copy the model
+    /// never sees.
+    pub const DESCRIPTION: &'static str =
+        "Read or write the SCHEMA.md file that describes the structure of the agent's \
+         long-term memory wiki. Use 'read' to inspect the current schema, 'write' to \
+         update it (include the expected_hash from your last read to prevent conflicts).";
+
     pub fn new(memory_dir: impl Into<PathBuf>) -> Self {
         Self {
             memory_dir: memory_dir.into(),

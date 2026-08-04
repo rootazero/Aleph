@@ -248,8 +248,8 @@ cross-call state, write it to a file under `working_dir`. Re-running a shell
 command you already ran this session comes back with an `advisory` field
 flagging it — don't repeat unless you expect the output to have changed.
 
-`working_dir` (optional) is resolved inside the session workspace; paths
-outside the workspace are denied. Defaults to the workspace root.
+`working_dir` (optional) resolves inside the session workspace and defaults
+to its root; anything outside is denied.
 
 `timeout` defaults to 60s; foreground calls are clamped to ~170s (just under
 the 180s tool budget) so an over-long `timeout` returns a clean

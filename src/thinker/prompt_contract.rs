@@ -491,22 +491,29 @@ fn dynamic_tail_bytes_ratchet() {
 /// same drift risk, so it belongs in the same scan.
 ///
 /// The tool text ingested is `BUILTIN_TOOL_DEFINITIONS` — the LLM-facing
-/// catalog `agent_init` maps straight into the model's tool list — deliberately
-/// **not** the `AlephTool::DESCRIPTION` consts, several of which are richer than
-/// the catalog entry that paraphrases them. Measuring the consts would repeat
-/// the very mistake above in mirror image: measuring text production never
-/// sends. (Where an entry and its tool's const have drifted apart, that is a
-/// separate bug in `definitions.rs`; this guard reports on what ships, and will
-/// see those sentences the moment the catalog points at the consts.)
+/// catalog `agent_init` maps straight into the model's tool list. That choice
+/// is about *what ships*, not about where the text is written: reading the
+/// `AlephTool::DESCRIPTION` consts directly would repeat the very mistake above
+/// in mirror image, measuring text production never sends. It stays correct now
+/// that every catalog entry references its tool's const, and it stays correct
+/// if one ever stops.
 ///
-/// What widening it actually found, for the record: **no duplication at all —
-/// and the D4 clause named above ships zero times.** All three memory writers'
-/// catalog entries are terse one-line literals, so the `AFTER A SUCCESSFUL
-/// WRITE` paragraph in each tool's own const never reaches the model. The
-/// mirror-image failure of triplication, and invisible from the layer side
-/// exactly as triplication was. Fix is in `definitions.rs` (point those three
-/// entries at their consts, as the five file tools already do); this guard will
-/// start measuring the clause the moment it does.
+/// The corollary is easy to misread, so: this guard counts **how many times a
+/// sentence is sent**, not how many times it is written. Text hoisted into one
+/// shared const and referenced by N tools still ships N times and is still
+/// flagged. Deduplicating the source is not the fix; sending it once is.
+///
+/// History, for the record. When the tool half was first ingested it found no
+/// duplication at all — and reported that the D4 acknowledgment clause shipped
+/// *zero* times, because all three memory writers' catalog entries were terse
+/// literals shadowing the `AFTER A SUCCESSFUL WRITE` paragraph in each tool's
+/// own const. The mirror-image failure of triplication, invisible from the
+/// layer side exactly as triplication was. The 2026-08-04 sweep pointed all 155
+/// entries at their consts, and this guard immediately earned its keep: six
+/// real duplicates surfaced the moment the text started shipping — the AX
+/// platform-support sentence in four sibling tools, the heartbeat "find the id
+/// first" pointer in three, and one hard-wrapped `working_dir` line identical
+/// across `bash` and `code_exec`. All three now state it once.
 ///
 /// The tool half must also stay non-empty — see the ingest assertion below. A
 /// guard that quietly narrows back to layer-only would keep passing while

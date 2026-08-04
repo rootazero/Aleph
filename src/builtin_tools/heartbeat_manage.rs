@@ -204,7 +204,7 @@ impl AlephTool for HeartbeatCreateTool {
 /// Arguments for `heartbeat_update`
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
 pub struct HeartbeatUpdateArgs {
-    /// Task ID to update (required)
+    /// Task ID to update, from `heartbeat_list` (required)
     pub id: String,
     /// New name (optional)
     #[serde(default)]
@@ -247,8 +247,7 @@ impl HeartbeatUpdateTool {
 #[async_trait]
 impl AlephTool for HeartbeatUpdateTool {
     const NAME: &'static str = "heartbeat_update";
-    const DESCRIPTION: &'static str =
-        "Update an existing heartbeat monitoring task. Use heartbeat_list to find the task ID first.";
+    const DESCRIPTION: &'static str = "Update an existing heartbeat monitoring task.";
 
     type Args = HeartbeatUpdateArgs;
     type Output = HeartbeatUpdateOutput;
@@ -300,7 +299,7 @@ impl AlephTool for HeartbeatUpdateTool {
 /// Arguments for `heartbeat_delete`
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
 pub struct HeartbeatDeleteArgs {
-    /// Task ID to delete (required)
+    /// Task ID to delete, from `heartbeat_list` (required)
     pub id: String,
 }
 
@@ -328,8 +327,7 @@ impl HeartbeatDeleteTool {
 #[async_trait]
 impl AlephTool for HeartbeatDeleteTool {
     const NAME: &'static str = "heartbeat_delete";
-    const DESCRIPTION: &'static str =
-        "Delete a heartbeat monitoring task permanently. Use heartbeat_list to find the task ID first.";
+    const DESCRIPTION: &'static str = "Delete a heartbeat monitoring task permanently.";
 
     type Args = HeartbeatDeleteArgs;
     type Output = HeartbeatDeleteOutput;
@@ -356,7 +354,7 @@ impl AlephTool for HeartbeatDeleteTool {
 /// Arguments for `heartbeat_toggle`
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
 pub struct HeartbeatToggleArgs {
-    /// Task ID to toggle (required)
+    /// Task ID to toggle, from `heartbeat_list` (required)
     pub id: String,
 }
 
@@ -386,8 +384,7 @@ impl HeartbeatToggleTool {
 #[async_trait]
 impl AlephTool for HeartbeatToggleTool {
     const NAME: &'static str = "heartbeat_toggle";
-    const DESCRIPTION: &'static str =
-        "Enable or disable a heartbeat monitoring task. Use heartbeat_list to find the task ID first.";
+    const DESCRIPTION: &'static str = "Enable or disable a heartbeat monitoring task.";
 
     type Args = HeartbeatToggleArgs;
     type Output = HeartbeatToggleOutput;

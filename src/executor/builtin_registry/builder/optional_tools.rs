@@ -541,9 +541,7 @@ impl BuiltinToolRegistry {
             reg(
                 tools,
                 "note_schema",
-                "Read or write the SCHEMA.md file that describes the structure of the agent's \
-                 long-term memory wiki. Use 'read' to inspect the current schema, 'write' to \
-                 update it (include the expected_hash from your last read to prevent conflicts).",
+                crate::builtin_tools::note_schema::NoteSchemaTool::DESCRIPTION,
                 schema::<crate::builtin_tools::note_schema::NoteSchemaArgs>("note_schema"),
             );
             info!("Registered note_schema tool in BuiltinToolRegistry");
@@ -553,9 +551,7 @@ impl BuiltinToolRegistry {
             reg(
                 tools,
                 "note_orient",
-                "Fetch a compact orientation snapshot of the agent's memory wiki: SCHEMA, \
-                 index, and recent log entries. Call this at the start of a task to understand \
-                 what structured memory is available before searching or writing notes.",
+                crate::builtin_tools::note_orient::NoteOrientTool::DESCRIPTION,
                 schema::<crate::builtin_tools::note_orient::NoteOrientArgs>("note_orient"),
             );
             info!("Registered note_orient tool in BuiltinToolRegistry");
@@ -566,9 +562,7 @@ impl BuiltinToolRegistry {
             reg(
                 tools,
                 "user_profile",
-                "Read the current user profile (interests, preferences, context) or view \
-                 its revision history. Use 'read' to get the latest profile, 'history' to \
-                 inspect the revision log.",
+                crate::builtin_tools::user_profile::UserProfileTool::DESCRIPTION,
                 schema::<crate::builtin_tools::user_profile::UserProfileArgs>("user_profile"),
             );
             info!("Registered user_profile tool in BuiltinToolRegistry");
