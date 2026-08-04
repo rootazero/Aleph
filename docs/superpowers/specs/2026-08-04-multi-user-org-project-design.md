@@ -204,14 +204,19 @@ scope id 由它派生（`project:<id>`）。**项目本身没有任何专属共�
 
 ## 10. 边界语义 (Edge Semantics — 定死三条)
 
-- **停用用户**：设备 token 即时拒绝；其 personal scope 后台工作暂停（冻结不删除）
+- **停用用户**：设备 token 即时拒绝；其 personal scope 后台工作暂停（冻结不删除）。**owner（u-owner）不可停用/降级**：loopback 解析恒 (owner, operator) 且不查 user status——那是恢复路径（等价 root console），停用 owner 只会产生半生效状态（远程设备被踢、本机不受影响），语义不自洽，直接禁止；这也保证系统永远至少有一个 admin。部署机即隐式超管账户——「凭据」是对机器的物理/OS 访问权，设计承认这个物理事实而非假装密码能挡住能直接读 SQLite 的人
 - **移出项目成员**：立即失去可见性；**其在项目内发起的后台工作继续跑**——归项目不归人
 - **会话 scope 不可变**：会话创建后不迁移 scope（否则记忆 capture 的归属历史说不清）
 - 项目群聊多作者并发细节留 P2 实现时敲定，spec 只锁：**成员消息默认 Queue、发起者可 steer 自己的 run**
 
 ## 11. 风险与诚实声明 (Risks)
 
-1. **隔离是隐私级**：强制在服务层，恶意成员遇上一个漏掉咽喉的 handler 就是旁路。升级到安全级的路径是存储层强制（行级/加密），本设计不堵死它
+1. **隔离是隐私级——防误看，不防恶意**（D2 的确切边界，适用场景是家庭/小团队：你信任你邀请进来的人）。三条硬边界，全部是刻意接受的取舍而非疏漏：
+   - **同一 OS 进程、同一 OS 账户**：所有用户的 agent run 在同一进程内执行工具。member 默认能用 `bash`（`method_authz` 明确对 chat tier 开放），一句 `sqlite3 ~/.aleph/data/sessions.db` 就能读到他人会话——file 工具 denylist 与 command_policy 硬底线防的是误操作和典型攻击模式，不是决心绕过的恶意用户
+   - **vault 组织级共享**：member 的 agent 间接使用同一批 provider 凭据，不存在 per-user 密钥视图（P4 backlog）
+   - **org scope 记忆按设计共享**：member 写入的 org 层记忆进入所有人的召回——这是特性不是漏洞，但意味着记忆投毒面是组织级的（`content_scanner` + threat-scope 防线在，但同样是防典型模式）
+   
+   另外服务层强制本身有旁路面：恶意成员遇上一个漏掉可见性咽喉的 handler 就是旁路（§9 咽喉防旁路守卫是对这一点的持续回归）。**升级路径**（本设计不堵死）：接纳不可信用户的正解是 per-user OS 沙箱（D2 否掉的重方案）或一人一部署，不是在应用层继续打补丁；存储层强制（行级/加密）是中间档。**低成本加固**（P1 可做，全是现有旋钮）：member 会话默认 exec tier = `Ask`、按角色收紧 `tool_permissions`
 2. **前缀缓存**：user/scope 相关字节进 prompt 时必须按 CLAUDE.md §2.18 纪律分区——per-user 事实在会话内稳定（Stable），别逐轮重印
 3. **R6 一致性**：渠道入站消息经 pairing 解析到 User 后进入其 personal scope；未链接的渠道 peer 维持现状（pairing 前置闸）。渠道群聊（多人 IM 群）绑定项目留 P4
 
