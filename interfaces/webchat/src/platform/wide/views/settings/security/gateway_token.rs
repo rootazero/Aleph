@@ -271,7 +271,12 @@ pub fn GatewayTokenSection() -> impl IntoView {
                                 .collect()
                         })
                         .unwrap_or_default();
-                    let ticket = pairing_ticket.get_untracked();
+                    // `try_get_untracked`: this view can be disposed while the
+                    // RPC is in flight, and reading a disposed signal panics the
+                    // whole panel (see `acp_harnesses` for the reproduction).
+                    let Some(ticket) = pairing_ticket.try_get_untracked() else {
+                        return;
+                    };
                     pairing_urls.set(choose_pairing_urls(
                         server_urls,
                         page_origin().as_deref(),

@@ -53,9 +53,15 @@ pub fn ProvidersView() -> impl IntoView {
     spawn_local(async move {
         match ProvidersApi::list(&state).await {
             Ok(list) => {
+                // `try_get_untracked`: this view can be disposed while the RPC
+                // is in flight, and reading a disposed signal panics the whole
+                // panel (see `acp_harnesses` for the reproduction).
+                let Some(current) = selected.try_get_untracked() else {
+                    return;
+                };
                 // Auto-select the default provider on first load so the detail pane
                 // shows content instead of the empty placeholder (mirrors Embedding/Reranking).
-                if selected.get_untracked().is_none() {
+                if current.is_none() {
                     if let Some(name) = list
                         .iter()
                         .find(|p| p.is_default)
