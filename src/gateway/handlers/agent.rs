@@ -485,6 +485,17 @@ pub async fn build_run_request(
         metadata.insert("caller_role".to_string(), role);
     }
 
+    // P1 data isolation: stamp the run's owner/scope attribution from the
+    // authenticated caller (resolved at `connect`, live here inside
+    // `process_request`'s task tree). Unauthenticated / non-gateway callers
+    // stamp nothing — legacy owner semantics.
+    if let Some(user) = crate::gateway::caller_identity::current_caller_user() {
+        crate::scope::stamp_metadata(
+            &mut metadata,
+            &crate::scope::ScopeAttribution::personal(&user),
+        );
+    }
+
     if let Some(cfg) = app_config {
         let cfg = cfg.read().await;
         let lang = cfg.general.language.as_deref().unwrap_or("zh");

@@ -405,6 +405,18 @@ pub struct FlowRequest {
     /// a user-scoped prefix (e.g. `user:{user_id}:session:{hint}`) or rely on
     /// `parent_session` for isolation rather than bare hints.
     pub session_hint: Option<String>,
+    /// P1 data isolation: the run's owner/scope attribution. `FlowRequest`
+    /// has no metadata map (unlike `RunRequest`), so this rides as an
+    /// explicit pair of fields instead of `crate::scope::stamp_metadata`.
+    /// Callers inside `process_request`'s task tree may inherit the ambient
+    /// `crate::scope::current_scope()`; callers with no live task-local
+    /// (cron, hook-less wakes) must pass it explicitly. `None` = unscoped
+    /// (legacy owner semantics) — see `Orchestrator::dispatch`, which
+    /// re-derives a `ScopeAttribution` from these two strings via
+    /// `crate::scope::scope_from_metadata` and re-seeds it inside the spawn.
+    pub owner_user_id: Option<String>,
+    /// See [`Self::owner_user_id`]. Rendered form of `ScopeId` (`scope.render()`).
+    pub scope_id: Option<String>,
     pub parent_session: Option<String>,
     pub depth: u8,
     /// Per-request tool service override. `None` causes `AgentHarnessRunner`
@@ -868,6 +880,13 @@ impl Orchestrator {
         let envelope = req.envelope.clone();
         // rust-doctor-disable-next-line excessive-clone
         let model_directive = req.model_directive.clone();
+        // P1 data isolation — captured before the spawn boundary (task-locals
+        // do not cross `tokio::spawn`); re-derived into a `ScopeAttribution`
+        // and re-seeded inside, sibling of `with_agent_id`/`with_project_root`.
+        // rust-doctor-disable-next-line excessive-clone
+        let owner_user_id = req.owner_user_id.clone();
+        // rust-doctor-disable-next-line excessive-clone
+        let scope_id = req.scope_id.clone();
 
         tokio::spawn(async move {
             let _lock = SessionLockGuard {
@@ -889,27 +908,45 @@ impl Orchestrator {
             // the id before `spec_clone` is moved into `harness.run`.
             // rust-doctor-disable-next-line excessive-clone
             let agent_id_for_scope = spec_clone.agent.clone();
+            // P1 data isolation: re-derive the `ScopeAttribution` from the
+            // captured owner/scope strings and re-seed it as a task-local
+            // inside the spawn — mirrors `run_loop`'s `with_request_scope`,
+            // but via `FlowRequest`'s two explicit fields since it has no
+            // metadata map to carry `scope::stamp_metadata`'s keys.
+            let scope_attr = {
+                let mut m = std::collections::HashMap::new();
+                if let Some(owner) = owner_user_id {
+                    m.insert(crate::scope::OWNER_META_KEY.to_string(), owner);
+                }
+                if let Some(scope) = scope_id {
+                    m.insert(crate::scope::SCOPE_META_KEY.to_string(), scope);
+                }
+                crate::scope::scope_from_metadata(&m)
+            };
             let outcome = crate::agents::with_agent_id(
                 Some(agent_id_for_scope),
                 crate::projects::with_project_root(
                     // rust-doctor-disable-next-line excessive-clone
                     workspace_override.clone(),
-                    harness.run(
-                        session_key,
-                        spec_clone,
-                        input_clone,
-                        sandbox_clone,
-                        event_tx,
-                        cancel_clone,
-                        tool_service_override,
-                        trace_sink,
-                        interaction_manifest,
-                        workspace_override,
-                        max_iterations_override,
-                        transient_context,
-                        think_level,
-                        envelope,
-                        model_directive,
+                    crate::scope::with_scope(
+                        scope_attr,
+                        harness.run(
+                            session_key,
+                            spec_clone,
+                            input_clone,
+                            sandbox_clone,
+                            event_tx,
+                            cancel_clone,
+                            tool_service_override,
+                            trace_sink,
+                            interaction_manifest,
+                            workspace_override,
+                            max_iterations_override,
+                            transient_context,
+                            think_level,
+                            envelope,
+                            model_directive,
+                        ),
                     ),
                 ),
             )

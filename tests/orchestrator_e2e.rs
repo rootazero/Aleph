@@ -21,6 +21,8 @@ async fn default_agent_roundtrip() {
             input: FlowInput::Prompt("what is the answer?".into()),
             channel: Some("openai-api-client".into()),
             session_hint: Some("e2e-session-1".into()),
+            owner_user_id: None,
+            scope_id: None,
             parent_session: None,
             depth: 0,
             tool_service: None,

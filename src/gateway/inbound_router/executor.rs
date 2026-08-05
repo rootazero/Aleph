@@ -279,6 +279,20 @@ impl InboundMessageRouter {
         let (caller_role, channel_workspace, busy_input_mode, channel_tool_permissions) =
             channel_run_identity(&self.channel_configs, ctx.message.channel_id.as_str());
         metadata.insert("caller_role".to_string(), caller_role.to_string());
+        // P1 data isolation: stamp the run's owner/scope attribution from the
+        // P0 sender→user link (`pairing_store`), not any task-local — channel
+        // dispatch runs outside `process_request`'s task tree. An unlinked
+        // peer (`None`) stamps nothing — legacy owner semantics.
+        if let Some(user) = self
+            .pairing_store
+            .sender_user(ctx.message.channel_id.as_str(), &ctx.sender_normalized)
+            .await
+        {
+            crate::scope::stamp_metadata(
+                &mut metadata,
+                &crate::scope::ScopeAttribution::personal(&user),
+            );
+        }
         // Stamp the channel's busy-input policy so the execution engine's busy
         // branch knows whether a message arriving mid-run should steer (default)
         // or interrupt the in-flight run. Absent on Panel/CLI paths → Steer.

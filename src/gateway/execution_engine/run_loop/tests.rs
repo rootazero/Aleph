@@ -35,6 +35,51 @@ fn anchor(dir: &std::path::Path) {
     std::fs::create_dir_all(dir.join(".git")).unwrap();
 }
 
+/// Builds a minimal `RunRequest` carrying the given metadata — everything
+/// else is a cheap default, since `with_request_scope` reads only
+/// `request.metadata`.
+fn minimal_request(metadata: std::collections::HashMap<String, String>) -> RunRequest {
+    RunRequest {
+        run_id: "test-run".to_string(),
+        input: String::new(),
+        session_key: crate::routing::session_key::SessionKey::main("test-agent"),
+        timeout_secs: None,
+        metadata,
+        attachments: Vec::new(),
+        pending_media: Arc::new(tokio::sync::Mutex::new(Vec::new())),
+        sandbox_override: None,
+        workspace_override: None,
+        max_iterations_override: None,
+        model_override: None,
+    }
+}
+
+#[tokio::test]
+async fn run_loop_seeds_scope_from_request_metadata() {
+    let mut metadata = std::collections::HashMap::new();
+    crate::scope::stamp_metadata(
+        &mut metadata,
+        &crate::scope::ScopeAttribution::personal("u-alice"),
+    );
+    let request = minimal_request(metadata);
+
+    let observed = with_request_scope(&request, async { crate::scope::current_scope() }).await;
+
+    assert_eq!(
+        observed.map(|a| a.owner_user_id),
+        Some("u-alice".to_string())
+    );
+}
+
+#[tokio::test]
+async fn run_loop_without_keys_runs_unscoped() {
+    let request = minimal_request(std::collections::HashMap::new());
+
+    let observed = with_request_scope(&request, async { crate::scope::current_scope() }).await;
+
+    assert!(observed.is_none(), "absent keys must not scope the run");
+}
+
 #[test]
 fn workspace_directive_steers_without_restating_the_path() {
     // The directive carries only the behavioural half. The path itself is stated

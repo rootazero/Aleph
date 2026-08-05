@@ -88,6 +88,15 @@ pub trait PairingStore: Send + Sync {
 
     /// Remove a sender from the approved list
     async fn revoke(&self, channel: &str, sender_id: &str) -> Result<(), PairingError>;
+
+    /// Looks up the Aleph user id linked to an approved channel sender.
+    ///
+    /// Returns `None` when the sender has not been approved (unknown
+    /// `channel`/`sender_id` pair) — including on an internal DB error, so
+    /// callers can treat "no link" and "lookup failed" the same way. P1's
+    /// inbound-session-attribution consumer degrades to no attribution
+    /// rather than failing the whole request.
+    async fn sender_user(&self, channel: &str, sender_id: &str) -> Option<String>;
 }
 
 /// Default pairing-code TTL (24h), mirroring the documented
@@ -204,36 +213,6 @@ impl SqlitePairingStore {
     pub async fn run_migrations(&self) -> Result<(), PairingError> {
         let conn = self.conn.lock().await;
         Self::migrate_approved_senders_user_id(&conn)
-    }
-
-    /// Looks up the Aleph user id linked to an approved channel sender.
-    ///
-    /// Returns `None` when the sender has not been approved (unknown
-    /// `channel`/`sender_id` pair) — including on an internal DB error, so
-    /// callers can treat "no link" and "lookup failed" the same way. P1's
-    /// inbound-session-attribution consumer degrades to no attribution
-    /// rather than failing the whole request.
-    pub async fn sender_user(&self, channel: &str, sender_id: &str) -> Option<String> {
-        let conn = self.conn.lock().await;
-        match conn
-            .query_row(
-                "SELECT user_id FROM approved_senders WHERE channel = ?1 AND sender_id = ?2",
-                params![channel, sender_id],
-                |row| row.get::<_, Option<String>>(0),
-            )
-            .optional()
-        {
-            Ok(user_id) => user_id.flatten(),
-            Err(e) => {
-                tracing::warn!(
-                    "sender_user lookup failed for {}:{}: {}",
-                    channel,
-                    sender_id,
-                    e
-                );
-                None
-            }
-        }
     }
 
     /// Generate a random 6-character alphanumeric code
@@ -499,6 +478,29 @@ impl PairingStore for SqlitePairingStore {
         )?;
         info!("Revoked approval for {}:{}", channel, sender_id);
         Ok(())
+    }
+
+    async fn sender_user(&self, channel: &str, sender_id: &str) -> Option<String> {
+        let conn = self.conn.lock().await;
+        match conn
+            .query_row(
+                "SELECT user_id FROM approved_senders WHERE channel = ?1 AND sender_id = ?2",
+                params![channel, sender_id],
+                |row| row.get::<_, Option<String>>(0),
+            )
+            .optional()
+        {
+            Ok(user_id) => user_id.flatten(),
+            Err(e) => {
+                tracing::warn!(
+                    "sender_user lookup failed for {}:{}: {}",
+                    channel,
+                    sender_id,
+                    e
+                );
+                None
+            }
+        }
     }
 }
 

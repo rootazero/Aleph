@@ -244,6 +244,8 @@ pub fn basic_request() -> FlowRequest {
         input: FlowInput::Prompt("hello".into()),
         channel: Some("test".into()),
         session_hint: Some("test-session".into()),
+        owner_user_id: None,
+        scope_id: None,
         parent_session: None,
         depth: 0,
         tool_service: None,
