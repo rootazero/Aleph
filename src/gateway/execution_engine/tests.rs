@@ -1825,11 +1825,20 @@ async fn goal_continuation_inherits_the_originating_runs_project_root() {
 /// So this asserts the WAKE — a real run reaching the execution adapter with the
 /// resume prompt — not the parked row. A test that stopped at "parked, weld
 /// preserved, not Blocked" passes with the bug fully present.
+/// The goal store is process-global and `sweep_once` scans EVERY row in it, so
+/// two tests that each park a goal into the sweep's claim shape will consume one
+/// another's barrier: the sweep clears it and claims the continuation FIRST, and
+/// only then discovers the agent belongs to the other test's registry — by which
+/// point the wake is already spent and unrecoverable. Serialize the sweeping
+/// tests rather than hoping their windows miss.
+static GOAL_SWEEP_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
 #[tokio::test]
 async fn a_transiently_parked_goal_is_actually_woken() {
     use crate::gateway::execution_adapter::ExecutionAdapter;
     use crate::goal::{ContinuationDecision, Goal, GoalStatus, PursuitMode};
 
+    let _sweep_guard = GOAL_SWEEP_LOCK.lock().await;
     let temp = tempfile::tempdir().unwrap();
     let store = goal_store_global();
 
@@ -1927,5 +1936,104 @@ async fn a_transiently_parked_goal_is_actually_woken() {
         woken.continuations_used, 2,
         "the wake claims through the normal pipeline, so it spends an iteration \
          like every other autonomous step"
+    );
+}
+
+/// The sweep that fixed the un-woken transient park (above) claims an elapsed
+/// timer barrier carrying no pending marker. A FIRED timer wake reads as exactly
+/// that shape: `confirm_fire`'s `Proceed` arm consumed the marker, and the
+/// barrier it fired on stayed behind until the next claim — for the whole
+/// duration of the woken run, which for an autonomous turn routinely outlasts
+/// the 60s sweep interval.
+///
+/// So the sweep spawned a SECOND continuation for a goal that was already
+/// running: one more iteration off the R5 cap, an `AgentBusy` collision plus its
+/// re-arm retries, and a "Resuming your standing goal — the wait elapsed" prompt
+/// for a pursuit that is not parked.
+///
+/// This asserts the sweep claims NOTHING while that run is in flight — the
+/// defect's observable — not merely that the row lost a field. The registered
+/// agent is load-bearing: an unregistered one makes `spawn_wake_run` drop every
+/// wake, and the assertion would then hold with the defect fully present.
+#[tokio::test]
+async fn a_fired_timer_wake_leaves_nothing_for_the_sweep_to_claim() {
+    use crate::gateway::execution_adapter::ExecutionAdapter;
+    use crate::goal::{ContinuationDecision, FireDecision, Goal, PursuitMode};
+
+    let _sweep_guard = GOAL_SWEEP_LOCK.lock().await;
+    let temp = tempfile::tempdir().unwrap();
+    let store = goal_store_global();
+
+    let session = SessionKey::main("b10-fired-wake");
+    let session_str = session.to_key_string();
+    // Real wall clock: the claim, `confirm_fire` and the sweep all read
+    // `now_ms()`, so the row has to live in that coordinate system.
+    let now = super::goal_continuation::now_ms();
+    // The designed park — `goal(update, wait_minutes=…)` — one second out, so
+    // the claim below arms it while it is still in the future (the claim's lazy
+    // self-clear only drops an already-elapsed barrier).
+    store
+        .put(
+            &Goal::new(&session_str, "keep going", 0, now)
+                .with_pursuit(PursuitMode::Active { max_iterations: 5 })
+                .with_wait_until(now + 1_000, Some("cooldown".into()), now),
+        )
+        .unwrap();
+    let ContinuationDecision::Fire { wake_ms, .. } = store
+        .try_claim_continuation(&session_str, None, now, false, None)
+        .unwrap()
+    else {
+        panic!("a parked timer barrier must claim its wake");
+    };
+
+    let sessions: Arc<dyn crate::gateway::session_store::SessionStore> =
+        test_session_manager(&temp);
+    let agent = AgentInstance::new(
+        AgentInstanceConfig {
+            agent_id: session.agent_id().to_string(),
+            workspace: temp.path().join("agent-workspace"),
+            agent_dir: temp.path().join("agents"),
+            ..Default::default()
+        },
+        Arc::clone(&sessions),
+    )
+    .unwrap();
+    let registry = Arc::new(crate::gateway::agent_instance::AgentRegistry::new());
+    registry.register(agent).await;
+    let adapter = Arc::new(RecordingAdapter::new());
+    let wake = Arc::new(super::goal_wait::GoalWakeService::new(
+        ContinuationDeps {
+            registry,
+            adapter: Arc::clone(&adapter) as Arc<dyn ExecutionAdapter>,
+            gate: None,
+            event_bus: None,
+        },
+        None,
+        Some(sessions),
+    ));
+
+    // The timer elapses and fires: this is the instant the woken run starts.
+    tokio::time::sleep(std::time::Duration::from_millis(1_200)).await;
+    assert_eq!(
+        store
+            .confirm_fire(&session_str, wake_ms, super::goal_continuation::now_ms())
+            .unwrap(),
+        FireDecision::Proceed,
+        "the armed timer's own fire must be confirmed"
+    );
+    let spent = store.get(&session_str).unwrap().unwrap().continuations_used;
+
+    // A sweep tick lands while that woken run is still executing.
+    wake.sweep_once().await;
+
+    assert!(
+        adapter.await_one().await.is_none(),
+        "the sweep must not dispatch a second continuation for a goal whose wake \
+         is already running"
+    );
+    assert_eq!(
+        store.get(&session_str).unwrap().unwrap().continuations_used,
+        spent,
+        "and it must not spend another iteration off the pursuit cap"
     );
 }

@@ -272,7 +272,9 @@ impl GoalWakeService {
     /// lie. Both guards are load-bearing:
     /// - `pending_continuation_ms.is_none()` — a barrier that WAS claimed has a
     ///   live armed `tokio` sleep holding the marker as its `confirm_fire` key;
-    ///   claiming it again here would double-fire it.
+    ///   claiming it again here would double-fire it. Its counterpart lives in
+    ///   `GoalStore::confirm_fire`: firing that timer consumes the BARRIER too,
+    ///   so a wake already in flight never presents this shape either.
     /// - `waiting_until_ms <= now` — an unelapsed barrier is not due yet, and
     ///   the next `post_run` (or the boot re-arm) arms it exactly.
     ///

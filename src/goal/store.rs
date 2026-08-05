@@ -855,7 +855,10 @@ impl GoalStore {
     /// Fire-time gate for a claimed continuation: proceed only if the goal is
     /// still `Active`, THIS continuation is still the one on the books
     /// (`wake_ms` matches the pending marker), AND the wall-clock bound has
-    /// not elapsed while it waited. The marker is cleared in the same guard.
+    /// not elapsed while it waited. The marker is cleared in the same guard —
+    /// and so is the TIMER barrier this fire satisfies, on every arm: a wake
+    /// that consumed its marker but left its barrier standing is exactly what
+    /// `GoalWakeService::sweep_once` claims (see the `Proceed` arm).
     ///
     /// [`FireDecision::Superseded`] (the user cleared/completed the goal, or a
     /// stale-grace re-claim replaced this one) keeps the run from burning a
@@ -900,7 +903,38 @@ impl GoalStore {
                     )?;
                     return Ok(FireDecision::OutOfBounds { note });
                 }
-                Self::put_locked(&conn, &g.with_pending_continuation(None))?;
+                // The fire instant is when a TIMER barrier is genuinely
+                // satisfied — this run IS its wake — so drop it here, exactly as
+                // the `OutOfBounds` sibling above does. Leaving it behind is not
+                // cosmetic: from this write until the row's next claim it reads
+                // Active + Active pursuit + no task barrier + no marker +
+                // elapsed timer, which is precisely the shape
+                // `GoalWakeService::sweep_once` claims — for the whole duration
+                // of the run this fire just started, and an autonomous turn
+                // routinely outlasts the sweep interval. Any tick landing in
+                // there claims a second continuation for a goal that is already
+                // running (one iteration off the R5 cap, an `AgentBusy`
+                // collision plus its re-arm retries, and a "the wait elapsed"
+                // prompt for a pursuit that is not parked). It also keeps
+                // `render_goal_summary` telling the model "parked (waiting)"
+                // through a run it is not parked for.
+                //
+                // Guarded rather than unconditional, because this arm also fires
+                // for a NORMAL continuation (`wake_ms` = the claim's `now`, no
+                // barrier of its own): a barrier that is neither this fire's own
+                // instant nor yet elapsed belongs to whoever wrote it — a
+                // `goal(update, wait_for_task=…)` landing between
+                // `commit_field_update` and `supersede_wait_timer` is the one way
+                // to get there — and consuming it would discard the model's park.
+                let satisfied_timer = g
+                    .waiting_until_ms
+                    .is_some_and(|until| until == wake_ms || (now_ms != 0 && until <= now_ms));
+                let fired = if satisfied_timer {
+                    g.without_wait(now_ms)
+                } else {
+                    g
+                };
+                Self::put_locked(&conn, &fired.with_pending_continuation(None))?;
                 Ok(FireDecision::Proceed)
             }
             _ => Ok(FireDecision::Superseded),
@@ -1095,8 +1129,8 @@ mod tests {
             ContinuationDecision::Idle
         ));
 
-        // Fire-time confirm matches the stored marker; the barrier itself is
-        // lazily cleared on the NEXT claim after the wake elapsed.
+        // Fire-time confirm matches the stored marker, and consumes the barrier
+        // it fires on (`confirm_fire_consumes_the_timer_barrier_it_just_fired`).
         assert_eq!(
             store.confirm_fire("sess-wait", 61_000, 61_000).unwrap(),
             FireDecision::Proceed
@@ -2111,6 +2145,88 @@ mod tests {
             store.confirm_fire("sess-missing", 7_000, 7_100).unwrap(),
             FireDecision::Superseded
         ));
+    }
+
+    #[test]
+    fn confirm_fire_consumes_the_timer_barrier_it_just_fired() {
+        use crate::goal::PursuitMode;
+        let (store, _d) = temp_store();
+        // The designed park path: `goal(update, wait_minutes=1)` writes the
+        // barrier, and the post_run claim arms an exact timer while KEEPING it
+        // (the claim's lazy self-clear only drops an ELAPSED barrier, and this
+        // one is still in the future).
+        let g = Goal::new("sess-fired", "obj", 0, 1_000)
+            .with_pursuit(PursuitMode::Active { max_iterations: 5 })
+            .with_wait_until(61_000, Some("cooldown".into()), 1_000);
+        store.put(&g).unwrap();
+        let ContinuationDecision::Fire { wake_ms, .. } = store
+            .try_claim_continuation("sess-fired", None, 1_000, false, None)
+            .unwrap()
+        else {
+            panic!("a parked timer barrier must claim its wake");
+        };
+        assert_eq!(
+            store.get("sess-fired").unwrap().unwrap().waiting_until_ms,
+            Some(61_000),
+            "the claim arms the timer and carries the unelapsed barrier into the park"
+        );
+
+        assert_eq!(
+            store.confirm_fire("sess-fired", wake_ms, 61_000).unwrap(),
+            FireDecision::Proceed
+        );
+        // The fire instant IS the moment the barrier is satisfied. Leaving it on
+        // the row hands `GoalWakeService::sweep_once` its exact claim shape —
+        // Active + Active pursuit + no task barrier + no pending marker +
+        // elapsed timer — for the whole duration of the run this fire just
+        // started, so any sweep tick during that run claims a SECOND
+        // continuation for a goal that is already running.
+        let live = store.get("sess-fired").unwrap().unwrap();
+        assert!(
+            !live.has_wait_barrier(),
+            "a fired timer wake must consume the barrier it fired on"
+        );
+        assert_eq!(
+            live.waiting_reason, None,
+            "and the reason that explained the park with it"
+        );
+        assert_eq!(live.pending_continuation_ms, None);
+        assert_eq!(
+            live.status,
+            GoalStatus::Active,
+            "only the barrier is gone — the woken run continues"
+        );
+    }
+
+    #[test]
+    fn confirm_fire_does_not_consume_a_barrier_it_was_not_armed_for() {
+        use crate::goal::PursuitMode;
+        let (store, _d) = temp_store();
+        // A NORMAL continuation fires through this same arm with `wake_ms` = the
+        // claim's `now` and no barrier of its own. An unsatisfied barrier on the
+        // row therefore belongs to whoever wrote it — `goal(update,
+        // wait_for_task=…)` landing in the gap between `commit_field_update` and
+        // `supersede_wait_timer` is the one way to get there — and consuming it
+        // would silently discard the model's park. Only a SATISFIED timer (this
+        // fire's own instant, or one the clock has passed) is this fire's to drop.
+        let task_parked = Goal::new("sess-other-barrier", "obj", 0, 1_000)
+            .with_pursuit(PursuitMode::Active { max_iterations: 5 })
+            .with_wait_on_task("task-9".into(), Some("waiting on the build".into()), 6_900)
+            .with_pending_continuation(Some(7_000));
+        store.put(&task_parked).unwrap();
+        assert_eq!(
+            store
+                .confirm_fire("sess-other-barrier", 7_000, 7_100)
+                .unwrap(),
+            FireDecision::Proceed
+        );
+        let live = store.get("sess-other-barrier").unwrap().unwrap();
+        assert_eq!(
+            live.waiting_on_task.as_deref(),
+            Some("task-9"),
+            "a task barrier is not satisfied by a timer fire"
+        );
+        assert_eq!(live.waiting_reason.as_deref(), Some("waiting on the build"));
     }
 
     #[test]
