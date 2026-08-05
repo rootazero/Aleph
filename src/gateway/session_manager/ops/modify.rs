@@ -97,12 +97,29 @@ impl SessionManager {
             let tail = self
                 .read_recent_messages(&conn, &key_str, 64)
                 .unwrap_or_default();
+            // Review fix: the session-end reflector (spawned inside
+            // `emit_session_end_raw`) needs this session's P1 scope columns
+            // to write OPEN_LOOPS.md through the same composed id the
+            // curated-envelope reader resolves — the ambient task-local
+            // scope is not reliably live on this session-close path, so
+            // derive it from the persisted row instead (a `.ok()` miss on a
+            // legacy/pre-P1 row degrades to `(None, None)`, the pre-P1
+            // unscoped behaviour).
+            let (owner_user_id, scope_id): (Option<String>, Option<String>) = conn
+                .query_row(
+                    "SELECT owner_user_id, scope_id FROM sessions WHERE key = ?",
+                    params![&key_str],
+                    |row| Ok((row.get(0)?, row.get(1)?)),
+                )
+                .unwrap_or((None, None));
             super::emit_session_end_raw(
                 writer,
                 agent_id,
                 session_id,
                 tail,
                 crate::memory::store::raw_memory::SessionEndReason::Disconnect,
+                owner_user_id,
+                scope_id,
             );
         }
 

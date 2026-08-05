@@ -764,12 +764,18 @@ impl SessionStore for FileSessionStore {
                     .map(|m| format!("{}: {}", m.role, m.content))
                     .collect::<Vec<_>>()
                     .join("\n");
+                // Review fix: `meta` is already loaded above — reuse its P1
+                // scope columns directly (no extra query) so the session-end
+                // reflector can write OPEN_LOOPS.md under the same composed
+                // id the curated-envelope reader resolves.
                 crate::gateway::session_manager::ops::emit_session_end_raw(
                     writer,
                     key.agent_id().to_string(),
                     key_str.clone(),
                     tail,
                     crate::memory::store::raw_memory::SessionEndReason::Disconnect,
+                    meta.owner_user_id.clone(),
+                    meta.scope_id.clone(),
                 );
             }
 

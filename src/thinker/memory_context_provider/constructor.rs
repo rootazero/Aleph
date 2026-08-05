@@ -79,6 +79,7 @@ impl MemoryContextProvider {
             curated_config: CuratedConfig::default(),
             #[cfg(test)]
             curated_root_override: None,
+            project_scoped: false,
         }
     }
 
@@ -172,6 +173,7 @@ impl MemoryContextProvider {
             curated_config: CuratedConfig::default(),
             #[cfg(test)]
             curated_root_override: None,
+            project_scoped: false,
         }
     }
 
@@ -240,6 +242,10 @@ impl MemoryContextProvider {
             Some(p) => AiProviderReranker::new(p),
             None => Arc::new(NoopReranker),
         };
+        // Captured before the move into `HybridAssembler::new` below — the
+        // provider needs its own copy to resolve the curated envelope's
+        // storage id the same way `Gatherer` resolves notes/floors.
+        let project_scoped = assembler_config.project_scoped;
         let assembler: Arc<dyn WorkingMemoryAssembler> = Arc::new(HybridAssembler::new(
             retrieval,
             snapshots,
@@ -265,6 +271,7 @@ impl MemoryContextProvider {
             curated_config: CuratedConfig::default(),
             #[cfg(test)]
             curated_root_override: None,
+            project_scoped,
         }
     }
 
@@ -335,6 +342,22 @@ impl MemoryContextProvider {
             std::env::temp_dir().join(".aleph")
         });
         base.join("agents").join(agent_id).join("MEMORY.md")
+    }
+
+    /// Resolve a BASE agent id into the effective storage id for the
+    /// CURRENT session's scope (spec §5.2). Every public curated-envelope
+    /// entry point (`build_curated_message`, `get_or_load_curated_store`)
+    /// calls this exactly once at its own top on whatever id it was handed —
+    /// mirroring `assembler::Gatherer`'s per-call resolution — so a caller
+    /// must always pass a BASE id, never a pre-resolved one (passing an
+    /// already-composed id back in would double-compose under an active
+    /// personal scope).
+    pub(crate) fn resolve_storage_id(&self, base_agent_id: &str) -> String {
+        crate::memory::project_scope::session_write_id(
+            base_agent_id,
+            self.project_scoped,
+            crate::projects::current_project_root().as_deref(),
+        )
     }
 
     /// One-time, lazy, per-file adoption of the single-machine owner's pre-P1

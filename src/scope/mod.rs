@@ -99,6 +99,27 @@ impl ScopeAttribution {
             scope: ScopeId::Personal(user_id.to_string()),
         }
     }
+
+    /// Reconstruct a `ScopeAttribution` from a session row's persisted
+    /// `owner_user_id`/`scope_id` columns (`gateway::session_store::types::
+    /// SessionMetadata`).
+    ///
+    /// Used on paths where the ambient task-local ([`current_scope`]) is not
+    /// reliably live — e.g. session-close, which can run outside the run's
+    /// task tree (a background sweep, a `sessions.delete` RPC, a spawned
+    /// task with no re-threaded scope) — so those callers derive scope from
+    /// the durable row instead of guessing at the task-local. Same
+    /// fail-closed contract as [`scope_from_metadata`]: requires both
+    /// fields present and a parseable, coherent scope, else `None`.
+    #[must_use]
+    pub fn from_persisted(owner_user_id: Option<&str>, scope_id: Option<&str>) -> Option<Self> {
+        let owner_user_id = owner_user_id?.to_string();
+        let scope = ScopeId::parse(scope_id?)?;
+        Some(ScopeAttribution {
+            owner_user_id,
+            scope,
+        })
+    }
 }
 
 /// Metadata key for the owning user ID.
@@ -217,5 +238,32 @@ mod tests {
         bad.insert(OWNER_META_KEY.to_string(), "u-alice".into());
         bad.insert(SCOPE_META_KEY.to_string(), "garbage".into());
         assert!(scope_from_metadata(&bad).is_none());
+    }
+
+    #[test]
+    fn from_persisted_reconstructs_personal_scope() {
+        let attr = ScopeAttribution::from_persisted(Some("u-alice"), Some("personal:u-alice"))
+            .expect("both columns present and coherent");
+        assert_eq!(attr.owner_user_id, "u-alice");
+        assert_eq!(attr.scope, ScopeId::Personal("u-alice".into()));
+    }
+
+    #[test]
+    fn from_persisted_reconstructs_org_scope_too() {
+        // Not personal-only: any coherent scope round-trips (mirrors
+        // `scope_from_metadata`). Callers that only care about personal
+        // scope filter on `ScopeId::Personal` themselves — this helper's
+        // job is fidelity to the persisted row, not policy.
+        let attr = ScopeAttribution::from_persisted(Some("u-alice"), Some("org"))
+            .expect("org is a coherent scope");
+        assert_eq!(attr.scope, ScopeId::Org);
+    }
+
+    #[test]
+    fn from_persisted_fails_closed_on_absence_or_garbage() {
+        // Legacy/pre-P1 rows: both columns NULL.
+        assert!(ScopeAttribution::from_persisted(None, None).is_none());
+        // Unparseable scope_id: fail closed, never guess.
+        assert!(ScopeAttribution::from_persisted(Some("u-alice"), Some("garbage")).is_none());
     }
 }

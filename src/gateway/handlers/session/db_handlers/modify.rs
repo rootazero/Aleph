@@ -212,6 +212,19 @@ async fn handle_delete_db_inner(
                         .collect::<Vec<_>>()
                         .join("\n");
                     if !tail.is_empty() {
+                        // Review fix: fetch the row's P1 scope columns
+                        // BEFORE the delete below removes it — same reason
+                        // as `SessionManager::close_session`: the session-end
+                        // reflector needs them to write OPEN_LOOPS.md under
+                        // the same composed id the curated-envelope reader
+                        // resolves, and the ambient scope task-local is not
+                        // reliably live on this delete-RPC path.
+                        let (owner_user_id, scope_id) = manager
+                            .get_metadata(&session_key)
+                            .await
+                            .ok()
+                            .flatten()
+                            .map_or((None, None), |m| (m.owner_user_id, m.scope_id));
                         // Canonical spelling, not the caller's `key_str` — same
                         // rule as the two siblings in this function: the
                         // downstream snapshot store encodes the key straight
@@ -230,6 +243,8 @@ async fn handle_delete_db_inner(
                             session_key.to_key_string(),
                             tail,
                             crate::memory::store::raw_memory::SessionEndReason::Disconnect,
+                            owner_user_id,
+                            scope_id,
                         );
                     }
                 }

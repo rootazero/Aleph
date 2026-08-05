@@ -168,6 +168,15 @@ pub struct MemoryContextProvider {
     /// to a tempdir to keep filesystem state isolated.
     #[cfg(test)]
     pub(crate) curated_root_override: Option<std::path::PathBuf>,
+    /// Mirror of `MemoryConfig.project_scoped`. Every public entry point
+    /// below that logically operates on "the agent" (`build_curated_message`,
+    /// `get_or_load_curated_store`) takes a BASE agent id and resolves the
+    /// effective storage id itself via `project_scope::session_write_id`,
+    /// using this flag plus the ambient session scope
+    /// (`crate::scope::current_scope`) — mirroring `assembler::Gatherer`'s
+    /// `project_scoped` field. Callers must NOT pre-resolve the id
+    /// themselves before calling in (that would double-compose).
+    pub(crate) project_scoped: bool,
 }
 
 mod constructor;

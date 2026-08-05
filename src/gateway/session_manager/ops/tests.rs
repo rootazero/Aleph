@@ -62,6 +62,8 @@ mod spec1_tests {
             "sess-y".into(),
             "user: hi\nassistant: yo".into(),
             SessionEndReason::Disconnect,
+            None,
+            None,
         );
         tokio::time::sleep(std::time::Duration::from_millis(50)).await;
         let captured = fake.0.lock().unwrap_or_else(|e| e.into_inner());
@@ -86,6 +88,8 @@ mod spec1_tests {
             "sess-y".into(),
             String::new(),
             SessionEndReason::Disconnect,
+            None,
+            None,
         );
         tokio::time::sleep(std::time::Duration::from_millis(50)).await;
         assert!(fake.0.lock().unwrap_or_else(|e| e.into_inner()).is_empty());

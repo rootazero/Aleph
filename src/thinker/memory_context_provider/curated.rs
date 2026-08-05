@@ -4,20 +4,27 @@ use crate::sync_primitives::Arc;
 
 impl MemoryContextProvider {
     /// Build the cached `CuratedMemory` + `UserProfile` envelope for
-    /// this `(agent_id, session_key)`. The first call captures a frozen
-    /// snapshot; subsequent calls in the same session reuse it. Returns
-    /// `Ok(None)` only when both blocks are empty (so the layer can skip
-    /// emitting an empty user message).
+    /// `base_agent_id`'s current-session scope. `base_agent_id` is the BASE
+    /// (registered) agent id — this method resolves the effective storage id
+    /// itself via `resolve_storage_id` (spec §5.2), so a personal-scoped
+    /// session's envelope is composed from ITS OWN MEMORY.md/USER.md/
+    /// OPEN_LOOPS.md, not the shared base one. The first call captures a
+    /// frozen snapshot, keyed by the RESOLVED id (session scope is immutable
+    /// for the session's lifetime, so this stays session-constant — §2.18);
+    /// subsequent calls in the same session reuse it. Returns `Ok(None)`
+    /// only when both blocks are empty (so the layer can skip emitting an
+    /// empty user message).
     pub async fn build_curated_message(
         &self,
-        agent_id: &str,
+        base_agent_id: &str,
         session_key: &str,
     ) -> Result<Option<crate::providers::message::UnifiedMessage>, crate::error::AlephError> {
-        let key = (agent_id.to_string(), session_key.to_string());
+        let resolved_id = self.resolve_storage_id(base_agent_id);
+        let key = (resolved_id, session_key.to_string());
         if let Some(entry) = self.curated_snapshots.read().await.get(&key) {
             return Ok(self.snapshot_to_message(&entry.value));
         }
-        let snap = Arc::new(self.capture_curated(agent_id).await?);
+        let snap = Arc::new(self.capture_curated(base_agent_id).await?);
         // Single write-guard get-or-insert: a concurrent first build that lost
         // the race gets the winner's snapshot back, so both render identical
         // bytes instead of one silently replacing the other's frozen envelope.
@@ -25,35 +32,53 @@ impl MemoryContextProvider {
         Ok(self.snapshot_to_message(&frozen))
     }
 
-    /// Get or lazily load the per-agent `CuratedMemoryStore`. Public so the
-    /// builtin `remember` tool can resolve the same store instance the
-    /// `CuratedMemoryLayer` renders into the system prompt.
+    /// Get or lazily load the `CuratedMemoryStore` for `base_agent_id`'s
+    /// current-session scope. `base_agent_id` is the BASE (registered) agent
+    /// id — resolved to the effective storage id via `resolve_storage_id`
+    /// before touching the cache/disk, so a personal-scoped caller (the
+    /// `remember` tool, `capture_curated`) always lands on its own instance.
+    /// Public so the builtin `remember` tool can resolve the same store
+    /// instance the `CuratedMemoryLayer` renders into the system prompt.
     pub async fn get_or_load_curated_store(
         &self,
-        agent_id: &str,
+        base_agent_id: &str,
     ) -> Result<Arc<CuratedMemoryStore>, crate::error::AlephError> {
-        if let Some(s) = self.curated_stores.get(agent_id) {
+        let agent_id = self.resolve_storage_id(base_agent_id);
+        if let Some(s) = self.curated_stores.get(&agent_id) {
             return Ok(s.clone());
         }
-        self.adopt_owner_curated_file(agent_id, "MEMORY.md").await;
-        let path = self.agent_memory_path(agent_id);
+        self.adopt_owner_curated_file(&agent_id, "MEMORY.md").await;
+        let path = self.agent_memory_path(&agent_id);
         let s = Arc::new(
-            CuratedMemoryStore::load(path, self.curated_config.memory_char_limit, agent_id).await?,
+            CuratedMemoryStore::load(
+                path,
+                self.curated_config.memory_char_limit,
+                agent_id.clone(),
+            )
+            .await?,
         );
-        self.curated_stores.insert(agent_id.to_string(), s.clone());
+        self.curated_stores.insert(agent_id, s.clone());
         Ok(s)
     }
 
-    /// Load (or reuse) the per-agent `CuratedMemoryStore`, render the
-    /// `CuratedMemory` and `UserProfile` blocks, and return them as a
-    /// frozen `CuratedSnapshot`.
+    /// Load (or reuse) the `CuratedMemoryStore` for `base_agent_id`'s
+    /// current-session scope, render the `CuratedMemory` and `UserProfile`
+    /// blocks, and return them as a frozen `CuratedSnapshot`. `base_agent_id`
+    /// is the BASE agent id; resolved once here via `resolve_storage_id` and
+    /// reused for every sub-fetch (USER.md, OPEN_LOOPS.md) so all three
+    /// curated files come from the SAME scope's directory.
     async fn capture_curated(
         &self,
-        agent_id: &str,
+        base_agent_id: &str,
     ) -> Result<CuratedSnapshot, crate::error::AlephError> {
         use crate::memory::curated::snapshot::{render_agent_block, render_user_block};
 
-        let store = self.get_or_load_curated_store(agent_id).await?;
+        let agent_id = self.resolve_storage_id(base_agent_id);
+        // `get_or_load_curated_store` re-resolves from `base_agent_id` — same
+        // ambient scope, same result — rather than accepting `agent_id`
+        // directly, so its contract stays "always takes a base id" for its
+        // other caller (the `remember` tool).
+        let store = self.get_or_load_curated_store(base_agent_id).await?;
 
         let entries = store.current_entries();
         let agent_block = render_agent_block(
@@ -63,7 +88,7 @@ impl MemoryContextProvider {
         );
 
         let user_block = if let Some(ps) = &self.profile {
-            match ps.current(agent_id).await? {
+            match ps.current(&agent_id).await? {
                 Some(p) => {
                     let body = super::helpers::strip_frontmatter(&p.raw);
                     let block = render_user_block(
@@ -85,15 +110,16 @@ impl MemoryContextProvider {
 
         // Open loops from the previous session (Batch 2 open-loop tracking).
         // Opt-in via `set_open_loop_inject`. `SessionReflector` writes
-        // `OPEN_LOOPS.md` beside MEMORY.md on session end; absence (or the
-        // feature being off) simply yields no block. Bounded to keep the
-        // injected prompt small.
+        // `OPEN_LOOPS.md` beside MEMORY.md on session end (also resolved
+        // through session scope — see `session_reflection::open_loops_path`);
+        // absence (or the feature being off) simply yields no block. Bounded
+        // to keep the injected prompt small.
         const OPEN_LOOPS_CHAR_LIMIT: usize = 2000;
         let open_loops_block = if super::helpers::open_loop_inject() {
-            self.adopt_owner_curated_file(agent_id, "OPEN_LOOPS.md")
+            self.adopt_owner_curated_file(&agent_id, "OPEN_LOOPS.md")
                 .await;
             let path = self
-                .agent_memory_path(agent_id)
+                .agent_memory_path(&agent_id)
                 .with_file_name("OPEN_LOOPS.md");
             match tokio::fs::read_to_string(&path).await {
                 Ok(body) => {
@@ -183,6 +209,12 @@ impl MemoryContextProvider {
     /// `session_key`. Spec A Task 18: fired after compression-run completes
     /// for the agent, since compression mutates `MEMORY.md` / `USER.md` on
     /// disk and any per-session cache must rebuild on the next prompt.
+    ///
+    /// Unlike `build_curated_message`/`get_or_load_curated_store`, `agent_id`
+    /// here is the RESOLVED storage id, not a base id — this is an eviction
+    /// keyed on whatever the caches actually hold. `PostCompressionHook`'s
+    /// caller compresses under the resolved id (`SessionCompactor` writes via
+    /// `session_write_id`), so it already has the right value on hand.
     pub async fn invalidate_curated_for_agent(&self, agent_id: &str) {
         self.curated_snapshots
             .write()
@@ -335,9 +367,62 @@ mod tests {
         );
     }
 
+    /// Review fix (Finding 1): `build_curated_message` takes a BASE agent id
+    /// and must resolve it through the ACTIVE session scope itself — not
+    /// trust a pre-composed id from the caller. Proves the composed id
+    /// actually reaches the curated store end-to-end under a scoped run: the
+    /// base and the personal-scope directories hold DIFFERENT content, and a
+    /// personal-scoped call must read the personal one.
+    #[tokio::test]
+    async fn personal_scope_reaches_the_curated_store_end_to_end() {
+        let dir = tempfile::tempdir().unwrap();
+        let base = dir.path().join("main");
+        tokio::fs::create_dir_all(&base).await.unwrap();
+        tokio::fs::write(base.join("MEMORY.md"), "base-only fact\n§\n")
+            .await
+            .unwrap();
+        let scoped = dir.path().join("main__u-alice");
+        tokio::fs::create_dir_all(&scoped).await.unwrap();
+        tokio::fs::write(scoped.join("MEMORY.md"), "alice-only fact\n§\n")
+            .await
+            .unwrap();
+
+        let provider = provider_rooted_at(dir.path());
+
+        // Passing the BASE id "main", exactly as `runner_impl.rs` does
+        // (`&spec.agent`) — the composition must come from the ambient scope.
+        let msg = crate::scope::with_scope(
+            Some(crate::scope::ScopeAttribution::personal("u-alice")),
+            provider.build_curated_message("main", "ses-1"),
+        )
+        .await
+        .unwrap();
+        let rendered = format!("{msg:?}");
+        assert!(
+            rendered.contains("alice-only fact"),
+            "personal scope must reach its own MEMORY.md: {rendered}"
+        );
+        assert!(
+            !rendered.contains("base-only fact"),
+            "personal scope must NOT read the shared base MEMORY.md: {rendered}"
+        );
+
+        // No active scope at all: must fall back to the base id unchanged
+        // (byte-identical pre-P1 behaviour for org/legacy sessions).
+        let base_msg = provider
+            .build_curated_message("main", "ses-2")
+            .await
+            .unwrap();
+        let base_rendered = format!("{base_msg:?}");
+        assert!(
+            base_rendered.contains("base-only fact"),
+            "no scope → base id: {base_rendered}"
+        );
+    }
+
     /// P1 owner adoption: the single-machine owner's pre-existing single-user
     /// MEMORY.md + USER.md must become their personal-scope instance the
-    /// first time it's loaded under the composed `{base}__u-owner` id, and a
+    /// first time it's loaded under an ACTIVE owner personal-scope run, and a
     /// second load must be a no-op (idempotent). Both files' real roots
     /// differ in production (MEMORY.md under `agents/`, USER.md under the
     /// note-memory dir), so this test points both at the SAME tempdir root —
@@ -346,6 +431,7 @@ mod tests {
     async fn owner_adoption_moves_the_trio_once_and_is_idempotent() {
         use crate::memory::notes::profile::synthesizer::FsProfileSynthesizer;
         use crate::providers::recording_mock::RecordingMockProvider;
+        use crate::scope::{with_scope, ScopeAttribution};
 
         let dir = tempfile::tempdir().unwrap();
         let bare = dir.path().join("main");
@@ -363,11 +449,21 @@ mod tests {
                 Arc::new(RecordingMockProvider::new(String::new())),
             ));
         let provider = provider_rooted_at(dir.path()).with_profile(profile);
+        let owner_scope = || {
+            Some(ScopeAttribution::personal(
+                crate::gateway::security::store::OWNER_USER_ID,
+            ))
+        };
 
-        let msg = provider
-            .build_curated_message("main__u-owner", "ses-1")
-            .await
-            .unwrap();
+        // Passing the BASE id "main" under an active owner personal-scope
+        // run — mirrors a real `runner_impl.rs` call for the owner's own
+        // session, not a pre-composed id handed in by the test.
+        let msg = with_scope(
+            owner_scope(),
+            provider.build_curated_message("main", "ses-1"),
+        )
+        .await
+        .unwrap();
         let rendered = format!("{msg:?}");
         assert!(rendered.contains("fact one"), "{rendered}");
         assert!(rendered.contains("owner profile body"), "{rendered}");
@@ -382,10 +478,12 @@ mod tests {
         // Idempotent: a fresh session (caches evicted) re-loads and finds
         // nothing left to adopt — no error, same content.
         provider.invalidate_curated_for_agent("main__u-owner").await;
-        let msg2 = provider
-            .build_curated_message("main__u-owner", "ses-2")
-            .await
-            .unwrap();
+        let msg2 = with_scope(
+            owner_scope(),
+            provider.build_curated_message("main", "ses-2"),
+        )
+        .await
+        .unwrap();
         let rendered2 = format!("{msg2:?}");
         assert!(rendered2.contains("fact one"), "{rendered2}");
         assert!(rendered2.contains("owner profile body"), "{rendered2}");
@@ -405,10 +503,13 @@ mod tests {
 
         let provider = provider_rooted_at(dir.path());
 
-        let store = provider
-            .get_or_load_curated_store("main__u-alice")
-            .await
-            .unwrap();
+        // BASE id "main" under alice's active personal scope.
+        let store = crate::scope::with_scope(
+            Some(crate::scope::ScopeAttribution::personal("u-alice")),
+            provider.get_or_load_curated_store("main"),
+        )
+        .await
+        .unwrap();
         assert!(
             store.current_entries().is_empty(),
             "a member must start fresh, not inherit the owner's content"
