@@ -199,6 +199,18 @@ const ADMIN_PREFIXES: &[&str] = &[
     // *delivery* of the cards, this list refuses the *resolution* RPCs, and
     // neither implies the other. No carve-outs — ---
     "exec.", // exec.approval.resolve, exec.approvals.pending.
+    // --- Persisted agent-trace replay (final-review round — C2). A trace is
+    // a full transcript (prompts, tool inputs, tool outputs) keyed only by
+    // `run_id`, with no owner recorded anywhere in the trace store, so this
+    // family was an enumeration oracle (`trace.list` returns EVERY task_id in
+    // the process) feeding arbitrary-id readers. Gated whole so a future
+    // sibling is gated by default; `trace.by_runs` — the Panel's
+    // session-hydration path, the only member-reachable one — is carved out
+    // below and owner-scoped in its own handler instead. `trace.list` /
+    // `trace.get` have no member surface: their only callers are the operator
+    // debugging commands `aleph trace list|get` (CLI) and the TUI's `/trace`.
+    // See `handlers/trace_replay.rs`'s module doc for the full split. ---
+    "trace.",
 ];
 
 /// Member-safe reads inside otherwise-admin families.
@@ -215,6 +227,13 @@ const MEMBER_CARVE_OUTS: &[&str] = &[
     // identity propagation, not a hole. `Panel team_from_template` needs
     // only `invoke`; the siblings stay admin-gated (widen later on demand).
     "tools.invoke",
+    // Final-review C2: the Panel calls this on EVERY session open to replay
+    // tool calls into the transcript, so admin-gating it would break member
+    // transcripts. It is owner-scoped in the handler instead (KeyChecked on
+    // the addressed session, then the requested runs intersected with that
+    // session's own) — see `handlers/trace_replay.rs::handle_by_runs`. Its
+    // siblings stay gated; this carve-out is as narrow as `tools.invoke`'s.
+    "trace.by_runs",
 ];
 
 #[must_use]
@@ -315,8 +334,30 @@ mod tests {
             "tools.effective",
             "tools.cancel_call",
             "tools.in_flight",
+            // persisted trace replay (final-review round — C2)
+            "trace.list",
+            "trace.get",
         ] {
             assert!(method_requires_admin(m), "{m} must require admin");
+        }
+    }
+
+    /// Final-review C2's exact shape: `trace.list` is the enumeration oracle
+    /// and must be gated; `trace.by_runs` must stay open because the Panel's
+    /// session hydration depends on it — its isolation is the handler's job,
+    /// not this gate's.
+    #[test]
+    fn trace_by_runs_is_carved_open_but_its_siblings_stay_gated() {
+        assert!(
+            !method_requires_admin("trace.by_runs"),
+            "trace.by_runs must stay open — the Panel replays tool calls with it \
+             on every session open; it is owner-scoped in its own handler"
+        );
+        for sibling in ["trace.list", "trace.get"] {
+            assert!(
+                method_requires_admin(sibling),
+                "{sibling} must be admin-gated — only trace.by_runs is carved out"
+            );
         }
     }
 
@@ -355,6 +396,7 @@ mod tests {
             "clarification.pending",
             "subagent.tree",
             "agent.run",
+            "trace.by_runs",
             "session.compact",
             "command.execute",
             "commands.list",

@@ -49,6 +49,24 @@ pub fn visible_owner_filter() -> Option<String> {
     current_caller_user()
 }
 
+/// Whether a record carrying a raw stamped `owner_user_id` is visible to the
+/// current caller.
+///
+/// [`session_visible`] is this predicate applied to a [`SessionMetadata`];
+/// this is the shape for the OTHER P1-stamped records that are not sessions
+/// and so have no `SessionMetadata` to pass — a group-chat session, a loop, a
+/// goal. Same rule, one implementation: an unrestricted caller sees
+/// everything, `None` reads as [`OWNER_USER_ID`] (owner-by-absence), and a
+/// scoped caller sees only their own. Do not re-derive it at a call site —
+/// that is exactly the bypass this module exists to prevent.
+#[must_use]
+pub fn stamped_owner_visible(owner_user_id: Option<&str>) -> bool {
+    match visible_owner_filter() {
+        None => true,
+        Some(caller) => caller == owner_user_id.unwrap_or(OWNER_USER_ID),
+    }
+}
+
 /// Whether `meta` is visible to the current caller.
 ///
 /// An unrestricted caller (see [`visible_owner_filter`]) sees every session.
@@ -58,10 +76,7 @@ pub fn visible_owner_filter() -> Option<String> {
 /// them, matching Global Constraint 2.
 #[must_use]
 pub fn session_visible(meta: &SessionMetadata) -> bool {
-    match visible_owner_filter() {
-        None => true,
-        Some(caller) => caller == effective_owner(meta),
-    }
+    stamped_owner_visible(meta.owner_user_id.as_deref())
 }
 
 /// The response for an addressed-key visibility failure.

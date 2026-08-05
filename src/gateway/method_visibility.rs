@@ -226,6 +226,49 @@
 //!   for the identical reason — `AgentRunManager` has no `SessionStore`
 //!   dependency — and this table must not overstate what is enforced.
 //!
+//! The same blind spot hid two more families, which address their data by
+//! `run_id` and by a group-chat `session_id` respectively:
+//!
+//! - `trace.by_runs` → **KeyChecked**. A persisted trace is a full transcript
+//!   and the trace store records no owner, so ownership is resolved through
+//!   the session instead: the method now takes a `session_key`, KeyChecks it
+//!   with `visibility::session_visible`/`not_found_response`, and then serves
+//!   only those requested `run_id`s that the session's own transcript
+//!   attributes to itself (proving you own one session must not become a
+//!   licence to read every run in the process). A run outside that set reads
+//!   as `[]` — the same shape an unknown or trace-less run has always
+//!   produced. Its siblings `trace.list`/`trace.get` are NOT in this table
+//!   because they are not member-reachable at all: the `trace.` prefix is
+//!   admin-gated in `method_admin.rs` and only `trace.by_runs` is carved out
+//!   (`trace.list` was its own enumeration oracle — every `task_id` in the
+//!   process — and the Panel calls neither).
+//! - `group_chat.list` → **ListFiltered**; `group_chat.continue`/`mention`/
+//!   `history`/`end` → **KeyChecked**. These sessions are NOT keyed by a
+//!   `SessionKey` (`GroupChatSession::source_session_key` is the sentinel
+//!   `"rpc:direct"` on the RPC path, so it names no session and cannot answer
+//!   ownership), so `GroupChatSession` carries the same P1 owner stamp
+//!   `SessionMetadata`/`LoopState`/`Goal` do, taken off the ambient scope in
+//!   its constructor, and read through the shared
+//!   `visibility::stamped_owner_visible`. `KeyChecked` here means "addressed
+//!   record, ownership checked before anything else, denial reuses the
+//!   method's own not-found response" — the label is about the shape of the
+//!   check, not about the identifier being a `SessionKey`. `group_chat.start`
+//!   is a creation surface with no addressed record (nothing to check),
+//!   matching `session.create`'s ruling above.
+//!
+//! ## `teams.*`
+//!
+//! Registered as [`Treatment::OrgShared`], not because it was audited clean
+//! but because the plan
+//! (`docs/superpowers/plans/2026-08-05-p1-data-isolation.md`, Task 6) ruled
+//! the family org-level and deferred project scoping to P2. `Team` carries no
+//! owner field at all, so there is nothing this table's predicates could
+//! check without first inventing an ownership model — which is a product
+//! decision, not a fix. It is listed rather than omitted so the registry
+//! stops being silently incomplete: an `OrgShared` entry with a reason is a
+//! recorded decision, absence is indistinguishable from an oversight. The
+//! ruling is pending human confirmation (see `ORG_SHARED_REASONS`).
+//!
 //! ## Known gaps NOT covered by this table (found during the sweep, not
 //! fixed — flagged here exactly as `method_admin.rs` flags its own
 //! follow-ups)
@@ -326,20 +369,48 @@ pub const SCOPED_METHODS: &[(&str, Treatment)] = &[
     ("graph.delete_note", Treatment::PartitionChecked),
     // --- Final-review fix round ---
     ("agent.run", Treatment::KeyChecked),
+    ("trace.by_runs", Treatment::KeyChecked),
+    ("group_chat.list", Treatment::ListFiltered),
+    ("group_chat.continue", Treatment::KeyChecked),
+    ("group_chat.mention", Treatment::KeyChecked),
+    ("group_chat.history", Treatment::KeyChecked),
+    ("group_chat.end", Treatment::KeyChecked),
 ];
 
-/// `OrgShared` entries carry a one-line reason at the point they're listed —
-/// currently empty (see module doc: no Task-6 method is `OrgShared`), kept
-/// as a separate const so Task 7 can extend it without touching
-/// `SCOPED_METHODS`'s shape.
-pub const ORG_SHARED_REASONS: &[(&str, &str)] = &[];
+/// Whole families ruled [`Treatment::OrgShared`], as prefixes.
+///
+/// The exact-match [`SCOPED_METHODS`] table is the right shape for a method
+/// that was individually read and enforced; it is the wrong shape for a
+/// family whose ruling is "every method here, present and future, is
+/// org-level infrastructure" — enumerating 37 `teams.*` methods would mean a
+/// new sibling silently drops out of the audit trail, which is the failure
+/// this file exists to prevent. Prefix form (the `method_admin.rs` idiom this
+/// file is the sibling of) makes the ruling cover the family by construction.
+///
+/// Every entry needs a reason in [`ORG_SHARED_REASONS`], enforced by test.
+const ORG_SHARED_PREFIXES: &[&str] = &["teams."];
+
+/// `OrgShared` entries carry a one-line reason at the point they're listed,
+/// keyed by the exact method or by the family prefix
+/// ([`ORG_SHARED_PREFIXES`]).
+pub const ORG_SHARED_REASONS: &[(&str, &str)] = &[(
+    "teams.",
+    "org-level AI-team infrastructure; project scoping arrives in P2 — pending human ruling",
+)];
 
 #[must_use]
 pub fn treatment_of(method: &str) -> Option<Treatment> {
-    SCOPED_METHODS
+    if let Some(t) = SCOPED_METHODS
         .iter()
         .find(|(m, _)| *m == method)
         .map(|(_, t)| *t)
+    {
+        return Some(t);
+    }
+    ORG_SHARED_PREFIXES
+        .iter()
+        .any(|p| method.starts_with(p))
+        .then_some(Treatment::OrgShared)
 }
 
 #[cfg(test)]
@@ -513,22 +584,64 @@ mod tests {
         assert_eq!(treatment_of("agent.run"), treatment_of("chat.send"));
     }
 
-    /// Every `OrgShared` entry must carry a one-line reason. Currently
-    /// vacuously true (the table is empty — see module doc); the test stays
-    /// so Task 7's additions are checked by construction, not convention.
+    /// Every `OrgShared` entry — exact or family prefix — must carry a
+    /// one-line reason. "Shared by design" and "nobody looked" are
+    /// indistinguishable without one.
     #[test]
     fn org_shared_entries_all_carry_reasons() {
-        let org_shared: Vec<&str> = SCOPED_METHODS
+        let exact = SCOPED_METHODS
             .iter()
             .filter(|(_, t)| *t == Treatment::OrgShared)
-            .map(|(m, _)| *m)
-            .collect();
-        for m in org_shared {
+            .map(|(m, _)| *m);
+        for m in exact.chain(ORG_SHARED_PREFIXES.iter().copied()) {
             assert!(
                 ORG_SHARED_REASONS
                     .iter()
                     .any(|(rm, reason)| *rm == m && !reason.is_empty()),
                 "{m} is OrgShared but carries no reason in ORG_SHARED_REASONS"
+            );
+        }
+    }
+
+    /// Final-review C2/C3: the families the parameter-keyed sweep could not
+    /// see. `teams.*` is ruled org-shared BY THE PLAN, not by an audit — it
+    /// is listed so the ruling is recorded rather than looking like an
+    /// oversight, and the prefix form means a new `teams.*` sibling inherits
+    /// the ruling instead of silently dropping out of the table.
+    #[test]
+    fn final_review_families_are_registered() {
+        assert_eq!(treatment_of("trace.by_runs"), Some(Treatment::KeyChecked));
+        assert_eq!(
+            treatment_of("group_chat.list"),
+            Some(Treatment::ListFiltered)
+        );
+        for m in [
+            "group_chat.continue",
+            "group_chat.mention",
+            "group_chat.history",
+            "group_chat.end",
+        ] {
+            assert_eq!(treatment_of(m), Some(Treatment::KeyChecked), "{m}");
+        }
+        // `group_chat.start` creates; there is no addressed record to check,
+        // same ruling as `session.create`.
+        assert_eq!(treatment_of("group_chat.start"), None);
+
+        for m in ["teams.list", "teams.chat.history", "teams.some_future_rpc"] {
+            assert_eq!(treatment_of(m), Some(Treatment::OrgShared), "{m}");
+        }
+    }
+
+    /// `trace.list`/`trace.get` are absent from this table on purpose: they
+    /// are admin-gated, and the cross-check below would fail if they were
+    /// listed. Pin the reason so "missing" can't be read as "forgotten".
+    #[test]
+    fn admin_gated_trace_siblings_are_deliberately_absent() {
+        for m in ["trace.list", "trace.get"] {
+            assert_eq!(treatment_of(m), None, "{m}");
+            assert!(
+                crate::gateway::method_admin::method_requires_admin(m),
+                "{m} is absent from SCOPED_METHODS only because it is admin-gated"
             );
         }
     }

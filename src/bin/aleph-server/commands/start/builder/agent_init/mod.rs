@@ -1344,7 +1344,7 @@ pub(in crate::commands::start) async fn register_agent_handlers(
 
         // trace.list / trace.get / trace.by_runs — replay durable traces when a
         // state DB exists, else SERVICE_UNAVAILABLE. See `common_handlers.rs`.
-        register_trace_handlers(server, resilience_db.clone());
+        register_trace_handlers(server, resilience_db.clone(), session_store.clone());
 
         // Capture for inbound router
         let engine_arc: Arc<dyn alephcore::gateway::ExecutionAdapter> = engine;
