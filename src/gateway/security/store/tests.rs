@@ -35,29 +35,3 @@ fn test_device_crud() {
     assert!(!store.is_device_approved("dev-1").unwrap());
 }
 
-#[test]
-fn test_channel_dm_policy_crud() {
-    let store = SecurityStore::in_memory().unwrap();
-
-    assert!(store.get_channel_dm_policy("telegram").unwrap().is_none());
-
-    store
-        .set_channel_dm_policy("telegram", "pairing", None)
-        .unwrap();
-    let (policy, allowlist) = store.get_channel_dm_policy("telegram").unwrap().unwrap();
-    assert_eq!(policy, "pairing");
-    assert!(allowlist.is_none());
-
-    store
-        .set_channel_dm_policy("discord", "allowlist", Some("[\"user1\",\"user2\"]"))
-        .unwrap();
-    let (policy, allowlist) = store.get_channel_dm_policy("discord").unwrap().unwrap();
-    assert_eq!(policy, "allowlist");
-    assert_eq!(allowlist.unwrap(), "[\"user1\",\"user2\"]");
-
-    store
-        .set_channel_dm_policy("telegram", "open", None)
-        .unwrap();
-    let (policy, _) = store.get_channel_dm_policy("telegram").unwrap().unwrap();
-    assert_eq!(policy, "open");
-}

@@ -25,7 +25,6 @@ use tracing::{debug, info};
 mod bootstrap_tickets;
 mod devices;
 mod identity;
-mod senders;
 mod tokens;
 mod types;
 mod users;
@@ -364,6 +363,11 @@ CREATE TABLE pairing_requests (
 CREATE INDEX idx_pairing_code ON pairing_requests(code);
 CREATE INDEX idx_pairing_expires ON pairing_requests(expires_at);
 
+-- Accessorless since the dead-twin CUT: nothing in the tree reads or writes
+-- this table. The live approved-sender authority is `gateway::pairing_store`
+-- (a different database), consulted by `inbound_router::check_permission`.
+-- The DDL stays only so the v2 migration keeps producing the schema every
+-- deployed database already has; do not add accessors here.
 CREATE TABLE approved_senders (
     channel         TEXT NOT NULL,
     sender_id       TEXT NOT NULL,
@@ -409,7 +413,12 @@ const SCHEMA_V6: &str = r#"
 ALTER TABLE shared_token ADD COLUMN plaintext_token TEXT;
 "#;
 
-/// Schema v8 SQL — channel policies persistence
+/// Schema v8 SQL — channel policies persistence.
+///
+/// Accessorless since the dead-twin CUT: the per-channel dm/group policy that
+/// is actually enforced comes from `[channels.*]` config bridged into
+/// `gateway::channel_policy` + `inbound_router::check_permission`; this table
+/// never had a runtime writer. DDL retained for schema continuity only.
 const SCHEMA_V8: &str = r#"
 CREATE TABLE IF NOT EXISTS channel_policies (
     channel_id  TEXT NOT NULL,
