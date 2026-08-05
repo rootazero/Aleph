@@ -101,15 +101,18 @@ pub struct CatalogEntry {
     pub modalities: Vec<String>,
     #[serde(default)]
     pub models: Vec<String>,
-    /// Curated alternatives the preset ships for this provider. The backend has
-    /// sent these since the field was introduced, documented as "used by the
-    /// picker" — but nothing here read them, so a provider with no
-    /// operator-configured `models` rendered exactly one row. [`roster`] is now
-    /// the single place that decides what the picker shows.
-    ///
-    /// [`roster`]: crate::components::model_picker::roster
+    /// Curated alternatives the preset ships for this provider. Informational
+    /// only — the authoritative picker list is [`CatalogEntry::roster`],
+    /// computed backend-side through the same ladder leaf the failover walk
+    /// uses (including the "operator moved base_url ⇒ no curated rungs"
+    /// guard, which this frontend has no way to evaluate on its own).
     #[serde(default)]
     pub fallback_models: Vec<String>,
+    /// The exact model ids the picker offers, computed by the backend
+    /// (`providers.catalog`). Rendered verbatim — never re-derived here (R4).
+    /// Empty for bring-your-own-model relays.
+    #[serde(default)]
+    pub roster: Vec<String>,
     #[serde(default)]
     pub has_api_key: bool,
     #[serde(default)]

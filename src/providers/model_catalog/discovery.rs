@@ -90,6 +90,14 @@ pub struct DiscoveredModels {
     pub provider: String,
     /// Unix seconds at which this listing was fetched.
     pub fetched_at: u64,
+    /// The endpoint this listing was fetched from. A cache entry only answers
+    /// for the same `base_url`: after the operator moves the endpoint, the
+    /// old inventory belongs to a different host, and serving it would be the
+    /// same class of wrong as applying a preset `models_url` override to a
+    /// relocated endpoint. Entries written before this field existed carry
+    /// `None` and are treated as another endpoint's — they cost one refetch.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub base_url: Option<String>,
     pub models: Vec<DiscoveredModel>,
 }
 
@@ -173,7 +181,7 @@ pub async fn refresh_models(
         )
     };
     let _permit = lock.lock().await;
-    if let Some(cached) = cached_models(provider) {
+    if let Some(cached) = cached_models(provider, base_url) {
         if cached.fetched_at >= started {
             return Ok(cached);
         }
@@ -217,21 +225,32 @@ pub async fn refresh_models(
     let listing = DiscoveredModels {
         provider: provider.to_string(),
         fetched_at: now_secs(),
+        base_url: Some(base_url.to_string()),
         models,
     };
     write_cache(&listing);
     Ok(listing)
 }
 
-/// Read a provider's cached listing, if one was ever written.
+/// Read a provider's cached listing, if one was ever written **for the same
+/// `base_url`**.
 ///
 /// Never fetches. Callers that want freshness check
 /// [`DiscoveredModels::is_fresh`] and call [`refresh_models`] themselves —
 /// keeping the network call an explicit, visible act at every call site.
+///
+/// The `base_url` fingerprint (Bifrost's keyconfig-snapshot shape: a config
+/// change swaps the whole view) is what keeps a relocated endpoint from
+/// inheriting the previous host's inventory. A generation counter was
+/// considered and rejected: the per-provider single-flight lock already
+/// serialises writers within the process, and a second aleph-server process
+/// is a supported-against configuration (doctor's duplicate-instance check),
+/// so there is no cross-writer race left for a counter to close.
 #[must_use]
-pub fn cached_models(provider: &str) -> Option<DiscoveredModels> {
+pub fn cached_models(provider: &str, base_url: &str) -> Option<DiscoveredModels> {
     let raw = std::fs::read_to_string(cache_path(provider)?).ok()?;
-    serde_json::from_str(&raw).ok()
+    let listing: DiscoveredModels = serde_json::from_str(&raw).ok()?;
+    (listing.base_url.as_deref() == Some(base_url)).then_some(listing)
 }
 
 /// Resolve the listing endpoint for a provider.
@@ -526,6 +545,7 @@ mod tests {
         let fresh = DiscoveredModels {
             provider: "openai".into(),
             fetched_at: now_secs(),
+            base_url: Some("https://api.openai.com/v1".into()),
             models: Vec::new(),
         };
         assert!(fresh.is_fresh(CACHE_TTL));
@@ -534,5 +554,56 @@ mod tests {
             ..fresh
         };
         assert!(!stale.is_fresh(CACHE_TTL));
+    }
+
+    #[test]
+    fn cache_only_answers_for_the_same_base_url() {
+        let provider = "fingerprint-probe";
+        let url_a = "https://a.example/v1";
+        let url_b = "https://b.example/v1";
+        write_cache(&DiscoveredModels {
+            provider: provider.into(),
+            fetched_at: now_secs(),
+            base_url: Some(url_a.into()),
+            models: Vec::new(),
+        });
+
+        assert!(
+            cached_models(provider, url_a).is_some(),
+            "same endpoint reads its cache"
+        );
+        assert!(
+            cached_models(provider, url_b).is_none(),
+            "a moved endpoint must not inherit the previous host's inventory"
+        );
+
+        if let Some(path) = cache_path(provider) {
+            let _ = std::fs::remove_file(path);
+        }
+    }
+
+    #[test]
+    fn legacy_cache_without_fingerprint_is_not_served() {
+        // Entries written before the fingerprint existed carry no `base_url`;
+        // they are treated as another endpoint's inventory and cost one
+        // refetch rather than a guess.
+        let provider = "legacy-fingerprint-probe";
+        let path = cache_path(provider).unwrap();
+        let parent = path.parent().unwrap();
+        std::fs::create_dir_all(parent).unwrap();
+        std::fs::write(
+            &path,
+            serde_json::json!({
+                "provider": provider,
+                "fetched_at": now_secs(),
+                "models": [],
+            })
+            .to_string(),
+        )
+        .unwrap();
+
+        assert!(cached_models(provider, "https://a.example/v1").is_none());
+
+        let _ = std::fs::remove_file(path);
     }
 }

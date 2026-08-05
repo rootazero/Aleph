@@ -30,12 +30,7 @@ use crate::providers::model_catalog::{ModelRecord, ModelSource};
 use crate::sync_primitives::Arc;
 use tokio::sync::RwLock;
 
-/// Vault key convention for AI provider API keys (mirrors the providers handler
-/// `helpers::vault_key`). Kept local so the tool depends only on the vault read
-/// path, not on gateway handler internals.
-fn vault_key(provider: &str) -> String {
-    format!("ai:{provider}")
-}
+use crate::providers::probe::provider_vault_key;
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
 pub struct ListModelsArgs {
@@ -183,7 +178,7 @@ impl ListModelsTool {
             return Some(key.clone());
         }
         let vault = self.vault.as_ref()?;
-        crate::gateway::handlers::resolve_vault_secret(&vault_key(name), vault)
+        crate::gateway::handlers::resolve_vault_secret(&provider_vault_key(name), vault)
     }
 
     /// True when the provider has a usable credential.
@@ -251,7 +246,9 @@ impl ListModelsTool {
             // configured vendor with the operator's keys. The operator RPC
             // (`providers.modelsRefresh`) still forces a real round trip —
             // that path is an explicit, authorised "go look now".
-            if let Some(cached) = crate::providers::model_catalog::cached_models(&t.provider) {
+            if let Some(cached) =
+                crate::providers::model_catalog::cached_models(&t.provider, &t.base_url)
+            {
                 if cached.is_fresh(crate::providers::model_catalog::discovery::CACHE_TTL) {
                     out.insert(
                         t.provider,
@@ -261,6 +258,7 @@ impl ListModelsTool {
                 }
             }
             tasks.spawn(async move {
+                let base_url = t.base_url.clone();
                 let outcome = crate::providers::model_catalog::refresh_models(
                     &t.provider,
                     &t.base_url,
@@ -268,12 +266,12 @@ impl ListModelsTool {
                     &t.api_key,
                 )
                 .await;
-                (t.provider, outcome)
+                (t.provider, base_url, outcome)
             });
         }
 
         while let Some(joined) = tasks.join_next().await {
-            let Ok((provider, outcome)) = joined else {
+            let Ok((provider, base_url, outcome)) = joined else {
                 continue;
             };
             match outcome {
@@ -288,7 +286,9 @@ impl ListModelsTool {
                     // a vendor that is unreachable *right now* still had an
                     // inventory the last time we looked, and every id in it
                     // is enriched by the curated tables anyway.
-                    if let Some(stale) = crate::providers::model_catalog::cached_models(&provider) {
+                    if let Some(stale) =
+                        crate::providers::model_catalog::cached_models(&provider, &base_url)
+                    {
                         tracing::debug!(
                             provider = %provider, error = %e,
                             "model discovery failed; serving stale cache"

@@ -1,10 +1,11 @@
-/// Provider health tracking and error classification.
+/// Provider error classification for advisory/observability consumers.
 ///
-/// This module provides types for tracking provider health state and
-/// classifying errors into transient (retriable) vs permanent categories.
-/// Used by the failover system to make routing decisions.
+/// This module classifies errors into transient (retriable) vs permanent
+/// categories. Its production consumers are the MoA advisor health tracker
+/// (`moa/advisor_health.rs`) and gateway event surfaces (`ModelInfo`) — the
+/// failover engine itself does *not* read these types; its retry/migrate
+/// decisions are classified in `llm_retry` + `failover/decision.rs`.
 use serde::{Deserialize, Serialize};
-use std::time::Duration;
 
 use crate::error::AlephError;
 
@@ -14,8 +15,11 @@ use crate::error::AlephError;
 /// These trigger cooldown/degraded state rather than permanent unavailability.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum TransientError {
-    /// Provider returned 429 with optional retry-after hint
-    RateLimited { retry_after: Option<Duration> },
+    /// Provider returned 429. The vendor's Retry-After hint, when present, is
+    /// consumed upstream by `failover`'s model/provider cooldowns; by the time
+    /// an error reaches this classifier the hint is already spent, so the
+    /// variant deliberately carries no `retry_after` payload.
+    RateLimited,
     /// Provider returned 5xx
     ServerError { status: u16 },
     /// Request timed out
@@ -55,9 +59,7 @@ impl From<&AlephError> for Option<ProviderError> {
     fn from(error: &AlephError) -> Self {
         match error {
             AlephError::RateLimitError { .. } => {
-                Some(ProviderError::Transient(TransientError::RateLimited {
-                    retry_after: None,
-                }))
+                Some(ProviderError::Transient(TransientError::RateLimited))
             }
             AlephError::Timeout { .. } | AlephError::ExecutionTimeout { .. } => {
                 Some(ProviderError::Transient(TransientError::Timeout))
@@ -128,9 +130,7 @@ mod tests {
         let provider_err: Option<ProviderError> = (&err).into();
         assert_eq!(
             provider_err,
-            Some(ProviderError::Transient(TransientError::RateLimited {
-                retry_after: None
-            }))
+            Some(ProviderError::Transient(TransientError::RateLimited))
         );
     }
 

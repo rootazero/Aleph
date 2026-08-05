@@ -743,7 +743,7 @@ pub async fn handle_models_refresh(
                     // Stale snapshot beats an error row: report what the
                     // provider served last time, marked so the picker can
                     // show it as dated rather than live.
-                    match crate::providers::model_catalog::cached_models(&name) {
+                    match crate::providers::model_catalog::cached_models(&name, &base_url) {
                         Some(stale) => json!({
                             "provider": name,
                             "ok": true,
@@ -1078,6 +1078,26 @@ pub async fn handle_catalog(
                 crate::providers::model_catalog::ModelSource::PresetDefault,
             );
 
+            // The picker roster merges through the same leaf the failover
+            // walk uses (`presets::model_ladder`), seeded with the operator's
+            // `models` or, when none are listed, the preset default. This is
+            // what stops the picker from recommending curated ids on a relay
+            // whose base_url the operator moved — they would 400 there.
+            let roster = chat_presets::model_ladder(
+                entry.name,
+                if models.is_empty() {
+                    let d = preset.default_model;
+                    if d.is_empty() {
+                        Vec::new()
+                    } else {
+                        vec![d.to_string()]
+                    }
+                } else {
+                    models.clone()
+                },
+                cfg.and_then(|c| c.base_url.as_deref()),
+            );
+
             Some(CatalogEntryView {
                 id: entry.name.to_string(),
                 display_name,
@@ -1110,6 +1130,7 @@ pub async fn handle_catalog(
                 endpoint: record.endpoint.as_str().to_string(),
                 lifecycle: record.lifecycle,
                 requires_explicit_model: preset.requires_explicit_model,
+                roster,
             })
         })
         .collect();
@@ -1164,6 +1185,7 @@ pub async fn handle_catalog(
                 // in `models` is the roster, so there is never a "no default
                 // shipped" state to announce.
                 requires_explicit_model: false,
+                roster: cfg.models.clone(),
             }
         })
         .collect();
@@ -1219,7 +1241,7 @@ pub async fn handle_catalog(
                 default_aux_model: None,
                 aliases: Vec::new(),
                 modalities: vec!["chat".to_string()],
-                models: names,
+                models: names.clone(),
                 has_api_key: true,
                 verified: true,
                 enabled: true,
@@ -1237,6 +1259,7 @@ pub async fn handle_catalog(
                 // models is caught where those slots are resolved, not here.)
                 lifecycle: crate::providers::model_catalog::ModelLifecycle::ACTIVE,
                 requires_explicit_model: false,
+                roster: names,
             });
         }
     }

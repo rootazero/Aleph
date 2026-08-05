@@ -83,13 +83,23 @@ pub fn build_failover_chain(
     let allow_escalation = config.route.allow_cloud_escalation;
     // Catalog of every configured provider's model list, keyed by toml name.
     // Lets the live primary — and each fallback — fail over across models.
-    // `provider_model_ladder` folds the preset's curated fallback chain in
-    // behind the operator's own `models` (see its doc).
+    // `presets::model_ladder` folds the preset's curated fallback chain in
+    // behind the operator's own `models` (see its doc) — the same leaf the
+    // `providers.catalog` picker roster merges through.
     let model_catalog: HashMap<String, Vec<String>> = config
         .providers
         .iter()
         // rust-doctor-disable-next-line excessive-clone
-        .map(|(name, pc)| (name.clone(), provider_model_ladder(name, pc)))
+        .map(|(name, pc)| {
+            (
+                name.clone(),
+                crate::providers::presets::model_ladder(
+                    name,
+                    pc.all_models().to_vec(),
+                    pc.base_url.as_deref(),
+                ),
+            )
+        })
         .collect();
 
     // Endpoint tier of every configured provider, keyed by the same toml name.
@@ -332,37 +342,6 @@ pub fn build_failover_chain(
     }
 }
 
-/// One provider's failover model ladder: the operator's `models` first, then
-/// any rungs of the preset's curated `fallback_models` chain the operator
-/// did not list.
-///
-/// The preset chain *is* the failover ladder within one provider — it is
-/// already the picker roster and the `list_models` roster; before this round
-/// the walk saw only operator-typed models, so the curated ladder existed
-/// everywhere except the one place that walks it. Operator entries keep
-/// priority (they are explicit intent) and the first entry stays whatever
-/// the operator pinned, which is also what `price_hint` reads.
-///
-/// The merge is skipped when the operator moved `base_url` off the preset: a
-/// relocated endpoint serves its own inventory (same guard as discovery's
-/// `models_url` override), and the curated ids would be opaque 400s there.
-/// The aux model is deliberately *not* a rung — it is the cheap tier for
-/// background jobs, not a failover candidate for the main loop.
-fn provider_model_ladder(name: &str, pc: &ProviderConfig) -> Vec<String> {
-    let mut models = pc.all_models().to_vec();
-    if let Some(preset) = crate::providers::presets::get_preset(name) {
-        let unmoved = pc.base_url.as_deref().is_none_or(|u| u == preset.base_url);
-        if unmoved {
-            for rung in preset.fallback_models {
-                if !rung.is_empty() && !models.iter().any(|m| m.eq_ignore_ascii_case(rung)) {
-                    models.push((*rung).to_string());
-                }
-            }
-        }
-    }
-    models
-}
-
 /// Assemble the ordered fallback chain for the global failover provider.
 ///
 /// Source of truth is `[fallback_provider].chain` (with the back-compat
@@ -556,13 +535,23 @@ mod tests {
         nodes.iter().map(|n| n.name.as_str()).collect()
     }
 
+    /// Test-local shorthand for the shared ladder leaf as the failover chain
+    /// builder seeds it: operator `models` as the base.
+    fn ladder_of(name: &str, pc: &ProviderConfig) -> Vec<String> {
+        crate::providers::presets::model_ladder(
+            name,
+            pc.all_models().to_vec(),
+            pc.base_url.as_deref(),
+        )
+    }
+
     #[test]
-    fn provider_model_ladder_appends_preset_rungs_after_operator_models() {
+    fn model_ladder_appends_preset_rungs_after_operator_models() {
         // The preset's curated fallback chain is the failover ladder within
         // one provider: operator-listed models keep priority, unlisted
         // curated rungs append behind them, case-insensitively deduped.
         let pc = ProviderConfig::test_config("gpt-5.6");
-        let ladder = provider_model_ladder("openai", &pc);
+        let ladder = ladder_of("openai", &pc);
         assert_eq!(ladder[0], "gpt-5.6", "operator's first model stays first");
         let preset = crate::providers::presets::get_preset("openai").unwrap();
         for rung in preset.fallback_models {
@@ -575,11 +564,11 @@ mod tests {
     }
 
     #[test]
-    fn provider_model_ladder_resolves_alias_names() {
+    fn model_ladder_resolves_alias_names() {
         // A provider configured under an alias (`kimi`) still gets the
         // canonical preset's (`moonshot`) curated ladder.
         let pc = ProviderConfig::test_config("some-custom-model");
-        let ladder = provider_model_ladder("kimi", &pc);
+        let ladder = ladder_of("kimi", &pc);
         let preset = crate::providers::presets::get_preset("moonshot").unwrap();
         assert_eq!(ladder[0], "some-custom-model");
         assert!(ladder.len() > 1, "alias must resolve the preset ladder");
@@ -589,25 +578,25 @@ mod tests {
     }
 
     #[test]
-    fn provider_model_ladder_skips_merge_when_base_url_moved() {
+    fn model_ladder_skips_merge_when_base_url_moved() {
         // A relocated endpoint serves its own inventory — the curated ids
         // would be opaque 400s there, so no preset rungs are appended.
         let mut pc = ProviderConfig::test_config("my-relay-model");
         pc.base_url = Some("https://relay.internal/v1".to_string());
-        let ladder = provider_model_ladder("openai", &pc);
+        let ladder = ladder_of("openai", &pc);
         assert_eq!(ladder, vec!["my-relay-model".to_string()]);
 
         // Explicitly keeping the preset's base_url is *not* a move.
         let mut pc = ProviderConfig::test_config("my-relay-model");
         pc.base_url = Some("https://api.openai.com/v1".to_string());
-        let ladder = provider_model_ladder("openai", &pc);
+        let ladder = ladder_of("openai", &pc);
         assert!(ladder.len() > 1);
     }
 
     #[test]
-    fn provider_model_ladder_leaves_unknown_providers_untouched() {
+    fn model_ladder_leaves_unknown_providers_untouched() {
         let pc = ProviderConfig::test_config("my-model");
-        let ladder = provider_model_ladder("my-custom-relay", &pc);
+        let ladder = ladder_of("my-custom-relay", &pc);
         assert_eq!(ladder, vec!["my-model".to_string()]);
     }
 

@@ -33,6 +33,29 @@ pub(crate) fn parse_chat_sse_event(
         }
     };
 
+    // ── In-band error ───────────────────────────────────────────────────
+    // Some relays (OpenRouter, DashScope, various OpenAI-compatible
+    // gateways) deliver failures as HTTP 200 with an `{"error": ...}` chunk
+    // instead of a non-2xx status. Without this check the chunk has neither
+    // `usage` nor `choices` and would be dropped silently — the stream
+    // would end as if the provider had simply stopped talking, and the
+    // failover machinery would never see the failure. Mapping it to
+    // `ProviderDelta::Error` reuses the same "promote to retryable
+    // transient error" path the Anthropic/Responses protocols already take.
+    if let Some(error) = v.get("error") {
+        let message = match error {
+            serde_json::Value::String(s) => s.clone(),
+            serde_json::Value::Object(_) => error
+                .get("message")
+                .and_then(|m| m.as_str())
+                .unwrap_or("Unknown provider error")
+                .to_string(),
+            _ => "Unknown provider error".to_string(),
+        };
+        out.push_back(Ok(ProviderDelta::Error(message)));
+        return;
+    }
+
     // ── Usage ───────────────────────────────────────────────────────────
     // Parsed before the `choices` lookup. With `stream_options.include_usage`
     // set, OpenAI delivers token counts in a dedicated trailing chunk whose
