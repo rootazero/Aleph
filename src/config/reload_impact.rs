@@ -57,7 +57,12 @@ pub enum ReloadImpact {
 ///   `ConcurrencyLimiter` by `self_config` via
 ///   `execution_engine::concurrency_handle::reconfigure_global`, mirroring the
 ///   `route` hot-apply. New caps bind on the next admission — no restart.
-const LIVE_SECTIONS: &[&str] = &["route", "behavior", "execution"];
+///
+/// Visible to [`crate::config::live_apply`], which executes exactly this
+/// table — the declaration and the action must be one list, or a section can
+/// be advertised as live with nothing to apply it (which is what happened
+/// before `live_apply` existed).
+pub(crate) const LIVE_SECTIONS: &[&str] = &["route", "behavior", "execution"];
 
 /// Legacy top-level sections that are parsed but inert (no runtime consumer).
 ///

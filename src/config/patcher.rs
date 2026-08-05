@@ -67,6 +67,13 @@ pub struct PatchResult {
     pub health_check: Option<HealthCheckResult>,
     /// Non-fatal warnings
     pub warnings: Vec<String>,
+    /// Sections that were hot-applied onto the running runtime by this write
+    /// (see [`crate::config::live_apply`]). Empty for a dry-run, a no-op, and
+    /// for every section that needs a restart. Callers classify reload impact
+    /// from this rather than from the section name alone, so a `Live` verdict
+    /// is only reported when the runtime was actually there to receive it.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub live_applied: Vec<&'static str>,
 }
 
 /// A single field-level change.
@@ -103,6 +110,11 @@ pub struct RollbackResult {
     pub diff: Vec<FieldDiff>,
     /// Non-fatal warnings (e.g. the pre-rollback safety snapshot failed).
     pub warnings: Vec<String>,
+    /// Sections hot-applied onto the running runtime. A restored snapshot can
+    /// touch any section, so a rollback attempts *every* live section — undoing
+    /// a route change must reach the running chain just as making it did.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub live_applied: Vec<&'static str>,
 }
 
 // =============================================================================
@@ -262,6 +274,7 @@ impl ConfigPatcher {
                     None
                 },
                 warnings,
+                live_applied: Vec::new(),
             });
         }
 
@@ -290,6 +303,10 @@ impl ConfigPatcher {
                 diff,
                 health_check,
                 warnings,
+                // Nothing changed, so nothing to push onto the runtime — and
+                // reporting a hot-apply here would tell the caller a no-op had
+                // an effect.
+                live_applied: Vec::new(),
             });
         }
 
@@ -350,6 +367,20 @@ impl ConfigPatcher {
             }
         }
 
+        // 12b. Hot-apply onto the running runtime.
+        //
+        // This lives in the patcher — the single write chokepoint — and NOT in
+        // each calling surface, because that is exactly how it went wrong
+        // before: the `self_config` tool inlined the pokes while the
+        // `config.patch` RPC (which attaches the same "applied live, no
+        // restart needed" hint to its response) did none of them. Every
+        // present and future consumer of the patcher now gets the behaviour
+        // its own response already promises.
+        let live_applied = {
+            let cfg = self.config.read().await;
+            crate::config::live_apply::apply_live_sections(&cfg, &[top_section.as_str()])
+        };
+
         // 13. Update mtime
         self.record_mtime().await;
 
@@ -367,6 +398,7 @@ impl ConfigPatcher {
             path = %request.path,
             section = %top_section,
             diff_count = diff.len(),
+            live_applied = ?live_applied.applied,
             "Config patch applied"
         );
 
@@ -377,6 +409,7 @@ impl ConfigPatcher {
             diff,
             health_check,
             warnings,
+            live_applied: live_applied.applied,
         })
     }
 
@@ -562,6 +595,7 @@ impl ConfigPatcher {
                 restored_from: entry.timestamp,
                 diff,
                 warnings,
+                live_applied: Vec::new(),
             });
         }
 
@@ -587,12 +621,26 @@ impl ConfigPatcher {
             }
         }
 
+        // 7b. Hot-apply. A snapshot can differ in ANY section, so every live
+        // section is pushed — not just the one the operator happens to be
+        // thinking about. Undoing a route change has to reach the running
+        // chain exactly like making it did, and `execution` was missing from
+        // the old hand-inlined rollback path entirely.
+        let live_applied = {
+            let cfg = self.config.read().await;
+            crate::config::live_apply::apply_live_sections(
+                &cfg,
+                crate::config::reload_impact::LIVE_SECTIONS,
+            )
+        };
+
         // 8. Refresh the mtime baseline so the next patch's conflict check passes.
         self.record_mtime().await;
 
         info!(
             restored_from = %entry.timestamp,
             diff_count = diff.len(),
+            live_applied = ?live_applied.applied,
             "Config rolled back to snapshot"
         );
 
@@ -601,6 +649,7 @@ impl ConfigPatcher {
             restored_from: entry.timestamp,
             diff,
             warnings,
+            live_applied: live_applied.applied,
         })
     }
 }
@@ -1042,6 +1091,126 @@ mod tests {
         let patcher = ConfigPatcher::new(config, config_path.clone(), backup);
 
         (patcher, config_path, backup_dir)
+    }
+
+    /// The hot-apply must happen inside the patcher, so every write surface
+    /// gets it. `behavior` is the section whose liveness needs no boot-time
+    /// global (its readers re-read the shared config), which makes it the one
+    /// the unit test can observe end-to-end.
+    #[tokio::test]
+    async fn apply_reports_the_live_sections_it_actually_pushed() {
+        let tmp = TempDir::new().unwrap();
+        let (patcher, _config_path, _backup_dir) = setup_patcher(&tmp);
+        patcher.record_mtime().await;
+
+        let result = patcher
+            .apply(PatchRequest {
+                path: "behavior".to_string(),
+                patch: json!({"output_mode": "instant"}),
+                health_check: false,
+                dry_run: false,
+            })
+            .await
+            .unwrap();
+
+        assert!(result.success);
+        assert!(!result.diff.is_empty());
+        assert_eq!(
+            result.live_applied,
+            vec!["behavior"],
+            "the patcher, not the calling surface, owns the hot-apply"
+        );
+    }
+
+    #[tokio::test]
+    async fn restart_only_sections_report_no_live_apply() {
+        let tmp = TempDir::new().unwrap();
+        let (patcher, _config_path, _backup_dir) = setup_patcher(&tmp);
+        patcher.record_mtime().await;
+
+        let result = patcher
+            .apply(PatchRequest {
+                path: "general".to_string(),
+                patch: json!({"language": "zh-Hans"}),
+                health_check: false,
+                dry_run: false,
+            })
+            .await
+            .unwrap();
+
+        assert!(result.success);
+        assert!(
+            result.live_applied.is_empty(),
+            "a restart-only section must not claim a hot-apply"
+        );
+    }
+
+    #[tokio::test]
+    async fn dry_run_and_noop_never_claim_a_live_apply() {
+        let tmp = TempDir::new().unwrap();
+        let (patcher, _config_path, _backup_dir) = setup_patcher(&tmp);
+        patcher.record_mtime().await;
+
+        let dry = patcher
+            .apply(PatchRequest {
+                path: "behavior".to_string(),
+                patch: json!({"output_mode": "instant"}),
+                health_check: false,
+                dry_run: true,
+            })
+            .await
+            .unwrap();
+        assert!(dry.live_applied.is_empty(), "a forecast applied nothing");
+
+        // Apply for real, then repeat: the second call is a value-identical
+        // no-op that persists nothing, so it must not report an effect either.
+        let _ = patcher
+            .apply(PatchRequest {
+                path: "behavior".to_string(),
+                patch: json!({"output_mode": "instant"}),
+                health_check: false,
+                dry_run: false,
+            })
+            .await
+            .unwrap();
+        let noop = patcher
+            .apply(PatchRequest {
+                path: "behavior".to_string(),
+                patch: json!({"output_mode": "instant"}),
+                health_check: false,
+                dry_run: false,
+            })
+            .await
+            .unwrap();
+        assert!(noop.diff.is_empty(), "precondition: this is the no-op path");
+        assert!(noop.live_applied.is_empty());
+    }
+
+    /// A rollback pushes every live section, not just the one the operator was
+    /// thinking about — a restored snapshot can differ anywhere.
+    #[tokio::test]
+    async fn rollback_hot_applies_live_sections() {
+        let tmp = TempDir::new().unwrap();
+        let (patcher, _config_path, _backup_dir) = setup_patcher(&tmp);
+        patcher.record_mtime().await;
+
+        patcher
+            .apply(PatchRequest {
+                path: "behavior".to_string(),
+                patch: json!({"output_mode": "instant"}),
+                health_check: false,
+                dry_run: false,
+            })
+            .await
+            .unwrap();
+
+        let rolled = patcher.rollback(None, false).await.unwrap();
+        assert!(rolled.success);
+        assert!(
+            rolled.live_applied.contains(&"behavior"),
+            "undoing a live change must reach the runtime like making it did: {:?}",
+            rolled.live_applied
+        );
     }
 
     #[tokio::test]

@@ -141,9 +141,18 @@ pub struct SelfConfigTool {
 impl SelfConfigTool {
     pub fn new(agent_id: impl Into<String>) -> Result<Self> {
         let agent_id = agent_id.into();
-        let home = dirs::home_dir()
-            .ok_or_else(|| ToolError::Execution("Cannot determine home directory".to_string()))?;
-        let agent_dir = home.join(".aleph").join("agents").join(&agent_id);
+        // ⚠️ MUST be the same resolution the *readers* use
+        // (`discovery::aleph_agents_dir`, consumed by
+        // `harness_bridge::prompt_build` for `IdentityFilesLayer` and by the
+        // `identity.*` RPC handlers). This used to be a hand-rolled
+        // `dirs::home_dir().join(".aleph")`, which ignores `ALEPH_HOME` — so
+        // under a relocated home the tool wrote SOUL.md into the real
+        // `~/.aleph` while every reader looked in the configured one. Nothing
+        // errors in that state: the write reports success and the file simply
+        // never reaches the prompt.
+        let agent_dir = crate::discovery::aleph_agents_dir()
+            .map_err(|e| ToolError::Execution(format!("Cannot resolve agents directory: {e}")))?
+            .join(&agent_id);
         Ok(Self {
             agent_dir,
             agent_id,
@@ -447,37 +456,13 @@ impl SelfConfigTool {
 
         match patcher.apply(request).await {
             Ok(result) => {
-                // Hot-apply a route-mode change to the live failover chain so an
-                // LLM-driven switch (R8) takes effect on the next prompt, exactly
-                // like the panel's `route_config.update`. Without this the patch
-                // would only land at the next daemon start.
-                if !dry_run
-                    && result.success
-                    && (config_path == "route" || config_path.starts_with("route."))
-                {
-                    if let (Some(cfg), Some(handle)) = (
-                        self.config.as_ref(),
-                        crate::providers::route_handle::try_global_route_handle(),
-                    ) {
-                        handle.store(&cfg.read().await.route);
-                    }
-                }
-
-                // Hot-apply an [execution] cap change to the live
-                // ConcurrencyLimiter so new run caps bind on the next admission
-                // (mirrors the route hot-apply above; makes the Live verdict true).
-                if !dry_run
-                    && result.success
-                    && (config_path == "execution" || config_path.starts_with("execution."))
-                {
-                    if let Some(cfg) = self.config.as_ref() {
-                        let ex = &cfg.read().await.execution;
-                        crate::gateway::execution_engine::concurrency_handle::reconfigure_global(
-                            ex.max_runs_global,
-                            ex.max_runs_per_agent,
-                        );
-                    }
-                }
+                // NOTE: the route / execution hot-applies that used to be
+                // inlined here now live in `ConfigPatcher::apply`
+                // (`config::live_apply`). They were moved because this tool was
+                // the ONLY surface performing them while every surface attached
+                // the "applied live" hint — a Panel `config.patch` of
+                // `route.mode` claimed liveness and changed nothing. What
+                // landed is reported back in `result.live_applied`.
 
                 // Notify connected Panels — the same `ConfigChanged` event the
                 // RPC `config.patch` handler broadcasts — so an LLM-driven
@@ -490,9 +475,28 @@ impl SelfConfigTool {
                 // Classify when this change actually takes effect so the agent
                 // gets a deterministic "what happens next" signal instead of
                 // having to recall the prose rules scattered through the /self
-                // SKILL.md. (route and execution are the Live sections — their
-                // hot-applies above are exactly what make the Live verdict true.)
-                let impact = crate::config::ReloadImpact::classify(config_path);
+                // SKILL.md.
+                //
+                // For an applied patch the verdict is *verified* against what
+                // the patcher actually hot-applied: a live-by-table section
+                // whose runtime handle was never registered (no failover chain
+                // assembled yet) downgrades to `Restart`, because telling the
+                // user "no restart needed" when nothing received the change is
+                // the one failure mode the conservative default exists to
+                // avoid. A dry-run has applied nothing by definition, so it
+                // keeps the unverified classification — it is a forecast, not
+                // a report.
+                let impact = if dry_run {
+                    crate::config::ReloadImpact::classify(config_path)
+                } else {
+                    crate::config::classify_verified(
+                        config_path,
+                        &crate::config::LiveApplyReport {
+                            applied: result.live_applied.clone(),
+                            unavailable: Vec::new(),
+                        },
+                    )
+                };
 
                 let mode = if dry_run { "dry-run" } else { "applied" };
                 let preview_message = if dry_run && !result.diff.is_empty() {
@@ -626,17 +630,12 @@ impl SelfConfigTool {
 
         match patcher.rollback(timestamp.as_deref(), dry_run).await {
             Ok(result) => {
-                // A restored snapshot may carry a different route mode. Hot-apply
-                // it to the live failover chain exactly like update_config does,
-                // so a rollback of a route change takes effect on the next prompt.
+                // The hot-apply of a restored snapshot lives in
+                // `ConfigPatcher::rollback` now, and covers EVERY live section
+                // rather than only `route` — a rollback of an `[execution]`
+                // change previously left the old concurrency caps installed
+                // while the response implied otherwise.
                 if !dry_run && result.success {
-                    if let (Some(cfg), Some(handle)) = (
-                        self.config.as_ref(),
-                        crate::providers::route_handle::try_global_route_handle(),
-                    ) {
-                        handle.store(&cfg.read().await.route);
-                    }
-
                     // Notify connected Panels (same `ConfigChanged` event as
                     // the RPC path — see update_config). A restored snapshot
                     // can touch any section, so no single-section hint is sent.
@@ -654,14 +653,34 @@ impl SelfConfigTool {
                     None
                 };
 
+                // Name what actually reached the running runtime instead of
+                // the old blanket "non-route sections need a restart", which
+                // was wrong in both directions: it over-promised `route` (in a
+                // process with no failover chain nothing was applied) and
+                // under-reported `execution` / `behavior`.
+                let live_note = if result.live_applied.is_empty() {
+                    "No section could be applied live; restart aleph-server for the restored \
+                     config to take effect."
+                        .to_string()
+                } else {
+                    format!(
+                        "Applied live: {}. Every other section takes effect on the next daemon start.",
+                        result.live_applied.join(", ")
+                    )
+                };
+
                 Ok(SelfConfigOutput {
                     success: result.success,
                     message: format!(
-                        "Config rollback {} from snapshot '{}' ({} field change(s)). \
-                         Non-route sections take effect on the next daemon start.",
+                        "Config rollback {} from snapshot '{}' ({} field change(s)). {}",
                         mode,
                         result.restored_from,
-                        result.diff.len()
+                        result.diff.len(),
+                        if dry_run {
+                            "Nothing was written."
+                        } else {
+                            live_note.as_str()
+                        }
                     ),
                     data: Some(serde_json::to_value(&result).unwrap_or_default()),
                     preview_message,
@@ -842,6 +861,28 @@ mod tests {
             config_patcher: Arc::new(std::sync::OnceLock::new()),
             config_broadcaster: Arc::new(std::sync::OnceLock::new()),
         }
+    }
+
+    /// The write surface must resolve the agent directory through the same
+    /// helper the prompt-layer reader uses. Asserting the *shared resolver*
+    /// (not a hand-spelled expected path) is the point: a future edit that
+    /// re-hardcodes `dirs::home_dir()` would still produce a plausible path
+    /// under the real home, and only this comparison catches it.
+    #[test]
+    fn agent_dir_follows_the_same_resolver_the_readers_use() {
+        let _home = crate::utils::paths::IsolatedAlephHome::new();
+        let tool = SelfConfigTool::new("main").unwrap();
+        let expected = crate::discovery::aleph_agents_dir().unwrap().join("main");
+        assert_eq!(tool.agent_dir, expected);
+        // And that resolver follows ALEPH_HOME, so the write lands where the
+        // `IdentityFilesLayer` will look for it.
+        let home = crate::utils::paths::get_config_dir().unwrap();
+        assert!(
+            tool.agent_dir.starts_with(&home),
+            "agent dir {:?} escaped the configured home {:?}",
+            tool.agent_dir,
+            home
+        );
     }
 
     #[tokio::test]

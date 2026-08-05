@@ -7,9 +7,22 @@
 //! rather than in a separate switchboard (avoids the openclaw detect/repair
 //! id-matching seam).
 
+use std::time::Duration;
+
 use async_trait::async_trait;
 
 use super::finding::Finding;
+
+/// Wall-clock ceiling a check gets before the engine gives up on it.
+///
+/// Every check either touches the filesystem, scans the process table, shells
+/// out (`which`), or opens a SQLite file — all of which can block on something
+/// outside this process. Without a deadline one wedged check hangs the whole
+/// report, and because the `doctor` tool runs inside an agent turn, that means
+/// a hung *turn* whose only symptom is silence. A timed-out check is folded
+/// into an ordinary `Warning` finding naming the check, so the rest of the
+/// battery still reports.
+pub const DEFAULT_CHECK_TIMEOUT: Duration = Duration::from_secs(20);
 
 /// Controls whether a run is allowed to mutate state.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -47,4 +60,13 @@ pub trait HealthCheck: Send + Sync {
     /// repairable, the check should apply the repair and record the outcome
     /// on the returned finding via `Finding::with_repair`.
     async fn run(&self, posture: Posture) -> Vec<Finding>;
+
+    /// This check's wall-clock ceiling. Override only when the check has a
+    /// *known* inner bound that legitimately exceeds
+    /// [`DEFAULT_CHECK_TIMEOUT`] — state the inner bound in the override's
+    /// doc comment so the number stays traceable to a real budget rather than
+    /// becoming a magic constant.
+    fn timeout(&self) -> Duration {
+        DEFAULT_CHECK_TIMEOUT
+    }
 }

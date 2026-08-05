@@ -109,12 +109,18 @@ impl ShellHookConsent {
         hex16(&hasher.finalize())
     }
 
-    /// Default registry path: `~/.aleph/shell-hooks-allowlist.json`.
+    /// Default registry path: `<config_dir>/shell-hooks-allowlist.json`.
+    ///
+    /// Resolved through `utils::paths::get_config_dir` like every other piece
+    /// of Aleph state, so it follows `ALEPH_HOME`. The former hand-rolled
+    /// `dirs::home_dir().join(".aleph")` did not: under a relocated home the
+    /// approval registry — and the `hooks/consent` doctor check that reads it
+    /// — silently addressed the developer's real `~/.aleph` instead. Identical
+    /// bytes when `ALEPH_HOME` is unset.
     #[must_use]
     pub fn default_path() -> PathBuf {
-        dirs::home_dir()
-            .unwrap_or_else(|| PathBuf::from("."))
-            .join(".aleph")
+        crate::utils::paths::get_config_dir()
+            .unwrap_or_else(|_| PathBuf::from("."))
             .join("shell-hooks-allowlist.json")
     }
 

@@ -88,11 +88,22 @@ pub async fn handle_reload_with_subsystems(
             let has_profiles = !new_app_config.profiles.is_empty();
             let has_providers = !new_app_config.generation.providers.is_empty();
 
-            {
+            let live_applied = {
                 let mut config_guard = app_config.write().await;
                 *config_guard = new_app_config;
-            }
+                // A reload replaces the WHOLE config from disk, so every live
+                // section may have changed — push them all onto the running
+                // runtime. Swapping the shared `Config` alone reaches only the
+                // subsystems that re-read it per turn; `route` and `execution`
+                // captured handles at boot and would otherwise keep serving
+                // the pre-reload values while this response says "reloaded".
+                crate::config::live_apply::apply_live_sections(
+                    &config_guard,
+                    crate::config::reload_impact::LIVE_SECTIONS,
+                )
+            };
             reloaded.push("app_config".to_string());
+            reloaded.extend(live_applied.applied.iter().map(|s| format!("live:{s}")));
 
             if has_profiles {
                 reloaded.push("profiles".to_string());
@@ -575,8 +586,21 @@ pub async fn handle_patch_config(
             // "takes effect live / needs restart" signal the `self_config`
             // tool gives the agent. Absent on a no-op patch: nothing was
             // persisted, so no reload semantics apply.
+            //
+            // Verified against what `ConfigPatcher::apply` actually hot-applied
+            // (`result.live_applied`), not inferred from the section name. This
+            // handler used to attach a bare `Live` for `route` / `execution`
+            // while performing no hot-apply at all — the claim was true only on
+            // the `self_config` tool path, which had the pokes inlined. Both
+            // halves now come from the same place.
             if !result.diff.is_empty() {
-                let impact = crate::config::ReloadImpact::classify(&path);
+                let impact = crate::config::classify_verified(
+                    &path,
+                    &crate::config::LiveApplyReport {
+                        applied: result.live_applied.clone(),
+                        unavailable: Vec::new(),
+                    },
+                );
                 if let Some(obj) = v.as_object_mut() {
                     obj.insert(
                         "reload_impact".to_string(),

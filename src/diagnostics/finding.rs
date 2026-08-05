@@ -130,6 +130,39 @@ impl Finding {
     pub fn is_problem(&self) -> bool {
         self.severity > Severity::Info
     }
+
+    /// Mask credential shapes in every free-text field of this finding.
+    ///
+    /// Applied by the engine to **every** finding of **every** check (see
+    /// [`DiagnosticEngine::run_with_filter`](super::DiagnosticEngine::run_with_filter)),
+    /// which is the only place that can make the guarantee hold for checks
+    /// that do not know they need it. Individual checks must NOT call
+    /// [`redact_secrets`](super::redact_secrets) themselves: a per-call-site
+    /// guard covers the sites that remembered, and the failure mode of the
+    /// ones that forgot is a leaked key in CLI output, `--json` support
+    /// bundles, and LLM tool results.
+    ///
+    /// Idempotent: `***` carries no credential shape, so redacting twice is a
+    /// no-op — a check that redacts defensively is not punished, it is just
+    /// redundant.
+    #[must_use]
+    pub fn redacted(mut self) -> Self {
+        self.title = super::redact::redact_secrets(&self.title);
+        self.detail = super::redact::redact_secrets(&self.detail);
+        self.fix_hint = self.fix_hint.map(|h| super::redact::redact_secrets(&h));
+        self.repair_outcome = self.repair_outcome.map(|outcome| match outcome {
+            RepairOutcome::Repaired { detail } => RepairOutcome::Repaired {
+                detail: super::redact::redact_secrets(&detail),
+            },
+            RepairOutcome::Failed { error } => RepairOutcome::Failed {
+                error: super::redact::redact_secrets(&error),
+            },
+            RepairOutcome::Skipped { reason } => RepairOutcome::Skipped {
+                reason: super::redact::redact_secrets(&reason),
+            },
+        });
+        self
+    }
 }
 
 #[cfg(test)]
@@ -157,6 +190,43 @@ mod tests {
         assert!(f.is_problem());
         assert!(f.repairable);
         assert_eq!(f.fix_hint.as_deref(), Some("turn it off and on"));
+    }
+
+    #[test]
+    fn redacted_masks_every_free_text_field() {
+        let f = Finding::problem(
+            "core/x",
+            Severity::Error,
+            "probe failed for sk-abcdefgh12345678",
+            "server said Bearer eyJhbGciOi",
+        )
+        .with_fix_hint("retry with ?apikey=abc123")
+        .with_repair(RepairOutcome::Failed {
+            error: "auth rejected token=deadbeef".into(),
+        })
+        .redacted();
+
+        assert_eq!(f.title, "probe failed for ***");
+        assert_eq!(f.detail, "server said ***");
+        assert_eq!(f.fix_hint.as_deref(), Some("retry with ?***"));
+        match f.repair_outcome {
+            Some(RepairOutcome::Failed { ref error }) => assert_eq!(error, "auth rejected ***"),
+            ref other => panic!("repair outcome not preserved: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn redacted_is_idempotent_and_leaves_clean_text_alone() {
+        let once = Finding::problem(
+            "core/x",
+            Severity::Warning,
+            "sk-abcdefgh1234",
+            "clean detail",
+        )
+        .redacted();
+        let twice = once.clone().redacted();
+        assert_eq!(once.title, twice.title);
+        assert_eq!(twice.detail, "clean detail");
     }
 
     #[test]

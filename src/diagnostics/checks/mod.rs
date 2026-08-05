@@ -13,6 +13,7 @@ pub mod duplicate_instance;
 pub mod hooks_consent;
 pub mod loop_graph;
 pub mod providers_connectivity;
+pub mod sqlite_integrity;
 pub mod stale_lock;
 pub mod vault;
 
@@ -24,5 +25,6 @@ pub use duplicate_instance::DuplicateInstanceCheck;
 pub use hooks_consent::HooksConsentCheck;
 pub use loop_graph::LoopGraphCheck;
 pub use providers_connectivity::ProvidersConnectivityCheck;
+pub use sqlite_integrity::SqliteIntegrityCheck;
 pub use stale_lock::StaleLockCheck;
 pub use vault::VaultCheck;

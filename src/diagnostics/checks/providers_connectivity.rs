@@ -27,9 +27,8 @@ use tokio::sync::RwLock;
 use crate::config::{Config, ProviderConfig};
 use crate::diagnostics::check::{HealthCheck, Posture};
 use crate::diagnostics::finding::{Finding, Severity};
-use crate::diagnostics::redact::redact_secrets;
 use crate::gateway::security::SharedTokenManager;
-use crate::providers::probe::{probe_provider_bounded, provider_vault_key};
+use crate::providers::probe::{probe_provider_bounded, provider_vault_key, PROBE_TIMEOUT};
 use crate::sync_primitives::Arc;
 
 const ID: &str = "providers/connectivity";
@@ -73,6 +72,16 @@ impl HealthCheck for ProvidersConnectivityCheck {
 
     fn title(&self) -> &'static str {
         "Provider connectivity"
+    }
+
+    /// Derived from the inner bound rather than guessed: every probe is
+    /// already capped at [`PROBE_TIMEOUT`] and they run concurrently, so the
+    /// check's own honest ceiling is one probe plus scheduling slack. Stating
+    /// it here keeps the engine's deadline a backstop for "the bound broke"
+    /// instead of a second, unrelated number that could silently become the
+    /// tighter one.
+    fn timeout(&self) -> std::time::Duration {
+        PROBE_TIMEOUT + std::time::Duration::from_secs(5)
     }
 
     async fn run(&self, _posture: Posture) -> Vec<Finding> {
@@ -145,17 +154,20 @@ impl HealthCheck for ProvidersConnectivityCheck {
                         .with_tag(TAG_REACHABLE)
                 } else {
                     // Provider errors can echo credentials (Authorization
-                    // headers, keyed URLs) — redact before the text reaches
-                    // findings (CLI, --json, LLM tool output).
+                    // headers, keyed URLs). Redaction is NOT done here: the
+                    // engine masks every field of every finding on the way out
+                    // (`DiagnosticEngine::run_with_filter` → `Finding::redacted`),
+                    // which is the only place that also covers the checks whose
+                    // authors never considered credentials. A second call here
+                    // would be harmless but would re-teach the wrong lesson —
+                    // that each check is responsible for its own masking.
                     Finding::problem(
                         ID,
                         Severity::Warning,
                         format!("{name}: unreachable"),
-                        redact_secrets(
-                            &outcome
-                                .error
-                                .unwrap_or_else(|| "unknown probe error".to_string()),
-                        ),
+                        outcome
+                            .error
+                            .unwrap_or_else(|| "unknown probe error".to_string()),
                     )
                     .with_fix_hint(unreachable_hint(&name))
                     .with_tag(TAG_UNREACHABLE)
