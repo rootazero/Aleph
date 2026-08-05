@@ -96,6 +96,48 @@
 //! `graph.search`/`graph.node_detail`) were NOT checked this round — still a
 //! recorded gap, see below.
 //!
+//! ## Task 7 fix round 2
+//!
+//! Review triage ruled the `graph.update_note`/`rename_note`/`delete_note`
+//! trio MUST-FIX: same unenforced `agent_id` shape as `graph.search`/
+//! `graph.node_detail`, member-reachable (`graph.` absent from
+//! `ADMIN_PREFIXES`), and all three MUTATE — strictly worse than the reads
+//! this task already closed. All three are now **PartitionChecked**, but
+//! each denial reuses whatever THAT specific operation's own natural
+//! "genuinely nonexistent node" response already is, rather than inventing
+//! one new shared shape:
+//!
+//! - `graph.update_note` → upsert (create-or-overwrite) with no "not found"
+//!   error of its own — a nonexistent node_id under a VISIBLE partition
+//!   already just creates it, reporting success. So an invisible partition
+//!   gets that SAME fixed success shape (`{node_id, saved: true}`, provably
+//!   constant regardless of new-vs-existing — no dynamic content to
+//!   byte-compare), without the store ever being touched.
+//! - `graph.delete_note` → idempotent — `NoteIndexer::delete_note`'s own doc
+//!   states deleting a note that never existed already reports success, not
+//!   an error. An invisible partition gets that SAME idempotent-success
+//!   shape (`{node_id, deleted: true}`), without the store ever being
+//!   touched.
+//! - `graph.rename_note` → the one genuine exception: renaming a missing
+//!   note is NOT idempotent, and `NoteIndexer::rename_note` hits the
+//!   filesystem `rename()` syscall directly, so its natural failure message
+//!   embeds the real on-disk path — reusing it verbatim for an invisible
+//!   partition would leak exactly what P1 exists to hide. Rather than
+//!   duplicate that internal path-reconstruction logic to fabricate a
+//!   byte-identical leaky message, the handler gained its OWN existence
+//!   check (`NoteStore::find_by_filename`, matching `rename_note`'s own
+//!   internal category-resolution-by-title so a stale/wrong category in the
+//!   caller's `node_id` — a pre-existing, deliberate tolerance — is not
+//!   mistaken for "not found") that short-circuits BEFORE the indexer is
+//!   ever called, for BOTH the invisible-partition case and (as a
+//!   necessary, not scope-creeping, side effect) the genuinely-missing-under-
+//!   a-visible-partition case — both now produce `graph.node_detail`'s
+//!   established clean "Note not found: {node_id}" shape instead of a raw
+//!   OS path. Tested with the same same-node_id-vs-fresh-store comparison
+//!   methodology fix round 1 established.
+//!
+//! No further same-shape siblings were found while fixing this trio.
+//!
 //! ## Enumeration evidence
 //!
 //! Every method below was found by a mechanical sweep of the same four
@@ -176,10 +218,8 @@
 //! Simulated-fallback `chat.send` path (see the `chat.send` bullet above) is
 //! also a known, deliberate gap. All three are recorded here as the durable
 //! home for the follow-up, same convention as `method_admin.rs`'s notes.
-//! `graph.update_note`/`rename_note`/`delete_note` (siblings of the now-fixed
-//! `graph.search`/`graph.node_detail` — see "Task 7 fix round 1" above) take
-//! a caller-supplied `agent_id`/`node_id` with no ownership check; not
-//! checked this round, recorded here rather than silently dropped.
+//! (`graph.update_note`/`rename_note`/`delete_note` were in this list until
+//! Task 7 fix round 2 closed them — see that section above.)
 //!
 //! ## `OrgShared`
 //!
@@ -204,10 +244,11 @@ pub enum Treatment {
     /// A partition-addressed endpoint (e.g. `agent_id="main__u-alice"`)
     /// checks `visibility::partition_visible` before reading/writing that
     /// partition. (Task 7: `memory.search`/`memory.listFacts`/`memory.stats`/
-    /// `graph.query`/`memory.trace`/`graph.node_detail`/`graph.search`;
+    /// `graph.query`/`memory.trace`/`graph.node_detail`/`graph.search`/
+    /// `graph.update_note`/`graph.rename_note`/`graph.delete_note`;
     /// `memory.delete` too, via a resolved-owning-partition lookup since it
     /// has no caller-supplied `agent_id` of its own — see "Task 7 fix round
-    /// 1" in the module doc.)
+    /// 1"/"round 2" in the module doc.)
     PartitionChecked,
     /// Deliberately shared across every user by design — not a gap. Carries
     /// a reason string at the call site (see `org_shared_entries_all_carry_reasons`).
@@ -258,6 +299,10 @@ pub const SCOPED_METHODS: &[(&str, Treatment)] = &[
     ("memory.delete", Treatment::PartitionChecked),
     ("graph.node_detail", Treatment::PartitionChecked),
     ("graph.search", Treatment::PartitionChecked),
+    // --- Task 7 fix round 2 ---
+    ("graph.update_note", Treatment::PartitionChecked),
+    ("graph.rename_note", Treatment::PartitionChecked),
+    ("graph.delete_note", Treatment::PartitionChecked),
 ];
 
 /// `OrgShared` entries carry a one-line reason at the point they're listed —
@@ -346,13 +391,14 @@ mod tests {
     fn unregistered_method_reads_as_none_not_a_default_treatment() {
         // No silent "assume KeyChecked" default — an unlisted method must
         // read as unclassified, not falsely covered. `sessions.set_topic`,
-        // `chat.context_estimate`, and `graph.update_note` are DELIBERATE,
-        // documented gaps (see module doc) — not silently dropped, but also
-        // not falsely claimed. (`memory.trace` was one of these until Task
-        // 7 fix round 1 — see `task_7_fix_round_1_methods_are_registered`.)
+        // `chat.context_estimate`, and `memory.reembed` (whole-store, no
+        // `agent_id` at all) are DELIBERATE, documented gaps (see module
+        // doc) — not silently dropped, but also not falsely claimed.
+        // (`memory.trace` and `graph.update_note` were examples here until
+        // Task 7 fix rounds 1/2 registered them — see those pin tests.)
         assert_eq!(treatment_of("sessions.set_topic"), None);
         assert_eq!(treatment_of("chat.context_estimate"), None);
-        assert_eq!(treatment_of("graph.update_note"), None);
+        assert_eq!(treatment_of("memory.reembed"), None);
     }
 
     /// Task 7 fix round 1's own pin.
@@ -363,6 +409,18 @@ mod tests {
             "memory.delete",
             "graph.node_detail",
             "graph.search",
+        ] {
+            assert_eq!(treatment_of(m), Some(Treatment::PartitionChecked), "{m}");
+        }
+    }
+
+    /// Task 7 fix round 2's own pin.
+    #[test]
+    fn task_7_fix_round_2_methods_are_registered_and_partition_checked() {
+        for m in [
+            "graph.update_note",
+            "graph.rename_note",
+            "graph.delete_note",
         ] {
             assert_eq!(treatment_of(m), Some(Treatment::PartitionChecked), "{m}");
         }
