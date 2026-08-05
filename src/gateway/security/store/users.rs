@@ -186,7 +186,6 @@ impl SecurityStore {
         Ok(())
     }
 
-    /// Live (un-revoked) device ids linked to a user — deactivation revokes these.
     /// Live (un-revoked) device ids bound to `user_id`.
     ///
     /// `devices` is the shared panel/node namespace (`src/gateway/CLAUDE.md`

@@ -30,6 +30,34 @@ use super::parse_params;
 use crate::agents::AgentRegistry;
 use crate::executor::ToolRegistry;
 
+/// Tool names explicitly permitted for non-operator (member) callers on this
+/// surface (P1 member hardening, Task 9 review fix round 1).
+///
+/// (a) Why it exists: `tools.invoke` was blanket-gated to operators by
+/// `method_admin.rs` until this task narrowly carved it open, because the
+/// Panel's `create_from_template` (`interfaces/webchat/src/api/teams.rs`)
+/// calls `tools.invoke{tool_name: "team_from_template"}` to materialize a
+/// team from a template — a member-facing feature with no other RPC path.
+///
+/// (b) Why every addition is load-bearing: `tools.invoke` does NOT route
+/// through `ScopedToolService` (see the module doc above) — so nothing on
+/// this surface gets exec-tier approval, `tool_permissions`, hooks, or the
+/// operation ledger. A name added here executes IMMEDIATELY for every
+/// member with none of those gates, regardless of what the tool actually
+/// does. This is why `OPERATOR_TOOLS` (a narrow curated self-config/cluster
+/// list — see the third hard floor below) is NOT used as this allowlist:
+/// most of this surface's tools, including the entire desktop-action family
+/// and `channel_message`, are not in `OPERATOR_TOOLS` either, and letting
+/// "not operator-tier" stand in for "safe for a member to invoke ungated"
+/// was the actual hole this round closes.
+///
+/// (c) Widen-on-demand rule: add a name here ONLY with a named production
+/// consumer (like `create_from_template` above) AND a test. Do not add a
+/// tool "because it seems harmless" — prove it with a consumer and pin it
+/// with a regression test the way `member_role_may_invoke_the_allowed_tool`
+/// and `member_role_is_denied_a_tool_not_on_the_allowlist` do below.
+const MEMBER_ALLOWED_TOOLS: &[&str] = &["team_from_template"];
+
 /// Parameters for `tools.invoke`.
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct InvokeParams {
@@ -77,8 +105,9 @@ where
     // (openclaw `dangerous-tools` parity) and tools that self-declare
     // `requires_confirmation`. Production agents reach both through the agent
     // loop, which does have the gates. Re-enable a specific tool via the
-    // `ALEPH_GATEWAY_TOOLS_ALLOW` env var. (The operator gate is the one
-    // exception — see the third hard floor below, P1 Task 9.)
+    // `ALEPH_GATEWAY_TOOLS_ALLOW` env var. (The operator-tier gate and the
+    // member allowlist are the two exceptions — see the third and fourth
+    // hard floors below, P1 Task 9.)
     if crate::security::dangerous_tools::is_denied_on_gateway_surface(
         &params.tool_name,
         &params.arguments,
@@ -121,6 +150,14 @@ where
         );
     }
 
+    // `caller_role` is already ambient here with no new stamping needed:
+    // `scope::with_scope`/`CALLER_ROLE`/`CALLER_USER` are scoped around
+    // EVERY dispatched request (`server::handler::dispatch_with_caller_context`,
+    // P0/Task 3), and `tools.invoke` dispatches through `process_request`
+    // like any other RPC. Computed once and shared by the two floors below.
+    let caller_role = crate::gateway::caller_identity::current_caller_role();
+    let caller_is_operator = crate::tools::turn_context::role_is_operator(caller_role.as_deref());
+
     // Third hard floor: operator-tier tools (`OPERATOR_TOOLS`,
     // `method_authz.rs` — self-config, cron, agent identity, cluster
     // membership, …). This handler dispatches straight off the raw
@@ -133,26 +170,59 @@ where
     // hardening, Task 9); this is the enforcement that makes the carve-out
     // safe. Reuses the SAME predicate the agent loop's own gate uses —
     // `method_authz::tool_requires_operator` +
-    // `turn_context::role_is_operator` — against `caller_role`, which is
-    // already ambient here (scoped around every dispatched request at
-    // `process_request`, P0/Task 3): nothing new is stamped, this handler
-    // simply never consulted what was already available. Absent role (no
-    // gateway connection — cron/internal/local no-auth daemon) is trusted,
-    // exactly like every other operator gate in this codebase.
-    if crate::gateway::method_authz::tool_requires_operator(&params.tool_name) {
-        let caller_role = crate::gateway::caller_identity::current_caller_role();
-        if !crate::tools::turn_context::role_is_operator(caller_role.as_deref()) {
-            return JsonRpcResponse::error(
-                request.id,
-                AUTH_REQUIRED,
-                format!(
-                    "tool '{}' changes Aleph's own configuration and requires an \
-                     operator-authorized connection; this caller is not operator-tier. \
-                     Do not retry.",
-                    params.tool_name
-                ),
-            );
-        }
+    // `turn_context::role_is_operator`. Absent role (no gateway connection
+    // — cron/internal/local no-auth daemon) is trusted, exactly like every
+    // other operator gate in this codebase.
+    if crate::gateway::method_authz::tool_requires_operator(&params.tool_name)
+        && !caller_is_operator
+    {
+        return JsonRpcResponse::error(
+            request.id,
+            AUTH_REQUIRED,
+            format!(
+                "tool '{}' changes Aleph's own configuration and requires an \
+                 operator-authorized connection; this caller is not operator-tier. \
+                 Do not retry.",
+                params.tool_name
+            ),
+        );
+    }
+
+    // Fourth hard floor (review fix, P1 Task 9 round 1): a member allowlist.
+    // `OPERATOR_TOOLS` above is a NARROW curated self-config/cluster list —
+    // it is NOT a general destructive-tool gate, and most of this surface's
+    // tools (including the entire desktop-action family — `gui_click`,
+    // `type_text`, `key_button`, `desktop_action`, … — and `channel_message`)
+    // are in none of `OPERATOR_TOOLS` / `dangerous_tools`'s deny list /
+    // `requires_confirmation`. Because this handler dispatches straight off
+    // the raw `ToolRegistry`, NOTHING on this surface gets exec-tier
+    // approval, `tool_permissions`, hooks, or the operation ledger — so a
+    // member reaching any of those tools here would act immediately with
+    // NONE of the gates the `chat.send`/`agent.run` path enforces for that
+    // same caller, and members were fully walled off `tools.` before this
+    // task. "Carve open everything except OPERATOR_TOOLS" was never the
+    // intent — the plan's own text says the carve-out exists because "Panel
+    // `team_from_template` needs only invoke; widen later on demand." So a
+    // non-operator caller may invoke ONLY a tool named in
+    // `MEMBER_ALLOWED_TOOLS`, independent of whether it also passed the
+    // `OPERATOR_TOOLS` check above (defense in depth — both floors stay).
+    // WIDEN-ON-DEMAND RULE: add a name here only with a named production
+    // consumer AND a test proving the specific escalation it does or does
+    // not enable — each addition is a load-bearing security decision, not a
+    // convenience.
+    if !caller_is_operator && !MEMBER_ALLOWED_TOOLS.contains(&params.tool_name.as_str()) {
+        return JsonRpcResponse::error(
+            request.id,
+            AUTH_REQUIRED,
+            format!(
+                "tool '{}' is not on the member allowlist for the gateway \
+                 tools.invoke surface (this surface bypasses exec-tier \
+                 approval, tool_permissions, and hooks — only explicitly \
+                 reviewed tools are open to non-operator callers). \
+                 Do not retry.",
+                params.tool_name
+            ),
+        );
     }
 
     // Allowlist gate — applied only when caller supplied an agent registry.
@@ -508,7 +578,8 @@ mod tests {
     }
 
     // ---------------------------------------------------------------------
-    // P1 member hardening (Task 9): the operator-tier tool gate.
+    // P1 member hardening (Task 9): the operator-tier tool gate + the member
+    // allowlist (review fix round 1).
     //
     // `tools.invoke` dispatches straight off the raw `ToolRegistry` and never
     // passes through `ScopedToolService::check_operator_gate` — verified by
@@ -524,6 +595,17 @@ mod tests {
     // `server::handler::dispatch_with_caller_context` — P0/Task 3, nothing
     // new to stamp), so `tools.invoke` can be carved open in
     // `method_admin::MEMBER_CARVE_OUTS` without reopening the escalation.
+    //
+    // Round-1 review found `OPERATOR_TOOLS` alone was not enough: it is a
+    // narrow curated self-config/cluster list, not a general destructive-
+    // tool gate, so `channel_message` and the desktop-action family
+    // (`gui_click`, `type_text`, …) would have executed immediately for any
+    // member with zero exec-tier approval / `tool_permissions` / hooks — a
+    // NEW member-reachable escalation members never had before this task
+    // (they were previously walled off `tools.` entirely). The round-1 fix
+    // adds `MEMBER_ALLOWED_TOOLS`, an explicit allowlist checked independent
+    // of the `OPERATOR_TOOLS` floor — see the tests below including the
+    // deliberate tightening of `memory_search` from allowed to denied.
     // ---------------------------------------------------------------------
 
     #[tokio::test]
@@ -547,8 +629,15 @@ mod tests {
             .await;
     }
 
+    /// Round-1 tightening: `memory_search` used to be allowed for a member
+    /// (round 0, before `MEMBER_ALLOWED_TOOLS` existed — any tool not in
+    /// `OPERATOR_TOOLS` passed). It is NOT on the member allowlist, so it is
+    /// now denied. This is a deliberate narrowing, not a regression: the
+    /// round-0 gate's "everything except OPERATOR_TOOLS" shape was the hole
+    /// review found (`channel_message`/desktop-action tools would have
+    /// passed the same way `memory_search` did).
     #[tokio::test]
-    async fn member_role_may_invoke_an_ordinary_read_tool() {
+    async fn member_role_is_denied_a_tool_not_on_the_allowlist() {
         crate::gateway::caller_identity::CALLER_ROLE
             .scope(Some("member".to_string()), async {
                 let reg =
@@ -556,8 +645,77 @@ mod tests {
                 let params = json!({"tool_name": "memory_search", "arguments": {"query": "x"}});
                 let req = JsonRpcRequest::with_id("tools.invoke", Some(params), json!(1));
                 let resp = handle_invoke(req, reg.clone(), None).await;
+                assert!(
+                    !resp.is_success(),
+                    "memory_search is not on MEMBER_ALLOWED_TOOLS — must be denied"
+                );
+                assert_eq!(resp.error.unwrap().code, AUTH_REQUIRED);
+                assert!(
+                    reg.last_call().is_none(),
+                    "registry must not be touched when the allowlist floor denies"
+                );
+            })
+            .await;
+    }
+
+    /// The stated reason `tools.invoke` was carved open at all: the Panel's
+    /// `create_from_template` calls this for a member. Must still work.
+    #[tokio::test]
+    async fn member_role_may_invoke_the_allowed_tool() {
+        crate::gateway::caller_identity::CALLER_ROLE
+            .scope(Some("member".to_string()), async {
+                let reg = Arc::new(
+                    StubRegistry::new().with_ok("team_from_template", json!({"team_id": "t1"})),
+                );
+                let params =
+                    json!({"tool_name": "team_from_template", "arguments": {"template": "x"}});
+                let req = JsonRpcRequest::with_id("tools.invoke", Some(params), json!(1));
+                let resp = handle_invoke(req, reg.clone(), None).await;
                 assert!(resp.is_success(), "expected success: {:?}", resp.error);
                 assert!(reg.last_call().is_some());
+            })
+            .await;
+    }
+
+    /// `channel_message` is in none of `OPERATOR_TOOLS` / `dangerous_tools`'s
+    /// deny list / `requires_confirmation` — the exact class of tool the
+    /// round-0 gate would have let a member fire immediately, with no
+    /// exec-tier approval, no `tool_permissions`, no hooks. Must be denied
+    /// by the member allowlist floor.
+    #[tokio::test]
+    async fn member_role_is_denied_channel_message() {
+        crate::gateway::caller_identity::CALLER_ROLE
+            .scope(Some("member".to_string()), async {
+                let reg =
+                    Arc::new(StubRegistry::new().with_ok("channel_message", json!({"ok": true})));
+                let params = json!({
+                    "tool_name": "channel_message",
+                    "arguments": {"conversation_id": "c1", "text": "hi"}
+                });
+                let req = JsonRpcRequest::with_id("tools.invoke", Some(params), json!(1));
+                let resp = handle_invoke(req, reg.clone(), None).await;
+                assert!(!resp.is_success(), "channel_message must be denied");
+                assert_eq!(resp.error.unwrap().code, AUTH_REQUIRED);
+                assert!(reg.last_call().is_none());
+            })
+            .await;
+    }
+
+    /// Same shape as `channel_message`: a desktop-action tool is not in
+    /// `OPERATOR_TOOLS` either, so the round-0 gate alone would have let a
+    /// member drive the desktop directly through this surface. Denied by
+    /// the member allowlist floor.
+    #[tokio::test]
+    async fn member_role_is_denied_a_desktop_action_tool() {
+        crate::gateway::caller_identity::CALLER_ROLE
+            .scope(Some("member".to_string()), async {
+                let reg = Arc::new(StubRegistry::new().with_ok("gui_click", json!({"ok": true})));
+                let params = json!({"tool_name": "gui_click", "arguments": {"x": 1, "y": 1}});
+                let req = JsonRpcRequest::with_id("tools.invoke", Some(params), json!(1));
+                let resp = handle_invoke(req, reg.clone(), None).await;
+                assert!(!resp.is_success(), "gui_click must be denied");
+                assert_eq!(resp.error.unwrap().code, AUTH_REQUIRED);
+                assert!(reg.last_call().is_none());
             })
             .await;
     }
