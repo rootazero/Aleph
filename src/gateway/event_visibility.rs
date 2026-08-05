@@ -44,6 +44,28 @@
 //! signal). See [`session_identity_of`]'s doc and the
 //! `every_frame_variant_is_classified` pin test for the full, reviewed list.
 //!
+//! ## Known gap: `RunningSetChanged` leaks cross-user session keys (fix round 1)
+//!
+//! Review flagged that any member currently sees every OTHER user's active
+//! `session_key`s via `stream.running_set_changed` — not org-public, not
+//! guarded by `EventScopeGuard`. The obvious fix (add its topic to
+//! `EventScopeGuard::default_rules()`'s guarded set, operator-only) was
+//! checked against actual Panel consumption first, per this task's own
+//! "verify before guessing" discipline, and REJECTED: `interfaces/webchat/
+//! src/state/sessions.rs::SessionMap::server_running` is documented as "the
+//! SOLE input source for the red dot — purely server-authoritative, client
+//! refcounts are not consulted," fed exclusively by this event
+//! (`components/chat_sidebar.rs:480`). Gating it operator-only would silently
+//! break every MEMBER's OWN sidebar running-indicator for their OWN sessions
+//! — the opposite of a P1 isolation fix. Left `Global`, unfixed, and
+//! recorded here (not silently dropped) pending a real fix: per-connection
+//! payload projection (filter `running` down to the receiving connection's
+//! visible session keys before send) needs a payload-REWRITE step this
+//! module's boolean `event_admits` doesn't have — the delivery loop's
+//! `should_forward` is pass/fail only, never rewrites the wire bytes it
+//! forwards. That is new infrastructure, not a term in this filter chain,
+//! and is out of scope for this task.
+//!
 //! ## Fail-closed
 //!
 //! A `caller_user: None` connection (walled — the login wall already refused
@@ -83,6 +105,22 @@ fn str_field(data: Option<&Value>, field: &str) -> Option<String> {
     data.and_then(|d| d.get(field))
         .and_then(Value::as_str)
         .map(str::to_string)
+}
+
+/// `run.subagent_tree` (`subagent_tree_relay.rs`, republishing
+/// `aleph_protocol::subagent_tree::SubagentTreeEvent`) is NOT a
+/// `GatewayEventFrame` variant — a different producer entirely, published
+/// via a hand-built `TopicEvent::to_notification()` rather than
+/// `publish_frame` — so it sits outside `every_frame_variant_is_classified`'s
+/// exhaustive match; covered by its own tests instead (fix round 1).
+///
+/// Its session key (`root_session`, a field of `SubagentNode`) sits at a
+/// variant-dependent nesting depth: `Progress`/`Settled` carry it at the
+/// top level of the event payload, but `Spawned { node: SubagentNode }`
+/// nests it one level deeper, under `node`. Check both positions.
+fn subagent_tree_root_session(data: Option<&Value>) -> Option<String> {
+    let d = data?;
+    str_field(Some(d), "root_session").or_else(|| str_field(d.get("node"), "root_session"))
 }
 
 /// Classify a delivered event frame's session identity from its wire
@@ -135,6 +173,20 @@ pub fn session_identity_of(topic: &str, data: Option<&Value>) -> SessionIdentity
         // Broadcast red-dot spanning every owner's running sessions — see
         // module doc "Deliberately Global".
         "stream.running_set_changed" => SessionIdentity::Global,
+
+        // Not a `GatewayEventFrame` variant — republished by
+        // `subagent_tree_relay.rs` via a hand-built
+        // `TopicEvent::to_notification()`. Genuinely session-scoped (a live
+        // per-run subagent tree is exactly as cross-user-sensitive as
+        // `stream.agent_trace`) and was previously unreachable here at all:
+        // the double-nested `{"method":"event","params":{"topic":...}}`
+        // envelope this producer uses read as topic `"event"` before the
+        // `extract_topic_and_data` fix (fix round 1) — see that function's
+        // doc in `server::handler`.
+        "run.subagent_tree" => match subagent_tree_root_session(data) {
+            Some(k) => SessionIdentity::BySessionKey(k),
+            None => SessionIdentity::Global,
+        },
 
         // --- TopicEvent-form frames genuinely session-scoped and NOT
         // covered by any other filter today ---
@@ -471,6 +523,98 @@ mod tests {
                     Some("bob"),
                     &store
                 )
+                .await
+        );
+    }
+
+    /// `run.subagent_tree`'s `Progress`/`Settled` shapes carry `root_session`
+    /// at the top level of the payload — the common case.
+    #[tokio::test]
+    async fn subagent_tree_progress_and_settled_are_owner_scoped_by_flat_root_session() {
+        let (store, _temp) = test_store();
+        let key = SessionKey::main("conv-3");
+        stamp_owner(&store, &key, "alice").await;
+        let store: Arc<dyn SessionStore> = Arc::new(store);
+        let index = EventVisibilityIndex::new();
+
+        let progress = serde_json::json!({
+            "kind": "progress",
+            "node_id": "n1",
+            "root_session": key.to_key_string(),
+            "step": 1,
+            "activity": "tool_called",
+            "tool_name": "bash",
+            "tool_count": 1,
+        });
+        assert!(
+            index
+                .event_admits("run.subagent_tree", Some(&progress), Some("alice"), &store)
+                .await
+        );
+        assert!(
+            !index
+                .event_admits("run.subagent_tree", Some(&progress), Some("bob"), &store)
+                .await
+        );
+
+        let settled = serde_json::json!({
+            "kind": "settled",
+            "node_id": "n1",
+            "root_session": key.to_key_string(),
+            "lifecycle": "completed",
+            "duration_ms": 100,
+            "iterations": 1,
+            "tool_calls_made": 1,
+            "total_tokens": 10,
+        });
+        assert!(
+            index
+                .event_admits("run.subagent_tree", Some(&settled), Some("alice"), &store)
+                .await
+        );
+        assert!(
+            !index
+                .event_admits("run.subagent_tree", Some(&settled), Some("bob"), &store)
+                .await
+        );
+    }
+
+    /// `run.subagent_tree`'s `Spawned { node: SubagentNode }` shape nests
+    /// `root_session` one level deeper, under `node` — the tricky case that
+    /// a flat `str_field(data, "root_session")` lookup alone would miss.
+    #[tokio::test]
+    async fn subagent_tree_spawned_is_owner_scoped_by_nested_root_session() {
+        let (store, _temp) = test_store();
+        let key = SessionKey::main("conv-4");
+        stamp_owner(&store, &key, "alice").await;
+        let store: Arc<dyn SessionStore> = Arc::new(store);
+        let index = EventVisibilityIndex::new();
+
+        let spawned = serde_json::json!({
+            "kind": "spawned",
+            "node": {
+                "node_id": "n1",
+                "parent_id": null,
+                "depth": 1,
+                "root_session": key.to_key_string(),
+                "task": "t",
+                "model": null,
+                "lifecycle": "running",
+                "started_at_ms": 0,
+                "elapsed_ms": 0,
+                "tool_count": 0,
+                "last_tool": null,
+                "last_activity": null,
+            },
+        });
+        assert!(
+            index
+                .event_admits("run.subagent_tree", Some(&spawned), Some("alice"), &store)
+                .await
+        );
+        assert!(
+            !index
+                .event_admits("run.subagent_tree", Some(&spawned), Some("bob"), &store)
                 .await
         );
     }

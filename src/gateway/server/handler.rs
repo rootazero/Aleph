@@ -393,6 +393,53 @@ fn device_revoked_should_close(event_json: &str, session_device_id: Option<&str>
     }
 }
 
+/// Extract `(topic, data)` from an already-parsed event envelope — the
+/// single chokepoint every per-connection filter term reads from
+/// (`EventScopeGuard`, `audience_allows`, `SubscriptionManager`,
+/// `EventVisibilityIndex`).
+///
+/// Handles every wire shape an event can arrive in on `ctx.event_bus`:
+/// - `TopicEvent` form (non-stream `GatewayEventFrame` variants, published
+///   by `publish_frame`): `{"topic": "...", "data": {...}}`.
+/// - `stream.*` JSON-RPC notification form (streaming `GatewayEventFrame`
+///   variants): `{"method": "stream.X", "params": <frame body>}` — the
+///   frame's own fields live directly under `params`, not nested under a
+///   `.data` (see `event_bus.rs::publish_frame`'s doc). `data` reads `None`
+///   for this shape — unchanged from before this function existed; no
+///   `stream.*` frame has ever had a nested `.data` to find.
+/// - The double-wrapped `TopicEvent::to_notification()` form, used by
+///   producers that build a raw string and call `GatewayEventBus::publish`
+///   directly rather than going through `publish_frame` (e.g.
+///   `subagent_tree_relay.rs`'s `run.subagent_tree`):
+///   `{"jsonrpc":"2.0","method":"event","params":{"topic":"...",
+///   "data":{...},"timestamp":...}}`. **Missing this branch reads `topic`
+///   as the literal string `"event"` for every producer using this shape**
+///   — `EventScopeGuard` happens to default-allow an unrecognized topic
+///   anyway, but `session_identity_of` ALSO defaults an unrecognized topic
+///   to `Global`, so a session-scoped event published this way silently
+///   skipped owner-scoping entirely (found in review, fix round 1 — see
+///   `run.subagent_tree`'s entry in `event_visibility::session_identity_of`).
+fn extract_topic_and_data(event_obj: &serde_json::Value) -> (&str, Option<&serde_json::Value>) {
+    if event_obj.get("method").and_then(serde_json::Value::as_str) == Some("event") {
+        if let Some(params) = event_obj.get("params") {
+            let topic = params
+                .get("topic")
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or("");
+            return (topic, params.get("data"));
+        }
+    }
+    let topic = event_obj
+        .get("topic")
+        .and_then(serde_json::Value::as_str)
+        .or_else(|| event_obj.get("method").and_then(serde_json::Value::as_str))
+        .unwrap_or("");
+    let data = event_obj
+        .get("data")
+        .or_else(|| event_obj.get("params").and_then(|p| p.get("data")));
+    (topic, data)
+}
+
 /// The guest login wall: may a connection stamped with `role` send `method`?
 ///
 /// The wall is the *guest* wall and nothing else — it separates "this
@@ -1462,12 +1509,7 @@ async fn handle_connection(
                         }
                         // Try to extract topic from event for filtering
                         let should_forward = if let Ok(event_obj) = serde_json::from_str::<serde_json::Value>(&event_json) {
-                            // Check for topic in event (TopicEvent format)
-                            let topic = event_obj.get("topic")
-                                .and_then(|t| t.as_str())
-                                // Or method for JSON-RPC notification format
-                                .or_else(|| event_obj.get("method").and_then(|m| m.as_str()))
-                                .unwrap_or("");
+                            let (topic, event_data) = extract_topic_and_data(&event_obj);
 
                             // Permission-based scope guard check + surface audience +
                             // caller identity for the owner-scoped event filter (P1,
@@ -1486,19 +1528,16 @@ async fn handle_connection(
                                 }
                             };
 
-                            // Extract payload data for field-level filter predicates.
-                            // TopicEvent shape stores it at .data; JSON-RPC notifications
-                            // store it at .params (then nested .data for our wrapper).
-                            let event_data = event_obj
-                                .get("data")
-                                .or_else(|| event_obj.get("params").and_then(|p| p.get("data")));
-
                             // The owner-scoped filter needs the frame's OWN fields
                             // (run_id/session_key), which for stream.* notifications
                             // live directly under `.params` — `event_data` above only
-                            // resolves for the TopicEvent `.data` shape (no producer
-                            // nests a `.data` inside `.params`), so fall back to the
-                            // raw `.params` object for the stream-form case.
+                            // resolves for the TopicEvent `.data` and the
+                            // double-wrapped `TopicEvent::to_notification()`
+                            // `.params.data` shapes (both handled by
+                            // `extract_topic_and_data`), not the bare stream-form
+                            // `.params` (no `GatewayEventFrame` stream.* variant
+                            // nests a second `.data` inside it), so fall back to the
+                            // raw `.params` object for that one remaining case.
                             let visibility_payload =
                                 event_data.or_else(|| event_obj.get("params"));
 
@@ -2617,6 +2656,210 @@ mod tests {
         assert!(
             resp.contains("\"owner_user_id\":null"),
             "no caller_user must mean no scope attribution: {resp}"
+        );
+    }
+
+    // ── extract_topic_and_data — wire-envelope tests (P1 fix round 1) ─────
+    // The event_visibility.rs suite hand-builds post-extraction `data` and
+    // never runs the REAL envelope through the REAL extraction. These tests
+    // feed literal production wire JSON — generated via the actual publish
+    // path wherever practical — through `extract_topic_and_data` itself, so
+    // a future producer/wrapper-shape mismatch (like the "event"-wrapped
+    // double-nesting fix round 1 found) shows up here, not just in a
+    // classification unit test that never saw the real bytes.
+
+    use crate::gateway::events::frame::GatewayEventFrame;
+
+    /// The bare `TopicEvent` form — real producer: `publish_frame` on a
+    /// non-stream `GatewayEventFrame` variant.
+    #[test]
+    fn extract_topic_and_data_handles_the_real_bare_topic_event_wire_form() {
+        let bus = GatewayEventBus::new();
+        let mut rx = bus.subscribe();
+        let frame = GatewayEventFrame::SessionLifecycleChanged {
+            session_key: "agent:main:main".to_string(),
+            old_state: None,
+            new_state: "active".to_string(),
+            reason: None,
+        };
+        bus.publish_frame(&frame).unwrap();
+        let wire = rx
+            .try_recv()
+            .expect("publish_frame must deliver synchronously");
+        let event_obj: serde_json::Value = serde_json::from_str(&wire).unwrap();
+
+        let (topic, data) = extract_topic_and_data(&event_obj);
+        assert_eq!(topic, "session.lifecycle.changed");
+        assert_eq!(
+            data.and_then(|d| d.get("session_key"))
+                .and_then(|v| v.as_str()),
+            Some("agent:main:main")
+        );
+    }
+
+    /// The `stream.*` JSON-RPC notification form — real producer:
+    /// `publish_frame` on a streaming `GatewayEventFrame` variant. `data`
+    /// stays `None` here by design (no stream.* frame nests a second `.data`
+    /// inside `.params`) — the WS loop's `visibility_payload` fallback
+    /// (`event_data.or_else(|| event_obj.get("params"))`) is what reaches
+    /// into `.params` for this shape; exercised end-to-end below.
+    #[test]
+    fn extract_topic_and_data_handles_the_real_stream_wire_form() {
+        let bus = GatewayEventBus::new();
+        let mut rx = bus.subscribe();
+        let frame = GatewayEventFrame::RunAccepted {
+            run_id: "r1".to_string(),
+            session_key: "agent:main:main".to_string(),
+            accepted_at: "t".to_string(),
+        };
+        bus.publish_frame(&frame).unwrap();
+        let wire = rx
+            .try_recv()
+            .expect("publish_frame must deliver synchronously");
+        let event_obj: serde_json::Value = serde_json::from_str(&wire).unwrap();
+
+        let (topic, data) = extract_topic_and_data(&event_obj);
+        assert_eq!(topic, "stream.run_accepted");
+        assert_eq!(
+            data, None,
+            "no stream.* frame nests a second .data in .params"
+        );
+        // The frame's own fields live directly under .params — same value
+        // the WS loop's visibility_payload fallback reaches for.
+        assert_eq!(
+            event_obj
+                .get("params")
+                .and_then(|p| p.get("run_id"))
+                .and_then(|v| v.as_str()),
+            Some("r1")
+        );
+    }
+
+    /// The double-wrapped `TopicEvent::to_notification()` form — real
+    /// producer: `subagent_tree_relay.rs`'s exact construction
+    /// (`TopicEvent::new(topic, data).to_notification()`, published as a raw
+    /// string via `GatewayEventBus::publish`, bypassing `publish_frame`
+    /// entirely). Before fix round 1, `extract_topic_and_data`'s
+    /// predecessor read `topic` as the literal string `"event"` here —
+    /// this pins the fix.
+    #[test]
+    fn extract_topic_and_data_unwraps_the_real_double_nested_event_envelope() {
+        let bus = GatewayEventBus::new();
+        let mut rx = bus.subscribe();
+        let tree_event = serde_json::json!({
+            "kind": "settled",
+            "node_id": "n1",
+            "root_session": "agent:main:main",
+            "lifecycle": "completed",
+            "duration_ms": 100,
+            "iterations": 1,
+            "tool_calls_made": 1,
+            "total_tokens": 10,
+        });
+        let notification = TopicEvent::new("run.subagent_tree", tree_event).to_notification();
+        let json = serde_json::to_string(&notification).unwrap();
+        bus.publish(json);
+        let wire = rx.try_recv().expect("publish must deliver synchronously");
+        let event_obj: serde_json::Value = serde_json::from_str(&wire).unwrap();
+
+        // Prove the envelope really is double-nested (method == "event", no
+        // top-level "topic") — otherwise this test would pass for the wrong
+        // reason.
+        assert_eq!(
+            event_obj.get("method").and_then(|m| m.as_str()),
+            Some("event")
+        );
+        assert!(event_obj.get("topic").is_none());
+
+        let (topic, data) = extract_topic_and_data(&event_obj);
+        assert_eq!(
+            topic, "run.subagent_tree",
+            "must unwrap to the REAL topic, not the literal \"event\" wrapper method"
+        );
+        assert_eq!(
+            data.and_then(|d| d.get("root_session"))
+                .and_then(|v| v.as_str()),
+            Some("agent:main:main")
+        );
+    }
+
+    fn visibility_test_store() -> (
+        crate::gateway::session_store::file_backend::FileSessionStore,
+        tempfile::TempDir,
+    ) {
+        use crate::gateway::session_store::file_backend::{
+            FileSessionStore, FileSessionStoreConfig,
+        };
+        let temp = tempfile::TempDir::new().unwrap();
+        let store = FileSessionStore::new(FileSessionStoreConfig {
+            base_dir: temp.path().to_path_buf(),
+            ..Default::default()
+        })
+        .unwrap();
+        (store, temp)
+    }
+
+    /// End-to-end: real `publish_frame` wire bytes → `extract_topic_and_data`
+    /// → the SAME `visibility_payload` fallback the WS loop computes →
+    /// `EventVisibilityIndex::note_frame`/`event_admits`. Proves the owner
+    /// scoping this task adds actually receives a resolvable `run_id`/
+    /// `session_key` from a REAL `RunAccepted`→`AgentTrace` run, not just a
+    /// hand-built payload shaped to look like one.
+    #[tokio::test]
+    async fn owner_scoping_round_trips_through_the_real_publish_path() {
+        use crate::gateway::event_visibility::EventVisibilityIndex;
+        use crate::gateway::router::SessionKey;
+        use crate::gateway::session_store::SessionStore;
+
+        let (store, _temp) = visibility_test_store();
+        let key = SessionKey::main("main");
+        crate::scope::with_scope(
+            Some(crate::scope::ScopeAttribution::personal("alice")),
+            store.get_or_create(&key),
+        )
+        .await
+        .unwrap();
+        let store: Arc<dyn SessionStore> = Arc::new(store);
+
+        let bus = GatewayEventBus::new();
+        let mut rx = bus.subscribe();
+        let index = EventVisibilityIndex::new();
+
+        // Seed: real RunAccepted, real wire bytes, real extraction.
+        let accepted = GatewayEventFrame::RunAccepted {
+            run_id: "r1".to_string(),
+            session_key: key.to_key_string(),
+            accepted_at: "t".to_string(),
+        };
+        bus.publish_frame(&accepted).unwrap();
+        let wire = rx.try_recv().unwrap();
+        let event_obj: serde_json::Value = serde_json::from_str(&wire).unwrap();
+        let (topic, event_data) = extract_topic_and_data(&event_obj);
+        let visibility_payload = event_data.or_else(|| event_obj.get("params"));
+        index.note_frame(topic, visibility_payload).await;
+
+        // A later same-run frame, resolved purely through the seed above —
+        // real wire bytes, real extraction, same fallback the loop uses.
+        let trace = GatewayEventFrame::AgentTrace {
+            run_id: "r1".to_string(),
+            seq: 1,
+            event: aleph_protocol::AgentTraceEvent::TurnStarted { iteration: 1 },
+        };
+        bus.publish_frame(&trace).unwrap();
+        let wire2 = rx.try_recv().unwrap();
+        let event_obj2: serde_json::Value = serde_json::from_str(&wire2).unwrap();
+        let (topic2, event_data2) = extract_topic_and_data(&event_obj2);
+        let visibility_payload2 = event_data2.or_else(|| event_obj2.get("params"));
+
+        assert!(
+            index
+                .event_admits(topic2, visibility_payload2, Some("alice"), &store)
+                .await
+        );
+        assert!(
+            !index
+                .event_admits(topic2, visibility_payload2, Some("bob"), &store)
+                .await
         );
     }
 }
