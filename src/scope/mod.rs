@@ -54,8 +54,12 @@ impl ScopeId {
             _ => {
                 if let Some((kind, ref_id)) = s.split_once(':') {
                     match kind {
-                        "personal" if !ref_id.is_empty() => Some(ScopeId::Personal(ref_id.to_string())),
-                        "project" if !ref_id.is_empty() => Some(ScopeId::Project(ref_id.to_string())),
+                        "personal" if !ref_id.is_empty() => {
+                            Some(ScopeId::Personal(ref_id.to_string()))
+                        }
+                        "project" if !ref_id.is_empty() => {
+                            Some(ScopeId::Project(ref_id.to_string()))
+                        }
                         _ => None,
                     }
                 } else {
@@ -121,7 +125,10 @@ where
 /// [`with_scope`] scope or when the surrounding scope explicitly set `None`.
 #[must_use]
 pub fn current_scope() -> Option<ScopeAttribution> {
-    CURRENT_ATTRIBUTION.try_with(|attr| attr.clone()).ok().flatten()
+    CURRENT_ATTRIBUTION
+        .try_with(|attr| attr.clone())
+        .ok()
+        .flatten()
 }
 
 /// Reconstruct a `ScopeAttribution` from metadata.
