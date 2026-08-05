@@ -429,13 +429,7 @@ impl AgentInstance {
     /// created by an *external* channel (not the Panel's own `"gui:chat"` nor
     /// the unknown sentinel) and an origin conversation id was captured.
     pub async fn origin_route(&self, key: &SessionKey) -> Option<(String, String)> {
-        let meta = self.session_store.get_metadata(key).await.ok().flatten()?;
-        let channel = meta.origin_channel()?;
-        if channel == "gui:chat" {
-            return None;
-        }
-        let conversation = meta.origin_conversation()?;
-        Some((channel, conversation))
+        origin_route_from_store(&self.session_store, key).await
     }
 
     /// Add a message to a session (delegated to session store) and capture
@@ -569,6 +563,28 @@ impl AgentInstance {
             &self.config.tool_blacklist,
         )
     }
+}
+
+/// Resolve a session's bound origin `(channel, conversation)` directly from a
+/// session-store handle, with no live [`AgentInstance`] required.
+///
+/// Extracted from [`AgentInstance::origin_route`] (which just delegates here
+/// with `&self.session_store`) so a caller holding only a store handle and a
+/// [`SessionKey`] — e.g. the continuation dispatcher's agent-miss race, where
+/// the agent that would normally answer this has already been deleted — can
+/// resolve the same origin instead of duplicating (and inevitably drifting
+/// from) this lookup.
+pub(crate) async fn origin_route_from_store(
+    session_store: &Arc<dyn SessionStore>,
+    key: &SessionKey,
+) -> Option<(String, String)> {
+    let meta = session_store.get_metadata(key).await.ok().flatten()?;
+    let channel = meta.origin_channel()?;
+    if channel == "gui:chat" {
+        return None;
+    }
+    let conversation = meta.origin_conversation()?;
+    Some((channel, conversation))
 }
 
 /// Glob-aware allow/deny match over a `(whitelist, blacklist)` pair.

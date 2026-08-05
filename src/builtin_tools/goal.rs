@@ -536,9 +536,14 @@ fn reject_zero_caps(args: &GoalArgs) -> Result<()> {
 }
 
 /// Boundary validation for the wait-barrier parameters (P7): they only make
-/// sense on an update of a still-active AUTONOMOUS goal — the continuation
-/// path is the barrier's sole consumer, so parking a passive/terminal goal
-/// would silently do nothing and the model must learn that here, not never.
+/// sense on a still-active AUTONOMOUS goal — the continuation path is the
+/// barrier's sole consumer, so parking a passive/terminal goal would silently
+/// do nothing and the model must learn that here, not never.
+///
+/// `goal` is the goal AS THIS UPDATE LEAVES IT, not the stored snapshot: one
+/// call can both arm autonomous pursuit and park it, and validating the
+/// pre-update row rejected that legal combination while accepting the illegal
+/// one (a park on a goal the same call moves out of `Active`).
 fn validate_wait_args(args: &GoalArgs, goal: &Goal) -> Result<()> {
     if args.wait_minutes.is_none() && args.wait_for_task.is_none() {
         return Ok(());
@@ -557,6 +562,14 @@ fn validate_wait_args(args: &GoalArgs, goal: &Goal) -> Result<()> {
              loop to park."
                 .to_string(),
         ));
+    }
+    if goal.status != GoalStatus::Active {
+        return Err(AlephError::tool(format!(
+            "a wait barrier only wakes an active pursuit; this goal is \
+             '{}'. Pass status='active' in the same update to resume it, or \
+             drop the wait.",
+            goal.status.as_str()
+        )));
     }
     if args
         .wait_for_task
@@ -827,7 +840,29 @@ token_budget. \
                     .get(&session)?
                     .ok_or_else(|| AlephError::tool("no standing goal to update".to_string()))?;
                 reject_zero_caps(&args)?;
-                validate_wait_args(&args, &goal)?;
+                // `update` never reads `objective`, so passing one used to be
+                // silently discarded — and the reply echoed the OLD objective
+                // under a `success: true` "Updated." The cross-session path
+                // refuses smuggled fields for exactly this reason; the local
+                // path owes the same honesty.
+                //
+                // Refused rather than implemented: the objective is the
+                // reference an `owns_reference` edge governs, and `set` is
+                // where that ACL lives (`governing_owner_or_refuse`).
+                // Implementing an objective change here would mean a second
+                // copy of the same gate — and a gate with two implementations
+                // is how a governed loop rewrites its own reference through
+                // the door nobody guarded.
+                if args.objective.is_some() {
+                    return Err(AlephError::tool(
+                        "goal 'update' cannot change the objective — it only adjusts \
+                         status, caps, budget, deadline, gate, lessons and notes. Use \
+                         goal(action='set', objective='…') to replace the objective \
+                         (that path carries the governance check a replacement needs); \
+                         note it resets the autonomous iteration count."
+                            .to_string(),
+                    ));
+                }
                 let prev_status = goal.status;
                 // The armed timer instant BEFORE this update mutates the
                 // barrier. A parked timer's continuation is claimed at the
@@ -926,6 +961,12 @@ token_budget. \
                 if let Some(lesson) = args.lesson.clone() {
                     goal = goal.with_lesson_appended(lesson, now);
                 }
+                // Validated here, not at the top of the arm: `goal` now
+                // carries this update's status and pursuit changes, so one
+                // call may legitimately arm autonomous pursuit and park it,
+                // and a park on a goal this call moves out of `Active` is
+                // correctly refused. See `validate_wait_args`.
+                validate_wait_args(&args, &goal)?;
                 // Wait barrier (model self-park, R7): the continuation hook
                 // turns a deadline barrier into an exact timer wake and a
                 // task barrier into an event-driven wake. The wake run costs
@@ -1315,6 +1356,34 @@ mod tests {
         assert!(
             !store.try_claim_settle_notify(&live).unwrap(),
             "the Passive-complete update must have claimed the watcher poke"
+        );
+    }
+
+    #[tokio::test]
+    async fn update_refuses_an_objective_change_instead_of_dropping_it() {
+        let (tool, _d) = tool_with_session("s-obj");
+        let mut set = args(GoalAction::Set);
+        set.objective = Some("original objective".into());
+        tool.call(set).await.unwrap();
+
+        let mut update = args(GoalAction::Update);
+        update.objective = Some("a completely different objective".into());
+        let err = tool
+            .call(update)
+            .await
+            .expect_err("a smuggled objective must not be silently discarded");
+        let msg = err.to_string();
+        assert!(
+            msg.contains("set"),
+            "the error must point at the fix: {msg}"
+        );
+
+        // And the stored objective is untouched.
+        let out = tool.call(args(GoalAction::Get)).await.unwrap();
+        assert!(
+            out.message.contains("original objective"),
+            "got: {}",
+            out.message
         );
     }
 
@@ -1868,6 +1937,47 @@ mod tests {
             .await
             .unwrap_err();
         assert!(format!("{err}").contains("at least 1"), "got: {err}");
+    }
+
+    #[tokio::test]
+    async fn wait_is_refused_on_a_goal_this_update_leaves_non_active() {
+        let (tool, _d) = tool_with_session("s-wait-blocked");
+        let mut set = args(GoalAction::Set);
+        set.objective = Some("obj".into());
+        set.pursuit_max_iterations = Some(5);
+        tool.call(set).await.unwrap();
+        // Self-report blocked, then try to park it. `wait_parked` requires an
+        // Active goal, so the barrier would never wake and `get` would advertise
+        // a park that can never end.
+        let mut block = args(GoalAction::Update);
+        block.status = Some(GoalStatus::Blocked);
+        tool.call(block).await.unwrap();
+
+        let mut park = args(GoalAction::Update);
+        park.wait_minutes = Some(30);
+        let err = tool
+            .call(park)
+            .await
+            .expect_err("parking a non-active goal must be refused, not silently inert");
+        assert!(err.to_string().contains("active"), "got: {err}");
+    }
+
+    #[tokio::test]
+    async fn wait_is_allowed_when_the_same_update_makes_the_goal_autonomous() {
+        let (tool, _d) = tool_with_session("s-wait-promote");
+        let mut set = args(GoalAction::Set);
+        set.objective = Some("obj".into());
+        tool.call(set).await.unwrap(); // interactive (Passive) goal
+
+        // One call that both arms autonomous pursuit and parks it. Validating
+        // against the PRE-update goal rejected this as "not autonomous" even
+        // though this very call makes it autonomous.
+        let mut promote = args(GoalAction::Update);
+        promote.pursuit_max_iterations = Some(5);
+        promote.wait_minutes = Some(30);
+        let out = tool.call(promote).await.unwrap();
+        assert!(out.success, "got: {}", out.message);
+        assert!(out.message.contains("parked"), "got: {}", out.message);
     }
 
     #[tokio::test]
