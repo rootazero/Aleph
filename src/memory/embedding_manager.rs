@@ -245,8 +245,13 @@ impl EmbeddingManager {
         let dim = provider.dimensions() as u32;
         let mut written = 0;
         for (item, vec) in drained.iter().zip(vectors.iter()) {
+            // `body` carries the full on-disk note text (see the producer in
+            // `ingest::batch`), so hashing it yields the same value the note
+            // index stores as `content_hash` — which is what makes the vector's
+            // recorded provenance comparable to the note's current version.
+            let embedded_hash = crate::memory::notes::indexer::sha2_hash(&item.body);
             if let Err(e) = store
-                .upsert_embedding(&item.path, &item.agent_id, vec, dim)
+                .upsert_embedding(&item.path, &item.agent_id, vec, dim, &embedded_hash)
                 .await
             {
                 tracing::warn!(
