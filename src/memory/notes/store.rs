@@ -80,6 +80,47 @@ pub fn note_md_filename(filename: &str) -> String {
     format!("{}.md", strip_md_ext(filename))
 }
 
+/// Resolve a note's on-disk path under a given note-memory root.
+///
+/// The single derivation of "where does this note live". Readers that built the
+/// path by hand with `format!("{filename}.md")` bypassed [`strip_md_ext`] and so
+/// resolved a legacy `.md`-suffixed index row to `*.md.md` — a miss that surfaces
+/// as an empty body rather than an error.
+///
+/// The *root* is deliberately a parameter: it belongs to whoever owns the
+/// indexer, and is not always the process-global
+/// `utils::paths::get_note_memory_dir()`.
+#[must_use]
+pub fn note_content_path(
+    memory_dir: &std::path::Path,
+    agent_id: &str,
+    category: &str,
+    filename: &str,
+) -> std::path::PathBuf {
+    memory_dir
+        .join(agent_id)
+        .join(category)
+        .join(note_md_filename(filename))
+}
+
+/// Result of a hybrid (vector + full-text) note search, with each leg's
+/// contribution reported alongside the fused ranking.
+///
+/// The counts exist so a caller can describe what actually ran instead of what
+/// it asked for: "hybrid" with `vector_candidates == 0` means the semantic half
+/// did not participate at all — an empty or dimension-mismatched vector index —
+/// which is a different situation from a semantic search that simply found
+/// nothing, and the two used to be indistinguishable from the outside.
+#[derive(Debug, Clone, Default)]
+pub struct HybridSearchOutcome {
+    /// Fused, ranked results (already truncated to the requested limit).
+    pub results: Vec<crate::memory::notes::NoteSearchResult>,
+    /// Candidates the vector leg contributed to fusion.
+    pub vector_candidates: usize,
+    /// Candidates the full-text leg contributed to fusion.
+    pub fts_candidates: usize,
+}
+
 /// Persistence contract for the notes index, link graph, and full-text search.
 ///
 /// All methods are scoped by `agent_id` to support the `memory/{agent_id}/{category}/`
@@ -299,7 +340,8 @@ pub trait NoteStore: Send + Sync {
         limit: usize,
     ) -> Result<Vec<(String, f32)>, AlephError>;
 
-    /// Vector + FTS hybrid search with RRF fusion, returning full content.
+    /// Vector + FTS hybrid search with RRF fusion, returning full content
+    /// alongside how much each leg contributed.
     async fn hybrid_search_notes(
         &self,
         embedding: &[f32],
@@ -307,7 +349,7 @@ pub trait NoteStore: Send + Sync {
         agent_id: &str,
         dim_hint: u32,
         limit: usize,
-    ) -> Result<Vec<crate::memory::notes::NoteSearchResult>, AlephError>;
+    ) -> Result<HybridSearchOutcome, AlephError>;
 
     /// Vector search returning full content (not just path+score).
     async fn vector_search_notes_with_content(

@@ -38,6 +38,81 @@ const NOTE_MANAGE_RECALL_CHANNEL: &str = "note_manage";
 /// `(path, category, filename, tags, content, score)` rows from `search_notes`.
 type SearchRows = Vec<(String, String, String, Vec<String>, String, f32)>;
 
+/// Why a `query` ran without its semantic leg.
+#[derive(Debug, Clone, Copy)]
+enum DegradedReason {
+    /// FTS-only deployment — a steady state, not a fault.
+    NoEmbedder,
+    /// The embedding endpoint was unreachable.
+    EmbedFailed,
+    /// The embedding succeeded but the vector index could not serve it —
+    /// most often a provider dimension with no matching vec0 table.
+    VectorLegUnavailable,
+}
+
+impl DegradedReason {
+    const fn as_str(self) -> &'static str {
+        match self {
+            Self::NoEmbedder => "no embedding provider configured",
+            Self::EmbedFailed => "embedding provider unreachable",
+            Self::VectorLegUnavailable => "vector index unavailable for this embedding dimension",
+        }
+    }
+}
+
+/// What a `query` actually did, as opposed to what it attempted.
+///
+/// The mode label used to be a claim about configuration: any query with an
+/// embedder wired reported `"hybrid"`, including one whose vector leg returned
+/// nothing because the index was empty or dimension-mismatched. The model could
+/// not tell "semantic search found nothing relevant" from "semantic search did
+/// not run", which are opposite instructions about whether to trust the result.
+/// Same discipline as `note_graph_query`'s `QueryAdvisory`.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct SearchAdvisory {
+    /// `hybrid` (both legs contributed), `semantic` (vector only),
+    /// `full-text` (keyword only).
+    pub mode: String,
+    /// Candidates the vector leg contributed. Zero under `mode: "hybrid"`
+    /// means the vector index held nothing for this agent.
+    pub vector_candidates: usize,
+    /// Candidates the full-text leg contributed.
+    pub fts_candidates: usize,
+    /// Present only when the semantic leg was skipped, saying why.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub degraded: Option<String>,
+    /// Result bodies dropped to stay inside the response content budget.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub bodies_omitted: Option<usize>,
+}
+
+impl SearchAdvisory {
+    fn fused(vector_candidates: usize, fts_candidates: usize) -> Self {
+        let mode = match (vector_candidates, fts_candidates) {
+            (0, _) => "full-text",
+            (_, 0) => "semantic",
+            _ => "hybrid",
+        };
+        Self {
+            mode: mode.to_string(),
+            vector_candidates,
+            fts_candidates,
+            degraded: None,
+            bodies_omitted: None,
+        }
+    }
+
+    fn text_only(fts_candidates: usize, reason: Option<DegradedReason>) -> Self {
+        Self {
+            mode: "full-text".to_string(),
+            vector_candidates: 0,
+            fts_candidates,
+            degraded: reason.map(|r| r.as_str().to_string()),
+            bodies_omitted: None,
+        }
+    }
+}
+
 use crate::memory::notes::CATEGORY_DIRS;
 
 // =============================================================================
@@ -198,6 +273,11 @@ pub struct NoteManageResult {
     /// orphan island.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub related_notes: Option<Vec<NoteListEntry>>,
+    /// What the `query` action actually ran — which retrieval legs took part,
+    /// how much each contributed, and why the semantic leg was skipped when it
+    /// was. Absent for every other action.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub search: Option<SearchAdvisory>,
 }
 
 // =============================================================================
@@ -438,6 +518,23 @@ impl NoteManageTool {
     /// receipts is what keeps the two acknowledgments comparable.
     ///
     /// `note_path` is the `{category}/{filename}` VFS path the write returned.
+    /// Resolve the `category` argument for any action: canonicalize the
+    /// spelling, then validate.
+    ///
+    /// One boundary for every handler. `create` used to be the only action that
+    /// canonicalized, so `category: "projects"` created a note under
+    /// `project/` and then failed to update, append to, or delete it — the same
+    /// model, the same session, contradictory answers about the same category.
+    fn resolve_category(args: &NoteManageArgs, action: &str) -> Result<String> {
+        let raw = args
+            .category
+            .as_deref()
+            .ok_or_else(|| AlephError::tool(format!("category is required for {action}")))?;
+        let canonical = canonicalize_category(raw);
+        validate_category(&canonical)?;
+        Ok(canonical)
+    }
+
     fn destination(&self, agent_id: &str, note_path: &str) -> String {
         let file = self
             .indexer
@@ -466,13 +563,7 @@ impl NoteManageTool {
         let agent_id_owned = self.resolve_agent_id(args)?;
         let agent_id = agent_id_owned.as_str();
 
-        let category_raw = args
-            .category
-            .as_deref()
-            .ok_or_else(|| AlephError::tool("category is required for create"))?;
-        // Canonicalize plural/spelling variants (projects→project) so the tool
-        // path agrees with ingest on one category dir, then validate.
-        let category_owned = canonicalize_category(category_raw);
+        let category_owned = Self::resolve_category(args, "create")?;
         let category = category_owned.as_str();
         let filename = args
             .filename
@@ -482,8 +573,6 @@ impl NoteManageTool {
             .title
             .as_deref()
             .ok_or_else(|| AlephError::tool("title is required for create"))?;
-
-        validate_category(category)?;
 
         // Hard security floor (§5.1): reject injection / exfiltration /
         // persistence payloads before they land in trusted long-term memory.
@@ -633,6 +722,7 @@ impl NoteManageTool {
             note_path: Some(note_path),
             content: None,
             notes: None,
+            search: None,
         })
     }
 
@@ -640,10 +730,8 @@ impl NoteManageTool {
         let agent_id_owned = self.resolve_agent_id(args)?;
         let agent_id = agent_id_owned.as_str();
 
-        let category = args
-            .category
-            .as_deref()
-            .ok_or_else(|| AlephError::tool("category is required for update"))?;
+        let category_owned = Self::resolve_category(args, "update")?;
+        let category = category_owned.as_str();
         let filename = args
             .filename
             .as_deref()
@@ -652,8 +740,6 @@ impl NoteManageTool {
             .content
             .as_deref()
             .ok_or_else(|| AlephError::tool("content is required for update"))?;
-
-        validate_category(category)?;
 
         // Hard security floor (§5.1): see `scan_note_for_threats`.
         scan_note_for_threats(content)?;
@@ -714,6 +800,7 @@ impl NoteManageTool {
             note_path: Some(note_path),
             content: None,
             notes: None,
+            search: None,
         })
     }
 
@@ -721,16 +808,12 @@ impl NoteManageTool {
         let agent_id_owned = self.resolve_agent_id(args)?;
         let agent_id = agent_id_owned.as_str();
 
-        let category = args
-            .category
-            .as_deref()
-            .ok_or_else(|| AlephError::tool("category is required for append"))?;
+        let category_owned = Self::resolve_category(args, "append")?;
+        let category = category_owned.as_str();
         let filename = args
             .filename
             .as_deref()
             .ok_or_else(|| AlephError::tool("filename is required for append"))?;
-
-        validate_category(category)?;
 
         let safe_filename = sanitize_title(filename)?;
         let note_path = format!("{category}/{safe_filename}");
@@ -785,6 +868,7 @@ impl NoteManageTool {
             note_path: Some(note_path),
             content: None,
             notes: None,
+            search: None,
         })
     }
 
@@ -797,28 +881,55 @@ impl NoteManageTool {
         query: &str,
         agent_id: &str,
         limit: usize,
-    ) -> Result<(SearchRows, &'static str)> {
-        if let Some(embedder) = &self.embedder {
-            match embedder.embed(query).await {
+    ) -> Result<(SearchRows, SearchAdvisory)> {
+        // Three ways the vector leg can be absent, and the reason to degrade is
+        // the same for all of them: the notes and the full-text index are both
+        // local and intact. Only the first two were covered — a store-side
+        // failure (typically an embedding dimension with no vec0 table) failed
+        // the whole query, in a tool documented to fall back to full text.
+        let degraded = match &self.embedder {
+            None => Some(DegradedReason::NoEmbedder),
+            Some(embedder) => match embedder.embed(query).await {
+                Err(e) => {
+                    warn!(error = %e, "note_manage query: embed failed — falling back to FTS");
+                    Some(DegradedReason::EmbedFailed)
+                }
                 Ok(embedding) => {
                     let dim = embedding.len() as u32;
-                    let hits = self
+                    match self
                         .indexer
                         .store()
                         .hybrid_search_notes(&embedding, query, agent_id, dim, limit)
                         .await
-                        .map_err(|e| AlephError::tool(format!("Note search failed: {e}")))?;
-                    let rows = hits
-                        .into_iter()
-                        .map(|h| (h.path, h.category, h.filename, h.tags, h.content, h.score))
-                        .collect();
-                    return Ok((rows, "hybrid"));
+                    {
+                        Ok(outcome) => {
+                            let rows = outcome
+                                .results
+                                .into_iter()
+                                .map(|h| {
+                                    (h.path, h.category, h.filename, h.tags, h.content, h.score)
+                                })
+                                .collect();
+                            return Ok((
+                                rows,
+                                SearchAdvisory::fused(
+                                    outcome.vector_candidates,
+                                    outcome.fts_candidates,
+                                ),
+                            ));
+                        }
+                        Err(e) => {
+                            warn!(
+                                error = %e,
+                                dim,
+                                "note_manage query: vector leg unavailable — falling back to FTS"
+                            );
+                            Some(DegradedReason::VectorLegUnavailable)
+                        }
+                    }
                 }
-                Err(e) => {
-                    warn!(error = %e, "note_manage query: embed failed — falling back to FTS");
-                }
-            }
-        }
+            },
+        };
 
         let entries = self
             .indexer
@@ -826,29 +937,43 @@ impl NoteManageTool {
             .search_notes_fts(query, agent_id, limit)
             .await
             .map_err(|e| AlephError::tool(format!("Note search failed: {e}")))?;
-        let mut rows: SearchRows = Vec::with_capacity(entries.len());
-        for (rank, entry) in entries.into_iter().enumerate() {
-            let file_path = self
-                .indexer
-                .memory_dir()
-                .join(agent_id)
-                .join(&entry.category)
-                .join(format!("{}.md", entry.filename));
-            let content = tokio::fs::read_to_string(&file_path)
-                .await
-                .unwrap_or_default();
-            // Rank-derived pseudo score — FTS entries carry no fused score.
-            let score = 1.0 / (1.0 + rank as f32);
-            rows.push((
-                entry.path,
-                entry.category,
-                entry.filename,
-                entry.tags,
-                content,
-                score,
-            ));
-        }
-        Ok((rows, "full-text"))
+        let fts_hits = entries.len();
+        // Bodies are read against *this tool's* note root, through the shared
+        // `note_content_path` derivation. The store's own loader is not reused
+        // here on purpose: it resolves the root from the process-global
+        // `utils::paths::get_note_memory_dir()` rather than from the indexer it
+        // was called through, so borrowing it would trade one duplicated
+        // derivation for a reader that can look in a different directory than
+        // the writer used.
+        let memory_dir = self.indexer.memory_dir().to_path_buf();
+        let bodies = futures::future::join_all(entries.iter().map(|entry| {
+            let path = crate::memory::notes::store::note_content_path(
+                &memory_dir,
+                agent_id,
+                &entry.category,
+                &entry.filename,
+            );
+            async move { tokio::fs::read_to_string(&path).await.unwrap_or_default() }
+        }))
+        .await;
+        let rows: SearchRows = entries
+            .into_iter()
+            .zip(bodies)
+            .enumerate()
+            .map(|(rank, (entry, content))| {
+                // Rank-derived pseudo score — FTS entries carry no fused score.
+                let score = 1.0 / (1.0 + rank as f32);
+                (
+                    entry.path,
+                    entry.category,
+                    entry.filename,
+                    entry.tags,
+                    content,
+                    score,
+                )
+            })
+            .collect();
+        Ok((rows, SearchAdvisory::text_only(fts_hits, degraded)))
     }
 
     async fn handle_query(&self, args: &NoteManageArgs) -> Result<NoteManageResult> {
@@ -862,7 +987,7 @@ impl NoteManageTool {
 
         let limit = args.limit.unwrap_or(20);
 
-        let (results, mode) = self.search_notes(query, agent_id, limit).await?;
+        let (results, mut advisory) = self.search_notes(query, agent_id, limit).await?;
 
         if results.is_empty() {
             return Ok(NoteManageResult {
@@ -873,6 +998,10 @@ impl NoteManageTool {
                 note_path: None,
                 content: None,
                 notes: Some(vec![]),
+                // An empty result under a degraded mode reads very differently
+                // from an empty result under a working one, so the advisory
+                // rides along here too.
+                search: Some(advisory),
             });
         }
 
@@ -919,19 +1048,27 @@ impl NoteManageTool {
                 "[{bodies_omitted} more matching note(s) listed above without bodies — \
                  query with a smaller limit or read them individually]\n"
             ));
+            advisory.bodies_omitted = Some(bodies_omitted);
         }
 
+        let mode = advisory.mode.clone();
+        let suffix = advisory
+            .degraded
+            .as_deref()
+            .map(|why| format!(" — semantic leg skipped: {why}"))
+            .unwrap_or_default();
         Ok(NoteManageResult {
             related_notes: None,
             success: true,
             message: format!(
-                "Found {} note(s) matching '{query}' ({mode} search)",
+                "Found {} note(s) matching '{query}' ({mode} search){suffix}",
                 notes.len()
             ),
             destination: None,
             note_path: None,
             content: Some(combined_content),
             notes: Some(notes),
+            search: Some(advisory),
         })
     }
 
@@ -941,8 +1078,11 @@ impl NoteManageTool {
         let limit = args.limit.unwrap_or(100);
 
         // Category filter dispatches to the paginated store query instead of
-        // scanning every note for the agent and filtering in memory.
-        let all_entries = match args.category.as_deref() {
+        // scanning every note for the agent and filtering in memory. The filter
+        // is canonicalized like every write path, so `projects` lists the notes
+        // that a `projects` create actually filed under `project`.
+        let category_filter = args.category.as_deref().map(canonicalize_category);
+        let all_entries = match category_filter.as_deref() {
             Some(cat) => self
                 .indexer
                 .store()
@@ -982,6 +1122,7 @@ impl NoteManageTool {
             note_path: None,
             content: None,
             notes: Some(entries),
+            search: None,
         })
     }
 
@@ -989,16 +1130,12 @@ impl NoteManageTool {
         let agent_id_owned = self.resolve_agent_id(args)?;
         let agent_id = agent_id_owned.as_str();
 
-        let category = args
-            .category
-            .as_deref()
-            .ok_or_else(|| AlephError::tool("category is required for delete"))?;
+        let category_owned = Self::resolve_category(args, "delete")?;
+        let category = category_owned.as_str();
         let filename = args
             .filename
             .as_deref()
             .ok_or_else(|| AlephError::tool("filename is required for delete"))?;
-
-        validate_category(category)?;
 
         let safe_filename = sanitize_title(filename)?;
         let file_path = self
@@ -1035,6 +1172,7 @@ impl NoteManageTool {
             note_path: Some(note_path),
             content: None,
             notes: None,
+            search: None,
         })
     }
 
@@ -1083,6 +1221,7 @@ impl NoteManageTool {
             note_path: Some(note_path),
             content: None,
             notes: None,
+            search: None,
         })
     }
 
@@ -1118,6 +1257,7 @@ impl NoteManageTool {
             note_path: None,
             content: Some(content),
             notes: None,
+            search: None,
         })
     }
 
@@ -1150,6 +1290,7 @@ impl NoteManageTool {
                 note_path: None,
                 content: Some(content),
                 notes: None,
+                search: None,
             });
         }
 
@@ -1211,6 +1352,7 @@ impl NoteManageTool {
             note_path: None,
             content: Some(content),
             notes: None,
+            search: None,
         })
     }
 }
@@ -1892,5 +2034,210 @@ mod tests {
         assert!(body.contains("relations:"), "got:\n{body}");
         assert!(body.contains("to: learning/other-note"));
         assert!(body.contains("type: refers"));
+    }
+
+    // ---- §2.9 degradation + honest query surface --------------------------
+
+    /// Embedder whose dimension has no vec0 table, so the vector leg fails in
+    /// the store rather than at the embedding call.
+    struct UnsupportedDimEmbedder;
+
+    #[async_trait]
+    impl EmbeddingProvider for UnsupportedDimEmbedder {
+        async fn embed(&self, _text: &str) -> Result<Vec<f32>> {
+            Ok(vec![0.1; 999])
+        }
+        async fn embed_batch(&self, texts: &[&str]) -> Result<Vec<Vec<f32>>> {
+            Ok(texts.iter().map(|_| vec![0.1; 999]).collect())
+        }
+        fn dimensions(&self) -> usize {
+            999
+        }
+        fn model_name(&self) -> &str {
+            "unsupported-dim"
+        }
+        fn provider_id(&self) -> &str {
+            "test"
+        }
+    }
+
+    /// Embedder that cannot reach its endpoint.
+    struct UnreachableEmbedder;
+
+    #[async_trait]
+    impl EmbeddingProvider for UnreachableEmbedder {
+        async fn embed(&self, _text: &str) -> Result<Vec<f32>> {
+            Err(AlephError::other("endpoint unreachable"))
+        }
+        async fn embed_batch(&self, _texts: &[&str]) -> Result<Vec<Vec<f32>>> {
+            Err(AlephError::other("endpoint unreachable"))
+        }
+        fn dimensions(&self) -> usize {
+            768
+        }
+        fn model_name(&self) -> &str {
+            "unreachable"
+        }
+        fn provider_id(&self) -> &str {
+            "test"
+        }
+    }
+
+    #[tokio::test]
+    async fn query_degrades_to_fts_when_the_vector_leg_fails_in_the_store() {
+        // The fallback used to cover only a failing embed(). A store-side
+        // failure — an embedding dimension with no vec0 table is the common
+        // one — failed the whole query in a tool documented to fall back.
+        let (_d, tool) = mk_tool();
+        tool.call(create_args("dim-target", "- tokioruntime scheduling"))
+            .await
+            .unwrap();
+        let tool = tool.with_embedder(Arc::new(UnsupportedDimEmbedder));
+
+        let r = tool
+            .call(NoteManageArgs {
+                action: NoteManageAction::Query,
+                query: Some("tokioruntime".into()),
+                ..blank_args()
+            })
+            .await
+            .expect("a broken vector leg must not fail the query");
+        assert!(r.success);
+        assert!(r.content.unwrap().contains("dim-target"));
+        let adv = r.search.expect("query must report what it ran");
+        assert_eq!(adv.mode, "full-text");
+        assert_eq!(
+            adv.degraded.as_deref(),
+            Some("vector index unavailable for this embedding dimension")
+        );
+    }
+
+    #[tokio::test]
+    async fn query_degrades_to_fts_when_the_embedding_endpoint_is_unreachable() {
+        let (_d, tool) = mk_tool();
+        tool.call(create_args("net-target", "- tokioruntime scheduling"))
+            .await
+            .unwrap();
+        let tool = tool.with_embedder(Arc::new(UnreachableEmbedder));
+
+        let r = tool
+            .call(NoteManageArgs {
+                action: NoteManageAction::Query,
+                query: Some("tokioruntime".into()),
+                ..blank_args()
+            })
+            .await
+            .unwrap();
+        let adv = r.search.expect("query must report what it ran");
+        assert_eq!(adv.mode, "full-text");
+        assert_eq!(
+            adv.degraded.as_deref(),
+            Some("embedding provider unreachable")
+        );
+    }
+
+    #[tokio::test]
+    async fn an_fts_only_deployment_says_so_rather_than_claiming_hybrid() {
+        let (_d, tool) = mk_tool();
+        tool.call(create_args("plain", "- tokioruntime scheduling"))
+            .await
+            .unwrap();
+        let r = tool
+            .call(NoteManageArgs {
+                action: NoteManageAction::Query,
+                query: Some("tokioruntime".into()),
+                ..blank_args()
+            })
+            .await
+            .unwrap();
+        let adv = r.search.expect("query must report what it ran");
+        assert_eq!(adv.mode, "full-text");
+        assert_eq!(adv.vector_candidates, 0);
+        assert_eq!(adv.fts_candidates, 1);
+        assert_eq!(
+            adv.degraded.as_deref(),
+            Some("no embedding provider configured")
+        );
+    }
+
+    // ---- §2.9 category canonicalization on every action -------------------
+
+    #[tokio::test]
+    async fn a_plural_category_resolves_the_same_way_for_every_action() {
+        // `create` was the only action that canonicalized, so a note created
+        // under `projects` landed in `project/` and then could not be updated,
+        // appended to, listed, or deleted with the same argument.
+        let (_d, tool) = mk_tool();
+        let mut args = create_args("plural-note", "- initial body");
+        args.category = Some("projects".into());
+        tool.call(args).await.expect("create must accept a plural");
+
+        let listed = tool
+            .call(NoteManageArgs {
+                action: NoteManageAction::List,
+                category: Some("projects".into()),
+                ..blank_args()
+            })
+            .await
+            .expect("list must accept a plural");
+        assert_eq!(
+            listed.notes.as_ref().map(Vec::len),
+            Some(1),
+            "plural list filter found nothing: {listed:?}"
+        );
+        assert_eq!(listed.notes.unwrap()[0].category, "project");
+
+        tool.call(NoteManageArgs {
+            action: NoteManageAction::Append,
+            category: Some("projects".into()),
+            filename: Some("plural-note".into()),
+            facts: Some(vec!["a later fact".into()]),
+            ..blank_args()
+        })
+        .await
+        .expect("append must accept a plural");
+
+        tool.call(NoteManageArgs {
+            action: NoteManageAction::Update,
+            category: Some("projects".into()),
+            filename: Some("plural-note".into()),
+            content: Some("- replaced body".into()),
+            ..blank_args()
+        })
+        .await
+        .expect("update must accept a plural");
+
+        tool.call(NoteManageArgs {
+            action: NoteManageAction::Delete,
+            category: Some("projects".into()),
+            filename: Some("plural-note".into()),
+            ..blank_args()
+        })
+        .await
+        .expect("delete must accept a plural");
+    }
+
+    #[tokio::test]
+    async fn a_plural_category_never_creates_a_second_directory() {
+        let (_d, tool) = mk_tool();
+        let mut args = create_args("one-home", "- body");
+        args.category = Some("projects".into());
+        tool.call(args).await.unwrap();
+        tool.call(NoteManageArgs {
+            action: NoteManageAction::Append,
+            category: Some("projects".into()),
+            filename: Some("one-home".into()),
+            facts: Some(vec!["more".into()]),
+            ..blank_args()
+        })
+        .await
+        .unwrap();
+
+        let root = tool_memory_dir(&tool).join(crate::routing::DEFAULT_AGENT_ID);
+        assert!(root.join("project").join("one-home.md").exists());
+        assert!(
+            !root.join("projects").exists(),
+            "a phantom plural directory was created"
+        );
     }
 }
