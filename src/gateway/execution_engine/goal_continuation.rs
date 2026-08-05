@@ -32,7 +32,7 @@ use crate::routing::session_key::SessionKey;
 use crate::sync_primitives::Arc;
 use crate::verification::stop_hooks::{execute_stop_hooks_arc, StopHookContext};
 
-type SessionManager = Option<Arc<dyn crate::gateway::session_store::SessionStore>>;
+pub(super) type SessionManager = Option<Arc<dyn crate::gateway::session_store::SessionStore>>;
 
 /// Wall-clock now (Unix epoch ms); 0 only if the clock predates the epoch.
 pub(super) fn now_ms() -> u64 {
@@ -46,7 +46,12 @@ pub(super) fn now_ms() -> u64 {
 /// budget goes unenforced this round (the iteration/deadline caps still bind).
 /// With enrolled delegation members (tree budget v1) this is the TREE total:
 /// own session plus each member's spend since it joined.
-async fn live_tokens(
+///
+/// Shared with the wake service (`goal_wait::claim_and_spawn`): "compute the
+/// token total for a claim" has exactly one answer, and the short-circuit above
+/// is half of it — a wake that called `tree_tokens` directly read session state
+/// for goals that have no budget to enforce.
+pub(super) async fn live_tokens(
     session_manager: &SessionManager,
     session_key: &SessionKey,
     goal: &crate::goal::Goal,

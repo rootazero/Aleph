@@ -384,11 +384,16 @@ impl GoalWakeService {
         // this service is the only driver there is. `None` (no store, an
         // unparseable key, or a read failure) keeps the budget unenforced for
         // this claim, exactly as before; the next post_run re-enforces it.
-        let tokens = match (&self.session_store, SessionKey::parse(&session)) {
-            (Some(store), Some(key)) => {
-                crate::gateway::goal_budget::tree_tokens(store, goal, &key).await
+        //
+        // Through `live_tokens`, the same wrapper `post_run` uses, rather than
+        // a second call into `tree_tokens`: it short-circuits on
+        // `goal.token_budget?`, so a budget-less goal touches no session state
+        // at all — the common path this had quietly started paying for.
+        let tokens = match SessionKey::parse(&session) {
+            Some(key) => {
+                super::goal_continuation::live_tokens(&self.session_store, &key, goal).await
             }
-            _ => None,
+            None => None,
         };
         let decision =
             match store.try_claim_continuation(&session, tokens, now_ms(), gate_configured, None) {
