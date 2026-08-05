@@ -251,13 +251,43 @@ pub trait NoteStore: Send + Sync {
 
     /// Store or update the embedding vector for a note. Backed by sqlite-vec
     /// (`notes_vec_{dim}` + `notes_vec_map`) in `SqliteMemoryBackend`.
+    ///
+    /// `content_hash` is the note's [`KnowledgeNote::content_hash`] for the
+    /// text that was embedded; it is recorded alongside the vector so
+    /// [`Self::stale_vector_paths`] can tell a current vector from one left
+    /// behind by a swallowed embed failure. Pass `""` when the caller does not
+    /// know it — that records "provenance unknown", which reads as *stale*, so
+    /// an under-informed caller errs toward re-embedding rather than toward
+    /// claiming freshness it cannot vouch for.
+    ///
+    /// Deliberately one method rather than two: a second, hash-less entry point
+    /// is a second path every future writer can forget to keep in step.
+    ///
+    /// [`KnowledgeNote::content_hash`]: crate::memory::notes::KnowledgeNote::content_hash
     async fn upsert_embedding(
         &self,
         path: &str,
         agent_id: &str,
         embedding: &[f32],
         dim: u32,
+        content_hash: &str,
     ) -> Result<(), AlephError>;
+
+    /// Note paths whose vector is missing or was computed from a different
+    /// version of the note than the one currently indexed.
+    ///
+    /// This is the observable half of embed-on-write: that path logs and
+    /// swallows failures on purpose (the note is already on disk), which left
+    /// no way at all to find out afterwards that a note had silently dropped
+    /// out of vector search. A path is stale when it has no `notes_vec_map`
+    /// row, or when the recorded `embedded_hash` differs from the note's
+    /// current `content_hash` (including the empty hash written by
+    /// pre-freshness rows and by callers that did not supply one).
+    ///
+    /// Default impl returns empty for backends without a vector index.
+    async fn stale_vector_paths(&self, _agent_id: &str) -> Result<Vec<String>, AlephError> {
+        Ok(Vec::new())
+    }
 
     /// Search notes by embedding similarity (sqlite-vec KNN over the
     /// dimension-matched `notes_vec_{dim}` table).

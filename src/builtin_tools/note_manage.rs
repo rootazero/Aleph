@@ -237,8 +237,24 @@ impl NoteManageTool {
 
     /// Attach an embedding provider so `query` runs hybrid (vector + FTS)
     /// search instead of FTS-only. Wired from the registry's `config.embedder`.
+    ///
+    /// The provider is also pushed into the indexer, so embed-on-write is owned
+    /// by the one shared write chokepoint (`NoteIndexer::finalize_write` and
+    /// friends) rather than re-implemented here. This tool used to keep its own
+    /// copy and call it after each write, which meant two implementations of
+    /// the same step, a second disk read per write, and a rename path whose
+    /// re-embed depended on which of the two happened to be wired.
     #[must_use]
     pub fn with_embedder(mut self, embedder: Arc<dyn EmbeddingProvider>) -> Self {
+        self.indexer = Arc::new(
+            NoteIndexer::new(
+                self.indexer.memory_dir().to_path_buf(),
+                // rust-doctor-disable-next-line excessive-clone
+                self.indexer.store().clone(),
+            )
+            // rust-doctor-disable-next-line excessive-clone
+            .with_embedder(embedder.clone()),
+        );
         self.embedder = Some(embedder);
         self
     }
@@ -526,10 +542,6 @@ impl NoteManageTool {
         let note_path = format!("{category}/{safe_filename}");
         info!(path = %note_path, "Note created");
 
-        // Make the new note immediately visible to vector retrieval.
-        self.refresh_embedding(agent_id, category, &safe_filename)
-            .await;
-
         // Surface related existing notes (best-effort) so the model can weave
         // the new note into the wiki instead of leaving an orphan island.
         // Preferred: semantic neighbors via the embedder — this also works for
@@ -694,10 +706,6 @@ impl NoteManageTool {
         let note_path = format!("{category}/{safe_filename}");
         info!(path = %note_path, "Note updated");
 
-        // Keep the vector index in step with the rewritten content.
-        self.refresh_embedding(agent_id, category, &safe_filename)
-            .await;
-
         Ok(NoteManageResult {
             related_notes: None,
             success: true,
@@ -765,10 +773,6 @@ impl NoteManageTool {
         }
 
         info!(path = %note_path, facts = new_facts.len(), "Note appended");
-
-        // Keep the vector index in step with the extended content.
-        self.refresh_embedding(agent_id, category, &safe_filename)
-            .await;
 
         Ok(NoteManageResult {
             related_notes: None,
@@ -845,43 +849,6 @@ impl NoteManageTool {
             ));
         }
         Ok((rows, "full-text"))
-    }
-
-    /// Best-effort embedding refresh after a successful write, so the note is
-    /// immediately visible to the vector leg of retrieval instead of waiting
-    /// for a manual `memory.reembed`. Embeds the full on-disk file content
-    /// (same text basis as `reembed_all`). Never fails the write.
-    async fn refresh_embedding(&self, agent_id: &str, category: &str, filename: &str) {
-        let Some(embedder) = &self.embedder else {
-            return;
-        };
-        let file_path = self
-            .indexer
-            .memory_dir()
-            .join(agent_id)
-            .join(category)
-            .join(format!("{filename}.md"));
-        let content = match tokio::fs::read_to_string(&file_path).await {
-            Ok(c) if !c.trim().is_empty() => c,
-            _ => return,
-        };
-        match embedder.embed(&content).await {
-            Ok(embedding) => {
-                let dim = embedding.len() as u32;
-                let note_path = format!("{category}/{filename}");
-                if let Err(e) = self
-                    .indexer
-                    .store()
-                    .upsert_embedding(&note_path, agent_id, &embedding, dim)
-                    .await
-                {
-                    warn!(path = %note_path, error = %e, "note_manage: embedding upsert failed");
-                }
-            }
-            Err(e) => {
-                warn!(error = %e, "note_manage: embed-on-write failed (vector index stays stale)");
-            }
-        }
     }
 
     async fn handle_query(&self, args: &NoteManageArgs) -> Result<NoteManageResult> {
@@ -1106,12 +1073,6 @@ impl NoteManageTool {
             .cloned()
             .unwrap_or_else(|| format!("other/{safe_new}"));
         info!(old = %safe_old, new = %safe_new, "Note renamed");
-        self.refresh_embedding(
-            agent_id,
-            note_path.split('/').next().unwrap_or("other"),
-            &safe_new,
-        )
-        .await;
         Ok(NoteManageResult {
             related_notes: None,
             success: true,
