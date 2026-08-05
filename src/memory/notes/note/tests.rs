@@ -877,4 +877,184 @@ tags: []
         );
         assert!(n.fact_provenance[1].inferred);
     }
+
+    // ---- §2.9 frontmatter passthrough (D1) --------------------------------
+
+    #[test]
+    fn unknown_frontmatter_keys_survive_a_write_round_trip() {
+        // Obsidian / hand-authored / external-tool keys used to be parsed away
+        // and never re-emitted, so the first write through this layer
+        // destroyed them.
+        let md = "---\ncategory: reference\ntags: [a]\ncssclass: wide\npublish: true\nup: \"[[Index]]\"\n---\n\nProse.\n";
+        let n = KnowledgeNote::from_markdown("t", md).unwrap();
+        assert_eq!(n.extra_frontmatter.len(), 3, "{:?}", n.extra_frontmatter);
+
+        let out = n.to_markdown();
+        assert!(out.contains("cssclass: wide"), "{out}");
+        assert!(out.contains("publish: true"), "{out}");
+        assert!(out.contains("up:"), "{out}");
+
+        // And they survive a second pass (the shape is stable, not one-shot).
+        let again = KnowledgeNote::from_markdown("t", &out)
+            .unwrap()
+            .to_markdown();
+        assert!(again.contains("cssclass: wide"), "{again}");
+        assert_eq!(
+            KnowledgeNote::from_markdown("t", &again)
+                .unwrap()
+                .extra_frontmatter
+                .len(),
+            3
+        );
+    }
+
+    #[test]
+    fn modelled_frontmatter_keys_never_leak_into_passthrough() {
+        // A known key appearing twice in the header (once typed, once as
+        // passthrough) would make the note ambiguous on the next parse.
+        let md = "---\ntype: reference\ntitle: T\naliases: [x]\ncategory: reference\ntags: []\ncreated: \"2026-01-01\"\nupdated: \"2026-01-02\"\nconfidence: 0.5\nseverity: high\nsource_notes: []\nsupersedes: []\nsuperseded_by: []\npermanent: true\nstale: true\n---\n\nBody.\n";
+        let n = KnowledgeNote::from_markdown("t", md).unwrap();
+        assert!(
+            n.extra_frontmatter.is_empty(),
+            "modelled keys leaked: {:?}",
+            n.extra_frontmatter
+        );
+        // `stale` stays parse-only: it is deliberately dropped by to_markdown,
+        // and passthrough must not resurrect it through the back door.
+        assert!(n.stale);
+        assert!(!n.to_markdown().contains("stale:"));
+    }
+
+    #[test]
+    fn a_note_without_extra_frontmatter_serializes_byte_identically() {
+        // Legacy parity: the passthrough block must add nothing at all when
+        // the header is fully modelled.
+        let n = KnowledgeNote {
+            title: "plain".into(),
+            category: "skill".into(),
+            facts: vec!["a rule".into()],
+            ..Default::default()
+        };
+        let out = n.to_markdown();
+        assert_eq!(
+            out,
+            "---\ntype: skill\ntitle: plain\naliases: []\ncategory: skill\ntags: []\ncreated: \"1970-01-01T00:00:00Z\"\nupdated: \"1970-01-01T00:00:00Z\"\nconfidence: 1.0000\nseverity: low\nsource_notes: []\nsupersedes: []\nsuperseded_by: []\n---\n\n- a rule\n"
+        );
+    }
+
+    #[test]
+    fn nested_passthrough_values_round_trip() {
+        let md =
+            "---\ncategory: project\ntags: []\nkanban:\n  lane: doing\n  order: 3\n---\n\nBody.\n";
+        let n = KnowledgeNote::from_markdown("t", md).unwrap();
+        let reparsed = KnowledgeNote::from_markdown("t", &n.to_markdown()).unwrap();
+        assert_eq!(
+            reparsed.extra_frontmatter.get("kanban"),
+            n.extra_frontmatter.get("kanban")
+        );
+    }
+
+    #[test]
+    fn known_frontmatter_keys_covers_every_modelled_field() {
+        // The passthrough filter is a hand-maintained key list. If a new typed
+        // field is added to Frontmatter without registering it here, that field
+        // would be emitted twice — once typed, once as passthrough.
+        let src = include_str!("parsing.rs");
+        let mut seen = 0usize;
+        for line in src.lines() {
+            let t = line.trim();
+            let Some(rest) = t.strip_prefix("pub(super) ") else {
+                continue;
+            };
+            let Some((name, _)) = rest.split_once(':') else {
+                continue;
+            };
+            let name = name.trim();
+            if name.contains(' ') || name.contains('(') {
+                continue; // fn / const, not a field
+            }
+            seen += 1;
+            let registered = parsing::KNOWN_FRONTMATTER_KEYS.contains(&name)
+                // serde `rename`d field: the wire key differs from the ident.
+                || (name == "note_type" && parsing::KNOWN_FRONTMATTER_KEYS.contains(&"type"));
+            assert!(
+                registered,
+                "Frontmatter field `{name}` is not in KNOWN_FRONTMATTER_KEYS \
+                 — it would be emitted twice (typed + passthrough)"
+            );
+        }
+        // A scanner that matches nothing passes vacuously — pin the count so a
+        // reshaped struct breaks the guard loudly instead of silently.
+        assert_eq!(
+            seen, 15,
+            "Frontmatter field scan found {seen} fields; update this count \
+             (and KNOWN_FRONTMATTER_KEYS) when the struct changes"
+        );
+    }
+
+    // ---- §2.9 single trailing Related block (D2) --------------------------
+
+    #[test]
+    fn repeated_link_weaving_keeps_one_related_block() {
+        // The nightly link weaver calls add_links once per weave; a per-call
+        // Related line grew one footer line per night.
+        let md = "---\ncategory: reference\ntags: []\n---\n\nProse.\n";
+        let mut n = KnowledgeNote::from_markdown("t", md).unwrap();
+        n.add_links(&["A".to_string()]);
+        n.add_links(&["B".to_string()]);
+        n.add_links(&["C".to_string()]);
+        let out = n.to_markdown();
+        assert_eq!(out.matches("Related:").count(), 1, "{out}");
+        for t in ["A", "B", "C"] {
+            assert!(out.contains(&format!("[[{t}]]")), "{out}");
+        }
+        let reparsed = KnowledgeNote::from_markdown("t", &out).unwrap();
+        assert_eq!(reparsed.links, vec!["A", "B", "C"]);
+    }
+
+    #[test]
+    fn appended_facts_land_above_the_related_block() {
+        let md = "---\ncategory: reference\ntags: []\n---\n\nProse.\n\nRelated: [[A]]\n";
+        let mut n = KnowledgeNote::from_markdown("t", md).unwrap();
+        n.append_facts(&["a new fact".to_string()]);
+        let body = n.body.as_deref().unwrap();
+        let fact_at = body.find("- a new fact").expect("fact missing");
+        let related_at = body.find("Related:").expect("footer missing");
+        assert!(fact_at < related_at, "fact landed below the footer: {body}");
+        assert_eq!(body.matches("Related:").count(), 1, "{body}");
+    }
+
+    #[test]
+    fn a_pre_existing_multiline_related_footer_collapses_on_the_next_weave() {
+        // Notes written before the merge behaviour accumulated one line per
+        // weave; the next write heals a consecutive run.
+        let md = "---\ncategory: reference\ntags: []\n---\n\nProse.\n\nRelated: [[A]]\n\nRelated: [[B]]\n";
+        let mut n = KnowledgeNote::from_markdown("t", md).unwrap();
+        n.add_links(&["C".to_string()]);
+        let body = n.body.as_deref().unwrap();
+        assert_eq!(body.matches("Related:").count(), 1, "{body}");
+        assert!(body.contains("[[A]]") && body.contains("[[B]]") && body.contains("[[C]]"));
+    }
+
+    #[test]
+    fn related_mentioned_mid_prose_is_not_treated_as_a_footer() {
+        let md = "---\ncategory: reference\ntags: []\n---\n\nRelated: work is tracked elsewhere.\n\nMore prose.\n";
+        let mut n = KnowledgeNote::from_markdown("t", md).unwrap();
+        n.append_facts(&["f".to_string()]);
+        let body = n.body.as_deref().unwrap();
+        assert!(
+            body.starts_with("Related: work is tracked elsewhere."),
+            "prose line was consumed as a footer: {body}"
+        );
+    }
+
+    #[test]
+    fn add_links_does_not_rewrite_the_body_when_the_footer_is_unchanged() {
+        // A target already named in the prose must not churn content_hash.
+        let md = "---\ncategory: reference\ntags: []\n---\n\nSee [[Existing]].\n";
+        let mut n = KnowledgeNote::from_markdown("t", md).unwrap();
+        let before = n.body.clone();
+        n.add_links(&["Existing".to_string()]);
+        assert_eq!(n.body, before, "body rewritten for a no-op link add");
+    }
 }

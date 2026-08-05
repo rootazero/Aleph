@@ -15,11 +15,11 @@ mod tests;
 pub mod types;
 
 pub use helpers::{sanitize_note_path, sanitize_title};
-pub use parsing::fact_provenance_for;
+pub use parsing::{fact_provenance_for, ExtraFrontmatter};
 pub use relation::{is_structural_strong, Relation, STRUCTURAL_STRONG};
 pub use types::{FactProvenance, ProvenanceOrigin, Severity};
 
-use helpers::{sha256_hex, yaml_inline_array, yaml_scalar};
+use helpers::{sha256_hex, yaml_extra_block, yaml_inline_array, yaml_scalar};
 use parsing::{extract_facts, extract_provenance_markers, parse_date_to_unix, split_frontmatter};
 
 /// Whether any tag marks a note as permanent core knowledge. Recognises
@@ -112,6 +112,19 @@ pub struct KnowledgeNote {
     pub note_type: Option<String>,
     /// Obsidian aliases from frontmatter `aliases:`. Empty for legacy notes.
     pub aliases: Vec<String>,
+    /// Frontmatter keys this layer does not model, preserved verbatim.
+    ///
+    /// `to_markdown` regenerates the header from the typed fields above, so
+    /// without this every key a human / Obsidian plugin / external tool wrote
+    /// (`cssclass`, `publish`, `id`, project-specific keys…) was destroyed by
+    /// the first write that passed through the note layer — the markdown-is-
+    /// source-of-truth contract held for the body and not for the header.
+    ///
+    /// Never contains a key in
+    /// [`parsing::KNOWN_FRONTMATTER_KEYS`]; empty for notes whose header this
+    /// layer fully models, which then serialize byte-for-byte as before.
+    #[serde(default)]
+    pub extra_frontmatter: ExtraFrontmatter,
 }
 
 impl Default for KnowledgeNote {
@@ -137,6 +150,7 @@ impl Default for KnowledgeNote {
             stale: false,
             note_type: None,
             aliases: Vec::new(),
+            extra_frontmatter: ExtraFrontmatter::new(),
         }
     }
 }
@@ -149,7 +163,7 @@ impl KnowledgeNote {
     pub fn from_markdown(title: &str, content: &str) -> Result<Self, AlephError> {
         let content_hash = sha256_hex(content);
 
-        let (frontmatter, body) = split_frontmatter(content)?;
+        let (frontmatter, extra_frontmatter, body) = split_frontmatter(content)?;
 
         let created_at = parse_date_to_unix(&frontmatter.created)?;
         let updated_at = parse_date_to_unix(&frontmatter.updated)?;
@@ -183,6 +197,7 @@ impl KnowledgeNote {
             stale: frontmatter.stale,
             note_type: frontmatter.note_type,
             aliases: frontmatter.aliases,
+            extra_frontmatter,
         })
     }
 
@@ -266,6 +281,9 @@ impl KnowledgeNote {
         if self.permanent {
             out.push_str("permanent: true\n");
         }
+        // Passthrough keys last, in deterministic (BTreeMap) order. Empty for
+        // notes this layer fully models → byte-identical legacy output.
+        out.push_str(&yaml_extra_block(&self.extra_frontmatter));
         out.push_str("---\n\n");
 
         if let Some(body) = self.body.as_deref() {
@@ -303,24 +321,37 @@ impl KnowledgeNote {
 
     /// Append bullet facts, keeping the verbatim body (when present) in sync
     /// so the new facts survive `to_markdown`.
+    ///
+    /// Facts land *above* the trailing `Related:` block. Appending blindly to
+    /// the end interleaved bullets with the link footer, so a note touched by
+    /// both the append path and the nightly link weaver degraded into
+    /// alternating fact / `Related:` lines.
     pub fn append_facts(&mut self, new_facts: &[String]) {
         if new_facts.is_empty() {
             return;
         }
         if let Some(body) = self.body.as_mut() {
+            let (mut head, related) = split_trailing_related(body);
             for fact in new_facts {
-                if !body.is_empty() && !body.ends_with('\n') {
-                    body.push('\n');
+                if !head.is_empty() && !head.ends_with('\n') {
+                    head.push('\n');
                 }
-                push_fact_bullet(body, fact);
+                push_fact_bullet(&mut head, fact);
             }
+            *body = join_body_and_related(&head, &related);
         }
         self.facts.extend(new_facts.iter().cloned());
     }
 
-    /// Add wikilink targets (deduped against `links`), appending a `Related:`
-    /// line to the verbatim body (when present) for targets it doesn't
-    /// already reference.
+    /// Add wikilink targets (deduped against `links`), merging them into the
+    /// body's single trailing `Related:` line for targets it doesn't already
+    /// reference.
+    ///
+    /// Merging (rather than appending a fresh line each time) is what keeps a
+    /// note readable: the nightly link weaver calls this once per weave, so a
+    /// per-call `Related:` line meant a well-connected note grew one footer
+    /// line per night. Consecutive trailing `Related:` lines left by the old
+    /// behaviour are collapsed here on the next weave.
     pub fn add_links(&mut self, new_links: &[String]) {
         let fresh: Vec<String> = new_links
             .iter()
@@ -331,19 +362,26 @@ impl KnowledgeNote {
             return;
         }
         if let Some(body) = self.body.as_mut() {
-            let missing: Vec<&String> = fresh
-                .iter()
-                .filter(|l| {
-                    !body.contains(&format!("[[{l}]]")) && !body.contains(&format!("[[{l}|"))
-                })
-                .collect();
-            if !missing.is_empty() {
-                if !body.is_empty() && !body.ends_with('\n') {
-                    body.push('\n');
+            let (head, mut related) = split_trailing_related(body);
+            // Only the head is checked for an existing mention: a target
+            // already named in the prose does not need a footer entry, but one
+            // already in the footer is handled by the dedup below.
+            let mut added_to_footer = false;
+            for l in &fresh {
+                if head.contains(&format!("[[{l}]]")) || head.contains(&format!("[[{l}|")) {
+                    continue;
                 }
-                let link_strs: Vec<String> = missing.iter().map(|l| format!("[[{l}]]")).collect();
-                body.push('\n');
-                body.push_str(&format!("Related: {}\n", link_strs.join(" ")));
+                if related.iter().any(|existing| existing == l) {
+                    continue;
+                }
+                related.push(l.clone());
+                added_to_footer = true;
+            }
+            // A body whose footer needs no change must not be rewritten — an
+            // unnecessary rewrite churns `content_hash` and, downstream, the
+            // note's embedding.
+            if added_to_footer {
+                *body = join_body_and_related(&head, &related);
             }
         }
         self.links.extend(fresh);
@@ -381,6 +419,73 @@ impl KnowledgeNote {
                 .join("\n"),
         }
     }
+}
+
+/// Marker that opens a note body's link footer.
+const RELATED_PREFIX: &str = "Related:";
+
+/// Split a body into its prose head and the wikilink targets of the trailing
+/// `Related:` footer.
+///
+/// Only a *trailing* run of `Related:` lines counts, so the word appearing
+/// mid-prose is never consumed. A run (rather than a single line) is accepted
+/// because notes written before [`KnowledgeNote::add_links`] merged footers
+/// accumulated one line per weave; those collapse on the next write.
+///
+/// The returned head carries no trailing newline — [`join_body_and_related`]
+/// is the inverse and re-establishes the separator.
+fn split_trailing_related(body: &str) -> (String, Vec<String>) {
+    let mut lines: Vec<&str> = body.lines().collect();
+    let mut footer_lines: Vec<&str> = Vec::new();
+
+    while let Some(last) = lines.last() {
+        let trimmed = last.trim();
+        if trimmed.is_empty() {
+            // Blank lines are only consumed as separators *inside* a footer we
+            // have already started collecting; a body merely ending in blanks
+            // keeps them.
+            if footer_lines.is_empty() {
+                break;
+            }
+            lines.pop();
+            continue;
+        }
+        if trimmed.starts_with(RELATED_PREFIX) {
+            footer_lines.push(trimmed);
+            lines.pop();
+            continue;
+        }
+        break;
+    }
+
+    // Restore document order (the scan ran backwards) before extracting.
+    footer_lines.reverse();
+    let mut targets: Vec<String> = Vec::new();
+    for line in footer_lines {
+        for target in extract_wikilinks(line) {
+            if !targets.contains(&target) {
+                targets.push(target);
+            }
+        }
+    }
+    (lines.join("\n"), targets)
+}
+
+/// Inverse of [`split_trailing_related`]: reattach a single `Related:` footer.
+///
+/// An empty target list returns the head unchanged, so bodies that never had a
+/// footer round-trip byte-for-byte.
+fn join_body_and_related(head: &str, targets: &[String]) -> String {
+    if targets.is_empty() {
+        return head.to_string();
+    }
+    let rendered: Vec<String> = targets.iter().map(|t| format!("[[{t}]]")).collect();
+    let footer = format!("{RELATED_PREFIX} {}\n", rendered.join(" "));
+    if head.is_empty() {
+        return footer;
+    }
+    let separator = if head.ends_with('\n') { "\n" } else { "\n\n" };
+    format!("{head}{separator}{footer}")
 }
 
 /// Append one fact as a `- ` bullet, indenting continuation lines by two
