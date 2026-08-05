@@ -279,7 +279,11 @@ pub async fn handle_abort(
     // busy-queue backlog directly by string — a caller-controlled key with
     // real mutating effect, not just a hint. A malformed key that fails to
     // parse falls through unchanged: it can never match a real busy-queue
-    // entry either, so there is nothing to authorize.
+    // entry either, because every real entry is registered under a
+    // canonical `SessionKey::to_key_string()` — a string that FAILS to
+    // parse can therefore never equal one that succeeded. This is
+    // load-bearing, not just a comment: see
+    // `visibility_guards::a_canonical_session_key_always_round_trips_so_a_malformed_one_cannot_collide`.
     if let Some(ref key_str) = params.session_key {
         if let Some(session_key) = SessionKey::from_key_string(key_str) {
             let meta = match session_store.get_metadata(&session_key).await {
@@ -919,6 +923,37 @@ mod tests {
                 !waiting.is_cancelled(),
                 "a denied abort must not purge the foreign session's queue"
             );
+        }
+
+        /// Pins the invariant `handle_abort`'s comment relies on for its
+        /// malformed-`session_key` fallthrough: a malformed key can only
+        /// ever collide with a real `busy_queue` entry if SOME canonical
+        /// `to_key_string()` output could also fail to parse back — round
+        /// trip it for a representative sample of every `SessionKey`
+        /// variant shape and confirm none do. This is the guard that
+        /// upgrades the assumption from "a comment" to "load-bearing and
+        /// checked".
+        #[test]
+        fn a_canonical_session_key_always_round_trips_so_a_malformed_one_cannot_collide() {
+            for key in [
+                SessionKey::main("roundtrip-main"),
+                SessionKey::peer("roundtrip-peer", "window-1"),
+                SessionKey::task("roundtrip-task", "cron", "job-1"),
+            ] {
+                let canonical = key.to_key_string();
+                assert!(
+                    SessionKey::from_key_string(&canonical).is_some(),
+                    "every canonical session key string must parse back — \
+                     `{canonical}` did not, which would let a malformed \
+                     caller-supplied key collide with a real busy_queue entry"
+                );
+            }
+            // And the converse half of the same invariant: a string that
+            // fails to parse is exactly the shape `handle_abort` lets fall
+            // through unguarded — confirm a garbage string really does fail,
+            // so that fallthrough branch is provably reachable and provably
+            // safe, not just assumed.
+            assert!(SessionKey::from_key_string("not a real session key").is_none());
         }
 
         #[tokio::test]

@@ -46,36 +46,68 @@
 //!   `sessions.delete`, `sessions.reset` → each resolves a caller-supplied
 //!   `session_key` to `SessionMetadata` and calls `visibility::
 //!   session_visible` before touching the store — **KeyChecked**.
-//! - `chat.send` → session resolution goes through
-//!   `visibility::existing_session_is_visible` before the run starts (a
-//!   session that doesn't exist yet is not a denial — see that fn's doc);
-//!   registered here as **KeyChecked** since the caller-supplied
-//!   `session_key`, when it already exists, is checked exactly like the
-//!   addressed-key sites above.
+//! - `chat.send` → the REAL-provider production path
+//!   (`server_init.rs::handle_chat_send_with_engine`) sends session
+//!   resolution through `visibility::existing_session_is_visible` before the
+//!   run starts (a session that doesn't exist yet is not a denial — see that
+//!   fn's doc); registered here as **KeyChecked** on that basis. **Carve-out:
+//!   the Simulated-execution fallback path** (`chat_handlers::handle_send` →
+//!   `AgentRunManager::start_run`, used only when no LLM provider is
+//!   configured) is NOT covered — `AgentRunManager` has no `SessionStore`
+//!   dependency, and this table must not overstate what's actually enforced.
 //! - `chat.abort`, `chat.history`, `chat.clear`, `chat.rewind` →
 //!   `KeyChecked`, same pattern (`chat.abort`'s `session_key` is optional;
 //!   absent it does nothing session-scoped, present it is checked).
-//! - `session.create`, `sessions.new` → creation/epoch-bump surfaces, not
-//!   enumerated by this table (see "Known gaps" below — `sessions.new`
-//!   mutates an addressed EXISTING session and is a real gap, just not one
-//!   this table can claim `KeyChecked` for since it isn't enforced yet).
+//! - `sessions.new` (`handle_new_session_db`) → KeyChecked on the addressed
+//!   (closing) session, before continuation termination or `close_session`.
+//! - `sessions.patch` (`handle_patch_db`) → KeyChecked before any field
+//!   validation, so a foreign caller gets an identical denial regardless of
+//!   what they put in `metadata` (no oracle via a validation-error side
+//!   channel).
+//! - `sessions.set_project_root` (`handle_set_project_root_db`) → KeyChecked
+//!   before the write; without it a foreign caller could redirect the
+//!   victim's next run to an attacker-chosen filesystem path.
+//! - `session.compact` (`handle_compact_db`) → KeyChecked; this one is a
+//!   **content-disclosure** site (the RPC response includes a summary of the
+//!   session's real messages) as well as a mutation (irreversibly rewrites
+//!   the event log), so it needed a new `SessionStore` parameter that didn't
+//!   exist before (the compaction operation itself still doesn't use the
+//!   store — see the fn's doc).
+//! - `session.truncate` (`handle_truncate_db`) → KeyChecked before the
+//!   irreversible tail deletion.
+//! - `sessions.compaction.list` (`handle_list_checkpoints_db`) → KeyChecked;
+//!   without it a foreign caller learns whether/how many checkpoints a
+//!   victim session has.
+//! - `sessions.compaction.restore` (`handle_restore_checkpoint_db`) →
+//!   KeyChecked on the addressed session, before it's overwritten with
+//!   checkpoint content.
+//! - `sessions.compaction.branch` (`handle_branch_checkpoint_db`) → the
+//!   worst of this batch: it copies the SOURCE session's full verbatim
+//!   checkpoint messages into `new_session_key` — a read compromise if the
+//!   source isn't the caller's. **Two checks, not one**: the source
+//!   (addressed) session is KeyChecked as usual; `new_session_key` (the
+//!   caller-chosen TARGET) is separately checked for a collision — the store
+//!   writes to it with no existence check of its own (confirmed by reading
+//!   both backends), so a target key that already names a foreign session
+//!   would otherwise be silently overwritten. There is no pre-existing
+//!   "target already exists" error to reuse (the store never had one), so
+//!   the target-collision case reuses the SAME `not_found_response` the
+//!   source check uses rather than inventing a new error shape.
+//! - `session.create` → creation surface with no addressed key, not
+//!   enumerated by this table (nothing to check).
 //!
 //! ## Known gaps NOT covered by this table (found during the sweep, not
-//! fixed by Task 6 — flagged here exactly as `method_admin.rs` flags its own
+//! fixed — flagged here exactly as `method_admin.rs` flags its own
 //! `clarification.*`/`subagent.tree` follow-up)
 //!
-//! `sessions.new` (closes+terminates an addressed session's continuations),
-//! `sessions.patch`, `sessions.set_topic`, `sessions.set_project_root`,
-//! `session.compact`, `session.truncate`, `sessions.compaction.{list,
-//! restore,branch}`, and `chat.context_estimate` all take a caller-supplied
-//! `session_key` with no ownership check today. They were out of this
-//! task's declared file list (`src/gateway/handlers/session/db_handlers/
-//! {query,modify}.rs` + the two named `chat.*` handlers); left unfixed so
-//! the reviewed diff stays scoped to what was asked, but recorded here as
-//! the durable home for the follow-up (same convention as
-//! `method_admin.rs`'s `clarification.*` note). `sessions.new` is the
-//! highest-severity of these — it destructively closes a session and stops
-//! its autonomous continuations by caller-supplied key alone.
+//! `sessions.set_topic` and `chat.context_estimate` take a caller-supplied
+//! `session_key` with no ownership check today; deferred deliberately (lower
+//! severity — a title-rename side effect and a token-count-only read,
+//! respectively — and reviewed as out of this round's scope). The
+//! Simulated-fallback `chat.send` path (see the `chat.send` bullet above) is
+//! also a known, deliberate gap. All three are recorded here as the durable
+//! home for the follow-up, same convention as `method_admin.rs`'s
+//! `clarification.*` note.
 //!
 //! ## `OrgShared`
 //!
@@ -124,6 +156,14 @@ pub const SCOPED_METHODS: &[(&str, Treatment)] = &[
     ("chat.history", Treatment::KeyChecked),
     ("chat.clear", Treatment::KeyChecked),
     ("chat.rewind", Treatment::KeyChecked),
+    ("sessions.new", Treatment::KeyChecked),
+    ("sessions.patch", Treatment::KeyChecked),
+    ("sessions.set_project_root", Treatment::KeyChecked),
+    ("session.compact", Treatment::KeyChecked),
+    ("session.truncate", Treatment::KeyChecked),
+    ("sessions.compaction.list", Treatment::KeyChecked),
+    ("sessions.compaction.restore", Treatment::KeyChecked),
+    ("sessions.compaction.branch", Treatment::KeyChecked),
 ];
 
 /// `OrgShared` entries carry a one-line reason at the point they're listed —
@@ -161,6 +201,14 @@ mod tests {
             "chat.history",
             "chat.clear",
             "chat.rewind",
+            "sessions.new",
+            "sessions.patch",
+            "sessions.set_project_root",
+            "session.compact",
+            "session.truncate",
+            "sessions.compaction.list",
+            "sessions.compaction.restore",
+            "sessions.compaction.branch",
         ] {
             assert!(
                 treatment_of(m).is_some(),
@@ -187,6 +235,14 @@ mod tests {
             "chat.history",
             "chat.clear",
             "chat.rewind",
+            "sessions.new",
+            "sessions.patch",
+            "sessions.set_project_root",
+            "session.compact",
+            "session.truncate",
+            "sessions.compaction.list",
+            "sessions.compaction.restore",
+            "sessions.compaction.branch",
         ] {
             assert_eq!(treatment_of(m), Some(Treatment::KeyChecked), "{m}");
         }
@@ -195,9 +251,12 @@ mod tests {
     #[test]
     fn unregistered_method_reads_as_none_not_a_default_treatment() {
         // No silent "assume KeyChecked" default — an unlisted method must
-        // read as unclassified, not falsely covered.
+        // read as unclassified, not falsely covered. `sessions.set_topic`
+        // and `chat.context_estimate` are DELIBERATE, documented gaps (see
+        // module doc) — not silently dropped, but also not falsely claimed.
         assert_eq!(treatment_of("memory.search"), None);
-        assert_eq!(treatment_of("sessions.new"), None);
+        assert_eq!(treatment_of("sessions.set_topic"), None);
+        assert_eq!(treatment_of("chat.context_estimate"), None);
     }
 
     /// Every `OrgShared` entry must carry a one-line reason. Currently

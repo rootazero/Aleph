@@ -368,6 +368,18 @@ pub async fn handle_patch_db(
         }
     };
 
+    let meta = match manager.get_metadata(&session_key).await {
+        Ok(Some(m)) => m,
+        Ok(None) => return visibility::not_found_response(request.id),
+        Err(_) => return visibility::not_found_response(request.id), // fail closed (GC 3)
+    };
+    if !visibility::session_visible(&meta) {
+        // Same error as missing (GC 4), and checked before any field
+        // validation below — a foreign caller must get an identical response
+        // regardless of what they put in `metadata`.
+        return visibility::not_found_response(request.id);
+    }
+
     // Both stores merge `metadata` opaquely into `identity_meta.custom`, so this
     // is the only place an `exec_tier` written through sessions.patch can be
     // checked. An unknown id would persist, render as an override in the Panel,
@@ -460,12 +472,18 @@ pub async fn handle_patch_db(
 /// TUI `/compress`, CLI `aleph session compact`, Panel `/compact` and a model's
 /// own tool call are one behaviour (R6).
 ///
-/// Takes no `SessionStore`: this operates on the session **event log** (the
-/// single source of truth the prompt is rebuilt from), not on the `messages`
-/// read projection. The old implementation deleted rows from that projection —
-/// which the agent never reads — and reported a fabricated `deleted × 50`
-/// token saving; both are gone.
-pub async fn handle_compact_db(request: JsonRpcRequest) -> JsonRpcResponse {
+/// The compaction operation itself still takes no `SessionStore`: it operates
+/// on the session **event log** (the single source of truth the prompt is
+/// rebuilt from), not on the `messages` read projection — that part of the
+/// original doc still holds. `manager` here is ONLY the P1 visibility gate:
+/// this RPC returns a summary of the addressed session's real conversation in
+/// its response AND irreversibly rewrites that session's event log, so a
+/// caller-supplied `session_key` belonging to someone else must be refused
+/// before either happens.
+pub async fn handle_compact_db(
+    request: JsonRpcRequest,
+    manager: Arc<dyn SessionStore>,
+) -> JsonRpcResponse {
     let session_key = match request
         .params
         .as_ref()
@@ -476,8 +494,26 @@ pub async fn handle_compact_db(request: JsonRpcRequest) -> JsonRpcResponse {
         None => return JsonRpcResponse::error(request.id, INVALID_PARAMS, "Missing session_key"),
     };
 
-    if SessionKey::from_key_string(&session_key).is_none() {
-        return JsonRpcResponse::error(request.id, INVALID_PARAMS, "Invalid session_key format");
+    let session_key_typed = match SessionKey::from_key_string(&session_key) {
+        Some(k) => k,
+        None => {
+            return JsonRpcResponse::error(
+                request.id,
+                INVALID_PARAMS,
+                "Invalid session_key format",
+            );
+        }
+    };
+
+    let meta = match manager.get_metadata(&session_key_typed).await {
+        Ok(Some(m)) => m,
+        Ok(None) => return visibility::not_found_response(request.id),
+        Err(_) => return visibility::not_found_response(request.id), // fail closed (GC 3)
+    };
+    if !visibility::session_visible(&meta) {
+        // Same error as missing (GC 4) — before the summary is ever computed
+        // or the event log rewritten.
+        return visibility::not_found_response(request.id);
     }
 
     // `/compact <instructions>` (codex / pi / kimi-cli parity). The TUI passes
@@ -557,6 +593,17 @@ pub async fn handle_truncate_db(
             );
         }
     };
+
+    let meta = match manager.get_metadata(&key).await {
+        Ok(Some(m)) => m,
+        Ok(None) => return visibility::not_found_response(request.id),
+        Err(_) => return visibility::not_found_response(request.id), // fail closed (GC 3)
+    };
+    if !visibility::session_visible(&meta) {
+        // Same error as missing (GC 4) — before the irreversible tail
+        // deletion below.
+        return visibility::not_found_response(request.id);
+    }
 
     match manager.truncate_messages(&key, keep_count).await {
         Ok(result) => JsonRpcResponse::success(
@@ -686,6 +733,17 @@ pub async fn handle_set_project_root_db(
             );
         }
     };
+
+    let meta = match manager.get_metadata(&session_key).await {
+        Ok(Some(m)) => m,
+        Ok(None) => return visibility::not_found_response(request.id),
+        Err(_) => return visibility::not_found_response(request.id), // fail closed (GC 3)
+    };
+    if !visibility::session_visible(&meta) {
+        // Same error as missing (GC 4) — before redirecting the foreign
+        // session's next run to a caller-chosen path.
+        return visibility::not_found_response(request.id);
+    }
 
     match manager.set_project_root(&session_key, project_root).await {
         Ok(()) => JsonRpcResponse::success(
@@ -1057,6 +1115,147 @@ mod tests {
             assert_eq!(
                 serde_json::to_string(&as_bob.error).unwrap(),
                 serde_json::to_string(&as_bob_missing.error).unwrap(),
+            );
+        }
+
+        /// Guardrail-downgrade shape: bob attempting to weaken alice's
+        /// exec_tier via a foreign session_key must be denied, and the
+        /// session's metadata (its label, standing in for "anything at
+        /// all") must be untouched.
+        #[tokio::test]
+        async fn sessions_patch_denies_cross_user_and_leaves_session_intact() {
+            let temp = tempdir().unwrap();
+            let store = store(&temp);
+            let alice_key = alice_session(&store).await;
+            let alice_key_str = alice_key.to_key_string();
+
+            let req = JsonRpcRequest {
+                jsonrpc: "2.0".into(),
+                method: "sessions.patch".into(),
+                params: Some(json!({
+                    "session_key": alice_key_str,
+                    "label": "hacked-by-bob",
+                    "metadata": { "exec_tier": "full" },
+                })),
+                id: Some(json!(1)),
+            };
+            let as_bob = CALLER_USER
+                .scope(
+                    Some("u-bob".to_string()),
+                    handle_patch_db(req, store.clone()),
+                )
+                .await;
+            assert_eq!(
+                as_bob.error.as_ref().map(|e| e.code),
+                Some(RESOURCE_NOT_FOUND)
+            );
+
+            let after = store.get_metadata(&alice_key).await.unwrap().unwrap();
+            assert_ne!(
+                after.label.as_deref(),
+                Some("hacked-by-bob"),
+                "a denied patch must not write the foreign session's label"
+            );
+        }
+
+        #[tokio::test]
+        async fn sessions_set_project_root_denies_cross_user_as_not_found() {
+            let temp = tempdir().unwrap();
+            let store = store(&temp);
+            let alice_key = alice_session(&store).await;
+
+            let req = JsonRpcRequest {
+                jsonrpc: "2.0".into(),
+                method: "sessions.set_project_root".into(),
+                params: Some(json!({
+                    "session_key": alice_key.to_key_string(),
+                    "project_root": "/attacker/chosen/path",
+                })),
+                id: Some(json!(1)),
+            };
+            let as_bob = CALLER_USER
+                .scope(
+                    Some("u-bob".to_string()),
+                    handle_set_project_root_db(req, store.clone()),
+                )
+                .await;
+            assert_eq!(
+                as_bob.error.as_ref().map(|e| e.code),
+                Some(RESOURCE_NOT_FOUND)
+            );
+        }
+
+        #[tokio::test]
+        async fn session_compact_denies_cross_user_as_not_found() {
+            let temp = tempdir().unwrap();
+            let store = store(&temp);
+            let alice_key = alice_session(&store).await;
+
+            let as_bob = CALLER_USER
+                .scope(
+                    Some("u-bob".to_string()),
+                    handle_compact_db(
+                        keyed_request("session.compact", &alice_key.to_key_string()),
+                        store.clone(),
+                    ),
+                )
+                .await;
+            assert_eq!(
+                as_bob.error.as_ref().map(|e| e.code),
+                Some(RESOURCE_NOT_FOUND)
+            );
+        }
+
+        /// `session.truncate` irreversibly drops the tail of the transcript
+        /// — a denial must leave every message alone.
+        #[tokio::test]
+        async fn session_truncate_denies_cross_user_and_leaves_messages_intact() {
+            let temp = tempdir().unwrap();
+            let store = store(&temp);
+            let alice_key = alice_session(&store).await;
+            store
+                .append_message(
+                    &alice_key,
+                    crate::gateway::session_store::types::MessageRecord {
+                        id: "m1".into(),
+                        role: "user".into(),
+                        content: "alice's message".into(),
+                        timestamp: 0,
+                        metadata: None,
+                        input_tokens: 0,
+                        output_tokens: 0,
+                        tool_call_id: None,
+                        tool_name: None,
+                    },
+                )
+                .await
+                .unwrap();
+
+            let req = JsonRpcRequest {
+                jsonrpc: "2.0".into(),
+                method: "session.truncate".into(),
+                params: Some(json!({
+                    "session_key": alice_key.to_key_string(),
+                    "keep_count": 0,
+                })),
+                id: Some(json!(1)),
+            };
+            let as_bob = CALLER_USER
+                .scope(
+                    Some("u-bob".to_string()),
+                    handle_truncate_db(req, store.clone()),
+                )
+                .await;
+            assert_eq!(
+                as_bob.error.as_ref().map(|e| e.code),
+                Some(RESOURCE_NOT_FOUND)
+            );
+
+            let history = store.get_history(&alice_key, None).await.unwrap();
+            assert_eq!(
+                history.len(),
+                1,
+                "a denied truncate must not remove the foreign session's messages"
             );
         }
     }

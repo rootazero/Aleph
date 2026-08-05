@@ -402,13 +402,20 @@ impl HandlerRegistry {
             )
         });
 
-        // Session compact — no SessionStore needed: manual compaction operates
-        // on the session *event log* (the source the prompt is rebuilt from),
-        // resolved from the process-wide handles, not on the `messages` read
-        // projection. So it is registered for real here rather than as a
-        // "wire in Gateway startup" placeholder.
+        // Session compact (requires SessionStore — placeholder). Manual
+        // compaction itself still operates on the session *event log* (the
+        // source the prompt is rebuilt from) through process-wide handles,
+        // not the `messages` read projection — but the RPC now also needs
+        // the store for the P1 visibility gate (the response discloses the
+        // addressed session's real conversation summary), so this can no
+        // longer be registered for real without one. See `builder/handlers/
+        // session.rs::register_session_handlers` for the wired version.
         registry.register("session.compact", |req| async move {
-            session::handle_compact_db(req).await
+            JsonRpcResponse::error(
+                req.id,
+                INTERNAL_ERROR,
+                "session.compact requires SessionStore — wire in Gateway startup".to_string(),
+            )
         });
 
         // Session truncate (requires SessionStore — placeholder)
