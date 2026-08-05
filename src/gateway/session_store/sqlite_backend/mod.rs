@@ -127,6 +127,10 @@ impl SessionStore for SessionManager {
             let cutoff = chrono::Utc::now().timestamp() - (i64::from(threshold) * 60);
             sessions.retain(|s| s.last_active_at >= cutoff);
         }
+        // Deliberate deviation from the P1 plan's "SQL COALESCE(owner_user_id, ?)"
+        // instruction: filtering in memory (like `active_minutes` above) keeps the
+        // effective-owner fallback single-sourced in `visibility::effective_owner`
+        // instead of re-deriving it a second time in SQL.
         if let Some(ref owner) = filter.owner_visible_to {
             sessions.retain(|s| crate::gateway::visibility::effective_owner(s) == owner);
         }
