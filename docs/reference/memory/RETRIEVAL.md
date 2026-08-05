@@ -43,6 +43,8 @@ pub async fn vector_retrieve(
 
 `retrieve` embeds the query once, infers `dim` from the embedding length, delegates to `NoteStore::hybrid_search_notes`, and maps each `NoteSearchResult` to a `ScoredFact` via `to_scored_fact(agent_id)`. `vector_retrieve` skips FTS and calls `vector_search_notes_with_content`. The return type is `Vec<ScoredFact>` where `ScoredFact { fact: MemoryFact, score: f32 }` — the scoring pipeline consumes this directly.
 
+**Degradation (P7).** The vector leg can be absent three ways, and the reason to keep going is the same for all of them: the notes and the FTS index are both local and intact. No embedder configured is a steady state (skip quietly); `embed()` failing means the endpoint is unreachable; and the store itself can fail *after* a successful embed, most often because the provider's dimension has no `notes_vec_{dim}` table (§8). Until 2026-08-05 only the first two were covered — the third propagated with `?`. That mattered most here, because `retrieve_inner` is the auto-recall path: a broken vector leg silently emptied `<memory-context>` on every turn, three lines below a comment promising exactly this degradation. `retrieve_inner`, `retrieve_multi_agent`, and `note_manage`'s `search_notes` now all fall back to the keyword path.
+
 ## 2. Working Memory Assembler
 
 Before retrieval results reach the LLM, they pass through the `WorkingMemoryAssembler` (`src/memory/assembler/mod.rs`). `HybridAssembler` is the production implementation:
@@ -98,7 +100,7 @@ The rendered XML is injected as a `role=user` message containing a fenced `<Memo
 
 ## 3. Hybrid Search Algorithm
 
-`SqliteMemoryBackend::hybrid_search_notes` in `src/memory/store/sqlite/notes.rs` is the concrete implementation behind `NoteStore::hybrid_search_notes`. It takes the query embedding, the raw query text, an `agent_id`, a `dim_hint`, and a `limit`, and returns `Vec<NoteSearchResult>` with full content loaded from disk.
+`SqliteMemoryBackend::hybrid_search_notes` in `src/memory/store/sqlite/notes.rs` is the concrete implementation behind `NoteStore::hybrid_search_notes`. It takes the query embedding, the raw query text, an `agent_id`, a `dim_hint`, and a `limit`, and returns a `HybridSearchOutcome { results, vector_candidates, fts_candidates }` with full content loaded from disk (concurrently — a result set's wall time used to be the sum of its disk reads). The per-leg counts exist so a caller can report what actually ran: `"hybrid"` with `vector_candidates == 0` means the semantic half did not participate at all, which is a different instruction to the model than a semantic search that simply found nothing. `note_manage(query)` surfaces this as `SearchAdvisory`.
 
 The algorithm has four steps:
 
@@ -337,7 +339,11 @@ From `src/config/types/memory.rs`:
 | Ollama | `http://localhost:11434/v1` | `nomic-embed-text` | 768 |
 | Custom | *(user-supplied)* | *(user-supplied)* | *(user-supplied)* |
 
-**Multi-dimension rationale.** The notes store keeps three parallel virtual tables — `notes_vec_768`, `notes_vec_1024`, `notes_vec_1536` — so that switching between Ollama (768), SiliconFlow (1024), and OpenAI (1536) does not invalidate existing embeddings. A query carries its `dim` hint, looks up in the matching table, and never mixes spaces.
+**Multi-dimension rationale.** The notes store keeps one virtual table per supported dimension so that switching providers does not invalidate existing embeddings. A query carries its `dim` hint, looks up in the matching table, and never mixes spaces. The supported set is the single source `vec::EMBEDDING_DIM_TABLES` — **384, 768, 1024, 1536, 3072** — from which table creation, dimension lookup, and the delete-path sweep are all derived.
+
+Until 2026-08-05 the set was spelled out in five places and stopped at {768, 1024, 1536}. A 384-dim provider (`all-MiniLM-L6-v2`, the most common local embedder) or a 3072-dim one (`text-embedding-3-large`) produced a deployment with **no note vectors at all**: every `upsert_embedding` failed into a swallowed `warn!` and every hybrid read failed outright. The two halves read together as "semantic search is broken" rather than "a table is missing". `CREATE VIRTUAL TABLE IF NOT EXISTS` is idempotent, so an existing database picks up a newly supported dimension on the next open.
+
+**Embed freshness.** `notes_vec_map` carries `embedded_hash` + `embedded_at`: the note's `content_hash` at the moment its vector was computed. Embed-on-write logs and swallows its failures by design (the note is already on disk), so without this nothing could tell a current vector from one left behind by a network blip, and `reembed_all` had to redo the whole corpus to be sure. `NoteStore::stale_vector_paths` is the read side; `reembed_all` skips fresh notes and `full_rebuild` reports `IndexStats.stale_vectors`. An empty hash means provenance unknown and reads as stale, so a caller that cannot vouch for what it embedded errs toward re-embedding. The skip is suppressed whenever the embedding **signature** (provider + model + dimension) changed: an equal content hash then says the text is unchanged, which is not the question once the vector space itself has moved.
 
 ## 9. Context Assembly
 
