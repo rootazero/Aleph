@@ -207,6 +207,25 @@
 //! - `session.create` → creation surface with no addressed key, not
 //!   enumerated by this table (nothing to check).
 //!
+//! ## Final-review fix round: the sweep's blind spot
+//!
+//! The Task 6/7 sweep keyed on handlers taking a `session_key` or `agent_id`
+//! PARAMETER, which made it structurally blind to a handler that routes the
+//! caller-supplied key through `AgentRouter` FIRST and only then holds a
+//! `SessionKey`. `agent.run` is exactly that shape, and it is `chat.send`
+//! with the guard missing:
+//!
+//! - `agent.run` → **KeyChecked**. The real-`ExecutionEngine` production path
+//!   (`server_init.rs::handle_run_with_engine`) now runs session resolution
+//!   through `visibility::existing_session_is_visible` immediately after
+//!   `router.route` and before the run starts — byte-identical placement and
+//!   semantics to its `chat.send` twin in the same file. **Same Simulated-
+//!   execution carve-out as `chat.send`**: the no-provider fallback path
+//!   (`handlers::agent::handle_run` → `AgentRunManager::start_run`,
+//!   registered at `agent_init/mod.rs`'s simulated branch) is NOT covered,
+//!   for the identical reason — `AgentRunManager` has no `SessionStore`
+//!   dependency — and this table must not overstate what is enforced.
+//!
 //! ## Known gaps NOT covered by this table (found during the sweep, not
 //! fixed — flagged here exactly as `method_admin.rs` flags its own
 //! follow-ups)
@@ -305,6 +324,8 @@ pub const SCOPED_METHODS: &[(&str, Treatment)] = &[
     ("graph.update_note", Treatment::PartitionChecked),
     ("graph.rename_note", Treatment::PartitionChecked),
     ("graph.delete_note", Treatment::PartitionChecked),
+    // --- Final-review fix round ---
+    ("agent.run", Treatment::KeyChecked),
 ];
 
 /// `OrgShared` entries carry a one-line reason at the point they're listed —
@@ -481,6 +502,15 @@ mod tests {
         for m in ["clarification.pending", "subagent.tree"] {
             assert_eq!(treatment_of(m), Some(Treatment::ListFiltered), "{m}");
         }
+    }
+
+    /// The final review's C1: `agent.run` is `chat.send` with the same
+    /// obligation, so it must carry the same `Treatment` — if this ever reads
+    /// `None` again, the run-start guard has been dropped.
+    #[test]
+    fn agent_run_is_key_checked_like_its_chat_send_twin() {
+        assert_eq!(treatment_of("agent.run"), Some(Treatment::KeyChecked));
+        assert_eq!(treatment_of("agent.run"), treatment_of("chat.send"));
     }
 
     /// Every `OrgShared` entry must carry a one-line reason. Currently
