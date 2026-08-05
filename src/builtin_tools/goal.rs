@@ -827,6 +827,29 @@ token_budget. \
                     .get(&session)?
                     .ok_or_else(|| AlephError::tool("no standing goal to update".to_string()))?;
                 reject_zero_caps(&args)?;
+                // `update` never reads `objective`, so passing one used to be
+                // silently discarded — and the reply echoed the OLD objective
+                // under a `success: true` "Updated." The cross-session path
+                // refuses smuggled fields for exactly this reason; the local
+                // path owes the same honesty.
+                //
+                // Refused rather than implemented: the objective is the
+                // reference an `owns_reference` edge governs, and `set` is
+                // where that ACL lives (`governing_owner_or_refuse`).
+                // Implementing an objective change here would mean a second
+                // copy of the same gate — and a gate with two implementations
+                // is how a governed loop rewrites its own reference through
+                // the door nobody guarded.
+                if args.objective.is_some() {
+                    return Err(AlephError::tool(
+                        "goal 'update' cannot change the objective — it only adjusts \
+                         status, caps, budget, deadline, gate, lessons and notes. Use \
+                         goal(action='set', objective='…') to replace the objective \
+                         (that path carries the governance check a replacement needs); \
+                         note it resets the autonomous iteration count."
+                            .to_string(),
+                    ));
+                }
                 validate_wait_args(&args, &goal)?;
                 let prev_status = goal.status;
                 // The armed timer instant BEFORE this update mutates the
@@ -1315,6 +1338,34 @@ mod tests {
         assert!(
             !store.try_claim_settle_notify(&live).unwrap(),
             "the Passive-complete update must have claimed the watcher poke"
+        );
+    }
+
+    #[tokio::test]
+    async fn update_refuses_an_objective_change_instead_of_dropping_it() {
+        let (tool, _d) = tool_with_session("s-obj");
+        let mut set = args(GoalAction::Set);
+        set.objective = Some("original objective".into());
+        tool.call(set).await.unwrap();
+
+        let mut update = args(GoalAction::Update);
+        update.objective = Some("a completely different objective".into());
+        let err = tool
+            .call(update)
+            .await
+            .expect_err("a smuggled objective must not be silently discarded");
+        let msg = err.to_string();
+        assert!(
+            msg.contains("set"),
+            "the error must point at the fix: {msg}"
+        );
+
+        // And the stored objective is untouched.
+        let out = tool.call(args(GoalAction::Get)).await.unwrap();
+        assert!(
+            out.message.contains("original objective"),
+            "got: {}",
+            out.message
         );
     }
 
