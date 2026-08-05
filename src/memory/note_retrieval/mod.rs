@@ -523,11 +523,30 @@ impl<S: NoteStore + Send + Sync + 'static> NoteFactRetrieval<S> {
         let dim = embedding.len() as u32;
 
         let t0 = Instant::now();
-        let mut results = self
+        // The vector leg can also fail *after* a successful embed — most often
+        // because the provider's dimension has no vec0 table. The reason to
+        // degrade is unchanged (FTS and the notes on disk are both intact), so
+        // the fallback has to cover this arm too. It did not, and this is the
+        // auto-recall path: a failure here silently emptied <memory-context>
+        // for every turn.
+        let hybrid = self
             .indexer
             .store()
             .hybrid_search_notes(&embedding, query, agent_id, dim, self.fetch_limit(limit))
-            .await?;
+            .await;
+        let mut results = match hybrid {
+            Ok(r) => r.results,
+            Err(e) => {
+                tracing::warn!(
+                    error = %e,
+                    dim,
+                    "note retrieval: vector leg unavailable, falling back to FTS-only search"
+                );
+                return self
+                    .text_retrieve_scored(query, agent_id, limit, sink)
+                    .await;
+            }
+        };
         sink.record(
             "hybrid_search",
             t0.elapsed().as_millis() as u64,
@@ -730,11 +749,28 @@ impl<S: NoteStore + Send + Sync + 'static> NoteFactRetrieval<S> {
         let per_agent_limit = limit.max(10);
 
         for agent_id in agent_ids {
-            let mut results = self
+            // Same reasoning as `retrieve_inner`: a store-side vector failure
+            // (typically an unsupported embedding dimension) is not agent- or
+            // query-specific, so retry-per-agent would just repeat it. Degrade
+            // the whole call to the keyword path instead of failing recall.
+            let hybrid = self
                 .indexer
                 .store()
                 .hybrid_search_notes(&embedding, query, agent_id, dim, per_agent_limit)
-                .await?;
+                .await;
+            let mut results = match hybrid {
+                Ok(r) => r.results,
+                Err(e) => {
+                    tracing::warn!(
+                        error = %e,
+                        dim,
+                        "multi-agent recall: vector leg unavailable, falling back to FTS-only search"
+                    );
+                    return self
+                        .multi_agent_text_fallback(query, agent_ids, limit)
+                        .await;
+                }
+            };
             if self.expansion.is_active() {
                 let peers = expansion::graph_expand(
                     self.indexer.store().as_ref(),
@@ -892,6 +928,74 @@ mod tests {
         fn provider_id(&self) -> &str {
             "failing"
         }
+    }
+
+    /// Embedder that succeeds, but at a dimension the vector index has no
+    /// table for — so the failure lands in the store, after the embed call.
+    struct UnsupportedDimEmbeddingProvider;
+
+    #[async_trait::async_trait]
+    impl EmbeddingProvider for UnsupportedDimEmbeddingProvider {
+        async fn embed(&self, _text: &str) -> Result<Vec<f32>, AlephError> {
+            Ok(vec![0.1; 999])
+        }
+
+        async fn embed_batch(&self, texts: &[&str]) -> Result<Vec<Vec<f32>>, AlephError> {
+            Ok(texts.iter().map(|_| vec![0.1; 999]).collect())
+        }
+
+        fn dimensions(&self) -> usize {
+            999
+        }
+
+        fn model_name(&self) -> &str {
+            "unsupported-dim"
+        }
+
+        fn provider_id(&self) -> &str {
+            "test"
+        }
+    }
+
+    #[tokio::test]
+    async fn retrieve_falls_back_to_fts_when_the_vector_leg_fails_in_the_store() {
+        // The degradation guard covered only `embed()`. The very next call
+        // used `?`, so a store-side vector failure emptied <memory-context>
+        // for every turn — on the auto-recall path, silently.
+        use crate::memory::notes::KnowledgeNote;
+
+        let dir = tempdir().unwrap();
+        let backend: Arc<SqliteMemoryBackend> =
+            Arc::new(SqliteMemoryBackend::new(dir.path()).unwrap());
+        let note = KnowledgeNote {
+            title: "dreame brand incident".to_string(),
+            category: "general".to_string(),
+            facts: vec!["dreame shipped a broken firmware".to_string()],
+            ..Default::default()
+        };
+        backend
+            .index_note(&note, "default", "general")
+            .await
+            .unwrap();
+
+        // rust-doctor-disable-next-line excessive-clone
+        let indexer = Arc::new(NoteIndexer::new(dir.path().to_path_buf(), backend.clone()));
+        let retrieval = NoteFactRetrieval::new(indexer, Arc::new(UnsupportedDimEmbeddingProvider));
+
+        let results = retrieval
+            .retrieve("dreame", "default", 10)
+            .await
+            .expect("a broken vector leg must degrade to FTS, not fail recall");
+        assert!(
+            !results.is_empty(),
+            "FTS fallback should surface the indexed note"
+        );
+
+        let multi = retrieval
+            .retrieve_multi_agent("dreame", &["default".to_string()], 10)
+            .await
+            .expect("multi-agent recall must degrade too");
+        assert!(!multi.is_empty(), "multi-agent FTS fallback found nothing");
     }
 
     #[tokio::test]

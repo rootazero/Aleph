@@ -307,9 +307,16 @@ CREATE INDEX IF NOT EXISTS idx_query_filed_agent ON query_filed(agent_id);
 
 pub const NOTES_VEC_MAP_DDL: &str = r#"
 CREATE TABLE IF NOT EXISTS notes_vec_map (
-    rowid       INTEGER PRIMARY KEY AUTOINCREMENT,
-    path        TEXT NOT NULL,
-    agent_id    TEXT NOT NULL DEFAULT 'default',
+    rowid           INTEGER PRIMARY KEY AUTOINCREMENT,
+    path            TEXT NOT NULL,
+    agent_id        TEXT NOT NULL DEFAULT 'default',
+    -- The note's `content_hash` at the moment its vector was computed. Without
+    -- it nothing can tell a fresh vector from one left behind by a swallowed
+    -- embed failure, and `reembed_all` has to re-embed the whole corpus to be
+    -- sure. Empty string = provenance unknown => always treated as stale, so a
+    -- caller that does not supply a hash fails safe toward re-embedding.
+    embedded_hash   TEXT NOT NULL DEFAULT '',
+    embedded_at     INTEGER NOT NULL DEFAULT 0,
     UNIQUE(agent_id, path)
 );
 CREATE INDEX IF NOT EXISTS idx_notes_vec_map_agent ON notes_vec_map(agent_id);

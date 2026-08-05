@@ -16,6 +16,11 @@ pub mod provider;
 
 pub use config_handle::{get_moa_config, store_moa_config};
 pub use preset_store::{MoaPresetStore, MoaStoreError};
+// The Anthropic cache adapter asks "will these bytes be at this index next
+// turn?" of every message it considers anchoring a breakpoint on. MoA's
+// per-turn guidance is one of the two producers that can answer "no", and the
+// answer lives with the producer (`prompts.rs`), not with the asker.
+pub use prompts::{carries_advisory_guidance, ADVISORY_GUIDANCE_MARKER};
 pub use provider::{try_build_for_run, MoaProvider};
 
 /// Parse a `/moa <prompt>` one-shot command. The argument is ALWAYS a

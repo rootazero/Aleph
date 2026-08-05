@@ -106,6 +106,47 @@ pub(crate) fn yaml_inline_array(items: &[String]) -> String {
     format!("[{}]", parts.join(", "))
 }
 
+/// Render passthrough frontmatter keys (see
+/// [`super::parsing::ExtraFrontmatter`]) as YAML block lines, ready to be
+/// appended inside a note's `---` fence.
+///
+/// Serialization goes through `serde_yaml` rather than hand-built strings:
+/// the values are arbitrary YAML read back from disk (nested maps, sequences,
+/// multi-line scalars), and only the emitter that produced them can be trusted
+/// to quote them back correctly.
+///
+/// Returns `""` for an empty map, so a note without passthrough keys
+/// serializes byte-for-byte as it did before this existed.
+pub(crate) fn yaml_extra_block(extra: &super::parsing::ExtraFrontmatter) -> String {
+    if extra.is_empty() {
+        return String::new();
+    }
+    let mut map = serde_yaml::Mapping::new();
+    for (k, v) in extra {
+        // rust-doctor-disable-next-line excessive-clone
+        map.insert(serde_yaml::Value::String(k.clone()), v.clone());
+    }
+    let Ok(rendered) = serde_yaml::to_string(&serde_yaml::Value::Mapping(map)) else {
+        // Unrepresentable value: drop the passthrough block rather than emit a
+        // half-serialized header that would make the whole note unparseable.
+        // The known fields — the ones the note layer actually reasons about —
+        // still round-trip.
+        return String::new();
+    };
+    // Some serde_yaml versions frame a document with `---` / `...`; those
+    // markers would close the note's own frontmatter fence early.
+    let body = rendered
+        .strip_prefix("---\n")
+        .unwrap_or(&rendered)
+        .trim_end_matches('\n')
+        .trim_end_matches("\n...")
+        .to_string();
+    if body.is_empty() {
+        return String::new();
+    }
+    format!("{body}\n")
+}
+
 /// Sanitize a `category/filename` note path for safe use as a filesystem path.
 /// Each path component is run through [`sanitize_title`] and joined with the
 /// platform separator, preventing traversal out of the agent memory directory.

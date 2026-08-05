@@ -819,7 +819,7 @@ async fn dedup_redirects_near_duplicate_create_to_append() {
     let mut merge_vec = vec![0.1f32; 900];
     merge_vec.extend(std::iter::repeat_n(0.0f32, 124));
     backend
-        .upsert_embedding("learning/tokio", "default", &merge_vec, 1024)
+        .upsert_embedding("learning/tokio", "default", &merge_vec, 1024, "")
         .await
         // rust-doctor-disable-next-line unwrap-in-production
         .unwrap();
@@ -886,7 +886,7 @@ async fn dedup_redirects_near_duplicate_create_to_append() {
 async fn dedup_disabled_keeps_create_unchanged() {
     let (dir, backend, indexer) = mk().await;
     backend
-        .upsert_embedding("learning/tokio", "default", &vec![0.1f32; 1024], 1024)
+        .upsert_embedding("learning/tokio", "default", &vec![0.1f32; 1024], 1024, "")
         .await
         // rust-doctor-disable-next-line unwrap-in-production
         .unwrap();
@@ -940,7 +940,7 @@ async fn dedup_disabled_keeps_create_unchanged() {
 async fn dedup_never_self_redirects() {
     let (dir, backend, indexer) = mk().await;
     backend
-        .upsert_embedding("learning/tokio", "default", &vec![0.1f32; 1024], 1024)
+        .upsert_embedding("learning/tokio", "default", &vec![0.1f32; 1024], 1024, "")
         .await
         // rust-doctor-disable-next-line unwrap-in-production
         .unwrap();
@@ -1006,7 +1006,7 @@ fn seed_with_cosine_entries(m: usize) -> Vec<f32> {
 async fn run_dedup_tier(seed_vec: Vec<f32>, budget: RelatedBudget) -> Vec<PageOp> {
     let (dir, backend, indexer) = mk().await;
     backend
-        .upsert_embedding("learning/tokio", "default", &seed_vec, 1024)
+        .upsert_embedding("learning/tokio", "default", &seed_vec, 1024, "")
         .await
         // rust-doctor-disable-next-line unwrap-in-production
         .unwrap();

@@ -158,6 +158,35 @@ pub(crate) fn advisor_system_prompt(tools: Option<&[ToolDefinition]>) -> Cow<'st
     ))
 }
 
+/// First line of every guidance block — the marker that tells a downstream
+/// adapter "these bytes are this turn's scaffolding".
+///
+/// The Anthropic adapter spends its message cache breakpoints from the tail
+/// inwards and skips messages that will not be at their index next turn
+/// (`adapter/cache.rs::is_ephemeral_notice`) — a breakpoint is only worth
+/// spending on bytes that can recur. The guidance is exactly such bytes: it is
+/// never persisted to `session_events`, so next turn that index holds the real
+/// assistant / tool-result the turn produced, and the block's own content
+/// changes on every fresh consultation anyway. Left unrecognised, the deepest
+/// breakpoint of every MoA turn is a guaranteed miss AND a `cache_creation`
+/// write (billed at 1.25x) for advice that is never read back.
+///
+/// The classification lives HERE, next to the code that emits it — same rule
+/// as `thinker::nudges::is_synthetic_reminder`, which answers the identical
+/// question for the harness's own nudges.
+pub const ADVISORY_GUIDANCE_MARKER: &str = "[Mixture of Agents advisory context]";
+
+/// Whether `text` carries an [`ADVISORY_GUIDANCE_MARKER`] block.
+///
+/// `contains`, not `starts_with`: [`attach_guidance`] merges into a trailing
+/// user turn when there is one, so the marker can sit after the user's own
+/// prompt in the same text block. Both shapes are "these bytes differ next
+/// turn", which is the only question the caller is asking.
+#[must_use]
+pub fn carries_advisory_guidance(text: &str) -> bool {
+    text.contains(ADVISORY_GUIDANCE_MARKER)
+}
+
 /// Build the guidance block injected at the END of the aggregator's prompt.
 ///
 /// Two shapes, chosen by whether ANY slot actually advised:
@@ -192,7 +221,7 @@ pub(crate) fn build_guidance(
         .collect::<Vec<_>>()
         .join(", ");
     let header = format!(
-        "[Mixture of Agents advisory context]\n\
+        "{ADVISORY_GUIDANCE_MARKER}\n\
          Preset: {preset}\n\
          Aggregator/acting model: {aggregator_label}\n\
          Advisors: {roster}\n\n"
@@ -318,6 +347,47 @@ mod tests {
         // Must not panic on a multi-byte boundary.
         let o = AdvisorOutcome::unavailable("a:b", &note);
         assert!(o.text.chars().count() <= ADVISOR_NOTE_BUDGET + 3);
+    }
+
+    #[test]
+    fn every_guidance_shape_is_recognisable_as_this_turns_scaffolding() {
+        // The Anthropic adapter skips messages whose bytes will not be at that
+        // index next turn. It can only skip what it can recognise, and the
+        // marker is the whole of the recognition — so both guidance shapes
+        // (advice present / nothing advised) must carry it, and the predicate
+        // must be reading the SAME const the header is built from.
+        let with_advice = build_guidance("p", "anthropic:opus", &outcomes());
+        let nothing = build_guidance(
+            "p",
+            "anthropic:opus",
+            &[AdvisorOutcome::unavailable("a:b", "[failed: x]")],
+        );
+        for g in [&with_advice, &nothing] {
+            assert!(g.starts_with(ADVISORY_GUIDANCE_MARKER), "{g}");
+            assert!(carries_advisory_guidance(g));
+        }
+        assert!(!carries_advisory_guidance("an ordinary user message"));
+    }
+
+    #[test]
+    fn guidance_stays_recognisable_after_being_merged_into_a_user_turn() {
+        // `attach_guidance` merges into a trailing user turn when there is one
+        // (two consecutive user turns are rejected by strict providers), so the
+        // marker ends up in the MIDDLE of that message's text. A prefix-only
+        // predicate would miss exactly the plain-chat shape.
+        let mut msgs = vec![UnifiedMessage::user("what should I do?")];
+        attach_guidance(
+            &mut msgs,
+            &build_guidance("p", "anthropic:opus", &outcomes()),
+        );
+        let UnifiedMessage::User { content } = &msgs[0] else {
+            panic!()
+        };
+        let ContentBlock::Text { text, .. } = &content[0] else {
+            panic!()
+        };
+        assert!(!text.starts_with(ADVISORY_GUIDANCE_MARKER));
+        assert!(carries_advisory_guidance(text));
     }
 
     #[test]

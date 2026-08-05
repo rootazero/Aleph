@@ -136,8 +136,70 @@ pub(super) const fn default_confidence() -> f32 {
     1.0
 }
 
-/// Split markdown content into parsed frontmatter and body text.
-pub fn split_frontmatter(content: &str) -> Result<(Frontmatter, String), AlephError> {
+/// Every frontmatter key [`Frontmatter`] models explicitly.
+///
+/// Anything else in a note's YAML header is **passthrough** — carried on
+/// [`super::KnowledgeNote::extra_frontmatter`] and re-emitted verbatim by
+/// `to_markdown`, so a key a human (or Obsidian, or an external tool) wrote
+/// survives every rewrite instead of being silently destroyed by the first
+/// write that passes through this layer.
+///
+/// `source_facts` is here because it is a serde `alias` for `source_notes`:
+/// omitting it would re-emit the same data under two keys.
+///
+/// Kept in sync with the struct by
+/// `tests::known_frontmatter_keys_covers_every_modelled_field`.
+pub(super) const KNOWN_FRONTMATTER_KEYS: &[&str] = &[
+    "aliases",
+    "category",
+    "confidence",
+    "created",
+    "permanent",
+    "relations",
+    "severity",
+    "source_facts",
+    "source_notes",
+    "stale",
+    "supersedes",
+    "superseded_by",
+    "tags",
+    "title",
+    "type",
+    "updated",
+];
+
+/// Frontmatter keys the note layer does not model, preserved for round-trip.
+///
+/// `BTreeMap` (not `HashMap`): the emission order must be deterministic, or
+/// every rewrite would shuffle the header and churn `content_hash`.
+pub type ExtraFrontmatter = std::collections::BTreeMap<String, serde_yaml::Value>;
+
+/// Collect the frontmatter keys `Frontmatter` does not model.
+///
+/// Parsed independently of `Frontmatter` rather than via `#[serde(flatten)]`:
+/// flatten routes the whole struct through serde's buffered `Content`
+/// representation, which would change how `deserialize_optional_date_string`
+/// sees a native YAML date — a silent behaviour change on the parse path this
+/// module's own regression tests were written to pin.
+fn collect_extra_frontmatter(yaml: &str) -> ExtraFrontmatter {
+    let Ok(serde_yaml::Value::Mapping(map)) = serde_yaml::from_str::<serde_yaml::Value>(yaml)
+    else {
+        return ExtraFrontmatter::new();
+    };
+    map.into_iter()
+        .filter_map(|(k, v)| match k {
+            serde_yaml::Value::String(key) if !KNOWN_FRONTMATTER_KEYS.contains(&key.as_str()) => {
+                Some((key, v))
+            }
+            _ => None,
+        })
+        .collect()
+}
+
+/// Split markdown content into parsed frontmatter, passthrough keys, and body.
+pub fn split_frontmatter(
+    content: &str,
+) -> Result<(Frontmatter, ExtraFrontmatter, String), AlephError> {
     let trimmed = content.trim();
 
     if !trimmed.starts_with("---") {
@@ -173,7 +235,7 @@ pub fn split_frontmatter(content: &str) -> Result<(Frontmatter, String), AlephEr
         suggestion: None,
     })?;
 
-    Ok((fm, body))
+    Ok((fm, collect_extra_frontmatter(yaml_str), body))
 }
 
 /// Parse an optional date string to a unix timestamp. Accepts RFC3339

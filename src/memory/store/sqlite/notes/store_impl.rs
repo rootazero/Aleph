@@ -515,8 +515,8 @@ impl NoteStore for SqliteMemoryBackend {
             .optional()
             .map_err(|e| AlephError::config(format!("remove_note_index vec map lookup: {e}")))?;
         if let Some(rowid) = vec_rowid {
-            for table in vec::ALL_NOTES_VEC_TABLES {
-                // Table name comes from an internal static allowlist (`ALL_NOTES_VEC_TABLES`).
+            for table in vec::all_notes_vec_tables() {
+                // Table name comes from an internal static allowlist (`EMBEDDING_DIM_TABLES`).
                 // rust-doctor-disable-next-line sql-injection-risk
                 tx.execute(
                     &format!("DELETE FROM {table} WHERE rowid = ?1"),
@@ -1152,8 +1152,8 @@ impl NoteStore for SqliteMemoryBackend {
         };
 
         for rowid in &orphan_rowids {
-            for table in vec::ALL_NOTES_VEC_TABLES {
-                // Table name comes from an internal static allowlist (`ALL_NOTES_VEC_TABLES`).
+            for table in vec::all_notes_vec_tables() {
+                // Table name comes from an internal static allowlist (`EMBEDDING_DIM_TABLES`).
                 // rust-doctor-disable-next-line sql-injection-risk
                 tx.execute(
                     &format!("DELETE FROM {table} WHERE rowid = ?1"),
@@ -1176,15 +1176,24 @@ impl NoteStore for SqliteMemoryBackend {
         agent_id: &str,
         embedding: &[f32],
         dim: u32,
+        content_hash: &str,
     ) -> Result<(), AlephError> {
         let table = vec::notes_vec_table_for_dim(dim)?;
         let conn = lock_conn!(self)?;
+        let now = chrono::Utc::now().timestamp();
 
-        // Upsert the mapping row to get a stable numeric rowid
+        // Upsert the mapping row to get a stable numeric rowid, recording which
+        // version of the note this vector was computed from. The freshness
+        // columns are updated on conflict too — a re-embed of an existing note
+        // must move its provenance forward, or the row would keep claiming the
+        // version it was first embedded at.
         conn.execute(
-            "INSERT INTO notes_vec_map (path, agent_id) VALUES (?1, ?2) \
-             ON CONFLICT(agent_id, path) DO NOTHING",
-            params![path, agent_id],
+            "INSERT INTO notes_vec_map (path, agent_id, embedded_hash, embedded_at) \
+             VALUES (?1, ?2, ?3, ?4) \
+             ON CONFLICT(agent_id, path) \
+             DO UPDATE SET embedded_hash = excluded.embedded_hash, \
+                           embedded_at = excluded.embedded_at",
+            params![path, agent_id, content_hash, now],
         )
         .map_err(|e| AlephError::config(format!("upsert_embedding map insert: {e}")))?;
 
@@ -1201,8 +1210,8 @@ impl NoteStore for SqliteMemoryBackend {
         // 768 -> 1024) would otherwise orphan the old-dim row at this same rowid,
         // leaving a stale vector permanently occupying a KNN slot in the other
         // table. Mirrors the sweep in `remove_note_index`.
-        for t in vec::ALL_NOTES_VEC_TABLES {
-            // Table name comes from an internal static allowlist (`ALL_NOTES_VEC_TABLES`).
+        for t in vec::all_notes_vec_tables() {
+            // Table name comes from an internal static allowlist (`EMBEDDING_DIM_TABLES`).
             // rust-doctor-disable-next-line sql-injection-risk
             conn.execute(&format!("DELETE FROM {t} WHERE rowid = ?1"), params![rowid])
                 .map_err(|e| AlephError::config(format!("upsert_embedding delete vec {t}: {e}")))?;
@@ -1221,6 +1230,27 @@ impl NoteStore for SqliteMemoryBackend {
         Ok(())
     }
 
+    async fn stale_vector_paths(&self, agent_id: &str) -> Result<Vec<String>, AlephError> {
+        let conn = lock_conn!(self)?;
+        let mut stmt = conn
+            .prepare(
+                "SELECT n.path FROM notes_index n \
+                 LEFT JOIN notes_vec_map m ON m.path = n.path AND m.agent_id = n.agent_id \
+                 WHERE n.agent_id = ?1 \
+                   AND (m.path IS NULL OR m.embedded_hash != n.content_hash) \
+                 ORDER BY n.path",
+            )
+            .map_err(|e| AlephError::config(format!("stale_vector_paths prepare: {e}")))?;
+        let rows = stmt
+            .query_map(params![agent_id], |row| row.get::<_, String>(0))
+            .map_err(|e| AlephError::config(format!("stale_vector_paths query: {e}")))?;
+        let mut out = Vec::new();
+        for row in rows {
+            out.push(row.map_err(|e| AlephError::config(format!("stale_vector_paths row: {e}")))?);
+        }
+        Ok(out)
+    }
+
     async fn hybrid_search_notes(
         &self,
         embedding: &[f32],
@@ -1228,7 +1258,7 @@ impl NoteStore for SqliteMemoryBackend {
         agent_id: &str,
         dim_hint: u32,
         limit: usize,
-    ) -> Result<Vec<crate::memory::notes::NoteSearchResult>, AlephError> {
+    ) -> Result<crate::memory::notes::store::HybridSearchOutcome, AlephError> {
         use std::collections::HashMap;
 
         let vec_results = self
@@ -1261,29 +1291,39 @@ impl NoteStore for SqliteMemoryBackend {
         sorted.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
         sorted.truncate(limit);
 
-        let mut results = Vec::new();
+        // Resolve index rows first (they share one connection, so they are
+        // serial by construction), then read the bodies concurrently.
+        let mut entries = Vec::with_capacity(sorted.len());
         for (path, score) in sorted {
             if let Some(entry) = self.get_note_index(&path, agent_id).await? {
-                let content = load_note_content_from_disk(&entry, agent_id)
-                    .await
-                    .unwrap_or_default();
-                results.push(crate::memory::notes::NoteSearchResult {
-                    // rust-doctor-disable-next-line excessive-clone
-                    path: entry.path.clone(),
-                    // rust-doctor-disable-next-line excessive-clone
-                    filename: entry.filename.clone(),
-                    // rust-doctor-disable-next-line excessive-clone
-                    category: entry.category.clone(),
-                    // rust-doctor-disable-next-line excessive-clone
-                    tags: entry.tags.clone(),
+                entries.push((entry, score));
+            }
+        }
+        let rows: Vec<NoteIndexEntry> = entries.iter().map(|(e, _)| e.clone()).collect();
+        let contents = super::helpers::load_note_contents_from_disk(&rows, agent_id).await;
+
+        let results = entries
+            .into_iter()
+            .zip(contents)
+            .map(
+                |((entry, score), content)| crate::memory::notes::NoteSearchResult {
+                    path: entry.path,
+                    filename: entry.filename,
+                    category: entry.category,
+                    tags: entry.tags,
                     content,
                     score,
                     created_at: entry.created_at,
                     updated_at: entry.updated_at,
-                });
-            }
-        }
-        Ok(results)
+                },
+            )
+            .collect();
+
+        Ok(crate::memory::notes::store::HybridSearchOutcome {
+            results,
+            vector_candidates: vec_results.len(),
+            fts_candidates: fts_entries.len(),
+        })
     }
 
     async fn vector_search_notes_with_content(
@@ -1297,29 +1337,31 @@ impl NoteStore for SqliteMemoryBackend {
             .vector_search(embedding, dim_hint, agent_id, limit)
             .await?;
 
-        let mut results = Vec::new();
+        let mut entries = Vec::with_capacity(pairs.len());
         for (path, score) in pairs {
             if let Some(entry) = self.get_note_index(&path, agent_id).await? {
-                let content = load_note_content_from_disk(&entry, agent_id)
-                    .await
-                    .unwrap_or_default();
-                results.push(crate::memory::notes::NoteSearchResult {
-                    // rust-doctor-disable-next-line excessive-clone
-                    path: entry.path.clone(),
-                    // rust-doctor-disable-next-line excessive-clone
-                    filename: entry.filename.clone(),
-                    // rust-doctor-disable-next-line excessive-clone
-                    category: entry.category.clone(),
-                    // rust-doctor-disable-next-line excessive-clone
-                    tags: entry.tags.clone(),
+                entries.push((entry, score));
+            }
+        }
+        let rows: Vec<NoteIndexEntry> = entries.iter().map(|(e, _)| e.clone()).collect();
+        let contents = super::helpers::load_note_contents_from_disk(&rows, agent_id).await;
+
+        Ok(entries
+            .into_iter()
+            .zip(contents)
+            .map(
+                |((entry, score), content)| crate::memory::notes::NoteSearchResult {
+                    path: entry.path,
+                    filename: entry.filename,
+                    category: entry.category,
+                    tags: entry.tags,
                     content,
                     score,
                     created_at: entry.created_at,
                     updated_at: entry.updated_at,
-                });
-            }
-        }
-        Ok(results)
+                },
+            )
+            .collect())
     }
 
     async fn get_notes_with_content(
@@ -1327,29 +1369,27 @@ impl NoteStore for SqliteMemoryBackend {
         agent_id: &str,
         paths: &[String],
     ) -> Result<Vec<crate::memory::notes::NoteSearchResult>, AlephError> {
-        let mut results = Vec::with_capacity(paths.len());
+        let mut entries = Vec::with_capacity(paths.len());
         for path in paths {
             if let Some(entry) = self.get_note_index(path, agent_id).await? {
-                let content = load_note_content_from_disk(&entry, agent_id)
-                    .await
-                    .unwrap_or_default();
-                results.push(crate::memory::notes::NoteSearchResult {
-                    // rust-doctor-disable-next-line excessive-clone
-                    path: entry.path.clone(),
-                    // rust-doctor-disable-next-line excessive-clone
-                    filename: entry.filename.clone(),
-                    // rust-doctor-disable-next-line excessive-clone
-                    category: entry.category.clone(),
-                    // rust-doctor-disable-next-line excessive-clone
-                    tags: entry.tags.clone(),
-                    content,
-                    score: 0.0,
-                    created_at: entry.created_at,
-                    updated_at: entry.updated_at,
-                });
+                entries.push(entry);
             }
         }
-        Ok(results)
+        let contents = super::helpers::load_note_contents_from_disk(&entries, agent_id).await;
+        Ok(entries
+            .into_iter()
+            .zip(contents)
+            .map(|(entry, content)| crate::memory::notes::NoteSearchResult {
+                path: entry.path,
+                filename: entry.filename,
+                category: entry.category,
+                tags: entry.tags,
+                content,
+                score: 0.0,
+                created_at: entry.created_at,
+                updated_at: entry.updated_at,
+            })
+            .collect())
     }
 
     async fn get_notes_by_category(
