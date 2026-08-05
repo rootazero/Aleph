@@ -464,7 +464,12 @@ mod tests {
     /// `alephcore::gateway::visibility`.
     #[test]
     fn both_run_start_paths_check_session_visibility() {
-        let src = include_str!("server_init.rs");
+        // Normalize line endings: this file is CRLF on disk on Windows, and
+        // `include_str!` hands over the raw bytes. Matching on a bare "\n}"
+        // bound against CRLF text silently finds nothing and runs the bound
+        // to end-of-file — which is precisely the vacuous pass the
+        // "mod tests" assertion below exists to catch, and did catch.
+        let src = include_str!("server_init.rs").replace('\r', "");
         let guard = "visibility::existing_session_is_visible";
 
         for entry in ["handle_run_with_engine", "handle_chat_send_with_engine"] {
