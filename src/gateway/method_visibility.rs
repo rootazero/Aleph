@@ -216,8 +216,10 @@
 //! severity — a title-rename side effect and a token-count-only read,
 //! respectively — and reviewed as out of this round's scope). The
 //! Simulated-fallback `chat.send` path (see the `chat.send` bullet above) is
-//! also a known, deliberate gap. All three are recorded here as the durable
-//! home for the follow-up, same convention as `method_admin.rs`'s notes.
+//! also a known, deliberate gap. `memory.reembed` is intentionally absent
+//! from the table (whole-store maintenance, no per-user `agent_id` to check
+//! — see the pin test). All are recorded here as the durable home for the
+//! follow-up, same convention as `method_admin.rs`'s notes.
 //! (`graph.update_note`/`rename_note`/`delete_note` were in this list until
 //! Task 7 fix round 2 closed them — see that section above.)
 //!
