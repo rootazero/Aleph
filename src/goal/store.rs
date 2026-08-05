@@ -854,9 +854,24 @@ impl GoalStore {
     /// stale LLM turn. [`FireDecision::OutOfBounds`] additionally Blocks the
     /// goal with the deadline note, because a bound that merely refuses to
     /// fire — with no arbitration — leaves an `Active` goal that nothing will
-    /// ever claim again. This is the only bound the boot re-arm path
-    /// (`GoalWakeService::rearm_parked_goals`, which replays a stored marker
-    /// without a fresh claim) passes through.
+    /// ever claim again.
+    ///
+    /// This is NOT the boot re-arm path's only bound —
+    /// `GoalWakeService::rearm_parked_goals` runs the identical predicate on
+    /// identical inputs microseconds before calling in. What this arm uniquely
+    /// catches is a deadline LOWERED while a wake was already armed:
+    /// `goal(update, timeout_minutes=…)` preserves `pending_continuation_ms`
+    /// through `commit_field_update`, so a shortened deadline reaches the fire
+    /// instant with the old timer still sleeping and no claim in between to
+    /// re-project it.
+    ///
+    /// The bound is evaluated at `wake_ms.max(now_ms)` — see
+    /// [`pursuit::fires_out_of_bounds`], which asks "would a wake scheduled for
+    /// `wake_ms` still be in bounds", the right question at CLAIM time and the
+    /// wrong one here. At fire time `wake_ms` is in the past and the fact that
+    /// matters is whether NOW is past the deadline; `now >= wake` makes the
+    /// `max` collapse to exactly that, matching `should_continue`. (Claim-time
+    /// callers have `wake > now`, so their semantics are untouched.)
     pub fn confirm_fire(
         &self,
         session_id: &str,
@@ -866,7 +881,7 @@ impl GoalStore {
         let conn = self.lock();
         match Self::get_locked(&conn, session_id)? {
             Some(g) if g.is_active() && g.pending_continuation_ms == Some(wake_ms) => {
-                if pursuit::fires_out_of_bounds(&g, wake_ms, now_ms) {
+                if pursuit::fires_out_of_bounds(&g, wake_ms.max(now_ms), now_ms) {
                     let note = pursuit::deadline_reached_note(&g);
                     Self::put_locked(
                         &conn,
@@ -1989,6 +2004,52 @@ mod tests {
         assert_eq!(live.status, GoalStatus::Blocked);
         assert_eq!(live.pending_continuation_ms, None);
         assert!(!live.has_wait_barrier());
+    }
+
+    #[test]
+    fn confirm_fire_arbitrates_a_wake_that_was_in_bounds_but_fires_past_the_deadline() {
+        use crate::goal::PursuitMode;
+        let (store, _d) = temp_store();
+        // Deadline at 30_000; the model parks until 20_000 — comfortably INSIDE
+        // the bound, so the claim armed it correctly. The daemon then dies and
+        // comes back five hours later. `fires_out_of_bounds(goal, wake, now)` is
+        // `wake > deadline`, which is the right question when projecting a
+        // future wake and the wrong one now: 20_000 > 30_000 stays false forever,
+        // however long the process was gone, so a full LLM turn ran hours past
+        // the user's `timeout_minutes`. At fire time the fact that matters is
+        // `now > deadline` — what `should_continue` reads, and what this path
+        // never consults.
+        let g = Goal::new("sess-late-now", "obj", 0, 1_000)
+            .with_pursuit(PursuitMode::Active { max_iterations: 5 })
+            .with_deadline_ms(Some(30_000))
+            .with_wait_until(20_000, None, 1_000)
+            .with_pending_continuation(Some(20_000));
+        store.put(&g).unwrap();
+
+        let FireDecision::OutOfBounds { note } = store
+            .confirm_fire("sess-late-now", 20_000, 18_020_000)
+            .unwrap()
+        else {
+            panic!("a wake firing five hours past the deadline must not proceed");
+        };
+        assert!(note.contains("wall-clock"), "got: {note}");
+        let live = store.get("sess-late-now").unwrap().unwrap();
+        assert_eq!(live.status, GoalStatus::Blocked);
+        assert_eq!(live.pending_continuation_ms, None);
+        assert!(!live.has_wait_barrier());
+
+        // And the `max` must not over-block: a wake firing on time, inside a
+        // deadline, still proceeds.
+        let ok = Goal::new("sess-on-time", "obj", 0, 1_000)
+            .with_pursuit(PursuitMode::Active { max_iterations: 5 })
+            .with_deadline_ms(Some(30_000))
+            .with_wait_until(20_000, None, 1_000)
+            .with_pending_continuation(Some(20_000));
+        store.put(&ok).unwrap();
+        assert!(matches!(
+            store.confirm_fire("sess-on-time", 20_000, 20_050).unwrap(),
+            FireDecision::Proceed
+        ));
     }
 
     #[test]

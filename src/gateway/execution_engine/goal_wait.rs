@@ -203,8 +203,17 @@ impl GoalWakeService {
                 // rather than waking a goal whose wall-clock budget expired
                 // while the daemon was down; `confirm_fire` is the second,
                 // narrower net for the same condition.
+                //
+                // `wake_ms.max(now)` because this is a FIRE-time evaluation:
+                // `fires_out_of_bounds` projects a scheduled wake, which is the
+                // right question at claim time and the wrong one here — a wake
+                // armed for `T - 20m` under a deadline of `T` is forever "in
+                // bounds" no matter how many hours the daemon was down. At fire
+                // time `now >= wake`, so the max collapses to `now > deadline`,
+                // the same fact `should_continue` reads (and which this path
+                // never consults).
                 if goal.waiting_until_ms.is_some() {
-                    if crate::goal::pursuit::fires_out_of_bounds(&goal, wake_ms, now) {
+                    if crate::goal::pursuit::fires_out_of_bounds(&goal, wake_ms.max(now), now) {
                         self.arbitrate_out_of_bounds(&goal, now).await;
                         continue;
                     }
