@@ -1778,6 +1778,17 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
                         indexed = stats.indexed,
                         skipped = stats.skipped,
                         errors = stats.errors,
+                        pruned = stats.pruned,
+                        // The summary line is what an operator actually reads,
+                        // so the vector drift has to appear on it. Without this
+                        // the only production consumer of `IndexStats` dropped
+                        // `stale_vectors` on the floor — the field had no reader
+                        // anywhere in the repo — and a boot reporting
+                        // `errors=0` looked healthy while every note's vector
+                        // was missing or outdated. A count near the note total
+                        // is the shape a misconfigured embedding dimension
+                        // makes; `reembed_all` is the repair.
+                        stale_vectors = stats.stale_vectors,
                         "Note index rebuild complete"
                     );
                 }
