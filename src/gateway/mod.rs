@@ -96,6 +96,7 @@ pub mod busy_queue;
 pub mod caller_identity;
 pub mod context;
 pub mod event_scope;
+pub mod event_visibility;
 pub mod execution_adapter;
 pub mod hello_snapshot;
 pub mod i18n;

@@ -114,6 +114,13 @@ struct ConnectionContext {
     /// flood guard closes an unauthorized connection. `None` ⇒ auth events are
     /// not persisted (probe/degraded wiring).
     audit_log: Option<crate::security::audit::SecurityAuditLog>,
+    /// Session store for the owner-scoped WS event filter (P1 data isolation,
+    /// spec §5.4). `None` ⇒ that 4th filter term is skipped (zero-change
+    /// guarantee — see `GatewaySharedState::session_store`).
+    session_store: Option<Arc<dyn crate::gateway::session_store::SessionStore>>,
+    /// Process-shared run→session / session→owner cache backing the filter.
+    /// See `crate::gateway::event_visibility`.
+    event_visibility: Arc<crate::gateway::event_visibility::EventVisibilityIndex>,
 }
 
 /// axum handler: upgrade HTTP connection to WebSocket at `/ws`
@@ -246,6 +253,8 @@ pub(super) async fn ws_upgrade_handler(
             node_registry: state.node_registry.clone(),
             exec_approval_manager: state.exec_approval_manager.clone(),
             audit_log: state.audit_log.clone(),
+            session_store: state.session_store.clone(),
+            event_visibility: state.event_visibility.clone(),
         };
         if let Err(e) = handle_connection(socket, peer_addr, ctx).await {
             error!("Connection error from {}: {}", peer_addr, e);
@@ -1460,16 +1469,20 @@ async fn handle_connection(
                                 .or_else(|| event_obj.get("method").and_then(|m| m.as_str()))
                                 .unwrap_or("");
 
-                            // Permission-based scope guard check + surface audience.
-                            // Both read the same ConnectionState under one lock.
-                            let (scope_allowed, channel_kind) = {
+                            // Permission-based scope guard check + surface audience +
+                            // caller identity for the owner-scoped event filter (P1,
+                            // spec §5.4). All three read the same ConnectionState
+                            // under one lock — extend the tuple, don't take the lock
+                            // twice.
+                            let (scope_allowed, channel_kind, event_caller_user) = {
                                 let conns = ctx.connections.read().await;
                                 match conns.get(&conn_id) {
                                     Some(s) => (
                                         ctx.event_scope_guard.can_receive(topic, &s.permissions),
                                         s.channel_kind,
+                                        s.caller_user.clone(),
                                     ),
-                                    None => (false, None),
+                                    None => (false, None, None),
                                 }
                             };
 
@@ -1480,12 +1493,45 @@ async fn handle_connection(
                                 .get("data")
                                 .or_else(|| event_obj.get("params").and_then(|p| p.get("data")));
 
+                            // The owner-scoped filter needs the frame's OWN fields
+                            // (run_id/session_key), which for stream.* notifications
+                            // live directly under `.params` — `event_data` above only
+                            // resolves for the TopicEvent `.data` shape (no producer
+                            // nests a `.data` inside `.params`), so fall back to the
+                            // raw `.params` object for the stream-form case.
+                            let visibility_payload =
+                                event_data.or_else(|| event_obj.get("params"));
+
+                            // `note_frame` runs unconditionally, before the filter —
+                            // every connection's loop keeps the shared, process-wide
+                            // index warm (first writer wins) regardless of whether
+                            // THIS connection ends up receiving the frame.
+                            ctx.event_visibility
+                                .note_frame(topic, visibility_payload)
+                                .await;
+
                             scope_allowed
                                 && crate::gateway::surface::delivery::audience_allows(
                                     event_data,
                                     channel_kind,
                                 )
                                 && ctx.subscription_manager.should_receive(&conn_id, topic, event_data).await
+                                && match ctx.session_store.as_ref() {
+                                    Some(store) => {
+                                        ctx.event_visibility
+                                            .event_admits(
+                                                topic,
+                                                visibility_payload,
+                                                event_caller_user.as_deref(),
+                                                store,
+                                            )
+                                            .await
+                                    }
+                                    // No store wired (probe/legacy wiring): skip the
+                                    // 4th term entirely — zero-change guarantee, see
+                                    // `GatewaySharedState::session_store`.
+                                    None => true,
+                                }
                         } else {
                             // Can't parse event, forward by default
                             true

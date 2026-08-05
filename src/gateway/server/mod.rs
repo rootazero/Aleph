@@ -219,6 +219,17 @@ pub struct GatewaySharedState {
     /// of connected `role:node` peers; populated by the connect handler.
     pub node_registry: Arc<crate::cluster::NodeRegistry>,
     pub exec_approval_manager: Option<Arc<crate::exec::manager::ExecApprovalManager>>,
+    /// Session store handle for the owner-scoped WS event filter (P1 data
+    /// isolation, spec §5.4 — `event_visibility::EventVisibilityIndex`).
+    /// `None` in probe/legacy wiring: the 4th filter term is then skipped
+    /// (zero-change guarantee), matching every other `Option<Arc<...>>`
+    /// dependency in this struct.
+    pub session_store: Option<Arc<dyn crate::gateway::session_store::SessionStore>>,
+    /// Process-shared run→session / session→owner cache backing the
+    /// owner-scoped WS event filter. Always constructed (unlike
+    /// `session_store`) — the index itself is cheap and harmless to warm
+    /// even when no store is wired to consult it.
+    pub event_visibility: Arc<crate::gateway::event_visibility::EventVisibilityIndex>,
 }
 
 /// Configuration for the Gateway server
@@ -407,6 +418,11 @@ pub struct GatewayServer {
     /// [`GatewayServer::set_audit_log`] and cloned into `GatewaySharedState`.
     /// `None` in test/probe constructors ⇒ auth events go unrecorded.
     audit_log: Option<crate::security::audit::SecurityAuditLog>,
+    /// See [`GatewaySharedState::session_store`]. Installed by
+    /// [`GatewayServer::set_session_store`].
+    session_store: Option<Arc<dyn crate::gateway::session_store::SessionStore>>,
+    /// See [`GatewaySharedState::event_visibility`]. Always constructed.
+    event_visibility: Arc<crate::gateway::event_visibility::EventVisibilityIndex>,
 }
 
 impl GatewayServer {
@@ -458,6 +474,10 @@ impl GatewayServer {
             node_registry: Arc::new(crate::cluster::NodeRegistry::new()),
             exec_approval_manager: None,
             audit_log: None,
+            session_store: None,
+            event_visibility: Arc::new(
+                crate::gateway::event_visibility::EventVisibilityIndex::new(),
+            ),
         }
     }
 
@@ -510,6 +530,10 @@ impl GatewayServer {
             node_registry: Arc::new(crate::cluster::NodeRegistry::new()),
             exec_approval_manager: None,
             audit_log: None,
+            session_store: None,
+            event_visibility: Arc::new(
+                crate::gateway::event_visibility::EventVisibilityIndex::new(),
+            ),
         }
     }
 
@@ -593,6 +617,19 @@ impl GatewayServer {
         self.audit_log = Some(log);
     }
 
+    /// Install the `SessionStore` so the WS event-delivery loop can resolve
+    /// session ownership for the owner-scoped event filter (P1 data
+    /// isolation, spec §5.4 — `event_visibility::EventVisibilityIndex`).
+    /// `None` (unset) skips that 4th filter term entirely, matching pre-P1
+    /// delivery behavior — the same zero-change guarantee every other
+    /// `Option<Arc<...>>` dependency on this struct provides.
+    pub fn set_session_store(
+        &mut self,
+        store: Arc<dyn crate::gateway::session_store::SessionStore>,
+    ) {
+        self.session_store = Some(store);
+    }
+
     /// Get the current number of active connections
     pub async fn connection_count(&self) -> usize {
         self.connections.read().await.len()
@@ -651,6 +688,8 @@ impl GatewayServer {
             }),
             node_registry: self.node_registry.clone(),
             exec_approval_manager: self.exec_approval_manager.clone(),
+            session_store: self.session_store.clone(),
+            event_visibility: self.event_visibility.clone(),
         });
 
         // Strip query strings from the Panel/control-plane fallback before any

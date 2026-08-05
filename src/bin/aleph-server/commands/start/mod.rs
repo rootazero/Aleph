@@ -635,6 +635,10 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
     // Wire the security store so the WS node connect/disconnect paths can
     // stamp enrolled-node last_seen_at (offline fleet view honesty).
     server.set_security_store(auth_bundle.security_store.clone());
+    // Wire the session store so the WS event-delivery loop can resolve
+    // session ownership for the owner-scoped event filter (P1 data
+    // isolation, spec §5.4 — `event_visibility::EventVisibilityIndex`).
+    server.set_session_store(session_store.clone());
 
     // Dedicated gateway audit pipeline for remote-connection auth forensics
     // (AuthFailure on a rejected remote connect; RateLimited on a flood-guard

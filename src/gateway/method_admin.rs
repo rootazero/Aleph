@@ -45,7 +45,14 @@
 //! [`crate::gateway::method_visibility`] (`sessions.*`/`chat.*` land there
 //! as of Task 6; `memory.*`/`artifacts.*`/`clarification.*`/`subagent.tree`/
 //! `graph.query` are Task 7's follow-up — see that module's doc for the
-//! current coverage boundary, not this gate's job either way).
+//! current coverage boundary, not this gate's job either way). The RPC-side
+//! chokepoint above has an event-bus-side sibling for the same reason:
+//! `EventScopeGuard` (`event_scope.rs`) is role-based (admin-topic delivery
+//! gating, independent of who owns the session), while owner-scoped WS event
+//! delivery — the same per-user filtering this gate leaves to
+//! `crate::gateway::visibility` for RPCs — is Task 8's
+//! [`crate::gateway::event_visibility`], the 4th term in
+//! `server::handler`'s `should_forward` filter chain.
 //!
 //! Two families were read (not guessed) and deliberately left OPEN despite
 //! looking admin-shaped at first glance:
