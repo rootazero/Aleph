@@ -367,7 +367,6 @@ fn send_progress(
 mod tests {
     use super::*;
     use crate::memory::embedding_provider::tests::MockEmbeddingProvider;
-    use crate::memory::notes::store::NoteStore;
     use crate::memory::notes::{KnowledgeNote, NoteIndexer};
     use crate::memory::store::SqliteMemoryBackend;
 
