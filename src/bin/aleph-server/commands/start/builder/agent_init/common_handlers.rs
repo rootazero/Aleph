@@ -103,9 +103,11 @@ pub(super) fn register_common_handlers(
 
         // Register chat handlers (abort, history, clear work for both real and simulated)
         let rm_abort = rm.clone();
+        let sm_abort = session_store.clone();
         server.handlers_mut().register("chat.abort", move |req| {
             let manager = rm_abort.clone();
-            async move { chat_handlers::handle_abort(req, manager).await }
+            let store = sm_abort.clone();
+            async move { chat_handlers::handle_abort(req, manager, store).await }
         });
     }
 

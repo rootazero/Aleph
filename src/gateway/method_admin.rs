@@ -40,7 +40,12 @@
 //! caller's own data (or needed for basic chat/tool operation) ⇒ open.
 //! `connect` / `chat.*` / `sessions.*` / `memory.*` / `projects.*` /
 //! `artifacts.*` are member daily surfaces and deliberately absent — their
-//! per-user filtering is P1's visibility chokepoint, not this gate's job.
+//! per-user filtering is P1's visibility chokepoint, enforced in
+//! [`crate::gateway::visibility`] and registered in
+//! [`crate::gateway::method_visibility`] (`sessions.*`/`chat.*` land there
+//! as of Task 6; `memory.*`/`artifacts.*`/`clarification.*`/`subagent.tree`/
+//! `graph.query` are Task 7's follow-up — see that module's doc for the
+//! current coverage boundary, not this gate's job either way).
 //!
 //! Two families were read (not guessed) and deliberately left OPEN despite
 //! looking admin-shaped at first glance:

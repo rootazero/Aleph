@@ -19,6 +19,7 @@ use tracing::debug;
 use super::super::protocol::{JsonRpcRequest, JsonRpcResponse, INTERNAL_ERROR, INVALID_PARAMS};
 use super::super::router::SessionKey;
 use super::super::session_store::SessionStore;
+use super::super::visibility;
 use super::agent::{AgentRunManager, AgentRunParams, Attachment};
 use super::parse_params;
 
@@ -264,12 +265,33 @@ pub async fn handle_send(
 pub async fn handle_abort(
     request: JsonRpcRequest,
     run_manager: Arc<AgentRunManager>,
+    session_store: Arc<dyn SessionStore>,
 ) -> JsonRpcResponse {
     // Parse params
     let params: AbortParams = match parse_params(&request) {
         Ok(p) => p,
         Err(e) => return e,
     };
+
+    // Visibility gate: an addressed `session_key` must belong to the caller
+    // before we touch anything. `session_key` is optional (legacy clients
+    // omit it), but when PRESENT it is used below to purge that session's
+    // busy-queue backlog directly by string — a caller-controlled key with
+    // real mutating effect, not just a hint. A malformed key that fails to
+    // parse falls through unchanged: it can never match a real busy-queue
+    // entry either, so there is nothing to authorize.
+    if let Some(ref key_str) = params.session_key {
+        if let Some(session_key) = SessionKey::from_key_string(key_str) {
+            let meta = match session_store.get_metadata(&session_key).await {
+                Ok(Some(m)) => m,
+                Ok(None) => return visibility::not_found_response(request.id),
+                Err(_) => return visibility::not_found_response(request.id), // fail closed (GC 3)
+            };
+            if !visibility::session_visible(&meta) {
+                return visibility::not_found_response(request.id); // same error as missing (GC 4)
+            }
+        }
+    }
 
     // Drop the backlog before cancelling, never after: cancelling releases the
     // session slot, which wakes the lane's front waiter, which can be admitted
@@ -324,6 +346,15 @@ pub async fn handle_history(
             );
         }
     };
+
+    let meta = match session_manager.get_metadata(&session_key).await {
+        Ok(Some(m)) => m,
+        Ok(None) => return visibility::not_found_response(request.id),
+        Err(_) => return visibility::not_found_response(request.id), // fail closed (GC 3)
+    };
+    if !visibility::session_visible(&meta) {
+        return visibility::not_found_response(request.id); // same error as missing (GC 4)
+    }
 
     // Resolve the optional pagination cursor (degrades to None when absent
     // or unparseable, yielding the most-recent window).
@@ -402,6 +433,15 @@ pub async fn handle_clear(
         }
     };
 
+    let meta = match session_manager.get_metadata(&session_key).await {
+        Ok(Some(m)) => m,
+        Ok(None) => return visibility::not_found_response(request.id),
+        Err(_) => return visibility::not_found_response(request.id), // fail closed (GC 3)
+    };
+    if !visibility::session_visible(&meta) {
+        return visibility::not_found_response(request.id); // same error as missing (GC 4)
+    }
+
     debug!(session_key = %params.session_key, "Clearing chat history");
 
     // Retire the event log BEFORE the projection. `reset_session` only empties
@@ -470,6 +510,15 @@ pub async fn handle_rewind(
     // asking to rewind past the start of the log.
     if params.seq == 0 {
         return JsonRpcResponse::error(request.id, INVALID_PARAMS, "seq must be >= 1");
+    }
+
+    let meta = match session_manager.get_metadata(&session_key).await {
+        Ok(Some(m)) => m,
+        Ok(None) => return visibility::not_found_response(request.id),
+        Err(_) => return visibility::not_found_response(request.id), // fail closed (GC 3)
+    };
+    if !visibility::session_visible(&meta) {
+        return visibility::not_found_response(request.id); // same error as missing (GC 4)
     }
 
     debug!(session_key = %params.session_key, seq = params.seq, "Rewinding chat");
@@ -773,5 +822,172 @@ mod tests {
         let v = serde_json::json!({ "session_key": "main:agentA" });
         let p: super::EstimateParams = serde_json::from_value(v).unwrap();
         assert_eq!(p.session_key, "main:agentA");
+    }
+
+    /// P1 visibility chokepoint — pinned per task-6-brief.md Step 1.
+    /// `chat.history` / `chat.clear` / `chat.rewind` are not literally named
+    /// in the brief's file list (only `chat.send`/`chat.abort` are), but they
+    /// are session-addressed handlers in this same file, already carrying a
+    /// `SessionStore`, with the identical unguarded pattern — leaving them
+    /// open would make the `sessions.history` fix moot (same content,
+    /// reachable through a sibling method). Guarded here as an in-scope
+    /// extension of the same chokepoint, not a separate task.
+    mod visibility_guards {
+        use super::*;
+        use crate::gateway::caller_identity::CALLER_USER;
+        use crate::gateway::protocol::RESOURCE_NOT_FOUND;
+        use crate::gateway::session_manager::{SessionManager, SessionManagerConfig};
+        use crate::scope::{with_scope, ScopeAttribution};
+
+        fn store(temp: &tempfile::TempDir) -> Arc<dyn SessionStore> {
+            Arc::new(
+                SessionManager::new(SessionManagerConfig {
+                    db_path: temp.path().join("chat_visibility.db"),
+                    ..Default::default()
+                })
+                .unwrap(),
+            )
+        }
+
+        async fn alice_session(store: &Arc<dyn SessionStore>) -> SessionKey {
+            let key = SessionKey::from_key_string("agent:alicechatvis:main").unwrap();
+            with_scope(
+                Some(ScopeAttribution::personal("u-alice")),
+                store.get_or_create(&key),
+            )
+            .await
+            .unwrap();
+            key
+        }
+
+        fn request(method: &str, params: serde_json::Value) -> JsonRpcRequest {
+            JsonRpcRequest {
+                jsonrpc: "2.0".into(),
+                method: method.into(),
+                params: Some(params),
+                id: Some(json!(1)),
+            }
+        }
+
+        /// `chat.abort` with a foreign `session_key`: denied, and the
+        /// caller-controlled busy-queue purge that key would otherwise drive
+        /// must not fire (bob learns nothing and nothing of alice's is
+        /// touched).
+        #[tokio::test]
+        async fn chat_abort_denies_a_foreign_session_key() {
+            let temp = tempfile::tempdir().unwrap();
+            let store = store(&temp);
+            let alice_key = alice_session(&store).await;
+            let alice_key_str = alice_key.to_key_string();
+
+            let waiting = crate::gateway::busy_queue::register(&alice_key_str, 8, "queued-1")
+                .expect("lane has room");
+
+            let router = Arc::new(crate::gateway::router::AgentRouter::new());
+            let event_bus = Arc::new(crate::gateway::event_bus::GatewayEventBus::new());
+            let agent_registry = Arc::new(crate::gateway::agent_instance::AgentRegistry::new());
+            let execution_adapter: Arc<dyn crate::gateway::ExecutionAdapter> = Arc::new(
+                crate::gateway::execution_engine::SimpleExecutionEngine::new(
+                    crate::gateway::execution_engine::ExecutionEngineConfig::default(),
+                ),
+            );
+            let run_manager = Arc::new(AgentRunManager::new(
+                router,
+                event_bus,
+                agent_registry,
+                execution_adapter,
+            ));
+
+            let as_bob = CALLER_USER
+                .scope(
+                    Some("u-bob".to_string()),
+                    handle_abort(
+                        request(
+                            "chat.abort",
+                            json!({ "run_id": "irrelevant", "session_key": alice_key_str }),
+                        ),
+                        run_manager,
+                        store.clone(),
+                    ),
+                )
+                .await;
+            assert_eq!(
+                as_bob.error.as_ref().map(|e| e.code),
+                Some(RESOURCE_NOT_FOUND)
+            );
+            assert!(
+                !waiting.is_cancelled(),
+                "a denied abort must not purge the foreign session's queue"
+            );
+        }
+
+        #[tokio::test]
+        async fn chat_history_denies_cross_user_as_not_found() {
+            let temp = tempfile::tempdir().unwrap();
+            let store = store(&temp);
+            let alice_key = alice_session(&store).await;
+            let alice_key_str = alice_key.to_key_string();
+
+            let as_bob = CALLER_USER
+                .scope(
+                    Some("u-bob".to_string()),
+                    handle_history(
+                        request("chat.history", json!({ "session_key": alice_key_str })),
+                        store.clone(),
+                    ),
+                )
+                .await;
+            assert_eq!(
+                as_bob.error.as_ref().map(|e| e.code),
+                Some(RESOURCE_NOT_FOUND)
+            );
+        }
+
+        #[tokio::test]
+        async fn chat_clear_denies_cross_user_as_not_found() {
+            let temp = tempfile::tempdir().unwrap();
+            let store = store(&temp);
+            let alice_key = alice_session(&store).await;
+            let alice_key_str = alice_key.to_key_string();
+
+            let as_bob = CALLER_USER
+                .scope(
+                    Some("u-bob".to_string()),
+                    handle_clear(
+                        request("chat.clear", json!({ "session_key": alice_key_str })),
+                        store.clone(),
+                    ),
+                )
+                .await;
+            assert_eq!(
+                as_bob.error.as_ref().map(|e| e.code),
+                Some(RESOURCE_NOT_FOUND)
+            );
+        }
+
+        #[tokio::test]
+        async fn chat_rewind_denies_cross_user_as_not_found() {
+            let temp = tempfile::tempdir().unwrap();
+            let store = store(&temp);
+            let alice_key = alice_session(&store).await;
+            let alice_key_str = alice_key.to_key_string();
+
+            let as_bob = CALLER_USER
+                .scope(
+                    Some("u-bob".to_string()),
+                    handle_rewind(
+                        request(
+                            "chat.rewind",
+                            json!({ "session_key": alice_key_str, "seq": 1 }),
+                        ),
+                        store.clone(),
+                    ),
+                )
+                .await;
+            assert_eq!(
+                as_bob.error.as_ref().map(|e| e.code),
+                Some(RESOURCE_NOT_FOUND)
+            );
+        }
     }
 }

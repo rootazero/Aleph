@@ -215,7 +215,7 @@ pub async fn handle_chat_send_with_engine<P, R>(
     app_config: Arc<tokio::sync::RwLock<alephcore::Config>>,
     _workspace_manager: Option<Arc<alephcore::gateway::AgentEnvStore>>,
     _provider_registry: Arc<P>,
-    _session_manager: Arc<dyn alephcore::gateway::session_store::SessionStore>,
+    session_manager: Arc<dyn alephcore::gateway::session_store::SessionStore>,
     command_parser: Option<Arc<alephcore::command::CommandParser>>,
 ) -> alephcore::gateway::JsonRpcResponse
 where
@@ -279,6 +279,20 @@ where
         .await;
 
     let session_key_str = session_key.to_key_string();
+
+    // P1 visibility chokepoint: a caller-supplied session_key that already
+    // belongs to someone else must be refused before a run ever starts — a
+    // brand-new key (nothing created yet) is NOT a denial, it is the
+    // ordinary "first message of a new conversation" case and proceeds so
+    // the run can create+stamp it. See `visibility::existing_session_is_visible`.
+    if !alephcore::gateway::visibility::existing_session_is_visible(
+        session_manager.as_ref(),
+        &session_key,
+    )
+    .await
+    {
+        return alephcore::gateway::visibility::not_found_response(request.id);
+    }
 
     // Resolve agent from session_key (which now encodes the correct agent_id)
     let resolved_agent_id = session_key.agent_id().to_string();

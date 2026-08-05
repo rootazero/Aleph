@@ -82,6 +82,7 @@ async fn fire_session_end_hook(session_key: &crate::gateway::router::SessionKey)
 use crate::gateway::protocol::{JsonRpcRequest, JsonRpcResponse, INTERNAL_ERROR, INVALID_PARAMS};
 use crate::gateway::router::SessionKey;
 use crate::gateway::session_store::SessionStore;
+use crate::gateway::visibility;
 
 /// Handle sessions.reset RPC request with database backend
 pub async fn handle_reset_db(
@@ -105,6 +106,15 @@ pub async fn handle_reset_db(
                     );
                 }
             };
+
+            let meta = match manager.get_metadata(&session_key).await {
+                Ok(Some(m)) => m,
+                Ok(None) => return visibility::not_found_response(request.id),
+                Err(_) => return visibility::not_found_response(request.id), // fail closed (GC 3)
+            };
+            if !visibility::session_visible(&meta) {
+                return visibility::not_found_response(request.id); // same error as missing (GC 4)
+            }
 
             // Retire the SSOT event log before the `messages` projection —
             // same ordering rationale as `chat.clear`: resetting only the
@@ -186,6 +196,18 @@ async fn handle_delete_db_inner(
                     );
                 }
             };
+
+            let meta = match manager.get_metadata(&session_key).await {
+                Ok(Some(m)) => m,
+                Ok(None) => return visibility::not_found_response(request.id),
+                Err(_) => return visibility::not_found_response(request.id), // fail closed (GC 3)
+            };
+            if !visibility::session_visible(&meta) {
+                // Same error as missing (GC 4) — and returning here, before any
+                // of the mutations below, is what keeps the foreign session
+                // intact: deny must have no side effect.
+                return visibility::not_found_response(request.id);
+            }
 
             // Terminate the autonomous continuations FIRST — deleting the
             // transcript does not stop the loop/goal chains keyed to it. They
@@ -914,6 +936,127 @@ mod tests {
                 response.error.is_none(),
                 "`{accepted}` is a legal exec_tier write: {:?}",
                 response.error
+            );
+        }
+    }
+
+    /// P1 visibility chokepoint — pinned per task-6-brief.md Step 1.
+    mod visibility_guards {
+        use super::*;
+        use crate::gateway::caller_identity::CALLER_USER;
+        use crate::gateway::protocol::RESOURCE_NOT_FOUND;
+        use crate::scope::{with_scope, ScopeAttribution};
+
+        fn store(temp: &tempfile::TempDir) -> Arc<dyn SessionStore> {
+            Arc::new(
+                SessionManager::new(SessionManagerConfig {
+                    db_path: temp.path().join("visibility_modify.db"),
+                    ..Default::default()
+                })
+                .unwrap(),
+            )
+        }
+
+        fn keyed_request(method: &str, session_key: &str) -> JsonRpcRequest {
+            JsonRpcRequest {
+                jsonrpc: "2.0".into(),
+                method: method.into(),
+                params: Some(json!({ "session_key": session_key })),
+                id: Some(json!(1)),
+            }
+        }
+
+        async fn alice_session(store: &Arc<dyn SessionStore>) -> SessionKey {
+            let key = SessionKey::from_key_string("agent:alicemodvis:main").unwrap();
+            with_scope(
+                Some(ScopeAttribution::personal("u-alice")),
+                store.get_or_create(&key),
+            )
+            .await
+            .unwrap();
+            key
+        }
+
+        /// `sessions.delete` deny must leave the foreign session INTACT — a
+        /// denial is not a side effect. This is the property distinguishing
+        /// the deny path from a real delete: both return quickly, only one
+        /// actually removes the row.
+        #[tokio::test]
+        async fn sessions_delete_denies_cross_user_and_leaves_session_intact() {
+            let temp = tempdir().unwrap();
+            let store = store(&temp);
+            let alice_key = alice_session(&store).await;
+            let alice_key_str = alice_key.to_key_string();
+
+            let as_bob = CALLER_USER
+                .scope(
+                    Some("u-bob".to_string()),
+                    handle_delete_db(
+                        keyed_request("sessions.delete", &alice_key_str),
+                        store.clone(),
+                    ),
+                )
+                .await;
+            assert_eq!(
+                as_bob.error.as_ref().map(|e| e.code),
+                Some(RESOURCE_NOT_FOUND)
+            );
+
+            let still_there = store.get_metadata(&alice_key).await.unwrap();
+            assert!(
+                still_there.is_some(),
+                "a denied delete must not remove the foreign session"
+            );
+
+            // alice herself can still delete it — a stamped session belongs
+            // exclusively to its stamped owner, not to the org-era owner id
+            // (that adoption-by-absence rule only applies to legacy rows).
+            let as_alice = CALLER_USER
+                .scope(
+                    Some("u-alice".to_string()),
+                    handle_delete_db(
+                        keyed_request("sessions.delete", &alice_key_str),
+                        store.clone(),
+                    ),
+                )
+                .await;
+            assert!(as_alice.error.is_none());
+        }
+
+        #[tokio::test]
+        async fn sessions_reset_denies_cross_user_as_not_found() {
+            let temp = tempdir().unwrap();
+            let store = store(&temp);
+            let alice_key = alice_session(&store).await;
+            let alice_key_str = alice_key.to_key_string();
+
+            let as_bob = CALLER_USER
+                .scope(
+                    Some("u-bob".to_string()),
+                    handle_reset_db(
+                        keyed_request("sessions.reset", &alice_key_str),
+                        store.clone(),
+                    ),
+                )
+                .await;
+            assert_eq!(
+                as_bob.error.as_ref().map(|e| e.code),
+                Some(RESOURCE_NOT_FOUND)
+            );
+
+            // Byte-identical to a genuinely nonexistent key (no existence oracle).
+            let as_bob_missing = CALLER_USER
+                .scope(
+                    Some("u-bob".to_string()),
+                    handle_reset_db(
+                        keyed_request("sessions.reset", "agent:nosuchresetkey:main"),
+                        store.clone(),
+                    ),
+                )
+                .await;
+            assert_eq!(
+                serde_json::to_string(&as_bob.error).unwrap(),
+                serde_json::to_string(&as_bob_missing.error).unwrap(),
             );
         }
     }

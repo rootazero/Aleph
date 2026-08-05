@@ -106,6 +106,7 @@ pub mod lane;
 pub mod media;
 pub mod method_admin;
 pub mod method_authz;
+pub mod method_visibility;
 pub mod openai_api;
 pub mod projection_reconciler;
 pub mod rate_limiter;
