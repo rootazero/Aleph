@@ -608,6 +608,38 @@ impl GoalStore {
         }
     }
 
+    /// Retire a goal on a session that is being CLOSED: blocks it from either
+    /// non-terminal state (`Active` or `Paused`), never from a terminal one.
+    ///
+    /// The wider predicate exists for exactly one caller
+    /// (`continuation_lifecycle::block_session_goal`) and must not spread.
+    /// [`Self::block_if_active`]'s narrower "Active only" is correct where it
+    /// is used — a goal a human deliberately paused must not be demoted to
+    /// `Blocked` because some unrelated run failed. But when the session
+    /// itself is retired (an epoch bump or `sessions.delete`), a `Paused` goal
+    /// can never be resumed: arming is refused cross-session
+    /// (`GoalTool::reject_remote`) and the owning session no longer exists, so
+    /// leaving it Paused only makes `goal(action='list')` advertise a pursuit
+    /// nobody can restart — and leaks its welded strategy row forever. The
+    /// loop's retirement seam already retires Paused loops for this reason.
+    pub fn block_if_not_terminal(&self, session_id: &str, note: &str, now_ms: u64) -> Result<bool> {
+        let conn = self.lock();
+        match Self::get_locked(&conn, session_id)? {
+            Some(live) if matches!(live.status, GoalStatus::Active | GoalStatus::Paused) => {
+                Self::put_locked(
+                    &conn,
+                    &live
+                        .with_status(GoalStatus::Blocked, now_ms)
+                        .with_note(Some(note.to_string()), now_ms)
+                        .without_wait(now_ms)
+                        .with_pending_continuation(None),
+                )?;
+                Ok(true)
+            }
+            _ => Ok(false),
+        }
+    }
+
     /// Pause a goal that is still being actively pursued, in one guard — the
     /// REVERSIBLE sibling of [`Self::block_if_active`]. Same atomicity and the
     /// same "never clobber a terminal goal" contract; the difference is intent:
@@ -1788,6 +1820,48 @@ mod tests {
         let g = store.get("s").unwrap().unwrap();
         assert_eq!(g.status, GoalStatus::Blocked);
         assert_eq!(g.note.as_deref(), Some("boom"));
+    }
+
+    #[test]
+    fn block_if_not_terminal_retires_a_paused_goal_but_not_a_finished_one() {
+        let (store, _d) = temp_store();
+
+        // Paused: the session is being retired, so a Paused goal here can never
+        // be resumed again (arming is refused cross-session and this session is
+        // about to become unreachable). Retire it honestly.
+        let paused = Goal::new("sess-p", "obj", 0, 1_000).with_status(GoalStatus::Paused, 1_000);
+        store.put(&paused).unwrap();
+        assert!(store
+            .block_if_not_terminal("sess-p", "closed", 2_000)
+            .unwrap());
+        let live = store.get("sess-p").unwrap().unwrap();
+        assert_eq!(live.status, GoalStatus::Blocked);
+        assert_eq!(live.note.as_deref(), Some("closed"));
+
+        // Active: same as `block_if_active`.
+        let active = Goal::new("sess-a", "obj", 0, 1_000);
+        store.put(&active).unwrap();
+        assert!(store
+            .block_if_not_terminal("sess-a", "closed", 2_000)
+            .unwrap());
+        assert_eq!(
+            store.get("sess-a").unwrap().unwrap().status,
+            GoalStatus::Blocked
+        );
+
+        // Terminal states keep their own verdict and their own note.
+        for status in [GoalStatus::Complete, GoalStatus::Blocked] {
+            let g = Goal::new("sess-t", "obj", 0, 1_000)
+                .with_status(status, 1_000)
+                .with_note(Some("original".into()), 1_000);
+            store.put(&g).unwrap();
+            assert!(!store
+                .block_if_not_terminal("sess-t", "closed", 2_000)
+                .unwrap());
+            let live = store.get("sess-t").unwrap().unwrap();
+            assert_eq!(live.status, status);
+            assert_eq!(live.note.as_deref(), Some("original"));
+        }
     }
 
     /// Regression (W1): the gate-less Idle arm re-observes the same terminal
