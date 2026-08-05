@@ -14,6 +14,9 @@ pub struct InstallPreferences {
     #[serde(default)]
     pub prefer_brew: bool,
 }
+// `cfg!()` cannot appear inside `#[derive(Default)]`, so the macOS-true default
+// stays a hand-written impl. clippy::derivable_impls mis-flags this.
+#[allow(clippy::derivable_impls)]
 impl Default for InstallPreferences {
     fn default() -> Self {
         Self {
