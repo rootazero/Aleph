@@ -1159,6 +1159,20 @@ pub(super) fn spawn_continuation_run(
             // Terminate honestly per kind instead. No origin channel can be
             // resolved without the agent, so the stored stop reason / blocked
             // note is the surviving signal (R5 as far as it can reach).
+            //
+            // Compound race: the wake also landed out of bounds. `confirm_fire`
+            // already persisted the deadline note on the (now Blocked) goal, but
+            // that note would otherwise vanish from THIS run entirely — the
+            // generic warn below only names "agent no longer exists", and the
+            // Goal-kind block below is a no-op once the goal is already Blocked
+            // (`block_if_active` requires Active). Origin resolution needs
+            // `cont_agent`, which does not exist in this branch either way, so
+            // a log line is the floor here, not a push.
+            if let Some(note) = &goal_out_of_bounds_note {
+                warn!(session = %session_key_str, note = %note,
+                    "goal pursuit: wake landed past the wall-clock bound; goal blocked \
+                     (agent also gone — no origin channel reachable to notify)");
+            }
             warn!(
                 agent_id = %cont_agent_id,
                 session = %session_key_str,
