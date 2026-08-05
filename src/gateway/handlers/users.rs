@@ -534,6 +534,28 @@ mod tests {
         store.set_device_user(device_id, user_id).unwrap();
     }
 
+    /// Upsert a node-namespace device (device_type absent, mirroring
+    /// `admit_node`'s own backfill — `src/gateway/CLAUDE.md` mine 3) and bind
+    /// it to `user_id`. This row shape should never exist in production
+    /// (cluster nodes don't carry a `user_id`), but the store lookup's
+    /// `device_type = 'panel'` predicate must exclude it regardless of that
+    /// invariant holding.
+    fn upsert_node_device(store: &SecurityStore, device_id: &str, user_id: &str) {
+        store
+            .upsert_device(&DeviceUpsertData {
+                device_id,
+                device_name: "Test Node",
+                device_type: None,
+                public_key: &[2u8; 32],
+                fingerprint: device_id,
+                role: "operator",
+                scopes: &[],
+                user_id: None,
+            })
+            .unwrap();
+        store.set_device_user(device_id, user_id).unwrap();
+    }
+
     fn rpc_request(method: &str, params: serde_json::Value) -> JsonRpcRequest {
         JsonRpcRequest::with_id(method, Some(params), json!(1))
     }
@@ -959,6 +981,43 @@ mod tests {
 
         let c = conns.read().await;
         assert_eq!(c.get("conn-bob").unwrap().caller_role, "operator");
+    }
+
+    /// P1 hardening (Task 9): the `devices` table is the shared panel/node
+    /// namespace (`src/gateway/CLAUDE.md` mine 3). The restamp loop's store
+    /// lookup must consider only `device_type = 'panel'` rows, so a
+    /// node-namespace row that happens to carry a matching `user_id`/
+    /// `device_id` (never true in production today — nodes are enrolled via
+    /// `admit_node`, unrelated to the `users` table — but the predicate must
+    /// hold regardless of that invariant) can never restamp a live
+    /// connection.
+    #[tokio::test]
+    async fn restamp_skips_a_node_namespace_device_row_with_a_matching_id() {
+        let store = seeded_store();
+        store
+            .create_user("u-alice", "Alice", UserRole::Member)
+            .unwrap();
+        upsert_node_device(&store, "dev-node-1", "u-alice");
+
+        let kick = kick_with_live_connection("conn-alice", "dev-node-1", "u-alice", "member").await;
+        let conns = kick.connections.clone();
+
+        handle_update(
+            rpc_request(
+                "users.update",
+                json!({"user_id": "u-alice", "role": "admin"}),
+            ),
+            store,
+            kick,
+        )
+        .await;
+
+        let c = conns.read().await;
+        assert_eq!(
+            c.get("conn-alice").unwrap().caller_role,
+            "member",
+            "a node-namespace device row must never restamp a live connection"
+        );
     }
 
     #[tokio::test]

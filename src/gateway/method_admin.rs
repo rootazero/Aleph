@@ -176,18 +176,19 @@ const ADMIN_PREFIXES: &[&str] = &[
     // off the raw `ToolRegistry` — its own module doc says so, and its own
     // hard floor exists precisely because none of the loop's gates run there.
     // That floor covers RCE / `requires_confirmation` / continuation-driven
-    // tools, but NOT the OPERATOR_TOOLS family `method_authz.rs` already
-    // rules operator-only (`cron_manage`, `hooks_manage`, `agent_identity`,
-    // `agent_create`, `moa`, …), so a member could reach them here and, via
-    // `cron_manage`, schedule a run that executes with CALLER_ROLE=None
-    // (= trusted internal). Principle: an RPC surface must never be a
-    // lower-privilege bypass of the per-tool operator gate. The whole family
-    // is gated rather than carved down to `tools.invoke`: this surface is
-    // E2E-test-oriented by its own module doc ("production callers should
-    // still go through the agent loop"), the siblings are few
-    // (catalog/effective/cancel_call/in_flight), and fail-closed-for-privilege
-    // is this list's default. A member-safe read carve-out is a P1 decision
-    // to make with a member Panel in hand, not a P0 guess. ---
+    // tools. It now ALSO covers the OPERATOR_TOOLS family `method_authz.rs`
+    // already rules operator-only (`cron_manage`, `hooks_manage`,
+    // `agent_identity`, `agent_create`, `moa`, …) — P1 member hardening
+    // (Task 9) added a third hard floor to `handle_invoke` that reuses the
+    // identical predicate (`method_authz::tool_requires_operator` +
+    // `turn_context::role_is_operator`) the agent loop's own gate uses, so a
+    // member can no longer reach `cron_manage` here to schedule a run that
+    // executes with CALLER_ROLE=None (= trusted internal). `tools.invoke` is
+    // carved open below (`MEMBER_CARVE_OUTS`); the family stays gated for the
+    // siblings (`tools.catalog`/`tools.effective`/`tools.cancel_call`/
+    // `tools.in_flight`) — narrowing those is a separate, not-yet-made
+    // decision, and fail-closed-for-privilege is still this list's default
+    // for anything not individually carved out. ---
     "tools.",
     // --- Exec-tier approval resolution: a member resolving these is a
     // privilege escalation over the approval gate itself. The delivery-side
@@ -209,6 +210,11 @@ const MEMBER_CARVE_OUTS: &[&str] = &[
     "heartbeat.list", // matches chat-safe `heartbeat_list` in method_authz.rs.
     "heartbeat.get",  // read-only sibling of heartbeat.list.
     "heartbeat.runs", // read-only run history, sibling of heartbeat.list.
+    // P1 member hardening (Task 9): safe now that `handle_invoke` enforces
+    // the OPERATOR_TOOLS gate itself (see the `tools.` comment above) —
+    // identity propagation, not a hole. `Panel team_from_template` needs
+    // only `invoke`; the siblings stay admin-gated (widen later on demand).
+    "tools.invoke",
 ];
 
 #[must_use]
@@ -301,10 +307,10 @@ mod tests {
             "exec.approval.resolve",
             "exec.approvals.pending",
             // direct tool execution (final-review round — C2). `tools.invoke`
-            // is the escalation vector (raw-registry dispatch, no operator
-            // tool gate); the siblings are pinned too so the family stays
-            // whole and a future carve-out has to be deliberate.
-            "tools.invoke",
+            // is carved open below (Task 9, P1 member hardening — the handler
+            // now enforces the operator gate itself); the siblings are
+            // pinned here so the family stays whole and a future carve-out
+            // has to be deliberate.
             "tools.catalog",
             "tools.effective",
             "tools.cancel_call",
@@ -325,10 +331,13 @@ mod tests {
             "projects.list",
             "memory.search",
             "artifacts.list",
-            // NOTE: `tools.invoke` used to be pinned open here. It is now
-            // admin-gated (see ADMIN_PREFIXES) — a raw-registry dispatch
-            // surface must not be a lower-privilege bypass of the per-tool
-            // operator gate. The pin moved to the admin table above.
+            // `tools.invoke` (Task 9, P1 member hardening): carved open now
+            // that `handle_invoke` enforces the OPERATOR_TOOLS gate itself —
+            // see `member_role_is_denied_an_operator_tier_tool` in
+            // `tools_invoke.rs` for the C2 regression this depends on. The
+            // siblings (`tools.catalog` etc., pinned in the admin table
+            // above) are unaffected.
+            "tools.invoke",
             "agents.list",
             "agents.get",
             "heartbeat.list",
@@ -351,6 +360,28 @@ mod tests {
             "commands.list",
         ] {
             assert!(!method_requires_admin(m), "{m} must stay open to members");
+        }
+    }
+
+    /// Pins the exact carve-out shape Task 9 relies on: `tools.invoke` is
+    /// open, but its admin-gated siblings inside the same `tools.` family
+    /// are not — the carve-out is narrow, not a family-wide reopening.
+    #[test]
+    fn tools_invoke_is_carved_open_but_its_siblings_stay_gated() {
+        assert!(
+            !method_requires_admin("tools.invoke"),
+            "tools.invoke must be open — the handler enforces the operator gate itself"
+        );
+        for sibling in [
+            "tools.catalog",
+            "tools.effective",
+            "tools.cancel_call",
+            "tools.in_flight",
+        ] {
+            assert!(
+                method_requires_admin(sibling),
+                "{sibling} must stay admin-gated — only tools.invoke is carved out"
+            );
         }
     }
 

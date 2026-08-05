@@ -187,11 +187,25 @@ impl SecurityStore {
     }
 
     /// Live (un-revoked) device ids linked to a user — deactivation revokes these.
+    /// Live (un-revoked) device ids bound to `user_id`.
+    ///
+    /// `devices` is the shared panel/node namespace (`src/gateway/CLAUDE.md`
+    /// mine 3) — a cluster node's row is backfilled with `device_type = NULL`
+    /// by `admit_node`, never a `user_id`, but the two call sites of this
+    /// method (the live role re-stamp and the deactivation revoke-all) must
+    /// not depend on that invariant holding forever. `PANEL_DEVICE_TYPE` is
+    /// the sole predicate for "is this a panel device" anywhere in this
+    /// codebase; this is that predicate applied here too.
     pub fn list_device_ids_for_user(&self, user_id: &str) -> SqliteResult<Vec<String>> {
         let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
-        let mut stmt = conn
-            .prepare("SELECT device_id FROM devices WHERE user_id = ?1 AND revoked_at IS NULL")?;
-        let rows = stmt.query_map(params![user_id], |r| r.get(0))?;
+        let mut stmt = conn.prepare(
+            "SELECT device_id FROM devices \
+             WHERE user_id = ?1 AND revoked_at IS NULL AND device_type = ?2",
+        )?;
+        let rows = stmt.query_map(
+            params![user_id, crate::gateway::security::PANEL_DEVICE_TYPE],
+            |r| r.get(0),
+        )?;
         rows.collect()
     }
 

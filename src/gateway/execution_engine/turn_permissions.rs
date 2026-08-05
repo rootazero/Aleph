@@ -23,10 +23,21 @@ use super::RunRequest;
 ///
 /// Precedence: the tier the REQUEST carries (the composer's pick, possibly made
 /// in a conversation whose session did not exist yet) > the session's stored
-/// tier > the global `[policies.exec_tier]`. An explicit choice REPLACES the
-/// global tier and may RAISE it as well as lower it — an authorized caller's
-/// deliberate decision, safe because the undisableable `[sandbox.command_policy]`
-/// floor holds under every tier.
+/// tier > the fallback tier. An explicit choice REPLACES the fallback and may
+/// RAISE it as well as lower it — an authorized caller's deliberate decision,
+/// safe because the undisableable `[sandbox.command_policy]` floor holds under
+/// every tier.
+///
+/// The fallback is normally the global `[policies.exec_tier]`. P1 member
+/// hardening (spec §11): when the caller's resolved role is `"member"` and
+/// neither rung above named a tier, the fallback is `Ask` instead — a member
+/// never silently inherits an operator-configured `Auto`/`Full` default. This
+/// is a DEFAULT, not a clamp: an explicit member pick (which lands in
+/// `requested` or `stored`) still wins and may raise above `Ask`, same as any
+/// other caller — the clamp below and the undisableable
+/// `[sandbox.command_policy]` floor are what actually bound member tool
+/// execution, not this default. Operator / absent-role / channel callers are
+/// byte-identical to before (fallback stays `global`).
 ///
 /// The channel clamp runs AFTER the three rungs, never before: an untrusted
 /// (`Chat`) channel must not run at `Full` with nobody at the keyboard, whichever
@@ -38,7 +49,12 @@ pub(super) fn resolve_exec_tier(
     stored: Option<ExecTier>,
     caller_role: Option<&str>,
 ) -> ExecTier {
-    let tier = requested.or(stored).unwrap_or(global);
+    let fallback = if caller_role == Some("member") {
+        ExecTier::Ask
+    } else {
+        global
+    };
+    let tier = requested.or(stored).unwrap_or(fallback);
     match caller_role.and_then(crate::gateway::channel_policy::channel_permission_level_from_role) {
         Some(level) => crate::gateway::channel_policy::clamp_tier_for_channel(level, tier),
         None => tier,
@@ -268,6 +284,55 @@ mod tests {
         assert_eq!(
             resolve_exec_tier(ExecTier::Full, None, None, Some("bogus")),
             ExecTier::Full
+        );
+    }
+
+    // -------------------------------------------------------------------
+    // P1 member hardening (Task 9): member default tier = Ask.
+    // -------------------------------------------------------------------
+
+    /// A member with no explicit pick anywhere (this request and no
+    /// persisted session choice) falls back to `Ask`, not the operator-
+    /// configured global tier — the actual defect this task closes.
+    #[test]
+    fn member_with_no_explicit_tier_defaults_to_ask() {
+        assert_eq!(
+            resolve_exec_tier(ExecTier::Full, None, None, Some("member")),
+            ExecTier::Ask
+        );
+        assert_eq!(
+            resolve_exec_tier(ExecTier::Auto, None, None, Some("member")),
+            ExecTier::Ask
+        );
+    }
+
+    /// Operator resolves the global tier exactly as before — byte-identical.
+    #[test]
+    fn operator_with_no_explicit_tier_still_resolves_the_global_tier() {
+        assert_eq!(
+            resolve_exec_tier(ExecTier::Full, None, None, Some("operator")),
+            ExecTier::Full
+        );
+    }
+
+    /// This is a DEFAULT, not a clamp: an explicit member pick (composer
+    /// pill, landing in `requested`) still wins over the `Ask` default and
+    /// may raise above it.
+    #[test]
+    fn a_members_explicit_pick_still_wins_over_the_member_default() {
+        assert_eq!(
+            resolve_exec_tier(ExecTier::Ask, Some(ExecTier::Full), None, Some("member")),
+            ExecTier::Full
+        );
+    }
+
+    /// Same for a session-stored tier from an earlier explicit pick: it
+    /// outranks the member default exactly like it outranks the global one.
+    #[test]
+    fn a_members_stored_session_tier_still_wins_over_the_member_default() {
+        assert_eq!(
+            resolve_exec_tier(ExecTier::Ask, None, Some(ExecTier::Auto), Some("member")),
+            ExecTier::Auto
         );
     }
 }

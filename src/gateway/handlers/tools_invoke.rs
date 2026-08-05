@@ -23,7 +23,9 @@ use crate::sync_primitives::Arc;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
-use super::super::protocol::{JsonRpcRequest, JsonRpcResponse, INTERNAL_ERROR, INVALID_PARAMS};
+use super::super::protocol::{
+    JsonRpcRequest, JsonRpcResponse, AUTH_REQUIRED, INTERNAL_ERROR, INVALID_PARAMS,
+};
 use super::parse_params;
 use crate::agents::AgentRegistry;
 use crate::executor::ToolRegistry;
@@ -68,14 +70,15 @@ where
     }
 
     // Transport hard floor. This handler dispatches straight off the raw
-    // `ToolRegistry`, so none of the loop's gates (exec tier, tool_permissions,
-    // the operator gate, the confirmation card) run here — and this surface has
-    // no approval transport to raise a card with. Two classes are therefore
+    // `ToolRegistry`, so most of the loop's gates (exec tier, tool_permissions,
+    // the confirmation card) do not run here — and this surface has no
+    // approval transport to raise a card with. Two classes are therefore
     // refused outright: RCE / host-mutation / self-reconfiguration tools
     // (openclaw `dangerous-tools` parity) and tools that self-declare
     // `requires_confirmation`. Production agents reach both through the agent
     // loop, which does have the gates. Re-enable a specific tool via the
-    // `ALEPH_GATEWAY_TOOLS_ALLOW` env var.
+    // `ALEPH_GATEWAY_TOOLS_ALLOW` env var. (The operator gate is the one
+    // exception — see the third hard floor below, P1 Task 9.)
     if crate::security::dangerous_tools::is_denied_on_gateway_surface(
         &params.tool_name,
         &params.arguments,
@@ -116,6 +119,40 @@ where
                 crate::security::dangerous_tools::GATEWAY_TOOLS_ALLOW_ENV
             ),
         );
+    }
+
+    // Third hard floor: operator-tier tools (`OPERATOR_TOOLS`,
+    // `method_authz.rs` — self-config, cron, agent identity, cluster
+    // membership, …). This handler dispatches straight off the raw
+    // `ToolRegistry` (see the module doc above) and never reaches
+    // `ScopedToolService::check_operator_gate`, so without this check a
+    // member-authorized Panel connection could invoke e.g. `cron_manage`
+    // directly — the exact C2 escalation `method_admin.rs` used to fend off
+    // by blanket-gating the whole `tools.` family at the RPC layer. That
+    // blanket gate is now narrowed to carve `tools.invoke` open (P1 member
+    // hardening, Task 9); this is the enforcement that makes the carve-out
+    // safe. Reuses the SAME predicate the agent loop's own gate uses —
+    // `method_authz::tool_requires_operator` +
+    // `turn_context::role_is_operator` — against `caller_role`, which is
+    // already ambient here (scoped around every dispatched request at
+    // `process_request`, P0/Task 3): nothing new is stamped, this handler
+    // simply never consulted what was already available. Absent role (no
+    // gateway connection — cron/internal/local no-auth daemon) is trusted,
+    // exactly like every other operator gate in this codebase.
+    if crate::gateway::method_authz::tool_requires_operator(&params.tool_name) {
+        let caller_role = crate::gateway::caller_identity::current_caller_role();
+        if !crate::tools::turn_context::role_is_operator(caller_role.as_deref()) {
+            return JsonRpcResponse::error(
+                request.id,
+                AUTH_REQUIRED,
+                format!(
+                    "tool '{}' changes Aleph's own configuration and requires an \
+                     operator-authorized connection; this caller is not operator-tier. \
+                     Do not retry.",
+                    params.tool_name
+                ),
+            );
+        }
     }
 
     // Allowlist gate — applied only when caller supplied an agent registry.
@@ -468,6 +505,94 @@ mod tests {
         let req = JsonRpcRequest::with_id("tools.invoke", Some(params), json!(1));
         let resp = handle_invoke(req, tool_reg, None).await;
         assert!(resp.is_success());
+    }
+
+    // ---------------------------------------------------------------------
+    // P1 member hardening (Task 9): the operator-tier tool gate.
+    //
+    // `tools.invoke` dispatches straight off the raw `ToolRegistry` and never
+    // passes through `ScopedToolService::check_operator_gate` — verified by
+    // reading `execute_inner`/`dispatch.rs`, which this handler simply does
+    // not call. The C2 escalation: a member-authorized Panel connection
+    // (P0 identity, `CALLER_ROLE == "member"`) could invoke `cron_manage`
+    // (an `OPERATOR_TOOLS` entry, `method_authz.rs`) directly, bypassing the
+    // gate the agent loop already enforces for that same tool. The fix
+    // reuses the identical predicate the loop's gate uses
+    // (`method_authz::tool_requires_operator` +
+    // `turn_context::role_is_operator`) against the `caller_role` already
+    // ambient here (scoped around every dispatched request by
+    // `server::handler::dispatch_with_caller_context` — P0/Task 3, nothing
+    // new to stamp), so `tools.invoke` can be carved open in
+    // `method_admin::MEMBER_CARVE_OUTS` without reopening the escalation.
+    // ---------------------------------------------------------------------
+
+    #[tokio::test]
+    async fn member_role_is_denied_an_operator_tier_tool() {
+        crate::gateway::caller_identity::CALLER_ROLE
+            .scope(Some("member".to_string()), async {
+                let reg = Arc::new(StubRegistry::new().with_ok("cron_manage", json!({"ok": true})));
+                let params = json!({"tool_name": "cron_manage", "arguments": {"action": "list"}});
+                let req = JsonRpcRequest::with_id("tools.invoke", Some(params), json!(1));
+                let resp = handle_invoke(req, reg.clone(), None).await;
+                assert!(
+                    !resp.is_success(),
+                    "a member must be denied an operator-tier tool"
+                );
+                assert_eq!(resp.error.unwrap().code, AUTH_REQUIRED);
+                assert!(
+                    reg.last_call().is_none(),
+                    "registry must not be touched when the operator gate denies"
+                );
+            })
+            .await;
+    }
+
+    #[tokio::test]
+    async fn member_role_may_invoke_an_ordinary_read_tool() {
+        crate::gateway::caller_identity::CALLER_ROLE
+            .scope(Some("member".to_string()), async {
+                let reg =
+                    Arc::new(StubRegistry::new().with_ok("memory_search", json!({"hits": []})));
+                let params = json!({"tool_name": "memory_search", "arguments": {"query": "x"}});
+                let req = JsonRpcRequest::with_id("tools.invoke", Some(params), json!(1));
+                let resp = handle_invoke(req, reg.clone(), None).await;
+                assert!(resp.is_success(), "expected success: {:?}", resp.error);
+                assert!(reg.last_call().is_some());
+            })
+            .await;
+    }
+
+    #[tokio::test]
+    async fn operator_role_may_invoke_an_operator_tier_tool() {
+        crate::gateway::caller_identity::CALLER_ROLE
+            .scope(Some("operator".to_string()), async {
+                let reg = Arc::new(StubRegistry::new().with_ok("cron_manage", json!({"ok": true})));
+                let params = json!({"tool_name": "cron_manage", "arguments": {"action": "list"}});
+                let req = JsonRpcRequest::with_id("tools.invoke", Some(params), json!(1));
+                let resp = handle_invoke(req, reg.clone(), None).await;
+                assert!(
+                    resp.is_success(),
+                    "operator must be allowed: {:?}",
+                    resp.error
+                );
+                assert!(reg.last_call().is_some());
+            })
+            .await;
+    }
+
+    /// Absent role (no `CALLER_ROLE` scoped — cron/internal/local no-auth
+    /// daemon callers) is trusted, exactly like every other operator gate in
+    /// this codebase (`role_is_operator(None) == true`). Byte-identical to
+    /// pre-Task-9 behavior for every test above this point in the file that
+    /// exercises `OPERATOR_TOOLS` members like `vault_store` with no scoped
+    /// role.
+    #[tokio::test]
+    async fn absent_role_is_treated_as_operator_for_the_gate() {
+        let reg = Arc::new(StubRegistry::new().with_ok("cron_manage", json!({"ok": true})));
+        let params = json!({"tool_name": "cron_manage", "arguments": {"action": "list"}});
+        let req = JsonRpcRequest::with_id("tools.invoke", Some(params), json!(1));
+        let resp = handle_invoke(req, reg.clone(), None).await;
+        assert!(resp.is_success(), "expected success: {:?}", resp.error);
     }
 
     #[tokio::test]
