@@ -408,12 +408,25 @@ impl GoalWakeService {
             }
         };
         super::goal_continuation::clear_goal_welded_strategy(&goal.session_id);
-        if let Some(key) = SessionKey::parse(&goal.session_id) {
-            if let Some(agent) = self.deps.registry.get(key.agent_id()).await {
-                let origin = origin_of(&agent, &key).await;
-                notify_origin(origin.as_ref(), format!("⏹ {note}")).await;
-            }
-        }
+        // The goal is now Blocked regardless of what happens below — a parse
+        // or registry miss here is a structural early return BEFORE any
+        // notify attempt, not the ordinary `None` origin `origin_of` can
+        // return (that case is silent by design). Without a log the note —
+        // the only record of why the goal ended — would go dark along with
+        // it. Mirrors the floor `spawn_wake_run` already keeps for the same
+        // two misses (64ceea3ba).
+        let Some(key) = SessionKey::parse(&goal.session_id) else {
+            warn!(session = %goal.session_id, note = %note,
+                "goal wake: unparseable session key; out-of-bounds block has no origin notice");
+            return;
+        };
+        let Some(agent) = self.deps.registry.get(key.agent_id()).await else {
+            warn!(session = %goal.session_id, agent = %key.agent_id(), note = %note,
+                "goal wake: agent not registered; out-of-bounds block has no origin notice");
+            return;
+        };
+        let origin = origin_of(&agent, &key).await;
+        notify_origin(origin.as_ref(), format!("⏹ {note}")).await;
         info!(session = %goal.session_id, note = %note,
             "goal wake: parked wake outlived its deadline while down; goal blocked");
     }
