@@ -333,3 +333,27 @@ pub const SUPPORTED_EMBEDDING_DIMS: &[u32] = &[384, 768, 1024, 1536, 3072];
 - **cross-encoder rerank 进 `note_manage(query)`**：`note_retrieval` 已有 LLM rerank；
   给显式工具查询再加一次 LLM 调用违背「工具查询要快且可预期」。
 - **存量 plural 笔记的批量迁移**：§2.13 已把它记为 follow-up，本轮不改变该决定。
+
+---
+
+## 6. 实施与设计的偏离（实施后补记，2026-08-05）
+
+设计里有两条在写代码时被证伪，按原样记下而不是回头改设计：
+
+**D7 的处置反了。** §3.6 写「FTS 回退腿改走 store 已有的 `get_notes_with_content`，纯复用，负行数」。
+照做之后 `concurrent_runs_different_agents_do_not_cross_write_memory` 立刻变红——因为 store 侧的
+`load_note_content_from_disk` 从**进程级** `utils::paths::get_note_memory_dir()` 推 note 根，
+而不是从调用它的那个 `NoteIndexer`。复用它等于把「重复派生」换成「读者可能看向写者从没写过的目录」。
+**真正重复的是「怎么拼路径」，不是「根在哪」**：前者收敛成 `note_content_path`（顺带修掉手拼版
+漏掉 `strip_md_ext` 导致 `*.md.md` 的空正文），后者属于各自的所有者。
+**遗留·未做**：hybrid 腿今天仍在用那个全局解析器。生产里两者一致，所以这不是活 bug；
+但任何以非全局 note 根构造 `NoteIndexer` 的部署，其 hybrid 腿会读错目录。
+
+**D2 的自愈范围比设计说的窄。** §3.2 写「存量笔记的多行 Related 会在下一次 weave 时被自愈合并」——
+只有**尾部连续**的 `Related:` 行会合并。被事实行隔开的（`prose / Related:[[A]] / - fact /
+Related:[[B]]`）不会，也**不应该**会：把用户正文里的一行搬位置是一次有损重写。
+修复保证的是「此后不再产生交错」，不是「把已经交错的复原」。
+
+同时新增了设计里没有的一项：`add_links` 在 footer 无需改动时**完全不重写 body**。
+没有它，一次 no-op 的 link add 会 churn `content_hash`，继而把这篇笔记标成向量陈旧、
+下一次重嵌再花一次 API 钱——而 D5 的记账正好让这件事第一次变得可观测，也就第一次变得要紧。
