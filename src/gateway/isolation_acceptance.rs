@@ -429,8 +429,9 @@ async fn two_users_cannot_see_each_other_end_to_end() {
 ///   all — reading it must not retroactively stamp them, and re-serializing
 ///   must not introduce the keys (`skip_serializing_if` holds);
 /// - a bare `agents/main/MEMORY.md` — the first owner-scoped load adopts it
-///   (renames, does not copy) into `agents/main__u-owner/MEMORY.md` with
-///   byte-identical content;
+///   (copies, leaving the base instance in place — see
+///   `adopt_owner_curated_file`'s doc) into
+///   `agents/main__u-owner/MEMORY.md` with byte-identical content;
 /// - a base-partition note under `note/main/...` — `session_read_ids` must
 ///   still query the org partition FIRST in the union, and the note itself
 ///   must survive untouched.
@@ -534,11 +535,14 @@ async fn single_user_fixture_is_byte_identical_after_upgrade() {
     let store = as_caller(OWNER_USER_ID, provider.get_or_load_curated_store("main"))
         .await
         .unwrap();
-    assert!(
-        !tokio::fs::try_exists(bare_memory_dir.join("MEMORY.md"))
+    assert_eq!(
+        tokio::fs::read(bare_memory_dir.join("MEMORY.md"))
             .await
             .unwrap(),
-        "adoption renames the bare file away, it does not copy it"
+        legacy_curated_content.as_bytes(),
+        "adoption COPIES the bare file: the base path is the org-tier instance \
+         every unscoped principal still resolves to, and emptying it is the \
+         P1 final review's I5 (see adopt_owner_curated_file's doc)"
     );
     let owner_scoped_id = scoped_agent_id("main", OWNER_USER_ID);
     let adopted_path = curated_dir.join(&owner_scoped_id).join("MEMORY.md");

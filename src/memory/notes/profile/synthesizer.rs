@@ -107,6 +107,12 @@ impl FsProfileSynthesizer {
     /// owner's composed personal scope. Called before every `store(agent_id)`
     /// read/write so a personal-scoped owner session sees their pre-existing
     /// profile instead of a silently empty one.
+    ///
+    /// COPIES, does not move — the bare path is the org-tier instance every
+    /// unscoped principal resolves to, and moving it leaves them reading an
+    /// empty profile. The argument and the shared atomic-publish helper live
+    /// with the curated twin; see `adopt_owner_curated_file`'s doc and
+    /// `project_scope::copy_adopted_file`.
     async fn adopt_owner_profile(&self, agent_id: &str) {
         let Some(base) = crate::memory::project_scope::owner_adoption_base(agent_id) else {
             return;
@@ -125,8 +131,10 @@ impl FsProfileSynthesizer {
                 return;
             }
         }
-        if let Err(e) = tokio::fs::rename(&bare_path, &scoped_path).await {
-            warn!("owner adoption: USER.md rename failed for {agent_id}: {e}");
+        if let Err(e) =
+            crate::memory::project_scope::copy_adopted_file(&bare_path, &scoped_path).await
+        {
+            warn!("owner adoption: USER.md copy failed for {agent_id}: {e}");
         }
     }
 

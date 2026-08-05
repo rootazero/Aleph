@@ -243,6 +243,42 @@ pub fn owner_adoption_base(agent_id: &str) -> Option<&str> {
     agent_id.strip_suffix(&format!("{NS_SEP}{OWNER_USER_ID}"))
 }
 
+/// Copy a pre-P1 base-partition file into the owner's personal-scope path,
+/// publishing it atomically.
+///
+/// The single implementation shared by the two adoption hooks
+/// (`MemoryContextProvider::adopt_owner_curated_file` for MEMORY.md /
+/// OPEN_LOOPS.md, `FsProfileSynthesizer::adopt_owner_profile` for USER.md),
+/// which had drifted into two near-identical copies of the same body. Both
+/// gate on "the scoped file does not exist yet", so a half-written
+/// destination would permanently suppress re-adoption — hence the copy lands
+/// on a temp sibling and is `rename`d into place, which is atomic on every
+/// supported platform. A leftover temp file from a crash is overwritten by
+/// the next attempt (`fs::copy` truncates).
+///
+/// It COPIES: the source is the org-tier instance that every unscoped
+/// principal reads, and moving it out from under them is the P1 defect this
+/// exists to avoid. See `adopt_owner_curated_file`'s doc for the full
+/// argument.
+pub async fn copy_adopted_file(
+    from: &Path,
+    to: &Path,
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    let mut staging = to.as_os_str().to_owned();
+    staging.push(".adopting");
+    let staging = std::path::PathBuf::from(staging);
+
+    if let Err(e) = tokio::fs::copy(from, &staging).await {
+        let _ = tokio::fs::remove_file(&staging).await;
+        return Err(Box::new(e));
+    }
+    if let Err(e) = tokio::fs::rename(&staging, to).await {
+        let _ = tokio::fs::remove_file(&staging).await;
+        return Err(Box::new(e));
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

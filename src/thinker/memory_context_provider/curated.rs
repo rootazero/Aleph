@@ -522,7 +522,7 @@ mod tests {
     /// note-memory dir), so this test points both at the SAME tempdir root —
     /// each store's own adoption hook only ever cares about its own root.
     #[tokio::test]
-    async fn owner_adoption_moves_the_trio_once_and_is_idempotent() {
+    async fn owner_adoption_copies_the_trio_once_and_is_idempotent() {
         use crate::memory::notes::profile::synthesizer::FsProfileSynthesizer;
         use crate::providers::recording_mock::RecordingMockProvider;
         use crate::scope::{with_scope, ScopeAttribution};
@@ -562,12 +562,30 @@ mod tests {
         assert!(rendered.contains("fact one"), "{rendered}");
         assert!(rendered.contains("owner profile body"), "{rendered}");
 
-        // Bare files adopted away; scoped files now hold the content.
-        assert!(!bare.join("MEMORY.md").exists());
-        assert!(!bare.join("USER.md").exists());
+        // The scoped files now hold the content...
         let scoped = dir.path().join("main__u-owner");
         assert!(scoped.join("MEMORY.md").exists());
         assert!(scoped.join("USER.md").exists());
+        // ...and the base instance SURVIVES, byte-identical (final-review
+        // I5). It is the org-tier instance every unscoped principal reads —
+        // an unlinked channel sender, a legacy null-owner cron — so adoption
+        // must not empty it out from under them.
+        assert_eq!(
+            tokio::fs::read_to_string(bare.join("MEMORY.md"))
+                .await
+                .unwrap(),
+            "fact one\n\u{a7}\n",
+            "adoption must copy the base MEMORY.md, not move it"
+        );
+        assert_eq!(
+            tokio::fs::read_to_string(bare.join("USER.md"))
+                .await
+                .unwrap(),
+            "owner profile body",
+            "adoption must copy the base USER.md, not move it"
+        );
+        // No staging file left behind by the atomic publish.
+        assert!(!scoped.join("MEMORY.md.adopting").exists());
 
         // Idempotent: a fresh session (caches evicted) re-loads and finds
         // nothing left to adopt — no error, same content.
@@ -581,6 +599,55 @@ mod tests {
         let rendered2 = format!("{msg2:?}");
         assert!(rendered2.contains("fact one"), "{rendered2}");
         assert!(rendered2.contains("owner profile body"), "{rendered2}");
+    }
+
+    /// Final-review I5, the reader that was actually stranded: a principal
+    /// with NO personal scope at all.
+    ///
+    /// `session_write_id` falls through to the BASE id when nothing is
+    /// scoped, which is the everyday case for an unlinked channel sender
+    /// (`sender_user` is `None` by design) and for a legacy null-owner cron.
+    /// While adoption moved the file, the owner's first Panel run emptied the
+    /// base instance and every one of those principals silently read a blank
+    /// hot zone — then `remember(add)` wrote a second, diverging store
+    /// underneath them (§2.5's "memory fails silently" mode), on a
+    /// single-user box.
+    #[tokio::test]
+    async fn an_unscoped_principal_still_reads_the_base_instance_after_owner_adoption() {
+        use crate::scope::{with_scope, ScopeAttribution};
+
+        let dir = tempfile::tempdir().unwrap();
+        let bare = dir.path().join("main");
+        tokio::fs::create_dir_all(&bare).await.unwrap();
+        tokio::fs::write(bare.join("MEMORY.md"), "pre-P1 single-user fact\n\u{a7}\n")
+            .await
+            .unwrap();
+
+        let provider = provider_rooted_at(dir.path());
+
+        // The owner's first Panel run adopts.
+        with_scope(
+            Some(ScopeAttribution::personal(
+                crate::gateway::security::store::OWNER_USER_ID,
+            )),
+            provider.get_or_load_curated_store("main"),
+        )
+        .await
+        .unwrap();
+
+        // An unscoped principal (no `with_scope` at all — exactly what an
+        // unlinked channel sender and a legacy cron run under) reads the base
+        // id, and must still find the content there.
+        provider.invalidate_curated_for_agent("main").await;
+        let unscoped = provider.get_or_load_curated_store("main").await.unwrap();
+        let entries = unscoped.current_entries();
+        assert!(
+            entries
+                .iter()
+                .any(|e| e.contains("pre-P1 single-user fact")),
+            "an unscoped principal must not read an empty hot zone after the \
+             owner adopts: {entries:?}"
+        );
     }
 
     /// A non-owner personal scope (e.g. a team member) must get a genuinely
