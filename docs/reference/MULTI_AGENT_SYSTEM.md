@@ -691,6 +691,17 @@ sees one ordinary provider (R10); none of this touches `src/harness/`.
   `select_model` session pick > agent `model_hint` pin > flow `BrainRef`
   brain. An unusable preset (no `[moa]` section, unresolvable provider) fails
   soft — the run falls back to the normal provider chain and logs a warning.
+- **Side channels** (round 9): `MoaProvider` is the shape of the *user's
+  turn*, and only the Think loop drives it. Anything else in the run that
+  reaches for "the run's provider" — today that is history summarization via
+  `ContextCompactor` — takes `MoaProvider::acting_chain()` instead: the same
+  acting model, without the fan-out. Going through the facade made every
+  compaction pay N advisor calls, appended "use the advisor responses below"
+  to the *summarizer's* prompt (so advisory framing could reach the persisted
+  `<session_context>`), and consumed a cadence slot while overwriting the
+  run's cached advice — which the next real turn then reused. `runner_impl.rs`
+  derives `side_channel_llm` for this, wrapped in the same per-agent
+  `MeteringProvider` so side-channel spend is still attributed.
 - **Accounting**: advisor usage is metered per-slot (`MeteringProvider`
   labelled `moa:<idx>:<provider>:<model>`) and kept OUT of
   `ProviderResponse.usage` so the context gauge stays honest; a summed
@@ -699,7 +710,12 @@ sees one ordinary provider (R10); none of this touches `src/harness/`.
   `MoaTurnTrace` (persist-only, gated by `save_traces`) — are the harness's
   only touchpoint (`src/harness/trace.rs`). The panel renders the three live
   events inline as reasoning blocks (◇ 顾问 / ◆ 聚合 / ▫ 开销,
-  `interfaces/webchat/src/platform/wide/views/chat/events.rs`).
+  `interfaces/webchat/src/platform/wide/views/chat/events.rs`). Since round 9
+  each `MoaAdvisor` fires the moment that advisor lands (a `FuturesUnordered`
+  over the fan-out), not in one batch after the slowest returns — advisors
+  differ wildly in latency and the batch shape left every surface dark for up
+  to `advisor_timeout_secs` on each tool iteration. The event still carries its
+  own SLOT index, so what a user reads never depends on who answered first.
 
 **Round 2** (spec `docs/superpowers/specs/2026-07-05-moa-round2-optimization-design.md`)
 added four pieces on top of the port above:

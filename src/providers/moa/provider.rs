@@ -79,6 +79,12 @@ pub struct MoaProvider {
     /// two MISSes could both fan out (duplicate advisor spend,
     /// last-writer-wins) — the check-then-act gap is deliberate, not an
     /// oversight (round-2 R3).
+    ///
+    /// The other half of that invariant is that only the Think loop drives
+    /// `process()` at all: a non-turn caller sharing the facade advances the
+    /// cadence and overwrites `outcomes` with advice about its own prompt.
+    /// Side channels take [`MoaProvider::acting_chain`] instead — read its doc
+    /// before wiring a new consumer of "the run's provider".
     cache: Mutex<Option<FanoutState>>,
     /// Run-scoped per-advisor circuit breaker (round-6 G1). Same run-scoped,
     /// strictly-sequential invariant as `cache` above.
@@ -196,6 +202,36 @@ impl MoaProvider {
         if let Some(sink) = &self.sink {
             sink.on_trace(&event);
         }
+    }
+
+    /// The acting model WITHOUT the advisory fan-out in front of it.
+    ///
+    /// MoA is the shape of the USER'S TURN: flatten → consult → aggregate. A
+    /// run has other, non-turn calls that go through "the run's provider" —
+    /// history summarization is the live one (`ContextCompactor::summarizer`,
+    /// wired in `runner_impl.rs`) — and every one of them used to fan out too,
+    /// because the compactor was handed the facade. That is wrong three ways
+    /// at once, all silent:
+    ///
+    /// * **cost/latency** — one summarization pays N advisor calls, each up to
+    ///   `advisor_timeout_secs` (default 120 s), on the critical path of a turn;
+    /// * **content** — the advisors are asked to advise on a *summarize this
+    ///   history* prompt, and `build_guidance` appends "Use the advisor
+    ///   responses below as private context" to the summarizer's own prompt,
+    ///   so advisory framing can land in the `<session_context>` summary that
+    ///   is then persisted and replayed for the rest of the conversation;
+    /// * **cadence** — the side-channel call has its own view signature, so it
+    ///   consumes a cadence slot AND overwrites this run's cached advice. Under
+    ///   [`MoaFanout::UserTurn`] / [`MoaFanout::EveryN`] the next REAL turn then
+    ///   reuses advice about how to write a summary.
+    ///
+    /// Callers that are not the user's turn take this chain instead. It is the
+    /// same acting model (so summaries stay in the model family that will read
+    /// them back) — just without the consultation.
+    #[must_use]
+    pub fn acting_chain(&self) -> Arc<dyn AiProvider> {
+        // rust-doctor-disable-next-line excessive-clone
+        self.aggregator.clone()
     }
 
     /// `(provider, model)` of the aggregator slot — run-level attribution
@@ -326,138 +362,157 @@ impl MoaProvider {
         let metadata = payload.metadata.clone();
 
         Box::pin(async move {
-            // 1. Advisory view + whole-view budget + signature. The budget is
-            //    derived from the weakest advisor's real context window
-            //    (round-8) and runs BEFORE the signature so the cache key
-            //    describes what is actually sent (round-6 G3).
-            let mut view = build_advisory_view(&messages);
-            let budget =
-                view_budget_chars(&view, self.advisor_window_tokens, self.advisor_max_tokens);
-            apply_view_budget(&mut view, budget);
-            let sig = view_signature(&view);
-
-            // 1b. Prompt-cache breakpoints (round-2 E1) — AFTER the signature
-            //     (which ignores marks) so the cache key is never perturbed.
-            mark_cache_breakpoints(&mut view);
-
-            // 2. Cadence decision — see `reuse_cached`.
-            let cached: Option<Vec<AdvisorOutcome>> = self.reuse_cached(sig);
-
             // Round-2 B3: pending turn-trace payload, filled in on a MISS
             // (below) and emitted only after the aggregator returns — see
             // the comment at the aggregator call site.
             let mut pending_trace: Option<serde_json::Value> = None;
 
-            let outcomes: Vec<AdvisorOutcome> = if let Some(hit) = cached {
-                // Cache HIT: the aggregator still runs on the reused advice —
-                // emit the lightweight aggregating moment so multi-iteration
-                // user_turn runs don't go dark on the panel (round-2 B4).
-                if !hit.is_empty() {
-                    self.emit(LoopTraceEvent::MoaAggregating {
-                        // rust-doctor-disable-next-line excessive-clone
-                        aggregator: self.aggregator_label.clone(),
-                        advisor_count: hit.len(),
-                        cached: true,
-                    });
-                }
-                hit
-            } else if self.advisors.is_empty() {
+            // A preset with `enabled = false` (or simply no advisor slots) has
+            // nothing to consult, so none of the view pipeline below has a
+            // consumer: the whole transcript was being re-flattened, budgeted,
+            // hashed and marked once per turn to produce an empty outcome
+            // vector. Skip straight to the aggregator — the facade is then a
+            // pure pass-through, which is exactly what the preset asked for.
+            let outcomes: Vec<AdvisorOutcome> = if self.advisors.is_empty() {
                 Vec::new()
             } else {
-                // 3. Parallel fan-out (extracted: fan_out.rs). The breaker
-                //    mask is read here and folded back below — both under the
-                //    same run-scoped sequential invariant as `cache`, and
-                //    never held across the fan-out `.await`.
-                let skip_reasons: Vec<Option<String>> = {
-                    let guard = self.health.lock().unwrap_or_else(|e| e.into_inner());
-                    (0..self.advisors.len())
-                        .map(|idx| guard.skip_reason(idx))
-                        .collect()
-                };
-                let results = super::fan_out::run_fan_out(
-                    &self.advisors,
-                    &view,
-                    // Round-6 G2: advisors see the acting agent's tool roster
-                    // so their "tool-use strategy" advice names real tools.
-                    &advisor_system_prompt(tools.as_deref()),
-                    &skip_reasons,
-                    self.advisor_timeout,
-                    self.advisor_temperature,
-                    self.advisor_max_tokens,
-                )
-                .await;
-                {
-                    let signals: Vec<_> = results.iter().map(|r| r.health.clone()).collect();
-                    self.health
-                        .lock()
-                        .unwrap_or_else(|e| e.into_inner())
-                        .record(&signals);
-                }
+                // 1. Advisory view + whole-view budget + signature. The budget is
+                //    derived from the weakest advisor's real context window
+                //    (round-8) and runs BEFORE the signature so the cache key
+                //    describes what is actually sent (round-6 G3).
+                let mut view = build_advisory_view(&messages);
+                let budget =
+                    view_budget_chars(&view, self.advisor_window_tokens, self.advisor_max_tokens);
+                apply_view_budget(&mut view, budget);
+                let sig = view_signature(&view);
 
-                let usages: Vec<(usize, TokenUsage)> = results
-                    .iter()
-                    .enumerate()
-                    // rust-doctor-disable-next-line excessive-clone
-                    .filter_map(|(idx, r)| r.usage.clone().map(|u| (idx, u)))
-                    .collect();
-                let outcomes: Vec<AdvisorOutcome> =
+                // 2. Cadence decision — see `reuse_cached`.
+                let cached: Option<Vec<AdvisorOutcome>> = self.reuse_cached(sig);
+
+                if let Some(hit) = cached {
+                    // Cache HIT: the aggregator still runs on the reused advice —
+                    // emit the lightweight aggregating moment so multi-iteration
+                    // user_turn runs don't go dark on the panel (round-2 B4).
+                    if !hit.is_empty() {
+                        self.emit(LoopTraceEvent::MoaAggregating {
+                            // rust-doctor-disable-next-line excessive-clone
+                            aggregator: self.aggregator_label.clone(),
+                            advisor_count: hit.len(),
+                            cached: true,
+                        });
+                    }
+                    hit
+                } else {
+                    // 2b. Prompt-cache breakpoints (round-2 E1) — AFTER the
+                    //     signature (which ignores marks) so the cache key is
+                    //     never perturbed, and only on the MISS path: on a HIT the
+                    //     view is discarded without ever reaching a provider, so
+                    //     marking it was decorating a value nobody sends.
+                    mark_cache_breakpoints(&mut view);
+
+                    // 3. Parallel fan-out (extracted: fan_out.rs). The breaker
+                    //    mask is read here and folded back below — both under the
+                    //    same run-scoped sequential invariant as `cache`, and
+                    //    never held across the fan-out `.await`.
+                    let skip_reasons: Vec<Option<String>> = {
+                        let guard = self.health.lock().unwrap_or_else(|e| e.into_inner());
+                        (0..self.advisors.len())
+                            .map(|idx| guard.skip_reason(idx))
+                            .collect()
+                    };
+                    let results = super::fan_out::run_fan_out(
+                        &self.advisors,
+                        &view,
+                        // Round-6 G2: advisors see the acting agent's tool roster
+                        // so their "tool-use strategy" advice names real tools.
+                        &advisor_system_prompt(tools.as_deref()),
+                        &skip_reasons,
+                        self.advisor_timeout,
+                        self.advisor_temperature,
+                        self.advisor_max_tokens,
+                        // Live per-advisor events, emitted as each lands rather
+                        // than in one batch once the slowest returns.
+                        self.sink.as_ref(),
+                    )
+                    .await;
+                    {
+                        let signals: Vec<_> = results.iter().map(|r| r.health.clone()).collect();
+                        self.health
+                            .lock()
+                            .unwrap_or_else(|e| e.into_inner())
+                            .record(&signals);
+                    }
+
+                    let usages: Vec<(usize, TokenUsage)> = results
+                        .iter()
+                        .enumerate()
+                        // rust-doctor-disable-next-line excessive-clone
+                        .filter_map(|(idx, r)| r.usage.clone().map(|u| (idx, u)))
+                        .collect();
+                    let outcomes: Vec<AdvisorOutcome> =
                     // rust-doctor-disable-next-line excessive-clone
                     results.iter().map(|r| r.outcome.clone()).collect();
 
-                // 4. Display + accounting + heavy trace events (MISS only;
-                //    per-advisor + aggregating emission lives in fan_out.rs).
-                super::fan_out::emit_fanout_events(&self.sink, &results, &self.aggregator_label);
-                if !usages.is_empty() {
-                    // `advisor_count` is documented as CONSULTED — breaker
-                    // skips don't count (the display `i/n` in
-                    // `emit_fanout_events` stays the total slot count).
-                    let consulted = results.iter().filter(|r| r.consulted()).count();
-                    let spend = self.spend_event(consulted, &usages);
-                    self.emit(spend);
-                }
-                if self.save_traces {
-                    pending_trace = Some(json!({
-                        "aggregator": self.aggregator_label,
-                        "view_signature": sig,
-                        "advisors": outcomes
-                            .iter()
-                            .map(|o| json!({ "label": o.label, "output": o.text }))
-                            .collect::<Vec<_>>(),
-                    }));
-                }
+                    // 4. Accounting + heavy trace events (MISS only). The
+                    //    per-advisor events already fired inside the fan-out; this
+                    //    closes the group with the aggregating marker.
+                    super::fan_out::emit_aggregating_event(
+                        &self.sink,
+                        results.len(),
+                        &self.aggregator_label,
+                    );
+                    if !usages.is_empty() {
+                        // `advisor_count` is documented as CONSULTED — breaker
+                        // skips don't count (the display `i/n` emitted by the
+                        // fan-out stays the total slot count).
+                        let consulted = results.iter().filter(|r| r.consulted()).count();
+                        let spend = self.spend_event(consulted, &usages);
+                        self.emit(spend);
+                    }
+                    if self.save_traces {
+                        pending_trace = Some(json!({
+                            "aggregator": self.aggregator_label,
+                            "view_signature": sig,
+                            "advisors": outcomes
+                                .iter()
+                                .map(|o| json!({ "label": o.label, "output": o.text }))
+                                .collect::<Vec<_>>(),
+                        }));
+                    }
 
-                {
-                    let mut guard = self.cache.lock().unwrap_or_else(|e| e.into_inner());
-                    match guard.as_mut() {
-                        Some(state) => {
-                            // R3 invariant guard: `reuse_cached` stamped
-                            // `last_seen_signature = sig` before this fan-out
-                            // started, and the lock was NOT held across the
-                            // `.await` (see the invariant doc on `cache`).
-                            // Finding a different signature here means another
-                            // `process()` call advanced the run's state while
-                            // this one was consulting — the run-scoped,
-                            // strictly sequential invariant was violated.
-                            debug_assert_eq!(
-                                state.last_seen_signature, sig,
-                                "MoaProvider cache invariant violated: a concurrent \
+                    {
+                        let mut guard = self.cache.lock().unwrap_or_else(|e| e.into_inner());
+                        match guard.as_mut() {
+                            Some(state) => {
+                                // R3 invariant guard: `reuse_cached` stamped
+                                // `last_seen_signature = sig` before this fan-out
+                                // started, and the lock was NOT held across the
+                                // `.await` (see the invariant doc on `cache`).
+                                // Finding a different signature here means another
+                                // `process()` call advanced the run's state while
+                                // this one was consulting — the run-scoped,
+                                // strictly sequential invariant was violated.
+                                debug_assert_eq!(
+                                    state.last_seen_signature, sig,
+                                    "MoaProvider cache invariant violated: a concurrent \
                                  process() call advanced the fan-out state while \
                                  this one was consulting advisors"
-                            );
-                            // rust-doctor-disable-next-line excessive-clone
-                            state.outcomes = outcomes.clone();
-                        }
-                        None => {
-                            *guard = Some(FanoutState {
-                                last_seen_signature: sig,
-                                advances: 1,
+                                );
                                 // rust-doctor-disable-next-line excessive-clone
-                                outcomes: outcomes.clone(),
-                            });
+                                state.outcomes = outcomes.clone();
+                            }
+                            None => {
+                                *guard = Some(FanoutState {
+                                    last_seen_signature: sig,
+                                    advances: 1,
+                                    // rust-doctor-disable-next-line excessive-clone
+                                    outcomes: outcomes.clone(),
+                                });
+                            }
                         }
                     }
+                    outcomes
                 }
-                outcomes
             };
 
             // 5. Guidance injection at the prompt tail (cache-stable prefix).
@@ -596,6 +651,7 @@ impl AiProvider for MoaProvider {
 #[cfg(test)]
 mod tests {
     use super::super::advisory_view::ADVISORY_VIEW_BUDGET;
+    use super::super::prompts::carries_advisory_guidance;
     use super::*;
     use crate::providers::mock::MockProvider;
     use std::sync::atomic::{AtomicUsize, Ordering};
@@ -790,6 +846,108 @@ mod tests {
         assert_eq!(calls.load(Ordering::SeqCst), 2);
         // Parallel: two 150ms advisors must not take 300ms serially.
         assert!(start.elapsed() < Duration::from_millis(280));
+    }
+
+    #[tokio::test]
+    async fn advisor_events_land_as_each_advisor_finishes_while_slots_stay_aligned() {
+        // Advisors differ wildly in latency (a local 7B next to a reasoning
+        // model). Emitting the whole batch after the SLOWEST returns meant the
+        // panel and the TUI went dark for up to `advisor_timeout_secs` on every
+        // tool iteration under the default cadence, then printed everything at
+        // once. Slot 0 is the slow one here, so completion order (1, 0) is the
+        // opposite of slot order — which is exactly what makes the assertion
+        // meaningful.
+        let calls = Arc::new(AtomicUsize::new(0));
+        let slow: Arc<dyn AiProvider> = Arc::new(CountingProvider {
+            text: "slow advice".into(),
+            delay: Some(Duration::from_millis(120)),
+            calls: calls.clone(),
+        });
+        let fast: Arc<dyn AiProvider> = Arc::new(CountingProvider::new("fast advice"));
+        let capture = Arc::new(Mutex::new(String::new()));
+        let sink = RecordingSink::new();
+        let p = make_provider_sinked(
+            vec![(slow, "slow:m"), (fast, "fast:m")],
+            // rust-doctor-disable-next-line excessive-clone
+            Arc::new(CapturingAggregator(capture.clone())),
+            MoaFanout::PerIteration,
+            // rust-doctor-disable-next-line excessive-clone
+            sink.clone(),
+        );
+        let msgs = user_msgs("go");
+        p.process(RequestPayload::new(&msgs)).await.unwrap();
+
+        let order: Vec<(usize, String)> = sink
+            .events()
+            .into_iter()
+            .filter_map(|e| match e {
+                LoopTraceEvent::MoaAdvisor { index, label, .. } => Some((index, label)),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            order,
+            vec![(2, "fast:m".to_string()), (1, "slow:m".to_string())],
+            "events must arrive in COMPLETION order, carrying their own SLOT index"
+        );
+
+        // Index alignment is unaffected: the guidance still numbers advisors by
+        // slot, so what a user reads never depends on who answered first.
+        let guidance = capture.lock().unwrap_or_else(|e| e.into_inner()).clone();
+        let one = guidance
+            .find("Advisor 1 — slow:m")
+            .expect("slot 1 is slow:m");
+        let two = guidance
+            .find("Advisor 2 — fast:m")
+            .expect("slot 2 is fast:m");
+        assert!(one < two, "guidance order is slot order:\n{guidance}");
+    }
+
+    #[tokio::test]
+    async fn the_acting_chain_reaches_the_aggregator_without_consulting_advisors() {
+        // The seam the run's SIDE CHANNELS take (history summarization —
+        // `ContextCompactor::summarizer`). Going through the facade instead
+        // made every summarization pay the full fan-out, appended "use the
+        // advisor responses below" to the summarizer's own prompt, AND
+        // overwrote this run's cached advice with advice about how to write a
+        // summary — which the next real turn then reused.
+        let calls = Arc::new(AtomicUsize::new(0));
+        let advisor: Arc<dyn AiProvider> = Arc::new(CountingProvider {
+            text: "advice".into(),
+            delay: None,
+            calls: calls.clone(),
+        });
+        let capture = Arc::new(Mutex::new(String::new()));
+        let p = make_provider(
+            vec![(advisor, "a:1")],
+            // rust-doctor-disable-next-line excessive-clone
+            Arc::new(CapturingAggregator(capture.clone())),
+            MoaFanout::PerIteration,
+            30,
+        );
+
+        let msgs = user_msgs("summarize this history");
+        let resp = p
+            .acting_chain()
+            .process(RequestPayload::new(&msgs))
+            .await
+            .unwrap();
+
+        assert_eq!(resp.text_content(), "ok");
+        assert_eq!(
+            calls.load(Ordering::SeqCst),
+            0,
+            "a side-channel call must not consult advisors"
+        );
+        let seen = capture.lock().unwrap_or_else(|e| e.into_inner()).clone();
+        assert!(
+            !carries_advisory_guidance(&seen),
+            "no advisory framing may reach a side-channel prompt:\n{seen}"
+        );
+        assert!(
+            p.cache.lock().unwrap_or_else(|e| e.into_inner()).is_none(),
+            "a side-channel call must not consume a cadence slot or overwrite cached advice"
+        );
     }
 
     /// A streaming-capable aggregator whose `execute_streaming_dyn` emits the
