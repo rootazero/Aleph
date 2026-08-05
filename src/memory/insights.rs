@@ -102,6 +102,19 @@ pub async fn aggregate_tool_usage(
     Ok(build_report(&rows, since_unix_secs, window_seconds, top_n))
 }
 
+/// The report a partition with no invocations in the window produces.
+///
+/// Built by running the REAL aggregator over zero rows rather than
+/// hand-writing the empty shape, so it is byte-identical to a genuine empty
+/// result by construction and cannot drift as [`ToolUsageReport`] gains
+/// fields. `insights.tools` returns this for a partition the caller cannot
+/// see (P1, spec §11-1c) — the denial must be indistinguishable from "that
+/// partition ran no tools", and it must not read the store to say so.
+#[must_use]
+pub fn empty_tool_usage_report(window_seconds: i64, top_n: usize) -> ToolUsageReport {
+    build_report(&[], 0, window_seconds, top_n)
+}
+
 /// One tool's running tallies during aggregation.
 #[derive(Default)]
 struct Acc {

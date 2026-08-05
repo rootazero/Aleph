@@ -191,6 +191,15 @@ impl EmbeddingProvider for UnavailableEmbedder {
 ///
 /// Real retrieval trace: runs the scoring pipeline and returns per-stage
 /// telemetry + scored results for the Settings ▸ Memory debug panel.
+///
+/// P1 partition isolation (spec §11-1c): takes a caller-supplied `agent_id`
+/// exactly like `memory.search`, and returns note CONTENT — a superset of
+/// what `memory.search` discloses, since the per-result `content` is the note
+/// body (truncated to `TRACE_CONTENT_MAX`, not withheld). An invisible
+/// partition therefore gets the same "ran, found nothing" shape an unused
+/// partition produces: empty stages, empty results, no oracle. Checked
+/// BEFORE the retrieval pipeline is built, so a denied caller never touches
+/// the note store.
 pub async fn handle_retrieve_with_trace(
     request: JsonRpcRequest,
     db: MemoryBackend,
@@ -212,6 +221,25 @@ pub async fn handle_retrieve_with_trace(
     let agent_id = params
         .agent_id
         .unwrap_or_else(|| DEFAULT_AGENT_ID.to_string());
+
+    // P1 partition isolation — see this fn's doc. Same empty shape a
+    // partition with no matching notes produces; the default (no suffix)
+    // always passes, so the common path is unaffected.
+    if !crate::gateway::visibility::partition_visible(&agent_id) {
+        let now_ms = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_millis() as i64;
+        return JsonRpcResponse::success(
+            request.id,
+            json!({
+                "query": query,
+                "trace": { "query": query, "timestamp": now_ms, "stages": [] },
+                "results": [],
+            }),
+        );
+    }
+
     let limit = params.limit.unwrap_or(10);
 
     // Snapshot the three scoring configs, then drop the lock before retrieval.
@@ -373,6 +401,39 @@ mod retrieve_trace_tests {
 mod tests {
     use super::*;
     use crate::config::CompressionPolicy;
+
+    /// Final-review I6: `memory.retrieve_with_trace` returns note CONTENT — a
+    /// superset of what the now-guarded `memory.search` discloses — off the
+    /// same caller-supplied `agent_id`. A foreign partition must read as a
+    /// real-but-empty one, and the retrieval pipeline must not run for it.
+    #[tokio::test]
+    async fn retrieve_with_trace_hides_a_foreign_partition() {
+        use crate::gateway::caller_identity::CALLER_USER;
+        use crate::memory::store::sqlite::SqliteMemoryBackend;
+
+        let db: MemoryBackend =
+            Arc::new(SqliteMemoryBackend::in_memory().expect("in-memory backend"));
+        let cfg = Arc::new(tokio::sync::RwLock::new(crate::Config::default()));
+        let req = JsonRpcRequest::with_id(
+            "memory.retrieve_with_trace",
+            Some(json!({ "agent_id": "main__u-alice", "query": "address" })),
+            json!(1),
+        );
+
+        let denied = CALLER_USER
+            .scope(
+                Some("u-bob".to_string()),
+                handle_retrieve_with_trace(req, db, None, cfg),
+            )
+            .await;
+
+        let v = denied.result.expect("success, never an error");
+        assert!(v["results"].as_array().expect("results").is_empty());
+        assert!(v["trace"]["stages"].as_array().expect("stages").is_empty());
+        // The query is echoed, exactly as on the allowed path — the denial
+        // must not be identifiable by a missing field either.
+        assert_eq!(v["query"], "address");
+    }
 
     #[test]
     fn project_compression_emits_panel_shape() {

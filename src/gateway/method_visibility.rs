@@ -256,6 +256,37 @@
 //!   is a creation surface with no addressed record (nothing to check),
 //!   matching `session.create`'s ruling above.
 //!
+//! Five more siblings carried the caller-supplied-`agent_id` shape Task 7
+//! ruled MUST-FIX, and were missed because that sweep stopped at the
+//! `memory.*`/`graph.*` module boundary rather than following the shape:
+//!
+//! - `memory.retrieve_with_trace` → **PartitionChecked**. Strictly worse than
+//!   the `memory.search` it sits next to: its results carry note CONTENT
+//!   (truncated, not withheld). Invisible partition → empty stages, empty
+//!   results, store untouched.
+//! - `memory.list_corrections` → **PartitionChecked**. Rows carry verbatim
+//!   `content` — things the user typed at the agent. Invisible partition →
+//!   empty list, checked before the dream watermark is even read.
+//! - `dreaming.list_insights` → **PartitionChecked**. Its `synthesis` list
+//!   leaks note paths/titles/tags. Invisible partition → all three lists
+//!   empty. (Only `synthesis` is genuinely partitioned; `daily` and `runs`
+//!   read the whole store with no `agent_id` at all — pre-existing, recorded
+//!   in the handler's doc, and the reason the denial empties the whole
+//!   response instead of one list.)
+//! - `insights.tools` → **PartitionChecked**. Discloses which tools a
+//!   partition ran, how often, failure rates, distinct session counts. The
+//!   denial is produced by the REAL aggregator over zero rows
+//!   (`memory::insights::empty_tool_usage_report`) so it is byte-identical to
+//!   a partition that ran nothing and cannot drift as the report type grows.
+//! - `workspace.list` → **ListFiltered**, `workspace.get` →
+//!   **PartitionChecked**. ⚠️ These two are DEFENSE IN DEPTH ONLY and the
+//!   table would overstate them if read as more: a workspace id is a
+//!   user-chosen name that encodes no owner and `agent_envs` has no owner
+//!   column, so an ordinary workspace passes `partition_visible` for every
+//!   caller and its `env_vars` are still cross-user readable. Closing that
+//!   needs an owner column plus a migration — a schema and product decision,
+//!   not a handler fix. Both handlers' docs say so at the site.
+//!
 //! ## `teams.*`
 //!
 //! Registered as [`Treatment::OrgShared`], not because it was audited clean
@@ -375,6 +406,12 @@ pub const SCOPED_METHODS: &[(&str, Treatment)] = &[
     ("group_chat.mention", Treatment::KeyChecked),
     ("group_chat.history", Treatment::KeyChecked),
     ("group_chat.end", Treatment::KeyChecked),
+    ("memory.retrieve_with_trace", Treatment::PartitionChecked),
+    ("memory.list_corrections", Treatment::PartitionChecked),
+    ("dreaming.list_insights", Treatment::PartitionChecked),
+    ("insights.tools", Treatment::PartitionChecked),
+    ("workspace.list", Treatment::ListFiltered),
+    ("workspace.get", Treatment::PartitionChecked),
 ];
 
 /// Whole families ruled [`Treatment::OrgShared`], as prefixes.
@@ -630,6 +667,26 @@ mod tests {
         for m in ["teams.list", "teams.chat.history", "teams.some_future_rpc"] {
             assert_eq!(treatment_of(m), Some(Treatment::OrgShared), "{m}");
         }
+    }
+
+    /// Final-review I6: the five same-shape siblings Task 7's sweep stopped
+    /// short of. `workspace.*` is registered as defense in depth only — see
+    /// the module doc and both handlers.
+    #[test]
+    fn final_review_agent_id_siblings_are_registered() {
+        for m in [
+            "memory.retrieve_with_trace",
+            "memory.list_corrections",
+            "dreaming.list_insights",
+            "insights.tools",
+            "workspace.get",
+        ] {
+            assert_eq!(treatment_of(m), Some(Treatment::PartitionChecked), "{m}");
+        }
+        assert_eq!(
+            treatment_of("workspace.list"),
+            Some(Treatment::ListFiltered)
+        );
     }
 
     /// `trace.list`/`trace.get` are absent from this table on purpose: they

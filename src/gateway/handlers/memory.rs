@@ -522,6 +522,12 @@ pub async fn handle_compress(
 /// Read-only listing of user corrections (raw `flag_user_correction` rows)
 /// and their distillation status. Surfaces the correction→feedback lifecycle
 /// to the panel; performs NO mutation (R7/R8: distillation stays LLM-driven).
+///
+/// P1 partition isolation (spec §11-1c): same caller-supplied `agent_id`
+/// shape as `memory.search`, and the rows carry verbatim `content` (a
+/// correction is something the user typed at the agent). An invisible
+/// partition reads as an empty correction list — the same shape a partition
+/// with no corrections produces.
 pub async fn handle_list_corrections(
     request: JsonRpcRequest,
     db: MemoryBackend,
@@ -544,6 +550,13 @@ pub async fn handle_list_corrections(
         .agent_id
         .as_deref()
         .unwrap_or(crate::routing::DEFAULT_AGENT_ID);
+    // P1 partition isolation — see this fn's doc. Before the watermark read,
+    // so a denied caller learns nothing about the partition's dream state
+    // either.
+    if !crate::gateway::visibility::partition_visible(agent_id) {
+        return JsonRpcResponse::success(request.id, json!({ "corrections": [] }));
+    }
+
     let limit = params.limit.filter(|n| *n > 0).unwrap_or(50);
     let include_distilled = params.include_distilled.unwrap_or(true);
 
@@ -1489,6 +1502,68 @@ mod search_tests {
             "bob must not see alice's partition"
         );
         assert_eq!(result["total"], 0);
+    }
+
+    /// Final-review I6: `memory.list_corrections` carried the same
+    /// unenforced `agent_id` shape as `memory.search` above, and its rows
+    /// carry verbatim `content` — things the user typed at the agent.
+    #[tokio::test]
+    async fn list_corrections_hides_a_foreign_partition() {
+        use crate::gateway::caller_identity::CALLER_USER;
+
+        let db = db();
+        let correction = RawMemory {
+            id: "alice-correction".to_string(),
+            content: "no, my address is 12 Privacy Lane".to_string(),
+            source: RawMemorySource::Correction {
+                severity: "high".to_string(),
+                suggested_rule: Some("remember the address".to_string()),
+            },
+            agent_id: "main__u-alice".to_string(),
+            session_id: None,
+            path: Some("aleph://correction/alice-correction".to_string()),
+            layer: None,
+            attachment_text: None,
+            is_processed: false,
+            created_at: 1_700_000_000,
+        };
+        db.insert_raw_memory(&correction).await.unwrap();
+
+        let ask = |caller: &'static str| {
+            let db = db.clone();
+            async move {
+                CALLER_USER
+                    .scope(Some(caller.to_string()), async {
+                        handle_list_corrections(
+                            req(serde_json::json!({ "agent_id": "main__u-alice" })),
+                            db,
+                        )
+                        .await
+                    })
+                    .await
+            }
+        };
+
+        // Sanity: the row is really there for its owner — otherwise the deny
+        // assertion below would pass for the wrong reason.
+        let owner = ask("u-alice").await;
+        assert_eq!(
+            owner.result.expect("success")["corrections"]
+                .as_array()
+                .unwrap()
+                .len(),
+            1,
+            "alice must see her own correction"
+        );
+
+        let bob = ask("u-bob").await;
+        assert!(
+            bob.result.expect("success, not an error")["corrections"]
+                .as_array()
+                .unwrap()
+                .is_empty(),
+            "bob must not see alice's corrections"
+        );
     }
 }
 

@@ -175,14 +175,17 @@ pub struct Goal {
     /// re-emitted into hook-less wake continuations (`GoalWakeService`) so a
     /// wake's `memory.project_scoped` / retrieval reads never fall back to the
     /// unscoped namespace. `#[serde(default)]` → old (pre-P1) payloads read
-    /// `None` — unscoped, legacy owner semantics, zero behavior change.
-    #[serde(default)]
+    /// `None` — unscoped, legacy owner semantics, zero behavior change;
+    /// `skip_serializing_if` → a legacy row round-trips byte-identical
+    /// instead of gaining an `"owner_user_id":null` key, matching
+    /// `SessionMetadata`'s two fields exactly.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub owner_user_id: Option<String>,
     /// The rendered scope boundary (`scope::ScopeId::render()`) paired with
     /// [`Self::owner_user_id`]. Always set/cleared together with it — see
     /// [`Self::with_owner_scope`]. `#[serde(default)]` → old payloads read
-    /// `None`.
-    #[serde(default)]
+    /// `None`; `skip_serializing_if` → they round-trip unchanged.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub scope_id: Option<String>,
 }
 

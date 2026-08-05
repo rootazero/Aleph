@@ -351,7 +351,24 @@ impl EventVisibilityIndex {
         let owner = match SessionKey::from_key_string(session_key) {
             Some(key) => match store.get_metadata(&key).await {
                 Ok(Some(meta)) => Some(effective_owner(&meta).to_string()),
-                Ok(None) => None,
+                // Row absent: TRANSIENT, exactly like the store error below,
+                // and for a reason that fires on the happy path of a brand-new
+                // conversation. `execute.rs` emits `RunAccepted{session_key}`
+                // BEFORE `ensure_session` creates the row, so the very first
+                // frame of a fresh session can arrive while the row does not
+                // exist yet. Caching that absence as `owner: None` would deny
+                // EVERY later frame for that session key — the cache has no
+                // invalidation and evicts only by FIFO at
+                // `MAX_CACHED_SESSION_OWNERS` — so streaming for that
+                // conversation would stay dead for the process lifetime. It
+                // fails closed, so nothing leaks, but it dies silently, and
+                // loopback resolves to `Some(OWNER_USER_ID)` so a single-user
+                // box runs this path too.
+                //
+                // Deny THIS frame and re-resolve on the next one (a dropped
+                // early frame self-heals via `run_complete`'s summary
+                // reconciliation on the client — see the module doc).
+                Ok(None) => return false,
                 // Store error: fail closed, and don't cache a transient
                 // failure as a permanent "no owner" — matching
                 // `visibility::existing_session_is_visible`'s own rule.
@@ -359,6 +376,8 @@ impl EventVisibilityIndex {
             },
             // Malformed session_key string: cache as "no owner" so a
             // repeated malformed key doesn't re-hit the parse on every event.
+            // This one IS permanent — a string that does not parse today will
+            // not parse later, so nothing can invalidate it.
             None => None,
         };
         self.cache_owner(session_key.to_string(), owner.clone())
@@ -469,6 +488,67 @@ mod tests {
                 .await,
             "the operator is not exempt from session ownership — see visibility.rs's \
              same rule for RPCs"
+        );
+    }
+
+    /// The final review's I4. `RunAccepted{session_key}` is emitted before
+    /// `ensure_session` creates the row, so the first frame of a brand-new
+    /// conversation can lose that race. The frame that loses it must be
+    /// denied — but the DENIAL must not be cached, or every later frame for
+    /// that session dies too, for the process lifetime, silently.
+    #[tokio::test]
+    async fn an_absent_session_row_is_transient_not_a_cached_denial() {
+        let (store, _temp) = test_store();
+        let key = SessionKey::main("conv-racing");
+        let key_str = key.to_key_string();
+        let store: Arc<dyn SessionStore> = Arc::new(store);
+
+        let index = EventVisibilityIndex::new();
+        index
+            .note_frame(
+                "stream.run_accepted",
+                Some(&serde_json::json!({
+                    "run_id": "r-race",
+                    "session_key": key_str,
+                    "accepted_at": "t",
+                })),
+            )
+            .await;
+        let trace = serde_json::json!({
+            "run_id": "r-race",
+            "seq": 1,
+            "event": {"kind": "turn_started", "iteration": 1},
+        });
+
+        // The row does not exist yet: this frame is denied (fail closed).
+        assert!(
+            !index
+                .event_admits("stream.agent_trace", Some(&trace), Some("alice"), &store)
+                .await
+        );
+
+        // `ensure_session` lands, stamping alice as the owner.
+        crate::scope::with_scope(
+            Some(crate::scope::ScopeAttribution::personal("alice")),
+            store.get_or_create(&key),
+        )
+        .await
+        .unwrap();
+
+        // A LATER frame for the same session must now be admitted. Before the
+        // fix this stayed false forever — the `Ok(None)` had been cached as
+        // `owner: None` with nothing to invalidate it.
+        assert!(
+            index
+                .event_admits("stream.agent_trace", Some(&trace), Some("alice"), &store)
+                .await,
+            "an absent row must be re-resolved on the next frame, not cached as a denial"
+        );
+        // ...and the re-resolution is a real one, not a blanket allow.
+        assert!(
+            !index
+                .event_admits("stream.agent_trace", Some(&trace), Some("bob"), &store)
+                .await
         );
     }
 

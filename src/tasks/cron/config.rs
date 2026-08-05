@@ -418,12 +418,16 @@ pub struct CronJob {
     /// P1 data isolation: the user id that created this job, stamped once at
     /// `cron_manage(action='create')` time from `scope::current_scope()`
     /// inside the creating (admin-gated) run. `#[serde(default)]` → old
-    /// (pre-P1) payloads read `None` — unscoped, legacy owner semantics.
-    #[serde(default)]
+    /// (pre-P1) payloads read `None` — unscoped, legacy owner semantics;
+    /// `skip_serializing_if` → a legacy job round-trips byte-identical
+    /// instead of gaining an `"owner_user_id":null` key, matching
+    /// `SessionMetadata`'s two fields exactly.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub owner_user_id: Option<String>,
     /// The rendered scope boundary (`scope::ScopeId::render()`) paired with
-    /// [`Self::owner_user_id`]. `#[serde(default)]` → old payloads read `None`.
-    #[serde(default)]
+    /// [`Self::owner_user_id`]. `#[serde(default)]` → old payloads read
+    /// `None`; `skip_serializing_if` → they round-trip unchanged.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub scope_id: Option<String>,
 }
 
