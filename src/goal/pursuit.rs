@@ -14,6 +14,8 @@
 //! backstops. Sibling of `looping::pursuit` (the clock-gated variant); never
 //! in `src/harness/` (R10 12-file redline).
 
+use std::time::Duration;
+
 use crate::goal::{GateOutcome, Goal, GoalStatus, PursuitMode};
 use crate::looping::types::fmt_duration_ms;
 
@@ -272,6 +274,28 @@ pub fn transient_park_note(code: &str, delay_ms: u64) -> String {
          retrying in ~{}.",
         fmt_duration_ms(delay_ms)
     )
+}
+
+/// Bound a transient-failure retry delay derived from a provider's
+/// `Retry-After` hint into a delay safe to park a goal on.
+///
+/// `hint` is `None` both when the header was missing AND when it parsed to a
+/// `Duration` whose milliseconds overflow `u64` — both read as "no usable
+/// hint", never as "wait forever": `extract_retry_after_str` has no ceiling of
+/// its own (it parses digits straight into `Duration::from_secs`), so without
+/// this a syntactically valid but absurd header (30 days, comfortably inside
+/// `u64`) would sail through unchanged and park the goal a month out.
+///
+/// Floored at 1s so a `Retry-After: 0` (or a parse producing an
+/// effectively-zero delay) cannot spin the wake loop; capped at `max_ms` so no
+/// single hop can outlast the ceiling regardless of what the header claims.
+/// `fallback_ms` is used verbatim when there is no hint at all, so callers
+/// should keep it below `max_ms` themselves — this function does not reorder
+/// the two, only bounds whichever one is selected.
+#[must_use]
+pub fn bound_transient_park_delay_ms(hint: Option<Duration>, fallback_ms: u64, max_ms: u64) -> u64 {
+    let raw_ms = hint.and_then(|d| u64::try_from(d.as_millis()).ok());
+    raw_ms.unwrap_or(fallback_ms).max(1_000).min(max_ms)
 }
 
 /// Pick the note that explains WHY autonomous pursuit stopped, from the three
@@ -783,6 +807,54 @@ mod tests {
         // The note is both the model-facing `waiting_reason` and the user-facing
         // push, so it must read as a pause, never as a halt.
         assert!(!note.to_lowercase().contains("halt"), "got: {note}");
+    }
+
+    #[test]
+    fn bound_transient_park_delay_falls_back_when_there_is_no_hint() {
+        assert_eq!(
+            bound_transient_park_delay_ms(None, 300_000, 600_000),
+            300_000
+        );
+    }
+
+    #[test]
+    fn bound_transient_park_delay_floors_a_zero_or_tiny_hint() {
+        assert_eq!(
+            bound_transient_park_delay_ms(Some(Duration::from_secs(0)), 300_000, 600_000),
+            1_000,
+            "a Retry-After: 0 must not spin the wake loop"
+        );
+    }
+
+    #[test]
+    fn bound_transient_park_delay_passes_through_an_in_range_hint() {
+        assert_eq!(
+            bound_transient_park_delay_ms(Some(Duration::from_secs(45)), 300_000, 600_000),
+            45_000
+        );
+    }
+
+    #[test]
+    fn bound_transient_park_delay_caps_a_large_but_valid_hint() {
+        // The reviewer's finding: a 30-day Retry-After parses cleanly (it
+        // fits comfortably inside u64 millis) and nothing before this clamp
+        // would have caught it.
+        let thirty_days = Duration::from_secs(30 * 24 * 60 * 60);
+        assert_eq!(
+            bound_transient_park_delay_ms(Some(thirty_days), 300_000, 600_000),
+            600_000,
+            "an absurd but syntactically valid hint must still be capped"
+        );
+    }
+
+    #[test]
+    fn bound_transient_park_delay_falls_back_when_the_hint_overflows_u64_millis() {
+        // Duration::MAX's milliseconds exceed u64::MAX — must not silently
+        // wrap into a bogus (possibly tiny) number; reads as "no usable hint".
+        assert_eq!(
+            bound_transient_park_delay_ms(Some(Duration::MAX), 300_000, 600_000),
+            300_000
+        );
     }
 
     #[test]

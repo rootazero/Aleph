@@ -431,6 +431,21 @@ pub(super) fn clear_goal_welded_strategy(session: &str) {
 /// Default retry window when a transient failure carries no `Retry-After`.
 const TRANSIENT_PARK_FALLBACK_MS: u64 = 300_000;
 
+/// Ceiling on a single transient-failure park, even when the provider's own
+/// `Retry-After` asks for more. Mirrors `providers::failover::MAX_COOLDOWN`
+/// (10 minutes, `src/providers/failover/mod.rs`) — the retry machinery's own
+/// answer to "how long is it sane to honor a server-stated rate-limit/cooldown
+/// hint" (`Decision::RateLimited` clamps the identical kind of hint the same
+/// way: `hint.unwrap_or(DEFAULT_MODEL_COOLDOWN).min(MAX_COOLDOWN)` in
+/// `src/providers/failover/provider.rs`) — rather than inventing a second
+/// number for the same question. Kept as a local constant instead of an
+/// import: the value is shared because the underlying question is the same,
+/// not because the goal-park path should take a dependency on the failover
+/// module's internal circuit-breaker tuning. Must stay `>=
+/// TRANSIENT_PARK_FALLBACK_MS`, or the no-hint default would itself get
+/// silently clamped down.
+const TRANSIENT_PARK_MAX_MS: u64 = 600_000;
+
 /// A continuation run failed (non-cancellation, non-busy). Route it by what
 /// KIND of failure it was — the classification is not ours to invent:
 /// [`ExecutionError::receipt_kind`] is already the single source three user
@@ -442,11 +457,16 @@ const TRANSIENT_PARK_FALLBACK_MS: u64 = 300_000;
 ///   barrier and let the wake pipeline resume it. Blocking here used to be a
 ///   verdict on a 429: it made the goal invisible in the prompt, deleted the
 ///   welded plan, and pushed "pursuit halted" for something the codebase's own
-///   classifier labels "retry is worthwhile, soon". The retry is bounded
-///   without any new state — the failed run already spent an iteration at
-///   claim time and the wake spends another, so the iteration cap caps the
-///   recovery, and the wall-clock deadline (now enforced at the wake's
-///   execution instant) caps it again.
+///   classifier labels "retry is worthwhile, soon". The wait itself is bounded
+///   independently of everything else — floored at 1s and capped at
+///   [`TRANSIENT_PARK_MAX_MS`] by [`crate::goal::pursuit::bound_transient_park_delay_ms`]
+///   — because neither of the other two backstops covers a single park's
+///   DURATION: the iteration cap only bounds how many times this can repeat
+///   (the failed run already spent an iteration at claim time, the wake
+///   spends another), and the wall-clock deadline only rejects a wake that
+///   lands past it (`fires_out_of_bounds`, and only when a deadline is set at
+///   all) — neither stops one hop from parking for however long a provider's
+///   `Retry-After` claims.
 /// - Everything else → `Blocked` with the error and an origin notice, exactly
 ///   as before. Without it a transient failure leaves the goal a stuck
 ///   `Active` with no in-flight run — a silent stall — and `Blocked` goals are
@@ -468,11 +488,12 @@ pub(super) async fn block_goal_on_failure(
         crate::gateway::i18n::ReceiptKind::RateLimited
             | crate::gateway::i18n::ReceiptKind::Unreachable
     ) {
-        let delay_ms = crate::providers::llm_retry::extract_retry_after_str(&raw)
-            .map_or(TRANSIENT_PARK_FALLBACK_MS, |d| {
-                u64::try_from(d.as_millis()).unwrap_or(TRANSIENT_PARK_FALLBACK_MS)
-            })
-            .max(1_000);
+        let hint = crate::providers::llm_retry::extract_retry_after_str(&raw);
+        let delay_ms = crate::goal::pursuit::bound_transient_park_delay_ms(
+            hint,
+            TRANSIENT_PARK_FALLBACK_MS,
+            TRANSIENT_PARK_MAX_MS,
+        );
         let note = crate::goal::pursuit::transient_park_note(kind.code(), delay_ms);
         match store.park_if_active(session, now.saturating_add(delay_ms), &note, now) {
             Ok(true) => {
