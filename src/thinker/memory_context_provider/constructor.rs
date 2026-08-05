@@ -322,6 +322,15 @@ impl MemoryContextProvider {
         self
     }
 
+    /// Test-only: set `project_scoped` on an existing provider. Mirrors
+    /// `MemoryConfig.project_scoped`; production always threads it through
+    /// `AssemblerConfig` (`assemble_default`) instead.
+    #[cfg(test)]
+    pub(crate) const fn with_project_scoped(mut self, project_scoped: bool) -> Self {
+        self.project_scoped = project_scoped;
+        self
+    }
+
     /// Resolve the on-disk path for an agent's curated MEMORY.md.
     ///
     /// Real path: `~/.aleph/agents/<agent_id>/MEMORY.md`. Tests can override

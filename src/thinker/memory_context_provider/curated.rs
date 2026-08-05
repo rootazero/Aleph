@@ -65,8 +65,9 @@ impl MemoryContextProvider {
     /// current-session scope, render the `CuratedMemory` and `UserProfile`
     /// blocks, and return them as a frozen `CuratedSnapshot`. `base_agent_id`
     /// is the BASE agent id; resolved once here via `resolve_storage_id` and
-    /// reused for every sub-fetch (USER.md, OPEN_LOOPS.md) so all three
-    /// curated files come from the SAME scope's directory.
+    /// reused for MEMORY.md + USER.md. OPEN_LOOPS.md resolves SEPARATELY,
+    /// pinned to match its writer's more limited scoping — see the comment
+    /// at that sub-fetch below for why.
     async fn capture_curated(
         &self,
         base_agent_id: &str,
@@ -110,16 +111,38 @@ impl MemoryContextProvider {
 
         // Open loops from the previous session (Batch 2 open-loop tracking).
         // Opt-in via `set_open_loop_inject`. `SessionReflector` writes
-        // `OPEN_LOOPS.md` beside MEMORY.md on session end (also resolved
-        // through session scope — see `session_reflection::open_loops_path`);
-        // absence (or the feature being off) simply yields no block. Bounded
-        // to keep the injected prompt small.
+        // `OPEN_LOOPS.md` beside MEMORY.md on session end.
+        //
+        // Review fix round 2: this read is DELIBERATELY NOT `agent_id` (the
+        // fully project+personal-scoped id used above for MEMORY.md/USER.md).
+        // The writer, `session_reflection::open_loops_path`, resolves via
+        // `session_write_id(agent_id, false, None)` — it can only ever
+        // pin personal scope, because `close_session` (where it fires) has
+        // no live `current_project_root()` task-local and no persisted
+        // project-root column to derive one from, unlike `owner_user_id`/
+        // `scope_id` which ARE persisted on the session row. If this read
+        // used the fully-scoped `agent_id` instead, a project-scoped
+        // (non-personal) session would read `…__proj-<hash>/OPEN_LOOPS.md`
+        // while the writer keeps writing the bare `…/OPEN_LOOPS.md` — a
+        // silent, permanent split (the block would always render empty for
+        // every project-scoped session). Pinning this read to the SAME
+        // resolution the writer uses keeps read == write for every scope
+        // kind: bare for org/legacy, `u-`-suffixed for personal, and —
+        // deliberately, for now — bare (not `proj-`-suffixed) for
+        // project-scoped too. MEMORY.md/USER.md are NOT pinned: their
+        // writers (`note_manage`, `post_turn_compress`, etc.) DO thread a
+        // real `project_scoped`, so `agent_id` above is the right resolution
+        // for them. Un-pin this once the write side can persist/resolve a
+        // project root at session-close time — until then, do NOT
+        // "helpfully" widen just the read side again.
+        let open_loops_id =
+            crate::memory::project_scope::session_write_id(base_agent_id, false, None);
         const OPEN_LOOPS_CHAR_LIMIT: usize = 2000;
         let open_loops_block = if super::helpers::open_loop_inject() {
-            self.adopt_owner_curated_file(&agent_id, "OPEN_LOOPS.md")
+            self.adopt_owner_curated_file(&open_loops_id, "OPEN_LOOPS.md")
                 .await;
             let path = self
-                .agent_memory_path(&agent_id)
+                .agent_memory_path(&open_loops_id)
                 .with_file_name("OPEN_LOOPS.md");
             match tokio::fs::read_to_string(&path).await {
                 Ok(body) => {
@@ -417,6 +440,77 @@ mod tests {
         assert!(
             base_rendered.contains("base-only fact"),
             "no scope → base id: {base_rendered}"
+        );
+    }
+
+    /// Review fix round 2: a project-scoped (non-personal) session's
+    /// OPEN_LOOPS.md read must match the writer's resolution (bare — see the
+    /// pin comment on `capture_curated`'s OPEN_LOOPS sub-fetch), even though
+    /// MEMORY.md/USER.md DO fully resolve project-scoped. Without the pin,
+    /// this read would look under `main__proj-<hash>/OPEN_LOOPS.md` while
+    /// `SessionReflector` keeps writing `main/OPEN_LOOPS.md` — permanently
+    /// empty for every project-scoped session.
+    #[tokio::test]
+    async fn project_scoped_open_loops_read_matches_the_bare_writer_while_memory_stays_scoped() {
+        crate::thinker::memory_context_provider::set_open_loop_inject(true);
+
+        let dir = tempfile::tempdir().unwrap();
+        let project_root = dir.path().join("myproject");
+        tokio::fs::create_dir_all(&project_root).await.unwrap();
+        let ns = crate::memory::project_scope::project_namespace(Some(&project_root));
+        let scoped_id = format!("main__{ns}");
+
+        let base = dir.path().join("main");
+        tokio::fs::create_dir_all(&base).await.unwrap();
+        tokio::fs::write(base.join("MEMORY.md"), "base fact\n§\n")
+            .await
+            .unwrap();
+        // Mirrors the writer exactly: OPEN_LOOPS.md always lands under the
+        // BARE dir, even for a project-scoped session (write side pins to
+        // `session_write_id(base, false, None)`).
+        tokio::fs::write(
+            base.join("OPEN_LOOPS.md"),
+            "<!-- captured 2026-01-01 -->\n- bare open loop\n",
+        )
+        .await
+        .unwrap();
+
+        let scoped = dir.path().join(&scoped_id);
+        tokio::fs::create_dir_all(&scoped).await.unwrap();
+        tokio::fs::write(scoped.join("MEMORY.md"), "project-scoped fact\n§\n")
+            .await
+            .unwrap();
+        // A stray OPEN_LOOPS.md under the proj- dir must NEVER be read —
+        // proves the pin, not just an accident of the file being absent.
+        tokio::fs::write(
+            scoped.join("OPEN_LOOPS.md"),
+            "<!-- captured 2026-01-01 -->\n- must never be read\n",
+        )
+        .await
+        .unwrap();
+
+        let provider = provider_rooted_at(dir.path()).with_project_scoped(true);
+
+        let msg = crate::projects::with_project_root(
+            Some(project_root),
+            provider.build_curated_message("main", "ses-1"),
+        )
+        .await
+        .unwrap();
+        let rendered = format!("{msg:?}");
+
+        assert!(
+            rendered.contains("project-scoped fact"),
+            "MEMORY.md must still resolve project-scoped: {rendered}"
+        );
+        assert!(!rendered.contains("base fact"), "{rendered}");
+        assert!(
+            rendered.contains("bare open loop"),
+            "OPEN_LOOPS.md read must match the bare writer for a project-scoped session: {rendered}"
+        );
+        assert!(
+            !rendered.contains("must never be read"),
+            "OPEN_LOOPS.md read must NOT resolve the proj- dir: {rendered}"
         );
     }
 
