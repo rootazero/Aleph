@@ -10,7 +10,7 @@ use tracing::{debug, info};
 
 use super::path_utils::{check_and_resolve_path, reject_unsafe_glob_pattern};
 use super::types::{
-    is_skipped_dir_path, FileInfo, FileOpsOutput, StatsSummary, DEFAULT_ENTRY_LIMIT,
+    is_skipped_dir_path, FileInfo, FileOpsOutput, StatsSort, StatsSummary, DEFAULT_ENTRY_LIMIT,
 };
 use crate::builtin_tools::error::ToolError;
 
@@ -24,12 +24,18 @@ const MAX_LINE_COUNT_BYTES: u64 = 16 * 1024 * 1024; // 16 MB
 /// `**/*` when not provided. Directories are skipped from line counting but
 /// reported through `summary.total_files` only when they appear as concrete
 /// files; directory entries themselves are filtered out of the result.
+///
+/// `sort_by` controls the order of the per-file rows (the aggregates are
+/// always full and unaffected). The sort happens AFTER the cap is applied,
+/// so `sort_by=size` plus a small `limit` returns the *biggest* matches —
+/// the typical "show me the top offenders" intent.
 pub async fn execute_stats(
     dir: &Path,
     pattern: Option<&str>,
     denied_paths: &[String],
     output_dir_override: Option<&std::path::Path>,
     limit: Option<usize>,
+    sort_by: Option<StatsSort>,
 ) -> Result<FileOpsOutput, ToolError> {
     let canonical = check_and_resolve_path(dir, denied_paths, output_dir_override)?;
 
@@ -119,6 +125,15 @@ pub async fn execute_stats(
             }
         };
 
+        // mtime is only fetched when the caller asked to sort on it; the
+        // syscall costs nothing to skip when the default `name` order is in
+        // play.
+        let mtime = if sort_by == Some(StatsSort::Mtime) {
+            metadata.modified().ok()
+        } else {
+            None
+        };
+
         // The aggregate always counts every file; only the per-file rows are
         // capped. Losing the four summary numbers to their own payload was the
         // failure mode — `stats` exists to answer "how many lines are in here",
@@ -135,11 +150,12 @@ pub async fn execute_stats(
                 size,
                 extension: path.extension().map(|e| e.to_string_lossy().to_string()),
                 lines,
+                mtime,
             });
         }
     }
 
-    files.sort_by(|a, b| a.path.cmp(&b.path));
+    sort_files(&mut files, sort_by.unwrap_or(StatsSort::Name));
 
     let summary = StatsSummary {
         total_files,
@@ -181,6 +197,38 @@ pub async fn execute_stats(
     })
 }
 
+/// Order `files` per `sort`. `name` is ascending (deterministic alpha);
+/// `size` / `lines` are descending (the cap then retains the biggest);
+/// `mtime` is descending newest first, with a name-based tiebreaker.
+fn sort_files(files: &mut [FileInfo], sort: StatsSort) {
+    match sort {
+        StatsSort::Name => files.sort_by(|a, b| a.path.cmp(&b.path)),
+        StatsSort::Size => files.sort_by(|a, b| b.size.cmp(&a.size).then(a.path.cmp(&b.path))),
+        StatsSort::Lines => {
+            // `None` (= skipped from line counting) sorts LAST on the
+            // lines axis; the caller can still see the file, just at the
+            // bottom where the interesting "real" rankings live.
+            files.sort_by(|a, b| match (a.lines, b.lines) {
+                (Some(x), Some(y)) => y.cmp(&x).then(a.path.cmp(&b.path)),
+                (Some(_), None) => std::cmp::Ordering::Less,
+                (None, Some(_)) => std::cmp::Ordering::Greater,
+                (None, None) => a.path.cmp(&b.path),
+            });
+        }
+        StatsSort::Mtime => {
+            // Newest first; missing mtime sinks to the bottom. Name is the
+            // tiebreaker so the order is fully deterministic for the model
+            // to reason about.
+            files.sort_by(|a, b| match (a.mtime, b.mtime) {
+                (Some(x), Some(y)) => y.cmp(&x).then(a.path.cmp(&b.path)),
+                (Some(_), None) => std::cmp::Ordering::Less,
+                (None, Some(_)) => std::cmp::Ordering::Greater,
+                (None, None) => a.path.cmp(&b.path),
+            });
+        }
+    }
+}
+
 /// Count newline-terminated lines. Files without a trailing newline still
 /// count their last line (matches `wc -l` semantics for non-empty files).
 async fn count_lines(path: &Path) -> std::io::Result<u64> {
@@ -211,7 +259,7 @@ mod tests {
         fs::write(dir.path().join("sub/b.rs"), "hello\nworld\n").unwrap();
         fs::write(dir.path().join("sub/c.txt"), "ignored\n").unwrap();
 
-        let out = execute_stats(dir.path(), Some("**/*.rs"), &[], None, None)
+        let out = execute_stats(dir.path(), Some("**/*.rs"), &[], None, None, None)
             .await
             .unwrap();
 
@@ -226,7 +274,7 @@ mod tests {
     async fn stats_rejects_escaping_pattern() {
         let dir = tempdir().unwrap();
         for bad in ["/etc/*", "../*", "../../**/*"] {
-            let out = execute_stats(dir.path(), Some(bad), &[], None, None).await;
+            let out = execute_stats(dir.path(), Some(bad), &[], None, None, None).await;
             assert!(
                 matches!(out, Err(ToolError::InvalidArgs(_))),
                 "escaping stats pattern {bad:?} must be rejected, got {out:?}"
@@ -240,7 +288,7 @@ mod tests {
         fs::write(dir.path().join("a"), "x\ny\n").unwrap();
         fs::write(dir.path().join("b"), "z\n").unwrap();
 
-        let out = execute_stats(dir.path(), None, &[], None, None)
+        let out = execute_stats(dir.path(), None, &[], None, None, None)
             .await
             .unwrap();
         let summary = out.summary.expect("summary populated");
@@ -259,7 +307,7 @@ mod tests {
             fs::write(dir.path().join(format!("f{i}.rs")), "a\nb\n").unwrap();
         }
 
-        let out = execute_stats(dir.path(), Some("**/*.rs"), &[], None, Some(5))
+        let out = execute_stats(dir.path(), Some("**/*.rs"), &[], None, Some(5), None)
             .await
             .unwrap();
 
@@ -276,5 +324,88 @@ mod tests {
             "totals and the cap note must both be present; got: {}",
             out.message
         );
+    }
+
+    /// `sort_by=size` returns the biggest matches first, so combining it with
+    /// a small `limit` gives the model's "show me the top offenders by size"
+    /// answer in one call.
+    #[tokio::test]
+    async fn sort_by_size_returns_largest_first() {
+        let dir = tempdir().unwrap();
+        fs::write(dir.path().join("tiny.txt"), "x").unwrap(); // 1 byte
+        fs::write(dir.path().join("medium.txt"), "x".repeat(100).as_str()).unwrap(); // 100 B
+        fs::write(dir.path().join("huge.txt"), "x".repeat(1000).as_str()).unwrap(); // 1000 B
+
+        let out = execute_stats(
+            dir.path(),
+            Some("**/*.txt"),
+            &[],
+            None,
+            None,
+            Some(StatsSort::Size),
+        )
+        .await
+        .unwrap();
+
+        let files = out.files.expect("rows present");
+        assert_eq!(files[0].name, "huge.txt");
+        assert_eq!(files[1].name, "medium.txt");
+        assert_eq!(files[2].name, "tiny.txt");
+    }
+
+    /// `sort_by=lines` returns the most-liney files first; rows whose line
+    /// count was skipped (None) sink to the bottom so the real rankings
+    /// dominate the kept top-N.
+    #[tokio::test]
+    async fn sort_by_lines_returns_most_lines_first_skipped_last() {
+        let dir = tempdir().unwrap();
+        fs::write(dir.path().join("big.rs"), "x\n".repeat(100).as_str()).unwrap();
+        fs::write(dir.path().join("small.rs"), "x\ny\nz\n").unwrap();
+        // Skipped: too big to line-count.
+        let big_bytes = "x".repeat((MAX_LINE_COUNT_BYTES + 1) as usize);
+        fs::write(dir.path().join("binary-like.bin"), big_bytes.as_str()).unwrap();
+
+        let out = execute_stats(
+            dir.path(),
+            Some("**/*"),
+            &[],
+            None,
+            None,
+            Some(StatsSort::Lines),
+        )
+        .await
+        .unwrap();
+
+        let files = out.files.expect("rows present");
+        // Skipped is at the end; among the line-counted files, big first.
+        assert!(files.len() >= 3);
+        let last = files.last().unwrap();
+        assert_eq!(last.name, "binary-like.bin", "skipped files sink last");
+        assert!(last.lines.is_none());
+        // big.rs is 100 lines, small.rs is 3 — big must precede small.
+        let big_idx = files.iter().position(|f| f.name == "big.rs").unwrap();
+        let small_idx = files.iter().position(|f| f.name == "small.rs").unwrap();
+        assert!(big_idx < small_idx, "big.rs ({big_idx}) must precede small.rs ({small_idx})");
+    }
+
+    /// `sort_by=name` is the default and is stable / deterministic.
+    #[tokio::test]
+    async fn sort_by_name_is_alphabetical_and_is_the_default() {
+        let dir = tempdir().unwrap();
+        fs::write(dir.path().join("b.txt"), "y").unwrap();
+        fs::write(dir.path().join("a.txt"), "y").unwrap();
+        fs::write(dir.path().join("c.txt"), "y").unwrap();
+
+        let out = execute_stats(dir.path(), Some("**/*.txt"), &[], None, None, None)
+            .await
+            .unwrap();
+        let names: Vec<&str> = out
+            .files
+            .as_ref()
+            .expect("rows present")
+            .iter()
+            .map(|f| f.name.as_str())
+            .collect();
+        assert_eq!(names, vec!["a.txt", "b.txt", "c.txt"]);
     }
 }

@@ -127,6 +127,7 @@ pub async fn execute_batch_move(
                                     .extension()
                                     .map(|e| e.to_string_lossy().to_string()),
                                 lines: None,
+                                mtime: None,
                             });
                         }
                         Err(e) => {
@@ -313,6 +314,7 @@ pub async fn execute_organize(
                     size,
                     extension: Some(ext),
                     lines: None,
+                    mtime: None,
                 });
             }
             Err(e) => {

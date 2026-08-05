@@ -74,6 +74,7 @@ pub async fn execute_search(
                             size: metadata.len(),
                             extension: path.extension().map(|e| e.to_string_lossy().to_string()),
                             lines: None,
+                            mtime: None,
                         });
                     }
                 }
