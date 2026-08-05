@@ -1526,6 +1526,16 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
     // route itself is plain HTTP on the axum router; these RPCs are what mint
     // the capability that authorises it.
     register_artifact_handlers(&mut server, &session_store, args.daemon);
+    // `subagent.tree` needs `SessionStore` for P1 per-user tree visibility
+    // (spec §11-1c) — override the phase-1 placeholder registered at
+    // `HandlerRegistry::new()` now that the store exists.
+    {
+        let sessions = session_store.clone();
+        server.handlers_mut().register("subagent.tree", move |req| {
+            let sessions = sessions.clone();
+            async move { alephcore::gateway::handlers::subagent::handle_tree(req, sessions).await }
+        });
+    }
     register_memory_handlers(
         &mut server,
         &memory_db,
@@ -2552,9 +2562,12 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
         );
 
         // clarification.* RPC handlers — same `Arc` the `ask_user` tool parks on.
+        // `session_store` backs the P1 per-user visibility checks (spec
+        // §11-1c) `register_handlers` now applies to both methods.
         alephcore::gateway::handlers::clarification::register_handlers(
             server.handlers_mut(),
             clarification_manager.clone(),
+            session_store.clone(),
         );
 
         use alephcore::approval::adapters::FallbackApprovalRequester;

@@ -178,13 +178,15 @@ pub(in crate::commands::start) fn register_artifact_handlers(
         server,
         "artifacts.list",
         artifact_handlers::handle_list,
-        store
+        store,
+        session_store
     );
     register_handler!(
         server,
         "artifacts.read_text",
         artifact_handlers::handle_read_text,
-        store
+        store,
+        session_store
     );
     register_handler!(
         server,

@@ -71,6 +71,23 @@ fn resolve_session(request: &JsonRpcRequest, raw: &str) -> Result<SessionKey, Js
     })
 }
 
+/// The Task-6 addressed-key check (`gateway::visibility`), shared by every
+/// handler in this file: resolve the session's metadata and deny with the
+/// same `not_found_response` a missing key would produce (no existence
+/// oracle) unless it is visible to the current caller.
+async fn deny_unless_visible(
+    request: &JsonRpcRequest,
+    sessions: &dyn SessionStore,
+    key: &SessionKey,
+) -> Option<JsonRpcResponse> {
+    match sessions.get_metadata(key).await {
+        Ok(Some(meta)) if crate::gateway::visibility::session_visible(&meta) => None,
+        _ => Some(crate::gateway::visibility::not_found_response(
+            request.id.clone(),
+        )),
+    }
+}
+
 /// Build the capability URL for one record.
 fn artifact_url(cap: &str, record: &ArtifactRecord) -> String {
     let filename = utf8_percent_encode(&record.filename, URL_SEGMENT_ENCODE_SET);
@@ -99,15 +116,29 @@ fn record_json(cap: &str, record: &ArtifactRecord) -> serde_json::Value {
 /// content-free invalidation ping — the `agent_trace` stream is deliberately
 /// lossy, so a client that treated live events as the record would show ghosts
 /// the moment a frame is dropped. Clients re-read this list instead.
-pub async fn handle_list(request: JsonRpcRequest, store: Arc<ArtifactStore>) -> JsonRpcResponse {
+///
+/// P1 (spec §11-1c): `sessions` is the same addressed-key check every other
+/// session-scoped RPC uses (`gateway::visibility::session_visible`), applied
+/// here as defense in depth — the store itself is already session-keyed and
+/// cross-session-proof, but this handler must not depend on `sessions.list`
+/// having filtered the key out first.
+pub async fn handle_list(
+    request: JsonRpcRequest,
+    store: Arc<ArtifactStore>,
+    sessions: Arc<dyn SessionStore>,
+) -> JsonRpcResponse {
     let params: SessionScopeParams = match parse_params(&request) {
         Ok(p) => p,
         Err(e) => return e,
     };
-    let session_key = match resolve_session(&request, &params.session_key) {
-        Ok(k) => k.to_key_string(),
+    let key = match resolve_session(&request, &params.session_key) {
+        Ok(k) => k,
         Err(e) => return e,
     };
+    if let Some(resp) = deny_unless_visible(&request, &*sessions, &key).await {
+        return resp;
+    }
+    let session_key = key.to_key_string();
 
     let records = match store.list(&session_key).await {
         Ok(r) => r,
@@ -163,15 +194,20 @@ pub struct ReadTextParams {
 pub async fn handle_read_text(
     request: JsonRpcRequest,
     store: Arc<ArtifactStore>,
+    sessions: Arc<dyn SessionStore>,
 ) -> JsonRpcResponse {
     let params: ReadTextParams = match parse_params(&request) {
         Ok(p) => p,
         Err(e) => return e,
     };
-    let session_key = match resolve_session(&request, &params.session_key) {
-        Ok(k) => k.to_key_string(),
+    let key = match resolve_session(&request, &params.session_key) {
+        Ok(k) => k,
         Err(e) => return e,
     };
+    if let Some(resp) = deny_unless_visible(&request, &*sessions, &key).await {
+        return resp;
+    }
+    let session_key = key.to_key_string();
 
     let (record, bytes) = match store.read(&session_key, &params.id).await {
         Ok(pair) => pair,
@@ -254,6 +290,9 @@ pub async fn handle_export_html(
         Ok(k) => k,
         Err(e) => return e,
     };
+    if let Some(resp) = deny_unless_visible(&request, &*sessions, &key).await {
+        return resp;
+    }
     let session_key = key.to_key_string();
 
     let messages = match sessions.get_history(&key, None).await {
@@ -356,6 +395,8 @@ fn embeddable_records(records: &[ArtifactRecord]) -> Vec<ArtifactRecord> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::gateway::caller_identity::CALLER_USER;
+    use crate::gateway::session_store::file_backend::{FileSessionStore, FileSessionStoreConfig};
     use tempfile::TempDir;
 
     fn req(method: &str, params: serde_json::Value) -> JsonRpcRequest {
@@ -365,6 +406,38 @@ mod tests {
             params: Some(params),
             id: Some(json!(1)),
         }
+    }
+
+    /// A `SessionStore` backing the addressed-key visibility check every
+    /// handler in this file now applies (P1, defense in depth). Each test
+    /// gets its own on-disk store — real production artifacts always belong
+    /// to a session `AgentInstance::get_or_create_session` already created,
+    /// so fixtures create the session too rather than special-casing an
+    /// "artifact with no session row" shape that cannot occur in practice.
+    fn session_store(temp: &TempDir) -> Arc<dyn SessionStore> {
+        Arc::new(
+            FileSessionStore::new(FileSessionStoreConfig {
+                base_dir: temp.path().to_path_buf(),
+                ..Default::default()
+            })
+            .expect("file session store"),
+        )
+    }
+
+    /// Create `session_key`, optionally stamped as owned by `owner` (mirrors
+    /// `gateway::visibility`'s own test helpers). `None` leaves it a
+    /// legacy/unstamped row, visible to an unrestricted caller and to the
+    /// [`crate::gateway::security::store::OWNER_USER_ID`] owner-by-absence.
+    async fn create_session(
+        sessions: &Arc<dyn SessionStore>,
+        session_key: &str,
+        owner: Option<&str>,
+    ) {
+        let key = SessionKey::from_key_string(session_key).expect("valid session_key fixture");
+        let attribution = owner.map(crate::scope::ScopeAttribution::personal);
+        crate::scope::with_scope(attribution, sessions.get_or_create(&key))
+            .await
+            .expect("get_or_create");
     }
 
     async fn store_with_one_artifact(session_key: &str) -> (TempDir, Arc<ArtifactStore>) {
@@ -388,10 +461,14 @@ mod tests {
     async fn list_returns_items_with_capability_urls() {
         let session_key = "agent:main:main";
         let (_tmp, store) = store_with_one_artifact(session_key).await;
+        let session_tmp = TempDir::new().expect("tempdir");
+        let sessions = session_store(&session_tmp);
+        create_session(&sessions, session_key, None).await;
 
         let resp = handle_list(
             req("artifacts.list", json!({ "session_key": session_key })),
             store,
+            sessions,
         )
         .await;
 
@@ -414,10 +491,14 @@ mod tests {
     async fn list_url_carries_a_capability_scoped_to_that_session() {
         let session_key = "agent:main:main";
         let (_tmp, store) = store_with_one_artifact(session_key).await;
+        let session_tmp = TempDir::new().expect("tempdir");
+        let sessions = session_store(&session_tmp);
+        create_session(&sessions, session_key, None).await;
 
         let resp = handle_list(
             req("artifacts.list", json!({ "session_key": session_key })),
             store,
+            sessions,
         )
         .await;
         let url = resp.result.expect("success")["items"][0]["url"]
@@ -434,6 +515,9 @@ mod tests {
     async fn list_of_a_session_without_artifacts_is_empty_not_an_error() {
         let tmp = TempDir::new().expect("tempdir");
         let store = Arc::new(ArtifactStore::new(tmp.path().to_path_buf()));
+        let session_tmp = TempDir::new().expect("tempdir");
+        let sessions = session_store(&session_tmp);
+        create_session(&sessions, "agent:main:main", None).await;
 
         let resp = handle_list(
             req(
@@ -441,6 +525,7 @@ mod tests {
                 json!({ "session_key": "agent:main:main" }),
             ),
             store,
+            sessions,
         )
         .await;
 
@@ -453,10 +538,13 @@ mod tests {
     async fn list_rejects_a_malformed_session_key() {
         let tmp = TempDir::new().expect("tempdir");
         let store = Arc::new(ArtifactStore::new(tmp.path().to_path_buf()));
+        let session_tmp = TempDir::new().expect("tempdir");
+        let sessions = session_store(&session_tmp);
 
         let resp = handle_list(
             req("artifacts.list", json!({ "session_key": "not-a-session" })),
             store,
+            sessions,
         )
         .await;
 
@@ -467,6 +555,8 @@ mod tests {
     async fn list_requires_params() {
         let tmp = TempDir::new().expect("tempdir");
         let store = Arc::new(ArtifactStore::new(tmp.path().to_path_buf()));
+        let session_tmp = TempDir::new().expect("tempdir");
+        let sessions = session_store(&session_tmp);
 
         let request = JsonRpcRequest {
             jsonrpc: "2.0".to_string(),
@@ -474,8 +564,33 @@ mod tests {
             params: None,
             id: Some(json!(1)),
         };
-        let resp = handle_list(request, store).await;
+        let resp = handle_list(request, store, sessions).await;
         assert_eq!(resp.error.expect("expected error").code, INVALID_PARAMS);
+    }
+
+    /// P1: bob cannot `artifacts.list` alice's session, even by naming its
+    /// real (existing) key — NOT_FOUND, no oracle distinguishing "denied"
+    /// from "never existed".
+    #[tokio::test]
+    async fn list_denies_a_foreign_owner() {
+        let session_key = "agent:main:main";
+        let (_tmp, store) = store_with_one_artifact(session_key).await;
+        let session_tmp = TempDir::new().expect("tempdir");
+        let sessions = session_store(&session_tmp);
+        create_session(&sessions, session_key, Some("u-alice")).await;
+
+        let resp = CALLER_USER
+            .scope(Some("u-bob".to_string()), async {
+                handle_list(
+                    req("artifacts.list", json!({ "session_key": session_key })),
+                    store,
+                    sessions,
+                )
+                .await
+            })
+            .await;
+
+        assert_eq!(resp.error.expect("expected error").code, RESOURCE_NOT_FOUND);
     }
 
     async fn store_with_text(
@@ -498,6 +613,9 @@ mod tests {
         let session_key = "agent:main:main";
         let (_tmp, store, id) =
             store_with_text(session_key, "notes.md", "text/markdown", b"# Title\n\nbody").await;
+        let session_tmp = TempDir::new().expect("tempdir");
+        let sessions = session_store(&session_tmp);
+        create_session(&sessions, session_key, None).await;
 
         let resp = handle_read_text(
             req(
@@ -505,6 +623,7 @@ mod tests {
                 json!({ "session_key": session_key, "id": id }),
             ),
             store,
+            sessions,
         )
         .await;
 
@@ -523,6 +642,9 @@ mod tests {
         let session_key = "agent:main:main";
         let (_tmp, store, id) =
             store_with_text(session_key, "shot.png", "image/png", b"\x89PNG\r\n").await;
+        let session_tmp = TempDir::new().expect("tempdir");
+        let sessions = session_store(&session_tmp);
+        create_session(&sessions, session_key, None).await;
 
         let resp = handle_read_text(
             req(
@@ -530,6 +652,7 @@ mod tests {
                 json!({ "session_key": session_key, "id": id }),
             ),
             store,
+            sessions,
         )
         .await;
 
@@ -540,6 +663,9 @@ mod tests {
     async fn read_text_of_an_unknown_id_is_not_found() {
         let session_key = "agent:main:main";
         let (_tmp, store, _) = store_with_text(session_key, "a.txt", "text/plain", b"x").await;
+        let session_tmp = TempDir::new().expect("tempdir");
+        let sessions = session_store(&session_tmp);
+        create_session(&sessions, session_key, None).await;
 
         for id in [
             uuid::Uuid::new_v4().to_string(),
@@ -551,6 +677,7 @@ mod tests {
                     json!({ "session_key": session_key, "id": id }),
                 ),
                 Arc::clone(&store),
+                Arc::clone(&sessions),
             )
             .await;
             assert_eq!(
@@ -563,10 +690,16 @@ mod tests {
 
     /// A reader scoped to one session must not be able to name another's bytes,
     /// even holding a valid id — the store looks only under the key it is given.
+    /// The session named ("agent:other:main") never existing is itself now
+    /// enough to deny (P1 addressed-key check), independent of the
+    /// storage-layer isolation this test originally targeted.
     #[tokio::test]
     async fn read_text_cannot_reach_another_sessions_artifact() {
         let (_tmp, store, id) =
             store_with_text("agent:main:main", "secret.txt", "text/plain", b"s").await;
+        let session_tmp = TempDir::new().expect("tempdir");
+        let sessions = session_store(&session_tmp);
+        create_session(&sessions, "agent:main:main", None).await;
 
         let resp = handle_read_text(
             req(
@@ -574,10 +707,61 @@ mod tests {
                 json!({ "session_key": "agent:other:main", "id": id }),
             ),
             store,
+            sessions,
         )
         .await;
 
         assert_eq!(resp.error.expect("expected error").code, RESOURCE_NOT_FOUND);
+    }
+
+    /// P1's own acceptance case (brief step 1): bob cannot `read_text` a real
+    /// artifact belonging to alice's session — NOT_FOUND, and the storage row
+    /// itself is untouched (alice can still read it after bob's denied call).
+    #[tokio::test]
+    async fn read_text_denies_a_foreign_owner_storage_row_intact() {
+        let session_key = "agent:main:main";
+        let (_tmp, store, id) =
+            store_with_text(session_key, "secret.txt", "text/plain", b"alice's secret").await;
+        let session_tmp = TempDir::new().expect("tempdir");
+        let sessions = session_store(&session_tmp);
+        create_session(&sessions, session_key, Some("u-alice")).await;
+
+        let bob_resp = CALLER_USER
+            .scope(Some("u-bob".to_string()), async {
+                handle_read_text(
+                    req(
+                        "artifacts.read_text",
+                        json!({ "session_key": session_key, "id": id }),
+                    ),
+                    Arc::clone(&store),
+                    Arc::clone(&sessions),
+                )
+                .await
+            })
+            .await;
+        assert_eq!(
+            bob_resp.error.expect("expected error").code,
+            RESOURCE_NOT_FOUND
+        );
+
+        // The row is intact — alice (the owner) can still read it.
+        let alice_resp = CALLER_USER
+            .scope(Some("u-alice".to_string()), async {
+                handle_read_text(
+                    req(
+                        "artifacts.read_text",
+                        json!({ "session_key": session_key, "id": id }),
+                    ),
+                    store,
+                    sessions,
+                )
+                .await
+            })
+            .await;
+        assert_eq!(
+            alice_resp.result.expect("alice's own row is untouched")["content"],
+            "alice's secret"
+        );
     }
 
     #[test]

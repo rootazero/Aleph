@@ -60,21 +60,16 @@
 //!   already concedes — not a server-global config surface.
 //! - `clarification.*` / `subagent.tree` — genuinely member's-own-session
 //!   surfaces by *purpose* (answering the agent's own parked question;
-//!   viewing your own run's subagent tree for the Panel dashboard), but
-//!   verification found neither is actually scoped to the caller's session:
-//!   `clarification.pending` (`src/gateway/handlers/clarification.rs:100-106`)
-//!   lists every pending question process-wide with no session filter;
-//!   `clarification.resolve` (`:77-93`) takes a caller-supplied `session_key`
-//!   with no ownership check; `subagent.tree`'s `root_session` param
-//!   (`src/gateway/handlers/subagent.rs:11-35`) is optional — omitted means
-//!   "whole process." Gating these methods would break the Panel's ONLY path
-//!   to answer a clarifying question and to view a running subagent tree
-//!   (chat.*-equivalent member necessity), so they stay open per the same
-//!   precedent as `sessions.*`/`memory.*`. **Known follow-up, recorded here
-//!   because this file is the durable home for it**: that cross-session reach
-//!   is not fixed by this gate and needs the per-user visibility work
-//!   (P1-adjacent — these methods aren't in P1's named scope, so they will not
-//!   be picked up for free).
+//!   viewing your own run's subagent tree for the Panel dashboard). Gating
+//!   them here would break the Panel's ONLY path to answer a clarifying
+//!   question and to view a running subagent tree (chat.*-equivalent member
+//!   necessity), so they stay open at THIS gate — same precedent as
+//!   `sessions.*`/`memory.*`. Their per-user visibility is enforced
+//!   elsewhere: `crate::gateway::visibility`'s predicates, applied at each
+//!   handler site (`gateway/handlers/clarification.rs`,
+//!   `gateway/handlers/subagent.rs`), registered in
+//!   [`crate::gateway::method_visibility`] (Task 7 entries — see that
+//!   module's doc for the exact `Treatment` and coverage boundary).
 //!
 //! This file is the authoritative source for the classification — both the
 //! enforcement and the audit trail. Nothing here defers to a report artifact.

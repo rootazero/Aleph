@@ -758,10 +758,16 @@ impl HandlerRegistry {
         // disabled or simulated mode), it simply returns an error.
         registry.register("dreaming.run_now", dreaming::handle_run_now);
 
-        // Background sub-agent tree snapshot — read-only, stateless (reads the
-        // process-global BackgroundAgentTracker). Backs the panel's cold-start;
-        // live deltas arrive via the `run.subagent_tree` relay.
-        registry.register("subagent.tree", subagent::handle_tree);
+        // Background sub-agent tree snapshot — reads the process-global
+        // BackgroundAgentTracker (no per-boot state), but P1 (spec §11-1c)
+        // added a SessionStore dependency for per-user visibility filtering,
+        // so this is now a phase-1 placeholder like the others below;
+        // `register_artifact_handlers`-adjacent wiring overrides it at boot
+        // phase 2 once the store exists. Backs the panel's cold-start; live
+        // deltas arrive via the `run.subagent_tree` relay.
+        registry.register("subagent.tree", |req| async move {
+            service_unavailable(req, "subagent.tree requires SessionStore (boot phase 2)")
+        });
 
         // Insights introspection handler — needs MemoryBackend; the real
         // handler is wired in Gateway startup (register_memory_handlers).

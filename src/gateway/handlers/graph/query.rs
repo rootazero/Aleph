@@ -26,6 +26,27 @@ pub async fn handle_query_impl(req: JsonRpcRequest, db: MemoryBackend) -> JsonRp
         .agent_id
         .as_deref()
         .unwrap_or(crate::routing::DEFAULT_AGENT_ID);
+
+    // P1 partition isolation (spec §11-1c): an invisible partition reads as
+    // an empty graph — the same shape a genuinely unused agent_id produces —
+    // without ever touching the store under the caller's chosen name (no
+    // existence oracle).
+    if !crate::gateway::visibility::partition_visible(agent_id) {
+        let response = GraphQueryResponse {
+            nodes: vec![],
+            edges: vec![],
+            total: Some(0),
+            bridge_nodes: vec![],
+            surprising_edges: vec![],
+        };
+        return match serde_json::to_value(response) {
+            Ok(v) => JsonRpcResponse::success(req.id, v),
+            Err(e) => {
+                JsonRpcResponse::error(req.id, INTERNAL_ERROR, format!("Serialize error: {e}"))
+            }
+        };
+    }
+
     let (entries, links) = match db.get_graph_data(agent_id, params.limit).await {
         Ok(data) => data,
         Err(e) => {
@@ -277,5 +298,36 @@ mod tests {
             result.surprising_edges,
             vec![("concept/A".into(), "concept/B".into())]
         );
+    }
+
+    /// P1 partition isolation: bob addressing alice's personal partition by
+    /// name gets an empty graph — the same shape an unknown agent_id
+    /// produces — not alice's real notes.
+    #[tokio::test]
+    async fn foreign_partition_reads_an_empty_graph_not_the_owners_notes() {
+        use crate::gateway::caller_identity::CALLER_USER;
+
+        let db = make_db();
+        let secret = make_note("AliceSecret", "concept", vec![]);
+        db.index_note(&secret, "main__u-alice", "concept")
+            .await
+            .unwrap();
+
+        let resp = CALLER_USER
+            .scope(Some("u-bob".to_string()), async {
+                handle_query_impl(query_request(50, Some("main__u-alice")), db).await
+            })
+            .await;
+        assert!(
+            resp.error.is_none(),
+            "success, not an error: {:?}",
+            resp.error
+        );
+        let result: GraphQueryResponse = serde_json::from_value(resp.result.unwrap()).unwrap();
+        assert!(result.nodes.is_empty(), "bob must not see alice's notes");
+        assert_eq!(result.total, Some(0));
+        assert!(result.edges.is_empty());
+        assert!(result.bridge_nodes.is_empty());
+        assert!(result.surprising_edges.is_empty());
     }
 }

@@ -21,11 +21,49 @@
 //! family. Task 7 of the same plan
 //! (`docs/superpowers/plans/2026-08-05-p1-data-isolation.md`) owns
 //! `memory.*`, `artifacts.*`, `clarification.*`, `subagent.tree`, and
-//! `graph.query` — those methods are **not yet enforced** (recon confirmed
-//! zero ownership checks on any of them at the time of writing) and are
-//! deliberately **absent** from `SCOPED_METHODS` rather than added with a
-//! `Treatment` that would misrepresent them as covered. Task 7 registers
-//! them here when it lands.
+//! `graph.query` — all five are now enforced and registered below.
+//!
+//! ## Task 7 additions
+//!
+//! - `memory.search` / `memory.listFacts` / `graph.query` → **PartitionChecked**:
+//!   each runs its (possibly-defaulted) `agent_id` through
+//!   `visibility::partition_visible` before touching the store; an invisible
+//!   partition reads as an empty result — the SAME shape a genuinely unused
+//!   `agent_id` produces, so there is no existence oracle distinguishing
+//!   "denied" from "never used".
+//! - `memory.stats` → **PartitionChecked**: an explicit invisible `agent_id`
+//!   reads as a real-but-empty partition (same no-oracle contract); an
+//!   *omitted* `agent_id` additionally now depends on the caller —
+//!   unrestricted keeps the pre-P1 whole-store rollup, a member is scoped to
+//!   the org partition (`crate::routing::DEFAULT_AGENT_ID`) instead of ever
+//!   falling through to the whole store just because they left the field off
+//!   (see that handler's doc).
+//! - `artifacts.list` / `artifacts.read_text` / `session.export_html` →
+//!   **KeyChecked**: the Task-6 addressed-key pattern, applied as defense in
+//!   depth (`artifacts.rs`'s own module doc — the store is already
+//!   session-keyed and cross-session-proof, but a handler must not depend on
+//!   `sessions.list` having filtered the key out first).
+//! - `clarification.resolve` → **KeyChecked**, same pattern; a malformed
+//!   `session_key` is a separate, pre-existing `INVALID_PARAMS` validation
+//!   error, not an existence question.
+//! - `clarification.pending` → **ListFiltered**: the list is process-wide and
+//!   small, so each item is filtered by ITS OWN session's visibility rather
+//!   than pushed through a single `SessionFilter` — an unrestricted caller
+//!   sees every pending item unchanged from pre-P1; a member sees only the
+//!   ones whose session they own.
+//! - `subagent.tree` → **ListFiltered**: registered under this label because
+//!   its default (and panel-dashboard-common) shape — `root_session`
+//!   omitted — is exactly `ListFiltered`'s contract (unrestricted caller
+//!   unchanged whole-process view; a member gets the same flat list filtered
+//!   to roots whose session is visible, never an error — an empty tree is a
+//!   valid answer). The method ALSO accepts an optional `root_session`, in
+//!   which case it additionally applies the Task-6 addressed-key check
+//!   (`not_found_response` on a foreign owner) — the same "optional key
+//!   narrows an otherwise-list endpoint" shape `chat.abort` uses for
+//!   `KeyChecked` (its `session_key` is optional too; absent, it does
+//!   nothing session-scoped). One `Treatment` per method cannot carry both
+//!   labels; `handle_tree`'s own doc is the source for the addressed-key
+//!   half.
 //!
 //! ## Enumeration evidence
 //!
@@ -98,7 +136,7 @@
 //!
 //! ## Known gaps NOT covered by this table (found during the sweep, not
 //! fixed — flagged here exactly as `method_admin.rs` flags its own
-//! `clarification.*`/`subagent.tree` follow-up)
+//! follow-ups)
 //!
 //! `sessions.set_topic` and `chat.context_estimate` take a caller-supplied
 //! `session_key` with no ownership check today; deferred deliberately (lower
@@ -106,17 +144,27 @@
 //! respectively — and reviewed as out of this round's scope). The
 //! Simulated-fallback `chat.send` path (see the `chat.send` bullet above) is
 //! also a known, deliberate gap. All three are recorded here as the durable
-//! home for the follow-up, same convention as `method_admin.rs`'s
-//! `clarification.*` note.
+//! home for the follow-up, same convention as `method_admin.rs`'s notes.
+//! `memory.trace` and `graph.node_detail`/`graph.search` (verified by
+//! reading, not guessed) share the exact same caller-supplied-`agent_id`
+//! shape as the four methods this task DID cover, but were out of the
+//! brief's named surface list and are NOT yet run through
+//! `visibility::partition_visible` — recorded here as a follow-up, not
+//! silently dropped. `memory.delete` is a DIFFERENT, narrower gap: it
+//! addresses a row by bare `id` with no `agent_id` at all
+//! (`DeleteParams { id: String }`), so it is not a partition-suffix problem
+//! `partition_visible` would fix — any caller who learns another partition's
+//! raw-memory id (e.g. via a still-open `memory.search` result before this
+//! task's fix) can delete it. `graph.update_note`/`rename_note`/`delete_note`
+//! were not checked this pass.
 //!
 //! ## `OrgShared`
 //!
-//! No entry in this table is `OrgShared` — every session-addressed method
-//! Task 6 touches is genuinely per-user (a session has exactly one owner).
-//! `OrgShared` exists for Task 7's methods (e.g. `teams.*` surfaces
-//! elsewhere in the codebase are org-level infrastructure — project scoping
-//! arrives in P2) and is defined here so the enum is stable across both
-//! tasks.
+//! No entry in this table is `OrgShared`. Every Task 6 method is genuinely
+//! per-user (a session has exactly one owner); every Task 7 method is
+//! per-user or per-partition, never org-level infrastructure. `OrgShared`
+//! stays defined (see the enum doc) for a future task whose methods
+//! genuinely are shared by design.
 
 /// How a scoped-data method's response is (or should be) restricted to the
 /// calling user.
@@ -132,12 +180,16 @@ pub enum Treatment {
     KeyChecked,
     /// A partition-addressed endpoint (e.g. `agent_id="main__u-alice"`)
     /// checks `visibility::partition_visible` before reading/writing that
-    /// partition. (Task 7.)
-    #[allow(dead_code)] // no Task-6 entry uses this variant yet; Task 7 will.
+    /// partition. (Task 7: `memory.search`/`memory.listFacts`/`memory.stats`/
+    /// `graph.query`.)
     PartitionChecked,
     /// Deliberately shared across every user by design — not a gap. Carries
     /// a reason string at the call site (see `org_shared_entries_all_carry_reasons`).
-    #[allow(dead_code)] // no Task-6 entry uses this variant; Task 7 populates it.
+    /// Still unused after Task 7 — none of `memory.*`/`artifacts.*`/
+    /// `clarification.*`/`subagent.tree`/`graph.query` are org-shared, they
+    /// are all per-user or per-partition. Left for a future task whose
+    /// methods genuinely are org-level infrastructure (e.g. `teams.*`).
+    #[allow(dead_code)]
     OrgShared,
 }
 
@@ -164,6 +216,17 @@ pub const SCOPED_METHODS: &[(&str, Treatment)] = &[
     ("sessions.compaction.list", Treatment::KeyChecked),
     ("sessions.compaction.restore", Treatment::KeyChecked),
     ("sessions.compaction.branch", Treatment::KeyChecked),
+    // --- Task 7 ---
+    ("memory.search", Treatment::PartitionChecked),
+    ("memory.listFacts", Treatment::PartitionChecked),
+    ("memory.stats", Treatment::PartitionChecked),
+    ("graph.query", Treatment::PartitionChecked),
+    ("artifacts.list", Treatment::KeyChecked),
+    ("artifacts.read_text", Treatment::KeyChecked),
+    ("session.export_html", Treatment::KeyChecked),
+    ("clarification.resolve", Treatment::KeyChecked),
+    ("clarification.pending", Treatment::ListFiltered),
+    ("subagent.tree", Treatment::ListFiltered),
 ];
 
 /// `OrgShared` entries carry a one-line reason at the point they're listed —
@@ -251,12 +314,68 @@ mod tests {
     #[test]
     fn unregistered_method_reads_as_none_not_a_default_treatment() {
         // No silent "assume KeyChecked" default — an unlisted method must
-        // read as unclassified, not falsely covered. `sessions.set_topic`
-        // and `chat.context_estimate` are DELIBERATE, documented gaps (see
-        // module doc) — not silently dropped, but also not falsely claimed.
-        assert_eq!(treatment_of("memory.search"), None);
+        // read as unclassified, not falsely covered. `sessions.set_topic`,
+        // `chat.context_estimate`, and `memory.trace` are DELIBERATE,
+        // documented gaps (see module doc) — not silently dropped, but also
+        // not falsely claimed.
         assert_eq!(treatment_of("sessions.set_topic"), None);
         assert_eq!(treatment_of("chat.context_estimate"), None);
+        assert_eq!(treatment_of("memory.trace"), None);
+    }
+
+    /// Task 7's own pin — same philosophy as the Task 6 pin above: a
+    /// deletion or typo in these `SCOPED_METHODS` entries fails a test by
+    /// name, not silently reads as "unenforced".
+    #[test]
+    fn every_task_7_method_is_registered() {
+        for m in [
+            "memory.search",
+            "memory.listFacts",
+            "memory.stats",
+            "graph.query",
+            "artifacts.list",
+            "artifacts.read_text",
+            "session.export_html",
+            "clarification.resolve",
+            "clarification.pending",
+            "subagent.tree",
+        ] {
+            assert!(
+                treatment_of(m).is_some(),
+                "{m} must be registered in SCOPED_METHODS"
+            );
+        }
+    }
+
+    #[test]
+    fn task_7_partition_methods_are_partition_checked() {
+        for m in [
+            "memory.search",
+            "memory.listFacts",
+            "memory.stats",
+            "graph.query",
+        ] {
+            assert_eq!(treatment_of(m), Some(Treatment::PartitionChecked), "{m}");
+        }
+    }
+
+    #[test]
+    fn task_7_addressed_key_methods_are_key_checked() {
+        for m in [
+            "artifacts.list",
+            "artifacts.read_text",
+            "session.export_html",
+            "clarification.resolve",
+        ] {
+            assert_eq!(treatment_of(m), Some(Treatment::KeyChecked), "{m}");
+        }
+    }
+
+    #[test]
+    fn task_7_list_methods_are_list_filtered() {
+        for m in ["clarification.pending", "subagent.tree"] {
+            assert_eq!(treatment_of(m), Some(Treatment::ListFiltered), "{m}");
+        }
     }
 
     /// Every `OrgShared` entry must carry a one-line reason. Currently

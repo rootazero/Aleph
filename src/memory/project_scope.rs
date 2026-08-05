@@ -64,7 +64,12 @@ pub const GLOBAL_NS: &str = "global";
 /// composed id. Chosen because it never appears in an `agent_id` produced by
 /// [`crate::routing::session_key::SessionKey`] (which uses `:` as its own field
 /// separator) and is filesystem-safe on every supported platform.
-const NS_SEP: &str = "__";
+///
+/// `pub(crate)` so [`crate::gateway::visibility::partition_visible`] (P1) can
+/// split a composed id on the SAME literal rather than re-declaring it — two
+/// separators for one grammar is exactly the kind of drift this module's own
+/// doc warns about.
+pub(crate) const NS_SEP: &str = "__";
 
 /// Derive the stable project namespace token for an optional project root.
 ///

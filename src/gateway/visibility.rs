@@ -96,6 +96,42 @@ pub async fn existing_session_is_visible(store: &dyn SessionStore, key: &Session
     }
 }
 
+/// Whether a partition-composed `agent_id` (spec §11-1c, Task 4's grammar:
+/// `<base>__<suffix>` via [`crate::memory::project_scope::NS_SEP`]) is
+/// visible to the current caller.
+///
+/// Split ONCE on the namespace separator:
+/// - No suffix (a bare base id like `"main"`) → `true`. The org layer is
+///   shared by design — every member reads the same base partition.
+/// - Suffix starts with `"proj-"` → `true`. The legacy project-directory
+///   feature ([`crate::memory::project_scope::project_namespace`]) is
+///   org-tier, not per-user; it predates per-user scoping and stays shared.
+/// - Any other suffix → visible only when it equals the caller's own user id
+///   ([`visible_owner_filter`]), or when the caller is unrestricted
+///   (`None` — internal/cron/A2A, matching every other predicate in this
+///   module). A personal-scope suffix ([`crate::scope::ScopeId::Personal`])
+///   IS the owning user's id verbatim (see that module's doc), so this is a
+///   direct string comparison, not a second parse of the suffix.
+///
+/// Unknown suffix families (anything that is not `proj-` and does not match
+/// the caller) fail closed for a scoped caller — there is no positive-match
+/// arm for them, so e.g. a `p-*` (project scope, P2) partition is invisible
+/// to every member until P2 adds the membership check that would let one in.
+#[must_use]
+pub fn partition_visible(partition_id: &str) -> bool {
+    let Some((_base, suffix)) = partition_id.split_once(crate::memory::project_scope::NS_SEP)
+    else {
+        return true;
+    };
+    if suffix.starts_with("proj-") {
+        return true;
+    }
+    match visible_owner_filter() {
+        None => true,
+        Some(caller) => suffix == caller,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -275,5 +311,73 @@ mod tests {
             serde_json::to_string(&missing).unwrap(),
             serde_json::to_string(&denied).unwrap()
         );
+    }
+
+    /// The full partition matrix pinned by the Task 7 brief: (suffix family,
+    /// caller) → expected. Each case scopes `CALLER_USER` around the read so
+    /// task-local state never leaks between cases.
+    #[tokio::test]
+    async fn partition_visible_matrix() {
+        // No suffix at all: org layer, shared by design — visible to everyone,
+        // scoped or not.
+        assert!(partition_visible("main"));
+        assert!(
+            CALLER_USER
+                .scope(Some("u-alice".to_string()), async {
+                    partition_visible("main")
+                })
+                .await
+        );
+
+        // `proj-*`: legacy project-directory feature, org-tier — visible to
+        // any scoped caller, not just its creator.
+        assert!(
+            CALLER_USER
+                .scope(Some("u-alice".to_string()), async {
+                    partition_visible("main__proj-deadbeef")
+                })
+                .await
+        );
+        assert!(
+            CALLER_USER
+                .scope(Some("u-bob".to_string()), async {
+                    partition_visible("main__proj-deadbeef")
+                })
+                .await
+        );
+
+        // `u-*` (personal scope): visible to its own owner...
+        assert!(
+            CALLER_USER
+                .scope(Some("u-alice".to_string()), async {
+                    partition_visible("main__u-alice")
+                })
+                .await
+        );
+        // ...invisible to a different member...
+        assert!(
+            !CALLER_USER
+                .scope(Some("u-bob".to_string()), async {
+                    partition_visible("main__u-alice")
+                })
+                .await
+        );
+        // ...and visible to an unrestricted (internal/cron) caller.
+        assert!(partition_visible("main__u-alice"));
+
+        // Unknown suffix family (not `proj-`, not the caller's own id): fails
+        // closed for a scoped member even though it superficially "looks
+        // like" a partition suffix (e.g. a future `p-*` project scope before
+        // P2 wires membership).
+        assert!(
+            !CALLER_USER
+                .scope(Some("u-alice".to_string()), async {
+                    partition_visible("main__p-somewhere")
+                })
+                .await
+        );
+        // ...but an unrestricted caller still sees it (zero-change guarantee
+        // for internal/cron callers, matching every other predicate here).
+        assert!(partition_visible("main__p-somewhere"));
     }
 }
