@@ -30,7 +30,7 @@ impl SessionManager {
                         message_count, total_tokens, auto_reset_at, state, metadata,
                         label, input_tokens, output_tokens, model, model_provider,
                         parent_session_key, compaction_count, derived_title,
-                        estimated_cost_usd
+                        estimated_cost_usd, owner_user_id, scope_id
                  FROM sessions WHERE key = ?",
                 params![&key_str],
                 map_session_metadata,
@@ -60,16 +60,7 @@ impl SessionManager {
         }
 
         // Create new session
-        conn.execute(
-            "INSERT INTO sessions (key, agent_id, session_type, created_at, last_active_at, state)
-             VALUES (?, ?, ?, ?, ?, 'created')",
-            params![&key_str, &agent_id, &session_type, now, now],
-        )
-        .map_err(|e| SessionManagerError::DatabaseError(format!("Insert failed: {e}")))?;
-
-        debug!("Created session: {}", key_str);
-
-        Ok(SessionMetadata {
+        let mut meta = SessionMetadata {
             key: key_str,
             agent_id,
             session_type,
@@ -90,7 +81,30 @@ impl SessionManager {
             parent_session_key: None,
             compaction_count: 0,
             ..Default::default()
-        })
+        };
+        // P1 data isolation: stamp owner/scope from the ambient dispatch
+        // scope before persisting. No-op (leaves both `None`) outside any
+        // `scope::with_scope` context — cron/internal/A2A creators.
+        meta.stamp_attribution();
+
+        conn.execute(
+            "INSERT INTO sessions (key, agent_id, session_type, created_at, last_active_at, state, owner_user_id, scope_id)
+             VALUES (?, ?, ?, ?, ?, 'created', ?, ?)",
+            params![
+                &meta.key,
+                &meta.agent_id,
+                &meta.session_type,
+                now,
+                now,
+                &meta.owner_user_id,
+                &meta.scope_id
+            ],
+        )
+        .map_err(|e| SessionManagerError::DatabaseError(format!("Insert failed: {e}")))?;
+
+        debug!("Created session: {}", meta.key);
+
+        Ok(meta)
     }
 
     /// Add a message to a session.

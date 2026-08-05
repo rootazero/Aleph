@@ -326,7 +326,7 @@ impl SessionStore for FileSessionStore {
         }
 
         let now = chrono::Utc::now().timestamp();
-        let meta = SessionMetadata {
+        let mut meta = SessionMetadata {
             key: key_str.clone(),
             agent_id: key.agent_id().to_string(),
             session_type: match key {
@@ -356,6 +356,10 @@ impl SessionStore for FileSessionStore {
             compaction_count: 0,
             ..Default::default()
         };
+        // P1 data isolation: stamp owner/scope from the ambient dispatch
+        // scope before persisting. No-op (leaves both `None`) outside any
+        // `scope::with_scope` context — cron/internal/A2A creators.
+        meta.stamp_attribution();
         self.write_metadata(&key_str, &meta).await?;
         self.emit_session_changed(&key_str, "create", Some(&meta));
         debug!("Created file-backed session: {}", key_str);
@@ -406,6 +410,11 @@ impl SessionStore for FileSessionStore {
             if let Some(threshold) = filter.active_minutes {
                 let cutoff = chrono::Utc::now().timestamp() - (i64::from(threshold) * 60);
                 if meta.last_active_at < cutoff {
+                    continue;
+                }
+            }
+            if let Some(ref owner) = filter.owner_visible_to {
+                if crate::gateway::visibility::effective_owner(&meta) != owner {
                     continue;
                 }
             }

@@ -103,6 +103,16 @@ pub struct SessionMetadata {
     pub model_provider: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub parent_session_key: Option<String>,
+    /// Authenticated user who created this session (`users.user_id`). `None` on
+    /// rows created before P1 or outside any dispatch scope — read as owned by
+    /// `OWNER_USER_ID` (adoption-by-absence; single predicate:
+    /// `gateway::visibility::effective_owner`). Stamped once at creation, immutable
+    /// thereafter (spec §10: 会话 scope 不可变).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub owner_user_id: Option<String>,
+    /// Rendered `scope::ScopeId` ("personal:u-…"); `None` = legacy = org-era owner session.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub scope_id: Option<String>,
     #[serde(default)]
     pub compaction_count: i64,
     /// Derived title from first user message (computed lazily on append).
@@ -181,6 +191,21 @@ impl SessionMetadata {
             .get(ORIGIN_CONVERSATION_KEY)
             .and_then(|v| v.as_str())
             .map(str::to_string)
+    }
+
+    /// Stamp `owner_user_id`/`scope_id` from the active
+    /// [`crate::scope::current_scope`] attribution. No-op when already
+    /// stamped — stamping is create-only (spec §10: session scope is
+    /// immutable once set). Call sites: both `SessionStore::get_or_create`
+    /// CREATE branches only, never on the existing-session read path.
+    pub fn stamp_attribution(&mut self) {
+        if self.owner_user_id.is_some() {
+            return;
+        }
+        if let Some(attr) = crate::scope::current_scope() {
+            self.owner_user_id = Some(attr.owner_user_id);
+            self.scope_id = Some(attr.scope.render());
+        }
     }
 }
 
@@ -322,6 +347,10 @@ pub struct SessionFilter {
     pub agent_id: Option<String>,
     pub limit: Option<usize>,
     pub active_minutes: Option<u32>,
+    /// When `Some`, only sessions whose effective owner
+    /// (`gateway::visibility::effective_owner`) equals this user id are
+    /// returned. `None` = unfiltered (every owner).
+    pub owner_visible_to: Option<String>,
 }
 
 #[derive(Debug, Clone)]

@@ -897,11 +897,7 @@ async fn handle_connection(
                                         let do_lane_dispatch = |text: String, lm: Arc<LaneManager>, mc: MiddlewareChain, method: String, req_id: Option<serde_json::Value>, class: ChannelClass, caller_role: Option<String>, caller_user: Option<String>, caller_is_loopback: bool| async move {
                                             let lane_result = lm.acquire(&method, class).await;
                                             match lane_result {
-                                                Ok(_permit) => crate::gateway::caller_identity::CALLER_USER
-                                                    .scope(caller_user, crate::gateway::caller_identity::CALLER_ROLE
-                                                        .scope(caller_role, crate::gateway::caller_identity::CALLER_IS_LOOPBACK
-                                                            .scope(caller_is_loopback, process_request(&text, &mc))))
-                                                    .await,
+                                                Ok(_permit) => dispatch_with_caller_context(&text, &mc, caller_role, caller_user, caller_is_loopback).await,
                                                 Err(_) => serde_json::to_string(&JsonRpcResponse::error(
                                                     req_id,
                                                     INTERNAL_ERROR,
@@ -948,11 +944,7 @@ async fn handle_connection(
                                                         let lane_result = ctx.lane_manager.acquire(&req.method, ctx.channel_class).await;
                                                         match lane_result {
                                                             Ok(_permit) => {
-                                                                let resp = crate::gateway::caller_identity::CALLER_USER
-                                                                    .scope(caller_user.clone(), crate::gateway::caller_identity::CALLER_ROLE
-                                                                        .scope(caller_role.clone(), crate::gateway::caller_identity::CALLER_IS_LOOPBACK
-                                                                            .scope(ctx.client_ip.is_loopback(), process_request(&text, &ctx.middleware_chain))))
-                                                                    .await;
+                                                                let resp = dispatch_with_caller_context(&text, &ctx.middleware_chain, caller_role.clone(), caller_user.clone(), ctx.client_ip.is_loopback()).await;
                                                                 if let Ok(parsed) = serde_json::from_str::<JsonRpcResponse>(&resp) {
                                                                     if parsed.is_success() {
                                                                         if let Some(result) = parsed.result {
@@ -1147,16 +1139,29 @@ async fn handle_connection(
                                                             };
                                                             state.channel_kind = Some(kind);
                                                             state.first_message = false;
-                                                            // Authorized ⇒ wildcard scope so
-                                                            // EventScopeGuard delivers guarded topics
-                                                            // (approval banners, config.changed).
-                                                            // Walled (unauthorized, or authorized but
-                                                            // resolving to no principal) ⇒ no scopes.
-                                                            state.permissions = if holds_authority {
-                                                                vec!["*".to_string()]
-                                                            } else {
-                                                                Vec::new()
-                                                            };
+                                                            // Event scope follows the RESOLVED role,
+                                                            // through the single authority shared with
+                                                            // the live re-stamp in `handlers::users`.
+                                                            // Operator ⇒ the `"*"` wildcard, so
+                                                            // EventScopeGuard keeps delivering guarded
+                                                            // topics (approval banners, config.changed).
+                                                            // Member and walled ⇒ no scopes; that is not
+                                                            // a blackout, `can_receive` is default-allow
+                                                            // and only the guarded prefixes stop.
+                                                            //
+                                                            // Keying on the role rather than
+                                                            // `holds_authority` is equivalent for every
+                                                            // pre-P0 shape — `resolve_stamped_identity`
+                                                            // returns `"guest"` whenever `!authorized`,
+                                                            // so `holds_authority == (role != "guest")`.
+                                                            // It differs in exactly one case, which is
+                                                            // the bug being fixed: a member holds
+                                                            // authority (the login wall admits him) yet
+                                                            // must not hold the admin event scope.
+                                                            state.permissions =
+                                                                crate::gateway::event_scope::scope_for_role(
+                                                                    resolved_role,
+                                                                );
                                                             state.caller_role = resolved_role.to_string();
                                                             state.caller_user = resolved_user;
                                                             // Device binding for the per-device revoke.
@@ -1680,6 +1685,38 @@ async fn handle_connection(
     Ok(())
 }
 
+/// Scope `process_request` with the caller-identity task-locals + P1 scope
+/// attribution that must surround every dispatched request. Single source of
+/// truth shared by both dispatch stations (`do_lane_dispatch`'s closure and
+/// the idempotency `Proceed` arm) so the two call sites cannot drift apart —
+/// see `src/gateway/CLAUDE.md`'s note that `CALLER_ROLE`/`CALLER_USER`/
+/// `CALLER_IS_LOOPBACK` must be scoped around `process_request` at both
+/// sites. `scope::with_scope` is the outermost (4th) layer: a `caller_user`
+/// seeds a personal-scope attribution, observable via `scope::current_scope`
+/// for the lifetime of this dispatch (spec P1 §5).
+async fn dispatch_with_caller_context(
+    text: &str,
+    mc: &MiddlewareChain,
+    caller_role: Option<String>,
+    caller_user: Option<String>,
+    caller_is_loopback: bool,
+) -> String {
+    crate::scope::with_scope(
+        caller_user
+            .clone()
+            .map(|u| crate::scope::ScopeAttribution::personal(&u)),
+        crate::gateway::caller_identity::CALLER_USER.scope(
+            caller_user,
+            crate::gateway::caller_identity::CALLER_ROLE.scope(
+                caller_role,
+                crate::gateway::caller_identity::CALLER_IS_LOOPBACK
+                    .scope(caller_is_loopback, process_request(text, mc)),
+            ),
+        ),
+    )
+    .await
+}
+
 /// Process a JSON-RPC request string
 pub(super) async fn process_request(text: &str, middleware_chain: &MiddlewareChain) -> String {
     // Parse the request
@@ -2056,6 +2093,105 @@ mod tests {
         assert_eq!(connect_verdict(false, guest_role), ("guest", false, true));
     }
 
+    // ── The event scope stamped alongside that verdict ────────────────────
+    // The stamping itself has no seam (it edits ConnectionState inside the
+    // live WS loop), but both its inputs are pure, so the composition the
+    // handshake actually evaluates is testable: resolved role → scope.
+
+    #[test]
+    fn connect_stamps_a_member_out_of_the_admin_event_scope() {
+        // The finding: a member holds authority (the login wall admits him),
+        // and the stamping used to key on that, handing him `"*"` — which
+        // short-circuits every EventScopeGuard rule. So a member's socket was
+        // delivered exec approval cards including the command text.
+        let store = store_with_device_user(
+            "dev-a",
+            "u-alice",
+            crate::gateway::security::store::UserRole::Member,
+        );
+        let (_, role) = resolve_stamped_identity(true, false, Some("dev-a"), Some(&store));
+        let scope = crate::gateway::event_scope::scope_for_role(role);
+        assert!(scope.is_empty(), "a member must not be stamped `*`");
+
+        let guard = crate::gateway::event_scope::EventScopeGuard::default_rules();
+        assert!(!guard.can_receive("approval.requested", &scope));
+        assert!(!guard.can_receive("surface.approval", &scope));
+        assert!(!guard.can_receive("config.changed", &scope));
+        assert!(!guard.can_receive("pairing.requested", &scope));
+        // ...while his daily surfaces are untouched (default-allow guard).
+        assert!(guard.can_receive("agent.run.started", &scope));
+        assert!(guard.can_receive("chat.message", &scope));
+    }
+
+    #[test]
+    fn connect_stamps_operator_and_walled_scopes_unchanged() {
+        // Zero-change guarantee on the scope axis, mirroring
+        // `connect_response_is_unchanged_for_operator_and_walled_connections`.
+        let star = vec!["*".to_string()];
+        // Loopback / legacy shared token.
+        let (_, lo_role) = resolve_stamped_identity(true, true, None, None);
+        assert_eq!(crate::gateway::event_scope::scope_for_role(lo_role), star);
+        // Remote, admin-bound device.
+        let store = store_with_device_user(
+            "dev-r",
+            "u-root",
+            crate::gateway::security::store::UserRole::Admin,
+        );
+        let (_, adm_role) = resolve_stamped_identity(true, false, Some("dev-r"), Some(&store));
+        assert_eq!(crate::gateway::event_scope::scope_for_role(adm_role), star);
+        // Rejected credential ⇒ walled, no scope (as before).
+        let (_, guest_role) = resolve_stamped_identity(false, false, None, Some(&store));
+        assert!(crate::gateway::event_scope::scope_for_role(guest_role).is_empty());
+    }
+
+    #[test]
+    fn scope_keyed_on_role_matches_holds_authority_except_for_members() {
+        // The stamping switched from `holds_authority` to the resolved role.
+        // That is safe because `resolve_stamped_identity` returns "guest"
+        // whenever `!authorized`, so `holds_authority == (role != "guest")`
+        // for every shape — the ONE divergence is the member, which is the
+        // fix. Pinned here so a future change to either function that breaks
+        // the equivalence is loud rather than a silent scope widening.
+        let store = store_with_device_user(
+            "dev-a",
+            "u-alice",
+            crate::gateway::security::store::UserRole::Member,
+        );
+        let admin_store = store_with_device_user(
+            "dev-r",
+            "u-root",
+            crate::gateway::security::store::UserRole::Admin,
+        );
+        let cases = [
+            // (authorized, loopback, device, store)
+            (true, true, None, None),
+            (true, false, None, None),
+            (false, false, None, None),
+            (true, false, Some("dev-x"), None),
+            (true, false, Some("dev-a"), Some(&store)),
+            (false, false, Some("dev-a"), Some(&store)),
+            (true, false, Some("dev-r"), Some(&admin_store)),
+        ];
+        for (authorized, loopback, device, st) in cases {
+            let (_, role) = resolve_stamped_identity(authorized, loopback, device, st);
+            let (_, holds_authority, _) = connect_verdict(authorized, role);
+            let scope = crate::gateway::event_scope::scope_for_role(role);
+            if role == "member" {
+                assert!(
+                    holds_authority && scope.is_empty(),
+                    "a member holds authority yet must hold no event scope"
+                );
+            } else {
+                assert_eq!(
+                    holds_authority,
+                    !scope.is_empty(),
+                    "non-member scope must still track holds_authority \
+                     (authorized={authorized}, loopback={loopback}, role={role})"
+                );
+            }
+        }
+    }
+
     // ── The login wall's own predicate (wall_admits) ──────────────────────
     // These drive the ACTUAL wall expression the dispatch loop evaluates.
     // The `resolve_stamped_identity` tests above prove a member connection is
@@ -2368,5 +2504,73 @@ mod tests {
         assert!(!super::refuse_insecure_remote(remote, true, false));
         // Remote + insecure + explicitly allowed ⇒ allow.
         assert!(!super::refuse_insecure_remote(remote, false, true));
+    }
+
+    // ── P1 scope attribution around dispatch (dispatch_with_caller_context) ──
+    // `dispatch_with_caller_context` is the single function BOTH dispatch
+    // stations call (`do_lane_dispatch`'s closure and the idempotency
+    // `Proceed` arm — see the call sites above). Exercising it once proves
+    // both stations by construction: neither wraps `process_request` any
+    // other way, so there is no second code path to drift out of sync. This
+    // mirrors how `resolve_stamped_identity`/`connect_verdict` are tested
+    // above rather than the live WS loop itself — that loop has no
+    // injectable seam (it operates on a real `axum::extract::ws::WebSocket`).
+
+    #[tokio::test]
+    async fn both_dispatch_stations_seed_scope() {
+        use crate::gateway::handlers::HandlerRegistry;
+        use crate::gateway::rate_limiter::RateLimitConfig;
+
+        // A probe method that reports what `scope::current_scope()` sees
+        // from inside `process_request`'s dispatch.
+        let mut registry = HandlerRegistry::new();
+        registry.register("probe.scope", |req| async move {
+            let owner = crate::scope::current_scope().map(|attr| attr.owner_user_id);
+            JsonRpcResponse::success(req.id, serde_json::json!({ "owner_user_id": owner }))
+        });
+        let mc = MiddlewareChain::new(
+            Arc::new(registry),
+            Arc::new(RateLimiter::new(RateLimitConfig::default())),
+        );
+        let text = r#"{"jsonrpc":"2.0","id":1,"method":"probe.scope","params":{}}"#;
+
+        let resp = dispatch_with_caller_context(
+            text,
+            &mc,
+            Some("member".to_string()),
+            Some("u-alice".to_string()),
+            false,
+        )
+        .await;
+        assert!(
+            resp.contains("\"owner_user_id\":\"u-alice\""),
+            "scope must be observable inside process_request's dispatch: {resp}"
+        );
+    }
+
+    #[tokio::test]
+    async fn dispatch_with_caller_context_leaves_scope_unset_for_no_caller_user() {
+        // Loopback / legacy shared-token connections resolve to `caller_user:
+        // None` — must not seed a scope attribution (no owner to attribute to).
+        use crate::gateway::handlers::HandlerRegistry;
+        use crate::gateway::rate_limiter::RateLimitConfig;
+
+        let mut registry = HandlerRegistry::new();
+        registry.register("probe.scope", |req| async move {
+            let owner = crate::scope::current_scope().map(|attr| attr.owner_user_id);
+            JsonRpcResponse::success(req.id, serde_json::json!({ "owner_user_id": owner }))
+        });
+        let mc = MiddlewareChain::new(
+            Arc::new(registry),
+            Arc::new(RateLimiter::new(RateLimitConfig::default())),
+        );
+        let text = r#"{"jsonrpc":"2.0","id":1,"method":"probe.scope","params":{}}"#;
+
+        let resp =
+            dispatch_with_caller_context(text, &mc, Some("operator".to_string()), None, true).await;
+        assert!(
+            resp.contains("\"owner_user_id\":null"),
+            "no caller_user must mean no scope attribution: {resp}"
+        );
     }
 }
