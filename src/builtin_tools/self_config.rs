@@ -489,13 +489,7 @@ impl SelfConfigTool {
                 let impact = if dry_run {
                     crate::config::ReloadImpact::classify(config_path)
                 } else {
-                    crate::config::classify_verified(
-                        config_path,
-                        &crate::config::LiveApplyReport {
-                            applied: result.live_applied.clone(),
-                            unavailable: Vec::new(),
-                        },
-                    )
+                    crate::config::classify_verified(config_path, &result.live_applied)
                 };
 
                 let mode = if dry_run { "dry-run" } else { "applied" };

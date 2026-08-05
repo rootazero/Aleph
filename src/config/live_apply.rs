@@ -20,9 +20,9 @@
 //! 2. **A claim is downgraded when the action did not happen.** The live
 //!    handles are process-global `OnceLock`s registered at boot; in a CLI
 //!    process, a test, or before the failover chain is assembled they are
-//!    absent, and "hot-applied" would be a lie. [`LiveApplyReport::applied`]
-//!    reports what actually landed so the caller can classify honestly
-//!    ([`ReloadImpact::classify_verified`]).
+//!    absent, and "hot-applied" would be a lie. [`apply_live_sections`]
+//!    returns what actually landed so the caller can classify honestly
+//!    ([`classify_verified`]).
 //!
 //! Layering note: `config` reaching into `providers` / `gateway` inverts the
 //! usual direction. It is deliberate and narrow — both targets are
@@ -34,34 +34,20 @@
 use super::reload_impact::{ReloadImpact, LIVE_SECTIONS};
 use super::Config;
 
-/// What a live-apply attempt actually accomplished.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub struct LiveApplyReport {
-    /// Sections whose runtime handle was present and was updated.
-    pub applied: Vec<&'static str>,
-    /// Sections declared live whose runtime handle was not registered, so
-    /// nothing was updated and a restart is genuinely required.
-    pub unavailable: Vec<&'static str>,
-}
-
-impl LiveApplyReport {
-    /// True when the requested section is declared live and its handle was
-    /// there to receive the change.
-    #[must_use]
-    pub fn is_live(&self) -> bool {
-        !self.applied.is_empty()
-    }
-}
-
 /// Hot-apply the sections of `cfg` named by `top_sections` onto the running
-/// runtime.
+/// runtime, returning the sections that actually landed.
 ///
 /// `top_sections` are top-level `config.toml` section names (the
 /// `applied_sections` of a patch, or every live section after a whole-file
 /// rollback). Unknown / non-live names are ignored — this function never
 /// decides *whether* a section is live, it only executes the table.
-pub fn apply_live_sections(cfg: &Config, top_sections: &[&str]) -> LiveApplyReport {
-    let mut report = LiveApplyReport::default();
+///
+/// A declared-live section whose runtime handle is absent is logged and
+/// omitted from the return value; it is NOT reported as a separate list,
+/// because "declared live minus applied" already says it and a field nobody
+/// reads is a field that will eventually be wrong.
+pub fn apply_live_sections(cfg: &Config, top_sections: &[&str]) -> Vec<&'static str> {
+    let mut applied = Vec::new();
 
     for section in LIVE_SECTIONS {
         if !top_sections.contains(section) {
@@ -98,17 +84,21 @@ pub fn apply_live_sections(cfg: &Config, top_sections: &[&str]) -> LiveApplyRepo
             _ => false,
         };
         if landed {
-            report.applied.push(section);
+            applied.push(*section);
         } else {
-            report.unavailable.push(section);
+            tracing::debug!(
+                section,
+                "config section is declared live but its runtime handle is not registered; \
+                 the change is persisted and needs a restart"
+            );
         }
     }
 
-    report
+    applied
 }
 
 /// Classify `config_path`, downgrading a `Live` verdict to `Restart` when the
-/// hot-apply for that section did not actually happen.
+/// hot-apply **for that section** did not actually happen.
 ///
 /// This is the honest version of [`ReloadImpact::classify`] for callers that
 /// have just performed a write: `classify` answers "is this section *the kind
@@ -116,13 +106,23 @@ pub fn apply_live_sections(cfg: &Config, top_sections: &[&str]) -> LiveApplyRepo
 /// after a real write we also know whether the runtime was there to receive
 /// it, and reporting `Live` when it was not is precisely the silent failure
 /// the conservative default was chosen to avoid.
+///
+/// The match is section-exact rather than "did anything apply at all". Today a
+/// patch carries one section so the two agree, but a predicate that answers a
+/// question adjacent to the one asked is how the next multi-section caller
+/// gets a `Live` verdict for a section that never landed.
 #[must_use]
-pub fn classify_verified(config_path: &str, report: &LiveApplyReport) -> ReloadImpact {
+pub fn classify_verified(config_path: &str, live_applied: &[&'static str]) -> ReloadImpact {
     let impact = ReloadImpact::classify(config_path);
-    if impact == ReloadImpact::Live && !report.is_live() {
-        return ReloadImpact::Restart;
+    if impact != ReloadImpact::Live {
+        return impact;
     }
-    impact
+    let top = config_path.split('.').next().unwrap_or(config_path).trim();
+    if live_applied.contains(&top) {
+        ReloadImpact::Live
+    } else {
+        ReloadImpact::Restart
+    }
 }
 
 #[cfg(test)]
@@ -157,10 +157,7 @@ mod tests {
     #[test]
     fn non_live_sections_are_ignored() {
         let cfg = Config::default();
-        let report = apply_live_sections(&cfg, &["providers", "memory"]);
-        assert!(report.applied.is_empty());
-        assert!(report.unavailable.is_empty());
-        assert!(!report.is_live());
+        assert!(apply_live_sections(&cfg, &["providers", "memory"]).is_empty());
     }
 
     #[test]
@@ -168,9 +165,7 @@ mod tests {
         // `behavior` liveness comes from readers re-reading the shared config,
         // which the patcher already swapped — no boot-time handle involved.
         let cfg = Config::default();
-        let report = apply_live_sections(&cfg, &["behavior"]);
-        assert_eq!(report.applied, vec!["behavior"]);
-        assert!(report.is_live());
+        assert_eq!(apply_live_sections(&cfg, &["behavior"]), vec!["behavior"]);
     }
 
     #[test]
@@ -178,39 +173,41 @@ mod tests {
         // In a process where the failover chain was never assembled (CLI,
         // tests, early boot) nothing received the change, so claiming Live
         // would be a lie the user only discovers by the change not happening.
-        let report = LiveApplyReport {
-            applied: Vec::new(),
-            unavailable: vec!["route"],
-        };
-        assert_eq!(
-            classify_verified("route.mode", &report),
-            ReloadImpact::Restart
-        );
+        assert_eq!(classify_verified("route.mode", &[]), ReloadImpact::Restart);
     }
 
     #[test]
     fn a_landed_live_apply_keeps_the_live_verdict() {
-        let report = LiveApplyReport {
-            applied: vec!["route"],
-            unavailable: Vec::new(),
-        };
-        assert_eq!(classify_verified("route.mode", &report), ReloadImpact::Live);
+        assert_eq!(
+            classify_verified("route.mode", &["route"]),
+            ReloadImpact::Live
+        );
     }
 
     #[test]
-    fn classify_verified_never_upgrades_a_restart_section() {
-        // A non-live section stays Restart even if some *other* section in the
-        // same write hot-applied.
-        let report = LiveApplyReport {
-            applied: vec!["route"],
-            unavailable: Vec::new(),
-        };
+    fn classify_verified_matches_the_section_not_merely_any_success() {
+        // A sibling section landing must NOT vouch for this one. The two agree
+        // today (a patch carries one section), so only this assertion keeps the
+        // predicate answering the question that was asked.
         assert_eq!(
-            classify_verified("providers.openai", &report),
+            classify_verified("route.mode", &["execution"]),
             ReloadImpact::Restart
         );
         assert_eq!(
-            classify_verified("task_routing", &report),
+            classify_verified("execution.max_runs_global", &["execution"]),
+            ReloadImpact::Live
+        );
+    }
+
+    #[test]
+    fn classify_verified_never_upgrades_a_non_live_section() {
+        // Restart / Inert verdicts are untouched by what did or did not apply.
+        assert_eq!(
+            classify_verified("providers.openai", &["route"]),
+            ReloadImpact::Restart
+        );
+        assert_eq!(
+            classify_verified("task_routing", &["route"]),
             ReloadImpact::Inert
         );
     }

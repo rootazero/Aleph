@@ -39,7 +39,7 @@ pub use patcher::ConfigPatcher;
 
 // Re-export reload-impact classifier (self-management SSOT) and the
 // hot-apply that makes its `Live` verdict true.
-pub use live_apply::{classify_verified, LiveApplyReport};
+pub use live_apply::classify_verified;
 pub use reload_impact::ReloadImpact;
 
 // Re-export schema generation functions

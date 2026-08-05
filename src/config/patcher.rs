@@ -398,7 +398,7 @@ impl ConfigPatcher {
             path = %request.path,
             section = %top_section,
             diff_count = diff.len(),
-            live_applied = ?live_applied.applied,
+            live_applied = ?live_applied,
             "Config patch applied"
         );
 
@@ -409,7 +409,7 @@ impl ConfigPatcher {
             diff,
             health_check,
             warnings,
-            live_applied: live_applied.applied,
+            live_applied,
         })
     }
 
@@ -640,7 +640,7 @@ impl ConfigPatcher {
         info!(
             restored_from = %entry.timestamp,
             diff_count = diff.len(),
-            live_applied = ?live_applied.applied,
+            live_applied = ?live_applied,
             "Config rolled back to snapshot"
         );
 
@@ -649,7 +649,7 @@ impl ConfigPatcher {
             restored_from: entry.timestamp,
             diff,
             warnings,
-            live_applied: live_applied.applied,
+            live_applied,
         })
     }
 }

@@ -103,7 +103,7 @@ pub async fn handle_reload_with_subsystems(
                 )
             };
             reloaded.push("app_config".to_string());
-            reloaded.extend(live_applied.applied.iter().map(|s| format!("live:{s}")));
+            reloaded.extend(live_applied.iter().map(|s| format!("live:{s}")));
 
             if has_profiles {
                 reloaded.push("profiles".to_string());
@@ -594,13 +594,7 @@ pub async fn handle_patch_config(
             // the `self_config` tool path, which had the pokes inlined. Both
             // halves now come from the same place.
             if !result.diff.is_empty() {
-                let impact = crate::config::classify_verified(
-                    &path,
-                    &crate::config::LiveApplyReport {
-                        applied: result.live_applied.clone(),
-                        unavailable: Vec::new(),
-                    },
-                );
+                let impact = crate::config::classify_verified(&path, &result.live_applied);
                 if let Some(obj) = v.as_object_mut() {
                     obj.insert(
                         "reload_impact".to_string(),
