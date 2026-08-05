@@ -1304,7 +1304,15 @@ mod tests {
     /// sentence reworded from an instruction into the runtime fact behind it
     /// (-88 B), and four copies of the AX platform-support sentence down to
     /// one (-690 B).
-    const CATALOG_DESCRIPTION_CEILING_BYTES: usize = 81_274;
+    ///
+    /// 2026-08-05, the self-config/doctor round: 81,274 -> 81,270 B. `doctor`
+    /// gained four checks (disk space, duplicate daemons, SQLite integrity,
+    /// loop-graph) and two arguments (`only` / `skip`) and still came in 4 B
+    /// under, by cutting the prose the model can read off the tool's own
+    /// output — its findings enumerate every check id — and keeping only what
+    /// nothing else says: that the filters exist, and which check is the
+    /// expensive one.
+    const CATALOG_DESCRIPTION_CEILING_BYTES: usize = 81_270;
 
     #[test]
     fn catalog_description_bytes_ratchet() {

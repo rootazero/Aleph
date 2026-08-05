@@ -132,10 +132,13 @@ impl ExtensionWatcher {
     {
         let mut watch_dirs = Vec::new();
 
-        // Global directories
+        // Global directories. `.claude` is Claude Code's own directory and
+        // stays on the real home; `.aleph` is OUR state and must follow
+        // `ALEPH_HOME`, or the watcher watches a tree nobody writes to.
         if let Some(home) = dirs::home_dir() {
             let claude_global = home.join(".claude");
-            let aleph_global = home.join(".aleph");
+            let aleph_global =
+                crate::utils::paths::get_config_dir().unwrap_or_else(|_| home.join(".aleph"));
 
             if claude_global.exists() {
                 watch_dirs.push(claude_global);

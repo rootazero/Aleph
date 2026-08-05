@@ -16,6 +16,7 @@ pub mod agent_resolver;
 pub mod backup;
 pub mod defaults_override;
 pub mod guides;
+pub mod live_apply;
 mod load;
 mod methods;
 mod migration;
@@ -36,7 +37,9 @@ pub use structs::{ChannelInstanceConfig, Config, PluginMarketplaceEntry};
 // Re-export patcher types
 pub use patcher::ConfigPatcher;
 
-// Re-export reload-impact classifier (self-management SSOT)
+// Re-export reload-impact classifier (self-management SSOT) and the
+// hot-apply that makes its `Live` verdict true.
+pub use live_apply::classify_verified;
 pub use reload_impact::ReloadImpact;
 
 // Re-export schema generation functions

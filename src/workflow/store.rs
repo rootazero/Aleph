@@ -52,11 +52,10 @@ pub fn workflow_dir() -> PathBuf {
     aleph_home().join("workflows")
 }
 
+/// Aleph home, or the CWD when it cannot be resolved at all.
+/// Single source: [`crate::utils::paths::get_config_dir`] (see `canvas_io`).
 fn aleph_home() -> PathBuf {
-    std::env::var_os("ALEPH_HOME")
-        .map(PathBuf::from)
-        .or_else(|| dirs::home_dir().map(|h| h.join(".aleph")))
-        .unwrap_or_else(|| PathBuf::from("."))
+    crate::utils::paths::get_config_dir().unwrap_or_else(|_| PathBuf::from("."))
 }
 
 /// Listed entry for a workflow file on disk.

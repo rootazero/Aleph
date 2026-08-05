@@ -35,6 +35,57 @@ pub enum GuideTopic {
 }
 
 impl GuideTopic {
+    /// Every topic the tool accepts, in schema order.
+    ///
+    /// Exists so that surfaces which *advertise* the topic list to the model
+    /// (notably `self_manage`'s fallback manual) enumerate it instead of
+    /// hand-spelling a copy — a hand-spelled copy had already drifted, omitting
+    /// `multi_channel` and `cluster`, which reads to the model as "those
+    /// domains have no guide".
+    pub const ALL: &'static [Self] = &[
+        Self::Overview,
+        Self::Providers,
+        Self::Mcp,
+        Self::Skills,
+        Self::Agents,
+        Self::General,
+        Self::Generation,
+        Self::Channels,
+        Self::Cron,
+        Self::MultiChannel,
+        Self::Cluster,
+    ];
+
+    /// Wire id — the exact string the `topic` argument accepts. Kept in
+    /// lock-step with the `serde(rename_all = "snake_case")` above by
+    /// [`tests::ids_match_the_serialized_form`].
+    #[must_use]
+    pub const fn id(&self) -> &'static str {
+        match self {
+            Self::Overview => "overview",
+            Self::Providers => "providers",
+            Self::Mcp => "mcp",
+            Self::Skills => "skills",
+            Self::Agents => "agents",
+            Self::General => "general",
+            Self::Generation => "generation",
+            Self::Channels => "channels",
+            Self::Cron => "cron",
+            Self::MultiChannel => "multi_channel",
+            Self::Cluster => "cluster",
+        }
+    }
+
+    /// Comma-separated list of every accepted topic id.
+    #[must_use]
+    pub fn all_ids() -> String {
+        Self::ALL
+            .iter()
+            .map(Self::id)
+            .collect::<Vec<_>>()
+            .join(", ")
+    }
+
     const fn filename(&self) -> &'static str {
         match self {
             Self::Overview => "overview.md",
@@ -70,12 +121,18 @@ impl ReadConfigGuideTool {
         Self { guides_dir }
     }
 
-    /// Default guides directory: ~/.aleph/guides/
+    /// Default guides directory: `<config_dir>/guides/`.
+    ///
+    /// ⚠️ Must match the *writer*: `start::mod` deploys the embedded guides to
+    /// `utils::paths::get_config_dir()/guides`. Resolving the read side
+    /// through `dirs::home_dir().join(".aleph")` instead — as this did — meant
+    /// that under `ALEPH_HOME` the tool read a directory nothing ever wrote,
+    /// and progressive disclosure (the spine of self-management) returned
+    /// "guide not found" on a fully provisioned install.
     #[must_use]
     pub fn default_dir() -> PathBuf {
-        dirs::home_dir()
-            .unwrap_or_else(|| PathBuf::from("/tmp"))
-            .join(".aleph")
+        crate::utils::paths::get_config_dir()
+            .unwrap_or_else(|_| PathBuf::from(".aleph"))
             .join("guides")
     }
 }
@@ -130,6 +187,42 @@ impl AlephTool for ReadConfigGuideTool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// `id()` must be the serialized form, or a surface that advertises the
+    /// list would be naming topics the argument rejects.
+    #[test]
+    fn ids_match_the_serialized_form() {
+        for topic in GuideTopic::ALL {
+            let wire = serde_json::to_value(topic).unwrap();
+            assert_eq!(
+                wire.as_str(),
+                Some(topic.id()),
+                "id() drifted from the serde representation for {topic:?}"
+            );
+            // And the wire id round-trips back into the enum, which is what
+            // the model actually sends.
+            let parsed: GuideTopic = serde_json::from_value(wire).unwrap();
+            assert_eq!(parsed.filename(), topic.filename());
+        }
+    }
+
+    /// Every declared topic must have a deployed guide file behind it —
+    /// advertising a topic whose file was never embedded is a promise the
+    /// tool cannot keep.
+    #[test]
+    fn every_topic_has_an_embedded_guide_file() {
+        let embedded: Vec<&str> = crate::config::guides::GUIDE_FILES
+            .iter()
+            .map(|(name, _)| *name)
+            .collect();
+        for topic in GuideTopic::ALL {
+            assert!(
+                embedded.contains(&topic.filename()),
+                "{} is offered as a topic but no guide file is embedded for it",
+                topic.id()
+            );
+        }
+    }
 
     #[test]
     fn new_topics_map_to_files() {

@@ -45,19 +45,26 @@ pub enum ReloadImpact {
 /// Top-level sections applied live (effective on the next conversation turn)
 /// without a daemon restart.
 ///
-/// Keep in lock-step with the actual live-read / hot-apply call sites:
-/// - `route` — `self_config::update_config` and the gateway `route_config`
-///   handler both call `route_handle.store(..)` after patching it.
+/// Why each one qualifies:
+/// - `route` — the failover chain reads its route state from a boot-installed
+///   `ArcSwap`; storing into it is what makes a route change live.
 /// - `behavior` — `output_mode` is re-read fresh from the shared config on
 ///   every run by all channel paths (`server_init`, the `inbound_router`
 ///   executor, and the `agent` handler's `resolved_output_mode`), so the
-///   typewriter/instant switch takes effect on the next turn. No restart is
-///   needed despite no explicit hot-swap call.
-/// - `execution` — `[execution] max_runs_*` are hot-applied to the live
-///   `ConcurrencyLimiter` by `self_config` via
-///   `execution_engine::concurrency_handle::reconfigure_global`, mirroring the
-///   `route` hot-apply. New caps bind on the next admission — no restart.
-const LIVE_SECTIONS: &[&str] = &["route", "behavior", "execution"];
+///   typewriter/instant switch takes effect on the next turn. Its liveness is
+///   a property of the READER — no hot-swap call exists or is needed.
+/// - `execution` — `[execution] max_runs_*` are pushed to the live
+///   `ConcurrencyLimiter`; new caps bind on the next admission.
+///
+/// ⚠️ This is a **declaration**, and the code that executes it is
+/// [`crate::config::live_apply::apply_live_sections`] — one table, one
+/// executor, reached from the single write chokepoint (`ConfigPatcher`).
+/// Do not re-implement the hot-apply at a call site: this list used to be
+/// asserted by every write surface while only one of them acted on it, so a
+/// `config.patch` of `route.mode` reported "no restart needed" and changed
+/// nothing. `live_apply`'s `every_live_section_has_an_apply_arm` fails if an
+/// entry here has no arm there, or vice versa.
+pub(crate) const LIVE_SECTIONS: &[&str] = &["route", "behavior", "execution"];
 
 /// Legacy top-level sections that are parsed but inert (no runtime consumer).
 ///
