@@ -1810,6 +1810,14 @@ async fn goal_continuation_inherits_the_originating_runs_project_root() {
     );
 }
 
+// The goal store is process-global and `sweep_once` scans EVERY row in it, so
+// two tests that each park a goal into the sweep's claim shape will consume one
+// another's barrier: the sweep clears it and claims the continuation FIRST, and
+// only then discovers the agent belongs to the other test's registry — by which
+// point the wake is already spent and unrecoverable. Serialize the sweeping
+// tests rather than hoping their windows miss.
+static GOAL_SWEEP_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
 /// A transient provider failure parks the pursuit and pushes "retrying in ~N" —
 /// and something has to make that retry happen.
 ///
@@ -1825,14 +1833,6 @@ async fn goal_continuation_inherits_the_originating_runs_project_root() {
 /// So this asserts the WAKE — a real run reaching the execution adapter with the
 /// resume prompt — not the parked row. A test that stopped at "parked, weld
 /// preserved, not Blocked" passes with the bug fully present.
-/// The goal store is process-global and `sweep_once` scans EVERY row in it, so
-/// two tests that each park a goal into the sweep's claim shape will consume one
-/// another's barrier: the sweep clears it and claims the continuation FIRST, and
-/// only then discovers the agent belongs to the other test's registry — by which
-/// point the wake is already spent and unrecoverable. Serialize the sweeping
-/// tests rather than hoping their windows miss.
-static GOAL_SWEEP_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
-
 #[tokio::test]
 async fn a_transiently_parked_goal_is_actually_woken() {
     use crate::gateway::execution_adapter::ExecutionAdapter;
