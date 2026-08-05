@@ -432,15 +432,24 @@ impl ActiveAgentEnv {
             agent_id: "global".to_string(),
             profile: ProfileConfig::default(),
             memory_filter: AgentEnvFilter::Single("global".to_string()),
-            agent_env_path: dirs::home_dir().map(|h| h.join(".aleph")),
+            agent_env_path: crate::utils::paths::get_config_dir().ok(),
         }
     }
 
     /// Resolve the agent environment directory path from the agent ID.
     ///
-    /// Convention: `~/.aleph/agents/{agent_id}`
+    /// Convention: `<config_dir>/agents/{agent_id}`.
+    ///
+    /// ⚠️ This is the SAME directory as `discovery::aleph_agents_dir()`,
+    /// `SelfConfigTool`, and `agent_resolver::default_agents_root` — it must
+    /// therefore be the same resolution. It used to hand-roll
+    /// `dirs::home_dir().join(".aleph/agents")`, making it a fourth
+    /// independent answer for one directory, and independent answers only
+    /// diverge where nobody is looking (a relocated `ALEPH_HOME`).
     fn resolve_agent_env_path(agent_id: &str) -> Option<PathBuf> {
-        dirs::home_dir().map(|h| h.join(".aleph/agents").join(agent_id))
+        crate::utils::paths::get_config_dir()
+            .ok()
+            .map(|h| h.join("agents").join(agent_id))
     }
 }
 

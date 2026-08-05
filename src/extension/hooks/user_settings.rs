@@ -117,8 +117,12 @@ struct UserHooksFile {
 pub fn load_user_hooks(cwd: Option<&Path>, project_roots: &[PathBuf]) -> Vec<HookConfig> {
     let mut out = Vec::new();
 
-    if let Some(home) = dirs::home_dir() {
-        let p = home.join(".aleph/hooks.json");
+    // `ALEPH_HOME`-aware, like every other reader of Aleph state — and like the
+    // sibling `ShellHookConsent::default_path` that gates these same hooks.
+    // A user-global layer that reads the real home under a relocated one is a
+    // silently empty layer.
+    if let Ok(home) = crate::utils::paths::get_config_dir() {
+        let p = home.join("hooks.json");
         load_into(&p, "user:global", &mut out);
     }
 

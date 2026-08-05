@@ -30,11 +30,12 @@ pub async fn load_model_behavior(name: &str) -> Option<String> {
         return None;
     }
 
-    // 1. Check user override (async I/O, silently skip if home_dir unavailable)
-    if let Some(home) = dirs::home_dir() {
-        let user_path = home
-            .join(".aleph/model_behaviors")
-            .join(format!("{name}.md"));
+    // 1. Check user override (async I/O, silently skip if the dir is
+    //    unresolvable). `ALEPH_HOME`-aware: an override the user dropped into
+    //    the configured home must be the one that wins, or the "user override"
+    //    layer is silently inert under a relocated home.
+    if let Ok(home) = crate::utils::paths::get_config_dir() {
+        let user_path = home.join("model_behaviors").join(format!("{name}.md"));
         if let Ok(content) = tokio::fs::read_to_string(&user_path).await {
             return Some(content);
         }

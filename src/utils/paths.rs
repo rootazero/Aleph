@@ -675,6 +675,110 @@ mod tests {
     use super::*;
     use tempfile::TempDir;
 
+    /// Files allowed to hand-roll a `.aleph` path off `dirs::home_dir()`,
+    /// each with the reason it is not the bug this guard hunts.
+    ///
+    /// Everything else must go through [`get_config_dir`] — see the guard's
+    /// own doc for why.
+    const HOME_JOIN_ALLOWLIST: &[(&str, &str)] = &[
+        (
+            "src/utils/paths.rs",
+            "this module IS the resolver; the allowlist strings live here too",
+        ),
+        (
+            "src/extension/watcher.rs",
+            "resolves `.claude` (Claude Code's dir, real home by definition) \
+             next to an ALEPH_HOME-aware `.aleph`",
+        ),
+        (
+            "src/extension/marketplace/types.rs",
+            "prefers discovery::aleph_home_dir(); home_dir is only the error fallback",
+        ),
+        (
+            "src/extension/mod.rs",
+            "prefers discovery::aleph_plugins_dir(); home_dir is only the error fallback",
+        ),
+        (
+            "src/sandbox/proxy/netns_bridge.rs",
+            "unix-socket parent chosen for sun_path's 108-byte limit, not for state \
+             location; a long ALEPH_HOME would bind-fail after a successful mkdir",
+        ),
+        (
+            "src/bin/aleph-server/daemon.rs",
+            "expands a user-written `~/` prefix, which means the real home",
+        ),
+    ];
+
+    /// Guard against the single most repeated wiring bug in this repo: a path
+    /// under `~/.aleph` resolved by hand instead of through [`get_config_dir`].
+    ///
+    /// Its whole failure mode is invisibility. With `ALEPH_HOME` unset the two
+    /// resolutions are byte-identical, so a developer machine, CI, and every
+    /// unit test agree — and the divergence only appears on a relocated home,
+    /// where the writer writes one place and the reader reads another and
+    /// *nothing errors*. The 2026-08-05 round found eight live instances at
+    /// once (identity files the prompt could never see, a guides directory
+    /// nobody wrote, a silently empty user-hooks layer, a second answer for
+    /// the agents root).
+    ///
+    /// Source-level on purpose: at runtime the two spellings produce the same
+    /// value under the test environment, so only the text can tell them apart.
+    #[test]
+    fn no_hand_rolled_aleph_home_outside_the_allowlist() {
+        fn walk(dir: &std::path::Path, out: &mut Vec<PathBuf>) {
+            let Ok(entries) = std::fs::read_dir(dir) else {
+                return;
+            };
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if path.is_dir() {
+                    walk(&path, out);
+                } else if path.extension().is_some_and(|e| e == "rs") {
+                    out.push(path);
+                }
+            }
+        }
+
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+        let mut files = Vec::new();
+        walk(&root, &mut files);
+        assert!(files.len() > 100, "walk found suspiciously few sources");
+
+        let mut offenders: Vec<String> = Vec::new();
+        for file in files {
+            let rel = file
+                .strip_prefix(env!("CARGO_MANIFEST_DIR"))
+                .unwrap_or(&file)
+                .to_string_lossy()
+                .replace('\\', "/");
+            if HOME_JOIN_ALLOWLIST.iter().any(|(f, _)| *f == rel) {
+                continue;
+            }
+            let Ok(text) = std::fs::read_to_string(&file) else {
+                continue;
+            };
+            for (i, line) in text.lines().enumerate() {
+                // Comments and doc comments discuss the anti-pattern by name;
+                // only real code counts.
+                let code = line.trim_start();
+                if code.starts_with("//") || code.starts_with("*") {
+                    continue;
+                }
+                if line.contains("dirs::home_dir()") && line.contains(".aleph") {
+                    offenders.push(format!("{rel}:{}: {}", i + 1, line.trim()));
+                }
+            }
+        }
+
+        assert!(
+            offenders.is_empty(),
+            "these resolve an Aleph path by hand instead of through \
+             utils::paths::get_config_dir(), so they ignore ALEPH_HOME and will read/write \
+             a different directory than the rest of the process — with no error:\n  {}",
+            offenders.join("\n  ")
+        );
+    }
+
     #[test]
     fn test_find_git_root() {
         let temp_dir = TempDir::new().unwrap();

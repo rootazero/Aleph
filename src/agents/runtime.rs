@@ -714,10 +714,12 @@ fn persist_transcript(transcript: &SubagentTranscript, session_id: &str) {
         .agent_id
         .replace(['/', '\\'], "_")
         .replace("..", "_");
-    let base = match dirs::home_dir() {
-        Some(h) => h.join(".aleph/data/transcripts").join(safe_session),
-        None => {
-            tracing::warn!("Cannot resolve home dir for transcript persistence");
+    // `ALEPH_HOME`-aware: transcripts are Aleph state and belong under the
+    // configured home with every other store, not under the real one.
+    let base = match crate::utils::paths::get_config_dir() {
+        Ok(h) => h.join("data/transcripts").join(safe_session),
+        Err(e) => {
+            tracing::warn!(error = %e, "Cannot resolve Aleph home for transcript persistence");
             return;
         }
     };

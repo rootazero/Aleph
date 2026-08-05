@@ -69,12 +69,13 @@ impl Default for McpPersistentConfig {
 impl McpPersistentConfig {
     /// Get the default configuration file path
     ///
-    /// Returns `~/.aleph/mcp_config.json`
+    /// Returns `<config_dir>/mcp_config.json` — the same `ALEPH_HOME`-aware
+    /// resolution every other piece of Aleph state uses, so the file the MCP
+    /// manager loads is the file self-management writes.
     #[must_use]
     pub fn default_path() -> PathBuf {
-        dirs::home_dir()
-            .unwrap_or_else(|| PathBuf::from("."))
-            .join(".aleph")
+        crate::utils::paths::get_config_dir()
+            .unwrap_or_else(|_| PathBuf::from(".aleph"))
             .join("mcp_config.json")
     }
 

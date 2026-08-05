@@ -29,10 +29,9 @@ const BUILTIN_TEMPLATES: &[(&str, &str)] = &[
 /// Default user-templates directory under the conventional Aleph home.
 /// Honours `$ALEPH_HOME` for parity with the `project_root` + dotfiles code.
 pub fn default_user_dir() -> PathBuf {
-    let base = std::env::var_os("ALEPH_HOME")
-        .map(PathBuf::from)
-        .or_else(|| dirs::home_dir().map(|h| h.join(".aleph")))
-        .unwrap_or_else(|| PathBuf::from("."));
+    // Single source: `get_config_dir` already IS the `ALEPH_HOME` -> `~/.aleph`
+    // rule (see `canvas_io::aleph_home` for why the copies were collapsed).
+    let base = crate::utils::paths::get_config_dir().unwrap_or_else(|_| PathBuf::from("."));
     base.join("teams").join("templates")
 }
 

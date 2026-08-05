@@ -473,23 +473,28 @@ fn resolve_user_path(path: &Path) -> PathBuf {
     path.to_path_buf()
 }
 
-/// Default workspace root directory: `~/.aleph/workspaces`.
+/// Default workspace root directory: `<config_dir>/workspaces`.
 ///
 /// Workspaces hold runtime data (tool output, project files),
 /// NOT identity files (SOUL.md, AGENTS.md, MEMORY.md) — those live under `agents/`.
 pub(crate) fn default_workspace_root() -> PathBuf {
-    dirs::home_dir()
-        .unwrap_or_else(|| PathBuf::from("/tmp"))
-        .join(".aleph")
-        .join("workspaces")
+    aleph_home().join("workspaces")
 }
 
-/// Default agent state root directory: `~/.aleph/agents`.
+/// Default agent state root directory: `<config_dir>/agents`.
+///
+/// ⚠️ Same directory `discovery::aleph_agents_dir()` resolves and that
+/// `SelfConfigTool` writes into. It must therefore be the same resolution: a
+/// second answer for one directory is how identity files end up written where
+/// nothing reads them (2026-08-05 fixed exactly that on the tool side).
 fn default_agents_root() -> PathBuf {
-    dirs::home_dir()
-        .unwrap_or_else(|| PathBuf::from("/tmp"))
-        .join(".aleph")
-        .join("agents")
+    aleph_home().join("agents")
+}
+
+/// `ALEPH_HOME`-aware Aleph home, with the historical `/tmp` fallback kept for
+/// the (practically unreachable) no-home case so behaviour is unchanged there.
+fn aleph_home() -> PathBuf {
+    crate::utils::paths::get_config_dir().unwrap_or_else(|_| PathBuf::from("/tmp").join(".aleph"))
 }
 
 // =============================================================================

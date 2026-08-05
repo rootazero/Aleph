@@ -64,7 +64,9 @@ fn identity_path(name: &str) -> Option<PathBuf> {
     {
         return None;
     }
-    let base = dirs::home_dir()?.join(".aleph").join("node");
+    // `ALEPH_HOME`-aware like every other Aleph state path — the node
+    // enrolment record must live beside the config it belongs to.
+    let base = alephcore::utils::paths::get_config_dir().ok()?.join("node");
     let candidate = base.join(&file_name);
     if candidate.strip_prefix(&base).is_ok() {
         Some(candidate)
