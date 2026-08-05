@@ -60,6 +60,25 @@ fn test_session_manager(
     )
 }
 
+/// Install (or join) the process-wide goal store every goal test in this binary
+/// shares, and return whichever store actually became global — that is the one
+/// `confirm_fire` / `block_goal_on_failure` / the wake sweep all read.
+///
+/// The directory is anchored to the PROCESS, not to the installing test. The
+/// global is a set-once `OnceCell`, so a `TempDir` dropped at the end of the
+/// winning test would delete the database out from under every later test that
+/// reads it — and, since cargo runs tests in parallel, out from under a
+/// concurrent one. That was harmless while exactly one test used the global; it
+/// stops being harmless the moment a second one does.
+fn goal_store_global() -> Arc<crate::goal::GoalStore> {
+    static DIR: std::sync::OnceLock<tempfile::TempDir> = std::sync::OnceLock::new();
+    let dir = DIR.get_or_init(|| tempfile::tempdir().expect("goal store dir"));
+    crate::goal::set_global_for_test(Arc::new(
+        crate::goal::GoalStore::open(&dir.path().join("goals.db")).expect("goal store"),
+    ));
+    crate::goal::global().expect("a goal store is installed")
+}
+
 #[tokio::test]
 async fn test_simple_execution_engine_basic() {
     let temp = tempfile::tempdir().unwrap();
@@ -1719,16 +1738,10 @@ impl crate::gateway::execution_adapter::ExecutionAdapter for RecordingAdapter {
 #[tokio::test]
 async fn goal_continuation_inherits_the_originating_runs_project_root() {
     use crate::gateway::execution_adapter::ExecutionAdapter;
-    use crate::goal::{ContinuationDecision, Goal, GoalStore, PursuitMode};
+    use crate::goal::{ContinuationDecision, Goal, PursuitMode};
 
     let temp = tempfile::tempdir().unwrap();
-    // The goal store global is a `OnceCell` shared by the whole test binary:
-    // install ours if we win the race, then operate on whichever store actually
-    // became global — that is the one the fire-time `confirm_fire` reads.
-    crate::goal::set_global_for_test(Arc::new(
-        GoalStore::open(&temp.path().join("goals.db")).expect("goal store"),
-    ));
-    let store = crate::goal::global().expect("a goal store is installed");
+    let store = goal_store_global();
 
     let session = SessionKey::main("b10-continuation");
     let session_str = session.to_key_string();
@@ -1753,6 +1766,8 @@ async fn goal_continuation_inherits_the_originating_runs_project_root() {
         panic!("an Active goal with runway must claim a continuation");
     };
 
+    let sessions: Arc<dyn crate::gateway::session_store::SessionStore> =
+        test_session_manager(&temp);
     let agent = AgentInstance::new(
         AgentInstanceConfig {
             agent_id: session.agent_id().to_string(),
@@ -1760,7 +1775,7 @@ async fn goal_continuation_inherits_the_originating_runs_project_root() {
             agent_dir: temp.path().join("agents"),
             ..Default::default()
         },
-        test_session_manager(&temp),
+        Arc::clone(&sessions),
     )
     .unwrap();
     let registry = Arc::new(crate::gateway::agent_instance::AgentRegistry::new());
@@ -1776,7 +1791,10 @@ async fn goal_continuation_inherits_the_originating_runs_project_root() {
         HashMap::new(),
         Some(project.clone()),
         None,
-        None,
+        // The real store, not `None`: this argument is what the agent-miss
+        // branch resolves an origin from, and a test that passes `None` cannot
+        // tell a wired handle from an unwired one.
+        Some(sessions),
         None,
         super::execute::ContinuationKind::Goal { wake_ms },
     );
