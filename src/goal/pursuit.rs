@@ -60,6 +60,29 @@ pub fn should_continue(goal: &Goal, tokens_now: u64, now_ms: u64) -> bool {
     true
 }
 
+/// Would a continuation claimed now — waking at `wake_ms` — still be inside
+/// the goal's wall-clock bound when it actually EXECUTES?
+///
+/// [`should_continue`] answers "may this goal be claimed", which is a
+/// different question. A deadline wait barrier is claimed at one `post_run`
+/// and its wake executes up to hours later, and nothing in between re-reads
+/// the clock: `confirm_fire` matches the pending marker, not the deadline.
+/// Without this projection `timeout_minutes` bounds only when a continuation
+/// may be *scheduled*, so `wait_minutes=180` under a 30-minute deadline runs a
+/// full LLM turn 150 minutes past the limit the user set.
+///
+/// The tradeoff is deliberate and identical to the loop's
+/// (`looping::pursuit::fires_out_of_bounds`): the pursuit now stops at the
+/// last claim whose wake lands in-bounds — up to one park EARLY rather than
+/// arbitrarily late. A safety cap is an upper bound, not an approximation.
+///
+/// `now_ms == 0` (clock unavailable) fails open, matching [`should_continue`].
+#[must_use]
+pub fn fires_out_of_bounds(goal: &Goal, wake_ms: u64, now_ms: u64) -> bool {
+    goal.deadline_ms
+        .is_some_and(|deadline| now_ms != 0 && wake_ms > deadline)
+}
+
 /// The OTHER two structural budgets the loop silently enforces — the wall-clock
 /// deadline and the token budget — rendered as a remaining-quota clause for the
 /// continuation prompt. The iteration pace is already in the prompt's header, so
@@ -683,6 +706,28 @@ mod tests {
         let g = active_goal(5).with_deadline_ms(Some(1_000));
         // iterations remain (0/5) but the wall-clock budget is spent.
         assert!(exhausted_while_active(&g, 0, 2_000));
+    }
+
+    #[test]
+    fn a_wake_past_the_deadline_is_out_of_bounds() {
+        let g = active_goal(5).with_deadline_ms(Some(10_000));
+        // Claimed at 1_000 (inside the deadline) but waking at 20_000 (outside).
+        assert!(fires_out_of_bounds(&g, 20_000, 1_000));
+        // A wake that lands before the deadline is fine.
+        assert!(!fires_out_of_bounds(&g, 9_000, 1_000));
+        // Exactly at the deadline is still in bounds (`>` not `>=`, matching
+        // `should_continue`'s `now_ms > deadline`).
+        assert!(!fires_out_of_bounds(&g, 10_000, 1_000));
+    }
+
+    #[test]
+    fn no_deadline_or_no_clock_never_reads_out_of_bounds() {
+        let no_deadline = active_goal(5);
+        assert!(!fires_out_of_bounds(&no_deadline, u64::MAX, 1_000));
+        // now_ms == 0 means "clock unavailable" — fail open, same convention as
+        // `should_continue`, so clock-less callers stay behavior-identical.
+        let bounded = active_goal(5).with_deadline_ms(Some(10_000));
+        assert!(!fires_out_of_bounds(&bounded, 20_000, 0));
     }
 
     #[test]

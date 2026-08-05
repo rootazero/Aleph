@@ -333,7 +333,14 @@ impl GoalStore {
         // goal is never Blocked while legitimately waiting.
         if let Some(park) = pursuit::wait_parked(&goal, now_ms) {
             if let pursuit::WaitPark::Timer { wake_ms } = park {
-                if pursuit::should_continue(&goal, tokens_now, now_ms) {
+                // The bound must hold at the instant the wake EXECUTES, not
+                // merely when it is claimed: this claim arms a timer that
+                // fires up to hours from now, and `confirm_fire` matches the
+                // marker, not the clock. A wake landing past the deadline is
+                // arbitrated here instead of running out of bounds.
+                if pursuit::should_continue(&goal, tokens_now, now_ms)
+                    && !pursuit::fires_out_of_bounds(&goal, wake_ms, now_ms)
+                {
                     let prompt = pursuit::wait_resume_prompt(&goal, "the wait elapsed");
                     Self::put_locked(
                         &conn,
@@ -347,28 +354,32 @@ impl GoalStore {
                         prompt,
                     });
                 }
-                // Timer parked with no runway left (iteration/deadline/token
-                // cap already spent): arming the timer would only wake into an
-                // immediate Block, so arbitrate exhaustion NOW instead of
-                // parking silently forever. Same transition as the unparked
-                // exhausted path below; clears the barrier + pending marker.
-                if pursuit::exhausted_while_active(&goal, tokens_now, now_ms) {
-                    let note = pursuit::stop_reason_note(&goal, tokens_now, now_ms);
-                    Self::put_locked(
-                        &conn,
-                        &goal
-                            .without_wait(now_ms)
-                            .with_status(GoalStatus::Blocked, now_ms)
-                            .with_note(Some(note.clone()), now_ms)
-                            .with_pending_continuation(None),
-                    )?;
-                    return Ok(ContinuationDecision::Exhausted { note });
-                }
+                // No runway left — either already spent (iteration / deadline
+                // / token cap) or the wake itself lands out of bounds. Arming
+                // the timer would only wake into an immediate Block (or, for
+                // the out-of-bounds case, run past the user's limit), so
+                // arbitrate now. `wait_parked` already established Active
+                // status + Active pursuit, so `exhausted_while_active` holds
+                // whenever `should_continue` does not; the out-of-bounds case
+                // is reported with the deadline note for the same reason.
+                let note = if pursuit::fires_out_of_bounds(&goal, wake_ms, now_ms) {
+                    pursuit::deadline_reached_note(&goal)
+                } else {
+                    pursuit::stop_reason_note(&goal, tokens_now, now_ms)
+                };
+                Self::put_locked(
+                    &conn,
+                    &goal
+                        .without_wait(now_ms)
+                        .with_status(GoalStatus::Blocked, now_ms)
+                        .with_note(Some(note.clone()), now_ms)
+                        .with_pending_continuation(None),
+                )?;
+                return Ok(ContinuationDecision::Exhausted { note });
             }
-            // Task barrier (woken externally by GoalWakeService), or a timer
-            // barrier that is neither runnable nor exhausted (e.g. status not
-            // Active): stay parked. Exhaustion for a task barrier is arbitrated
-            // when the barrier clears.
+            // Task barrier: woken externally by `GoalWakeService` on the
+            // task's settle event. Exhaustion is arbitrated when the barrier
+            // clears, so a goal legitimately waiting is never Blocked here.
             if dirty {
                 Self::put_locked(&conn, &goal)?;
             }
@@ -1029,6 +1040,81 @@ mod tests {
         let live = store.get("sess-noroom").unwrap().unwrap();
         assert_eq!(live.status, GoalStatus::Blocked);
         assert!(!live.has_wait_barrier(), "barrier cleared on the block");
+    }
+
+    #[test]
+    fn a_timer_park_whose_wake_lands_past_the_deadline_is_arbitrated_not_armed() {
+        use crate::goal::PursuitMode;
+        let (store, _d) = temp_store();
+        // Deadline at 30_000; the model parks until 200_000. Claiming at 1_000
+        // the goal is still inside its deadline, so `should_continue` alone said
+        // "arm the timer" — and the wake would have executed 170s past the bound.
+        let g = Goal::new("sess-oob", "obj", 0, 1_000)
+            .with_pursuit(PursuitMode::Active { max_iterations: 5 })
+            .with_deadline_ms(Some(30_000))
+            .with_wait_until(200_000, Some("long cooldown".into()), 1_000);
+        store.put(&g).unwrap();
+
+        let ContinuationDecision::Exhausted { note } = store
+            .try_claim_continuation("sess-oob", None, 1_000, false, None)
+            .unwrap()
+        else {
+            panic!("a wake landing past the deadline must be arbitrated, not armed");
+        };
+        assert!(note.contains("wall-clock"), "got: {note}");
+
+        let live = store.get("sess-oob").unwrap().unwrap();
+        assert_eq!(live.status, GoalStatus::Blocked);
+        assert!(
+            !live.has_wait_barrier(),
+            "the barrier is dropped with the block"
+        );
+        assert_eq!(live.pending_continuation_ms, None, "no timer left armed");
+        assert_eq!(
+            live.continuations_used, 0,
+            "arbitration spends no iteration — nothing ran"
+        );
+    }
+
+    #[test]
+    fn a_timer_park_inside_the_deadline_still_arms_normally() {
+        use crate::goal::PursuitMode;
+        let (store, _d) = temp_store();
+        let g = Goal::new("sess-ib", "obj", 0, 1_000)
+            .with_pursuit(PursuitMode::Active { max_iterations: 5 })
+            .with_deadline_ms(Some(300_000))
+            .with_wait_until(61_000, None, 1_000);
+        store.put(&g).unwrap();
+        let ContinuationDecision::Fire { wake_ms, .. } = store
+            .try_claim_continuation("sess-ib", None, 1_000, false, None)
+            .unwrap()
+        else {
+            panic!("an in-bounds wake must still arm");
+        };
+        assert_eq!(wake_ms, 61_000);
+    }
+
+    #[test]
+    fn a_parked_timer_is_always_either_runnable_or_exhausted() {
+        use crate::goal::pursuit;
+        use crate::goal::PursuitMode;
+        // Locks the invariant the Timer arm relies on: `wait_parked` already
+        // requires Active status + Active pursuit, which are exactly the two
+        // extra conditions `exhausted_while_active` adds on top of
+        // `!should_continue`. If a future edit relaxes `wait_parked`, this fails
+        // instead of silently resurrecting a dead fall-through branch.
+        let g = Goal::new("s", "obj", 0, 0)
+            .with_pursuit(PursuitMode::Active { max_iterations: 1 })
+            .with_wait_until(90_000, None, 0)
+            .spent_continuation(0); // iteration cap now spent
+        let Some(pursuit::WaitPark::Timer { .. }) = pursuit::wait_parked(&g, 1_000) else {
+            panic!("expected a timer park");
+        };
+        assert!(!pursuit::should_continue(&g, 0, 1_000));
+        assert!(
+            pursuit::exhausted_while_active(&g, 0, 1_000),
+            "a parked timer with no runway must read as exhausted"
+        );
     }
 
     #[test]
