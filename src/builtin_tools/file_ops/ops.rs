@@ -66,6 +66,7 @@ pub async fn execute_list(
                 .extension()
                 .map(|e| e.to_string_lossy().to_string()),
             lines: None,
+            mtime: None,
         });
     }
 
@@ -150,18 +151,38 @@ pub(super) async fn read_file_bytes(
     Ok((canonical, size, bytes))
 }
 
+/// What [`execute_write`] did to disk. The `bytes` figure is the full content
+/// length either way (what would have been written) so callers can report a
+/// uniform figure regardless of whether the call was a no-op.
+pub(super) struct WriteOutcome {
+    pub canonical: PathBuf,
+    pub bytes: u64,
+    /// `true` when the destination already had identical bytes and the atomic
+    /// rename was therefore skipped. The file's `mtime` is preserved on
+    /// `unchanged == true`; on `false` the rename overwrote it.
+    pub unchanged: bool,
+}
+
 /// Execute a write operation.
 ///
 /// Returns the canonicalized path written and the number of bytes written, so
 /// callers can report the real resolved path rather than reverse-engineering it
 /// from a human-readable message string.
+///
+/// **No-op short-circuit**: when the destination already exists and its
+/// contents are byte-for-byte equal to `content`, the atomic rename is
+/// skipped so the file's `mtime` is preserved. This matters for build
+/// systems, file watchers, and incremental test runners that key on `mtime`:
+/// a no-op write must not look like a new commit. The byte count returned
+/// is still the full size of `content` (what would have been written) so
+/// callers can report a uniform figure.
 pub(super) async fn execute_write(
     path: &Path,
     content: &str,
     create_parents: bool,
     denied_paths: &[String],
     output_dir_override: Option<&std::path::Path>,
-) -> Result<(PathBuf, u64), ToolError> {
+) -> Result<WriteOutcome, ToolError> {
     let canonical = check_and_resolve_path(path, denied_paths, output_dir_override)?;
 
     // Cross-agent write guard: serialize against any other harness (parent
@@ -183,6 +204,21 @@ pub(super) async fn execute_write(
     }
 
     let bytes = content.len() as u64;
+
+    // No-op short-circuit: if the file already exists with the exact same
+    // bytes, skip the atomic write entirely so mtime (and the file's
+    // identity in any mtime-keyed downstream) is preserved. The compare
+    // happens UNDER the path lock so a concurrent writer cannot change the
+    // file between the read and the decision to skip.
+    if is_byte_equal_existing(&canonical, content.as_bytes()).await {
+        info!(path = %canonical.display(), bytes, "Wrote file (no-op, mtime preserved)");
+        return Ok(WriteOutcome {
+            canonical,
+            bytes,
+            unchanged: true,
+        });
+    }
+
     // Atomic write: staged temp file + rename, so a crash never leaves a
     // half-written file. Parent directories are already created above.
     crate::utils::atomic_write::atomic_write_file(&canonical, content)
@@ -191,7 +227,29 @@ pub(super) async fn execute_write(
 
     info!(path = %canonical.display(), bytes, "Wrote file");
 
-    Ok((canonical, bytes))
+    Ok(WriteOutcome {
+        canonical,
+        bytes,
+        unchanged: false,
+    })
+}
+
+/// Whether `canonical` exists and is byte-for-byte equal to `wanted`. Returns
+/// `false` (i.e. "not a no-op, please write") when the file is absent or its
+/// size differs — a cheap short-circuit that avoids loading the file when the
+/// lengths already disagree.
+async fn is_byte_equal_existing(canonical: &Path, wanted: &[u8]) -> bool {
+    let meta = match fs::metadata(canonical) {
+        Ok(m) if m.is_file() => m,
+        _ => return false,
+    };
+    if meta.len() as usize != wanted.len() {
+        return false;
+    }
+    match fs::read(canonical) {
+        Ok(existing) => existing == wanted,
+        Err(_) => false,
+    }
 }
 
 /// Execute a move operation
@@ -759,10 +817,28 @@ mod tests {
     async fn write_then_read_back_roundtrips() {
         let dir = tempdir().unwrap();
         let path = dir.path().join("nested/out.txt");
-        let (canonical, bytes) = execute_write(&path, "payload", true, &[], None)
+        let outcome = execute_write(&path, "payload", true, &[], None)
             .await
             .unwrap();
-        assert_eq!(bytes, 7);
-        assert_eq!(fs::read_to_string(&canonical).unwrap(), "payload");
+        assert_eq!(outcome.bytes, 7);
+        assert!(!outcome.unchanged, "first write must not be a no-op");
+        assert_eq!(fs::read_to_string(&outcome.canonical).unwrap(), "payload");
+    }
+
+    /// No-op short-circuit: writing the same bytes to an existing file
+    /// reports `unchanged: true` and leaves the file alone (its mtime is
+    /// preserved so build systems and file watchers that key on mtime
+    /// don't see a fresh change).
+    #[tokio::test]
+    async fn write_to_existing_file_with_same_bytes_is_a_noop() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("p.txt");
+        fs::write(&path, "same").unwrap();
+        let outcome = execute_write(&path, "same", false, &[], None)
+            .await
+            .unwrap();
+        assert_eq!(outcome.bytes, 4);
+        assert!(outcome.unchanged, "byte-equal rewrite must report unchanged");
+        assert_eq!(fs::read_to_string(&outcome.canonical).unwrap(), "same");
     }
 }
