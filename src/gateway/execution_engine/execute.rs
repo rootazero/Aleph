@@ -1112,6 +1112,12 @@ pub(super) fn spawn_continuation_run(
         // a completion, or a stale-grace re-claim supersede a continuation.
         // Without the atomic confirm, a superseded run still burned one full
         // stale LLM turn (the ghost run).
+        //
+        // `goal_out_of_bounds_note` defers the OutOfBounds notice past the
+        // agent lookup below: resolving the origin channel needs `cont_agent`,
+        // which does not exist yet at this point, and duplicating that lookup
+        // here would diverge from the single agent-miss handling underneath.
+        let mut goal_out_of_bounds_note: Option<String> = None;
         match kind {
             ContinuationKind::Loop { wake_ms } => {
                 let confirmed = crate::looping::global()
@@ -1123,15 +1129,23 @@ pub(super) fn spawn_continuation_run(
                 }
             }
             ContinuationKind::Goal { wake_ms } => {
-                let confirmed = crate::goal::global().is_some_and(|store| {
-                    store
-                        .confirm_fire(&session_key_str, wake_ms)
-                        .unwrap_or(false)
+                let decision = crate::goal::global().map(|store| {
+                    store.confirm_fire(
+                        &session_key_str,
+                        wake_ms,
+                        super::goal_continuation::now_ms(),
+                    )
                 });
-                if !confirmed {
-                    info!(session = %session_key_str,
-                        "goal pursuit: continuation superseded (goal cleared, completed or re-claimed); skipping");
-                    return;
+                match decision {
+                    Some(Ok(crate::goal::FireDecision::Proceed)) => {}
+                    Some(Ok(crate::goal::FireDecision::OutOfBounds { note })) => {
+                        goal_out_of_bounds_note = Some(note);
+                    }
+                    _ => {
+                        info!(session = %session_key_str,
+                            "goal pursuit: continuation superseded (goal cleared, completed or re-claimed); skipping");
+                        return;
+                    }
                 }
             }
         }
@@ -1195,6 +1209,18 @@ pub(super) fn spawn_continuation_run(
             }
             return;
         };
+        if let Some(note) = goal_out_of_bounds_note {
+            // The bound elapsed while this continuation waited. The store
+            // already Blocked the goal; push the same notice the `Exhausted`
+            // claim decision would (R5 — an autonomous ending must never be
+            // silent), and drop the welded plan like every other terminal end.
+            super::goal_continuation::clear_goal_welded_strategy(&session_key_str);
+            info!(session = %session_key_str, note = %note,
+                "goal pursuit: wake landed past the wall-clock bound; goal blocked");
+            let origin = super::goal_continuation::origin_of(&cont_agent, &session_key).await;
+            notify_origin(origin.as_ref(), format!("⏹ {note}")).await;
+            return;
+        }
         // G1: resolve the session's bound origin channel once — used both to
         // fan the continuation's final reply out to it (Telegram/Slack) and,
         // on failure, to deliver the halt notice (G3). `None` for Panel-only

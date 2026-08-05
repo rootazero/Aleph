@@ -74,6 +74,26 @@ pub enum RearmDecision {
     Drop,
 }
 
+/// Fire-time verdict for a claimed continuation.
+///
+/// `confirm_fire` used to return a bare `bool`, whose `false` meant "this
+/// continuation was superseded — skip silently". That is the right handling
+/// for a supersession and exactly the WRONG handling for a wake that is now
+/// out of bounds: skipping silently would trade "runs past the user's limit"
+/// for "stalls forever with the goal still Active and nothing left to claim
+/// it". The out-of-bounds case therefore carries the note its caller must
+/// push to the origin channel, exactly as the `Exhausted` claim decision does.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum FireDecision {
+    /// Still the continuation on the books, still in bounds — execute it.
+    Proceed,
+    /// Superseded (goal cleared / completed / re-claimed) — skip silently.
+    Superseded,
+    /// The wall-clock bound elapsed while this continuation waited. The goal
+    /// has been Blocked with `note` in the same guard; the caller notifies.
+    OutOfBounds { note: String },
+}
+
 /// Outcome of [`GoalStore::commit_field_update`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FieldUpdate {
@@ -747,20 +767,42 @@ impl GoalStore {
     }
 
     /// Fire-time gate for a claimed continuation: proceed only if the goal is
-    /// still `Active` and THIS continuation is still the one on the books
-    /// (`wake_ms` matches the pending marker), clearing the marker in the same
-    /// guard. `false` = superseded (the user cleared/completed the goal, or a
-    /// stale-grace re-claim replaced this one) — the run must NOT execute. This
-    /// is what keeps a re-armed continuation from burning a stale LLM turn on a
-    /// goal that ended during its retry delay.
-    pub fn confirm_fire(&self, session_id: &str, wake_ms: u64) -> Result<bool> {
+    /// still `Active`, THIS continuation is still the one on the books
+    /// (`wake_ms` matches the pending marker), AND the wall-clock bound has
+    /// not elapsed while it waited. The marker is cleared in the same guard.
+    ///
+    /// [`FireDecision::Superseded`] (the user cleared/completed the goal, or a
+    /// stale-grace re-claim replaced this one) keeps the run from burning a
+    /// stale LLM turn. [`FireDecision::OutOfBounds`] additionally Blocks the
+    /// goal with the deadline note, because a bound that merely refuses to
+    /// fire — with no arbitration — leaves an `Active` goal that nothing will
+    /// ever claim again. This is the only bound the boot re-arm path
+    /// (`GoalWakeService::rearm_parked_goals`, which replays a stored marker
+    /// without a fresh claim) passes through.
+    pub fn confirm_fire(
+        &self,
+        session_id: &str,
+        wake_ms: u64,
+        now_ms: u64,
+    ) -> Result<FireDecision> {
         let conn = self.lock();
         match Self::get_locked(&conn, session_id)? {
             Some(g) if g.is_active() && g.pending_continuation_ms == Some(wake_ms) => {
+                if pursuit::fires_out_of_bounds(&g, wake_ms, now_ms) {
+                    let note = pursuit::deadline_reached_note(&g);
+                    Self::put_locked(
+                        &conn,
+                        &g.without_wait(now_ms)
+                            .with_status(GoalStatus::Blocked, now_ms)
+                            .with_note(Some(note.clone()), now_ms)
+                            .with_pending_continuation(None),
+                    )?;
+                    return Ok(FireDecision::OutOfBounds { note });
+                }
                 Self::put_locked(&conn, &g.with_pending_continuation(None))?;
-                Ok(true)
+                Ok(FireDecision::Proceed)
             }
-            _ => Ok(false),
+            _ => Ok(FireDecision::Superseded),
         }
     }
 
@@ -954,7 +996,10 @@ mod tests {
 
         // Fire-time confirm matches the stored marker; the barrier itself is
         // lazily cleared on the NEXT claim after the wake elapsed.
-        assert!(store.confirm_fire("sess-wait", 61_000).unwrap());
+        assert_eq!(
+            store.confirm_fire("sess-wait", 61_000, 61_000).unwrap(),
+            FireDecision::Proceed
+        );
         let ContinuationDecision::Fire { delay_ms, .. } = store
             .try_claim_continuation("sess-wait", None, 62_000, false, None)
             .unwrap()
@@ -1304,7 +1349,10 @@ mod tests {
         assert_eq!(store.get("s").unwrap().unwrap().continuations_used, 1);
 
         // Once the claimed continuation fires, the chain is free to continue.
-        assert!(store.confirm_fire("s", wake_ms).unwrap());
+        assert_eq!(
+            store.confirm_fire("s", wake_ms, wake_ms).unwrap(),
+            FireDecision::Proceed
+        );
         assert!(matches!(
             store
                 .try_claim_continuation("s", None, 1_200, false, None)
@@ -1334,7 +1382,10 @@ mod tests {
             ContinuationDecision::Fire { .. }
         ));
         // …and the dead task's own fire is then refused (its wake is superseded).
-        assert!(!store.confirm_fire("s", wake_ms).unwrap());
+        assert_eq!(
+            store.confirm_fire("s", wake_ms, wake_ms).unwrap(),
+            FireDecision::Superseded
+        );
     }
 
     #[test]
@@ -1349,8 +1400,9 @@ mod tests {
         };
         // User cleared the goal while the continuation waited out a busy retry.
         store.delete("s").unwrap();
-        assert!(
-            !store.confirm_fire("s", wake_ms).unwrap(),
+        assert_eq!(
+            store.confirm_fire("s", wake_ms, wake_ms).unwrap(),
+            FireDecision::Superseded,
             "a ghost run must not execute against a goal that no longer exists"
         );
     }
@@ -1365,7 +1417,10 @@ mod tests {
         else {
             panic!("expected Fire");
         };
-        assert!(store.confirm_fire("s", wake_ms).unwrap()); // fired, then AgentBusy
+        assert_eq!(
+            store.confirm_fire("s", wake_ms, wake_ms).unwrap(),
+            FireDecision::Proceed
+        ); // fired, then AgentBusy
         let decision = store.rearm_after_busy("s", 2_000).unwrap();
         let RearmDecision::Retry { delay_ms, wake_ms } = decision else {
             panic!("expected Retry, got {decision:?}");
@@ -1645,9 +1700,16 @@ mod tests {
         );
         // A wake-service re-claim (no workspace info) must NOT wipe it.
         let live = store.get("s").unwrap().unwrap();
-        assert!(store
-            .confirm_fire("s", live.pending_continuation_ms.unwrap())
-            .unwrap());
+        assert_eq!(
+            store
+                .confirm_fire(
+                    "s",
+                    live.pending_continuation_ms.unwrap(),
+                    live.pending_continuation_ms.unwrap()
+                )
+                .unwrap(),
+            FireDecision::Proceed
+        );
         let d = store
             .try_claim_continuation("s", None, 2_000, false, None)
             .unwrap();
@@ -1781,5 +1843,55 @@ mod tests {
         let redone = reopened.with_status(GoalStatus::Complete, 5_000);
         assert_eq!(redone.completed_at_ms, Some(5_000));
         assert!(store.try_claim_settle_notify(&redone).unwrap());
+    }
+
+    #[test]
+    fn confirm_fire_refuses_and_arbitrates_a_wake_that_is_now_out_of_bounds() {
+        use crate::goal::PursuitMode;
+        let (store, _d) = temp_store();
+        // A claimed timer whose deadline passed while it slept — the shape a
+        // daemon restart produces, where the boot re-arm replays the stored
+        // marker directly. `is_active()` + marker match alone would fire it.
+        let g = Goal::new("sess-late", "obj", 0, 1_000)
+            .with_pursuit(PursuitMode::Active { max_iterations: 5 })
+            .with_deadline_ms(Some(50_000))
+            .with_wait_until(200_000, None, 1_000)
+            .with_pending_continuation(Some(200_000));
+        store.put(&g).unwrap();
+
+        let FireDecision::OutOfBounds { note } =
+            store.confirm_fire("sess-late", 200_000, 200_000).unwrap()
+        else {
+            panic!("a wake past the deadline must not proceed");
+        };
+        assert!(note.contains("wall-clock"), "got: {note}");
+        let live = store.get("sess-late").unwrap().unwrap();
+        assert_eq!(live.status, GoalStatus::Blocked);
+        assert_eq!(live.pending_continuation_ms, None);
+        assert!(!live.has_wait_barrier());
+    }
+
+    #[test]
+    fn confirm_fire_still_proceeds_and_still_reports_supersession() {
+        use crate::goal::PursuitMode;
+        let (store, _d) = temp_store();
+        let g = Goal::new("sess-ok", "obj", 0, 1_000)
+            .with_pursuit(PursuitMode::Active { max_iterations: 5 })
+            .with_pending_continuation(Some(7_000));
+        store.put(&g).unwrap();
+        assert!(matches!(
+            store.confirm_fire("sess-ok", 7_000, 7_000).unwrap(),
+            FireDecision::Proceed
+        ));
+        // The marker was consumed, so a second confirm is superseded.
+        assert!(matches!(
+            store.confirm_fire("sess-ok", 7_000, 7_100).unwrap(),
+            FireDecision::Superseded
+        ));
+        // A goal with no marker at all is likewise superseded, never OutOfBounds.
+        assert!(matches!(
+            store.confirm_fire("sess-missing", 7_000, 7_100).unwrap(),
+            FireDecision::Superseded
+        ));
     }
 }
