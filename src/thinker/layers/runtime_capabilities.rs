@@ -1,6 +1,6 @@
 //! `RuntimeCapabilitiesLayer` — available runtime environments (priority 400)
 
-use crate::thinker::prompt_layer::{AssemblyPath, LayerInput, PromptLayer};
+use crate::thinker::prompt_layer::{AssemblyPath, LayerInput, LayerStability, PromptLayer};
 use crate::thinker::prompt_mode::PromptMode;
 use crate::thinker::prompt_sanitizer::{sanitize_for_prompt, SanitizeLevel};
 
@@ -18,6 +18,9 @@ impl PromptLayer for RuntimeCapabilitiesLayer {
     }
     fn paths(&self) -> &'static [AssemblyPath] {
         &[AssemblyPath::Basic, AssemblyPath::Cached]
+    }
+    fn stability(&self) -> LayerStability {
+        LayerStability::Stable
     }
     fn inject(&self, output: &mut String, input: &LayerInput) {
         if let Some(ref runtimes) = input.config.runtime_capabilities {

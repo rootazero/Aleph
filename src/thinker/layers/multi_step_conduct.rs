@@ -20,7 +20,7 @@
 //! silent completion is the point and the prompt must stay byte-identical.
 
 use crate::thinker::interaction::Capability;
-use crate::thinker::prompt_layer::{AssemblyPath, LayerInput, PromptLayer};
+use crate::thinker::prompt_layer::{AssemblyPath, LayerInput, LayerStability, PromptLayer};
 use crate::thinker::prompt_mode::PromptMode;
 
 pub struct MultiStepConductLayer;
@@ -42,6 +42,10 @@ impl PromptLayer for MultiStepConductLayer {
         // Ride every non-minimal path; the `inject()` guard keeps output empty
         // when no `ResolvedContext` is attached or SilentReply is active.
         &[AssemblyPath::Basic, AssemblyPath::Cached]
+    }
+
+    fn stability(&self) -> LayerStability {
+        LayerStability::Stable
     }
 
     fn inject(&self, output: &mut String, input: &LayerInput) {
@@ -120,8 +124,13 @@ mod tests {
         assert_eq!(MultiStepConductLayer.priority(), 805);
     }
 
+    /// Renamed from `stability_is_stable_by_default`: there is no default any
+    /// more. This layer's copy is a constant, so it belongs in the cacheable
+    /// prefix — and it now says so itself instead of inheriting the answer by
+    /// staying silent. (The old name was the only reason a `grep "fn stability"`
+    /// audit believed this file already declared one.)
     #[test]
-    fn stability_is_stable_by_default() {
+    fn stability_is_declared_stable() {
         assert!(matches!(
             MultiStepConductLayer.stability(),
             LayerStability::Stable

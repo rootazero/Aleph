@@ -124,8 +124,18 @@ impl CapabilityLedger {
                 Ok(content) => match serde_json::from_str::<Self>(&content) {
                     Ok(mut ledger) => {
                         ledger.persist_path = persist_path;
+                        let dropped = ledger.revalidate_ready();
+                        // Write the correction back, but only when there was
+                        // one: this file is also what a human opens to ask
+                        // "what does Aleph think is installed?", and an
+                        // in-memory-only demotion leaves that answer wrong.
+                        if dropped > 0 {
+                            if let Err(e) = ledger.persist() {
+                                warn!("failed to persist revalidated ledger: {e}");
+                            }
+                        }
                         debug!(
-                            "Loaded capability ledger ({} entries)",
+                            "Loaded capability ledger ({} entries, {dropped} stale)",
                             ledger.entries.len()
                         );
                         return ledger;
@@ -204,6 +214,45 @@ impl CapabilityLedger {
         } else {
             false
         }
+    }
+
+    /// Demote every `Ready` entry whose recorded binary is no longer there.
+    /// Returns how many were demoted.
+    ///
+    /// A ledger records what was true when it was written; nothing re-asks. The
+    /// way that bites: global npm CLIs used to be installed inside the node
+    /// version manager's own tree, so moving to a newer node deleted them while
+    /// this file still said `Ready` — [`executable`](Self::executable) then
+    /// handed callers a path that does not exist, and
+    /// [`build_path`](Self::build_path) prepended its directory to PATH. The
+    /// install location is fixed in [`super::npm_global`]; this is the other
+    /// half, and it covers every disappearance, not just that one (manual
+    /// uninstall, a pruned Homebrew keg, a ledger copied between machines).
+    ///
+    /// `Path::exists` follows symlinks, which is what makes it the right probe
+    /// here: an fnm alias that now points at a different node version leaves a
+    /// *dangling* link, not a missing one.
+    ///
+    /// Deliberately a stat and not a re-run of each binary: this is on the
+    /// startup path, and `--version` per entry would trade correctness we
+    /// already have for latency. The recorded version stays as-of
+    /// `last_probed`, which is why that field exists.
+    pub fn revalidate_ready(&mut self) -> usize {
+        let stale: Vec<String> = self
+            .entries
+            .values()
+            .filter(|e| {
+                e.status == CapabilityStatus::Ready
+                    && !e.bin_path.as_os_str().is_empty()
+                    && !e.bin_path.exists()
+            })
+            .map(|e| e.name.clone())
+            .collect();
+        for name in &stale {
+            warn!("capability '{name}' was recorded Ready but its binary is gone; marking Missing");
+            self.mark_missing(name);
+        }
+        stale.len()
     }
 
     /// Build an enhanced PATH string with Ready entries' bin directories
@@ -404,6 +453,21 @@ mod tests {
         }
     }
 
+    /// Create a real file to stand in for an installed binary, so a `Ready`
+    /// fixture survives `revalidate_ready`.
+    fn existing_binary(dir: &TempDir, name: &str) -> PathBuf {
+        let path = dir.path().join(name);
+        std::fs::write(&path, b"#!/bin/sh\n").unwrap();
+        path
+    }
+
+    fn entry_at(name: &str, bin: &Path, status: CapabilityStatus) -> CapabilityEntry {
+        CapabilityEntry {
+            bin_path: bin.to_path_buf(),
+            ..sample_entry(name, status)
+        }
+    }
+
     // -- tests -------------------------------------------------------------
 
     #[test]
@@ -443,11 +507,17 @@ mod tests {
         let dir = TempDir::new().unwrap();
         let path = tmp_ledger_path(&dir);
 
+        // Binaries must really be on disk: `load_or_create` revalidates Ready
+        // entries, so a fixture with an invented path would exercise the
+        // demotion path instead of the round-trip this test is about.
+        let uv = existing_binary(&dir, "uv");
+        let fnm = existing_binary(&dir, "fnm");
+
         // Create, populate, persist
         {
             let mut ledger = CapabilityLedger::new(path.clone());
-            ledger.update(sample_entry("uv", CapabilityStatus::Ready));
-            ledger.update(sample_entry("fnm", CapabilityStatus::Ready));
+            ledger.update(entry_at("uv", &uv, CapabilityStatus::Ready));
+            ledger.update(entry_at("fnm", &fnm, CapabilityStatus::Ready));
             ledger.persist().unwrap();
         }
 
@@ -456,6 +526,78 @@ mod tests {
         assert_eq!(ledger.entries.len(), 2);
         assert_eq!(ledger.status("uv"), CapabilityStatus::Ready);
         assert_eq!(ledger.status("fnm"), CapabilityStatus::Ready);
+    }
+
+    /// The failure this exists to prevent: a global CLI installed inside a node
+    /// version manager's tree disappears on the next node upgrade, and the
+    /// ledger keeps handing callers its path.
+    #[test]
+    fn reload_demotes_a_ready_entry_whose_binary_vanished() {
+        let dir = TempDir::new().unwrap();
+        let path = tmp_ledger_path(&dir);
+        let bin = existing_binary(&dir, "playwright-cli");
+
+        {
+            let mut ledger = CapabilityLedger::new(path.clone());
+            ledger.update(entry_at("playwright-cli", &bin, CapabilityStatus::Ready));
+            ledger.persist().unwrap();
+        }
+        std::fs::remove_file(&bin).unwrap();
+
+        let ledger = CapabilityLedger::load_or_create(path.clone());
+        assert_eq!(ledger.status("playwright-cli"), CapabilityStatus::Missing);
+        // Demotion must also stop the two ways a stale path leaks out.
+        assert!(ledger.executable("playwright-cli").is_none());
+        assert!(!ledger.build_path().contains(dir.path().to_str().unwrap()));
+        // The capability stays listed as known-but-absent.
+        assert_eq!(ledger.entries.len(), 1);
+
+        // The correction has to reach the file too — this is what an operator
+        // reads to ask what Aleph believes is installed.
+        let on_disk = std::fs::read_to_string(&path).unwrap();
+        assert!(
+            !on_disk.contains("\"ready\""),
+            "revalidated ledger still records a ready entry on disk: {on_disk}"
+        );
+    }
+
+    /// A dangling symlink is the *actual* shape of the fnm-alias failure — the
+    /// link survives the node upgrade, its target does not.
+    #[cfg(unix)]
+    #[test]
+    fn revalidate_treats_a_dangling_symlink_as_gone() {
+        let dir = TempDir::new().unwrap();
+        let target = existing_binary(&dir, "real-tool");
+        let link = dir.path().join("aliased-tool");
+        std::os::unix::fs::symlink(&target, &link).unwrap();
+
+        let mut ledger = CapabilityLedger::new(tmp_ledger_path(&dir));
+        ledger.update(entry_at("aliased-tool", &link, CapabilityStatus::Ready));
+        assert_eq!(ledger.revalidate_ready(), 0, "live symlink must survive");
+
+        std::fs::remove_file(&target).unwrap();
+        assert_eq!(ledger.revalidate_ready(), 1, "dangling symlink must demote");
+        assert_eq!(ledger.status("aliased-tool"), CapabilityStatus::Missing);
+    }
+
+    /// Non-Ready entries carry no promise about their path, so revalidation
+    /// must leave them alone rather than churn their status.
+    #[test]
+    fn revalidate_only_touches_ready_entries() {
+        let dir = TempDir::new().unwrap();
+        let mut ledger = CapabilityLedger::new(tmp_ledger_path(&dir));
+        ledger.update(sample_entry(
+            "bootstrapping",
+            CapabilityStatus::Bootstrapping,
+        ));
+        ledger.update(sample_entry("stale", CapabilityStatus::Stale));
+
+        assert_eq!(ledger.revalidate_ready(), 0);
+        assert_eq!(
+            ledger.status("bootstrapping"),
+            CapabilityStatus::Bootstrapping
+        );
+        assert_eq!(ledger.status("stale"), CapabilityStatus::Stale);
     }
 
     #[test]

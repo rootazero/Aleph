@@ -1033,10 +1033,13 @@ fn DreamInsightsPanel() -> impl IntoView {
                                             .is_some_and(|g| g.kind == "conserve");
                                         let strategy = c.last_decision.as_ref()
                                             .map_or(c.last_pipeline_type.clone(), |d| d.strategy.clone());
-                                        let summary = format!(
-                                            "{} {} · {} · {}{}",
-                                            c.runs,
-                                            t_string!(i18n, settings.memory.dream_corpus_cycles),
+                                        // The cycle count carries the locale's plural form, so it
+                                        // is a `t!` fragment rather than part of the format
+                                        // string — `t_string!` rejects interpolated keys unless
+                                        // the `interpolate_display` feature is on.
+                                        let runs = c.runs;
+                                        let summary_tail = format!(
+                                            " · {} · {}{}",
                                             format_ts(c.last_started_at),
                                             strategy,
                                             if conserved { " ⚠" } else { "" },
@@ -1058,7 +1061,8 @@ fn DreamInsightsPanel() -> impl IntoView {
                                             >
                                                 <span class="font-mono">{ns}</span>
                                                 <span class=move || if conserved { "text-xs text-warning" } else { "text-xs text-text-tertiary" }>
-                                                    {summary}
+                                                    {t!(i18n, settings.memory.dream_corpus_cycles, count = move || runs)}
+                                                    {summary_tail}
                                                 </span>
                                             </button>
                                         }

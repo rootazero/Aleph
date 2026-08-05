@@ -57,6 +57,17 @@ mod chunker_tests;
 // ---------------------------------------------------------------------------
 
 /// Configuration for the `SessionCompactor` subsystem.
+///
+/// `session_fact_retention_hours` and `promote_confidence_threshold` were
+/// removed 2026-08-04: both were reachable from `[memory.session_compactor]`
+/// and read by nothing, so an operator could set either and observe no effect —
+/// and `docs/reference/memory/RAW_MEMORY.md` described the first as governing
+/// retention, which it never did. There is still no time-based eviction of
+/// `raw_memories`; if one is built it should introduce its own knob rather than
+/// resurrect a name that spent this long meaning nothing. Removal is safe for
+/// existing configs: this struct has no `deny_unknown_fields`, so TOML still
+/// carrying the keys continues to parse (same precedent as `context_threshold`,
+/// FEATURE_LOCATOR §2.14).
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct SessionCompactorConfig {
     pub enabled: bool,
@@ -66,8 +77,6 @@ pub struct SessionCompactorConfig {
     pub d2_min_fanout: usize,
     pub max_summary_depth: u32,
     pub token_estimate_ratio: f64,
-    pub session_fact_retention_hours: u64,
-    pub promote_confidence_threshold: f32,
 }
 
 impl Default for SessionCompactorConfig {
@@ -80,8 +89,6 @@ impl Default for SessionCompactorConfig {
             d2_min_fanout: 3,
             max_summary_depth: 2,
             token_estimate_ratio: 3.5,
-            session_fact_retention_hours: 24,
-            promote_confidence_threshold: 0.8,
         }
     }
 }

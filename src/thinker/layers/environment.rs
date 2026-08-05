@@ -8,7 +8,7 @@
 
 use chrono::Utc;
 
-use crate::thinker::prompt_layer::{AssemblyPath, LayerInput, PromptLayer};
+use crate::thinker::prompt_layer::{AssemblyPath, LayerInput, LayerStability, PromptLayer};
 use crate::thinker::prompt_mode::PromptMode;
 
 /// Paths the environment hint participates in. Everything except `Minimal`
@@ -34,6 +34,9 @@ impl PromptLayer for EnvironmentLayer {
     }
     fn paths(&self) -> &'static [AssemblyPath] {
         ENVIRONMENT_PATHS
+    }
+    fn stability(&self) -> LayerStability {
+        LayerStability::Stable
     }
     fn inject(&self, output: &mut String, input: &LayerInput) {
         output.push_str("## Environment\n\n");

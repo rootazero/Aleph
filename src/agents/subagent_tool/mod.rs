@@ -131,6 +131,11 @@ pub struct SubagentTool {
     /// (the `new()` default, or `[context_budget]` disabled) leaves the child
     /// context-unmanaged, matching the main harness under the same config.
     pub(super) context_budget_config: Option<crate::context::budget::ContextBudgetConfig>,
+    /// The parent runner's cheap-tier summarization provider, inherited so the
+    /// child's compactor bills its side-channel to the same flash sibling
+    /// rather than the main reasoning model. `None` (the `new()` default, or no
+    /// cheap tier resolved) summarizes on the main LLM, as before.
+    pub(super) cheap_summary_provider: Option<Arc<dyn AiProvider>>,
 }
 
 impl SubagentTool {
@@ -180,6 +185,7 @@ impl SubagentTool {
             default_max_iterations: None,
             parallel_tool_concurrency: None,
             context_budget_config: None,
+            cheap_summary_provider: None,
         }
     }
 
@@ -192,6 +198,16 @@ impl SubagentTool {
         cfg: crate::context::budget::ContextBudgetConfig,
     ) -> Self {
         self.context_budget_config = Some(cfg);
+        self
+    }
+
+    /// Wire the parent runner's cheap-tier summarizer so the child's compactor
+    /// routes its side-channel call to the same flash sibling. Pairs with
+    /// [`Self::with_context_budget_config`]: that one gives the child a
+    /// compactor at all, this one stops it billing the main model to run it.
+    #[must_use]
+    pub fn with_cheap_summary_provider(mut self, provider: Arc<dyn AiProvider>) -> Self {
+        self.cheap_summary_provider = Some(provider);
         self
     }
 
