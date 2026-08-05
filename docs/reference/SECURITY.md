@@ -1081,6 +1081,141 @@ sees byte-identical behavior before and after.
   credentials keep resolving to that same owner as full operator, so the
   single-user experience is unchanged.
 
+### 多用户数据隔离层（P1）{#multi-user-isolation-p1}
+
+The P0 layer above answers "authorized as whom"; this layer answers "can
+that identity SEE this particular row of data." Landed as the P1 data
+isolation plan (`docs/superpowers/plans/2026-08-05-p1-data-isolation.md`),
+it is partition-key composition (spec §3): a new `src/scope/` vocabulary
+rides the *existing* `project_scope.rs` suffix mechanism for memory, new
+`owner_user_id`/`scope_id` columns on sessions and background-work stores,
+one ambient `ScopeAttribution` task-local seeded at gateway dispatch and at
+every `tokio::spawn` run boundary, and a single predicate family every
+scoped-data RPC handler and the WS event-delivery filter both consume.
+Legacy rows (no owner field) read as owner-owned — adoption by absence, zero
+backfill migration; the single-user experience is byte-identical before and
+after (verified by `single_user_fixture_is_byte_identical_after_upgrade`,
+`src/gateway/isolation_acceptance.rs`).
+
+- **Scope vocabulary** (`src/scope/mod.rs`). `ScopeId::{Org, Personal(user_id),
+  Project(project_id)}` and `ScopeAttribution { owner_user_id, scope }`.
+  `Org`/`Personal`/`Project` render to `"org"` / `"personal:<id>"` /
+  `"project:<id>"` and compose directly with `project_scope::scoped_agent_id`'s
+  suffix grammar — the `proj-*` (legacy project-directory feature) / `u-*`
+  (personal) / `p-*` (project, P2) suffix families are siblings, never
+  nested. Carried by a `tokio::task_local!` (`with_scope`/`current_scope`),
+  scoped around every dispatch by `server::handler::
+  dispatch_with_caller_context` exactly like P0's `CALLER_USER`/
+  `CALLER_ROLE` — and, like those, does NOT cross a `tokio::spawn` boundary:
+  any run-work spawn must re-seed it explicitly (see the
+  `src/gateway/CLAUDE.md` landmine below).
+- **Visibility chokepoint** (`src/gateway/visibility.rs`). `effective_owner`
+  is the ONE place "who owns this row" is decided: a session's own
+  `owner_user_id`, or `OWNER_USER_ID` for a legacy/pre-P1 row with none
+  (adoption by absence). `session_visible` and `partition_visible` turn that
+  into a boolean for a session row / a `<base>__<suffix>` memory partition
+  id respectively; `visible_owner_filter` is `None` for an unrestricted
+  (internal/cron/A2A) caller — the zero-change guarantee for
+  single-user/internal callers — or `Some(caller)` for a scoped one.
+  `not_found_response` is the single, byte-identical `RESOURCE_NOT_FOUND`
+  response every addressed-key denial returns — see "NOT_FOUND over
+  forbidden" below. Any handler that writes its own `meta.owner_user_id ==
+  caller` comparison instead of calling one of these predicates, or filters
+  `sessions.list` without setting `SessionFilter::owner_visible_to`, is
+  exactly the bypass this module exists to prevent.
+- **Registry + regression net** (`src/gateway/method_visibility.rs`). NOT a
+  dispatch gate — a durable table pairing every scoped-data RPC method with
+  its enforcement shape (`KeyChecked` / `PartitionChecked` / `ListFiltered`)
+  and a pin test that fails loudly if a method's enforcement call is ever
+  removed. Sibling of P0's `method_admin.rs` (same shape, different
+  question: that one asks "does this method need operator role," this one
+  asks "does this method's answer depend on who's asking, and is that
+  enforced"). Covers `sessions.*`/`session.*`/`chat.*` and
+  `memory.*`/`artifacts.*`/`clarification.*`/`subagent.tree`/`graph.query` —
+  see that file's module doc for the full per-method breakdown.
+- **Event delivery** (`src/gateway/event_visibility.rs`). The event-bus
+  analogue of the RPC chokepoint above: `EventScopeGuard` (P0) is
+  role-based and default-allow for ordinary session/run events, so without
+  this every connected member would receive every OTHER user's live run
+  stream. `EventVisibilityIndex` is the 4th `&&` term in `server::handler`'s
+  `should_forward` filter chain — it classifies each delivered frame's
+  session identity (`session_identity_of`: by session key directly, by
+  `run_id` through a seeded run→session cache, or `Global` for org-level
+  infrastructure) and denies unless the caller is that session's
+  `effective_owner`. Fails closed: an unresolvable `run_id` (cache miss) or
+  a walled `caller_user: None` connection is denied, never admitted by
+  default.
+- **Background-work ownership.** `goal::Goal` and `looping::LoopState` both
+  carry the same `owner_user_id`/`scope_id` pair, stamped once at creation
+  from `scope::current_scope()` (`with_owner_scope`) and preserved across
+  updates (e.g. `GoalStore::commit_field_update`'s status CAS never
+  clobbers it). **Deactivation freeze** (spec §10): `users.update { status:
+  "deactivated" }` freezes background work owned by that user (e.g.
+  `GoalStore::pause_all_owned_by`) — one-way, no auto-resume on
+  reactivation (spec silent on the reverse; recorded as a deliberate P1
+  scope boundary, not an oversight).
+- **Scope is immutable for a session's lifetime** (spec §10).
+  `owner_user_id`/`scope_id` are stamped once, at session creation
+  (`SessionMetadata::stamp_attribution`, the CREATE branch only — reading an
+  EXISTING row, even as its owner, never (re)stamps it;
+  `single_user_fixture_is_byte_identical_after_upgrade` pins this directly).
+  This is also why the curated-memory envelope can stay in the prompt's
+  Stable (cacheable) zone per session (CLAUDE.md §2.18): per-user bytes are
+  per-session stable.
+- **NOT_FOUND over forbidden.** Every addressed-key visibility denial
+  (`sessions.history`, `artifacts.read_text`, `sessions.new` on a foreign
+  key, …) returns the EXACT SAME `RESOURCE_NOT_FOUND` response a genuinely
+  missing key would — never a distinct "forbidden"/"not authorized" shape.
+  Confirming existence to an unauthorized caller is itself a leak;
+  `visibility::not_found_response` is the single byte-identical response
+  every one of these sites returns, and its own test serializes both cases
+  and compares the bytes.
+- **The §11 honesty boundary, restated.** This layer is **privacy-grade
+  isolation** — it protects against ACCIDENTAL cross-user exposure between
+  cooperating users on one server (the stated goal: two users cannot see
+  each other's sessions, memory, artifacts, or live events). It is
+  explicitly **NOT malicious-member-grade**: a member is still trusted code
+  execution inside the same process, sandbox, and filesystem as the owner.
+  The hardening below (member default exec tier `Ask`, an explicit
+  `tools.invoke` allowlist starting at `team_from_template`, `memory_search`
+  denied to members) raises the cost of a hostile member; it does not
+  remove that trust assumption. `role-aware per-tool tool_permissions` was
+  considered and dropped as YAGNI (R10) in favor of this narrower set.
+- **Known gaps (deliberate, recorded, not silently dropped):**
+  1. `stream.running_set_changed` is `Global` in `event_visibility.rs`, not
+     owner-scoped — every member currently sees every OTHER user's active
+     `session_key`s and `run_id`s (no message content). It is the SOLE feed
+     of the member sidebar's running-session indicator
+     (`interfaces/webchat/src/state/sessions.rs::SessionMap::server_running`
+     is documented as purely server-authoritative), so gating it
+     operator-only would silently break every member's OWN sidebar
+     indicator; left unfixed pending a real fix — per-connection payload
+     projection, which needs a payload-rewrite step the delivery loop's
+     pass/fail-only `should_forward` doesn't have. See
+     `event_visibility.rs`'s module doc.
+  2. `sessions.set_topic` and `chat.context_estimate` take a
+     caller-supplied `session_key` with no ownership check — a
+     title-rename side effect and a token-count-only read, respectively;
+     reviewed and deferred as lower severity.
+  3. `chat.send`'s Simulated-execution fallback path (used only when no LLM
+     provider is configured — `AgentRunManager::start_run`, which has no
+     `SessionStore` dependency) is not covered by the real-provider path's
+     `existing_session_is_visible` check.
+  4. `slash_command.rs::execute_direct_tool` (the `/toolname` L0 fast path)
+     bypasses `ScopedToolService` entirely, with no allowlist — but it IS
+     tier-aware (routes through `resolve_exec_tier`), so the gap only opens
+     if a member explicitly escalates their own session to `Auto`/`Full`
+     (the member default is `Ask`). Pre-existing, not introduced by P1;
+     recommended as a follow-up task.
+  5. The legacy `proj-*` (project-directory feature) write side of
+     `OPEN_LOOPS.md` is pinned `project_scoped = false` on both read and
+     write for a `proj-` session — widening it needs a persisted project
+     root on the session-close path that doesn't exist yet. Personal scope
+     still applies on top; this is a narrower, pre-existing gap, not a P1
+     regression.
+- **Explicitly out of scope for P1**: pushing routing/notifications TO
+  members (spec §8, P3).
+
 ### Network boundary = reachability
 
 - **Default — loopback only.** `aleph-server` binds `127.0.0.1`

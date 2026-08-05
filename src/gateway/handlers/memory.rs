@@ -447,10 +447,9 @@ pub async fn handle_stats(request: JsonRpcRequest, db: MemoryBackend) -> JsonRpc
             }
             Some(requested)
         }
-        None => match crate::gateway::visibility::visible_owner_filter() {
-            None => None, // unrestricted caller: whole-store rollup, unchanged.
-            Some(_) => Some(crate::routing::DEFAULT_AGENT_ID.to_string()),
-        },
+        // unrestricted caller (`None`): whole-store rollup, unchanged.
+        None => crate::gateway::visibility::visible_owner_filter()
+            .map(|_| crate::routing::DEFAULT_AGENT_ID.to_string()),
     };
     let agent = agent.as_deref();
     let scope = if agent.is_some() { "agent" } else { "global" };

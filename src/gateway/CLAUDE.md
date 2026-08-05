@@ -105,6 +105,14 @@
 - **WS Origin 校验**（`origin_policy.rs`）：挡公网恶意网页跨源驱动 agent。域名部署须把
   origin 加进 `[gateway] allowed_origins`。
 
+## P1 数据隔离地雷
+
+> 详见 [SECURITY.md 多用户数据隔离层（P1）](../../docs/reference/SECURITY.md#multi-user-isolation-p1)。以下三条是本目录内、新代码最容易踩空的三处连线。
+
+- **地雷 A（新 RPC 返回 scoped 数据必须注册 + 调谓词）**：任何新增的、响应内容依赖"谁在问"的 RPC 都要做两件事——① 在 `method_visibility.rs` 里登记它的执行形态（`KeyChecked` / `PartitionChecked` / `ListFiltered`），该文件自带的 pin 测试会在登记缺失或被删时报错；② 在 handler 内部实际调用 `visibility::session_visible` / `visibility::partition_visible` / `visibility::not_found_response` 之一——**手写一行 `meta.owner_user_id == caller` 的内联比较，就是这套模块存在的目的所要防的那种旁路**（判定逻辑分叉出第二个真源，且大概率漏掉 fail-closed / no-oracle 的细节）。`sessions.list`-形态的端点额外要把 `visibility::visible_owner_filter()` 塞进 `SessionFilter::owner_visible_to`，不能只在拿到结果后过滤——那样只是隐藏了列表，没有真正约束查询。
+- **地雷 B（新 `GatewayEventFrame` 变体必须分类）**：任何新增的 `GatewayEventFrame` 变体都要在 `event_visibility::session_identity_of` 里显式分类为 `BySessionKey` / `ByRunId` / `Global` 之一——`every_frame_variant_is_classified` 那条 pin 测试对真实枚举做穷尽匹配、没有通配臂，编不过就是提醒你去做这个判断。**默认答案不是"先编译过再说"**：一个本该 session-scoped 的新变体如果被判成 `Global`，就是一次跨用户数据泄漏，而不是"以后再补"的功能缺口——`session_identity_of` 自己的模块文档把这句话写在最前面。
+- **地雷 C（新 `tokio::spawn` 的 run 工作必须重新播种 scope）**：`tokio::task_local!`（`scope::current_scope()`，以及 P0 的 `CALLER_USER`/`CALLER_ROLE`）**不会**跨越 `tokio::spawn` 边界——子任务里读到的永远是 `None`，不是父任务当时的值。任何新的、在 spawn 出的任务里会碰业务数据（记忆检索、会话写入、后台 goal/loop）的调用点，都必须在 `tokio::spawn(...)` **之前** `let captured = crate::scope::current_scope();`，再在 spawned 的 future 内部用 `crate::scope::with_scope(captured, ...)` 包一层——反面教材是 `src/agents/subagent_tool/spawn.rs::spawn_background`（这个函数本身已经修好：`captured_scope`/`captured_root`/`captured_agent` 在 spawn 前捕获、`with_scope`/`with_project_root`/`with_agent_id` 在 spawn 内重新建立），修复前它让后台 subagent 的记忆检索静默退回到无 owner 的 base 命名空间。新的后台产地（另一个 subagent 变体、新的后台 tool、新的 daemon 触发路径）复制这个形状，不要假设"内层调用会自己继承"。
+
 ## 红线
 
 - 改认证 / 授权 / Origin 逻辑**必须同步更新测试**，不得只改实现。

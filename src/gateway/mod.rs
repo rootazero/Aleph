@@ -202,5 +202,10 @@ mod proptest_channel;
 #[cfg(test)]
 mod proptest_protocol;
 
+// P1 data-isolation acceptance tests (spec §9) — the two end-to-end tests
+// the branch is named for.
+#[cfg(test)]
+mod isolation_acceptance;
+
 #[cfg(all(test, feature = "loom"))]
 mod loom_concurrency;
