@@ -4,9 +4,11 @@
 //! `SessionMetadata::owner_user_id` is `None` on legacy/pre-P1 rows and on
 //! rows created outside any dispatch scope (cron, internal, A2A). Those rows
 //! read as owned by the org-era single operator — adoption-by-absence, not a
-//! missing value. [`effective_owner`] is the one place that rule is encoded;
-//! both `SessionStore` backends' `SessionFilter::owner_visible_to` filter
-//! call it, so the fallback can never drift between them.
+//! missing value. [`owner_or_legacy`] is the one place that rule is encoded;
+//! [`effective_owner`] (used by both `SessionStore` backends'
+//! `SessionFilter::owner_visible_to` filter) and [`stamped_owner_visible`]
+//! (used by every non-session P1-stamped record) both call it, so the
+//! fallback can never drift between them.
 //!
 //! ALL user-visibility decisions for session-scoped RPCs live in this
 //! module. The resolution itself is not re-derived here — it is the P0
@@ -27,12 +29,25 @@ use crate::gateway::security::store::OWNER_USER_ID;
 use crate::gateway::session_store::types::SessionMetadata;
 use crate::gateway::session_store::SessionStore;
 
+/// Adoption-by-absence, encoded exactly once: a stamped `owner_user_id`, or
+/// [`OWNER_USER_ID`] when the record predates P1 / was created outside any
+/// dispatch scope.
+///
+/// Every other predicate in this module resolves ownership through this
+/// function. A second `unwrap_or(OWNER_USER_ID)` anywhere is a second
+/// derivation of the legacy rule — it agrees today and silently diverges the
+/// day that rule changes.
+#[must_use]
+pub fn owner_or_legacy(owner_user_id: Option<&str>) -> &str {
+    owner_user_id.unwrap_or(OWNER_USER_ID)
+}
+
 /// The user who effectively owns `meta` for visibility purposes: its stamped
 /// `owner_user_id`, or [`OWNER_USER_ID`] for a legacy/pre-P1 row with no
 /// scope stamp.
 #[must_use]
 pub fn effective_owner(meta: &SessionMetadata) -> &str {
-    meta.owner_user_id.as_deref().unwrap_or(OWNER_USER_ID)
+    owner_or_legacy(meta.owner_user_id.as_deref())
 }
 
 /// The owner a `sessions.list`-shaped query should restrict itself to, for
@@ -63,7 +78,7 @@ pub fn visible_owner_filter() -> Option<String> {
 pub fn stamped_owner_visible(owner_user_id: Option<&str>) -> bool {
     match visible_owner_filter() {
         None => true,
-        Some(caller) => caller == owner_user_id.unwrap_or(OWNER_USER_ID),
+        Some(caller) => caller == owner_or_legacy(owner_user_id),
     }
 }
 

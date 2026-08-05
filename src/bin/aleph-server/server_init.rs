@@ -489,8 +489,12 @@ mod tests {
                 "{entry}'s body bound leaked past the end of the file — the \
                  assertion below would pass on this module's own source"
             );
+            // Assert on the CALL, not the name: the guard string also appears
+            // in each function's explanatory comment, so `contains(guard)`
+            // alone stays green if someone deletes the `if` block and leaves
+            // the comment. The prose mentions end in a backtick, never `(`.
             assert!(
-                body.contains(guard),
+                body.contains(&format!("{guard}(")),
                 "{entry} starts a run against a caller-supplied session_key and \
                  must call {guard} before doing so (final-review C1)"
             );
