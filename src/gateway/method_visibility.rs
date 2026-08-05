@@ -65,6 +65,37 @@
 //!   labels; `handle_tree`'s own doc is the source for the addressed-key
 //!   half.
 //!
+//! ## Task 7 fix round 1
+//!
+//! Review triage on Task 7 found four more member-reachable methods sharing
+//! the exact same unenforced `agent_id`/bare-`id` shape as the four above —
+//! all four are now fixed and registered, closing the "Known gaps" bullets
+//! this section used to carry for them:
+//!
+//! - `memory.trace` → **PartitionChecked**, same contract as `memory.search`
+//!   (invisible partition → an empty evidence chain, the same shape a
+//!   genuinely unused partition produces).
+//! - `graph.node_detail` → **PartitionChecked**: an invisible partition gets
+//!   the exact same "not found" response a nonexistent node produces — no
+//!   oracle, and the (potentially large, full-markdown) note body is never
+//!   read for a denied caller.
+//! - `graph.search` → **PartitionChecked**, same contract as `graph.query`
+//!   (invisible partition → no hits, not a leaked title/tag/content).
+//! - `memory.delete` → **PartitionChecked**, but shaped differently from its
+//!   siblings: the RPC addresses a row by bare `id` with no `agent_id` at
+//!   all, so there is no caller-supplied partition to check directly. The
+//!   fix resolves the row's OWNING partition FIRST (a new, deliberately
+//!   narrow `SqliteMemoryBackend::raw_memory_agent_id` lookup — the existing
+//!   `delete_raw_memory` query itself was NOT widened) and runs THAT through
+//!   `visibility::partition_visible` before the delete executes. A
+//!   nonexistent id and an id whose partition is invisible to the caller
+//!   produce the exact same response (byte-identical, tested), and a denied
+//!   delete never touches the row.
+//!
+//! `graph.update_note`/`rename_note`/`delete_note` (siblings of the now-fixed
+//! `graph.search`/`graph.node_detail`) were NOT checked this round — still a
+//! recorded gap, see below.
+//!
 //! ## Enumeration evidence
 //!
 //! Every method below was found by a mechanical sweep of the same four
@@ -145,18 +176,10 @@
 //! Simulated-fallback `chat.send` path (see the `chat.send` bullet above) is
 //! also a known, deliberate gap. All three are recorded here as the durable
 //! home for the follow-up, same convention as `method_admin.rs`'s notes.
-//! `memory.trace` and `graph.node_detail`/`graph.search` (verified by
-//! reading, not guessed) share the exact same caller-supplied-`agent_id`
-//! shape as the four methods this task DID cover, but were out of the
-//! brief's named surface list and are NOT yet run through
-//! `visibility::partition_visible` — recorded here as a follow-up, not
-//! silently dropped. `memory.delete` is a DIFFERENT, narrower gap: it
-//! addresses a row by bare `id` with no `agent_id` at all
-//! (`DeleteParams { id: String }`), so it is not a partition-suffix problem
-//! `partition_visible` would fix — any caller who learns another partition's
-//! raw-memory id (e.g. via a still-open `memory.search` result before this
-//! task's fix) can delete it. `graph.update_note`/`rename_note`/`delete_note`
-//! were not checked this pass.
+//! `graph.update_note`/`rename_note`/`delete_note` (siblings of the now-fixed
+//! `graph.search`/`graph.node_detail` — see "Task 7 fix round 1" above) take
+//! a caller-supplied `agent_id`/`node_id` with no ownership check; not
+//! checked this round, recorded here rather than silently dropped.
 //!
 //! ## `OrgShared`
 //!
@@ -181,7 +204,10 @@ pub enum Treatment {
     /// A partition-addressed endpoint (e.g. `agent_id="main__u-alice"`)
     /// checks `visibility::partition_visible` before reading/writing that
     /// partition. (Task 7: `memory.search`/`memory.listFacts`/`memory.stats`/
-    /// `graph.query`.)
+    /// `graph.query`/`memory.trace`/`graph.node_detail`/`graph.search`;
+    /// `memory.delete` too, via a resolved-owning-partition lookup since it
+    /// has no caller-supplied `agent_id` of its own — see "Task 7 fix round
+    /// 1" in the module doc.)
     PartitionChecked,
     /// Deliberately shared across every user by design — not a gap. Carries
     /// a reason string at the call site (see `org_shared_entries_all_carry_reasons`).
@@ -227,6 +253,11 @@ pub const SCOPED_METHODS: &[(&str, Treatment)] = &[
     ("clarification.resolve", Treatment::KeyChecked),
     ("clarification.pending", Treatment::ListFiltered),
     ("subagent.tree", Treatment::ListFiltered),
+    // --- Task 7 fix round 1 ---
+    ("memory.trace", Treatment::PartitionChecked),
+    ("memory.delete", Treatment::PartitionChecked),
+    ("graph.node_detail", Treatment::PartitionChecked),
+    ("graph.search", Treatment::PartitionChecked),
 ];
 
 /// `OrgShared` entries carry a one-line reason at the point they're listed —
@@ -315,12 +346,26 @@ mod tests {
     fn unregistered_method_reads_as_none_not_a_default_treatment() {
         // No silent "assume KeyChecked" default — an unlisted method must
         // read as unclassified, not falsely covered. `sessions.set_topic`,
-        // `chat.context_estimate`, and `memory.trace` are DELIBERATE,
+        // `chat.context_estimate`, and `graph.update_note` are DELIBERATE,
         // documented gaps (see module doc) — not silently dropped, but also
-        // not falsely claimed.
+        // not falsely claimed. (`memory.trace` was one of these until Task
+        // 7 fix round 1 — see `task_7_fix_round_1_methods_are_registered`.)
         assert_eq!(treatment_of("sessions.set_topic"), None);
         assert_eq!(treatment_of("chat.context_estimate"), None);
-        assert_eq!(treatment_of("memory.trace"), None);
+        assert_eq!(treatment_of("graph.update_note"), None);
+    }
+
+    /// Task 7 fix round 1's own pin.
+    #[test]
+    fn task_7_fix_round_1_methods_are_registered_and_partition_checked() {
+        for m in [
+            "memory.trace",
+            "memory.delete",
+            "graph.node_detail",
+            "graph.search",
+        ] {
+            assert_eq!(treatment_of(m), Some(Treatment::PartitionChecked), "{m}");
+        }
     }
 
     /// Task 7's own pin — same philosophy as the Task 6 pin above: a

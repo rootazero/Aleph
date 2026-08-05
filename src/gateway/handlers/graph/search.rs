@@ -28,6 +28,21 @@ pub async fn handle_search_impl(req: JsonRpcRequest, db: MemoryBackend) -> JsonR
         .agent_id
         .as_deref()
         .unwrap_or(crate::routing::DEFAULT_AGENT_ID);
+
+    // P1 partition isolation (spec §11-1c): an invisible partition reads as
+    // a no-hits search — the same shape a genuinely unused partition
+    // produces — without ever running the FTS query under the caller's
+    // chosen name (no oracle, no title/tag leak).
+    if !crate::gateway::visibility::partition_visible(agent_id) {
+        let response = GraphSearchResponse { results: vec![] };
+        return match serde_json::to_value(response) {
+            Ok(v) => JsonRpcResponse::success(req.id, v),
+            Err(e) => {
+                JsonRpcResponse::error(req.id, INTERNAL_ERROR, format!("Serialize error: {e}"))
+            }
+        };
+    }
+
     let entries = match db
         .search_notes_fts(&params.query, agent_id, params.limit)
         .await
@@ -182,5 +197,37 @@ mod tests {
         assert!(hit["link_count"].is_u64(), "link_count must be present");
         let tags: Vec<String> = serde_json::from_value(hit["tags"].clone()).unwrap();
         assert_eq!(tags, vec!["rust".to_string(), "ci".to_string()]);
+    }
+
+    /// P1 partition isolation: bob searching alice's partition by name gets
+    /// no hits — the same shape a genuinely unused partition produces — not
+    /// alice's titles/tags/content.
+    #[tokio::test]
+    async fn foreign_partition_search_returns_no_hits_not_the_owners_notes() {
+        use crate::gateway::caller_identity::CALLER_USER;
+
+        let db = make_db();
+        let secret = make_note_with_fact("AliceSecretNote", "distinctivesearchword");
+        db.index_note(&secret, "main__u-alice", "concept")
+            .await
+            .unwrap();
+
+        let req = search_request("distinctivesearchword", 20, Some("main__u-alice"));
+        let resp = CALLER_USER
+            .scope(Some("u-bob".to_string()), async {
+                handle_search_impl(req, db).await
+            })
+            .await;
+        assert!(
+            resp.error.is_none(),
+            "success, not an error: {:?}",
+            resp.error
+        );
+        let result: GraphSearchResponse = serde_json::from_value(resp.result.unwrap()).unwrap();
+        assert!(
+            result.results.is_empty(),
+            "bob must not see alice's search hits: {:?}",
+            result.results
+        );
     }
 }

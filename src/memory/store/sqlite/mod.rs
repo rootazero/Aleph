@@ -21,7 +21,7 @@ mod sessions;
 
 use crate::error::AlephError;
 use crate::sync_primitives::Mutex;
-use rusqlite::Connection;
+use rusqlite::{Connection, OptionalExtension};
 use std::path::{Path, PathBuf};
 
 /// Tunable knobs for hybrid (vector + FTS) retrieval fusion.
@@ -288,6 +288,30 @@ impl SqliteMemoryBackend {
 
         conn.query_row(&sql, rusqlite::params_from_iter(binds), |row| row.get(0))
             .map_err(|e| AlephError::config(format!("count_raw_memories failed: {e}")))
+    }
+
+    /// The `agent_id`/partition that owns a raw memory row, or `None` if no
+    /// row has this id.
+    ///
+    /// The narrowest possible lookup for the P1 ownership check
+    /// `memory.delete` needs (spec §11-1c): `delete_raw_memory` below
+    /// addresses a row by bare `id` alone with no `agent_id`, so the caller
+    /// must be checked against `visibility::partition_visible` BEFORE
+    /// deleting — this answers "who owns this id" without widening the
+    /// delete query itself.
+    pub fn raw_memory_agent_id(&self, id: &str) -> Result<Option<String>, AlephError> {
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| AlephError::config(format!("Mutex poisoned: {e}")))?;
+
+        conn.query_row(
+            "SELECT agent_id FROM raw_memories WHERE id = ?1",
+            rusqlite::params![id],
+            |row| row.get(0),
+        )
+        .optional()
+        .map_err(|e| AlephError::config(format!("raw_memory_agent_id failed: {e}")))
     }
 
     /// Delete a single raw memory entry by id.

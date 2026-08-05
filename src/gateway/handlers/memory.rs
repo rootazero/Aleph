@@ -180,11 +180,39 @@ pub struct DeleteParams {
 /// vector/foreign-key linkage, so a single-row delete is safe. (Layer-2
 /// knowledge notes are a separate model curated via the `note_manage` tool and
 /// are not affected by this handler.)
+///
+/// P1 partition isolation (spec §11-1c): this endpoint addresses a row by
+/// bare `id` with no `agent_id` — unlike `memory.search`/`memory.listFacts`,
+/// there is no caller-supplied partition to default or check directly. The
+/// row's OWNING partition is resolved first (`raw_memory_agent_id`) and run
+/// through `visibility::partition_visible` BEFORE the delete executes: an id
+/// that doesn't exist and an id whose partition is invisible to the caller
+/// get the exact same response (no oracle), and a denied delete never
+/// touches the row.
 pub async fn handle_delete(request: JsonRpcRequest, db: MemoryBackend) -> JsonRpcResponse {
     let params: DeleteParams = match parse_params(&request) {
         Ok(p) => p,
         Err(e) => return e,
     };
+
+    let not_found = || {
+        JsonRpcResponse::error(
+            request.id.clone(),
+            INTERNAL_ERROR,
+            format!("No raw memory found with id '{}'", params.id),
+        )
+    };
+    match db.raw_memory_agent_id(&params.id) {
+        Ok(Some(owner)) if crate::gateway::visibility::partition_visible(&owner) => {}
+        Ok(_) => return not_found(),
+        Err(e) => {
+            return JsonRpcResponse::error(
+                request.id,
+                INTERNAL_ERROR,
+                format!("Delete raw memory failed: {e}"),
+            )
+        }
+    }
 
     match db.delete_raw_memory(&params.id) {
         Ok(true) => JsonRpcResponse::success(request.id, json!({ "ok": true })),
@@ -605,6 +633,24 @@ pub async fn handle_trace(request: JsonRpcRequest, db: MemoryBackend) -> JsonRpc
     let agent = params
         .agent_id
         .unwrap_or_else(|| crate::routing::DEFAULT_AGENT_ID.to_string());
+
+    // P1 partition isolation (spec §11-1c): same "invisible partition reads
+    // as an unknown agent" contract as `memory.search`/`memory.listFacts` —
+    // an empty evidence chain, not an error, and no store touch under the
+    // caller's chosen name.
+    if !crate::gateway::visibility::partition_visible(&agent) {
+        use crate::builtin_tools::memory_trace::TraceResult;
+        let empty = TraceResult {
+            target: params.target,
+            notes: Vec::new(),
+            evidence: Vec::new(),
+            write_decisions: Vec::new(),
+        };
+        return JsonRpcResponse::success(
+            request.id,
+            serde_json::to_value(empty).unwrap_or_default(),
+        );
+    }
 
     let note_memory_dir = match crate::utils::paths::get_note_memory_dir() {
         Ok(d) => d,
@@ -1043,6 +1089,146 @@ mod trace_tests {
             evidence.iter().any(|e| e["raw_id"] == "raw-ev1"),
             "evidence references seeded raw raw-ev1"
         );
+    }
+
+    /// P1 partition isolation: bob tracing alice's partition by name gets an
+    /// empty evidence chain — the same shape an unused partition produces —
+    /// not alice's real notes/evidence.
+    #[tokio::test]
+    async fn foreign_partition_traces_empty_not_the_owners_evidence() {
+        use crate::gateway::caller_identity::CALLER_USER;
+
+        let dir = tempfile::tempdir().unwrap();
+        let db: crate::memory::store::MemoryBackend =
+            Arc::new(SqliteMemoryBackend::new(&dir.path().join("m.db")).unwrap());
+
+        let note = KnowledgeNote {
+            title: "alice-secret".into(),
+            category: "habits".into(),
+            facts: vec!["daily running".into()],
+            source_notes: vec!["raw-ev1".into()],
+            ..Default::default()
+        };
+        db.index_note(&note, "main__u-alice", "habits")
+            .await
+            .unwrap();
+        let mut raw = RawMemory::new("user: I run daily".into(), RawMemorySource::Transcript);
+        raw.id = "raw-ev1".into();
+        raw.agent_id = "main__u-alice".into();
+        db.insert_raw_memory(&raw).await.unwrap();
+
+        let req = JsonRpcRequest::with_id(
+            "memory.trace",
+            Some(
+                json!({ "agent_id": "main__u-alice", "target": "habits/alice-secret", "kind": "note" }),
+            ),
+            json!(1),
+        );
+        let resp = CALLER_USER
+            .scope(Some("u-bob".to_string()), async {
+                handle_trace(req, db).await
+            })
+            .await;
+        assert!(resp.is_success(), "success, not an error: {:?}", resp.error);
+        let result = resp.result.unwrap();
+        assert!(result["notes"].as_array().unwrap().is_empty());
+        assert!(result["evidence"].as_array().unwrap().is_empty());
+    }
+}
+
+#[cfg(test)]
+mod delete_tests {
+    use super::*;
+    use crate::memory::store::raw_memory::{RawMemory, RawMemorySource, RawMemoryStore};
+    use crate::memory::store::sqlite::SqliteMemoryBackend;
+    use crate::sync_primitives::Arc;
+
+    fn db() -> MemoryBackend {
+        let path = std::env::temp_dir().join(format!("mem_del_test_{}", uuid::Uuid::new_v4()));
+        Arc::new(SqliteMemoryBackend::new(&path).unwrap())
+    }
+
+    fn req(id: &str) -> JsonRpcRequest {
+        JsonRpcRequest::with_id("memory.delete", Some(json!({ "id": id })), json!(1))
+    }
+
+    async fn seed(db: &MemoryBackend, id: &str, agent_id: &str) {
+        let mut raw = RawMemory::new("content".to_string(), RawMemorySource::Transcript);
+        raw.id = id.to_string();
+        raw.agent_id = agent_id.to_string();
+        db.insert_raw_memory(&raw).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn owner_can_delete_their_own_row() {
+        let db = db();
+        seed(&db, "r1", "main__u-alice").await;
+
+        let resp = crate::gateway::caller_identity::CALLER_USER
+            .scope(Some("u-alice".to_string()), async {
+                handle_delete(req("r1"), db.clone()).await
+            })
+            .await;
+        assert!(resp.is_success(), "{:?}", resp.error);
+        assert_eq!(
+            db.get_raws_by_ids("main__u-alice", &["r1".to_string()])
+                .await
+                .unwrap()
+                .len(),
+            0,
+            "the row is actually gone"
+        );
+    }
+
+    /// P1's own acceptance case: bob deleting alice's raw memory by its bare
+    /// id — same "not found" response a genuinely missing id produces (no
+    /// oracle), and the row is left completely intact.
+    #[tokio::test]
+    async fn foreign_partition_delete_is_denied_row_intact() {
+        let db = db();
+        seed(&db, "r1", "main__u-alice").await;
+
+        let resp = crate::gateway::caller_identity::CALLER_USER
+            .scope(Some("u-bob".to_string()), async {
+                handle_delete(req("r1"), db.clone()).await
+            })
+            .await;
+        assert!(resp.error.is_some(), "must be denied, not succeed");
+
+        // Same response shape a genuinely unknown id produces — compared
+        // against the SAME id string on a fresh, empty store, so any
+        // difference can only come from the denial itself, not from the id
+        // appearing in the message.
+        let empty_db = self::db();
+        let unknown_resp = crate::gateway::caller_identity::CALLER_USER
+            .scope(Some("u-bob".to_string()), async {
+                handle_delete(req("r1"), empty_db).await
+            })
+            .await;
+        assert_eq!(
+            resp.error.unwrap().message,
+            unknown_resp.error.unwrap().message,
+            "denied and genuinely-missing must be byte-identical (no oracle)"
+        );
+
+        // The row is intact — alice can still delete (and thus still read) it.
+        let alice_resp = crate::gateway::caller_identity::CALLER_USER
+            .scope(Some("u-alice".to_string()), async {
+                handle_delete(req("r1"), db).await
+            })
+            .await;
+        assert!(
+            alice_resp.is_success(),
+            "row must still exist for its real owner: {:?}",
+            alice_resp.error
+        );
+    }
+
+    #[tokio::test]
+    async fn unknown_id_reports_not_found() {
+        let db = db();
+        let resp = handle_delete(req("nope"), db).await;
+        assert!(resp.error.is_some());
     }
 }
 

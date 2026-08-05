@@ -31,6 +31,18 @@ pub async fn handle_node_detail_impl(req: JsonRpcRequest, db: MemoryBackend) -> 
         .as_deref()
         .unwrap_or(crate::routing::DEFAULT_AGENT_ID);
 
+    // P1 partition isolation (spec §11-1c): an invisible partition gets the
+    // exact same "not found" response a nonexistent node would — no oracle
+    // distinguishing "this note doesn't exist" from "you can't see it" —
+    // without ever reading its (potentially full-content) row.
+    if !crate::gateway::visibility::partition_visible(agent_id) {
+        return JsonRpcResponse::error(
+            req.id,
+            INVALID_PARAMS,
+            format!("Note not found: {}", params.node_id),
+        );
+    }
+
     // Fetch the note index entry.
     let entry = match db.get_note_index(&params.node_id, agent_id).await {
         Ok(Some(e)) => e,
@@ -199,5 +211,50 @@ mod tests {
         assert_eq!(outgoing.len(), 2);
         let ghost = outgoing.iter().find(|o| o["raw"] == "ghost").unwrap();
         assert_eq!(ghost["status"], "dangling");
+    }
+
+    /// P1 partition isolation: bob reading alice's note by its real
+    /// node_id gets the same "not found" response a nonexistent node
+    /// produces — no oracle, and the full markdown body is never read.
+    #[tokio::test]
+    async fn foreign_partition_denies_with_the_not_found_shape() {
+        use crate::gateway::caller_identity::CALLER_USER;
+
+        let db = make_db();
+        let secret = make_note("AliceSecret", "concept", vec![]);
+        db.index_note(&secret, "main__u-alice", "concept")
+            .await
+            .unwrap();
+
+        let owned = node_detail_request("concept/AliceSecret", Some("main__u-alice"));
+        let deny_resp = CALLER_USER
+            .scope(Some("u-bob".to_string()), async {
+                handle_node_detail_impl(owned, db).await
+            })
+            .await;
+        let deny_err = deny_resp.error.expect("must be denied");
+
+        // Same (node_id, agent_id) pair, compared against a FRESH store
+        // where it genuinely never existed — any difference in the message
+        // can only come from the denial itself, not from the node_id
+        // appearing in the text.
+        let empty_db = make_db();
+        let missing_resp = CALLER_USER
+            .scope(Some("u-bob".to_string()), async {
+                handle_node_detail_impl(
+                    node_detail_request("concept/AliceSecret", Some("main__u-alice")),
+                    empty_db,
+                )
+                .await
+            })
+            .await;
+        let missing_err = missing_resp
+            .error
+            .expect("genuinely missing must error too");
+
+        assert_eq!(
+            deny_err.message, missing_err.message,
+            "denied and genuinely-missing must be byte-identical (no oracle)"
+        );
     }
 }
