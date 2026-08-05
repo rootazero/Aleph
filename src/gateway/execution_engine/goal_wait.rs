@@ -49,8 +49,8 @@ use std::collections::HashMap;
 
 use tracing::{info, warn};
 
-use super::execute::{notify_origin, spawn_continuation_run, ContinuationKind};
-use super::goal_continuation::{now_ms, origin_of};
+use super::execute::{spawn_continuation_run, ContinuationKind};
+use super::goal_continuation::now_ms;
 use super::{ContinuationDeps, UNATTENDED_KEY};
 use crate::agents::swarm::tasks::CoordTaskStore;
 use crate::gateway::agent_instance::AgentInstance;
@@ -401,13 +401,18 @@ impl GoalWakeService {
             ContinuationDecision::Exhausted { note } => {
                 // The wake found no runway left — the store already blocked
                 // the goal with its reason; push the notice like post_run
-                // would (R5: an autonomous ending must not be silent).
-                if let Some(key) = SessionKey::parse(&session) {
-                    if let Some(agent) = self.deps.registry.get(key.agent_id()).await {
-                        let origin = origin_of(&agent, &key).await;
-                        notify_origin(origin.as_ref(), format!("⏹ {note}")).await;
-                    }
-                }
+                // would (R5: an autonomous ending must not be silent). Via the
+                // shared ladder: this arm is reachable from the boot re-arm,
+                // where the agent legitimately is not registered yet, and the
+                // hand-rolled `registry.get`-only version silently dropped the
+                // push for exactly that case.
+                super::goal_continuation::notify_goal_stop(
+                    &self.deps.registry,
+                    self.session_store.as_ref(),
+                    &session,
+                    &note,
+                )
+                .await;
                 info!(session = %session, note = %note,
                     "goal wake: pursuit exhausted at wake; goal blocked");
             }
@@ -486,43 +491,25 @@ impl GoalWakeService {
             }
         };
         super::goal_continuation::clear_goal_welded_strategy(&goal.session_id);
-        // The goal is now Blocked regardless of what happens below. An
-        // unparseable key is a structural early return BEFORE any notify
-        // attempt — without a parsed key there is nothing to look up, and
-        // without a log the note (the only record of why the goal ended)
-        // would go dark along with it. Mirrors the floor `spawn_wake_run`
-        // already keeps for the same miss (64ceea3ba).
-        let Some(key) = SessionKey::parse(&goal.session_id) else {
-            warn!(session = %goal.session_id, note = %note,
-                "goal wake: unparseable session key; out-of-bounds block has no origin notice");
-            return;
-        };
-        // The agent not being registered is a real case at boot —
-        // `rearm_parked_goals` runs before agent loading is guaranteed
-        // complete — not just a deletion race, so it must not fall through
-        // to silence (R5). Fall back to the store-based resolution
-        // `spawn_wake_run` already hands its own agent-deletion race to;
-        // that seam only needs the session store, not a live agent.
-        let origin = match self.deps.registry.get(key.agent_id()).await {
-            Some(agent) => origin_of(&agent, &key).await,
-            None => {
-                super::goal_continuation::origin_of_via_store(self.session_store.as_ref(), &key)
-                    .await
-            }
-        };
-        // Genuine last resort: no store handle, or the store has no origin
-        // bound for this session either — both are real "nothing to notify"
-        // cases (the same silent-by-design `None` `origin_of`/
-        // `origin_of_via_store` return elsewhere), not a bug. Still logged
-        // here because the note is the only record of why the goal ended.
-        let Some(origin) = origin else {
-            warn!(session = %goal.session_id, agent = %key.agent_id(), note = %note,
-                "goal wake: no origin resolvable (agent unregistered, no store-bound origin); out-of-bounds block has no origin notice");
-            return;
-        };
-        notify_origin(Some(&origin), format!("⏹ {note}")).await;
-        info!(session = %goal.session_id, note = %note,
-            "goal wake: parked wake outlived its deadline while down; goal blocked");
+        // The goal is now Blocked regardless of what happens below, so the
+        // notice is the user's only signal (R5). `notify_goal_stop` owns both
+        // failure floors this site used to keep inline — an unparseable session
+        // id and an unresolvable origin — and both still carry the note, which
+        // is the only record of why the goal ended. It also owns the
+        // agent-miss fallback: the agent not being registered is a REAL case
+        // here, not just a deletion race, because `rearm_parked_goals` runs
+        // before agent loading is guaranteed complete.
+        if super::goal_continuation::notify_goal_stop(
+            &self.deps.registry,
+            self.session_store.as_ref(),
+            &goal.session_id,
+            &note,
+        )
+        .await
+        {
+            info!(session = %goal.session_id, note = %note,
+                "goal wake: parked wake outlived its deadline while down; goal blocked");
+        }
     }
 }
 

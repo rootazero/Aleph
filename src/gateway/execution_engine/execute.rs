@@ -1183,20 +1183,22 @@ pub(super) fn spawn_continuation_run(
             // that handle or the session's origin metadata itself is
             // unavailable does this fall back to a log line.
             if let Some(note) = &goal_out_of_bounds_note {
-                let origin = super::goal_continuation::origin_of_via_store(
+                // Through the shared ladder, which keeps its own named floor
+                // when nothing is reachable. `registry` is handed to it even
+                // though the lookup just missed: the ladder's shape is the
+                // single source, and one extra miss on a terminal path is
+                // cheaper than a fourth divergent copy of it.
+                if super::goal_continuation::notify_goal_stop(
+                    &registry,
                     session_manager.as_ref(),
-                    &session_key,
+                    &session_key_str,
+                    note,
                 )
-                .await;
-                if origin.is_some() {
-                    notify_origin(origin.as_ref(), format!("⏹ {note}")).await;
+                .await
+                {
                     info!(session = %session_key_str, note = %note,
                         "goal pursuit: wake landed past the wall-clock bound; goal blocked \
                          (agent also gone — notified via the session-store origin)");
-                } else {
-                    warn!(session = %session_key_str, note = %note,
-                        "goal pursuit: wake landed past the wall-clock bound; goal blocked \
-                         (agent also gone — no origin channel reachable to notify)");
                 }
             }
             warn!(

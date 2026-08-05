@@ -89,6 +89,51 @@ pub(super) async fn origin_of_via_store(
         .map(|(ch, conv)| (reg, ch, conv))
 }
 
+/// Push a goal's terminal/stop note to the session's origin channel (R5), for
+/// every site that must notify WITHOUT already holding a live agent. Returns
+/// whether the notice was delivered.
+///
+/// The `parse key → registry.get → origin → notify` ladder had grown three
+/// copies at three different completeness levels — no store fallback here, a
+/// store fallback and two named `warn!` floors there, store-only and one floor
+/// in `execute`. Each was locally correct and the divergence WAS the bug: the
+/// wake-side `Exhausted` branch dropped its push entirely whenever
+/// `registry.get` missed, and that miss is a REAL case rather than a deletion
+/// race — `rearm_parked_goals` reaches it via `claim_and_spawn` at boot, before
+/// agent loading is guaranteed complete.
+///
+/// Every failure floor carries the note, because on these paths the note is the
+/// only surviving record of why the pursuit ended, and an unparseable session id
+/// and a missing origin are different operational problems.
+///
+/// Sites that DO hold a live agent stay on plain `origin_of` + `notify_origin`:
+/// re-resolving through a registry lookup there would be strictly worse.
+pub(super) async fn notify_goal_stop(
+    registry: &Arc<crate::gateway::agent_instance::AgentRegistry>,
+    session_manager: Option<&Arc<dyn crate::gateway::session_store::SessionStore>>,
+    session: &str,
+    note: &str,
+) -> bool {
+    let Some(key) = SessionKey::parse(session) else {
+        warn!(session = %session, note = %note,
+            "goal pursuit: unparseable session key; the stop notice has no origin to reach");
+        return false;
+    };
+    // The origin lives in the session STORE, not the agent, so a bare store
+    // handle is enough when the agent is absent.
+    let origin = match registry.get(key.agent_id()).await {
+        Some(agent) => origin_of(&agent, &key).await,
+        None => origin_of_via_store(session_manager, &key).await,
+    };
+    let Some(origin) = origin else {
+        warn!(session = %session, agent = %key.agent_id(), note = %note,
+            "goal pursuit: no origin resolvable (agent unregistered, no store-bound origin); the stop notice was not delivered");
+        return false;
+    };
+    notify_origin(Some(&origin), format!("⏹ {note}")).await;
+    true
+}
+
 /// Post-run continuation hook for the session's standing goal. Fires after every
 /// completed run (user turns included); a session with no goal, a passive goal or
 /// a terminal one costs exactly one indexed `SELECT`.
