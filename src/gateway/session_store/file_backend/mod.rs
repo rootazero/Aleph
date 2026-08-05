@@ -700,6 +700,13 @@ impl SessionStore for FileSessionStore {
         tokio::fs::write(&path, contents).await.map_err(|e| {
             SessionStoreError::DatabaseError(format!("Write transcript failed: {e}"))
         })?;
+        // P1 data isolation: this is a freshly-created session (new_key), so
+        // it gets the same owner/scope stamp `get_or_create`'s CREATE branch
+        // gives every other new session — no-op outside any `scope::
+        // with_scope` context. Without this, the branched session reads as
+        // legacy/owner-owned under `visibility::session_visible`, invisible
+        // to the member who just created it (see the trait doc on this fn).
+        meta.stamp_attribution();
         self.write_metadata(&new_key_str, &meta).await?;
         self.emit_session_changed(&new_key_str, "checkpoint-branch", Some(&meta));
         Ok(meta)
@@ -1453,5 +1460,126 @@ mod patch_metadata_tests {
             custom.get("project_root").and_then(|v| v.as_str()),
             Some("/tmp/p")
         );
+    }
+}
+
+/// P1 visibility chokepoint — pinned per team-lead fix round 2.
+/// `branch_from_checkpoint` is a CREATE (of `new_key`), so it must be
+/// owner-stamped exactly like `get_or_create`'s CREATE branch — see the
+/// trait doc on `SessionStore::branch_from_checkpoint`. There is no
+/// `write_checkpoint` anymore (the destructive `compact` that produced
+/// checkpoints is gone — see the comment above `read_checkpoint`), so this
+/// test seeds a checkpoint file directly at the same private path
+/// `read_checkpoint` reads, from inside this module where that's visible.
+#[cfg(test)]
+mod branch_checkpoint_attribution_tests {
+    use super::*;
+    use crate::scope::{with_scope, ScopeAttribution};
+
+    fn temp_store() -> (FileSessionStore, tempfile::TempDir) {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let config = FileSessionStoreConfig {
+            base_dir: dir.path().to_path_buf(),
+            ..Default::default()
+        };
+        (FileSessionStore::new(config).expect("store"), dir)
+    }
+
+    async fn seed_checkpoint(store: &FileSessionStore, key_str: &str, checkpoint_id: &str) {
+        let msg = MessageRecord {
+            id: "m1".into(),
+            role: "user".into(),
+            content: "hello from the checkpoint".into(),
+            timestamp: 0,
+            metadata: None,
+            input_tokens: 0,
+            output_tokens: 0,
+            tool_call_id: None,
+            tool_name: None,
+        };
+        let line = serde_json::to_string(&msg).expect("serialize");
+        let path = store.checkpoint_path(key_str, checkpoint_id);
+        tokio::fs::create_dir_all(path.parent().expect("parent"))
+            .await
+            .expect("mkdir");
+        tokio::fs::write(&path, format!("{line}\n"))
+            .await
+            .expect("write checkpoint");
+    }
+
+    /// The exact case the review flagged: alice branches her OWN session
+    /// under her own dispatch scope. The new session must come out
+    /// owner-stamped to alice — visible to her via `session_visible`, and
+    /// NOT reading as the legacy/owner-owned default a `None` owner would
+    /// produce.
+    #[tokio::test]
+    async fn branch_own_session_stamps_the_new_session_to_the_caller() {
+        let (store, _dir) = temp_store();
+        let source_key = SessionKey::from_key_string("agent:branchattrsrc:main").unwrap();
+        with_scope(
+            Some(ScopeAttribution::personal("u-alice")),
+            store.get_or_create(&source_key),
+        )
+        .await
+        .unwrap();
+        seed_checkpoint(&store, &source_key.to_key_string(), "cp-1").await;
+
+        let new_key = SessionKey::from_key_string("agent:branchattrnew:main").unwrap();
+        let branched = with_scope(
+            Some(ScopeAttribution::personal("u-alice")),
+            store.branch_from_checkpoint(&source_key, "cp-1", &new_key),
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(
+            branched.owner_user_id.as_deref(),
+            Some("u-alice"),
+            "a checkpoint-branched session must be stamped to the caller \
+             who created it, exactly like get_or_create's CREATE branch"
+        );
+
+        // Visible to alice via the real predicate, not just by inspecting
+        // the field directly — and NOT owner-owned (a `None`-owner/legacy
+        // row would read as OWNER_USER_ID's, which alice is not, unless
+        // she happens to be the org owner in this test's fixture — she
+        // isn't, so this also proves the row isn't legacy).
+        let visible_to_alice = crate::gateway::caller_identity::CALLER_USER
+            .scope(Some("u-alice".to_string()), async {
+                crate::gateway::visibility::session_visible(&branched)
+            })
+            .await;
+        assert!(visible_to_alice);
+        assert_ne!(
+            branched.owner_user_id, None,
+            "must not be legacy/owner-owned"
+        );
+
+        // Round-trip: re-read from disk through the store, confirming the
+        // stamp was actually persisted, not just present on the in-memory
+        // return value.
+        let reread = store.get_metadata(&new_key).await.unwrap().unwrap();
+        assert_eq!(reread.owner_user_id.as_deref(), Some("u-alice"));
+    }
+
+    /// Zero-change guarantee: branching with no ambient scope (cron,
+    /// internal, or — after this task's own gate — an unrestricted caller)
+    /// must still leave the new session unstamped, exactly like
+    /// `get_or_create`'s CREATE branch does outside a scope.
+    #[tokio::test]
+    async fn branch_without_scope_leaves_the_new_session_unstamped() {
+        let (store, _dir) = temp_store();
+        let source_key = SessionKey::from_key_string("agent:branchattrsrc2:main").unwrap();
+        store.get_or_create(&source_key).await.unwrap();
+        seed_checkpoint(&store, &source_key.to_key_string(), "cp-1").await;
+
+        let new_key = SessionKey::from_key_string("agent:branchattrnew2:main").unwrap();
+        let branched = store
+            .branch_from_checkpoint(&source_key, "cp-1", &new_key)
+            .await
+            .unwrap();
+
+        assert_eq!(branched.owner_user_id, None);
+        assert_eq!(branched.scope_id, None);
     }
 }

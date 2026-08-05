@@ -123,6 +123,13 @@ pub trait SessionStore: Send + Sync {
         &self,
         key: &SessionKey,
     ) -> Result<Vec<CheckpointSummary>, SessionStoreError>;
+    /// Implementors: the returned `SessionMetadata` is a freshly-created
+    /// session (`new_key`), so it must be owner-stamped exactly like
+    /// [`get_or_create`](SessionStore::get_or_create)'s CREATE branch — call
+    /// `SessionMetadata::stamp_attribution()` on it before persisting. Skip
+    /// this and the branched session silently reads as legacy/owner-owned
+    /// under `visibility::session_visible`, invisible to the member who just
+    /// created it (P1 data isolation).
     async fn branch_from_checkpoint(
         &self,
         key: &SessionKey,
