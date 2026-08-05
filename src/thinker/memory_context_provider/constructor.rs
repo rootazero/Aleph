@@ -336,6 +336,45 @@ impl MemoryContextProvider {
         });
         base.join("agents").join(agent_id).join("MEMORY.md")
     }
+
+    /// One-time, lazy, per-file adoption of the single-machine owner's pre-P1
+    /// curated file into their personal-scope directory (spec §5.2 "Owner 落地
+    ///收养"). If `agent_id` is the owner's composed personal scope
+    /// (`{base}__u-owner`) and the scoped `filename` doesn't exist yet but the
+    /// bare base one does, renames it in — so pre-existing single-user content
+    /// BECOMES the owner's personal instance instead of silently going dark
+    /// behind the new per-scope path (the §2.5 "memory fails silently" failure
+    /// mode).
+    ///
+    /// Idempotent: a second call finds the scoped file already there and is a
+    /// no-op. Crash-safe: a partial adoption (this renamed, a sibling call for
+    /// a different `filename` didn't run yet) just re-runs for the missing
+    /// file on the next load — each file is adopted independently. `agent_id`
+    /// shapes that are not the owner's composed personal scope (base ids,
+    /// `proj-`/`p-` ids, another user's `u-` id) are a no-op by construction —
+    /// only the owner could have pre-existing single-user content to inherit.
+    pub(crate) async fn adopt_owner_curated_file(&self, agent_id: &str, filename: &str) {
+        let Some(base) = crate::memory::project_scope::owner_adoption_base(agent_id) else {
+            return;
+        };
+        let scoped_path = self.agent_memory_path(agent_id).with_file_name(filename);
+        if tokio::fs::try_exists(&scoped_path).await.unwrap_or(false) {
+            return; // already adopted (or a fresh write already landed here)
+        }
+        let bare_path = self.agent_memory_path(base).with_file_name(filename);
+        if !tokio::fs::try_exists(&bare_path).await.unwrap_or(false) {
+            return; // nothing pre-P1 to adopt
+        }
+        if let Some(parent) = scoped_path.parent() {
+            if let Err(e) = tokio::fs::create_dir_all(parent).await {
+                tracing::warn!("owner adoption: mkdir failed for {filename} ({agent_id}): {e}");
+                return;
+            }
+        }
+        if let Err(e) = tokio::fs::rename(&bare_path, &scoped_path).await {
+            tracing::warn!("owner adoption: rename failed for {filename} ({agent_id}): {e}");
+        }
+    }
 }
 
 #[cfg(test)]

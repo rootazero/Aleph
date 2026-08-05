@@ -353,13 +353,22 @@ impl ToolRegistry for BuiltinToolRegistry {
             // Curated hot memory write tool — resolves a per-agent
             // CuratedMemoryStore via MemoryContextProvider at call time
             // (mirrors the per-call construction pattern used by session_search).
+            // Routed through `session_write_id` (not the raw caller agent id)
+            // so a personal-scoped session's `remember` writes land in the
+            // user's own MEMORY.md, not the shared base one (P1 curated
+            // per-scope instancing — see `thinker::memory_context_provider`).
             "remember" => Box::pin(async move {
                 let mcp = self.memory_context_provider.get().ok_or_else(|| {
                     AlephError::tool(
                         "remember not available: MemoryContextProvider not yet injected",
                     )
                 })?;
-                let agent_id = self.caller_agent_id("main");
+                let base_agent = self.caller_agent_id("main");
+                let agent_id = crate::memory::project_scope::session_write_id(
+                    &base_agent,
+                    self.memory_project_scoped,
+                    crate::projects::current_project_root().as_deref(),
+                );
                 let store = mcp
                     .get_or_load_curated_store(&agent_id)
                     .await
@@ -1445,7 +1454,7 @@ impl ToolRegistry for BuiltinToolRegistry {
                 // dispatch runs inside the scoped tool-execution task.
                 let base_agent = crate::tools::turn_context::current_agent_id()
                     .unwrap_or_else(|| self.caller_agent_id("default"));
-                let agent_id = crate::memory::project_scope::scoped_or_base(
+                let agent_id = crate::memory::project_scope::session_write_id(
                     &base_agent,
                     self.memory_project_scoped,
                     crate::projects::current_project_root().as_deref(),

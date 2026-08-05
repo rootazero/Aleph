@@ -368,7 +368,7 @@ impl MemorySearchTool {
                 let base_agent =
                     crate::routing::session_key::SessionKey::from_key_string(&session_key)
                         .map_or_else(|| "default".to_string(), |k| k.agent_id().to_string());
-                let agent_id = crate::memory::project_scope::scoped_or_base(
+                let agent_id = crate::memory::project_scope::session_write_id(
                     &base_agent,
                     self.project_scoped,
                     crate::projects::current_project_root().as_deref(),

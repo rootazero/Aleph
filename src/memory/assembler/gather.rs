@@ -35,18 +35,30 @@ pub(crate) struct Gatherer {
     /// Mirror of `MemoryConfig.project_scoped`. When true and a project root is
     /// active for the run, note retrieval unions the project's namespace with
     /// the agent's global namespace so project-authored notes surface alongside
-    /// cross-project knowledge. The profile/feedback floors are loaded under the
-    /// base id regardless, keeping them global.
+    /// cross-project knowledge. Independently, a personal-scoped session
+    /// (`crate::scope::current_scope`) always unions in the user's own
+    /// namespace regardless of this flag — see `project_scope::session_read_ids`.
+    /// The two floors split (P1 "Floors 分床"): the user-profile floor follows
+    /// the session's personal scope (`session_write_id`), the feedback floor
+    /// stays under the base id unconditionally (org-wide standing rules).
     pub project_scoped: bool,
 }
 
 impl Gatherer {
     pub async fn gather(&self, input: &GatherInputs) -> Vec<Candidate> {
+        // The user-profile floor follows personal scope; the feedback floor
+        // stays under the base id (org-wide) regardless — see the field doc
+        // on `project_scoped` and project_scope.rs's "Floors 分床" invariant.
+        let user_floor_id = crate::memory::project_scope::session_write_id(
+            &input.agent_id,
+            self.project_scoped,
+            crate::projects::current_project_root().as_deref(),
+        );
         let (notes, snapshot, raws, profile, feedback_floor, daily_insight) = tokio::join!(
             self.fetch_notes(&input.query, &input.agent_id, input.pool_limit),
             self.fetch_snapshot(&input.agent_id, input.session_id.as_deref()),
             self.fetch_raws(&input.agent_id, input.session_id.as_deref(), &input.filter),
-            self.profile.load(&input.agent_id),
+            self.profile.load(&user_floor_id),
             self.feedback_floor.load(&input.agent_id),
             self.fetch_daily_insight(),
         );
@@ -96,26 +108,23 @@ impl Gatherer {
     }
 
     async fn fetch_notes(&self, query: &str, agent_id: &str, limit: usize) -> Vec<Candidate> {
-        // Project-scoped reads union the active project's namespace with the
-        // agent's global namespace (via the existing multi-agent path) so a
-        // project sees its own notes plus cross-project knowledge. With the
-        // feature off, or outside any project, `read_scope_ids` collapses to
-        // `[agent_id]` and we take the single-agent fast path — byte-identical
-        // to the pre-feature behaviour.
-        let fetched = if self.project_scoped {
-            let ns = crate::memory::project_scope::project_namespace(
-                crate::projects::current_project_root().as_deref(),
-            );
-            if crate::memory::project_scope::is_global(&ns) {
-                self.retrieval.retrieve(query, agent_id, limit).await
-            } else {
-                let ids = crate::memory::project_scope::read_scope_ids(agent_id, &ns);
-                self.retrieval
-                    .retrieve_multi_agent(query, &ids, limit)
-                    .await
-            }
-        } else {
+        // Session-scope-aware union: a personal-scoped session unions in the
+        // user's own namespace regardless of `project_scoped`; otherwise a
+        // project-scoped session unions the active project's namespace with
+        // the agent's global namespace. With neither active, `session_read_ids`
+        // collapses to `[agent_id]` and we take the single-agent fast path —
+        // byte-identical to the pre-feature behaviour.
+        let ids = crate::memory::project_scope::session_read_ids(
+            agent_id,
+            self.project_scoped,
+            crate::projects::current_project_root().as_deref(),
+        );
+        let fetched = if ids.len() <= 1 {
             self.retrieval.retrieve(query, agent_id, limit).await
+        } else {
+            self.retrieval
+                .retrieve_multi_agent(query, &ids, limit)
+                .await
         };
         match fetched {
             Ok(results) => results
@@ -246,19 +255,17 @@ impl Gatherer {
     /// Fetch all `SessionCompressed` raw memories for an agent, regardless of
     /// session. Used by the cross-session `session_search` path.
     ///
-    /// Mirrors [`Self::fetch_notes`]: when project scoping is on inside a
-    /// project, sessions written under the project's composed id are unioned
-    /// with the agent's global sessions (`read_scope_ids`). Off / outside a
-    /// project this collapses to the single base id — one query, unchanged.
+    /// Mirrors [`Self::fetch_notes`]: `session_read_ids` unions in the
+    /// session's personal namespace when personal scope is active, or the
+    /// active project's namespace when project scoping is on inside a
+    /// project. With neither active this collapses to the single base id —
+    /// one query, unchanged.
     async fn fetch_session_compressed(&self, agent_id: &str) -> Vec<Candidate> {
-        let ids = if self.project_scoped {
-            let ns = crate::memory::project_scope::project_namespace(
-                crate::projects::current_project_root().as_deref(),
-            );
-            crate::memory::project_scope::read_scope_ids(agent_id, &ns)
-        } else {
-            vec![agent_id.to_string()]
-        };
+        let ids = crate::memory::project_scope::session_read_ids(
+            agent_id,
+            self.project_scoped,
+            crate::projects::current_project_root().as_deref(),
+        );
         let mut out = Vec::new();
         for id in &ids {
             match self
@@ -514,6 +521,79 @@ mod tests {
             }
             _ => panic!("expected ItemSource::Summary"),
         }
+    }
+
+    /// P1 "Floors 分床": the user-profile floor must follow the session's
+    /// personal scope while the feedback floor stays org-wide (base id)
+    /// regardless. Effect assertion via real tempdir-backed loaders, not a
+    /// mock — both loaders join `agent_id` straight into their own path, so
+    /// the right content landing in the pool IS the proof of which id each
+    /// loader was actually asked for.
+    #[tokio::test]
+    async fn user_floor_is_scoped_feedback_floor_is_not() {
+        use crate::scope::{with_scope, ScopeAttribution};
+
+        let tmp = tempfile::tempdir().unwrap();
+        let memory_dir = tmp.path().to_path_buf();
+
+        // Scoped profile — only visible if the profile floor resolves the
+        // composed personal-scope id ("main__u-alice").
+        let scoped_profile_dir = memory_dir.join("main__u-alice").join("personal");
+        std::fs::create_dir_all(&scoped_profile_dir).unwrap();
+        std::fs::write(scoped_profile_dir.join("profile.md"), "alice profile body").unwrap();
+
+        // Base feedback rule — must still surface even though the session is
+        // personal-scoped; the feedback floor is never scoped.
+        let feedback_dir = memory_dir.join("main").join("feedback");
+        std::fs::create_dir_all(&feedback_dir).unwrap();
+        std::fs::write(
+            feedback_dir.join("rule.md"),
+            "---\ncategory: feedback\nseverity: high\nconfidence: 0.9\n---\n\n- Always do X\n",
+        )
+        .unwrap();
+
+        let backend: MemoryBackend = Arc::new(SqliteMemoryBackend::in_memory().unwrap());
+        let indexer = Arc::new(crate::memory::notes::NoteIndexer::new(
+            memory_dir.join("notes_idx"),
+            backend.clone(),
+        ));
+        let retrieval = Arc::new(NoteFactRetrieval::new_fts_only(indexer));
+        let snapshots = Arc::new(SnapshotReader::new(tmp.path().join("snap")));
+        let profile = UserProfileLoader::new(memory_dir.clone());
+        let feedback_floor = FeedbackFloorLoader::new(memory_dir);
+        let gatherer = Gatherer {
+            retrieval,
+            snapshots,
+            backend,
+            profile,
+            feedback_floor,
+            project_scoped: false,
+        };
+        let inputs = GatherInputs {
+            query: "q".into(),
+            agent_id: "main".into(),
+            session_id: None,
+            pool_limit: 20,
+            filter: FactSourceFilter::Any,
+        };
+
+        let pool = with_scope(
+            Some(ScopeAttribution::personal("u-alice")),
+            gatherer.gather(&inputs),
+        )
+        .await;
+
+        let profile_hit = pool
+            .iter()
+            .find(|c| c.slot_hint == SlotKind::UserProfile)
+            .expect("profile floor must load under personal scope");
+        assert_eq!(profile_hit.full_content, "alice profile body");
+
+        let feedback_hit = pool
+            .iter()
+            .find(|c| c.slot_hint == SlotKind::Feedback)
+            .expect("feedback floor must still load — it is org-wide, not scoped");
+        assert!(feedback_hit.full_content.contains("Always do X"));
     }
 
     #[test]

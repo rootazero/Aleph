@@ -361,13 +361,15 @@ impl NoteManageTool {
     /// session's agent (turn context) → `DEFAULT_AGENT_ID` for non-gateway
     /// paths (cron / internal / tests).
     ///
-    /// When `project_scoped` is enabled and a project root is active for the
-    /// run, the base id is composed with the project namespace so notes are
+    /// The base id is composed via `project_scope::session_write_id`: a
+    /// personal-scoped session (`crate::scope::current_scope`) always wins,
+    /// isolating notes to the user's own personal namespace; otherwise, when
+    /// `project_scoped` is enabled and a project root is active for the run,
+    /// the base id is composed with the project namespace so notes are
     /// isolated per project directory (the existing `note/{agent_id}/…` layout
     /// + `(agent_id, …)` table keys do the partitioning, no schema change).
-    ///   Outside a project — or with the feature off — the base id is returned
-    ///   unchanged. This is the only path callers should use when they need an
-    ///   agent-scoped operation.
+    ///   With neither active, the base id is returned unchanged. This is the
+    ///   only path callers should use when they need an agent-scoped operation.
     fn resolve_agent_id(&self, args: &NoteManageArgs) -> Result<String> {
         if let Some(id) = args.agent_id.as_deref() {
             // `agent_id` is untrusted LLM input that is joined directly into a
@@ -407,7 +409,7 @@ impl NoteManageTool {
             .as_deref()
             .or(session_agent.as_deref())
             .unwrap_or_else(|| self.agent_id());
-        Ok(crate::memory::project_scope::scoped_or_base(
+        Ok(crate::memory::project_scope::session_write_id(
             base,
             self.project_scoped,
             crate::projects::current_project_root().as_deref(),

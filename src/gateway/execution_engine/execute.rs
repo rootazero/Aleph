@@ -730,20 +730,22 @@ where
                 }
 
                 // Async session compaction (hierarchical summarization).
-                // Capture this turn's project root BEFORE the spawn: the
-                // `projects::run_context` task-local does not cross a
-                // `tokio::spawn` boundary (and the run-loop's scope is already
-                // closed here), so resolving the project-scoped storage agent
-                // id inside the spawned task would always fall back to the
-                // base id while the in-turn readers resolve the scoped id —
-                // writes and reads would silently split. Mirrors the workspace
-                // capture in the goal_continuation hook below.
+                // Capture this turn's project root AND scope attribution
+                // BEFORE the spawn: neither the `projects::run_context` nor
+                // the `crate::scope` task-local crosses a `tokio::spawn`
+                // boundary (and the run-loop's own scopes are already closed
+                // here), so resolving the storage agent id inside the spawned
+                // task would always fall back to the base/org id while the
+                // in-turn readers resolve the project- or personal-scoped id
+                // — writes and reads would silently split. Mirrors the
+                // workspace capture in the goal_continuation hook below.
                 if let Some(ref sc) = self.session_compactor {
                     let sc = sc.clone();
                     let agent_clone = agent.clone();
                     let session_key_clone = request.session_key.clone();
                     let project_root = request.workspace_override.clone();
-                    tokio::spawn(async move {
+                    let scope_attr = crate::scope::current_scope();
+                    tokio::spawn(crate::scope::with_scope(scope_attr, async move {
                         if let Err(e) = sc
                             .post_turn_compress(
                                 &agent_clone,
@@ -754,7 +756,7 @@ where
                         {
                             warn!(error = %e, "Session compaction failed");
                         }
-                    });
+                    }));
                 }
 
                 // Autonomous-continuation hook (R7/R10-safe, opt-in).

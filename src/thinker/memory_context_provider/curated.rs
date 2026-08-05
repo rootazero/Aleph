@@ -35,6 +35,7 @@ impl MemoryContextProvider {
         if let Some(s) = self.curated_stores.get(agent_id) {
             return Ok(s.clone());
         }
+        self.adopt_owner_curated_file(agent_id, "MEMORY.md").await;
         let path = self.agent_memory_path(agent_id);
         let s = Arc::new(
             CuratedMemoryStore::load(path, self.curated_config.memory_char_limit, agent_id).await?,
@@ -89,6 +90,8 @@ impl MemoryContextProvider {
         // injected prompt small.
         const OPEN_LOOPS_CHAR_LIMIT: usize = 2000;
         let open_loops_block = if super::helpers::open_loop_inject() {
+            self.adopt_owner_curated_file(agent_id, "OPEN_LOOPS.md")
+                .await;
             let path = self
                 .agent_memory_path(agent_id)
                 .with_file_name("OPEN_LOOPS.md");
@@ -201,6 +204,7 @@ mod tests {
     use super::MemoryContextProvider;
     use crate::config::types::memory::MemoryInjectionMode;
     use crate::memory::curated::CuratedConfig;
+    use crate::sync_primitives::Arc;
 
     fn provider_rooted_at(root: &std::path::Path) -> MemoryContextProvider {
         MemoryContextProvider::new_for_test_empty_envelope(MemoryInjectionMode::Context)
@@ -329,5 +333,96 @@ mod tests {
             1,
             "the loser must reuse the frozen value, not overwrite it"
         );
+    }
+
+    /// P1 owner adoption: the single-machine owner's pre-existing single-user
+    /// MEMORY.md + USER.md must become their personal-scope instance the
+    /// first time it's loaded under the composed `{base}__u-owner` id, and a
+    /// second load must be a no-op (idempotent). Both files' real roots
+    /// differ in production (MEMORY.md under `agents/`, USER.md under the
+    /// note-memory dir), so this test points both at the SAME tempdir root —
+    /// each store's own adoption hook only ever cares about its own root.
+    #[tokio::test]
+    async fn owner_adoption_moves_the_trio_once_and_is_idempotent() {
+        use crate::memory::notes::profile::synthesizer::FsProfileSynthesizer;
+        use crate::providers::recording_mock::RecordingMockProvider;
+
+        let dir = tempfile::tempdir().unwrap();
+        let bare = dir.path().join("main");
+        tokio::fs::create_dir_all(&bare).await.unwrap();
+        tokio::fs::write(bare.join("MEMORY.md"), "fact one\n§\n")
+            .await
+            .unwrap();
+        tokio::fs::write(bare.join("USER.md"), "owner profile body")
+            .await
+            .unwrap();
+
+        let profile: Arc<dyn crate::memory::notes::profile::synthesizer::ProfileSynthesizer> =
+            Arc::new(FsProfileSynthesizer::new(
+                dir.path().to_path_buf(),
+                Arc::new(RecordingMockProvider::new(String::new())),
+            ));
+        let provider = provider_rooted_at(dir.path()).with_profile(profile);
+
+        let msg = provider
+            .build_curated_message("main__u-owner", "ses-1")
+            .await
+            .unwrap();
+        let rendered = format!("{msg:?}");
+        assert!(rendered.contains("fact one"), "{rendered}");
+        assert!(rendered.contains("owner profile body"), "{rendered}");
+
+        // Bare files adopted away; scoped files now hold the content.
+        assert!(!bare.join("MEMORY.md").exists());
+        assert!(!bare.join("USER.md").exists());
+        let scoped = dir.path().join("main__u-owner");
+        assert!(scoped.join("MEMORY.md").exists());
+        assert!(scoped.join("USER.md").exists());
+
+        // Idempotent: a fresh session (caches evicted) re-loads and finds
+        // nothing left to adopt — no error, same content.
+        provider.invalidate_curated_for_agent("main__u-owner").await;
+        let msg2 = provider
+            .build_curated_message("main__u-owner", "ses-2")
+            .await
+            .unwrap();
+        let rendered2 = format!("{msg2:?}");
+        assert!(rendered2.contains("fact one"), "{rendered2}");
+        assert!(rendered2.contains("owner profile body"), "{rendered2}");
+    }
+
+    /// A non-owner personal scope (e.g. a team member) must get a genuinely
+    /// fresh curated instance, never the owner's pre-P1 content — and its
+    /// own writes must never touch the owner's bare file.
+    #[tokio::test]
+    async fn member_scope_gets_a_fresh_instance_not_the_owners() {
+        let dir = tempfile::tempdir().unwrap();
+        let bare = dir.path().join("main");
+        tokio::fs::create_dir_all(&bare).await.unwrap();
+        tokio::fs::write(bare.join("MEMORY.md"), "owner-only fact\n§\n")
+            .await
+            .unwrap();
+
+        let provider = provider_rooted_at(dir.path());
+
+        let store = provider
+            .get_or_load_curated_store("main__u-alice")
+            .await
+            .unwrap();
+        assert!(
+            store.current_entries().is_empty(),
+            "a member must start fresh, not inherit the owner's content"
+        );
+        assert!(
+            bare.join("MEMORY.md").exists(),
+            "the owner's pre-P1 file must be untouched by a member's load"
+        );
+
+        store.add("alice's own fact").await.unwrap();
+        let owner_body = tokio::fs::read_to_string(bare.join("MEMORY.md"))
+            .await
+            .unwrap();
+        assert!(owner_body.contains("owner-only fact"));
+        assert!(!owner_body.contains("alice's own fact"));
     }
 }
