@@ -4,9 +4,10 @@
 //!
 //! The barrier itself is model-owned state on the [`crate::goal::Goal`] row
 //! (`goal(update, wait_minutes=… | wait_for_task=…)`, R7/R8) and the DEADLINE
-//! kind is woken entirely by the claim pipeline: `try_claim_continuation`
-//! arms an exact timer through the normal `Fire` machinery at the next
-//! `post_run`. What that leaves uncovered — and what this service exists for:
+//! kind is woken by the claim pipeline WHEN a claim happens:
+//! `try_claim_continuation` arms an exact timer through the normal `Fire`
+//! machinery at the next `post_run`. What that leaves uncovered — and what
+//! this service exists for:
 //!
 //! 1. **Task barriers** have no wake instant: this service subscribes to the
 //!    GlobalBus task-settle events (the same one-line pattern as
@@ -22,6 +23,15 @@
 //!    replayed timer whose deadline expired while the daemon was down is
 //!    arbitrated (Blocked + origin notice) instead of woken: bypassing the
 //!    claim must not also bypass the claim's bounds.
+//! 3. **Timer barriers written by a producer that never reaches `post_run`**:
+//!    `post_run` is the ONLY thing that turns a timer barrier into an armed
+//!    `tokio` sleep, and it runs on the `Ok(response)` arm of a run alone. A
+//!    park written from the FAILURE arm (`block_goal_on_failure`'s transient
+//!    park) therefore has no waker at all — and the park clears
+//!    `pending_continuation_ms`, so no in-flight timer survives it either.
+//!    [`Self::sweep_once`] closes that by treating an elapsed, unclaimed timer
+//!    barrier exactly like a settled task barrier. Bounded lateness (one sweep
+//!    interval) instead of "until someone happens to type in that session".
 //!
 //! Identity: a boot/event wake has no completing run to inherit policy
 //! metadata from (the deadline path claimed at `post_run` does, and keeps
@@ -216,14 +226,9 @@ impl GoalWakeService {
         }
     }
 
-    /// Spawn a periodic task-barrier recheck loop. The GlobalBus subscription
-    /// is the primary waker, but it can miss a settle that fired BEFORE the
-    /// barrier row existed (the model parks on a task that just completed), a
-    /// typo'd / deleted task id, and a task that derives to `Unsatisfiable`
-    /// (never stored, so no event ever carries its id). This bounded sweep
-    /// (fail-open, same store recheck as boot) is the backstop that keeps any
-    /// of those from wedging a pursuit until the next restart. Cheap: one
-    /// `list_all` + one `get_task` per genuinely task-parked goal.
+    /// Spawn the periodic barrier sweep loop. Runs [`Self::sweep_once`] every
+    /// `interval_secs` for the process lifetime; the sweep is the bounded
+    /// backstop behind BOTH barrier kinds' primary wakers.
     pub fn spawn_periodic_recheck(self: &Arc<Self>, interval_secs: u64) {
         let svc = Arc::clone(self);
         tokio::spawn(async move {
@@ -232,27 +237,70 @@ impl GoalWakeService {
             ticker.tick().await; // consume the immediate first tick.
             loop {
                 ticker.tick().await;
-                let Some(store) = crate::goal::global() else {
-                    continue;
-                };
-                let goals = match store.list_all() {
-                    Ok(g) => g,
-                    Err(e) => {
-                        warn!(error = %e,
-                            "goal wake: failed to list goals on periodic recheck; retrying next tick");
-                        continue;
-                    }
-                };
-                for goal in goals {
-                    if goal.is_active()
-                        && matches!(goal.pursuit, crate::goal::PursuitMode::Active { .. })
-                        && goal.waiting_on_task.is_some()
-                    {
-                        svc.recheck_task_barrier(&goal, "on periodic recheck").await;
-                    }
-                }
+                svc.sweep_once().await;
             }
         });
+    }
+
+    /// One pass of the periodic sweep — the tick loop's entire body, factored
+    /// out so it is drivable directly (the clock is not a testable seam) and so
+    /// the two barrier kinds' backstops are visibly the same scan.
+    ///
+    /// **Task barriers.** The GlobalBus subscription is the primary waker, but
+    /// it can miss a settle that fired BEFORE the barrier row existed (the
+    /// model parks on a task that just completed), a typo'd / deleted task id,
+    /// and a task that derives to `Unsatisfiable` (never stored, so no event
+    /// ever carries its id).
+    ///
+    /// **Timer barriers.** The claim pipeline is the primary waker, and it only
+    /// runs at `post_run` — i.e. only on the SUCCESS arm of a run. A park
+    /// written from the failure arm (`block_goal_on_failure`'s transient park
+    /// after a 429) is never seen by it, and the park clears
+    /// `pending_continuation_ms` so no in-flight timer survives either. Without
+    /// this arm such a goal sits `Active`-and-parked until someone types in
+    /// that session or the daemon restarts — for an unattended pursuit, neither
+    /// is coming, and the user is holding a "retrying in ~5m" push that is a
+    /// lie. Both guards are load-bearing:
+    /// - `pending_continuation_ms.is_none()` — a barrier that WAS claimed has a
+    ///   live armed `tokio` sleep holding the marker as its `confirm_fire` key;
+    ///   claiming it again here would double-fire it.
+    /// - `waiting_until_ms <= now` — an unelapsed barrier is not due yet, and
+    ///   the next `post_run` (or the boot re-arm) arms it exactly.
+    ///
+    /// A wake up to one interval late is the deliberate price: the shortest
+    /// park this covers is a retry, and a retry is not a deadline.
+    ///
+    /// Cheap: one `list_all` plus one `get_task` per genuinely task-parked goal.
+    pub async fn sweep_once(&self) {
+        let Some(store) = crate::goal::global() else {
+            return;
+        };
+        let goals = match store.list_all() {
+            Ok(g) => g,
+            Err(e) => {
+                warn!(error = %e,
+                    "goal wake: failed to list goals on periodic recheck; retrying next tick");
+                return;
+            }
+        };
+        let now = now_ms();
+        for goal in goals {
+            if !goal.is_active() || !matches!(goal.pursuit, crate::goal::PursuitMode::Active { .. })
+            {
+                continue;
+            }
+            if goal.waiting_on_task.is_some() {
+                self.recheck_task_barrier(&goal, "on periodic recheck")
+                    .await;
+            } else if goal.pending_continuation_ms.is_none()
+                && goal.waiting_until_ms.is_some_and(|until| until <= now)
+            {
+                // `wake` clears the barrier under a CAS before claiming, so a
+                // goal that moved on between the `list_all` and here is left
+                // alone — the same guard the task arm relies on.
+                self.wake(&goal, "the wait elapsed").await;
+            }
+        }
     }
 
     /// Recheck one task-parked goal against the live `CoordTaskStore` and wake
@@ -424,7 +472,12 @@ impl GoalWakeService {
         let note = match store.confirm_fire(&goal.session_id, wake_ms, now) {
             Ok(crate::goal::FireDecision::OutOfBounds { note }) => note,
             // Proceed / Superseded: the row moved under us between the sweep's
-            // read and this write — leave it to the normal pipeline.
+            // read and this write — leave it to the normal pipeline. `Proceed`
+            // additionally CONSUMED the pending marker, so this boot re-arm
+            // dropped the wake it was replaying; what re-establishes it is
+            // `sweep_once`, which claims exactly that shape (Active + elapsed
+            // timer barrier + no pending marker) within one interval. Without
+            // that arm this return is a silent stall.
             Ok(_) => return,
             Err(e) => {
                 warn!(session = %goal.session_id, error = %e,

@@ -676,9 +676,17 @@ impl GoalStore {
     /// the pursuit hit something it cannot get past, `Paused` means a human is
     /// holding it — and neither is true of a provider rate limit or a network
     /// outage, which the run-failure path used to render as a permanent
-    /// verdict. Parking leaves the goal `Active` so the existing wake pipeline
-    /// resumes it, and deliberately does NOT touch the welded strategy: the
-    /// plan is still the plan.
+    /// verdict. Parking leaves the goal `Active` so the wake pipeline resumes
+    /// it, and deliberately does NOT touch the welded strategy: the plan is
+    /// still the plan.
+    ///
+    /// WHICH waker resumes it matters, and is not "whichever one happens to be
+    /// around": `post_run` — the only producer that turns a timer barrier into
+    /// an armed `tokio` sleep — runs on a run's SUCCESS arm, and this park is
+    /// written from the FAILURE arm. The waker that actually covers it is
+    /// `GoalWakeService::sweep_once`, which claims an elapsed timer barrier
+    /// carrying no pending marker (exactly the row this writes). Do not narrow
+    /// that sweep without giving this path another waker.
     ///
     /// Clears the pending-continuation marker (the failed run's marker would
     /// otherwise gate the park's own wake behind the 60s stale grace), exactly

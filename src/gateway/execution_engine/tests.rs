@@ -1809,3 +1809,123 @@ async fn goal_continuation_inherits_the_originating_runs_project_root() {
         "the continuation must run inside the project the goal was set in"
     );
 }
+
+/// A transient provider failure parks the pursuit and pushes "retrying in ~N" —
+/// and something has to make that retry happen.
+///
+/// Nothing did. The park is written from the FAILURE arm of `adapter.execute`,
+/// while `post_run` — the only producer that turns a timer barrier into an armed
+/// `tokio` sleep — runs on the `Ok` arm alone. The park also clears
+/// `pending_continuation_ms`, so no in-flight timer survives it, and the
+/// periodic sweep filtered `waiting_on_task.is_some()`, so timer barriers were
+/// invisible to it. The goal then sat `Active`-and-parked until someone typed in
+/// that session or the daemon restarted; for an unattended pursuit neither is
+/// coming, and the push the user is holding is a lie.
+///
+/// So this asserts the WAKE — a real run reaching the execution adapter with the
+/// resume prompt — not the parked row. A test that stopped at "parked, weld
+/// preserved, not Blocked" passes with the bug fully present.
+#[tokio::test]
+async fn a_transiently_parked_goal_is_actually_woken() {
+    use crate::gateway::execution_adapter::ExecutionAdapter;
+    use crate::goal::{ContinuationDecision, Goal, GoalStatus, PursuitMode};
+
+    let temp = tempfile::tempdir().unwrap();
+    let store = goal_store_global();
+
+    let session = SessionKey::main("b10-transient-park");
+    let session_str = session.to_key_string();
+    // Real wall clock: the park, the sweep and `confirm_fire` all read
+    // `now_ms()`, so the row has to live in that coordinate system.
+    let now = super::goal_continuation::now_ms();
+    store
+        .put(
+            &Goal::new(&session_str, "keep going", 0, now)
+                .with_pursuit(PursuitMode::Active { max_iterations: 5 }),
+        )
+        .unwrap();
+    // Claim one continuation exactly as the post-run hook does — the run that is
+    // about to fail is a claimed one, and its marker is what the park clears.
+    let ContinuationDecision::Fire { .. } = store
+        .try_claim_continuation(&session_str, None, now, false, None)
+        .unwrap()
+    else {
+        panic!("an Active goal with runway must claim a continuation");
+    };
+
+    // That run fails with a 429 carrying a 1-second Retry-After — the shortest
+    // park `bound_transient_park_delay_ms` allows, so the sweep below runs
+    // against a genuinely elapsed barrier instead of a hand-written row.
+    super::goal_continuation::block_goal_on_failure(
+        &session_str,
+        &ExecutionError::Failed(
+            "provider x: Rate limit error: 429 rate limited; retry after 1 seconds".to_string(),
+        ),
+        None,
+    )
+    .await;
+    let parked = store.get(&session_str).unwrap().unwrap();
+    assert_eq!(
+        parked.status,
+        GoalStatus::Active,
+        "a transient failure parks, it does not judge"
+    );
+    assert!(
+        parked.waiting_until_ms.is_some(),
+        "the park is a timer barrier"
+    );
+    assert_eq!(
+        parked.pending_continuation_ms, None,
+        "the failed run's marker is cleared — nothing is in flight to wake this"
+    );
+
+    let sessions: Arc<dyn crate::gateway::session_store::SessionStore> =
+        test_session_manager(&temp);
+    let agent = AgentInstance::new(
+        AgentInstanceConfig {
+            agent_id: session.agent_id().to_string(),
+            workspace: temp.path().join("agent-workspace"),
+            agent_dir: temp.path().join("agents"),
+            ..Default::default()
+        },
+        Arc::clone(&sessions),
+    )
+    .unwrap();
+    let registry = Arc::new(crate::gateway::agent_instance::AgentRegistry::new());
+    registry.register(agent).await;
+    let adapter = Arc::new(RecordingAdapter::new());
+    let wake = Arc::new(super::goal_wait::GoalWakeService::new(
+        ContinuationDeps {
+            registry,
+            adapter: Arc::clone(&adapter) as Arc<dyn ExecutionAdapter>,
+            gate: None,
+            event_bus: None,
+        },
+        None,
+        Some(sessions),
+    ));
+
+    // Let the park elapse, then run exactly one sweep — the tick loop's body.
+    tokio::time::sleep(std::time::Duration::from_millis(1_200)).await;
+    wake.sweep_once().await;
+
+    let request = adapter
+        .await_one()
+        .await
+        .expect("the parked pursuit must be woken, not left Active-and-parked forever");
+    assert!(
+        request.input.contains("Resuming your standing goal"),
+        "the wake must say WHY it fired (R9); got: {}",
+        request.input
+    );
+    let woken = store.get(&session_str).unwrap().unwrap();
+    assert!(
+        !woken.has_wait_barrier(),
+        "the wake consumes the barrier it fired on"
+    );
+    assert_eq!(
+        woken.continuations_used, 2,
+        "the wake claims through the normal pipeline, so it spends an iteration \
+         like every other autonomous step"
+    );
+}

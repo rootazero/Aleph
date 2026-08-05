@@ -453,8 +453,12 @@ const TRANSIENT_PARK_MAX_MS: u64 = 600_000;
 /// signature at this layer means every provider and model in the chain was
 /// tried, so the failure is genuinely transient.
 ///
-/// - Transient (`RateLimited` / `Unreachable`) → PARK on the existing wait
-///   barrier and let the wake pipeline resume it. Blocking here used to be a
+/// - Transient (`RateLimited` / `Unreachable`) → PARK on the wait barrier and
+///   let the wake pipeline resume it — specifically
+///   `GoalWakeService::sweep_once`, which is the one waker that covers a timer
+///   barrier written OUTSIDE `post_run` (this is the failure arm; `post_run`
+///   only runs on the success arm, and the park clears the failed run's pending
+///   marker, so no in-flight timer survives it). Blocking here used to be a
 ///   verdict on a 429: it made the goal invisible in the prompt, deleted the
 ///   welded plan, and pushed "pursuit halted" for something the codebase's own
 ///   classifier labels "retry is worthwhile, soon". The wait itself is bounded
