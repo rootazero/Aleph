@@ -69,6 +69,16 @@ fn not_found(msg: impl Into<String>) -> AlephError {
     AlephError::NotFound(format!("TeamStore: {}", msg.into()))
 }
 
+/// The error a team id that this store will not serve produces.
+///
+/// Single-sourced because [`super::scoped::ScopedTeamStore`] must return the
+/// byte-identical error for a team that exists but belongs to someone else —
+/// two spellings of "team not found" is an existence oracle (spec §5.4 GC4)
+/// that no test would catch, because both spellings look correct in isolation.
+pub(super) fn team_not_found(id: &str) -> AlephError {
+    not_found(format!("team not found: {id}"))
+}
+
 fn domain_err(msg: impl Into<String>) -> AlephError {
     AlephError::Other {
         message: format!("TeamStore: {}", msg.into()),
@@ -217,6 +227,12 @@ impl SqliteTeamStore {
         // name with an LLM-generated topic. Older rows backfill 0 (no-op).
         add_column_if_missing(&conn, "teams", "name_auto", "INTEGER NOT NULL DEFAULT 0")?;
 
+        // Additive migration: P1 owning user. Deliberately NOT backfilled —
+        // NULL is the adoption-by-absence signal every other P1-stamped record
+        // uses (`gateway::visibility::owner_or_legacy`), so pre-P1 teams read
+        // as the org-era single operator's without touching a single row.
+        add_column_if_missing(&conn, "teams", "owner_user_id", "TEXT")?;
+
         Ok(())
     }
 }
@@ -272,9 +288,10 @@ fn read_team_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Team> {
         status: row.get(4)?,
         created_at: row.get(5)?,
         disbanded_at: row.get(6)?,
-        // Column 7 (`protocol`) is an additive nullable column; `.ok()`
-        // tolerates legacy rows / SELECTs that predate it.
+        // Columns 7-8 (`protocol`, `owner_user_id`) are additive nullable
+        // columns; `.ok()` tolerates legacy rows / SELECTs that predate them.
         protocol: row.get::<_, Option<String>>(7).ok().flatten(),
+        owner_user_id: row.get::<_, Option<String>>(8).ok().flatten(),
     })
 }
 
@@ -301,6 +318,7 @@ fn read_summary_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<TeamSummary> {
         created_at: row.get(5)?,
         disbanded_at: row.get(6)?,
         member_count: row.get(7)?,
+        owner_user_id: row.get::<_, Option<String>>(8).ok().flatten(),
     })
 }
 
@@ -324,16 +342,29 @@ async fn broadcast_team_event(team_id: &str, event: crate::event::AlephEvent) {
 #[async_trait]
 impl TeamStore for SqliteTeamStore {
     async fn create_team(&self, input: NewTeam) -> crate::error::Result<Team> {
+        // Stamped here rather than carried on `NewTeam` so EVERY creation path
+        // gets it — the `teams.create` RPC, the `team_create` / `team_from_
+        // template` tools, and any future caller — without touching the 20+
+        // `NewTeam { .. }` literals. `None` (internal / cron / test, no ambient
+        // owner) stays NULL and reads back as the legacy owner.
+        let owner_user_id = crate::scope::ambient_owner();
         let conn = self.conn.lock().await;
         let id = uuid::Uuid::new_v4().to_string();
         let now = now_epoch();
 
         conn.execute(
             r#"
-            INSERT INTO teams (id, name, description, leader_id, status, created_at)
-            VALUES (?1, ?2, ?3, ?4, 'active', ?5)
+            INSERT INTO teams (id, name, description, leader_id, status, created_at, owner_user_id)
+            VALUES (?1, ?2, ?3, ?4, 'active', ?5, ?6)
             "#,
-            params![id, input.name, input.description, input.leader_id, now],
+            params![
+                id,
+                input.name,
+                input.description,
+                input.leader_id,
+                now,
+                owner_user_id
+            ],
         )
         .map_err(|e| match e {
             // Surface a clean duplicate-name error so `team_create` callers can
@@ -376,6 +407,7 @@ impl TeamStore for SqliteTeamStore {
             // Protocol is set post-creation via `set_protocol` (keeps `NewTeam`
             // — and its 20+ call-site literals — unchanged).
             protocol: None,
+            owner_user_id,
         })
     }
 
@@ -383,7 +415,7 @@ impl TeamStore for SqliteTeamStore {
         let conn = self.conn.lock().await;
         let mut stmt = conn
             .prepare_cached(
-                "SELECT id, name, description, leader_id, status, created_at, disbanded_at, protocol FROM teams WHERE id = ?1",
+                "SELECT id, name, description, leader_id, status, created_at, disbanded_at, protocol, owner_user_id FROM teams WHERE id = ?1",
             )
             .map_err(db_err)?;
         stmt.query_row(params![id], read_team_row)
@@ -395,7 +427,7 @@ impl TeamStore for SqliteTeamStore {
         let conn = self.conn.lock().await;
         let mut stmt = conn
             .prepare_cached(
-                "SELECT id, name, description, leader_id, status, created_at, disbanded_at, protocol FROM teams WHERE name = ?1",
+                "SELECT id, name, description, leader_id, status, created_at, disbanded_at, protocol, owner_user_id FROM teams WHERE name = ?1",
             )
             .map_err(db_err)?;
         stmt.query_row(params![name], read_team_row)
@@ -411,7 +443,8 @@ impl TeamStore for SqliteTeamStore {
                 r#"
                 SELECT t.id, t.name, t.description, t.leader_id, t.status,
                        t.created_at, t.disbanded_at,
-                       COUNT(DISTINCT m.agent_id) AS member_count
+                       COUNT(DISTINCT m.agent_id) AS member_count,
+                       t.owner_user_id
                 FROM teams t
                 LEFT JOIN team_members m ON m.team_id = t.id
                 GROUP BY t.id
@@ -615,7 +648,7 @@ impl TeamStore for SqliteTeamStore {
         // Check team exists and is active
         let team = conn
             .prepare_cached(
-                "SELECT id, name, description, leader_id, status, created_at, disbanded_at, protocol FROM teams WHERE id = ?1",
+                "SELECT id, name, description, leader_id, status, created_at, disbanded_at, protocol, owner_user_id FROM teams WHERE id = ?1",
             )
             .map_err(db_err)?
             .query_row(params![team_id], read_team_row)
@@ -674,7 +707,8 @@ impl TeamStore for SqliteTeamStore {
                 r#"
                 SELECT t.id, t.name, t.description, t.leader_id, t.status,
                        t.created_at, t.disbanded_at,
-                       COUNT(DISTINCT am.agent_id) AS member_count
+                       COUNT(DISTINCT am.agent_id) AS member_count,
+                       t.owner_user_id
                 FROM teams t
                 LEFT JOIN team_members fm ON fm.team_id = t.id AND fm.agent_id = ?1
                 LEFT JOIN team_members am ON am.team_id = t.id

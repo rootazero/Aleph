@@ -82,6 +82,27 @@ pub fn stamped_owner_visible(owner_user_id: Option<&str>) -> bool {
     }
 }
 
+/// [`stamped_owner_visible`]'s sibling for records reachable from BOTH the
+/// gateway and an agent run's tools — currently team ownership.
+///
+/// Same rule, same [`owner_or_legacy`] derivation; the only difference is the
+/// resolver: [`crate::scope::ambient_owner`] instead of
+/// [`visible_owner_filter`]. That difference is load-bearing and deliberate.
+/// `CALLER_USER` is dead inside a spawned run, so a team predicate built on
+/// [`stamped_owner_visible`] would be fail-open for every `team_*` tool call —
+/// the Panel half would be enforced and the chat half wide open, which is not
+/// "tightened", it is a different-looking hole. Records reachable ONLY through
+/// the gateway keep using [`stamped_owner_visible`]: the connection identity is
+/// the stronger claim, and widening every predicate to accept a run-seeded
+/// scope would be a silent semantics change to surfaces that never needed it.
+#[must_use]
+pub fn ambient_owner_visible(owner_user_id: Option<&str>) -> bool {
+    match crate::scope::ambient_owner() {
+        None => true,
+        Some(actor) => actor == owner_or_legacy(owner_user_id),
+    }
+}
+
 /// Whether `meta` is visible to the current caller.
 ///
 /// An unrestricted caller (see [`visible_owner_filter`]) sees every session.

@@ -152,6 +152,34 @@ pub fn current_scope() -> Option<ScopeAttribution> {
         .flatten()
 }
 
+/// The user the current execution context acts for, across BOTH ambient
+/// mechanisms — or `None` for an unrestricted internal caller.
+///
+/// Two task-locals carry attribution and neither one covers both surfaces:
+///
+/// - `CALLER_USER` ([`crate::gateway::caller_identity`]) is scoped around
+///   every gateway dispatch, so it is live for an RPC handler and dead
+///   everywhere else.
+/// - [`current_scope`] is re-seeded across every `tokio::spawn` boundary a run
+///   crosses, so it is live inside an agent run's tools and dead for a bare
+///   RPC that never starts a run.
+///
+/// A predicate that reads only the first is fail-open for every tool call; one
+/// that reads only the second is fail-open for every RPC. Reading the gateway
+/// identity first matters when both are live: it is the resolved *connection*
+/// identity, checked at `connect` against the device binding, while the scope
+/// is whatever the run was seeded with.
+///
+/// `None` means "no ambient owner" and is deliberately unrestricted — cron,
+/// background sweeps, A2A and in-process tests behave exactly as they did
+/// before P1 (zero-change guarantee), matching
+/// [`crate::gateway::visibility::visible_owner_filter`].
+#[must_use]
+pub fn ambient_owner() -> Option<String> {
+    crate::gateway::caller_identity::current_caller_user()
+        .or_else(|| current_scope().map(|attr| attr.owner_user_id))
+}
+
 /// Reconstruct a `ScopeAttribution` from metadata.
 /// Requires BOTH `OWNER_META_KEY` and `SCOPE_META_KEY` to be present and
 /// coherent; returns `None` if either is missing or the scope fails to parse

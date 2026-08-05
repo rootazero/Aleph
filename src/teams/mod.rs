@@ -15,6 +15,7 @@ pub mod messages;
 pub mod notifier;
 pub mod plans;
 pub mod run_mode;
+pub mod scoped;
 pub mod sessions;
 pub mod snapshots;
 pub mod store;
@@ -34,6 +35,7 @@ pub use snapshots::{
     capture_snapshot, restore_snapshot, CreateSnapshotOutput, RestoreDiff, SnapshotMeta,
     SqliteSnapshotStore, TeamSnapshotPayload,
 };
+pub use scoped::{team_visible, ScopedTeamStore};
 pub use store::{SqliteTeamStore, TeamStore};
 pub use types::{
     acp_member_id, NewTeam, NewTeamMember, Team, TeamId, TeamMember, TeamMemberKind, TeamStatus,
