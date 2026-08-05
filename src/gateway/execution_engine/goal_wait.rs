@@ -53,12 +53,27 @@ pub struct GoalWakeService {
     /// For the boot recheck of task barriers. `None` → recheck skipped
     /// (fail-open wake instead: with no store the task can never settle).
     coord_store: Option<Arc<dyn CoordTaskStore>>,
+    /// For the token budget on wake claims. A wake has no completing run to
+    /// read a live total from, so this used to pass `None` and every wake was
+    /// budget-unenforced — and the wake service is the ONLY driver a
+    /// task-barrier pursuit ever has, so its whole budget could be spent
+    /// through this hole. `None` (not injected / read failure) keeps the old
+    /// fail-open behavior.
+    session_store: Option<Arc<dyn crate::gateway::session_store::SessionStore>>,
 }
 
 impl GoalWakeService {
     #[must_use]
-    pub fn new(deps: ContinuationDeps, coord_store: Option<Arc<dyn CoordTaskStore>>) -> Self {
-        Self { deps, coord_store }
+    pub fn new(
+        deps: ContinuationDeps,
+        coord_store: Option<Arc<dyn CoordTaskStore>>,
+        session_store: Option<Arc<dyn crate::gateway::session_store::SessionStore>>,
+    ) -> Self {
+        Self {
+            deps,
+            coord_store,
+            session_store,
+        }
     }
 
     /// Subscribe to task-settle events on the GlobalBus. Call once at boot;
@@ -306,10 +321,20 @@ impl GoalWakeService {
         };
         let session = goal.session_id.clone();
         let gate_configured = self.deps.gate.is_some() || goal.gate_command.is_some();
-        // No live token count here (no completing run): a token budget goes
-        // unenforced for THIS claim; the next post_run re-enforces it.
+        // The tree total in `over_budget`'s coordinate system (own session +
+        // each enrolled delegation member's delta). Without it every wake was
+        // a free step past the token budget — and for a task-barrier pursuit
+        // this service is the only driver there is. `None` (no store, an
+        // unparseable key, or a read failure) keeps the budget unenforced for
+        // this claim, exactly as before; the next post_run re-enforces it.
+        let tokens = match (&self.session_store, SessionKey::parse(&session)) {
+            (Some(store), Some(key)) => {
+                crate::gateway::goal_budget::tree_tokens(store, goal, &key).await
+            }
+            _ => None,
+        };
         let decision =
-            match store.try_claim_continuation(&session, None, now_ms(), gate_configured, None) {
+            match store.try_claim_continuation(&session, tokens, now_ms(), gate_configured, None) {
                 Ok(d) => d,
                 Err(e) => {
                     warn!(session = %session, error = %e, "goal wake: claim failed");
