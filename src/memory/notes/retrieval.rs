@@ -231,7 +231,7 @@ mod tests {
 
         // Insert an embedding but don't create the file
         let fake_embedding = vec![0.1_f32; 1024];
-        db.upsert_embedding("reference/ghost-note", AGENT, &fake_embedding, 1024)
+        db.upsert_embedding("reference/ghost-note", AGENT, &fake_embedding, 1024, "")
             .await
             .unwrap();
 
@@ -262,7 +262,7 @@ mod tests {
 
         // Insert an embedding for this note
         let fake_embedding = vec![0.1_f32; 1024];
-        db.upsert_embedding("reference/rust-ownership", AGENT, &fake_embedding, 1024)
+        db.upsert_embedding("reference/rust-ownership", AGENT, &fake_embedding, 1024, "")
             .await
             .unwrap();
 

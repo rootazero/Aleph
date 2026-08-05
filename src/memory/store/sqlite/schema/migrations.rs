@@ -311,6 +311,35 @@ pub fn migrate_notes_index_aliases(conn: &rusqlite::Connection) -> rusqlite::Res
     Ok(())
 }
 
+/// Add the embed-freshness columns to `notes_vec_map` on databases created
+/// before they existed.
+///
+/// `embedded_hash` records which version of a note a stored vector was computed
+/// from. Existing rows default to `''` — "provenance unknown" — which
+/// [`crate::memory::notes::store::NoteStore::stale_vector_paths`] reports as
+/// stale, so the first sweep after an upgrade correctly says every legacy
+/// vector is unverified rather than silently claiming they are all current.
+///
+/// Idempotent: checks column existence first.
+pub fn migrate_notes_vec_map_freshness(conn: &rusqlite::Connection) -> rusqlite::Result<()> {
+    let existing: Vec<String> = conn
+        .prepare("PRAGMA table_info(notes_vec_map)")?
+        .query_map([], |r| r.get::<_, String>(1))?
+        .filter_map(std::result::Result::ok)
+        .collect();
+    if !existing.iter().any(|c| c == "embedded_hash") {
+        conn.execute_batch(
+            "ALTER TABLE notes_vec_map ADD COLUMN embedded_hash TEXT NOT NULL DEFAULT '';",
+        )?;
+    }
+    if !existing.iter().any(|c| c == "embedded_at") {
+        conn.execute_batch(
+            "ALTER TABLE notes_vec_map ADD COLUMN embedded_at INTEGER NOT NULL DEFAULT 0;",
+        )?;
+    }
+    Ok(())
+}
+
 /// Reconcile the trigram FTS companion (`notes_fts_trigram`) against the
 /// authoritative `notes_fts` on every startup, so it self-heals from any
 /// divergence rather than relying on a one-shot backfill: insert rows present in

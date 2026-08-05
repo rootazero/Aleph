@@ -103,10 +103,32 @@ pub(crate) async fn load_note_content_from_disk(
     agent_id: &str,
 ) -> Option<String> {
     let memory_dir = crate::utils::paths::get_note_memory_dir().ok()?;
-    let file_path = memory_dir.join(agent_id).join(&entry.category).join(
-        crate::memory::notes::store::note_md_filename(&entry.filename),
+    let file_path = crate::memory::notes::store::note_content_path(
+        &memory_dir,
+        agent_id,
+        &entry.category,
+        &entry.filename,
     );
     tokio::fs::read_to_string(&file_path).await.ok()
+}
+
+/// Load every entry's note body from disk concurrently.
+///
+/// Result-set sizes here are bounded by a search limit (tens), and each item is
+/// an independent `read_to_string` — running them one at a time made a hybrid
+/// query's wall time the *sum* of its disk reads for no reason. Order matches
+/// `entries`; an unreadable file yields an empty string, exactly as the
+/// per-entry loader did.
+pub(crate) async fn load_note_contents_from_disk(
+    entries: &[NoteIndexEntry],
+    agent_id: &str,
+) -> Vec<String> {
+    futures::future::join_all(entries.iter().map(|e| async move {
+        load_note_content_from_disk(e, agent_id)
+            .await
+            .unwrap_or_default()
+    }))
+    .await
 }
 
 /// Collect all active edges where both endpoints are in `visible`, scoped by

@@ -163,35 +163,32 @@ pub fn init_schema(conn: &Connection) -> Result<(), AlephError> {
     Ok(())
 }
 
-/// Initialize the sqlite-vec virtual tables for notes (768, 1024, 1536 dimensions).
+/// Initialize every sqlite-vec virtual table, notes and routing-experience
+/// alike, for each dimension in [`crate::memory::store::sqlite::vec::EMBEDDING_DIM_TABLES`].
 pub fn init_vec_tables(conn: &Connection) -> Result<(), AlephError> {
     init_notes_vec_tables(conn)?;
 
-    for (dim, name) in [
-        (768u32, "routing_exp_vec_768"),
-        (1024u32, "routing_exp_vec_1024"),
-        (1536u32, "routing_exp_vec_1536"),
-    ] {
-        conn.execute_batch(&ddl::vec_table_ddl(dim, name))
+    for (dim, _, name) in crate::memory::store::sqlite::vec::EMBEDDING_DIM_TABLES {
+        conn.execute_batch(&ddl::vec_table_ddl(*dim, name))
             .map_err(|e| AlephError::config(format!("Failed to create {name}: {e}")))?;
     }
 
     Ok(())
 }
 
-/// Initialize `notes_vec` virtual tables for 768, 1024, and 1536 dimensions,
-/// plus the mapping table that links `(path, agent_id)` to numeric rowids.
+/// Initialize the `notes_vec_*` virtual tables — one per supported embedding
+/// dimension — plus the mapping table that links `(path, agent_id)` to numeric
+/// rowids.
+///
+/// `CREATE VIRTUAL TABLE IF NOT EXISTS` is idempotent, so an existing database
+/// picks up a newly supported dimension on the next open with no migration.
 pub fn init_notes_vec_tables(conn: &Connection) -> Result<(), AlephError> {
     conn.execute_batch(ddl::NOTES_VEC_MAP_DDL)
         .map_err(|e| AlephError::config(format!("Failed to create notes_vec_map table: {e}")))?;
+    migrations::migrate_notes_vec_map_freshness(conn)
+        .map_err(|e| AlephError::config(format!("migrate notes_vec_map freshness: {e}")))?;
 
-    let tables = [
-        (768, "notes_vec_768"),
-        (1024, "notes_vec_1024"),
-        (1536, "notes_vec_1536"),
-    ];
-
-    for (dim, name) in &tables {
+    for (dim, name, _) in crate::memory::store::sqlite::vec::EMBEDDING_DIM_TABLES {
         let sql = ddl::vec_table_ddl(*dim, name);
         conn.execute_batch(&sql)
             .map_err(|e| AlephError::config(format!("Failed to create vec table {name}: {e}")))?;

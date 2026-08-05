@@ -80,6 +80,47 @@ pub fn note_md_filename(filename: &str) -> String {
     format!("{}.md", strip_md_ext(filename))
 }
 
+/// Resolve a note's on-disk path under a given note-memory root.
+///
+/// The single derivation of "where does this note live". Readers that built the
+/// path by hand with `format!("{filename}.md")` bypassed [`strip_md_ext`] and so
+/// resolved a legacy `.md`-suffixed index row to `*.md.md` — a miss that surfaces
+/// as an empty body rather than an error.
+///
+/// The *root* is deliberately a parameter: it belongs to whoever owns the
+/// indexer, and is not always the process-global
+/// `utils::paths::get_note_memory_dir()`.
+#[must_use]
+pub fn note_content_path(
+    memory_dir: &std::path::Path,
+    agent_id: &str,
+    category: &str,
+    filename: &str,
+) -> std::path::PathBuf {
+    memory_dir
+        .join(agent_id)
+        .join(category)
+        .join(note_md_filename(filename))
+}
+
+/// Result of a hybrid (vector + full-text) note search, with each leg's
+/// contribution reported alongside the fused ranking.
+///
+/// The counts exist so a caller can describe what actually ran instead of what
+/// it asked for: "hybrid" with `vector_candidates == 0` means the semantic half
+/// did not participate at all — an empty or dimension-mismatched vector index —
+/// which is a different situation from a semantic search that simply found
+/// nothing, and the two used to be indistinguishable from the outside.
+#[derive(Debug, Clone, Default)]
+pub struct HybridSearchOutcome {
+    /// Fused, ranked results (already truncated to the requested limit).
+    pub results: Vec<crate::memory::notes::NoteSearchResult>,
+    /// Candidates the vector leg contributed to fusion.
+    pub vector_candidates: usize,
+    /// Candidates the full-text leg contributed to fusion.
+    pub fts_candidates: usize,
+}
+
 /// Persistence contract for the notes index, link graph, and full-text search.
 ///
 /// All methods are scoped by `agent_id` to support the `memory/{agent_id}/{category}/`
@@ -251,13 +292,43 @@ pub trait NoteStore: Send + Sync {
 
     /// Store or update the embedding vector for a note. Backed by sqlite-vec
     /// (`notes_vec_{dim}` + `notes_vec_map`) in `SqliteMemoryBackend`.
+    ///
+    /// `content_hash` is the note's [`KnowledgeNote::content_hash`] for the
+    /// text that was embedded; it is recorded alongside the vector so
+    /// [`Self::stale_vector_paths`] can tell a current vector from one left
+    /// behind by a swallowed embed failure. Pass `""` when the caller does not
+    /// know it — that records "provenance unknown", which reads as *stale*, so
+    /// an under-informed caller errs toward re-embedding rather than toward
+    /// claiming freshness it cannot vouch for.
+    ///
+    /// Deliberately one method rather than two: a second, hash-less entry point
+    /// is a second path every future writer can forget to keep in step.
+    ///
+    /// [`KnowledgeNote::content_hash`]: crate::memory::notes::KnowledgeNote::content_hash
     async fn upsert_embedding(
         &self,
         path: &str,
         agent_id: &str,
         embedding: &[f32],
         dim: u32,
+        content_hash: &str,
     ) -> Result<(), AlephError>;
+
+    /// Note paths whose vector is missing or was computed from a different
+    /// version of the note than the one currently indexed.
+    ///
+    /// This is the observable half of embed-on-write: that path logs and
+    /// swallows failures on purpose (the note is already on disk), which left
+    /// no way at all to find out afterwards that a note had silently dropped
+    /// out of vector search. A path is stale when it has no `notes_vec_map`
+    /// row, or when the recorded `embedded_hash` differs from the note's
+    /// current `content_hash` (including the empty hash written by
+    /// pre-freshness rows and by callers that did not supply one).
+    ///
+    /// Default impl returns empty for backends without a vector index.
+    async fn stale_vector_paths(&self, _agent_id: &str) -> Result<Vec<String>, AlephError> {
+        Ok(Vec::new())
+    }
 
     /// Search notes by embedding similarity (sqlite-vec KNN over the
     /// dimension-matched `notes_vec_{dim}` table).
@@ -269,7 +340,8 @@ pub trait NoteStore: Send + Sync {
         limit: usize,
     ) -> Result<Vec<(String, f32)>, AlephError>;
 
-    /// Vector + FTS hybrid search with RRF fusion, returning full content.
+    /// Vector + FTS hybrid search with RRF fusion, returning full content
+    /// alongside how much each leg contributed.
     async fn hybrid_search_notes(
         &self,
         embedding: &[f32],
@@ -277,7 +349,7 @@ pub trait NoteStore: Send + Sync {
         agent_id: &str,
         dim_hint: u32,
         limit: usize,
-    ) -> Result<Vec<crate::memory::notes::NoteSearchResult>, AlephError>;
+    ) -> Result<HybridSearchOutcome, AlephError>;
 
     /// Vector search returning full content (not just path+score).
     async fn vector_search_notes_with_content(
