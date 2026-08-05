@@ -108,6 +108,8 @@ pub async fn phase1_mark_due_jobs<C: Clock>(
             session_target: job.session_target.clone(),
             marked_at: now,
             trigger_source: TriggerSource::Schedule,
+            owner_user_id: job.owner_user_id.clone(),
+            scope_id: job.scope_id.clone(),
         });
     }
 
@@ -156,6 +158,8 @@ pub async fn phase1_mark_manual<C: Clock>(
         session_target: job.session_target.clone(),
         marked_at: now,
         trigger_source: TriggerSource::Manual,
+        owner_user_id: job.owner_user_id.clone(),
+        scope_id: job.scope_id.clone(),
     };
 
     guard.persist()?;

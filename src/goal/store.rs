@@ -649,6 +649,57 @@ impl GoalStore {
         Ok(paused)
     }
 
+    /// Deactivation freeze (spec §10): pause every actively-pursued goal
+    /// OWNED BY `user_id`, under ONE lock guard. The scoped sibling of
+    /// [`Self::pause_all_active`] — same full-scan+filter shape, narrowed by
+    /// [`crate::goal::types::Goal::owner_user_id`] instead of taking
+    /// everything. Returns the count paused.
+    ///
+    /// The predicate is exact equality against `Some(user_id)` — a legacy
+    /// goal with `owner_user_id: None` belongs to the platform owner (spec
+    /// §10: the owner account can never be deactivated), never to the user
+    /// being deactivated here, so it is left untouched by construction. This
+    /// is a one-way freeze: reactivating the user does not auto-resume its
+    /// goals (spec is silent on auto-resume; each is a deliberate design
+    /// choice recorded here rather than a client-side fallback guess).
+    pub fn pause_all_owned_by(&self, user_id: &str) -> Result<usize> {
+        let now_ms = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |d| d.as_millis() as u64);
+        let conn = self.lock();
+        let mut stmt = conn
+            .prepare("SELECT json FROM goals")
+            .map_err(|e| AlephError::other(format!("goal pause_all_owned_by prepare: {e}")))?;
+        let rows = stmt
+            .query_map([], |r| r.get::<_, String>(0))
+            .map_err(|e| AlephError::other(format!("goal pause_all_owned_by query: {e}")))?;
+        let mut targets = Vec::new();
+        for row in rows {
+            let json =
+                row.map_err(|e| AlephError::other(format!("goal pause_all_owned_by row: {e}")))?;
+            // Corrupt rows are skipped, like `get` / `pause_all_active` (fail-safe).
+            if let Ok(goal) = serde_json::from_str::<Goal>(&json) {
+                if goal.is_active() && goal.owner_user_id.as_deref() == Some(user_id) {
+                    targets.push(goal);
+                }
+            }
+        }
+        drop(stmt);
+        let note = format!("Account '{user_id}' was deactivated — pursuit frozen.");
+        let count = targets.len();
+        for goal in targets {
+            Self::put_locked(
+                &conn,
+                &goal
+                    .with_status(GoalStatus::Paused, now_ms)
+                    .with_note(Some(note.clone()), now_ms)
+                    .without_wait(now_ms)
+                    .with_pending_continuation(None),
+            )?;
+        }
+        Ok(count)
+    }
+
     /// Enroll a delegation session in the goal's shared token budget (tree
     /// budget v1), in one guard. First writer wins per member (the join-time
     /// baseline must not be re-stamped by a later delegation to the same
@@ -837,6 +888,11 @@ impl GoalStore {
                 // The claiming run's project root is likewise pipeline-owned:
                 // a tool update must never roll it back to the snapshot's.
                 merged.workspace = live.workspace.clone();
+                // Owner/scope attribution (P1 data isolation) is stamped once
+                // at creation and never re-derived from a tool snapshot — same
+                // ownership rule as `workspace`.
+                merged.owner_user_id = live.owner_user_id.clone();
+                merged.scope_id = live.scope_id.clone();
                 let outcome = if live.status == expected_status {
                     FieldUpdate::Committed
                 } else {
@@ -1583,6 +1639,91 @@ mod tests {
         assert_eq!(
             store.get("s").unwrap().unwrap().workspace.as_deref(),
             Some("/proj/x")
+        );
+    }
+
+    #[test]
+    fn commit_field_update_never_clobbers_owner_scope() {
+        // Mirrors `claim_records_workspace_and_tool_updates_preserve_it`: a
+        // tool-side field update (computed from a `get` snapshot) must not
+        // roll back the owner/scope attribution stamped at creation.
+        let (store, _d) = temp_store();
+        let attr = crate::scope::ScopeAttribution::personal("u-alice");
+        let owned = pursuing("s", 5).with_owner_scope(Some(&attr));
+        store.put(&owned).unwrap();
+
+        let snapshot = store.get("s").unwrap().unwrap();
+        assert_eq!(snapshot.owner_user_id.as_deref(), Some("u-alice"));
+        // Simulate a tool call that read a stale/bare snapshot (e.g. one built
+        // fresh via Goal::new without re-stamping owner_scope) and wrote it back.
+        let edited = snapshot.with_note(Some("n".into()), 3_000);
+        assert_eq!(
+            store
+                .commit_field_update(&edited, GoalStatus::Active)
+                .unwrap(),
+            FieldUpdate::Committed
+        );
+        let after = store.get("s").unwrap().unwrap();
+        assert_eq!(after.owner_user_id.as_deref(), Some("u-alice"));
+        assert_eq!(after.scope_id.as_deref(), Some("personal:u-alice"));
+        assert_eq!(
+            after.note.as_deref(),
+            Some("n"),
+            "the actual edit still lands"
+        );
+    }
+
+    #[test]
+    fn pause_all_owned_by_pauses_exactly_that_users_active_goals() {
+        let (store, _d) = temp_store();
+        let alice = crate::scope::ScopeAttribution::personal("u-alice");
+        let bob = crate::scope::ScopeAttribution::personal("u-bob");
+        store
+            .put(&pursuing("s-alice-1", 5).with_owner_scope(Some(&alice)))
+            .unwrap();
+        store
+            .put(&pursuing("s-alice-2", 5).with_owner_scope(Some(&alice)))
+            .unwrap();
+        store
+            .put(&pursuing("s-bob", 5).with_owner_scope(Some(&bob)))
+            .unwrap();
+        // A legacy (pre-P1) row: owner_user_id is None, never alice's.
+        store.put(&pursuing("s-legacy", 5)).unwrap();
+
+        let count = store.pause_all_owned_by("u-alice").unwrap();
+        assert_eq!(count, 2, "only alice's two active goals are paused");
+
+        assert_eq!(
+            store.get("s-alice-1").unwrap().unwrap().status,
+            GoalStatus::Paused
+        );
+        assert_eq!(
+            store.get("s-alice-2").unwrap().unwrap().status,
+            GoalStatus::Paused
+        );
+        assert_eq!(
+            store.get("s-bob").unwrap().unwrap().status,
+            GoalStatus::Active,
+            "bob's goal must be untouched"
+        );
+        assert_eq!(
+            store.get("s-legacy").unwrap().unwrap().status,
+            GoalStatus::Active,
+            "legacy None-owner rows belong to the platform owner, not alice — untouched"
+        );
+    }
+
+    #[test]
+    fn pause_all_owned_by_is_a_no_op_for_a_user_with_no_active_goals() {
+        let (store, _d) = temp_store();
+        let bob = crate::scope::ScopeAttribution::personal("u-bob");
+        store
+            .put(&pursuing("s-bob", 5).with_owner_scope(Some(&bob)))
+            .unwrap();
+        assert_eq!(store.pause_all_owned_by("u-alice").unwrap(), 0);
+        assert_eq!(
+            store.get("s-bob").unwrap().unwrap().status,
+            GoalStatus::Active
         );
     }
 

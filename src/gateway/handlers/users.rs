@@ -294,6 +294,7 @@ pub async fn handle_update(
 
     if status == Some(UserStatus::Deactivated) {
         deactivate_devices(&store, &kick, &params.user_id).await;
+        freeze_owned_background_work(&params.user_id);
     }
 
     match store.get_user(&params.user_id) {
@@ -454,6 +455,51 @@ async fn deactivate_devices(
                     "users.update: failed to revoke device during deactivation"
                 );
             }
+        }
+    }
+}
+
+/// Deactivation freeze (spec §10): pause every goal and loop OWNED BY
+/// `user_id`, mirroring [`deactivate_devices`]'s best-effort shape (a scan
+/// failure for one subsystem must not abort the other, and neither aborts
+/// the already-committed store write above).
+///
+/// Cron jobs are DELIBERATELY skipped: `cron.*` is admin-gated (see
+/// `builtin_tools::cron_manage`), so a deactivated MEMBER owns none by
+/// construction — there is nothing to freeze. If cron creation is ever
+/// opened to non-admin members, this exclusion must be revisited.
+///
+/// One-way freeze: reactivating the user does NOT auto-resume its goals or
+/// loops (spec is silent on auto-resume) — each owner session resumes its
+/// own via `goal(action='update', status='active')` / `loop(action='resume')`.
+fn freeze_owned_background_work(user_id: &str) {
+    if let Some(store) = crate::goal::global() {
+        match store.pause_all_owned_by(user_id) {
+            Ok(count) if count > 0 => {
+                tracing::warn!(
+                    user_id = %user_id,
+                    count,
+                    "users.update: deactivation paused owned goals"
+                );
+            }
+            Ok(_) => {}
+            Err(e) => {
+                tracing::warn!(
+                    user_id = %user_id,
+                    error = %e,
+                    "users.update: failed to pause owned goals during deactivation"
+                );
+            }
+        }
+    }
+    if let Some(registry) = crate::looping::global() {
+        let count = registry.pause_all_owned_by(user_id);
+        if count > 0 {
+            tracing::warn!(
+                user_id = %user_id,
+                count,
+                "users.update: deactivation paused owned loops"
+            );
         }
     }
 }
@@ -636,6 +682,106 @@ mod tests {
             .expect("connection must still be present, only demoted");
         assert_eq!(demoted.caller_role, "guest", "must be downgraded to guest");
         assert_eq!(demoted.caller_user, None, "caller_user must be cleared");
+    }
+
+    /// Spec §10 end-to-end: deactivating a user must freeze its OWNED goals
+    /// and loops, and leave another user's untouched. Session ids are unique
+    /// to this test to stay correct even if another test in the same binary
+    /// already installed the process-global registries (mirrors
+    /// `db_handlers::modify::delete_stops_the_sessions_timer_loop`'s
+    /// `unwrap_or_else` idiom for exactly that reason).
+    #[tokio::test]
+    async fn deactivate_pauses_owned_goals_and_loops() {
+        let goal_store = crate::goal::global().unwrap_or_else(|| {
+            let temp = tempfile::tempdir().unwrap();
+            crate::goal::set_global_for_test(Arc::new(
+                crate::goal::GoalStore::open(&temp.path().join("g.db")).unwrap(),
+            ));
+            std::mem::forget(temp); // keep the sqlite file alive for the process
+            crate::goal::global().expect("goal store installed")
+        });
+        let loop_registry = crate::looping::global().unwrap_or_else(|| {
+            crate::looping::init_global(Arc::new(crate::looping::LoopRegistry::default()));
+            crate::looping::global().expect("loop registry installed")
+        });
+
+        let alice_attr = crate::scope::ScopeAttribution::personal("u-alice-p0t5");
+        let bob_attr = crate::scope::ScopeAttribution::personal("u-bob-p0t5");
+        goal_store
+            .put(
+                &crate::goal::Goal::new("agent:g-alice-p0t5:main", "obj", 0, 0)
+                    .with_pursuit(crate::goal::PursuitMode::Active { max_iterations: 5 })
+                    .with_owner_scope(Some(&alice_attr)),
+            )
+            .unwrap();
+        goal_store
+            .put(
+                &crate::goal::Goal::new("agent:g-bob-p0t5:main", "obj", 0, 0)
+                    .with_pursuit(crate::goal::PursuitMode::Active { max_iterations: 5 })
+                    .with_owner_scope(Some(&bob_attr)),
+            )
+            .unwrap();
+        loop_registry.put(
+            crate::looping::LoopState::new(
+                "agent:l-alice-p0t5:main",
+                "watch",
+                crate::looping::Cadence::Fixed {
+                    interval_ms: 300_000,
+                },
+                0,
+            )
+            .with_owner_scope(Some(&alice_attr)),
+        );
+        loop_registry.put(
+            crate::looping::LoopState::new(
+                "agent:l-bob-p0t5:main",
+                "watch",
+                crate::looping::Cadence::Fixed {
+                    interval_ms: 300_000,
+                },
+                0,
+            )
+            .with_owner_scope(Some(&bob_attr)),
+        );
+
+        let store = seeded_store();
+        store
+            .create_user("u-alice-p0t5", "Alice", UserRole::Member)
+            .unwrap();
+        let req = rpc_request(
+            "users.update",
+            json!({"user_id": "u-alice-p0t5", "status": "deactivated"}),
+        );
+        handle_update(req, store, test_kick_sink()).await;
+
+        assert_eq!(
+            goal_store
+                .get("agent:g-alice-p0t5:main")
+                .unwrap()
+                .unwrap()
+                .status,
+            crate::goal::GoalStatus::Paused,
+            "alice's goal must be paused"
+        );
+        assert_eq!(
+            goal_store
+                .get("agent:g-bob-p0t5:main")
+                .unwrap()
+                .unwrap()
+                .status,
+            crate::goal::GoalStatus::Active,
+            "bob's goal must be untouched"
+        );
+        assert_eq!(
+            loop_registry.get("agent:l-alice-p0t5:main").unwrap().status,
+            crate::looping::LoopStatus::Paused,
+            "alice's loop must be paused"
+        );
+        assert_eq!(
+            loop_registry.get("agent:l-bob-p0t5:main").unwrap().status,
+            crate::looping::LoopStatus::Active,
+            "bob's loop must be untouched"
+        );
     }
 
     /// Seed one live connection bound to `device_id` at `role`, and return

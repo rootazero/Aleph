@@ -414,6 +414,17 @@ pub struct CronJob {
     /// Runtime state
     #[serde(default)]
     pub state: JobStateV2,
+
+    /// P1 data isolation: the user id that created this job, stamped once at
+    /// `cron_manage(action='create')` time from `scope::current_scope()`
+    /// inside the creating (admin-gated) run. `#[serde(default)]` → old
+    /// (pre-P1) payloads read `None` — unscoped, legacy owner semantics.
+    #[serde(default)]
+    pub owner_user_id: Option<String>,
+    /// The rendered scope boundary (`scope::ScopeId::render()`) paired with
+    /// [`Self::owner_user_id`]. `#[serde(default)]` → old payloads read `None`.
+    #[serde(default)]
+    pub scope_id: Option<String>,
 }
 
 impl CronJob {
@@ -447,6 +458,8 @@ impl CronJob {
             context_vars: None,
             timeout_ms: None,
             state: JobStateV2::default(),
+            owner_user_id: None,
+            scope_id: None,
         }
     }
 
@@ -501,6 +514,13 @@ pub struct JobSnapshot {
     pub session_target: SessionTarget,
     pub marked_at: i64,
     pub trigger_source: TriggerSource,
+    /// P1 data isolation: copied from `CronJob::owner_user_id` at snapshot
+    /// time (both `phase1_mark_due_jobs` and `phase1_mark_manual`) so the
+    /// fire path can rehydrate attribution with no completing run to inherit
+    /// metadata from — see `executor::build_cron_metadata`.
+    pub owner_user_id: Option<String>,
+    /// Copied from `CronJob::scope_id` alongside [`Self::owner_user_id`].
+    pub scope_id: Option<String>,
 }
 
 // ── ExecutionResult ─────────────────────────────────────────────────────

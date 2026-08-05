@@ -343,7 +343,7 @@ impl GoalWakeService {
                 "goal wake: agent not registered; wake dropped (confirm_fire will lapse via stale grace)");
             return;
         };
-        let policy_meta = wake_identity(&agent, &key).await;
+        let policy_meta = rehydrate_owner_scope(goal, wake_identity(&agent, &key).await);
         // Rebuild the wake run in the project the last claiming run recorded
         // (the post-run hook writes it into the goal row); `None` falls back
         // to the agent workspace exactly as before.
@@ -361,6 +361,32 @@ impl GoalWakeService {
             ContinuationKind::Goal { wake_ms },
         );
     }
+}
+
+/// Rehydrate owner/scope attribution (P1 data isolation) into a wake run's
+/// metadata from the goal's OWN persisted `owner_user_id`/`scope_id` fields.
+///
+/// `wake_identity` above has no completing run to inherit `carry_policy_metadata`
+/// from — this IS the run with no predecessor, mirroring cron's fire path
+/// (`executor::build_cron_metadata`) — so attribution must be reconstructed
+/// from the durable row instead. Fail-closed via
+/// [`crate::scope::ScopeAttribution::from_persisted`]: a legacy (pre-P1) goal
+/// with neither column set, or an incoherent pair, emits nothing — the wake
+/// stays unscoped, zero behavior change. Without this, a wake's
+/// `memory.project_scoped` / retrieval / compaction reads would silently fall
+/// back to the unscoped namespace even though the goal was created inside a
+/// personal or project scope.
+fn rehydrate_owner_scope(
+    goal: &Goal,
+    mut policy_meta: HashMap<String, String>,
+) -> HashMap<String, String> {
+    if let Some(attr) = crate::scope::ScopeAttribution::from_persisted(
+        goal.owner_user_id.as_deref(),
+        goal.scope_id.as_deref(),
+    ) {
+        crate::scope::stamp_metadata(&mut policy_meta, &attr);
+    }
+    policy_meta
 }
 
 /// Fail-closed identity for a wake run with no completing run to inherit from.
@@ -382,5 +408,57 @@ async fn wake_identity(
             meta.insert(UNATTENDED_KEY.to_string(), "true".to_string());
             meta
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn owned_goal() -> Goal {
+        let attr = crate::scope::ScopeAttribution::personal("u-alice");
+        Goal::new("agent:s:main", "obj", 0, 0).with_owner_scope(Some(&attr))
+    }
+
+    /// The gap this function exists to close: `spawn_wake_run` has no
+    /// completing run to inherit `carry_policy_metadata` from, so it must
+    /// rehydrate owner/scope from the goal's own persisted fields and emit
+    /// both metadata keys into the run it builds.
+    #[test]
+    fn rehydrate_owner_scope_emits_both_keys_from_persisted_fields() {
+        let meta = rehydrate_owner_scope(&owned_goal(), HashMap::new());
+        assert_eq!(
+            meta.get(crate::scope::OWNER_META_KEY).map(String::as_str),
+            Some("u-alice")
+        );
+        assert_eq!(
+            meta.get(crate::scope::SCOPE_META_KEY).map(String::as_str),
+            Some("personal:u-alice")
+        );
+    }
+
+    /// Existing keys (e.g. `wake_identity`'s unattended marker / channel
+    /// permission layer) are preserved alongside the rehydrated attribution —
+    /// this augments the wake's metadata, it does not replace it.
+    #[test]
+    fn rehydrate_owner_scope_preserves_existing_metadata_keys() {
+        let mut base = HashMap::new();
+        base.insert(UNATTENDED_KEY.to_string(), "true".to_string());
+        let meta = rehydrate_owner_scope(&owned_goal(), base);
+        assert_eq!(meta.get(UNATTENDED_KEY).map(String::as_str), Some("true"));
+        assert_eq!(
+            meta.get(crate::scope::OWNER_META_KEY).map(String::as_str),
+            Some("u-alice")
+        );
+    }
+
+    /// A legacy (pre-P1) goal with no owner/scope columns emits neither key —
+    /// zero behavior change for goals that predate P1.
+    #[test]
+    fn rehydrate_owner_scope_is_a_no_op_for_a_legacy_goal() {
+        let legacy = Goal::new("agent:s:main", "obj", 0, 0);
+        let meta = rehydrate_owner_scope(&legacy, HashMap::new());
+        assert!(!meta.contains_key(crate::scope::OWNER_META_KEY));
+        assert!(!meta.contains_key(crate::scope::SCOPE_META_KEY));
     }
 }
