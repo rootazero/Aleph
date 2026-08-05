@@ -18,7 +18,10 @@
 //!    the `confirm_fire` key, so the CAS still holds), claiming never-claimed
 //!    timer barriers, and re-checking task barriers against the live
 //!    `CoordTaskStore` (fail-open: a vanished task reads as settled, so a
-//!    stale barrier can never wedge a pursuit forever — hermes' rule).
+//!    stale barrier can never wedge a pursuit forever — hermes' rule). A
+//!    replayed timer whose deadline expired while the daemon was down is
+//!    arbitrated (Blocked + origin notice) instead of woken: bypassing the
+//!    claim must not also bypass the claim's bounds.
 //!
 //! Identity: a boot/event wake has no completing run to inherit policy
 //! metadata from (the deadline path claimed at `post_run` does, and keeps
@@ -168,7 +171,18 @@ impl GoalWakeService {
                 // goals — a generic crashed pending marker keeps the
                 // pre-existing stale-grace recovery (its prompt is
                 // unrecoverable). delay 0 when the wake already elapsed.
+                //
+                // Bypassing the claim also bypasses every bound the claim
+                // evaluates, and a restart is exactly when a parked wake is
+                // most likely to have outlived its deadline. Arbitrate here
+                // rather than waking a goal whose wall-clock budget expired
+                // while the daemon was down; `confirm_fire` is the second,
+                // narrower net for the same condition.
                 if goal.waiting_until_ms.is_some() {
+                    if crate::goal::pursuit::fires_out_of_bounds(&goal, wake_ms, now) {
+                        self.arbitrate_out_of_bounds(&goal, now).await;
+                        continue;
+                    }
                     self.spawn_wake_run(
                         &goal,
                         crate::goal::pursuit::wait_resume_prompt(&goal, "the wait elapsed"),
@@ -367,6 +381,41 @@ impl GoalWakeService {
             Some(delay_ms),
             ContinuationKind::Goal { wake_ms },
         );
+    }
+
+    /// A parked wake outlived its wall-clock deadline while the daemon was
+    /// down. Block the goal with the deadline note and push the same origin
+    /// notice every other structural stop pushes (R5). Uses `confirm_fire`
+    /// rather than a bespoke write so the Blocked transition, the barrier
+    /// drop and the marker clear all come from the one guard that already
+    /// owns them — and so a concurrent claim cannot race this into firing.
+    async fn arbitrate_out_of_bounds(&self, goal: &Goal, now: u64) {
+        let Some(store) = crate::goal::global() else {
+            return;
+        };
+        let Some(wake_ms) = goal.pending_continuation_ms else {
+            return;
+        };
+        let note = match store.confirm_fire(&goal.session_id, wake_ms, now) {
+            Ok(crate::goal::FireDecision::OutOfBounds { note }) => note,
+            // Proceed / Superseded: the row moved under us between the sweep's
+            // read and this write — leave it to the normal pipeline.
+            Ok(_) => return,
+            Err(e) => {
+                warn!(session = %goal.session_id, error = %e,
+                    "goal wake: failed to arbitrate an out-of-bounds parked wake");
+                return;
+            }
+        };
+        super::goal_continuation::clear_goal_welded_strategy(&goal.session_id);
+        if let Some(key) = SessionKey::parse(&goal.session_id) {
+            if let Some(agent) = self.deps.registry.get(key.agent_id()).await {
+                let origin = origin_of(&agent, &key).await;
+                notify_origin(origin.as_ref(), format!("⏹ {note}")).await;
+            }
+        }
+        info!(session = %goal.session_id, note = %note,
+            "goal wake: parked wake outlived its deadline while down; goal blocked");
     }
 }
 
