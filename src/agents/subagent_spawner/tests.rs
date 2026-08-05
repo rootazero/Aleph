@@ -247,6 +247,7 @@ mod tests {
             // mechanics, and a wired compactor would put a side-channel LLM
             // call behind the scripted provider.
             context_budget_config: None,
+            cheap_summary_provider: None,
         }
     }
 
@@ -271,6 +272,7 @@ mod tests {
         let (budget, compactor, preflight) = super::super::build_context_triple(
             None,
             &llm,
+            None,
             "child-agent",
             &ephemeral_for("child-agent"),
         );
@@ -292,7 +294,7 @@ mod tests {
         };
         let child_id = ephemeral_for("child-agent");
         let (budget, compactor, preflight) =
-            super::super::build_context_triple(Some(&cfg), &llm, "child-agent", &child_id);
+            super::super::build_context_triple(Some(&cfg), &llm, None, "child-agent", &child_id);
         assert!(
             budget.is_some() && compactor.is_some() && preflight.is_some(),
             "a configured child must get budget AND compactor AND preflight — \
@@ -311,6 +313,55 @@ mod tests {
              conversation — an unscoped reset zeroes every other agent's miss streak \
              in a swarm, and an agent-only scope zeroes its own siblings', which in a \
              fan-out are all the same agent id",
+        );
+    }
+
+    /// The child's compactor must summarize on the parent's flash-tier provider.
+    ///
+    /// Asserts the *routing* (`summarizer_name`), not that a builder was called:
+    /// the whole defect class this guards against is a second construction site
+    /// that looks wired and bills the wrong model.
+    #[test]
+    fn a_child_compactor_summarizes_on_the_inherited_cheap_tier() {
+        let llm: Arc<dyn AiProvider> = Arc::new(crate::providers::mock::MockProvider::new("ok"));
+        let cheap: Arc<dyn AiProvider> =
+            Arc::new(crate::providers::mock::MockProvider::new("ok").with_name("flash-tier"));
+        let cfg = crate::context::budget::ContextBudgetConfig {
+            token_budget: 10_000,
+            warning_threshold: 0.70,
+            critical_threshold: 0.85,
+            token_estimate_ratio: 3.5,
+            fresh_tail_count: 6,
+            circuit_breaker_max: 3,
+            diminishing_window: 4,
+            diminishing_threshold: 500,
+            max_splits: 3,
+        };
+        let child_id = ephemeral_for("child-agent");
+
+        let (_, with_cheap, _) = super::super::build_context_triple(
+            Some(&cfg),
+            &llm,
+            Some(&cheap),
+            "child-agent",
+            &child_id,
+        );
+        assert_eq!(
+            with_cheap.as_ref().map(|c| c.summarizer_name()),
+            Some("flash-tier"),
+            "an inherited cheap tier must actually be what summarization is \
+             billed to — otherwise every child compaction silently charges the \
+             operator's main reasoning model, multiplied by the fan-out width",
+        );
+
+        // No cheap tier resolved upstream → fall back to the child's own LLM,
+        // exactly as before this was threaded.
+        let (_, without, _) =
+            super::super::build_context_triple(Some(&cfg), &llm, None, "child-agent", &child_id);
+        assert_eq!(
+            without.as_ref().map(|c| c.summarizer_name()),
+            Some(llm.name()),
+            "no cheap tier → main LLM, unchanged legacy behaviour",
         );
     }
 

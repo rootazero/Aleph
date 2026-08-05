@@ -2,7 +2,7 @@
 
 use crate::domain::skill::{PromptScope, SkillManifest};
 use crate::skill::prompt::{build_skills_prompt_xml, build_skills_prompt_xml_with_budget};
-use crate::thinker::prompt_layer::{AssemblyPath, LayerInput, PromptLayer};
+use crate::thinker::prompt_layer::{AssemblyPath, LayerInput, LayerStability, PromptLayer};
 use crate::thinker::prompt_mode::PromptMode;
 use crate::thinker::prompt_sanitizer::{sanitize_for_prompt, SanitizeLevel};
 
@@ -20,6 +20,9 @@ impl PromptLayer for SkillInstructionsLayer {
     }
     fn paths(&self) -> &'static [AssemblyPath] {
         &[AssemblyPath::Basic, AssemblyPath::Cached]
+    }
+    fn stability(&self) -> LayerStability {
+        LayerStability::Stable
     }
     fn inject(&self, output: &mut String, input: &LayerInput) {
         // (A `config.skill_instructions` pre-rendered-XML override used to

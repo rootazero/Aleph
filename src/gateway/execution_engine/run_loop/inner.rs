@@ -1039,6 +1039,14 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
                 if let Some(cfg) = orchestrator.harness.context_budget_config() {
                     t = t.with_context_budget_config(cfg);
                 }
+                // ...and the flash-tier summarizer that config's compactor is
+                // meant to run on. Inheriting the budget without this gave the
+                // child a compactor that billed the main reasoning model for
+                // every summarization the root agent had already routed to a
+                // cheap sibling — silent, and multiplied by the fan-out width.
+                if let Some(cheap) = orchestrator.harness.cheap_summary_provider() {
+                    t = t.with_cheap_summary_provider(cheap);
+                }
                 // P3 Stage I — hand subagents the shared plugin-registry handle
                 // so a role declaring `mcp_servers:` frontmatter can provision
                 // its per-agent MCP scope (reference validation + referenced-tool

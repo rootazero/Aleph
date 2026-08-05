@@ -307,7 +307,9 @@ pub fn canonical_provider_id(provider: &str) -> Option<&'static str> {
         Some("baidu")
     } else if p.contains("xiaomi") || p.contains("mimo") {
         Some("xiaomi")
-    } else if p.contains("longcat") {
+    } else if p.contains("longcat") || p.contains("meituan") {
+        // Meituan's LongCat line. `meituan` itself must match so the vendor
+        // key is a fixed point (the pricing guard asserts reachability).
         Some("meituan")
     } else if p.contains("meta") || p.contains("llama") {
         // Parity with [`infer_vendor`]'s `llama -> meta` row. Open-weight

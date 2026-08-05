@@ -157,11 +157,53 @@ pub const REDACTED_USER_MESSAGE: &str = "<system-reminder>\n\
 pub fn user_interjection_note(text: &str) -> String {
     format!(
         "<system-reminder>\n\
-         The user sent the following message:\n\
+         {INTERJECTION_LEAD_IN}\n\
          {text}\n\n\
          Please address this message and continue with your tasks.\n\
          </system-reminder>",
     )
+}
+
+/// Opening fence of every harness-authored message in this module.
+pub const SYSTEM_REMINDER_OPEN: &str = "<system-reminder>";
+
+/// Lead-in [`user_interjection_note`] puts above the user's own words. Single
+/// source: the formatter interpolates it, so the predicate below and the copy
+/// can never disagree.
+const INTERJECTION_LEAD_IN: &str = "The user sent the following message:";
+
+/// Whether `text` is a **synthetic** `<system-reminder>` turn: scaffolding this
+/// module authored, which the model reads but the user never wrote and the
+/// session log never stored.
+///
+/// Two consumers, one question, deliberately answered in one place:
+/// - `context::compact::summary_utils::latest_user_task` — the compaction focus
+///   anchor must not mistake a nudge for the user's request;
+/// - `providers::protocols::anthropic::adapter::cache` — a cache breakpoint must
+///   not land on a message that will not exist at that index next turn.
+///
+/// **Not every `<system-reminder>` qualifies.** [`user_interjection_note`] wraps
+/// a *real* mid-loop user message in the same fence so the model recognises it
+/// as genuine (G2 / opencode parity), and that message **is** persisted — it is
+/// a non-synthetic `SessionEvent::UserMessage` replayed verbatim every turn
+/// (`harness/agent/prompt.rs`). Classifying it as scaffolding would be wrong for
+/// both consumers in opposite ways: the focus anchor would discard the user's
+/// most recent instruction (the one thing it most needs), and the cache would
+/// skip a breakpoint whose index is in fact perfectly stable. So it is excluded
+/// by its lead-in line.
+///
+/// The lead-in is matched **at its position** — immediately after the fence —
+/// not merely "contained somewhere". [`orphan_tool_result_note`] interpolates
+/// raw tool output into the same fence, so a tool whose output happened to
+/// include that sentence would otherwise be read as a user interjection and the
+/// focus anchor would take a result blob for the user's request.
+#[must_use]
+pub fn is_synthetic_reminder(text: &str) -> bool {
+    let trimmed = text.trim_start();
+    let Some(after_fence) = trimmed.strip_prefix(SYSTEM_REMINDER_OPEN) else {
+        return false;
+    };
+    !after_fence.trim_start().starts_with(INTERJECTION_LEAD_IN)
 }
 
 /// Copy for an orphaned / duplicate tool result downgraded to plain user text
@@ -262,6 +304,120 @@ mod tests {
         assert_eq!(
             DEFERRED_TOOL_RESULT_REASON,
             "superseded by a new user message that arrived mid-turn; re-issue this call if it is still needed"
+        );
+    }
+
+    // ── synthetic-reminder classification ──────────────────────────────────
+    //
+    // Every `<system-reminder>` const in this file, and the one function that
+    // emits the fence around content the user *did* write. The split between
+    // them is the whole point of `is_synthetic_reminder`.
+
+    /// Every fenced const this module authors on the model's behalf.
+    const SYNTHETIC_FENCED_CONSTS: &[(&str, &str)] = &[
+        ("SOFT_FAILURE_WARNING", SOFT_FAILURE_WARNING),
+        ("MAX_STEPS_HINT", MAX_STEPS_HINT),
+        ("INTERRUPTION_NOTE", INTERRUPTION_NOTE),
+        ("REDACTED_USER_MESSAGE", REDACTED_USER_MESSAGE),
+    ];
+
+    #[test]
+    fn every_harness_authored_reminder_is_classified_synthetic() {
+        for (name, text) in SYNTHETIC_FENCED_CONSTS {
+            assert!(
+                is_synthetic_reminder(text),
+                "{name} is harness-authored scaffolding and must be classified synthetic"
+            );
+        }
+        // Dynamic emitters too — same fence, still nobody's actual request.
+        assert!(is_synthetic_reminder(&orphan_tool_result_note(
+            "call_1", "grep", "{}"
+        )));
+    }
+
+    #[test]
+    fn tool_output_cannot_disguise_itself_as_a_user_interjection() {
+        // `orphan_tool_result_note` interpolates raw tool output into the same
+        // fence. A grep hit over this very file would carry the interjection
+        // lead-in, and a `contains` test would then read the result blob as the
+        // user's own words — handing the compaction focus anchor a tool dump.
+        // The lead-in only counts immediately after the fence, where
+        // `user_interjection_note` puts it.
+        let sneaky = orphan_tool_result_note(
+            "call_9",
+            "grep",
+            "nudges.rs:160: The user sent the following message:",
+        );
+        assert!(
+            is_synthetic_reminder(&sneaky),
+            "tool output quoting the lead-in is still harness-authored scaffolding"
+        );
+    }
+
+    #[test]
+    fn a_wrapped_user_interjection_is_not_synthetic() {
+        // The fence is identical; the content is the user's own words, and the
+        // underlying `SessionEvent::UserMessage` is persisted. Misclassifying it
+        // would make the compaction focus anchor throw away the user's most
+        // recent instruction and make the cache skip a stable breakpoint.
+        let wrapped = user_interjection_note("actually, target the staging cluster");
+        assert!(
+            wrapped.starts_with(SYSTEM_REMINDER_OPEN),
+            "shares the fence"
+        );
+        assert!(
+            !is_synthetic_reminder(&wrapped),
+            "a wrapped real user message is not harness scaffolding"
+        );
+    }
+
+    #[test]
+    fn ordinary_user_text_is_not_synthetic() {
+        assert!(!is_synthetic_reminder("deploy the thing"));
+        // Merely *mentioning* the tag mid-sentence is not a fenced message.
+        assert!(!is_synthetic_reminder(
+            "why does <system-reminder> keep appearing?"
+        ));
+    }
+
+    /// Source-level drift guard: a newly added fenced `pub const` must be
+    /// classified, not silently inherit whatever the predicate happens to do.
+    ///
+    /// This has to read the source. At runtime a const that nobody listed is
+    /// indistinguishable from one that does not exist — which is exactly how the
+    /// bug this predicate fixes survived: `latest_user_task` knew about two
+    /// fences and simply never heard about the third.
+    #[test]
+    fn no_fenced_const_escapes_classification() {
+        let src = include_str!("nudges.rs");
+        let declared: Vec<&str> = src
+            .lines()
+            .filter_map(|line| {
+                let rest = line.trim().strip_prefix("pub const ")?;
+                let name = rest.split(':').next()?.trim();
+                // Only the fenced ones; `SYSTEM_REMINDER_OPEN` declares the fence
+                // itself rather than carrying a message.
+                (rest.contains(SYSTEM_REMINDER_OPEN) && name != "SYSTEM_REMINDER_OPEN")
+                    .then_some(name)
+            })
+            .collect();
+        for name in &declared {
+            assert!(
+                SYNTHETIC_FENCED_CONSTS.iter().any(|(n, _)| n == name),
+                "`{name}` opens a <system-reminder> but is not listed in \
+                 SYNTHETIC_FENCED_CONSTS. Decide what it is: harness scaffolding \
+                 (add it there) or a wrapper around real user content (exclude it \
+                 in `is_synthetic_reminder` and say why)."
+            );
+        }
+        assert_eq!(
+            declared.len(),
+            SYNTHETIC_FENCED_CONSTS.len(),
+            "the scan found {} fenced consts but {} are listed — if a const moved \
+             to a multi-line form the scan stopped seeing it, which would let the \
+             guard pass by not looking",
+            declared.len(),
+            SYNTHETIC_FENCED_CONSTS.len()
         );
     }
 }

@@ -158,7 +158,7 @@ Trait defined in `src/memory/store/raw_memory.rs`; implemented by the SQLite bac
 
 `src/memory/session_compactor/mod.rs` owns the hierarchical session summary pipeline. On every post-turn tick it semantic-chunks compressible messages, generates a d0 (leaf) summary per chunk, then condenses d0→d1 when count ≥ `d1_min_fanout` (default 4) and d1→d2 when count ≥ `d2_min_fanout` (default 3). Each summary is written with `RawMemorySource::SessionCompressed` at path `aleph://session/{session_id}/d{depth}/{seq}`. In addition, `store_raw_chunk` writes the verbatim pre-compression conversation chunk at `aleph://session/{session_id}/raw/{seq}` (also `SessionCompressed`) so `recall_context` can recover the originals after the context window has been replaced.
 
-Relevant config fields on `SessionCompactorConfig`: `d1_min_fanout = 4`, `d2_min_fanout = 3`, `session_fact_retention_hours = 24`, plus `max_summary_depth` (gates the d1→d2 step).
+Relevant config fields on `SessionCompactorConfig`: `d1_min_fanout = 4`, `d2_min_fanout = 3`, plus `max_summary_depth` (gates the d1→d2 step).
 
 ### 6.2 TranscriptIndexer
 
@@ -218,7 +218,7 @@ Rows move through four phases:
 1. **Insert** — writers in §6 call `insert_raw_memory`.
 2. **Queryable** — `CompressionService` batches the row via `get_unprocessed_raw_memories`; path-prefix readers (`recall_context`, `SessionSummarySource`, `SessionCompactor::count_valid_facts_at_depth`) can see it regardless of `is_processed`.
 3. **Consumed** — on successful Note write, `mark_raw_as_processed(ids)` flips `is_processed = 1`. The row drops out of the `idx_raw_unprocessed` partial index but stays readable by path.
-4. **Retained-but-inert** — the row persists. There is **no time-based eviction of `raw_memories`** in the current codebase: no `DELETE FROM raw_memories`, no TTL constant, no scheduled cleanup job. `SessionCompactorConfig::session_fact_retention_hours = 24` governs session-summary retention semantics higher up the stack, not row deletion here. Housekeeping is currently manual/external; a dedicated GC is future work.
+4. **Retained-but-inert** — the row persists. There is **no time-based eviction of `raw_memories`** in the current codebase: no `DELETE FROM raw_memories`, no TTL constant, no scheduled cleanup job. Nor does one exist further up the stack: this paragraph used to cite `SessionCompactorConfig::session_fact_retention_hours = 24` as governing session-summary retention "higher up", but that field was read by nothing anywhere in the workspace and was removed 2026-08-04 — the retention it named never existed at any level. Housekeeping is currently manual/external; a dedicated GC is future work, and would introduce its own knob.
 
 The partial index (`WHERE is_processed = 0`) ensures that even with unbounded historical rows, pending-compression queries stay cheap. Path-prefix queries used by §7.2 and §7.3 rely on the prefix match over `path`; they are bounded by the caller's `limit` (typically 50–500) rather than a dedicated index, which is acceptable because the session-scoped prefix is highly selective.
 

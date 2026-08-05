@@ -368,6 +368,9 @@ mod tests {
         fn paths(&self) -> &'static [AssemblyPath] {
             self.paths
         }
+        fn stability(&self) -> LayerStability {
+            LayerStability::Stable
+        }
         fn inject(&self, output: &mut String, _input: &LayerInput) {
             output.push_str(self.text);
         }

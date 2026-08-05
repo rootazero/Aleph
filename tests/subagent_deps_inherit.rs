@@ -151,6 +151,11 @@ async fn subagent_base_carries_4_p1_fields() {
             diminishing_threshold: 500,
             max_splits: 3,
         }),
+        // Sentinel `None`: this fixture has no cheap tier to inherit, so the
+        // child's compactor summarizes on its own LLM. The inheritance itself is
+        // asserted by routing, not by presence, in
+        // `subagent_spawner::tests::a_child_compactor_summarizes_on_the_inherited_cheap_tier`.
+        cheap_summary_provider: None,
     };
 
     // Structural assertions — the 5 P1 fields are populated as expected.

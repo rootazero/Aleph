@@ -1,6 +1,6 @@
 //! `GuidelinesLayer` — general operational guidelines (priority 1300)
 
-use crate::thinker::prompt_layer::{AssemblyPath, LayerInput, PromptLayer};
+use crate::thinker::prompt_layer::{AssemblyPath, LayerInput, LayerStability, PromptLayer};
 use crate::thinker::prompt_mode::PromptMode;
 
 pub struct GuidelinesLayer;
@@ -17,6 +17,9 @@ impl PromptLayer for GuidelinesLayer {
     }
     fn paths(&self) -> &'static [AssemblyPath] {
         &[AssemblyPath::Basic, AssemblyPath::Cached]
+    }
+    fn stability(&self) -> LayerStability {
+        LayerStability::Stable
     }
     fn inject(&self, output: &mut String, _input: &LayerInput) {
         // Lean rails only. The old rules 1-14 were loop-mechanics / how-to

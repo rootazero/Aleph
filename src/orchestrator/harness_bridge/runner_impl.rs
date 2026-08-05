@@ -71,6 +71,12 @@ impl HarnessRunner for AgentHarnessRunner {
         self.context_budget_config.clone()
     }
 
+    /// Hand the spawner the SAME cheap-tier summarizer this runner routes its
+    /// own compaction to, so a child's compactor is tiered on the same terms.
+    fn cheap_summary_provider(&self) -> Option<Arc<dyn AiProvider>> {
+        self.cheap_provider.clone()
+    }
+
     // rust-doctor-disable-next-line high-cyclomatic-complexity
     async fn run(
         &self,
