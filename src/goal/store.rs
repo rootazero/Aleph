@@ -635,6 +635,44 @@ impl GoalStore {
         }
     }
 
+    /// Park a goal that is still being actively pursued on a deadline wait
+    /// barrier, in one guard — the THIRD sibling of [`Self::block_if_active`]
+    /// and [`Self::pause_if_active`], with the same atomicity and the same
+    /// "never clobber a terminal goal" contract.
+    ///
+    /// The difference is intent, and it is the whole point: `Blocked` means
+    /// the pursuit hit something it cannot get past, `Paused` means a human is
+    /// holding it — and neither is true of a provider rate limit or a network
+    /// outage, which the run-failure path used to render as a permanent
+    /// verdict. Parking leaves the goal `Active` so the existing wake pipeline
+    /// resumes it, and deliberately does NOT touch the welded strategy: the
+    /// plan is still the plan.
+    ///
+    /// Clears the pending-continuation marker (the failed run's marker would
+    /// otherwise gate the park's own wake behind the 60s stale grace), exactly
+    /// as blocking and pausing do. `false` = nothing active to park.
+    pub fn park_if_active(
+        &self,
+        session_id: &str,
+        until_ms: u64,
+        reason: &str,
+        now_ms: u64,
+    ) -> Result<bool> {
+        let conn = self.lock();
+        match Self::get_locked(&conn, session_id)? {
+            Some(live) if live.is_active() => {
+                Self::put_locked(
+                    &conn,
+                    &live
+                        .with_wait_until(until_ms, Some(reason.to_string()), now_ms)
+                        .with_pending_continuation(None),
+                )?;
+                Ok(true)
+            }
+            _ => Ok(false),
+        }
+    }
+
     /// Kill switch: pause every actively-pursued goal across ALL sessions under
     /// ONE lock guard, returning the session keys actually paused. The bulk
     /// counterpart to [`Self::list_all`] and the goal-side twin of
@@ -1893,5 +1931,54 @@ mod tests {
             store.confirm_fire("sess-missing", 7_000, 7_100).unwrap(),
             FireDecision::Superseded
         ));
+    }
+
+    #[test]
+    fn park_if_active_arms_a_timer_barrier_without_leaving_active() {
+        use crate::goal::PursuitMode;
+        let (store, _d) = temp_store();
+        let g = Goal::new("sess-park", "obj", 0, 1_000)
+            .with_pursuit(PursuitMode::Active { max_iterations: 5 })
+            .with_pending_continuation(Some(1_000));
+        store.put(&g).unwrap();
+
+        assert!(store
+            .park_if_active("sess-park", 300_000, "RATE_LIMITED: retry later", 2_000)
+            .unwrap());
+        let live = store.get("sess-park").unwrap().unwrap();
+        assert_eq!(live.status, GoalStatus::Active, "a park is not a verdict");
+        assert_eq!(live.waiting_until_ms, Some(300_000));
+        assert_eq!(
+            live.waiting_reason.as_deref(),
+            Some("RATE_LIMITED: retry later")
+        );
+        assert_eq!(
+            live.pending_continuation_ms, None,
+            "the failed run's marker must not gate the new park's wake"
+        );
+    }
+
+    #[test]
+    fn park_if_active_never_touches_a_terminal_or_paused_goal() {
+        let (store, _d) = temp_store();
+        for status in [
+            GoalStatus::Blocked,
+            GoalStatus::Complete,
+            GoalStatus::Paused,
+        ] {
+            let g = Goal::new("sess-t", "obj", 0, 1_000).with_status(status, 1_000);
+            store.put(&g).unwrap();
+            assert!(
+                !store
+                    .park_if_active("sess-t", 300_000, "why", 2_000)
+                    .unwrap(),
+                "must not park a {status:?} goal"
+            );
+            let live = store.get("sess-t").unwrap().unwrap();
+            assert_eq!(live.status, status);
+            assert!(!live.has_wait_barrier());
+        }
+        // No goal at all is likewise a no-op, never a resurrection.
+        assert!(!store.park_if_active("nope", 300_000, "why", 2_000).unwrap());
     }
 }
