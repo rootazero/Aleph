@@ -380,12 +380,20 @@ impl GoalStore {
                 // the out-of-bounds case, run past the user's limit), so
                 // arbitrate now. `wait_parked` already established Active
                 // status + Active pursuit, so `exhausted_while_active` holds
-                // whenever `should_continue` does not; the out-of-bounds case
-                // is reported with the deadline note for the same reason.
-                let note = if pursuit::fires_out_of_bounds(&goal, wake_ms, now_ms) {
-                    pursuit::deadline_reached_note(&goal)
-                } else {
+                // whenever `should_continue` does not.
+                //
+                // An ALREADY-SPENT budget outranks a PROJECTED out-of-bounds
+                // wake: a goal that is both over its token budget and parked
+                // past its deadline used to report the deadline, inverting the
+                // priority `stop_reason_note` itself establishes (budget >
+                // deadline > cap) and telling the user to raise the wrong dial.
+                // `!should_continue` is the stronger fact — something is spent
+                // NOW — so it is asked first, and `stop_reason_note` then names
+                // which of the three it was.
+                let note = if !pursuit::should_continue(&goal, tokens_now, now_ms) {
                     pursuit::stop_reason_note(&goal, tokens_now, now_ms)
+                } else {
+                    pursuit::deadline_reached_note(&goal)
                 };
                 Self::put_locked(
                     &conn,
@@ -1211,6 +1219,35 @@ mod tests {
         assert_eq!(
             live.continuations_used, 0,
             "arbitration spends no iteration — nothing ran"
+        );
+    }
+
+    #[test]
+    fn an_already_spent_budget_outranks_a_projected_out_of_bounds_wake() {
+        use crate::goal::PursuitMode;
+        let (store, _d) = temp_store();
+        // Both conditions hold at once: the token budget is ALREADY spent, and
+        // the parked wake would ALSO land past the deadline. The arbitration
+        // used to report the deadline, inverting the priority
+        // `stop_reason_note` establishes (budget > deadline > cap) and sending
+        // the user to raise `timeout_minutes` when the budget is what ran out.
+        let g = Goal::new("sess-both", "obj", 0, 1_000)
+            .with_pursuit(PursuitMode::Active { max_iterations: 5 })
+            .with_budget(Some(100))
+            .with_baseline(1_000, 1_000)
+            .with_deadline_ms(Some(30_000))
+            .with_wait_until(200_000, None, 1_000);
+        store.put(&g).unwrap();
+
+        let ContinuationDecision::Exhausted { note } = store
+            .try_claim_continuation("sess-both", Some(9_999), 1_000, false, None)
+            .unwrap()
+        else {
+            panic!("a parked timer with no runway must arbitrate");
+        };
+        assert!(
+            note.contains("token budget"),
+            "the spent budget is the binding stop, not the projected wake; got: {note}"
         );
     }
 
