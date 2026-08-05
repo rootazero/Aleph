@@ -264,9 +264,15 @@ pub fn budget_reached_note(goal: &Goal) -> String {
 
 /// Why an autonomous pursuit parked on a transient provider failure, and how
 /// long until it retries. Serves three readers at once — the goal's
-/// `waiting_reason` (so `get` / `list` / the per-turn summary all explain the
-/// pause), the resume prompt, and the origin-channel notice — so it must read
-/// as a pause rather than a verdict.
+/// `waiting_reason` (which `goal(get)` / `goal(list)` render), the resume
+/// prompt, and the origin-channel notice — so it must read as a pause rather
+/// than a verdict.
+///
+/// NOT the per-turn prompt summary: `render_goal_summary` deliberately does not
+/// read `waiting_reason`. This string carries a countdown, and the summary sits
+/// in the cacheable region — a per-turn-varying reason there would invalidate
+/// the prefix on every turn. The summary states the parked FACT instead, and the
+/// countdown rides `live_deadline_status` past the cache breakpoint.
 ///
 /// `code` is the stable `ReceiptKind::code()` string (`RATE_LIMITED` /
 /// `PROVIDERS_UNREACHABLE`), never the raw provider error chain: that chain is
@@ -299,6 +305,14 @@ pub fn transient_park_note(code: &str, delay_ms: u64) -> String {
 /// the two, only bounds whichever one is selected.
 #[must_use]
 pub fn bound_transient_park_delay_ms(hint: Option<Duration>, fallback_ms: u64, max_ms: u64) -> u64 {
+    // The floor is applied before the ceiling, so a `max_ms` under the floor
+    // would invert them and hand back a delay shorter than the 1s spin guard —
+    // silently, since both bounds "applied". No caller passes such a ceiling and
+    // none should; say so where it is enforced rather than in a comment.
+    debug_assert!(
+        max_ms >= 1_000,
+        "the park ceiling must not sit under the 1s floor"
+    );
     let raw_ms = hint.and_then(|d| u64::try_from(d.as_millis()).ok());
     raw_ms.unwrap_or(fallback_ms).max(1_000).min(max_ms)
 }
