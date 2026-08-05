@@ -48,6 +48,31 @@ pub struct FileOpsArgs {
     /// result says so when the cap is reached; raise it or narrow `pattern`.
     #[serde(default)]
     pub limit: Option<usize>,
+    /// Stats only: which axis the per-file rows are sorted on. Aggregates
+    /// (`summary`) are always full and unaffected. Defaults to `name` (a
+    /// deterministic alpha order; same as the unkeyed form).
+    ///
+    /// `size` / `lines` sort descending (largest first) so the cap retains
+    /// the *biggest* matches — typical "show me the top offenders" intent.
+    /// `mtime` (where the platform exposes it) sorts newest first.
+    #[serde(default)]
+    pub sort_by: Option<StatsSort>,
+}
+
+/// Axis on which `stats` orders its per-file rows.
+#[derive(Debug, Clone, Copy, Deserialize, Serialize, JsonSchema, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum StatsSort {
+    /// Alphabetical by relative path (the default).
+    Name,
+    /// File size, largest first.
+    Size,
+    /// Line count, most lines first. Files whose line count was skipped (too
+    /// large / binary / unreadable) sort last on this axis.
+    Lines,
+    /// Modification time, newest first. Falls back to `name` on platforms
+    /// where `mtime` is not available.
+    Mtime,
 }
 
 const fn default_true() -> bool {
@@ -129,6 +154,11 @@ pub struct FileInfo {
     /// Newline-terminated line count. Only populated by `stats`.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub lines: Option<u64>,
+    /// Last-modified time (Unix seconds). Only populated by `stats` when the
+    /// caller asked for `sort_by=mtime` (the syscall is skipped otherwise to
+    /// keep the default path cheap).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub mtime: Option<std::time::SystemTime>,
 }
 
 /// Aggregate counts produced by the `stats` operation.

@@ -398,6 +398,17 @@ Singleton 由 OS 级 `flock`（`~/.aleph/data/aleph.lock`）强制；CLI 写子�
 
 > 信任模型见上文「信任模型 = 网络边界」与 [SECURITY.md#auth-ux](docs/reference/SECURITY.md#auth-ux)。
 
+### 内置文件与 Shell 工具 (Builtin File & Shell Tools)
+
+§3.4/§3.7 的全部现状与打磨记录在 [FEATURE_LOCATOR.md](docs/reference/FEATURE_LOCATOR.md#34-内置文件工具-builtin-file-tools)。**关键事实**：
+
+- **`file_edit` 既支持 `old_string`+`new_string` 单 op（向后兼容），也支持 `edits: [{old_string, new_string}, ...]` 多原子 op**——多 op 全部匹配**原始文件**（防后 op 命中前 op 半写结果），重叠/非唯一 op 立即拒，错误携带行号 / byte 区间可定位。
+- **`file_write` 是 no-op 时（byte-equal 改写）跳过 atomic rename、保留 mtime**——`FileWriteOutput.unchanged: bool` 透出。增量 build 不被"同字节重发"误触发重编译。
+- **`file_ops stats` 的 `sort_by: name|size|lines|mtime`**——size/lines 倒序，cap 保留"最大几个"；`mtime` 只在该模式下 syscall。
+- **长任务（>3 min build/install）必须 `background: true`**——`WAIT_MAX_TIMEOUT_SECS=170` 是 180s tool budget 的硬约束，**不要**尝试扩展（违反 R10）。
+
+> 这三个新行为都在 [FEATURE_LOCATOR §3.4](docs/reference/FEATURE_LOCATOR.md#34-内置文件工具-builtin-file-tools) 的「2026-08-05 文件工具深度重构轮」段有详细决策与回归覆盖清单，改这三处前先看一遍。
+
 ---
 
 ## 📚 文档索引

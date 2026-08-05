@@ -182,6 +182,7 @@ impl FileOpsTool {
                     &self.denied_paths,
                     output_dir_ref,
                     args.limit,
+                    args.sort_by,
                 )
                 .await
             }
