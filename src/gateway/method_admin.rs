@@ -183,8 +183,13 @@ const ADMIN_PREFIXES: &[&str] = &[
     // to make with a member Panel in hand, not a P0 guess. ---
     "tools.",
     // --- Exec-tier approval resolution: a member resolving these is a
-    // privilege escalation over the approval gate itself (event_scope.rs
-    // already restricts approval.* events to admin). No carve-outs — ---
+    // privilege escalation over the approval gate itself. The delivery-side
+    // half is `event_scope.rs`: `approval.*` / `surface.approval` are guarded
+    // prefixes there, and a member no longer holds the `"*"` wildcard that
+    // short-circuits every rule (`event_scope::scope_for_role` — the wildcard
+    // is operator-only). Note the two halves are independent: that guard filters
+    // *delivery* of the cards, this list refuses the *resolution* RPCs, and
+    // neither implies the other. No carve-outs — ---
     "exec.", // exec.approval.resolve, exec.approvals.pending.
 ];
 

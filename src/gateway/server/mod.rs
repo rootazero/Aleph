@@ -43,10 +43,18 @@ pub struct ConnectionState {
     pub subscriptions: Vec<String>,
     /// Connection metadata
     pub metadata: HashMap<String, String>,
-    /// Event-scope permissions. LAN-trust treats every connection as the
-    /// implicit operator, so the connect handshake stamps the `"*"`
-    /// wildcard here; `EventScopeGuard` then delivers guarded topics
-    /// (approval banners, config.changed) to every connected client.
+    /// Event-scope permissions, stamped at the `connect` handshake from the
+    /// **resolved role** via
+    /// [`event_scope::scope_for_role`](crate::gateway::event_scope::scope_for_role)
+    /// and re-stamped in place by `handlers::users::restamp_live_connections`
+    /// when that role changes. Operator ⇒ the `"*"` wildcard; member and walled
+    /// ⇒ empty.
+    ///
+    /// Read by exactly one consumer, [`EventScopeGuard::can_receive`] on the
+    /// per-event delivery path, and that guard is *default-allow*: an empty
+    /// scope still receives every unguarded topic (chat, session, `agent.run.*`)
+    /// and only loses the admin-guarded prefixes — `approval.*`,
+    /// `surface.approval`, `config.changed`, `pairing.*`, `guest.*`.
     pub permissions: Vec<String>,
     /// Resolved client IP (the trusted-proxy-forwarded client behind a
     /// reverse proxy, else the raw socket peer). The per-IP connection cap

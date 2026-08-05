@@ -313,9 +313,9 @@ pub async fn handle_update(
     }
 }
 
-/// Re-stamp `caller_role` on every live connection belonging to `user_id`'s
-/// devices, so a promotion/demotion takes effect on sessions that are already
-/// open.
+/// Re-stamp `caller_role` **and the event scope** on every live connection
+/// belonging to `user_id`'s devices, so a promotion/demotion takes effect on
+/// sessions that are already open.
 ///
 /// Without this, a role change is latched-at-`connect` only: the wire role
 /// lives in `ConnectionState.caller_role`, written once at the handshake and
@@ -335,6 +335,14 @@ pub async fn handle_update(
 /// `"guest"` was put there deliberately (its device was revoked, or its user
 /// deactivated); only a fresh `connect` may lift that. Re-stamping it would
 /// resurrect a revoked device's authority through the back door.
+///
+/// The role and the event scope move together, both derived from
+/// [`scope_for_role`](crate::gateway::event_scope::scope_for_role) — the same
+/// authority the `connect` handshake stamps from. Restamping only the role
+/// would leave a demoted admin holding the `"*"` wildcard on his open tab, i.e.
+/// still receiving exec approval cards and their command text, until he
+/// happened to reconnect — the same indefinite window this function exists to
+/// close on the role axis.
 async fn restamp_live_connections(
     store: &Arc<SecurityStore>,
     kick: &UserDeactivationKick,
@@ -362,8 +370,7 @@ async fn restamp_live_connections(
         UserRole::Admin => "operator",
         UserRole::Member => "member",
     };
-    let bound: std::collections::HashSet<&str> =
-        device_ids.iter().map(String::as_str).collect();
+    let bound: std::collections::HashSet<&str> = device_ids.iter().map(String::as_str).collect();
 
     let mut restamped = 0usize;
     {
@@ -377,6 +384,7 @@ async fn restamp_live_connections(
             }
             if state.caller_role != wanted {
                 state.caller_role = wanted.to_string();
+                state.permissions = crate::gateway::event_scope::scope_for_role(wanted);
                 restamped += 1;
             }
         }
@@ -645,6 +653,10 @@ mod tests {
             state.caller_role = role.to_string();
             state.caller_user = Some(user_id.to_string());
             state.device_id = Some(device_id.to_string());
+            // Seed the scope the `connect` handshake would have stamped for
+            // this role, so the re-stamp assertions below measure a real
+            // transition rather than an already-empty vec.
+            state.permissions = crate::gateway::event_scope::scope_for_role(role);
             conns.insert(conn_id.to_string(), state);
         }
         kick
@@ -668,7 +680,10 @@ mod tests {
             let conns = kick.connections.clone();
 
             let resp = handle_update(
-                rpc_request("users.update", json!({"user_id": "u-boss", "role": "member"})),
+                rpc_request(
+                    "users.update",
+                    json!({"user_id": "u-boss", "role": "member"}),
+                ),
                 store,
                 kick,
             )
@@ -676,10 +691,30 @@ mod tests {
             assert!(resp.is_success(), "{resp:?}");
 
             let c = conns.read().await;
+            let s = c.get("conn-boss").unwrap();
             assert_eq!(
-                c.get("conn-boss").unwrap().caller_role,
-                "member",
+                s.caller_role, "member",
                 "a demoted admin's live session must lose operator authority immediately"
+            );
+            // The event scope must narrow in the same breath, or the demoted
+            // admin keeps receiving exec approval cards (and the command text
+            // inside them) on the tab he already has open.
+            assert!(
+                s.permissions.is_empty(),
+                "a demoted admin's live session must lose the `*` event scope"
+            );
+            let guard = crate::gateway::event_scope::EventScopeGuard::default_rules();
+            assert!(
+                !guard.can_receive("approval.requested", &s.permissions),
+                "a demoted admin must no longer be delivered approval cards"
+            );
+            assert!(
+                !guard.can_receive("config.changed", &s.permissions),
+                "a demoted admin must no longer be delivered config.changed"
+            );
+            assert!(
+                guard.can_receive("agent.run.started", &s.permissions),
+                "narrowing the scope must not black out ordinary run events"
             );
         }
 
@@ -694,14 +729,28 @@ mod tests {
             let conns = kick.connections.clone();
 
             handle_update(
-                rpc_request("users.update", json!({"user_id": "u-alice", "role": "admin"})),
+                rpc_request(
+                    "users.update",
+                    json!({"user_id": "u-alice", "role": "admin"}),
+                ),
                 store,
                 kick,
             )
             .await;
 
             let c = conns.read().await;
-            assert_eq!(c.get("conn-alice").unwrap().caller_role, "operator");
+            let s = c.get("conn-alice").unwrap();
+            assert_eq!(s.caller_role, "operator");
+            assert_eq!(
+                s.permissions,
+                vec!["*".to_string()],
+                "a promoted member's live session must widen to the operator scope"
+            );
+            let guard = crate::gateway::event_scope::EventScopeGuard::default_rules();
+            assert!(
+                guard.can_receive("approval.requested", &s.permissions),
+                "a promoted member must now be delivered approval cards"
+            );
         }
     }
 
@@ -720,7 +769,10 @@ mod tests {
         let conns = kick.connections.clone();
 
         handle_update(
-            rpc_request("users.update", json!({"user_id": "u-alice", "role": "admin"})),
+            rpc_request(
+                "users.update",
+                json!({"user_id": "u-alice", "role": "admin"}),
+            ),
             store,
             kick,
         )
@@ -750,7 +802,10 @@ mod tests {
         let conns = kick.connections.clone();
 
         handle_update(
-            rpc_request("users.update", json!({"user_id": "u-alice", "role": "admin"})),
+            rpc_request(
+                "users.update",
+                json!({"user_id": "u-alice", "role": "admin"}),
+            ),
             store,
             kick,
         )
