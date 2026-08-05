@@ -255,6 +255,25 @@ pub fn budget_reached_note(goal: &Goal) -> String {
     }
 }
 
+/// Why an autonomous pursuit parked on a transient provider failure, and how
+/// long until it retries. Serves three readers at once — the goal's
+/// `waiting_reason` (so `get` / `list` / the per-turn summary all explain the
+/// pause), the resume prompt, and the origin-channel notice — so it must read
+/// as a pause rather than a verdict.
+///
+/// `code` is the stable `ReceiptKind::code()` string (`RATE_LIMITED` /
+/// `PROVIDERS_UNREACHABLE`), never the raw provider error chain: that chain is
+/// already classified by the time it reaches here, and echoing it would leak
+/// internal detail into a persisted, prompt-injected field.
+#[must_use]
+pub fn transient_park_note(code: &str, delay_ms: u64) -> String {
+    format!(
+        "Autonomous pursuit paused on a transient provider failure ({code}); \
+         retrying in ~{}.",
+        fmt_duration_ms(delay_ms)
+    )
+}
+
 /// Pick the note that explains WHY autonomous pursuit stopped, from the three
 /// structural stops `should_continue` enforces (token budget / wall-clock
 /// deadline / iteration cap). Single source for the continuation hook, which
@@ -751,6 +770,19 @@ mod tests {
         // No budget set → cannot be the binding stop; reuse the cap note.
         let g = active_goal(7);
         assert_eq!(budget_reached_note(&g), cap_reached_note(&g));
+    }
+
+    #[test]
+    fn transient_park_note_names_the_cause_and_the_retry_window() {
+        let note = transient_park_note("RATE_LIMITED", 300_000);
+        assert!(note.contains("RATE_LIMITED"), "got: {note}");
+        assert!(
+            note.contains("5m"),
+            "the retry window must be legible: {note}"
+        );
+        // The note is both the model-facing `waiting_reason` and the user-facing
+        // push, so it must read as a pause, never as a halt.
+        assert!(!note.to_lowercase().contains("halt"), "got: {note}");
     }
 
     #[test]

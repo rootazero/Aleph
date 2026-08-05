@@ -428,42 +428,91 @@ pub(super) fn clear_goal_welded_strategy(session: &str) {
     }
 }
 
-/// A continuation run failed (non-cancellation, non-busy): transition the goal to
-/// `Blocked` with the error and notify the origin channel. Without this a
-/// transient failure leaves the goal a stuck `Active` with no in-flight run —
-/// a silent stall — and `Blocked` goals are invisible in the prompt, so the
-/// channel notice is the user's only signal that unattended pursuit halted.
+/// Default retry window when a transient failure carries no `Retry-After`.
+const TRANSIENT_PARK_FALLBACK_MS: u64 = 300_000;
+
+/// A continuation run failed (non-cancellation, non-busy). Route it by what
+/// KIND of failure it was — the classification is not ours to invent:
+/// [`ExecutionError::receipt_kind`] is already the single source three user
+/// surfaces read, and its own doc records that a rate-limit or network
+/// signature at this layer means every provider and model in the chain was
+/// tried, so the failure is genuinely transient.
+///
+/// - Transient (`RateLimited` / `Unreachable`) → PARK on the existing wait
+///   barrier and let the wake pipeline resume it. Blocking here used to be a
+///   verdict on a 429: it made the goal invisible in the prompt, deleted the
+///   welded plan, and pushed "pursuit halted" for something the codebase's own
+///   classifier labels "retry is worthwhile, soon". The retry is bounded
+///   without any new state — the failed run already spent an iteration at
+///   claim time and the wake spends another, so the iteration cap caps the
+///   recovery, and the wall-clock deadline (now enforced at the wake's
+///   execution instant) caps it again.
+/// - Everything else → `Blocked` with the error and an origin notice, exactly
+///   as before. Without it a transient failure leaves the goal a stuck
+///   `Active` with no in-flight run — a silent stall — and `Blocked` goals are
+///   invisible in the prompt, so the channel notice is the user's only signal.
 pub(super) async fn block_goal_on_failure(
     session: &str,
     error: &ExecutionError,
     origin: Option<&OriginRoute>,
 ) {
-    let reason: String = format!("{error}").chars().take(300).collect();
-    if let Some(store) = crate::goal::global() {
-        let note = format!(
-            "Autonomous pursuit was halted by an error and blocked for your \
-             guidance: {reason}. Review progress, then clear or re-set the \
-             goal to continue."
-        );
-        // Atomic: only blocks a goal still being pursued — never clobbers one the
-        // failed run had already marked complete/blocked, nor one the user
-        // cleared while the failure landed.
-        match store.block_if_active(session, &note, now_ms()) {
+    let Some(store) = crate::goal::global() else {
+        return;
+    };
+    let raw = format!("{error}");
+    let kind = error.receipt_kind();
+    let now = now_ms();
+
+    if matches!(
+        kind,
+        crate::gateway::i18n::ReceiptKind::RateLimited
+            | crate::gateway::i18n::ReceiptKind::Unreachable
+    ) {
+        let delay_ms = crate::providers::llm_retry::extract_retry_after_str(&raw)
+            .map_or(TRANSIENT_PARK_FALLBACK_MS, |d| {
+                u64::try_from(d.as_millis()).unwrap_or(TRANSIENT_PARK_FALLBACK_MS)
+            })
+            .max(1_000);
+        let note = crate::goal::pursuit::transient_park_note(kind.code(), delay_ms);
+        match store.park_if_active(session, now.saturating_add(delay_ms), &note, now) {
             Ok(true) => {
-                clear_goal_welded_strategy(session);
-                // Notify ONLY when a goal was actually blocked: when the failed
-                // run had already terminated its own goal (or the user cleared
-                // it), a "pursuit halted" push would be a false alarm.
-                notify_origin(
-                    origin,
-                    format!("⚠️ Autonomous pursuit of your standing goal halted: {reason}"),
-                )
-                .await;
+                // Deliberately NOT clearing the welded strategy: a provider
+                // outage did not invalidate the plan.
+                info!(session = %session, code = kind.code(), delay_ms,
+                    "goal pursuit: transient provider failure; parked for retry");
+                notify_origin(origin, format!("⏸ {note}")).await;
             }
-            Ok(false) => {} // nothing left to block — stay silent.
+            Ok(false) => {} // nothing active to park — stay silent.
             Err(e) => warn!(error = %e, session = %session,
-                "goal pursuit: failed to persist failure block"),
+                "goal pursuit: failed to persist transient park"),
         }
+        return;
+    }
+
+    let reason: String = raw.chars().take(300).collect();
+    let note = format!(
+        "Autonomous pursuit was halted by an error and blocked for your \
+         guidance: {reason}. Review progress, then clear or re-set the \
+         goal to continue."
+    );
+    // Atomic: only blocks a goal still being pursued — never clobbers one the
+    // failed run had already marked complete/blocked, nor one the user
+    // cleared while the failure landed.
+    match store.block_if_active(session, &note, now) {
+        Ok(true) => {
+            clear_goal_welded_strategy(session);
+            // Notify ONLY when a goal was actually blocked: when the failed
+            // run had already terminated its own goal (or the user cleared
+            // it), a "pursuit halted" push would be a false alarm.
+            notify_origin(
+                origin,
+                format!("⚠️ Autonomous pursuit of your standing goal halted: {reason}"),
+            )
+            .await;
+        }
+        Ok(false) => {} // nothing left to block — stay silent.
+        Err(e) => warn!(error = %e, session = %session,
+            "goal pursuit: failed to persist failure block"),
     }
 }
 
