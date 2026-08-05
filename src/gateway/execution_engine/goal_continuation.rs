@@ -69,6 +69,26 @@ pub(super) async fn origin_of(
         .map(|(ch, conv)| (reg, ch, conv))
 }
 
+/// [`origin_of`]'s sibling for the one place that must resolve an origin
+/// WITHOUT a live agent: `spawn_continuation_run`'s agent-miss race, where the
+/// agent was deleted during the delay and `registry.get` comes back empty. The
+/// session's origin metadata lives in the session store, not the agent, so a
+/// bare store handle is enough — `AgentInstance::origin_route` only ever reads
+/// `self.session_store` anyway, and `session_manager` here is a clone of that
+/// SAME shared store (both sourced from `start`'s one `session_store`, see
+/// `AgentInstance::new`). Delegates to `origin_route_from_store` so this is
+/// not a second, driftable copy of the lookup.
+pub(super) async fn origin_of_via_store(
+    session_manager: Option<&Arc<dyn crate::gateway::session_store::SessionStore>>,
+    session_key: &SessionKey,
+) -> Option<OriginRoute> {
+    let reg = crate::gateway::event_emitter::origin_fanout::channel_registry()?;
+    let sm = session_manager?;
+    crate::gateway::agent_instance::origin_route_from_store(sm, session_key)
+        .await
+        .map(|(ch, conv)| (reg, ch, conv))
+}
+
 /// Post-run continuation hook for the session's standing goal. Fires after every
 /// completed run (user turns included); a session with no goal, a passive goal or
 /// a terminal one costs exactly one indexed `SELECT`.
@@ -178,6 +198,7 @@ pub(super) async fn post_run(
                 policy_meta.clone(),
                 workspace.map(Path::to_path_buf),
                 deps.event_bus.clone(),
+                session_manager.clone(),
                 Some(delay_ms),
                 ContinuationKind::Goal { wake_ms },
             );
@@ -204,6 +225,7 @@ pub(super) async fn post_run(
             // the raw live total here is safe.
             arbitrate_gate(
                 deps,
+                session_manager,
                 session_key,
                 &session,
                 agent,
@@ -268,6 +290,7 @@ fn gate_veto(result: &crate::verification::stop_hooks::StopHookAggregateResult) 
 #[allow(clippy::too_many_arguments)]
 async fn arbitrate_gate(
     deps: &ContinuationDeps,
+    session_manager: &SessionManager,
     session_key: &SessionKey,
     session: &str,
     agent: &Arc<AgentInstance>,
@@ -374,6 +397,7 @@ async fn arbitrate_gate(
                 policy_meta.clone(),
                 workspace.map(Path::to_path_buf),
                 deps.event_bus.clone(),
+                session_manager.clone(),
                 Some(0),
                 ContinuationKind::Goal { wake_ms },
             );

@@ -1777,6 +1777,7 @@ async fn goal_continuation_inherits_the_originating_runs_project_root() {
         Some(project.clone()),
         None,
         None,
+        None,
         super::execute::ContinuationKind::Goal { wake_ms },
     );
 

@@ -842,6 +842,7 @@ where
                                         policy_meta.clone(),
                                         request.workspace_override.clone(),
                                         cont_deps.event_bus.clone(),
+                                        self.session_manager.clone(),
                                         Some(delay_ms),
                                         ContinuationKind::Loop { wake_ms },
                                     );
@@ -1082,6 +1083,14 @@ pub(super) fn spawn_continuation_run(
     policy_meta: std::collections::HashMap<String, String>,
     workspace_override: Option<std::path::PathBuf>,
     event_bus: Option<Arc<crate::gateway::event_bus::GatewayEventBus>>,
+    // A clone of the engine's shared session-store handle — the SAME instance
+    // every `AgentInstance::session_store` clones from (see `start`'s single
+    // `session_store` variable). Threaded through so the agent-miss branch
+    // below can resolve an origin channel WITHOUT a live agent, for the one
+    // ending (Goal `OutOfBounds`) that must notify but has nothing else to
+    // notify with once the agent is gone. `ContinuationKind::Loop` ignores it
+    // — it has no analogous origin-resolution need on this path.
+    session_manager: Option<Arc<dyn crate::gateway::session_store::SessionStore>>,
     delay_ms: Option<u64>,
     kind: ContinuationKind,
 ) {
@@ -1114,9 +1123,11 @@ pub(super) fn spawn_continuation_run(
         // stale LLM turn (the ghost run).
         //
         // `goal_out_of_bounds_note` defers the OutOfBounds notice past the
-        // agent lookup below: resolving the origin channel needs `cont_agent`,
-        // which does not exist yet at this point, and duplicating that lookup
-        // here would diverge from the single agent-miss handling underneath.
+        // agent lookup below: the common-path origin resolution goes through
+        // `cont_agent`, which does not exist yet at this point, and
+        // duplicating that lookup here would diverge from the single
+        // agent-miss handling underneath (which has its own store-based
+        // fallback for exactly the case where `cont_agent` never shows up).
         let mut goal_out_of_bounds_note: Option<String> = None;
         match kind {
             ContinuationKind::Loop { wake_ms } => {
@@ -1156,22 +1167,37 @@ pub(super) fn spawn_continuation_run(
             // can ever happen on this session again — so nothing re-claims,
             // `goal(action='list')` keeps showing a live pursuit from every
             // other session (dishonest), and the welded strategy row leaks.
-            // Terminate honestly per kind instead. No origin channel can be
-            // resolved without the agent, so the stored stop reason / blocked
-            // note is the surviving signal (R5 as far as it can reach).
+            // Terminate honestly per kind instead. The stored stop reason /
+            // blocked note is the surviving signal (R5) either way.
             //
             // Compound race: the wake also landed out of bounds. `confirm_fire`
             // already persisted the deadline note on the (now Blocked) goal, but
             // that note would otherwise vanish from THIS run entirely — the
             // generic warn below only names "agent no longer exists", and the
             // Goal-kind block below is a no-op once the goal is already Blocked
-            // (`block_if_active` requires Active). Origin resolution needs
-            // `cont_agent`, which does not exist in this branch either way, so
-            // a log line is the floor here, not a push.
+            // (`block_if_active` requires Active). Origin resolution normally
+            // goes through `cont_agent`, which does not exist in this branch —
+            // but the origin lives in the session STORE, not the agent, and
+            // `session_manager` is a clone of that same shared store, so
+            // `origin_of_via_store` still resolves and pushes it. Only when
+            // that handle or the session's origin metadata itself is
+            // unavailable does this fall back to a log line.
             if let Some(note) = &goal_out_of_bounds_note {
-                warn!(session = %session_key_str, note = %note,
-                    "goal pursuit: wake landed past the wall-clock bound; goal blocked \
-                     (agent also gone — no origin channel reachable to notify)");
+                let origin = super::goal_continuation::origin_of_via_store(
+                    session_manager.as_ref(),
+                    &session_key,
+                )
+                .await;
+                if origin.is_some() {
+                    notify_origin(origin.as_ref(), format!("⏹ {note}")).await;
+                    info!(session = %session_key_str, note = %note,
+                        "goal pursuit: wake landed past the wall-clock bound; goal blocked \
+                         (agent also gone — notified via the session-store origin)");
+                } else {
+                    warn!(session = %session_key_str, note = %note,
+                        "goal pursuit: wake landed past the wall-clock bound; goal blocked \
+                         (agent also gone — no origin channel reachable to notify)");
+                }
             }
             warn!(
                 agent_id = %cont_agent_id,
@@ -1331,6 +1357,7 @@ pub(super) fn spawn_continuation_run(
                         retry_policy_meta.clone(),
                         retry_workspace.clone(),
                         retry_bus.clone(),
+                        session_manager.clone(),
                         Some(delay_ms),
                         next_kind,
                     );

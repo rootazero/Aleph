@@ -348,6 +348,12 @@ impl GoalWakeService {
         // (the post-run hook writes it into the goal row); `None` falls back
         // to the agent workspace exactly as before.
         let workspace = goal.workspace.as_ref().map(std::path::PathBuf::from);
+        // `agent` above is still live right now, but the closure sleeps
+        // `delay_ms` before firing — the same agent-deletion race
+        // `spawn_continuation_run` guards against elsewhere. Hand it the
+        // store handle (not the agent) so an out-of-bounds wake that lands
+        // after the agent is gone can still resolve an origin to notify.
+        let session_manager = Some(agent.session_store());
         spawn_continuation_run(
             self.deps.registry.clone(),
             self.deps.adapter.clone(),
@@ -357,6 +363,7 @@ impl GoalWakeService {
             policy_meta,
             workspace,
             self.deps.event_bus.clone(),
+            session_manager,
             Some(delay_ms),
             ContinuationKind::Goal { wake_ms },
         );
