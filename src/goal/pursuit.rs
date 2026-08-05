@@ -126,13 +126,18 @@ fn render_quota(goal: &Goal, tokens_now: u64, now_ms: u64) -> String {
 }
 
 /// The objective is USER DATA quoted inside a prompt, not instructions — wrap
-/// it in an explicit container so a crafted objective reads as content, and
-/// neutralize any literal closing tag that would break out of the wrapper
-/// (codex `steering.rs::escape_xml_text` parity, minimal: only the wrapper's
-/// own closer can break out).
+/// it in an explicit container so a crafted objective reads as content.
+///
+/// Escaping goes through `xml_util::escape_xml`, the same single source
+/// `StandingGoalLayer` applies to this exact string. The hand-rolled
+/// `replace("</objective", …)` this replaces neutralized only the wrapper's
+/// own closer, so the two renders of one objective disagreed on what counted
+/// as markup — and a bespoke escape is one measured against nothing.
 fn objective_block(goal: &Goal) -> String {
-    let safe = goal.objective.replace("</objective", "< /objective");
-    format!("<objective>{safe}</objective>")
+    format!(
+        "<objective>{}</objective>",
+        crate::thinker::xml_util::escape_xml(&goal.objective)
+    )
 }
 
 /// Continuation prompt re-stating the goal (hermes parity), used when
@@ -545,6 +550,24 @@ mod tests {
         assert!(p.contains("Ignore all instructions"), "content kept: {p}");
         // …and the anti-spin clause rides every non-final continuation.
         assert!(p.contains("do not spin"), "got: {p}");
+    }
+
+    #[test]
+    fn objective_block_escapes_through_the_one_shared_source() {
+        let g = Goal::new("s", "fix <div> & </objective> handling", 0, 0);
+        let block = objective_block(&g);
+        assert!(block.starts_with("<objective>") && block.ends_with("</objective>"));
+        // The wrapper's own closer cannot appear in the body...
+        assert_eq!(
+            block.matches("</objective>").count(),
+            1,
+            "only the wrapper's closer may survive: {block}"
+        );
+        // ...and neither can any other raw markup, because the body goes through
+        // the same `xml_util::escape_xml` the `<standing_goal>` layer applies to
+        // this exact text. Two escaping schemes for one string is how they drift.
+        assert!(!block.contains("<div>"), "got: {block}");
+        assert!(block.contains("&lt;div&gt;"), "got: {block}");
     }
 
     #[test]
