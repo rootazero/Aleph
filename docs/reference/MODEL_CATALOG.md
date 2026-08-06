@@ -379,6 +379,16 @@ pi 侧独有但**本轮明确不收**的：`compat` 能力矩阵（30+ 字段的
 
 RouteLLM 可提炼的三条资产——score→threshold 决策契约、"阈值=目标升级比例"的分位数校准、阈值扫描 cost-quality 曲线评估——属于**未来若做难度信号路由**时的参考，本轮不落地（Aleph 的 N 元游走梯已是其强弱二元对的超集）。
 
+**round-5 补记（2026-08-06，C 层运行时路由视角复核同三个项目，详见 FEATURE_LOCATOR §3.6 round-5）**：上表裁完「差距在参考项目侧」之后，本轮回身修自己——**8 个内部缺陷 + 3 个增强**，三个增强各对应表里的一行：
+
+| 增强 | 对位的参考项目事实 | Aleph 落地 |
+|------|------------------|-----------|
+| 滑动窗口限流计数 | LiteLLM/Bifrost 用固定分钟桶，边界清零是它们已知的坑——Aleph 在 round-2 立 `rate_limits` 时把**同一个坑**也继承了（`over_limit` 边界 99%→0% 抖动） | `load_stats.rs::RateWindow` 双桶加权：当前窗口 + 上一窗口 × 剩余时间比例，占用率逐秒线性衰减不跳零 |
+| 限流文本词表 | Bifrost `IsRateLimitErrorMessage` 的 22 个模式——限流不一定以干净 429 到达 | `llm_retry.rs::RATE_LIMIT_TEXT_PATTERNS` 补 12 个真空缺模式（`throttled`/`tpm exceeded`/`concurrent requests limit` 等），**拒 6 个**（`requests per`/`limit exceeded`/`usage limit`/`rate increased` 等误伤面，理由写在常量 doc）；`classify` 与 `classify_exhausted` 的词表从此同源（顺带根治了两臂漂移的 F1） |
+| 后台健康探测 | 参考项目普遍带后台探测循环（LiteLLM `background_health_checks`、Bifrost 健康检查）——**Aleph 缺这一块**：熔断只能等真实流量 half-open 或手动 `providers.test` | `gateway/health_prober.rs`：`[route] health_probe_interval_secs`（**默认关**，探测花真实请求），只探 circuit-open 的 provider，绿色探测只清断路器、不碰限流 cooldown |
+
+本轮新裁决（追加进 §9 的同款判据）：**hedging（并行对冲请求）不移植**——并行对冲是拿双倍请求钱买尾延迟，多租户网关的流量形态才值这个价；Aleph 的 failover walk 是顺序链，断路器 + 双层 cooldown + EWMA 已覆盖慢/死端点，个人 runtime 无此需求。**key 池维持 round-4 裁决**（多租户税）。**metrics 导出（Prometheus/OTel exporter）不移植**——可观测性的答案已经有 `route_status` 快照（含 `next_order` 与 `config_problems`）+ doctor，独立导出器是新依赖加新常驻面（R3），真出现外接监控需求时单独立项。**run 粒度 witness 键（E3①）不做**——`RequestPayload.metadata` 只有 `session_id` 没有 run_id，跨 harness↔gateway 穿一个 id 的代价对 best-effort 诊断不成比例；溢出全清抹在飞 run 的那一半已修（LRU 淘汰 + 写入刷新年龄，`route_witness::BoundedWitnesses`）。
+
 ---
 
 ## 9. 刻意不做清单

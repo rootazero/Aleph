@@ -1605,6 +1605,16 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
         }
     }
 
+    // Background health prober for circuit-open providers (LiteLLM/Bifrost
+    // parity). The loop self-gates on `[route] health_probe_interval_secs`
+    // (0/absent = off, the default — probing spends real requests), read fresh
+    // from the live route handle every tick so `route_config.update` hot-tunes
+    // it. Spawned unconditionally: with the knob off it idles probe-free.
+    alephcore::gateway::health_prober::spawn_background(
+        app_config_for_oauth.clone(),
+        oauth_vault.clone(),
+    );
+
     if let Some(ref wm) = workspace_manager {
         register_workspace_handlers(
             &mut server,

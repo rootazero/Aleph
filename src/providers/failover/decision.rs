@@ -4,7 +4,8 @@ use std::time::Duration;
 
 use crate::error::{AlephError, ErrorClass};
 use crate::providers::llm_retry::{
-    classify, classify_exhausted, extract_retry_after_str, is_transient_overload, RetryVerdict,
+    classify, classify_exhausted, extract_retry_after_str, has_status_code, is_transient_overload,
+    RetryVerdict,
 };
 
 use super::{DEFAULT_TRANSIENT_DELAY, OVERLOAD_RETRY_BUDGET};
@@ -134,7 +135,12 @@ pub(crate) fn decide(err: &AlephError, attempt: u32, max_retries: u32) -> Decisi
                 // upstream and never reach here): sideline this model and try a
                 // sibling before advancing providers. The overload path above
                 // exhausts its deeper in-place budget first, then lands here.
-                Decision::RateLimited(server_delay)
+                // The cooldown hint prefers the typed `suggestion` field; when
+                // the error carries none, fall back to the `Retry-After` the
+                // message body itself states — `classify_rate_limit` already
+                // parsed the same text into the reason, so discarding it here
+                // replaced a server-guided wait with the blind default.
+                Decision::RateLimited(server_delay.or_else(|| extract_retry_after_str(&msg)))
             } else {
                 next_provider
             }
@@ -143,7 +149,11 @@ pub(crate) fn decide(err: &AlephError, attempt: u32, max_retries: u32) -> Decisi
         RetryVerdict::Retry { delay } if can_retry => Decision::RetrySame(delay),
         RetryVerdict::Retry { .. } => next_provider,
         RetryVerdict::Fatal => {
-            let explicit_bad_request = lower.contains("400")
+            // `has_status_code`, not a bare substring: provider bodies are full
+            // of digit runs that merely *contain* 400 ("used 400123 tokens;
+            // invalid"), and a false bad-request here aborts the whole walk on
+            // what is really a transient error (see `llm_retry::has_status_code`).
+            let explicit_bad_request = has_status_code(&lower, 400)
                 && (lower.contains("bad request") || lower.contains("invalid"));
             if !explicit_bad_request && err.class() == ErrorClass::Transient {
                 if can_retry {

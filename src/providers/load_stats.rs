@@ -29,19 +29,36 @@ use crate::providers::route_policy::LoadMetric;
 /// a sustained shift within a handful of requests.
 const EWMA_SHIFT: u32 = 3; // divide by 2^3 = 8
 
-/// Current rate-window index as a *monotonic* minute count since process start.
+/// Elapsed monotonic seconds since process start.
 ///
 /// Deliberately monotonic (a process-global [`Instant`] base) rather than wall
 /// clock: an NTP step or DST jump can only ever cost one window's worth of
 /// counts, never a negative duration or a permanently-stuck window. `LiteLLM`'s
 /// wall-clock minute buckets do not have this guarantee.
-fn now_min() -> u64 {
+fn now_secs() -> u64 {
     static BASE: OnceLock<Instant> = OnceLock::new();
-    BASE.get_or_init(Instant::now).elapsed().as_secs() / 60
+    BASE.get_or_init(Instant::now).elapsed().as_secs()
 }
 
-/// One provider's rolling 60s usage window: request and token counts that reset
-/// when the minute rolls over. Lock-free — a roll is a single CAS on the epoch.
+/// Current rate-window index as a monotonic minute count since process start.
+fn now_min() -> u64 {
+    now_secs() / 60
+}
+
+/// One provider's usage window as a *sliding* 60s count: the current minute's
+/// counters plus the previous minute's, the latter weighted by how much of it
+/// still falls inside the trailing 60 seconds.
+///
+/// This used to be a hard bucket: counters reset at the minute boundary, so a
+/// provider at 99% of its ceiling read as 0% one second later — `over_limit`
+/// flapped at every boundary and `UsageBased` ordering saw every provider tied
+/// at zero for the first seconds of each minute. The weighted read (the same
+/// shape as LiteLLM's / vLLM-SR's sliding windows) makes utilisation decay
+/// linearly instead of snapping: at second 0 of the new minute the old minute
+/// still counts in full, at second 30 it counts half.
+///
+/// Lock-free — a roll is a single CAS on the epoch; the previous counts are
+/// *moved*, not discarded.
 #[derive(Debug, Default)]
 struct RateWindow {
     /// Monotonic-minute index this window's counters belong to.
@@ -50,13 +67,20 @@ struct RateWindow {
     req: AtomicU32,
     /// Tokens (input + output) consumed in the current window.
     tokens: AtomicU64,
+    /// Requests started in the previous window, weight-decayed on read.
+    prev_req: AtomicU32,
+    /// Tokens consumed in the previous window, weight-decayed on read.
+    prev_tokens: AtomicU64,
 }
 
 impl RateWindow {
     /// Roll the window if the minute changed: the thread that wins the epoch CAS
-    /// zeroes the counters; losers proceed against the freshly-reset (or being-
-    /// reset) window. A reader/writer racing the reset sees a value at most one
-    /// request stale — the same advisory contract the rest of this module keeps.
+    /// carries the current counters into the previous slots (a gap of two or
+    /// more minutes means the old window is entirely outside the trailing 60s,
+    /// so the previous slots zero instead) and resets the current ones; losers
+    /// proceed against the freshly-rolled window. A reader/writer racing the
+    /// reset sees a value at most one request stale — the same advisory
+    /// contract the rest of this module keeps.
     fn roll(&self, now: u64) {
         let cur = self.epoch_min.load(Ordering::Relaxed);
         if cur != now
@@ -65,6 +89,15 @@ impl RateWindow {
                 .compare_exchange(cur, now, Ordering::Relaxed, Ordering::Relaxed)
                 .is_ok()
         {
+            if now == cur + 1 {
+                self.prev_req
+                    .store(self.req.load(Ordering::Relaxed), Ordering::Relaxed);
+                self.prev_tokens
+                    .store(self.tokens.load(Ordering::Relaxed), Ordering::Relaxed);
+            } else {
+                self.prev_req.store(0, Ordering::Relaxed);
+                self.prev_tokens.store(0, Ordering::Relaxed);
+            }
             self.req.store(0, Ordering::Relaxed);
             self.tokens.store(0, Ordering::Relaxed);
         }
@@ -82,14 +115,31 @@ impl RateWindow {
         self.tokens.fetch_add(n, Ordering::Relaxed);
     }
 
-    /// Snapshot `(req, tokens)` for the live window (rolling first so a provider
-    /// that went quiet does not report stale full counts).
+    /// Weighted sliding counts at `now_secs`, assuming the window has already
+    /// been rolled to `now_secs / 60`. Pure (no clock read, no roll) so tests
+    /// can drive a fixed clock across the boundary.
+    fn weighted(&self, now_secs: u64) -> (u32, u64) {
+        // How many seconds of the PREVIOUS minute still fall inside the
+        // trailing 60s, in 60ths: second 0 → 60/60 (full weight), second 30 →
+        // 30/60 (half), second 59 → 1/60 (nearly decayed).
+        let prev_weight = 60 - (now_secs % 60);
+        let req = u64::from(self.req.load(Ordering::Relaxed))
+            + u64::from(self.prev_req.load(Ordering::Relaxed)) * prev_weight / 60;
+        let tokens = self.tokens.load(Ordering::Relaxed)
+            + self.prev_tokens.load(Ordering::Relaxed) * prev_weight / 60;
+        (u32::try_from(req).unwrap_or(u32::MAX), tokens)
+    }
+
+    /// Snapshot `(req, tokens)` for the trailing 60 seconds (rolling first so a
+    /// provider that went quiet does not report stale full counts). Both
+    /// consumers — the failover ordering / over-limit gate and the
+    /// `route_status` snapshot — read this same weighted value, so the reported
+    /// `rpm_used`/`tpm_used` decay smoothly across the minute boundary rather
+    /// than jumping to zero.
     fn snapshot(&self) -> (u32, u64) {
-        self.roll(now_min());
-        (
-            self.req.load(Ordering::Relaxed),
-            self.tokens.load(Ordering::Relaxed),
-        )
+        let secs = now_secs();
+        self.roll(secs / 60);
+        self.weighted(secs)
     }
 }
 
@@ -106,8 +156,9 @@ pub struct ProviderLoad {
     /// by [`LoadBalanceStrategy::LatencyAware`] so a fresh endpoint gets
     /// measured rather than starved.
     latency_ewma_us: AtomicU64,
-    /// Rolling 60s request/token window driving
-    /// [`LoadBalanceStrategy::UsageBased`] and the over-limit gate.
+    /// Sliding 60s request/token window (current minute + weight-decayed
+    /// previous minute) driving [`LoadBalanceStrategy::UsageBased`] and the
+    /// over-limit gate.
     window: RateWindow,
 }
 
@@ -330,16 +381,58 @@ mod tests {
     }
 
     #[test]
-    fn window_rolls_and_resets_counts() {
-        // Drive the RateWindow directly across a minute boundary.
+    fn window_rolls_and_carries_previous_counts() {
+        // Drive the RateWindow directly across a minute boundary (fixed clock
+        // via the pure `weighted` read).
         let w = RateWindow::default();
         w.roll(10);
-        w.bump_req();
-        w.add_tokens(500);
-        assert_eq!(w.snapshot(), (1, 500));
-        // A later minute rolls the window → counters reset.
+        w.req.store(60, Ordering::Relaxed);
+        w.tokens.store(6000, Ordering::Relaxed);
+        assert_eq!(w.weighted(10 * 60), (60, 6000));
+        // One minute later the window rolls: the counts move to the previous
+        // slots instead of being zeroed.
         w.roll(11);
-        assert_eq!(w.snapshot(), (0, 0));
+        // At second 0 of the new minute the trailing 60s still covers the
+        // whole previous minute → full weight.
+        assert_eq!(w.weighted(11 * 60), (60, 6000));
+        // A gap of two minutes means the old window is entirely outside the
+        // trailing 60s → nothing carries.
+        w.roll(13);
+        assert_eq!(w.weighted(13 * 60), (0, 0));
+    }
+
+    #[test]
+    fn window_utilisation_decays_smoothly_across_the_boundary() {
+        // The failure this fixes: a provider at 99% of its ceiling read as 0%
+        // one second past the minute boundary (`over_limit` flapped, and
+        // `UsageBased` saw every provider tied at zero for the first seconds
+        // of each minute). The sliding read must decay linearly instead.
+        let w = RateWindow::default();
+        w.roll(10);
+        w.req.store(60, Ordering::Relaxed);
+        w.tokens.store(6000, Ordering::Relaxed);
+        w.roll(11);
+        w.req.store(6, Ordering::Relaxed); // fresh traffic in the new minute
+
+        // Boundary + 0s: previous minute counts in full.
+        assert_eq!(w.weighted(11 * 60), (66, 6000));
+        // Boundary + 30s: previous minute counts half → 6 + 30.
+        assert_eq!(w.weighted(11 * 60 + 30), (36, 3000));
+        // Boundary + 59s: previous minute nearly decayed → 6 + 1.
+        assert_eq!(w.weighted(11 * 60 + 59), (7, 100));
+        // The read is monotonic non-increasing for a provider that went quiet:
+        // no cliff, no 99%→0% jump.
+        let quiet = RateWindow::default();
+        quiet.roll(20);
+        quiet.req.store(99, Ordering::Relaxed);
+        quiet.roll(21);
+        let series: Vec<u32> = (0..60).map(|s| quiet.weighted(21 * 60 + s).0).collect();
+        assert_eq!(series[0], 99);
+        assert_eq!(series[59], 1);
+        assert!(
+            series.windows(2).all(|pair| pair[0] >= pair[1]),
+            "utilisation must decay smoothly, got {series:?}"
+        );
     }
 
     #[test]
