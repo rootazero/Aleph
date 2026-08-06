@@ -1,8 +1,12 @@
-//! P1 data-isolation acceptance tests (spec §9).
+//! Data-isolation acceptance tests (spec §9, §13).
 //!
-//! These are the two acceptance tests the P1 branch is named for:
+//! The two P1 acceptance tests this module is named for:
 //! - [`two_users_cannot_see_each_other_end_to_end`] (spec §9-1)
 //! - [`single_user_fixture_is_byte_identical_after_upgrade`] (spec §9-2)
+//!
+//! …and P2's, which is the same isolation read from the other side — what a
+//! shared room DOES share, and what it still must not:
+//! - [`two_members_share_one_room_memory_and_nobody_elses`] (spec §8/§13)
 //!
 //! Every RPC surface below is exercised through its REAL handler function —
 //! the exact same one `HandlerRegistry` wires up in production
@@ -555,6 +559,174 @@ async fn two_users_cannot_see_each_others_teams() {
         result["tasks"].as_array().expect("tasks").len(),
         1,
         "alice's task survived bob's skip attempt"
+    );
+}
+
+/// Reproduce the task-local nesting a real dispatch applies to a turn taken
+/// INSIDE a project room: the ambient scope is the ROOM's
+/// (`ScopeId::Project`), while `CALLER_USER` remains the individual member who
+/// is speaking. The divergence is the point — see
+/// `gateway::handlers::agent::resolve_attribution` and
+/// `execution_engine::AUTHOR_USER_KEY`: every member's turn in a room carries
+/// the room's attribution (that is what shares the memory partition), so
+/// "whose turn is this" needs its own fact.
+async fn as_room_member<F, T>(user: &str, project_id: &str, fut: F) -> T
+where
+    F: std::future::Future<Output = T>,
+{
+    with_scope(
+        Some(ScopeAttribution {
+            owner_user_id: user.to_string(),
+            scope: crate::scope::ScopeId::Project(project_id.to_string()),
+        }),
+        CALLER_USER.scope(Some(user.to_string()), fut),
+    )
+    .await
+}
+
+/// Spec §8/§13 (P2 acceptance): **两用户在同一项目群聊协作，项目记忆共享.**
+///
+/// The storage half of the P2 acceptance criterion, driven through the real
+/// derivation (`project_scope::session_read_ids`) and the real `memory.search`
+/// handler under the same task-locals a dispatch applies. Four claims, and the
+/// last two are the ones that fail silently if the room arms are wrong:
+///
+/// 1. Alice writes in the room; **Bob's recall union contains that partition**
+///    — one room, one memory, whoever is speaking.
+/// 2. A non-member addressing the room's partition gets an EMPTY result, not
+///    an error: `memory.search` must not become an existence oracle.
+/// 3. Neither member's recall union contains ANY personal partition — a room
+///    recalls the org tier and itself, and nobody's private memory. Asserted on
+///    the whole vec, because a third entry sneaking in leaks with no error.
+/// 4. The profile floor is ABSENT in the room. "Whose USER.md" has no answer
+///    here; a predicate spelled `current_scope().is_some()` would admit the
+///    creator's and report nothing.
+#[tokio::test]
+async fn two_members_share_one_room_memory_and_nobody_elses() {
+    use crate::memory::project_scope::{profile_floor_id, session_read_ids, session_write_id};
+    use crate::projects::ProjectStore;
+
+    let _guard = crate::projects::roster::TEST_GUARD
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+
+    let temp = TempDir::new().unwrap();
+    let memory: Arc<SqliteMemoryBackend> =
+        Arc::new(SqliteMemoryBackend::new(&temp.path().join("memory.db")).unwrap());
+
+    // A real room with a real roster: alice owns it, bob is on it, mallory is
+    // not. The roster IS the authorization (spec §6.1) — there is no second
+    // per-resource grant to forget to set.
+    let projects = ProjectStore::new(rusqlite::Connection::open_in_memory().unwrap());
+    projects.create_schema().unwrap();
+    let room = projects
+        .create("shared room", Some("u-alice"), None)
+        .unwrap();
+    projects.add_member(&room.id, "u-bob").unwrap();
+
+    // ── 1. Alice speaks in the room ──
+    let alice_wrote_to = as_room_member("u-alice", &room.id, async {
+        let partition = session_write_id("main", false, None);
+        memory
+            .insert_raw_memory(
+                &RawMemory::new(
+                    "the room agreed to ship on friday".to_string(),
+                    RawMemorySource::Reflection,
+                )
+                .with_agent(partition.clone()),
+            )
+            .await
+            .unwrap();
+        partition
+    })
+    .await;
+
+    // ── 2. Bob, a different member of the SAME room, recalls it ──
+    let bob_reads = as_room_member("u-bob", &room.id, async {
+        session_read_ids("main", false, None)
+    })
+    .await;
+    assert!(
+        bob_reads.contains(&alice_wrote_to),
+        "one room, one memory: bob's recall union must contain the partition \
+         alice wrote to ({alice_wrote_to}): {bob_reads:?}"
+    );
+
+    let bob_search = as_room_member(
+        "u-bob",
+        &room.id,
+        handle_search(
+            req(
+                "memory.search",
+                Some(json!({ "agent_id": alice_wrote_to.clone() })),
+            ),
+            memory.clone(),
+        ),
+    )
+    .await;
+    let rows = bob_search.result.expect("success, not an error")["memories"]
+        .as_array()
+        .expect("memories array")
+        .clone();
+    assert!(
+        rows.iter().any(|m| m["user_input"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("friday")),
+        "bob must recall what alice taught the agent in their shared room: {rows:?}"
+    );
+
+    // ── 3. A stranger gets emptiness, not an error ──
+    let mallory_search = as_caller(
+        "u-mallory",
+        handle_search(
+            req(
+                "memory.search",
+                Some(json!({ "agent_id": alice_wrote_to.clone() })),
+            ),
+            memory.clone(),
+        ),
+    )
+    .await;
+    let mallory_rows = mallory_search
+        .result
+        .expect("a denial must look like an empty result, never an error")["memories"]
+        .as_array()
+        .expect("memories array")
+        .clone();
+    assert!(
+        mallory_rows.is_empty(),
+        "a non-member must not read the room's partition: {mallory_rows:?}"
+    );
+
+    // ── 4. The room recalls nobody's personal memory, and has no profile ──
+    assert_eq!(
+        bob_reads,
+        vec!["main".to_string(), alice_wrote_to.clone()],
+        "a room recalls the org tier and itself — a third entry here is a \
+         cross-user leak that reports nothing"
+    );
+    let alice_reads = as_room_member("u-alice", &room.id, async {
+        session_read_ids("main", false, None)
+    })
+    .await;
+    assert_eq!(
+        alice_reads, bob_reads,
+        "the room resolves identically for every member — that IS the sharing"
+    );
+    for ids in [&alice_reads, &bob_reads] {
+        assert!(
+            !ids.iter().any(|id| id.contains("__u-")),
+            "not even the creator's personal memory is recalled in a room: {ids:?}"
+        );
+    }
+    assert_eq!(
+        as_room_member("u-alice", &room.id, async {
+            profile_floor_id("main", false, None)
+        })
+        .await,
+        None,
+        "a room has no 'the user' whose profile could be the floor"
     );
 }
 
