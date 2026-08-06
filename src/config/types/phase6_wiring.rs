@@ -187,6 +187,34 @@ pub struct ModelThresholdToml {
     pub critical_threshold: Option<f64>,
 }
 
+impl ModelThresholdToml {
+    /// First entry in `entries` matching the resolved `model` id or `provider`
+    /// key (case-insensitive substring). Returns `None` when the list is empty
+    /// or nothing matches — callers then use the global thresholds, so
+    /// behaviour is byte-identical without any override.
+    ///
+    /// Free-standing sibling of [`ContextBudgetToml::threshold_override_for`]
+    /// so per-run consumers holding only the entry list (not the whole toml
+    /// section) share the exact same matching semantics.
+    #[must_use]
+    pub fn first_match<'a>(
+        entries: &'a [ModelThresholdToml],
+        model: Option<&str>,
+        provider: &str,
+    ) -> Option<&'a ModelThresholdToml> {
+        let provider_lc = provider.to_lowercase();
+        let model_lc = model.map(str::to_lowercase);
+        entries.iter().find(|o| {
+            let needle = o.model.trim().to_lowercase();
+            if needle.is_empty() {
+                return false;
+            }
+            model_lc.as_deref().is_some_and(|m| m.contains(&needle))
+                || provider_lc.contains(&needle)
+        })
+    }
+}
+
 impl ContextBudgetToml {
     /// First per-model threshold override matching the resolved `model` id or
     /// `provider` key (case-insensitive substring). Returns `None` when the
@@ -198,16 +226,7 @@ impl ContextBudgetToml {
         model: Option<&str>,
         provider: &str,
     ) -> Option<&ModelThresholdToml> {
-        let provider_lc = provider.to_lowercase();
-        let model_lc = model.map(str::to_lowercase);
-        self.model_thresholds.iter().find(|o| {
-            let needle = o.model.trim().to_lowercase();
-            if needle.is_empty() {
-                return false;
-            }
-            model_lc.as_deref().is_some_and(|m| m.contains(&needle))
-                || provider_lc.contains(&needle)
-        })
+        ModelThresholdToml::first_match(&self.model_thresholds, model, provider)
     }
 }
 

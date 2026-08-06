@@ -21,9 +21,10 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use alephcore::orchestrator::{
-    build_cheap_summary_provider, build_context_budget_config, build_sandbox_factory,
-    dispatch::Orchestrator, flow_registry::FlowRegistry, harness_bridge::AgentHarnessRunner,
-    loader::load_presets, resolver::RoutingOverrides, sandbox_factory::WorkspaceBuilder,
+    build_cheap_summary_provider, build_context_budget_config, build_context_budget_refiner,
+    build_sandbox_factory, dispatch::Orchestrator, flow_registry::FlowRegistry,
+    harness_bridge::AgentHarnessRunner, loader::load_presets, resolver::RoutingOverrides,
+    sandbox_factory::WorkspaceBuilder,
 };
 use alephcore::verification::{
     stop_hooks::build_from_config as build_stop_hooks, MutationEvidenceVerifier,
@@ -315,6 +316,11 @@ pub(in crate::commands::start) async fn initialize_orchestrator(
         // H2: opt-in mid-run context compaction. `None` (section absent /
         // disabled) keeps the previous behavior — no compaction.
         context_budget_config: build_context_budget_config(config, primary_provider_key),
+        // Per-run serving-model refinement (§2.2): re-keys the chain-minimum
+        // budget onto the model each run actually serves (select_model /
+        // model_hint / brain pin), min-floored by the chain-minimum so
+        // failover safety is preserved. Same enablement gate as the config.
+        context_budget_refiner: build_context_budget_refiner(config, primary_provider_key),
         skill_system: Some(alephcore::skill::shared_skill_system().clone()),
         // Stage 7 (#12) wiring placeholders — PHASE-6 will load these from
         // aleph.toml. Path is now plumbed end-to-end; defaults stay None

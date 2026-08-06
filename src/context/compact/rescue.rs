@@ -110,27 +110,73 @@ pub trait RescueHost: Sync {
     fn mark_rescue_exhausted(&self);
 }
 
+/// True when a provider response carries no usable content at all — no text,
+/// no `tool_calls`, no thinking. Local twin of the harness's
+/// `is_empty_response` (kept separate so this layer names no harness path).
+fn response_is_empty(response: &ProviderResponse) -> bool {
+    response.text_content().trim().is_empty()
+        && response.tool_calls.is_empty()
+        && response.thinking.as_deref().unwrap_or("").trim().is_empty()
+}
+
+/// Silent truncated-overflow detection (pi `overflow.ts` Case 3 parity —
+/// Xiaomi MiMo / z.ai-class providers). Some providers never raise a
+/// context-overflow error: once the INPUT alone fills the window they return
+/// `stop_reason=length` with ZERO output and a usage report showing the full
+/// prompt. The discriminator: `MaxTokens` + no output at all + the provider's
+/// own `prompt_tokens_total` already met/exceeded the compaction budget. A
+/// `MaxTokens` stop WITH partial text is the genuine output-cap case (the
+/// caller's resume-nudge loop owns it) and returns false here; with no usage
+/// or no wired budget there is nothing trustworthy to judge on → false.
+async fn is_silent_truncated_overflow(
+    response: &ProviderResponse,
+    budget: Option<&Arc<Mutex<ContextBudget>>>,
+) -> bool {
+    if !matches!(response.stop_reason, StopReason::MaxTokens) || !response_is_empty(response) {
+        return false;
+    }
+    match (budget, response.usage.as_ref()) {
+        (Some(budget), Some(usage)) => {
+            let budget_tokens = budget.lock().await.token_budget();
+            budget_tokens > 0 && usage.prompt_tokens_total() >= budget_tokens
+        }
+        _ => false,
+    }
+}
+
 /// Drain a `ContextWindowExceeded` terminal state via reactive compaction.
 ///
-/// `model_context_window_exceeded` means the *context window* filled
-/// mid-generation (distinct from the output-token cap). Each pass counts the
-/// overflowed call's billed tokens, synthesizes the overflow-marker error
-/// (`llm_retry::classify` maps it to `CompactAndRetry`), and routes through
-/// [`try_reactive_compact_and_retry`] — reusing its one-shot cap, trace, and
-/// budget plumbing.
+/// Two overflow shapes are recognized, both routed through
+/// [`try_reactive_compact_and_retry`]:
 ///
-/// The loop is finite because [`reactive_fit_and_retry`] never returns
-/// `Ok(overflow)`: every path out of the rescue either yields a
-/// non-`ContextWindowExceeded` response or an `Err` that `?` propagates. Do not
-/// add an arm that returns a still-overflowing response — that is the one change
-/// that would make this spin.
+/// - **Explicit**: `model_context_window_exceeded` means the *context window*
+///   — not the output cap — filled mid-generation. The resume-nudge loop in
+///   the caller would append more messages and re-hit the wall, so this drain
+///   must run BEFORE any resume-nudge append. Each pass counts the overflowed
+///   call's billed tokens, synthesizes the overflow-marker error
+///   (`llm_retry::classify` maps it to `CompactAndRetry`), and routes through
+///   the rescue — reusing its one-shot cap, trace, and budget plumbing.
+/// - **Silent** (one-shot pre-pass): `MaxTokens` + zero output + a usage
+///   report whose prompt alone already meets/exceeds the budget (see
+///   [`is_silent_truncated_overflow`]). Same overflow, but the provider
+///   reported it as a successful `length` stop instead of an error.
+///
+/// The explicit shape loops; the silent shape is checked at most ONCE per
+/// drain call. That asymmetry is what keeps the drain finite:
+/// [`reactive_fit_and_retry`] never returns `Ok(ContextWindowExceeded)`, but
+/// it CAN legitimately return another silent-shape response (an `Ok` whose
+/// stop reason is `MaxTokens`) — re-detecting that shape would re-enter the
+/// rescue forever. After the one rescue pass, a still-silent response falls
+/// through to the caller's bounded retry loops (empty-response, resume-nudge)
+/// exactly as before this drain existed. Do not move the silent check into
+/// the `while` condition — that is the one change that would make this spin.
 ///
 /// `response` / `response_was_streamed` are `&mut` so the caller's surviving
 /// state is updated in place. Clearing `response_was_streamed` is load-bearing:
 /// the rescue replaces the response through the NON-streaming path, so the
 /// caller must re-enable its one-shot delta emit or the rescued text never
-/// reaches live stream consumers. No-op (zero LLM cost) when `response` is not
-/// in the overflow state.
+/// reaches live stream consumers. No-op (zero LLM cost) when `response` is in
+/// neither overflow shape.
 pub async fn drain_context_overflow<H: RescueHost>(
     host: &H,
     response: &mut ProviderResponse,
@@ -139,6 +185,30 @@ pub async fn drain_context_overflow<H: RescueHost>(
     messages: &mut Vec<UnifiedMessage>,
     parent_cancel: &CancellationToken,
 ) -> Result<(), H::Fatal> {
+    // One-shot silent-shape pre-pass — see the doc above for why this must
+    // not become a loop.
+    if is_silent_truncated_overflow(response, cx.budget).await {
+        // The truncated call still billed the full prompt; count it before
+        // the rescue replaces `response`, exactly as the explicit-shape pass
+        // below does.
+        host.account_discarded_tokens(response);
+        *response_was_streamed = false;
+        tracing::warn!(
+            session_id = ?cx.session_id,
+            "provider stopped at length with zero output while the prompt alone \
+             exceeds the context budget — silent overflow; routing to reactive compaction",
+        );
+        let overflow_err = AlephError::ProviderError {
+            // Must carry a marker `llm_retry::classify` maps to
+            // `CompactAndRetry` (same trick as the explicit-shape error below).
+            message: "silent context overflow: provider stopped at maximum context \
+                      length (stop_reason=length, zero output, prompt filled the window)"
+                .to_string(),
+            suggestion: None,
+        };
+        *response =
+            try_reactive_compact_and_retry(host, overflow_err, cx, messages, parent_cancel).await?;
+    }
     while matches!(response.stop_reason, StopReason::ContextWindowExceeded) {
         // The overflowed call still billed input plus the partial output;
         // count it before the retry replaces `response`.
