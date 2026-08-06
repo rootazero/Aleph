@@ -14,6 +14,8 @@ use crate::gateway::event_bus::GatewayEventBus;
 use crate::sync_primitives::Arc;
 use crate::tools::AlephTool;
 
+use super::error::AgentManageError;
+
 // =============================================================================
 // Guard helper
 // =============================================================================
@@ -125,19 +127,25 @@ impl AlephTool for AgentDeleteTool {
 
         // 1. Reject deletion of any built-in agent (main + other builtins).
         if is_protected(&self.agent_catalog, &args.agent_id) {
-            return Err(crate::error::AlephError::other(format!(
-                "Cannot delete the built-in '{}' agent. Built-in agents are protected.",
+            return Err(AgentManageError::ProtectedAgent(format!(
+                "the built-in '{}' agent. Built-in agents are protected.",
                 args.agent_id
-            )));
+            ))
+            .into());
         }
 
         // 2. Verify agent exists (existence check only — no need to
         //    instantiate a lazy entry just to delete it).
         if !self.registry.contains(&args.agent_id).await {
-            return Err(crate::error::AlephError::other(format!(
-                "Agent '{}' not found",
-                args.agent_id
-            )));
+            // Build the available list from the runtime registry so the LLM
+            // can pick a real existing target without guessing.
+            let mut available = self.registry.list().await;
+            available.sort();
+            return Err(AgentManageError::AgentNotFound {
+                agent_id: args.agent_id.clone(),
+                available,
+            }
+            .into());
         }
 
         // 3. Delete the persisted TOML definition FIRST, while its guards can
@@ -149,9 +157,9 @@ impl AlephTool for AgentDeleteTool {
         if let Some(ref manager) = self.agent_manager {
             if manager.get(&args.agent_id).is_ok() {
                 manager.delete(&args.agent_id).map_err(|e| {
-                    crate::error::AlephError::other(format!(
-                        "Cannot delete agent '{}': {e}",
-                        args.agent_id
+                    AgentManageError::Store(format!(
+                        "Cannot delete agent '{}': {}",
+                        args.agent_id, e
                     ))
                 })?;
                 dirs_archived_by_manager = true;
@@ -197,8 +205,10 @@ impl AlephTool for AgentDeleteTool {
                     }
                 }
 
-                // Also archive agent state directory (~/.aleph/agents/{id}/)
-                let Some(home) = dirs::home_dir() else {
+                // Also archive agent state directory (~/.aleph/agents/{id}/).
+                // Resolved via `discovery::aleph_home_dir()` for the same reason
+                // `create` does — `ALEPH_HOME` override parity.
+                let Some(home) = crate::discovery::aleph_home_dir().ok() else {
                     warn!(
                         agent_id = %args.agent_id,
                         "Cannot determine home directory, skipping agent state archive"
@@ -211,7 +221,7 @@ impl AlephTool for AgentDeleteTool {
                         ),
                     });
                 };
-                let agent_state_dir = home.join(".aleph").join("agents").join(&args.agent_id);
+                let agent_state_dir = home.join("agents").join(&args.agent_id);
                 if agent_state_dir.exists() {
                     let archived_state = agent_state_dir.with_extension("archived");
                     if let Err(e) = tokio::fs::rename(&agent_state_dir, &archived_state).await {
@@ -265,36 +275,15 @@ impl AlephTool for AgentDeleteTool {
 mod tests {
     use super::*;
     use crate::agents::AgentRegistry as CatalogRegistry;
-    use crate::gateway::agent_env::AgentEnvStoreConfig;
+    use crate::builtin_tools::agent_manage::test_utils;
     use crate::tools::AlephTool;
-    use tempfile::tempdir;
-
-    fn test_workspace_mgr() -> Arc<AgentEnvStore> {
-        let temp = tempdir().unwrap();
-        let config = AgentEnvStoreConfig {
-            db_path: temp.keep().join("test.db"),
-            default_profile: "default".to_string(),
-            archive_after_days: 0,
-        };
-        Arc::new(AgentEnvStore::new(config).unwrap())
-    }
-
-    fn test_session_store() -> Arc<dyn crate::gateway::session_store::SessionStore> {
-        use crate::gateway::session_manager::{SessionManager, SessionManagerConfig};
-        let temp = tempdir().unwrap();
-        let cfg = SessionManagerConfig {
-            db_path: temp.keep().join("sessions.db"),
-            ..Default::default()
-        };
-        Arc::new(SessionManager::new(cfg).expect("session manager"))
-    }
 
     #[test]
     fn test_delete_tool_definition() {
         let registry = Arc::new(AgentRegistry::new());
-        let workspace_mgr = test_workspace_mgr();
+        let (wm, _wm_temp) = test_utils::workspace_mgr();
         let catalog = Arc::new(CatalogRegistry::with_builtins());
-        let tool = AgentDeleteTool::new(registry, workspace_mgr, None, catalog);
+        let tool = AgentDeleteTool::new(registry, wm, None, catalog);
         let def = AlephTool::definition(&tool);
 
         assert_eq!(def.name, "agent_delete");
@@ -338,7 +327,8 @@ mod tests {
         // deleted=true and drop its channel bindings — the old
         // `Option<Arc<AgentInstance>>` remove() collapsed this case to None.
         let registry = Arc::new(AgentRegistry::new());
-        let root = tempdir().unwrap().keep();
+        let (sm, _sm_temp) = test_utils::session_store();
+        let root = tempfile::tempdir().unwrap().keep();
         registry
             .register_config(
                 AgentInstanceConfig {
@@ -347,11 +337,11 @@ mod tests {
                     agent_dir: root.join("state"),
                     ..Default::default()
                 },
-                test_session_store(),
+                sm,
             )
             .await;
 
-        let wm = test_workspace_mgr();
+        let (wm, _wm_temp) = test_utils::workspace_mgr();
         wm.set_active_agent("telegram", "trader").unwrap();
         wm.set_active_agent("discord", "trader").unwrap();
 
@@ -372,16 +362,44 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn delete_unknown_agent_errors() {
+    async fn delete_unknown_agent_errors_with_available_list() {
         let registry = Arc::new(AgentRegistry::new());
+        // Pre-register a known agent so the not-found error can list it.
+        let (instance, _sm, _t) = test_utils::instance("trader");
+        registry.register(instance).await;
+        let (wm, _wm_temp) = test_utils::workspace_mgr();
         let catalog = Arc::new(CatalogRegistry::with_builtins());
-        let tool = AgentDeleteTool::new(registry, test_workspace_mgr(), None, catalog);
+        let tool = AgentDeleteTool::new(registry, wm, None, catalog);
+
         let err = tool
             .call(AgentDeleteArgs {
                 agent_id: "ghost".to_string(),
             })
             .await
             .unwrap_err();
-        assert!(err.to_string().contains("not found"));
+        let msg = err.to_string();
+        assert!(msg.contains("not found"), "got: {msg}");
+        assert!(msg.contains("trader"), "available list missing: {msg}");
+    }
+
+    #[tokio::test]
+    async fn delete_builtin_main_is_protected() {
+        let registry = Arc::new(AgentRegistry::new());
+        // Register "main" so the existence check passes — the catalog guard
+        // is what should reject the delete.
+        let (instance, _sm, _t) = test_utils::instance("main");
+        registry.register(instance).await;
+        let (wm, _wm_temp) = test_utils::workspace_mgr();
+        let catalog = Arc::new(CatalogRegistry::with_builtins());
+        let tool = AgentDeleteTool::new(registry, wm, None, catalog);
+
+        let err = tool
+            .call(AgentDeleteArgs {
+                agent_id: "main".to_string(),
+            })
+            .await
+            .unwrap_err();
+        let msg = err.to_string();
+        assert!(msg.contains("built-in"), "got: {msg}");
     }
 }

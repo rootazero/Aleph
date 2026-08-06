@@ -484,6 +484,16 @@ pub const BUILTIN_TOOL_DEFINITIONS: &[BuiltinToolDefinition] = &[
         requires_config: true, // Requires agent_registry + workspace_manager
     },
     BuiltinToolDefinition {
+        name: "agent_unbind",
+        description: <crate::builtin_tools::agent_manage::unbind::AgentUnbindTool as crate::tools::AlephTool>::DESCRIPTION,
+        requires_config: true, // Requires workspace_manager (and registry for symmetry)
+    },
+    BuiltinToolDefinition {
+        name: "agent_update",
+        description: <crate::builtin_tools::agent_manage::update::AgentUpdateTool as crate::tools::AlephTool>::DESCRIPTION,
+        requires_config: true, // Requires agent_registry; TOML manager optional
+    },
+    BuiltinToolDefinition {
         name: "agent_info",
         description: <crate::builtin_tools::agent_manage::info::AgentInfoTool as crate::tools::AlephTool>::DESCRIPTION,
         requires_config: false, // Always available — builds its own agent-definition catalog
@@ -1060,7 +1070,7 @@ pub fn create_tool_boxed(
         // BuiltinToolRegistry::with_config() — agent_create/list/delete/switch
         // need agent_registry + workspace_manager; agent_info builds its own
         // catalog.
-        "agent_create" | "agent_list" | "agent_delete" | "agent_switch" | "agent_info" => None,
+        "agent_create" | "agent_list" | "agent_delete" | "agent_switch" | "agent_unbind" | "agent_update" | "agent_info" => None,
         // self_config requires the per-agent agent_id, injected at construction time
         // in BuiltinToolRegistry — cannot be created standalone here.
         "self_config" => None,

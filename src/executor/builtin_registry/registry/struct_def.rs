@@ -170,6 +170,11 @@ pub struct BuiltinToolRegistry {
     pub(crate) agent_list_tool: Option<crate::builtin_tools::agent_manage::AgentListTool>,
     pub(crate) agent_delete_tool: Option<crate::builtin_tools::agent_manage::AgentDeleteTool>,
     pub(crate) agent_switch_tool: Option<crate::builtin_tools::agent_manage::AgentSwitchTool>,
+    /// `agent_unbind` — companion to `agent_switch`. Clears the explicit
+    /// channel→agent binding (returns to default routing on next message).
+    pub(crate) agent_unbind_tool: Option<crate::builtin_tools::agent_manage::AgentUnbindTool>,
+    /// `agent_update` — patch an existing agent's editable fields.
+    pub(crate) agent_update_tool: Option<crate::builtin_tools::agent_manage::AgentUpdateTool>,
     /// `agent_info` — always available (read-only, depends only on the agent
     /// definition catalog, which is built unconditionally).
     pub(crate) agent_info_tool: crate::builtin_tools::agent_manage::AgentInfoTool,

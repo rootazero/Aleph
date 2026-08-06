@@ -784,7 +784,7 @@ impl ToolRegistry for BuiltinToolRegistry {
 
             // Agent management tools — snapshot session context into arguments
             // to avoid race conditions from concurrent reads of the shared handle.
-            "agent_create" | "agent_list" | "agent_delete" | "agent_switch" => {
+            "agent_create" | "agent_list" | "agent_delete" | "agent_switch" | "agent_unbind" | "agent_update" => {
                 // Snapshot session context into tool arguments before async execution
                 let arguments = {
                     let mut args = arguments;
@@ -829,6 +829,18 @@ impl ToolRegistry for BuiltinToolRegistry {
                     "agent_switch" => Box::pin(async move {
                         let tool = self.agent_switch_tool.as_ref().ok_or_else(|| {
                             AlephError::tool("agent_switch not available: no AgentRegistry/AgentEnvStore configured")
+                        })?;
+                        tool.call_json(arguments).await
+                    }),
+                    "agent_unbind" => Box::pin(async move {
+                        let tool = self.agent_unbind_tool.as_ref().ok_or_else(|| {
+                            AlephError::tool("agent_unbind not available: no AgentRegistry/AgentEnvStore configured")
+                        })?;
+                        tool.call_json(arguments).await
+                    }),
+                    "agent_update" => Box::pin(async move {
+                        let tool = self.agent_update_tool.as_ref().ok_or_else(|| {
+                            AlephError::tool("agent_update not available: no AgentRegistry configured")
                         })?;
                         tool.call_json(arguments).await
                     }),
