@@ -1273,6 +1273,112 @@ async fn background_subagent_forwards_trace_to_parent_sink() {
     );
 }
 
+/// P1 data isolation: `spawn_background`'s `tokio::spawn` must re-seed the
+/// scope and project-root task-locals inside the spawned task — otherwise a
+/// background subagent's memory reads silently fall back to the unscoped /
+/// wrong-project namespace regardless of what the parent run was scoped to.
+#[tokio::test]
+async fn background_subagent_reseeds_scope_and_project_root() {
+    use crate::scope::ScopeAttribution;
+    use std::path::PathBuf;
+
+    /// Captures the ambient scope + project root observed at provider-call
+    /// time — i.e. from inside the task `spawn_background` spawns.
+    struct ScopeCapturingProvider {
+        observed: Arc<std::sync::Mutex<Option<(Option<ScopeAttribution>, Option<PathBuf>)>>>,
+    }
+
+    impl AiProvider for ScopeCapturingProvider {
+        fn process<'a>(
+            &'a self,
+            _payload: RequestPayload<'a>,
+        ) -> Pin<Box<dyn Future<Output = crate::error::Result<ProviderResponse>> + Send + 'a>>
+        {
+            let observed = self.observed.clone();
+            Box::pin(async move {
+                *observed.lock().unwrap() = Some((
+                    crate::scope::current_scope(),
+                    crate::projects::current_project_root(),
+                ));
+                Ok(ProviderResponse::text_only("mock response".to_string()))
+            })
+        }
+
+        fn name(&self) -> &str {
+            "scope-capture"
+        }
+
+        fn color(&self) -> &str {
+            "#000000"
+        }
+    }
+
+    let observed: Arc<std::sync::Mutex<Option<(Option<ScopeAttribution>, Option<PathBuf>)>>> =
+        Arc::new(std::sync::Mutex::new(None));
+    let chain = crate::harness::chain_context::ChainContext::new();
+    let tracker = make_tracker();
+    let tool = SubagentTool::new(
+        Arc::new(ScopeCapturingProvider {
+            observed: observed.clone(),
+        }),
+        chain,
+        make_registry(),
+        tracker.clone(),
+        in_mem_session(),
+        Arc::new(NoopTestToolService),
+    );
+
+    let dir = std::env::temp_dir().join("aleph-p1-scope-test");
+    let attr = ScopeAttribution::personal("u-alice");
+
+    let rid = crate::scope::with_scope(
+        Some(attr),
+        crate::projects::with_project_root(Some(dir.clone()), async {
+            let out = tool
+                .execute(
+                    json!({ "task": "bg", "run_in_background": true }),
+                    CancellationToken::new(),
+                )
+                .await;
+            match out {
+                ToolResult::Success { output } => {
+                    output["request_id"].as_str().unwrap().to_string()
+                }
+                other => unreachable!("expected background success, got {other:?}"),
+            }
+        }),
+    )
+    .await;
+
+    // Poll until the background task completes (bounded).
+    for _ in 0..100 {
+        if tracker
+            .list_running(None)
+            .iter()
+            .all(|(id, _, _)| id != &rid)
+        {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    }
+
+    let (seen_scope, seen_root) = observed
+        .lock()
+        .unwrap()
+        .clone()
+        .expect("provider must have been invoked inside the spawned task");
+    assert_eq!(
+        seen_scope.map(|a| a.owner_user_id),
+        Some("u-alice".to_string()),
+        "scope must be re-seeded inside the tokio::spawn boundary"
+    );
+    assert_eq!(
+        seen_root,
+        Some(dir),
+        "project root must be re-seeded inside the tokio::spawn boundary"
+    );
+}
+
 /// Async batch path: explicit run_in_background=true returns request_ids
 /// without awaiting sub-task completion.
 #[tokio::test]

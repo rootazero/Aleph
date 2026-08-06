@@ -160,6 +160,17 @@ impl SubagentTool {
         let root_session_for_done = root_session;
         let tree_agent_id_for_done = tree_agent_id;
         let settle_started = std::time::Instant::now();
+        // P1 data isolation (also closes a pre-existing cross-project note
+        // leak): captured BEFORE the spawn boundary — `tokio::spawn` does NOT
+        // inherit task-locals, so without re-establishing these inside, a
+        // background subagent's `memory.project_scoped` / retrieval /
+        // compaction silently fell back to the unscoped base namespace
+        // regardless of the parent run's project or owner. Mirrors
+        // `run_loop`'s `with_request_scope` / `orchestrator::dispatch`'s
+        // re-establishment at their own spawn boundaries.
+        let captured_scope = crate::scope::current_scope();
+        let captured_root = crate::projects::current_project_root();
+        let captured_agent = crate::agents::current_agent_id();
         tokio::spawn(async move {
             let _cancel_guard = CancelGuard::new(bridge_cancel.clone());
             let runtime_config = AgentRuntimeConfig {
@@ -169,9 +180,26 @@ impl SubagentTool {
                 model,
                 timeout_secs,
             };
-            let result = AssertUnwindSafe(runtime.run(runtime_config))
-                .catch_unwind()
-                .await;
+            // Boxed: `AgentRuntime::run`'s state machine is already large, and
+            // nesting three more task-local combinators directly around it
+            // inline overflowed the (debug-build) test-thread stack. Boxing
+            // moves that state machine to the heap so the wrappers above hold
+            // a pointer-sized `Pin<Box<_>>` instead of embedding it.
+            let result = crate::agents::with_agent_id(
+                captured_agent,
+                crate::projects::with_project_root(
+                    captured_root,
+                    crate::scope::with_scope(
+                        captured_scope,
+                        Box::pin(async move {
+                            AssertUnwindSafe(runtime.run(runtime_config))
+                                .catch_unwind()
+                                .await
+                        }),
+                    ),
+                ),
+            )
+            .await;
             let outcome = match result {
                 Ok(Ok(r)) => {
                     let mut final_text = r.final_text.unwrap_or_else(|| "(no output)".to_string());

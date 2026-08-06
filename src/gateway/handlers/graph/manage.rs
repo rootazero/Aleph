@@ -67,6 +67,21 @@ pub async fn handle_update_note_impl(
         );
     }
 
+    // P1 partition isolation (spec §11-1c): `update_note` is upsert
+    // (create-or-overwrite) with no "not found" error of its own — a
+    // nonexistent node_id under a VISIBLE partition simply creates it,
+    // reporting success (see this fn's doc). The no-oracle-consistent
+    // denial for an INVISIBLE partition is that SAME success shape, without
+    // ever touching the store: a caller who cannot see this partition sees
+    // exactly what they would see writing a brand-new note anywhere else,
+    // and nothing is actually written under a partition they don't own.
+    if !crate::gateway::visibility::partition_visible(agent_id) {
+        return JsonRpcResponse::success(
+            req.id,
+            serde_json::json!({ "node_id": params.node_id, "saved": true }),
+        );
+    }
+
     // Hard security floor (§5.1): a panel node edit writes verbatim into the
     // trusted vault, so scan the incoming content for data-exfiltration
     // payloads before persisting. Exfiltration-only scope (not Strict) so a
@@ -136,6 +151,49 @@ pub async fn handle_rename_note_impl(
             "node_id / agent_id must not contain path traversal components".to_string(),
         );
     }
+
+    // P1 partition isolation: unlike update/delete, rename has no natural
+    // idempotent-success shape for a missing source — `NoteIndexer::
+    // rename_note` hits the filesystem `rename()` syscall directly, and its
+    // failure message embeds the real on-disk path, which would leak both
+    // the invisible partition's content AND its directory layout if reused
+    // verbatim. So this handler gets its own existence check BEFORE calling
+    // into the indexer at all, mirroring `graph.node_detail`'s "Note not
+    // found" shape (the read sibling of this family): an invisible
+    // partition never even reaches the existence lookup (no oracle from
+    // timing either), and a note that genuinely doesn't exist under a
+    // visible partition now gets this same clean message instead of a
+    // leaked OS path — a latent hygiene bug this fix also closes, since
+    // there is no other way to make the two cases byte-identical without
+    // duplicating `rename_note`'s internal path reconstruction.
+    //
+    // The existence check itself uses `find_by_filename(title, ..)` — NOT
+    // an exact `(category, title)` match — because `rename_note` resolves
+    // the real category by title lookup internally and deliberately
+    // tolerates a stale/wrong category in the caller's `node_id` (see the
+    // success-path comment below); an exact-path check here would reject
+    // that already-working case as a false "not found".
+    if !crate::gateway::visibility::partition_visible(agent_id) {
+        return JsonRpcResponse::error(
+            req.id,
+            INVALID_PARAMS,
+            format!("Note not found: {}", params.node_id),
+        );
+    }
+    match indexer.store().find_by_filename(title, agent_id).await {
+        Ok(paths) if !paths.is_empty() => {}
+        Ok(_) => {
+            return JsonRpcResponse::error(
+                req.id,
+                INVALID_PARAMS,
+                format!("Note not found: {}", params.node_id),
+            )
+        }
+        Err(e) => {
+            return JsonRpcResponse::error(req.id, INTERNAL_ERROR, format!("NoteStore error: {e}"))
+        }
+    }
+
     match indexer
         .rename_note(agent_id, title, &params.new_title)
         .await
@@ -223,6 +281,20 @@ pub async fn handle_delete_note_impl(
             "node_id / agent_id must not contain path traversal components".to_string(),
         );
     }
+
+    // P1 partition isolation: `delete_note` is idempotent — deleting a note
+    // that never existed already reports success without erroring (see
+    // `NoteIndexer::delete_note`'s doc). The no-oracle-consistent denial for
+    // an invisible partition is that SAME success shape, without ever
+    // touching the store: an unauthorized delete attempt looks identical to
+    // deleting a note that was never there.
+    if !crate::gateway::visibility::partition_visible(agent_id) {
+        return JsonRpcResponse::success(
+            req.id,
+            serde_json::json!({ "node_id": params.node_id, "deleted": true }),
+        );
+    }
+
     match indexer.delete_note(agent_id, category, title).await {
         Ok(()) => JsonRpcResponse::success(
             req.id,
@@ -411,5 +483,204 @@ mod tests {
             "expected traversal guard message, got: {}",
             err.message
         );
+    }
+
+    /// P1's own acceptance case for `update_note`: bob "updating" alice's
+    /// note reports the SAME success shape a legitimate write always
+    /// produces (this handler's response is a fixed `{node_id, saved:true}`
+    /// literal regardless of new-vs-existing — no dynamic content to
+    /// byte-compare against), but nothing is actually written — alice's
+    /// content on disk is untouched.
+    #[tokio::test]
+    async fn foreign_partition_update_reports_success_but_does_not_write() {
+        use crate::gateway::caller_identity::CALLER_USER;
+
+        let memory_dir = std::env::temp_dir().join(format!("update_deny_{}", Uuid::new_v4()));
+        let db = make_db();
+        let indexer = Arc::new(NoteIndexer::new(memory_dir.clone(), db));
+
+        let original = "---\ncategory: reference\ntags: []\ncreated: \"2024-01-01\"\nupdated: \"2024-01-01\"\n---\n\n- alice's real fact\n";
+        indexer
+            .write_note_raw("main__u-alice", "reference", "AliceSecret", original)
+            .await
+            .unwrap();
+
+        let req = update_note_request(
+            "reference/AliceSecret",
+            "bob's malicious overwrite",
+            Some("main__u-alice"),
+        );
+        let resp = CALLER_USER
+            .scope(Some("u-bob".to_string()), async {
+                handle_update_note_impl(req, indexer).await
+            })
+            .await;
+        assert!(resp.is_success(), "{:?}", resp.error);
+        assert_eq!(resp.result.unwrap()["saved"], true);
+
+        let path = memory_dir
+            .join("main__u-alice")
+            .join("reference")
+            .join("AliceSecret.md");
+        let content = tokio::fs::read_to_string(&path).await.unwrap();
+        assert_eq!(
+            content, original,
+            "denied update must leave alice's content untouched"
+        );
+    }
+
+    /// P1's own acceptance case for `delete_note`: bob "deleting" alice's
+    /// note reports the SAME idempotent-success shape a delete of a
+    /// genuinely nonexistent note always produces, but the file and index
+    /// entry are left completely intact — alice can still delete it herself
+    /// afterward.
+    #[tokio::test]
+    async fn foreign_partition_delete_reports_success_but_leaves_the_note_intact() {
+        use crate::gateway::caller_identity::CALLER_USER;
+
+        let memory_dir = std::env::temp_dir().join(format!("delete_deny_{}", Uuid::new_v4()));
+        let db = make_db();
+        let indexer = Arc::new(NoteIndexer::new(memory_dir.clone(), db.clone()));
+
+        indexer
+            .write_note_raw(
+                "main__u-alice",
+                "plan",
+                "AliceSecret",
+                "---\ncategory: plan\ntags: []\ncreated: \"2024-01-01\"\nupdated: \"2024-01-01\"\n---\n\n- x\n",
+            )
+            .await
+            .unwrap();
+
+        let req = JsonRpcRequest {
+            jsonrpc: "2.0".into(),
+            method: "graph.delete_note".into(),
+            params: Some(serde_json::json!({
+                "node_id": "plan/AliceSecret", "agent_id": "main__u-alice"
+            })),
+            id: Some(serde_json::json!(1)),
+        };
+        let resp = CALLER_USER
+            .scope(Some("u-bob".to_string()), async {
+                handle_delete_note_impl(req, indexer.clone()).await
+            })
+            .await;
+        assert!(resp.is_success(), "{:?}", resp.error);
+        assert_eq!(resp.result.unwrap()["deleted"], true);
+
+        assert!(
+            memory_dir
+                .join("main__u-alice")
+                .join("plan/AliceSecret.md")
+                .exists(),
+            "denied delete must leave the file intact"
+        );
+        assert!(
+            db.get_note_index("plan/AliceSecret", "main__u-alice")
+                .await
+                .unwrap()
+                .is_some(),
+            "denied delete must leave the index entry intact"
+        );
+
+        // Alice (the real owner) can still delete it for real.
+        let alice_req = JsonRpcRequest {
+            jsonrpc: "2.0".into(),
+            method: "graph.delete_note".into(),
+            params: Some(serde_json::json!({
+                "node_id": "plan/AliceSecret", "agent_id": "main__u-alice"
+            })),
+            id: Some(serde_json::json!(1)),
+        };
+        let alice_resp = CALLER_USER
+            .scope(Some("u-alice".to_string()), async {
+                handle_delete_note_impl(alice_req, indexer).await
+            })
+            .await;
+        assert!(alice_resp.is_success(), "{:?}", alice_resp.error);
+        assert!(!memory_dir
+            .join("main__u-alice")
+            .join("plan/AliceSecret.md")
+            .exists());
+    }
+
+    /// P1's own acceptance case for `rename_note`: bob renaming alice's note
+    /// gets the exact same "Note not found" response a genuinely nonexistent
+    /// node_id produces — compared against the SAME node_id on a fresh,
+    /// never-seeded store so the comparison isolates the denial itself, not
+    /// the node_id appearing in the message (the exact mistake caught and
+    /// fixed in fix round 1). Alice's file is untouched under its old name,
+    /// and she can still rename it herself afterward.
+    #[tokio::test]
+    async fn foreign_partition_rename_is_denied_with_the_not_found_shape_old_name_intact() {
+        use crate::gateway::caller_identity::CALLER_USER;
+
+        let memory_dir = std::env::temp_dir().join(format!("rename_deny_{}", Uuid::new_v4()));
+        let db = make_db();
+        let indexer = Arc::new(NoteIndexer::new(memory_dir.clone(), db));
+
+        indexer
+            .write_note_raw(
+                "main__u-alice",
+                "reference",
+                "AliceSecret",
+                "---\ncategory: reference\ntags: []\ncreated: \"2024-01-01\"\nupdated: \"2024-01-01\"\n---\n\n- x\n",
+            )
+            .await
+            .unwrap();
+
+        let rename_req = || JsonRpcRequest {
+            jsonrpc: "2.0".into(),
+            method: "graph.rename_note".into(),
+            params: Some(serde_json::json!({
+                "node_id": "reference/AliceSecret", "new_title": "Stolen", "agent_id": "main__u-alice"
+            })),
+            id: Some(serde_json::json!(1)),
+        };
+
+        let deny_resp = CALLER_USER
+            .scope(Some("u-bob".to_string()), async {
+                handle_rename_note_impl(rename_req(), indexer.clone()).await
+            })
+            .await;
+        let deny_err = deny_resp.error.expect("must be denied");
+
+        // SAME (node_id, agent_id), compared against a FRESH store where it
+        // genuinely never existed.
+        let empty_memory_dir =
+            std::env::temp_dir().join(format!("rename_deny_empty_{}", Uuid::new_v4()));
+        let empty_indexer = Arc::new(NoteIndexer::new(empty_memory_dir, make_db()));
+        let missing_resp = CALLER_USER
+            .scope(Some("u-bob".to_string()), async {
+                handle_rename_note_impl(rename_req(), empty_indexer).await
+            })
+            .await;
+        let missing_err = missing_resp
+            .error
+            .expect("genuinely missing must error too");
+
+        assert_eq!(
+            deny_err.message, missing_err.message,
+            "denied and genuinely-missing must be byte-identical (no oracle)"
+        );
+        assert_eq!(deny_err.code, missing_err.code);
+
+        // Alice's file is untouched under its old name.
+        assert!(memory_dir
+            .join("main__u-alice")
+            .join("reference/AliceSecret.md")
+            .exists());
+        assert!(!memory_dir
+            .join("main__u-alice")
+            .join("reference/Stolen.md")
+            .exists());
+
+        // Alice (the real owner) can still rename it herself.
+        let alice_resp = CALLER_USER
+            .scope(Some("u-alice".to_string()), async {
+                handle_rename_note_impl(rename_req(), indexer).await
+            })
+            .await;
+        assert!(alice_resp.is_success(), "{:?}", alice_resp.error);
     }
 }

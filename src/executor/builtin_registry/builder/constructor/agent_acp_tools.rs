@@ -25,6 +25,8 @@ impl BuiltinToolRegistry {
         Option<crate::builtin_tools::agent_manage::AgentListTool>,
         Option<crate::builtin_tools::agent_manage::AgentDeleteTool>,
         Option<crate::builtin_tools::agent_manage::AgentSwitchTool>,
+        Option<crate::builtin_tools::agent_manage::AgentUnbindTool>,
+        Option<crate::builtin_tools::agent_manage::AgentUpdateTool>,
         Option<crate::builtin_tools::agent_manage::SessionContextHandle>,
         Option<crate::builtin_tools::acp_tools::AcpDelegateTool>,
         Option<crate::builtin_tools::acp_tools::AcpSwitchTool>,
@@ -53,8 +55,13 @@ impl BuiltinToolRegistry {
         };
         let agent_info_tool = {
             use crate::tools::AlephTool;
-            let tool =
+            let mut tool =
                 crate::builtin_tools::agent_manage::AgentInfoTool::new(Arc::clone(&agent_catalog));
+            // Wire the runtime store so `bound_channels` matches `agent_list`
+            // — keeps the two views consistent for the model (R8 honesty).
+            if let Some(ref wm) = config.workspace_manager {
+                tool = tool.with_store(Arc::clone(wm));
+            }
             let td = tool.definition();
             let mut ut = UnifiedTool::new(
                 format!("builtin:{}", td.name),
@@ -89,6 +96,8 @@ impl BuiltinToolRegistry {
             agent_list_tool,
             agent_delete_tool,
             agent_switch_tool,
+            agent_unbind_tool,
+            agent_update_tool,
             session_context_handle,
         ) = if let (Some(ref ar), Some(ref wm), Some(ref sm)) = (
             &config.agent_registry,
@@ -132,6 +141,9 @@ impl BuiltinToolRegistry {
                 Arc::clone(wm),
                 config.event_bus.clone(),
             );
+            let unbind =
+                agent_manage::AgentUnbindTool::new(Arc::clone(ar), Arc::clone(wm), config.event_bus.clone());
+            let update = agent_manage::AgentUpdateTool::new(Arc::clone(ar), config.agent_manager.clone());
 
             // Register agent tools WITH their parameter schemas so LLMs
             // know which arguments to pass.
@@ -142,6 +154,8 @@ impl BuiltinToolRegistry {
                     list.definition(),
                     delete.definition(),
                     switch.definition(),
+                    unbind.definition(),
+                    update.definition(),
                 ];
                 for td in &tool_defs {
                     let mut ut = UnifiedTool::new(
@@ -156,20 +170,22 @@ impl BuiltinToolRegistry {
             }
 
             info!(
-                "Registered agent management tools (agent.create, agent.list, agent.delete, agent.switch)"
+                "Registered agent management tools (agent.create, agent.list, agent.delete, agent.switch, agent.unbind, agent.update)"
             );
             (
                 Some(create),
                 Some(list),
                 Some(delete),
                 Some(switch),
+                Some(unbind),
+                Some(update),
                 Some(ctx),
             )
         } else {
             if config.agent_registry.is_some() && config.workspace_manager.is_some() {
                 warn!("Agent management tools disabled: SessionManager not available");
             }
-            (None, None, None, None, None)
+            (None, None, None, None, None, None, None)
         };
 
         // Add ACP delegate tools (if AcpAdapterManager is provided)
@@ -282,6 +298,8 @@ impl BuiltinToolRegistry {
             agent_list_tool,
             agent_delete_tool,
             agent_switch_tool,
+            agent_unbind_tool,
+            agent_update_tool,
             session_context_handle,
             acp_delegate_tool,
             acp_switch_tool,

@@ -79,6 +79,7 @@ impl MemoryContextProvider {
             curated_config: CuratedConfig::default(),
             #[cfg(test)]
             curated_root_override: None,
+            project_scoped: false,
         }
     }
 
@@ -172,6 +173,7 @@ impl MemoryContextProvider {
             curated_config: CuratedConfig::default(),
             #[cfg(test)]
             curated_root_override: None,
+            project_scoped: false,
         }
     }
 
@@ -240,6 +242,10 @@ impl MemoryContextProvider {
             Some(p) => AiProviderReranker::new(p),
             None => Arc::new(NoopReranker),
         };
+        // Captured before the move into `HybridAssembler::new` below — the
+        // provider needs its own copy to resolve the curated envelope's
+        // storage id the same way `Gatherer` resolves notes/floors.
+        let project_scoped = assembler_config.project_scoped;
         let assembler: Arc<dyn WorkingMemoryAssembler> = Arc::new(HybridAssembler::new(
             retrieval,
             snapshots,
@@ -265,6 +271,7 @@ impl MemoryContextProvider {
             curated_config: CuratedConfig::default(),
             #[cfg(test)]
             curated_root_override: None,
+            project_scoped,
         }
     }
 
@@ -315,6 +322,15 @@ impl MemoryContextProvider {
         self
     }
 
+    /// Test-only: set `project_scoped` on an existing provider. Mirrors
+    /// `MemoryConfig.project_scoped`; production always threads it through
+    /// `AssemblerConfig` (`assemble_default`) instead.
+    #[cfg(test)]
+    pub(crate) const fn with_project_scoped(mut self, project_scoped: bool) -> Self {
+        self.project_scoped = project_scoped;
+        self
+    }
+
     /// Resolve the on-disk path for an agent's curated MEMORY.md.
     ///
     /// Real path: `~/.aleph/agents/<agent_id>/MEMORY.md`. Tests can override
@@ -335,6 +351,92 @@ impl MemoryContextProvider {
             std::env::temp_dir().join(".aleph")
         });
         base.join("agents").join(agent_id).join("MEMORY.md")
+    }
+
+    /// Resolve a BASE agent id into the effective storage id for the
+    /// CURRENT session's scope (spec §5.2). Every public curated-envelope
+    /// entry point (`build_curated_message`, `get_or_load_curated_store`)
+    /// calls this exactly once at its own top on whatever id it was handed —
+    /// mirroring `assembler::Gatherer`'s per-call resolution — so a caller
+    /// must always pass a BASE id, never a pre-resolved one (passing an
+    /// already-composed id back in would double-compose under an active
+    /// personal scope).
+    pub(crate) fn resolve_storage_id(&self, base_agent_id: &str) -> String {
+        crate::memory::project_scope::session_write_id(
+            base_agent_id,
+            self.project_scoped,
+            crate::projects::current_project_root().as_deref(),
+        )
+    }
+
+    /// One-time, lazy, per-file adoption of the single-machine owner's pre-P1
+    /// curated file into their personal-scope directory (spec §5.2 "Owner 落地
+    ///收养"). If `agent_id` is the owner's composed personal scope
+    /// (`{base}__u-owner`) and the scoped `filename` doesn't exist yet but the
+    /// bare base one does, COPIES it in — so pre-existing single-user content
+    /// BECOMES the owner's personal instance instead of silently going dark
+    /// behind the new per-scope path (the §2.5 "memory fails silently" failure
+    /// mode).
+    ///
+    /// ## Why this copies rather than moves (P1 final review, I5)
+    ///
+    /// It used to `rename`, which fixed the owner's view by breaking
+    /// everybody else's: the bare base path is not spare capacity, it is the
+    /// ORG-TIER instance. Every principal with no personal scope resolves to
+    /// it ([`crate::memory::project_scope::session_write_id`] falls through to
+    /// the base id) — an unlinked channel sender, whose `sender_user` is
+    /// `None` by design, and a legacy null-owner cron — and `session_read_ids`
+    /// still lists it FIRST in the union for scoped principals. Moving the
+    /// file out meant that after the owner's first Panel run those principals
+    /// read an EMPTY hot zone and then `remember(add)` wrote a fresh one
+    /// underneath them. Two stores, diverging, with no error anywhere — on a
+    /// single-user box, which is most of them.
+    ///
+    /// Copying leaves the org instance exactly where a pre-P1 reader expects
+    /// it and still gives the owner a personal instance. The two do diverge
+    /// afterwards, and that is P1's intended per-user semantics, not a
+    /// regression — the notes layer already has precisely this org/personal
+    /// split. The silent EMPTINESS was the defect.
+    ///
+    /// The trade this accepts: the owner's pre-P1 content stays readable by
+    /// future members through the base partition. That matches how pre-P1
+    /// NOTES already behave (org-first read union), and pre-P1 content is by
+    /// definition org-era content written when only one principal existed.
+    ///
+    /// Idempotent: a second call finds the scoped file already there and is a
+    /// no-op. Crash-safe: the copy lands on a temp sibling and is `rename`d
+    /// into place, so the idempotency check above never sees a half-written
+    /// file (a plain copy-in-place could leave a truncated scoped file that
+    /// then permanently suppresses re-adoption). A partial adoption across
+    /// FILES (this one done, a sibling call for a different `filename` not yet
+    /// run) just re-runs for the missing file on the next load — each file is
+    /// adopted independently. `agent_id` shapes that are not the owner's
+    /// composed personal scope (base ids, `proj-`/`p-` ids, another user's
+    /// `u-` id) are a no-op by construction — only the owner could have
+    /// pre-existing single-user content to inherit.
+    pub(crate) async fn adopt_owner_curated_file(&self, agent_id: &str, filename: &str) {
+        let Some(base) = crate::memory::project_scope::owner_adoption_base(agent_id) else {
+            return;
+        };
+        let scoped_path = self.agent_memory_path(agent_id).with_file_name(filename);
+        if tokio::fs::try_exists(&scoped_path).await.unwrap_or(false) {
+            return; // already adopted (or a fresh write already landed here)
+        }
+        let bare_path = self.agent_memory_path(base).with_file_name(filename);
+        if !tokio::fs::try_exists(&bare_path).await.unwrap_or(false) {
+            return; // nothing pre-P1 to adopt
+        }
+        if let Some(parent) = scoped_path.parent() {
+            if let Err(e) = tokio::fs::create_dir_all(parent).await {
+                tracing::warn!("owner adoption: mkdir failed for {filename} ({agent_id}): {e}");
+                return;
+            }
+        }
+        if let Err(e) =
+            crate::memory::project_scope::copy_adopted_file(&bare_path, &scoped_path).await
+        {
+            tracing::warn!("owner adoption: copy failed for {filename} ({agent_id}): {e}");
+        }
     }
 }
 

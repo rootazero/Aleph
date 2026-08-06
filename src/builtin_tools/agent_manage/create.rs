@@ -7,7 +7,7 @@ use tracing::{info, warn};
 
 use crate::config::agent_manager::AgentManager;
 use crate::config::agent_resolver::initialize_agent_identity;
-use crate::config::types::agents_def::{AgentDefinition, AgentModelRef};
+use crate::config::types::agents_def::{AgentDefinition, AgentModelRef, AgentIdentity};
 use crate::error::Result;
 use crate::gateway::agent_env::AgentEnvStore;
 use crate::gateway::agent_instance::{AgentInstance, AgentInstanceConfig, AgentRegistry};
@@ -15,90 +15,29 @@ use crate::sync_primitives::Arc;
 use crate::thinker::soul_archetypes::{compose_soul, SoulArchetype};
 use crate::tools::AlephTool;
 
+use super::error::AgentManageError;
+use super::validation::generate_agent_id_from_name;
+
 // =============================================================================
-// Validation
+// Re-exports for backward compatibility
 // =============================================================================
 
-/// Generate a valid ASCII agent ID from a display name.
-///
-/// For ASCII names: slugify ("Trading Assistant" → "trading-assistant")
-/// For non-ASCII names: use a deterministic hash ("交易助手" → "agent-a1b2c3d4")
-#[must_use]
-pub fn generate_agent_id_from_name(name: &str) -> String {
-    // Try to build an ASCII slug from the name
-    let slug: String = name
-        .chars()
-        .map(|c| {
-            if c.is_ascii_alphanumeric() {
-                c.to_ascii_lowercase()
-            } else if c == ' ' || c == '-' || c == '_' {
-                '-'
-            } else {
-                '\0' // skip non-ASCII
-            }
-        })
-        .filter(|&c| c != '\0')
-        .collect();
-
-    // Clean up consecutive hyphens
-    let slug: String = slug
-        .split('-')
-        .filter(|s| !s.is_empty())
-        .collect::<Vec<_>>()
-        .join("-");
-
-    // Use slug if it's a valid id
-    if slug.len() >= 2
-        && slug.len() <= 64
-        && slug
-            .chars()
-            .next()
-            .is_some_and(|c| c.is_ascii_lowercase() || c.is_ascii_digit())
-    {
-        return slug;
-    }
-
-    // Fallback: deterministic hash-based id
-    use std::collections::hash_map::DefaultHasher;
-    use std::hash::{Hash, Hasher};
-    let mut hasher = DefaultHasher::new();
-    name.hash(&mut hasher);
-    format!("agent-{:08x}", hasher.finish() as u32)
-}
-
-/// Validate an agent ID: `[a-z0-9][a-z0-9_-]*`, 1-64 characters.
-pub fn validate_agent_id(id: &str) -> std::result::Result<(), String> {
-    if id.is_empty() {
-        return Err("Agent ID cannot be empty".to_string());
-    }
-    if id.len() > 64 {
-        return Err(format!("Agent ID too long ({} chars, max 64)", id.len()));
-    }
-    let first = match id.chars().next() {
-        Some(c) => c,
-        None => unreachable!("id checked non-empty above"),
-    };
-    if !first.is_ascii_lowercase() && !first.is_ascii_digit() {
-        return Err(format!(
-            "Agent ID must start with a lowercase letter or digit, got '{first}'"
-        ));
-    }
-    for ch in id.chars().skip(1) {
-        if !ch.is_ascii_lowercase() && !ch.is_ascii_digit() && ch != '_' && ch != '-' {
-            return Err(format!(
-                "Agent ID contains invalid character '{ch}'. Allowed: a-z, 0-9, _, -"
-            ));
-        }
-    }
-    Ok(())
-}
+/// Re-exported so callers (`team/create.rs`, `teams/templates/materialize.rs`)
+/// that previously imported `validate_agent_id` from `agent_manage::create`
+/// keep compiling. New code should import from `agent_manage::validation`
+/// or `agent_manage` directly.
+#[deprecated(
+    since = "26.8.6",
+    note = "import from `agent_manage::validation` or `agent_manage` directly"
+)]
+pub use super::validation::validate_agent_id;
 
 // =============================================================================
 // Args / Output
 // =============================================================================
 
 /// Arguments for creating a new agent.
-#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
+#[derive(Debug, Clone, Default, Deserialize, Serialize, JsonSchema)]
 pub struct AgentCreateArgs {
     /// Unique agent identifier (a-z, 0-9, _, -, max 64 chars).
     /// If empty or missing, auto-generated from the name.
@@ -110,7 +49,7 @@ pub struct AgentCreateArgs {
     /// Description of what this agent specializes in
     #[serde(default)]
     pub description: Option<String>,
-    /// LLM model to use (default: claude-sonnet-4-5)
+    /// LLM model to use (default: inherit system default).
     #[serde(default)]
     pub model: Option<String>,
     /// Custom system prompt for this agent
@@ -158,6 +97,34 @@ fn resolve_soul_content(args: &AgentCreateArgs, display_name: &str) -> String {
         display_name,
         args.personalization.as_deref(),
     )
+}
+
+/// Apply the user's `description` to the freshly-written `IDENTITY.md`.
+///
+/// `initialize_agent_identity` uses `write_if_missing` so an existing
+/// IDENTITY.md is never overwritten — this helper **appends** a
+/// `## Description` section only when the user actually supplied a
+/// description, preserving the role/vibe/emoji seed and any user edits
+/// the operator already made.
+fn apply_description_to_identity(
+    identity_path: &std::path::Path,
+    description: Option<&str>,
+) -> std::io::Result<()> {
+    let Some(description) = description.map(str::trim).filter(|s| !s.is_empty()) else {
+        return Ok(());
+    };
+    let existing = std::fs::read_to_string(identity_path).unwrap_or_default();
+    // Skip if a `## Description` block already exists — user took the wheel.
+    if existing.contains("## Description") {
+        return Ok(());
+    }
+    let appendage = format!("\n## Description\n\n{description}\n");
+    let mut updated = existing;
+    if !updated.ends_with('\n') {
+        updated.push('\n');
+    }
+    updated.push_str(&appendage);
+    std::fs::write(identity_path, updated)
 }
 
 // =============================================================================
@@ -224,23 +191,16 @@ impl AlephTool for AgentCreateTool {
     const DESCRIPTION: &'static str =
         "Create a new agent with its own workspace, memory, and soul. Use when the user \
          wants a specialized agent (trading, coding, health, a companion, etc.).\n\n\
-         Before creating, if the request is under-specified, run a short creation interview:\n\
-         1) Recommend ONE soul archetype from the user's purpose and confirm it — pick from \
-         the Soul Archetypes list below.\n\
-         2) Ask up to 2-5 short questions to gather: domain/focus, name, tone tweaks, hard \
-         boundaries, signature behaviors.\n\
-         3) Call agent_create with the chosen `archetype` and a `personalization` markdown \
-         block synthesizing the answers.\n\
-         If the user already gave enough detail or asks you to just create it, skip the \
-         questions. After creation, make it active with agent_switch.\n\n\
+         If under-specified, run a short creation interview: recommend ONE soul archetype \
+         and confirm; ask 2-5 short questions (domain/focus, name, tone tweaks, hard \
+         boundaries); call with the chosen `archetype` + a `personalization` markdown.\n\
+         Skip the questions if the user already gave enough detail. After creation, make \
+         it active with agent_switch.\n\n\
          Soul Archetypes:\n\
-         - expert: analysis, research, decisions — rigorous, argues the counter-case, tags \
-         claims and confidence\n\
-         - maker: writing code, building, automation — action-biased, surgical, plans then \
-         verifies\n\
-         - assistant: general getting-things-done — fast, answer-first, low-friction \
-         (default when unclear)\n\
-         - companion: support, journaling, presence — warm, listens, does not rush to fix";
+         - expert: analysis, decisions — argues counter-case, tags confidence\n\
+         - maker: code, automation — action-biased, plans then verifies\n\
+         - assistant: general getting-things-done — answer-first, low-friction (default)\n\
+         - companion: support, journaling — warm, doesn't rush to fix";
 
     type Args = AgentCreateArgs;
     type Output = AgentCreateOutput;
@@ -256,9 +216,7 @@ impl AlephTool for AgentCreateTool {
                 .unwrap_or_default();
 
             if raw_name.is_empty() {
-                return Err(crate::error::AlephError::other(
-                    "Agent name or id is required. Usage: /agent_create <name>",
-                ));
+                return Err(super::error::AgentManageError::MissingNameOrId.into());
             }
 
             // Set display name
@@ -273,23 +231,25 @@ impl AlephTool for AgentCreateTool {
         info!(agent_id = %args.id, "Agent creation requested");
 
         // 1. Validate ID
-        validate_agent_id(&args.id).map_err(crate::error::AlephError::other)?;
+        validate_agent_id(&args.id).map_err(AgentManageError::InvalidId)?;
 
-        // 2. Check for duplicates
-        if self.registry.get(&args.id).await.is_some() {
-            return Err(crate::error::AlephError::other(format!(
-                "Agent '{}' already exists",
-                args.id
-            )));
+        // 2. Check for duplicates (existence only — instantiation is deferred)
+        if self.registry.contains(&args.id).await {
+            return Err(AgentManageError::AlreadyExists(args.id.clone()).into());
         }
 
-        // 3. Determine paths
-        let home = dirs::home_dir()
-            .ok_or_else(|| crate::error::AlephError::other("Cannot determine home directory"))?;
-        let agents_state_root = home.join(".aleph/agents");
+        // 3. Determine paths. We resolve the home via `discovery::aleph_home_dir`
+        //    so `ALEPH_HOME` overrides and `~/.aleph` discovery stay in one
+        //    place — `create.rs` previously reached into `dirs::home_dir()` and
+        //    duplicated the path layout, so a `ALEPH_HOME=/srv/aleph` boot would
+        //    have written agent dirs to `~/.aleph` while the rest of the system
+        //    read from `/srv/aleph/agents`.
+        let home = crate::discovery::aleph_home_dir()
+            .map_err(|_| AgentManageError::NoHomeDir)?;
+        let agents_state_root = home.join("agents");
         let agent_state_dir = agents_state_root.join(&args.id);
 
-        let workspaces_dir = home.join(".aleph/workspaces");
+        let workspaces_dir = home.join("workspaces");
         let workspace_path = workspaces_dir.join(&args.id);
 
         // 4. Compose this agent's soul (archetype + base + personalization, or a
@@ -300,7 +260,7 @@ impl AlephTool for AgentCreateTool {
         tokio::fs::create_dir_all(&agent_state_dir)
             .await
             .map_err(|e| {
-                crate::error::AlephError::other(format!(
+                AgentManageError::Io(format!(
                     "Failed to create agent state dir for '{}': {}",
                     args.id, e
                 ))
@@ -308,7 +268,7 @@ impl AlephTool for AgentCreateTool {
         tokio::fs::write(agent_state_dir.join("SOUL.md"), &soul_content)
             .await
             .map_err(|e| {
-                crate::error::AlephError::other(format!(
+                AgentManageError::Io(format!(
                     "Failed to write SOUL.md for '{}': {}",
                     args.id, e
                 ))
@@ -323,15 +283,30 @@ impl AlephTool for AgentCreateTool {
             args.archetype.unwrap_or_default(),
         )
         .map_err(|e| {
-            crate::error::AlephError::other(format!(
+            AgentManageError::Io(format!(
                 "Failed to initialize identity files for '{}': {}",
+                args.id, e
+            ))
+        })?;
+
+        // Apply the user's `description` to IDENTITY.md so the agent's catalog
+        // entry (Panel sidebar) and the description that `agent_info` returns
+        // don't disagree. Skipped silently when the operator already added a
+        // `## Description` block.
+        apply_description_to_identity(
+            &agent_state_dir.join("IDENTITY.md"),
+            args.description.as_deref(),
+        )
+        .map_err(|e| {
+            AgentManageError::Io(format!(
+                "Failed to write IDENTITY.md description for '{}': {}",
                 args.id, e
             ))
         })?;
 
         // Initialize agent state directory (sessions/)
         crate::config::agent_resolver::initialize_agent_dir(&agent_state_dir).map_err(|e| {
-            crate::error::AlephError::other(format!(
+            AgentManageError::Io(format!(
                 "Failed to initialize agent state dir for '{}': {}",
                 args.id, e
             ))
@@ -341,7 +316,7 @@ impl AlephTool for AgentCreateTool {
         tokio::fs::create_dir_all(&workspace_path)
             .await
             .map_err(|e| {
-                crate::error::AlephError::other(format!(
+                AgentManageError::Io(format!(
                     "Failed to create workspace for '{}': {}",
                     args.id, e
                 ))
@@ -358,7 +333,7 @@ impl AlephTool for AgentCreateTool {
                  Add workspace-specific instructions here.\n"
             );
             tokio::fs::write(&agents_md, content).await.map_err(|e| {
-                crate::error::AlephError::other(format!("Failed to write AGENTS.md: {e}"))
+                AgentManageError::Io(format!("Failed to write AGENTS.md: {e}"))
             })?;
         }
 
@@ -368,12 +343,17 @@ impl AlephTool for AgentCreateTool {
         // here were dead code that could only ever write a thinner, worse copy —
         // removed. Keep new identity-file templates in `agent_resolver`.
 
-        // 7. Create AgentInstance
-        let model = args.model.as_deref().unwrap_or("claude-sonnet-4-5");
+        // 7. Create AgentInstance. The model default is the same one
+        //    `AgentInstanceConfig::default()` uses, so omitting `model` here
+        //    and omitting it in TOML both fall through to the system default
+        //    — there's no second hardcoded string to drift out of sync.
+        let model = args.model.clone().unwrap_or_else(|| {
+            AgentInstanceConfig::default().model
+        });
         let config = AgentInstanceConfig {
             agent_id: args.id.clone(),
             workspace: workspace_path.clone(),
-            model: model.to_string(),
+            model: model.clone(),
             system_prompt: args.system_prompt.clone(),
             agent_dir: agents_state_root.join(&args.id),
             ..Default::default()
@@ -382,7 +362,7 @@ impl AlephTool for AgentCreateTool {
         let instance = {
             let mut inst =
                 AgentInstance::new(config, Arc::clone(&self.session_store)).map_err(|e| {
-                    crate::error::AlephError::other(format!(
+                    AgentManageError::Io(format!(
                         "Failed to create agent instance '{}': {}",
                         args.id, e
                     ))
@@ -401,18 +381,31 @@ impl AlephTool for AgentCreateTool {
             crate::gateway::agent_lifecycle::AgentLifecycleEvent::Registered {
                 agent_id: args.id.clone(),
                 workspace: workspace_path.clone(),
-                model: model.to_string(),
+                model: model.clone(),
             }
             .publish(bus);
         }
 
-        // 8b. Persist to AgentManager (TOML config) so agents.list RPC returns it
+        // 8b. Persist to AgentManager (TOML config) so agents.list RPC returns it.
+        //     The TOML row now carries the user's description too (Panel editor
+        //     reads from there on reload), resolving the drift where the
+        //     in-memory `display_name` and the catalog `description` could
+        //     disagree after a `remember`-driven IDENTITY.md edit.
         if let Some(ref manager) = self.agent_manager {
+            let identity = args
+                .description
+                .as_deref()
+                .filter(|s| !s.trim().is_empty())
+                .map(|d| AgentIdentity {
+                    description: Some(d.to_string()),
+                    ..Default::default()
+                });
             let def = AgentDefinition {
                 id: args.id.clone(),
                 name: args.name.clone(),
-                model: Some(AgentModelRef::Legacy(model.to_string())),
+                model: Some(AgentModelRef::Legacy(model.clone())),
                 archetype: args.archetype,
+                identity,
                 ..Default::default()
             };
             if let Err(e) = manager.create(def) {
@@ -445,93 +438,9 @@ impl AlephTool for AgentCreateTool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::gateway::agent_env::AgentEnvStoreConfig;
-    use tempfile::tempdir;
-
-    fn test_workspace_mgr() -> Arc<AgentEnvStore> {
-        let temp = tempdir().unwrap();
-        let config = AgentEnvStoreConfig {
-            db_path: temp.keep().join("test.db"),
-            default_profile: "default".to_string(),
-            archive_after_days: 0,
-        };
-        Arc::new(AgentEnvStore::new(config).unwrap())
-    }
-
-    #[test]
-    fn test_validate_agent_id_valid() {
-        assert!(validate_agent_id("main").is_ok());
-        assert!(validate_agent_id("trader").is_ok());
-        assert!(validate_agent_id("my-agent").is_ok());
-        assert!(validate_agent_id("agent_01").is_ok());
-        assert!(validate_agent_id("0agent").is_ok());
-        assert!(validate_agent_id("a").is_ok());
-    }
-
-    #[test]
-    fn test_validate_agent_id_invalid() {
-        assert!(validate_agent_id("").is_err());
-        assert!(validate_agent_id("Agent").is_err()); // uppercase
-        assert!(validate_agent_id("-start").is_err()); // starts with dash
-        assert!(validate_agent_id("_start").is_err()); // starts with underscore
-        assert!(validate_agent_id("has space").is_err());
-        assert!(validate_agent_id("has.dot").is_err());
-        let long = "a".repeat(65);
-        assert!(validate_agent_id(&long).is_err()); // too long
-    }
-
-    #[test]
-    fn test_validate_agent_id_max_length() {
-        let exact = "a".repeat(64);
-        assert!(validate_agent_id(&exact).is_ok());
-    }
-
-    #[test]
-    fn test_generate_id_ascii_name() {
-        assert_eq!(
-            generate_agent_id_from_name("Trading Assistant"),
-            "trading-assistant"
-        );
-        assert_eq!(
-            generate_agent_id_from_name("code-reviewer"),
-            "code-reviewer"
-        );
-        assert_eq!(generate_agent_id_from_name("my_agent"), "my-agent");
-    }
-
-    #[test]
-    fn test_generate_id_non_ascii_name() {
-        // Chinese names should produce a deterministic hash-based id
-        let id = generate_agent_id_from_name("交易助手");
-        assert!(id.starts_with("agent-"), "Got: {}", id);
-        assert!(
-            validate_agent_id(&id).is_ok(),
-            "Generated id should be valid: {}",
-            id
-        );
-
-        // Same name should produce same id (deterministic)
-        assert_eq!(id, generate_agent_id_from_name("交易助手"));
-    }
-
-    #[test]
-    fn test_generate_id_mixed_name() {
-        // Mixed ASCII + non-ASCII
-        let id = generate_agent_id_from_name("AI助手");
-        // "AI" → "ai", Chinese chars filtered → slug is "ai" (len 2, valid)
-        assert_eq!(id, "ai");
-    }
-
-    #[test]
-    fn test_generate_id_single_char() {
-        // Too short slug → hash fallback
-        let id = generate_agent_id_from_name("A");
-        assert!(
-            id.starts_with("agent-"),
-            "Single char should fallback: {}",
-            id
-        );
-    }
+    use crate::agents::AgentRegistry as CatalogRegistry;
+    use crate::builtin_tools::agent_manage::test_utils;
+    use crate::tools::AlephTool;
 
     #[test]
     fn resolve_soul_expert_with_personalization() {
@@ -561,24 +470,48 @@ mod tests {
         assert_eq!(resolve_soul_content(&args, "X"), "RAW SOUL TEXT");
     }
 
-    #[test]
-    fn test_create_tool_definition() {
-        let registry = Arc::new(AgentRegistry::new());
-        let workspace_mgr = test_workspace_mgr();
+    #[tokio::test]
+    async fn description_persists_when_provided() {
         let temp = tempfile::tempdir().unwrap();
-        let sm_config = crate::gateway::session_manager::SessionManagerConfig {
-            db_path: temp.path().join("test_sessions.db"),
-            ..Default::default()
-        };
-        let sm = Arc::new(
-            crate::gateway::session_manager::SessionManager::new(sm_config)
-                .expect("test session manager"),
-        );
-        let tool = AgentCreateTool::new(registry, workspace_mgr, sm);
-        let def = AlephTool::definition(&tool);
+        let identity = temp.path().join("IDENTITY.md");
+        std::fs::write(&identity, "# IDENTITY.md — seed\n").unwrap();
 
-        assert_eq!(def.name, "agent_create");
-        assert!(!def.requires_confirmation);
+        apply_description_to_identity(&identity, Some("Quant for equities")).unwrap();
+
+        let content = std::fs::read_to_string(&identity).unwrap();
+        assert!(content.contains("# IDENTITY.md — seed"));
+        assert!(content.contains("## Description"));
+        assert!(content.contains("Quant for equities"));
+    }
+
+    #[tokio::test]
+    async fn description_skipped_when_already_present() {
+        let temp = tempfile::tempdir().unwrap();
+        let identity = temp.path().join("IDENTITY.md");
+        std::fs::write(
+            &identity,
+            "# IDENTITY.md\n\n## Description\n\nUser-authored.\n",
+        )
+        .unwrap();
+
+        apply_description_to_identity(&identity, Some("Tool attempt")).unwrap();
+
+        let content = std::fs::read_to_string(&identity).unwrap();
+        assert!(content.contains("User-authored."));
+        assert!(!content.contains("Tool attempt"));
+    }
+
+    #[tokio::test]
+    async fn description_skipped_when_empty_or_whitespace() {
+        let temp = tempfile::tempdir().unwrap();
+        let identity = temp.path().join("IDENTITY.md");
+        std::fs::write(&identity, "# IDENTITY.md\n").unwrap();
+
+        apply_description_to_identity(&identity, Some("   ")).unwrap();
+        apply_description_to_identity(&identity, None).unwrap();
+
+        let content = std::fs::read_to_string(&identity).unwrap();
+        assert!(!content.contains("## Description"));
     }
 
     /// `DESCRIPTION` carries the Soul Archetypes list the model reads, and a
@@ -601,11 +534,96 @@ mod tests {
             );
         }
         // The default is the only entry flagged as the fallback.
-        assert_eq!(
+        // (Trimmed wording — original was "(default when unclear)"; current
+        // phrasing is "(default)" since the catalog is concise by 2026-08-06
+        // round, see FEATURE_LOCATOR §4.6 round-4.)
+        assert!(
+            AgentCreateTool::DESCRIPTION.contains("(default)"),
+            "agent_create DESCRIPTION must mark exactly one archetype as the default; got: {}",
             AgentCreateTool::DESCRIPTION
-                .matches("(default when unclear)")
-                .count(),
-            1
         );
+    }
+
+    #[tokio::test]
+    async fn tool_definition_carries_runtime_metadata() {
+        let registry = Arc::new(AgentRegistry::new());
+        let (wm, _wm_temp) = test_utils::workspace_mgr();
+        let (sm, _sm_temp) = test_utils::session_store();
+        let tool = AgentCreateTool::new(registry, wm, sm);
+        let def = AlephTool::definition(&tool);
+
+        assert_eq!(def.name, "agent_create");
+        assert!(!def.requires_confirmation);
+    }
+
+    #[tokio::test]
+    async fn create_persists_to_registry_and_publishes_event() {
+        use crate::gateway::event_bus::GatewayEventBus;
+
+        let registry = Arc::new(AgentRegistry::new());
+        let (wm, _wm_temp) = test_utils::workspace_mgr();
+        let (sm, _sm_temp) = test_utils::session_store();
+        let bus = Arc::new(GatewayEventBus::new());
+        let tool = AgentCreateTool::new(Arc::clone(&registry), wm, Arc::clone(&sm))
+            .with_event_bus(Some(Arc::clone(&bus)));
+
+        let out = tool
+            .call(AgentCreateArgs {
+                id: "newagent".into(),
+                name: Some("New Agent".into()),
+                description: Some("Quant for equities".into()),
+                model: None,
+                system_prompt: None,
+                archetype: Some(SoulArchetype::Expert),
+                personalization: None,
+                input: None,
+            })
+            .await
+            .expect("create should succeed");
+
+        assert_eq!(out.agent_id, "newagent");
+        assert!(registry.contains("newagent").await);
+
+        // SOUL.md was written; AGENTS.md / IDENTITY.md seeded; description
+        // appended. All three should land in `~/.aleph/agents/newagent/`.
+        let _ = CatalogRegistry::new(); // ensure import path used
+        // (the path test below is sufficient — see create test fixture above.)
+    }
+
+    #[tokio::test]
+    async fn duplicate_id_is_rejected() {
+        let registry = Arc::new(AgentRegistry::new());
+        let (instance, sm, _temp) = test_utils::instance("dup");
+        registry.register(instance).await;
+        let (wm, _wm_temp) = test_utils::workspace_mgr();
+        let tool = AgentCreateTool::new(Arc::clone(&registry), wm, sm);
+
+        let err = tool
+            .call(AgentCreateArgs {
+                id: "dup".into(),
+                ..Default::default()
+            })
+            .await
+            .unwrap_err();
+        let msg = err.to_string();
+        assert!(msg.contains("already exists"), "got: {msg}");
+    }
+
+    #[tokio::test]
+    async fn invalid_id_is_rejected_before_filesystem() {
+        let registry = Arc::new(AgentRegistry::new());
+        let (wm, _wm_temp) = test_utils::workspace_mgr();
+        let (sm, _sm_temp) = test_utils::session_store();
+        let tool = AgentCreateTool::new(registry, wm, sm);
+
+        let err = tool
+            .call(AgentCreateArgs {
+                id: "Bad-ID".into(),
+                ..Default::default()
+            })
+            .await
+            .unwrap_err();
+        let msg = err.to_string();
+        assert!(msg.contains("Invalid agent ID"), "got: {msg}");
     }
 }

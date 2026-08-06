@@ -30,6 +30,22 @@ use super::engine::ExecutionEngine;
 // Agent loop execution
 // ============================================================================
 
+/// Establishes this run's scope attribution (owner/scope) as a task-local for
+/// `fut`'s duration, derived from `request.metadata` — see
+/// [`crate::scope::stamp_metadata`] at the two origin sites
+/// (`build_run_request`, the channel inbound router's `execute_for_context_inner`).
+///
+/// Extracted from [`ExecutionEngine::run_agent_loop`]'s wrapping nest for
+/// testability: unlike the other layers in that nest (agent id, project
+/// root, fs scope), this one depends on nothing but the metadata map, so it
+/// can be driven directly with a minimal `RunRequest` and a probe future.
+pub(super) async fn with_request_scope<F, T>(request: &RunRequest, fut: F) -> T
+where
+    F: std::future::Future<Output = T>,
+{
+    crate::scope::with_scope(crate::scope::scope_from_metadata(&request.metadata), fut).await
+}
+
 impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionEngine<P, R> {
     /// Run the agent loop (think->act two-step, Claude Code-inspired).
     ///
@@ -176,22 +192,31 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
                 request.workspace_override.clone(),
                 crate::tools::fs_scope::with_fs_scope(
                     Some(fs_scope),
-                    crate::tools::turn_context::with_originator(
-                        originator,
-                        crate::gateway::media::with_pending_media(
-                            Some(delivery_media),
-                            self.run_agent_loop_inner(
-                                run_id,
-                                request,
-                                agent.clone(),
-                                emitter,
-                                deadline,
-                                trace_task_id,
-                                cancel_token,
-                                extension_manager,
-                                hook_executor.clone(),
-                                hook_session_id.clone(),
-                                occupancy_out,
+                    // P1 data isolation: publish this run's owner/scope
+                    // attribution as a task-local, sibling of `originator`
+                    // below — both are derived from `request.metadata` and
+                    // must be re-seeded at every spawn boundary that carries
+                    // this request's metadata forward (see
+                    // `scope::with_scope`'s doc and `carry_policy_metadata`).
+                    with_request_scope(
+                        request,
+                        crate::tools::turn_context::with_originator(
+                            originator,
+                            crate::gateway::media::with_pending_media(
+                                Some(delivery_media),
+                                self.run_agent_loop_inner(
+                                    run_id,
+                                    request,
+                                    agent.clone(),
+                                    emitter,
+                                    deadline,
+                                    trace_task_id,
+                                    cancel_token,
+                                    extension_manager,
+                                    hook_executor.clone(),
+                                    hook_session_id.clone(),
+                                    occupancy_out,
+                                ),
                             ),
                         ),
                     ),

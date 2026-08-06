@@ -309,36 +309,42 @@ pub(in crate::commands::start) fn register_teams_handlers(
         server,
         "teams.list_tasks",
         teams::handle_list_tasks,
+        store,
         coord_store
     );
     register_handler!(
         server,
         "teams.create_task",
         teams::handle_create_task,
+        store,
         coord_store
     );
     register_handler!(
         server,
         "teams.update_task",
         teams::handle_update_task,
+        store,
         coord_store
     );
     register_handler!(
         server,
         "teams.list_task_runs",
         teams::handle_list_task_runs,
+        store,
         coord_store
     );
     register_handler!(
         server,
         "teams.add_task_comment",
         teams::handle_add_task_comment,
+        store,
         coord_store
     );
     register_handler!(
         server,
         "teams.list_task_comments",
         teams::handle_list_task_comments,
+        store,
         coord_store
     );
 
@@ -349,12 +355,14 @@ pub(in crate::commands::start) fn register_teams_handlers(
         server,
         "teams.workflow.approve_step",
         teams::handle_workflow_approve_step,
+        store,
         coord_store
     );
     register_handler!(
         server,
         "teams.workflow.reject_step",
         teams::handle_workflow_reject_step,
+        store,
         coord_store
     );
 
@@ -366,24 +374,28 @@ pub(in crate::commands::start) fn register_teams_handlers(
         server,
         "teams.task.pause",
         teams::handle_task_pause,
+        store,
         coord_store
     );
     register_handler!(
         server,
         "teams.task.resume",
         teams::handle_task_resume,
+        store,
         coord_store
     );
     register_handler!(
         server,
         "teams.task.retry",
         teams::handle_task_retry,
+        store,
         coord_store
     );
     register_handler!(
         server,
         "teams.task.skip",
         teams::handle_task_skip,
+        store,
         coord_store
     );
 
@@ -394,16 +406,18 @@ pub(in crate::commands::start) fn register_teams_handlers(
     // register_handler! macro is fixed to 1-3 mandatory Arcs — here we
     // need two Option<Arc<_>> contexts.
     {
+        let ts = Arc::clone(store);
         let cs = Arc::clone(coord_store);
         let es = event_store.cloned();
         let ar = artifact_store.cloned();
         server
             .handlers_mut()
             .register("teams.task.trace", move |req| {
+                let ts = Arc::clone(&ts);
                 let cs = Arc::clone(&cs);
                 let es = es.clone();
                 let ar = ar.clone();
-                async move { teams::handle_task_trace(req, cs, es, ar).await }
+                async move { teams::handle_task_trace(req, ts, cs, es, ar).await }
             });
     }
 
@@ -411,25 +425,29 @@ pub(in crate::commands::start) fn register_teams_handlers(
     // merged chronologically). Done by hand like teams.task.trace because it
     // takes coord_store (mandatory) + artifact_store (optional Option<Arc>).
     {
+        let ts = Arc::clone(store);
         let cs = Arc::clone(coord_store);
         let ar = artifact_store.cloned();
         server
             .handlers_mut()
             .register("teams.chat.thread", move |req| {
+                let ts = Arc::clone(&ts);
                 let cs = Arc::clone(&cs);
                 let ar = ar.clone();
-                async move { teams::handle_chat_thread(req, cs, ar).await }
+                async move { teams::handle_chat_thread(req, ts, cs, ar).await }
             });
     }
 
     // teams.chat.history — replay durable group-chat transcript as attribution
     // bubbles. Only registered when the message store is wired at boot.
     if let Some(ms) = msg_store.clone() {
+        let ts = Arc::clone(store);
         server
             .handlers_mut()
             .register("teams.chat.history", move |req| {
+                let ts = Arc::clone(&ts);
                 let ms = Arc::clone(&ms);
-                async move { teams::handle_chat_history(req, ms).await }
+                async move { teams::handle_chat_history(req, ts, ms).await }
             });
     }
 
@@ -439,12 +457,14 @@ pub(in crate::commands::start) fn register_teams_handlers(
         server,
         "teams.task.journal.get",
         teams::handle_task_journal_get,
+        store,
         coord_store
     );
     register_handler!(
         server,
         "teams.task.journal.list",
         teams::handle_task_journal_list,
+        store,
         coord_store
     );
 
@@ -478,6 +498,7 @@ pub(in crate::commands::start) fn register_teams_handlers(
             server,
             "teams.list_task_events",
             teams::handle_list_task_events,
+            store,
             coord_store,
             es
         );
@@ -500,12 +521,14 @@ pub(in crate::commands::start) fn register_teams_handlers(
             server,
             "teams.snapshot.list",
             teams::handle_snapshot_list,
+            store,
             snap
         );
         register_handler!(
             server,
             "teams.snapshot.get",
             teams::handle_snapshot_get,
+            store,
             snap
         );
         register_handler!(
@@ -520,6 +543,7 @@ pub(in crate::commands::start) fn register_teams_handlers(
             server,
             "teams.snapshot.delete",
             teams::handle_snapshot_delete,
+            store,
             snap
         );
     }

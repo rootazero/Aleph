@@ -107,7 +107,12 @@ pub(super) async fn init_team_store(daemon: bool) -> Option<Arc<dyn alephcore::t
             if !daemon {
                 println!("  Team store initialized (SQLite)");
             }
-            Some(store as Arc<dyn alephcore::teams::TeamStore>)
+            // Every consumer — the 37 `teams.*` RPCs, the `team_*` tools, the
+            // dispatcher — receives the OWNERSHIP-SCOPED handle. This is the
+            // only place the raw store is visible; publishing it unwrapped is
+            // how the P1 team isolation gets bypassed (see
+            // `teams::scoped::ScopedTeamStore`).
+            Some(alephcore::teams::ScopedTeamStore::wrap(store))
         }
         Err(e) => {
             if !daemon {

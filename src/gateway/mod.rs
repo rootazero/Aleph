@@ -96,6 +96,7 @@ pub mod busy_queue;
 pub mod caller_identity;
 pub mod context;
 pub mod event_scope;
+pub mod event_visibility;
 pub mod execution_adapter;
 pub mod hello_snapshot;
 pub mod i18n;
@@ -104,7 +105,9 @@ pub mod identity_loader;
 pub mod inter_agent_policy;
 pub mod lane;
 pub mod media;
+pub mod method_admin;
 pub mod method_authz;
+pub mod method_visibility;
 pub mod openai_api;
 pub mod projection_reconciler;
 pub mod rate_limiter;
@@ -117,6 +120,7 @@ pub mod tools_invalidation;
 pub mod trace_context;
 pub mod trace_protocol;
 pub mod trusted_proxy;
+pub mod visibility;
 pub mod voice;
 pub mod webhook_receiver;
 pub mod webhooks;
@@ -197,6 +201,11 @@ pub use webhooks::{
 mod proptest_channel;
 #[cfg(test)]
 mod proptest_protocol;
+
+// P1 data-isolation acceptance tests (spec §9) — the two end-to-end tests
+// the branch is named for.
+#[cfg(test)]
+mod isolation_acceptance;
 
 #[cfg(all(test, feature = "loom"))]
 mod loom_concurrency;

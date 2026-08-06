@@ -21,15 +21,19 @@ impl SecurityStore {
             "[]".to_string()
         });
 
+        // `user_id = COALESCE(excluded.user_id, devices.user_id)`: a `None`
+        // binding (unbound re-pair) must leave an existing owner untouched —
+        // mine-4 sibling of the `device_type`/`revoked_at` invariants below.
         conn.execute(
             r#"INSERT INTO devices
-               (device_id, device_name, device_type, public_key, fingerprint, role, scopes, created_at, approved_at)
-               VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?8)
+               (device_id, device_name, device_type, public_key, fingerprint, role, scopes, user_id, created_at, approved_at)
+               VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?9)
                ON CONFLICT(device_id) DO UPDATE SET
                  device_name = excluded.device_name,
-                 last_seen_at = ?8,
-                 revoked_at = NULL"#,
-            params![data.device_id, data.device_name, data.device_type, data.public_key, data.fingerprint, data.role, scopes_json, now],
+                 last_seen_at = ?9,
+                 revoked_at = NULL,
+                 user_id = COALESCE(excluded.user_id, devices.user_id)"#,
+            params![data.device_id, data.device_name, data.device_type, data.public_key, data.fingerprint, data.role, scopes_json, data.user_id, now],
         )?;
         Ok(())
     }

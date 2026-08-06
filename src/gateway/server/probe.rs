@@ -103,6 +103,10 @@ mod tests {
             origin_policy: Arc::new(crate::gateway::origin_policy::OriginPolicy::loopback_only()),
             node_registry: Arc::new(crate::cluster::NodeRegistry::new()),
             exec_approval_manager: None,
+            session_store: None,
+            event_visibility: Arc::new(
+                crate::gateway::event_visibility::EventVisibilityIndex::new(),
+            ),
         })
     }
 

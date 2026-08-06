@@ -126,8 +126,10 @@ pub use agent_identity::{AgentIdentityArgs, AgentIdentityTool};
 pub use agent_manage::{
     AgentCreateArgs, AgentCreateOutput, AgentCreateTool, AgentDeleteArgs, AgentDeleteOutput,
     AgentDeleteTool, AgentInfoArgs, AgentInfoOutput, AgentInfoTool, AgentListArgs, AgentListInfo,
-    AgentListOutput, AgentListTool, AgentSwitchArgs, AgentSwitchOutput, AgentSwitchTool,
-    SessionContext, SessionContextHandle,
+    AgentListOutput, AgentListTool, AgentManageContext, AgentManageError, AgentSwitchArgs,
+    AgentSwitchOutput, AgentSwitchTool, AgentUnbindArgs, AgentUnbindOutput, AgentUnbindTool,
+    AgentUpdateArgs, AgentUpdateOutput, AgentUpdateTool, generate_agent_id_from_name,
+    validate_agent_id,
 };
 pub use automation_tool::{AutomationArgs, AutomationOutput, AutomationTool};
 pub use bash_exec::{BashExecArgs, BashExecTool};

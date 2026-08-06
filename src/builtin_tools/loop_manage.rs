@@ -352,7 +352,10 @@ impl LoopTool {
         let mut state = LoopState::new(session, &prompt, cadence, now)
             .with_max_iterations(effective_max)
             .with_deadline_ms(deadline)
-            .with_token_budget(args.token_budget);
+            .with_token_budget(args.token_budget)
+            // P1 data isolation: stamp the owning user/scope from the ambient
+            // attribution of THIS creating run — mirrors goal.rs's stamp.
+            .with_owner_scope(crate::scope::current_scope().as_ref());
         // Honor next_wake on a model-paced start so the model's chosen pace
         // applies from tick 1 instead of the 10-minute fallback; on a fixed
         // cadence it is contradictory — reject with the same guidance as

@@ -311,6 +311,8 @@ mod tests {
             session_target: SessionTarget::Isolated,
             marked_at: 1_000_000,
             trigger_source: TriggerSource::Schedule,
+            owner_user_id: None,
+            scope_id: None,
         }
     }
 

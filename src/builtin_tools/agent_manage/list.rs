@@ -176,46 +176,14 @@ impl AlephTool for AgentListTool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::gateway::agent_env::AgentEnvStoreConfig;
+    use crate::builtin_tools::agent_manage::test_utils;
     use crate::tools::AlephTool;
-    use tempfile::tempdir;
-
-    fn test_workspace_mgr() -> Arc<AgentEnvStore> {
-        let temp = tempdir().unwrap();
-        let config = AgentEnvStoreConfig {
-            db_path: temp.keep().join("test.db"),
-            default_profile: "default".to_string(),
-            archive_after_days: 0,
-        };
-        Arc::new(AgentEnvStore::new(config).unwrap())
-    }
-
-    fn test_instance(agent_id: &str) -> crate::gateway::agent_instance::AgentInstance {
-        use crate::gateway::agent_instance::{AgentInstance, AgentInstanceConfig};
-        use crate::gateway::session_manager::{SessionManager, SessionManagerConfig};
-        let root = tempdir().unwrap().keep();
-        let session_store = Arc::new(
-            SessionManager::new(SessionManagerConfig {
-                db_path: root.join("sessions.db"),
-                ..Default::default()
-            })
-            .expect("session manager"),
-        );
-        let config = AgentInstanceConfig {
-            agent_id: agent_id.to_string(),
-            workspace: root.join("workspace"),
-            agent_dir: root.join("state"),
-            model: "claude-sonnet-4-5".to_string(),
-            ..Default::default()
-        };
-        AgentInstance::new(config, session_store).expect("instance")
-    }
 
     #[test]
     fn test_list_tool_definition() {
         let registry = Arc::new(AgentRegistry::new());
-        let workspace_mgr = test_workspace_mgr();
-        let tool = AgentListTool::new(registry, workspace_mgr);
+        let (wm, _wm_temp) = test_utils::workspace_mgr();
+        let tool = AgentListTool::new(registry, wm);
         let def = AlephTool::definition(&tool);
 
         assert_eq!(def.name, "agent_list");
@@ -225,10 +193,11 @@ mod tests {
     #[tokio::test]
     async fn test_list_marks_active_for_bound_channel() {
         let registry = Arc::new(AgentRegistry::new());
-        for id in ["coder", "trader"] {
-            registry.register(test_instance(id)).await;
-        }
-        let wm = test_workspace_mgr();
+        let (instance1, _sm, _t) = test_utils::instance("coder");
+        registry.register(instance1).await;
+        let (instance2, _sm2, _t2) = test_utils::instance("trader");
+        registry.register(instance2).await;
+        let (wm, _wm_temp) = test_utils::workspace_mgr();
         wm.set_active_agent("telegram", "trader").unwrap();
         let tool = AgentListTool::new(registry, Arc::clone(&wm));
 
@@ -251,8 +220,9 @@ mod tests {
     #[tokio::test]
     async fn test_list_unbound_channel_falls_back_to_default() {
         let registry = Arc::new(AgentRegistry::new());
-        registry.register(test_instance("main")).await;
-        let wm = test_workspace_mgr();
+        let (instance, _sm, _t) = test_utils::instance("main");
+        registry.register(instance).await;
+        let (wm, _wm_temp) = test_utils::workspace_mgr();
         let tool = AgentListTool::new(registry, wm);
 
         let out = tool
@@ -270,8 +240,9 @@ mod tests {
     #[tokio::test]
     async fn test_list_reports_all_bound_channels() {
         let registry = Arc::new(AgentRegistry::new());
-        registry.register(test_instance("trader")).await;
-        let wm = test_workspace_mgr();
+        let (instance, _sm, _t) = test_utils::instance("trader");
+        registry.register(instance).await;
+        let (wm, _wm_temp) = test_utils::workspace_mgr();
         // Many-to-one: several channels bound to the same agent.
         wm.set_active_agent("telegram", "trader").unwrap();
         wm.set_active_agent("discord", "trader").unwrap();

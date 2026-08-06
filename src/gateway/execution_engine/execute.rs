@@ -730,20 +730,22 @@ where
                 }
 
                 // Async session compaction (hierarchical summarization).
-                // Capture this turn's project root BEFORE the spawn: the
-                // `projects::run_context` task-local does not cross a
-                // `tokio::spawn` boundary (and the run-loop's scope is already
-                // closed here), so resolving the project-scoped storage agent
-                // id inside the spawned task would always fall back to the
-                // base id while the in-turn readers resolve the scoped id —
-                // writes and reads would silently split. Mirrors the workspace
-                // capture in the goal_continuation hook below.
+                // Capture this turn's project root AND scope attribution
+                // BEFORE the spawn: neither the `projects::run_context` nor
+                // the `crate::scope` task-local crosses a `tokio::spawn`
+                // boundary (and the run-loop's own scopes are already closed
+                // here), so resolving the storage agent id inside the spawned
+                // task would always fall back to the base/org id while the
+                // in-turn readers resolve the project- or personal-scoped id
+                // — writes and reads would silently split. Mirrors the
+                // workspace capture in the goal_continuation hook below.
                 if let Some(ref sc) = self.session_compactor {
                     let sc = sc.clone();
                     let agent_clone = agent.clone();
                     let session_key_clone = request.session_key.clone();
                     let project_root = request.workspace_override.clone();
-                    tokio::spawn(async move {
+                    let scope_attr = crate::scope::current_scope();
+                    tokio::spawn(crate::scope::with_scope(scope_attr, async move {
                         if let Err(e) = sc
                             .post_turn_compress(
                                 &agent_clone,
@@ -754,7 +756,7 @@ where
                         {
                             warn!(error = %e, "Session compaction failed");
                         }
-                    });
+                    }));
                 }
 
                 // Autonomous-continuation hook (R7/R10-safe, opt-in).
@@ -1020,7 +1022,12 @@ pub(super) type OriginRoute = (
 /// metadata from scratch — so a Chat-tier Telegram conversation clamped to `Auto`
 /// on its interactive turns spawned a goal continuation that ran at the
 /// unclamped global tier with nobody watching. Invariant: a background run is
-/// never MORE privileged than the conversation that spawned it.
+/// never MORE privileged than the conversation that spawned it — and, per P1
+/// data isolation, never LESS situated either: [`crate::scope::OWNER_META_KEY`]
+/// / [`crate::scope::SCOPE_META_KEY`] (the owner/scope attribution stamped at
+/// the originating request) must inherit unchanged, so a continuation's
+/// `memory.project_scoped` / retrieval / compaction reads never fall back to
+/// the unscoped or wrong-owner namespace.
 ///
 /// Everything else is per-turn (locale / platform / busy-input mode / slash
 /// mode) and is deliberately dropped. `channel_id` / `conversation_id` stay out
@@ -1029,10 +1036,15 @@ pub(super) type OriginRoute = (
 pub(super) fn carry_policy_metadata(
     src: &std::collections::HashMap<String, String>,
 ) -> std::collections::HashMap<String, String> {
-    ["caller_role", super::CHANNEL_TOOL_PERMISSIONS_KEY]
-        .iter()
-        .filter_map(|k| src.get(*k).map(|v| ((*k).to_string(), v.clone())))
-        .collect()
+    [
+        "caller_role",
+        super::CHANNEL_TOOL_PERMISSIONS_KEY,
+        crate::scope::OWNER_META_KEY,
+        crate::scope::SCOPE_META_KEY,
+    ]
+    .iter()
+    .filter_map(|k| src.get(*k).map(|v| ((*k).to_string(), v.clone())))
+    .collect()
 }
 
 /// Metadata of an autonomous continuation run: the inherited policy layer plus
@@ -1693,6 +1705,30 @@ mod carry_policy_metadata_tests {
     #[test]
     fn a_panel_turn_carries_nothing() {
         assert!(carry_policy_metadata(&meta(&[("platform", "webchat")])).is_empty());
+    }
+
+    /// P1 data isolation: a continuation must inherit the owner/scope
+    /// attribution stamped on the originating request, exactly like
+    /// `caller_role` — otherwise a background run's memory reads fall back
+    /// to the unscoped namespace.
+    #[test]
+    fn continuation_inherits_owner_and_scope_keys() {
+        use crate::scope::ScopeAttribution;
+
+        let mut src = HashMap::new();
+        crate::scope::stamp_metadata(&mut src, &ScopeAttribution::personal("u-alice"));
+        src.insert("caller_role".into(), "member".into());
+
+        let out = carry_policy_metadata(&src);
+
+        assert_eq!(
+            out.get(crate::scope::OWNER_META_KEY).map(String::as_str),
+            Some("u-alice")
+        );
+        assert_eq!(
+            out.get(crate::scope::SCOPE_META_KEY).map(String::as_str),
+            Some("personal:u-alice")
+        );
     }
 
     /// The composed invariant, end to end: a Chat-tier Telegram turn's clamp and

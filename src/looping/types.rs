@@ -142,6 +142,18 @@ pub struct LoopState {
     /// silently-capped watch loop can explain itself on the next turn — without
     /// it, the stop reason the hook computes was logged and dropped.
     pub stop_reason: Option<String>,
+    /// P1 data isolation: the user id that started this loop, stamped once at
+    /// `loop(action='start')` time from `scope::current_scope()` inside the
+    /// creating run. Owned by the claim pipeline exactly like `goal::Goal::workspace`
+    /// — preserved across tool updates by `LoopRegistry::commit_field_update`.
+    /// `None` outside any scope (legacy/unattended) — unscoped, zero behavior
+    /// change. No `#[serde(default)]` needed: this type is never persisted
+    /// (see the module doc).
+    pub owner_user_id: Option<String>,
+    /// The rendered scope boundary (`scope::ScopeId::render()`) paired with
+    /// [`Self::owner_user_id`]. Always set/cleared together — see
+    /// [`Self::with_owner_scope`].
+    pub scope_id: Option<String>,
 }
 
 impl LoopState {
@@ -162,6 +174,8 @@ impl LoopState {
             status: LoopStatus::Active,
             created_at_ms: now_ms,
             stop_reason: None,
+            owner_user_id: None,
+            scope_id: None,
         }
     }
 
@@ -203,6 +217,16 @@ impl LoopState {
     #[must_use]
     pub fn with_stop_reason(mut self, reason: Option<String>) -> Self {
         self.stop_reason = reason;
+        self
+    }
+
+    /// Stamp (or clear) the owning scope attribution. Set once at creation
+    /// from `scope::current_scope()`; claim-pipeline-owned thereafter, mirrors
+    /// `goal::Goal::with_owner_scope`.
+    #[must_use]
+    pub fn with_owner_scope(mut self, attr: Option<&crate::scope::ScopeAttribution>) -> Self {
+        self.owner_user_id = attr.map(|a| a.owner_user_id.clone());
+        self.scope_id = attr.map(|a| a.scope.render());
         self
     }
 
@@ -540,6 +564,27 @@ mod tests {
             }
         ));
         assert!(l.next_wake_ms.is_none(), "stale next_wake cleared on Fixed");
+    }
+
+    #[test]
+    fn new_loop_has_no_owner_scope() {
+        let l = sample();
+        assert_eq!(l.owner_user_id, None);
+        assert_eq!(l.scope_id, None);
+    }
+
+    #[test]
+    fn with_owner_scope_stamps_both_fields() {
+        let attr = crate::scope::ScopeAttribution::personal("u-alice");
+        let l = sample().with_owner_scope(Some(&attr));
+        assert_eq!(l.owner_user_id.as_deref(), Some("u-alice"));
+        assert_eq!(l.scope_id.as_deref(), Some("personal:u-alice"));
+        // None clears both, mirroring goal::Goal::with_owner_scope(None).
+        let cleared = l.with_owner_scope(None);
+        assert_eq!(cleared.owner_user_id, None);
+        assert_eq!(cleared.scope_id, None);
+        // original unaffected (immutability)
+        assert_eq!(sample().owner_user_id, None);
     }
 
     #[test]

@@ -68,6 +68,7 @@ fn mint_node_device(store: &SecurityStore, node_name: &str) -> Result<String, St
             fingerprint: &device_id[..16],
             role: "node",
             scopes: &["node".to_string()],
+            user_id: None,
         })
         .map_err(|e| format!("failed to register node device: {e}"))?;
     Ok(device_id)
@@ -211,6 +212,7 @@ pub fn admit_node(
                     fingerprint,
                     role: "node",
                     scopes: &["node".to_string()],
+                    user_id: None,
                 }) {
                     warn!(node_id = id, error = %e, "failed to backfill node device record");
                 }
@@ -476,6 +478,7 @@ mod tests {
             fingerprint: "device-abc",
             role: "operator",
             scopes: &["*".to_string()],
+            user_id: None,
         })
         .unwrap();
 

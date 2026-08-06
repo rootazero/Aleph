@@ -71,6 +71,16 @@ pub struct Team {
     /// column so older databases and serialized payloads stay compatible.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub protocol: Option<String>,
+    /// The user who owns this team (P1 data isolation).
+    ///
+    /// `None` on rows created before P1 and on rows created outside any
+    /// dispatch scope (cron, internal, tests) — adoption-by-absence, read
+    /// through `gateway::visibility::owner_or_legacy` exactly like a session's
+    /// own stamp, never re-derived here. Stored as an additive nullable column
+    /// and skipped when absent so a legacy team serializes byte-identically to
+    /// what it did before this field existed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub owner_user_id: Option<String>,
 }
 
 // ---------------------------------------------------------------------------
@@ -240,4 +250,9 @@ pub struct TeamSummary {
     pub member_count: u64,
     pub created_at: i64,
     pub disbanded_at: Option<i64>,
+    /// Owning user — the same stamp [`Team::owner_user_id`] carries, projected
+    /// onto the summary so a list can be filtered in one query instead of
+    /// re-fetching every team. Same adoption-by-absence rule.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub owner_user_id: Option<String>,
 }

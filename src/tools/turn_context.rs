@@ -190,4 +190,19 @@ mod caller_tier_tests {
         assert!(!role_is_operator(Some("guest")));
         assert!(!role_is_operator(Some("chat")));
     }
+
+    /// Pin (spec §4.6, P0 identity foundation, Task 7): a `"member"` caller
+    /// role — the role `resolve_connection_identity` stamps for a device
+    /// bound to a `UserRole::Member` user — must NOT satisfy the operator
+    /// predicate. This is what bounds member tool execution by the EXISTING
+    /// per-tool operator gate (`ScopedToolService::check_operator_gate` in
+    /// `src/tools/scoped/dispatch.rs`, which calls
+    /// `TurnContext::caller_is_operator()`) without that gate needing any
+    /// member-specific code of its own. If this assertion ever fails, the
+    /// gate has silently loosened for every OPERATOR_TOOLS-gated tool.
+    #[test]
+    fn member_role_is_not_operator() {
+        assert!(!ctx(Some("member")).caller_is_operator());
+        assert!(!role_is_operator(Some("member")));
+    }
 }

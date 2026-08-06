@@ -74,6 +74,10 @@ fn map_session_metadata(
         // Column added later; `.ok()` + default keeps a pre-migration row (or a
         // NULL) reading as 0.0 rather than panicking.
         estimated_cost_usd: row.get::<_, Option<f64>>(18).ok().flatten().unwrap_or(0.0),
+        // P1 columns; `.ok()` keeps a pre-migration row reading as `None`
+        // (legacy, adoption-by-absence) rather than panicking.
+        owner_user_id: row.get(19).ok(),
+        scope_id: row.get(20).ok(),
         ..Default::default()
     })
 }
@@ -100,7 +104,7 @@ impl SessionStore for SessionManager {
                         message_count, total_tokens, auto_reset_at, state, metadata,
                         label, input_tokens, output_tokens, model, model_provider,
                         parent_session_key, compaction_count, derived_title,
-                        estimated_cost_usd
+                        estimated_cost_usd, owner_user_id, scope_id
                  FROM sessions WHERE key = ?",
                 params![&key_str],
                 map_session_metadata,
@@ -122,6 +126,13 @@ impl SessionStore for SessionManager {
         if let Some(threshold) = filter.active_minutes {
             let cutoff = chrono::Utc::now().timestamp() - (i64::from(threshold) * 60);
             sessions.retain(|s| s.last_active_at >= cutoff);
+        }
+        // Deliberate deviation from the P1 plan's "SQL COALESCE(owner_user_id, ?)"
+        // instruction: filtering in memory (like `active_minutes` above) keeps the
+        // effective-owner fallback single-sourced in `visibility::effective_owner`
+        // instead of re-deriving it a second time in SQL.
+        if let Some(ref owner) = filter.owner_visible_to {
+            sessions.retain(|s| crate::gateway::visibility::effective_owner(s) == owner);
         }
         if let Some(limit) = filter.limit {
             sessions.truncate(limit);

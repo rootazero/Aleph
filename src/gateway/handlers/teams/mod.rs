@@ -19,6 +19,7 @@ mod canvas;
 mod crud;
 mod snapshot;
 mod tasks;
+pub mod visibility;
 mod workflow;
 
 #[cfg(test)]

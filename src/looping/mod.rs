@@ -220,6 +220,40 @@ impl LoopRegistry {
         targets
     }
 
+    /// Deactivation freeze (spec §10): pause every loop OWNED BY `user_id`
+    /// that is still running or merely paused (mirrors [`Self::stop_all`]'s
+    /// scan), going through [`Self::transition`] — THE single atomic
+    /// lifecycle move (CLAUDE.md A4) — instead of hand-rolling a second one.
+    /// Returns the count actually paused (a loop already `Paused` reports
+    /// `Refused` from `transition` and is not counted, mirroring `stop_all`'s
+    /// "already-stopped loops are left untouched and omitted").
+    ///
+    /// The predicate is exact equality against `Some(user_id)` — a legacy
+    /// loop with `owner_user_id: None` belongs to the platform owner (spec
+    /// §10: the owner account can never be deactivated), never to the user
+    /// being deactivated here. One-way freeze: reactivating the user does not
+    /// auto-resume its loops (spec is silent on auto-resume).
+    pub fn pause_all_owned_by(&self, user_id: &str) -> usize {
+        let targets: Vec<String> = self
+            .list_all()
+            .into_iter()
+            .filter(|l| {
+                l.status != LoopStatus::Stopped && l.owner_user_id.as_deref() == Some(user_id)
+            })
+            .map(|l| l.session_id)
+            .collect();
+        let reason = format!("Account '{user_id}' was deactivated — pursuit frozen.");
+        targets
+            .iter()
+            .filter(|session_id| {
+                matches!(
+                    self.transition(session_id, LoopStatus::Paused, Some(reason.clone())),
+                    TransitionOutcome::Applied { .. }
+                )
+            })
+            .count()
+    }
+
     /// The continuation hook's whole post-run decision, under ONE lock guard:
     /// seed the token baseline, gate on an in-flight tick, then either claim
     /// the next tick (bump the counter, stamp the pending wake) or stop an
@@ -401,16 +435,22 @@ impl LoopRegistry {
                     live.pending_tick_wake_ms
                 };
                 let (status, stop_reason) = (live.status, live.stop_reason.clone());
+                // Owner/scope attribution (P1 data isolation) is stamped once
+                // at creation and never re-derived from a tool snapshot —
+                // same ownership rule as `status`/`stop_reason` above.
+                let (owner_user_id, scope_id) = (live.owner_user_id.clone(), live.scope_id.clone());
                 let session = next.session_id.clone();
                 // A reschedule discards a still-sleeping tick the same way
                 // `transition` does, so it owes the same refund. `next` carries
                 // the tool's snapshot of `iterations_used`, which is not
                 // concurrently mutated during a user turn.
-                let next = if reschedule && live.pending_tick_wake_ms.is_some() {
+                let mut next = if reschedule && live.pending_tick_wake_ms.is_some() {
                     next.refund_iteration()
                 } else {
                     next
                 };
+                next.owner_user_id = owner_user_id;
+                next.scope_id = scope_id;
                 map.insert(
                     session,
                     next.with_status(status)
@@ -865,6 +905,59 @@ mod tests {
             !reg.commit_field_update(st("gone").with_max_iterations(Some(5)), false),
             "no loop for this session → false"
         );
+    }
+
+    #[test]
+    fn commit_field_update_never_clobbers_owner_scope() {
+        // Mirrors `commit_field_update_preserves_live_pending_not_stale`: a
+        // tool-side field update built from a bare `st()` snapshot (no owner
+        // stamped) must not roll back the owner/scope recorded at creation.
+        let reg = LoopRegistry::default();
+        let attr = crate::scope::ScopeAttribution::personal("u-alice");
+        reg.put(st("a").with_owner_scope(Some(&attr)));
+        let next = st("a").with_max_iterations(Some(9)); // no owner_scope re-stamped
+        assert!(reg.commit_field_update(next, false));
+        let s = reg.get("a").unwrap();
+        assert_eq!(s.max_iterations, Some(9), "cap change applied");
+        assert_eq!(s.owner_user_id.as_deref(), Some("u-alice"));
+        assert_eq!(s.scope_id.as_deref(), Some("personal:u-alice"));
+    }
+
+    #[test]
+    fn pause_all_owned_by_pauses_exactly_that_users_loops() {
+        let reg = LoopRegistry::default();
+        let alice = crate::scope::ScopeAttribution::personal("u-alice");
+        let bob = crate::scope::ScopeAttribution::personal("u-bob");
+        reg.put(st("s-alice-1").with_owner_scope(Some(&alice)));
+        reg.put(st("s-alice-2").with_owner_scope(Some(&alice)));
+        reg.put(st("s-bob").with_owner_scope(Some(&bob)));
+        // A legacy (pre-P1) loop: owner_user_id is None, never alice's.
+        reg.put(st("s-legacy"));
+
+        let count = reg.pause_all_owned_by("u-alice");
+        assert_eq!(count, 2, "only alice's two loops are paused");
+
+        assert_eq!(reg.get("s-alice-1").unwrap().status, LoopStatus::Paused);
+        assert_eq!(reg.get("s-alice-2").unwrap().status, LoopStatus::Paused);
+        assert_eq!(
+            reg.get("s-bob").unwrap().status,
+            LoopStatus::Active,
+            "bob's loop must be untouched"
+        );
+        assert_eq!(
+            reg.get("s-legacy").unwrap().status,
+            LoopStatus::Active,
+            "legacy None-owner rows belong to the platform owner, not alice — untouched"
+        );
+    }
+
+    #[test]
+    fn pause_all_owned_by_is_a_no_op_for_a_user_with_no_loops() {
+        let reg = LoopRegistry::default();
+        let bob = crate::scope::ScopeAttribution::personal("u-bob");
+        reg.put(st("s-bob").with_owner_scope(Some(&bob)));
+        assert_eq!(reg.pause_all_owned_by("u-alice"), 0);
+        assert_eq!(reg.get("s-bob").unwrap().status, LoopStatus::Active);
     }
 
     #[test]

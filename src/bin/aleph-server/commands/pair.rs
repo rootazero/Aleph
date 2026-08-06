@@ -42,8 +42,10 @@ pub fn handle_pair(
     // Same clamp as the RPC path so both entry points cannot disagree about
     // what "5 minutes" means.
     let ttl_ms = ttl_seconds.map(|s| s.clamp(60, 86_400) as i64 * 1000);
+    // Headless/CLI pairing is admin-only and has no notion of "which user" —
+    // the ticket is unbound, so the paired device defaults to the owner.
     let ticket = mgr
-        .create_bootstrap_ticket(ttl_ms)
+        .create_bootstrap_ticket(ttl_ms, None)
         .map_err(|e| format!("mint pairing ticket: {e}"))?;
 
     // Opportunistic hygiene, same as the RPC chokepoints.

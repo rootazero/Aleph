@@ -101,6 +101,16 @@ pub async fn handle_search(request: JsonRpcRequest, db: MemoryBackend) -> JsonRp
         .agent_id
         .as_deref()
         .unwrap_or(crate::routing::DEFAULT_AGENT_ID);
+
+    // P1 partition isolation (spec §11-1c): a caller-supplied partition
+    // suffix (`main__u-bob`) the caller does not own is invisible — same
+    // empty-result shape as an unknown agent_id, no existence oracle. The
+    // default (no suffix) always passes this check, so the common path is
+    // unaffected.
+    if !crate::gateway::visibility::partition_visible(agent_id) {
+        return JsonRpcResponse::success(request.id, json!({ "memories": [], "total": 0 }));
+    }
+
     let query = params
         .query
         .as_deref()
@@ -170,11 +180,39 @@ pub struct DeleteParams {
 /// vector/foreign-key linkage, so a single-row delete is safe. (Layer-2
 /// knowledge notes are a separate model curated via the `note_manage` tool and
 /// are not affected by this handler.)
+///
+/// P1 partition isolation (spec §11-1c): this endpoint addresses a row by
+/// bare `id` with no `agent_id` — unlike `memory.search`/`memory.listFacts`,
+/// there is no caller-supplied partition to default or check directly. The
+/// row's OWNING partition is resolved first (`raw_memory_agent_id`) and run
+/// through `visibility::partition_visible` BEFORE the delete executes: an id
+/// that doesn't exist and an id whose partition is invisible to the caller
+/// get the exact same response (no oracle), and a denied delete never
+/// touches the row.
 pub async fn handle_delete(request: JsonRpcRequest, db: MemoryBackend) -> JsonRpcResponse {
     let params: DeleteParams = match parse_params(&request) {
         Ok(p) => p,
         Err(e) => return e,
     };
+
+    let not_found = || {
+        JsonRpcResponse::error(
+            request.id.clone(),
+            INTERNAL_ERROR,
+            format!("No raw memory found with id '{}'", params.id),
+        )
+    };
+    match db.raw_memory_agent_id(&params.id) {
+        Ok(Some(owner)) if crate::gateway::visibility::partition_visible(&owner) => {}
+        Ok(_) => return not_found(),
+        Err(e) => {
+            return JsonRpcResponse::error(
+                request.id,
+                INTERNAL_ERROR,
+                format!("Delete raw memory failed: {e}"),
+            )
+        }
+    }
 
     match db.delete_raw_memory(&params.id) {
         Ok(true) => JsonRpcResponse::success(request.id, json!({ "ok": true })),
@@ -283,6 +321,12 @@ pub async fn handle_list_facts(request: JsonRpcRequest, db: MemoryBackend) -> Js
         .as_deref()
         .unwrap_or(crate::routing::DEFAULT_AGENT_ID);
 
+    // P1 partition isolation: same "invisible partition reads as an unknown
+    // agent" contract as `memory.search` above.
+    if !crate::gateway::visibility::partition_visible(agent_id) {
+        return JsonRpcResponse::success(request.id, json!({ "facts": [], "total": 0 }));
+    }
+
     match db.list_notes(agent_id).await {
         Ok(notes) => {
             // `total` describes the whole agent store, so the pager can size
@@ -343,7 +387,13 @@ pub async fn handle_clear_facts(request: JsonRpcRequest, _db: MemoryBackend) -> 
 /// Parameters for `memory.stats`.
 #[derive(Debug, Default, Deserialize)]
 pub struct StatsParams {
-    /// Scope every count to one agent. Omitted = whole store.
+    /// Scope every count to one agent/partition. Omitted meaning depends on
+    /// the caller (P1, spec §11-1c): an **unrestricted** caller (internal,
+    /// cron, or an operator with no `CALLER_USER` scope) gets the whole
+    /// store; a **member** gets the org partition
+    /// ([`crate::routing::DEFAULT_AGENT_ID`]) instead — the whole-store
+    /// rollup is never handed to a scoped caller just because they left this
+    /// field off.
     #[serde(default)]
     pub agent_id: Option<String>,
 }
@@ -361,6 +411,13 @@ pub struct StatsParams {
 /// returns `null`, not `0` — a failure to count is not "counted zero", and
 /// padding it with a plausible-looking `0` would tell the panel something
 /// false with total confidence.
+///
+/// P1 partition isolation (spec §11-1c): an explicit `agent_id` the caller
+/// does not own reads as a real-but-empty agent (zero counts, not an error —
+/// the same shape a genuinely unused agent id produces, so there is no
+/// existence oracle). Omitting `agent_id` scopes a member to the org
+/// partition rather than falling through to the whole-store rollup — see
+/// [`StatsParams::agent_id`].
 pub async fn handle_stats(request: JsonRpcRequest, db: MemoryBackend) -> JsonRpcResponse {
     use crate::memory::notes::store::NoteStore;
 
@@ -370,7 +427,31 @@ pub async fn handle_stats(request: JsonRpcRequest, db: MemoryBackend) -> JsonRpc
         .and_then(|p| serde_json::from_value(p.clone()).ok())
         .unwrap_or_default();
 
-    let agent = params.agent_id.as_deref();
+    let agent: Option<String> = match params.agent_id {
+        Some(requested) => {
+            if !crate::gateway::visibility::partition_visible(&requested) {
+                // Invisible partition: report the same "real, empty agent"
+                // shape a never-used agent_id would produce, without ever
+                // touching the store under the caller's chosen name.
+                return JsonRpcResponse::success(
+                    request.id,
+                    json!({
+                        "totalMemories": 0,
+                        "totalFacts": 0,
+                        "validFacts": 0,
+                        "totalGraphNodes": 0,
+                        "totalGraphEdges": 0,
+                        "scope": "agent",
+                    }),
+                );
+            }
+            Some(requested)
+        }
+        // unrestricted caller (`None`): whole-store rollup, unchanged.
+        None => crate::gateway::visibility::visible_owner_filter()
+            .map(|_| crate::routing::DEFAULT_AGENT_ID.to_string()),
+    };
+    let agent = agent.as_deref();
     let scope = if agent.is_some() { "agent" } else { "global" };
 
     let raw_count = db.count_raw_memories(agent, None).unwrap_or(0);
@@ -441,6 +522,12 @@ pub async fn handle_compress(
 /// Read-only listing of user corrections (raw `flag_user_correction` rows)
 /// and their distillation status. Surfaces the correction→feedback lifecycle
 /// to the panel; performs NO mutation (R7/R8: distillation stays LLM-driven).
+///
+/// P1 partition isolation (spec §11-1c): same caller-supplied `agent_id`
+/// shape as `memory.search`, and the rows carry verbatim `content` (a
+/// correction is something the user typed at the agent). An invisible
+/// partition reads as an empty correction list — the same shape a partition
+/// with no corrections produces.
 pub async fn handle_list_corrections(
     request: JsonRpcRequest,
     db: MemoryBackend,
@@ -463,6 +550,13 @@ pub async fn handle_list_corrections(
         .agent_id
         .as_deref()
         .unwrap_or(crate::routing::DEFAULT_AGENT_ID);
+    // P1 partition isolation — see this fn's doc. Before the watermark read,
+    // so a denied caller learns nothing about the partition's dream state
+    // either.
+    if !crate::gateway::visibility::partition_visible(agent_id) {
+        return JsonRpcResponse::success(request.id, json!({ "corrections": [] }));
+    }
+
     let limit = params.limit.filter(|n| *n > 0).unwrap_or(50);
     let include_distilled = params.include_distilled.unwrap_or(true);
 
@@ -551,6 +645,24 @@ pub async fn handle_trace(request: JsonRpcRequest, db: MemoryBackend) -> JsonRpc
     let agent = params
         .agent_id
         .unwrap_or_else(|| crate::routing::DEFAULT_AGENT_ID.to_string());
+
+    // P1 partition isolation (spec §11-1c): same "invisible partition reads
+    // as an unknown agent" contract as `memory.search`/`memory.listFacts` —
+    // an empty evidence chain, not an error, and no store touch under the
+    // caller's chosen name.
+    if !crate::gateway::visibility::partition_visible(&agent) {
+        use crate::builtin_tools::memory_trace::TraceResult;
+        let empty = TraceResult {
+            target: params.target,
+            notes: Vec::new(),
+            evidence: Vec::new(),
+            write_decisions: Vec::new(),
+        };
+        return JsonRpcResponse::success(
+            request.id,
+            serde_json::to_value(empty).unwrap_or_default(),
+        );
+    }
 
     let note_memory_dir = match crate::utils::paths::get_note_memory_dir() {
         Ok(d) => d,
@@ -990,6 +1102,146 @@ mod trace_tests {
             "evidence references seeded raw raw-ev1"
         );
     }
+
+    /// P1 partition isolation: bob tracing alice's partition by name gets an
+    /// empty evidence chain — the same shape an unused partition produces —
+    /// not alice's real notes/evidence.
+    #[tokio::test]
+    async fn foreign_partition_traces_empty_not_the_owners_evidence() {
+        use crate::gateway::caller_identity::CALLER_USER;
+
+        let dir = tempfile::tempdir().unwrap();
+        let db: crate::memory::store::MemoryBackend =
+            Arc::new(SqliteMemoryBackend::new(&dir.path().join("m.db")).unwrap());
+
+        let note = KnowledgeNote {
+            title: "alice-secret".into(),
+            category: "habits".into(),
+            facts: vec!["daily running".into()],
+            source_notes: vec!["raw-ev1".into()],
+            ..Default::default()
+        };
+        db.index_note(&note, "main__u-alice", "habits")
+            .await
+            .unwrap();
+        let mut raw = RawMemory::new("user: I run daily".into(), RawMemorySource::Transcript);
+        raw.id = "raw-ev1".into();
+        raw.agent_id = "main__u-alice".into();
+        db.insert_raw_memory(&raw).await.unwrap();
+
+        let req = JsonRpcRequest::with_id(
+            "memory.trace",
+            Some(
+                json!({ "agent_id": "main__u-alice", "target": "habits/alice-secret", "kind": "note" }),
+            ),
+            json!(1),
+        );
+        let resp = CALLER_USER
+            .scope(Some("u-bob".to_string()), async {
+                handle_trace(req, db).await
+            })
+            .await;
+        assert!(resp.is_success(), "success, not an error: {:?}", resp.error);
+        let result = resp.result.unwrap();
+        assert!(result["notes"].as_array().unwrap().is_empty());
+        assert!(result["evidence"].as_array().unwrap().is_empty());
+    }
+}
+
+#[cfg(test)]
+mod delete_tests {
+    use super::*;
+    use crate::memory::store::raw_memory::{RawMemory, RawMemorySource, RawMemoryStore};
+    use crate::memory::store::sqlite::SqliteMemoryBackend;
+    use crate::sync_primitives::Arc;
+
+    fn db() -> MemoryBackend {
+        let path = std::env::temp_dir().join(format!("mem_del_test_{}", uuid::Uuid::new_v4()));
+        Arc::new(SqliteMemoryBackend::new(&path).unwrap())
+    }
+
+    fn req(id: &str) -> JsonRpcRequest {
+        JsonRpcRequest::with_id("memory.delete", Some(json!({ "id": id })), json!(1))
+    }
+
+    async fn seed(db: &MemoryBackend, id: &str, agent_id: &str) {
+        let mut raw = RawMemory::new("content".to_string(), RawMemorySource::Transcript);
+        raw.id = id.to_string();
+        raw.agent_id = agent_id.to_string();
+        db.insert_raw_memory(&raw).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn owner_can_delete_their_own_row() {
+        let db = db();
+        seed(&db, "r1", "main__u-alice").await;
+
+        let resp = crate::gateway::caller_identity::CALLER_USER
+            .scope(Some("u-alice".to_string()), async {
+                handle_delete(req("r1"), db.clone()).await
+            })
+            .await;
+        assert!(resp.is_success(), "{:?}", resp.error);
+        assert_eq!(
+            db.get_raws_by_ids("main__u-alice", &["r1".to_string()])
+                .await
+                .unwrap()
+                .len(),
+            0,
+            "the row is actually gone"
+        );
+    }
+
+    /// P1's own acceptance case: bob deleting alice's raw memory by its bare
+    /// id — same "not found" response a genuinely missing id produces (no
+    /// oracle), and the row is left completely intact.
+    #[tokio::test]
+    async fn foreign_partition_delete_is_denied_row_intact() {
+        let db = db();
+        seed(&db, "r1", "main__u-alice").await;
+
+        let resp = crate::gateway::caller_identity::CALLER_USER
+            .scope(Some("u-bob".to_string()), async {
+                handle_delete(req("r1"), db.clone()).await
+            })
+            .await;
+        assert!(resp.error.is_some(), "must be denied, not succeed");
+
+        // Same response shape a genuinely unknown id produces — compared
+        // against the SAME id string on a fresh, empty store, so any
+        // difference can only come from the denial itself, not from the id
+        // appearing in the message.
+        let empty_db = self::db();
+        let unknown_resp = crate::gateway::caller_identity::CALLER_USER
+            .scope(Some("u-bob".to_string()), async {
+                handle_delete(req("r1"), empty_db).await
+            })
+            .await;
+        assert_eq!(
+            resp.error.unwrap().message,
+            unknown_resp.error.unwrap().message,
+            "denied and genuinely-missing must be byte-identical (no oracle)"
+        );
+
+        // The row is intact — alice can still delete (and thus still read) it.
+        let alice_resp = crate::gateway::caller_identity::CALLER_USER
+            .scope(Some("u-alice".to_string()), async {
+                handle_delete(req("r1"), db).await
+            })
+            .await;
+        assert!(
+            alice_resp.is_success(),
+            "row must still exist for its real owner: {:?}",
+            alice_resp.error
+        );
+    }
+
+    #[tokio::test]
+    async fn unknown_id_reports_not_found() {
+        let db = db();
+        let resp = handle_delete(req("nope"), db).await;
+        assert!(resp.error.is_some());
+    }
 }
 
 #[cfg(test)]
@@ -1196,6 +1448,123 @@ mod search_tests {
         .await;
         assert_eq!(resp.result.expect("success")["total"], 5);
     }
+
+    /// P1 partition isolation: alice's raw memories, addressed by their real
+    /// partition id, are invisible to bob — same empty shape an unknown
+    /// agent_id would produce (no existence oracle), not an error.
+    #[tokio::test]
+    async fn foreign_partition_reads_empty_not_the_owners_rows() {
+        use crate::gateway::caller_identity::CALLER_USER;
+
+        let db = db();
+        let raw = RawMemory {
+            id: "alice-secret".to_string(),
+            content: "alice's private note".to_string(),
+            source: RawMemorySource::Transcript,
+            agent_id: "main__u-alice".to_string(),
+            session_id: None,
+            path: None,
+            layer: None,
+            attachment_text: None,
+            is_processed: false,
+            created_at: 1_700_000_000,
+        };
+        db.insert_raw_memory(&raw).await.unwrap();
+
+        // Sanity: the row is really there for its owner.
+        let owner_resp = CALLER_USER
+            .scope(Some("u-alice".to_string()), async {
+                handle_search(
+                    req(serde_json::json!({ "agent_id": "main__u-alice" })),
+                    db.clone(),
+                )
+                .await
+            })
+            .await;
+        assert_eq!(
+            owner_resp.result.expect("success")["memories"]
+                .as_array()
+                .unwrap()
+                .len(),
+            1,
+            "alice must see her own partition"
+        );
+
+        // Bob addresses the same partition by name — invisible.
+        let bob_resp = CALLER_USER
+            .scope(Some("u-bob".to_string()), async {
+                handle_search(req(serde_json::json!({ "agent_id": "main__u-alice" })), db).await
+            })
+            .await;
+        let result = bob_resp.result.expect("success, not an error");
+        assert!(
+            result["memories"].as_array().unwrap().is_empty(),
+            "bob must not see alice's partition"
+        );
+        assert_eq!(result["total"], 0);
+    }
+
+    /// Final-review I6: `memory.list_corrections` carried the same
+    /// unenforced `agent_id` shape as `memory.search` above, and its rows
+    /// carry verbatim `content` — things the user typed at the agent.
+    #[tokio::test]
+    async fn list_corrections_hides_a_foreign_partition() {
+        use crate::gateway::caller_identity::CALLER_USER;
+
+        let db = db();
+        let correction = RawMemory {
+            id: "alice-correction".to_string(),
+            content: "no, my address is 12 Privacy Lane".to_string(),
+            source: RawMemorySource::Correction {
+                severity: "high".to_string(),
+                suggested_rule: Some("remember the address".to_string()),
+            },
+            agent_id: "main__u-alice".to_string(),
+            session_id: None,
+            path: Some("aleph://correction/alice-correction".to_string()),
+            layer: None,
+            attachment_text: None,
+            is_processed: false,
+            created_at: 1_700_000_000,
+        };
+        db.insert_raw_memory(&correction).await.unwrap();
+
+        let ask = |caller: &'static str| {
+            let db = db.clone();
+            async move {
+                CALLER_USER
+                    .scope(Some(caller.to_string()), async {
+                        handle_list_corrections(
+                            req(serde_json::json!({ "agent_id": "main__u-alice" })),
+                            db,
+                        )
+                        .await
+                    })
+                    .await
+            }
+        };
+
+        // Sanity: the row is really there for its owner — otherwise the deny
+        // assertion below would pass for the wrong reason.
+        let owner = ask("u-alice").await;
+        assert_eq!(
+            owner.result.expect("success")["corrections"]
+                .as_array()
+                .unwrap()
+                .len(),
+            1,
+            "alice must see her own correction"
+        );
+
+        let bob = ask("u-bob").await;
+        assert!(
+            bob.result.expect("success, not an error")["corrections"]
+                .as_array()
+                .unwrap()
+                .is_empty(),
+            "bob must not see alice's corrections"
+        );
+    }
 }
 
 #[cfg(test)]
@@ -1325,6 +1694,77 @@ mod stats_tests {
         assert!(!v["totalGraphNodes"].is_null());
         assert!(!v["totalGraphEdges"].is_null());
     }
+
+    /// P1: a member who omits `agent_id` is scoped to the org partition
+    /// (`DEFAULT_AGENT_ID`, "main"), never the whole-store rollup — that
+    /// rollup is reserved for unrestricted (internal/cron/operator-with-
+    /// no-scope) callers, tested separately below.
+    #[tokio::test]
+    async fn member_omitted_agent_id_gets_org_partition_not_whole_store() {
+        use crate::gateway::caller_identity::CALLER_USER;
+
+        let db = db();
+        seed(&db).await; // "alpha"/"beta" — neither is the org partition
+        db.insert_raw_memory(&raw("r-main", "main")).await.unwrap();
+        db.index_note(&note("main-note"), "main", "facts")
+            .await
+            .unwrap();
+
+        let r = CALLER_USER
+            .scope(Some("u-alice".to_string()), async {
+                handle_stats(req(None), db).await
+            })
+            .await;
+        let v = r.result.expect("success");
+
+        assert_eq!(v["scope"], "agent", "member always gets a scoped answer");
+        assert_eq!(v["totalMemories"], 1, "only the org (\"main\") row");
+        assert_eq!(v["totalFacts"], 1, "only the org (\"main\") note");
+    }
+
+    /// The same omitted-`agent_id` request from an unrestricted caller (no
+    /// `CALLER_USER` scope — internal/cron/legacy single-user) keeps the
+    /// pre-P1 whole-store rollup, unchanged.
+    #[tokio::test]
+    async fn unrestricted_omitted_agent_id_still_gets_whole_store() {
+        let db = db();
+        seed(&db).await;
+
+        let r = handle_stats(req(None), db).await;
+        let v = r.result.expect("success");
+        assert_eq!(v["scope"], "global");
+        assert_eq!(v["totalFacts"], 3, "whole store, all agents");
+    }
+
+    /// Defense in depth: a member explicitly naming a foreign partition gets
+    /// the same real-but-empty shape a genuinely unused agent id would
+    /// produce — not the victim's real counts.
+    #[tokio::test]
+    async fn foreign_explicit_partition_reads_as_empty_not_the_owners_counts() {
+        use crate::gateway::caller_identity::CALLER_USER;
+
+        let db = db();
+        db.insert_raw_memory(&raw("r1", "main__u-alice"))
+            .await
+            .unwrap();
+        db.insert_raw_memory(&raw("r2", "main__u-alice"))
+            .await
+            .unwrap();
+
+        let r = CALLER_USER
+            .scope(Some("u-bob".to_string()), async {
+                handle_stats(
+                    req(Some(serde_json::json!({ "agent_id": "main__u-alice" }))),
+                    db,
+                )
+                .await
+            })
+            .await;
+        let v = r.result.expect("success, not an error");
+        assert_eq!(v["totalMemories"], 0, "not alice's real count of 2");
+        assert_eq!(v["totalGraphNodes"], 0);
+        assert_eq!(v["totalGraphEdges"], 0);
+    }
 }
 
 #[cfg(test)]
@@ -1408,5 +1848,38 @@ mod list_facts_tests {
         let tags: Vec<String> = serde_json::from_value(row["tags"].clone()).unwrap();
         assert_eq!(tags, vec!["rust".to_string(), "ci".to_string()]);
         assert!(row["link_count"].is_u64());
+    }
+
+    /// P1 partition isolation, `listFacts` twin of `handle_search`'s test:
+    /// a foreign partition reads as empty, not the owner's real facts.
+    #[tokio::test]
+    async fn foreign_partition_reads_empty_not_the_owners_facts() {
+        use crate::gateway::caller_identity::CALLER_USER;
+
+        let db = db();
+        db.index_note(
+            &KnowledgeNote {
+                title: "alice-secret".to_string(),
+                category: "facts".to_string(),
+                facts: vec!["f".to_string()],
+                created_at: 1_700_000_000,
+                updated_at: 1_700_000_000,
+                content_hash: "h".to_string(),
+                ..Default::default()
+            },
+            "main__u-alice",
+            "facts",
+        )
+        .await
+        .unwrap();
+
+        let r = CALLER_USER
+            .scope(Some("u-bob".to_string()), async {
+                handle_list_facts(req(serde_json::json!({ "agent_id": "main__u-alice" })), db).await
+            })
+            .await;
+        let v = r.result.expect("success, not an error");
+        assert!(v["facts"].as_array().unwrap().is_empty());
+        assert_eq!(v["total"], 0);
     }
 }

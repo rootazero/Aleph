@@ -93,7 +93,11 @@ pub async fn handle_approve(
 
     debug!("Handling pairing.approve for {}:{}", channel, code);
 
-    match store.approve(channel, code).await {
+    // P0 (identity foundation, Task 6): the RPC caller doesn't carry an
+    // Aleph user id yet, so this always adopts the single-machine owner.
+    // P1 (inbound-session-attribution) is what will thread an explicit
+    // user_id through here.
+    match store.approve(channel, code, None).await {
         Ok(req) => {
             let response: PairingRequestResponse = req.into();
             JsonRpcResponse::success(

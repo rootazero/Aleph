@@ -85,8 +85,7 @@ fn is_anchor(l: &str) -> bool {
     is_header(l) || is_change(l)
 }
 
-pub(super) fn reduce_diff(text: &str, profile: &Profile) -> Option<Reduction> {
-    let lines: Vec<&str> = text.lines().collect();
+pub(super) fn reduce_diff(lines: &[&str], profile: &Profile) -> Option<Reduction> {
     let total = lines.len();
     let mut keep = vec![false; total];
 
@@ -114,12 +113,12 @@ pub(super) fn reduce_diff(text: &str, profile: &Profile) -> Option<Reduction> {
     if kept.len() >= total {
         return None; // all signal — nothing to drop
     }
-    let files_total = count_file_starts(&lines, 0..total);
+    let files_total = count_file_starts(lines, 0..total);
     if kept.len() > profile.diff_lines {
-        kept = trim_per_file(&lines, &kept, profile.diff_lines);
+        kept = trim_per_file(lines, &kept, profile.diff_lines);
     }
-    let mut body = render_selected(&lines, &kept, total, profile);
-    let files_shown = count_file_starts(&lines, kept.iter().copied());
+    let mut body = render_selected(lines, &kept, total, profile);
+    let files_shown = count_file_starts(lines, kept.iter().copied());
     if files_total > files_shown {
         body.push_str(&format!(
             "\n… ({} more files changed, not shown) …",
@@ -245,7 +244,8 @@ mod tests {
     use super::*;
 
     fn reduce(text: &str) -> Option<Reduction> {
-        reduce_diff(text, &Profile::DEFAULT)
+        let lines: Vec<&str> = text.lines().collect();
+        reduce_diff(&lines, &Profile::DEFAULT)
     }
 
     fn sample_diff() -> String {
@@ -441,7 +441,9 @@ mod tests {
             d.push_str("-let old = 1;\n+let new = 2;\n");
         }
         let wide = reduce(&d).expect("default profile must reduce");
-        let tight = reduce_diff(&d, &Profile::for_token_budget(500)).expect("tight must reduce");
+        let tight_lines: Vec<&str> = d.lines().collect();
+        let tight =
+            reduce_diff(&tight_lines, &Profile::for_token_budget(500)).expect("tight must reduce");
         assert!(
             tight.tally.kept() < wide.tally.kept(),
             "tight kept {} vs default {}",

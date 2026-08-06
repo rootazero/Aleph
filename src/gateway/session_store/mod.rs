@@ -123,6 +123,13 @@ pub trait SessionStore: Send + Sync {
         &self,
         key: &SessionKey,
     ) -> Result<Vec<CheckpointSummary>, SessionStoreError>;
+    /// Implementors: the returned `SessionMetadata` is a freshly-created
+    /// session (`new_key`), so it must be owner-stamped exactly like
+    /// [`get_or_create`](SessionStore::get_or_create)'s CREATE branch — call
+    /// `SessionMetadata::stamp_attribution()` on it before persisting. Skip
+    /// this and the branched session silently reads as legacy/owner-owned
+    /// under `visibility::session_visible`, invisible to the member who just
+    /// created it (P1 data isolation).
     async fn branch_from_checkpoint(
         &self,
         key: &SessionKey,
@@ -561,5 +568,176 @@ mod delete_from_seq_tests {
         rewind_mid_log_drops_the_suffix(sqlite_store(&temp)).await;
         let temp = TempDir::new().unwrap();
         rewind_past_head_is_a_noop(sqlite_store(&temp)).await;
+    }
+}
+
+/// P1 data isolation: session `owner_user_id`/`scope_id` stamping at
+/// creation + `SessionFilter::owner_visible_to` filtering. Both production
+/// backends must behave identically, so every case runs twice — same
+/// discipline as `delete_from_seq_tests`.
+#[cfg(test)]
+mod owner_scope_tests {
+    use super::*;
+    use crate::gateway::session_manager::{SessionManager, SessionManagerConfig};
+    use crate::gateway::session_store::file_backend::{FileSessionStore, FileSessionStoreConfig};
+    use crate::scope::ScopeAttribution;
+    use crate::sync_primitives::Arc;
+    use tempfile::TempDir;
+
+    fn key_for(agent: &str) -> SessionKey {
+        SessionKey::main(agent)
+    }
+
+    fn file_store(temp: &TempDir) -> Arc<dyn SessionStore> {
+        Arc::new(
+            FileSessionStore::new(FileSessionStoreConfig {
+                base_dir: temp.path().to_path_buf(),
+                ..Default::default()
+            })
+            .unwrap(),
+        )
+    }
+
+    fn sqlite_store(temp: &TempDir) -> Arc<dyn SessionStore> {
+        Arc::new(
+            SessionManager::new(SessionManagerConfig {
+                db_path: temp.path().join("sessions.db"),
+                ..Default::default()
+            })
+            .unwrap(),
+        )
+    }
+
+    async fn create_under_scope_stamps_owner_and_scope(store: Arc<dyn SessionStore>) {
+        let key = key_for("alice-1");
+        let meta = crate::scope::with_scope(
+            Some(ScopeAttribution::personal("u-alice")),
+            store.get_or_create(&key),
+        )
+        .await
+        .unwrap();
+        assert_eq!(meta.owner_user_id.as_deref(), Some("u-alice"));
+        assert_eq!(meta.scope_id.as_deref(), Some("personal:u-alice"));
+
+        // Round-trip: read back from disk, both fields survive.
+        let read = store.get_metadata(&key).await.unwrap().unwrap();
+        assert_eq!(read.owner_user_id.as_deref(), Some("u-alice"));
+        assert_eq!(read.scope_id.as_deref(), Some("personal:u-alice"));
+    }
+
+    async fn create_without_scope_leaves_fields_none_and_serializes_without_them(
+        store: Arc<dyn SessionStore>,
+    ) {
+        let key = key_for("bob-1");
+        let meta = store.get_or_create(&key).await.unwrap();
+        assert!(meta.owner_user_id.is_none() && meta.scope_id.is_none());
+
+        // Migration invariant: a None-owner metadata record contains neither
+        // key (`skip_serializing_if`) — a pre-P1 `metadata.json` stays
+        // byte-identical.
+        let json = serde_json::to_string(&meta).unwrap();
+        assert!(!json.contains("owner_user_id") && !json.contains("scope_id"));
+    }
+
+    async fn get_or_create_on_existing_session_never_restamps(store: Arc<dyn SessionStore>) {
+        // A created it; B's later get_or_create must not steal ownership.
+        let key = key_for("carol-1");
+        let first = crate::scope::with_scope(
+            Some(ScopeAttribution::personal("u-alice")),
+            store.get_or_create(&key),
+        )
+        .await
+        .unwrap();
+        assert_eq!(first.owner_user_id.as_deref(), Some("u-alice"));
+
+        let second = crate::scope::with_scope(
+            Some(ScopeAttribution::personal("u-bob")),
+            store.get_or_create(&key),
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            second.owner_user_id.as_deref(),
+            Some("u-alice"),
+            "stamping is create-only"
+        );
+    }
+
+    async fn list_sessions_filters_by_owner_visible_to(store: Arc<dyn SessionStore>) {
+        // alice creates 2, bob creates 1, one legacy (no scope) row.
+        crate::scope::with_scope(
+            Some(ScopeAttribution::personal("u-alice")),
+            store.get_or_create(&key_for("alice-1")),
+        )
+        .await
+        .unwrap();
+        crate::scope::with_scope(
+            Some(ScopeAttribution::personal("u-alice")),
+            store.get_or_create(&key_for("alice-2")),
+        )
+        .await
+        .unwrap();
+        crate::scope::with_scope(
+            Some(ScopeAttribution::personal("u-bob")),
+            store.get_or_create(&key_for("bob-1")),
+        )
+        .await
+        .unwrap();
+        store.get_or_create(&key_for("legacy-1")).await.unwrap();
+
+        let alice_sessions = store
+            .list_sessions(SessionFilter {
+                owner_visible_to: Some("u-alice".to_string()),
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+        assert_eq!(alice_sessions.len(), 2, "alice's 2 sessions only");
+        assert!(alice_sessions
+            .iter()
+            .all(|s| s.owner_user_id.as_deref() == Some("u-alice")));
+
+        let owner_sessions = store
+            .list_sessions(SessionFilter {
+                owner_visible_to: Some(crate::gateway::security::store::OWNER_USER_ID.to_string()),
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+        assert_eq!(
+            owner_sessions.len(),
+            1,
+            "legacy row reads as owned by OWNER_USER_ID"
+        );
+        assert!(owner_sessions[0].owner_user_id.is_none());
+
+        let all_sessions = store.list_sessions(SessionFilter::default()).await.unwrap();
+        assert_eq!(all_sessions.len(), 4, "no filter = every owner");
+    }
+
+    #[tokio::test]
+    async fn file_backend_owner_scope_stamping() {
+        let temp = TempDir::new().unwrap();
+        create_under_scope_stamps_owner_and_scope(file_store(&temp)).await;
+        let temp = TempDir::new().unwrap();
+        create_without_scope_leaves_fields_none_and_serializes_without_them(file_store(&temp))
+            .await;
+        let temp = TempDir::new().unwrap();
+        get_or_create_on_existing_session_never_restamps(file_store(&temp)).await;
+        let temp = TempDir::new().unwrap();
+        list_sessions_filters_by_owner_visible_to(file_store(&temp)).await;
+    }
+
+    #[tokio::test]
+    async fn sqlite_backend_owner_scope_stamping() {
+        let temp = TempDir::new().unwrap();
+        create_under_scope_stamps_owner_and_scope(sqlite_store(&temp)).await;
+        let temp = TempDir::new().unwrap();
+        create_without_scope_leaves_fields_none_and_serializes_without_them(sqlite_store(&temp))
+            .await;
+        let temp = TempDir::new().unwrap();
+        get_or_create_on_existing_session_never_restamps(sqlite_store(&temp)).await;
+        let temp = TempDir::new().unwrap();
+        list_sessions_filters_by_owner_visible_to(sqlite_store(&temp)).await;
     }
 }

@@ -1288,6 +1288,7 @@ pub(in crate::commands::start) async fn register_agent_handlers(
         let agent_registry_clone = agent_registry.clone();
         let app_config_run = app_config_arc.clone();
         let wm_run = workspace_manager.clone();
+        let sm_run = session_store.clone();
         server.handlers_mut().register("agent.run", move |req| {
             let engine = engine_clone.clone();
             let event_bus = event_bus_clone.clone();
@@ -1295,8 +1296,9 @@ pub(in crate::commands::start) async fn register_agent_handlers(
             let agent_registry = agent_registry_clone.clone();
             let cfg = app_config_run.clone();
             let wm = wm_run.clone();
+            let sm = sm_run.clone();
             async move {
-                handle_run_with_engine(req, engine, event_bus, router, agent_registry, cfg, wm)
+                handle_run_with_engine(req, engine, event_bus, router, agent_registry, cfg, wm, sm)
                     .await
             }
         });
@@ -1342,7 +1344,7 @@ pub(in crate::commands::start) async fn register_agent_handlers(
 
         // trace.list / trace.get / trace.by_runs — replay durable traces when a
         // state DB exists, else SERVICE_UNAVAILABLE. See `common_handlers.rs`.
-        register_trace_handlers(server, resilience_db.clone());
+        register_trace_handlers(server, resilience_db.clone(), session_store.clone());
 
         // Capture for inbound router
         let engine_arc: Arc<dyn alephcore::gateway::ExecutionAdapter> = engine;

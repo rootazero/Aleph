@@ -48,10 +48,17 @@ pub async fn handle_run_now(request: JsonRpcRequest) -> JsonRpcResponse {
 /// Settings ▸ Memory governance view. Pure I/O over existing store read APIs.
 ///
 /// `agent_id` scopes `synthesis` and `runs` to one corpus — the base agent by
-/// default, or a `{base}__proj-*` project namespace. `daily` stays global (the
-/// daily digest is cross-project by design) and `namespaces` is the index of
-/// every corpus that has ever dreamed, which is what makes the other corpora
-/// reachable at all.
+/// default, or a `{base}__proj-*` project namespace (P1 personal scope
+/// `{base}__u-*` is also partitioned, see `project_scope::list_scoped_agent_ids`).
+/// `daily` stays global (the daily digest is cross-project by design) and
+/// `namespaces` is the index of every corpus that has ever dreamed, which is
+/// what makes the other corpora reachable at all.
+///
+/// P1 partition isolation (spec §11-1c): when the caller asks for an invisible
+/// partition the whole response is denied as an empty-but-real result (all
+/// three lists empty, the same shape a partition the dream daemon has never
+/// run over produces) — a half-checked response is exactly the shape this
+/// review kept finding, so we never return one.
 pub async fn handle_list_insights(request: JsonRpcRequest, db: MemoryBackend) -> JsonRpcResponse {
     use crate::memory::notes::store::NoteStore;
     use crate::memory::store::DreamStore;
@@ -71,6 +78,14 @@ pub async fn handle_list_insights(request: JsonRpcRequest, db: MemoryBackend) ->
         .agent_id
         .as_deref()
         .unwrap_or(crate::routing::DEFAULT_AGENT_ID);
+    // P1 partition isolation — see this fn's doc.
+    if !crate::gateway::visibility::partition_visible(agent_id) {
+        return JsonRpcResponse::success(
+            request.id,
+            json!({ "daily": [], "synthesis": [], "runs": [] }),
+        );
+    }
+
     let limit = params.limit.filter(|n| *n > 0).unwrap_or(30);
 
     // 1. Recent daily digests.
@@ -217,6 +232,52 @@ pub async fn handle_list_insights(request: JsonRpcRequest, db: MemoryBackend) ->
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Final-review I6: a caller-supplied `agent_id` naming another user's
+    /// partition reads as a real-but-empty one, not as that user's synthesis
+    /// notes.
+    #[tokio::test]
+    async fn list_insights_hides_a_foreign_partition() {
+        use crate::gateway::caller_identity::CALLER_USER;
+        use crate::memory::store::sqlite::SqliteMemoryBackend;
+        use crate::sync_primitives::Arc;
+
+        let db: MemoryBackend =
+            Arc::new(SqliteMemoryBackend::in_memory().expect("in-memory backend"));
+        let req = |agent: &str| {
+            JsonRpcRequest::with_id(
+                "dreaming.list_insights",
+                Some(json!({ "agent_id": agent })),
+                json!(1),
+            )
+        };
+
+        let denied = CALLER_USER
+            .scope(
+                Some("u-bob".to_string()),
+                handle_list_insights(req("main__u-alice"), db.clone()),
+            )
+            .await;
+        let v = denied.result.expect("success, never an error");
+        for key in ["daily", "synthesis", "runs"] {
+            assert!(
+                v[key].as_array().expect("array").is_empty(),
+                "{key} must be empty for a partition bob cannot see: {v}"
+            );
+        }
+
+        // The guard must not be a false positive: bob's own partition and the
+        // shared org partition still answer normally.
+        for agent in ["main__u-bob", "main"] {
+            let ok = CALLER_USER
+                .scope(
+                    Some("u-bob".to_string()),
+                    handle_list_insights(req(agent), db.clone()),
+                )
+                .await;
+            assert!(ok.is_success(), "{agent}: {:?}", ok.error);
+        }
+    }
 
     /// In a unit-test process the global DreamDaemon is never initialized
     /// (it's gated by `cfg!(test)` inside `ensure_dream_daemon`). The handler

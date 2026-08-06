@@ -391,14 +391,28 @@ fn stamp_open_loops(loops: &str, today: &str) -> String {
     format!("{header}\n{loops}")
 }
 
-/// Resolve `~/.aleph/agents/<agent_id>/OPEN_LOOPS.md` — beside the curated
+/// Resolve `~/.aleph/agents/<resolved_id>/OPEN_LOOPS.md` — beside the curated
 /// `MEMORY.md` that `MemoryContextProvider::agent_memory_path` renders, so the
-/// injection side reads the same location. `None` if the home dir is
-/// unresolvable.
+/// injection side (`capture_curated`, via `resolve_storage_id`) reads the
+/// same location. `None` if the home dir is unresolvable.
+///
+/// `agent_id` is resolved through `session_write_id` before the path is
+/// built: a personal-scoped session's open loops must land in ITS OWN
+/// directory, not the shared base one, or the read side (which resolves
+/// through session scope) would find nothing there. `project_scoped=false`/
+/// `project_root=None` deliberately — the legacy project-directory feature
+/// is not threaded onto this write path (no live `current_project_root()`
+/// task-local at session-close time to resolve it with; this only closes the
+/// personal-scope split, which is P1's actual mandate), so `session_write_id`
+/// falls through to the base id unchanged for every non-personal session,
+/// exactly as before this fix.
 fn open_loops_path(agent_id: &str) -> Option<PathBuf> {
     let base = crate::discovery::aleph_home_dir().ok()?;
+    let resolved_id = crate::memory::project_scope::session_write_id(agent_id, false, None);
     // Sanitize the agent id so it cannot traverse out of the agents directory.
-    let safe_id = agent_id.replace(['/', '\\', '\0'], "_").replace("..", "__");
+    let safe_id = resolved_id
+        .replace(['/', '\\', '\0'], "_")
+        .replace("..", "__");
     Some(base.join("agents").join(safe_id).join("OPEN_LOOPS.md"))
 }
 
@@ -592,6 +606,60 @@ mod tests {
             "persisted cooldown must survive a restart"
         );
         assert_eq!(reflection_count(&store, "agent-1").await, 1);
+    }
+
+    /// Review fix (Finding 2, HARD RULE a): `write_open_loops`/`open_loops_path`
+    /// must resolve through the same session scope the curated-envelope
+    /// reader (`capture_curated`) resolves — otherwise a personal-scoped
+    /// session's open loops land in the shared base dir while the reader
+    /// looks in the scoped one, and the injected block goes permanently
+    /// stale/empty.
+    #[tokio::test]
+    async fn open_loops_write_follows_personal_scope() {
+        use crate::scope::{with_scope, ScopeAttribution};
+        let _home = crate::utils::paths::IsolatedAlephHome::new();
+
+        let store = make_store();
+        let llm = MockSummaryLlm::with_response(
+            "LESSONS:\nNONE\n\nOPEN_LOOPS:\n- Follow up on the deploy status",
+        );
+        let reflector = SessionReflector::new(
+            store.clone(),
+            substantive(),
+            llm.clone(),
+            ReflectionConfig {
+                enabled: true,
+                min_turns: 1,
+                min_user_chars: 0,
+                cooldown_minutes: 0,
+                open_loop_tracking: true,
+                open_loop_inject_prompt: false,
+            },
+        );
+
+        with_scope(
+            Some(ScopeAttribution::personal("u-alice")),
+            reflector.reflect("agent-1", "sess-1"),
+        )
+        .await
+        .unwrap();
+
+        let base = crate::discovery::aleph_home_dir().unwrap();
+        let scoped_path = base
+            .join("agents")
+            .join("agent-1__u-alice")
+            .join("OPEN_LOOPS.md");
+        let bare_path = base.join("agents").join("agent-1").join("OPEN_LOOPS.md");
+        assert!(
+            scoped_path.exists(),
+            "personal-scoped reflection must write OPEN_LOOPS.md under the composed id: {scoped_path:?}"
+        );
+        assert!(
+            !bare_path.exists(),
+            "must NOT also write the bare/base OPEN_LOOPS.md: {bare_path:?}"
+        );
+        let body = std::fs::read_to_string(&scoped_path).unwrap();
+        assert!(body.contains("Follow up on the deploy status"), "{body}");
     }
 
     #[test]

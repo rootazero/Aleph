@@ -534,15 +534,16 @@ impl HarnessRunner for AgentHarnessRunner {
                 // Wire the zero-API-cost session-summary reuse path: the
                 // memory backend holding the d0/d1/d2 facts plus the owning
                 // agent id they were written under. The writes resolve the
-                // storage id via `scoped_or_base` (post_turn_compress /
+                // storage id via `session_write_id` (post_turn_compress /
                 // prepare_history), so the read side must resolve identically —
-                // the bare agent id matches nothing when project scoping is on.
+                // the bare agent id matches nothing when project/personal
+                // scoping is on.
                 // `current_project_root()` is task-local and re-established
                 // inside this run's spawned task, so build-time resolution here
                 // sees the same root the writes see at call time.
                 // rust-doctor-disable-next-line excessive-clone
                 if let Some(backend) = self.memory_backend.clone() {
-                    let reuse_agent_id = crate::memory::project_scope::scoped_or_base(
+                    let reuse_agent_id = crate::memory::project_scope::session_write_id(
                         &spec.agent,
                         self.memory_project_scoped,
                         crate::projects::current_project_root().as_deref(),

@@ -43,14 +43,32 @@ impl SessionManager {
 /// pipeline the `session_complete` tool path honours. Resolving it here closes
 /// that gap with zero caller churn; no registered MCP (tests / early boot)
 /// degrades to a direct insert, exactly the old behaviour.
+/// `owner_user_id`/`scope_id` are the session row's persisted P1 columns
+/// (`SessionMetadata`) — review-fix follow-up: the session-end reflector
+/// (`SessionReflector::reflect`, which writes OPEN_LOOPS.md) runs in a
+/// spawned task on a path that may be outside any run's task tree, so the
+/// ambient `crate::scope::current_scope()` task-local is not reliable here.
+/// Callers pass the persisted columns straight through; `emit_session_end`
+/// re-derives the `ScopeAttribution` from them (never guesses).
 pub(crate) fn emit_session_end_raw(
     writer: std::sync::Arc<dyn crate::memory::store::raw_memory::RawMemoryStore>,
     agent_id: String,
     session_id: String,
     tail: String,
     reason: crate::memory::store::raw_memory::SessionEndReason,
+    owner_user_id: Option<String>,
+    scope_id: Option<String>,
 ) {
-    emit_session_end(writer, agent_id, session_id, tail, reason, true);
+    emit_session_end(
+        writer,
+        agent_id,
+        session_id,
+        tail,
+        reason,
+        true,
+        owner_user_id,
+        scope_id,
+    );
 }
 
 /// `sessions.delete` variant: identical capture, but it does NOT materialize a
@@ -71,8 +89,19 @@ pub(crate) fn emit_session_end_raw_without_resume(
     session_id: String,
     tail: String,
     reason: crate::memory::store::raw_memory::SessionEndReason,
+    owner_user_id: Option<String>,
+    scope_id: Option<String>,
 ) {
-    emit_session_end(writer, agent_id, session_id, tail, reason, false);
+    emit_session_end(
+        writer,
+        agent_id,
+        session_id,
+        tail,
+        reason,
+        false,
+        owner_user_id,
+        scope_id,
+    );
 }
 
 /// Shared body of the two entry points above. `resume_snapshot` is the only
@@ -85,7 +114,17 @@ fn emit_session_end(
     tail: String,
     reason: crate::memory::store::raw_memory::SessionEndReason,
     resume_snapshot: bool,
+    owner_user_id: Option<String>,
+    scope_id: Option<String>,
 ) {
+    // Re-derived once, cloned into whichever spawned task needs ambient
+    // scope re-established (`crate::scope::with_scope` — task-locals don't
+    // cross a `tokio::spawn` boundary). `None` for legacy/pre-P1/org rows —
+    // those spawns proceed unscoped, exactly the pre-P1 behaviour.
+    let scope_attr = crate::scope::ScopeAttribution::from_persisted(
+        owner_user_id.as_deref(),
+        scope_id.as_deref(),
+    );
     if tail.is_empty() {
         return;
     }
@@ -162,8 +201,21 @@ fn emit_session_end(
         if let Some(reflector) = crate::thinker::memory_context_provider::session_reflector() {
             let r_agent_id = agent_id.clone();
             let r_session_id = session_id.clone();
+            // Review fix: re-establish the session's scope inside the
+            // spawned task (it does not cross the `tokio::spawn` boundary
+            // otherwise), from the row's persisted columns, not a guess —
+            // `SessionReflector::reflect` writes OPEN_LOOPS.md through
+            // `session_write_id`, which needs the SAME active scope the
+            // curated-envelope reader resolves, or a personal-scoped
+            // owner's open loops go permanently stale after adoption while
+            // a member reads a permanently empty block.
+            let r_scope_attr = scope_attr.clone();
             rt.spawn(async move {
-                if let Err(e) = reflector.reflect(&r_agent_id, &r_session_id).await {
+                let reflect = crate::scope::with_scope(
+                    r_scope_attr,
+                    reflector.reflect(&r_agent_id, &r_session_id),
+                );
+                if let Err(e) = reflect.await {
                     tracing::warn!(
                         target: "reflection.end_hook",
                         agent_id = %r_agent_id,

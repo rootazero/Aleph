@@ -750,7 +750,12 @@ token_budget. \
                 // budget remains a soft, surfaced guardrail.
                 let mut goal = Goal::new(&session, objective, 0, now)
                     .with_budget(args.token_budget)
-                    .with_note(args.note.clone(), now);
+                    .with_note(args.note.clone(), now)
+                    // P1 data isolation: stamp the owning user/scope from the
+                    // ambient attribution of THIS creating run. `None` outside
+                    // any scope (e.g. no caller user resolved) leaves the goal
+                    // unscoped — legacy owner semantics, never guessed.
+                    .with_owner_scope(crate::scope::current_scope().as_ref());
                 if let Some(requested) = args.pursuit_max_iterations {
                     // Hard cap autonomous continuations (R5 menu-bar-first): an
                     // unbounded value would let a single session self-run for

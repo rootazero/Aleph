@@ -62,6 +62,17 @@ pub async fn serve_webchat(
 }
 
 /// Handle agent.run with real `ExecutionEngine`
+///
+/// `agent.run` is `chat.send` with a different param spelling — same router,
+/// same engine, same wait lane — so it carries the SAME P1 visibility
+/// obligation as its twin below (`handle_chat_send_with_engine`), and for the
+/// same reason: it accepts a caller-supplied `session_key`, routes it through
+/// `AgentRouter`, and starts a real run against it. Without the check a
+/// member could write a turn into any other user's session and read the whole
+/// transcript back out of the model, bypassing every `KeyChecked` guard the
+/// `sessions.*`/`chat.*` family installs. Hence the `session_manager`
+/// parameter, which this function needs for nothing else.
+#[allow(clippy::too_many_arguments)]
 pub async fn handle_run_with_engine<P, R>(
     request: alephcore::gateway::JsonRpcRequest,
     engine: Arc<ExecutionEngine<P, R>>,
@@ -70,6 +81,7 @@ pub async fn handle_run_with_engine<P, R>(
     agent_registry: Arc<AgentRegistry>,
     app_config: Arc<tokio::sync::RwLock<alephcore::Config>>,
     _workspace_manager: Option<Arc<alephcore::gateway::AgentEnvStore>>,
+    session_manager: Arc<dyn alephcore::gateway::session_store::SessionStore>,
 ) -> alephcore::gateway::JsonRpcResponse
 where
     P: alephcore::thinker::ProviderRegistry + 'static,
@@ -132,6 +144,22 @@ where
         .await;
 
     let session_key_str = session_key.to_key_string();
+
+    // P1 visibility chokepoint — identical placement and semantics to the
+    // `chat.send` twin below (immediately after `router.route`, before any
+    // agent resolution or run start): a caller-supplied `session_key` that
+    // already belongs to someone else is refused; a brand-new key is NOT a
+    // denial (the run that follows creates and stamps it). See
+    // `visibility::existing_session_is_visible`.
+    if !alephcore::gateway::visibility::existing_session_is_visible(
+        session_manager.as_ref(),
+        &session_key,
+    )
+    .await
+    {
+        return alephcore::gateway::visibility::not_found_response(request.id);
+    }
+
     let accepted_at = chrono::Utc::now().to_rfc3339();
 
     // Resolve agent from session_key (which encodes the correct agent_id)
@@ -215,7 +243,7 @@ pub async fn handle_chat_send_with_engine<P, R>(
     app_config: Arc<tokio::sync::RwLock<alephcore::Config>>,
     _workspace_manager: Option<Arc<alephcore::gateway::AgentEnvStore>>,
     _provider_registry: Arc<P>,
-    _session_manager: Arc<dyn alephcore::gateway::session_store::SessionStore>,
+    session_manager: Arc<dyn alephcore::gateway::session_store::SessionStore>,
     command_parser: Option<Arc<alephcore::command::CommandParser>>,
 ) -> alephcore::gateway::JsonRpcResponse
 where
@@ -279,6 +307,20 @@ where
         .await;
 
     let session_key_str = session_key.to_key_string();
+
+    // P1 visibility chokepoint: a caller-supplied session_key that already
+    // belongs to someone else must be refused before a run ever starts — a
+    // brand-new key (nothing created yet) is NOT a denial, it is the
+    // ordinary "first message of a new conversation" case and proceeds so
+    // the run can create+stamp it. See `visibility::existing_session_is_visible`.
+    if !alephcore::gateway::visibility::existing_session_is_visible(
+        session_manager.as_ref(),
+        &session_key,
+    )
+    .await
+    {
+        return alephcore::gateway::visibility::not_found_response(request.id);
+    }
 
     // Resolve agent from session_key (which now encodes the correct agent_id)
     let resolved_agent_id = session_key.agent_id().to_string();
@@ -397,4 +439,65 @@ where
     };
 
     alephcore::gateway::JsonRpcResponse::success(request.id, json!(result))
+}
+
+#[cfg(test)]
+mod tests {
+    /// Both run-start entry points in this file take a caller-supplied
+    /// `session_key`, route it through `AgentRouter`, and start a real run
+    /// against the result — so both owe the P1 visibility check, and
+    /// `agent.run` shipped without it (final-review finding C1).
+    ///
+    /// This is a SOURCE pin, not an effect test, and deliberately so: the
+    /// effect is only observable by calling these functions, which requires a
+    /// live `ExecutionEngine<P, R>` (a provider registry plus a tool
+    /// registry), and they live in the binary crate — `alephcore`'s test
+    /// surface cannot reach them, and constructing the engine here would test
+    /// the engine, not the guard. The repo already uses this technique where
+    /// the real wire is invisible to host tests (`queue_row_key`'s
+    /// `include_str!` pin on the Panel's `<For>` call — see the root
+    /// CLAUDE.md's busy-queue note). What it buys is precise: deleting either
+    /// call fails a test by name instead of silently reopening the hole.
+    ///
+    /// The predicate's own deny/allow/brand-new-key behaviour is covered by
+    /// effect tests against a real `SessionStore` in
+    /// `alephcore::gateway::visibility`.
+    #[test]
+    fn both_run_start_paths_check_session_visibility() {
+        // Normalize line endings: this file is CRLF on disk on Windows, and
+        // `include_str!` hands over the raw bytes. Matching on a bare "\n}"
+        // bound against CRLF text silently finds nothing and runs the bound
+        // to end-of-file — which is precisely the vacuous pass the
+        // "mod tests" assertion below exists to catch, and did catch.
+        let src = include_str!("server_init.rs").replace('\r', "");
+        let guard = "visibility::existing_session_is_visible";
+
+        for entry in ["handle_run_with_engine", "handle_chat_send_with_engine"] {
+            let body = src
+                .split_once(&format!("pub async fn {entry}<P, R>"))
+                .unwrap_or_else(|| panic!("{entry} must exist in this file"))
+                .1;
+            // Bound the search to this function: stop at the next `\n}` that
+            // closes it, so a sibling's guard can never satisfy this entry.
+            let body = body.split("\n}\n").next().unwrap_or(body);
+            // The bound is what makes the assertion below non-vacuous, so
+            // check it held: this module's own `guard` literal sits after the
+            // last function, and an over-long body would swallow it and pass
+            // for free.
+            assert!(
+                !body.contains("mod tests"),
+                "{entry}'s body bound leaked past the end of the file — the \
+                 assertion below would pass on this module's own source"
+            );
+            // Assert on the CALL, not the name: the guard string also appears
+            // in each function's explanatory comment, so `contains(guard)`
+            // alone stays green if someone deletes the `if` block and leaves
+            // the comment. The prose mentions end in a backtick, never `(`.
+            assert!(
+                body.contains(&format!("{guard}(")),
+                "{entry} starts a run against a caller-supplied session_key and \
+                 must call {guard} before doing so (final-review C1)"
+            );
+        }
+    }
 }

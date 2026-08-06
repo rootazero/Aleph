@@ -114,6 +114,13 @@ struct ConnectionContext {
     /// flood guard closes an unauthorized connection. `None` ⇒ auth events are
     /// not persisted (probe/degraded wiring).
     audit_log: Option<crate::security::audit::SecurityAuditLog>,
+    /// Session store for the owner-scoped WS event filter (P1 data isolation,
+    /// spec §5.4). `None` ⇒ that 4th filter term is skipped (zero-change
+    /// guarantee — see `GatewaySharedState::session_store`).
+    session_store: Option<Arc<dyn crate::gateway::session_store::SessionStore>>,
+    /// Process-shared run→session / session→owner cache backing the filter.
+    /// See `crate::gateway::event_visibility`.
+    event_visibility: Arc<crate::gateway::event_visibility::EventVisibilityIndex>,
 }
 
 /// axum handler: upgrade HTTP connection to WebSocket at `/ws`
@@ -246,6 +253,8 @@ pub(super) async fn ws_upgrade_handler(
             node_registry: state.node_registry.clone(),
             exec_approval_manager: state.exec_approval_manager.clone(),
             audit_log: state.audit_log.clone(),
+            session_store: state.session_store.clone(),
+            event_visibility: state.event_visibility.clone(),
         };
         if let Err(e) = handle_connection(socket, peer_addr, ctx).await {
             error!("Connection error from {}: {}", peer_addr, e);
@@ -381,6 +390,144 @@ fn device_revoked_should_close(event_json: &str, session_device_id: Option<&str>
     match (device_revoked_id(event_json), session_device_id) {
         (Some(revoked), Some(mine)) => revoked == mine,
         _ => false,
+    }
+}
+
+/// Extract `(topic, data)` from an already-parsed event envelope — the
+/// single chokepoint every per-connection filter term reads from
+/// (`EventScopeGuard`, `audience_allows`, `SubscriptionManager`,
+/// `EventVisibilityIndex`).
+///
+/// Handles every wire shape an event can arrive in on `ctx.event_bus`:
+/// - `TopicEvent` form (non-stream `GatewayEventFrame` variants, published
+///   by `publish_frame`): `{"topic": "...", "data": {...}}`.
+/// - `stream.*` JSON-RPC notification form (streaming `GatewayEventFrame`
+///   variants): `{"method": "stream.X", "params": <frame body>}` — the
+///   frame's own fields live directly under `params`, not nested under a
+///   `.data` (see `event_bus.rs::publish_frame`'s doc). `data` reads `None`
+///   for this shape — unchanged from before this function existed; no
+///   `stream.*` frame has ever had a nested `.data` to find.
+/// - The double-wrapped `TopicEvent::to_notification()` form, used by
+///   producers that build a raw string and call `GatewayEventBus::publish`
+///   directly rather than going through `publish_frame` (e.g.
+///   `subagent_tree_relay.rs`'s `run.subagent_tree`):
+///   `{"jsonrpc":"2.0","method":"event","params":{"topic":"...",
+///   "data":{...},"timestamp":...}}`. **Missing this branch reads `topic`
+///   as the literal string `"event"` for every producer using this shape**
+///   — `EventScopeGuard` happens to default-allow an unrecognized topic
+///   anyway, but `session_identity_of` ALSO defaults an unrecognized topic
+///   to `Global`, so a session-scoped event published this way silently
+///   skipped owner-scoping entirely (found in review, fix round 1 — see
+///   `run.subagent_tree`'s entry in `event_visibility::session_identity_of`).
+fn extract_topic_and_data(event_obj: &serde_json::Value) -> (&str, Option<&serde_json::Value>) {
+    if event_obj.get("method").and_then(serde_json::Value::as_str) == Some("event") {
+        if let Some(params) = event_obj.get("params") {
+            let topic = params
+                .get("topic")
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or("");
+            return (topic, params.get("data"));
+        }
+    }
+    let topic = event_obj
+        .get("topic")
+        .and_then(serde_json::Value::as_str)
+        .or_else(|| event_obj.get("method").and_then(serde_json::Value::as_str))
+        .unwrap_or("");
+    let data = event_obj
+        .get("data")
+        .or_else(|| event_obj.get("params").and_then(|p| p.get("data")));
+    (topic, data)
+}
+
+/// The guest login wall: may a connection stamped with `role` send `method`?
+///
+/// The wall is the *guest* wall and nothing else — it separates "this
+/// connection presented a credential" from "it did not." Both authorized roles
+/// pass every method: `"operator"` (loopback, legacy shared token, or a device
+/// bound to an `admin` user) and `"member"` (a device bound to a `member`-role
+/// user). The admin/member split for server-global methods is decided further
+/// in, at the `process_request` chokepoint (`method_admin.rs`) — teaching this
+/// predicate about it would put the same decision in two places.
+///
+/// Anything else — `"guest"`, an unrecognized role string, or absent
+/// connection state — may only send `connect` to authorize (fail closed).
+///
+/// Pure so the wall's own logic is host-testable. The
+/// `resolve_stamped_identity` tests below cover *what role gets stamped*; the
+/// class of bug this function exists to prevent lives in the *predicate* — a
+/// correctly-stamped `"member"` being refused every method and then
+/// flood-guard-kicked as an abuser stays green under any test that scopes
+/// task-locals below the wall.
+#[must_use]
+fn wall_admits(role: Option<&str>, method: &str) -> bool {
+    matches!(role, Some("operator" | "member")) || method == "connect"
+}
+
+/// The authorization verdict echoed back in a `connect` response:
+/// `(role, authorized, needs_token)`.
+///
+/// Derived from the **resolved** identity, never from the raw credential
+/// verdict alone. "Was the credential valid" and "does this connection hold
+/// any authority" are different questions, and P0 made them come apart: a
+/// device token that is still valid but whose bound user was deactivated (or
+/// whose `user_id` dangles) is a valid credential that grants nothing. It must
+/// be reported with the shape the Panel already knows — `("guest", false,
+/// true)`, i.e. the login wall — rather than a new close reason or verdict
+/// word no client parses.
+///
+/// Pure so the exact wire triple is host-testable; the surrounding JSON
+/// insertion has no seam (it edits a response inside the live WS loop).
+#[must_use]
+fn connect_verdict(credential_ok: bool, resolved_role: &str) -> (&str, bool, bool) {
+    let holds_authority = credential_ok && resolved_role != "guest";
+    (resolved_role, holds_authority, !holds_authority)
+}
+
+/// Resolve the `(caller_role, caller_user)` pair stamped onto
+/// `ConnectionState` at a `connect` handshake, given the authorization
+/// verdict `resolve_connect_auth` already decided. Pure — host-testable
+/// without a live WS socket, unlike the handshake it's extracted from.
+///
+/// `authorized == false` stays walled (guest, no user) exactly as before
+/// per-user resolution existed. `authorized == true` resolves the bound
+/// device's user via [`resolve_connection_identity`](crate::gateway::handlers::connect::resolve_connection_identity)
+/// when a security store is available — loopback and legacy unbound-device
+/// paths still resolve to the implicit owner as operator (zero-change
+/// guarantee), but a device bound to a deactivated user is walled here even
+/// though its token was valid.
+///
+/// With **no store wired** (probe/test server) the arm splits on whether the
+/// connection is device-bound. No device and no store is the pre-P0 shape
+/// (loopback / legacy shared token) and keeps resolving to the implicit owner
+/// as operator — unchanged from before per-user resolution existed. A device
+/// *is* presented but there is no store to resolve it against ⇒ `("guest",
+/// None)`, fail-closed, mirroring the ruled `Err` semantics inside
+/// `resolve_connection_identity`: a binding lookup that could not be
+/// performed must never be read as "unbound, therefore owner" — that is the
+/// one input a remote caller controls, and it would otherwise buy full
+/// operator authority on any deployment whose store failed to wire.
+fn resolve_stamped_identity(
+    authorized: bool,
+    is_loopback: bool,
+    device_id: Option<&str>,
+    store: Option<&crate::gateway::security::store::SecurityStore>,
+) -> (Option<String>, &'static str) {
+    if !authorized {
+        return (None, "guest");
+    }
+    match store {
+        Some(store) => crate::gateway::handlers::connect::resolve_connection_identity(
+            is_loopback,
+            device_id,
+            store,
+        ),
+        // Device-bound but unresolvable: fail closed (see doc above).
+        None if device_id.is_some() => (None, "guest"),
+        None => (
+            Some(crate::gateway::security::store::OWNER_USER_ID.to_string()),
+            "operator",
+        ),
     }
 }
 
@@ -677,18 +824,36 @@ async fn handle_connection(
                                         )
                                     });
 
+                                    // Originating connection's authenticated user
+                                    // (`users.user_id`), latched at `connect`
+                                    // alongside `caller_role`. Pre-handshake /
+                                    // probe paths default by network position —
+                                    // loopback is the implicit owner, remote has
+                                    // no user until authorized.
+                                    let caller_user: Option<String> = {
+                                        let conns = ctx.connections.read().await;
+                                        conns.get(&conn_id).and_then(|s| s.caller_user.clone())
+                                    }
+                                    .or_else(|| {
+                                        ctx.client_ip
+                                            .is_loopback()
+                                            .then(|| crate::gateway::security::store::OWNER_USER_ID.to_string())
+                                    });
+
                                     // Login wall (Gateway-token model): an
                                     // unauthorized connection — a remote Panel
                                     // that has not presented a valid Gateway
                                     // token — may only (re)issue `connect` to
                                     // authorize. Every other method is refused
-                                    // until a valid token is presented. Loopback
-                                    // and token-authorized connections are
-                                    // operator and pass freely; once authorized,
-                                    // authority equals local (single tier).
-                                    if caller_role.as_deref() != Some("operator")
-                                        && req.method != "connect"
-                                    {
+                                    // until a valid credential is presented.
+                                    // Loopback, token-authorized and
+                                    // member-resolved connections pass freely
+                                    // here; the admin/member split is a
+                                    // *separate*, deeper gate (`method_admin.rs`
+                                    // inside `process_request`). See
+                                    // `wall_admits` for the predicate and why it
+                                    // is extracted (host-testable).
+                                    if !wall_admits(caller_role.as_deref(), &req.method) {
                                         let resp = JsonRpcResponse::error(
                                             req.id.clone(),
                                             AUTH_REQUIRED,
@@ -785,13 +950,10 @@ async fn handle_connection(
                                         }
 
                                         // Helper closure: standard lane dispatch (no idempotency)
-                                        let do_lane_dispatch = |text: String, lm: Arc<LaneManager>, mc: MiddlewareChain, method: String, req_id: Option<serde_json::Value>, class: ChannelClass, caller_role: Option<String>, caller_is_loopback: bool| async move {
+                                        let do_lane_dispatch = |text: String, lm: Arc<LaneManager>, mc: MiddlewareChain, method: String, req_id: Option<serde_json::Value>, class: ChannelClass, caller_role: Option<String>, caller_user: Option<String>, caller_is_loopback: bool| async move {
                                             let lane_result = lm.acquire(&method, class).await;
                                             match lane_result {
-                                                Ok(_permit) => crate::gateway::caller_identity::CALLER_ROLE
-                                                    .scope(caller_role, crate::gateway::caller_identity::CALLER_IS_LOOPBACK
-                                                        .scope(caller_is_loopback, process_request(&text, &mc)))
-                                                    .await,
+                                                Ok(_permit) => dispatch_with_caller_context(&text, &mc, caller_role, caller_user, caller_is_loopback).await,
                                                 Err(_) => serde_json::to_string(&JsonRpcResponse::error(
                                                     req_id,
                                                     INTERNAL_ERROR,
@@ -838,10 +1000,7 @@ async fn handle_connection(
                                                         let lane_result = ctx.lane_manager.acquire(&req.method, ctx.channel_class).await;
                                                         match lane_result {
                                                             Ok(_permit) => {
-                                                                let resp = crate::gateway::caller_identity::CALLER_ROLE
-                                                                    .scope(caller_role.clone(), crate::gateway::caller_identity::CALLER_IS_LOOPBACK
-                                                                        .scope(ctx.client_ip.is_loopback(), process_request(&text, &ctx.middleware_chain)))
-                                                                    .await;
+                                                                let resp = dispatch_with_caller_context(&text, &ctx.middleware_chain, caller_role.clone(), caller_user.clone(), ctx.client_ip.is_loopback()).await;
                                                                 if let Ok(parsed) = serde_json::from_str::<JsonRpcResponse>(&resp) {
                                                                     if parsed.is_success() {
                                                                         if let Some(result) = parsed.result {
@@ -870,11 +1029,11 @@ async fn handle_connection(
                                                 }
                                             } else {
                                                 // Query lane — skip idempotency
-                                                do_lane_dispatch(text.to_string(), ctx.lane_manager.clone(), ctx.middleware_chain.clone(), req.method.clone(), req.id.clone(), ctx.channel_class, caller_role.clone(), ctx.client_ip.is_loopback()).await
+                                                do_lane_dispatch(text.to_string(), ctx.lane_manager.clone(), ctx.middleware_chain.clone(), req.method.clone(), req.id.clone(), ctx.channel_class, caller_role.clone(), caller_user.clone(), ctx.client_ip.is_loopback()).await
                                             }
                                         } else {
                                             // No idempotency key — standard lane dispatch
-                                            do_lane_dispatch(text.to_string(), ctx.lane_manager.clone(), ctx.middleware_chain.clone(), req.method.clone(), req.id.clone(), ctx.channel_class, caller_role.clone(), ctx.client_ip.is_loopback()).await
+                                            do_lane_dispatch(text.to_string(), ctx.lane_manager.clone(), ctx.middleware_chain.clone(), req.method.clone(), req.id.clone(), ctx.channel_class, caller_role.clone(), caller_user.clone(), ctx.client_ip.is_loopback()).await
                                         };
                                         // --- End idempotency + lane block ---
 
@@ -942,10 +1101,16 @@ async fn handle_connection(
                                                         }
                                                     };
 
-                                                    let (authorized, panel_role, issued_device_token, authed_device_id) = match &auth_outcome {
-                                                        crate::gateway::handlers::connect::ConnectAuthOutcome::Authorized { device_id } => (true, "operator", None, device_id.clone()),
-                                                        crate::gateway::handlers::connect::ConnectAuthOutcome::BootstrapExchanged { device_token, device_id } => (true, "operator", Some(device_token.clone()), Some(device_id.clone())),
-                                                        crate::gateway::handlers::connect::ConnectAuthOutcome::Unauthorized => (false, "guest", None, None),
+                                                    // Credential verdict only — "did this connection
+                                                    // present something valid". The *role* it maps to
+                                                    // is no longer decided here: per-user resolution
+                                                    // (`resolve_stamped_identity`, below) owns that
+                                                    // for both the stamp and the response, so there
+                                                    // is exactly one answer to "who is this".
+                                                    let (authorized, issued_device_token, authed_device_id) = match &auth_outcome {
+                                                        crate::gateway::handlers::connect::ConnectAuthOutcome::Authorized { device_id } => (true, None, device_id.clone()),
+                                                        crate::gateway::handlers::connect::ConnectAuthOutcome::BootstrapExchanged { device_token, device_id } => (true, Some(device_token.clone()), Some(device_id.clone())),
+                                                        crate::gateway::handlers::connect::ConnectAuthOutcome::Unauthorized => (false, None, None),
                                                     };
                                                     // Bind this session to the paired device it authenticated
                                                     // as, so `gateway.devices.revoke` can close exactly this
@@ -979,6 +1144,38 @@ async fn handle_connection(
                                                             ));
                                                         }
                                                     }
+                                                    // Role + user for the login-wall gate and the
+                                                    // config-tier tool gate. See
+                                                    // `resolve_stamped_identity` (pure, unit-tested)
+                                                    // for the decision rules. Resolved BEFORE taking
+                                                    // the connection-map lock (it is a pure function;
+                                                    // holding the lock across it buys nothing) so the
+                                                    // very same verdict can be echoed to the client
+                                                    // in the response overlay below.
+                                                    let (resolved_user, resolved_role) = resolve_stamped_identity(
+                                                        authorized,
+                                                        ctx.client_ip.is_loopback(),
+                                                        authed_device_id.as_deref(),
+                                                        ctx.security_store.as_deref(),
+                                                    );
+                                                    // What the client is told, and what the event
+                                                    // scope grants. A connect can be
+                                                    // credential-authorized yet resolve to no
+                                                    // principal (deactivated / dangling user); the
+                                                    // login wall already treats that as guest, so the
+                                                    // response and the scope must agree — otherwise
+                                                    // the client is told `authorized: true` and
+                                                    // handed a dead UI in which every later frame is
+                                                    // refused, while a wildcard scope keeps streaming
+                                                    // guarded topics (approval banners,
+                                                    // config.changed) to a principal that no longer
+                                                    // exists. For every pre-P0 shape (loopback,
+                                                    // shared token, unbound device, unauthorized)
+                                                    // this triple is byte-identical to what the old
+                                                    // credential-only `panel_role`/`authorized` pair
+                                                    // produced.
+                                                    let (echo_role, holds_authority, needs_token) =
+                                                        connect_verdict(authorized, resolved_role);
                                                     {
                                                         let mut conns = ctx.connections.write().await;
                                                         if let Some(state) = conns.get_mut(&conn_id) {
@@ -998,18 +1195,31 @@ async fn handle_connection(
                                                             };
                                                             state.channel_kind = Some(kind);
                                                             state.first_message = false;
-                                                            // Authorized ⇒ wildcard scope so
-                                                            // EventScopeGuard delivers guarded topics
-                                                            // (approval banners, config.changed).
-                                                            // Unauthorized ⇒ no scopes (walled).
-                                                            state.permissions = if authorized {
-                                                                vec!["*".to_string()]
-                                                            } else {
-                                                                Vec::new()
-                                                            };
-                                                            // Single-tier role for the login-wall gate:
-                                                            // operator (authorized) or guest (walled).
-                                                            state.caller_role = panel_role.to_string();
+                                                            // Event scope follows the RESOLVED role,
+                                                            // through the single authority shared with
+                                                            // the live re-stamp in `handlers::users`.
+                                                            // Operator ⇒ the `"*"` wildcard, so
+                                                            // EventScopeGuard keeps delivering guarded
+                                                            // topics (approval banners, config.changed).
+                                                            // Member and walled ⇒ no scopes; that is not
+                                                            // a blackout, `can_receive` is default-allow
+                                                            // and only the guarded prefixes stop.
+                                                            //
+                                                            // Keying on the role rather than
+                                                            // `holds_authority` is equivalent for every
+                                                            // pre-P0 shape — `resolve_stamped_identity`
+                                                            // returns `"guest"` whenever `!authorized`,
+                                                            // so `holds_authority == (role != "guest")`.
+                                                            // It differs in exactly one case, which is
+                                                            // the bug being fixed: a member holds
+                                                            // authority (the login wall admits him) yet
+                                                            // must not hold the admin event scope.
+                                                            state.permissions =
+                                                                crate::gateway::event_scope::scope_for_role(
+                                                                    resolved_role,
+                                                                );
+                                                            state.caller_role = resolved_role.to_string();
+                                                            state.caller_user = resolved_user;
                                                             // Device binding for the per-device revoke.
                                                             // Same value as the connection-local latch
                                                             // above, written under this one lock: the
@@ -1137,7 +1347,17 @@ async fn handle_connection(
 
                                                     // Echo the verdict so the Panel renders the login
                                                     // wall / token box when unauthorized, and unlocks
-                                                    // the full app (same as local) when authorized.
+                                                    // the app when authorized. The echoed role is the
+                                                    // RESOLVED one (`resolve_stamped_identity`), not
+                                                    // the credential-only `panel_role` guess — the
+                                                    // client must be told the authority it actually
+                                                    // holds, or a member renders an operator UI whose
+                                                    // admin surfaces all fail, and a deactivated
+                                                    // user's still-valid device is told it is a fully
+                                                    // authorized operator while the wall refuses
+                                                    // every frame it sends. No new vocabulary: a
+                                                    // walled resolution reuses the existing
+                                                    // guest/needs_token shape.
                                                     if let Some(obj) = resp
                                                         .result
                                                         .as_mut()
@@ -1146,16 +1366,16 @@ async fn handle_connection(
                                                         obj.insert(
                                                             "role".to_string(),
                                                             serde_json::Value::String(
-                                                                panel_role.to_string(),
+                                                                echo_role.to_string(),
                                                             ),
                                                         );
                                                         obj.insert(
                                                             "authorized".to_string(),
-                                                            serde_json::Value::Bool(authorized),
+                                                            serde_json::Value::Bool(holds_authority),
                                                         );
                                                         obj.insert(
                                                             "needs_token".to_string(),
-                                                            serde_json::Value::Bool(!authorized),
+                                                            serde_json::Value::Bool(needs_token),
                                                         );
                                                         if let Some(dt) = issued_device_token {
                                                             obj.insert(
@@ -1289,32 +1509,45 @@ async fn handle_connection(
                         }
                         // Try to extract topic from event for filtering
                         let should_forward = if let Ok(event_obj) = serde_json::from_str::<serde_json::Value>(&event_json) {
-                            // Check for topic in event (TopicEvent format)
-                            let topic = event_obj.get("topic")
-                                .and_then(|t| t.as_str())
-                                // Or method for JSON-RPC notification format
-                                .or_else(|| event_obj.get("method").and_then(|m| m.as_str()))
-                                .unwrap_or("");
+                            let (topic, event_data) = extract_topic_and_data(&event_obj);
 
-                            // Permission-based scope guard check + surface audience.
-                            // Both read the same ConnectionState under one lock.
-                            let (scope_allowed, channel_kind) = {
+                            // Permission-based scope guard check + surface audience +
+                            // caller identity for the owner-scoped event filter (P1,
+                            // spec §5.4). All three read the same ConnectionState
+                            // under one lock — extend the tuple, don't take the lock
+                            // twice.
+                            let (scope_allowed, channel_kind, event_caller_user) = {
                                 let conns = ctx.connections.read().await;
                                 match conns.get(&conn_id) {
                                     Some(s) => (
                                         ctx.event_scope_guard.can_receive(topic, &s.permissions),
                                         s.channel_kind,
+                                        s.caller_user.clone(),
                                     ),
-                                    None => (false, None),
+                                    None => (false, None, None),
                                 }
                             };
 
-                            // Extract payload data for field-level filter predicates.
-                            // TopicEvent shape stores it at .data; JSON-RPC notifications
-                            // store it at .params (then nested .data for our wrapper).
-                            let event_data = event_obj
-                                .get("data")
-                                .or_else(|| event_obj.get("params").and_then(|p| p.get("data")));
+                            // The owner-scoped filter needs the frame's OWN fields
+                            // (run_id/session_key), which for stream.* notifications
+                            // live directly under `.params` — `event_data` above only
+                            // resolves for the TopicEvent `.data` and the
+                            // double-wrapped `TopicEvent::to_notification()`
+                            // `.params.data` shapes (both handled by
+                            // `extract_topic_and_data`), not the bare stream-form
+                            // `.params` (no `GatewayEventFrame` stream.* variant
+                            // nests a second `.data` inside it), so fall back to the
+                            // raw `.params` object for that one remaining case.
+                            let visibility_payload =
+                                event_data.or_else(|| event_obj.get("params"));
+
+                            // `note_frame` runs unconditionally, before the filter —
+                            // every connection's loop keeps the shared, process-wide
+                            // index warm (first writer wins) regardless of whether
+                            // THIS connection ends up receiving the frame.
+                            ctx.event_visibility
+                                .note_frame(topic, visibility_payload)
+                                .await;
 
                             scope_allowed
                                 && crate::gateway::surface::delivery::audience_allows(
@@ -1322,6 +1555,22 @@ async fn handle_connection(
                                     channel_kind,
                                 )
                                 && ctx.subscription_manager.should_receive(&conn_id, topic, event_data).await
+                                && match ctx.session_store.as_ref() {
+                                    Some(store) => {
+                                        ctx.event_visibility
+                                            .event_admits(
+                                                topic,
+                                                visibility_payload,
+                                                event_caller_user.as_deref(),
+                                                store,
+                                            )
+                                            .await
+                                    }
+                                    // No store wired (probe/legacy wiring): skip the
+                                    // 4th term entirely — zero-change guarantee, see
+                                    // `GatewaySharedState::session_store`.
+                                    None => true,
+                                }
                         } else {
                             // Can't parse event, forward by default
                             true
@@ -1521,6 +1770,38 @@ async fn handle_connection(
     Ok(())
 }
 
+/// Scope `process_request` with the caller-identity task-locals + P1 scope
+/// attribution that must surround every dispatched request. Single source of
+/// truth shared by both dispatch stations (`do_lane_dispatch`'s closure and
+/// the idempotency `Proceed` arm) so the two call sites cannot drift apart —
+/// see `src/gateway/CLAUDE.md`'s note that `CALLER_ROLE`/`CALLER_USER`/
+/// `CALLER_IS_LOOPBACK` must be scoped around `process_request` at both
+/// sites. `scope::with_scope` is the outermost (4th) layer: a `caller_user`
+/// seeds a personal-scope attribution, observable via `scope::current_scope`
+/// for the lifetime of this dispatch (spec P1 §5).
+async fn dispatch_with_caller_context(
+    text: &str,
+    mc: &MiddlewareChain,
+    caller_role: Option<String>,
+    caller_user: Option<String>,
+    caller_is_loopback: bool,
+) -> String {
+    crate::scope::with_scope(
+        caller_user
+            .clone()
+            .map(|u| crate::scope::ScopeAttribution::personal(&u)),
+        crate::gateway::caller_identity::CALLER_USER.scope(
+            caller_user,
+            crate::gateway::caller_identity::CALLER_ROLE.scope(
+                caller_role,
+                crate::gateway::caller_identity::CALLER_IS_LOOPBACK
+                    .scope(caller_is_loopback, process_request(text, mc)),
+            ),
+        ),
+    )
+    .await
+}
+
 /// Process a JSON-RPC request string
 pub(super) async fn process_request(text: &str, middleware_chain: &MiddlewareChain) -> String {
     // Parse the request
@@ -1535,6 +1816,23 @@ pub(super) async fn process_request(text: &str, middleware_chain: &MiddlewareCha
             .unwrap_or_default();
         }
     };
+
+    // Multi-user role gate (spec §4.6): members cannot reach server-global
+    // config/credential methods. One chokepoint covers both dispatch paths —
+    // CALLER_ROLE is scoped around process_request at both call sites
+    // (`do_lane_dispatch` and the idempotency `Proceed` arm). `None`
+    // (internal/cron) and `"operator"` pass; `"guest"` never reaches here for
+    // non-connect methods (the login wall above refuses it first).
+    if crate::gateway::method_admin::method_requires_admin(&request.method)
+        && crate::gateway::caller_identity::current_caller_role().as_deref() == Some("member")
+    {
+        return serde_json::to_string(&JsonRpcResponse::error(
+            request.id.clone(),
+            AUTH_REQUIRED,
+            "Not authorized: this method requires operator privileges".to_string(),
+        ))
+        .unwrap_or_default();
+    }
 
     // Distributed-trace context: honour an inbound W3C `traceparent` (carried
     // in params) or mint a fresh root trace, so every log/span emitted while
@@ -1748,6 +2046,337 @@ mod device_revocation_tests {
 mod tests {
     use super::*;
 
+    // ── Connect-time identity stamping (resolve_stamped_identity) ─────────
+    // These pin the branch logic extracted verbatim from the connect
+    // handshake's ConnectionState-stamping site (server::handler still calls
+    // this exact function). The surrounding WS glue — lock acquisition, the
+    // `state.caller_role = ..` / `state.caller_user = ..` assignment, and
+    // `handle_connection`'s dispatch loop itself — has no injectable seam
+    // (it operates on a live `axum::extract::ws::WebSocket`) and is not
+    // covered here; see the Task 2 fix report for what that would require.
+
+    fn store_with_device_user(
+        device_id: &str,
+        user_id: &str,
+        role: crate::gateway::security::store::UserRole,
+    ) -> crate::gateway::security::store::SecurityStore {
+        use crate::gateway::security::store::{DeviceUpsertData, SecurityStore};
+        let store = SecurityStore::in_memory().unwrap();
+        store.create_user(user_id, "Test User", role).unwrap();
+        store
+            .upsert_device(&DeviceUpsertData {
+                device_id,
+                device_name: "Test Device",
+                device_type: Some("panel"),
+                public_key: &[1u8; 32],
+                fingerprint: device_id,
+                role: "operator",
+                scopes: &[],
+                user_id: None,
+            })
+            .unwrap();
+        store.set_device_user(device_id, user_id).unwrap();
+        store
+    }
+
+    #[test]
+    fn unauthorized_stays_walled_even_with_a_store_present() {
+        // A store being available never overrides an unauthorized verdict.
+        let store = store_with_device_user(
+            "dev-r",
+            "u-root",
+            crate::gateway::security::store::UserRole::Admin,
+        );
+        let (user, role) = resolve_stamped_identity(false, false, Some("dev-r"), Some(&store));
+        assert_eq!(user, None);
+        assert_eq!(role, "guest");
+    }
+
+    #[test]
+    fn no_store_and_no_device_falls_back_to_owner_when_authorized() {
+        // probe/test server with no security store, and a connection that is
+        // not device-bound (loopback / legacy shared token): the pre-P0 shape,
+        // LAN-trust degrade preserved.
+        let (user, role) = resolve_stamped_identity(true, false, None, None);
+        assert_eq!(
+            user.as_deref(),
+            Some(crate::gateway::security::store::OWNER_USER_ID)
+        );
+        assert_eq!(role, "operator");
+    }
+
+    #[test]
+    fn no_store_but_device_bound_fails_closed_to_guest() {
+        // The other half of the same arm: a device id WAS presented but there
+        // is no store to resolve its binding against. "Could not look it up"
+        // must not read as "unbound, therefore owner" — the device id is
+        // remote-controlled input, so fail closed exactly like the store-`Err`
+        // arm inside `resolve_connection_identity`.
+        let (user, role) = resolve_stamped_identity(true, false, Some("dev-x"), None);
+        assert_eq!(user, None);
+        assert_eq!(role, "guest");
+    }
+
+    // ── The connect response's echoed verdict (connect_verdict) ──────────
+    // Composed with `resolve_stamped_identity` so each case runs the real
+    // chain the handshake runs: credential verdict + store → resolved role →
+    // wire triple.
+
+    #[test]
+    fn connect_response_reports_member_authority_to_a_member() {
+        // The regression: the response used to be computed from the
+        // credential verdict alone, so a member was told `role: "operator"`
+        // and rendered an operator UI whose every admin surface then failed.
+        let store = store_with_device_user(
+            "dev-a",
+            "u-alice",
+            crate::gateway::security::store::UserRole::Member,
+        );
+        let (_, role) = resolve_stamped_identity(true, false, Some("dev-a"), Some(&store));
+        assert_eq!(connect_verdict(true, role), ("member", true, false));
+    }
+
+    #[test]
+    fn connect_response_walls_a_deactivated_users_valid_device() {
+        // Valid credential, no principal. Reported with the EXISTING walled
+        // shape — no new vocabulary, no new close reason.
+        use crate::gateway::security::store::UserStatus;
+        let store = store_with_device_user(
+            "dev-a",
+            "u-alice",
+            crate::gateway::security::store::UserRole::Member,
+        );
+        store
+            .update_user("u-alice", None, None, Some(UserStatus::Deactivated))
+            .unwrap();
+        let (user, role) = resolve_stamped_identity(true, false, Some("dev-a"), Some(&store));
+        assert_eq!(user, None);
+        assert_eq!(
+            connect_verdict(true, role),
+            ("guest", false, true),
+            "a credential that grants nothing must not claim operator authority"
+        );
+    }
+
+    #[test]
+    fn connect_response_is_unchanged_for_operator_and_walled_connections() {
+        // Zero-change guarantee: every pre-P0 shape produces exactly the
+        // triple the old credential-only overlay produced.
+        // Loopback / legacy shared token (no store, no device).
+        let (_, lo_role) = resolve_stamped_identity(true, true, None, None);
+        assert_eq!(connect_verdict(true, lo_role), ("operator", true, false));
+        // Remote, admin-bound device.
+        let store = store_with_device_user(
+            "dev-r",
+            "u-root",
+            crate::gateway::security::store::UserRole::Admin,
+        );
+        let (_, adm_role) = resolve_stamped_identity(true, false, Some("dev-r"), Some(&store));
+        assert_eq!(connect_verdict(true, adm_role), ("operator", true, false));
+        // Rejected credential.
+        let (_, guest_role) = resolve_stamped_identity(false, false, None, Some(&store));
+        assert_eq!(connect_verdict(false, guest_role), ("guest", false, true));
+    }
+
+    // ── The event scope stamped alongside that verdict ────────────────────
+    // The stamping itself has no seam (it edits ConnectionState inside the
+    // live WS loop), but both its inputs are pure, so the composition the
+    // handshake actually evaluates is testable: resolved role → scope.
+
+    #[test]
+    fn connect_stamps_a_member_out_of_the_admin_event_scope() {
+        // The finding: a member holds authority (the login wall admits him),
+        // and the stamping used to key on that, handing him `"*"` — which
+        // short-circuits every EventScopeGuard rule. So a member's socket was
+        // delivered exec approval cards including the command text.
+        let store = store_with_device_user(
+            "dev-a",
+            "u-alice",
+            crate::gateway::security::store::UserRole::Member,
+        );
+        let (_, role) = resolve_stamped_identity(true, false, Some("dev-a"), Some(&store));
+        let scope = crate::gateway::event_scope::scope_for_role(role);
+        assert!(scope.is_empty(), "a member must not be stamped `*`");
+
+        let guard = crate::gateway::event_scope::EventScopeGuard::default_rules();
+        assert!(!guard.can_receive("approval.requested", &scope));
+        assert!(!guard.can_receive("surface.approval", &scope));
+        assert!(!guard.can_receive("config.changed", &scope));
+        assert!(!guard.can_receive("pairing.requested", &scope));
+        // ...while his daily surfaces are untouched (default-allow guard).
+        assert!(guard.can_receive("agent.run.started", &scope));
+        assert!(guard.can_receive("chat.message", &scope));
+    }
+
+    #[test]
+    fn connect_stamps_operator_and_walled_scopes_unchanged() {
+        // Zero-change guarantee on the scope axis, mirroring
+        // `connect_response_is_unchanged_for_operator_and_walled_connections`.
+        let star = vec!["*".to_string()];
+        // Loopback / legacy shared token.
+        let (_, lo_role) = resolve_stamped_identity(true, true, None, None);
+        assert_eq!(crate::gateway::event_scope::scope_for_role(lo_role), star);
+        // Remote, admin-bound device.
+        let store = store_with_device_user(
+            "dev-r",
+            "u-root",
+            crate::gateway::security::store::UserRole::Admin,
+        );
+        let (_, adm_role) = resolve_stamped_identity(true, false, Some("dev-r"), Some(&store));
+        assert_eq!(crate::gateway::event_scope::scope_for_role(adm_role), star);
+        // Rejected credential ⇒ walled, no scope (as before).
+        let (_, guest_role) = resolve_stamped_identity(false, false, None, Some(&store));
+        assert!(crate::gateway::event_scope::scope_for_role(guest_role).is_empty());
+    }
+
+    #[test]
+    fn scope_keyed_on_role_matches_holds_authority_except_for_members() {
+        // The stamping switched from `holds_authority` to the resolved role.
+        // That is safe because `resolve_stamped_identity` returns "guest"
+        // whenever `!authorized`, so `holds_authority == (role != "guest")`
+        // for every shape — the ONE divergence is the member, which is the
+        // fix. Pinned here so a future change to either function that breaks
+        // the equivalence is loud rather than a silent scope widening.
+        let store = store_with_device_user(
+            "dev-a",
+            "u-alice",
+            crate::gateway::security::store::UserRole::Member,
+        );
+        let admin_store = store_with_device_user(
+            "dev-r",
+            "u-root",
+            crate::gateway::security::store::UserRole::Admin,
+        );
+        let cases = [
+            // (authorized, loopback, device, store)
+            (true, true, None, None),
+            (true, false, None, None),
+            (false, false, None, None),
+            (true, false, Some("dev-x"), None),
+            (true, false, Some("dev-a"), Some(&store)),
+            (false, false, Some("dev-a"), Some(&store)),
+            (true, false, Some("dev-r"), Some(&admin_store)),
+        ];
+        for (authorized, loopback, device, st) in cases {
+            let (_, role) = resolve_stamped_identity(authorized, loopback, device, st);
+            let (_, holds_authority, _) = connect_verdict(authorized, role);
+            let scope = crate::gateway::event_scope::scope_for_role(role);
+            if role == "member" {
+                assert!(
+                    holds_authority && scope.is_empty(),
+                    "a member holds authority yet must hold no event scope"
+                );
+            } else {
+                assert_eq!(
+                    holds_authority,
+                    !scope.is_empty(),
+                    "non-member scope must still track holds_authority \
+                     (authorized={authorized}, loopback={loopback}, role={role})"
+                );
+            }
+        }
+    }
+
+    // ── The login wall's own predicate (wall_admits) ──────────────────────
+    // These drive the ACTUAL wall expression the dispatch loop evaluates.
+    // The `resolve_stamped_identity` tests above prove a member connection is
+    // *stamped* "member"; only these prove the wall then lets it through —
+    // the distinction is not academic, it is precisely how "member is refused
+    // every method and then flood-kicked as an abuser" stayed green.
+
+    #[test]
+    fn wall_admits_member_on_a_daily_method() {
+        assert!(
+            wall_admits(Some("member"), "chat.send"),
+            "a member connection must clear the guest wall; the admin/member \
+             split is method_admin.rs's job, deeper in"
+        );
+        assert!(wall_admits(Some("member"), "sessions.list"));
+        assert!(wall_admits(Some("member"), "connect"));
+    }
+
+    #[test]
+    fn wall_admits_operator_on_everything() {
+        assert!(wall_admits(Some("operator"), "chat.send"));
+        assert!(wall_admits(Some("operator"), "connect"));
+        assert!(wall_admits(Some("operator"), "config.patch"));
+    }
+
+    #[test]
+    fn wall_refuses_guest_except_connect() {
+        assert!(
+            !wall_admits(Some("guest"), "chat.send"),
+            "the wall must stay the guest wall"
+        );
+        assert!(
+            wall_admits(Some("guest"), "connect"),
+            "connect is the only way to authorize, so it is always admitted"
+        );
+    }
+
+    #[test]
+    fn wall_fails_closed_on_absent_or_unknown_roles() {
+        // Pre-handshake / vanished connection state, and any role string the
+        // wall does not know, are refused everything but `connect`.
+        assert!(!wall_admits(None, "chat.send"));
+        assert!(wall_admits(None, "connect"));
+        assert!(!wall_admits(Some("admin"), "chat.send")); // wire word is "operator"
+        assert!(!wall_admits(Some(""), "chat.send"));
+    }
+
+    #[test]
+    fn admin_user_device_stamps_operator_and_user_id() {
+        let store = store_with_device_user(
+            "dev-r",
+            "u-root",
+            crate::gateway::security::store::UserRole::Admin,
+        );
+        let (user, role) = resolve_stamped_identity(true, false, Some("dev-r"), Some(&store));
+        assert_eq!(user.as_deref(), Some("u-root"));
+        assert_eq!(role, "operator");
+    }
+
+    #[test]
+    fn member_user_device_stamps_member_and_user_id() {
+        let store = store_with_device_user(
+            "dev-a",
+            "u-alice",
+            crate::gateway::security::store::UserRole::Member,
+        );
+        let (user, role) = resolve_stamped_identity(true, false, Some("dev-a"), Some(&store));
+        assert_eq!(user.as_deref(), Some("u-alice"));
+        assert_eq!(role, "member");
+    }
+
+    #[test]
+    fn deactivated_user_device_is_walled_at_connect_time() {
+        // The key behavior this task pins: a device bound to a deactivated
+        // user is walled at connect time even though its token was valid
+        // (authorized == true).
+        use crate::gateway::security::store::UserStatus;
+        let store = store_with_device_user(
+            "dev-r",
+            "u-root",
+            crate::gateway::security::store::UserRole::Admin,
+        );
+        store
+            .update_user("u-root", None, None, Some(UserStatus::Deactivated))
+            .unwrap();
+        let (user, role) = resolve_stamped_identity(true, false, Some("dev-r"), Some(&store));
+        assert_eq!(user, None);
+        assert_eq!(role, "guest");
+    }
+
+    #[test]
+    fn loopback_stamps_owner_operator_regardless_of_device() {
+        let (user, role) = resolve_stamped_identity(true, true, None, None);
+        assert_eq!(
+            user.as_deref(),
+            Some(crate::gateway::security::store::OWNER_USER_ID)
+        );
+        assert_eq!(role, "operator");
+    }
+
     // ── LAN-trust node-shape detection + cluster registration ────────────
 
     #[test]
@@ -1960,5 +2589,277 @@ mod tests {
         assert!(!super::refuse_insecure_remote(remote, true, false));
         // Remote + insecure + explicitly allowed ⇒ allow.
         assert!(!super::refuse_insecure_remote(remote, false, true));
+    }
+
+    // ── P1 scope attribution around dispatch (dispatch_with_caller_context) ──
+    // `dispatch_with_caller_context` is the single function BOTH dispatch
+    // stations call (`do_lane_dispatch`'s closure and the idempotency
+    // `Proceed` arm — see the call sites above). Exercising it once proves
+    // both stations by construction: neither wraps `process_request` any
+    // other way, so there is no second code path to drift out of sync. This
+    // mirrors how `resolve_stamped_identity`/`connect_verdict` are tested
+    // above rather than the live WS loop itself — that loop has no
+    // injectable seam (it operates on a real `axum::extract::ws::WebSocket`).
+
+    #[tokio::test]
+    async fn both_dispatch_stations_seed_scope() {
+        use crate::gateway::handlers::HandlerRegistry;
+        use crate::gateway::rate_limiter::RateLimitConfig;
+
+        // A probe method that reports what `scope::current_scope()` sees
+        // from inside `process_request`'s dispatch.
+        let mut registry = HandlerRegistry::new();
+        registry.register("probe.scope", |req| async move {
+            let owner = crate::scope::current_scope().map(|attr| attr.owner_user_id);
+            JsonRpcResponse::success(req.id, serde_json::json!({ "owner_user_id": owner }))
+        });
+        let mc = MiddlewareChain::new(
+            Arc::new(registry),
+            Arc::new(RateLimiter::new(RateLimitConfig::default())),
+        );
+        let text = r#"{"jsonrpc":"2.0","id":1,"method":"probe.scope","params":{}}"#;
+
+        let resp = dispatch_with_caller_context(
+            text,
+            &mc,
+            Some("member".to_string()),
+            Some("u-alice".to_string()),
+            false,
+        )
+        .await;
+        assert!(
+            resp.contains("\"owner_user_id\":\"u-alice\""),
+            "scope must be observable inside process_request's dispatch: {resp}"
+        );
+    }
+
+    #[tokio::test]
+    async fn dispatch_with_caller_context_leaves_scope_unset_for_no_caller_user() {
+        // Loopback / legacy shared-token connections resolve to `caller_user:
+        // None` — must not seed a scope attribution (no owner to attribute to).
+        use crate::gateway::handlers::HandlerRegistry;
+        use crate::gateway::rate_limiter::RateLimitConfig;
+
+        let mut registry = HandlerRegistry::new();
+        registry.register("probe.scope", |req| async move {
+            let owner = crate::scope::current_scope().map(|attr| attr.owner_user_id);
+            JsonRpcResponse::success(req.id, serde_json::json!({ "owner_user_id": owner }))
+        });
+        let mc = MiddlewareChain::new(
+            Arc::new(registry),
+            Arc::new(RateLimiter::new(RateLimitConfig::default())),
+        );
+        let text = r#"{"jsonrpc":"2.0","id":1,"method":"probe.scope","params":{}}"#;
+
+        let resp =
+            dispatch_with_caller_context(text, &mc, Some("operator".to_string()), None, true).await;
+        assert!(
+            resp.contains("\"owner_user_id\":null"),
+            "no caller_user must mean no scope attribution: {resp}"
+        );
+    }
+
+    // ── extract_topic_and_data — wire-envelope tests (P1 fix round 1) ─────
+    // The event_visibility.rs suite hand-builds post-extraction `data` and
+    // never runs the REAL envelope through the REAL extraction. These tests
+    // feed literal production wire JSON — generated via the actual publish
+    // path wherever practical — through `extract_topic_and_data` itself, so
+    // a future producer/wrapper-shape mismatch (like the "event"-wrapped
+    // double-nesting fix round 1 found) shows up here, not just in a
+    // classification unit test that never saw the real bytes.
+
+    use crate::gateway::events::frame::GatewayEventFrame;
+
+    /// The bare `TopicEvent` form — real producer: `publish_frame` on a
+    /// non-stream `GatewayEventFrame` variant.
+    #[test]
+    fn extract_topic_and_data_handles_the_real_bare_topic_event_wire_form() {
+        let bus = GatewayEventBus::new();
+        let mut rx = bus.subscribe();
+        let frame = GatewayEventFrame::SessionLifecycleChanged {
+            session_key: "agent:main:main".to_string(),
+            old_state: None,
+            new_state: "active".to_string(),
+            reason: None,
+        };
+        bus.publish_frame(&frame).unwrap();
+        let wire = rx
+            .try_recv()
+            .expect("publish_frame must deliver synchronously");
+        let event_obj: serde_json::Value = serde_json::from_str(&wire).unwrap();
+
+        let (topic, data) = extract_topic_and_data(&event_obj);
+        assert_eq!(topic, "session.lifecycle.changed");
+        assert_eq!(
+            data.and_then(|d| d.get("session_key"))
+                .and_then(|v| v.as_str()),
+            Some("agent:main:main")
+        );
+    }
+
+    /// The `stream.*` JSON-RPC notification form — real producer:
+    /// `publish_frame` on a streaming `GatewayEventFrame` variant. `data`
+    /// stays `None` here by design (no stream.* frame nests a second `.data`
+    /// inside `.params`) — the WS loop's `visibility_payload` fallback
+    /// (`event_data.or_else(|| event_obj.get("params"))`) is what reaches
+    /// into `.params` for this shape; exercised end-to-end below.
+    #[test]
+    fn extract_topic_and_data_handles_the_real_stream_wire_form() {
+        let bus = GatewayEventBus::new();
+        let mut rx = bus.subscribe();
+        let frame = GatewayEventFrame::RunAccepted {
+            run_id: "r1".to_string(),
+            session_key: "agent:main:main".to_string(),
+            accepted_at: "t".to_string(),
+        };
+        bus.publish_frame(&frame).unwrap();
+        let wire = rx
+            .try_recv()
+            .expect("publish_frame must deliver synchronously");
+        let event_obj: serde_json::Value = serde_json::from_str(&wire).unwrap();
+
+        let (topic, data) = extract_topic_and_data(&event_obj);
+        assert_eq!(topic, "stream.run_accepted");
+        assert_eq!(
+            data, None,
+            "no stream.* frame nests a second .data in .params"
+        );
+        // The frame's own fields live directly under .params — same value
+        // the WS loop's visibility_payload fallback reaches for.
+        assert_eq!(
+            event_obj
+                .get("params")
+                .and_then(|p| p.get("run_id"))
+                .and_then(|v| v.as_str()),
+            Some("r1")
+        );
+    }
+
+    /// The double-wrapped `TopicEvent::to_notification()` form — real
+    /// producer: `subagent_tree_relay.rs`'s exact construction
+    /// (`TopicEvent::new(topic, data).to_notification()`, published as a raw
+    /// string via `GatewayEventBus::publish`, bypassing `publish_frame`
+    /// entirely). Before fix round 1, `extract_topic_and_data`'s
+    /// predecessor read `topic` as the literal string `"event"` here —
+    /// this pins the fix.
+    #[test]
+    fn extract_topic_and_data_unwraps_the_real_double_nested_event_envelope() {
+        let bus = GatewayEventBus::new();
+        let mut rx = bus.subscribe();
+        let tree_event = serde_json::json!({
+            "kind": "settled",
+            "node_id": "n1",
+            "root_session": "agent:main:main",
+            "lifecycle": "completed",
+            "duration_ms": 100,
+            "iterations": 1,
+            "tool_calls_made": 1,
+            "total_tokens": 10,
+        });
+        let notification = TopicEvent::new("run.subagent_tree", tree_event).to_notification();
+        let json = serde_json::to_string(&notification).unwrap();
+        bus.publish(json);
+        let wire = rx.try_recv().expect("publish must deliver synchronously");
+        let event_obj: serde_json::Value = serde_json::from_str(&wire).unwrap();
+
+        // Prove the envelope really is double-nested (method == "event", no
+        // top-level "topic") — otherwise this test would pass for the wrong
+        // reason.
+        assert_eq!(
+            event_obj.get("method").and_then(|m| m.as_str()),
+            Some("event")
+        );
+        assert!(event_obj.get("topic").is_none());
+
+        let (topic, data) = extract_topic_and_data(&event_obj);
+        assert_eq!(
+            topic, "run.subagent_tree",
+            "must unwrap to the REAL topic, not the literal \"event\" wrapper method"
+        );
+        assert_eq!(
+            data.and_then(|d| d.get("root_session"))
+                .and_then(|v| v.as_str()),
+            Some("agent:main:main")
+        );
+    }
+
+    fn visibility_test_store() -> (
+        crate::gateway::session_store::file_backend::FileSessionStore,
+        tempfile::TempDir,
+    ) {
+        use crate::gateway::session_store::file_backend::{
+            FileSessionStore, FileSessionStoreConfig,
+        };
+        let temp = tempfile::TempDir::new().unwrap();
+        let store = FileSessionStore::new(FileSessionStoreConfig {
+            base_dir: temp.path().to_path_buf(),
+            ..Default::default()
+        })
+        .unwrap();
+        (store, temp)
+    }
+
+    /// End-to-end: real `publish_frame` wire bytes → `extract_topic_and_data`
+    /// → the SAME `visibility_payload` fallback the WS loop computes →
+    /// `EventVisibilityIndex::note_frame`/`event_admits`. Proves the owner
+    /// scoping this task adds actually receives a resolvable `run_id`/
+    /// `session_key` from a REAL `RunAccepted`→`AgentTrace` run, not just a
+    /// hand-built payload shaped to look like one.
+    #[tokio::test]
+    async fn owner_scoping_round_trips_through_the_real_publish_path() {
+        use crate::gateway::event_visibility::EventVisibilityIndex;
+        use crate::gateway::router::SessionKey;
+        use crate::gateway::session_store::SessionStore;
+
+        let (store, _temp) = visibility_test_store();
+        let key = SessionKey::main("main");
+        crate::scope::with_scope(
+            Some(crate::scope::ScopeAttribution::personal("alice")),
+            store.get_or_create(&key),
+        )
+        .await
+        .unwrap();
+        let store: Arc<dyn SessionStore> = Arc::new(store);
+
+        let bus = GatewayEventBus::new();
+        let mut rx = bus.subscribe();
+        let index = EventVisibilityIndex::new();
+
+        // Seed: real RunAccepted, real wire bytes, real extraction.
+        let accepted = GatewayEventFrame::RunAccepted {
+            run_id: "r1".to_string(),
+            session_key: key.to_key_string(),
+            accepted_at: "t".to_string(),
+        };
+        bus.publish_frame(&accepted).unwrap();
+        let wire = rx.try_recv().unwrap();
+        let event_obj: serde_json::Value = serde_json::from_str(&wire).unwrap();
+        let (topic, event_data) = extract_topic_and_data(&event_obj);
+        let visibility_payload = event_data.or_else(|| event_obj.get("params"));
+        index.note_frame(topic, visibility_payload).await;
+
+        // A later same-run frame, resolved purely through the seed above —
+        // real wire bytes, real extraction, same fallback the loop uses.
+        let trace = GatewayEventFrame::AgentTrace {
+            run_id: "r1".to_string(),
+            seq: 1,
+            event: aleph_protocol::AgentTraceEvent::TurnStarted { iteration: 1 },
+        };
+        bus.publish_frame(&trace).unwrap();
+        let wire2 = rx.try_recv().unwrap();
+        let event_obj2: serde_json::Value = serde_json::from_str(&wire2).unwrap();
+        let (topic2, event_data2) = extract_topic_and_data(&event_obj2);
+        let visibility_payload2 = event_data2.or_else(|| event_obj2.get("params"));
+
+        assert!(
+            index
+                .event_admits(topic2, visibility_payload2, Some("alice"), &store)
+                .await
+        );
+        assert!(
+            !index
+                .event_admits(topic2, visibility_payload2, Some("bob"), &store)
+                .await
+        );
     }
 }

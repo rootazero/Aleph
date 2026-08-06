@@ -22,7 +22,7 @@ impl SessionManager {
                           message_count, total_tokens, auto_reset_at, state, metadata,
                           label, input_tokens, output_tokens, model, model_provider,
                           parent_session_key, compaction_count, derived_title,
-                        estimated_cost_usd
+                        estimated_cost_usd, owner_user_id, scope_id
                    FROM sessions";
 
         let sessions = if let Some(id) = agent_id {
@@ -141,7 +141,7 @@ impl SessionManager {
                         message_count, total_tokens, auto_reset_at, state, metadata,
                         label, input_tokens, output_tokens, model, model_provider,
                         parent_session_key, compaction_count, derived_title,
-                        estimated_cost_usd
+                        estimated_cost_usd, owner_user_id, scope_id
                  FROM sessions WHERE key = ?",
                 params![&key_str],
                 map_session_metadata,
@@ -287,7 +287,7 @@ impl SessionManager {
                         message_count, total_tokens, auto_reset_at, state, metadata,
                         label, input_tokens, output_tokens, model, model_provider,
                         parent_session_key, compaction_count, derived_title,
-                        estimated_cost_usd
+                        estimated_cost_usd, owner_user_id, scope_id
                  FROM sessions WHERE state = ? ORDER BY last_active_at DESC",
             )
             .map_err(|e| SessionManagerError::DatabaseError(e.to_string()))?;

@@ -164,7 +164,7 @@ pub(crate) async fn hydrate_session_history(
                 if run_ids.is_empty() {
                     std::collections::HashMap::new()
                 } else {
-                    match crate::api::trace::TraceApi::by_runs(&dash, run_ids).await {
+                    match crate::api::trace::TraceApi::by_runs(&dash, &key, run_ids).await {
                         Ok(runs) => runs,
                         Err(e) => {
                             web_sys::console::warn_1(&format!("trace.by_runs failed: {e}").into());

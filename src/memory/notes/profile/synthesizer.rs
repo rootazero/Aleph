@@ -19,7 +19,7 @@ use crate::memory::notes::orientation::NoteOrientation;
 use crate::memory::notes::profile::prompts::{
     build_merge_user_prompt, PROMPT_PROFILE_BOOTSTRAP, PROMPT_PROFILE_MERGE,
 };
-use crate::memory::notes::profile::store::{render_user_md, ProfileStore};
+use crate::memory::notes::profile::store::{render_user_md, ProfileStore, PROFILE_FILENAME};
 use crate::memory::notes::profile::types::{
     ProfileDiff, ProfileSection, SessionSignal, UpdateOutcome, UserProfile,
 };
@@ -97,6 +97,45 @@ impl FsProfileSynthesizer {
 
     fn store(&self, agent_id: &str) -> ProfileStore {
         ProfileStore::new(self.memory_dir.join(agent_id))
+    }
+
+    /// One-time, lazy adoption of the single-machine owner's pre-P1 USER.md
+    /// into their personal-scope directory. Mirrors
+    /// `MemoryContextProvider::adopt_owner_curated_file` (curated
+    /// MEMORY.md/OPEN_LOOPS.md) for USER.md's separate root — same contract:
+    /// idempotent, crash-safe, a no-op for every `agent_id` that isn't the
+    /// owner's composed personal scope. Called before every `store(agent_id)`
+    /// read/write so a personal-scoped owner session sees their pre-existing
+    /// profile instead of a silently empty one.
+    ///
+    /// COPIES, does not move — the bare path is the org-tier instance every
+    /// unscoped principal resolves to, and moving it leaves them reading an
+    /// empty profile. The argument and the shared atomic-publish helper live
+    /// with the curated twin; see `adopt_owner_curated_file`'s doc and
+    /// `project_scope::copy_adopted_file`.
+    async fn adopt_owner_profile(&self, agent_id: &str) {
+        let Some(base) = crate::memory::project_scope::owner_adoption_base(agent_id) else {
+            return;
+        };
+        let scoped_path = self.memory_dir.join(agent_id).join(PROFILE_FILENAME);
+        if tokio::fs::try_exists(&scoped_path).await.unwrap_or(false) {
+            return;
+        }
+        let bare_path = self.memory_dir.join(base).join(PROFILE_FILENAME);
+        if !tokio::fs::try_exists(&bare_path).await.unwrap_or(false) {
+            return;
+        }
+        if let Some(parent) = scoped_path.parent() {
+            if let Err(e) = tokio::fs::create_dir_all(parent).await {
+                warn!("owner adoption: USER.md mkdir failed for {agent_id}: {e}");
+                return;
+            }
+        }
+        if let Err(e) =
+            crate::memory::project_scope::copy_adopted_file(&bare_path, &scoped_path).await
+        {
+            warn!("owner adoption: USER.md copy failed for {agent_id}: {e}");
+        }
     }
 
     /// Call the LLM with a system prompt and a single user message.
@@ -237,6 +276,7 @@ impl FsProfileSynthesizer {
 #[async_trait]
 impl ProfileSynthesizer for FsProfileSynthesizer {
     async fn bootstrap(&self, agent_id: &str) -> Result<UserProfile, AlephError> {
+        self.adopt_owner_profile(agent_id).await;
         let store = self.store(agent_id);
 
         // If USER.md already exists, return it.
@@ -281,6 +321,7 @@ impl ProfileSynthesizer for FsProfileSynthesizer {
     }
 
     async fn current(&self, agent_id: &str) -> Result<Option<UserProfile>, AlephError> {
+        self.adopt_owner_profile(agent_id).await;
         self.store(agent_id).read().await
     }
 
@@ -290,6 +331,7 @@ impl ProfileSynthesizer for FsProfileSynthesizer {
         agent_id: &str,
         signal: SessionSignal,
     ) -> Result<UpdateOutcome, AlephError> {
+        self.adopt_owner_profile(agent_id).await;
         // Rate-limit check
         {
             let guard = self.last_update.lock().unwrap_or_else(|e| e.into_inner());
