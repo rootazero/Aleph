@@ -20,7 +20,7 @@ use crate::security::content_sanitizer::split_external_fence;
 /// leaves the field alone. Unbalanced or multi-fence text is not split (see
 /// [`split_external_fence`]), so it is passed through as ordinary content —
 /// which is safe, because nothing there is a boundary this function could break.
-pub(super) fn rewrite_interior<F>(text: &str, rewrite: F) -> Option<String>
+pub(crate) fn rewrite_interior<F>(text: &str, rewrite: F) -> Option<String>
 where
     F: FnOnce(&str) -> Option<String>,
 {

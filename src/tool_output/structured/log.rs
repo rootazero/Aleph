@@ -143,7 +143,6 @@ fn mark_signal(
     order: impl Iterator<Item = usize>,
     budget: usize,
 ) -> usize {
-    let total = lines.len();
     let mut spent = 0usize;
     let mut prev_loud: Option<&str> = None;
     for i in order {
@@ -167,12 +166,11 @@ fn mark_signal(
         }
         let base_indent = indent_of(lines[i]);
         for k in 1..=ERROR_CONTEXT {
+            // `get` returning None already covers `i + k >= total` — a
+            // separate bounds check here could never fire.
             let Some(&follower) = lines.get(i + k) else {
                 break;
             };
-            if i + k >= total {
-                break;
-            }
             if !follower.trim().is_empty()
                 && indent_of(follower) <= base_indent
                 && !is_loud(follower)
@@ -186,15 +184,14 @@ fn mark_signal(
     spent
 }
 
-pub(super) fn reduce_log(text: &str, profile: &Profile) -> Option<Reduction> {
-    let lines: Vec<&str> = text.lines().collect();
+pub(super) fn reduce_log(lines: &[&str], profile: &Profile) -> Option<Reduction> {
     let total = lines.len();
     let mut keep = vec![false; total];
 
-    for i in head_indices(&lines, KEEP_HEAD) {
+    for i in head_indices(lines, KEEP_HEAD) {
         keep[i] = true;
     }
-    for i in tail_indices(&lines, KEEP_TAIL) {
+    for i in tail_indices(lines, KEEP_TAIL) {
         keep[i] = true;
     }
 
@@ -211,9 +208,9 @@ pub(super) fn reduce_log(text: &str, profile: &Profile) -> Option<Reduction> {
     // `panicked at …` lines and the ``assertion `left == right` failed`` diffs
     // all sit **after** that point, so they were dropped in their entirety.
     let tail_budget = profile.log_signal / 2;
-    let spent_tail = mark_signal(&lines, &mut keep, (0..total).rev(), tail_budget);
+    let spent_tail = mark_signal(lines, &mut keep, (0..total).rev(), tail_budget);
     mark_signal(
-        &lines,
+        lines,
         &mut keep,
         0..total,
         profile.log_signal.saturating_sub(spent_tail),
@@ -243,7 +240,7 @@ pub(super) fn reduce_log(text: &str, profile: &Profile) -> Option<Reduction> {
     // dropped two 200 KB noise lines (a 96 % byte win read as "kept 80 % of the
     // lines"), while accepting reductions that shrank no bytes at all. The
     // central `Reduction::is_meaningful_shrink` measures bytes, once.
-    let body = render_selected(&lines, &kept, total, profile);
+    let body = render_selected(lines, &kept, total, profile);
     Some(Reduction {
         kind: ContentKind::Log,
         body,
@@ -259,7 +256,8 @@ mod tests {
     use super::*;
 
     fn reduce(text: &str) -> Option<Reduction> {
-        reduce_log(text, &Profile::DEFAULT)
+        let lines: Vec<&str> = text.lines().collect();
+        reduce_log(&lines, &Profile::DEFAULT)
     }
 
     #[test]
@@ -465,7 +463,9 @@ mod tests {
         }
         s.push_str("test result: FAILED. 0 passed; 60 failed\n");
         let wide = reduce(&s).expect("default profile must reduce");
-        let tight = reduce_log(&s, &Profile::for_token_budget(400)).expect("tight must reduce");
+        let tight_lines: Vec<&str> = s.lines().collect();
+        let tight =
+            reduce_log(&tight_lines, &Profile::for_token_budget(400)).expect("tight must reduce");
         assert!(
             tight.tally.kept() < wide.tally.kept(),
             "tight kept {} vs default {}",

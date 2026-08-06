@@ -18,6 +18,7 @@
 //! falls back to existing truncation — non-breaking by construction.
 
 use std::borrow::Cow;
+use std::hash::{Hash, Hasher};
 
 /// Case-insensitive substring markers that flag an error / failure line.
 /// Ordered cheapest-first is irrelevant (we scan a lowercased copy once).
@@ -65,8 +66,11 @@ const MAX_PATHS: usize = 20;
 const MAX_LINE_CHARS: usize = 400;
 
 /// Minimum input size (bytes) below which distillation is pointless — small
-/// output is already cheap to show verbatim.
-const MIN_INPUT_BYTES: usize = 2 * 1024;
+/// output is already cheap to show verbatim. Named `DISTILL`-specifically
+/// because `structured` carries its own `MIN_INPUT_BYTES` (512) with a
+/// different value and a different job: same name, different number, one
+/// module tree apart is exactly how constants get "fixed" in the wrong place.
+const MIN_DISTILL_INPUT_BYTES: usize = 2 * 1024;
 
 /// A distilled view of command output.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -134,14 +138,21 @@ pub(crate) fn strip_ansi(line: &str) -> Cow<'_, str> {
     Cow::Owned(out)
 }
 
-/// Whether a (lowercased) line looks like an error / failure line.
-fn is_error_line(lower: &str) -> bool {
-    ERROR_MARKERS.iter().any(|m| lower.contains(m))
+/// Whether a line looks like an error / failure line, matched
+/// case-insensitively without allocating a lowercase copy — the per-line
+/// `to_ascii_lowercase()` this replaces copied every line of every oversized
+/// result on the ingress hot path. The markers are all lowercase already.
+fn is_error_line(line: &str) -> bool {
+    ERROR_MARKERS
+        .iter()
+        .any(|m| super::structured::contains_ignore_ascii_case(line, m))
 }
 
-/// Whether a (lowercased) line is a secondary diagnostic worth keeping.
-fn is_context_line(lower: &str) -> bool {
-    CONTEXT_MARKERS.iter().any(|m| lower.contains(m))
+/// Whether a line is a secondary diagnostic worth keeping.
+fn is_context_line(line: &str) -> bool {
+    CONTEXT_MARKERS
+        .iter()
+        .any(|m| super::structured::contains_ignore_ascii_case(line, m))
 }
 
 /// Extract a `file:line(:col)` reference from a line, if present. Dependency-
@@ -201,7 +212,7 @@ fn cap_chars(s: &str) -> String {
 /// error / failure / path signal worth surfacing (caller should then fall back
 /// to verbatim or head+tail truncation).
 ///
-/// Small inputs (`< MIN_INPUT_BYTES`) always return [`None`]: they are cheap to
+/// Small inputs (`< MIN_DISTILL_INPUT_BYTES`) always return [`None`]: they are cheap to
 /// show in full and distillation would only lose context.
 ///
 /// A payload with **no newline at all** also returns [`None`], and that is a
@@ -218,7 +229,7 @@ fn cap_chars(s: &str) -> String {
 /// 300 KB response with 400 characters of its envelope. A predicate that both
 /// faces of the same distiller must honour belongs on the distiller.
 pub fn distill_output(text: &str) -> Option<OutputDigest> {
-    if text.len() < MIN_INPUT_BYTES || !text.contains('\n') {
+    if text.len() < MIN_DISTILL_INPUT_BYTES || !text.contains('\n') {
         return None;
     }
 
@@ -228,8 +239,13 @@ pub fn distill_output(text: &str) -> Option<OutputDigest> {
     let mut paths: Vec<String> = Vec::new();
 
     // Collapse consecutive duplicate (post-strip) lines — progress bars and
-    // repeated dots otherwise dominate. Track only the previous stripped line.
-    let mut prev_stripped: Option<String> = None;
+    // repeated dots otherwise dominate. Track only the previous line, and only
+    // as a hash: the String this used to keep allocated a copy of every line
+    // (including the 200 KB minified ones) purely to compare it against the
+    // next. A hash collision just merges two distinct adjacent lines into one
+    // kept copy — harmless for a dedup heuristic, and 64-bit collisions are
+    // not a realistic input.
+    let mut prev_hash: Option<u64> = None;
 
     for raw_line in text.lines() {
         total_lines += 1;
@@ -240,14 +256,16 @@ pub fn distill_output(text: &str) -> Option<OutputDigest> {
         }
 
         // Duplicate collapse.
-        if prev_stripped.as_deref() == Some(stripped) {
+        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+        stripped.hash(&mut hasher);
+        let hash = hasher.finish();
+        if prev_hash == Some(hash) {
             continue;
         }
-        prev_stripped = Some(stripped.to_string());
+        prev_hash = Some(hash);
 
-        let lower = stripped.to_ascii_lowercase();
-        let err = is_error_line(&lower);
-        let ctx = is_context_line(&lower);
+        let err = is_error_line(stripped);
+        let ctx = is_context_line(stripped);
 
         if let Some(p) = extract_path(stripped) {
             if !paths.contains(&p) && paths.len() < MAX_PATHS {
@@ -392,7 +410,10 @@ mod tests {
             r#"{{"error":null,"status":"ok","data":"{}"}}"#,
             "d".repeat(8_000)
         );
-        assert!(one_line.len() > MIN_INPUT_BYTES, "precondition: big enough");
+        assert!(
+            one_line.len() > MIN_DISTILL_INPUT_BYTES,
+            "precondition: big enough"
+        );
         assert!(
             distill_output(&one_line).is_none(),
             "a line-oriented distiller has nothing to say about one line"
@@ -401,7 +422,7 @@ mod tests {
 
     #[test]
     fn distills_errors_from_middle_of_large_output() {
-        // Head noise + middle error + tail summary, > MIN_INPUT_BYTES.
+        // Head noise + middle error + tail summary, > MIN_DISTILL_INPUT_BYTES.
         let mut s = String::new();
         for i in 0..400 {
             s.push_str(&format!("   Compiling crate_{i} v0.1.0\n"));
@@ -412,7 +433,7 @@ mod tests {
         for i in 0..400 {
             s.push_str(&format!("   Finished step_{i}\n"));
         }
-        assert!(s.len() > MIN_INPUT_BYTES);
+        assert!(s.len() > MIN_DISTILL_INPUT_BYTES);
 
         let digest = distill_output(&s).expect("should distill");
         assert_eq!(digest.error_count, 2);
@@ -437,7 +458,7 @@ mod tests {
         for _ in 0..500 {
             s.push_str("....\n"); // repeated noise
         }
-        assert!(s.len() > MIN_INPUT_BYTES);
+        assert!(s.len() > MIN_DISTILL_INPUT_BYTES);
         let digest = distill_output(&s).expect("has error");
         // The noise line is not an error/context line, so it never enters
         // salient regardless; assert the error survived and salient is tiny.
@@ -457,7 +478,7 @@ mod tests {
             "stdout": "running tests\nerror[E0308]: mismatched types\n".repeat(200),
         })
         .to_string();
-        assert!(flat.len() > MIN_INPUT_BYTES);
+        assert!(flat.len() > MIN_DISTILL_INPUT_BYTES);
         assert!(!flat.contains('\n'), "precondition: one line");
         assert!(distill_output(&flat).is_none());
     }
@@ -466,7 +487,7 @@ mod tests {
     fn no_signal_returns_none() {
         // Large but signal-free output: caller should truncate instead.
         let s = "lorem ipsum dolor sit amet ".repeat(200);
-        assert!(s.len() > MIN_INPUT_BYTES);
+        assert!(s.len() > MIN_DISTILL_INPUT_BYTES);
         assert!(distill_output(&s).is_none());
     }
 
@@ -476,7 +497,7 @@ mod tests {
         for i in 0..100 {
             s.push_str(&format!("error: failure number {i} at f{i}.rs:1\n"));
         }
-        assert!(s.len() > MIN_INPUT_BYTES);
+        assert!(s.len() > MIN_DISTILL_INPUT_BYTES);
         let digest = distill_output(&s).unwrap();
         let rendered = digest.render(5);
         assert!(rendered.contains("more diagnostic lines omitted"));
