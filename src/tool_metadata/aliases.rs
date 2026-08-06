@@ -63,6 +63,8 @@ pub const SHORTHAND_ALIASES: &[(&str, &str)] = &[
     ("memories", "memory_search"),
     ("agent", "agent_switch"),
     ("agents", "agent_switch"),
+    ("unbind", "agent_unbind"),
+    ("update_agent", "agent_update"),
     // ── Session compaction (codex `/compact`, hermes `/compress` parity) ───
     // `session_compact` is a live `SessionManager`-dependent tool (`None` in
     // `create_tool_boxed`) but has an `execute_tool` dispatch arm, so the fast

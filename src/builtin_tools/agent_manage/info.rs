@@ -8,9 +8,11 @@ use serde::{Deserialize, Serialize};
 use tracing::info;
 
 use crate::agents::AgentRegistry;
-use crate::error::{AlephError, Result};
+use crate::error::Result;
 use crate::sync_primitives::Arc;
 use crate::tools::AlephTool;
+
+use super::error::AgentManageError;
 
 // =============================================================================
 // Args / Output
@@ -38,6 +40,12 @@ pub struct AgentInfoOutput {
     pub model_hint: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub token_budget: Option<u32>,
+    /// Channels currently bound to this agent (`agent_id -> Vec<channel>`,
+    /// many-to-one aware). Empty for catalog agents that aren't bound at
+    /// runtime; matches the shape `agent_list` reports so a model can join
+    /// the two views without re-querying.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub bound_channels: Vec<String>,
 }
 
 impl fmt::Display for AgentInfoOutput {
@@ -55,6 +63,9 @@ impl fmt::Display for AgentInfoOutput {
             writeln!(f, "  max_iterations: {max}")?;
         }
         writeln!(f, "  context_mode: {}", self.context_mode)?;
+        if !self.bound_channels.is_empty() {
+            writeln!(f, "  bound_channels: {}", self.bound_channels.join(", "))?;
+        }
         Ok(())
     }
 }
@@ -63,45 +74,54 @@ impl fmt::Display for AgentInfoOutput {
 // Tool
 // =============================================================================
 
+/// Tool that returns detailed capabilities and configuration of a registered
+/// agent. Uses the catalog [`AgentRegistry`] (builtin + user/project
+/// `AgentDef`s), not the runtime instance registry — `agent_info` is read-only
+/// and accepts whatever the delegation face accepts (plugin sub-agents,
+/// builtin aliases like `planner` -> `plan`).
 #[derive(Clone)]
 pub struct AgentInfoTool {
-    registry: Arc<AgentRegistry>,
+    catalog: Arc<AgentRegistry>,
+    /// Optional runtime store — when present, `bound_channels` is filled
+    /// from the per-channel binding table (many-to-one aware) so the model
+    /// sees the same channels `agent_list` reports instead of an empty list.
+    store: Option<Arc<crate::gateway::agent_env::AgentEnvStore>>,
 }
 
 impl AgentInfoTool {
-    pub const fn new(registry: Arc<AgentRegistry>) -> Self {
-        Self { registry }
+    pub const fn new(catalog: Arc<AgentRegistry>) -> Self {
+        Self {
+            catalog,
+            store: None,
+        }
     }
-}
 
-#[async_trait]
-impl AlephTool for AgentInfoTool {
-    const NAME: &'static str = "agent_info";
-    const DESCRIPTION: &'static str =
-        "Get detailed capabilities and configuration of a registered agent. \
-         Returns allowed/denied tools, iteration limits, context mode, and usage hints.";
+    /// Wire the runtime store so `bound_channels` is reported. Builder form
+    /// keeps the `new` 1-arg signature so all existing callers and tests
+    /// compile unchanged.
+    #[must_use]
+    pub fn with_store(
+        mut self,
+        store: Arc<crate::gateway::agent_env::AgentEnvStore>,
+    ) -> Self {
+        self.store = Some(store);
+        self
+    }
 
-    type Args = AgentInfoArgs;
-    type Output = AgentInfoOutput;
-
-    async fn call(&self, args: Self::Args) -> Result<Self::Output> {
-        info!(agent_id = %args.agent_id, "agent_info requested");
-
-        // `resolve`, not `get`: the inspect face must accept exactly what the
-        // delegation face accepts — project overlays, builtin aliases
-        // (`planner` → `plan`), and plugin-shipped sub-agents. With a bare `get`
-        // a model could successfully delegate to a plugin agent but was told the
-        // same id "not found" the moment it asked what that agent does.
+    /// Compose the output without instantiating an `AlephTool` envelope.
+    /// Used both by `call` (the tool path) and by tests / RPCs that already
+    /// hold a `&AgentRegistry`.
+    fn build_output(&self, agent_id: &str) -> Result<AgentInfoOutput> {
         let project_root = crate::projects::current_project_root();
         let agent_def = self
-            .registry
-            .resolve(&args.agent_id, project_root.as_deref())
+            .catalog
+            .resolve(agent_id, project_root.as_deref())
             .ok_or_else(|| {
-                let available = self.registry.available_agent_ids().join(", ");
-                AlephError::NotFound(format!(
-                    "Agent '{}' not found. Available agents: {}",
-                    args.agent_id, available
-                ))
+                let available = self.catalog.available_agent_ids();
+                AgentManageError::AgentNotFound {
+                    agent_id: agent_id.to_string(),
+                    available,
+                }
             })?;
 
         // Report the *effective* allowlist: expand named tool sets (e.g.
@@ -130,7 +150,36 @@ impl AlephTool for AgentInfoTool {
             context_mode: agent_def.context_mode.to_string(),
             model_hint: agent_def.model_hint,
             token_budget: agent_def.token_budget,
+            bound_channels: Vec::new(), // Filled in by `call` from the store.
         })
+    }
+}
+
+#[async_trait]
+impl AlephTool for AgentInfoTool {
+    const NAME: &'static str = "agent_info";
+    const DESCRIPTION: &'static str =
+        "Get detailed capabilities and configuration of a registered agent. \
+         Returns allowed/denied tools, iteration limits, context mode, and usage hints.";
+
+    type Args = AgentInfoArgs;
+    type Output = AgentInfoOutput;
+
+    async fn call(&self, args: Self::Args) -> Result<Self::Output> {
+        info!(agent_id = %args.agent_id, "agent_info requested");
+
+        let mut out = self.build_output(&args.agent_id)?;
+        // `bound_channels` is only known to the runtime `AgentEnvStore`; the
+        // catalog knows nothing about per-channel switches. When the store
+        // isn't wired (minimal server, embedded) we report an empty list
+        // rather than aborting the read — the catalog information alone is
+        // still actionable.
+        if let Some(store) = self.store.as_ref() {
+            if let Ok(bindings) = store.bindings_by_agent() {
+                out.bound_channels = bindings.get(&args.agent_id).cloned().unwrap_or_default();
+            }
+        }
+        Ok(out)
     }
 }
 
@@ -221,5 +270,43 @@ mod tests {
         assert!(display.contains("explore"));
         assert!(display.contains("SubAgent"));
         assert!(display.contains("context_mode"));
+    }
+
+    #[tokio::test]
+    async fn info_reports_bound_channels_when_set() {
+        use crate::builtin_tools::agent_manage::test_utils;
+
+        // Wire the store via `with_store`; bind two channels to the catalog
+        // agent and verify the info tool surfaces both sorted.
+        let (wm, _wm_temp) = test_utils::workspace_mgr();
+        wm.set_active_agent("telegram", "explore").unwrap();
+        wm.set_active_agent("discord", "explore").unwrap();
+
+        let tool = AgentInfoTool::new(test_registry()).with_store(Arc::clone(&wm));
+        let info = tool
+            .call(AgentInfoArgs {
+                agent_id: "explore".to_string(),
+            })
+            .await
+            .unwrap();
+        assert_eq!(
+            info.bound_channels,
+            vec!["discord".to_string(), "telegram".to_string()],
+            "sorted many-to-one channel list should match"
+        );
+    }
+
+    #[tokio::test]
+    async fn info_without_store_returns_empty_bound_channels() {
+        // Without `with_store`, the bound_channels field stays empty rather
+        // than crashing — the catalog information alone is still useful.
+        let tool = AgentInfoTool::new(test_registry());
+        let info = tool
+            .call(AgentInfoArgs {
+                agent_id: "explore".to_string(),
+            })
+            .await
+            .unwrap();
+        assert!(info.bound_channels.is_empty());
     }
 }

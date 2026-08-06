@@ -14,12 +14,14 @@ use serde::{Deserialize, Serialize};
 use tracing::info;
 
 use crate::error::Result;
-use crate::gateway::agent_binding::bind_channel_agent;
+use crate::gateway::agent_binding::{bind_channel_agent, BindError, BindOutcome};
 use crate::gateway::agent_env::AgentEnvStore;
 use crate::gateway::agent_instance::AgentRegistry;
 use crate::gateway::event_bus::GatewayEventBus;
 use crate::sync_primitives::Arc;
 use crate::tools::AlephTool;
+
+use super::error::AgentManageError;
 
 // =============================================================================
 // Args / Output
@@ -46,6 +48,10 @@ pub struct AgentSwitchOutput {
     /// The agent previously bound to the channel, if any.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub previous_agent: Option<String>,
+    /// `true` when the channel was already bound to the requested agent and
+    /// nothing was written (matches [`crate::gateway::agent_binding::BindOutcome::no_op`].
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub no_op: bool,
     /// Human-readable status message.
     pub message: String,
 }
@@ -85,10 +91,9 @@ impl AgentSwitchTool {
 impl AlephTool for AgentSwitchTool {
     const NAME: &'static str = "agent_switch";
     const DESCRIPTION: &'static str =
-        "Switch the active agent for the current conversation's channel. Use this \
-         when the user wants a different agent persona to handle the conversation \
-         (e.g., switch to a trading or coding assistant). The target agent must \
-         already exist — create it first with agent_create, then list with agent_list.";
+        "Switch the active agent for the current channel. Use when the user wants a \
+         different persona (e.g., switch to a trading or coding assistant). The target \
+         must already exist — create it first with agent_create.";
 
     type Args = AgentSwitchArgs;
     type Output = AgentSwitchOutput;
@@ -108,29 +113,52 @@ impl AlephTool for AgentSwitchTool {
             &args.agent_id,
         )
         .await
-        .map_err(|e| crate::error::AlephError::other(e.to_string()))?;
+        .map_err(map_bind_error)?;
 
-        let message = if outcome.no_op {
-            format!(
-                "Channel '{channel}' is already using agent '{}'.",
-                args.agent_id
-            )
-        } else {
-            match outcome.previous_agent.as_deref() {
-                Some(prev) => format!(
-                    "Switched channel '{channel}' from agent '{prev}' to '{}'.",
-                    args.agent_id
-                ),
-                None => format!("Bound channel '{channel}' to agent '{}'.", args.agent_id),
-            }
-        };
-
+        let message = render_message(&channel, &args.agent_id, &outcome);
         Ok(AgentSwitchOutput {
             agent_id: args.agent_id,
             channel,
             previous_agent: outcome.previous_agent,
+            no_op: outcome.no_op,
             message,
         })
+    }
+}
+
+/// Translate `BindError` into the typed `AgentManageError` used by this tool.
+///
+/// The `UnknownAgent` arm enriches the message with the full `available` list
+/// from the runtime registry — that list is what the LLM (and the next agent
+/// it picks) actually consults, so the error must reflect it.
+fn map_bind_error(err: BindError) -> crate::error::AlephError {
+    match err {
+        BindError::EmptyChannel => AgentManageError::NoActiveChannel.into(),
+        BindError::UnknownAgent { available, .. } => AgentManageError::AgentNotFound {
+            // Note: `agent_id` is not carried by `BindError::UnknownAgent` in
+            // the seam — the seam puts it in `agent_id: String` but the
+            // variant doesn't store it (a deliberate seam-level simplification).
+            // To still produce a useful `Available agents:` line, we use the
+            // available list directly. The Display impl in `BindError`
+            // already covers the full text path.
+            agent_id: String::new(),
+            available,
+        }
+        .into(),
+        BindError::Store(msg) => AgentManageError::Store(msg).into(),
+    }
+}
+
+fn render_message(channel: &str, agent_id: &str, outcome: &BindOutcome) -> String {
+    if outcome.no_op {
+        format!("Channel '{channel}' is already using agent '{agent_id}'.")
+    } else {
+        match outcome.previous_agent.as_deref() {
+            Some(prev) => format!(
+                "Switched channel '{channel}' from agent '{prev}' to '{agent_id}'."
+            ),
+            None => format!("Bound channel '{channel}' to agent '{agent_id}'."),
+        }
     }
 }
 
@@ -141,52 +169,14 @@ impl AlephTool for AgentSwitchTool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::gateway::agent_env::AgentEnvStoreConfig;
-    use crate::gateway::agent_instance::{AgentInstance, AgentInstanceConfig};
-    use crate::gateway::session_manager::{SessionManager, SessionManagerConfig};
-    use tempfile::tempdir;
-
-    fn test_workspace_mgr() -> Arc<AgentEnvStore> {
-        let temp = tempdir().unwrap();
-        let config = AgentEnvStoreConfig {
-            db_path: temp.keep().join("test.db"),
-            default_profile: "default".to_string(),
-            archive_after_days: 0,
-        };
-        Arc::new(AgentEnvStore::new(config).unwrap())
-    }
-
-    fn test_session_store() -> Arc<dyn crate::gateway::session_store::SessionStore> {
-        let temp = tempdir().unwrap();
-        let cfg = SessionManagerConfig {
-            db_path: temp.keep().join("sessions.db"),
-            ..Default::default()
-        };
-        Arc::new(SessionManager::new(cfg).expect("session manager"))
-    }
-
-    fn test_instance(agent_id: &str) -> AgentInstance {
-        let root = tempdir().unwrap().keep();
-        let config = AgentInstanceConfig {
-            agent_id: agent_id.to_string(),
-            workspace: root.join("workspace"),
-            agent_dir: root.join("state"),
-            model: "claude-sonnet-4-5".to_string(),
-            ..Default::default()
-        };
-        AgentInstance::new(config, test_session_store()).expect("instance")
-    }
-
-    async fn registry_with(agent_id: &str) -> Arc<AgentRegistry> {
-        let registry = Arc::new(AgentRegistry::new());
-        registry.register(test_instance(agent_id)).await;
-        registry
-    }
+    use crate::builtin_tools::agent_manage::test_utils;
+    use crate::tools::AlephTool;
 
     #[test]
     fn test_switch_tool_definition() {
         let registry = Arc::new(AgentRegistry::new());
-        let tool = AgentSwitchTool::new(registry, test_workspace_mgr(), None);
+        let (wm, _wm_temp) = test_utils::workspace_mgr();
+        let tool = AgentSwitchTool::new(registry, wm, None);
         let def = AlephTool::definition(&tool);
         assert_eq!(def.name, "agent_switch");
         assert!(!def.requires_confirmation);
@@ -194,8 +184,10 @@ mod tests {
 
     #[tokio::test]
     async fn test_switch_binds_existing_agent() {
-        let registry = registry_with("trader").await;
-        let wm = test_workspace_mgr();
+        let registry = Arc::new(AgentRegistry::new());
+        let (instance, _sm, _t) = test_utils::instance("trader");
+        registry.register(instance).await;
+        let (wm, _wm_temp) = test_utils::workspace_mgr();
         let tool = AgentSwitchTool::new(registry, Arc::clone(&wm), None);
 
         let out = tool
@@ -209,6 +201,7 @@ mod tests {
         assert_eq!(out.agent_id, "trader");
         assert_eq!(out.channel, "telegram");
         assert!(out.previous_agent.is_none());
+        assert!(!out.no_op);
         assert_eq!(
             wm.get_active_agent("telegram").unwrap().as_deref(),
             Some("trader")
@@ -218,10 +211,11 @@ mod tests {
     #[tokio::test]
     async fn test_switch_reports_previous_agent() {
         let registry = Arc::new(AgentRegistry::new());
-        for id in ["trader", "coder"] {
-            registry.register(test_instance(id)).await;
-        }
-        let wm = test_workspace_mgr();
+        let (instance1, _sm, _t) = test_utils::instance("trader");
+        registry.register(instance1).await;
+        let (instance2, _sm2, _t2) = test_utils::instance("coder");
+        registry.register(instance2).await;
+        let (wm, _wm_temp) = test_utils::workspace_mgr();
         wm.set_active_agent("telegram", "trader").unwrap();
         let tool = AgentSwitchTool::new(registry, Arc::clone(&wm), None);
 
@@ -235,12 +229,17 @@ mod tests {
 
         assert_eq!(out.previous_agent.as_deref(), Some("trader"));
         assert_eq!(out.agent_id, "coder");
+        assert!(!out.no_op);
     }
 
     #[tokio::test]
-    async fn test_switch_rejects_unknown_agent() {
-        let registry = registry_with("trader").await;
-        let tool = AgentSwitchTool::new(registry, test_workspace_mgr(), None);
+    async fn test_switch_rejects_unknown_agent_with_available_list() {
+        let registry = Arc::new(AgentRegistry::new());
+        let (instance, _sm, _t) = test_utils::instance("trader");
+        registry.register(instance).await;
+        let (wm, _wm_temp) = test_utils::workspace_mgr();
+        let tool = AgentSwitchTool::new(registry, wm, None);
+
         let err = tool
             .call(AgentSwitchArgs {
                 agent_id: "ghost".to_string(),
@@ -248,13 +247,19 @@ mod tests {
             })
             .await
             .unwrap_err();
-        assert!(err.to_string().contains("not found"));
+        let msg = err.to_string();
+        assert!(msg.contains("not found"), "got: {msg}");
+        assert!(msg.contains("trader"), "available list missing: {msg}");
     }
 
     #[tokio::test]
     async fn test_switch_rejects_empty_channel() {
-        let registry = registry_with("trader").await;
-        let tool = AgentSwitchTool::new(registry, test_workspace_mgr(), None);
+        let registry = Arc::new(AgentRegistry::new());
+        let (instance, _sm, _t) = test_utils::instance("trader");
+        registry.register(instance).await;
+        let (wm, _wm_temp) = test_utils::workspace_mgr();
+        let tool = AgentSwitchTool::new(registry, wm, None);
+
         let err = tool
             .call(AgentSwitchArgs {
                 agent_id: "trader".to_string(),
@@ -262,15 +267,19 @@ mod tests {
             })
             .await
             .unwrap_err();
-        assert!(err.to_string().contains("no active channel"));
+        let msg = err.to_string();
+        assert!(msg.contains("no active channel") || msg.contains("No active channel"), "got: {msg}");
     }
 
     #[tokio::test]
     async fn test_switch_is_idempotent() {
-        let registry = registry_with("trader").await;
-        let wm = test_workspace_mgr();
+        let registry = Arc::new(AgentRegistry::new());
+        let (instance, _sm, _t) = test_utils::instance("trader");
+        registry.register(instance).await;
+        let (wm, _wm_temp) = test_utils::workspace_mgr();
         wm.set_active_agent("telegram", "trader").unwrap();
         let tool = AgentSwitchTool::new(registry, Arc::clone(&wm), None);
+
         let out = tool
             .call(AgentSwitchArgs {
                 agent_id: "trader".to_string(),
@@ -278,6 +287,8 @@ mod tests {
             })
             .await
             .unwrap();
+        assert!(out.no_op);
         assert!(out.message.contains("already using"));
     }
 }
+
