@@ -249,7 +249,9 @@ enabled = false                # master switch — flipping this ONE flag lights
                                # whole lessons + open-loops pipeline (LLM call per
                                # substantive session end, so it stays opt-in)
 min_turns = 5                  # substance gate: skip trivial sessions
-min_user_chars = 200
+min_user_chars = 200           # counted in CHARS, not bytes — the gate measures
+                               # writing, not encoding (a CJK session used to
+                               # clear it at ~1/3 the advertised engagement)
 cooldown_minutes = 30          # per-agent throttle; the watermark persists to the
                                # compression_metadata table (consumer key
                                # "session_reflection") so restarts don't reset it
@@ -257,6 +259,29 @@ open_loop_tracking = true      # extract unresolved questions / promised follow-
                                # in the SAME reflection call → OPEN_LOOPS.md
 open_loop_inject_prompt = true # inject persisted open loops into the next
                                # session's curated context (R5 — AI 主动到达)
+```
+
+The curated envelope's own render policy — including the two knobs that bound the
+**injection** side of open loops — lives in `[memory.curated]`, beside the budgets
+for the other two blocks of the same envelope. The split is by owner, not by
+feature: `[memory.reflection]` decides whether loops are *written*,
+`[memory.curated]` decides how the envelope renders what it finds.
+
+```toml
+[memory.curated]
+memory_char_limit = 2200       # MEMORY.md hot zone
+user_char_limit = 1375         # USER.md profile block
+legacy_warn_threshold = 0.95   # NEAR LIMIT banner
+open_loops_char_limit = 2000   # <OpenLoops> block
+open_loops_max_age_days = 14   # stop injecting a capture older than this; 0 = no
+                               # ceiling. OPEN_LOOPS.md is rewritten ONLY when a
+                               # reflection runs to completion, so every early
+                               # return (cooldown / min_turns / LLM error) leaves
+                               # the previous capture in place — without a ceiling
+                               # a month of sub-threshold sessions keeps
+                               # re-injecting month-old follow-ups. A capture whose
+                               # date cannot be read counts as expired, not fresh;
+                               # the next completed reflection re-stamps the file.
 ```
 
 Compression **scheduling** lives under `[policies]`, not `[memory]` (`src/config/types/policies/memory.rs`):
