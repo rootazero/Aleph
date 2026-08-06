@@ -465,10 +465,14 @@ mod tests {
     /// by construction, so this pins the invariant rather than the number.
     #[test]
     fn context_window_is_below_gits_default_u3() {
-        assert!(
-            MAX_CONTEXT < 3,
-            "MAX_CONTEXT={MAX_CONTEXT} must be < git's default -U3, or every \
-             context line sits within reach of an anchor and nothing is trimmed"
-        );
+        // Const-evaluated: the invariant is a property of the constant, so a
+        // failure is a compile error, not a runtime test failure.
+        const {
+            assert!(
+                MAX_CONTEXT < 3,
+                "MAX_CONTEXT must be < git's default -U3, or every context line \
+                 sits within reach of an anchor and nothing is trimmed"
+            );
+        }
     }
 }

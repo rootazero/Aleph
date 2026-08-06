@@ -560,6 +560,11 @@ pub const BUILTIN_TOOL_DEFINITIONS: &[BuiltinToolDefinition] = &[
         requires_config: false,
     },
     BuiltinToolDefinition {
+        name: "browser_batch",
+        description: <crate::builtin_tools::browser_tools::batch::BrowserBatchTool as crate::tools::AlephTool>::DESCRIPTION,
+        requires_config: false,
+    },
+    BuiltinToolDefinition {
         name: "browser_console",
         description: <crate::builtin_tools::browser_tools::console::BrowserConsoleTool as crate::tools::AlephTool>::DESCRIPTION,
         requires_config: false,
@@ -1151,10 +1156,10 @@ pub fn create_tool_boxed(
         "browser_open" | "browser_click" | "browser_type" | "browser_screenshot"
         | "browser_snapshot" | "browser_navigate" | "browser_tabs" | "browser_select"
         | "browser_evaluate" | "browser_fill_form" | "browser_press_key" | "browser_wait_for"
-        | "browser_console" | "browser_hover" | "browser_scroll" | "browser_pdf"
-        | "browser_network" | "browser_dialog" | "browser_drag" | "browser_upload"
-        | "browser_resize" | "browser_emulate" | "browser_cookies" | "browser_session"
-        | "browser_profile" => None,
+        | "browser_batch" | "browser_console" | "browser_hover" | "browser_scroll"
+        | "browser_pdf" | "browser_network" | "browser_dialog" | "browser_drag"
+        | "browser_upload" | "browser_resize" | "browser_emulate" | "browser_cookies"
+        | "browser_session" | "browser_profile" => None,
         // Skill management tools — always available
         // Phase 2: share the process-wide initialized SkillSystem so
         // skill_status/install/manage see the same registry as the gateway.
@@ -1394,6 +1399,7 @@ mod tests {
         assert!(names.contains(&"browser_fill_form".to_string()));
         assert!(names.contains(&"browser_press_key".to_string()));
         assert!(names.contains(&"browser_wait_for".to_string()));
+        assert!(names.contains(&"browser_batch".to_string()));
         assert!(names.contains(&"browser_console".to_string()));
         assert!(names.contains(&"browser_hover".to_string()));
         assert!(names.contains(&"browser_scroll".to_string()));
@@ -1461,6 +1467,7 @@ mod tests {
         assert!(create_tool_boxed("browser_fill_form", None).is_none());
         assert!(create_tool_boxed("browser_press_key", None).is_none());
         assert!(create_tool_boxed("browser_wait_for", None).is_none());
+        assert!(create_tool_boxed("browser_batch", None).is_none());
         assert!(create_tool_boxed("browser_console", None).is_none());
         assert!(create_tool_boxed("browser_profile", None).is_none());
     }

@@ -166,23 +166,6 @@ impl ToolCatalog {
     // Conflict Resolution (Flat Namespace)
     // =========================================================================
 
-    /// Check if a command name conflicts with an existing tool
-    /// Test-only passthrough to the conflict resolver. Cut from the production
-    /// surface in `60ec3e05e` as an inert wrapper (registration calls the
-    /// resolver directly); restored under `cfg(test)` because that cut left its
-    /// tests behind and broke the lib-test build. The tests it serves cover the
-    /// resolver's real precedence rules.
-    #[cfg(test)]
-    pub(crate) fn resolve_conflict(
-        &self,
-        name: &str,
-        conflict: &super::types::ConflictInfo,
-        new_source: &super::types::ToolSource,
-    ) -> super::types::ConflictResolution {
-        self.conflict_resolver
-            .resolve_conflict(name, conflict, new_source)
-    }
-
     pub async fn check_conflict(&self, name: &str) -> Option<super::types::ConflictInfo> {
         self.conflict_resolver.check_conflict(name).await
     }

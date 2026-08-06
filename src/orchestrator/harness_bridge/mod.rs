@@ -80,6 +80,12 @@ pub struct AgentHarnessRunner {
     /// diminishing-returns state must never be shared across concurrent
     /// sessions. `None` disables mid-run compaction entirely.
     pub context_budget_config: Option<ContextBudgetConfig>,
+    /// Per-run companion to [`Self::context_budget_config`]: re-keys the
+    /// chain-minimum startup budget onto the model actually serving each run
+    /// (session `select_model` pick, agent `model_hint`, brain pin), keeping
+    /// the failover-safe floor via `min(chain_min, serving)`. `None` (tests /
+    /// direct injection) keeps every run on the startup config unchanged.
+    pub context_budget_refiner: Option<crate::orchestrator::deps_builder::ContextBudgetRefiner>,
     /// Shared v2 `SkillSystem`. When `Some`, `build_system_prompt` injects the
     /// eligible-skill `<available_skills>` block into the system prompt.
     pub skill_system: Option<crate::skill::SkillSystem>,
