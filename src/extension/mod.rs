@@ -23,6 +23,7 @@
 //!                       (unified hooks)
 //! ```
 
+pub mod activation;
 pub mod config;
 pub mod discovery;
 pub mod hooks;
@@ -170,6 +171,15 @@ pub struct ExtensionManager {
         Option<crate::sync_primitives::Arc<crate::memory::extensions::MemoryExtensionRegistry>>,
     >,
 
+    /// Owner trust policy (P3.5 — openclaw parity). When set to
+    /// `OwnerTrustPolicy::restrictive(allowlist)`, plugins from
+    /// `Workspace` / `Global` origins are only loaded when their id is
+    /// in the allowlist. Default is `permissive()` (legacy behaviour:
+    /// every plugin loads). Updated by [`Self::set_owner_trust_policy`].
+    owner_trust_policy: Arc<
+        crate::sync_primitives::RwLock<crate::extension::activation::OwnerTrustPolicy>,
+    >,
+
     /// Live MCP manager handle, used to register plugin-owned MCP servers as
     /// **transient** (runtime-only) servers. `None` until [`Self::set_mcp_handle`]
     /// is called at server boot — CLI/test paths leave it unset, so plugin MCP
@@ -285,6 +295,9 @@ impl ExtensionManager {
             watcher: StdMutex::new(None),
             internal_writes: Arc::new(InternalWriteTracker::default()),
             reload_count: AtomicU64::new(0),
+            owner_trust_policy: Arc::new(crate::sync_primitives::RwLock::new(
+                crate::extension::activation::OwnerTrustPolicy::permissive(),
+            )),
         })
     }
 
@@ -321,6 +334,32 @@ impl ExtensionManager {
             .memory_registry
             .write()
             .unwrap_or_else(|e| e.into_inner()) = Some(registry);
+    }
+
+    /// Install a non-default owner trust policy. The next
+    /// [`Self::load_all`] / [`Self::reload`] call uses the new policy to
+    /// gate `Workspace` and `Global` plugins (Bundled/Config always pass).
+    /// Pass [`OwnerTrustPolicy::permissive`] to revert to the legacy
+    /// "load every plugin" behaviour.
+    pub fn set_owner_trust_policy(
+        &self,
+        policy: crate::extension::activation::OwnerTrustPolicy,
+    ) {
+        *self
+            .owner_trust_policy
+            .write()
+            .unwrap_or_else(|e| e.into_inner()) = policy;
+    }
+
+    /// Snapshot the current owner trust policy. Used by
+    /// `extensions.stat` / `plugin trust <id>` so operators can read what
+    /// the manager is currently enforcing.
+    #[must_use]
+    pub fn current_owner_trust_policy(&self) -> crate::extension::activation::OwnerTrustPolicy {
+        self.owner_trust_policy
+            .read()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone()
     }
 
     /// Inject the live MCP manager handle after construction.
@@ -473,6 +512,27 @@ impl ExtensionManager {
                             record.kind = manifest.kind;
                         }
                         let plugin_id = output.plugin_id.clone();
+                        // P3.5 — owner trust policy gates the load. When the
+                        // policy is `restrictive`, plugins from `Workspace` or
+                        // `Global` origins are only registered if their id is
+                        // in the policy's allowlist; `Bundled`/`Config`
+                        // plugins always pass. The default is `permissive`
+                        // (matches the legacy "load everything" behaviour).
+                        let trust_allows = self
+                            .owner_trust_policy
+                            .read()
+                            .unwrap_or_else(|e| e.into_inner())
+                            .allows(&plugin_id, record.origin);
+                        if !trust_allows {
+                            tracing::info!(
+                                plugin_id = %plugin_id,
+                                origin = ?record.origin,
+                                "plugin skipped by owner trust policy \
+                                 (not in allowlist)"
+                            );
+                            summary.skipped_by_trust += 1;
+                            continue;
+                        }
                         registry.register_plugin(record);
 
                         // Register all capabilities via CapabilityApi

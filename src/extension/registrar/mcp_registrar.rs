@@ -132,6 +132,13 @@ pub struct McpScope {
     /// during `provision`; the scope holds no live-registry handle afterward
     /// (P5 — least knowledge).
     pub(crate) tools: Vec<crate::extension::registry::ToolRegistration>,
+    /// P3 Stage I follow-up — inline-server tools, snapshotted from each
+    /// spawned process's `tools/list` at provision time. Names are
+    /// namespaced as `<server_name>:<tool_name>` (matches the global plugin
+    /// convention used by `PluginRegistry`) and `plugin_id` is set to
+    /// `inline:<server_name>` so the spawner can disambiguate from global
+    /// plugin-owned tools when routing a call.
+    pub(crate) inline_tools: Vec<crate::extension::registry::ToolRegistration>,
 }
 
 impl std::fmt::Debug for McpScope {
@@ -152,6 +159,15 @@ impl McpScope {
     /// Build scope from agent def. Validates inline-name collisions against
     /// `global` BEFORE starting any process; then starts inline servers
     /// eagerly + in parallel via `futures::future::try_join_all`.
+    ///
+    /// Each successfully-spawned inline server has its `tools/list` queried
+    /// and the entries are converted to [`ToolRegistration`] (named
+    /// `<server>:<tool>`, `plugin_id = "inline:<server>"`); the snapshot is
+    /// stored on the scope so [`Self::tools`] can surface them without an
+    /// async re-query. A server that fails to list (e.g. an old MCP server
+    /// that doesn't implement `tools/list`) does NOT abort the spawn — the
+    /// agent still runs with whatever tools it can see, and the missing
+    /// surface is logged.
     pub async fn provision(
         agent_def: &AgentDef,
         registry: Arc<tokio::sync::RwLock<PluginRegistry>>,
@@ -199,12 +215,48 @@ impl McpScope {
         let inline_handles: Vec<InlineMcpHandle> =
             futures::future::try_join_all(spawn_futures).await?;
 
+        // Phase 3: snapshot each inline server's tool surface. We query AFTER
+        // every spawn has succeeded so a single broken server doesn't cancel
+        // a healthy peer. `McpServerConnection::list_tools` reads from the
+        // connection's pre-populated cache (filled during the handshake's
+        // initial `tools/list` exchange), so it cannot fail in the I/O sense
+        // — an empty list just means the server advertises no tools.
+        let mut inline_tools: Vec<crate::extension::registry::ToolRegistration> = Vec::new();
+        for handle in &inline_handles {
+            let Some(proc) = handle.process.as_ref() else {
+                continue;
+            };
+            let server_tools = proc.list_tools().await;
+            if server_tools.is_empty() {
+                tracing::debug!(
+                    agent_id = %agent_def.id,
+                    inline_server = %handle.name,
+                    "McpScope: inline server advertises no tools"
+                );
+            }
+            for mcp_tool in server_tools {
+                inline_tools.push(crate::extension::registry::ToolRegistration {
+                    name: format!("{}:{}", handle.name, mcp_tool.name),
+                    description: mcp_tool.description,
+                    parameters: mcp_tool.input_schema,
+                    // Inline-server tools are dispatched via the McpClient
+                    // that owns the spawned process. The handler string is
+                    // opaque to the spawner — see the agent_spawner wiring
+                    // which routes `inline:<server>:<tool>` calls back to the
+                    // matching `InlineMcpHandle`.
+                    handler: handle.name.clone(),
+                    plugin_id: format!("inline:{}", handle.name),
+                });
+            }
+        }
+
         let scope = Self {
             references,
             inline_handles,
             trace_sink,
             agent_id: agent_def.id.clone(),
             tools,
+            inline_tools,
         };
 
         if let Some(sink) = scope.trace_sink.as_ref() {
@@ -220,16 +272,22 @@ impl McpScope {
 
     /// Tools visible to the child harness:
     /// - All tools from the global registry whose plugin name is in `references`.
-    /// - **Inline tool surfacing is deferred to a follow-up** — see concern below.
+    /// - All tools discovered on inline servers at provision time, namespaced
+    ///   as `<server>:<tool>` with `plugin_id = "inline:<server>"`.
     ///
     /// Result is layered UNDER `AllowlistToolService` by the spawner.
     #[must_use]
     pub fn tools(&self) -> Vec<crate::extension::registry::ToolRegistration> {
         // Referenced global tools were snapshotted under a read guard at
-        // provision time (see the `tools` field). Inline-server tool surfacing
-        // still requires async list_tools() + McpTool→ToolRegistration
-        // conversion; deferred to a Stage I follow-up.
-        self.tools.clone()
+        // provision time; inline tools were snapshotted by calling
+        // `list_tools()` on each spawned `InlineMcpHandle` immediately after
+        // Phase 2 succeeded. The two lists are disjoint by construction
+        // (inline tools carry `plugin_id = "inline:..."`, referenced tools
+        // carry the global plugin id) so a plain concat is correct.
+        let mut all = Vec::with_capacity(self.tools.len() + self.inline_tools.len());
+        all.extend(self.tools.iter().cloned());
+        all.extend(self.inline_tools.iter().cloned());
+        all
     }
 
     /// Explicit shutdown. Calls `proc.close()` on each inline handle and marks

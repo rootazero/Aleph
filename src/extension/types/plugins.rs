@@ -143,6 +143,10 @@ pub struct LoadSummary {
     pub plugins_loaded: usize,
     /// Number of hooks loaded
     pub hooks_loaded: usize,
+    /// Number of plugins the owner trust policy refused to load. Surfaced in
+    /// `extensions.stat` so operators can spot a plugin that's installed but
+    /// not active because it wasn't on the allowlist.
+    pub skipped_by_trust: usize,
     /// Errors encountered during loading
     pub errors: Vec<String>,
 }

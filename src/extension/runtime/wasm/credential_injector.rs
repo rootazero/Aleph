@@ -1,21 +1,30 @@
-//! Credential injection at the host boundary — **aspirational infra, NOT yet
-//! wired into the live request path.**
+//! Credential injection at the host boundary.
 //!
-//! Design intent: resolve credentials host-side and inject them into outbound
-//! HTTP requests so that WASM plugins never see secret values — the host looks
-//! up the secret by name, matches the target URL against declared host
-//! patterns, and applies the injection strategy (Bearer, Basic, Header, Query,
-//! `UrlPath`).
+//! Resolves credentials host-side and injects them into outbound HTTP requests
+//! so that WASM plugins never see secret values. The host looks up each
+//! declared [`CredentialBinding`]'s secret by name (via the kernel's
+//! [`SecretResolver`](super::secret_resolver::SecretResolver)), matches the
+//! target URL against the binding's `host_patterns`, and applies the injection
+//! strategy (`Bearer` / `Basic` / `Header` / `Query` / `UrlPath`) to the
+//! outbound request before it leaves the sandbox.
 //!
-//! STATUS (do not trust the guarantee above as a live property): this module
-//! has no production consumer. `inject_credential` is exercised only by unit
-//! tests; the sole live outbound path (`host_functions.rs::try_http_fetch`)
-//! builds requests purely from plugin-supplied headers and never calls this,
-//! and `WasmCapabilityKernel` has no secret-value store (it only checks secret
-//! *existence* by pattern). Until a resolver is built and `try_http_fetch`
-//! calls in here, "plugins never see secret values" is a goal, not a fact —
-//! a plugin needing auth must supply it itself. Retained (not deleted) as the
-//! agreed foundation for that future secret-resolver wiring.
+//! ## Wiring
+//!
+//! The single live outbound path is `host_functions::try_http_fetch`. For
+//! every declared binding on the plugin's `http.credentials` list, the host
+//! function:
+//!
+//! 1. Resolves the secret name through `WasmCapabilityKernel::resolve_secret`
+//!    (which delegates to the kernel's installed `SecretResolver`).
+//! 2. Calls [`inject_credential`] to mutate either headers or URL.
+//! 3. Egresses the request via `reqwest::blocking` on a dedicated OS thread.
+//!
+//! If a declared binding matches the URL host but the resolver returns `None`
+//! for its secret name, the host function surfaces a hard error rather than
+//! silently dropping the credential and letting an unauthenticated request
+//! through.
+//!
+//! "Plugins never see secret values" is now a **live property**, not a goal.
 
 use url::Url;
 

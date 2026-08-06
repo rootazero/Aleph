@@ -6,16 +6,19 @@
 //! - Audit logging
 //! - Resource counting
 //!
-//! NOT (yet) done here: host-side credential injection. The kernel only checks
-//! secret *existence* by pattern (`check_secret_pattern`) — it holds no
-//! secret-value store, so it cannot supply values to `credential_injector`
-//! (which stays test-only until a resolver is wired). See that module's header.
+//! The kernel owns a [`SecretResolver`](super::secret_resolver::SecretResolver)
+//! that `host_functions::try_http_fetch` consults when injecting declared
+//! credentials host-side — the resolver supplies the secret value, but the
+//! plugin guest only sees the final URL/headers after the injector has
+//! applied the binding, so "plugins never see secret values" is now a live
+//! property (not a goal).
 
-use crate::sync_primitives::{AtomicU32, Mutex, Ordering};
+use crate::sync_primitives::{Arc, AtomicU32, Mutex, Ordering};
 
 use crate::extension::runtime::wasm::allowlist::AllowlistValidator;
 use crate::extension::runtime::wasm::capabilities::{HttpCapability, WasmCapabilities};
 use crate::extension::runtime::wasm::limits::WasmResourceLimits;
+use crate::extension::runtime::wasm::secret_resolver::{DenyAllSecretResolver, SecretResolver};
 
 /// Errors from capability checks
 #[derive(Debug)]
@@ -52,6 +55,13 @@ pub struct WasmCapabilityKernel {
     /// Monotonic millis timestamps of recent HTTP calls, for sliding-window
     /// rate limiting. Pruned to the last hour on each `check_rate_limit`.
     http_timestamps: Mutex<Vec<u64>>,
+    /// Host-side secret store consulted by `host_functions::try_http_fetch`
+    /// when resolving declared `CredentialBinding`s. Defaults to
+    /// [`DenyAllSecretResolver`] (every lookup returns `None`) — call
+    /// [`Self::with_secret_resolver`] before exposing the kernel to a plugin
+    /// that declares `http.credentials`. The resolver is `Arc`-shared with
+    /// the WASM host-function closures, so `Send + Sync` is required.
+    secret_resolver: Arc<dyn SecretResolver>,
 }
 
 impl WasmCapabilityKernel {
@@ -69,7 +79,35 @@ impl WasmCapabilityKernel {
             http_call_count: AtomicU32::new(0),
             tool_invoke_count: AtomicU32::new(0),
             http_timestamps: Mutex::new(Vec::new()),
+            secret_resolver: Arc::new(DenyAllSecretResolver),
         }
+    }
+
+    /// Install a custom secret resolver. The kernel owns an `Arc` to it; the
+    /// resolver's lifetime must outlive the kernel (and any in-flight host
+    /// function calls captured by the WASM runtime). Defaults to
+    /// [`DenyAllSecretResolver`] until this is called.
+    #[must_use]
+    pub fn with_secret_resolver(mut self, resolver: Arc<dyn SecretResolver>) -> Self {
+        self.secret_resolver = resolver;
+        self
+    }
+
+    /// Borrow the active secret resolver. Used by `host_functions::try_http_fetch`
+    /// to look up declared `CredentialBinding` values before egress.
+    #[must_use]
+    pub fn secret_resolver(&self) -> &dyn SecretResolver {
+        self.secret_resolver.as_ref()
+    }
+
+    /// Convenience: resolve a single secret name to its plaintext value, or
+    /// `None` if the resolver doesn't recognise it. Returns `None` (silently)
+    /// when the kernel carries the default deny-all resolver — the credential
+    /// injector then skips the binding host-pattern match and the request
+    /// proceeds unchanged.
+    #[must_use]
+    pub fn resolve_secret(&self, name: &str) -> Option<String> {
+        self.secret_resolver.resolve(name)
     }
 
     pub fn check_workspace_read(&self, path: &str) -> Result<(), CapabilityError> {

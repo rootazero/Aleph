@@ -265,6 +265,7 @@ pub fn parse_cc_plugin_toml_content(
         aleph_extensions: aleph_ext,
         // Memory extension manifest — not supported in CC flat format (only in aleph.plugin.toml)
         memory_manifest: None,
+        activation: None,
     };
 
     Ok(manifest)
