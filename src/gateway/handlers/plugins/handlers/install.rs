@@ -194,58 +194,6 @@ pub async fn handle_install_unified(request: JsonRpcRequest) -> JsonRpcResponse 
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn classify_bare_name_is_marketplace() {
-        assert_eq!(
-            classify_plugin_source("hello-world"),
-            PluginSourceKind::Marketplace
-        );
-        assert_eq!(
-            classify_plugin_source("my_plugin"),
-            PluginSourceKind::Marketplace
-        );
-    }
-
-    #[test]
-    fn classify_urls_and_paths_are_git() {
-        assert_eq!(
-            classify_plugin_source("https://github.com/x/y"),
-            PluginSourceKind::GitUrl
-        );
-        assert_eq!(
-            classify_plugin_source("owner/repo"),
-            PluginSourceKind::GitUrl
-        );
-        assert_eq!(
-            classify_plugin_source("git@github.com:x/y.git"),
-            PluginSourceKind::GitUrl
-        );
-        assert_eq!(
-            classify_plugin_source("./local.thing"),
-            PluginSourceKind::GitUrl
-        );
-    }
-
-    #[test]
-    fn install_source_prefers_source_then_url() {
-        use serde_json::json;
-        assert_eq!(
-            install_source(Some(&json!({"source":"a","url":"b"}))).as_deref(),
-            Some("a")
-        );
-        assert_eq!(
-            install_source(Some(&json!({"url":"https://x/y"}))).as_deref(),
-            Some("https://x/y")
-        );
-        assert_eq!(install_source(Some(&json!({}))), None);
-        assert_eq!(install_source(None), None);
-    }
-}
-
 /// Install plugins from a zip file
 pub async fn handle_install_from_zip(request: JsonRpcRequest) -> JsonRpcResponse {
     let params: InstallFromZipParams = match parse_params(&request) {
@@ -326,4 +274,56 @@ pub async fn handle_install_from_zip(request: JsonRpcRequest) -> JsonRpcResponse
         request.id,
         json!({ "installedNames": Vec::<String>::new() }),
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn classify_bare_name_is_marketplace() {
+        assert_eq!(
+            classify_plugin_source("hello-world"),
+            PluginSourceKind::Marketplace
+        );
+        assert_eq!(
+            classify_plugin_source("my_plugin"),
+            PluginSourceKind::Marketplace
+        );
+    }
+
+    #[test]
+    fn classify_urls_and_paths_are_git() {
+        assert_eq!(
+            classify_plugin_source("https://github.com/x/y"),
+            PluginSourceKind::GitUrl
+        );
+        assert_eq!(
+            classify_plugin_source("owner/repo"),
+            PluginSourceKind::GitUrl
+        );
+        assert_eq!(
+            classify_plugin_source("git@github.com:x/y.git"),
+            PluginSourceKind::GitUrl
+        );
+        assert_eq!(
+            classify_plugin_source("./local.thing"),
+            PluginSourceKind::GitUrl
+        );
+    }
+
+    #[test]
+    fn install_source_prefers_source_then_url() {
+        use serde_json::json;
+        assert_eq!(
+            install_source(Some(&json!({"source":"a","url":"b"}))).as_deref(),
+            Some("a")
+        );
+        assert_eq!(
+            install_source(Some(&json!({"url":"https://x/y"}))).as_deref(),
+            Some("https://x/y")
+        );
+        assert_eq!(install_source(Some(&json!({}))), None);
+        assert_eq!(install_source(None), None);
+    }
 }

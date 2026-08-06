@@ -186,6 +186,7 @@ pub struct BuiltinToolRegistry {
     pub(crate) browser_fill_form_tool: crate::builtin_tools::browser_tools::BrowserFillFormTool,
     pub(crate) browser_press_key_tool: crate::builtin_tools::browser_tools::BrowserPressKeyTool,
     pub(crate) browser_wait_for_tool: crate::builtin_tools::browser_tools::BrowserWaitForTool,
+    pub(crate) browser_batch_tool: crate::builtin_tools::browser_tools::BrowserBatchTool,
     pub(crate) browser_console_tool: crate::builtin_tools::browser_tools::BrowserConsoleTool,
     pub(crate) browser_hover_tool: crate::builtin_tools::browser_tools::BrowserHoverTool,
     pub(crate) browser_scroll_tool: crate::builtin_tools::browser_tools::BrowserScrollTool,

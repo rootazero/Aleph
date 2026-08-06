@@ -384,14 +384,14 @@ mod tests {
             "=================================== FAILURES ===================================\n",
         );
         s.push_str("_______________________ test_totals ________________________\n");
-        s.push_str("\n");
+        s.push('\n');
         s.push_str("    def test_totals():\n");
         s.push_str("        got = compute({'a': 1})\n");
         s.push_str(">       assert got == {'a': 2}\n");
         s.push_str("E       AssertionError: assert {'a': 1} == {'a': 2}\n");
         s.push_str("E         Differing items:\n");
         s.push_str("E         {'a': 1} != {'a': 2}\n");
-        s.push_str("\n");
+        s.push('\n');
         s.push_str("test_totals.py:7: AssertionError\n");
         for i in 0..300 {
             s.push_str(&format!("teardown chatter {i}\n"));

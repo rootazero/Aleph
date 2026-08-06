@@ -2,6 +2,7 @@
 //
 // Each tool wraps a ProfileManager and implements AlephTool for one operation.
 
+pub mod batch;
 pub mod click;
 pub mod console;
 pub mod cookies;
@@ -438,6 +439,7 @@ pub(crate) fn bound_screenshot_png(png_bytes: Vec<u8>) -> Vec<u8> {
     smallest
 }
 
+pub use batch::{BrowserBatchArgs, BrowserBatchOutput, BrowserBatchTool};
 pub use click::{BrowserClickArgs, BrowserClickOutput, BrowserClickTool};
 pub use console::{BrowserConsoleArgs, BrowserConsoleOutput, BrowserConsoleTool};
 pub use cookies::{BrowserCookiesArgs, BrowserCookiesOutput, BrowserCookiesTool};

@@ -17,12 +17,12 @@ use tracing::info;
 
 use super::{BuiltinToolConfig, BuiltinToolRegistry};
 use crate::builtin_tools::browser_tools::{
-    BrowserClickTool, BrowserConsoleTool, BrowserCookiesTool, BrowserDialogTool, BrowserDragTool,
-    BrowserEmulateTool, BrowserEvaluateTool, BrowserFillFormTool, BrowserHoverTool,
-    BrowserNavigateTool, BrowserNetworkTool, BrowserOpenTool, BrowserPdfTool, BrowserPressKeyTool,
-    BrowserProfileTool, BrowserResizeTool, BrowserScreenshotTool, BrowserScrollTool,
-    BrowserSelectTool, BrowserSessionTool, BrowserSnapshotTool, BrowserTabsTool, BrowserTypeTool,
-    BrowserUploadTool, BrowserWaitForTool,
+    BrowserBatchTool, BrowserClickTool, BrowserConsoleTool, BrowserCookiesTool, BrowserDialogTool,
+    BrowserDragTool, BrowserEmulateTool, BrowserEvaluateTool, BrowserFillFormTool,
+    BrowserHoverTool, BrowserNavigateTool, BrowserNetworkTool, BrowserOpenTool, BrowserPdfTool,
+    BrowserPressKeyTool, BrowserProfileTool, BrowserResizeTool, BrowserScreenshotTool,
+    BrowserScrollTool, BrowserSelectTool, BrowserSessionTool, BrowserSnapshotTool, BrowserTabsTool,
+    BrowserTypeTool, BrowserUploadTool, BrowserWaitForTool,
 };
 use crate::builtin_tools::{
     ApplyPatchTool, AutomationTool, BashExecTool, CodeCheckTool, CodeExecTool, DesktopTool,
@@ -515,6 +515,8 @@ impl BuiltinToolRegistry {
         let browser_press_key_tool = BrowserPressKeyTool::new(Arc::clone(&browser_profile_manager))
             .with_approval_policy(Arc::clone(&approval_policy));
         let browser_wait_for_tool = BrowserWaitForTool::new(Arc::clone(&browser_profile_manager));
+        let browser_batch_tool = BrowserBatchTool::new(Arc::clone(&browser_profile_manager))
+            .with_approval_policy(Arc::clone(&approval_policy));
         let browser_console_tool = BrowserConsoleTool::new(Arc::clone(&browser_profile_manager));
         let browser_hover_tool = BrowserHoverTool::new(Arc::clone(&browser_profile_manager))
             .with_approval_policy(Arc::clone(&approval_policy));
@@ -683,6 +685,7 @@ impl BuiltinToolRegistry {
                 browser_fill_form_tool.definition(),
                 browser_press_key_tool.definition(),
                 browser_wait_for_tool.definition(),
+                browser_batch_tool.definition(),
                 browser_console_tool.definition(),
                 browser_hover_tool.definition(),
                 browser_scroll_tool.definition(),
@@ -708,7 +711,7 @@ impl BuiltinToolRegistry {
                 tools.insert(td.name.clone(), ut);
             }
         }
-        info!("Registered browser tools (25 tools) in BuiltinToolRegistry");
+        info!("Registered browser tools (26 tools) in BuiltinToolRegistry");
 
         // Register parameter schemas for always-available tools that are listed
         // in BUILTIN_TOOL_DEFINITIONS (so the LLM sees them) and dispatched in
@@ -1152,6 +1155,7 @@ impl BuiltinToolRegistry {
             browser_fill_form_tool,
             browser_press_key_tool,
             browser_wait_for_tool,
+            browser_batch_tool,
             browser_console_tool,
             browser_hover_tool,
             browser_scroll_tool,

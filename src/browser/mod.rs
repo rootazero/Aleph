@@ -13,6 +13,8 @@ pub use playwright_cli_backend::PlaywrightCliBackend;
 pub(crate) mod post_nav;
 pub mod profile;
 pub mod tab_registry;
+#[cfg(test)]
+pub(crate) mod testkit;
 pub mod types;
 pub(crate) mod wait_probe;
 

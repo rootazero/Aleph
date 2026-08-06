@@ -152,13 +152,11 @@ mod tests {
 
     #[test]
     fn legacy_sections_are_inert() {
-        for s in ["task_routing"] {
-            assert_eq!(
-                ReloadImpact::classify(s),
-                ReloadImpact::Inert,
-                "expected '{s}' to be inert"
-            );
-        }
+        assert_eq!(
+            ReloadImpact::classify("task_routing"),
+            ReloadImpact::Inert,
+            "expected 'task_routing' to be inert"
+        );
     }
 
     #[test]

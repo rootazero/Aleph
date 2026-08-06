@@ -512,6 +512,9 @@ impl ToolRegistry for BuiltinToolRegistry {
             "browser_wait_for" => {
                 Box::pin(async move { self.browser_wait_for_tool.call_json(arguments).await })
             }
+            "browser_batch" => {
+                Box::pin(async move { self.browser_batch_tool.call_json(arguments).await })
+            }
             "browser_console" => {
                 Box::pin(async move { self.browser_console_tool.call_json(arguments).await })
             }

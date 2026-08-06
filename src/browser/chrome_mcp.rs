@@ -528,7 +528,7 @@ mod tests {
             driver.profiles.get("work").map(|p| &p.browser),
             Some(&BrowserType::Brave)
         );
-        assert!(driver.profiles.get("unknown").is_none());
+        assert!(!driver.profiles.contains_key("unknown"));
     }
 
     #[test]

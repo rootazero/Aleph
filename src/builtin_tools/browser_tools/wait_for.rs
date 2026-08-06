@@ -22,14 +22,14 @@ const fn default_timeout() -> u64 {
 /// — a panic — and would pin a tab for the agent's whole session. openclaw
 /// clamps the equivalent act-wait to this same 0.5s–120s window
 /// (`resolveActWaitTimeoutMs`).
-const MIN_TIMEOUT_MS: u64 = 500;
-const MAX_TIMEOUT_MS: u64 = 120_000;
+pub(crate) const MIN_TIMEOUT_MS: u64 = 500;
+pub(crate) const MAX_TIMEOUT_MS: u64 = 120_000;
 
 /// Clamp a model-supplied wait timeout to the safe `[MIN, MAX]` window.
 /// Hand-rolled rather than `Ord::clamp` so it can stay a `const fn`
 /// (`Ord::clamp` is not const).
 #[allow(clippy::manual_clamp)]
-const fn clamp_timeout(ms: u64) -> u64 {
+pub(crate) const fn clamp_timeout(ms: u64) -> u64 {
     if ms < MIN_TIMEOUT_MS {
         MIN_TIMEOUT_MS
     } else if ms > MAX_TIMEOUT_MS {
@@ -47,12 +47,20 @@ pub struct BrowserWaitForArgs {
     /// Text to wait for on the page.
     #[serde(default)]
     pub text: Option<String>,
+    /// Text to wait for DISAPPEARING from the page (e.g. a spinner or
+    /// "Loading…" label). Inverse polarity of `text`.
+    #[serde(default)]
+    pub text_gone: Option<String>,
     /// CSS selector to wait for (at least one matching element).
     #[serde(default)]
     pub selector: Option<String>,
     /// Substring to wait for in the tab's current URL.
     #[serde(default)]
     pub url_contains: Option<String>,
+    /// Fixed delay in milliseconds — for animations and debounced renders
+    /// that expose no observable condition. Clamped to 500–120000.
+    #[serde(default)]
+    pub time_ms: Option<u64>,
     /// Timeout in milliseconds (default: 5000; clamped to 500–120000).
     #[serde(default = "default_timeout")]
     pub timeout_ms: u64,
@@ -77,30 +85,36 @@ impl BrowserWaitForTool {
 }
 
 /// Build the wait condition from the model-supplied args. Exactly one of
-/// `text` / `selector` / `url_contains` must be set — the conditions are
-/// mutually exclusive because the backends poll them with different probes
-/// and a combined "any-of" semantic would be ambiguous in the result message.
+/// `text` / `text_gone` / `selector` / `url_contains` / `time_ms` must be set —
+/// the conditions are mutually exclusive because the backends poll them with
+/// different probes and a combined "any-of" semantic would be ambiguous in the
+/// result message.
 fn resolve_condition(args: &BrowserWaitForArgs) -> std::result::Result<WaitCondition, String> {
     let set = [
         args.text.as_ref().map(|t| ("text", t)),
+        args.text_gone.as_ref().map(|t| ("text_gone", t)),
         args.selector.as_ref().map(|s| ("selector", s)),
         args.url_contains.as_ref().map(|u| ("url_contains", u)),
     ]
     .into_iter()
     .flatten()
     .collect::<Vec<_>>();
-    match set.as_slice() {
-        [("text", t)] => Ok(WaitCondition::Text((*t).clone())),
-        [("selector", s)] => Ok(WaitCondition::Selector((*s).clone())),
-        [("url_contains", u)] => Ok(WaitCondition::UrlContains((*u).clone())),
-        [] => Err(
-            "exactly one wait condition is required: set one of 'text', 'selector' or \
-             'url_contains'"
+    match (set.as_slice(), args.time_ms) {
+        ([("text", t)], None) => Ok(WaitCondition::Text((*t).clone())),
+        ([("text_gone", t)], None) => Ok(WaitCondition::TextGone((*t).clone())),
+        ([("selector", s)], None) => Ok(WaitCondition::Selector((*s).clone())),
+        ([("url_contains", u)], None) => Ok(WaitCondition::UrlContains((*u).clone())),
+        // A bare delay is itself the condition; clamp it into the same safe
+        // window as a polling timeout so `u64::MAX` cannot pin a tab.
+        ([], Some(ms)) => Ok(WaitCondition::Time(clamp_timeout(ms))),
+        ([], None) => Err(
+            "exactly one wait condition is required: set one of 'text', 'text_gone', \
+             'selector', 'url_contains' or 'time_ms'"
                 .into(),
         ),
         _ => Err(
-            "wait conditions are mutually exclusive: set exactly one of 'text', 'selector' or \
-             'url_contains', not several"
+            "wait conditions are mutually exclusive: set exactly one of 'text', 'text_gone', \
+             'selector', 'url_contains' or 'time_ms', not several"
                 .into(),
         ),
     }
@@ -110,8 +124,10 @@ fn resolve_condition(args: &BrowserWaitForArgs) -> std::result::Result<WaitCondi
 fn describe_condition(condition: &WaitCondition) -> String {
     match condition {
         WaitCondition::Text(t) => format!("Text '{t}'"),
+        WaitCondition::TextGone(t) => format!("Text gone '{t}'"),
         WaitCondition::Selector(s) => format!("Selector '{s}'"),
         WaitCondition::UrlContains(u) => format!("URL containing '{u}'"),
+        WaitCondition::Time(ms) => format!("Delay {ms}ms"),
     }
 }
 
@@ -119,9 +135,10 @@ fn describe_condition(condition: &WaitCondition) -> String {
 impl AlephTool for BrowserWaitForTool {
     const NAME: &'static str = "browser_wait_for";
     const DESCRIPTION: &'static str =
-        "Wait for a condition on the page (useful after navigation or actions): text appearing, \
-         a CSS selector matching an element, or the URL containing a substring. \
-         Set exactly one of text / selector / url_contains.";
+        "Wait for a condition on the page (useful after navigation or actions): text appearing \
+         or disappearing, a CSS selector matching an element, the URL containing a substring, \
+         or a fixed delay in milliseconds. \
+         Set exactly one of text / text_gone / selector / url_contains / time_ms.";
     type Args = BrowserWaitForArgs;
     type Output = BrowserWaitForOutput;
 
@@ -177,14 +194,18 @@ mod tests {
 
     fn args(
         text: Option<&str>,
+        text_gone: Option<&str>,
         selector: Option<&str>,
         url_contains: Option<&str>,
+        time_ms: Option<u64>,
     ) -> BrowserWaitForArgs {
         BrowserWaitForArgs {
             profile: "default".into(),
             text: text.map(str::to_string),
+            text_gone: text_gone.map(str::to_string),
             selector: selector.map(str::to_string),
             url_contains: url_contains.map(str::to_string),
+            time_ms,
             timeout_ms: 1000,
         }
     }
@@ -201,30 +222,60 @@ mod tests {
     #[test]
     fn resolve_condition_maps_each_single_condition() {
         assert_eq!(
-            resolve_condition(&args(Some("Loading"), None, None)).unwrap(),
+            resolve_condition(&args(Some("Loading"), None, None, None, None)).unwrap(),
             WaitCondition::Text("Loading".into())
         );
         assert_eq!(
-            resolve_condition(&args(None, Some("#app .ready"), None)).unwrap(),
+            resolve_condition(&args(None, Some("Loading"), None, None, None)).unwrap(),
+            WaitCondition::TextGone("Loading".into())
+        );
+        assert_eq!(
+            resolve_condition(&args(None, None, Some("#app .ready"), None, None)).unwrap(),
             WaitCondition::Selector("#app .ready".into())
         );
         assert_eq!(
-            resolve_condition(&args(None, None, Some("/dashboard"))).unwrap(),
+            resolve_condition(&args(None, None, None, Some("/dashboard"), None)).unwrap(),
             WaitCondition::UrlContains("/dashboard".into())
         );
     }
 
     #[test]
+    fn resolve_condition_maps_time_ms_to_a_clamped_delay() {
+        assert_eq!(
+            resolve_condition(&args(None, None, None, None, Some(2000))).unwrap(),
+            WaitCondition::Time(2000)
+        );
+        // The delay shares the polling timeout's safe window.
+        assert_eq!(
+            resolve_condition(&args(None, None, None, None, Some(0))).unwrap(),
+            WaitCondition::Time(MIN_TIMEOUT_MS)
+        );
+        assert_eq!(
+            resolve_condition(&args(None, None, None, None, Some(u64::MAX))).unwrap(),
+            WaitCondition::Time(MAX_TIMEOUT_MS)
+        );
+    }
+
+    #[test]
     fn resolve_condition_rejects_zero_conditions() {
-        let err = resolve_condition(&args(None, None, None)).unwrap_err();
+        let err = resolve_condition(&args(None, None, None, None, None)).unwrap_err();
         assert!(err.contains("exactly one"), "got: {err}");
+        assert!(err.contains("time_ms"), "got: {err}");
     }
 
     #[test]
     fn resolve_condition_rejects_multiple_conditions() {
-        let err = resolve_condition(&args(Some("t"), Some("s"), None)).unwrap_err();
+        let err = resolve_condition(&args(Some("t"), None, Some("s"), None, None)).unwrap_err();
         assert!(err.contains("mutually exclusive"), "got: {err}");
-        let err = resolve_condition(&args(Some("t"), Some("s"), Some("u"))).unwrap_err();
+        let err =
+            resolve_condition(&args(Some("t"), None, Some("s"), Some("u"), None)).unwrap_err();
+        assert!(err.contains("mutually exclusive"), "got: {err}");
+        // A delay combined with any polled condition is also several conditions.
+        let mut mixed = args(None, None, None, None, Some(1000));
+        mixed.text = Some("t".into());
+        let err = resolve_condition(&mixed).unwrap_err();
+        assert!(err.contains("mutually exclusive"), "got: {err}");
+        let err = resolve_condition(&args(Some("t"), Some("g"), None, None, None)).unwrap_err();
         assert!(err.contains("mutually exclusive"), "got: {err}");
     }
 
@@ -233,7 +284,10 @@ mod tests {
         let config = BrowserSystemConfig::default();
         let manager = Arc::new(ProfileManager::new(config));
         let tool = BrowserWaitForTool::new(manager);
-        let result = tool.call(args(Some("Loading"), None, None)).await.unwrap();
+        let result = tool
+            .call(args(Some("Loading"), None, None, None, None))
+            .await
+            .unwrap();
         assert!(!result.success); // No browser running
     }
 
@@ -244,7 +298,7 @@ mod tests {
         let tool = BrowserWaitForTool::new(manager);
         // Validation fires before any backend lookup, so the message explains
         // the contract even with no browser running.
-        let result = tool.call(args(None, None, None)).await.unwrap();
+        let result = tool.call(args(None, None, None, None, None)).await.unwrap();
         assert!(!result.success);
         assert!(!result.found);
         assert!(
@@ -262,7 +316,10 @@ mod tests {
         let config = BrowserSystemConfig::default();
         let manager = Arc::new(ProfileManager::new(config));
         let tool = BrowserWaitForTool::new(manager);
-        let result = tool.call(args(Some("t"), Some("#x"), None)).await.unwrap();
+        let result = tool
+            .call(args(Some("t"), None, Some("#x"), None, None))
+            .await
+            .unwrap();
         assert!(!result.success);
         assert!(
             result

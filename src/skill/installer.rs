@@ -395,10 +395,7 @@ mod tests {
             },
         ];
 
-        let prefs = InstallPreferences {
-            prefer_brew: true,
-            ..Default::default()
-        };
+        let prefs = InstallPreferences { prefer_brew: true };
 
         let best = select_best_install(&specs, &prefs);
         assert!(best.is_some());
@@ -426,10 +423,7 @@ mod tests {
             },
         ];
 
-        let prefs = InstallPreferences {
-            prefer_brew: false,
-            ..Default::default()
-        };
+        let prefs = InstallPreferences { prefer_brew: false };
 
         let best = select_best_install(&specs, &prefs);
         assert!(best.is_some());
