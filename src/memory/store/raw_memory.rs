@@ -208,7 +208,6 @@ pub struct RawMemory {
     pub agent_id: String,
     pub session_id: Option<String>,
     pub path: Option<String>,
-    pub layer: Option<String>,
     pub attachment_text: Option<String>,
     pub is_processed: bool,
     pub created_at: i64,
@@ -224,7 +223,6 @@ impl RawMemory {
             agent_id: "default".to_string(),
             session_id: None,
             path: None,
-            layer: None,
             attachment_text: None,
             is_processed: false,
             created_at: chrono::Utc::now().timestamp(),
@@ -243,11 +241,6 @@ impl RawMemory {
 
     pub fn with_path(mut self, path: impl Into<String>) -> Self {
         self.path = Some(path.into());
-        self
-    }
-
-    pub fn with_layer(mut self, layer: impl Into<String>) -> Self {
-        self.layer = Some(layer.into());
         self
     }
 
