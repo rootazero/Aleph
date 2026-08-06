@@ -50,6 +50,31 @@ pub fn team_visible(owner_user_id: Option<&str>) -> bool {
     crate::gateway::visibility::ambient_owner_visible(owner_user_id)
 }
 
+/// Whether the team owning a coord task admits the current execution context —
+/// the tool-side twin of `gateway::handlers::teams::visibility::gate_task`.
+///
+/// Six `team_*` tools address a task by id and resolve it in `coord_tasks`
+/// alone, so the [`ScopedTeamStore`] decorator never sees them; they call this
+/// after fetching the task and refuse with their own "task not found" error.
+/// The gateway's twenty task-addressed RPCs are the same shape, and the same
+/// rule: a task with no team at all reads as an unstamped record (the legacy
+/// owner's), never as public.
+///
+/// `store == None` means no team database is wired in this deployment, so no
+/// coord task can belong to a team. That is unrestricted by construction, NOT
+/// a fail-closed case — treating it as a denial would take the task tools
+/// offline for every deployment that runs coord tasks without teams.
+pub async fn task_team_reachable(
+    store: Option<&Arc<dyn TeamStore>>,
+    team_id: Option<&str>,
+) -> bool {
+    let Some(store) = store else { return true };
+    match team_id {
+        None => team_visible(None),
+        Some(id) => matches!(store.get_team(id).await, Ok(Some(_))),
+    }
+}
+
 /// A [`TeamStore`] that only serves teams the current context owns.
 pub struct ScopedTeamStore {
     inner: Arc<dyn TeamStore>,

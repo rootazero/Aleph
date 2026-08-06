@@ -54,6 +54,7 @@ pub struct TaskSubmitTool {
     /// legacy artifact-only behavior.
     coord_store: Option<Arc<dyn CoordTaskStore>>,
     current_agent_id: String,
+    team_store: Option<Arc<dyn crate::teams::TeamStore>>,
 }
 
 impl TaskSubmitTool {
@@ -66,7 +67,15 @@ impl TaskSubmitTool {
             store,
             coord_store,
             current_agent_id,
+            team_store: None,
         }
+    }
+
+    /// Wire the ownership gate — see [`crate::teams::task_team_reachable`].
+    #[must_use]
+    pub fn with_team_store(mut self, store: Option<Arc<dyn crate::teams::TeamStore>>) -> Self {
+        self.team_store = store;
+        self
     }
 }
 
@@ -88,6 +97,27 @@ impl AlephTool for TaskSubmitTool {
             agent_id = %self.current_agent_id,
             "task_submit: creating artifact"
         );
+
+        // Ownership gate, BEFORE the artifact is written. `task_id` here may be
+        // freeform (not a coord task at all) — that case is legacy-legal and
+        // stays open. What must not happen is submitting into a coord task that
+        // exists and belongs to someone else: it would both file an artifact
+        // under their task and, below, flip their task to WaitingReview.
+        if let Some(coord_store) = &self.coord_store {
+            if let Ok(Some(task)) = coord_store.get_task(&args.task_id).await {
+                if !crate::teams::task_team_reachable(
+                    self.team_store.as_ref(),
+                    task.team_id.as_deref(),
+                )
+                .await
+                {
+                    return Err(AlephError::invalid_input(format!(
+                        "task '{}' not found",
+                        args.task_id
+                    )));
+                }
+            }
+        }
 
         let artifact = self
             .store

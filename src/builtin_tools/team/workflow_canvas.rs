@@ -72,12 +72,23 @@ pub enum TeamWorkflowCanvasOutput {
 
 #[derive(Clone)]
 pub struct TeamWorkflowCanvasTool {
+    team_store: Option<Arc<dyn crate::teams::TeamStore>>,
     coord_store: Arc<dyn CoordTaskStore>,
 }
 
 impl TeamWorkflowCanvasTool {
     pub fn new(coord_store: Arc<dyn CoordTaskStore>) -> Self {
-        Self { coord_store }
+        Self {
+            team_store: None,
+            coord_store,
+        }
+    }
+
+    /// Wire the ownership gate — see [`crate::teams::task_team_reachable`].
+    #[must_use]
+    pub fn with_team_store(mut self, store: Option<Arc<dyn crate::teams::TeamStore>>) -> Self {
+        self.team_store = store;
+        self
     }
 
     /// Parse the optional status filter. `None` input means "no filter".
@@ -115,6 +126,16 @@ impl AlephTool for TeamWorkflowCanvasTool {
     type Output = TeamWorkflowCanvasOutput;
 
     async fn call(&self, args: Self::Args) -> Result<Self::Output> {
+        // Ownership gate. Both actions are team-addressed, and `export`
+        // enumerates every task in the team — the one shape here that hands
+        // out ids for the other task tools, so it has to be gated even though
+        // it only reads.
+        if !crate::teams::task_team_reachable(self.team_store.as_ref(), Some(&args.team_id)).await {
+            return Err(AlephError::invalid_input(format!(
+                "team '{}' not found",
+                args.team_id
+            )));
+        }
         match args.action {
             WorkflowCanvasAction::Export => {
                 let filter = CoordTaskFilter {

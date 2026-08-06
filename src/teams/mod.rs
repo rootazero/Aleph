@@ -31,11 +31,11 @@ pub use broadcast::BroadcastConfig;
 pub use dispatcher::{DispatcherConfig, TeamDispatcher};
 pub use events::{EventLogStore, SqliteEventLogStore, TeamEventLogger};
 pub use notifier::TeamNotifier;
+pub use scoped::{task_team_reachable, team_visible, ScopedTeamStore};
 pub use snapshots::{
     capture_snapshot, restore_snapshot, CreateSnapshotOutput, RestoreDiff, SnapshotMeta,
     SqliteSnapshotStore, TeamSnapshotPayload,
 };
-pub use scoped::{team_visible, ScopedTeamStore};
 pub use store::{SqliteTeamStore, TeamStore};
 pub use types::{
     acp_member_id, NewTeam, NewTeamMember, Team, TeamId, TeamMember, TeamMemberKind, TeamStatus,

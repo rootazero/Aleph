@@ -66,7 +66,8 @@ impl BuiltinToolRegistry {
                         .current_agent_id
                         .clone()
                         .unwrap_or_else(|| "main".to_string()),
-                );
+                )
+                .with_team_store(config.team_store.clone());
 
                 // TaskUpdateTool and TaskWaitTool derive purely from the coord
                 // store; the store's own GlobalBus broadcast is what wakes
@@ -326,7 +327,8 @@ impl BuiltinToolRegistry {
         // diagrams without leaving conversation (R8).
         let team_workflow_canvas_tool = if let Some(ref coord_store) = config.coord_task_store {
             use crate::builtin_tools::team::TeamWorkflowCanvasTool;
-            let tool = TeamWorkflowCanvasTool::new(Arc::clone(coord_store));
+            let tool = TeamWorkflowCanvasTool::new(Arc::clone(coord_store))
+                .with_team_store(config.team_store.clone());
             {
                 use crate::tools::AlephTool;
                 let td = tool.definition();
@@ -352,7 +354,8 @@ impl BuiltinToolRegistry {
         let workflow_step_review_tool = if let Some(ref coord_store) = config.coord_task_store {
             use crate::builtin_tools::team::WorkflowStepReviewTool;
             let tool =
-                WorkflowStepReviewTool::new(Arc::clone(coord_store), current_agent_id.clone());
+                WorkflowStepReviewTool::new(Arc::clone(coord_store), current_agent_id.clone())
+                    .with_team_store(config.team_store.clone());
             {
                 use crate::tools::AlephTool;
                 let td = tool.definition();
@@ -402,7 +405,8 @@ impl BuiltinToolRegistry {
         // without requiring a finished run). R3 — ClawTeam task-control parity.
         let team_task_control_tool = if let Some(ref coord_store) = config.coord_task_store {
             use crate::builtin_tools::team::TeamTaskControlTool;
-            let tool = TeamTaskControlTool::new(Arc::clone(coord_store));
+            let tool = TeamTaskControlTool::new(Arc::clone(coord_store))
+                .with_team_store(config.team_store.clone());
             {
                 use crate::tools::AlephTool;
                 let td = tool.definition();
@@ -426,7 +430,8 @@ impl BuiltinToolRegistry {
         // trace + replay UI.
         let task_exit_journal_tool = if let Some(ref coord_store) = config.coord_task_store {
             use crate::builtin_tools::team::TaskExitJournalTool;
-            let tool = TaskExitJournalTool::new(Arc::clone(coord_store), current_agent_id.clone());
+            let tool = TaskExitJournalTool::new(Arc::clone(coord_store), current_agent_id.clone())
+                .with_team_store(config.team_store.clone());
             {
                 use crate::tools::AlephTool;
                 let td = tool.definition();
