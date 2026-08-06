@@ -781,6 +781,7 @@ mod tests {
             },
             at: 0,
             synthetic: false,
+            author_user_id: None,
         }
     }
 

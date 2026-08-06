@@ -68,6 +68,34 @@ pub struct MessageContent {
     pub thinking_signature: Option<String>,
 }
 
+impl SessionEvent {
+    /// A plain-text `UserMessage` the harness wrote itself — a grace nudge, a
+    /// stop-hook halt, a verifier veto.
+    ///
+    /// Three call sites in `src/harness/` had built this literal by hand, which
+    /// is one past the point where the duplication should collapse (P6). The
+    /// reason to collapse it *here* rather than leave three copies is the last
+    /// field: a harness-authored message has no human author by construction,
+    /// and this is what makes that unforgettable rather than merely true today.
+    /// Adding a fourth synthetic message in the loop must not require
+    /// remembering spec §6.2 — and it must not spend R10 budget on remembering.
+    #[must_use]
+    pub fn synthetic_user(turn_id: TurnId, text: String) -> Self {
+        SessionEvent::UserMessage {
+            turn_id,
+            content: MessageContent {
+                text,
+                blocks: Vec::new(),
+                thinking: None,
+                thinking_signature: None,
+            },
+            at: now_ms(),
+            synthetic: true,
+            author_user_id: None,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ToolOutput {
     pub value: serde_json::Value,
@@ -179,6 +207,25 @@ pub enum SessionEvent {
         /// synthetic messages are passed through unchanged.
         #[serde(default)]
         synthetic: bool,
+        /// Who typed this, in a multi-human project room (spec §6.2). `None`
+        /// for every single-author session, for every harness-authored
+        /// message, and for every event written before P2 — absent means "the
+        /// session's own user", the same adoption-by-absence rule the rest of
+        /// the multi-user arc uses.
+        ///
+        /// Stamped from [`crate::scope::room_author`], which is the single
+        /// source for *when* a message needs an author at all. Only the id is
+        /// stored: a display name is presentation, resolved fresh at render
+        /// time through `scope::directory`, so a rename shows up in history
+        /// instead of being frozen into it.
+        ///
+        /// Mirrors the [`SessionEvent::RunStarted::project_root`] precedent —
+        /// an optional payload field, not a side channel — and like it,
+        /// `skip_serializing_if` keeps it off the wire and out of the prompt's
+        /// cached prefix for the single-author sessions that are still the
+        /// overwhelming majority.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        author_user_id: Option<String>,
     },
     AssistantMessage {
         turn_id: TurnId,
@@ -422,6 +469,59 @@ mod tests {
             let back: SessionEvent = serde_json::from_str(&json).unwrap();
             assert_eq!(serde_json::to_string(&back).unwrap(), json);
             assert!(json.contains("\"type\":\"run_finished\""));
+        }
+    }
+
+    #[test]
+    fn a_project_rooms_user_message_carries_its_author() {
+        let ev = SessionEvent::UserMessage {
+            turn_id: TurnId::new_v4(),
+            content: MessageContent {
+                text: "ship it".into(),
+                blocks: vec![],
+                thinking: None,
+                thinking_signature: None,
+            },
+            at: 1,
+            synthetic: false,
+            author_user_id: Some("u-alice".into()),
+        };
+        let json = serde_json::to_string(&ev).unwrap();
+        assert!(json.contains("\"author_user_id\":\"u-alice\""));
+        let back: SessionEvent = serde_json::from_str(&json).unwrap();
+        assert_eq!(serde_json::to_string(&back).unwrap(), json);
+    }
+
+    #[test]
+    fn a_single_author_message_puts_no_author_on_the_wire() {
+        // `skip_serializing_if` is not cosmetic here: these bytes sit in the
+        // prompt's cached prefix, and a `"author_user_id":null` on every
+        // message of every single-author session is a per-turn tax paid by the
+        // sessions that get nothing back for it.
+        let ev = SessionEvent::synthetic_user(TurnId::new_v4(), "hint".into());
+        assert!(!serde_json::to_string(&ev)
+            .unwrap()
+            .contains("author_user_id"));
+    }
+
+    #[test]
+    fn a_pre_p2_event_without_an_author_still_deserializes() {
+        // On-disk session logs predate this field. `#[serde(default)]` is what
+        // keeps every historical log readable, and reading it back as `None` is
+        // adoption-by-absence: an unlabelled message belongs to the session's
+        // own user, exactly as it always did.
+        let legacy = r#"{"type":"user_message","turn_id":"11111111-1111-4111-8111-111111111111","content":{"text":"hi"},"at":7,"synthetic":false}"#;
+        let ev: SessionEvent = serde_json::from_str(legacy).unwrap();
+        match ev {
+            SessionEvent::UserMessage {
+                author_user_id,
+                content,
+                ..
+            } => {
+                assert_eq!(author_user_id, None);
+                assert_eq!(content.text, "hi");
+            }
+            other => panic!("expected a user message, got {other:?}"),
         }
     }
 

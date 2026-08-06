@@ -142,6 +142,7 @@ async fn seed_interrupted_run(store: &Arc<dyn SessionEventStore>, sid: &SessionK
             },
             at: at + 1,
             synthetic: false,
+            author_user_id: None,
         },
         SessionEvent::RunStarted {
             run_id: "run-1".into(),

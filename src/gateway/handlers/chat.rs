@@ -208,6 +208,16 @@ pub struct ChatMessage {
     /// Run-cumulative token total (gauge tooltip).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub total_tokens: Option<u64>,
+    /// Who typed this, in a multi-human project room (spec §6.2). `None` in
+    /// every single-author session, which is why the Panel must treat absence
+    /// as "the session's own user" rather than as "unknown".
+    ///
+    /// The id, not a name: the Panel resolves names through `users.list`, so a
+    /// rename is reflected in history instead of frozen into it — the same
+    /// reason the event stores the id and `thinker::nudges::speaker_label`
+    /// resolves at render time for the model's half.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub author_user_id: Option<String>,
 }
 
 // ============================================================================
@@ -396,6 +406,7 @@ pub async fn handle_history(
                         context_tokens: field("context_tokens").and_then(|s| s.parse().ok()),
                         context_window: field("context_window").and_then(|s| s.parse().ok()),
                         total_tokens: field("total_tokens").and_then(|s| s.parse().ok()),
+                        author_user_id: field("author_user_id").map(String::from),
                     }
                 })
                 .collect();
@@ -767,6 +778,7 @@ mod tests {
             context_tokens: Some(42_000),
             context_window: Some(200_000),
             total_tokens: Some(55_000),
+            author_user_id: None,
         };
 
         let json = serde_json::to_value(&message).unwrap();
@@ -789,6 +801,7 @@ mod tests {
             context_tokens: None,
             context_window: None,
             total_tokens: None,
+            author_user_id: None,
         };
 
         let json = serde_json::to_value(&message).unwrap();

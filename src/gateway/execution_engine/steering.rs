@@ -492,6 +492,12 @@ pub(super) async fn try_inject_steering(
         // `false` → the prompt builder (G2) wraps this in `<system-reminder>`
         // as a real user interjection, exactly the designed steering path.
         synthetic: false,
+        // The INTERRUPTING request's scope, not the running one's: in a room
+        // the whole point is that whoever steers is not necessarily whoever
+        // started the run, and the transcript has to say which.
+        author_user_id: crate::scope::room_author(
+            crate::scope::scope_from_metadata(&request.metadata).as_ref(),
+        ),
     };
 
     match orchestrator
@@ -740,6 +746,7 @@ mod tests {
                 },
                 at: now_ms(),
                 synthetic,
+                author_user_id: None,
             },
         }
     }

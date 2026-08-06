@@ -89,6 +89,7 @@ impl SecurityStore {
              VALUES (?1, ?2, ?3, 'active', ?4)",
             params![user_id, display_name, role.as_str(), current_timestamp_ms()],
         )?;
+        crate::scope::directory::record(user_id, display_name);
         Ok(())
     }
 
@@ -124,20 +125,29 @@ impl SecurityStore {
         role: Option<UserRole>,
         status: Option<UserStatus>,
     ) -> SqliteResult<usize> {
-        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
-        conn.execute(
-            "UPDATE users SET
+        let rows = {
+            let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
+            conn.execute(
+                "UPDATE users SET
                display_name = COALESCE(?2, display_name),
                role         = COALESCE(?3, role),
                status       = COALESCE(?4, status)
              WHERE user_id = ?1",
-            params![
-                user_id,
-                display_name,
-                role.map(UserRole::as_str),
-                status.map(UserStatus::as_str)
-            ],
-        )
+                params![
+                    user_id,
+                    display_name,
+                    role.map(UserRole::as_str),
+                    status.map(UserStatus::as_str)
+                ],
+            )?
+        };
+        // Only on a real rename: `COALESCE` above leaves the column alone when
+        // the caller passed `None`, and mirroring that here keeps the cache from
+        // inventing a name a status-only update never touched.
+        if let Some(name) = display_name {
+            crate::scope::directory::record(user_id, name);
+        }
+        Ok(rows)
     }
 
     /// Idempotent first-boot bootstrap: if no users exist, mint the implicit
@@ -148,6 +158,15 @@ impl SecurityStore {
         if self.count_users()? == 0 {
             self.create_user(OWNER_USER_ID, "Owner", UserRole::Admin)?;
         }
+        // Seed the render-time name cache. The per-write hooks above only see
+        // writes made by THIS process, so without this a restarted server would
+        // label every room message with a bare `u-…` id until someone happened
+        // to be renamed. Runs on the boot path that is already guaranteed once.
+        crate::scope::directory::hydrate(
+            self.list_users()?
+                .into_iter()
+                .map(|u| (u.user_id, u.display_name)),
+        );
         let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
         conn.execute(
             "UPDATE devices SET user_id = ?1

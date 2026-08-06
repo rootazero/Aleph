@@ -273,6 +273,7 @@ fn rec(seq: u64, text: &str, synthetic: bool) -> SessionEventRecord {
             },
             at: now_ms(),
             synthetic,
+            author_user_id: None,
         },
         created_at_ms: now_ms(),
     }

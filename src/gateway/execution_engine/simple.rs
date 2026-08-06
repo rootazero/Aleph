@@ -137,6 +137,9 @@ impl SimpleExecutionEngine {
                         },
                         at: crate::session::events::now_ms(),
                         synthetic: false,
+                        author_user_id: crate::scope::room_author(
+                            crate::scope::scope_from_metadata(&request.metadata).as_ref(),
+                        ),
                     },
                 )
                 .await;

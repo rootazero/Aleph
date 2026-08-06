@@ -10,7 +10,7 @@
 
 use crate::providers::message::{ContentBlock, UnifiedMessage};
 use crate::session::events::{RunOutcome, SessionEvent, SessionEventRecord, TurnId};
-use crate::thinker::nudges::{orphan_tool_result_note, user_interjection_note, INTERRUPTION_NOTE};
+use crate::thinker::nudges::{orphan_tool_result_note, user_turn_text, INTERRUPTION_NOTE};
 
 /// Build the per-turn message vector handed to the provider. Walks the
 /// session log slice and:
@@ -124,15 +124,17 @@ pub(crate) fn build_prompt_with_transient_tail(
                 }
             }
             SessionEvent::UserMessage {
-                content, synthetic, ..
+                content,
+                synthetic,
+                author_user_id,
+                ..
             } => {
-                let wrapped;
-                let text: &str = if !*synthetic && assistant_emitted {
-                    wrapped = user_interjection_note(&content.text);
-                    &wrapped
-                } else {
-                    content.text.as_str()
-                };
+                let text = user_turn_text(
+                    &content.text,
+                    *synthetic,
+                    assistant_emitted,
+                    author_user_id.as_deref(),
+                );
                 // Panel image attachments ride on `content.blocks` — replay them.
                 let msg = UnifiedMessage::user_with_attachments(text, &content.blocks);
                 // While the current assistant turn still owes tool results, this
@@ -609,6 +611,7 @@ mod tests {
                 },
                 at: now_ms(),
                 synthetic: false,
+                author_user_id: None,
             }),
             mk_record(SessionEvent::AssistantMessage {
                 turn_id: turn,
@@ -673,6 +676,7 @@ mod tests {
                 },
                 at: now_ms(),
                 synthetic: false,
+                author_user_id: None,
             })
         };
         let finished = |outcome: RunOutcome| {
@@ -756,6 +760,7 @@ mod tests {
                 },
                 at: now_ms(),
                 synthetic: false,
+                author_user_id: None,
             }),
             mk_record(SessionEvent::AssistantMessage {
                 turn_id: turn,
@@ -798,6 +803,7 @@ mod tests {
                 },
                 at: now_ms(),
                 synthetic: false,
+                author_user_id: None,
             }),
         ];
 
@@ -851,6 +857,7 @@ mod tests {
                 },
                 at: now_ms(),
                 synthetic: false,
+                author_user_id: None,
             }),
             mk_record(SessionEvent::AssistantMessage {
                 turn_id: turn,
@@ -886,6 +893,7 @@ mod tests {
                 },
                 at: now_ms(),
                 synthetic: false,
+                author_user_id: None,
             }),
             mk_record(SessionEvent::ToolResult {
                 turn_id: turn,
@@ -965,6 +973,7 @@ mod tests {
                 },
                 at: now_ms(),
                 synthetic: false,
+                author_user_id: None,
             }),
         ];
 
@@ -1008,6 +1017,7 @@ mod tests {
                 },
                 at: now_ms(),
                 synthetic: false,
+                author_user_id: None,
             }),
         ];
         let messages = build_prompt(&events, 1);
@@ -1062,6 +1072,7 @@ mod tests {
                 },
                 at: now_ms(),
                 synthetic: true,
+                author_user_id: None,
             }),
         ];
         let messages = build_prompt(&events, 1);
@@ -1103,6 +1114,7 @@ mod tests {
             },
             at: now_ms(),
             synthetic: false,
+            author_user_id: None,
         })];
         // 3 search calls all rate-limited
         for i in 0..3 {
@@ -1166,6 +1178,7 @@ mod tests {
             },
             at: now_ms(),
             synthetic: false,
+            author_user_id: None,
         })];
         for i in 0..2 {
             let cid = format!("call_{i}");
@@ -1217,6 +1230,7 @@ mod tests {
                 },
                 at: now_ms(),
                 synthetic: false,
+                author_user_id: None,
             }),
             mk_record(SessionEvent::AssistantMessage {
                 turn_id: turn,
@@ -1276,6 +1290,7 @@ mod tests {
                 },
                 at: now_ms(),
                 synthetic: false,
+                author_user_id: None,
             }),
             // No AssistantMessage for this call anywhere in the log.
             mk_record(SessionEvent::ToolCallRequested {
@@ -1335,6 +1350,7 @@ mod tests {
             },
             at: now_ms(),
             synthetic: false,
+            author_user_id: None,
         })];
         let messages = build_prompt(&events, 0);
         let user_text = messages

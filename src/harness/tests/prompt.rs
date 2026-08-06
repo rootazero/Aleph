@@ -30,6 +30,7 @@ fn user_msg(text: &str) -> SessionEventRecord {
         },
         at: now_ms(),
         synthetic: false,
+        author_user_id: None,
     })
 }
 
@@ -230,6 +231,7 @@ fn user_message_replays_persisted_image_blocks() {
         },
         at: now_ms(),
         synthetic: false,
+        author_user_id: None,
     })];
 
     let out = build_prompt(&events, 0);

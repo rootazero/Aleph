@@ -46,6 +46,7 @@ async fn crash_then_wake_then_continue() {
             },
             at: now_ms(),
             synthetic: false,
+            author_user_id: None,
         },
     )
     .await

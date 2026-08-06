@@ -22,6 +22,8 @@
 
 use std::collections::HashMap;
 
+pub mod directory;
+
 /// A scope identifier representing the visibility boundary for an agent or resource.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ScopeId {
@@ -180,6 +182,45 @@ pub fn ambient_owner() -> Option<String> {
         .or_else(|| current_scope().map(|attr| attr.owner_user_id))
 }
 
+/// Who to stamp as the author of a `SessionEvent::UserMessage` written under
+/// `scope` — or `None` when the message cannot have a second possible author.
+///
+/// Single source for spec §6.2's "only project rooms are labelled". A personal
+/// or org session has exactly one human in it, so an author stamp there is
+/// noise that buys nothing and costs prompt bytes on every replayed message.
+///
+/// The author is the *speaker*, which is why this reads [`ambient_owner`] and
+/// not `scope.owner_user_id`: since P2 those two are different facts. Every run
+/// in a room carries the ROOM's attribution — that is precisely what makes the
+/// members share one memory partition — so the scope's owner tells you whose
+/// turn it is only by accident. `owner_user_id` is the fallback for the paths
+/// that have a scope but no live caller identity (a channel-driven run).
+#[must_use]
+pub fn room_author(scope: Option<&ScopeAttribution>) -> Option<String> {
+    let attr = scope?;
+    if !matches!(attr.scope, ScopeId::Project(_)) {
+        return None;
+    }
+    Some(ambient_owner().unwrap_or_else(|| attr.owner_user_id.clone()))
+}
+
+/// Ambient-shaped twin of [`room_author`], for emission sites that run inside
+/// the run's task-local scope (everything under
+/// `gateway::execution_engine::run_loop::with_request_scope`, which is where
+/// `harness_bridge::session_seed` writes the main path's user message).
+///
+/// ⚠️ **A caller outside that nest reads `None` forever and the label silently
+/// never appears.** `fast_path` and `SimpleExecutionEngine` are separate
+/// engines that never enter it; they hold the same fact in
+/// `request.metadata` and must go through [`room_author`] with
+/// [`scope_from_metadata`] instead. This is the same two-shapes split as
+/// `memory::project_scope::{profile_floor_id, partition_is_shared_room}`: one
+/// question, two call sites, two different things in hand.
+#[must_use]
+pub fn ambient_room_author() -> Option<String> {
+    room_author(current_scope().as_ref())
+}
+
 /// Reconstruct a `ScopeAttribution` from metadata.
 /// Requires BOTH `OWNER_META_KEY` and `SCOPE_META_KEY` to be present and
 /// coherent; returns `None` if either is missing or the scope fails to parse
@@ -285,6 +326,61 @@ mod tests {
         let attr = ScopeAttribution::from_persisted(Some("u-alice"), Some("org"))
             .expect("org is a coherent scope");
         assert_eq!(attr.scope, ScopeId::Org);
+    }
+
+    fn attr(owner: &str, scope: ScopeId) -> ScopeAttribution {
+        ScopeAttribution {
+            owner_user_id: owner.to_string(),
+            scope,
+        }
+    }
+
+    #[test]
+    fn only_a_project_room_stamps_an_author() {
+        // The predicate is "can this session have a second speaker", NOT "is
+        // there a scope" — the latter is structurally true for every P1 session
+        // and would put a redundant label on every personal message, on every
+        // turn, forever.
+        assert_eq!(
+            room_author(Some(&attr("u-alice", ScopeId::Project("p-room".into())))),
+            Some("u-alice".to_string())
+        );
+        assert_eq!(
+            room_author(Some(&attr("u-alice", ScopeId::Personal("u-alice".into())))),
+            None
+        );
+        assert_eq!(room_author(Some(&attr("u-alice", ScopeId::Org))), None);
+        assert_eq!(room_author(None), None);
+    }
+
+    #[tokio::test]
+    async fn the_author_is_the_speaker_not_the_scopes_owner() {
+        // Since P2 those are different facts: every run in a room carries the
+        // ROOM's attribution (that is what shares the memory partition), so
+        // reading `owner_user_id` when a caller identity is live would label
+        // Bob's message with whoever the run was seeded for.
+        use crate::gateway::caller_identity::CALLER_USER;
+        let stamped = CALLER_USER
+            .scope(Some("u-bob".to_string()), async {
+                room_author(Some(&attr("u-alice", ScopeId::Project("p-room".into()))))
+            })
+            .await;
+        assert_eq!(stamped, Some("u-bob".to_string()));
+    }
+
+    #[tokio::test]
+    async fn the_ambient_twin_reads_none_outside_a_scope() {
+        // Documented trap: `fast_path` and `SimpleExecutionEngine` never enter
+        // the run's scope nest, so they must go through `room_author` with
+        // `scope_from_metadata` instead. If this ever starts returning a value
+        // outside a scope, that documented warning has gone stale.
+        assert_eq!(ambient_room_author(), None);
+        let inside = with_scope(
+            Some(attr("u-alice", ScopeId::Project("p-room".into()))),
+            async { ambient_room_author() },
+        )
+        .await;
+        assert_eq!(inside, Some("u-alice".to_string()));
     }
 
     #[test]

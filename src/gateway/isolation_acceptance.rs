@@ -7,6 +7,7 @@
 //! …and P2's, which is the same isolation read from the other side — what a
 //! shared room DOES share, and what it still must not:
 //! - [`two_members_share_one_room_memory_and_nobody_elses`] (spec §8/§13)
+//! - [`the_model_can_tell_two_room_members_apart`] (spec §6.2)
 //!
 //! Every RPC surface below is exercised through its REAL handler function —
 //! the exact same one `HandlerRegistry` wires up in production
@@ -887,5 +888,95 @@ async fn single_user_fixture_is_byte_identical_after_upgrade() {
         String::from_utf8(note_bytes_after).unwrap(),
         legacy_note_content,
         "the base-partition note must survive the P1 upgrade untouched"
+    );
+}
+
+/// Spec §6.2 (P2 acceptance, other half): **两用户在同一项目群聊协作** — the
+/// collaboration half of the criterion whose storage half is
+/// [`two_members_share_one_room_memory_and_nobody_elses`].
+///
+/// Sharing one memory partition is what makes the room a room; being able to
+/// tell the members apart is what makes it a *conversation*. Both are needed,
+/// and only the second exists in bytes the model reads — which is why this
+/// asserts on the built prompt and not on the events.
+///
+/// End to end through the real path: [`crate::scope::room_author`] decides
+/// whether a message gets an author at all, `SessionEvent::UserMessage` carries
+/// it, and `harness::agent::prompt::build_prompt` — the ONE place events become
+/// model messages — renders it. A personal-scope turn is included as the
+/// control, because the failure this guards against is not "the label is
+/// wrong": it is the label being absent, which merges two people into one voice
+/// and reports nothing.
+#[tokio::test]
+async fn the_model_can_tell_two_room_members_apart() {
+    use crate::providers::message::{ContentBlock, UnifiedMessage};
+    use crate::session::events::{MessageContent, SessionEvent, SessionEventRecord};
+
+    crate::scope::directory::record("u-room-alice", "Alice");
+    crate::scope::directory::record("u-room-bob", "Bob");
+
+    async fn said_in_room(user: &str, text: &str, seq: u64) -> SessionEventRecord {
+        let author = as_room_member(user, "p-standup", async {
+            crate::scope::ambient_room_author()
+        })
+        .await;
+        assert!(author.is_some(), "a room turn must be attributed");
+        user_event(text, seq, author)
+    }
+
+    fn user_event(text: &str, seq: u64, author: Option<String>) -> SessionEventRecord {
+        SessionEventRecord {
+            seq,
+            created_at_ms: 1_000 + seq as i64,
+            event: SessionEvent::UserMessage {
+                turn_id: uuid::Uuid::new_v4(),
+                content: MessageContent {
+                    text: text.to_string(),
+                    blocks: Vec::new(),
+                    thinking: None,
+                    thinking_signature: None,
+                },
+                at: 1_000 + seq as i64,
+                synthetic: false,
+                author_user_id: author,
+            },
+        }
+    }
+
+    // The control: the same helper under a PERSONAL scope must produce no
+    // author, so a solo session's prompt is byte-identical to pre-P2.
+    let solo = as_caller("u-room-alice", async {
+        crate::scope::ambient_room_author()
+    })
+    .await;
+    assert_eq!(
+        solo, None,
+        "a personal session has no second speaker to name"
+    );
+
+    let events = vec![
+        said_in_room("u-room-alice", "let's ship on friday", 1).await,
+        said_in_room("u-room-bob", "i need one more day", 2).await,
+        user_event("and nobody typed this one", 3, None),
+    ];
+
+    let texts: Vec<String> = crate::harness::agent::prompt::build_prompt(&events, 0)
+        .into_iter()
+        .filter_map(|m| match m {
+            UnifiedMessage::User { content } => content.into_iter().find_map(|b| match b {
+                ContentBlock::Text { text, .. } => Some(text),
+                _ => None,
+            }),
+            _ => None,
+        })
+        .collect();
+
+    assert_eq!(
+        texts,
+        vec![
+            "[Alice]: let's ship on friday".to_string(),
+            "[Bob]: i need one more day".to_string(),
+            "and nobody typed this one".to_string(),
+        ]
     );
 }
