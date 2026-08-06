@@ -247,7 +247,7 @@ mod tests {
         let path = "reference/vectored";
         let embedding = vec![0.5_f32; 768];
         backend
-            .upsert_embedding(path, "agent1", &embedding, 768)
+            .upsert_embedding(path, "agent1", &embedding, 768, "")
             .await
             .unwrap();
         assert!(backend
@@ -1200,5 +1200,279 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(pending[0].retry_count, 3);
+    }
+
+    // ---- §2.10 embedding dimensions + vector freshness --------------------
+
+    #[tokio::test]
+    async fn every_supported_dimension_has_a_working_table() {
+        // The dimension set used to be spelled out in five places. A model
+        // whose dimension was missing produced a deployment with no note
+        // vectors at all: writes failed into a swallowed warn!, reads failed
+        // outright, and nothing named the cause.
+        let backend = make_backend();
+        for (dim, ..) in crate::memory::store::sqlite::vec::EMBEDDING_DIM_TABLES {
+            let dim = *dim;
+            let path = format!("reference/dim-{dim}");
+            let mut note = make_note(&format!("dim-{dim}"), "reference");
+            note.title = format!("dim-{dim}");
+            backend
+                .index_note(&note, "agent1", "reference")
+                .await
+                .unwrap();
+            let embedding = vec![0.25_f32; dim as usize];
+            backend
+                .upsert_embedding(&path, "agent1", &embedding, dim, "h")
+                .await
+                .unwrap_or_else(|e| panic!("dim {dim} rejected on write: {e}"));
+            let hits = backend
+                .vector_search(&embedding, dim, "agent1", 5)
+                .await
+                .unwrap_or_else(|e| panic!("dim {dim} rejected on read: {e}"));
+            assert!(
+                hits.iter().any(|(p, _)| p == &path),
+                "dim {dim} vector did not come back from KNN"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn a_384_dim_embedding_round_trips() {
+        // all-MiniLM-L6-v2, the most common local embedding model.
+        let backend = make_backend();
+        let note = make_note("mini", "reference");
+        backend
+            .index_note(&note, "agent1", "reference")
+            .await
+            .unwrap();
+        let embedding = vec![0.1_f32; 384];
+        backend
+            .upsert_embedding("reference/mini", "agent1", &embedding, 384, "hash_mini")
+            .await
+            .unwrap();
+        assert!(backend
+            .get_embedding("reference/mini", "agent1", 384)
+            .await
+            .unwrap()
+            .is_some());
+    }
+
+    #[tokio::test]
+    async fn a_note_with_no_vector_is_reported_stale() {
+        let backend = make_backend();
+        let note = make_note("unembedded", "reference");
+        backend
+            .index_note(&note, "agent1", "reference")
+            .await
+            .unwrap();
+        let stale = backend.stale_vector_paths("agent1").await.unwrap();
+        assert_eq!(stale, vec!["reference/unembedded".to_string()]);
+    }
+
+    #[tokio::test]
+    async fn a_vector_matching_the_indexed_content_is_not_stale() {
+        let backend = make_backend();
+        let note = make_note("fresh", "reference");
+        backend
+            .index_note(&note, "agent1", "reference")
+            .await
+            .unwrap();
+        backend
+            .upsert_embedding(
+                "reference/fresh",
+                "agent1",
+                &vec![0.5_f32; 768],
+                768,
+                &note.content_hash,
+            )
+            .await
+            .unwrap();
+        assert!(backend
+            .stale_vector_paths("agent1")
+            .await
+            .unwrap()
+            .is_empty());
+    }
+
+    #[tokio::test]
+    async fn a_rewritten_note_becomes_stale_until_reembedded() {
+        // This is the failure embed-on-write hides: it logs and swallows, so
+        // without a recorded provenance a note silently drops out of vector
+        // search with nothing able to report it afterwards.
+        let backend = make_backend();
+        let mut note = make_note("drifting", "reference");
+        backend
+            .index_note(&note, "agent1", "reference")
+            .await
+            .unwrap();
+        backend
+            .upsert_embedding(
+                "reference/drifting",
+                "agent1",
+                &vec![0.5_f32; 768],
+                768,
+                &note.content_hash,
+            )
+            .await
+            .unwrap();
+        assert!(backend
+            .stale_vector_paths("agent1")
+            .await
+            .unwrap()
+            .is_empty());
+
+        // The note is rewritten; the embed-on-write attempt fails and is
+        // swallowed, so the vector still describes the previous version.
+        note.content_hash = "hash_after_edit".to_string();
+        backend
+            .index_note(&note, "agent1", "reference")
+            .await
+            .unwrap();
+        assert_eq!(
+            backend.stale_vector_paths("agent1").await.unwrap(),
+            vec!["reference/drifting".to_string()]
+        );
+
+        // Re-embedding moves the provenance forward — the ON CONFLICT branch
+        // has to update the freshness columns, not just keep the old row.
+        backend
+            .upsert_embedding(
+                "reference/drifting",
+                "agent1",
+                &vec![0.6_f32; 768],
+                768,
+                &note.content_hash,
+            )
+            .await
+            .unwrap();
+        assert!(backend
+            .stale_vector_paths("agent1")
+            .await
+            .unwrap()
+            .is_empty());
+    }
+
+    #[tokio::test]
+    async fn an_unattributed_vector_reads_as_stale() {
+        // Empty hash = "provenance unknown". A caller that cannot vouch for
+        // which version it embedded must not be able to claim freshness.
+        let backend = make_backend();
+        let note = make_note("anon", "reference");
+        backend
+            .index_note(&note, "agent1", "reference")
+            .await
+            .unwrap();
+        backend
+            .upsert_embedding("reference/anon", "agent1", &vec![0.5_f32; 768], 768, "")
+            .await
+            .unwrap();
+        assert_eq!(
+            backend.stale_vector_paths("agent1").await.unwrap(),
+            vec!["reference/anon".to_string()]
+        );
+    }
+
+    #[tokio::test]
+    async fn upgrading_a_pre_freshness_database_reports_its_legacy_vectors_as_stale() {
+        // Every test above builds a *current* database through the normal
+        // constructor. The upgrade — the path every existing deployment takes
+        // exactly once — is the one this covers: a database whose
+        // `notes_vec_map` predates the freshness columns holds vectors nobody
+        // can attribute to a version of the note. The safe reading of "I do
+        // not know what this was embedded from" is stale, so the first sweep
+        // after an upgrade offers to re-embed them rather than silently
+        // vouching for vectors it never saw computed.
+        let tmp = tempfile::tempdir().unwrap();
+        let db_path = tmp.path().join("memory.db");
+
+        {
+            crate::memory::store::sqlite::vec::register_sqlite_vec();
+            let conn = rusqlite::Connection::open(&db_path).unwrap();
+            crate::memory::store::sqlite::schema::init_schema(&conn).unwrap();
+            // notes_vec_map in its pre-freshness shape, so the constructor's
+            // CREATE TABLE IF NOT EXISTS leaves it alone and the migration is
+            // what has to add the columns.
+            conn.execute_batch(
+                "CREATE TABLE notes_vec_map (
+                     rowid    INTEGER PRIMARY KEY AUTOINCREMENT,
+                     path     TEXT NOT NULL,
+                     agent_id TEXT NOT NULL DEFAULT 'default',
+                     UNIQUE(agent_id, path));
+                 INSERT INTO notes_index
+                     (path, filename, agent_id, category, tags_json,
+                      created_at, updated_at, last_accessed_at, content_hash)
+                 VALUES ('reference/legacy', 'legacy.md', 'main', 'reference', '[]',
+                         1000, 1000, 1000, 'hash_of_the_note_body');
+                 INSERT INTO notes_vec_map (path, agent_id)
+                 VALUES ('reference/legacy', 'main');",
+            )
+            .unwrap();
+        }
+
+        // The upgrade itself: the ordinary production open path.
+        let backend = SqliteMemoryBackend::new(&db_path).unwrap();
+
+        assert_eq!(
+            backend.stale_vector_paths("main").await.unwrap(),
+            vec!["reference/legacy".to_string()],
+            "a vector with no recorded provenance must not pass as fresh"
+        );
+
+        // And it is repairable in place: re-embedding records the provenance
+        // the legacy row never had, which is what makes the drift *cheap* to
+        // fix rather than only visible.
+        backend
+            .upsert_embedding(
+                "reference/legacy",
+                "main",
+                &vec![0.5_f32; 768],
+                768,
+                "hash_of_the_note_body",
+            )
+            .await
+            .unwrap();
+        assert!(backend.stale_vector_paths("main").await.unwrap().is_empty());
+
+        // And the dimensions the upgrade *added* are usable on this database,
+        // not just on one created fresh. "CREATE VIRTUAL TABLE IF NOT EXISTS
+        // makes existing databases pick the new tables up on the next open" is
+        // a claim about a table that was absent a moment ago; asserting it only
+        // against a freshly built schema never exercises that.
+        for dim in [384_usize, 3072] {
+            backend
+                .upsert_embedding(
+                    "reference/legacy",
+                    "main",
+                    &vec![0.25_f32; dim],
+                    dim as u32,
+                    "hash_of_the_note_body",
+                )
+                .await
+                .unwrap_or_else(|e| panic!("dim {dim} rejected on an upgraded database: {e}"));
+            let hits = backend
+                .vector_search(&vec![0.25_f32; dim], dim as u32, "main", 5)
+                .await
+                .unwrap_or_else(|e| panic!("dim {dim} unreadable on an upgraded database: {e}"));
+            assert!(
+                hits.iter().any(|(p, _)| p == "reference/legacy"),
+                "dim {dim} vector did not come back from KNN after the upgrade"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn staleness_is_scoped_to_the_agent() {
+        let backend = make_backend();
+        let note = make_note("theirs", "reference");
+        backend
+            .index_note(&note, "agent2", "reference")
+            .await
+            .unwrap();
+        assert!(backend
+            .stale_vector_paths("agent1")
+            .await
+            .unwrap()
+            .is_empty());
+        assert_eq!(backend.stale_vector_paths("agent2").await.unwrap().len(), 1);
     }
 }

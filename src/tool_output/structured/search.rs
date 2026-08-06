@@ -10,11 +10,7 @@
 
 use std::collections::HashMap;
 
-use super::{is_error_signal, render_selected, ContentKind, Reduction};
-
-const MAX_PER_FILE: usize = 5;
-const MAX_FILES: usize = 20;
-const MAX_TOTAL: usize = 60;
+use super::{is_error_signal, render_selected, ContentKind, Profile, Reduction, Tally};
 
 /// Whether `p` is plausibly a file path, as opposed to a timestamp that happens
 /// to contain `<sep><digits><sep>`.
@@ -118,8 +114,7 @@ pub(super) fn looks_like_search(lines: &[&str]) -> bool {
     matches >= 4 && matches * 100 >= non_empty * 60
 }
 
-pub(super) fn reduce_search(text: &str) -> Option<Reduction> {
-    let lines: Vec<&str> = text.lines().collect();
+pub(super) fn reduce_search(lines: &[&str], profile: &Profile) -> Option<Reduction> {
     let total = lines.len();
 
     // Group match-line indices by file, preserving first-seen file order.
@@ -128,11 +123,12 @@ pub(super) fn reduce_search(text: &str) -> Option<Reduction> {
     // ingress this runs synchronously on the tool-result path, and the probe was
     // quadratic in (matches × distinct paths) — a repo-wide `rg` producing
     // 120 000 hits across 40 000 files spent ~3 s of blocking CPU deciding what
-    // to throw away, nearly all of it on groups past `MAX_FILES` that are then
-    // discarded unread. Collection also stops opening new groups at `MAX_FILES`.
+    // to throw away, nearly all of it on groups past the file cap that are then
+    // discarded unread. Collection also stops opening new groups at the cap.
     //
     // Every distinct path still gets an index entry, so `index.len()` is the true
-    // file tally; paths past the cap map to `UNGROUPED` and open no group.
+    // file tally; paths past `Profile::search_files` map to `UNGROUPED` and open
+    // no group.
     // Counting in the `None` arm instead counted a *line* per hit for every path
     // past the cap — the entry was only inserted when a group was created, so
     // those paths took the `None` arm again on every subsequent line, and the
@@ -148,7 +144,7 @@ pub(super) fn reduce_search(text: &str) -> Option<Reduction> {
             Some(&UNGROUPED) => {}
             Some(&pos) => groups[pos].push(idx),
             None => {
-                let pos = if groups.len() < MAX_FILES {
+                let pos = if groups.len() < profile.search_files {
                     groups.push(vec![idx]);
                     groups.len() - 1
                 } else {
@@ -165,26 +161,26 @@ pub(super) fn reduce_search(text: &str) -> Option<Reduction> {
 
     let mut kept: Vec<usize> = Vec::new();
     for idxs in &groups {
-        // Check before extending, so `MAX_TOTAL` cannot admit a group only to
-        // leave it unrendered — the overall tally has to match what is shown.
-        if kept.len() >= MAX_TOTAL {
+        // Check before extending, so the overall cap cannot admit a group only
+        // to leave it unrendered — the tally has to match what is shown.
+        if kept.len() >= profile.search_total {
             break;
         }
-        kept.extend(select_for_file(&lines, idxs));
+        kept.extend(select_for_file(lines, idxs, profile.search_per_file));
     }
     kept.sort_unstable();
     kept.dedup();
-    if kept.len() > MAX_TOTAL {
-        kept.truncate(MAX_TOTAL);
+    if kept.len() > profile.search_total {
+        kept.truncate(profile.search_total);
     }
     if kept.len() >= total {
         return None; // nothing dropped
     }
-    let mut body = render_selected(&lines, &kept, total);
+    let mut body = render_selected(lines, &kept, total, profile);
     // Dropping whole files has to be visible: otherwise a sweep across 400 files
     // reads as a complete answer covering 20. Counted from what actually survived
-    // rendering, not from the group count — `MAX_TOTAL` and the truncate above can
-    // both drop a group that was admitted.
+    // rendering, not from the group count — the overall cap and the truncate
+    // above can both drop a group that was admitted.
     let files_shown = kept
         .iter()
         .filter_map(|&i| match_path(lines[i]))
@@ -199,21 +195,26 @@ pub(super) fn reduce_search(text: &str) -> Option<Reduction> {
     Some(Reduction {
         kind: ContentKind::Search,
         body,
-        kept_lines: kept.len(),
-        total_lines: total,
+        tally: Tally::Lines {
+            kept: kept.len(),
+            total,
+        },
     })
 }
 
 /// Pick which of a file's match-line indices to keep: always the first and
 /// last, then fill the middle budget with error-bearing matches first, then
 /// the earliest remaining ones.
-fn select_for_file(lines: &[&str], idxs: &[usize]) -> Vec<usize> {
-    if idxs.len() <= MAX_PER_FILE {
+fn select_for_file(lines: &[&str], idxs: &[usize], max_per_file: usize) -> Vec<usize> {
+    if idxs.len() <= max_per_file {
         return idxs.to_vec();
     }
     let first = idxs[0];
     let last = idxs[idxs.len() - 1];
-    let budget = MAX_PER_FILE - 2; // slots between first and last
+    // `Profile::FLOOR` keeps this at 2, so the subtraction is saturating rather
+    // than a floor assumption: at the floor a file keeps only its first and last
+    // hit, which is still the shape the doc comment promises.
+    let budget = max_per_file.saturating_sub(2); // slots between first and last
     let middle = &idxs[1..idxs.len() - 1];
 
     let mut sel = vec![first];
@@ -227,9 +228,12 @@ fn select_for_file(lines: &[&str], idxs: &[usize]) -> Vec<usize> {
     }
     if sel.len() - 1 < budget {
         let remaining = budget - (sel.len() - 1);
+        // Membership tested once per middle line; a linear scan over `errs`
+        // made that quadratic in the per-file hit count.
+        let err_set: std::collections::HashSet<usize> = errs.iter().copied().collect();
         for &i in middle
             .iter()
-            .filter(|&&i| !errs.contains(&i))
+            .filter(|&&i| !err_set.contains(&i))
             .take(remaining)
         {
             sel.push(i);
@@ -244,6 +248,11 @@ fn select_for_file(lines: &[&str], idxs: &[usize]) -> Vec<usize> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn reduce(text: &str) -> Option<Reduction> {
+        let lines: Vec<&str> = text.lines().collect();
+        reduce_search(&lines, &Profile::DEFAULT)
+    }
 
     #[test]
     fn parses_plain_grep_line() {
@@ -294,9 +303,12 @@ mod tests {
         for i in 0..40 {
             s.push_str(&format!("big.rs:{i}:match number {i}\n"));
         }
-        let r = reduce_search(&s).expect("should reduce");
+        let r = reduce(&s).expect("should reduce");
         assert_eq!(r.kind, ContentKind::Search);
-        assert!(r.kept_lines <= MAX_PER_FILE, "per-file cap respected");
+        assert!(
+            r.tally.kept() <= Profile::DEFAULT.search_per_file,
+            "per-file cap respected"
+        );
         // First and last matches survive.
         assert!(r.body.contains("big.rs:0:"));
         assert!(r.body.contains("big.rs:39:"));
@@ -314,7 +326,7 @@ mod tests {
         for i in 9..14 {
             s.push_str(&format!("f.rs:{i}:fine line {i}\n"));
         }
-        let r = reduce_search(&s).expect("should reduce");
+        let r = reduce(&s).expect("should reduce");
         assert!(
             r.body.contains("ERROR something exploded"),
             "error-bearing match must be kept; got:\n{}",
@@ -360,19 +372,54 @@ mod tests {
         }
     }
 
+    /// A tight budget must reach the grouping and per-file selection, not arrive
+    /// as a blind cut of a default-sized body — and the "N more files matched"
+    /// note must stay truthful under the tighter caps.
+    #[test]
+    fn a_tight_budget_narrows_the_sweep_and_keeps_the_tally_honest() {
+        let mut s = String::new();
+        for f in 0..30 {
+            for l in 0..6 {
+                s.push_str(&format!("src/f{f}.rs:{}: let target = 1;\n", l + 1));
+            }
+        }
+        let wide = reduce(&s).expect("default must reduce");
+        let tight_lines: Vec<&str> = s.lines().collect();
+        let tight = reduce_search(&tight_lines, &Profile::for_token_budget(500))
+            .expect("tight must reduce");
+        assert!(
+            tight.tally.kept() < wide.tally.kept(),
+            "tight kept {} vs default {}",
+            tight.tally.kept(),
+            wide.tally.kept()
+        );
+        let shown: std::collections::HashSet<&str> =
+            tight.body.lines().filter_map(match_path).collect();
+        let note = tight
+            .body
+            .lines()
+            .find(|l| l.contains("more files matched"))
+            .expect("the note must be present");
+        let reported: usize = note
+            .split_whitespace()
+            .find_map(|w| w.trim_start_matches('(').parse::<usize>().ok())
+            .expect("the note carries a number");
+        assert_eq!(reported, 30 - shown.len(), "note: {note}");
+    }
+
     /// The tally is per FILE, not per matching line, and it counts what actually
     /// rendered — both halves were wrong and both over-reported.
     #[test]
     fn the_dropped_file_tally_counts_files_that_were_not_shown() {
-        // 30 files x 4 hits: MAX_FILES=20 groups, and MAX_TOTAL=60 stops well
-        // before all 20 are rendered.
+        // 30 files x 4 hits: the default profile opens 20 groups, and its
+        // 60-match overall cap stops well before all 20 are rendered.
         let mut s = String::new();
         for f in 0..30 {
             for l in 0..4 {
                 s.push_str(&format!("src/f{f}.rs:{}: let target = 1;\n", l + 1));
             }
         }
-        let r = reduce_search(&s).expect("must reduce");
+        let r = reduce(&s).expect("must reduce");
 
         let shown: std::collections::HashSet<&str> =
             r.body.lines().filter_map(match_path).collect();

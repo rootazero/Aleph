@@ -157,10 +157,7 @@ fn RuntimeCard(
     // An install is in flight while a non-terminal progress event is the latest
     // one for this capability (or the click handler is mid-flight).
     let is_active = Signal::derive(move || {
-        installing.get()
-            || my_progress
-                .get()
-                .is_some_and(|p| p.status == "started")
+        installing.get() || my_progress.get().is_some_and(|p| p.status == "started")
     });
 
     let (icon, icon_class) = match info.status {

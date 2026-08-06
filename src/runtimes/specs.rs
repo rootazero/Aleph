@@ -32,6 +32,16 @@ pub enum InstallStrategy {
         parent: &'static str,
         subcommand: &'static [&'static str],
     },
+    /// A globally installed npm CLI.
+    ///
+    /// Its own variant rather than `Via { parent: "node", subcommand: ["npm",
+    /// "install", "-g", …] }` because the install *location* is a runtime,
+    /// per-platform decision and therefore cannot live in a `&'static` argv:
+    /// see [`super::npm_global::prefix`] for why the node installation's own
+    /// tree is the one place it must not go.
+    NpmGlobal {
+        package: &'static str,
+    },
 }
 
 pub enum PostInstallAction {
@@ -149,9 +159,8 @@ pub const SPECS: &[RuntimeSpec] = &[
         deps: &["node"],
         install: &[OsInstall {
             os: TargetOs::AnyOs,
-            strategy: InstallStrategy::Via {
-                parent: "node",
-                subcommand: &["npm", "install", "-g", "@playwright/cli@latest"],
+            strategy: InstallStrategy::NpmGlobal {
+                package: "@playwright/cli@latest",
             },
         }],
         // v0.1.14 renamed the browser-install subcommand: the legacy
@@ -168,7 +177,11 @@ pub const SPECS: &[RuntimeSpec] = &[
         llm_hint: Some(
             "Browser automation CLI. Use `playwright-cli -s=<session> <command>`.",
         ),
-        install_hint: Some("Requires Node, then `npm install -g @playwright/cli@latest`."),
+        install_hint: Some(
+            "Requires Node, then `npm install -g --prefix ~/.local @playwright/cli@latest` \
+             (Windows: `--prefix %APPDATA%\\npm`). The prefix keeps it out of the node \
+             version manager's tree, where the next node upgrade would delete it.",
+        ),
     },
     // Cargo / Rust toolchain. Detection-first: if `cargo` is on PATH (user
     // installed rustup themselves, distro `rust` package, or `nix-shell`), we
@@ -378,6 +391,45 @@ mod tests {
                 }
             }
         }
+    }
+
+    /// Global npm CLIs must go through `NpmGlobal`, never a hand-rolled
+    /// `Via { parent: "node", subcommand: ["npm", "install", "-g", …] }`.
+    ///
+    /// That argv is `&'static`, so it cannot carry a `--prefix`, so npm falls
+    /// back to its own default — which under a version manager is *inside the
+    /// current node version's tree*. The package then evaporates on the next
+    /// node upgrade. The variant exists so the prefix can be computed at
+    /// runtime; this guard is what stops the old shape coming back.
+    #[test]
+    fn no_spec_installs_a_global_npm_package_through_via() {
+        for spec in SPECS {
+            for oi in spec.install {
+                if let InstallStrategy::Via { subcommand, .. } = &oi.strategy {
+                    let is_npm_global = subcommand.first() == Some(&"npm")
+                        && subcommand.contains(&"install")
+                        && (subcommand.contains(&"-g") || subcommand.contains(&"--global"));
+                    assert!(
+                        !is_npm_global,
+                        "spec '{}' installs a global npm package via a static argv; \
+                         use InstallStrategy::NpmGlobal so the prefix is chosen per platform",
+                        spec.name,
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn playwright_cli_is_a_global_npm_package() {
+        let spec = find_spec("playwright-cli").expect("playwright-cli spec must exist");
+        let strategies: Vec<_> = spec.install.iter().map(|oi| &oi.strategy).collect();
+        assert!(
+            strategies
+                .iter()
+                .any(|s| matches!(s, InstallStrategy::NpmGlobal { package } if package.starts_with("@playwright/cli"))),
+            "playwright-cli must install as a global npm package",
+        );
     }
 
     #[test]

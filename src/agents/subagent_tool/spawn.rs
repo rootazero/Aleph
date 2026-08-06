@@ -115,6 +115,11 @@ impl SubagentTool {
                     tool_count: 0,
                     last_tool: None,
                     last_activity: None,
+                    // Running nodes have no terminal result yet; the
+                    // Settled event + a follow-up `flat_nodes` rebuild
+                    // surfaces `result_preview` once `mark_completed`
+                    // folds the final text in.
+                    result_preview: None,
                 },
             },
         );
@@ -361,6 +366,9 @@ impl SubagentTool {
         if let Some(cfg) = self.context_budget_config.as_ref() {
             // rust-doctor-disable-next-line excessive-clone
             runtime = runtime.with_context_budget_config(cfg.clone());
+        }
+        if let Some(cheap) = self.cheap_summary_provider.clone() {
+            runtime = runtime.with_cheap_summary_provider(cheap);
         }
         if !self.provider_overrides.is_empty() {
             runtime = runtime.with_provider_overrides(self.provider_overrides.clone());

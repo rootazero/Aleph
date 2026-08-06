@@ -20,7 +20,7 @@ Module: `src/memory/curated/`. Spec: `docs/superpowers/specs/2026-05-01-memory-e
 Notes are the L1 **persistent** layer of Aleph's memory stack. Three claims define the contract:
 
 1. **Markdown is the source of truth.** Every note is a single `.md` file on disk at `~/.aleph/memory/note/{agent_id}/{category}/{filename}.md`. A human can read, diff, back up, and version-control these files without ever touching the database.
-2. **SQLite is a rebuildable index.** The `notes_index`, `notes_links`, `notes_fts`, `notes_vec_map`, and `notes_vec_{768,1024,1536}` tables exist solely to make lookup, wikilink graph traversal, full-text search, and semantic search fast. `NoteIndexer::full_rebuild` can reconstruct every row of every index table from the markdown files alone.
+2. **SQLite is a rebuildable index.** The `notes_index`, `notes_links`, `notes_fts`, `notes_vec_map`, and `notes_vec_{384,768,1024,1536,3072}` tables exist solely to make lookup, wikilink graph traversal, full-text search, and semantic search fast. `NoteIndexer::full_rebuild` can reconstruct every row of every index table from the markdown files alone.
 3. **Per-agent isolation.** Every path, query, and index row is scoped by `agent_id`. Two agents running against the same database see disjoint note namespaces with no fallthrough.
 
 ## 2. Filesystem Layout
@@ -158,10 +158,18 @@ pub struct KnowledgeNote {
     pub note_type: Option<String>,
     /// Obsidian aliases from frontmatter `aliases:`
     pub aliases: Vec<String>,
+    /// Frontmatter keys this layer does not model, preserved verbatim
+    pub extra_frontmatter: BTreeMap<String, serde_yaml::Value>,
 }
 ```
 
-**Body fidelity.** `body` is the verbatim markdown body. `from_markdown` populates it with the raw text after the closing frontmatter fence; `to_markdown` re-emits it byte-for-byte under regenerated frontmatter, so prose, headings, and code blocks survive every round-trip. `body: None` (programmatically constructed notes) falls back to the legacy rendering: facts as `- ` bullets plus a trailing `Related: [[...]]` line — byte-identical to the pre-body-field output. When `body` is `Some`, `facts` and `links` are *derived index views*: a direct `facts.push` would be silently dropped by `to_markdown` (the body wins). Mutations must go through the sync helpers — `set_body` (replaces the body and re-derives facts/links/provenance), `append_facts` (extends both the body and the facts view), `add_links` (dedupes and appends a `Related:` line for targets the body doesn't already reference).
+**Body fidelity.** `body` is the verbatim markdown body. `from_markdown` populates it with the raw text after the closing frontmatter fence; `to_markdown` re-emits it byte-for-byte under regenerated frontmatter, so prose, headings, and code blocks survive every round-trip. `body: None` (programmatically constructed notes) falls back to the legacy rendering: facts as `- ` bullets plus a trailing `Related: [[...]]` line — byte-identical to the pre-body-field output. When `body` is `Some`, `facts` and `links` are *derived index views*: a direct `facts.push` would be silently dropped by `to_markdown` (the body wins). Mutations must go through the sync helpers — `set_body` (replaces the body and re-derives facts/links/provenance), `append_facts` (extends the body and the facts view), `add_links` (dedupes and merges targets into the body's link footer).
+
+**Frontmatter fidelity.** The body was only half the contract. `Frontmatter` models a fixed key set and `to_markdown` regenerates the header from it, so until 2026-08-05 every key this layer did not model — `cssclass`, `publish`, `id`, `up`, anything an Obsidian plugin or a human wrote — was parsed away and never re-emitted, destroyed by the first write that passed through here. Unknown keys now ride on `extra_frontmatter` and are re-emitted after the modelled ones. `BTreeMap`, not `HashMap`: emission order must be deterministic or every rewrite would reshuffle the header and churn `content_hash`. An empty map emits nothing, so a note whose header this layer fully models serializes byte-for-byte as before.
+
+Collection is a **second parse of the YAML minus a known-key list**, not `#[serde(flatten)]`: flatten routes the whole struct through serde's buffered `Content` representation, which changes what `deserialize_optional_date_string` sees for a native YAML date — a silent behaviour change on the very parse path this module's regression tests exist to pin. `KNOWN_FRONTMATTER_KEYS` is guarded against drift by a source-level scan of the struct that also asserts how many fields it found, because a scanner matching nothing passes vacuously. `source_facts` is in the list even though no field is named that: it is a serde `alias` for `source_notes`, and omitting it would emit the same data under two keys.
+
+**The link footer is a position, not an event.** `add_links` used to append a *new* `Related:` line on every call and `append_facts` appended bullets after it. The nightly link weaver calls `append_to_note` with links and no facts, so a well-connected note grew one footer line per night with facts interleaved between them. Footer targets now merge into a single trailing line (`split_trailing_related` recognises only a trailing run, so `Related:` appearing mid-prose is untouched), facts are inserted above it, and a consecutive run left by the old behaviour collapses on the next weave. A body whose footer needs no change is not rewritten at all — a no-op link add would otherwise churn `content_hash` and, downstream, mark the note's vector stale.
 
 Parsing splits frontmatter and body at the `---` fences; the closing fence match is **line-anchored** (a whole line equal to `---`), so a `---` embedded inside a value like `title: phase---2` no longer truncates the YAML mid-line. The body contributes `facts` (top-level `- ` bullets, with indented continuation lines attached) and `links` (via `extract_wikilinks`; see §5). `content_hash` is computed over the entire file content and is how the indexer decides whether a re-scanned file needs to be re-indexed.
 
@@ -307,9 +315,10 @@ degrade gracefully to the legacy create-everything behaviour (P7).
 | `get_neighbors(&self, center, agent_id, depth, limit) -> Result<(Vec<NoteIndexEntry>, Vec<(String,String)>)>` | BFS neighborhood around a node. |
 | `count_all_notes(&self) -> Result<i64>` | Cross-agent note count for diagnostics. |
 | `find_by_filename(&self, filename, agent_id) -> Result<Vec<String>>` | Used by wikilink resolution (§5.2) to find exact filename matches. |
-| `upsert_embedding(&self, path, agent_id, embedding, dim) -> Result<()>` | Write or replace the embedding vector for a note. |
+| `upsert_embedding(&self, path, agent_id, embedding, dim, content_hash) -> Result<()>` | Write or replace a note's embedding, recording which version of the note it was computed from (§ embed freshness). `""` means provenance unknown and reads as stale. |
+| `stale_vector_paths(&self, agent_id) -> Result<Vec<String>>` | Notes whose vector is missing or was computed from an older version. |
 | `vector_search(&self, embedding, dim, agent_id, limit) -> Result<Vec<(String, f32)>>` | Vector similarity returning paths + scores. |
-| `hybrid_search_notes(&self, embedding, query_text, agent_id, dim_hint, limit) -> Result<Vec<NoteSearchResult>>` | Vector + FTS fusion via RRF, returns full content. |
+| `hybrid_search_notes(&self, embedding, query_text, agent_id, dim_hint, limit) -> Result<HybridSearchOutcome>` | Vector + FTS fusion via RRF. Returns full content plus each leg's candidate count, so a caller can say what actually ran rather than what it configured. |
 | `vector_search_notes_with_content(&self, embedding, agent_id, dim_hint, limit) -> Result<Vec<NoteSearchResult>>` | Vector-only search returning full content. |
 | `get_notes_by_category(&self, agent_id, category, limit) -> Result<Vec<NoteIndexEntry>>` | Paginated category listing. |
 | `get_embedding(&self, path, agent_id, dim_hint) -> Result<Option<Vec<f32>>>` | Read back a stored embedding. |

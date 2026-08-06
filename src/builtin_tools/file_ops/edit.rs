@@ -100,22 +100,89 @@ fn render_edit_snippet(new_content: &str, first_start: usize, replacement: &str)
     out
 }
 
+/// Apply a set of **non-overlapping** replacements in `content`, each at the
+/// given byte range with its own replacement string. Ranges are spliced
+/// back-to-front so earlier edits never shift the offsets of later ones, and
+/// every range lies on a UTF-8 char boundary (we are only splicing ASCII
+/// substitutions back into the file, so the chars-touched assertion holds by
+/// construction — multi-byte characters either stay inside the un-spliced
+/// regions or are replaced wholesale with whatever the model supplied).
+///
+/// Caller's contract: ranges are non-overlapping and ascending by `start`.
+/// That is checked by the multi-edit gate (overlap detector) before this
+/// function is reached.
+fn apply_distinct_replacements(
+    content: &str,
+    resolved: &[(usize, usize, std::borrow::Cow<'_, str>, bool, bool)],
+) -> String {
+    // Index slice in descending start order. The `fuzzy`/`crlf` flags are
+    // informational (already used in the message) and intentionally not
+    // consumed here.
+    let mut order: Vec<usize> = (0..resolved.len()).collect();
+    order.sort_by(|&a, &b| resolved[b].0.cmp(&resolved[a].0));
+
+    let mut result = content.to_string();
+    for i in order {
+        let (start, end, ref replacement, _, _) = resolved[i];
+        result.replace_range(start..end, replacement.as_ref());
+    }
+    result
+}
+
 // =============================================================================
 // Args & Output
 // =============================================================================
 
-/// Arguments for the `file_edit` tool
+/// One targeted replacement inside a `file_edit` call.
+///
+/// Used in the `edits: [...]` array form (multi-edit) and as the per-element
+/// shape of the array. Fields mirror the legacy single-edit `old_string` /
+/// `new_string` so a model that learned the old shape can still produce a
+/// correct `edits` array without translation.
+#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
+pub struct EditOp {
+    /// The exact text to find. Must be unique within the file unless the
+    /// call's top-level `replace_all` is also set.
+    pub old_string: String,
+    /// The replacement text.
+    pub new_string: String,
+}
+
+/// Arguments for the `file_edit` tool.
+///
+/// The schema accepts two shapes:
+///
+/// 1. **Legacy single edit** (kept for backwards-compat): `old_string` /
+///    `new_string` / `replace_all`. A model that sends only the legacy fields
+///    gets a single-target edit; this is the form most prompts/skills learned.
+/// 2. **Multi edit**: a non-empty `edits: [{old_string, new_string}, ...]`
+///    array. All edits are applied atomically against the *original* file
+///    (each `old_string` is matched against the pre-edit content, not against
+///    an incrementally-mutated file), and the whole call is rejected if any
+///    individual edit's `old_string` matches in more than one place, or if
+///    two edits' ranges overlap.
+///
+/// When both shapes are present, `edits` wins (the legacy fields are ignored).
+/// `replace_all` only applies to the legacy single-edit shape.
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
 pub struct FileEditArgs {
     /// Absolute or relative path to the file to edit
     pub file_path: String,
-    /// The exact string to find in the file
+    /// The exact string to find in the file. Ignored when `edits` is set.
+    #[serde(default)]
     pub old_string: String,
-    /// The replacement string
+    /// The replacement string. Ignored when `edits` is set.
+    #[serde(default)]
     pub new_string: String,
-    /// Replace all occurrences (default: false — single match only)
+    /// Replace all occurrences (default: false — single match only). Ignored
+    /// when `edits` is set; multi-edit requires each `old_string` to be unique.
     #[serde(default)]
     pub replace_all: bool,
+    /// One or more targeted replacements, each matched against the original
+    /// file. Overlapping or non-unique entries are rejected. Takes precedence
+    /// over the legacy `old_string` / `new_string` fields when non-empty.
+    #[serde(default)]
+    pub edits: Vec<EditOp>,
 }
 
 /// Output from the `file_edit` tool
@@ -188,21 +255,8 @@ impl FileEditTool {
         let summary = format!("edit: {}", &args.file_path);
         notify_tool_start("file_edit", &summary);
 
-        // Validate: old_string must be non-empty and differ from new_string.
-        if args.old_string.is_empty() {
-            let err = ToolError::InvalidArgs("old_string must not be empty".to_string());
-            notify_tool_result("file_edit", &err.to_string(), false);
-            return Err(err);
-        }
-        if args.old_string == args.new_string {
-            let err = ToolError::InvalidArgs(
-                "old_string and new_string are identical; nothing to change".to_string(),
-            );
-            notify_tool_result("file_edit", &err.to_string(), false);
-            return Err(err);
-        }
-
-        // Resolve & validate path
+        // Resolve & validate path (cheap, do it up front so a denied path is
+        // refused before we start reading content).
         let output_dir = self.resolve_output_dir().await;
         let output_dir_ref = output_dir.as_deref();
         let canonical = check_and_resolve_path(
@@ -225,9 +279,50 @@ impl FileEditTool {
             notify_tool_result("file_edit", &e.to_string(), false);
         })?;
 
-        // Locate the edit target: exact match, then CRLF / typographic-folding
-        // fallbacks, then an actionable diagnostic.
-        let (ranges, fuzzy, crlf) = match locate(&content, &args.old_string) {
+        // Normalise the request: the `edits: [...]` array (if non-empty) wins
+        // over the legacy single-edit fields. Each normalised op carries the
+        // resolved (old, new) pair exactly as it should be applied.
+        let ops: Vec<EditOp> = if !args.edits.is_empty() {
+            args.edits.clone()
+        } else {
+            vec![EditOp {
+                old_string: args.old_string.clone(),
+                new_string: args.new_string.clone(),
+            }]
+        };
+
+        // Validate the normalised op set. Both shapes feed through the same
+        // gate so the model gets the same error contract regardless of which
+        // form it sent.
+        for (i, op) in ops.iter().enumerate() {
+            if op.old_string.is_empty() {
+                let err = ToolError::InvalidArgs(format!(
+                    "edits[{i}].old_string must not be empty"
+                ));
+                notify_tool_result("file_edit", &err.to_string(), false);
+                return Err(err);
+            }
+            if op.old_string == op.new_string {
+                let err = ToolError::InvalidArgs(format!(
+                    "edits[{i}]: old_string and new_string are identical; nothing to change"
+                ));
+                notify_tool_result("file_edit", &err.to_string(), false);
+                return Err(err);
+            }
+        }
+
+        // Multi-edit branch: locate every op in one pass, refuse overlapping
+        // or non-unique matches, then apply the splices in descending order so
+        // earlier ops never shift the offsets of later ones. Each op is
+        // matched against the ORIGINAL file (the pre-edit content), so a
+        // later splice can never silently make an earlier one disappear.
+        if ops.len() > 1 {
+            return self.apply_multi_edit(&canonical, &content, &ops).await;
+        }
+
+        // Single-edit branch (the legacy fast path).
+        let op = &ops[0];
+        let (ranges, fuzzy, crlf) = match locate(&content, &op.old_string) {
             LocateResult::Exact(r) => (r, false, false),
             LocateResult::Folded(r) => (r, true, false),
             LocateResult::Crlf(r) => (r, false, true),
@@ -250,10 +345,10 @@ impl FileEditTool {
         // When the match was bridged by CRLF expansion, the replacement's LF
         // newlines must be expanded the same way, or the edit would splice
         // LF lines into a CRLF file (mixed line endings).
-        let replacement = if crlf && !args.new_string.contains('\r') {
-            std::borrow::Cow::Owned(args.new_string.replace('\n', "\r\n"))
+        let replacement = if crlf && !op.new_string.contains('\r') {
+            std::borrow::Cow::Owned(op.new_string.replace('\n', "\r\n"))
         } else {
-            std::borrow::Cow::Borrowed(args.new_string.as_str())
+            std::borrow::Cow::Borrowed(op.new_string.as_str())
         };
 
         // `ranges` is non-empty here; apply all under `replace_all`, else the first.
@@ -300,6 +395,139 @@ impl FileEditTool {
         );
 
         info!(replacements, fuzzy, crlf, path = %path_str, "FileEditTool: edit complete");
+        notify_tool_result("file_edit", &message, true);
+
+        Ok(FileEditOutput {
+            success: true,
+            path: path_str,
+            replacements,
+            message,
+            snippet,
+        })
+    }
+
+    /// Apply a multi-edit request in one atomic write. All `ops` are matched
+    /// against the *original* `content`; if any op's `old_string` cannot be
+    /// found uniquely the whole call is refused (no partial write), and if
+    /// two ops' resolved ranges overlap the call is refused with the index of
+    /// the offender so the model can fix the pair. Splices are applied
+    /// back-to-front so earlier ops never shift the offsets of later ones.
+    async fn apply_multi_edit(
+        &self,
+        canonical: &Path,
+        content: &str,
+        ops: &[EditOp],
+    ) -> std::result::Result<FileEditOutput, ToolError> {
+        use crate::builtin_tools::notify_tool_result;
+
+        // Step 1 — locate every op against the original content. Each entry
+        // is `(byte_start, byte_end, replacement_text, was_fuzzy, was_crlf)`
+        // — the range is over the *original* content; the replacement has
+        // been CRLF-expanded if a CRLF-bridged match was used.
+        let mut resolved: Vec<(usize, usize, std::borrow::Cow<'_, str>, bool, bool)> =
+            Vec::with_capacity(ops.len());
+        for (i, op) in ops.iter().enumerate() {
+            let (ranges, fuzzy, crlf) = match locate(content, &op.old_string) {
+                LocateResult::Exact(r) => (r, false, false),
+                LocateResult::Folded(r) => (r, true, false),
+                LocateResult::Crlf(r) => (r, false, true),
+                LocateResult::NotFound(diagnostic) => {
+                    let err = ToolError::Execution(format!(
+                        "edits[{i}] did not match: {diagnostic}"
+                    ));
+                    notify_tool_result("file_edit", &err.to_string(), false);
+                    return Err(err);
+                }
+            };
+            if ranges.len() > 1 {
+                let err = ToolError::Execution(format!(
+                    "edits[{i}] matched {} places in the file; multi-edit requires \
+                     each old_string to be unique. Add more surrounding context \
+                     to make this one different from its sibling matches.",
+                    ranges.len()
+                ));
+                notify_tool_result("file_edit", &err.to_string(), false);
+                return Err(err);
+            }
+            let (start, end) = ranges[0];
+            let replacement = if crlf && !op.new_string.contains('\r') {
+                std::borrow::Cow::Owned(op.new_string.replace('\n', "\r\n"))
+            } else {
+                std::borrow::Cow::Borrowed(op.new_string.as_str())
+            };
+            resolved.push((start, end, replacement, fuzzy, crlf));
+        }
+
+        // Step 2 — refuse overlapping ranges. Two edits to the same byte
+        // range (or to nested ranges) is a request the model should resolve
+        // upstream by either merging them into one edit or by giving them
+        // disjoint context; silently keeping one and dropping the other is
+        // the kind of "edit worked but the file is now wrong" failure this
+        // tool is explicitly trying to prevent.
+        let mut by_start: Vec<usize> = (0..resolved.len()).collect();
+        by_start.sort_by_key(|&i| resolved[i].0);
+        for win in by_start.windows(2) {
+            let prev = win[0];
+            let next = win[1];
+            // `resolved[i]` is `(start, end, replacement, fuzzy, crlf)`; the
+            // naming below is what makes the overlap test actually work — the
+            // previous version destructured `prev_end` from position 0 (i.e.
+            // the START), which made the comparison degenerate to
+            // `next_start < prev_start` and never fired on start ties.
+            let (prev_start, prev_end, _, _, _) = resolved[prev];
+            let (next_start, _, _, _, _) = resolved[next];
+            if next_start < prev_end {
+                let err = ToolError::Execution(format!(
+                    "edits[{prev}] and edits[{next}] overlap in the file (edits[{prev}] \
+                     spans {prev_start}..{prev_end}, edits[{next}] starts at {next_start}); \
+                     multi-edit requires every edit to target a non-overlapping region. \
+                     Either merge them into one edit or expand the context of each so the \
+                     regions become disjoint."
+                ));
+                notify_tool_result("file_edit", &err.to_string(), false);
+                return Err(err);
+            }
+        }
+
+        // Step 3 — apply in descending start order. `apply_ranges` already
+        // takes a slice of `(start, end)` and splices back-to-front, so
+        // collecting just the ranges is enough; the replacement text is
+        // spliced per-range by a small inline loop below because the
+        // existing `apply_ranges` only handles a single replacement string
+        // for every range.
+        let new_content = apply_distinct_replacements(content, &resolved);
+
+        // Step 4 — atomic write.
+        crate::utils::atomic_write::atomic_write_file(canonical, &new_content)
+            .await
+            .map_err(|e| {
+                ToolError::Execution(format!("Failed to write {}: {}", canonical.display(), e))
+            })?;
+
+        let path_str = canonical.to_string_lossy().to_string();
+        let replacements = resolved.len();
+        let had_fuzzy = resolved.iter().any(|r| r.3);
+        let had_crlf = resolved.iter().any(|r| r.4);
+        let suffix = if had_fuzzy && had_crlf {
+            " (some edits matched after normalizing typographic punctuation and/or line endings)"
+        } else if had_fuzzy {
+            " (some edits matched after normalizing typographic punctuation)"
+        } else if had_crlf {
+            " (some edits matched after normalizing line endings; replacements written with CRLF)"
+        } else {
+            ""
+        };
+        let message = format!(
+            "Applied {replacements} edits in {path_str}{suffix}"
+        );
+        // Render the snippet around the *first* applied edit by start order —
+        // it is the one most likely to be the "lead" edit the model cares
+        // about verifying.
+        let first_idx = by_start[0];
+        let (first_start, _, ref first_replacement, _, _) = resolved[first_idx];
+        let snippet = render_edit_snippet(&new_content, first_start, first_replacement);
+
+        info!(replacements, had_fuzzy, had_crlf, path = %path_str, "FileEditTool: multi-edit complete");
         notify_tool_result("file_edit", &message, true);
 
         Ok(FileEditOutput {
@@ -375,6 +603,7 @@ mod tests {
             old_string: "World".to_string(),
             new_string: "Rust".to_string(),
             replace_all: false,
+            edits: vec![],
         };
 
         let result = AlephTool::call(&tool, args).await.unwrap();
@@ -395,6 +624,7 @@ mod tests {
             old_string: "aaa".to_string(),
             new_string: "ccc".to_string(),
             replace_all: true,
+            edits: vec![],
         };
 
         let result = AlephTool::call(&tool, args).await.unwrap();
@@ -415,6 +645,7 @@ mod tests {
             old_string: "foo".to_string(),
             new_string: "baz".to_string(),
             replace_all: false,
+            edits: vec![],
         };
 
         let result = AlephTool::call(&tool, args).await;
@@ -435,6 +666,7 @@ mod tests {
             old_string: "NotHere".to_string(),
             new_string: "Replaced".to_string(),
             replace_all: false,
+            edits: vec![],
         };
 
         let result = AlephTool::call(&tool, args).await;
@@ -453,6 +685,7 @@ mod tests {
             old_string: "Hello".to_string(),
             new_string: "Hello".to_string(),
             replace_all: false,
+            edits: vec![],
         };
 
         let result = AlephTool::call(&tool, args).await;
@@ -473,7 +706,8 @@ mod tests {
                 old_string: "it's here".to_string(),
                 new_string: "it is here".to_string(),
                 replace_all: false,
-            },
+            edits: vec![],
+            }
         )
         .await
         .unwrap();
@@ -500,7 +734,8 @@ mod tests {
                 old_string: "alpha\nbeta".to_string(),
                 new_string: "alpha\nBETA\nbeta".to_string(),
                 replace_all: false,
-            },
+            edits: vec![],
+            }
         )
         .await
         .unwrap();
@@ -528,7 +763,8 @@ mod tests {
                 old_string: "l4".to_string(),
                 new_string: "L4-EDITED".to_string(),
                 replace_all: false,
-            },
+            edits: vec![],
+            }
         )
         .await
         .unwrap();
@@ -568,7 +804,8 @@ mod tests {
                 old_string: "anything".to_string(),
                 new_string: "else".to_string(),
                 replace_all: false,
-            },
+            edits: vec![],
+            }
         )
         .await;
         assert!(result.unwrap_err().to_string().contains("binary"));
@@ -588,7 +825,8 @@ mod tests {
                 old_string: "hi".to_string(),
                 new_string: "yo".to_string(),
                 replace_all: false,
-            },
+            edits: vec![],
+            }
         )
         .await;
         assert!(result.unwrap_err().to_string().contains("UTF-8"));
@@ -607,7 +845,8 @@ mod tests {
                 old_string: String::new(),
                 new_string: "x".to_string(),
                 replace_all: false,
-            },
+            edits: vec![],
+            }
         )
         .await;
         assert!(result.is_err());
@@ -628,7 +867,8 @@ mod tests {
                 old_string: "            let x = 1;".to_string(),
                 new_string: "    let x = 2;".to_string(),
                 replace_all: false,
-            },
+            edits: vec![],
+            }
         )
         .await;
         let err = result.unwrap_err().to_string();
@@ -653,7 +893,8 @@ mod tests {
                 old_string: "one".to_string(),
                 new_string: "two".to_string(),
                 replace_all: false,
-            },
+            edits: vec![],
+            }
         )
         .await
         .unwrap();
@@ -663,5 +904,225 @@ mod tests {
         // The atomic temp-file-and-rename write must not drop the file's mode.
         let mode = fs::metadata(&file).unwrap().permissions().mode();
         assert_eq!(mode & 0o777, 0o755, "executable bit must survive the edit");
+    }
+
+    // ========================================================================
+    // Multi-edit (edits: []) — applies every replacement in a single call
+    // against the ORIGINAL file, refusing overlaps and non-unique matches.
+    // ========================================================================
+
+    /// Two disjoint edits in a single call. Each is matched against the
+    /// pre-edit content, and the result on disk is the original file with
+    /// both splices applied in their original positions.
+    #[tokio::test]
+    async fn multi_edit_applies_two_disjoint_edits_atomically() {
+        let dir = tempdir().unwrap();
+        let file = dir.path().join("a.txt");
+        fs::write(&file, "alpha=1\nbeta=2\ngamma=3\n").unwrap();
+
+        let result = AlephTool::call(
+            &FileEditTool::new(),
+            FileEditArgs {
+                file_path: file.to_string_lossy().to_string(),
+                old_string: String::new(),
+                new_string: String::new(),
+                replace_all: false,
+                edits: vec![
+                    EditOp {
+                        old_string: "alpha=1".to_string(),
+                        new_string: "alpha=10".to_string(),
+                    },
+                    EditOp {
+                        old_string: "gamma=3".to_string(),
+                        new_string: "gamma=30".to_string(),
+                    },
+                ],
+            },
+        )
+        .await
+        .unwrap();
+
+        assert!(result.success);
+        assert_eq!(result.replacements, 2);
+        // `beta=` is between the two edits and must survive untouched.
+        assert_eq!(
+            fs::read_to_string(&file).unwrap(),
+            "alpha=10\nbeta=2\ngamma=30\n"
+        );
+    }
+
+    /// Multi-edit applies later splices against the ORIGINAL content, not the
+    /// incrementally-mutated buffer. A second edit whose `old_string` was
+    /// produced by the first edit therefore must NOT be able to silently
+    /// match in the half-written file.
+    #[tokio::test]
+    async fn multi_edit_matches_each_op_against_the_original_file() {
+        let dir = tempdir().unwrap();
+        let file = dir.path().join("a.txt");
+        fs::write(&file, "FOO\nbar\n").unwrap();
+
+        // The second edit's old_string would only exist if the first edit
+        // were applied first. Matching against the original file means the
+        // first op succeeds, the second op does NOT match, and the whole
+        // call is refused with a clean diagnostic — the file stays intact.
+        let result = AlephTool::call(
+            &FileEditTool::new(),
+            FileEditArgs {
+                file_path: file.to_string_lossy().to_string(),
+                old_string: String::new(),
+                new_string: String::new(),
+                replace_all: false,
+                edits: vec![
+                    EditOp {
+                        old_string: "FOO".to_string(),
+                        new_string: "BAZ".to_string(),
+                    },
+                    EditOp {
+                        old_string: "BAZ".to_string(),
+                        new_string: "QUUX".to_string(),
+                    },
+                ],
+            },
+        )
+        .await;
+        let err = result.unwrap_err().to_string();
+        assert!(err.contains("edits[1]"), "err: {err}");
+        // Original file untouched — the all-or-nothing contract.
+        assert_eq!(fs::read_to_string(&file).unwrap(), "FOO\nbar\n");
+    }
+
+    /// Overlapping byte ranges between two ops are refused, naming the
+    /// offending pair. This is the guard that prevents "edit succeeded but
+    /// the file is wrong" — when two ops target the same region, only one
+    /// of them can win on disk, and silently picking a winner corrupts the
+    /// model's intent.
+    #[tokio::test]
+    async fn multi_edit_refuses_overlapping_ranges() {
+        let dir = tempdir().unwrap();
+        let file = dir.path().join("a.txt");
+        fs::write(&file, "aaaa bbbb cccc\n").unwrap();
+
+        // The two old_strings are unique on their own but the ranges they
+        // resolve to overlap: "aa aa" sits inside "aaaa bbbb".
+        let result = AlephTool::call(
+            &FileEditTool::new(),
+            FileEditArgs {
+                file_path: file.to_string_lossy().to_string(),
+                old_string: String::new(),
+                new_string: String::new(),
+                replace_all: false,
+                edits: vec![
+                    EditOp {
+                        old_string: "aaaa".to_string(),
+                        new_string: "xxxx".to_string(),
+                    },
+                    EditOp {
+                        old_string: "aaaa bbbb".to_string(),
+                        new_string: "yyyy".to_string(),
+                    },
+                ],
+            },
+        )
+        .await;
+        let err = result.unwrap_err().to_string();
+        assert!(err.contains("overlap"), "err: {err}");
+        // File untouched on refusal.
+        assert_eq!(fs::read_to_string(&file).unwrap(), "aaaa bbbb cccc\n");
+    }
+
+    /// A single `old_string` that matches the file in more than one place is
+    /// refused for a multi-edit call, just like the legacy single-edit
+    /// branch's uniqueness gate. The error names the offending op index so
+    /// the model can disambiguate by adding context.
+    #[tokio::test]
+    async fn multi_edit_refuses_non_unique_op() {
+        let dir = tempdir().unwrap();
+        let file = dir.path().join("a.txt");
+        fs::write(&file, "foo bar foo\n").unwrap();
+
+        let result = AlephTool::call(
+            &FileEditTool::new(),
+            FileEditArgs {
+                file_path: file.to_string_lossy().to_string(),
+                old_string: String::new(),
+                new_string: String::new(),
+                replace_all: false,
+                edits: vec![
+                    EditOp {
+                        old_string: "foo bar foo".to_string(),
+                        new_string: "X".to_string(),
+                    },
+                    EditOp {
+                        old_string: "foo".to_string(),
+                        new_string: "Y".to_string(),
+                    },
+                ],
+            },
+        )
+        .await;
+        let err = result.unwrap_err().to_string();
+        assert!(err.contains("edits[1]") && err.contains("2 places"), "err: {err}");
+        // File untouched on refusal.
+        assert_eq!(fs::read_to_string(&file).unwrap(), "foo bar foo\n");
+    }
+
+    /// Empty `old_string` inside `edits[]` is rejected at the same gate as
+    /// the legacy single-edit form. The error names the array index so the
+    /// model can target the right entry.
+    #[tokio::test]
+    async fn multi_edit_empty_op_is_rejected() {
+        let dir = tempdir().unwrap();
+        let file = dir.path().join("a.txt");
+        fs::write(&file, "x\n").unwrap();
+
+        let result = AlephTool::call(
+            &FileEditTool::new(),
+            FileEditArgs {
+                file_path: file.to_string_lossy().to_string(),
+                old_string: String::new(),
+                new_string: String::new(),
+                replace_all: false,
+                edits: vec![EditOp {
+                    old_string: "x".to_string(),
+                    new_string: "y".to_string(),
+                }, EditOp {
+                    old_string: String::new(),
+                    new_string: "z".to_string(),
+                }],
+            },
+        )
+        .await;
+        assert!(result.unwrap_err().to_string().contains("edits[1]"));
+    }
+
+    /// `edits` wins when both shapes are present — the legacy fields are
+    /// ignored. This matches the documented contract and keeps the
+    /// multi-edit form strictly a superset.
+    #[tokio::test]
+    async fn multi_edit_takes_precedence_over_legacy_fields() {
+        let dir = tempdir().unwrap();
+        let file = dir.path().join("a.txt");
+        fs::write(&file, "alpha=1\nbeta=2\n").unwrap();
+
+        // Legacy fields would edit `alpha=1` -> `WRONG`. The `edits` array
+        // edits the same `alpha=1` -> `alpha=10`. The legacy fields must be
+        // ignored — the file on disk must reflect the array's intent.
+        let result = AlephTool::call(
+            &FileEditTool::new(),
+            FileEditArgs {
+                file_path: file.to_string_lossy().to_string(),
+                old_string: "alpha=1".to_string(),
+                new_string: "WRONG".to_string(),
+                replace_all: false,
+                edits: vec![EditOp {
+                    old_string: "alpha=1".to_string(),
+                    new_string: "alpha=10".to_string(),
+                }],
+            },
+        )
+        .await
+        .unwrap();
+        assert!(result.success);
+        assert_eq!(fs::read_to_string(&file).unwrap(), "alpha=10\nbeta=2\n");
     }
 }

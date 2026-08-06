@@ -1,6 +1,6 @@
 //! `RoleLayer` — core role definition (priority 100)
 
-use crate::thinker::prompt_layer::{AssemblyPath, LayerInput, PromptLayer};
+use crate::thinker::prompt_layer::{AssemblyPath, LayerInput, LayerStability, PromptLayer};
 use crate::thinker::prompt_mode::PromptMode;
 
 pub struct RoleLayer;
@@ -21,6 +21,9 @@ impl PromptLayer for RoleLayer {
         // the cached production one where it was previously absent. Stable, so
         // it joins the cacheable prefix.
         &[AssemblyPath::Basic, AssemblyPath::Cached]
+    }
+    fn stability(&self) -> LayerStability {
+        LayerStability::Stable
     }
     fn inject(&self, output: &mut String, _input: &LayerInput) {
         // Lean: the "Observe → decide the SINGLE next action → execute" cycle

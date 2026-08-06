@@ -131,6 +131,26 @@ pub(super) fn inject_cache_control_into_system_array(
 /// breakpoint to the nearest real message instead. Anchoring a breakpoint
 /// *earlier* is always safe: it only shortens the cached span, never
 /// invalidates it.
+///
+/// The classification itself is **not** decided here: it comes from
+/// [`nudges::is_synthetic_reminder`](crate::thinker::nudges::is_synthetic_reminder),
+/// alongside the copy that emits the fence. This module used to answer the
+/// question with its own inline `starts_with`, which got the one exception
+/// wrong: `user_interjection_note` wraps a *real* mid-loop user message in the
+/// same fence, and that message **is** persisted — so its index is perfectly
+/// stable and skipping it needlessly shortened the cached span. The compaction
+/// focus anchor asks the identical question about the identical messages, so
+/// there is exactly one answer.
+///
+/// There is a SECOND producer of such bytes:
+/// [`MoaProvider`](crate::providers::moa::MoaProvider) appends its per-turn
+/// advisory guidance to the tail of the aggregator's prompt, and that block is
+/// never persisted either — so next turn its index holds the assistant / tool
+/// result the turn actually produced, and its content has changed anyway. Its
+/// classification likewise lives with the producer
+/// ([`carries_advisory_guidance`](crate::providers::moa::carries_advisory_guidance)).
+/// Unrecognised, it took the deepest breakpoint of every MoA turn: a guaranteed
+/// miss plus a 1.25x `cache_creation` write for advice nothing ever reads back.
 fn is_ephemeral_notice(msg: &serde_json::Value) -> bool {
     if msg.get("role").and_then(|v| v.as_str()) != Some("user") {
         return false;
@@ -142,11 +162,22 @@ fn is_ephemeral_notice(msg: &serde_json::Value) -> bool {
                 Some(t) => t,
                 None => return false,
             },
-            _ => return false,
+            // MoA merges its guidance into a trailing user turn when there is
+            // one (two consecutive user turns are rejected by strict
+            // providers), so the block that carries the marker is not
+            // necessarily alone in the message.
+            blocks => {
+                return blocks.iter().any(|b| {
+                    b.get("text")
+                        .and_then(|v| v.as_str())
+                        .is_some_and(crate::providers::moa::carries_advisory_guidance)
+                })
+            }
         },
         _ => return false,
     };
-    text.trim_start().starts_with("<system-reminder>")
+    crate::thinker::nudges::is_synthetic_reminder(text)
+        || crate::providers::moa::carries_advisory_guidance(text)
 }
 
 /// Inject `cache_control` into the trailing content block of up to
@@ -450,6 +481,90 @@ mod tests {
         );
     }
 
+    /// A trailing MoA guidance turn, as `attach_guidance` appends it when the
+    /// last real message is a tool result (the agentic-loop shape).
+    fn moa_guidance_turn() -> serde_json::Value {
+        serde_json::json!({
+            "role": "user",
+            "content": [{
+                "type": "text",
+                "text": format!(
+                    "{}\nPreset: default\nAdvisors: openai:gpt-5\n\nAdvisor 1 — openai:gpt-5:\ntry X",
+                    crate::providers::moa::ADVISORY_GUIDANCE_MARKER
+                ),
+            }],
+        })
+    }
+
+    #[test]
+    fn moa_guidance_never_takes_a_breakpoint() {
+        // The guidance is never persisted to `session_events`, so next turn
+        // this index holds the assistant / tool result the turn produced — and
+        // the block's own text changes on every fresh consultation. Anchoring
+        // the deepest breakpoint there is a guaranteed miss AND a 1.25x
+        // `cache_creation` write for bytes nothing ever reads back. Skipping it
+        // must NOT consume budget: all three breakpoints go to real messages.
+        let mut payload = serde_json::json!({
+            "messages": [
+                {"role": "user", "content": [{"type": "text", "text": "m0"}]},
+                {"role": "assistant", "content": [{"type": "text", "text": "m1"}]},
+                {"role": "user", "content": [{"type": "text", "text": "m2"}]},
+                moa_guidance_turn(),
+            ]
+        });
+        inject_cache_control_into_recent_messages(
+            &mut payload,
+            CacheControl::Ephemeral { ttl: None },
+            3,
+        );
+        assert!(
+            payload["messages"][3]["content"][0]
+                .get("cache_control")
+                .is_none(),
+            "the turn-varying guidance must not be anchored:\n{payload:#}"
+        );
+        assert_eq!(
+            cached_message_count(&payload),
+            3,
+            "the skip must not spend budget — every breakpoint lands on a real message"
+        );
+    }
+
+    #[test]
+    fn moa_guidance_merged_into_a_real_user_turn_is_skipped_too() {
+        // Plain chat (no tools yet): the last message IS a user turn, so
+        // `attach_guidance` merges rather than appending — two consecutive
+        // user turns are rejected by strict providers. The message then holds
+        // the user's own prompt AND the guidance, and its bytes still differ
+        // next turn, so it is still the wrong place for a breakpoint.
+        let merged = format!(
+            "what should I do?\n\n{}\nPreset: default\n\nAdvisor 1 — a:b:\ntry X",
+            crate::providers::moa::ADVISORY_GUIDANCE_MARKER
+        );
+        let mut payload = serde_json::json!({
+            "messages": [
+                {"role": "user", "content": [{"type": "text", "text": "m0"}]},
+                {"role": "assistant", "content": [{"type": "text", "text": "m1"}]},
+                {"role": "user", "content": [
+                    {"type": "text", "text": "attachment"},
+                    {"type": "text", "text": merged}
+                ]},
+            ]
+        });
+        inject_cache_control_into_recent_messages(
+            &mut payload,
+            CacheControl::Ephemeral { ttl: None },
+            3,
+        );
+        assert!(
+            payload["messages"][2]["content"][1]
+                .get("cache_control")
+                .is_none(),
+            "a merged guidance block must not be anchored either:\n{payload:#}"
+        );
+        assert_eq!(cached_message_count(&payload), 2, "only m0 and m1 remain");
+    }
+
     #[test]
     fn recent_messages_preexisting_marker_counts_as_breakpoint() {
         // A message already carrying a marker counts as a used breakpoint and
@@ -566,6 +681,37 @@ mod tests {
             ]
         });
         assert!(!is_ephemeral_notice(&multi));
+    }
+
+    #[test]
+    fn a_wrapped_user_interjection_still_gets_a_breakpoint() {
+        // `user_interjection_note` wraps a REAL mid-loop user message in the same
+        // `<system-reminder>` fence, but that message is a persisted, replayed
+        // `SessionEvent::UserMessage` — its index is stable next turn, so it is a
+        // perfectly good breakpoint anchor. The old inline `starts_with` skipped
+        // it, silently shortening the cached span on every steered run.
+        let wrapped = crate::thinker::nudges::user_interjection_note("use staging instead");
+        let msg = serde_json::json!({
+            "role": "user",
+            "content": [{"type": "text", "text": wrapped}]
+        });
+        assert!(
+            !is_ephemeral_notice(&msg),
+            "a persisted user interjection is not an ephemeral notice"
+        );
+
+        let mut payload = serde_json::json!({ "messages": [msg] });
+        inject_cache_control_into_recent_messages(
+            &mut payload,
+            CacheControl::Ephemeral { ttl: None },
+            3,
+        );
+        assert_eq!(
+            cached_message_count(&payload),
+            1,
+            "the interjection must actually receive the breakpoint, not merely \
+             be classified as eligible"
+        );
     }
 
     /// An all-ephemeral tail must not deadlock the walk or place markers.

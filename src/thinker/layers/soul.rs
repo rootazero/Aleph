@@ -1,7 +1,7 @@
 //! `SoulLayer` — identity and personality injection (priority 50)
 
 use super::identity_files::sanitize_identity_content;
-use crate::thinker::prompt_layer::{AssemblyPath, LayerInput, PromptLayer};
+use crate::thinker::prompt_layer::{AssemblyPath, LayerInput, LayerStability, PromptLayer};
 
 pub struct SoulLayer;
 
@@ -20,6 +20,9 @@ impl PromptLayer for SoulLayer {
         // Citation layers were fixed for). `Soul` is kept for the legacy
         // soul-path builders still exercised by tests.
         &[AssemblyPath::Cached]
+    }
+    fn stability(&self) -> LayerStability {
+        LayerStability::Stable
     }
     fn inject(&self, output: &mut String, input: &LayerInput) {
         // The live identity-injection source is the agent-dir SOUL.md file,

@@ -62,8 +62,8 @@ mod tests {
                         min_request_interval_ms: None,
                         verified: true,
                     },
-                 )]),
-                 web_fetch_fallback: crate::config::types::search::default_web_fetch_fallback(),
+                )]),
+                web_fetch_fallback: crate::config::types::search::default_web_fetch_fallback(),
             }),
             ..Default::default()
         };

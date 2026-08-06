@@ -109,6 +109,15 @@ pub struct IndexStats {
     /// Index rows removed because their backing `.md` file no longer exists on
     /// disk (orphans from a rename / deletion / agent-id relocation).
     pub pruned: usize,
+    /// Notes whose vector is missing or was computed from an older version of
+    /// the note (see `NoteStore::stale_vector_paths`).
+    ///
+    /// Embed-on-write logs and swallows its failures on purpose, so this is the
+    /// only place the resulting drift becomes visible. A count equal to the
+    /// note total means the vector leg is not working at all — the shape a
+    /// misconfigured embedding dimension produces, which otherwise shows up
+    /// only as "semantic search finds nothing".
+    pub stale_vectors: usize,
 }
 
 /// Per-file outcome from `index_one_file`. Mirrors the `bool` returned by
@@ -207,9 +216,14 @@ impl<S: NoteStore> NoteIndexer<S> {
             Ok(embedding) => {
                 let dim = embedding.len() as u32;
                 let note_path = format!("{category}/{title}");
+                // Record which version of the note this vector came from. The
+                // basis is the full file text — the same string `index_note`
+                // hashes into `content_hash` — so `stale_vector_paths` compares
+                // like with like.
+                let embedded_hash = sha2_hash(content);
                 if let Err(e) = self
                     .store
-                    .upsert_embedding(&note_path, agent_id, &embedding, dim)
+                    .upsert_embedding(&note_path, agent_id, &embedding, dim, &embedded_hash)
                     .await
                 {
                     tracing::warn!(path = %note_path, error = %e, "indexer: embedding upsert failed");
@@ -444,6 +458,25 @@ impl<S: NoteStore> NoteIndexer<S> {
             Ok(_) => {}
             Err(e) => {
                 tracing::warn!(error = %e, "full_rebuild: orphan-vector sweep failed");
+            }
+        }
+
+        // Report vector drift. Best-effort and read-only: the sweep never
+        // repairs anything here (re-embedding a whole corpus is a cost the
+        // operator asks for via `reembed_all`), it only makes the drift
+        // countable instead of invisible.
+        match self.store.stale_vector_paths(agent_id).await {
+            Ok(paths) => {
+                total.stale_vectors = paths.len();
+                if !paths.is_empty() {
+                    tracing::info!(
+                        stale = paths.len(),
+                        "full_rebuild: notes whose vector is missing or outdated"
+                    );
+                }
+            }
+            Err(e) => {
+                tracing::warn!(error = %e, "full_rebuild: vector staleness probe failed");
             }
         }
 
@@ -1161,7 +1194,11 @@ impl<S: NoteStore> NoteIndexer<S> {
 }
 
 /// Compute SHA-256 hex digest.
-fn sha2_hash(content: &str) -> String {
+///
+/// `pub(crate)` so content-identity comparisons elsewhere in the memory layer
+/// (e.g. the dream cycle's synthesis-churn digest) agree with the note index's
+/// own `content_hash` rather than inventing a second hasher.
+pub(crate) fn sha2_hash(content: &str) -> String {
     let mut hasher = Sha256::new();
     hasher.update(content.as_bytes());
     format!("{:x}", hasher.finalize())

@@ -1062,6 +1062,10 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
         }
     };
 
+    alephcore::tools::in_flight::set_global_in_flight_tool_calls(
+        alephcore::tools::in_flight::InFlightToolCalls::new(),
+    );
+
     let agent_result = register_agent_handlers(
         &mut server,
         session_store.clone(),
@@ -1092,8 +1096,11 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
     // MCP tool bridge — now that `agent_result.tool_catalog` exists,
     // spawn the bridge with the tool-catalog handle so each registered MCP
     // tool also gets an `McpServerProbe` attached to the shared
-    // `ToolHealthCache`. The bridge subscribes to manager events; any
-    // servers that connect from this point on flow through it.
+    // `ToolHealthCache`. The bridge subscribes to manager events *and*
+    // reconciles once against the servers already running — the auto-start
+    // above happens inside `McpManagerActor::run`, i.e. long before this
+    // point, so an events-only bridge would never see the servers this
+    // deployment actually has (see `spawn_tool_bridge`).
     if let Some(ref h) = mcp_handle {
         std::mem::drop(alephcore::mcp::spawn_tool_bridge(
             h.clone(),
@@ -1792,6 +1799,17 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
                         indexed = stats.indexed,
                         skipped = stats.skipped,
                         errors = stats.errors,
+                        pruned = stats.pruned,
+                        // The summary line is what an operator actually reads,
+                        // so the vector drift has to appear on it. Without this
+                        // the only production consumer of `IndexStats` dropped
+                        // `stale_vectors` on the floor — the field had no reader
+                        // anywhere in the repo — and a boot reporting
+                        // `errors=0` looked healthy while every note's vector
+                        // was missing or outdated. A count near the note total
+                        // is the shape a misconfigured embedding dimension
+                        // makes; `reembed_all` is the repair.
+                        stale_vectors = stats.stale_vectors,
                         "Note index rebuild complete"
                     );
                 }
@@ -2664,10 +2682,11 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
     }
 
     // Tool-result budget — install Layer 2 store + Layer 3 turn-budget
-    // singletons. The store roots at `~/.aleph/data/tool_results/global/` and is
-    // deliberately *shared*: the per-session scope now rides on the handle, and
-    // the two seams that own session context (`build_request_tool_service`, the
-    // orchestrator harness bridge) narrow it with `ToolResultStore::for_session`.
+    // singletons. The store roots at `<config_dir>/data/tool_results/global/`
+    // (`ALEPH_HOME`-aware) and is deliberately *shared*: the per-session scope
+    // now rides on the handle, and the two seams that own session context
+    // (`build_request_tool_service`, the orchestrator harness bridge) narrow it
+    // with `ToolResultStore::for_session`.
     // Failure to create the store is not fatal — Layer 2 silently falls back to
     // in-line truncation.
     //
@@ -2708,21 +2727,13 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
                 max_turn_tokens,
             ));
             alephcore::tools::turn_budget::set_global_turn_result_budget(budget);
-            // Gap B follow-up — process-wide in-flight tool-call registry.
-            // The orchestrator's HarnessDeps and the gateway's
-            // `tools.cancel_call` RPC both read this same instance, so the
-            // RPC can cancel a single call by its `tool_call_id` without
-            // aborting the whole run.
-            alephcore::tools::in_flight::set_global_in_flight_tool_calls(
-                alephcore::tools::in_flight::InFlightToolCalls::new(),
-            );
             // TTL hygiene for crash-orphan spill dirs is owned by
             // `set_global_tool_result_store` (auto-spawns the periodic
             // sweeper since main's c1756ce80).
             if !args.daemon {
                 println!(
                     "tool-result-budget: ToolResultStore + TurnResultBudget wired \
-                     (~/.aleph/data/tool_results/global/, session-scoped handles, \
+                     (<config_dir>/data/tool_results/global/, session-scoped handles, \
                      max_result_tokens={per_result_tokens}, max_turn_tokens={max_turn_tokens})"
                 );
             }

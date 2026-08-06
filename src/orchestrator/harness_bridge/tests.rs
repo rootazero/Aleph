@@ -633,6 +633,38 @@ fn goal_summary_is_clock_free_so_the_cache_prefix_survives() {
 }
 
 #[test]
+fn goal_summary_says_when_the_pursuit_is_parked() {
+    use crate::goal::{Goal, PursuitMode};
+    let task_parked = Goal::new("s", "obj", 0, 1_000)
+        .with_pursuit(PursuitMode::Active { max_iterations: 5 })
+        .with_wait_on_task("task-7".into(), Some("waiting on the build".into()), 1_000);
+    let out = render_goal_summary(&task_parked);
+    assert!(out.contains("parked"), "got: {out}");
+    assert!(out.contains("task-7"), "got: {out}");
+
+    let timer_parked = Goal::new("s", "obj", 0, 1_000)
+        .with_pursuit(PursuitMode::Active { max_iterations: 5 })
+        .with_wait_until(999_000, None, 1_000);
+    let out = render_goal_summary(&timer_parked);
+    assert!(out.contains("parked"), "got: {out}");
+    // The remaining wait is clock-derived and belongs on the far side of the
+    // prompt-cache breakpoint (`live_deadline_status`), never here: a byte
+    // that changes every run would re-key the whole conversation prefix.
+    assert!(!out.contains("999"), "no clock-derived bytes here: {out}");
+}
+
+#[test]
+fn an_unparked_goal_summary_is_byte_identical_to_before() {
+    use crate::goal::{Goal, PursuitMode};
+    let g = Goal::new("s", "Migrate auth", 0, 1_000)
+        .with_pursuit(PursuitMode::Active { max_iterations: 5 });
+    assert_eq!(
+        render_goal_summary(&g),
+        "Migrate auth (status=active, autonomous iteration 0/5)"
+    );
+}
+
+#[test]
 fn deadline_render_buckets_and_edges() {
     let now = 1_000_000_u64;
     // sub-minute → seconds
@@ -650,4 +682,13 @@ fn deadline_render_buckets_and_edges() {
     assert_eq!(render_deadline(now, now), "deadline passed");
     // no clock available → existence only, no misleading countdown
     assert_eq!(render_deadline(now + 60_000, 0), "deadline set");
+}
+
+#[test]
+fn parked_countdown_is_rendered_relative_to_now() {
+    // Same convention as `render_deadline`: no clock (0) degrades instead of
+    // lying, and an elapsed park reads as due rather than negative.
+    assert_eq!(render_park_wait(600_000, 0), "parked, wake time unknown");
+    assert_eq!(render_park_wait(600_000, 300_000), "parked, ~5m left");
+    assert_eq!(render_park_wait(600_000, 600_001), "parked, wake due");
 }

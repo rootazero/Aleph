@@ -80,7 +80,8 @@ pub async fn gather_related<S: NoteStore + Send + Sync + 'static>(
     let seed_limit = budget.max_related_pages.saturating_mul(2).max(6);
     let seeds = store
         .hybrid_search_notes(&embedding, &aggregated, agent_id, dim_hint, seed_limit)
-        .await?;
+        .await?
+        .results;
 
     let mut seen: BTreeSet<String> = BTreeSet::new();
     let mut ranked: Vec<(String, f32)> = Vec::new();

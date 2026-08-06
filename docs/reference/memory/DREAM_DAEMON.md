@@ -22,13 +22,56 @@ There is **no** standalone `DreamGate` type. Whether a cycle runs at all is deci
 
 Ported from SkillOpt (arXiv 2605.23904): a bounded, validation-gated edit loop layered over the LLM-proposed edits (R7: the *content* is the model's; this layer only enforces discipline).
 
-- **Strict-improvement gate** — `evolution/gate.rs::evaluate_gate(candidate, current, best, ε)` keeps an edit only when it *strictly* improves a score (`> current + ε`, ties rejected), returning `AcceptNewBest` / `Accept` / `Reject`. At cycle level (`mod.rs` Phase 5.5) it scores `memory_health_score` before vs after this cycle's edits; a degrading cycle arms a 2-cycle Conserve cooldown (it does not roll back — edits are already on disk).
+- **Strict-improvement gate** — `evolution/gate.rs::evaluate_gate(candidate, current, best, ε)` keeps an edit only when it *strictly* improves a score (`> current + ε`, ties rejected), returning `AcceptNewBest` / `Accept` / `Reject`. At cycle level (`mod.rs` Phase 5.5) it scores `memory_health_score` before vs after this cycle's edits; a degrading cycle (`EvolutionOutcome::degraded` — a `Reject` whose candidate fell *below* its own baseline, not merely below the historical best) buys a 2-cycle Conserve cooldown. It does not roll back — edits are already on disk. The cooldown is **not** armed imperatively: the next cycle derives it from this cycle's persisted outcome (see §3.2), so a restart in between cannot swallow it.
 - **Best-checkpoint persistence** — `best_health` is loaded from `dream_best_health__{agent}` (`dream_kv.rs`) in `from_config` and re-persisted on every `AcceptNewBest`, so the honest historical best survives a restart instead of resetting to 0.
 - **Edit budget ("textual learning rate")** — `evolution/budget.rs::EditBudget` (default 32 edits / 256 KiB) is shared across the **destructive** stages — `NoteConsolidate` (merges), `NoteDecay` (archival), and the distill `Supersede` action (`SkillDistill` / `FeedbackDistill`, via `stages::charge_distill_budget`). Additive growth (new synthesis notes, distill `New`/`Strengthen`, weave links) is **not** budgeted, so the growth path is never starved.
 - **Recall-evidence gate** — `evolution/evidence.rs::gate_supersede_evidence` demands the LLM's confidence strictly beat a note's saturating recall support before a destructive `Supersede` lands (production recall is Aleph's cheap stand-in for a held-out split).
 - **Rejected-edit buffer** — rejected supersedes are fingerprinted and stored as `DistillRejectRecord`s (`distill_rejects__{agent}`, backward-compatible with the legacy fingerprint-only list). They both drop re-proposals in code (`stages/mod.rs::gate_action_evidence`) *and* are replayed into the next distill prompt as negative feedback (`stages/mod.rs::render_rejected_block`) so the model stops re-proposing losing edits.
 
-The cycle-level gate outcome (`EvolutionOutcome`) is persisted to `dream_reports.evolution_json` (§8) and surfaced via `dreaming.list_insights`.
+The cycle-level gate outcome (`EvolutionOutcome`) is persisted to `dream_reports.evolution_json` (§8) and surfaced via `dreaming.list_insights` **and** rendered by the Panel's Dream Insights panel. Its sibling `decision_json` (a `CycleDecision`: strategy, rationale, churn-gate verdict, stages executed, validation result) answers the operator's first question — *why did this cycle conserve* — from the same read.
+
+### 3.2 Cross-cycle state is derived, not accumulated
+
+`MutationGate` (churn detection) and `StrategySelector` (personality window) hold **no** state of their own between cycles. At the start of every run the daemon reads the last `DREAM_HISTORY_WINDOW` events from `dream_events.jsonl` once and folds them:
+
+```rust
+let history = EventLog::new(agent_dir).read_last(DREAM_HISTORY_WINDOW).await?;
+let prior_report = history.last().map(|ev| ev.report.clone());          // rot signals
+let gate  = MutationGate::from_reports(history.iter().map(|e| &e.report)).evaluate();
+let sel   = StrategySelector::from_outcomes(history.iter().map(|e| e.validation.overall_ok()));
+```
+
+`DREAM_HISTORY_WINDOW` is derived from the consumers' own `HISTORY_WINDOW` constants, so widening a detector's window widens the read automatically.
+
+**Why**: these were in-process accumulators until 2026-08-04, and cycles run at most once a day. A five-cycle detector therefore needed five consecutive days of daemon uptime before it could *ever* fire, and the conserve cooldown evaporated on the next restart — while the identical history sat unread on disk. Same shape as evolver's `analyzeRecentHistory(recentEvents)` (a pure fold over durable events) and SkillOpt-Sleep's `state.json`; satisfies constitution A3.
+
+**Consequence to respect**: the Phase-6 event-log append is now load-bearing, not just an audit line. If it fails, the *next* cycle cannot see this one — hence it logs at `error!`.
+
+**The read is a real tail.** `read_last` seeks to `len - window` and expands geometrically only if it did not recover `n` parseable events; it does not read the file into memory first. It used to, while its own doc comment claimed the opposite — and that claim is the reasoning anyone would use to decide the log's unbounded growth was affordable. With K project namespaces each rehydrating its own log every night (§3.3), the old cost was K × (whole history), growing forever. `read_last_measured` returns the byte count so the boundedness is testable rather than asserted.
+
+**Growth is deliberately unmanaged.** One line per cycle per corpus, and a `DreamEvent` is counters plus digests — the synthesis *bodies* left it when the regex oscillation detector did — so a line runs 1–3 KB and a corpus accrues roughly 1 MB/year. No rotation or compaction: a size-triggered rewrite is a new lifecycle to get wrong (temp file + rename, windows that span the cut, torn writes), it would be defending against ~8 MB after eight years, and truncation destroys the audit trail that §3.3 just made operator-visible. Revisit if a corpus is ever observed past ~50 MB.
+
+**Detector inputs are identifiers, never prose.** The merge detector keys on note-pair ids; the synthesis-churn detector keys on `(synthesis note path, digest of its body)` and fires only when the same note is rewritten to a *different* body for `SYNTHESIS_CHURN_THRESHOLD` consecutive cycles. Its predecessor matched regex negation pairs (`should` vs `should not`) against whole LLM-written synthesis essays: dead in production, and had it been live it would have been a rule-based re-judgement of a semantic question `NoteDrift` already answers (R7/P8) — that verdict already reaches the selector as `contradictions_found` → `contradiction_rate` → the stability veto. Digest the **body**, not the rendered markdown: frontmatter carries an `updated` date that moves on every write, so a whole-file hash would report churn every night.
+
+### 3.3 Every project namespace governs itself
+
+With `memory.project_scoped` on, `note_manage` writes project-local notes under `{base}__proj-*`, and the daemon fans the note-maintenance subset (`DreamPipeline::retain_project_stages`) over each namespace after the base cycle. **Each namespace is a full dream subject with its own everything** — `src/memory/dreaming/project_cycle.rs` mirrors §3.2 keyed on the namespace id:
+
+| per namespace | where |
+|---|---|
+| event log | `{memory_dir}/{base}__proj-*/dream_events.jsonl` |
+| churn gate + personality | folded from that log, same one-read-three-consumers shape as §3.2 |
+| strategy | selected from its **own** signals + gate — it does **not** inherit the base cycle's |
+| best-health checkpoint | `dream_best_health__{ns}` (the KV is already agent-keyed) — read and written each cycle, no in-daemon `Mutex`, because namespaces come and go with their projects |
+| audit row | `dream_reports` under `namespace = {base}__proj-*`, written by the **same** `DreamDaemon::persist_run_row` as the base cycle (§8) |
+
+**Legible to the model ≠ legible to the operator.** Until 2026-08-04 (round 2) a namespace's history existed only in its own JSONL. That log has a real reader — the *model*, via `note_manage(action="evolution")`, which resolves the scoped agent id — so nothing about it was dead, and everything about it was invisible to the person running the thing. The sub-cycle now returns the same `DreamCycleOutcome` the base cycle does, decision included, and the caller files the audit row the Panel reads. The decision used to be computed inside the sub-cycle and dropped on the floor: strategy, rationale, gate verdict and stage list all existed, went into the event log, and reached no operator-facing surface, because the surface is fed by the caller and the caller had nothing to write.
+
+**Validation tiers are at parity, not degraded.** A sub-cycle runs the same real L1 (`l1_over_corpus`, shared with the base cycle so the two cannot drift) and L2 it does. L3/L4 are `None` here *and* in the base cycle — no producer exists anywhere in the repo, and `overall_ok()` gates on L1+L2 by design. See `validation.rs`'s module header before reading that as a namespace gap.
+
+**Why not one shared log.** Until 2026-08-04 the sub-pipeline's `DreamReport` was `info!`-logged and dropped, so a project corpus could merge A→B and B→A every night with nothing able to see it — and the maintenance subset is *exactly* the part that produces churn signals (`note_consolidate` → `merged_pairs`, `note_synthesis` → `synthesis_rewrites`). But appending to the **base** agent's log would have been worse than the drop: a note `path` is relative *within* an agent (`"reference/rust-ownership"`), so `proj-a`'s `skill/foo` and the base agent's `skill/foo` are the same string. Merging the histories hands the base gate phantom merge cycles for notes it does not own — and phantom churn conserves the corpus that was behaving.
+
+**An empty night is not recorded.** A sub-cycle that yields to user activity before running a single stage returns without appending — to the event log *or* to `dream_reports`. Both skips read one predicate, `DreamReport::is_vacuous_interruption`, because they have to agree and the way they would disagree (a row with no matching event, or the reverse) is silent. The reasons point the same way: the gate window is only a few cycles deep, so one empty event per namespace on a busy evening pushes real churn history out of range and disarms the detectors exactly when the corpus is being touched most; and the governance probe reads run counts as a reality signal, which no-op rows inflate. A *partially* executed cycle **is** recorded in both — its merges are real. For the same reason the fan-out stops at the first interrupted namespace rather than walking the rest to collect interruptions.
 
 ## 4. Core Types
 
@@ -287,7 +330,17 @@ CREATE TABLE IF NOT EXISTS dream_status (
 
 The `CHECK (id = 1)` enforces singleton semantics. `last_status` transitions `running → success | error | timeout | cancelled` (§2).
 
-**`dream_reports`** — one row per run. Current writers populate `pipeline_type`, `started_at`, `finished_at`, `duration_ms`, `synthesis_count`, the notes-era activity counters (`notes_consolidated` / `notes_woven` / `notes_archived` / `feedback_distilled`, added by `migrate_dream_reports_add_activity_counters`), `errors`, and the nullable `evolution_json` (serialized `EvolutionOutcome` — the SkillOpt gate verdict, added by `migrate_dream_reports_add_evolution`; NULL on pre-migration rows or cycles with no gate decision). Legacy `facts_*` / `nodes_*` / `edges_*` columns from the pre-notes schema were dropped by `migrate_dream_reports_drop_legacy_cols`:
+**`dream_reports`** — one row per run. Current writers populate `pipeline_type`, `started_at`, `finished_at`, `duration_ms`, `synthesis_count`, the notes-era activity counters (`notes_consolidated` / `notes_woven` / `notes_archived` / `feedback_distilled`, added by `migrate_dream_reports_add_activity_counters`), `errors`, and the nullable `evolution_json` / `decision_json` (serialized `EvolutionOutcome` — the SkillOpt gate verdict — and `CycleDecision` — the cycle's strategy, rationale, churn-gate verdict, executed stages and validation result; both added by `migrate_dream_reports_add_evolution`, NULL on pre-migration rows). **The scheduled path (`check_and_run`), the forced path (`run_now`) and every project sub-cycle write rows through the single writer `DreamDaemon::persist_run_row`** — a forced cycle used to leave no row at all, so it was invisible to both the Panel's run history and the governance audit's activity probe; a project sub-cycle left none either (§3.3).
+
+**`namespace` is the corpus's real partition key** — the base agent id, or `{base}__proj-*`. It used to be the literal `'owner'`, an id no agent has ever had, on every row. That cost nothing while nothing read the column, and became load-bearing the moment sub-cycles started filing rows: `migrate_dream_reports_namespace_to_agent_id` backfills the sentinel to `DEFAULT_AGENT_ID` so an upgrade does not make the operator's whole history fall outside every scoped view. The id carries the namespace too (`dream_{started_at}_{namespace}`), because the base cycle and its sub-cycles routinely finish inside the same second and `id` is the primary key.
+
+**Readers, and their scope:**
+
+| reader | scope | why |
+|---|---|---|
+| `dreaming.list_insights` → `runs` | the requested `agent_id`, base by default | an unscoped window of 30 covers 30/(K+1) nights with K projects open — the base agent's history would thin out as the user opens more projects |
+| `dreaming.list_insights` → `namespaces` | all corpora, most recent first, capped | the index that makes the other corpora reachable; scoping without it would leave them as invisible as before |
+| `governance_metrics` → `dreaming` | base only (`dream_report_distribution_since`) | summing every corpus inflates `runs` by the number of open projects while leaving `feedback_distilled_sum` flat (that stage is global-only), i.e. it makes the Dreaming × correction Goodhart pairing read healthier the more projects are open | Legacy `facts_*` / `nodes_*` / `edges_*` columns from the pre-notes schema were dropped by `migrate_dream_reports_drop_legacy_cols`:
 
 ```sql
 CREATE TABLE IF NOT EXISTS dream_reports (
@@ -302,8 +355,9 @@ CREATE TABLE IF NOT EXISTS dream_reports (
     notes_archived     INTEGER NOT NULL DEFAULT 0,
     feedback_distilled INTEGER NOT NULL DEFAULT 0,
     errors             TEXT,
-    namespace          TEXT NOT NULL DEFAULT 'owner',
-    evolution_json     TEXT   -- serialized EvolutionOutcome (SkillOpt gate verdict), nullable
+    namespace          TEXT NOT NULL DEFAULT 'main',  -- must equal DEFAULT_AGENT_ID; guarded
+    evolution_json     TEXT,  -- serialized EvolutionOutcome (SkillOpt gate verdict), nullable
+    decision_json      TEXT   -- serialized CycleDecision (strategy/rationale/gate/stages/validation), nullable
 );
 CREATE INDEX IF NOT EXISTS idx_dream_reports_started ON dream_reports(started_at);
 ```

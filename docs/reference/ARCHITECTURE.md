@@ -179,7 +179,8 @@ Client Request (JSON-RPC)
 
 ```
 Thinker Decision (tool_use)
-    │
+    │ validate non-empty, response-unique call_id
+    │ persist AssistantMessage before side effects
     ▼
 ┌─────────────────────────────────────────────────────┐
 │ Dispatcher                                          │
@@ -207,6 +208,14 @@ Thinker Decision (tool_use)
     └─── Extension Tool (WASM / Node.js)
             • Plugin runtime execution
 ```
+
+`call_id` is the correlation key across the provider response, session log,
+approval identity, in-flight cancellation, tool result, trace, and UI projection.
+The harness rejects empty or duplicate IDs before persisting the assistant event;
+it never repairs IDs heuristically. The process-wide in-flight registry is installed
+before its Gateway RPC handlers, independently of the optional result store. MCP
+restart failures emit `ServerCrashed`, allowing the existing bridge to remove stale
+handlers before a later turn snapshots the tool surface.
 
 Exec-class tools (`code_exec`, `bash_exec`) route through an additional
 **Sandbox layer** (`src/sandbox/`) between the tool and process execution.
@@ -751,6 +760,13 @@ let prompt = builder.build_system_prompt(&tools);
 authoritative list** — layer set, priorities, and assembly order all live there,
 and each layer self-declares its `priority()`, `stability()`, `paths()` and
 `supports_mode()`. This document deliberately does **not** reproduce that list.
+
+`stability()` has **no default body** (2026-08-04) — a new layer that says nothing
+about whether its bytes change per turn does not compile. It used to default to
+`Stable`, which meant omission silently placed the layer in the provider-cached
+prefix; `ToolRuntimeStateLayer` rode that default until a person reading the code
+noticed a 30-second health probe was re-keying whole sessions. The question is
+asked at the one moment its author knows the answer. See FEATURE_LOCATOR §2.19 ⑥.
 
 A hand-maintained priority table used to live here, and by 2026-07-26 it named
 eight layers that no longer existed (`HydratedToolsLayer`, `HeartbeatLayer`,

@@ -15,7 +15,7 @@ mod registry;
 #[cfg(test)]
 mod tests;
 
-pub use registry::{PRESETS, PRESET_METADATA};
+pub use registry::{canonical_preset_id, canonical_profiles, PRESETS, PRESET_METADATA};
 
 /// Temperature handling for providers with non-standard expectations.
 ///
@@ -52,11 +52,16 @@ pub struct ProviderPreset {
     /// Alternative names this preset answers to (case-insensitive).
     /// Eliminates duplicate `m.insert()` calls per name variant.
     pub aliases: &'static [&'static str],
-    /// Curated fallback model IDs used when dynamic `/models` discovery fails.
-    /// First entry is the recommended fallback.
+    /// Curated fallback model IDs. First entry is the recommended fallback
+    /// and must equal `default_model` (drift-guarded). This chain is both
+    /// the picker roster and the failover walk order *within* the provider:
+    /// `deps_builder::provider_chain` appends any rungs the operator did not
+    /// list to the provider's failover model catalog.
     pub fallback_models: &'static [&'static str],
     /// Cheap auxiliary model for memory summarization, vision, classification.
-    /// `None` → callers should fall back to `default_model`.
+    /// `None` → the preset has no cheap tier; consumers (summary routing)
+    /// deliberately do **not** fall back to `default_model` — background jobs
+    /// must not silently run on the flagship.
     pub default_aux_model: Option<&'static str>,
     /// Override for the `/models` discovery endpoint.
     /// `None` → use `{base_url}/models` (or protocol-specific default).
@@ -223,12 +228,6 @@ impl ProviderPreset {
         self
     }
 
-    /// Resolve aux model, falling back to `default_model` when unset.
-    #[must_use]
-    pub fn aux_model(&self) -> &'static str {
-        self.default_aux_model.unwrap_or(self.default_model)
-    }
-
     /// Resolve `/models` discovery URL, falling back to `{base_url}/models`.
     #[must_use]
     pub fn resolve_models_url(&self) -> String {
@@ -253,8 +252,12 @@ pub fn provider_metadata(name: &str) -> Option<&'static ProviderMetadata> {
 ///
 /// Reads directly from `preset.modalities` — opt-out of the chat default
 /// is via `.with_modalities(&[..])` at the registry level.
+///
+/// Iterates the **canonical** profiles only: aliases are resolution keys,
+/// not display rows (see [`canonical_profiles`]), so `kimi`/`moonshot` no
+/// longer show up as two entries in pickers and `list_models`.
 pub fn presets_by_modality(modality: Modality) -> Vec<&'static str> {
-    let mut out: Vec<&'static str> = PRESETS
+    let mut out: Vec<&'static str> = registry::canonical_profiles()
         .iter()
         .filter(|(_, preset)| preset.modalities.contains(&modality))
         .map(|(name, _)| *name)
@@ -267,6 +270,49 @@ pub fn presets_by_modality(modality: Modality) -> Vec<&'static str> {
 pub fn get_preset(name: &str) -> Option<&'static ProviderPreset> {
     let lower = name.to_lowercase();
     PRESETS.get(lower.as_str())
+}
+
+/// One provider's model ladder: `base` first, then any rungs of the preset's
+/// curated `fallback_models` chain the base did not list.
+///
+/// The preset chain *is* the single curated ladder per provider, and this
+/// function is its only merge point — every surface consumes the same leaf so
+/// they cannot disagree:
+///
+/// * **failover walk** (`deps_builder/provider_chain.rs`): seeds `base` with
+///   the operator's `models`, giving the in-provider failover ladder.
+/// * **`providers.catalog` picker roster**: seeds `base` with the operator's
+///   `models`, or `[default_model]` when the operator listed none.
+///
+/// Base entries keep priority (they are explicit intent) and the first entry
+/// stays whatever the caller seeded, which is also what `price_hint` reads.
+/// Rungs are appended case-insensitively deduplicated; empty rungs are
+/// dropped so a bring-your-own-model relay (`requires_explicit_model`)
+/// contributes nothing.
+///
+/// The merge is skipped when the operator moved `base_url` off the preset: a
+/// relocated endpoint serves its own inventory (same guard as discovery's
+/// `models_url` override), and the curated ids would be opaque 400s there.
+/// The aux model is deliberately *not* a rung — it is the cheap tier for
+/// background jobs, not a failover candidate for the main loop.
+#[must_use]
+pub fn model_ladder(
+    name: &str,
+    base: Vec<String>,
+    operator_base_url: Option<&str>,
+) -> Vec<String> {
+    let mut models = base;
+    if let Some(preset) = get_preset(name) {
+        let unmoved = operator_base_url.is_none_or(|u| u == preset.base_url);
+        if unmoved {
+            for rung in preset.fallback_models {
+                if !rung.is_empty() && !models.iter().any(|m| m.eq_ignore_ascii_case(rung)) {
+                    models.push((*rung).to_string());
+                }
+            }
+        }
+    }
+    models
 }
 
 /// Get a preset with override support.

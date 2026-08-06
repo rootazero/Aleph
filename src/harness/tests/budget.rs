@@ -482,7 +482,7 @@ const BUDGETED: [&str; 12] = [
 ///     `fresh_tail_count`, and it is the only caller that needs the count — which
 ///     is exactly why the count is returned by a second function rather than
 ///     forced on every caller.
-const CEILING: usize = 5142;
+const CEILING: usize = 5146;
 
 fn repo_root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))

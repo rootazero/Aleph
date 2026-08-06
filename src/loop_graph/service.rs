@@ -415,7 +415,13 @@ pub(crate) fn render_session_topology_in(
     let label_of = |id: &str| -> String {
         nodes.iter().find(|n| n.id == id).map_or_else(
             || clamp_handle(&one_line(id)),
-            |n| format!("{} ({})", clamp_handle(&one_line(id)), clamp_handle(&one_line(&n.label))),
+            |n| {
+                format!(
+                    "{} ({})",
+                    clamp_handle(&one_line(id)),
+                    clamp_handle(&one_line(&n.label))
+                )
+            },
         )
     };
 

@@ -35,6 +35,7 @@ const PROFILES: &[(&str, ProviderPreset)] = &[
     (
         "chatgpt",
         ProviderPreset::new("https://chatgpt.com", "codex", "#10a37f", "gpt-5.6")
+            .with_aliases(&["codex"])
             .with_display("ChatGPT (Codex Login)")
             .with_homepage("https://chatgpt.com")
             .with_signup("https://chatgpt.com")
@@ -43,16 +44,21 @@ const PROFILES: &[(&str, ProviderPreset)] = &[
     ),
     (
         "azure-openai",
+        // Per-deployment host: the base_url is a template and model ids are
+        // whatever the operator named their deployments — there is no id
+        // Aleph could ship that would be right for an arbitrary resource
+        // (the previous `gpt-4o` default was a rotting guess).
         ProviderPreset::new(
             "https://YOUR-RESOURCE.openai.azure.com",
             "openai",
             "#0078d4",
-            "gpt-4o",
+            "",
         )
         .with_display("Azure OpenAI")
         .with_homepage("https://learn.microsoft.com/azure/ai-services/openai")
         .with_signup("https://portal.azure.com")
         .with_description("Override base_url with your Azure resource")
+        .requires_explicit_model()
         .no_health_check(),
     ),
     // ─── Anthropic family ─────────────────────────────────────────────────────
@@ -747,11 +753,14 @@ const PROFILES: &[(&str, ProviderPreset)] = &[
     ),
     (
         "litellm",
-        ProviderPreset::new("http://localhost:4000", "openai", "#22c55e", "gpt-4o")
+        // Pure relay: serves whatever the operator's proxy routes to, so no
+        // shipped default can be right (the `gpt-4o` here was a guess).
+        ProviderPreset::new("http://localhost:4000", "openai", "#22c55e", "")
             .with_display("LiteLLM Proxy")
             .with_homepage("https://docs.litellm.ai")
             .with_signup("https://docs.litellm.ai")
-            .with_description("Drop-in proxy for any LLM backend"),
+            .with_description("Drop-in proxy for any LLM backend")
+            .requires_explicit_model(),
     ),
     (
         "nvidia-nim",
@@ -824,30 +833,36 @@ const PROFILES: &[(&str, ProviderPreset)] = &[
     // ─── New presets brought over from hermes-agent plugins/model-providers ───
     (
         "ai-gateway",
+        // Per-account gateway (ACCOUNT_ID in the path): the model roster is
+        // the operator's own route config — BYO model, no shipped default.
         ProviderPreset::new(
             "https://gateway.ai.cloudflare.com/v1/ACCOUNT_ID/aleph/openai",
             "openai",
             "#f6821f",
-            "gpt-4o",
+            "",
         )
         .with_display("Cloudflare AI Gateway")
         .with_homepage("https://developers.cloudflare.com/ai-gateway")
         .with_signup("https://dash.cloudflare.com/?to=/:account/ai/ai-gateway")
         .with_description("OpenAI-compatible AI gateway with cache + analytics")
+        .requires_explicit_model()
         .no_health_check(),
     ),
     (
         "azure-foundry",
+        // Per-project host (YOUR-PROJECT in the path): model ids are the
+        // operator's deployment names — BYO model, no shipped default.
         ProviderPreset::new(
             "https://YOUR-PROJECT.services.ai.azure.com/models",
             "openai",
             "#0078d4",
-            "gpt-4o",
+            "",
         )
         .with_display("Azure AI Foundry")
         .with_homepage("https://learn.microsoft.com/azure/ai-foundry")
         .with_signup("https://ai.azure.com")
         .with_description("Azure AI Foundry inference (models endpoint)")
+        .requires_explicit_model()
         .no_health_check(),
     ),
     (
@@ -1016,3 +1031,36 @@ pub static PRESET_METADATA: Lazy<HashMap<&'static str, ProviderMetadata>> = Lazy
     }
     m
 });
+
+/// Canonical profiles, in declaration order.
+///
+/// Aliases are **resolution keys, not display rows**: `PRESETS` deliberately
+/// expands them for lookup, but any surface that *enumerates* presets
+/// (catalog RPC, `list_models`, modality listings) must iterate this slice
+/// instead — otherwise `kimi`/`moonshot` render as two rows describing one
+/// provider.
+pub fn canonical_profiles() -> &'static [(&'static str, ProviderPreset)] {
+    PROFILES
+}
+
+/// Alias → canonical id index (canonical ids map to themselves).
+static CANONICAL_ID: Lazy<HashMap<&'static str, &'static str>> = Lazy::new(|| {
+    let mut m = HashMap::with_capacity(PROFILES.len() * 2);
+    for (name, preset) in PROFILES {
+        m.insert(*name, *name);
+        for alias in preset.aliases {
+            m.insert(*alias, *name);
+        }
+    }
+    m
+});
+
+/// Resolve a preset name or alias (case-insensitive) to its canonical id.
+///
+/// Returns `None` for names no preset answers to. This is the single source
+/// for "alias → canonical" normalisation — call sites that hand-rolled it
+/// (the `codex` → `chatgpt` special case in `set_default_provider`) were a
+/// second truth that drifted the moment an alias was added here.
+pub fn canonical_preset_id(name: &str) -> Option<&'static str> {
+    CANONICAL_ID.get(name.to_lowercase().as_str()).copied()
+}

@@ -148,7 +148,7 @@ impl TranscriptIndexer {
     /// This is called after a conversation turn completes.
     /// The memory entry should already be in the database.
     pub async fn index_turn(&self, _memory_id: &str) -> Result<()> {
-         // This is a no-op for MVP since memories table already has embeddings
+        // This is a no-op for MVP since memories table already has embeddings
         // In future, this will handle chunking and additional indexing
         Ok(())
     }

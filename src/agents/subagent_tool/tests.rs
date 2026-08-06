@@ -1885,6 +1885,64 @@ async fn wait_returns_promptly_when_the_harness_cancels() {
     }
 }
 
+/// Round-8 — an interrupted `wait` over a set that contains unknown ids
+/// must surface them via `unknown_request_ids`, mirroring the success
+/// path's `annotate_unknown` so a typo'd id is diagnosed even when the
+/// parent cancels the wait instead of waiting it out. Without this the
+/// only signal of a typo is the absence of an entry in `still_running`,
+/// which reads to the model as "no children left" rather than "you got
+/// the request_id wrong".
+#[tokio::test]
+async fn wait_cancelled_carries_unknown_request_ids() {
+    let tracker = make_tracker();
+    register_owned(&tracker, "real", "sess-cancel-unknown");
+    let tool = tool_for_session(tracker, "sess-cancel-unknown");
+
+    let cancel = CancellationToken::new();
+    let fire = cancel.clone();
+    tokio::spawn(async move {
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        fire.cancel();
+    });
+
+    let result = tool
+        .execute(
+            json!({
+                "action": "wait",
+                "request_ids": ["real", "typo-a", "typo-b"],
+                "timeout_secs": 600,
+            }),
+            cancel,
+        )
+        .await;
+    match result {
+        ToolResult::Success { output } => {
+            assert_eq!(output["status"], "wait_interrupted");
+            let still: Vec<&str> = output["still_running"]
+                .as_array()
+                .expect("still_running is an array")
+                .iter()
+                .map(|r| r["request_id"].as_str().expect("request_id is a string"))
+                .collect();
+            assert_eq!(still, vec!["real"], "live ids stay listed as still_running");
+            let unknown: Vec<&str> = output["unknown_request_ids"]
+                .as_array()
+                .expect("unknown_request_ids is an array")
+                .iter()
+                .map(|v| v.as_str().expect("id is a string"))
+                .collect();
+            let mut got = unknown.clone();
+            got.sort_unstable();
+            assert_eq!(
+                got,
+                vec!["typo-a", "typo-b"],
+                "typo'd ids must surface on the interrupted-wait report"
+            );
+        }
+        other => unreachable!("expected an interrupted-wait report, got {other:?}"),
+    }
+}
+
 /// Cancelling a background sub-agent is the parent deciding its outcome, so the
 /// proactive announce must stay quiet about it — otherwise a whole fresh parent
 /// turn is spent reporting the death of a child the parent itself ordered.
@@ -2037,4 +2095,40 @@ async fn wait_names_request_ids_it_has_never_heard_of() {
     };
     assert_eq!(output["status"], "completed");
     assert_eq!(output["unknown_request_ids"][0], "typo-id");
+}
+
+/// Round-8 — a `wait` over a set that is *entirely* unknown must surface
+/// every id in the error message. The previous bool-shaped `NotFound`
+/// returned `"None of the given request_ids matches ..."` with no list,
+/// and the model could only diagnose the typo by trying one id at a
+/// time. This test pins the new contract: a fully-unknown set is still
+/// an error (the wait had nothing to wait for) but the error names the
+/// bad ids.
+#[tokio::test]
+async fn wait_with_all_unknown_request_ids_lists_them_in_the_error() {
+    let tracker = make_tracker();
+    let tool = tool_for_session(tracker, "sess-all-unknown");
+
+    let result = tool
+        .execute(
+            json!({
+                "action": "wait",
+                "request_ids": ["typo-a", "typo-b"],
+                "timeout_secs": 1
+            }),
+            CancellationToken::new(),
+        )
+        .await;
+    match result {
+        ToolResult::Error { error, .. } => {
+            // Both ids must appear in the human-readable error string.
+            assert!(
+                error.contains("typo-a") && error.contains("typo-b"),
+                "fully-unknown error must list every bad id, got: {error}"
+            );
+        }
+        ToolResult::Success { output } => {
+            unreachable!("fully-unknown set must return an error, not a success; got {output}")
+        }
+    }
 }

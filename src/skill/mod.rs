@@ -20,9 +20,7 @@ pub mod status;
 pub mod usage;
 
 pub use compat::SkillInfo;
-pub use config::{
-    InstallPreferences, SkillConfigUpdate, SkillEntryConfig, SkillsConfig,
-};
+pub use config::{InstallPreferences, SkillConfigUpdate, SkillEntryConfig, SkillsConfig};
 pub use cooccurrence::{cluster_chains, CoOccurrenceLog, RecentUse};
 pub use eligibility::{EligibilityResult, EligibilityService, IneligibilityReason};
 pub use guard::{
@@ -111,12 +109,13 @@ impl SkillSystem {
     /// Create a new, empty skill system.
     #[must_use]
     pub fn new() -> Self {
-        let data_dir = dirs::home_dir()
-            .unwrap_or_else(|| {
-                tracing::warn!("dirs::home_dir() returned None; falling back to current directory for skill data");
-                PathBuf::from(".")
+        // `ALEPH_HOME`-aware: skills.toml is Aleph state, and `skill_install`
+        // / `self_manage` address it through the same resolver.
+        let data_dir = crate::utils::paths::get_config_dir()
+            .unwrap_or_else(|e| {
+                tracing::warn!(error = %e, "cannot resolve Aleph config dir; falling back to current directory for skill data");
+                PathBuf::from(".aleph")
             })
-            .join(".aleph")
             .join("data");
         let config_path = data_dir.join("skills.toml");
         let config = SkillsConfig::load(&config_path);
@@ -1062,5 +1061,4 @@ Content two."#,
         // Skill should still be there
         assert_eq!(system.list_skills().await.len(), 1);
     }
-
 }

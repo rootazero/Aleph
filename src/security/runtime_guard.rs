@@ -70,20 +70,10 @@ pub struct SecurityContext {
 #[derive(Debug, Clone)]
 #[non_exhaustive]
 pub enum GuardResult {
-    Clean {
-        text: String,
-    },
-    Redacted {
-        text: String,
-        reasons: Vec<String>,
-    },
-    Blocked {
-        reason: String,
-    },
-    Warned {
-        text: String,
-        warnings: Vec<String>,
-    },
+    Clean { text: String },
+    Redacted { text: String, reasons: Vec<String> },
+    Blocked { reason: String },
+    Warned { text: String, warnings: Vec<String> },
 }
 
 /// Central orchestrator for runtime security checks.
@@ -374,8 +364,7 @@ impl RuntimeSecurityGuard {
         };
 
         // Handle secret leak detector block
-        if let LeakDecision::Block { reason, .. } = secret_scan
-        {
+        if let LeakDecision::Block { reason, .. } = secret_scan {
             self.log_audit(
                 context,
                 AuditEventType::EnvInjectionDetected,

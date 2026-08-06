@@ -17,17 +17,20 @@ use crate::exec::manager::{ExecApprovalManager, DEFAULT_APPROVAL_TIMEOUT_MS};
 use crate::exec::socket::ApprovalDecisionType;
 use crate::gateway::event_bus::GatewayEventBus;
 use crate::gateway::events::GatewayEventFrame;
+use crate::sandbox::exec_approval::gate::ApprovalOutcome;
 
-/// Map an `ExecApprovalManager` decision into the wire outcome string consumed
-/// by the node's `outcome_from_str`. `AllowAlways` collapses to a session grant
-/// (permanent device elevation is out of scope, same as Phase 2b).
-const fn decision_to_wire(decision: Option<ApprovalDecisionType>) -> &'static str {
-    match decision {
-        Some(ApprovalDecisionType::AllowOnce) => "approved",
-        Some(ApprovalDecisionType::AllowSession) => "approved_session",
-        Some(ApprovalDecisionType::AllowAlways) => "approved_session",
-        Some(ApprovalDecisionType::Deny) => "denied",
-        None => "timeout",
+/// Render an outcome as the wire string consumed by the node's
+/// `outcome_from_str`. The decision → outcome step is the shared
+/// [`ApprovalDecisionType::to_outcome`] mapping (`AllowAlways` collapses to a
+/// session grant — permanent device elevation is out of scope, same as
+/// Phase 2b); this fn only fixes the cluster wire vocabulary, which must not
+/// change.
+const fn outcome_to_wire(outcome: ApprovalOutcome) -> &'static str {
+    match outcome {
+        ApprovalOutcome::Approved => "approved",
+        ApprovalOutcome::ApprovedForSession => "approved_session",
+        ApprovalOutcome::Denied => "denied",
+        ApprovalOutcome::Timeout => "timeout",
     }
 }
 
@@ -69,6 +72,9 @@ pub async fn run_node_approval(
         // Cluster-node approvals are resolved by the center operator (RPC path),
         // never a channel button, so the originator gate does not apply here.
         originator_user_id: None,
+        // The node's redacted summary is not a canonical action identity — no
+        // session-grant cascade for node approvals.
+        grant_key: None,
     };
     let record = manager.create(&request, DEFAULT_APPROVAL_TIMEOUT_MS);
     // Register BEFORE publishing so an instantly-resolving operator cannot race
@@ -108,7 +114,8 @@ pub async fn run_node_approval(
         tracing::warn!(error = %e, "failed to publish final approval event for node approval");
     }
 
-    (decision_to_wire(decision), resolved.deny_reason)
+    let outcome = decision.map_or(ApprovalOutcome::Timeout, ApprovalDecisionType::to_outcome);
+    (outcome_to_wire(outcome), resolved.deny_reason)
 }
 
 #[cfg(test)]
@@ -119,20 +126,22 @@ mod tests {
 
     #[test]
     fn decision_mapping() {
+        // The wire strings are the cluster protocol and must not change; the
+        // decision → outcome step is the shared `to_outcome` mapping.
+        let wire = |d: Option<ApprovalDecisionType>| {
+            outcome_to_wire(d.map_or(ApprovalOutcome::Timeout, ApprovalDecisionType::to_outcome))
+        };
+        assert_eq!(wire(Some(ApprovalDecisionType::AllowOnce)), "approved");
         assert_eq!(
-            decision_to_wire(Some(ApprovalDecisionType::AllowOnce)),
-            "approved"
-        );
-        assert_eq!(
-            decision_to_wire(Some(ApprovalDecisionType::AllowSession)),
+            wire(Some(ApprovalDecisionType::AllowSession)),
             "approved_session"
         );
         assert_eq!(
-            decision_to_wire(Some(ApprovalDecisionType::AllowAlways)),
+            wire(Some(ApprovalDecisionType::AllowAlways)),
             "approved_session"
         );
-        assert_eq!(decision_to_wire(Some(ApprovalDecisionType::Deny)), "denied");
-        assert_eq!(decision_to_wire(None), "timeout");
+        assert_eq!(wire(Some(ApprovalDecisionType::Deny)), "denied");
+        assert_eq!(wire(None), "timeout");
     }
 
     #[tokio::test]

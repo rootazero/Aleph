@@ -91,11 +91,10 @@ pub fn carryover_dir() -> PathBuf {
     aleph_home().join("data").join("cron_carryover")
 }
 
+/// Aleph home, or the CWD when it cannot be resolved at all.
+/// Single source: [`crate::utils::paths::get_config_dir`] (see `canvas_io`).
 fn aleph_home() -> PathBuf {
-    std::env::var_os("ALEPH_HOME")
-        .map(PathBuf::from)
-        .or_else(|| dirs::home_dir().map(|h| h.join(".aleph")))
-        .unwrap_or_else(|| PathBuf::from("."))
+    crate::utils::paths::get_config_dir().unwrap_or_else(|_| PathBuf::from("."))
 }
 
 /// Sanitise `job_id` to `[A-Za-z0-9._-]` for safe filesystem use. Same

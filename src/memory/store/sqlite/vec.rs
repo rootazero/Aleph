@@ -31,36 +31,79 @@ pub fn register_sqlite_vec() {
     }
 }
 
-/// All notes vec0 tables, one per supported embedding dimension. Used by
+/// Every embedding dimension the vector index can store, paired with the vec0
+/// table names that hold it.
+///
+/// **Single source of truth.** Table creation (`schema::init_*_vec_tables`),
+/// dimension lookup, and the delete-path sweep all derive from this one array;
+/// adding a dimension is a one-line change here. It was previously spelled out
+/// in five places, which is how a deployment could end up with a table set that
+/// silently disagreed with what the lookup accepted.
+///
+/// 384 covers `all-MiniLM-L6-v2` (the most common local embedding model) and
+/// 3072 covers `text-embedding-3-large`. Before they were listed here, either
+/// one produced a deployment with **no note vectors at all**: every
+/// `upsert_embedding` failed into a swallowed `warn!` on the write side, and
+/// every hybrid query failed on the read side.
+///
+/// The names are compile-time constants, so interpolating them into SQL stays
+/// injection-safe.
+pub const EMBEDDING_DIM_TABLES: &[(u32, &str, &str)] = &[
+    (384, "notes_vec_384", "routing_exp_vec_384"),
+    (768, "notes_vec_768", "routing_exp_vec_768"),
+    (1024, "notes_vec_1024", "routing_exp_vec_1024"),
+    (1536, "notes_vec_1536", "routing_exp_vec_1536"),
+    (3072, "notes_vec_3072", "routing_exp_vec_3072"),
+];
+
+/// Every notes vec0 table, one per supported embedding dimension. Used by
 /// delete paths that must clear an embedding without knowing its dimension.
-pub const ALL_NOTES_VEC_TABLES: &[&str] = &["notes_vec_768", "notes_vec_1024", "notes_vec_1536"];
+///
+/// Derived from [`EMBEDDING_DIM_TABLES`] rather than restated, so a delete
+/// sweep can never miss a table that the write path is allowed to insert into.
+pub fn all_notes_vec_tables() -> impl Iterator<Item = &'static str> {
+    EMBEDDING_DIM_TABLES.iter().map(|(_, notes, _)| *notes)
+}
+
+/// Human-readable list of supported dimensions, for error messages.
+fn supported_dims_label() -> String {
+    EMBEDDING_DIM_TABLES
+        .iter()
+        .map(|(d, ..)| d.to_string())
+        .collect::<Vec<_>>()
+        .join(", ")
+}
 
 /// Map an embedding dimension to the corresponding notes vec0 table name.
 ///
-/// Returns an error if `dim` is not one of 768, 1024, or 1536.
+/// Returns an error for a dimension outside [`EMBEDDING_DIM_TABLES`].
 pub fn notes_vec_table_for_dim(dim: u32) -> Result<&'static str, AlephError> {
-    match dim {
-        768 => Ok("notes_vec_768"),
-        1024 => Ok("notes_vec_1024"),
-        1536 => Ok("notes_vec_1536"),
-        _ => Err(AlephError::config(format!(
-            "unsupported embedding dimension: {dim} (expected 768, 1024, or 1536)"
-        ))),
-    }
+    EMBEDDING_DIM_TABLES
+        .iter()
+        .find(|(d, ..)| *d == dim)
+        .map(|(_, notes, _)| *notes)
+        .ok_or_else(|| {
+            AlephError::config(format!(
+                "unsupported embedding dimension: {dim} (expected one of {})",
+                supported_dims_label()
+            ))
+        })
 }
 
 /// Map an embedding dimension to the corresponding routing experience vec0 table name.
 ///
-/// Returns an error if `dim` is not one of 768, 1024, or 1536.
+/// Returns an error for a dimension outside [`EMBEDDING_DIM_TABLES`].
 pub fn routing_exp_vec_table_for_dim(dim: u32) -> Result<&'static str, AlephError> {
-    match dim {
-        768 => Ok("routing_exp_vec_768"),
-        1024 => Ok("routing_exp_vec_1024"),
-        1536 => Ok("routing_exp_vec_1536"),
-        _ => Err(AlephError::config(format!(
-            "unsupported embedding dimension: {dim} (expected 768, 1024, or 1536)"
-        ))),
-    }
+    EMBEDDING_DIM_TABLES
+        .iter()
+        .find(|(d, ..)| *d == dim)
+        .map(|(.., routing)| *routing)
+        .ok_or_else(|| {
+            AlephError::config(format!(
+                "unsupported embedding dimension: {dim} (expected one of {})",
+                supported_dims_label()
+            ))
+        })
 }
 
 /// Serialize a float embedding to a little-endian byte blob for sqlite-vec.

@@ -1,6 +1,6 @@
 //! `SecurityLayer` — security constraints injection (priority 600)
 
-use crate::thinker::prompt_layer::{AssemblyPath, LayerInput, PromptLayer};
+use crate::thinker::prompt_layer::{AssemblyPath, LayerInput, LayerStability, PromptLayer};
 use crate::thinker::prompt_mode::PromptMode;
 use crate::thinker::prompt_sanitizer::{sanitize_for_prompt, SanitizeLevel};
 
@@ -21,6 +21,9 @@ impl PromptLayer for SecurityLayer {
         // harness `Basic` / `Cached` routes, where `ResolvedContext` is
         // threaded. The inject() guard keeps output empty when it is absent.
         &[AssemblyPath::Basic, AssemblyPath::Cached]
+    }
+    fn stability(&self) -> LayerStability {
+        LayerStability::Stable
     }
     fn inject(&self, output: &mut String, input: &LayerInput) {
         let ctx = match input.context {

@@ -282,6 +282,18 @@ impl ContextCompactor {
         self.cheap_provider.as_ref().unwrap_or(&self.provider)
     }
 
+    /// Name of the provider summarization would actually be billed to.
+    ///
+    /// Deliberately reports the resolved [`Self::summarizer`] rather than
+    /// whether `cheap_provider` is `Some`: a construction site can only be
+    /// proven correct by what the *routing* ends up being, not by observing
+    /// that a builder was called.
+    #[cfg(test)]
+    #[must_use]
+    pub fn summarizer_name(&self) -> &str {
+        self.summarizer().name()
+    }
+
     /// Compact older messages in the conversation history.
     ///
     /// The `fresh_tail` parameter overrides `config.fresh_tail` when larger.

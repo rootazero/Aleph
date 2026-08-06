@@ -64,6 +64,8 @@ Subagents inherit the following from their parent via `SpawnerBase`:
 - `trace_sink` (Stage A) — observability sink
 - `context_budget_config` (2026-07-29) — the `[context_budget]` config, from which the
   spawner builds the child's **own** budget + compactor + preflight pipeline
+- `cheap_summary_provider` (2026-08-04) — the `[generation] cheap_model` tier, so the
+  child compacts on the flash-tier model the root agent already uses for the same job
 
 The context triple deserves its own note, because it was missing for a long time and
 failed loudly rather than gracefully. `context_budget`, `context_compactor` and
@@ -82,6 +84,19 @@ concurrently-running children. Construction is a single point
 (`subagent_spawner::build_context_triple`) and is all-or-nothing, which is the gating
 `HarnessDeps` documents: a compactor without a preflight pipeline would pay for LLM
 summarisation where free structural pruning was available.
+
+The **cheap tier is the exception to "the child's provider"**, and it was missed for the
+same reason the triple itself was: `ContextCompactor` has two construction sites, and only
+the root one (`runner_impl.rs`) called `.with_cheap_provider(...)`. A second construction
+site inherits no tier it is not explicitly handed, so every subagent billed its compaction
+to the main model — which a swarm multiplies by its fan-out, silently and only on the bill
+(§2.19 ④). It is asserted by **routing**, not by builder invocation:
+`compactor::summarizer_name()` names the provider the compactor would actually call.
+
+Two sibling builders are deliberately **not** called for children, and
+`build_context_triple`'s doc says why so nobody "completes the set" later:
+`with_cache_carryover` (a 16-slot LRU that one-shot child sessions would evict the parent
+out of) and `with_summary_reuse` (keyed on a session that ends with the child).
 
 Per the P1 zero-override decision, subagents do not currently support per-agent overrides for these fields. `AgentDef` may be extended with `Option<T>` overrides in P4 if needed, with full backward compatibility.
 
@@ -676,6 +691,17 @@ sees one ordinary provider (R10); none of this touches `src/harness/`.
   `select_model` session pick > agent `model_hint` pin > flow `BrainRef`
   brain. An unusable preset (no `[moa]` section, unresolvable provider) fails
   soft — the run falls back to the normal provider chain and logs a warning.
+- **Side channels** (round 9): `MoaProvider` is the shape of the *user's
+  turn*, and only the Think loop drives it. Anything else in the run that
+  reaches for "the run's provider" — today that is history summarization via
+  `ContextCompactor` — takes `MoaProvider::acting_chain()` instead: the same
+  acting model, without the fan-out. Going through the facade made every
+  compaction pay N advisor calls, appended "use the advisor responses below"
+  to the *summarizer's* prompt (so advisory framing could reach the persisted
+  `<session_context>`), and consumed a cadence slot while overwriting the
+  run's cached advice — which the next real turn then reused. `runner_impl.rs`
+  derives `side_channel_llm` for this, wrapped in the same per-agent
+  `MeteringProvider` so side-channel spend is still attributed.
 - **Accounting**: advisor usage is metered per-slot (`MeteringProvider`
   labelled `moa:<idx>:<provider>:<model>`) and kept OUT of
   `ProviderResponse.usage` so the context gauge stays honest; a summed
@@ -684,7 +710,12 @@ sees one ordinary provider (R10); none of this touches `src/harness/`.
   `MoaTurnTrace` (persist-only, gated by `save_traces`) — are the harness's
   only touchpoint (`src/harness/trace.rs`). The panel renders the three live
   events inline as reasoning blocks (◇ 顾问 / ◆ 聚合 / ▫ 开销,
-  `interfaces/webchat/src/platform/wide/views/chat/events.rs`).
+  `interfaces/webchat/src/platform/wide/views/chat/events.rs`). Since round 9
+  each `MoaAdvisor` fires the moment that advisor lands (a `FuturesUnordered`
+  over the fan-out), not in one batch after the slowest returns — advisors
+  differ wildly in latency and the batch shape left every surface dark for up
+  to `advisor_timeout_secs` on each tool iteration. The event still carries its
+  own SLOT index, so what a user reads never depends on who answered first.
 
 **Round 2** (spec `docs/superpowers/specs/2026-07-05-moa-round2-optimization-design.md`)
 added four pieces on top of the port above:

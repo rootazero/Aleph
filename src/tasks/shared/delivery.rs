@@ -439,7 +439,4 @@ mod tests {
             "failure outcome must explain the configuration error"
         );
     }
-
 }
-
-

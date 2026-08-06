@@ -71,6 +71,12 @@ impl HarnessRunner for AgentHarnessRunner {
         self.context_budget_config.clone()
     }
 
+    /// Hand the spawner the SAME cheap-tier summarizer this runner routes its
+    /// own compaction to, so a child's compactor is tiered on the same terms.
+    fn cheap_summary_provider(&self) -> Option<Arc<dyn AiProvider>> {
+        self.cheap_provider.clone()
+    }
+
     // rust-doctor-disable-next-line high-cyclomatic-complexity
     async fn run(
         &self,
@@ -189,6 +195,10 @@ impl HarnessRunner for AgentHarnessRunner {
         // Spec: docs/superpowers/specs/2026-07-05-moa-continuous-advisory-port-design.md
         let mut moa_active = false;
         let mut moa_aggregator_identity: Option<(String, String)> = None;
+        // The acting model without the fan-out, for the run's NON-turn calls
+        // (history summarization). See `MoaProvider::acting_chain` for why a
+        // side channel that goes through the facade is wrong three ways at once.
+        let mut moa_acting_chain: Option<Arc<dyn crate::providers::AiProvider>> = None;
         let llm: Arc<dyn crate::providers::AiProvider> =
             match crate::providers::session_moa_handle::take_for_run(&session_pref_key) {
                 Some(pref) => {
@@ -203,6 +213,7 @@ impl HarnessRunner for AgentHarnessRunner {
                         Ok(moa) => {
                             moa_active = true;
                             moa_aggregator_identity = Some(moa.aggregator_identity());
+                            moa_acting_chain = Some(moa.acting_chain());
                             Arc::new(moa)
                         }
                         Err(reason) => {
@@ -263,6 +274,21 @@ impl HarnessRunner for AgentHarnessRunner {
             // rust-doctor-disable-next-line excessive-clone
             crate::providers::MeteringProvider::new(llm, trace_sink.clone(), spec.agent.clone()),
         );
+        // The run's provider for calls that are NOT the user's turn. Identical
+        // to `llm` in the normal case; when MoA is armed it is the aggregator
+        // alone, metered under the same agent so side-channel spend is still
+        // attributed. Only the advisory fan-out is dropped.
+        let side_channel_llm: Arc<dyn crate::providers::AiProvider> = match moa_acting_chain {
+            Some(acting) => Arc::new(crate::providers::MeteringProvider::new(
+                acting,
+                // rust-doctor-disable-next-line excessive-clone
+                trace_sink.clone(),
+                // rust-doctor-disable-next-line excessive-clone
+                spec.agent.clone(),
+            )),
+            // rust-doctor-disable-next-line excessive-clone
+            None => llm.clone(),
+        };
         // Remember the provider name so transient error classification below
         // can attach it to FlowError::Transient (Gateway's outer retry loop
         // reads this to call `report_outcome(&provider_name, ...)`).
@@ -352,15 +378,21 @@ impl HarnessRunner for AgentHarnessRunner {
         // `CostStatus::Unknown` ($0.00) on EVERY run. VESR's observer already
         // dodges this trap (routing/observer.rs: "never the FailoverProvider
         // wrapper name"); the pricing call just never got the same treatment.
-        let cost_provider: String = routing_provider_id
-            // rust-doctor-disable-next-line excessive-clone
-            .clone()
-            .or_else(|| {
-                llm.serving_provider_hint()
-                    .map(std::borrow::Cow::into_owned)
-            })
-            // rust-doctor-disable-next-line excessive-clone
-            .unwrap_or_else(|| provider_name.clone());
+        //
+        // MoA supersedes the directive for the PROVIDER half exactly as it does
+        // for the model half above. Without this the pair is mismatched — the
+        // pre-MoA provider key next to the aggregator's model — and
+        // `pricing::estimate` answers `CostStatus::Unknown` ($0.00) while
+        // `FlowOutcome.serving_provider` names a provider that never served a
+        // token. Round-2 B8 made exactly this correction for VESR; the cost /
+        // serving pair never got it, because only `gauge_model` was branched.
+        // Same single source as VESR: `moa_aggregator_identity`.
+        let cost_provider: String = acting_provider_id(
+            moa_aggregator_identity.as_ref().map(|(p, _)| p.as_str()),
+            routing_provider_id.as_deref(),
+            llm.serving_provider_hint().as_deref(),
+            &provider_name,
+        );
         // Complete the turn envelope with the model that is actually going to
         // answer. The gateway builds the rest of the envelope but cannot fill
         // this in — it is only resolvable here, after the provider chain is
@@ -445,8 +477,9 @@ impl HarnessRunner for AgentHarnessRunner {
         // H2: build a per-run context budget + compactor when `[context_budget]`
         // is enabled. The budget is fresh per run — its circuit-breaker and
         // diminishing-returns counters must not leak across concurrent
-        // sessions. The compactor reuses this run's provider for side-channel
-        // summarization (deterministic-truncation fallback on provider error).
+        // sessions. The compactor reuses this run's SIDE-CHANNEL provider for
+        // summarization (deterministic-truncation fallback on provider error) —
+        // `side_channel_llm`, not `llm`: see its construction above.
         let (context_budget, context_compactor, preflight_pipeline) = match self
             .context_budget_config
             .as_ref()
@@ -465,8 +498,13 @@ impl HarnessRunner for AgentHarnessRunner {
                 }
                 let budget = Arc::new(Mutex::new(budget_inner));
                 let mut compactor_inner = ContextCompactor::new(
+                    // NOT `llm`: summarization is a side channel, not the
+                    // user's turn. With MoA armed this is the aggregator alone
+                    // — see `MoaProvider::acting_chain`. `with_cheap_provider`
+                    // below still wins when a cheap tier is configured; this
+                    // fixes the (very common) case where it is not.
                     // rust-doctor-disable-next-line excessive-clone
-                    llm.clone(),
+                    side_channel_llm.clone(),
                     CompactorConfig {
                         fresh_tail: cfg.fresh_tail_count,
                         ..CompactorConfig::default()
@@ -487,10 +525,12 @@ impl HarnessRunner for AgentHarnessRunner {
                 // Agent alone is too coarse: the prefix is per session, so a
                 // second healthy session of this agent would zero this one's
                 // miss streak.
-                .with_monitor_scope(crate::thinker::prompt_builder::cache_monitor::cache_scope(
-                    &spec.agent,
-                    Some(&session_id.to_key_string()),
-                ));
+                .with_monitor_scope(
+                    crate::thinker::prompt_builder::cache_monitor::cache_scope(
+                        &spec.agent,
+                        Some(&session_id.to_key_string()),
+                    ),
+                );
                 // Wire the zero-API-cost session-summary reuse path: the
                 // memory backend holding the d0/d1/d2 facts plus the owning
                 // agent id they were written under. The writes resolve the
@@ -1148,6 +1188,75 @@ fn effective_model_directive(
     turn.or(session)
         .map(|p| (p.provider, p.model))
         .or(agent_hint)
+}
+
+/// The provider key the run's cost estimate and `FlowOutcome.serving_provider`
+/// are keyed on, in the same precedence as `gauge_model`.
+///
+/// 1. **MoA aggregator** — when MoA is armed the preset's aggregator IS the
+///    acting model, so it owns BOTH halves of the identity. Branching only the
+///    model half (which is what the code did) leaves a mismatched pair — the
+///    pre-MoA provider key next to the aggregator's model — and
+///    `pricing::estimate` answers `CostStatus::Unknown` ($0.00) while the
+///    outcome names a provider that never served a token. Reachable whenever a
+///    MoA run also carries a directive: an agent `provider_hint`, or a per-turn
+///    pick from the composer pill. Round-2 B8 made this correction for VESR;
+///    this is the same fact, read by the other two consumers.
+/// 2. **routing directive** — the pin the run resolved (select_model / hint).
+/// 3. **serving hint** — the dynamic chain answering which provider it serves.
+/// 4. **provider name** — last resort. NOT usable earlier: every production
+///    chain is a `FailoverProvider` (Metering/ModelOverride delegate `name()`),
+///    so this is the literal `"failover"`, a key the price table does not know.
+fn acting_provider_id(
+    moa_aggregator: Option<&str>,
+    routing_directive: Option<&str>,
+    serving_hint: Option<&str>,
+    provider_name: &str,
+) -> String {
+    moa_aggregator
+        .or(routing_directive)
+        .or(serving_hint)
+        .unwrap_or(provider_name)
+        .to_string()
+}
+
+#[cfg(test)]
+mod acting_provider_tests {
+    use super::acting_provider_id;
+
+    #[test]
+    fn the_moa_aggregator_owns_both_halves_of_the_identity() {
+        // Agent pins `openai`, user arms a MoA preset whose aggregator is
+        // anthropic. The gauge already reported the aggregator's MODEL; if the
+        // provider half stayed `openai` the pair is unpriceable ($0.00) and the
+        // outcome credits a provider that served nothing.
+        assert_eq!(
+            acting_provider_id(
+                Some("anthropic"),
+                Some("openai"),
+                Some("openai"),
+                "failover"
+            ),
+            "anthropic"
+        );
+    }
+
+    #[test]
+    fn without_moa_the_directive_still_wins_then_the_serving_hint() {
+        assert_eq!(
+            acting_provider_id(None, Some("openai"), Some("kimi"), "failover"),
+            "openai"
+        );
+        assert_eq!(
+            acting_provider_id(None, None, Some("kimi"), "failover"),
+            "kimi"
+        );
+    }
+
+    #[test]
+    fn the_wrapper_name_is_the_last_resort_only() {
+        assert_eq!(acting_provider_id(None, None, None, "failover"), "failover");
+    }
 }
 
 #[cfg(test)]

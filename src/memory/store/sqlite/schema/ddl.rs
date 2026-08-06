@@ -36,8 +36,13 @@ CREATE TABLE IF NOT EXISTS dream_reports (
     notes_archived     INTEGER NOT NULL DEFAULT 0,
     feedback_distilled INTEGER NOT NULL DEFAULT 0,
     errors          TEXT,
-    namespace       TEXT NOT NULL DEFAULT 'owner',
-    evolution_json  TEXT
+    -- Storage partition key: the base agent id, or `{base}__proj-*` for a
+    -- project sub-cycle. The default must stay in step with `DEFAULT_AGENT_ID`
+    -- (guarded by `dream_reports_namespace_default_is_the_default_agent`); it
+    -- used to read `'owner'`, an id no agent has ever had.
+    namespace       TEXT NOT NULL DEFAULT 'main',
+    evolution_json  TEXT,
+    decision_json   TEXT
 );
 
 CREATE INDEX IF NOT EXISTS idx_dream_reports_started
@@ -302,9 +307,16 @@ CREATE INDEX IF NOT EXISTS idx_query_filed_agent ON query_filed(agent_id);
 
 pub const NOTES_VEC_MAP_DDL: &str = r#"
 CREATE TABLE IF NOT EXISTS notes_vec_map (
-    rowid       INTEGER PRIMARY KEY AUTOINCREMENT,
-    path        TEXT NOT NULL,
-    agent_id    TEXT NOT NULL DEFAULT 'default',
+    rowid           INTEGER PRIMARY KEY AUTOINCREMENT,
+    path            TEXT NOT NULL,
+    agent_id        TEXT NOT NULL DEFAULT 'default',
+    -- The note's `content_hash` at the moment its vector was computed. Without
+    -- it nothing can tell a fresh vector from one left behind by a swallowed
+    -- embed failure, and `reembed_all` has to re-embed the whole corpus to be
+    -- sure. Empty string = provenance unknown => always treated as stale, so a
+    -- caller that does not supply a hash fails safe toward re-embedding.
+    embedded_hash   TEXT NOT NULL DEFAULT '',
+    embedded_at     INTEGER NOT NULL DEFAULT 0,
     UNIQUE(agent_id, path)
 );
 CREATE INDEX IF NOT EXISTS idx_notes_vec_map_agent ON notes_vec_map(agent_id);

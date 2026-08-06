@@ -830,6 +830,10 @@ impl AgentHarness {
             }
         }
 
+        response
+            .validate_tool_calls()
+            .map_err(|e| HarnessError::Llm(crate::error::AlephError::Validation(e)))?;
+
         // 4. Emit AssistantMessage preserving any tool_use intent in `blocks`.
         let turn_id = super::current_turn_id(&events);
         let text = format!("{carried}{}", response.text_content());

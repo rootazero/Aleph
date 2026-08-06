@@ -11,9 +11,9 @@ use tokio::sync::RwLock;
 use crate::error::{AlephError, Result};
 use crate::mcp::client::McpClient;
 use crate::mcp::context_injector::ContextInjector;
-use crate::mcp::jsonrpc::mcp::{SamplingRequest, SamplingResponse};
 #[cfg(test)]
 use crate::mcp::jsonrpc::mcp::{PromptRole, SamplingContent, StopReason};
+use crate::mcp::jsonrpc::mcp::{SamplingRequest, SamplingResponse};
 
 /// Callback for handling sampling requests
 ///

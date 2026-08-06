@@ -395,6 +395,82 @@ async fn catalog_configured_view_returns_verified_enabled_entry() {
 }
 
 #[tokio::test]
+async fn catalog_roster_merges_curated_rungs_behind_operator_models() {
+    // The picker roster comes from the same `presets::model_ladder` leaf the
+    // failover walk merges through: operator models first, unlisted curated
+    // `fallback_models` rungs appended behind them.
+    let mut config = Config::default();
+    let mut cfg = ProviderConfig::test_config("gpt-4o");
+    cfg.enabled = true;
+    cfg.verified = true;
+    config.providers.insert("openai".to_string(), cfg);
+    let config = Arc::new(RwLock::new(config));
+    let vault = test_vault();
+
+    let response = handle_catalog(catalog_request(Some("configured")), config, vault).await;
+    let items = items_array(&response);
+    let entry = items.iter().find(|e| e["id"] == "openai").unwrap();
+    let roster: Vec<&str> = entry["roster"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|m| m.as_str())
+        .collect();
+    assert_eq!(roster[0], "gpt-4o", "operator's first model stays first");
+    let preset = crate::providers::presets::get_preset("openai").unwrap();
+    for rung in preset.fallback_models {
+        assert!(
+            roster.iter().any(|m| m.eq_ignore_ascii_case(rung)),
+            "curated rung {rung} missing from the picker roster"
+        );
+    }
+}
+
+#[tokio::test]
+async fn catalog_roster_skips_curated_rungs_when_base_url_moved() {
+    // A relay whose base_url the operator moved serves its own inventory —
+    // the curated preset ids would be opaque 400s there, so the roster must
+    // be the operator's list alone. This is the guard the picker could not
+    // evaluate frontend-side.
+    let mut config = Config::default();
+    let mut cfg = ProviderConfig::test_config("gpt-4o");
+    cfg.enabled = true;
+    cfg.verified = true;
+    cfg.base_url = Some("https://relay.internal/v1".to_string());
+    config.providers.insert("openai".to_string(), cfg);
+    let config = Arc::new(RwLock::new(config));
+    let vault = test_vault();
+
+    let response = handle_catalog(catalog_request(Some("configured")), config, vault).await;
+    let items = items_array(&response);
+    let entry = items.iter().find(|e| e["id"] == "openai").unwrap();
+    assert_eq!(entry["roster"], json!(["gpt-4o"]));
+}
+
+#[tokio::test]
+async fn catalog_roster_defaults_to_preset_chain_when_unconfigured() {
+    let config = Arc::new(RwLock::new(Config::default()));
+    let vault = test_vault();
+    let response = handle_catalog(catalog_request(Some("all")), config, vault).await;
+    let items = items_array(&response);
+
+    // Unconfigured preset: roster is the curated chain, default first.
+    let entry = items.iter().find(|e| e["id"] == "openai").unwrap();
+    let roster: Vec<&str> = entry["roster"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|m| m.as_str())
+        .collect();
+    assert_eq!(roster[0], entry["default_model"].as_str().unwrap());
+    assert!(roster.len() > 1, "curated rungs must ride the roster");
+
+    // BYO-model relay: no default, no rungs → empty roster, never [""].
+    let byo = items.iter().find(|e| e["id"] == "t8star").unwrap();
+    assert_eq!(byo["roster"], json!([]));
+}
+
+#[tokio::test]
 async fn catalog_configured_view_includes_custom_non_preset_provider() {
     // A user-defined provider whose name is NOT a built-in chat preset (e.g.
     // an OpenAI-compatible relay added via `providers.create`). It must still

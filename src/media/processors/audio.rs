@@ -101,9 +101,7 @@ impl MediaProvider for AudioMediaProvider {
                 message: e.to_string(),
             })?;
 
-        Ok(MediaOutput::Text {
-            text: result.text,
-        })
+        Ok(MediaOutput::Text { text: result.text })
     }
 }
 

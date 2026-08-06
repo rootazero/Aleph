@@ -739,11 +739,26 @@ pub async fn handle_models_refresh(
                     "fetched_at": listing.fetched_at,
                     "models": listing.models,
                 }),
-                Err(e) => json!({
-                    "provider": name,
-                    "ok": false,
-                    "error": e.to_string(),
-                }),
+                Err(e) => {
+                    // Stale snapshot beats an error row: report what the
+                    // provider served last time, marked so the picker can
+                    // show it as dated rather than live.
+                    match crate::providers::model_catalog::cached_models(&name, &base_url) {
+                        Some(stale) => json!({
+                            "provider": name,
+                            "ok": true,
+                            "stale": true,
+                            "error": e.to_string(),
+                            "fetched_at": stale.fetched_at,
+                            "models": stale.models,
+                        }),
+                        None => json!({
+                            "provider": name,
+                            "ok": false,
+                            "error": e.to_string(),
+                        }),
+                    }
+                }
             }
         });
 
@@ -834,16 +849,30 @@ async fn set_default_provider_inner(
     multi_registry: Option<&Arc<crate::thinker::MultiProviderRegistry>>,
     vault: Option<&Arc<SharedTokenManager>>,
 ) -> JsonRpcResponse {
-    // Resolve canonical name (e.g. "codex" → "chatgpt")
-    let name = match params.name.to_lowercase().as_str() {
-        "codex" => "chatgpt".to_string(),
-        _ => params.name.clone(),
-    };
+    // Resolve canonical name through the preset alias table (e.g. "codex" →
+    // "chatgpt"). An exact config key match wins first (applied below against
+    // the live config): an operator who literally named a provider "codex"
+    // keeps their own entry. Anything the alias table doesn't know is used
+    // as-is (custom providers).
+    let name = crate::providers::presets::canonical_preset_id(&params.name.to_lowercase())
+        .map(str::to_string)
+        .unwrap_or_else(|| params.name.clone());
 
     // Set default provider and build new provider instance
     let provider_config_for_swap: Option<(String, crate::config::ProviderConfig)>;
     {
         let mut cfg = config.write().await;
+
+        // An exact (case-insensitive) config key beats the alias resolution:
+        // `canonical_preset_id("kimi")` is `moonshot`, but if the operator
+        // configured a provider literally named "kimi", that is the one they
+        // mean.
+        let name = cfg
+            .providers
+            .keys()
+            .find(|k| k.eq_ignore_ascii_case(&params.name))
+            .cloned()
+            .unwrap_or(name);
 
         // Guard: provider must exist and be verified
         match cfg.providers.get(&name) {
@@ -1006,8 +1035,26 @@ pub async fn handle_catalog(
             // display_name/modalities/homepage/notes into the preset itself,
             // so this is the single source of truth — no metadata-map fallback.
             let preset = chat_presets::get_preset(entry.name)?;
-            let cfg = config_guard.providers.get(entry.name);
-            let api_key = resolve_api_key(entry.name, &vault);
+            // A provider configured under an *alias* (`kimi` for `moonshot`)
+            // attaches to the canonical row rather than falling through to
+            // the custom section — aliases are resolution keys, and the
+            // enumeration above is canonical-only since this round. The
+            // matched config key doubles as the vault key (`ai:<name>`), so
+            // it is tracked alongside the config.
+            let (cfg_name, cfg) =
+                match config_guard
+                    .providers
+                    .get_key_value(entry.name)
+                    .or_else(|| {
+                        preset
+                            .aliases
+                            .iter()
+                            .find_map(|a| config_guard.providers.get_key_value(*a))
+                    }) {
+                    Some((n, c)) => (n.as_str(), Some(c)),
+                    None => (entry.name, None),
+                };
+            let api_key = resolve_api_key(cfg_name, &vault);
             let has_api_key = api_key.is_some() || cfg.and_then(|c| c.api_key.as_ref()).is_some();
             let verified = cfg.is_some_and(|c| c.verified);
             let enabled = cfg.is_some_and(|c| c.enabled);
@@ -1029,6 +1076,26 @@ pub async fn handle_catalog(
                 preset.default_model,
                 Some(preset.base_url),
                 crate::providers::model_catalog::ModelSource::PresetDefault,
+            );
+
+            // The picker roster merges through the same leaf the failover
+            // walk uses (`presets::model_ladder`), seeded with the operator's
+            // `models` or, when none are listed, the preset default. This is
+            // what stops the picker from recommending curated ids on a relay
+            // whose base_url the operator moved — they would 400 there.
+            let roster = chat_presets::model_ladder(
+                entry.name,
+                if models.is_empty() {
+                    let d = preset.default_model;
+                    if d.is_empty() {
+                        Vec::new()
+                    } else {
+                        vec![d.to_string()]
+                    }
+                } else {
+                    models.clone()
+                },
+                cfg.and_then(|c| c.base_url.as_deref()),
             );
 
             Some(CatalogEntryView {
@@ -1063,6 +1130,7 @@ pub async fn handle_catalog(
                 endpoint: record.endpoint.as_str().to_string(),
                 lifecycle: record.lifecycle,
                 requires_explicit_model: preset.requires_explicit_model,
+                roster,
             })
         })
         .collect();
@@ -1075,7 +1143,11 @@ pub async fn handle_catalog(
     let mut custom: Vec<CatalogEntryView> = config_guard
         .providers
         .iter()
-        .filter(|(name, _)| !preset_ids.contains(name.as_str()))
+        // Custom = no built-in preset answers to this name, canonical *or*
+        // alias (an alias-keyed config attached to its canonical row above).
+        .filter(|(name, _)| {
+            !preset_ids.contains(name.as_str()) && chat_presets::get_preset(name).is_none()
+        })
         .map(|(name, cfg)| {
             let api_key = resolve_api_key(name, &vault);
             let has_api_key = api_key.is_some() || cfg.api_key.is_some();
@@ -1113,6 +1185,7 @@ pub async fn handle_catalog(
                 // in `models` is the roster, so there is never a "no default
                 // shipped" state to announce.
                 requires_explicit_model: false,
+                roster: cfg.models.clone(),
             }
         })
         .collect();
@@ -1168,7 +1241,7 @@ pub async fn handle_catalog(
                 default_aux_model: None,
                 aliases: Vec::new(),
                 modalities: vec!["chat".to_string()],
-                models: names,
+                models: names.clone(),
                 has_api_key: true,
                 verified: true,
                 enabled: true,
@@ -1186,6 +1259,7 @@ pub async fn handle_catalog(
                 // models is caught where those slots are resolved, not here.)
                 lifecycle: crate::providers::model_catalog::ModelLifecycle::ACTIVE,
                 requires_explicit_model: false,
+                roster: names,
             });
         }
     }

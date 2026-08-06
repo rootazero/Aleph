@@ -311,9 +311,13 @@ fn test_provider_metadata_lookup() {
 
 #[test]
 fn test_presets_by_modality_chat_includes_all() {
-    // Every shipped preset is chat-capable today.
+    // Every shipped preset is chat-capable today. The listing iterates
+    // canonical profiles only — aliases resolve but do not get their own
+    // row, so the count is the canonical profile count, not PRESETS' (which
+    // is alias-expanded for lookup).
     let chat = presets_by_modality(Modality::Chat);
-    assert_eq!(chat.len(), PRESETS.len());
+    assert_eq!(chat.len(), canonical_profiles().len());
+    assert!(chat.len() < PRESETS.len());
     assert!(chat.contains(&"openai"));
     assert!(chat.contains(&"claude"));
     assert!(chat.contains(&"gemini"));
@@ -371,16 +375,36 @@ fn high_value_presets_have_fallback_models() {
 }
 
 #[test]
-fn aux_model_falls_back_to_default_model_when_unset() {
-    // Most providers don't declare a cheap aux model — aux_model() must
-    // gracefully fall back to default_model.
-    let cerebras = get_preset("cerebras").unwrap();
-    assert_eq!(cerebras.aux_model(), cerebras.default_model);
+fn alias_resolves_to_canonical_profile() {
+    // `codex` is an alias of the `chatgpt` preset — the alias mechanism, not
+    // a hardcoded special case in the gateway handlers.
+    let chatgpt = get_preset("chatgpt").unwrap();
+    let codex = get_preset("codex").unwrap();
+    assert_eq!(codex.base_url, chatgpt.base_url);
+    assert_eq!(codex.protocol, chatgpt.protocol);
+    assert_eq!(canonical_preset_id("codex"), Some("chatgpt"));
+    assert_eq!(canonical_preset_id("ChatGPT"), Some("chatgpt"));
+    assert_eq!(canonical_preset_id("kimi"), Some("moonshot"));
+    assert_eq!(canonical_preset_id("not-a-provider"), None);
+}
 
-    // OpenAI declares a dedicated cheap model.
-    let openai = get_preset("openai").unwrap();
-    assert_eq!(openai.aux_model(), "gpt-5.4-mini");
-    assert_ne!(openai.aux_model(), openai.default_model);
+#[test]
+fn modality_listing_has_no_alias_duplicates() {
+    // Aliases are resolution keys, not display rows: the enumeration behind
+    // the picker and `list_models` must contain each provider exactly once.
+    let chat = presets_by_modality(crate::providers::metadata::Modality::Chat);
+    let mut seen = std::collections::HashSet::new();
+    for name in &chat {
+        assert!(seen.insert(name), "duplicate listing row for {name}");
+        assert_eq!(
+            canonical_preset_id(name),
+            Some(*name),
+            "{name} is an alias, not a canonical listing row"
+        );
+    }
+    assert!(chat.contains(&"moonshot"));
+    assert!(!chat.contains(&"kimi"));
+    assert!(!chat.contains(&"codex"));
 }
 
 #[test]

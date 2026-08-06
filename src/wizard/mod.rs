@@ -13,6 +13,4 @@ pub mod types;
 pub use flows::onboarding::{OnboardingData, OnboardingFlow};
 pub use prompter::{RpcPrompter, WizardPrompter};
 pub use session::{WizardFlow, WizardSession, WizardSessionError};
-pub use types::{
-    StepExecutor, StepType, WizardNextResult, WizardOption, WizardStatus, WizardStep,
-};
+pub use types::{StepExecutor, StepType, WizardNextResult, WizardOption, WizardStatus, WizardStep};

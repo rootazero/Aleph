@@ -1,7 +1,7 @@
 //! `AgentRoleLayer` — sub-agent role header and protocol constraints (priority 55)
 
 use crate::agents::AgentMode;
-use crate::thinker::prompt_layer::{AssemblyPath, LayerInput, PromptLayer};
+use crate::thinker::prompt_layer::{AssemblyPath, LayerInput, LayerStability, PromptLayer};
 use crate::thinker::prompt_mode::PromptMode;
 
 /// Injects sub-agent role descriptions and protocol constraints.
@@ -97,6 +97,9 @@ impl PromptLayer for AgentRoleLayer {
         mode != PromptMode::Minimal
     }
 
+    fn stability(&self) -> LayerStability {
+        LayerStability::Stable
+    }
     fn inject(&self, output: &mut String, input: &LayerInput) {
         let agent = match input.agent_def {
             Some(a) => a,

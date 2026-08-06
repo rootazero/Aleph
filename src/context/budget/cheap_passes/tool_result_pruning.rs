@@ -9,6 +9,7 @@
 use crate::context::budget::pressure::estimate_tokens_smart;
 use crate::context::budget::ContextPressure;
 use crate::providers::message::{ContentBlock, UnifiedMessage};
+use crate::tool_output::sanitize::sanitize_command_output;
 use crate::tool_output::structured;
 use async_trait::async_trait;
 
@@ -113,17 +114,31 @@ impl crate::context::budget::preflight::PreflightStage for ToolResultPruningStag
             if original_tokens < self.min_tokens_to_prune {
                 continue;
             }
-            let replacement = match structured::reduce(&original_text) {
-                Some(reduction) => {
-                    let rendered = reduction.render();
-                    if estimate_tokens_smart(&rendered) < original_tokens {
-                        rendered
-                    } else {
-                        first_line_placeholder(tool_name, original_tokens, &original_text)
+            // Share the ingress cleaner's preprocessing. Hygiene strips ANSI
+            // before classifying because an escape run ahead of a `path:line:`
+            // match is exactly the noise that defeats the search classifier —
+            // and this face of the same classifier did not, so a colourised
+            // result that was *under* budget at ingress (hygiene only runs over
+            // budget) reached the stale pass with its escapes intact. `bash`
+            // output arrives sanitized; MCP text results do not.
+            let cleaned = sanitize_command_output(&original_text);
+            // Stale results are sized aggressively, and `min_tokens_to_prune` is
+            // the honest target: it is by definition the size below which a
+            // result is no longer worth pruning. The alternative this competes
+            // with is a one-line placeholder, so an over-tight reduction is
+            // still far more signal than the fallback.
+            let replacement =
+                match structured::reduce_within(&cleaned, Some(self.min_tokens_to_prune)) {
+                    Some(reduction) => {
+                        let rendered = reduction.render();
+                        if estimate_tokens_smart(&rendered) < original_tokens {
+                            rendered
+                        } else {
+                            first_line_placeholder(tool_name, original_tokens, &cleaned)
+                        }
                     }
-                }
-                None => first_line_placeholder(tool_name, original_tokens, &original_text),
-            };
+                    None => first_line_placeholder(tool_name, original_tokens, &cleaned),
+                };
             let new_tokens = estimate_tokens_smart(&replacement);
             if new_tokens >= original_tokens {
                 continue;

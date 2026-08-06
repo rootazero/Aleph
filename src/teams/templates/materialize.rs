@@ -611,11 +611,10 @@ async fn inject_role_prompt(deps: &MaterializeDeps, agent_id: &str, role: &str, 
     }
 }
 
+/// Aleph home, or the CWD when it cannot be resolved at all.
+/// Single source: [`crate::utils::paths::get_config_dir`] (see `canvas_io`).
 fn aleph_home() -> PathBuf {
-    std::env::var_os("ALEPH_HOME")
-        .map(PathBuf::from)
-        .or_else(|| dirs::home_dir().map(|h| h.join(".aleph")))
-        .unwrap_or_else(|| PathBuf::from("."))
+    crate::utils::paths::get_config_dir().unwrap_or_else(|_| PathBuf::from("."))
 }
 
 // Errors thrown by helpers wrap `AlephError` only via `Materialize` so the

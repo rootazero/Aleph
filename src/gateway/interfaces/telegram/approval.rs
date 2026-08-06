@@ -42,20 +42,6 @@ impl TelegramChannelApprovalCapability {
                 }
                 text
             }
-            ApprovalRequest::Capability(cap) => {
-                let stage_emoji = match cap.trust_stage {
-                    crate::exec::approval::types::TrustStage::Draft => "📝",
-                    crate::exec::approval::types::TrustStage::Trial => "🔧",
-                    crate::exec::approval::types::TrustStage::Verified => "✅",
-                };
-                format!(
-                    "{} *Tool Approval Required*\n\n\
-                     *Tool:* `{}`\n\n\
-                     _{}_\n\n\
-                     _Stage: {:?}_",
-                    stage_emoji, cap.tool_name, cap.tool_description, cap.trust_stage
-                )
-            }
         }
     }
 
@@ -63,16 +49,10 @@ impl TelegramChannelApprovalCapability {
     /// builder ([`ApprovalBridge::build_approval_keyboard`]) instead of a
     /// hand-rolled Approve/Deny pair, so the rendered decision tiers follow
     /// the request's [`allowed_decisions`] set (the session tier appears only
-    /// when permitted). Every grant is at most session-scoped, so capability
-    /// (tool) approvals declare that set directly.
+    /// when permitted).
     fn approval_keyboard(request: &ApprovalRequest, approval_id: &str) -> InlineKeyboard {
         let allowed: Vec<ApprovalDecisionType> = match request {
             ApprovalRequest::Command(cmd) => cmd.allowed_decisions.clone(),
-            ApprovalRequest::Capability(_) => vec![
-                ApprovalDecisionType::AllowOnce,
-                ApprovalDecisionType::AllowSession,
-                ApprovalDecisionType::Deny,
-            ],
         };
         ApprovalBridge::build_approval_keyboard(approval_id, &allowed)
     }
@@ -255,30 +235,6 @@ mod tests {
         let json = serde_json::to_string(&kb).unwrap();
         assert!(!json.contains("approve:danger-1:always"));
         assert!(json.contains("approve:danger-1:session"));
-    }
-
-    #[test]
-    fn capability_request_keyboard_stops_at_session_tier() {
-        use crate::exec::approval::parameter_binding::RequiredCapabilities;
-        use crate::exec::approval::types::{CapabilityApprovalRequest, TrustStage};
-
-        let request = ApprovalRequest::Capability(Box::new(CapabilityApprovalRequest {
-            tool_name: "vault_store".to_string(),
-            tool_description: "store a secret".to_string(),
-            required_capabilities: RequiredCapabilities {
-                base_preset: "default".to_string(),
-                description: String::new(),
-                overrides: Default::default(),
-                parameter_bindings: Default::default(),
-            },
-            resolved_capabilities: Default::default(),
-            trust_stage: TrustStage::Draft,
-        }));
-        let kb = TelegramChannelApprovalCapability::approval_keyboard(&request, "cap-1");
-        let json = serde_json::to_string(&kb).unwrap();
-        assert!(json.contains("approve:cap-1:once"));
-        assert!(json.contains("approve:cap-1:session"));
-        assert!(!json.contains("approve:cap-1:always"));
     }
 
     #[test]

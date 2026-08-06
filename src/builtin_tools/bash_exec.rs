@@ -146,11 +146,10 @@ variables, `set -e`, `source`, etc. do NOT carry over to the next call. If you
 need cross-call state, write the state into a file under `working_dir` and
 read it back in the next script, or just put everything into one cmd.
 
-Don't re-run a command you already ran this session unless you expect its
-output to have changed — the previous result is still above in the conversation.
-If you're polling for something to change (a build finishing, a file appearing),
-use BACKGROUND MODE's `wait`/`poll` below instead of re-issuing the same
-command; an identical re-run comes back with an `advisory` field flagging it.
+A command you already ran this session is still above in the conversation, and
+an identical re-run comes back with an `advisory` field flagging it. To watch
+for something to change (a build finishing, a file appearing), use BACKGROUND
+MODE's `wait`/`poll` below rather than re-issuing the same command.
 And prefer the purpose-built tools over shelling out: `file_read` to read a
 file, `file_edit` to change one, `search` to find files or text — they beat
 `cat`/`sed`/`grep`/`find` and don't spend a shell turn.
@@ -205,15 +204,7 @@ session's processes, and each session may have at most 8 running at once — if
 you hit that cap, poll/kill an existing one before starting another. Prefer
 foreground (blocking) execution for anything that finishes quickly —
 backgrounding is only worth it past ~the timeout ceiling.
-
-Examples:
-- One-liner: {"cmd": "ls -la /tmp"}
-- Multi-line with set -e: {"cmd": "set -e\ncd src\ncargo check\necho ok"}
-- Heredoc: {"cmd": "cat <<'EOF' > /tmp/note\nhello world\nEOF\nwc -l /tmp/note"}
-- Large script: {"cmd": "<paste a 50 KB build script — auto-piped via stdin>"}
-- Custom timeout: {"cmd": "find . -name '*.rs' | wc -l", "timeout": 30}
-- Background a build: {"cmd": "cargo build --release", "background": true}
-- Check on it later: {"process_action": "poll", "process_id": 1}"#;
+"#;
 
     type Args = BashExecArgs;
     type Output = super::code_exec::CodeExecOutput;

@@ -69,6 +69,18 @@ pub struct SubagentNode {
     /// Most recent activity signal ("tool_called" / "tool_returned" /
     /// "llm_thinking" / "cancelled").
     pub last_activity: Option<String>,
+    /// Round-8 — bounded preview of the terminal result (200 chars, UTF-8 safe,
+    /// ellipsised on truncation). `Some` ONLY for completed/failed/cancelled/
+    /// timed-out nodes whose outcome carried a non-empty payload. Lets a
+    /// panel render "completed: '...'" inline from a single cold-start RPC
+    /// instead of a follow-up `check_status` per node. `None` for running
+    /// nodes (no result yet) and for completed nodes whose result was empty.
+    ///
+    /// `#[serde(skip_serializing_if = "Option::is_none")]` — old panels that
+    /// never heard of this field drop the whole key without complaint. New
+    /// panels see a real preview and use it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub result_preview: Option<String>,
 }
 
 /// Live wire event — every variant carries enough identity (`node_id` +
@@ -238,6 +250,7 @@ mod tests {
             tool_count: 1,
             last_tool: None,
             last_activity: None,
+            result_preview: None,
         }
     }
 

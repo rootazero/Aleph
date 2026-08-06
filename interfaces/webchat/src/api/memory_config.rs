@@ -284,12 +284,46 @@ pub struct TestRerankResponse {
 /// Response from `dreaming.list_insights` RPC.
 #[derive(Debug, Clone, Deserialize, Default)]
 pub struct DreamInsightsResponse {
+    /// Corpus the `synthesis` and `runs` lists were scoped to. Echoed by the
+    /// server so the corpus table can mark which row is being shown without the
+    /// client having to remember what it asked for.
+    #[serde(default)]
+    pub agent_id: String,
     #[serde(default)]
     pub daily: Vec<DailyInsightDto>,
     #[serde(default)]
     pub synthesis: Vec<SynthesisNoteDto>,
     #[serde(default)]
     pub runs: Vec<DreamRunDto>,
+    /// Every corpus that has ever dreamed, most recently active first.
+    #[serde(default)]
+    pub namespaces: Vec<DreamNamespaceDto>,
+}
+
+/// One corpus in the dream history: the base agent, or a `{base}__proj-*`
+/// project namespace.
+///
+/// Project namespaces run their own nightly maintenance under their own churn
+/// gate and personality, and used to leave no trace the operator could reach —
+/// their history lived in a per-namespace `dream_events.jsonl` that only the
+/// model reads. Every field here must have a rendering site in
+/// `DreamInsightsPanel`.
+#[derive(Debug, Clone, Deserialize)]
+pub struct DreamNamespaceDto {
+    #[serde(default)]
+    pub namespace: String,
+    /// Cycles this corpus has recorded, all time.
+    #[serde(default)]
+    pub runs: u64,
+    /// `started_at` of its most recent cycle (epoch **seconds**).
+    #[serde(default)]
+    pub last_started_at: i64,
+    #[serde(default)]
+    pub last_pipeline_type: String,
+    /// Latest cycle's decision — carries the churn gate's verdict, which is how
+    /// a corpus stuck in Conserve becomes visible at a glance.
+    #[serde(default)]
+    pub last_decision: Option<DreamDecisionDto>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -316,10 +350,68 @@ pub struct SynthesisNoteDto {
     pub updated_at: i64,
 }
 
+/// SkillOpt evolution-gate verdict for one dream cycle.
+///
+/// The server has emitted this since the gate landed, but `DreamRunDto` had no
+/// field for it, so serde silently dropped it and nothing ever rendered the
+/// verdict. Every field here must have a rendering site in `DreamInsightsPanel`.
+#[derive(Debug, Clone, Deserialize)]
+pub struct DreamEvolutionDto {
+    /// Memory-health score before this cycle's edits.
+    #[serde(default)]
+    pub baseline: f64,
+    /// Memory-health score after this cycle's edits.
+    #[serde(default)]
+    pub candidate: f64,
+    /// Best-ever health known at decision time.
+    #[serde(default)]
+    pub best: f64,
+    /// `accept_new_best` | `accept` | `reject`.
+    #[serde(default)]
+    pub outcome: String,
+    #[serde(default)]
+    pub merges_rejected: u32,
+}
+
+/// Churn-gate verdict (`MutationGate`) that constrained the strategy choice.
+#[derive(Debug, Clone, Deserialize)]
+pub struct DreamGateDto {
+    /// `allow` | `conserve`.
+    #[serde(rename = "type", default)]
+    pub kind: String,
+    #[serde(default)]
+    pub reason: Option<String>,
+    #[serde(default)]
+    pub cooldown_remaining: u32,
+}
+
+/// Why a cycle did what it did — the answer to "why is dreaming always
+/// conserving?", which until now existed only in the daemon's JSONL event log.
+#[derive(Debug, Clone, Deserialize)]
+pub struct DreamDecisionDto {
+    #[serde(default)]
+    pub strategy: String,
+    #[serde(default)]
+    pub rationale: String,
+    #[serde(default)]
+    pub personality_adjustment: f64,
+    #[serde(default)]
+    pub gate: Option<DreamGateDto>,
+    #[serde(default)]
+    pub stages: Vec<String>,
+    #[serde(default)]
+    pub validation_passed: bool,
+}
+
 #[derive(Debug, Clone, Deserialize)]
 pub struct DreamRunDto {
     #[serde(default)]
     pub id: String,
+    /// Corpus this cycle ran over. Equal to the requested `agent_id` — the
+    /// server scopes the list — and rendered so a row can never be silently
+    /// attributed to the wrong corpus.
+    #[serde(default)]
+    pub namespace: String,
     #[serde(default)]
     pub pipeline_type: String,
     #[serde(default)]
@@ -331,7 +423,17 @@ pub struct DreamRunDto {
     #[serde(default)]
     pub synthesis_count: u32,
     #[serde(default)]
+    pub notes_consolidated: u32,
+    #[serde(default)]
+    pub notes_archived: u32,
+    #[serde(default)]
     pub errors: Option<String>,
+    /// `None` on pre-migration rows.
+    #[serde(default)]
+    pub evolution: Option<DreamEvolutionDto>,
+    /// `None` on pre-migration rows.
+    #[serde(default)]
+    pub decision: Option<DreamDecisionDto>,
 }
 
 /// Response from `memory.list_corrections` RPC.

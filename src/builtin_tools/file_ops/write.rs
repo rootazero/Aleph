@@ -56,6 +56,12 @@ pub struct FileWriteOutput {
     pub success: bool,
     pub path: String,
     pub bytes_written: u64,
+    /// `true` when the destination already held byte-identical content and the
+    /// atomic rename was therefore skipped — the file's `mtime` is preserved
+    /// in that case. Lets the caller (and the model) tell "wrote new bytes"
+    /// from "rewrote the same bytes" without re-stat'ing the file.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub unchanged: bool,
     pub message: String,
 }
 
@@ -153,13 +159,22 @@ impl AlephTool for FileWriteTool {
         .await;
 
         match result {
-            Ok((canonical, bytes_written)) => {
-                let path = canonical.display().to_string();
+            Ok(outcome) => {
+                let path = outcome.canonical.display().to_string();
+                let message = if outcome.unchanged {
+                    format!(
+                        "No-op: {path} already contained {} identical bytes (mtime preserved)",
+                        outcome.bytes
+                    )
+                } else {
+                    format!("Wrote {} bytes to {}", outcome.bytes, path)
+                };
                 let write_output = FileWriteOutput {
                     success: true,
-                    message: format!("Wrote {bytes_written} bytes to {path}"),
                     path,
-                    bytes_written,
+                    bytes_written: outcome.bytes,
+                    unchanged: outcome.unchanged,
+                    message,
                 };
                 notify_tool_result(Self::NAME, &write_output.message, true);
                 Ok(write_output)
@@ -170,5 +185,99 @@ impl AlephTool for FileWriteTool {
                 Err(e.into())
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::fs;
+    use std::time::Duration;
+    use tempfile::tempdir;
+
+    /// Re-writing the same bytes reports `unchanged: true` and (importantly)
+    /// leaves the file's mtime alone — build systems and file watchers that
+    /// key on mtime must NOT see a no-op write as a fresh change.
+    #[tokio::test]
+    async fn noop_write_preserves_mtime() {
+        let dir = tempdir().unwrap();
+        let file = dir.path().join("a.txt");
+        fs::write(&file, "same content").unwrap();
+
+        // Sleep long enough that a real write would produce a new mtime, even
+        // on a filesystem with second-resolution timestamps.
+        tokio::time::sleep(Duration::from_millis(1100)).await;
+        let before = fs::metadata(&file).unwrap().modified().unwrap();
+
+        tokio::time::sleep(Duration::from_millis(1100)).await;
+        let tool = FileWriteTool::new();
+        let out = AlephTool::call(
+            &tool,
+            FileWriteArgs {
+                file_path: file.to_string_lossy().to_string(),
+                content: "same content".to_string(),
+                create_parents: true,
+            },
+        )
+        .await
+        .unwrap();
+
+        assert!(out.success);
+        assert!(out.unchanged, "unchanged must be true for a byte-equal rewrite");
+        assert_eq!(out.bytes_written, "same content".len() as u64);
+        let after = fs::metadata(&file).unwrap().modified().unwrap();
+        assert_eq!(before, after, "no-op write must not touch mtime");
+    }
+
+    /// A genuinely different payload reports `unchanged: false` and the file
+    /// is rewritten.
+    #[tokio::test]
+    async fn changed_write_reports_not_unchanged() {
+        let dir = tempdir().unwrap();
+        let file = dir.path().join("a.txt");
+        fs::write(&file, "v1").unwrap();
+
+        let tool = FileWriteTool::new();
+        let out = AlephTool::call(
+            &tool,
+            FileWriteArgs {
+                file_path: file.to_string_lossy().to_string(),
+                content: "v2".to_string(),
+                create_parents: true,
+            },
+        )
+        .await
+        .unwrap();
+
+        assert!(out.success);
+        assert!(!out.unchanged);
+        assert_eq!(fs::read_to_string(&file).unwrap(), "v2");
+    }
+
+    /// The very first write of a new file is not a no-op even if the
+    /// short-circuit guard could conceivably fire — the file did not exist
+    /// before, so the byte-equality comparison is meaningless and the write
+    /// must happen.
+    #[tokio::test]
+    async fn first_write_of_a_new_file_is_not_a_noop() {
+        let dir = tempdir().unwrap();
+        let file = dir.path().join("fresh.txt");
+        assert!(!file.exists());
+
+        let tool = FileWriteTool::new();
+        let out = AlephTool::call(
+            &tool,
+            FileWriteArgs {
+                file_path: file.to_string_lossy().to_string(),
+                content: "first".to_string(),
+                create_parents: true,
+            },
+        )
+        .await
+        .unwrap();
+
+        assert!(out.success);
+        assert!(!out.unchanged);
+        assert_eq!(fs::read_to_string(&file).unwrap(), "first");
     }
 }

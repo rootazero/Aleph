@@ -70,6 +70,15 @@ pub struct ExecApprovalRecord {
     /// — both skip the gate (best-effort, preserving prior behaviour).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub originator_user_id: Option<String>,
+    /// Session-grant identity of the approved action
+    /// ([`crate::sandbox::exec_approval::grant_fingerprint`]). When a
+    /// session-level grant lands on one record, the manager cascades it to
+    /// every OTHER live pending record in the same session carrying the same
+    /// key — the concurrent-subagent case, where identical calls each parked
+    /// their own card before the user answered the first. `None` (no action
+    /// identity: cluster node approvals, bare escalations) never cascades.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub grant_key: Option<String>,
 }
 
 impl ExecApprovalRecord {
@@ -118,6 +127,7 @@ impl ExecApprovalRecord {
             tool_call_id: crate::approval::current_tool_call_id(),
             deny_reason: None,
             originator_user_id: request.originator_user_id.clone(),
+            grant_key: request.grant_key.clone(),
         }
     }
 
@@ -352,7 +362,11 @@ impl ExecApprovalManager {
     ///
     /// # Returns
     ///
-    /// `true` if the request was found and resolved
+    /// `true` if the request was found and resolved. A session-level grant
+    /// additionally cascades to every other live pending record in the same
+    /// session carrying the same `grant_key` (see
+    /// [`Self::cascade_session_grant`]); the return value only reports the
+    /// addressed record.
     pub fn resolve(
         &self,
         id: &str,
@@ -375,45 +389,121 @@ impl ExecApprovalManager {
     ) -> bool {
         let mut pending = self.pending.write().unwrap_or_else(|e| e.into_inner());
 
-        if let Some(entry) = pending.get_mut(id) {
-            // Liveness is the honest signal, exactly as the clarification twin
-            // enforces it ([`crate::clarification::session::ClarificationManager::resolve`]):
-            // a dead entry is one already resolved (`sender` taken), past its
-            // deadline, OR abandoned (receiver dropped by a cancelled run). Any
-            // of these makes the decision reach nobody — reporting `true` here
-            // is what lets a Telegram button callback / `exec.approval.resolve`
-            // reply "✅ Allowed" for an approval that was never delivered. The
-            // FIFO `resolve_for_session` path already filters on `is_live`; the
-            // by-id path must too, or the two disagree on the same registry.
-            if !entry.is_live() {
-                warn!(id = %id, "Approval already resolved, expired, or abandoned");
-                return false;
-            }
-
-            let decision = Self::clamp_decision(decision);
-            entry.record.decision = Some(decision);
-            entry.record.resolved_by = resolved_by;
-            if decision == ApprovalDecisionType::Deny {
-                entry.record.deny_reason = deny_reason;
-            }
-            entry.record.resolved_at_ms = Some(
-                std::time::SystemTime::now()
-                    .duration_since(std::time::UNIX_EPOCH)
-                    .unwrap_or_default()
-                    .as_millis() as u64,
-            );
-
-            // `is_live()` above proved the receiver is still open under this
-            // same lock, so the send delivers — no silent drop to a zombie.
-            if let Some(sender) = entry.sender.take() {
-                let _ = sender.send(Some(decision));
-            }
-
-            debug!(id = %id, ?decision, "Resolved approval");
-            true
-        } else {
+        let Some(entry) = pending.get_mut(id) else {
             warn!(id = %id, "Approval not found or already resolved");
-            false
+            return false;
+        };
+        // Liveness is the honest signal, exactly as the clarification twin
+        // enforces it ([`crate::clarification::session::ClarificationManager::resolve`]):
+        // a dead entry is one already resolved (`sender` taken), past its
+        // deadline, OR abandoned (receiver dropped by a cancelled run). Any
+        // of these makes the decision reach nobody — reporting `true` here
+        // is what lets a Telegram button callback / `exec.approval.resolve`
+        // reply "✅ Allowed" for an approval that was never delivered. The
+        // FIFO `resolve_for_session` path already filters on `is_live`; the
+        // by-id path must too, or the two disagree on the same registry.
+        if !entry.is_live() {
+            warn!(id = %id, "Approval already resolved, expired, or abandoned");
+            return false;
+        }
+
+        let decision = Self::clamp_decision(decision);
+        Self::resolve_entry(entry, decision, resolved_by.clone(), deny_reason);
+        debug!(id = %id, ?decision, "Resolved approval");
+
+        let cascade = pending
+            .get(id)
+            .map(|e| (e.record.session_key.clone(), e.record.grant_key.clone()));
+        if let Some((session_key, grant_key)) = cascade {
+            Self::cascade_session_grant(
+                &mut pending,
+                id,
+                &session_key,
+                grant_key.as_deref(),
+                decision,
+                resolved_by,
+            );
+        }
+        true
+    }
+
+    /// Stamp a resolution onto a LIVE entry and wake its waiter. The one
+    /// internal path every resolution takes — by-id, by-session, and the
+    /// session-grant cascade — so a cascaded record is indistinguishable from
+    /// a manually resolved one: the waiter is woken with the decision, the
+    /// `resolved_by` / `resolved_at_ms` / `deny_reason` audit fields are
+    /// stamped, and [`Self::await_registered`] harvests it the same way.
+    fn resolve_entry(
+        entry: &mut PendingEntry,
+        decision: ApprovalDecisionType,
+        resolved_by: Option<String>,
+        deny_reason: Option<String>,
+    ) {
+        entry.record.decision = Some(decision);
+        entry.record.resolved_by = resolved_by;
+        if decision == ApprovalDecisionType::Deny {
+            entry.record.deny_reason = deny_reason;
+        }
+        entry.record.resolved_at_ms = Some(
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_millis() as u64,
+        );
+
+        // Callers proved the receiver is still open under this same lock
+        // (`is_live`), so the send delivers — no silent drop to a zombie.
+        if let Some(sender) = entry.sender.take() {
+            let _ = sender.send(Some(decision));
+        }
+    }
+
+    /// Cascade a session-level grant to every OTHER live pending record in the
+    /// same session carrying the same `grant_key`.
+    ///
+    /// Session memory only suppresses FUTURE prompts; without this, identical
+    /// calls that were already parked (concurrent subagents, a teams
+    /// broadcast) would each still wait for their own click even though the
+    /// user just granted that exact action for the session. Cascading resolves
+    /// them through the same [`Self::resolve_entry`] path a manual resolve
+    /// takes. Only `AllowSession` (post-clamp) cascades — an `AllowOnce` covers
+    /// one invocation by definition, and a `Deny` is about THIS call's timing
+    /// or wording, not a blanket refusal of the action (mirrors kimi-cli
+    /// `approval.py`'s session-approval fan-out). A `None` key (no action
+    /// identity) never cascades.
+    fn cascade_session_grant(
+        pending: &mut HashMap<String, PendingEntry>,
+        resolved_id: &str,
+        session_key: &str,
+        grant_key: Option<&str>,
+        decision: ApprovalDecisionType,
+        resolved_by: Option<String>,
+    ) {
+        let Some(key) = grant_key else {
+            return;
+        };
+        if decision != ApprovalDecisionType::AllowSession {
+            return;
+        }
+        let ids: Vec<String> = pending
+            .iter()
+            .filter(|(id, e)| {
+                id.as_str() != resolved_id
+                    && e.is_live()
+                    && e.record.session_key == session_key
+                    && e.record.grant_key.as_deref() == Some(key)
+            })
+            .map(|(id, _)| id.clone())
+            .collect();
+        for cascade_id in ids {
+            if let Some(entry) = pending.get_mut(&cascade_id) {
+                Self::resolve_entry(entry, decision, resolved_by.clone(), None);
+                debug!(
+                    id = %cascade_id,
+                    cascaded_from = %resolved_id,
+                    "Session grant cascaded to pending approval"
+                );
+            }
         }
     }
 
@@ -566,21 +656,17 @@ impl ExecApprovalManager {
         if let Some(entry) = pending.get_mut(&id) {
             let decision = Self::clamp_decision(decision);
             let summary = Self::display_line(&entry.record);
-            entry.record.decision = Some(decision);
-            entry.record.resolved_by = resolved_by;
-            if decision == ApprovalDecisionType::Deny {
-                entry.record.deny_reason = deny_reason;
-            }
-            entry.record.resolved_at_ms = Some(
-                std::time::SystemTime::now()
-                    .duration_since(std::time::UNIX_EPOCH)
-                    .unwrap_or_default()
-                    .as_millis() as u64,
-            );
-            if let Some(sender) = entry.sender.take() {
-                let _ = sender.send(Some(decision));
-            }
+            Self::resolve_entry(entry, decision, resolved_by.clone(), deny_reason);
             debug!(id = %id, ?decision, "Resolved approval by session");
+            let grant_key = pending.get(&id).and_then(|e| e.record.grant_key.clone());
+            Self::cascade_session_grant(
+                &mut pending,
+                &id,
+                session_key,
+                grant_key.as_deref(),
+                decision,
+                resolved_by,
+            );
             SessionResolveOutcome::Resolved { decision, summary }
         } else {
             SessionResolveOutcome::NothingPending
@@ -600,16 +686,12 @@ impl ExecApprovalManager {
 
     /// Clamp `requested` to a grant scope the system can actually honor.
     ///
-    /// No persistent allowlist exists, so `AllowAlways` cannot outlive the
-    /// process: it is a legacy wire value (old inline-keyboard callbacks,
-    /// `/approve always` text replies, external RPC clients) and resolves to
-    /// the session tier. An explicit human approval is never escalated or
-    /// turned into a denial here — only the grant scope is narrowed.
+    /// Delegates to [`ApprovalDecisionType::clamped`] — the single source of
+    /// the "AllowAlways narrows to session" rule — so the decision layer and
+    /// the outcome layer ([`ApprovalDecisionType::to_outcome`]) can never
+    /// disagree on the downgrade.
     const fn clamp_decision(requested: ApprovalDecisionType) -> ApprovalDecisionType {
-        match requested {
-            ApprovalDecisionType::AllowAlways => ApprovalDecisionType::AllowSession,
-            other => other,
-        }
+        requested.clamped()
     }
 
     /// Get snapshot of a pending approval
@@ -728,6 +810,7 @@ mod tests {
             session_key: "agent:main:main".to_string(),
             reason: None,
             originator_user_id: None,
+            grant_key: None,
         }
     }
 
@@ -1201,5 +1284,142 @@ mod tests {
 
         assert!(manager.get_pending(&stale_id).is_none(), "orphan evicted");
         assert!(manager.get_pending(&live_id).is_some(), "live entry kept");
+    }
+
+    /// A request carrying a session-grant identity (`grant_key`), as the
+    /// bridge/operator requester stamp it from `ApprovalAction::grant_key`.
+    fn keyed_request(id: &str, session: &str, grant_key: Option<&str>) -> ApprovalRequest {
+        let mut r = mock_request();
+        r.id = id.to_string();
+        r.session_key = session.to_string();
+        r.grant_key = grant_key.map(str::to_string);
+        r
+    }
+
+    /// ① The concurrent-subagent case: two identical calls each parked a card
+    /// before the user answered the first. A session-level grant on one card
+    /// must resolve the other through the same internal path a manual resolve
+    /// takes (mirrors kimi-cli `approval.py`'s session-approval fan-out).
+    #[tokio::test]
+    async fn session_grant_cascades_to_same_action_pending_cards() {
+        let manager = ExecApprovalManager::new();
+        let rec_a = manager.create(&keyed_request("c-a", "s1", Some("k1")), 60_000);
+        let rec_b = manager.create(&keyed_request("c-b", "s1", Some("k1")), 60_000);
+        let (id_a, _rx_a, _t_a) = manager.register_pending(rec_a);
+        let (id_b, rx_b, t_b) = manager.register_pending(rec_b);
+
+        assert!(manager.resolve(&id_a, ApprovalDecisionType::AllowSession, None));
+
+        let cascaded = manager.await_registered(id_b, rx_b, t_b).await;
+        assert_eq!(
+            cascaded.decision,
+            Some(ApprovalDecisionType::AllowSession),
+            "the identical pending card must inherit the session grant"
+        );
+    }
+
+    /// ②③ A session grant is scoped to (session, action): a different
+    /// `grant_key` in the same session and the same `grant_key` in a different
+    /// session must both stay pending.
+    #[tokio::test]
+    async fn session_grant_does_not_cross_action_or_session() {
+        let manager = ExecApprovalManager::new();
+        let rec_a = manager.create(&keyed_request("x-a", "s1", Some("k1")), 60_000);
+        let rec_b = manager.create(&keyed_request("x-b", "s1", Some("k2")), 60_000);
+        let rec_c = manager.create(&keyed_request("x-c", "s2", Some("k1")), 60_000);
+        let (id_a, _rx_a, _t_a) = manager.register_pending(rec_a);
+        let (id_b, _rx_b, _t_b) = manager.register_pending(rec_b);
+        let (id_c, _rx_c, _t_c) = manager.register_pending(rec_c);
+
+        assert!(manager.resolve(&id_a, ApprovalDecisionType::AllowSession, None));
+
+        for id in [&id_b, &id_c] {
+            let record = &manager.get_pending(id).expect("still pending").record;
+            assert!(
+                record.decision.is_none(),
+                "{id} must not be resolved by an unrelated session grant"
+            );
+        }
+    }
+
+    /// ④ Records with no action identity (`grant_key: None` — bare route
+    /// escalations, cluster node approvals) never cascade, even when two of
+    /// them share a session.
+    #[tokio::test]
+    async fn none_grant_key_never_cascades() {
+        let manager = ExecApprovalManager::new();
+        let rec_a = manager.create(&keyed_request("n-a", "s1", None), 60_000);
+        let rec_b = manager.create(&keyed_request("n-b", "s1", None), 60_000);
+        let (id_a, _rx_a, _t_a) = manager.register_pending(rec_a);
+        let (id_b, _rx_b, _t_b) = manager.register_pending(rec_b);
+
+        assert!(manager.resolve(&id_a, ApprovalDecisionType::AllowSession, None));
+
+        let record = &manager.get_pending(&id_b).expect("still pending").record;
+        assert!(
+            record.decision.is_none(),
+            "a None grant_key must never inherit a session grant"
+        );
+    }
+
+    /// ⑤ Only session-level grants cascade: an `AllowOnce` covers one
+    /// invocation by definition, and a `Deny` speaks to THIS call, not to the
+    /// action — neither may resolve a sibling card.
+    #[tokio::test]
+    async fn allow_once_and_deny_do_not_cascade() {
+        for decision in [ApprovalDecisionType::AllowOnce, ApprovalDecisionType::Deny] {
+            let manager = ExecApprovalManager::new();
+            let rec_a = manager.create(&keyed_request("d-a", "s1", Some("k1")), 60_000);
+            let rec_b = manager.create(&keyed_request("d-b", "s1", Some("k1")), 60_000);
+            let (id_a, _rx_a, _t_a) = manager.register_pending(rec_a);
+            let (id_b, _rx_b, _t_b) = manager.register_pending(rec_b);
+
+            assert!(manager.resolve(&id_a, decision, None));
+
+            let record = &manager.get_pending(&id_b).expect("still pending").record;
+            assert!(
+                record.decision.is_none(),
+                "{decision:?} must not cascade to a sibling pending card"
+            );
+        }
+    }
+
+    /// The cascade also fires on the session-addressed path (`/approve
+    /// session` text reply), not only on by-id resolves.
+    #[tokio::test]
+    async fn session_grant_cascades_via_resolve_for_session() {
+        let manager = ExecApprovalManager::new();
+        let rec_a = manager.create(&keyed_request("f-a", "s1", Some("k1")), 60_000);
+        let rec_b = manager.create(&keyed_request("f-b", "s1", Some("k1")), 60_000);
+        let (_id_a, _rx_a, _t_a) = manager.register_pending(rec_a);
+        let (id_b, rx_b, t_b) = manager.register_pending(rec_b);
+
+        // Two live cards on one session: a bare reply is ambiguous, but it
+        // snapshots the listing…
+        assert!(matches!(
+            manager.resolve_for_session("s1", None, ApprovalDecisionType::AllowSession, None, None),
+            SessionResolveOutcome::Ambiguous(_)
+        ));
+        // …which the indexed reply then addresses.
+        assert!(matches!(
+            manager.resolve_for_session(
+                "s1",
+                Some(1),
+                ApprovalDecisionType::AllowSession,
+                None,
+                None,
+            ),
+            SessionResolveOutcome::Resolved {
+                decision: ApprovalDecisionType::AllowSession,
+                ..
+            }
+        ));
+
+        let cascaded = manager.await_registered(id_b, rx_b, t_b).await;
+        assert_eq!(
+            cascaded.decision,
+            Some(ApprovalDecisionType::AllowSession),
+            "an indexed /approve session must cascade to the identical card"
+        );
     }
 }

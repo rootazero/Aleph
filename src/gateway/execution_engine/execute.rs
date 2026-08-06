@@ -844,6 +844,7 @@ where
                                         policy_meta.clone(),
                                         request.workspace_override.clone(),
                                         cont_deps.event_bus.clone(),
+                                        self.session_manager.clone(),
                                         Some(delay_ms),
                                         ContinuationKind::Loop { wake_ms },
                                     );
@@ -1094,6 +1095,14 @@ pub(super) fn spawn_continuation_run(
     policy_meta: std::collections::HashMap<String, String>,
     workspace_override: Option<std::path::PathBuf>,
     event_bus: Option<Arc<crate::gateway::event_bus::GatewayEventBus>>,
+    // A clone of the engine's shared session-store handle — the SAME instance
+    // every `AgentInstance::session_store` clones from (see `start`'s single
+    // `session_store` variable). Threaded through so the agent-miss branch
+    // below can resolve an origin channel WITHOUT a live agent, for the one
+    // ending (Goal `OutOfBounds`) that must notify but has nothing else to
+    // notify with once the agent is gone. `ContinuationKind::Loop` ignores it
+    // — it has no analogous origin-resolution need on this path.
+    session_manager: Option<Arc<dyn crate::gateway::session_store::SessionStore>>,
     delay_ms: Option<u64>,
     kind: ContinuationKind,
 ) {
@@ -1124,6 +1133,14 @@ pub(super) fn spawn_continuation_run(
         // a completion, or a stale-grace re-claim supersede a continuation.
         // Without the atomic confirm, a superseded run still burned one full
         // stale LLM turn (the ghost run).
+        //
+        // `goal_out_of_bounds_note` defers the OutOfBounds notice past the
+        // agent lookup below: the common-path origin resolution goes through
+        // `cont_agent`, which does not exist yet at this point, and
+        // duplicating that lookup here would diverge from the single
+        // agent-miss handling underneath (which has its own store-based
+        // fallback for exactly the case where `cont_agent` never shows up).
+        let mut goal_out_of_bounds_note: Option<String> = None;
         match kind {
             ContinuationKind::Loop { wake_ms } => {
                 let confirmed = crate::looping::global()
@@ -1135,15 +1152,23 @@ pub(super) fn spawn_continuation_run(
                 }
             }
             ContinuationKind::Goal { wake_ms } => {
-                let confirmed = crate::goal::global().is_some_and(|store| {
-                    store
-                        .confirm_fire(&session_key_str, wake_ms)
-                        .unwrap_or(false)
+                let decision = crate::goal::global().map(|store| {
+                    store.confirm_fire(
+                        &session_key_str,
+                        wake_ms,
+                        super::goal_continuation::now_ms(),
+                    )
                 });
-                if !confirmed {
-                    info!(session = %session_key_str,
-                        "goal pursuit: continuation superseded (goal cleared, completed or re-claimed); skipping");
-                    return;
+                match decision {
+                    Some(Ok(crate::goal::FireDecision::Proceed)) => {}
+                    Some(Ok(crate::goal::FireDecision::OutOfBounds { note })) => {
+                        goal_out_of_bounds_note = Some(note);
+                    }
+                    _ => {
+                        info!(session = %session_key_str,
+                            "goal pursuit: continuation superseded (goal cleared, completed or re-claimed); skipping");
+                        return;
+                    }
                 }
             }
         }
@@ -1154,9 +1179,40 @@ pub(super) fn spawn_continuation_run(
             // can ever happen on this session again — so nothing re-claims,
             // `goal(action='list')` keeps showing a live pursuit from every
             // other session (dishonest), and the welded strategy row leaks.
-            // Terminate honestly per kind instead. No origin channel can be
-            // resolved without the agent, so the stored stop reason / blocked
-            // note is the surviving signal (R5 as far as it can reach).
+            // Terminate honestly per kind instead. The stored stop reason /
+            // blocked note is the surviving signal (R5) either way.
+            //
+            // Compound race: the wake also landed out of bounds. `confirm_fire`
+            // already persisted the deadline note on the (now Blocked) goal, but
+            // that note would otherwise vanish from THIS run entirely — the
+            // generic warn below only names "agent no longer exists", and the
+            // Goal-kind block below is a no-op once the goal is already Blocked
+            // (`block_if_active` requires Active). Origin resolution normally
+            // goes through `cont_agent`, which does not exist in this branch —
+            // but the origin lives in the session STORE, not the agent, and
+            // `session_manager` is a clone of that same shared store, so
+            // `origin_of_via_store` still resolves and pushes it. Only when
+            // that handle or the session's origin metadata itself is
+            // unavailable does this fall back to a log line.
+            if let Some(note) = &goal_out_of_bounds_note {
+                // Through the shared ladder, which keeps its own named floor
+                // when nothing is reachable. `registry` is handed to it even
+                // though the lookup just missed: the ladder's shape is the
+                // single source, and one extra miss on a terminal path is
+                // cheaper than a fourth divergent copy of it.
+                if super::goal_continuation::notify_goal_stop(
+                    &registry,
+                    session_manager.as_ref(),
+                    &session_key_str,
+                    note,
+                )
+                .await
+                {
+                    info!(session = %session_key_str, note = %note,
+                        "goal pursuit: wake landed past the wall-clock bound; goal blocked \
+                         (agent also gone — notified via the session-store origin)");
+                }
+            }
             warn!(
                 agent_id = %cont_agent_id,
                 session = %session_key_str,
@@ -1207,6 +1263,18 @@ pub(super) fn spawn_continuation_run(
             }
             return;
         };
+        if let Some(note) = goal_out_of_bounds_note {
+            // The bound elapsed while this continuation waited. The store
+            // already Blocked the goal; push the same notice the `Exhausted`
+            // claim decision would (R5 — an autonomous ending must never be
+            // silent), and drop the welded plan like every other terminal end.
+            super::goal_continuation::clear_goal_welded_strategy(&session_key_str);
+            info!(session = %session_key_str, note = %note,
+                "goal pursuit: wake landed past the wall-clock bound; goal blocked");
+            let origin = super::goal_continuation::origin_of(&cont_agent, &session_key).await;
+            notify_origin(origin.as_ref(), format!("⏹ {note}")).await;
+            return;
+        }
         // G1: resolve the session's bound origin channel once — used both to
         // fan the continuation's final reply out to it (Telegram/Slack) and,
         // on failure, to deliver the halt notice (G3). `None` for Panel-only
@@ -1303,6 +1371,7 @@ pub(super) fn spawn_continuation_run(
                         retry_policy_meta.clone(),
                         retry_workspace.clone(),
                         retry_bus.clone(),
+                        session_manager.clone(),
                         Some(delay_ms),
                         next_kind,
                     );

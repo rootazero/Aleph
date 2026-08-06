@@ -1,8 +1,9 @@
 #[cfg(test)]
 mod tests {
     use crate::memory::store::sqlite::schema::{
-        ddl, drop_obsolete_facts_tables, init_schema, migrate_notes_links_relation,
-        migrate_notes_links_to_raw, migrate_unify_default_to_main_agent, migrations,
+        ddl, drop_obsolete_facts_tables, init_notes_vec_tables, init_schema, init_vec_tables,
+        migrate_notes_links_relation, migrate_notes_links_to_raw,
+        migrate_unify_default_to_main_agent, migrations,
     };
     use rusqlite::{Connection, OptionalExtension};
 
@@ -41,6 +42,67 @@ mod tests {
                 .unwrap_or(false);
             assert!(exists, "{table} missing");
         }
+    }
+
+    /// The column default and the agent id it stands for must not drift apart.
+    ///
+    /// They already did once: the DDL said `'owner'`, an id no agent has ever
+    /// had, and the daemon wrote that literal on every row. It cost nothing
+    /// while nobody read the column — and became a vanishing act the moment the
+    /// Panel started scoping run history by namespace.
+    #[test]
+    fn dream_reports_namespace_default_is_the_default_agent() {
+        let conn = Connection::open_in_memory().expect("in-memory db");
+        init_schema(&conn).expect("init_schema");
+        let default: String = conn
+            .query_row(
+                "SELECT dflt_value FROM pragma_table_info('dream_reports') WHERE name='namespace'",
+                [],
+                |row| row.get(0),
+            )
+            .expect("namespace column exists");
+        assert_eq!(
+            default.trim_matches('\''),
+            crate::routing::DEFAULT_AGENT_ID,
+            "dream_reports.namespace default must equal DEFAULT_AGENT_ID"
+        );
+    }
+
+    /// Rows written before the namespace column meant anything must land in the
+    /// base agent's corpus, not fall out of every scoped view.
+    #[test]
+    fn legacy_owner_namespace_rows_are_backfilled() {
+        let conn = Connection::open_in_memory().expect("in-memory db");
+        init_schema(&conn).expect("init_schema");
+        conn.execute(
+            "INSERT INTO dream_reports \
+             (id, pipeline_type, started_at, finished_at, duration_ms, errors, namespace) \
+             VALUES ('legacy', 'consolidate', 1, 2, 1000, NULL, 'owner')",
+            [],
+        )
+        .expect("insert legacy row");
+
+        migrations::migrate_dream_reports_namespace_to_agent_id(&conn).expect("backfill");
+
+        let ns: String = conn
+            .query_row(
+                "SELECT namespace FROM dream_reports WHERE id='legacy'",
+                [],
+                |row| row.get(0),
+            )
+            .expect("row survives");
+        assert_eq!(ns, crate::routing::DEFAULT_AGENT_ID);
+
+        // Idempotent: a second pass must not touch the now-correct row.
+        migrations::migrate_dream_reports_namespace_to_agent_id(&conn).expect("backfill again");
+        let ns_again: String = conn
+            .query_row(
+                "SELECT namespace FROM dream_reports WHERE id='legacy'",
+                [],
+                |row| row.get(0),
+            )
+            .expect("row survives");
+        assert_eq!(ns_again, crate::routing::DEFAULT_AGENT_ID);
     }
 
     #[test]
@@ -150,6 +212,7 @@ mod tests {
         assert_eq!(
             sorted,
             vec![
+                "decision_json",
                 "duration_ms",
                 "errors",
                 "evolution_json",
@@ -168,7 +231,8 @@ mod tests {
             .map(String::from)
             .collect::<Vec<_>>(),
             "dream_reports must retain the 8 core columns, the 4 notes-era activity \
-             counters, and the evolution_json gate-verdict column"
+             counters, the evolution_json gate-verdict column and the decision_json \
+             cycle-decision column"
         );
 
         let row_count: i64 = conn
@@ -203,7 +267,11 @@ mod tests {
         assert_eq!(r1.4, 1000);
         assert_eq!(r1.5, 1);
         assert_eq!(r1.6, None);
-        assert_eq!(r1.7, "owner");
+        // The legacy rebuild carries the row across as `'owner'`; the same
+        // `init_schema` pass then backfills it to the base agent id, because a
+        // row still stamped with the sentinel falls outside every
+        // namespace-scoped read (see `legacy_owner_namespace_rows_are_backfilled`).
+        assert_eq!(r1.7, crate::routing::DEFAULT_AGENT_ID);
 
         init_schema(&conn).expect("second init_schema should be idempotent");
 
@@ -626,5 +694,185 @@ mod tests {
             )
             .unwrap();
         assert_eq!(s, "tombstone", "re-run must not re-backfill");
+    }
+
+    // ---- §2.10 notes_vec_map freshness + dimension widening ---------------
+    //
+    // The fixture below is a transcription of a real pre-§2.10 database, not a
+    // guess: a live `~/.aleph/data/memory.db` carries `notes_vec_map` with
+    // exactly `(rowid, path, agent_id)` and vec0 tables for 768/1024/1536
+    // alone. Every other test in this layer builds a *current* database
+    // through the normal constructor, so the upgrade path — the one every
+    // existing deployment takes exactly once — had no coverage at all.
+
+    /// The dimensions a database created before §2.10 carries.
+    const PRE_WIDENING_DIMS: [u32; 3] = [768, 1024, 1536];
+
+    /// Build `notes_vec_map` and the vec0 tables in their pre-§2.10 shape.
+    fn pre_widening_vec_schema(conn: &Connection) {
+        conn.execute_batch(
+            "CREATE TABLE notes_vec_map (
+                 rowid    INTEGER PRIMARY KEY AUTOINCREMENT,
+                 path     TEXT NOT NULL,
+                 agent_id TEXT NOT NULL DEFAULT 'default',
+                 UNIQUE(agent_id, path));
+             CREATE INDEX idx_notes_vec_map_agent ON notes_vec_map(agent_id);",
+        )
+        .expect("legacy notes_vec_map");
+        for dim in PRE_WIDENING_DIMS {
+            conn.execute_batch(&ddl::vec_table_ddl(dim, &format!("notes_vec_{dim}")))
+                .expect("legacy notes vec table");
+            conn.execute_batch(&ddl::vec_table_ddl(dim, &format!("routing_exp_vec_{dim}")))
+                .expect("legacy routing vec table");
+        }
+    }
+
+    fn column_names(conn: &Connection, table: &str) -> Vec<String> {
+        conn.prepare(&format!("PRAGMA table_info({table})"))
+            .expect("pragma")
+            .query_map([], |r| r.get::<_, String>(1))
+            .expect("pragma rows")
+            .filter_map(Result::ok)
+            .collect()
+    }
+
+    fn table_exists(conn: &Connection, name: &str) -> bool {
+        conn.query_row(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name=?1",
+            [name],
+            |_| Ok(()),
+        )
+        .optional()
+        .expect("sqlite_master")
+        .is_some()
+    }
+
+    #[test]
+    fn a_pre_freshness_notes_vec_map_gains_the_columns_without_losing_rows() {
+        crate::memory::store::sqlite::vec::register_sqlite_vec();
+        let conn = Connection::open_in_memory().expect("in-memory db");
+        pre_widening_vec_schema(&conn);
+        conn.execute_batch(
+            "INSERT INTO notes_vec_map (path, agent_id) VALUES ('reference/a', 'main');
+             INSERT INTO notes_vec_map (path, agent_id) VALUES ('project/b', 'analyst');",
+        )
+        .expect("seed legacy rows");
+
+        // The real open path, not the migration called in isolation — the DDL
+        // runs immediately before it, and that ordering is what keeps the
+        // ALTER from ever meeting a missing table.
+        init_notes_vec_tables(&conn).expect("upgrade");
+
+        let cols = column_names(&conn, "notes_vec_map");
+        assert!(
+            cols.iter().any(|c| c == "embedded_hash"),
+            "embedded_hash missing after upgrade: {cols:?}"
+        );
+        assert!(
+            cols.iter().any(|c| c == "embedded_at"),
+            "embedded_at missing after upgrade: {cols:?}"
+        );
+
+        // Both rows survive, and neither claims a provenance it cannot
+        // vouch for: '' reads as stale, which is the safe direction for a
+        // vector whose source version nobody recorded.
+        let mut stmt = conn
+            .prepare("SELECT path, embedded_hash, embedded_at FROM notes_vec_map ORDER BY path")
+            .expect("prepare");
+        let rows: Vec<(String, String, i64)> = stmt
+            .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))
+            .expect("query")
+            .filter_map(Result::ok)
+            .collect();
+        assert_eq!(
+            rows,
+            vec![
+                ("project/b".to_string(), String::new(), 0),
+                ("reference/a".to_string(), String::new(), 0),
+            ]
+        );
+    }
+
+    #[test]
+    fn the_freshness_migration_leaves_recorded_provenance_alone() {
+        crate::memory::store::sqlite::vec::register_sqlite_vec();
+        let conn = Connection::open_in_memory().expect("in-memory db");
+        pre_widening_vec_schema(&conn);
+        conn.execute_batch(
+            "INSERT INTO notes_vec_map (path, agent_id) VALUES ('reference/a', 'main');",
+        )
+        .expect("seed");
+        init_notes_vec_tables(&conn).expect("first upgrade");
+
+        // A subsequent embed records where the vector came from.
+        conn.execute(
+            "UPDATE notes_vec_map SET embedded_hash = 'abc123', embedded_at = 42",
+            [],
+        )
+        .expect("record provenance");
+
+        // Every later open runs the migration again. It must neither fail on
+        // the already-present columns nor reset what a real embed wrote —
+        // a re-run that blanked the hash would silently make every vector
+        // look stale and bill the operator for a full re-embed.
+        init_notes_vec_tables(&conn).expect("second upgrade is a no-op");
+
+        let (hash, at): (String, i64) = conn
+            .query_row(
+                "SELECT embedded_hash, embedded_at FROM notes_vec_map",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .expect("read back");
+        assert_eq!(hash, "abc123");
+        assert_eq!(at, 42);
+    }
+
+    #[test]
+    fn an_existing_database_picks_up_newly_supported_dimensions() {
+        // The claim being tested is that `CREATE VIRTUAL TABLE IF NOT EXISTS`
+        // makes a widened dimension set reach existing databases on the next
+        // open, with no migration step. Before 384 and 3072 were listed, such
+        // a deployment had *no* note vectors: writes failed into a swallowed
+        // warn! and reads failed outright.
+        crate::memory::store::sqlite::vec::register_sqlite_vec();
+        let supported: Vec<u32> = crate::memory::store::sqlite::vec::EMBEDDING_DIM_TABLES
+            .iter()
+            .map(|(d, ..)| *d)
+            .collect();
+        // Asserted against literals, not against the table this test also uses
+        // as its oracle: a regression that dropped a dimension from the single
+        // source would otherwise make the loop below pass by not looking.
+        // 384 = all-MiniLM-L6-v2, 3072 = text-embedding-3-large.
+        for dim in [384_u32, 3072] {
+            assert!(
+                supported.contains(&dim),
+                "dimension {dim} dropped from EMBEDDING_DIM_TABLES: {supported:?}"
+            );
+        }
+
+        let conn = Connection::open_in_memory().expect("in-memory db");
+        pre_widening_vec_schema(&conn);
+        for dim in [384_u32, 3072] {
+            assert!(
+                !table_exists(&conn, &format!("notes_vec_{dim}")),
+                "fixture is not pre-widening: notes_vec_{dim} already exists"
+            );
+        }
+
+        init_vec_tables(&conn).expect("upgrade");
+
+        for (dim, notes_table, routing_table) in
+            crate::memory::store::sqlite::vec::EMBEDDING_DIM_TABLES
+        {
+            assert!(
+                table_exists(&conn, notes_table),
+                "{notes_table} (dim {dim}) missing after upgrade"
+            );
+            assert!(
+                table_exists(&conn, routing_table),
+                "{routing_table} (dim {dim}) missing after upgrade"
+            );
+        }
     }
 }

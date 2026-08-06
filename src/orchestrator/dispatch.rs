@@ -692,6 +692,27 @@ pub trait HarnessRunner: Send + Sync {
         None
     }
 
+    /// The cheap-tier summarization provider this runner routes its OWN
+    /// compaction side-channel to (`[context_budget] summary_model`, or the
+    /// primary preset's declared `default_aux_model`).
+    ///
+    /// Threaded into `SubagentTool` for the same reason `context_budget_config`
+    /// is: the child builds its own compactor, and that second construction
+    /// site inherited none of the parent's tiering — so every subagent
+    /// compaction billed the operator's **main reasoning model** for
+    /// read-and-condense work the root agent had already routed to a flash
+    /// sibling. Silent, and worst exactly where it is worst: a swarm fan-out
+    /// compacts once per child.
+    ///
+    /// Unlike the budget, the *provider instance* travels rather than a config:
+    /// it is a stateless `Arc` handle and rebuilding it per child would clone
+    /// the whole provider config N times for a byte-identical result. Default
+    /// `None` (mocks / simple engine / no cheap tier resolved) leaves the child
+    /// summarizing on the main LLM, exactly as before.
+    fn cheap_summary_provider(&self) -> Option<Arc<dyn crate::providers::AiProvider>> {
+        None
+    }
+
     /// Estimate the context-window occupancy of this session's *next* prompt,
     /// for sessions that never ran an LLM turn (no persisted real occupancy).
     /// Deterministic token counting only — no LLM call (R7). Default `None`

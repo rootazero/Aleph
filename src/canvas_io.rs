@@ -24,11 +24,15 @@ pub fn canvas_dir() -> PathBuf {
     aleph_home().join("canvases")
 }
 
+/// Aleph home, or the CWD when it cannot be resolved at all.
+///
+/// Delegates rather than re-deriving: this was one of five verbatim copies of
+/// the `ALEPH_HOME` -> `~/.aleph` rule, and a rule with five implementations
+/// is a rule that will eventually have five behaviours. `get_config_dir` also
+/// reads `$HOME` before `dirs::home_dir()`, which is what the repo wants on
+/// macOS (`dirs` ignores an overridden `$HOME` there).
 fn aleph_home() -> PathBuf {
-    std::env::var_os("ALEPH_HOME")
-        .map(PathBuf::from)
-        .or_else(|| dirs::home_dir().map(|h| h.join(".aleph")))
-        .unwrap_or_else(|| PathBuf::from("."))
+    crate::utils::paths::get_config_dir().unwrap_or_else(|_| PathBuf::from("."))
 }
 
 /// Listed entry for a canvas file on disk.

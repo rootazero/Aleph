@@ -30,12 +30,7 @@ use crate::providers::model_catalog::{ModelRecord, ModelSource};
 use crate::sync_primitives::Arc;
 use tokio::sync::RwLock;
 
-/// Vault key convention for AI provider API keys (mirrors the providers handler
-/// `helpers::vault_key`). Kept local so the tool depends only on the vault read
-/// path, not on gateway handler internals.
-fn vault_key(provider: &str) -> String {
-    format!("ai:{provider}")
-}
+use crate::providers::probe::provider_vault_key;
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
 pub struct ListModelsArgs {
@@ -183,7 +178,7 @@ impl ListModelsTool {
             return Some(key.clone());
         }
         let vault = self.vault.as_ref()?;
-        crate::gateway::handlers::resolve_vault_secret(&vault_key(name), vault)
+        crate::gateway::handlers::resolve_vault_secret(&provider_vault_key(name), vault)
     }
 
     /// True when the provider has a usable credential.
@@ -251,7 +246,9 @@ impl ListModelsTool {
             // configured vendor with the operator's keys. The operator RPC
             // (`providers.modelsRefresh`) still forces a real round trip —
             // that path is an explicit, authorised "go look now".
-            if let Some(cached) = crate::providers::model_catalog::cached_models(&t.provider) {
+            if let Some(cached) =
+                crate::providers::model_catalog::cached_models(&t.provider, &t.base_url)
+            {
                 if cached.is_fresh(crate::providers::model_catalog::discovery::CACHE_TTL) {
                     out.insert(
                         t.provider,
@@ -261,6 +258,7 @@ impl ListModelsTool {
                 }
             }
             tasks.spawn(async move {
+                let base_url = t.base_url.clone();
                 let outcome = crate::providers::model_catalog::refresh_models(
                     &t.provider,
                     &t.base_url,
@@ -268,12 +266,12 @@ impl ListModelsTool {
                     &t.api_key,
                 )
                 .await;
-                (t.provider, outcome)
+                (t.provider, base_url, outcome)
             });
         }
 
         while let Some(joined) = tasks.join_next().await {
-            let Ok((provider, outcome)) = joined else {
+            let Ok((provider, base_url, outcome)) = joined else {
                 continue;
             };
             match outcome {
@@ -284,7 +282,24 @@ impl ListModelsTool {
                     );
                 }
                 Err(e) => {
-                    tracing::debug!(provider = %provider, error = %e, "model discovery skipped");
+                    // Stale snapshot beats no snapshot (pi's recovery shape):
+                    // a vendor that is unreachable *right now* still had an
+                    // inventory the last time we looked, and every id in it
+                    // is enriched by the curated tables anyway.
+                    if let Some(stale) =
+                        crate::providers::model_catalog::cached_models(&provider, &base_url)
+                    {
+                        tracing::debug!(
+                            provider = %provider, error = %e,
+                            "model discovery failed; serving stale cache"
+                        );
+                        out.insert(
+                            provider,
+                            stale.models.into_iter().map(|m| m.id).collect::<Vec<_>>(),
+                        );
+                    } else {
+                        tracing::debug!(provider = %provider, error = %e, "model discovery skipped");
+                    }
                 }
             }
         }
@@ -383,9 +398,22 @@ impl crate::tools::AlephTool for ListModelsTool {
             let Some(preset) = crate::providers::presets::get_preset(entry.name) else {
                 continue;
             };
-            let cfg = guard.providers.get(entry.name);
+            // A provider configured under an *alias* (`kimi` for `moonshot`)
+            // attaches to the canonical row. The matched config key matters
+            // beyond the config itself: vault secrets (`ai:<name>`) and
+            // discovery results are both keyed by the *config* name, not the
+            // canonical one.
+            let (cfg_name, cfg) = match guard.providers.get_key_value(entry.name).or_else(|| {
+                preset
+                    .aliases
+                    .iter()
+                    .find_map(|a| guard.providers.get_key_value(*a))
+            }) {
+                Some((n, c)) => (n.as_str(), Some(c)),
+                None => (entry.name, None),
+            };
             let configured =
-                self.provider_configured(entry.name, cfg.and_then(|c| c.api_key.as_ref()));
+                self.provider_configured(cfg_name, cfg.and_then(|c| c.api_key.as_ref()));
             if !args.all && !configured {
                 continue;
             }
@@ -433,7 +461,7 @@ impl crate::tools::AlephTool for ListModelsTool {
                     )
                     .chain(
                         discovered
-                            .get(entry.name)
+                            .get(cfg_name)
                             .into_iter()
                             .flatten()
                             .map(|m| (m.clone(), ModelSource::Discovered)),
@@ -463,9 +491,14 @@ impl crate::tools::AlephTool for ListModelsTool {
         }
 
         // Custom providers: user-added entries with no matching built-in preset
-        // (e.g. an OpenAI-compatible relay). Same credential gate.
+        // (e.g. an OpenAI-compatible relay). Same credential gate. A config
+        // keyed by an *alias* (`kimi`) attached to its canonical row above,
+        // so "no preset answers to this name" is the filter — not just "name
+        // is not a canonical id".
         for (name, cfg) in &guard.providers {
-            if preset_ids.contains(name.as_str()) {
+            if preset_ids.contains(name.as_str())
+                || crate::providers::presets::get_preset(name).is_some()
+            {
                 continue;
             }
             let configured = self.provider_configured(name, cfg.api_key.as_ref());

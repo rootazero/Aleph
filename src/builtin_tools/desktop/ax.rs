@@ -7,7 +7,7 @@
 //!
 //! All tools degrade gracefully when no `DesktopPlatform` is configured
 //! (e.g. headless server builds) or when the platform does not implement
-//! `AccessibilityCapability` (non-macOS today) — they return a structured
+//! `AccessibilityCapability` — they return a structured
 //! `DesktopOutput { success: false, message: "..." }` instead of erroring.
 
 use async_trait::async_trait;
@@ -125,6 +125,12 @@ impl DesktopAxQueryFocused {
 
 #[async_trait]
 impl AlephTool for DesktopAxQueryFocused {
+    // Platform availability is stated once for the whole AX family, on
+    // `desktop_ax_snapshot`. Four copies used to ship in every request that
+    // discloses the desktop family; `no_sentence_is_stated_twice` counts what
+    // ships, not what is written. A call where no AX layer exists returns
+    // `no_ax_capability_output()` — a runtime signal, which is the better home
+    // for it anyway (R9).
     const NAME: &'static str = "desktop_ax_query_focused";
     const DESCRIPTION: &'static str =
         "Return the UI element currently holding keyboard focus via the OS accessibility API. \
@@ -132,10 +138,7 @@ impl AlephTool for DesktopAxQueryFocused {
          its own affordances: `actions` (the exact AX action names it supports — pass one \
          verbatim to `ax_action` instead of guessing), `enabled:false` when greyed out, \
          `settable:false` when its value cannot be written, `secure:true` for a password field \
-         (whose value is never returned). Available on macOS (Accessibility permission required), \
-         Windows (UI Automation) and Linux (AT-SPI2, when the desktop has accessibility \
-         enabled); where no accessibility layer is available, fall back to screenshot + \
-         gui_locate.";
+         (whose value is never returned).";
 
     type Args = DesktopAxQueryFocusedArgs;
     type Output = DesktopOutput;
@@ -184,6 +187,12 @@ impl DesktopAxQueryTree {
 
 #[async_trait]
 impl AlephTool for DesktopAxQueryTree {
+    // Platform availability is stated once for the whole AX family, on
+    // `desktop_ax_snapshot`. Four copies used to ship in every request that
+    // discloses the desktop family; `no_sentence_is_stated_twice` counts what
+    // ships, not what is written. A call where no AX layer exists returns
+    // `no_ax_capability_output()` — a runtime signal, which is the better home
+    // for it anyway (R9).
     const NAME: &'static str = "desktop_ax_query_tree";
     const DESCRIPTION: &'static str =
         "Return the AX element tree for a process (the frontmost app if `pid` is omitted). \
@@ -191,10 +200,7 @@ impl AlephTool for DesktopAxQueryTree {
          with nested `children`. Each node carries its own affordances: `actions` (the exact \
          AX action names that node supports — pass one verbatim to `ax_action` instead of \
          guessing), `enabled` (false = greyed out), `settable` (false = value not writable), \
-         `secure` (true = password field; its value is never returned). Available on macOS \
-         (Accessibility permission required), Windows (UI Automation) and Linux (AT-SPI2, when \
-         the desktop has accessibility enabled); where no accessibility layer is available, \
-         fall back to screenshot + gui_locate.";
+         `secure` (true = password field; its value is never returned).";
 
     type Args = DesktopAxQueryTreeArgs;
     type Output = DesktopOutput;
@@ -257,6 +263,12 @@ impl DesktopAxQueryByRole {
 
 #[async_trait]
 impl AlephTool for DesktopAxQueryByRole {
+    // Platform availability is stated once for the whole AX family, on
+    // `desktop_ax_snapshot`. Four copies used to ship in every request that
+    // discloses the desktop family; `no_sentence_is_stated_twice` counts what
+    // ships, not what is written. A call where no AX layer exists returns
+    // `no_ax_capability_output()` — a runtime signal, which is the better home
+    // for it anyway (R9).
     const NAME: &'static str = "desktop_ax_query_by_role";
     const DESCRIPTION: &'static str =
         "Collect all AX elements whose role matches `role` (e.g. \"AXButton\") in a process. \
@@ -264,10 +276,7 @@ impl AlephTool for DesktopAxQueryByRole {
          `elements` array; each element carries its own `actions` (the exact AX action names it \
          supports — pass one verbatim to `ax_action` instead of guessing), plus `enabled` \
          (false = greyed out), `settable` (false = value not writable) and `secure` (true = \
-         password field; its value is never returned). Available on macOS (Accessibility \
-         permission required), Windows (UI Automation) and Linux (AT-SPI2, when the desktop has \
-         accessibility enabled); where no accessibility layer is available, fall back to \
-         screenshot + gui_locate.";
+         password field; its value is never returned).";
 
     type Args = DesktopAxQueryByRoleArgs;
     type Output = DesktopOutput;

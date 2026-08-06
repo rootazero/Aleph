@@ -24,10 +24,10 @@ pub(crate) mod write;
 pub use apply_patch::{ApplyPatchArgs, ApplyPatchOutput, ApplyPatchTool};
 // Blast-radius extractor for the concurrency scheduler (crate-internal).
 pub(crate) use apply_patch::patch_target_paths;
-pub use edit::FileEditTool;
+pub use edit::{EditOp, FileEditTool};
 pub use read::FileReadTool;
 pub use tool::FileOpsTool;
-pub use types::{FileInfo, FileOperation, FileOpsArgs, FileOpsOutput};
+pub use types::{FileInfo, FileOperation, FileOpsArgs, FileOpsOutput, StatsSort};
 pub use write::FileWriteTool;
 
 #[cfg(test)]
@@ -53,6 +53,7 @@ mod tests {
             pattern: None,
             create_parents: true,
             limit: None,
+            sort_by: None,
         };
 
         let result = AlephTool::call(&tool, args).await.unwrap();
@@ -108,6 +109,7 @@ mod tests {
             pattern: None,
             create_parents: true,
             limit: None,
+            sort_by: None,
         };
 
         let result = AlephTool::call(&tool, args).await.unwrap();
@@ -132,6 +134,7 @@ mod tests {
             pattern: None,
             create_parents: true,
             limit: None,
+            sort_by: None,
         };
 
         let result = AlephTool::call(&tool, args).await.unwrap();
@@ -157,6 +160,7 @@ mod tests {
             pattern: Some("*.txt".to_string()),
             create_parents: true,
             limit: None,
+            sort_by: None,
         };
 
         let result = AlephTool::call(&tool, args).await.unwrap();
@@ -179,6 +183,7 @@ mod tests {
             pattern: None,
             create_parents: true,
             limit: None,
+            sort_by: None,
         };
 
         let result = AlephTool::call(&tool, args).await;

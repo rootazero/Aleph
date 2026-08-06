@@ -20,6 +20,7 @@ pub mod bootstrap;
 mod capability;
 pub mod ensure;
 pub mod ledger;
+pub mod npm_global;
 pub mod os;
 pub mod post_install;
 pub mod probe;

@@ -218,25 +218,16 @@ pub trait ChannelApprovalExt {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::exec::approval::parameter_binding::{CapabilityOverrides, RequiredCapabilities};
-    use crate::exec::approval::types::{CapabilityApprovalRequest, TrustStage};
-    use crate::sandbox::capabilities::SandboxCapabilities;
+    use crate::exec::approval::types::CommandApprovalRequest;
+    use crate::exec::socket::ApprovalDecisionType;
 
     fn make_test_request() -> ApprovalRequest {
-        let required = RequiredCapabilities {
-            base_preset: "file_processor".to_string(),
-            description: "Process files in temp directory".to_string(),
-            overrides: CapabilityOverrides::default(),
-            parameter_bindings: Default::default(),
-        };
-
-        ApprovalRequest::Capability(Box::new(CapabilityApprovalRequest {
-            tool_name: "test_tool".to_string(),
-            tool_description: "A test tool".to_string(),
-            required_capabilities: required,
-            resolved_capabilities: SandboxCapabilities::default(),
-            trust_stage: TrustStage::Draft,
-        }))
+        ApprovalRequest::Command(CommandApprovalRequest {
+            command: "test_tool".to_string(),
+            cwd: None,
+            reason: None,
+            allowed_decisions: vec![ApprovalDecisionType::AllowOnce],
+        })
     }
 
     #[test]

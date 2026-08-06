@@ -5,7 +5,7 @@
 //! project-specific context without overriding the base identity.
 
 use super::identity_files::sanitize_identity_content;
-use crate::thinker::prompt_layer::{AssemblyPath, LayerInput, PromptLayer};
+use crate::thinker::prompt_layer::{AssemblyPath, LayerInput, LayerStability, PromptLayer};
 use crate::thinker::prompt_mode::PromptMode;
 
 pub struct ProfileLayer;
@@ -27,6 +27,9 @@ impl PromptLayer for ProfileLayer {
         // would vanish from every production prompt (same class of bug the
         // Role / Citation layers were fixed for).
         &[AssemblyPath::Cached]
+    }
+    fn stability(&self) -> LayerStability {
+        LayerStability::Stable
     }
     fn inject(&self, output: &mut String, input: &LayerInput) {
         // Workspace AGENTS.md → "## Project Context" overlay. It crosses the

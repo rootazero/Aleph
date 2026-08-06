@@ -11,8 +11,8 @@
 //! type: `api_key` is `#[serde(skip)]` on `GenerationProviderConfig` and is
 //! injected from the vault under `gen:<provider_name>` at runtime.
 
-use crate::config::{GenerationConfig, GenerationProviderConfig};
 use crate::config::types::voice_local::LOCAL_PROVIDER_TYPE;
+use crate::config::{GenerationConfig, GenerationProviderConfig};
 use crate::media::transcription::TranscriptionService;
 
 /// A resolved transcription backend plus a label for startup logging.
@@ -71,9 +71,9 @@ pub fn transcription_service(
     if pcfg.provider_type == LOCAL_PROVIDER_TYPE {
         // BYO endpoint: connection values live on the entry itself.
         Some(ResolvedTranscription {
-            service: Box::new(crate::gateway::voice::local_provider::LocalTranscription::from_config(
-                pcfg,
-            )),
+            service: Box::new(
+                crate::gateway::voice::local_provider::LocalTranscription::from_config(pcfg),
+            ),
             label: "local voice transcription enabled (BYO endpoint)",
         })
     } else {
@@ -136,10 +136,8 @@ mod tests {
     #[test]
     fn local_endpoint_needs_no_key() {
         let mut gen = GenerationConfig::default();
-        gen.transcription_providers.insert(
-            "local".into(),
-            provider(LOCAL_PROVIDER_TYPE, true, None),
-        );
+        gen.transcription_providers
+            .insert("local".into(), provider(LOCAL_PROVIDER_TYPE, true, None));
         let resolved = transcription_service(&gen, &|_| None).expect("local resolves");
         assert!(resolved.label.contains("BYO"));
     }
@@ -149,10 +147,8 @@ mod tests {
         let mut gen = GenerationConfig::default();
         gen.transcription_providers
             .insert("openai".into(), provider("openai", true, Some("sk-a")));
-        gen.transcription_providers.insert(
-            "byo".into(),
-            provider(LOCAL_PROVIDER_TYPE, true, None),
-        );
+        gen.transcription_providers
+            .insert("byo".into(), provider(LOCAL_PROVIDER_TYPE, true, None));
         gen.default_transcription_provider = Some("byo".into());
         let resolved = transcription_service(&gen, &|_| None).expect("resolves");
         assert!(resolved.label.contains("BYO"));

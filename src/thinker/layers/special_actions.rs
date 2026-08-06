@@ -11,7 +11,7 @@
 //! discipline) are preserved below as plain conduct rules; `ask_user`
 //! and `flag_user_correction` remain real registered tools.
 
-use crate::thinker::prompt_layer::{AssemblyPath, LayerInput, PromptLayer};
+use crate::thinker::prompt_layer::{AssemblyPath, LayerInput, LayerStability, PromptLayer};
 use crate::thinker::prompt_mode::PromptMode;
 
 pub struct SpecialActionsLayer;
@@ -28,6 +28,9 @@ impl PromptLayer for SpecialActionsLayer {
     }
     fn paths(&self) -> &'static [AssemblyPath] {
         &[AssemblyPath::Basic, AssemblyPath::Cached]
+    }
+    fn stability(&self) -> LayerStability {
+        LayerStability::Stable
     }
     fn inject(&self, output: &mut String, _input: &LayerInput) {
         output.push_str("## Finishing & Escalation\n");

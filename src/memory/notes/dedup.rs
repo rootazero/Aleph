@@ -92,10 +92,10 @@ mod tests {
     async fn filters_to_category_prefix() {
         let db = test_db();
         let emb = vec![1.0_f32; 1024];
-        db.upsert_embedding("skill/skill-A", "default", &emb, 1024)
+        db.upsert_embedding("skill/skill-A", "default", &emb, 1024, "")
             .await
             .unwrap();
-        db.upsert_embedding("preference/pref-A", "default", &emb, 1024)
+        db.upsert_embedding("preference/pref-A", "default", &emb, 1024, "")
             .await
             .unwrap();
 
@@ -112,10 +112,10 @@ mod tests {
         let exact = vec![1.0_f32; 1024];
         let mut close = vec![1.0_f32; 1024];
         close[0] = 0.9; // slightly less similar to `exact`
-        db.upsert_embedding("skill/exact", "default", &exact, 1024)
+        db.upsert_embedding("skill/exact", "default", &exact, 1024, "")
             .await
             .unwrap();
-        db.upsert_embedding("skill/close", "default", &close, 1024)
+        db.upsert_embedding("skill/close", "default", &close, 1024, "")
             .await
             .unwrap();
 

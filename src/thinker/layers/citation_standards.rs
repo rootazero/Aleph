@@ -1,6 +1,6 @@
 //! `CitationStandardsLayer` — memory citation standards (priority 900)
 
-use crate::thinker::prompt_layer::{AssemblyPath, LayerInput, PromptLayer};
+use crate::thinker::prompt_layer::{AssemblyPath, LayerInput, LayerStability, PromptLayer};
 use crate::thinker::prompt_mode::PromptMode;
 
 pub struct CitationStandardsLayer;
@@ -22,6 +22,9 @@ impl PromptLayer for CitationStandardsLayer {
         // (`[Source: <path>#<id>]`) — never reached production prompts. Stable +
         // Full-only, so it rides the cacheable prefix at zero per-request cost.
         &[AssemblyPath::Cached]
+    }
+    fn stability(&self) -> LayerStability {
+        LayerStability::Stable
     }
     fn inject(&self, output: &mut String, _input: &LayerInput) {
         // The `[Source: …]` token is the non-guessable protocol — keep it. The

@@ -10,7 +10,8 @@
 //! in `ScopedToolService` (Phase 2b sudo).
 //!
 //! Scope (Phase 2b): `AllowOnce` + `AllowSession` only. `AllowAlways` collapses to a
-//! session grant — permanent device elevation is Phase 3.
+//! session grant — permanent device elevation is Phase 3 (the narrowing lives in
+//! [`ApprovalDecisionType::clamped`], shared by every surface).
 
 use async_trait::async_trait;
 
@@ -22,19 +23,6 @@ use crate::gateway::events::GatewayEventFrame;
 use crate::sandbox::exec_approval::gate::{ApprovalOutcome, ApprovalRequester, ApprovalResponse};
 use crate::sandbox::exec_approval::ApprovalAction;
 use crate::sync_primitives::Arc;
-
-/// Maps an `ExecApprovalManager` decision into an `ApprovalOutcome`. `None` =
-/// timed out / channel closed. `AllowAlways` collapses to a session grant in
-/// Phase 2b (permanent device elevation deferred to Phase 3).
-const fn decision_to_outcome(decision: Option<ApprovalDecisionType>) -> ApprovalOutcome {
-    match decision {
-        Some(ApprovalDecisionType::AllowOnce) => ApprovalOutcome::Approved,
-        Some(ApprovalDecisionType::AllowSession) => ApprovalOutcome::ApprovedForSession,
-        Some(ApprovalDecisionType::AllowAlways) => ApprovalOutcome::ApprovedForSession,
-        Some(ApprovalDecisionType::Deny) => ApprovalOutcome::Denied,
-        None => ApprovalOutcome::Timeout,
-    }
-}
 
 pub struct OperatorApprovalRequester {
     manager: Arc<ExecApprovalManager>,
@@ -80,6 +68,9 @@ impl ApprovalRequester for OperatorApprovalRequester {
             // Operator/Panel approvals resolve via the `exec.approval.resolve`
             // RPC, not a channel button, so the originator gate never applies.
             originator_user_id: None,
+            // Session-grant identity of this action: a session-level decision
+            // cascades to other pending cards of the same action.
+            grant_key: action.grant_key.clone(),
         };
         let record = self.manager.create(&request, DEFAULT_APPROVAL_TIMEOUT_MS);
         // Pairing key for the client: which tool row this card belongs under.
@@ -155,7 +146,7 @@ impl ApprovalRequester for OperatorApprovalRequester {
         }
 
         ApprovalResponse {
-            outcome: decision_to_outcome(decision),
+            outcome: decision.map_or(ApprovalOutcome::Timeout, ApprovalDecisionType::to_outcome),
             deny_reason: resolved.deny_reason,
         }
     }
@@ -294,26 +285,5 @@ mod tests {
         assert!(!saw_chunk, "no notice must be emitted when run_id is empty");
         let outcome = handle.await.unwrap();
         assert_eq!(outcome.outcome, ApprovalOutcome::Approved);
-    }
-
-    #[test]
-    fn decision_mapping() {
-        assert_eq!(
-            decision_to_outcome(Some(ApprovalDecisionType::AllowOnce)),
-            ApprovalOutcome::Approved
-        );
-        assert_eq!(
-            decision_to_outcome(Some(ApprovalDecisionType::AllowSession)),
-            ApprovalOutcome::ApprovedForSession
-        );
-        assert_eq!(
-            decision_to_outcome(Some(ApprovalDecisionType::AllowAlways)),
-            ApprovalOutcome::ApprovedForSession
-        );
-        assert_eq!(
-            decision_to_outcome(Some(ApprovalDecisionType::Deny)),
-            ApprovalOutcome::Denied
-        );
-        assert_eq!(decision_to_outcome(None), ApprovalOutcome::Timeout);
     }
 }

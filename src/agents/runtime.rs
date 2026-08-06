@@ -158,6 +158,10 @@ pub struct AgentRuntime {
     /// `SpawnerBase` so each spawned child builds its own budget + compactor +
     /// preflight pipeline instead of running context-unmanaged.
     context_budget_config: Option<crate::context::budget::ContextBudgetConfig>,
+    /// The parent runner's cheap-tier summarizer, threaded into `SpawnerBase`
+    /// so each child's compactor bills its side-channel to the flash sibling
+    /// the operator already configured, not the main reasoning model.
+    cheap_summary_provider: Option<Arc<dyn AiProvider>>,
 }
 
 impl AgentRuntime {
@@ -194,7 +198,16 @@ impl AgentRuntime {
             default_max_iterations: None,
             parallel_tool_concurrency: None,
             context_budget_config: None,
+            cheap_summary_provider: None,
         }
+    }
+
+    /// Wire the parent runner's cheap-tier summarizer so every spawned child's
+    /// compactor routes its side-channel call to the same flash sibling.
+    #[must_use]
+    pub fn with_cheap_summary_provider(mut self, provider: Arc<dyn AiProvider>) -> Self {
+        self.cheap_summary_provider = Some(provider);
+        self
     }
 
     /// B15 — wire the parent runner's boot-time iteration cap, inherited by
@@ -537,6 +550,7 @@ impl AgentRuntime {
             // managed on the same terms (the spawner builds its own instances).
             // rust-doctor-disable-next-line excessive-clone
             context_budget_config: self.context_budget_config.clone(),
+            cheap_summary_provider: self.cheap_summary_provider.clone(),
         };
         let req = SpawnRequest {
             agent_def: &config.agent_def,
@@ -700,10 +714,12 @@ fn persist_transcript(transcript: &SubagentTranscript, session_id: &str) {
         .agent_id
         .replace(['/', '\\'], "_")
         .replace("..", "_");
-    let base = match dirs::home_dir() {
-        Some(h) => h.join(".aleph/data/transcripts").join(safe_session),
-        None => {
-            tracing::warn!("Cannot resolve home dir for transcript persistence");
+    // `ALEPH_HOME`-aware: transcripts are Aleph state and belong under the
+    // configured home with every other store, not under the real one.
+    let base = match crate::utils::paths::get_config_dir() {
+        Ok(h) => h.join("data/transcripts").join(safe_session),
+        Err(e) => {
+            tracing::warn!(error = %e, "Cannot resolve Aleph home for transcript persistence");
             return;
         }
     };

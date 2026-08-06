@@ -29,7 +29,9 @@ pub(super) async fn runtime_startup_warmup() {
     let ledger: Arc<RwLock<CapabilityLedger>> = match migrate_from_legacy(&runtimes_dir) {
         Ok(ledger) => Arc::new(RwLock::new(ledger)),
         Err(e) => {
-            tracing::warn!("Legacy manifest migration failed: {e}, falling back to ledger load_or_create");
+            tracing::warn!(
+                "Legacy manifest migration failed: {e}, falling back to ledger load_or_create"
+            );
             Arc::new(RwLock::new(CapabilityLedger::load_or_create(&ledger_path)))
         }
     };
