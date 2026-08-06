@@ -249,6 +249,7 @@
 - **窗口以天计的检测器必须持久化** —— 把窗口长度 × tick 周期，跟进程实际寿命比一比；量级接近就必须落在进程之外 → §2.8
 - **DEFER 若建立在「这条路走不到」上，就欠一次真实负载实测** —— 猜出来的边界只在边缘塌陷，而边缘正是真机所在 → §3.14
 - **能被精确回答的数字别用常量猜** —— 先问仓库里有没有人已经知道它；换算单位有没有单一源 → §4.9
+- **把一个字段升格成运行时能力之前，先数它有几个写入者** —— 休眠的展示字段（`workspace_path` 曾只是 picker 里的一行字）一旦接上运行时权力（成为 run 的 cwd），它的**每一个**写入者都追溯成了权限授予点；写入者与读取者必须同批过同一道闸，否则「两步都合法、合起来等价」（先注册目录、再进房间聊天）就是绕闸路径 → §5.22
 
 ### 1. Prompt · 前缀缓存 · 上下文（`src/thinker/` `src/context/`）
 
@@ -316,6 +317,9 @@
 - **`devices` 是 panel 与 cluster 共用的一张表，`device_id` 两边都是对端自报的** —— 任何「按 id 认领一行」的新路径必须先拒掉另一半命名空间（判据单一源 `PANEL_DEVICE_TYPE`）→ [SECURITY.md#auth-ux](docs/reference/SECURITY.md#auth-ux) · `src/gateway/CLAUDE.md`
 - **团队群聊投影前必须先按当前 `chat.team_id` 作用域** —— 订阅是 `team.*` 通配，否则后台团队的气泡挤进任意会话 → §4.5
 - **新增 `read_*` 一类只读 RPC 记得进 `gateway/lane.rs::override_for`** —— 后缀启发式不认它就落 Mutate 车道被幂等键守卫拒掉 → §6.8
+- **「谁拥有」回答不了「谁能看」** —— 共享房间的 `owner_user_id` 记的是**创建者**，只裁 owner-only 动词；可见性判据是名册（`member_visible`）。凡给一张表加了共享语义，`owner` 列的含义要重新问一遍——拿它答 can-see 就是 P2 修掉的那类 bug 复发 → §5.22
+- **谓词改了、下推的 SQL 过滤器没改，症状是「能进去但列表里没有」** —— `session_visible` 与 `SessionFilter::owner_visible_to`/`visible_scope_ids` 是同一个判据的内存态与 SQL 态，必须同批改；grep 内存谓词找齐所有下推点，只改一半的那半是静默的 → §5.22
+- **投影必须由真源在自己的写锁里发布** —— `projects::roster` 是 `project_members` 的进程内投影，发布点在 store 的写锁内（成员变更与投影更新原子）；第二个写入者就是第二个真源，CLI 要改名册必须走 IPC 而不是直开数据库 → §5.22
 
 ### 5. 记忆 · 笔记（`src/memory/` `src/note/`）
 
