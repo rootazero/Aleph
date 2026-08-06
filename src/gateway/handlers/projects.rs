@@ -117,6 +117,7 @@ fn project_not_found(id: Option<Value>, project_id: &str) -> JsonRpcResponse {
 ///
 /// Fails closed on a store error: a caller must never be admitted because the
 /// check itself could not complete.
+#[allow(clippy::result_large_err)] // house shape for Result<_, JsonRpcResponse> gates
 fn gate_project(
     store: &ProjectStore,
     id: Option<Value>,
@@ -140,6 +141,7 @@ fn gate_project(
 /// Org admins pass for any room (spec §6.3: owner changes are an admin
 /// operation). An unrestricted caller — cron, A2A, an in-process test — passes
 /// unconditionally, the same first arm every P1 predicate opens with.
+#[allow(clippy::result_large_err)] // house shape for Result<_, JsonRpcResponse> gates
 fn require_owner(
     users: &SecurityStore,
     id: Option<Value>,
@@ -179,6 +181,7 @@ fn require_owner(
 /// reconfigure". This asks "may this connection name server-side paths at
 /// all" — a room's owner connected from a chat-tier LAN device fails here and
 /// passes there.
+#[allow(clippy::result_large_err)] // house shape for Result<_, JsonRpcResponse> gates
 fn require_directory_choice(id: Option<Value>) -> Result<(), JsonRpcResponse> {
     if crate::gateway::caller_identity::caller_may_choose_directory() {
         return Ok(());
@@ -197,6 +200,7 @@ fn require_directory_choice(id: Option<Value>) -> Result<(), JsonRpcResponse> {
 /// access that only materialises if they are ever reactivated, which is a
 /// decision `users.update` owns, not this RPC. Fails closed on a store error —
 /// an unverifiable id is not a verified one.
+#[allow(clippy::result_large_err)] // house shape for Result<_, JsonRpcResponse> gates
 fn require_known_user(
     users: &SecurityStore,
     id: Option<Value>,
