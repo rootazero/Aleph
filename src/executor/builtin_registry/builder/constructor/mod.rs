@@ -1144,6 +1144,10 @@ impl BuiltinToolRegistry {
                     // Previously hardcoded "default" — broke multi-agent recall.
                     current_agent_id.clone(),
                 )
+                // Same backend `remember` audits to and `memory_trace` reads
+                // back, so "why isn't that in memory?" covers rung 2 of the
+                // destination ladder and not just rung 1.
+                .with_decision_log(Some(db.clone()))
             }),
             browser_open_tool,
             browser_click_tool,

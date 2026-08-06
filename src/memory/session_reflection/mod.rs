@@ -118,10 +118,17 @@ impl SessionReflector {
         if transcript.len() < self.config.min_turns as usize {
             return Ok(());
         }
+        // Chars, not bytes. The knob is named `min_user_chars` and the whole
+        // point of the gate is "did the user engage enough to have taught us
+        // anything" — a measure of writing, not of encoding. `str::len()` gave
+        // a CJK user 3x credit (3 bytes/char), so a 67-character Chinese
+        // session cleared a gate meant for 200 characters and spent an LLM
+        // call on a session the gate exists to skip. Same unit slip, same fix,
+        // as `curated::budget::used_chars`.
         let user_chars: usize = transcript
             .iter()
             .filter(|(role, _)| role.eq_ignore_ascii_case("user"))
-            .map(|(_, content)| content.len())
+            .map(|(_, content)| content.chars().count())
             .sum();
         if user_chars < self.config.min_user_chars as usize {
             return Ok(());
@@ -514,6 +521,35 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn the_substance_gate_counts_chars_not_bytes() {
+        // The knob is `min_user_chars` and the gate asks "did the user engage
+        // enough to have taught us anything". `str::len()` answered in UTF-8
+        // bytes, so a CJK speaker cleared it at ~1/3 the advertised
+        // engagement: this transcript is 22 characters of user text but 66
+        // bytes, and under byte counting a 40-"char" threshold let a session
+        // the gate exists to skip spend a real LLM call.
+        let store = make_store();
+        let llm = MockSummaryLlm::with_response("- lesson");
+        let cjk = InMemorySessionStore::new().with_messages(
+            "agent-1",
+            "sess-1",
+            &[
+                ("user", "我们来讨论一下这个问题"), // 11 chars / 33 bytes
+                ("assistant", "好的"),
+                ("user", "这个构建步骤又失败了吧"), // 11 chars / 33 bytes
+            ],
+        );
+        let reflector = SessionReflector::new(store.clone(), cjk, llm.clone(), cfg(true, 1, 40, 0));
+        reflector.reflect("agent-1", "sess-1").await.unwrap();
+        assert_eq!(
+            llm.call_count(),
+            0,
+            "22 chars of user text must not clear a 40-char gate"
+        );
+        assert_eq!(reflection_count(&store, "agent-1").await, 0);
+    }
+
+    #[tokio::test]
     async fn writes_reflection_when_qualified() {
         let store = make_store();
         let llm = MockSummaryLlm::with_response("- I should rebuild wasm before the panel");
@@ -776,7 +812,10 @@ mod tests {
         // outlives every reflection early-return (cooldown / min_turns / LLM
         // error), so recency is not ours to claim.
         let stamped = stamp_open_loops("- Follow up on the deploy status", "2026-07-02");
-        let block = crate::memory::curated::snapshot::render_open_loops_block(&stamped, 2000);
+        // Ceiling off: this asserts the date CROSSES the disk, not that a
+        // 2026-07-02 capture is still fresh (`snapshot.rs` owns the ceiling).
+        let block =
+            crate::memory::curated::snapshot::render_open_loops_block(&stamped, 2000, 0, "");
         assert!(
             block.contains("2026-07-02"),
             "injected block must name the capture date: {block}"

@@ -224,7 +224,7 @@ impl SqliteMemoryBackend {
 
         let (where_sql, mut binds) = raw_where(agent_id, query);
         let sql = format!(
-            "SELECT id, content, source, source_detail, agent_id, session_id, path, layer, \
+            "SELECT id, content, source, source_detail, agent_id, session_id, path, \
              attachment_text, is_processed, created_at \
              FROM raw_memories{where_sql} \
              ORDER BY created_at DESC LIMIT ? OFFSET ?"
@@ -247,7 +247,6 @@ impl SqliteMemoryBackend {
                 agent_id: row.get("agent_id")?,
                 session_id: row.get("session_id")?,
                 path: row.get("path")?,
-                layer: row.get("layer")?,
                 attachment_text: row.get("attachment_text")?,
                 is_processed: is_processed_int != 0,
                 created_at: row.get("created_at")?,

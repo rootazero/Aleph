@@ -20,14 +20,17 @@
 
 use std::sync::OnceLock;
 
+use arc_swap::ArcSwap;
 use serde_json::json;
 
-use crate::config::types::{LoadBalanceStrategy, RouteMode};
+use crate::config::types::{LoadBalanceStrategy, ModelRouteConfig, RouteMode};
 use crate::providers::default_handle::DefaultProviderHandle;
 use crate::providers::failover::{FailoverHealth, ModelCooldown, ProviderCooldown};
 use crate::providers::load_stats::LoadStats;
 use crate::providers::route_handle::RouteHandle;
-use crate::providers::route_policy::{EndpointTier, RateLimits, RouteTargets};
+use crate::providers::route_policy::{
+    route_problems, EndpointTier, RateLimits, RouteProblem, RouteTargets,
+};
 use crate::sync_primitives::Arc;
 
 /// Boot-time composition of one fallback candidate: name, model walk order,
@@ -82,10 +85,21 @@ pub struct RouteObservability {
     /// any one of them changed.
     pub chain: Option<Arc<crate::providers::failover::FailoverProvider>>,
     /// `[route]` settings that are set but cannot take effect
-    /// ([`route_problems`](crate::providers::route_policy::route_problems)),
-    /// computed at boot from the same provider/tier picture the chain was built
-    /// from. Empty on a clean config.
-    pub problems: Vec<crate::providers::route_policy::RouteProblem>,
+    /// ([`route_problems`]), computed at boot from the same provider/tier
+    /// picture the chain was built from — and RE-computed on every `[route]`
+    /// hot write ([`hot_apply_problems`](Self::hot_apply_problems)). An
+    /// `ArcSwap` (same RCU idiom as [`RouteHandle`]) because the boot value
+    /// alone went stale the moment the panel hot-applied a config: a typo'd
+    /// pin written at runtime would never show up here, and `route_status`
+    /// kept answering "why did my routing configuration do nothing" with the
+    /// boot-time list forever. Empty on a clean config.
+    pub problems: Arc<ArcSwap<Vec<RouteProblem>>>,
+    /// Boot-time provider name → endpoint tier, the same catalog the chain was
+    /// built from. Immutable (a provider's tier follows its `base_url`, which a
+    /// hot route write cannot change); carried so `hot_apply_problems` can
+    /// re-run [`route_problems`] against the same provider picture the boot
+    /// list was computed from.
+    pub tiers: Arc<std::collections::HashMap<String, EndpointTier>>,
 }
 
 const fn tier_str(tier: EndpointTier) -> &'static str {
@@ -129,6 +143,19 @@ fn price_milli_per_mtok(provider: &str, model: &str) -> Option<u64> {
 }
 
 impl RouteObservability {
+    /// Recompute `config_problems` for a hot-applied `[route]` config and
+    /// publish them as one atomic swap (the same RCU idiom the route handle
+    /// uses for the config itself). Called by the `route_config.update` write
+    /// path right after it stores the new route, so the very next `snapshot`
+    /// reports the problems of the config that is actually live — not the ones
+    /// the boot config had. The provider/tier picture is the boot catalog
+    /// ([`tiers`](Self::tiers)): a route write cannot change which providers
+    /// exist or where they point.
+    pub fn hot_apply_problems(&self, cfg: &ModelRouteConfig) {
+        self.problems
+            .store(Arc::new(route_problems(cfg, &self.tiers)));
+    }
+
     /// Render the live routing picture as one JSON value: route knobs, the
     /// chain composition, per-provider runtime health/load, and any active
     /// model cooldowns. Consumed by the `self_config` `route_status` action.
@@ -331,8 +358,10 @@ impl RouteObservability {
                 .collect::<Vec<_>>(),
             // `[route]` settings that are set but inert. Empty on a clean
             // config; a non-empty list is the answer to "why did my routing
-            // configuration do nothing".
+            // configuration do nothing". Read fresh (one RCU load) so a
+            // hot-applied config's problems show up instead of the boot list.
             "config_problems": self.problems
+                .load_full()
                 .iter()
                 .map(|p| json!({ "field": p.field, "detail": p.detail }))
                 .collect::<Vec<_>>(),
@@ -397,8 +426,43 @@ mod tests {
             load: Arc::new(LoadStats::new()),
             route: None,
             chain: None,
-            problems: Vec::new(),
+            problems: Arc::new(ArcSwap::from_pointee(Vec::new())),
+            tiers: Arc::new(std::collections::HashMap::new()),
         }
+    }
+
+    #[tokio::test]
+    async fn hot_applied_problems_replace_the_boot_list() {
+        // `config_problems` used to be frozen at boot: hot-apply a typo'd pin
+        // through the panel and `route_status` kept showing the boot-time
+        // (empty) list — the one field that could explain "my routing
+        // configuration did nothing" never saw the config that broke it.
+        let mut obs = observability(vec![]);
+        obs.tiers = Arc::new(std::collections::HashMap::from([(
+            "ollama".to_string(),
+            EndpointTier::Local,
+        )]));
+        assert!(obs.snapshot().await["config_problems"]
+            .as_array()
+            .unwrap()
+            .is_empty());
+
+        obs.hot_apply_problems(&ModelRouteConfig {
+            local_provider: Some("olama".to_string()),
+            ..Default::default()
+        });
+        let problems = obs.snapshot().await["config_problems"].clone();
+        let problems = problems.as_array().unwrap();
+        assert_eq!(problems.len(), 1, "got: {problems:?}");
+        assert_eq!(problems[0]["field"], "local_provider");
+        assert!(problems[0]["detail"].as_str().unwrap().contains("olama"));
+
+        // A later clean write clears the list again.
+        obs.hot_apply_problems(&ModelRouteConfig::default());
+        assert!(obs.snapshot().await["config_problems"]
+            .as_array()
+            .unwrap()
+            .is_empty());
     }
 
     #[tokio::test]

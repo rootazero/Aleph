@@ -448,7 +448,7 @@ async fn first_call_captures_snapshot_subsequent_calls_hit_cache() {
         .with_curated_config(CuratedConfig {
             memory_char_limit: 100,
             user_char_limit: 100,
-            legacy_warn_threshold: 0.95,
+            ..CuratedConfig::default()
         })
         .with_curated_root_for_test(dir.path().to_path_buf());
 
@@ -523,7 +523,7 @@ async fn invalidate_curated_for_agent_drops_all_sessions_only_for_target() {
         .with_curated_config(CuratedConfig {
             memory_char_limit: 200,
             user_char_limit: 200,
-            legacy_warn_threshold: 0.95,
+            ..CuratedConfig::default()
         })
         .with_curated_root_for_test(dir.path().to_path_buf());
 

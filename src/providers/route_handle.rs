@@ -47,6 +47,11 @@ pub struct RouteState {
     pub targets: Arc<RouteTargets>,
     /// Per-provider rate ceilings.
     pub limits: Arc<RateLimits>,
+    /// Background health-probe interval for circuit-open providers, in
+    /// seconds. `0` = disabled (the default — probing spends real requests).
+    /// Read by the gateway health prober on every tick, so a
+    /// `route_config.update` hot-tunes it without a restart.
+    pub health_probe_interval_secs: u64,
 }
 
 impl RouteState {
@@ -57,6 +62,7 @@ impl RouteState {
             load_balance: cfg.load_balance,
             targets: Arc::new(RouteTargets::from_config(cfg)),
             limits: Arc::new(RateLimits::from_config(cfg)),
+            health_probe_interval_secs: cfg.health_probe_interval_secs.unwrap_or(0),
         }
     }
 }

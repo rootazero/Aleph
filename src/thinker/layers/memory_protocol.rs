@@ -295,30 +295,59 @@ mod tests {
         assert!(out.contains("note_manage"));
     }
 
+    /// The three writing tools of the destination ladder — the set the D4
+    /// contract is defined over. Kept as one list so the two halves below
+    /// cannot drift apart into "asserted for some tools".
+    fn ladder_writer_descriptions() -> [&'static str; 3] {
+        use crate::tools::AlephTool;
+        [
+            <crate::builtin_tools::RememberTool as AlephTool>::DESCRIPTION,
+            <crate::builtin_tools::note_manage::NoteManageTool as AlephTool>::DESCRIPTION,
+            <crate::builtin_tools::FlagUserCorrectionTool as AlephTool>::DESCRIPTION,
+        ]
+    }
+
     #[test]
     fn acknowledgment_contract_is_stated_once_per_writing_tool() {
         // D4 survives the trim, but as one statement per writing tool instead
         // of a fourth copy in the always-on prompt. All three writers must
         // carry it — a tool that drops it silently drops the contract for its
         // own writes, which no amount of prompt prose would restore.
-        use crate::tools::AlephTool;
-        for desc in [
-            <crate::builtin_tools::RememberTool as AlephTool>::DESCRIPTION,
-            <crate::builtin_tools::note_manage::NoteManageTool as AlephTool>::DESCRIPTION,
-            <crate::builtin_tools::FlagUserCorrectionTool as AlephTool>::DESCRIPTION,
-        ] {
+        for desc in ladder_writer_descriptions() {
             let lower = desc.to_lowercase();
             assert!(
                 lower.contains("one short sentence"),
                 "missing the one-sentence ack: {desc}"
             );
             assert!(
-                lower.contains("user's language"),
+                lower.contains("user's language") || lower.contains("their language"),
                 "ack must be in the user's language: {desc}"
             );
             assert!(
                 lower.contains("do not quote") || lower.contains("never quote"),
                 "ack must not echo stored content: {desc}"
+            );
+        }
+    }
+
+    #[test]
+    fn the_refusal_half_of_the_contract_is_stated_too() {
+        // D4 had one half. Every one of these tools can settle without
+        // writing anything — an over-budget hot zone, a spent retry budget, a
+        // correction already on record — and each returns a SUCCESSFUL tool
+        // result to say so. Stating only "acknowledge after a successful
+        // write" leaves the model with no instruction for the case where the
+        // user asked for something durable and the system declined: it either
+        // reports a save that never happened, or goes quiet, and a silent
+        // skip is not evidence that nothing was asked for.
+        //
+        // Asserted over the same list as the positive half, in one loop, so
+        // the two cannot end up covering different tools.
+        for desc in ladder_writer_descriptions() {
+            assert!(
+                desc.contains("never acknowledge a save that did not happen")
+                    || desc.contains("Never acknowledge a save that did not happen"),
+                "missing the refusal-side contract: {desc}"
             );
         }
     }

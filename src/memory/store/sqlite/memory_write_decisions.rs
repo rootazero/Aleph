@@ -1,4 +1,4 @@
-//! `memory_write_decisions` — one row per curated-memory write ATTEMPT.
+//! `memory_write_decisions` — one row per memory write ATTEMPT.
 //!
 //! "Why didn't you remember that?" used to be unanswerable from data. A
 //! refused `remember` call told the model `rejected: …` inside that one turn
@@ -6,6 +6,15 @@
 //! say what had happened, and the only remaining source was the model's
 //! recollection. Every branch of the write path — including the branches that
 //! change nothing — now lands one row here with a machine-readable reason.
+//!
+//! **Which writers file here** is answered by the `action` column, not by the
+//! table's name: `remember` files `add`/`replace`/`remove`/`batch` (the
+//! curated hot zone) and `flag_user_correction` files `flag_correction` (the
+//! correction rail). The log was curated-only for one round, which made the
+//! user-facing promise — `memory_trace(kind: "write_decision")` answers "why
+//! wasn't that saved" — true for one rung of the destination ladder and
+//! silently empty for the next one down. A writer that lands here must use a
+//! distinct `action` label so a reader can still tell the rails apart.
 //!
 //! Diagnostic log, not an archive: capped at [`MAX_DECISIONS_PER_AGENT`] rows
 //! per agent and pruned on every write, following the keep-newest-N idiom of
@@ -95,7 +104,8 @@ impl MemoryWriteReason {
 /// needs.
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct MemoryWriteDecisionRow {
-    /// `add` / `replace` / `remove` / `batch`.
+    /// `add` / `replace` / `remove` / `batch` (`remember`), or
+    /// `flag_correction` (`flag_user_correction`).
     pub action: String,
     /// One of [`MemoryWriteReason::as_str`].
     pub reason: String,

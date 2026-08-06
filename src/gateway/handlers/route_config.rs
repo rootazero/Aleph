@@ -51,6 +51,10 @@ struct RouteModePayload {
     /// payload. Drives `usage_based` ordering and the over-limit gate.
     #[serde(default)]
     rate_limits: BTreeMap<String, ProviderRateLimit>,
+    /// Background health-probe interval for circuit-open providers (seconds;
+    /// `0`/absent = off). Hot-tunes the gateway health prober on its next tick.
+    #[serde(default)]
+    health_probe_interval_secs: Option<u64>,
 }
 
 /// Normalise a UI-supplied provider name: blank / whitespace-only → `None` so a
@@ -154,6 +158,7 @@ pub async fn handle_get(request: JsonRpcRequest, config: Arc<RwLock<Config>>) ->
             "local_provider": cfg.route.local_provider,
             "cloud_provider": cfg.route.cloud_provider,
             "rate_limits": cfg.route.rate_limits,
+            "health_probe_interval_secs": cfg.route.health_probe_interval_secs,
             "providers": providers,
         }),
     )
@@ -221,6 +226,9 @@ pub async fn handle_update(
         local_provider: normalize_pin(payload.local_provider),
         cloud_provider: normalize_pin(payload.cloud_provider),
         rate_limits: payload.rate_limits,
+        // 0 and absent both mean "off"; normalise to absent so the wire form
+        // stays minimal (`skip_serializing_if`).
+        health_probe_interval_secs: payload.health_probe_interval_secs.filter(|&s| s > 0),
     };
 
     {
@@ -241,6 +249,14 @@ pub async fn handle_update(
     if let Some(handle) = try_global_route_handle() {
         handle.store(&new_route);
     }
+    // The `config_problems` half of the same hot-apply: the observability
+    // bundle's boot-time list says nothing about a config written at runtime
+    // (e.g. a typo'd pin), so recompute it against the bundle's provider/tier
+    // picture and republish — `route_status` then diagnoses the config that is
+    // actually live. `None` only before boot wiring, same contract as above.
+    if let Some(obs) = crate::providers::route_observe::global_route_observability() {
+        obs.hot_apply_problems(&new_route);
+    }
 
     let event = GatewayEvent::ConfigChanged(ConfigChangedEvent {
         section: Some("route".to_string()),
@@ -251,6 +267,7 @@ pub async fn handle_update(
             "local_provider": new_route.local_provider,
             "cloud_provider": new_route.cloud_provider,
             "rate_limits": new_route.rate_limits,
+            "health_probe_interval_secs": new_route.health_probe_interval_secs,
         }),
         timestamp: chrono::Utc::now().timestamp_millis(),
     });
@@ -397,6 +414,21 @@ mod tests {
         let p2: RouteModePayload =
             serde_json::from_value(serde_json::json!({ "mode": "auto" })).unwrap();
         assert!(p2.rate_limits.is_empty());
+    }
+
+    #[test]
+    fn payload_parses_health_probe_interval_and_tolerates_absence() {
+        let p: RouteModePayload = serde_json::from_value(serde_json::json!({
+            "mode": "auto",
+            "health_probe_interval_secs": 60,
+        }))
+        .unwrap();
+        assert_eq!(p.health_probe_interval_secs, Some(60));
+
+        // Absent → None (off), backward-compatible with the pre-prober payload.
+        let p2: RouteModePayload =
+            serde_json::from_value(serde_json::json!({ "mode": "auto" })).unwrap();
+        assert_eq!(p2.health_probe_interval_secs, None);
     }
 
     #[tokio::test]

@@ -27,13 +27,14 @@ pub struct LoadMetric {
     pub in_flight: usize,
     /// Observed EWMA latency in microseconds; `0` = unsampled (tried first).
     pub latency_us: u64,
-    /// Requests used in the current rolling rate window (raw count; filled by
-    /// [`LoadStats`](crate::providers::load_stats::LoadStats)). The failover
-    /// layer folds this against the configured limit into the two derived fields
-    /// below; the ordering logic itself never sees the limit (stays prompt- and
-    /// config-blind, pure infrastructure).
+    /// Requests used in the trailing 60 seconds (weighted sliding-window count;
+    /// filled by [`LoadStats`](crate::providers::load_stats::LoadStats) — the
+    /// previous minute decays linearly across the boundary instead of snapping
+    /// to zero). The failover layer folds this against the configured limit
+    /// into the two derived fields below; the ordering logic itself never sees
+    /// the limit (stays prompt- and config-blind, pure infrastructure).
     pub rpm_used: u32,
-    /// Tokens used in the current rolling rate window (raw count).
+    /// Tokens used in the trailing 60 seconds (same weighted sliding window).
     pub tpm_used: u64,
     /// Rate-window utilisation in per-mille (‰): `max(rpm, tpm) / limit * 1000`,
     /// pre-computed by the failover layer. `0` when no limit is configured — so
@@ -365,6 +366,10 @@ where
     // `Vec::partition` preserves relative order within each side). An explicit
     // pin is a hard operator signal: it leads its tier even when rate-saturated
     // (pin beats the over-limit gate). The pinned group is exempt from balancing.
+    // The failover walk's saturation gate honours the same exemption (judged by
+    // the same `targets.is_pinned`), so a pin is never promoted here only to be
+    // skipped at dial time — the pin yields to a dead circuit or a pacing
+    // window (it does not exempt failure), never to capacity.
     let (pinned, unpinned): (Vec<(T, CandidateAction)>, Vec<(T, CandidateAction)>) =
         if targets.is_empty() {
             (Vec::new(), same_tier)
@@ -1007,6 +1012,10 @@ mod tests {
     #[test]
     fn pin_beats_over_limit_gate() {
         // Pin "b" though it is saturated → it still leads; a,c fresh follow.
+        // The walk's saturation gate exempts a pinned candidate for the same
+        // reason (see `a_pinned_provider_is_dialed_even_when_saturated` in the
+        // failover tests) — this ordering promise and the dial-time gate are
+        // one rule, not two.
         let targets = RouteTargets {
             local_provider: Some("b".to_string()),
             cloud_provider: None,

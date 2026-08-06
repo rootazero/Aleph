@@ -82,7 +82,6 @@ CREATE TABLE IF NOT EXISTS raw_memories (
     agent_id        TEXT NOT NULL DEFAULT 'default',
     session_id      TEXT,
     path            TEXT,
-    layer           TEXT,
     attachment_text TEXT,
     is_processed    INTEGER DEFAULT 0,
     created_at      INTEGER NOT NULL
