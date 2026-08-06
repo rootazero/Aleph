@@ -124,6 +124,19 @@ fn ProjectRoomPage(project_id: String) -> impl IntoView {
     let load_error: RwSignal<Option<String>> = RwSignal::new(None);
     let sub_tab = RwSignal::new(RoomSubTab::Chat);
 
+    // Fix round 1 (Important #1): the room's default sub-tab is Chat, and
+    // neither `RoomHeader`'s owner badge nor `MessageBubble`'s author label
+    // used to trigger this fetch — only `SettingsTab` did. Until a user
+    // happened to open Settings first, `UserDirectoryState.my_user_id` was
+    // `None`, which made every "is this the viewer's own id" comparison
+    // vacuously false: the owner badge always read "成员", and — worse —
+    // `author_label`'s self-suppression never fired, so the viewer's own
+    // messages picked up a (wrong, raw-id) label too. `ensure_loaded` is
+    // idempotent (guards on `loading` + "already populated"), so calling it
+    // here in addition to `SettingsTab`'s own call is harmless.
+    let dir = expect_context::<UserDirectoryState>();
+    dir.ensure_loaded(dash);
+
     let refresh = {
         let project_id = project_id.clone();
         Callback::new(move |()| {

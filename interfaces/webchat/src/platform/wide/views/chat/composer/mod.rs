@@ -266,11 +266,14 @@ pub(crate) fn InputArea() -> impl IntoView {
         // A project-room conversation (`room_project_id` set) sends
         // `project_id` and forces `project_root` to `None` — an explicit
         // `project_root` outranks the room's workspace binding and is
-        // refused server-side for remote chat-tier callers. The two are
-        // mutually exclusive by construction: `ProjectMenu` hides itself
-        // while a room conversation is active (see `project_menu.rs`), so
-        // `active_project_root` cannot legitimately be set here too, but the
-        // guard is unconditional regardless.
+        // refused server-side for remote chat-tier callers. This guard is
+        // unconditional (not merely a courtesy): `ProjectMenu`
+        // (`project_menu.rs`) is NOT suppressed while a room conversation is
+        // active — its picker chip stays visible/clickable and could still
+        // set `active_project_root` on this same `ChatState` — so the `if
+        // room_project_id.is_some()` check below is the ONLY thing
+        // preventing both from being set at once. Known gap, not fixed here:
+        // see the P2 Task 8 report's "deliberate scope decisions".
         let room_project_id = chat.room_project_id.get();
         let project_root = if room_project_id.is_some() {
             None
