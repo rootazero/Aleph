@@ -576,6 +576,13 @@ impl HandlerRegistry {
             });
             let s = default_store.clone();
             let u = default_security_store.clone();
+            registry.register("projects.bind_workspace", move |req| {
+                let s = s.clone();
+                let u = u.clone();
+                async move { projects::handle_bind_workspace(req, s, u).await }
+            });
+            let s = default_store.clone();
+            let u = default_security_store.clone();
             registry.register("projects.member.add", move |req| {
                 let s = s.clone();
                 let u = u.clone();

@@ -164,6 +164,13 @@ pub(in crate::commands::start) fn register_projects_handlers(
     );
     register_handler!(
         server,
+        "projects.bind_workspace",
+        projects_handlers::handle_bind_workspace,
+        project_store,
+        users_store
+    );
+    register_handler!(
+        server,
         "projects.member.add",
         projects_handlers::handle_member_add,
         project_store,
@@ -196,6 +203,9 @@ pub(in crate::commands::start) fn register_projects_handlers(
         );
         println!("  - projects.remove        : Drop a project entry (does not delete the folder)");
         println!("  - projects.touch         : Bump last_used_at for a project");
+        println!(
+            "  - projects.bind_workspace: Point a room at a folder, or unbind it (owner/admin)"
+        );
         println!("  - projects.member.add    : Add a user to a project roster (owner/admin)");
         println!("  - projects.member.remove : Remove a user from a project roster (owner/admin)");
         println!("  - projects.member.list   : List a project's roster");

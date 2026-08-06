@@ -524,6 +524,39 @@ async fn resolve_attribution(
     }
 }
 
+/// The folder a run under `attribution` should work in, or `None` for a
+/// personal/org session or an unbound room.
+///
+/// No visibility check here on purpose: `attribution` is what
+/// [`resolve_attribution`] already admitted — either the session's own stored
+/// scope or a `project_id` that passed `project_visible`. Re-asking would be
+/// the second derivation, and asking a DIFFERENT question (is the caller on
+/// the roster *now*) would mean a member removed mid-session gets a run with
+/// no workspace instead of no access.
+///
+/// A store failure reads as "unbound" rather than propagating: the fallback is
+/// the agent's own workspace, which is where the turn would have run before P2
+/// anyway. The alternative — refusing the turn because SQLite hiccuped — turns
+/// a degraded catalogue into a dead chat room.
+fn bound_workspace_of(
+    attribution: Option<&crate::scope::ScopeAttribution>,
+) -> Option<std::path::PathBuf> {
+    let crate::scope::ScopeId::Project(project_id) = &attribution?.scope else {
+        return None;
+    };
+    match crate::projects::ProjectStore::shared().get(project_id) {
+        Ok(project) => project?.workspace_path,
+        Err(e) => {
+            tracing::warn!(
+                project_id = %project_id,
+                error = %e,
+                "projects: workspace lookup failed; falling back to the agent workspace"
+            );
+            None
+        }
+    }
+}
+
 /// Build the [`RunRequest`] for one Panel-originated turn (`agent.run` /
 /// `chat.send`).
 ///
@@ -620,10 +653,10 @@ pub async fn build_run_request(
     // P1 data isolation + P2 project rooms: stamp the run's owner/scope
     // attribution. Two paths, and writing only the second is the silent bug
     // this comment exists to prevent — see `resolve_attribution`.
-    if let Some(attr) =
-        resolve_attribution(sessions, session_key, params.project_id.as_deref()).await?
-    {
-        crate::scope::stamp_metadata(&mut metadata, &attr);
+    let attribution =
+        resolve_attribution(sessions, session_key, params.project_id.as_deref()).await?;
+    if let Some(attr) = attribution.as_ref() {
+        crate::scope::stamp_metadata(&mut metadata, attr);
     }
 
     // Who typed THIS message — a different fact from the scope owner above,
@@ -642,29 +675,27 @@ pub async fn build_run_request(
         metadata.insert("locale".to_string(), lang.to_string());
     }
 
-    // Validate and resolve optional project_root. We refuse anything that
-    // isn't an existing absolute directory so the rest of the engine can
-    // assume the override is safe to chdir/scan into.
+    // Resolve this turn's working directory. Three tiers, highest first:
+    //
+    //   1. `params.project_root` — the caller names a folder for THIS turn.
+    //      Gated: naming an arbitrary server directory is a config-tier
+    //      capability (`caller_may_choose_directory`).
+    //   2. the room's bound `workspace_path` — the session is scoped to a
+    //      project that has a folder. NOT gated here, because the binding was
+    //      already written through the same gate (`projects.bind_workspace` /
+    //      `add` / `create_blank` all call it). A remote member chatting in a
+    //      room the owner bound is not choosing a directory; they are using
+    //      one that was chosen for them.
+    //   3. neither — the agent's own default workspace, resolved downstream.
+    //
+    // Tier 2 keys off the RESOLVED attribution, not `params.project_id`: a
+    // session's stored scope wins over the request (see `resolve_attribution`),
+    // and the Panel only sends `project_id` on the turn that opens the room.
+    // Reading the param would give the first message a workspace and every
+    // later one the agent default — silently, mid-conversation.
     let workspace_override = match params.project_root.as_deref() {
         Some(raw) => {
-            // Layer-2 (config tier) gate: choosing/creating a working
-            // directory is a config-tier capability. A chat-tier caller
-            // (remote Panel paired at "chat", or an external channel stamped
-            // "guest") is locked to its default workspace and may not pick an
-            // arbitrary project_root. Absent role (trusted local/internal
-            // run) and "operator" pass — mirrors
-            // `TurnContext::caller_is_operator`.
-            //
-            // Desktop App: the local Panel runs over loopback. Allow a
-            // project_root override from any loopback connection regardless
-            // of pairing tier — on the desktop the local operator IS the
-            // user. Remote LAN connections (non-loopback, chat-tier) stay
-            // gated, so opening `[gateway] host = "0.0.0.0"` does not hand
-            // arbitrary working-directory selection to every LAN device.
-            let role = crate::gateway::caller_identity::current_caller_role();
-            let is_config_tier = !matches!(role.as_deref(), Some(r) if r != "operator");
-            let is_loopback = crate::gateway::caller_identity::current_caller_is_loopback();
-            if !is_config_tier && !is_loopback {
+            if !crate::gateway::caller_identity::caller_may_choose_directory() {
                 return Err(format!(
                     "choosing a working directory requires config-tier authorization \
                      or a local (loopback) connection; this connection is paired at \
@@ -682,7 +713,30 @@ pub async fn build_run_request(
             metadata.insert("project_root".to_string(), path.display().to_string());
             Some(path)
         }
-        None => None,
+        None => bound_workspace_of(attribution.as_ref())
+            .map(|path| {
+                // Fail loud rather than falling back to the agent's default
+                // workspace. A room whose folder was unmounted or deleted
+                // would otherwise keep answering — with every file tool
+                // silently operating somewhere nobody in the room expects.
+                // The cost is real and deliberate: an offline external drive
+                // makes the room unusable until somebody re-binds it (bind to
+                // `null` to go back to the agent default).
+                if !path.is_dir() {
+                    return Err(BuildRunError::from(format!(
+                        "this project's folder is missing: {} — re-bind the project \
+                         to another folder (projects.bind_workspace) or restore it",
+                        path.display()
+                    )));
+                }
+                // Same fact, same representation as tier 1: anything reading
+                // `metadata["project_root"]` must not be able to tell which
+                // tier put the run there (`resume_coordinator` mirrors the
+                // override the same way).
+                metadata.insert("project_root".to_string(), path.display().to_string());
+                Ok(path)
+            })
+            .transpose()?,
     };
 
     // Composer-chosen execution tier. Unknown ids are rejected rather than
@@ -1586,6 +1640,191 @@ mod tests {
         assert!(
             result.is_ok(),
             "loopback chat-tier project_root override must succeed: {result:?}"
+        );
+    }
+
+    // ------------------------------------------------------------------
+    // Tier 2: the room's bound workspace (P2 Task 7)
+    // ------------------------------------------------------------------
+
+    /// A room in the process-global catalogue `bound_workspace_of` reads,
+    /// optionally bound to `dir`, with `u-alice` on its roster. The returned
+    /// guard serialises the roster projection — `republish_roster` REPLACES
+    /// it, so a concurrent roster test would otherwise erase this room.
+    ///
+    /// `ProjectStore::shared()` is process-global and outlives each test, and
+    /// its unique index is `(owner, workspace_path)`. Callers therefore bind a
+    /// FRESH `TempDir` rather than `std::env::temp_dir()` — two tests sharing
+    /// one path make whichever runs second fail on the index, and which one
+    /// that is depends on the scheduler.
+    fn room_in_the_shared_catalogue(
+        dir: Option<&std::path::Path>,
+    ) -> (String, std::sync::MutexGuard<'static, ()>) {
+        let guard = crate::projects::roster::TEST_GUARD
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let store = crate::projects::ProjectStore::shared();
+        let project = store
+            .create("workspace binding room", Some("u-alice"), dir)
+            .expect("create room");
+        (project.id, guard)
+    }
+
+    /// The headline of Task 7: chatting in a bound room puts the run in the
+    /// room's folder, with no `project_root` on the request at all.
+    #[tokio::test]
+    async fn a_project_session_defaults_its_cwd_to_the_bound_workspace() {
+        let folder = tempfile::tempdir().expect("tempdir");
+        let dir = std::fs::canonicalize(folder.path()).expect("canonical");
+        let (project_id, _guard) = room_in_the_shared_catalogue(Some(&dir));
+
+        let session_key = AgentRouter::new().route(None, None, None, None).await;
+        let params = AgentRunParams {
+            project_id: Some(project_id),
+            ..base_params()
+        };
+
+        let request = crate::gateway::caller_identity::CALLER_USER
+            .scope(
+                Some("u-alice".to_string()),
+                build_run_request("run-room".to_string(), &session_key, params, None, None),
+            )
+            .await
+            .expect("build_run_request");
+
+        assert_eq!(request.workspace_override.as_deref(), Some(dir.as_path()));
+        assert_eq!(
+            request.metadata.get("project_root").map(String::as_str),
+            Some(dir.display().to_string().as_str()),
+            "metadata must mirror the override on BOTH tiers — a reader must \
+             not be able to tell which one put the run there"
+        );
+    }
+
+    /// The plan's second test: the config-tier gate belongs to *choosing* a
+    /// directory. A remote member running in a folder the owner already chose
+    /// is not choosing one, so the gate must not fire here — otherwise every
+    /// remote member of a bound room is locked out of the room's whole point.
+    #[tokio::test]
+    async fn a_member_does_not_need_the_config_gate_to_use_the_bound_workspace() {
+        let folder = tempfile::tempdir().expect("tempdir");
+        let dir = std::fs::canonicalize(folder.path()).expect("canonical");
+        let (project_id, _guard) = room_in_the_shared_catalogue(Some(&dir));
+        crate::projects::ProjectStore::shared()
+            .add_member(&project_id, "u-bob")
+            .expect("bob joins");
+
+        let session_key = AgentRouter::new().route(None, None, None, None).await;
+        let params = AgentRunParams {
+            project_id: Some(project_id),
+            ..base_params()
+        };
+
+        // Remote AND chat-tier: exactly the connection tier 1 refuses.
+        let request = crate::gateway::caller_identity::CALLER_USER
+            .scope(
+                Some("u-bob".to_string()),
+                crate::gateway::caller_identity::CALLER_ROLE.scope(
+                    Some("member".to_string()),
+                    crate::gateway::caller_identity::CALLER_IS_LOOPBACK.scope(
+                        false,
+                        build_run_request(
+                            "run-remote-member".to_string(),
+                            &session_key,
+                            params,
+                            None,
+                            None,
+                        ),
+                    ),
+                ),
+            )
+            .await
+            .expect("a bound room must be usable by its remote members");
+
+        assert_eq!(request.workspace_override.as_deref(), Some(dir.as_path()));
+    }
+
+    /// Unbound rooms and personal sessions are unchanged: the agent's own
+    /// workspace, resolved downstream from `workspace_override: None`.
+    #[tokio::test]
+    async fn an_unbound_room_leaves_the_workspace_to_the_agent() {
+        let (project_id, _guard) = room_in_the_shared_catalogue(None);
+
+        let session_key = AgentRouter::new().route(None, None, None, None).await;
+        let params = AgentRunParams {
+            project_id: Some(project_id),
+            ..base_params()
+        };
+
+        let request = crate::gateway::caller_identity::CALLER_USER
+            .scope(
+                Some("u-alice".to_string()),
+                build_run_request("run-unbound".to_string(), &session_key, params, None, None),
+            )
+            .await
+            .expect("build_run_request");
+
+        assert!(request.workspace_override.is_none());
+        assert!(!request.metadata.contains_key("project_root"));
+    }
+
+    /// A room whose folder went away refuses the turn instead of quietly
+    /// running in the agent's default workspace — where every file tool would
+    /// then operate somewhere nobody in the room expects.
+    #[tokio::test]
+    async fn a_room_whose_folder_vanished_refuses_the_turn_loudly() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let dir = std::fs::canonicalize(tmp.path()).expect("canonical");
+        let (project_id, _guard) = room_in_the_shared_catalogue(Some(&dir));
+        drop(tmp); // the folder is gone, the binding is not
+
+        let session_key = AgentRouter::new().route(None, None, None, None).await;
+        let params = AgentRunParams {
+            project_id: Some(project_id),
+            ..base_params()
+        };
+
+        let err = crate::gateway::caller_identity::CALLER_USER
+            .scope(
+                Some("u-alice".to_string()),
+                build_run_request("run-gone".to_string(), &session_key, params, None, None),
+            )
+            .await
+            .expect_err("a missing bound folder must not silently fall back");
+        assert!(
+            err.to_string().contains("folder is missing"),
+            "unexpected error: {err}"
+        );
+    }
+
+    /// Tier 1 still outranks tier 2, and still through the gate — a caller
+    /// who names a folder for this turn gets that folder, not the room's.
+    #[tokio::test]
+    async fn an_explicit_project_root_still_outranks_the_binding() {
+        let folder = tempfile::tempdir().expect("tempdir");
+        let bound = std::fs::canonicalize(folder.path()).expect("canonical");
+        let (project_id, _guard) = room_in_the_shared_catalogue(Some(&bound));
+        let chosen = tempfile::tempdir().expect("tempdir");
+
+        let session_key = AgentRouter::new().route(None, None, None, None).await;
+        let params = AgentRunParams {
+            project_id: Some(project_id),
+            project_root: Some(chosen.path().display().to_string()),
+            ..base_params()
+        };
+
+        let request = crate::gateway::caller_identity::CALLER_USER
+            .scope(
+                Some("u-alice".to_string()),
+                build_run_request("run-explicit".to_string(), &session_key, params, None, None),
+            )
+            .await
+            .expect("build_run_request");
+
+        assert_eq!(
+            request.workspace_override.as_deref(),
+            Some(chosen.path()),
+            "the per-turn choice wins"
         );
     }
 

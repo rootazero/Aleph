@@ -334,7 +334,16 @@
 //! Enforcement is a single admission point in the handler file,
 //! `handlers::projects::gate_project`, plus `require_owner` for the
 //! owner-level verbs. `projects.list` filters; `projects.get` / `remove` /
-//! `touch` / `rename` / `archive` / `member.*` are addressed and gated.
+//! `touch` / `rename` / `archive` / `bind_workspace` / `member.*` are
+//! addressed and gated.
+//!
+//! `bind_workspace` carries a THIRD gate that has nothing to do with
+//! visibility — `require_directory_choice`, the config-tier predicate shared
+//! with the per-turn `project_root` override. Since P2 a room's bound folder
+//! is the default cwd of every member's run, so the two creation surfaces
+//! below (`add` / `create_blank`) carry it too even though neither is
+//! registered here: unregistered means "no addressed record to check", never
+//! "ungated".
 //!
 //! Three siblings are deliberately absent rather than registered:
 //!
@@ -504,6 +513,7 @@ pub const SCOPED_METHODS: &[(&str, Treatment)] = &[
     ("projects.touch", Treatment::KeyChecked),
     ("projects.rename", Treatment::KeyChecked),
     ("projects.archive", Treatment::KeyChecked),
+    ("projects.bind_workspace", Treatment::KeyChecked),
     ("projects.member.add", Treatment::KeyChecked),
     ("projects.member.remove", Treatment::KeyChecked),
     ("projects.member.list", Treatment::KeyChecked),
@@ -843,6 +853,7 @@ mod tests {
             "projects.touch",
             "projects.rename",
             "projects.archive",
+            "projects.bind_workspace",
             "projects.member.add",
             "projects.member.remove",
             "projects.member.list",

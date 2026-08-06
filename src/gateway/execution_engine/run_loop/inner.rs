@@ -89,7 +89,36 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
         // Skip catalogue writes for team-worktree runs: their override points
         // at an ephemeral `$TMPDIR` checkout that would otherwise pollute the
         // Panel's recent-projects list with paths that vanish minutes later.
-        if request.workspace_override.is_some()
+        //
+        // A project-room run takes the short branch below instead: since P2
+        // Task 7 the room's own `workspace_path` IS the override, so the
+        // catalogue row already exists and is addressed by id. Letting it fall
+        // into the path lookup would ask an owner-keyed index about the
+        // SPEAKER (`ambient_owner()` is whoever typed, not the room's owner),
+        // miss, and auto-register a duplicate personal row for the shared
+        // folder in every member's recents.
+        //
+        // Unbound rooms take this branch too, which is new and deliberate: a
+        // room with no folder still belongs in the sidebar's recency order,
+        // and by id there is nothing to look up by path anyway.
+        let room_id = crate::scope::scope_from_metadata(&request.metadata).and_then(|attr| {
+            match attr.scope {
+                crate::scope::ScopeId::Project(id) => Some(id),
+                _ => None,
+            }
+        });
+        if let Some(project_id) = room_id {
+            tokio::task::spawn_blocking(move || {
+                let store = crate::projects::ProjectStore::shared();
+                if let Err(e) = store.touch(&project_id) {
+                    tracing::debug!(
+                        error = %e,
+                        project = %project_id,
+                        "projects.touch failed; room recency may be stale"
+                    );
+                }
+            });
+        } else if request.workspace_override.is_some()
             && !request.metadata.contains_key("team_worktree_path")
         {
             let path = effective_workspace.clone();

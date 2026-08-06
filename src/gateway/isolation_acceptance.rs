@@ -8,6 +8,7 @@
 //! shared room DOES share, and what it still must not:
 //! - [`two_members_share_one_room_memory_and_nobody_elses`] (spec §8/§13)
 //! - [`the_model_can_tell_two_room_members_apart`] (spec §6.2)
+//! - [`two_members_of_a_room_work_in_the_same_bound_folder`] (spec §8, Task 7)
 //!
 //! Every RPC surface below is exercised through its REAL handler function —
 //! the exact same one `HandlerRegistry` wires up in production
@@ -979,4 +980,90 @@ async fn the_model_can_tell_two_room_members_apart() {
             "and nobody typed this one".to_string(),
         ]
     );
+}
+
+/// Spec §8 (P2 acceptance, Task 7): **collaborating in a room means working in
+/// the same folder** — the third leg beside shared memory and distinguishable
+/// speakers.
+///
+/// Driven through the real `handlers::agent::build_run_request`, the one
+/// gateway→engine hand-off, under the task-locals a real dispatch applies. The
+/// two claims that fail silently:
+///
+/// 1. **Both members resolve to the same directory**, from a binding neither of
+///    them named on the request. A per-member fallback to the agent workspace
+///    would look like a working room right up until one of them saved a file.
+/// 2. **A remote, chat-tier member is not gated.** The config-tier gate guards
+///    *choosing* a directory; using one the owner already chose is not
+///    choosing. Getting this wrong locks every remote member out of the room's
+///    entire purpose, and it fails as a permission error nobody would connect
+///    to project rooms.
+///
+/// The personal-session control is what proves the workspace came from the
+/// room and not from something ambient in the fixture.
+#[tokio::test]
+async fn two_members_of_a_room_work_in_the_same_bound_folder() {
+    use crate::gateway::caller_identity::{CALLER_IS_LOOPBACK, CALLER_ROLE};
+    use crate::gateway::handlers::agent::{build_run_request, AgentRunParams};
+    use crate::gateway::router::AgentRouter;
+
+    let _guard = crate::projects::roster::TEST_GUARD
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+    let folder = TempDir::new().expect("tempdir");
+    let canonical = std::fs::canonicalize(folder.path()).expect("canonical");
+
+    let store = crate::projects::ProjectStore::shared();
+    let room = store
+        .create(
+            "shared workspace room",
+            Some("u-ws-alice"),
+            Some(&canonical),
+        )
+        .expect("create room");
+    store.add_member(&room.id, "u-ws-bob").expect("bob joins");
+
+    // Remote AND chat-tier for both: the tier `project_root` refuses.
+    async fn cwd_for(user: &str, project_id: Option<&str>) -> Option<std::path::PathBuf> {
+        let session_key = AgentRouter::new().route(None, None, None, None).await;
+        let params = AgentRunParams {
+            input: "where are we working".to_string(),
+            session_key: None,
+            channel: Some("gui:chat".to_string()),
+            peer_id: None,
+            stream: false,
+            thinking: None,
+            attachments: vec![],
+            agent_id: None,
+            project_root: None,
+            model_override: None,
+            exec_tier: None,
+            mode: None,
+            voice_input: false,
+            project_id: project_id.map(str::to_string),
+        };
+        CALLER_USER
+            .scope(
+                Some(user.to_string()),
+                CALLER_ROLE.scope(
+                    Some("member".to_string()),
+                    CALLER_IS_LOOPBACK.scope(
+                        false,
+                        build_run_request(format!("run-{user}"), &session_key, params, None, None),
+                    ),
+                ),
+            )
+            .await
+            .expect("a room member's turn must build")
+            .workspace_override
+    }
+
+    let alice = cwd_for("u-ws-alice", Some(&room.id)).await;
+    let bob = cwd_for("u-ws-bob", Some(&room.id)).await;
+    assert_eq!(alice.as_deref(), Some(canonical.as_path()));
+    assert_eq!(bob, alice, "one room, one working directory");
+
+    // Control: outside the room the same person gets no override at all, so
+    // the folder above can only have come from the binding.
+    assert_eq!(cwd_for("u-ws-alice", None).await, None);
 }

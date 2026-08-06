@@ -9,7 +9,17 @@
 //! the same rows (human ruling 2026-08-06). `add` / `create_blank` / `touch`
 //! are the picker's entry points; `create` / `rename` / `archive` /
 //! `member.*` are the room's. Nothing distinguishes them but whether the row
-//! has a `workspace_path`.
+//! has a `workspace_path` — and `bind_workspace` is the verb that moves a row
+//! between the two views in either direction.
+//!
+//! ## The three writers of `workspace_path`
+//!
+//! `add`, `create_blank` and `bind_workspace`. Since P2 (Task 7) that column
+//! is the default working directory of every run in the room, so all three go
+//! through [`require_directory_choice`] — the same config-tier predicate the
+//! per-turn `project_root` override uses. Adding a fourth writer without it
+//! reopens "register a folder, then chat in it", a two-step path to an
+//! arbitrary server directory with both steps legal.
 //!
 //! ## The four verdicts (spec §6.3)
 //!
@@ -155,6 +165,32 @@ fn require_owner(
     ))
 }
 
+/// Reject a caller who may not point a project at an arbitrary server folder.
+///
+/// The three verbs that write `workspace_path` — [`handle_add`],
+/// [`handle_create_blank`], [`handle_bind_workspace`] — share this with the
+/// per-run `project_root` override in
+/// [`crate::gateway::handlers::agent::build_run_request`]. Since P2 a room's
+/// bound folder IS the default cwd of every member's run, so a writer weaker
+/// than the reader would be a two-step path to the same place with both steps
+/// legal: register a folder, then chat in it.
+///
+/// Orthogonal to [`require_owner`], which asks "is this room yours to
+/// reconfigure". This asks "may this connection name server-side paths at
+/// all" — a room's owner connected from a chat-tier LAN device fails here and
+/// passes there.
+fn require_directory_choice(id: Option<Value>) -> Result<(), JsonRpcResponse> {
+    if crate::gateway::caller_identity::caller_may_choose_directory() {
+        return Ok(());
+    }
+    Err(JsonRpcResponse::error(
+        id,
+        PERMISSION_DENIED,
+        "choosing a working directory requires config-tier authorization or a \
+         local (loopback) connection",
+    ))
+}
+
 /// Reject a roster mutation naming somebody who is not an active principal.
 ///
 /// A deactivated user reads as unknown here on purpose: adding one grants
@@ -272,11 +308,17 @@ pub struct AddParams {
 /// same ruling as [`handle_create`]: `ProjectStore::add` resolves the caller
 /// off the ambient scope and collapses onto THEIR existing row for that path,
 /// never onto somebody else's.
+///
+/// Gated by [`require_directory_choice`]: the row this writes carries a
+/// `workspace_path`, which since P2 becomes a run's cwd.
 pub async fn handle_add(request: JsonRpcRequest, store: Arc<ProjectStore>) -> JsonRpcResponse {
     let params: AddParams = match parse_params(&request) {
         Ok(p) => p,
         Err(e) => return e,
     };
+    if let Err(denial) = require_directory_choice(request.id.clone()) {
+        return denial;
+    }
     let path = PathBuf::from(&params.path);
     match store.add(&path, params.name) {
         Ok(project) => {
@@ -300,6 +342,8 @@ pub struct CreateBlankParams {
     pub name: String,
 }
 
+/// Create a folder and register it. Same gate as [`handle_add`], and a
+/// stronger reason for it: this one also *creates* a directory server-side.
 pub async fn handle_create_blank(
     request: JsonRpcRequest,
     store: Arc<ProjectStore>,
@@ -308,6 +352,9 @@ pub async fn handle_create_blank(
         Ok(p) => p,
         Err(e) => return e,
     };
+    if let Err(denial) = require_directory_choice(request.id.clone()) {
+        return denial;
+    }
     let parent = PathBuf::from(&params.parent);
     match store.create_blank(&parent, &params.name) {
         Ok(project) => {
@@ -419,6 +466,75 @@ pub async fn handle_archive(
             request.id,
             json!({ "id": params.id, "status": ProjectStatus::Archived.as_str() }),
         ),
+        Err(e) => project_error_response(request.id, e),
+    }
+}
+
+// ============================================================================
+// projects.bind_workspace
+// ============================================================================
+
+#[derive(Debug, Deserialize)]
+pub struct BindWorkspaceParams {
+    pub id: String,
+    /// Absent or JSON `null` unbinds — the room keeps its roster, memory and
+    /// history and its runs go back to the agent's default workspace. That is
+    /// also the repair for a folder that has gone missing, which
+    /// `build_run_request` refuses to run in.
+    #[serde(default)]
+    pub path: Option<String>,
+}
+
+/// Point a room at a folder (spec §8, Task 7). Every member's run in this room
+/// then defaults its working directory to it — which is why this needs BOTH
+/// gates:
+///
+/// - [`require_owner`] — redirecting where the whole room works is an owner
+///   decision, not a member's. `handle_create`'s doc has said so since Task 3.
+/// - [`require_directory_choice`] — naming a server-side path at all is
+///   config-tier, exactly as it is for a per-turn `project_root`.
+///
+/// Absolute-ness, existence and canonicalisation are the store's
+/// (`ProjectStore::bind_workspace` → `canonical_dir`), so the path this writes
+/// is already resolved — no `..` survives to the run.
+pub async fn handle_bind_workspace(
+    request: JsonRpcRequest,
+    store: Arc<ProjectStore>,
+    users: Arc<SecurityStore>,
+) -> JsonRpcResponse {
+    let params: BindWorkspaceParams = match parse_params(&request) {
+        Ok(p) => p,
+        Err(e) => return e,
+    };
+    let project = match gate_project(&store, request.id.clone(), &params.id) {
+        Ok(p) => p,
+        Err(denial) => return denial,
+    };
+    if let Err(denial) = require_owner(&users, request.id.clone(), &project) {
+        return denial;
+    }
+    // Only when actually naming a path: unbinding is a de-escalation and must
+    // stay reachable from the surface that got stuck. A chat-tier member who
+    // can see the room but not choose folders can still un-stick it.
+    let path = params
+        .path
+        .as_deref()
+        .map(str::trim)
+        .filter(|p| !p.is_empty())
+        .map(PathBuf::from);
+    if path.is_some() {
+        if let Err(denial) = require_directory_choice(request.id.clone()) {
+            return denial;
+        }
+    }
+    match store.bind_workspace(&params.id, path.as_deref()) {
+        Ok(bound) => {
+            let members = store.members(&bound.id).unwrap_or_default();
+            JsonRpcResponse::success(
+                request.id,
+                json!({ "project": ProjectView::render(bound, members) }),
+            )
+        }
         Err(e) => project_error_response(request.id, e),
     }
 }
@@ -993,5 +1109,252 @@ mod tests {
         assert!(view["workspace_path"].is_null());
         assert_eq!(view["status"], "active");
         assert_eq!(view["owner_user_id"], "u-alice");
+    }
+
+    // ------------------------------------------------------------------
+    // projects.bind_workspace (Task 7)
+    // ------------------------------------------------------------------
+
+    /// Drive a handler with a fully-populated connection identity. `role:
+    /// None` is the unrestricted internal caller every gate opens with.
+    async fn as_caller<F, T>(user: &str, role: Option<&str>, loopback: bool, fut: F) -> T
+    where
+        F: std::future::Future<Output = T>,
+    {
+        use crate::gateway::caller_identity::{CALLER_IS_LOOPBACK, CALLER_ROLE};
+        CALLER_USER
+            .scope(
+                Some(user.to_string()),
+                CALLER_ROLE.scope(
+                    role.map(str::to_string),
+                    CALLER_IS_LOOPBACK.scope(loopback, fut),
+                ),
+            )
+            .await
+    }
+
+    /// An existing directory, canonicalised the same way the store will
+    /// canonicalise it, so the round-trip comparison is exact on Windows too
+    /// (where `canonicalize` adds the `\\?\` verbatim prefix).
+    fn a_real_dir() -> PathBuf {
+        std::fs::canonicalize(std::env::temp_dir()).expect("temp dir is canonicalisable")
+    }
+
+    #[tokio::test]
+    async fn the_owner_binds_a_folder_and_the_room_reports_it() {
+        let (store, users, project, _guard) = room();
+        let dir = a_real_dir();
+
+        let bound = as_caller(
+            "u-alice",
+            Some("operator"),
+            false,
+            handle_bind_workspace(
+                rpc(
+                    "projects.bind_workspace",
+                    json!({ "id": project.id, "path": dir.display().to_string() }),
+                ),
+                store.clone(),
+                users,
+            ),
+        )
+        .await;
+
+        let view = &bound.result.expect("bind succeeds")["project"];
+        assert_eq!(view["workspace_path"], dir.to_string_lossy().to_string());
+        assert_eq!(
+            store.get(&project.id).unwrap().unwrap().workspace_path,
+            Some(dir),
+            "the row, not just the response"
+        );
+    }
+
+    /// Rebinding redirects where the WHOLE room works — an owner decision.
+    #[tokio::test]
+    async fn a_plain_member_cannot_rebind_the_room() {
+        let (store, users, project, _guard) = room();
+
+        let denied = as_caller(
+            "u-bob",
+            Some("operator"),
+            true,
+            handle_bind_workspace(
+                rpc(
+                    "projects.bind_workspace",
+                    json!({ "id": project.id, "path": a_real_dir().display().to_string() }),
+                ),
+                store.clone(),
+                users,
+            ),
+        )
+        .await;
+
+        assert_eq!(err_of(&denied).0, PERMISSION_DENIED);
+        assert!(store
+            .get(&project.id)
+            .unwrap()
+            .unwrap()
+            .workspace_path
+            .is_none());
+    }
+
+    /// The gate this whole task turns on: without it, "register a folder,
+    /// then chat in it" is a two-step route to an arbitrary server directory
+    /// for a caller who may not name one directly.
+    #[tokio::test]
+    async fn a_remote_chat_tier_owner_cannot_name_a_folder() {
+        let (store, users, project, _guard) = room();
+
+        let denied = as_caller(
+            "u-alice",
+            Some("member"),
+            false,
+            handle_bind_workspace(
+                rpc(
+                    "projects.bind_workspace",
+                    json!({ "id": project.id, "path": a_real_dir().display().to_string() }),
+                ),
+                store.clone(),
+                users,
+            ),
+        )
+        .await;
+
+        assert_eq!(err_of(&denied).0, PERMISSION_DENIED);
+        assert!(store
+            .get(&project.id)
+            .unwrap()
+            .unwrap()
+            .workspace_path
+            .is_none());
+    }
+
+    /// Unbinding is a de-escalation and stays reachable from the surface that
+    /// got stuck — otherwise a room whose folder vanished would be
+    /// unrepairable from the only connection its owner has.
+    #[tokio::test]
+    async fn the_same_owner_may_still_unbind_from_a_chat_tier_connection() {
+        let (store, users, project, _guard) = room();
+        store
+            .bind_workspace(&project.id, Some(&a_real_dir()))
+            .unwrap();
+
+        let unbound = as_caller(
+            "u-alice",
+            Some("member"),
+            false,
+            handle_bind_workspace(
+                rpc(
+                    "projects.bind_workspace",
+                    json!({ "id": project.id, "path": Value::Null }),
+                ),
+                store.clone(),
+                users,
+            ),
+        )
+        .await;
+
+        assert!(unbound.error.is_none(), "{:?}", unbound.error);
+        assert!(store
+            .get(&project.id)
+            .unwrap()
+            .unwrap()
+            .workspace_path
+            .is_none());
+    }
+
+    /// The no-oracle contract holds for the new verb too: a stranger learns
+    /// nothing about whether the room exists.
+    #[tokio::test]
+    async fn a_stranger_binding_gets_not_found_not_permission_denied() {
+        let (store, users, project, _guard) = room();
+
+        let denied = as_caller(
+            "u-mallory",
+            Some("operator"),
+            true,
+            handle_bind_workspace(
+                rpc(
+                    "projects.bind_workspace",
+                    json!({ "id": project.id, "path": a_real_dir().display().to_string() }),
+                ),
+                store,
+                users,
+            ),
+        )
+        .await;
+
+        let (code, msg) = err_of(&denied);
+        assert_eq!(code, RESOURCE_NOT_FOUND);
+        assert!(msg.starts_with("project not found:"), "{msg}");
+    }
+
+    /// The other two writers of `workspace_path`. Registering a folder was
+    /// open to any member before P2 because the column was inert; Task 7 made
+    /// it a working directory.
+    #[tokio::test]
+    async fn the_other_two_workspace_writers_carry_the_same_gate() {
+        let (store, _users, _project, _guard) = room();
+        let dir = a_real_dir();
+
+        let added = as_caller(
+            "u-bob",
+            Some("member"),
+            false,
+            handle_add(
+                rpc("projects.add", json!({ "path": dir.display().to_string() })),
+                store.clone(),
+            ),
+        )
+        .await;
+        assert_eq!(err_of(&added).0, PERMISSION_DENIED, "projects.add");
+
+        // A parent nobody else has touched, so "the folder is absent" can only
+        // mean the gate ran before the `mkdir`.
+        let parent = tempfile::tempdir().expect("tempdir");
+        let blanked = as_caller(
+            "u-bob",
+            Some("member"),
+            false,
+            handle_create_blank(
+                rpc(
+                    "projects.create_blank",
+                    json!({ "parent": parent.path().display().to_string(), "name": "escalation" }),
+                ),
+                store.clone(),
+            ),
+        )
+        .await;
+        assert_eq!(
+            err_of(&blanked).0,
+            PERMISSION_DENIED,
+            "projects.create_blank"
+        );
+        assert!(
+            !parent.path().join("escalation").exists(),
+            "the gate must run BEFORE mkdir, not after"
+        );
+    }
+
+    /// The desktop App's own Panel is chat-tier by pairing and local by
+    /// address. Zero-config single-machine use must not have regressed.
+    #[tokio::test]
+    async fn the_local_panel_still_registers_folders() {
+        let (store, _users, _project, _guard) = room();
+
+        let added = as_caller(
+            "u-alice",
+            Some("member"),
+            true,
+            handle_add(
+                rpc(
+                    "projects.add",
+                    json!({ "path": a_real_dir().display().to_string() }),
+                ),
+                store,
+            ),
+        )
+        .await;
+        assert!(added.error.is_none(), "{:?}", added.error);
     }
 }
