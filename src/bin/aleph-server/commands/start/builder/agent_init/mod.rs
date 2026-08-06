@@ -1378,6 +1378,7 @@ pub(in crate::commands::start) async fn register_agent_handlers(
                 alephcore::gateway::execution_engine::goal_wait::GoalWakeService::new(
                     goal_deps,
                     coord_store.clone(),
+                    Some(session_store.clone()),
                 ),
             );
             goal_wake.subscribe();

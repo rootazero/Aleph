@@ -66,11 +66,18 @@ pub async fn live_deadline_status(session_key: &str) -> Option<String> {
         .and_then(|store| store.get(session_key).ok().flatten())
         .filter(crate::goal::Goal::is_active)
     {
+        let mut parts = Vec::new();
         if let Some(deadline) = goal.deadline_ms {
-            lines.push(format!(
-                "standing goal: {}",
-                render_deadline(deadline, now_ms)
-            ));
+            parts.push(render_deadline(deadline, now_ms));
+        }
+        // The parked countdown rides here for the same reason the deadline
+        // countdown does: it changes every run, so it must stay on the far
+        // side of the prompt-cache breakpoint.
+        if let Some(until) = goal.waiting_until_ms {
+            parts.push(render_park_wait(until, now_ms));
+        }
+        if !parts.is_empty() {
+            lines.push(format!("standing goal: {}", parts.join(", ")));
         }
     }
 
@@ -254,8 +261,21 @@ pub(crate) fn render_goal_summary(goal: &crate::goal::Goal) -> String {
         }
         crate::goal::PursuitMode::Passive => String::new(),
     };
+    // The parked FACT (stable for the whole park) belongs here; the parked
+    // COUNTDOWN is clock-derived and rides `live_deadline_status` on the far
+    // side of the cache breakpoint. Without this the model reads a parked
+    // pursuit as actively running every single turn — the tool's own `get`
+    // and `list` renders both say it, and this is the one injected per turn.
+    let parked = match (
+        goal.waiting_on_task.as_deref(),
+        goal.waiting_until_ms.is_some(),
+    ) {
+        (Some(task_id), _) => format!(", parked (waiting on task '{task_id}')"),
+        (None, true) => ", parked (waiting)".to_string(),
+        (None, false) => String::new(),
+    };
     format!(
-        "{} (status=active{budget}{deadline}{pursuit})",
+        "{} (status=active{budget}{deadline}{pursuit}{parked})",
         goal.objective
     )
 }
@@ -280,6 +300,30 @@ pub(crate) fn render_deadline(deadline_ms: u64, now_ms: u64) -> String {
     } else {
         format!(
             "deadline in ~{}h{}m",
+            remaining_s / 3600,
+            (remaining_s % 3600) / 60
+        )
+    }
+}
+
+/// Render a wait barrier's remaining park as a compact phrase relative to
+/// `now_ms`. Sibling of [`render_deadline`], same conventions: `now_ms == 0`
+/// (no clock) degrades rather than lying, and an elapsed wake reads as due.
+pub(crate) fn render_park_wait(until_ms: u64, now_ms: u64) -> String {
+    if now_ms == 0 {
+        return "parked, wake time unknown".to_string();
+    }
+    if now_ms >= until_ms {
+        return "parked, wake due".to_string();
+    }
+    let remaining_s = (until_ms - now_ms) / 1000;
+    if remaining_s < 60 {
+        format!("parked, ~{remaining_s}s left")
+    } else if remaining_s < 3600 {
+        format!("parked, ~{}m left", remaining_s / 60)
+    } else {
+        format!(
+            "parked, ~{}h{}m left",
             remaining_s / 3600,
             (remaining_s % 3600) / 60
         )
