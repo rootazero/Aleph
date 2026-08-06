@@ -57,18 +57,43 @@ pub struct TeamTaskControlOutput {
 #[derive(Clone)]
 pub struct TeamTaskControlTool {
     coord_store: Arc<dyn CoordTaskStore>,
+    team_store: Option<Arc<dyn crate::teams::TeamStore>>,
 }
 
 impl TeamTaskControlTool {
     pub fn new(coord_store: Arc<dyn CoordTaskStore>) -> Self {
-        Self { coord_store }
+        Self {
+            coord_store,
+            team_store: None,
+        }
     }
 
+    /// Wire the ownership gate. Without it this tool addresses `coord_tasks`
+    /// alone, which the `ScopedTeamStore` decorator cannot see — see
+    /// [`crate::teams::task_team_reachable`].
+    #[must_use]
+    pub fn with_team_store(mut self, store: Option<Arc<dyn crate::teams::TeamStore>>) -> Self {
+        self.team_store = store;
+        self
+    }
+
+    /// The tool's only task-resolution point, so the gate lives here rather
+    /// than in each of the five action arms.
     async fn fetch_task(&self, task_id: &str) -> Result<crate::agents::swarm::tasks::CoordTask> {
-        self.coord_store
+        let not_found = || AlephError::invalid_input(format!("task '{task_id}' not found"));
+        let task = self
+            .coord_store
             .get_task(task_id)
             .await?
-            .ok_or_else(|| AlephError::invalid_input(format!("task '{task_id}' not found")))
+            .ok_or_else(not_found)?;
+        // Same error a genuinely absent task produces — a foreign task must
+        // not be distinguishable from one that never existed.
+        if !crate::teams::task_team_reachable(self.team_store.as_ref(), task.team_id.as_deref())
+            .await
+        {
+            return Err(not_found());
+        }
+        Ok(task)
     }
 
     async fn fetch_status(&self, task_id: &str) -> Result<CoordTaskStatus> {
@@ -342,6 +367,79 @@ mod tests {
             .await
             .unwrap();
         task.id
+    }
+
+    /// The tool-surface half of the `teams.*` isolation: a model running for
+    /// bob must not be able to pause a task in alice's team.
+    ///
+    /// Asserted on the EFFECT (the refusal, and alice's task still Pending),
+    /// not on "the gate was called" — a test that only proved the call happens
+    /// would stay green if the result were discarded.
+    #[tokio::test]
+    async fn a_foreign_teams_task_is_not_controllable() {
+        use crate::scope::{with_scope, ScopeAttribution};
+        use crate::teams::{NewTeam, ScopedTeamStore, SqliteTeamStore, TeamStore};
+
+        let raw = SqliteTeamStore::new(rusqlite::Connection::open_in_memory().unwrap());
+        raw.migrate().await.unwrap();
+        let teams: Arc<dyn TeamStore> = ScopedTeamStore::wrap(Arc::new(raw));
+        let team = with_scope(
+            Some(ScopeAttribution::personal("u-alice")),
+            teams.create_team(NewTeam {
+                name: "Alice Squad".into(),
+                description: String::new(),
+                leader_id: "agent-1".into(),
+            }),
+        )
+        .await
+        .unwrap();
+
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        let coord = SqliteCoordTaskStore::new(conn);
+        coord.migrate().await.unwrap();
+        let coord: Arc<dyn CoordTaskStore> = Arc::new(coord);
+        let task = coord
+            .create_task(NewCoordTask {
+                team_id: Some(team.id.clone()),
+                subject: "alice's work".into(),
+                description: String::new(),
+                owner: Some("agent-1".to_string()),
+                priority: Priority::Normal,
+                blocked_by: Vec::new(),
+                metadata: serde_json::Value::Null,
+            })
+            .await
+            .unwrap();
+
+        let tool = TeamTaskControlTool::new(Arc::clone(&coord)).with_team_store(Some(teams));
+
+        let err = with_scope(
+            Some(ScopeAttribution::personal("u-bob")),
+            tool.call(TeamTaskControlArgs::Pause {
+                task_id: task.id.clone(),
+            }),
+        )
+        .await
+        .expect_err("bob must be refused");
+        assert!(
+            err.to_string().contains("not found"),
+            "the refusal must read like an absent task, got: {err}"
+        );
+        assert_eq!(
+            coord.get_task(&task.id).await.unwrap().unwrap().status,
+            CoordTaskStatus::Pending,
+            "alice's task must be untouched"
+        );
+
+        // ...and alice herself is unaffected.
+        with_scope(
+            Some(ScopeAttribution::personal("u-alice")),
+            tool.call(TeamTaskControlArgs::Pause {
+                task_id: task.id.clone(),
+            }),
+        )
+        .await
+        .expect("alice controls her own team's task");
     }
 
     #[tokio::test]

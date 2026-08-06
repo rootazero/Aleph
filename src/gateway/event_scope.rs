@@ -78,6 +78,38 @@ impl EventScopeGuard {
     }
 }
 
+/// The event scope stamped onto a connection holding the resolved wire `role`.
+///
+/// **Single authority for the role → event-scope mapping.** Both writers call
+/// it: the `connect` handshake (`server::handler`) and the live role re-stamp
+/// (`handlers::users::restamp_live_connections`). Written twice, the two halves
+/// drift — a demoted admin would keep the wildcard on his open tab until he
+/// happened to reconnect, which is the exact indefinite window the re-stamp
+/// exists to close on the `caller_role` axis.
+///
+/// - `"operator"` ⇒ the `"*"` wildcard. Loopback and every credential-authorized
+///   admin keep byte-identical scope to before this function existed.
+/// - anything else (`"member"`, `"guest"`) ⇒ no scopes.
+///
+/// An empty scope is **not** a blackout. [`EventScopeGuard::can_receive`] is
+/// *default-allow*: only the prefixes named in
+/// [`default_rules`](EventScopeGuard::default_rules) are guarded, and every
+/// other topic — chat, session, `agent.run.*`, streaming deltas — passes for any
+/// connection regardless of permissions. So a member's daily surfaces are
+/// untouched, while the admin-guarded topics stop reaching him: `approval.*`
+/// (exec approval cards, **including the command text being approved**),
+/// `surface.approval`, `config.changed`, `pairing.*` and `guest.*`. Members used
+/// to be stamped `"*"`, which short-circuits every rule — the login wall admits
+/// them, so they were live connections receiving an admin's approval traffic.
+#[must_use]
+pub fn scope_for_role(role: &str) -> Vec<String> {
+    if role == "operator" {
+        vec!["*".to_string()]
+    } else {
+        Vec::new()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -200,6 +232,94 @@ mod tests {
         assert!(
             g.can_receive("surface.notify", &chat),
             "surface.notify must stay unguarded"
+        );
+    }
+
+    /// The operator half of the role → scope mapping is a zero-change
+    /// guarantee: loopback and every credential-authorized admin are stamped
+    /// the same `["*"]` they were stamped before `scope_for_role` existed.
+    #[test]
+    fn operator_scope_is_the_unchanged_wildcard() {
+        assert_eq!(scope_for_role("operator"), vec!["*".to_string()]);
+
+        let g = EventScopeGuard::default_rules();
+        let op = scope_for_role("operator");
+        for topic in [
+            "approval.requested",
+            "approval.resolved",
+            "surface.approval",
+            "config.changed",
+            "pairing.requested",
+            "guest.joined",
+            "agent.run.started",
+            "session.created",
+        ] {
+            assert!(
+                g.can_receive(topic, &op),
+                "operator must still receive {topic}"
+            );
+        }
+    }
+
+    /// A member is a *logged-in* principal — the login wall admits him and he
+    /// holds a live socket — so his scope is what decides whether an admin's
+    /// approval cards land on his screen. He used to be stamped `"*"`, which
+    /// short-circuits every rule in `can_receive`.
+    #[test]
+    fn member_scope_excludes_admin_guarded_topics() {
+        let g = EventScopeGuard::default_rules();
+        let member = scope_for_role("member");
+        assert!(member.is_empty(), "a member holds no event scopes");
+
+        for topic in [
+            // Exec approval cards carry the command text being approved.
+            "approval.requested",
+            "approval.resolved",
+            "approval.expired",
+            "surface.approval",
+            "config.changed",
+            "pairing.requested",
+            "pairing.approved",
+            "guest.joined",
+        ] {
+            assert!(
+                !g.can_receive(topic, &member),
+                "a member must NOT receive the admin-guarded topic {topic}"
+            );
+        }
+    }
+
+    /// The other half of the same fix: narrowing a member's scope must not
+    /// black out his daily surfaces. `can_receive` is default-allow, so every
+    /// topic that matches no rule still flows on an empty scope.
+    #[test]
+    fn member_still_receives_ordinary_session_and_chat_topics() {
+        let g = EventScopeGuard::default_rules();
+        let member = scope_for_role("member");
+
+        for topic in [
+            "agent.started",
+            "agent.run.started",
+            "chat.message",
+            "session.created",
+            "surface.notify",
+        ] {
+            assert!(
+                g.can_receive(topic, &member),
+                "unguarded topic {topic} must still reach a member"
+            );
+        }
+    }
+
+    /// Guest (walled) resolves through the same arm as member — no scopes.
+    /// Pinned so a future carve-out for one cannot silently widen the other.
+    #[test]
+    fn guest_and_unknown_roles_hold_no_scope() {
+        assert!(scope_for_role("guest").is_empty());
+        assert!(scope_for_role("").is_empty());
+        assert!(
+            scope_for_role("admin").is_empty(),
+            "the wire word is `operator`, not the store's `admin`"
         );
     }
 }

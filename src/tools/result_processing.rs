@@ -29,8 +29,9 @@ use crate::tools::result_store::{extract_persisted_ref, ToolResultStore};
 const MAX_INLINE_IMAGE_BASE64_CHARS: usize = (20usize * 1024 * 1024).div_ceil(3) * 4;
 
 /// Global default budget for tools that neither declare an explicit
-/// `max_result_tokens` nor appear in the legacy name table. Mirrors the
-/// `MAX_TOOL_RESULT_TOKENS` constant in `pipeline/helpers.rs`.
+/// `max_result_tokens` nor appear in the legacy name table. It descends from
+/// the historical `MAX_TOOL_RESULT_TOKENS` constant, which lived in the
+/// since-deleted `pipeline` module this one replaced.
 pub const DEFAULT_RESULT_BUDGET_TOKENS: usize = 8_000;
 
 /// Process-wide ceiling on every per-result budget, installed at boot from the
@@ -232,7 +233,7 @@ pub fn apply_result_budget(
             Some(_) => distill_or_truncate(text, budget.saturating_sub(footer_tokens)),
             // Opaque: a bounded error preview only, as before — visible without
             // a ctx_search round-trip, absent when there is no error signal.
-            None => inline_error_digest(text).unwrap_or_default(),
+            None => inline_error_digest(text, Some(budget)).unwrap_or_default(),
         };
         let composed = if body.is_empty() {
             footer
@@ -479,8 +480,11 @@ fn distill_or_truncate(text: &str, budget_tokens: usize) -> String {
 /// Inline error preview prepended to a persist marker, so the model sees the
 /// key failures immediately instead of having to `ctx_search` the offloaded
 /// blob first. Returns `None` when there is no error signal. Bounded to a
-/// handful of lines to preserve the offload's token saving.
-fn inline_error_digest(text: &str) -> Option<String> {
+/// handful of lines to preserve the offload's token saving — exactly how
+/// handful is budget-derived: 8 lines at the default result budget, scaled
+/// down (floor 2 — fewer and the preview stops naming the failure) for a tool
+/// that declared a tighter budget, never up.
+fn inline_error_digest(text: &str, budget_tokens: Option<usize>) -> Option<String> {
     // A payload with no newline at all cannot be line-distilled — a flattened
     // tool envelope is exactly one line, and a prefix slice of it is a guess
     // dressed up as a signal. That precondition now lives on
@@ -493,12 +497,11 @@ fn inline_error_digest(text: &str) -> Option<String> {
     if digest.error_count == 0 {
         return None;
     }
-    Some(digest.render(8))
+    let cap = budget_tokens.map_or(8, |b| crate::tool_output::scale_to_budget(8, 2, b));
+    Some(digest.render(cap))
 }
 
-/// Head + tail truncation under the budget. Mirrors
-/// `pipeline/helpers.rs::truncate_tool_result_with_budget`, which is
-/// removed in the same cycle that ships this module.
+/// Head + tail truncation under the budget.
 #[must_use]
 pub fn truncate_with_budget(text: &str, budget_tokens: usize) -> String {
     let estimated = estimate_tokens_smart(text);
@@ -575,7 +578,7 @@ mod tests {
         .to_string();
         assert!(!flat.contains('\n'), "the flattened envelope is one line");
         assert_eq!(
-            inline_error_digest(&flat),
+            inline_error_digest(&flat, None),
             None,
             "an opaque single-line payload cannot be line-distilled; the preview \
              would be the JSON envelope's head, not the error"
@@ -589,8 +592,42 @@ mod tests {
             "running 2001 tests\n{}error[E0308]: mismatched types\n  --> src/main.rs:4:9\n",
             "test foo ... ok\n".repeat(400)
         );
-        let digest = inline_error_digest(&text).expect("line-shaped output distills");
+        let digest = inline_error_digest(&text, None).expect("line-shaped output distills");
         assert!(digest.contains("error[E0308]"), "got: {digest}");
+    }
+
+    /// The preview's line cap is a budget knob, not a constant: the default
+    /// budget reproduces the historical 8 lines exactly, a tighter budget
+    /// shrinks it, and the floor keeps it from shrinking past usefulness.
+    #[test]
+    fn the_error_preview_scales_with_the_budget() {
+        let mut text = String::from("running 2001 tests\n");
+        for i in 0..30 {
+            text.push_str(&format!("error: failure number {i} at f{i}.rs:1\n"));
+        }
+        text.push_str(&"padding to exceed the distiller's size floor\n".repeat(40));
+
+        let count_errors =
+            |digest: &str| digest.lines().filter(|l| l.starts_with("error:")).count();
+        let default_budget =
+            inline_error_digest(&text, Some(DEFAULT_RESULT_BUDGET_TOKENS)).expect("distills");
+        assert_eq!(
+            count_errors(&default_budget),
+            8,
+            "the default budget reproduces the shipped 8-line cap:\n{default_budget}"
+        );
+        let no_budget = inline_error_digest(&text, None).expect("distills");
+        assert_eq!(no_budget, default_budget, "None is the default behaviour");
+        let tight = inline_error_digest(&text, Some(300)).expect("distills");
+        let tight_n = count_errors(&tight);
+        assert!(
+            tight_n < 8,
+            "a 300-token budget must tighten, got {tight_n}"
+        );
+        assert!(
+            tight_n >= 2,
+            "the floor keeps the preview useful, got {tight_n}"
+        );
     }
 
     fn test_store(name: &str) -> (ToolResultStore, PathBuf) {

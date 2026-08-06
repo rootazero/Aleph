@@ -14,6 +14,8 @@
 //! backstops. Sibling of `looping::pursuit` (the clock-gated variant); never
 //! in `src/harness/` (R10 12-file redline).
 
+use std::time::Duration;
+
 use crate::goal::{GateOutcome, Goal, GoalStatus, PursuitMode};
 use crate::looping::types::fmt_duration_ms;
 
@@ -60,6 +62,29 @@ pub fn should_continue(goal: &Goal, tokens_now: u64, now_ms: u64) -> bool {
     true
 }
 
+/// Would a continuation claimed now — waking at `wake_ms` — still be inside
+/// the goal's wall-clock bound when it actually EXECUTES?
+///
+/// [`should_continue`] answers "may this goal be claimed", which is a
+/// different question. A deadline wait barrier is claimed at one `post_run`
+/// and its wake executes up to hours later, and nothing in between re-reads
+/// the clock: `confirm_fire` matches the pending marker, not the deadline.
+/// Without this projection `timeout_minutes` bounds only when a continuation
+/// may be *scheduled*, so `wait_minutes=180` under a 30-minute deadline runs a
+/// full LLM turn 150 minutes past the limit the user set.
+///
+/// The tradeoff is deliberate and identical to the loop's
+/// (`looping::pursuit::fires_out_of_bounds`): the pursuit now stops at the
+/// last claim whose wake lands in-bounds — up to one park EARLY rather than
+/// arbitrarily late. A safety cap is an upper bound, not an approximation.
+///
+/// `now_ms == 0` (clock unavailable) fails open, matching [`should_continue`].
+#[must_use]
+pub fn fires_out_of_bounds(goal: &Goal, wake_ms: u64, now_ms: u64) -> bool {
+    goal.deadline_ms
+        .is_some_and(|deadline| now_ms != 0 && wake_ms > deadline)
+}
+
 /// The OTHER two structural budgets the loop silently enforces — the wall-clock
 /// deadline and the token budget — rendered as a remaining-quota clause for the
 /// continuation prompt. The iteration pace is already in the prompt's header, so
@@ -101,13 +126,18 @@ fn render_quota(goal: &Goal, tokens_now: u64, now_ms: u64) -> String {
 }
 
 /// The objective is USER DATA quoted inside a prompt, not instructions — wrap
-/// it in an explicit container so a crafted objective reads as content, and
-/// neutralize any literal closing tag that would break out of the wrapper
-/// (codex `steering.rs::escape_xml_text` parity, minimal: only the wrapper's
-/// own closer can break out).
+/// it in an explicit container so a crafted objective reads as content.
+///
+/// Escaping goes through `xml_util::escape_xml`, the same single source
+/// `StandingGoalLayer` applies to this exact string. The hand-rolled
+/// `replace("</objective", …)` this replaces neutralized only the wrapper's
+/// own closer, so the two renders of one objective disagreed on what counted
+/// as markup — and a bespoke escape is one measured against nothing.
 fn objective_block(goal: &Goal) -> String {
-    let safe = goal.objective.replace("</objective", "< /objective");
-    format!("<objective>{safe}</objective>")
+    format!(
+        "<objective>{}</objective>",
+        crate::thinker::xml_util::escape_xml(&goal.objective)
+    )
 }
 
 /// Continuation prompt re-stating the goal (hermes parity), used when
@@ -230,6 +260,61 @@ pub fn budget_reached_note(goal: &Goal) -> String {
         // No budget set → token budget cannot be the binding stop; fall back.
         None => cap_reached_note(goal),
     }
+}
+
+/// Why an autonomous pursuit parked on a transient provider failure, and how
+/// long until it retries. Serves three readers at once — the goal's
+/// `waiting_reason` (which `goal(get)` / `goal(list)` render), the resume
+/// prompt, and the origin-channel notice — so it must read as a pause rather
+/// than a verdict.
+///
+/// NOT the per-turn prompt summary: `render_goal_summary` deliberately does not
+/// read `waiting_reason`. This string carries a countdown, and the summary sits
+/// in the cacheable region — a per-turn-varying reason there would invalidate
+/// the prefix on every turn. The summary states the parked FACT instead, and the
+/// countdown rides `live_deadline_status` past the cache breakpoint.
+///
+/// `code` is the stable `ReceiptKind::code()` string (`RATE_LIMITED` /
+/// `PROVIDERS_UNREACHABLE`), never the raw provider error chain: that chain is
+/// already classified by the time it reaches here, and echoing it would leak
+/// internal detail into a persisted, prompt-injected field.
+#[must_use]
+pub fn transient_park_note(code: &str, delay_ms: u64) -> String {
+    format!(
+        "Autonomous pursuit paused on a transient provider failure ({code}); \
+         retrying in ~{}.",
+        fmt_duration_ms(delay_ms)
+    )
+}
+
+/// Bound a transient-failure retry delay derived from a provider's
+/// `Retry-After` hint into a delay safe to park a goal on.
+///
+/// `hint` is `None` both when the header was missing AND when it parsed to a
+/// `Duration` whose milliseconds overflow `u64` — both read as "no usable
+/// hint", never as "wait forever": `extract_retry_after_str` has no ceiling of
+/// its own (it parses digits straight into `Duration::from_secs`), so without
+/// this a syntactically valid but absurd header (30 days, comfortably inside
+/// `u64`) would sail through unchanged and park the goal a month out.
+///
+/// Floored at 1s so a `Retry-After: 0` (or a parse producing an
+/// effectively-zero delay) cannot spin the wake loop; capped at `max_ms` so no
+/// single hop can outlast the ceiling regardless of what the header claims.
+/// `fallback_ms` is used verbatim when there is no hint at all, so callers
+/// should keep it below `max_ms` themselves — this function does not reorder
+/// the two, only bounds whichever one is selected.
+#[must_use]
+pub fn bound_transient_park_delay_ms(hint: Option<Duration>, fallback_ms: u64, max_ms: u64) -> u64 {
+    // The floor is applied before the ceiling, so a `max_ms` under the floor
+    // would invert them and hand back a delay shorter than the 1s spin guard —
+    // silently, since both bounds "applied". No caller passes such a ceiling and
+    // none should; say so where it is enforced rather than in a comment.
+    debug_assert!(
+        max_ms >= 1_000,
+        "the park ceiling must not sit under the 1s floor"
+    );
+    let raw_ms = hint.and_then(|d| u64::try_from(d.as_millis()).ok());
+    raw_ms.unwrap_or(fallback_ms).max(1_000).min(max_ms)
 }
 
 /// Pick the note that explains WHY autonomous pursuit stopped, from the three
@@ -482,6 +567,24 @@ mod tests {
     }
 
     #[test]
+    fn objective_block_escapes_through_the_one_shared_source() {
+        let g = Goal::new("s", "fix <div> & </objective> handling", 0, 0);
+        let block = objective_block(&g);
+        assert!(block.starts_with("<objective>") && block.ends_with("</objective>"));
+        // The wrapper's own closer cannot appear in the body...
+        assert_eq!(
+            block.matches("</objective>").count(),
+            1,
+            "only the wrapper's closer may survive: {block}"
+        );
+        // ...and neither can any other raw markup, because the body goes through
+        // the same `xml_util::escape_xml` the `<standing_goal>` layer applies to
+        // this exact text. Two escaping schemes for one string is how they drift.
+        assert!(!block.contains("<div>"), "got: {block}");
+        assert!(block.contains("&lt;div&gt;"), "got: {block}");
+    }
+
+    #[test]
     fn continuation_prompt_surfaces_pace_when_not_final() {
         let g = active_goal(5); // continuations_used = 0 → this is iteration 1/5
         let p = continuation_prompt(&g, 0, 0);
@@ -686,6 +789,28 @@ mod tests {
     }
 
     #[test]
+    fn a_wake_past_the_deadline_is_out_of_bounds() {
+        let g = active_goal(5).with_deadline_ms(Some(10_000));
+        // Claimed at 1_000 (inside the deadline) but waking at 20_000 (outside).
+        assert!(fires_out_of_bounds(&g, 20_000, 1_000));
+        // A wake that lands before the deadline is fine.
+        assert!(!fires_out_of_bounds(&g, 9_000, 1_000));
+        // Exactly at the deadline is still in bounds (`>` not `>=`, matching
+        // `should_continue`'s `now_ms > deadline`).
+        assert!(!fires_out_of_bounds(&g, 10_000, 1_000));
+    }
+
+    #[test]
+    fn no_deadline_or_no_clock_never_reads_out_of_bounds() {
+        let no_deadline = active_goal(5);
+        assert!(!fires_out_of_bounds(&no_deadline, u64::MAX, 1_000));
+        // now_ms == 0 means "clock unavailable" — fail open, same convention as
+        // `should_continue`, so clock-less callers stay behavior-identical.
+        let bounded = active_goal(5).with_deadline_ms(Some(10_000));
+        assert!(!fires_out_of_bounds(&bounded, 20_000, 0));
+    }
+
+    #[test]
     fn deadline_reached_note_mentions_wall_clock() {
         let g = active_goal(5);
         assert!(deadline_reached_note(&g)
@@ -706,6 +831,67 @@ mod tests {
         // No budget set → cannot be the binding stop; reuse the cap note.
         let g = active_goal(7);
         assert_eq!(budget_reached_note(&g), cap_reached_note(&g));
+    }
+
+    #[test]
+    fn transient_park_note_names_the_cause_and_the_retry_window() {
+        let note = transient_park_note("RATE_LIMITED", 300_000);
+        assert!(note.contains("RATE_LIMITED"), "got: {note}");
+        assert!(
+            note.contains("5m"),
+            "the retry window must be legible: {note}"
+        );
+        // The note is both the model-facing `waiting_reason` and the user-facing
+        // push, so it must read as a pause, never as a halt.
+        assert!(!note.to_lowercase().contains("halt"), "got: {note}");
+    }
+
+    #[test]
+    fn bound_transient_park_delay_falls_back_when_there_is_no_hint() {
+        assert_eq!(
+            bound_transient_park_delay_ms(None, 300_000, 600_000),
+            300_000
+        );
+    }
+
+    #[test]
+    fn bound_transient_park_delay_floors_a_zero_or_tiny_hint() {
+        assert_eq!(
+            bound_transient_park_delay_ms(Some(Duration::from_secs(0)), 300_000, 600_000),
+            1_000,
+            "a Retry-After: 0 must not spin the wake loop"
+        );
+    }
+
+    #[test]
+    fn bound_transient_park_delay_passes_through_an_in_range_hint() {
+        assert_eq!(
+            bound_transient_park_delay_ms(Some(Duration::from_secs(45)), 300_000, 600_000),
+            45_000
+        );
+    }
+
+    #[test]
+    fn bound_transient_park_delay_caps_a_large_but_valid_hint() {
+        // The reviewer's finding: a 30-day Retry-After parses cleanly (it
+        // fits comfortably inside u64 millis) and nothing before this clamp
+        // would have caught it.
+        let thirty_days = Duration::from_secs(30 * 24 * 60 * 60);
+        assert_eq!(
+            bound_transient_park_delay_ms(Some(thirty_days), 300_000, 600_000),
+            600_000,
+            "an absurd but syntactically valid hint must still be capped"
+        );
+    }
+
+    #[test]
+    fn bound_transient_park_delay_falls_back_when_the_hint_overflows_u64_millis() {
+        // Duration::MAX's milliseconds exceed u64::MAX — must not silently
+        // wrap into a bogus (possibly tiny) number; reads as "no usable hint".
+        assert_eq!(
+            bound_transient_park_delay_ms(Some(Duration::MAX), 300_000, 600_000),
+            300_000
+        );
     }
 
     #[test]

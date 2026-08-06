@@ -16,7 +16,7 @@ use uuid::Uuid;
 
 use crate::gateway::security::store::{
     BootstrapTicketError, ConsumedBootstrapTicket, DeviceRow, DeviceTokenRow, DeviceUpsertData,
-    SecurityStore,
+    SecurityStore, OWNER_USER_ID,
 };
 use crate::sync_primitives::Arc;
 
@@ -83,13 +83,21 @@ impl DeviceTokenManager {
 
     /// Generate a new bootstrap ticket.
     ///
-    /// `ttl_ms` defaults to 5 minutes when `None`.
-    pub fn create_bootstrap_ticket(&self, ttl_ms: Option<i64>) -> Result<String, DeviceTokenError> {
+    /// `ttl_ms` defaults to 5 minutes when `None`. `user_id` binds the ticket
+    /// to a user — the device that exchanges it inherits the binding (see
+    /// [`Self::exchange_bootstrap_ticket`]); `None` leaves the ticket unbound,
+    /// which defaults a brand-new device to the owner and preserves an
+    /// existing binding on re-pair.
+    pub fn create_bootstrap_ticket(
+        &self,
+        ttl_ms: Option<i64>,
+        user_id: Option<&str>,
+    ) -> Result<String, DeviceTokenError> {
         let code = format!("aleph-bt-{}", Uuid::new_v4());
         let ttl = ttl_ms.unwrap_or(DEFAULT_BOOTSTRAP_TTL_MS);
         // Negative TTL is allowed for tests that need an immediately-expired ticket.
         let ttl = if ttl < 0 { ttl } else { ttl.max(60_000) };
-        self.store.create_bootstrap_ticket(&code, ttl)?;
+        self.store.create_bootstrap_ticket(&code, ttl, user_id)?;
         Ok(code)
     }
 
@@ -127,12 +135,19 @@ impl DeviceTokenManager {
         }
 
         // Atomically consume the ticket before issuing the device token.
-        let _consumed: ConsumedBootstrapTicket = self
+        let consumed: ConsumedBootstrapTicket = self
             .store
             .consume_bootstrap_ticket(ticket, Some(&device_id))?;
 
         // Create or update the device record. For the MVP every paired remote
-        // device gets the operator role and wildcard scope.
+        // device gets the operator role and wildcard scope. The ticket's user
+        // binding rides through as `Some`/`None` — `upsert_device`'s ON
+        // CONFLICT COALESCEs it against the existing row
+        // (`COALESCE(excluded.user_id, devices.user_id)`), so an unbound
+        // re-pair (`None`) never clobbers an already-bound device. Passing
+        // `Some(OWNER_USER_ID)` unconditionally here would defeat that
+        // COALESCE and silently reassign an already-owned device back to the
+        // owner on an unbound re-pair.
         self.store.upsert_device(&DeviceUpsertData {
             device_id: &device_id,
             device_name: &device_name,
@@ -141,7 +156,15 @@ impl DeviceTokenManager {
             fingerprint: &device_id,
             role: "operator",
             scopes: &["*".to_string()],
+            user_id: consumed.user_id.as_deref(),
         })?;
+
+        // Unbound ticket + still-unbound device after the upsert above (i.e.
+        // a brand-new pairing, not a re-pair of an already-owned device):
+        // default to the owner. Must run strictly after the upsert and be
+        // conditioned on `user_id IS NULL` — see the doc comment above.
+        self.store
+            .set_device_user_if_unbound(&device_id, OWNER_USER_ID)?;
 
         // Issue the device token.
         let token_id = format!("dt-{}", Uuid::new_v4());
@@ -251,15 +274,60 @@ fn current_timestamp_ms() -> i64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::gateway::security::store::UserRole;
 
     fn manager() -> DeviceTokenManager {
         DeviceTokenManager::new(Arc::new(SecurityStore::in_memory().unwrap()))
     }
 
+    /// Like [`manager`], but also hands back the backing store so a test can
+    /// inspect user bindings directly (`store.device_user(..)`) without going
+    /// through the manager's own API.
+    fn manager_fixture() -> (DeviceTokenManager, Arc<SecurityStore>) {
+        let store = Arc::new(SecurityStore::in_memory().unwrap());
+        let mgr = DeviceTokenManager::new(store.clone());
+        (mgr, store)
+    }
+
+    #[test]
+    fn ticket_bound_to_user_stamps_device_user() {
+        let (mgr, store) = manager_fixture();
+        store.create_user("u-alice", "Alice", UserRole::Member).unwrap();
+        let code = mgr.create_bootstrap_ticket(None, Some("u-alice")).unwrap();
+        let result = mgr
+            .exchange_bootstrap_ticket(&code, Some("dev-a".into()), None, None)
+            .unwrap();
+        assert_eq!(store.device_user("dev-a").unwrap().as_deref(), Some("u-alice"));
+        let _ = result; // token issuance shape unchanged
+    }
+
+    #[test]
+    fn unbound_ticket_defaults_device_to_owner() {
+        let (mgr, store) = manager_fixture();
+        let code = mgr.create_bootstrap_ticket(None, None).unwrap();
+        mgr.exchange_bootstrap_ticket(&code, Some("dev-b".into()), None, None)
+            .unwrap();
+        assert_eq!(store.device_user("dev-b").unwrap().as_deref(), Some(OWNER_USER_ID));
+    }
+
+    #[test]
+    fn repairing_does_not_silently_reassign_device_user() {
+        // Mine-4 sibling: ON CONFLICT must COALESCE, not overwrite with NULL.
+        let (mgr, store) = manager_fixture();
+        store.create_user("u-alice", "Alice", UserRole::Member).unwrap();
+        let t1 = mgr.create_bootstrap_ticket(None, Some("u-alice")).unwrap();
+        mgr.exchange_bootstrap_ticket(&t1, Some("dev-a".into()), None, None)
+            .unwrap();
+        let t2 = mgr.create_bootstrap_ticket(None, None).unwrap(); // unbound re-pair
+        mgr.exchange_bootstrap_ticket(&t2, Some("dev-a".into()), None, None)
+            .unwrap();
+        assert_eq!(store.device_user("dev-a").unwrap().as_deref(), Some("u-alice"));
+    }
+
     #[test]
     fn create_ticket_returns_valid_format() {
         let mgr = manager();
-        let ticket = mgr.create_bootstrap_ticket(None).unwrap();
+        let ticket = mgr.create_bootstrap_ticket(None, None).unwrap();
         assert!(ticket.starts_with("aleph-bt-"));
         assert_eq!(ticket.len(), "aleph-bt-".len() + 36);
     }
@@ -267,7 +335,7 @@ mod tests {
     #[test]
     fn exchange_ticket_issues_device_token() {
         let mgr = manager();
-        let ticket = mgr.create_bootstrap_ticket(None).unwrap();
+        let ticket = mgr.create_bootstrap_ticket(None, None).unwrap();
 
         let result = mgr
             .exchange_bootstrap_ticket(
@@ -297,7 +365,7 @@ mod tests {
     #[test]
     fn expired_ticket_cannot_be_exchanged() {
         let mgr = manager();
-        let ticket = mgr.create_bootstrap_ticket(Some(-1)).unwrap();
+        let ticket = mgr.create_bootstrap_ticket(Some(-1), None).unwrap();
         assert!(mgr
             .exchange_bootstrap_ticket(&ticket, None, None, None)
             .is_err());
@@ -306,7 +374,7 @@ mod tests {
     #[test]
     fn revoked_device_token_invalidated() {
         let mgr = manager();
-        let ticket = mgr.create_bootstrap_ticket(None).unwrap();
+        let ticket = mgr.create_bootstrap_ticket(None, None).unwrap();
         let result = mgr
             .exchange_bootstrap_ticket(&ticket, Some("dev-x".to_string()), None, None)
             .unwrap();
@@ -330,6 +398,7 @@ mod tests {
                 fingerprint: device_id,
                 role: "node",
                 scopes: &["*".to_string()],
+                user_id: None,
             })
             .unwrap();
     }
@@ -337,7 +406,7 @@ mod tests {
     #[test]
     fn list_panel_devices_excludes_cluster_nodes() {
         let mgr = manager();
-        let ticket = mgr.create_bootstrap_ticket(None).unwrap();
+        let ticket = mgr.create_bootstrap_ticket(None, None).unwrap();
         mgr.exchange_bootstrap_ticket(&ticket, Some("panel-1".to_string()), None, None)
             .unwrap();
         seed_node(&mgr, "node-1");
@@ -364,7 +433,7 @@ mod tests {
     #[test]
     fn revoke_all_panel_devices_spares_nodes_and_kills_tokens() {
         let mgr = manager();
-        let ticket = mgr.create_bootstrap_ticket(None).unwrap();
+        let ticket = mgr.create_bootstrap_ticket(None, None).unwrap();
         let paired = mgr
             .exchange_bootstrap_ticket(&ticket, Some("panel-1".to_string()), None, None)
             .unwrap();
@@ -399,7 +468,7 @@ mod tests {
         let mgr = manager();
         seed_node(&mgr, "node-1");
 
-        let ticket = mgr.create_bootstrap_ticket(None).unwrap();
+        let ticket = mgr.create_bootstrap_ticket(None, None).unwrap();
         let err = mgr
             .exchange_bootstrap_ticket(&ticket, Some("node-1".to_string()), None, None)
             .expect_err("pairing onto a cluster node id must fail closed");
@@ -436,10 +505,11 @@ mod tests {
                 fingerprint: "legacy-1",
                 role: "node",
                 scopes: &["node".to_string()],
+                user_id: None,
             })
             .unwrap();
 
-        let ticket = mgr.create_bootstrap_ticket(None).unwrap();
+        let ticket = mgr.create_bootstrap_ticket(None, None).unwrap();
         assert!(matches!(
             mgr.exchange_bootstrap_ticket(&ticket, Some("legacy-1".to_string()), None, None),
             Err(DeviceTokenError::DeviceIdConflict(_))
@@ -456,7 +526,7 @@ mod tests {
         let mgr = manager();
 
         // Pair, then revoke.
-        let t1 = mgr.create_bootstrap_ticket(None).unwrap();
+        let t1 = mgr.create_bootstrap_ticket(None, None).unwrap();
         mgr.exchange_bootstrap_ticket(&t1, Some("dev-x".to_string()), None, None)
             .unwrap();
         assert!(mgr.revoke_device("dev-x").unwrap());
@@ -467,7 +537,7 @@ mod tests {
             .any(|d| d.device_id == "dev-x"));
 
         // Re-pair the same device_id with a fresh ticket.
-        let t2 = mgr.create_bootstrap_ticket(None).unwrap();
+        let t2 = mgr.create_bootstrap_ticket(None, None).unwrap();
         let repaired = mgr
             .exchange_bootstrap_ticket(&t2, Some("dev-x".to_string()), None, None)
             .unwrap();

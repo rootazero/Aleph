@@ -437,4 +437,85 @@ mod tests {
         assert_eq!(snap["providers"]["x302"]["endpoint_tier"], "cloud");
         assert!(snap["providers"]["kimi"]["endpoint_tier"].is_null());
     }
+
+    #[tokio::test]
+    async fn snapshot_schema_is_locked() {
+        // `route_status` is consumed by the Panel route page and by operators
+        // reading raw JSON — neither is compiled against this shape, so a
+        // field rename would ship silently. Pin the full key set: any rename
+        // or accidental drop turns this test red.
+        let obs = observability(vec![ChainCandidate {
+            name: "x302".to_string(),
+            models: vec!["gpt-5".to_string()],
+            tier: EndpointTier::Cloud,
+        }]);
+        let snap = obs.snapshot().await;
+
+        let top: std::collections::BTreeSet<&str> = snap
+            .as_object()
+            .unwrap()
+            .keys()
+            .map(String::as_str)
+            .collect();
+        let expected_top: std::collections::BTreeSet<&str> = [
+            "mode",
+            "allow_cloud_escalation",
+            "load_balance",
+            "pins",
+            "primary",
+            "chain_source",
+            "fallback_chain",
+            "next_order",
+            "providers",
+            "cooling_models",
+            "config_problems",
+        ]
+        .into_iter()
+        .collect();
+        assert_eq!(top, expected_top, "route_status top-level schema drifted");
+
+        let provider: std::collections::BTreeSet<&str> = snap["providers"]["x302"]
+            .as_object()
+            .unwrap()
+            .keys()
+            .map(String::as_str)
+            .collect();
+        let expected_provider: std::collections::BTreeSet<&str> = [
+            "circuit",
+            "failure_count",
+            "last_error",
+            "breaker_cooldown_remaining_secs",
+            "rate_pacing_remaining_secs",
+            "in_flight",
+            "latency_ms",
+            "rpm_used",
+            "tpm_used",
+            "rpm_limit",
+            "tpm_limit",
+            "utilization_permille",
+            "rate_limited",
+            "over_limit",
+            "price_milli_per_mtok",
+            "endpoint_tier",
+        ]
+        .into_iter()
+        .collect();
+        assert_eq!(
+            provider, expected_provider,
+            "route_status per-provider schema drifted"
+        );
+
+        let chain_step: std::collections::BTreeSet<&str> = snap["fallback_chain"][0]
+            .as_object()
+            .unwrap()
+            .keys()
+            .map(String::as_str)
+            .collect();
+        let expected_step: std::collections::BTreeSet<&str> =
+            ["provider", "tier", "models"].into_iter().collect();
+        assert_eq!(
+            chain_step, expected_step,
+            "route_status fallback_chain schema drifted"
+        );
+    }
 }

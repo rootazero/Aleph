@@ -36,6 +36,10 @@ impl std::error::Error for BootstrapTicketError {}
 pub struct ConsumedBootstrapTicket {
     pub code: String,
     pub consumed_at: i64,
+    /// User the ticket was minted for (`gateway.ticket.create`'s optional
+    /// `user_id`). `None` for an unbound ticket — the exchange then defaults
+    /// a brand-new device to the owner, see `DeviceTokenManager::exchange_bootstrap_ticket`.
+    pub user_id: Option<String>,
 }
 
 impl SecurityStore {
@@ -44,12 +48,19 @@ impl SecurityStore {
     /// # Arguments
     /// * `code` — opaque ticket string (caller should generate a high-entropy value)
     /// * `ttl_ms` — lifetime in milliseconds from now
-    pub fn create_bootstrap_ticket(&self, code: &str, ttl_ms: i64) -> SqliteResult<()> {
+    /// * `user_id` — user this ticket pairs a device to; `None` for an unbound
+    ///   ticket (the exchange then defaults a brand-new device to the owner)
+    pub fn create_bootstrap_ticket(
+        &self,
+        code: &str,
+        ttl_ms: i64,
+        user_id: Option<&str>,
+    ) -> SqliteResult<()> {
         let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
         let now = current_timestamp_ms();
         conn.execute(
-            "INSERT INTO bootstrap_tickets (code, created_at, expires_at) VALUES (?1, ?2, ?3)",
-            params![code, now, now + ttl_ms],
+            "INSERT INTO bootstrap_tickets (code, created_at, expires_at, user_id) VALUES (?1, ?2, ?3, ?4)",
+            params![code, now, now + ttl_ms, user_id],
         )?;
         Ok(())
     }
@@ -67,24 +78,32 @@ impl SecurityStore {
         let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
 
         // Fast path: reject unknown, consumed, or expired tickets without locking a row.
+        // The ticket's user_id is read here too — it cannot change between
+        // this check and the UPDATE below (only set once, at creation).
         let now = current_timestamp_ms();
-        let row: Option<(i64, Option<i64>)> = conn
+        let row: Option<(i64, Option<i64>, Option<String>)> = conn
             .query_row(
-                "SELECT expires_at, consumed_at FROM bootstrap_tickets WHERE code = ?1",
+                "SELECT expires_at, consumed_at, user_id FROM bootstrap_tickets WHERE code = ?1",
                 params![code],
-                |row| Ok((row.get::<_, i64>(0)?, row.get::<_, Option<i64>>(1)?)),
+                |row| {
+                    Ok((
+                        row.get::<_, i64>(0)?,
+                        row.get::<_, Option<i64>>(1)?,
+                        row.get::<_, Option<String>>(2)?,
+                    ))
+                },
             )
             .optional()
             .map_err(|e| BootstrapTicketError::Store(e.to_string()))?;
 
-        match row {
+        let user_id = match row {
             None => return Err(BootstrapTicketError::Invalid),
-            Some((_, Some(_))) => return Err(BootstrapTicketError::Invalid),
-            Some((expires_at, None)) if now >= expires_at => {
+            Some((_, Some(_), _)) => return Err(BootstrapTicketError::Invalid),
+            Some((expires_at, None, _)) if now >= expires_at => {
                 return Err(BootstrapTicketError::Expired);
             }
-            Some((_, None)) => {}
-        }
+            Some((_, None, user_id)) => user_id,
+        };
 
         // Optimistic update; if another caller raced us, rows affected will be 0.
         let consumed_at = current_timestamp_ms();
@@ -104,6 +123,7 @@ impl SecurityStore {
         Ok(ConsumedBootstrapTicket {
             code: code.to_string(),
             consumed_at,
+            user_id,
         })
     }
 
@@ -128,7 +148,7 @@ mod tests {
     #[test]
     fn create_and_consume_ticket() {
         let store = store();
-        store.create_bootstrap_ticket("bt-1", 60_000).unwrap();
+        store.create_bootstrap_ticket("bt-1", 60_000, None).unwrap();
 
         let result = store.consume_bootstrap_ticket("bt-1", Some("dev-1"));
         assert!(result.is_ok());
@@ -145,7 +165,7 @@ mod tests {
     fn expired_ticket_rejected() {
         let store = store();
         // TTL of -1 makes it immediately expired.
-        store.create_bootstrap_ticket("bt-expired", -1).unwrap();
+        store.create_bootstrap_ticket("bt-expired", -1, None).unwrap();
 
         assert_eq!(
             store.consume_bootstrap_ticket("bt-expired", None),
@@ -165,8 +185,8 @@ mod tests {
     #[test]
     fn prune_removes_expired_tickets() {
         let store = store();
-        store.create_bootstrap_ticket("bt-old", -1).unwrap();
-        store.create_bootstrap_ticket("bt-fresh", 60_000).unwrap();
+        store.create_bootstrap_ticket("bt-old", -1, None).unwrap();
+        store.create_bootstrap_ticket("bt-fresh", 60_000, None).unwrap();
 
         let pruned = store
             .prune_expired_bootstrap_tickets(current_timestamp_ms())

@@ -6,6 +6,7 @@ use serde_json::json;
 use crate::gateway::protocol::{JsonRpcRequest, JsonRpcResponse, INTERNAL_ERROR, INVALID_PARAMS};
 use crate::gateway::router::SessionKey;
 use crate::gateway::session_store::SessionStore;
+use crate::gateway::visibility;
 
 /// Handle session.create RPC request with database backend
 ///
@@ -91,6 +92,18 @@ pub async fn handle_new_session_db(
         }
     };
 
+    let meta = match manager.get_metadata(&legacy_key).await {
+        Ok(Some(m)) => m,
+        Ok(None) => return visibility::not_found_response(request.id),
+        Err(_) => return visibility::not_found_response(request.id), // fail closed (GC 3)
+    };
+    if !visibility::session_visible(&meta) {
+        // Same error as missing (GC 4) — before any of the mutations below:
+        // closing a foreign session and killing its continuations must not
+        // happen just because the caller can guess/enumerate its key.
+        return visibility::not_found_response(request.id);
+    }
+
     // Terminate the closing session's autonomous continuations BEFORE the
     // epoch bump — a loop/goal keyed under the old epoch would otherwise keep
     // its self-sustaining chain alive with no session left that can stop it
@@ -140,5 +153,67 @@ pub async fn handle_new_session_db(
             INTERNAL_ERROR,
             format!("Failed to create new session: {e}"),
         ),
+    }
+}
+
+/// P1 visibility chokepoint — pinned per team-lead fix round 1.
+#[cfg(test)]
+mod visibility_guards {
+    use super::*;
+    use crate::gateway::caller_identity::CALLER_USER;
+    use crate::gateway::protocol::RESOURCE_NOT_FOUND;
+    use crate::gateway::session_manager::{SessionManager, SessionManagerConfig};
+    use crate::scope::{with_scope, ScopeAttribution};
+    use tempfile::TempDir;
+
+    fn store(temp: &TempDir) -> Arc<dyn SessionStore> {
+        Arc::new(
+            SessionManager::new(SessionManagerConfig {
+                db_path: temp.path().join("new_session_visibility.db"),
+                ..Default::default()
+            })
+            .unwrap(),
+        )
+    }
+
+    /// `sessions.new` closes the addressed session and kills its autonomous
+    /// continuations — a denied call must do neither. "Intact" here means
+    /// the state observed before the call is bit-for-bit what's observed
+    /// after (no close, no epoch bump consumed).
+    #[tokio::test]
+    async fn sessions_new_denies_a_foreign_session_and_leaves_it_intact() {
+        let temp = TempDir::new().unwrap();
+        let store = store(&temp);
+        let alice_key = SessionKey::from_key_string("agent:alicenewvis:main").unwrap();
+        with_scope(
+            Some(ScopeAttribution::personal("u-alice")),
+            store.get_or_create(&alice_key),
+        )
+        .await
+        .unwrap();
+        let before = store.get_metadata(&alice_key).await.unwrap().unwrap();
+
+        let req = JsonRpcRequest {
+            jsonrpc: "2.0".into(),
+            method: "sessions.new".into(),
+            params: Some(json!({ "session_key": alice_key.to_key_string() })),
+            id: Some(json!(1)),
+        };
+        let as_bob = CALLER_USER
+            .scope(
+                Some("u-bob".to_string()),
+                handle_new_session_db(req, store.clone()),
+            )
+            .await;
+        assert_eq!(
+            as_bob.error.as_ref().map(|e| e.code),
+            Some(RESOURCE_NOT_FOUND)
+        );
+
+        let after = store.get_metadata(&alice_key).await.unwrap().unwrap();
+        assert_eq!(
+            after.state, before.state,
+            "a denied sessions.new must not close the foreign session"
+        );
     }
 }

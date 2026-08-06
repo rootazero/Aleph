@@ -11,9 +11,20 @@ use crate::teams::snapshots::{capture_snapshot, restore_snapshot, SqliteSnapshot
 use crate::teams::TeamStore;
 
 use crate::gateway::handlers::parse_params;
+use crate::gateway::handlers::teams::visibility::{gate_team, snapshot_team_visible};
 use crate::gateway::protocol::{
     JsonRpcRequest, JsonRpcResponse, INTERNAL_ERROR, INVALID_PARAMS, RESOURCE_NOT_FOUND,
 };
+
+/// The response an unreachable snapshot produces — missing, orphaned, or owned
+/// by another user. One constructor so the three stay indistinguishable.
+fn snapshot_not_found(id: Option<serde_json::Value>, snapshot_id: &str) -> JsonRpcResponse {
+    JsonRpcResponse::error(
+        id,
+        RESOURCE_NOT_FOUND,
+        format!("snapshot '{snapshot_id}' not found"),
+    )
+}
 
 #[derive(Debug, Deserialize)]
 pub struct SnapshotCreateParams {
@@ -56,6 +67,9 @@ pub async fn handle_snapshot_create(
         Ok(p) => p,
         Err(resp) => return resp,
     };
+    if let Err(resp) = gate_team(request.id.clone(), &team_store, &params.team_id).await {
+        return resp;
+    }
     let tag = params.tag.unwrap_or_default();
     let note = params.note.unwrap_or_default();
     match capture_snapshot(
@@ -80,6 +94,7 @@ pub async fn handle_snapshot_create(
 /// teams.snapshot.list — newest-first metadata listing, optionally filtered.
 pub async fn handle_snapshot_list(
     request: JsonRpcRequest,
+    team_store: Arc<dyn TeamStore>,
     snapshot_store: Arc<SqliteSnapshotStore>,
 ) -> JsonRpcResponse {
     debug!("Handling teams.snapshot.list request");
@@ -97,8 +112,25 @@ pub async fn handle_snapshot_list(
         },
         None => SnapshotListParams::default(),
     };
+    // An explicit `team_id` is gated up front; the unfiltered form (the Panel's
+    // "all snapshots" view) is filtered per row below. Doing only the former
+    // would leave the no-argument call listing every user's snapshots — the
+    // list-shaped hole P1's `sessions.list` filter exists to prevent.
+    if let Some(ref team_id) = params.team_id {
+        if let Err(resp) = gate_team(request.id.clone(), &team_store, team_id).await {
+            return resp;
+        }
+    }
     match snapshot_store.list(params.team_id.as_deref()).await {
-        Ok(metas) => JsonRpcResponse::success(request.id, json!({ "snapshots": metas })),
+        Ok(metas) => {
+            let mut visible = Vec::with_capacity(metas.len());
+            for meta in metas {
+                if snapshot_team_visible(&team_store, &meta.team_id).await {
+                    visible.push(meta);
+                }
+            }
+            JsonRpcResponse::success(request.id, json!({ "snapshots": visible }))
+        }
         Err(e) => JsonRpcResponse::error(
             request.id,
             INTERNAL_ERROR,
@@ -110,6 +142,7 @@ pub async fn handle_snapshot_list(
 /// teams.snapshot.get — load the full payload by id.
 pub async fn handle_snapshot_get(
     request: JsonRpcRequest,
+    team_store: Arc<dyn TeamStore>,
     snapshot_store: Arc<SqliteSnapshotStore>,
 ) -> JsonRpcResponse {
     debug!("Handling teams.snapshot.get request");
@@ -119,13 +152,16 @@ pub async fn handle_snapshot_get(
     };
     match snapshot_store.get(&params.snapshot_id).await {
         Ok(Some((meta, payload))) => {
+            // The payload embeds the full team record, members and tasks, so
+            // the ownership check has to happen before it is serialized — this
+            // is the snapshot-shaped twin of P1 Task 6's checkpoint-branch read
+            // compromise.
+            if !snapshot_team_visible(&team_store, &meta.team_id).await {
+                return snapshot_not_found(request.id, &params.snapshot_id);
+            }
             JsonRpcResponse::success(request.id, json!({ "meta": meta, "payload": payload }))
         }
-        Ok(None) => JsonRpcResponse::error(
-            request.id,
-            RESOURCE_NOT_FOUND,
-            format!("snapshot '{}' not found", params.snapshot_id),
-        ),
+        Ok(None) => snapshot_not_found(request.id, &params.snapshot_id),
         Err(e) => JsonRpcResponse::error(
             request.id,
             INTERNAL_ERROR,
@@ -146,6 +182,24 @@ pub async fn handle_snapshot_restore(
         Ok(p) => p,
         Err(resp) => return resp,
     };
+    // Restore writes the snapshot's team + tasks back into the live stores, so
+    // it is gated on the SNAPSHOT's team, not on any caller-supplied team id.
+    match snapshot_store.get(&params.snapshot_id).await {
+        Ok(Some((meta, _))) => {
+            if !snapshot_team_visible(&team_store, &meta.team_id).await {
+                return snapshot_not_found(request.id, &params.snapshot_id);
+            }
+        }
+        Ok(None) => return snapshot_not_found(request.id, &params.snapshot_id),
+        Err(e) => {
+            tracing::warn!(
+                snapshot_id = %params.snapshot_id,
+                error = %e,
+                "teams.snapshot.restore: ownership gate failed closed"
+            );
+            return snapshot_not_found(request.id, &params.snapshot_id);
+        }
+    }
     match restore_snapshot(
         snapshot_store.as_ref(),
         team_store.as_ref(),
@@ -198,25 +252,12 @@ pub async fn handle_usage(
     };
 
     // Step 1 — resolve team members. Both "team not found" and "team exists
-    // but is empty" are distinguishable here so the response can disambiguate.
-    let team_exists = match team_store.get_team(&params.team_id).await {
-        Ok(Some(_)) => true,
-        Ok(None) => {
-            return JsonRpcResponse::error(
-                request.id,
-                RESOURCE_NOT_FOUND,
-                format!("Team '{}' not found", params.team_id),
-            );
-        }
-        Err(e) => {
-            return JsonRpcResponse::error(
-                request.id,
-                INTERNAL_ERROR,
-                format!("Failed to load team '{}': {}", params.team_id, e),
-            );
-        }
-    };
-    let _ = team_exists; // pure existence check; member list drives the join
+    // but is empty" are distinguishable here so the response can disambiguate;
+    // "team exists but is someone else's" collapses into the first, which is
+    // the point of routing the existence check through the gate.
+    if let Err(resp) = gate_team(request.id.clone(), &team_store, &params.team_id).await {
+        return resp;
+    }
 
     let members = match team_store.get_members(&params.team_id).await {
         Ok(m) => m,
@@ -311,6 +352,7 @@ pub async fn handle_usage(
 /// teams.snapshot.delete — idempotent removal. Returns `existed: bool`.
 pub async fn handle_snapshot_delete(
     request: JsonRpcRequest,
+    team_store: Arc<dyn TeamStore>,
     snapshot_store: Arc<SqliteSnapshotStore>,
 ) -> JsonRpcResponse {
     debug!("Handling teams.snapshot.delete request");
@@ -318,6 +360,25 @@ pub async fn handle_snapshot_delete(
         Ok(p) => p,
         Err(resp) => return resp,
     };
+    // Idempotent by contract (`existed: false` for an unknown id), so a
+    // foreign snapshot must produce that same shape rather than an error —
+    // otherwise delete becomes the existence oracle the reads are denied.
+    match snapshot_store.get(&params.snapshot_id).await {
+        Ok(Some((meta, _))) if snapshot_team_visible(&team_store, &meta.team_id).await => {}
+        Ok(_) => {
+            return JsonRpcResponse::success(
+                request.id,
+                json!({ "snapshot_id": params.snapshot_id, "existed": false }),
+            )
+        }
+        Err(e) => {
+            return JsonRpcResponse::error(
+                request.id,
+                INTERNAL_ERROR,
+                format!("snapshot delete failed: {e}"),
+            )
+        }
+    }
     match snapshot_store.delete(&params.snapshot_id).await {
         Ok(existed) => JsonRpcResponse::success(
             request.id,

@@ -730,20 +730,22 @@ where
                 }
 
                 // Async session compaction (hierarchical summarization).
-                // Capture this turn's project root BEFORE the spawn: the
-                // `projects::run_context` task-local does not cross a
-                // `tokio::spawn` boundary (and the run-loop's scope is already
-                // closed here), so resolving the project-scoped storage agent
-                // id inside the spawned task would always fall back to the
-                // base id while the in-turn readers resolve the scoped id —
-                // writes and reads would silently split. Mirrors the workspace
-                // capture in the goal_continuation hook below.
+                // Capture this turn's project root AND scope attribution
+                // BEFORE the spawn: neither the `projects::run_context` nor
+                // the `crate::scope` task-local crosses a `tokio::spawn`
+                // boundary (and the run-loop's own scopes are already closed
+                // here), so resolving the storage agent id inside the spawned
+                // task would always fall back to the base/org id while the
+                // in-turn readers resolve the project- or personal-scoped id
+                // — writes and reads would silently split. Mirrors the
+                // workspace capture in the goal_continuation hook below.
                 if let Some(ref sc) = self.session_compactor {
                     let sc = sc.clone();
                     let agent_clone = agent.clone();
                     let session_key_clone = request.session_key.clone();
                     let project_root = request.workspace_override.clone();
-                    tokio::spawn(async move {
+                    let scope_attr = crate::scope::current_scope();
+                    tokio::spawn(crate::scope::with_scope(scope_attr, async move {
                         if let Err(e) = sc
                             .post_turn_compress(
                                 &agent_clone,
@@ -754,7 +756,7 @@ where
                         {
                             warn!(error = %e, "Session compaction failed");
                         }
-                    });
+                    }));
                 }
 
                 // Autonomous-continuation hook (R7/R10-safe, opt-in).
@@ -842,6 +844,7 @@ where
                                         policy_meta.clone(),
                                         request.workspace_override.clone(),
                                         cont_deps.event_bus.clone(),
+                                        self.session_manager.clone(),
                                         Some(delay_ms),
                                         ContinuationKind::Loop { wake_ms },
                                     );
@@ -1019,7 +1022,12 @@ pub(super) type OriginRoute = (
 /// metadata from scratch — so a Chat-tier Telegram conversation clamped to `Auto`
 /// on its interactive turns spawned a goal continuation that ran at the
 /// unclamped global tier with nobody watching. Invariant: a background run is
-/// never MORE privileged than the conversation that spawned it.
+/// never MORE privileged than the conversation that spawned it — and, per P1
+/// data isolation, never LESS situated either: [`crate::scope::OWNER_META_KEY`]
+/// / [`crate::scope::SCOPE_META_KEY`] (the owner/scope attribution stamped at
+/// the originating request) must inherit unchanged, so a continuation's
+/// `memory.project_scoped` / retrieval / compaction reads never fall back to
+/// the unscoped or wrong-owner namespace.
 ///
 /// Everything else is per-turn (locale / platform / busy-input mode / slash
 /// mode) and is deliberately dropped. `channel_id` / `conversation_id` stay out
@@ -1028,10 +1036,15 @@ pub(super) type OriginRoute = (
 pub(super) fn carry_policy_metadata(
     src: &std::collections::HashMap<String, String>,
 ) -> std::collections::HashMap<String, String> {
-    ["caller_role", super::CHANNEL_TOOL_PERMISSIONS_KEY]
-        .iter()
-        .filter_map(|k| src.get(*k).map(|v| ((*k).to_string(), v.clone())))
-        .collect()
+    [
+        "caller_role",
+        super::CHANNEL_TOOL_PERMISSIONS_KEY,
+        crate::scope::OWNER_META_KEY,
+        crate::scope::SCOPE_META_KEY,
+    ]
+    .iter()
+    .filter_map(|k| src.get(*k).map(|v| ((*k).to_string(), v.clone())))
+    .collect()
 }
 
 /// Metadata of an autonomous continuation run: the inherited policy layer plus
@@ -1082,6 +1095,14 @@ pub(super) fn spawn_continuation_run(
     policy_meta: std::collections::HashMap<String, String>,
     workspace_override: Option<std::path::PathBuf>,
     event_bus: Option<Arc<crate::gateway::event_bus::GatewayEventBus>>,
+    // A clone of the engine's shared session-store handle — the SAME instance
+    // every `AgentInstance::session_store` clones from (see `start`'s single
+    // `session_store` variable). Threaded through so the agent-miss branch
+    // below can resolve an origin channel WITHOUT a live agent, for the one
+    // ending (Goal `OutOfBounds`) that must notify but has nothing else to
+    // notify with once the agent is gone. `ContinuationKind::Loop` ignores it
+    // — it has no analogous origin-resolution need on this path.
+    session_manager: Option<Arc<dyn crate::gateway::session_store::SessionStore>>,
     delay_ms: Option<u64>,
     kind: ContinuationKind,
 ) {
@@ -1112,6 +1133,14 @@ pub(super) fn spawn_continuation_run(
         // a completion, or a stale-grace re-claim supersede a continuation.
         // Without the atomic confirm, a superseded run still burned one full
         // stale LLM turn (the ghost run).
+        //
+        // `goal_out_of_bounds_note` defers the OutOfBounds notice past the
+        // agent lookup below: the common-path origin resolution goes through
+        // `cont_agent`, which does not exist yet at this point, and
+        // duplicating that lookup here would diverge from the single
+        // agent-miss handling underneath (which has its own store-based
+        // fallback for exactly the case where `cont_agent` never shows up).
+        let mut goal_out_of_bounds_note: Option<String> = None;
         match kind {
             ContinuationKind::Loop { wake_ms } => {
                 let confirmed = crate::looping::global()
@@ -1123,15 +1152,23 @@ pub(super) fn spawn_continuation_run(
                 }
             }
             ContinuationKind::Goal { wake_ms } => {
-                let confirmed = crate::goal::global().is_some_and(|store| {
-                    store
-                        .confirm_fire(&session_key_str, wake_ms)
-                        .unwrap_or(false)
+                let decision = crate::goal::global().map(|store| {
+                    store.confirm_fire(
+                        &session_key_str,
+                        wake_ms,
+                        super::goal_continuation::now_ms(),
+                    )
                 });
-                if !confirmed {
-                    info!(session = %session_key_str,
-                        "goal pursuit: continuation superseded (goal cleared, completed or re-claimed); skipping");
-                    return;
+                match decision {
+                    Some(Ok(crate::goal::FireDecision::Proceed)) => {}
+                    Some(Ok(crate::goal::FireDecision::OutOfBounds { note })) => {
+                        goal_out_of_bounds_note = Some(note);
+                    }
+                    _ => {
+                        info!(session = %session_key_str,
+                            "goal pursuit: continuation superseded (goal cleared, completed or re-claimed); skipping");
+                        return;
+                    }
                 }
             }
         }
@@ -1142,9 +1179,40 @@ pub(super) fn spawn_continuation_run(
             // can ever happen on this session again — so nothing re-claims,
             // `goal(action='list')` keeps showing a live pursuit from every
             // other session (dishonest), and the welded strategy row leaks.
-            // Terminate honestly per kind instead. No origin channel can be
-            // resolved without the agent, so the stored stop reason / blocked
-            // note is the surviving signal (R5 as far as it can reach).
+            // Terminate honestly per kind instead. The stored stop reason /
+            // blocked note is the surviving signal (R5) either way.
+            //
+            // Compound race: the wake also landed out of bounds. `confirm_fire`
+            // already persisted the deadline note on the (now Blocked) goal, but
+            // that note would otherwise vanish from THIS run entirely — the
+            // generic warn below only names "agent no longer exists", and the
+            // Goal-kind block below is a no-op once the goal is already Blocked
+            // (`block_if_active` requires Active). Origin resolution normally
+            // goes through `cont_agent`, which does not exist in this branch —
+            // but the origin lives in the session STORE, not the agent, and
+            // `session_manager` is a clone of that same shared store, so
+            // `origin_of_via_store` still resolves and pushes it. Only when
+            // that handle or the session's origin metadata itself is
+            // unavailable does this fall back to a log line.
+            if let Some(note) = &goal_out_of_bounds_note {
+                // Through the shared ladder, which keeps its own named floor
+                // when nothing is reachable. `registry` is handed to it even
+                // though the lookup just missed: the ladder's shape is the
+                // single source, and one extra miss on a terminal path is
+                // cheaper than a fourth divergent copy of it.
+                if super::goal_continuation::notify_goal_stop(
+                    &registry,
+                    session_manager.as_ref(),
+                    &session_key_str,
+                    note,
+                )
+                .await
+                {
+                    info!(session = %session_key_str, note = %note,
+                        "goal pursuit: wake landed past the wall-clock bound; goal blocked \
+                         (agent also gone — notified via the session-store origin)");
+                }
+            }
             warn!(
                 agent_id = %cont_agent_id,
                 session = %session_key_str,
@@ -1195,6 +1263,18 @@ pub(super) fn spawn_continuation_run(
             }
             return;
         };
+        if let Some(note) = goal_out_of_bounds_note {
+            // The bound elapsed while this continuation waited. The store
+            // already Blocked the goal; push the same notice the `Exhausted`
+            // claim decision would (R5 — an autonomous ending must never be
+            // silent), and drop the welded plan like every other terminal end.
+            super::goal_continuation::clear_goal_welded_strategy(&session_key_str);
+            info!(session = %session_key_str, note = %note,
+                "goal pursuit: wake landed past the wall-clock bound; goal blocked");
+            let origin = super::goal_continuation::origin_of(&cont_agent, &session_key).await;
+            notify_origin(origin.as_ref(), format!("⏹ {note}")).await;
+            return;
+        }
         // G1: resolve the session's bound origin channel once — used both to
         // fan the continuation's final reply out to it (Telegram/Slack) and,
         // on failure, to deliver the halt notice (G3). `None` for Panel-only
@@ -1291,6 +1371,7 @@ pub(super) fn spawn_continuation_run(
                         retry_policy_meta.clone(),
                         retry_workspace.clone(),
                         retry_bus.clone(),
+                        session_manager.clone(),
                         Some(delay_ms),
                         next_kind,
                     );
@@ -1624,6 +1705,30 @@ mod carry_policy_metadata_tests {
     #[test]
     fn a_panel_turn_carries_nothing() {
         assert!(carry_policy_metadata(&meta(&[("platform", "webchat")])).is_empty());
+    }
+
+    /// P1 data isolation: a continuation must inherit the owner/scope
+    /// attribution stamped on the originating request, exactly like
+    /// `caller_role` — otherwise a background run's memory reads fall back
+    /// to the unscoped namespace.
+    #[test]
+    fn continuation_inherits_owner_and_scope_keys() {
+        use crate::scope::ScopeAttribution;
+
+        let mut src = HashMap::new();
+        crate::scope::stamp_metadata(&mut src, &ScopeAttribution::personal("u-alice"));
+        src.insert("caller_role".into(), "member".into());
+
+        let out = carry_policy_metadata(&src);
+
+        assert_eq!(
+            out.get(crate::scope::OWNER_META_KEY).map(String::as_str),
+            Some("u-alice")
+        );
+        assert_eq!(
+            out.get(crate::scope::SCOPE_META_KEY).map(String::as_str),
+            Some("personal:u-alice")
+        );
     }
 
     /// The composed invariant, end to end: a Chat-tier Telegram turn's clamp and

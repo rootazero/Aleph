@@ -71,6 +71,7 @@ mod tests {
             modalities: vec![],
             models: models.iter().map(|m| (*m).into()).collect(),
             fallback_models: vec![],
+            roster: models.iter().map(|m| (*m).into()).collect(),
             has_api_key: true,
             verified: true,
             enabled: true,

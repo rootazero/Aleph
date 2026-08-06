@@ -27,7 +27,7 @@ Aleph 的模型参考数据是**编译期静态表**：升级二进制才更新�
 
 | 表 | 位置 | 回答的问题 | 缺失时的后果 |
 |----|------|-----------|-------------|
-| Presets | `src/providers/presets/registry.rs` | 每个 provider 默认用哪个模型、备选链、廉价 aux 档 | 开箱不可用。`fallback_models` 同时是 picker roster、`list_models` roster **与 failover 的模型游走梯**（`deps_builder::provider_chain::provider_model_ladder` 把 operator 未列出的档位接进游走目录；operator 改过 `base_url` 则不接） |
+| Presets | `src/providers/presets/registry.rs` | 每个 provider 默认用哪个模型、备选链、廉价 aux 档 | 开箱不可用。`fallback_models` 同时是 picker roster、`list_models` roster **与 failover 的模型游走梯**（**`presets::model_ladder` 唯一合并点**：failover 以 operator `models` 为 base、catalog `roster` 字段以 operator `models`（空则默认）为 base，把 operator 未列出的档位接在后面；operator 改过 `base_url` 则不接） |
 | Capabilities | `src/providers/model_catalog/capabilities.rs` | 窗口 / max-output / vision / tools / reasoning | 回落 `CONSERVATIVE_CONTEXT_WINDOW` (128K) ⇒ **过早压缩**（§2.2 消费方 `derive_token_budget`） |
 | Pricing | `src/pricing.rs` | USD/Mtok（含长上下文 tier） | `CostStatus::Unknown`；`cost_aware` 路由按 `unpriced_cost(tier)` 排 |
 | Lifecycle | `src/providers/model_catalog/lifecycle.rs` | 厂商还在不在服务这个 id | 模型被推荐一个已下线 id ⇒ 下一轮不透明 400 |
@@ -264,6 +264,7 @@ kimi-cli 问每个已配置平台 `GET {base_url}/models`。数据少（基本�
 - **只贡献 id**。窗口 / 价格 / 生命周期仍归策展表——`/models` 响应基本不带这些。一个没有策展行的 discovered id 诚实地显示为"能力未知"，跟今天的自定义中继模型一样。
 - **无后台定时器**。悄悄按时给每个已配置厂商打电话是意外行为，不是功能。
 - **`supports_health_check = false` 的 preset 直接拒**（OAuth-only 端点 / 按部署的 Azure 资源 / 分区域云都会 404 或限流列表路由）。
+- **缓存绑定端点指纹（2026-08 round-4）**。`DiscoveredModels.base_url` 记录清单取自哪个端点，`cached_models(provider, base_url)` 指纹不匹配即视为无缓存——operator 搬了 `base_url` 后旧清单是**另一台主机**的库存，绝不能复活（与 `models_url` override 的搬迁守卫同一条教条）。指纹字段引入前的旧缓存文件按"另一端点的库存"处理，代价是一次重拉。Bifrost 式 generation counter 评估为不需要（§9 round-4）。
 
 ---
 
@@ -360,6 +361,24 @@ pi 的目录是**生成期 hydrate**：`scripts/generate-models.ts`（2762 行�
 
 pi 侧独有但**本轮明确不收**的：`compat` 能力矩阵（30+ 字段的"同 API 不同方言"行为差异）——那是协议实现层的关注点，Aleph 的对应物是 `openai_common/provider_policy.rs` 的 `PayloadPolicy`，不进目录层。
 
+### 8.4 RouteLLM / vLLM semantic-router / Bifrost（2026-08 round-4）
+
+三个参考项目讲的主要是**运行时路由**（§3.6 C 层），目录层可比维度比前三个项目少；逐项裁决如下。注意 `/Volumes/TBU4/Github/semantic-router` 的实际检出是 **vLLM Semantic Router**（Go + Rust candle bindings），不是 aurelio-labs 的 Python 库。
+
+| 维度 | 参考项目 | Aleph | 裁决 |
+|------|---------|-------|------|
+| 模型目录 | RouteLLM **为零**（`MODEL_IDS` 是 MF embedding 行索引，加模型=重训）；vLLM SR `ModelParams`（pricing+capabilities+ctx，无生命周期）；Bifrost datasheet 远端 24h 同步+DB，~100 字段 LiteLLM schema | 编译期策展四表 + 单一 join 点 + 生命周期 | **Aleph 领先**；Bifrost 的远端同步与字段膨胀不移植（同 models.dev 判据，R3） |
+| 路由决策分层 | RouteLLM score→threshold→binary；vLLM SR Signals→Decision→Selection 三层 + SLO-then-score；Bifrost 插件 PreRequestHook 决策、core 执行 | capability_gate 剪枝 → route_policy 排序 → failover walk，已是同构三层 | **已对齐** |
+| 选型审计 | vLLM SR `SelectionResult` 必带 method+confidence+reasoning | `route_status` 快照 + `route_witness` + failover 事件 | **已对齐** |
+| 成本语义 | RouteLLM 无成本表（threshold 只对应"%强模型调用"）；vLLM SR 互斥桶计价；Bifrost `CalculateCost` | pricing.rs + `RateBasis` + `cost_aware` | **Aleph 领先**（真实美元 vs 调用占比代理） |
+| 故障韧性 | RouteLLM **无 failover**（异常透传）；vLLM SR 静态 weight 无健康信号；Bifrost 重试+key轮换+fallback，**无断路器/EWMA** | 断路器 + 双层 cooldown + EWMA + 游走梯 | **Aleph 领先** |
+| key 池 | Bifrost 401/402/403=死 key 请求内不复活免 backoff，429=本轮排除保留 backoff | 单 key per provider | **有意不移植**（个人 runtime，key 池=多租户税） |
+| 流式带内错误 | Bifrost `CheckFirstStreamChunkForError`：HTTP 200 流内错误载荷→重试/fallback | `ProviderDelta::Error` 基建早有（Anthropic/Responses 已接），**OpenAI 兼容 SSE 未接** | **缺口，round-4 连线**（`openai_chat/sse.rs`） |
+| live 目录并发 | Bifrost `live.UpsertIfCurrent` generation counter；keyconfig 变更=不可变 snapshot 整体换 | 单飞 + stale 回退；**缓存未绑端点指纹** | **缺口，round-4 补** base_url 指纹；generation counter 评估为不需要（单飞串行化同进程写，多进程本被 doctor 禁止） |
+| picker/消费面一致性 | — | roster 合并曾在**前端**重实现，且缺 base_url-moved 守卫（中继端点推荐必 400 的 id） | **缺口，round-4 收编**：`presets::model_ladder` 成为 picker/failover 共用 leaf |
+
+RouteLLM 可提炼的三条资产——score→threshold 决策契约、"阈值=目标升级比例"的分位数校准、阈值扫描 cost-quality 曲线评估——属于**未来若做难度信号路由**时的参考，本轮不落地（Aleph 的 N 元游走梯已是其强弱二元对的超集）。
+
 ---
 
 ## 9. 刻意不做清单
@@ -394,6 +413,15 @@ pi 侧独有但**本轮明确不收**的：`compat` 能力矩阵（30+ 字段的
 - **改 `hyperbolic` / `huggingface` 的默认模型**（仍是 Llama-3.3 时代）— 与 round-2 对 siliconflow 的判断同款：没有 accepted 源给出"应该改成什么"，`Llama-3.3-70B-Instruct` 是真实可用的 id（这两家是托管方不是厂商）。陈旧但能用 > 可能 404。
 - **pi 的 per-model `compat` 矩阵** — 协议方言差异属 `openai_common/provider_policy.rs` 的 `PayloadPolicy` 层，不进目录层。
 
+以下是 2026-08 round-4（对标 RouteLLM / vLLM semantic-router / Bifrost）评估后**明确不做**的：
+
+- **多 API key 池 / key 轮换**（Bifrost 的 dead-vs-used 双集合语义）— 那是多租户网关摊配额的方案；Aleph 是单 key 个人 runtime，引入 key 池是纯税。401/403 的正确处置已有：断路器 + `Permanent` 分类不再重试。
+- **训练管线与 embedding/ML 路由**（RouteLLM 的 MF/BERT/causal-LLM 打分器，vLLM SR 的 18 条信号管线与 KNN/SVM/MLP 选择器）— R3（core 无重依赖）+ R8/R10（意图路由归 LLM，智能住在 prompt，零中间件税）。score→threshold 契约与分位数校准若未来做难度信号再单独立项。
+- **Bifrost 的 CEL 治理引擎 / virtual key 层级 / 9 种定价 override 作用域** — 多租户 SaaS 网关需求，非个人 runtime。
+- **Bifrost datasheet 的远端 24h 同步 + DB 缓存** — 与"拉 models.dev"同一条理由：R3。
+- **discovery 的 generation counter**（Bifrost `live.UpsertIfCurrent`）— 评估为不需要：per-provider 单飞锁已串行化同进程写者，多 aleph-server 进程本就被 doctor 的 duplicate-instance 检查禁止；跨写者竞态不存在，counter 无洞可补。端点搬迁的正确解法已用 base_url 指纹落地（§6）。
+- **`WeightedRandom` 式权重截断**（Bifrost `int(weight*100)`，0.005 静默变 0）— 若未来做加权选择，用别名法 O(1) 或前缀和，别抄截断。
+
 ---
 
 ## 10. 常见修改的落点
@@ -405,7 +433,7 @@ pi 侧独有但**本轮明确不收**的：`compat` 能力矩阵（30+ 字段的
 | 本地还是云端 | `model_catalog/endpoint.rs` |
 | 成本 | `pricing.rs`（`RateCard` = picker 的费率投影） |
 | 按成本路由 | `[route] load_balance = "cost_aware"`；连线点 `failover/provider.rs::price_hint`，sort 在 `route_policy::balance_group`。**候选的 tier 从 `with_tier_catalog` 来**（2026-07-27）——此前 live 派生的候选一律 `Unknown`，`unpriced_cost` 因此把**免费本地端点排最后**，与本表第二次修复的方向正好相反 |
-| 单 provider 内的 failover 游走梯 | preset `fallback_models` 即游走梯（`deps_builder/provider_chain.rs::provider_model_ladder` 合并：operator models 在前、未列档位在后；operator 改过 `base_url` 则不合并） |
+| 单 provider 内的 failover 游走梯 / picker roster | preset `fallback_models` 即游走梯；**唯一合并点 `presets::model_ladder`**（base 在前、未列档位在后；operator 改过 `base_url` 则不合并）——failover 以 operator `models` 为 base，`providers.catalog` 的 `roster` 字段以 operator `models`（空则 `default_model`）为 base，前端 picker 纯渲染不再自算 |
 | **给模型记录加一个新维度** | **`model_catalog/record.rs::resolve` 一处** |
 | **某模型被厂商下线** | **`lifecycle.rs::LIFECYCLE_TABLE` 加一行，`provider: None`（带 successor）** |
 | **某模型只在一家宿主上下线** | **同表，`provider: Some("<preset id>")`** —— 别写成全局行，那会拒掉别处能用的 id（§3.1） |

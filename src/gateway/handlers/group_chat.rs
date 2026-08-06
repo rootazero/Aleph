@@ -12,12 +12,28 @@
 //!  3. Lock only the target session for the duration of the operation
 //!
 //! This allows different sessions to proceed concurrently.
+//!
+//! ## P1 visibility (final-review finding C3)
+//!
+//! A group-chat session is per-user state: `list` used to enumerate EVERY
+//! user's active sessions (id + topic + participants), and the id it handed
+//! out is the only thing `continue`/`mention`/`history`/`end` need — so the
+//! list was an enumeration oracle feeding four addressed surfaces, one of
+//! which returns the full conversation and two of which mutate it.
+//!
+//! Ownership comes from the stamp `GroupChatSession::new` takes off the
+//! ambient scope, read through the one shared predicate
+//! [`visibility::stamped_owner_visible`] (never re-derived here). `list`
+//! filters per item; the four addressed methods reuse each one's OWN existing
+//! "no such session" response verbatim, so a session that belongs to someone
+//! else is indistinguishable from one that never existed.
 
 use crate::sync_primitives::Arc;
 use serde_json::{json, Value};
 use tokio::sync::Mutex;
 
 use super::super::protocol::{JsonRpcRequest, JsonRpcResponse, INTERNAL_ERROR, INVALID_PARAMS};
+use crate::gateway::visibility;
 use crate::group_chat::{
     GroupChatExecutor, GroupChatMessage, GroupChatOrchestrator, GroupChatStatus, PersonaSource,
 };
@@ -220,6 +236,19 @@ async fn handle_continue_with_targets(
     // Lock session, check round limit, execute
     let mut session = session_handle.lock().await;
 
+    // P1: a foreign session gets this method's OWN not-found response, so a
+    // denial and a nonexistent id are indistinguishable. Checked before the
+    // round-limit branch — that branch ENDS the session, which would let a
+    // non-owner kill somebody else's group chat and learn from the distinct
+    // error that it existed.
+    if !visibility::stamped_owner_visible(session.owner_user_id.as_deref()) {
+        return JsonRpcResponse::error(
+            request.id,
+            INVALID_PARAMS,
+            format!("Session not found: {session_id}"),
+        );
+    }
+
     if session.current_round >= max_rounds {
         session.end();
         drop(session);
@@ -282,18 +311,39 @@ pub async fn handle_end(request: JsonRpcRequest, orch: SharedOrchestrator) -> Js
         }
     };
 
+    // P1: resolve and check ownership BEFORE removing anything — `end_session`
+    // is destructive, so the check cannot live after it. Peek through
+    // `get_session` first (orch lock taken and dropped before the session lock,
+    // preserving this module's never-hold-both rule), and reuse this method's
+    // own not-found response for a foreign owner.
+    let not_found = |id: Option<Value>| {
+        JsonRpcResponse::error(
+            id,
+            INTERNAL_ERROR,
+            format!("Session not found: {session_id}"),
+        )
+    };
+
+    let peek = {
+        let orch_guard = orch.lock().await;
+        orch_guard.get_session(&session_id)
+    }; // orch lock dropped
+    let Some(peek) = peek else {
+        return not_found(request.id);
+    };
+    {
+        let s = peek.lock().await;
+        if !visibility::stamped_owner_visible(s.owner_user_id.as_deref()) {
+            return not_found(request.id);
+        }
+    } // session lock dropped
+
     // Lock orchestrator: end session and remove from map
     let session_handle = {
         let mut orch_guard = orch.lock().await;
         match orch_guard.end_session(&session_id) {
             Some(h) => h,
-            None => {
-                return JsonRpcResponse::error(
-                    request.id,
-                    INTERNAL_ERROR,
-                    format!("Session not found: {session_id}"),
-                );
-            }
+            None => return not_found(request.id),
         }
     }; // orch lock dropped
 
@@ -319,6 +369,14 @@ pub async fn handle_list(request: JsonRpcRequest, orch: SharedOrchestrator) -> J
     for (_id, handle) in &all {
         let s = handle.lock().await;
         if s.status != GroupChatStatus::Active {
+            continue;
+        }
+        // P1: per-item filter, the `ListFiltered` shape. An unrestricted
+        // caller keeps the pre-P1 whole-process view; a scoped caller sees
+        // only their own sessions, and never an error — an empty list is a
+        // valid answer, and it is what stops this method being the
+        // enumeration oracle the four addressed methods below feed off.
+        if !visibility::stamped_owner_visible(s.owner_user_id.as_deref()) {
             continue;
         }
 
@@ -374,6 +432,17 @@ pub async fn handle_history(request: JsonRpcRequest, orch: SharedOrchestrator) -
 
     // Lock session, read history
     let session = session_handle.lock().await;
+
+    // P1: the whole conversation is behind this call, so the check comes
+    // before a single turn is serialized. Same not-found shape as a missing
+    // id above.
+    if !visibility::stamped_owner_visible(session.owner_user_id.as_deref()) {
+        return JsonRpcResponse::error(
+            request.id,
+            INVALID_PARAMS,
+            format!("Session not found: {session_id}"),
+        );
+    }
 
     let history: Vec<Value> = session
         .history
@@ -454,8 +523,164 @@ pub async fn handle_history_placeholder(req: JsonRpcRequest) -> JsonRpcResponse 
 
 #[cfg(test)]
 mod tests {
+    use super::*;
+    use crate::config::types::group_chat::GroupChatConfig;
+    use crate::gateway::caller_identity::CALLER_USER;
     use crate::gateway::protocol::JsonRpcRequest;
+    use crate::group_chat::Persona;
     use serde_json::json;
+
+    fn orch() -> SharedOrchestrator {
+        Arc::new(Mutex::new(GroupChatOrchestrator::new(
+            GroupChatConfig::default(),
+            &[],
+        )))
+    }
+
+    fn personas() -> Vec<PersonaSource> {
+        vec![PersonaSource::Inline(Persona {
+            id: "p1".into(),
+            name: "Analyst".into(),
+            system_prompt: "you analyse".into(),
+            provider: None,
+            model: None,
+            thinking_level: None,
+        })]
+    }
+
+    /// Create a session attributed to `owner`, exactly the way a dispatch
+    /// does — the stamp is taken off the ambient scope inside
+    /// `GroupChatSession::new`.
+    async fn session_owned_by(orch: &SharedOrchestrator, owner: &str) -> String {
+        crate::scope::with_scope(
+            Some(crate::scope::ScopeAttribution::personal(owner)),
+            async {
+                let mut g = orch.lock().await;
+                g.create_session(
+                    personas(),
+                    Some("secret topic".into()),
+                    "rpc".into(),
+                    "rpc:direct".into(),
+                )
+                .map(|(id, _)| id)
+                .unwrap()
+            },
+        )
+        .await
+    }
+
+    fn rpc(method: &str, params: serde_json::Value) -> JsonRpcRequest {
+        JsonRpcRequest::with_id(method, Some(params), json!(1))
+    }
+
+    /// C3: `list` used to hand every user's active session id + topic to
+    /// anyone who asked, which is what made the four addressed methods
+    /// reachable at all.
+    #[tokio::test]
+    async fn list_hides_another_users_sessions_but_keeps_your_own() {
+        let orch = orch();
+        let alice = session_owned_by(&orch, "u-alice").await;
+        let bob = session_owned_by(&orch, "u-bob").await;
+
+        let seen = |resp: JsonRpcResponse| -> Vec<String> {
+            resp.result.expect("success, never an error")["sessions"]
+                .as_array()
+                .expect("sessions array")
+                .iter()
+                .map(|s| s["id"].as_str().unwrap_or_default().to_string())
+                .collect()
+        };
+
+        let bobs = seen(
+            CALLER_USER
+                .scope(
+                    Some("u-bob".to_string()),
+                    handle_list(rpc("group_chat.list", json!({})), orch.clone()),
+                )
+                .await,
+        );
+        assert!(bobs.contains(&bob), "bob must see his own session");
+        assert!(
+            !bobs.contains(&alice),
+            "bob must not see alice's session: {bobs:?}"
+        );
+
+        // An unrestricted (internal) caller keeps the pre-P1 whole view.
+        let all = seen(handle_list(rpc("group_chat.list", json!({})), orch).await);
+        assert!(all.contains(&alice) && all.contains(&bob));
+    }
+
+    /// The addressed reads/mutations deny with each method's OWN not-found
+    /// response, so a foreign id and an unknown id are indistinguishable —
+    /// and the destructive one leaves the session intact.
+    #[tokio::test]
+    async fn addressed_methods_deny_a_foreign_session_as_not_found() {
+        let orch = orch();
+        let alice = session_owned_by(&orch, "u-alice").await;
+        let unknown = "gc-does-not-exist";
+
+        let history_denied = CALLER_USER
+            .scope(
+                Some("u-bob".to_string()),
+                handle_history(
+                    rpc("group_chat.history", json!({ "session_id": alice })),
+                    orch.clone(),
+                ),
+            )
+            .await;
+        let history_unknown = CALLER_USER
+            .scope(
+                Some("u-bob".to_string()),
+                handle_history(
+                    rpc("group_chat.history", json!({ "session_id": unknown })),
+                    orch.clone(),
+                ),
+            )
+            .await;
+        assert!(history_denied.result.is_none(), "no history may be served");
+        assert_eq!(
+            history_denied.error.as_ref().map(|e| e.message.clone()),
+            Some(format!("Session not found: {alice}")),
+        );
+        assert_eq!(
+            history_denied.error.as_ref().map(|e| e.code),
+            history_unknown.error.as_ref().map(|e| e.code),
+            "a foreign session and an unknown one must share the error shape"
+        );
+
+        let end_denied = CALLER_USER
+            .scope(
+                Some("u-bob".to_string()),
+                handle_end(
+                    rpc("group_chat.end", json!({ "session_id": alice })),
+                    orch.clone(),
+                ),
+            )
+            .await;
+        assert!(end_denied.result.is_none());
+        assert_eq!(
+            end_denied.error.as_ref().map(|e| e.message.clone()),
+            Some(format!("Session not found: {alice}")),
+        );
+
+        // Destructive denial must leave the data intact: alice still has it.
+        let alice_list = CALLER_USER
+            .scope(
+                Some("u-alice".to_string()),
+                handle_list(rpc("group_chat.list", json!({})), orch),
+            )
+            .await;
+        let ids: Vec<String> = alice_list.result.expect("success")["sessions"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|s| s["id"].as_str().unwrap_or_default().to_string())
+            .collect();
+        assert!(
+            ids.contains(&alice),
+            "a denied group_chat.end must not have ended the session: {ids:?}"
+        );
+    }
 
     #[test]
     fn test_group_chat_handlers_registered() {

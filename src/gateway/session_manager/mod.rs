@@ -379,6 +379,12 @@ impl SessionManager {
             // forever while being surfaced to the model (the `sessions` tool) and
             // to the Panel as this session's cost. Give it somewhere to live.
             ("sessions", "estimated_cost_usd", "REAL DEFAULT 0"),
+            // P1 data isolation: authenticated owner + scope stamp, set once at
+            // creation (`SessionMetadata::stamp_attribution`). NULL on legacy
+            // rows — read as owned by `OWNER_USER_ID` via
+            // `gateway::visibility::effective_owner` (adoption-by-absence).
+            ("sessions", "owner_user_id", "TEXT"),
+            ("sessions", "scope_id", "TEXT"),
             ("messages", "input_tokens", "INTEGER DEFAULT 0"),
             ("messages", "output_tokens", "INTEGER DEFAULT 0"),
             ("messages", "tool_call_id", "TEXT"),

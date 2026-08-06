@@ -353,15 +353,21 @@ impl ToolRegistry for BuiltinToolRegistry {
             // Curated hot memory write tool — resolves a per-agent
             // CuratedMemoryStore via MemoryContextProvider at call time
             // (mirrors the per-call construction pattern used by session_search).
+            // Passes the BASE caller agent id — `get_or_load_curated_store`
+            // resolves it through session scope itself (P1 curated per-scope
+            // instancing — see `thinker::memory_context_provider::curated`).
+            // Do NOT pre-resolve here: this crate's `session_write_id` is not
+            // idempotent under re-application — feeding it an already-composed
+            // id under an active personal scope would double-compose.
             "remember" => Box::pin(async move {
                 let mcp = self.memory_context_provider.get().ok_or_else(|| {
                     AlephError::tool(
                         "remember not available: MemoryContextProvider not yet injected",
                     )
                 })?;
-                let agent_id = self.caller_agent_id("main");
+                let base_agent = self.caller_agent_id("main");
                 let store = mcp
-                    .get_or_load_curated_store(&agent_id)
+                    .get_or_load_curated_store(&base_agent)
                     .await
                     .map_err(|e| AlephError::tool(format!("remember: {e}")))?;
                 // The write-decision audit log shares the memory_trace_db handle
@@ -1445,7 +1451,7 @@ impl ToolRegistry for BuiltinToolRegistry {
                 // dispatch runs inside the scoped tool-execution task.
                 let base_agent = crate::tools::turn_context::current_agent_id()
                     .unwrap_or_else(|| self.caller_agent_id("default"));
-                let agent_id = crate::memory::project_scope::scoped_or_base(
+                let agent_id = crate::memory::project_scope::session_write_id(
                     &base_agent,
                     self.memory_project_scoped,
                     crate::projects::current_project_root().as_deref(),

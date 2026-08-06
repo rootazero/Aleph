@@ -52,7 +52,7 @@ impl SessionCompactor {
         // when it writes the d0/d1/d2 summaries. Reading under the unscoped base
         // id while writes are project-scoped (or vice versa) would match nothing
         // and silently skip every prior summary.
-        let agent_id = crate::memory::project_scope::scoped_or_base(
+        let agent_id = crate::memory::project_scope::session_write_id(
             agent.id(),
             self.project_scoped,
             crate::projects::current_project_root().as_deref(),

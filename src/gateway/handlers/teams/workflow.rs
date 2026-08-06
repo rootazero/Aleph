@@ -13,6 +13,7 @@ use crate::sync_primitives::Arc;
 use crate::teams::{NewTeamMember, TeamMemberKind, TeamStore};
 
 use crate::gateway::handlers::parse_params;
+use crate::gateway::handlers::teams::visibility::{gate_task, gate_team};
 use crate::gateway::protocol::{
     JsonRpcRequest, JsonRpcResponse, INTERNAL_ERROR, INVALID_PARAMS, RESOURCE_NOT_FOUND,
 };
@@ -101,6 +102,10 @@ pub async fn handle_acp_member_add(
         Err(resp) => return resp,
     };
 
+    if let Err(resp) = gate_team(request.id.clone(), &store, &params.team_id).await {
+        return resp;
+    }
+
     let new_member = NewTeamMember::for_acp_session(
         params.team_id.clone(),
         params.harness_id,
@@ -134,6 +139,10 @@ pub async fn handle_acp_member_remove(
         Ok(p) => p,
         Err(resp) => return resp,
     };
+
+    if let Err(resp) = gate_team(request.id.clone(), &store, &params.team_id).await {
+        return resp;
+    }
 
     // Guard: refuse to remove a non-ACP row via this RPC so the caller
     // doesn't accidentally drop an in-process agent.
@@ -192,6 +201,10 @@ pub async fn handle_acp_member_list(
         Ok(p) => p,
         Err(resp) => return resp,
     };
+
+    if let Err(resp) = gate_team(request.id.clone(), &store, &params.team_id).await {
+        return resp;
+    }
 
     match store.get_members(&params.team_id).await {
         Ok(members) => {
@@ -282,6 +295,7 @@ async fn verdict_gate(
 /// approve tasks that have not yet finished a run.
 pub async fn handle_workflow_approve_step(
     request: JsonRpcRequest,
+    store: Arc<dyn TeamStore>,
     coord_store: Arc<dyn CoordTaskStore>,
 ) -> JsonRpcResponse {
     debug!("Handling teams.workflow.approve_step request");
@@ -293,6 +307,9 @@ pub async fn handle_workflow_approve_step(
         Ok(k) => k,
         Err(msg) => return JsonRpcResponse::error(request.id, INVALID_PARAMS, msg.to_string()),
     };
+    if let Err(resp) = gate_task(request.id.clone(), &store, &coord_store, &params.task_id).await {
+        return resp;
+    }
     match verdict_gate(&coord_store, &params.task_id, CoordTaskStatus::Completed).await {
         VerdictGate::Proceed => {}
         VerdictGate::AlreadyThere => {
@@ -355,6 +372,7 @@ pub async fn handle_workflow_approve_step(
 /// transition the task to Failed. Downstream dependents stay blocked.
 pub async fn handle_workflow_reject_step(
     request: JsonRpcRequest,
+    store: Arc<dyn TeamStore>,
     coord_store: Arc<dyn CoordTaskStore>,
 ) -> JsonRpcResponse {
     debug!("Handling teams.workflow.reject_step request");
@@ -366,6 +384,9 @@ pub async fn handle_workflow_reject_step(
         Ok(k) => k,
         Err(msg) => return JsonRpcResponse::error(request.id, INVALID_PARAMS, msg.to_string()),
     };
+    if let Err(resp) = gate_task(request.id.clone(), &store, &coord_store, &params.task_id).await {
+        return resp;
+    }
     match verdict_gate(&coord_store, &params.task_id, CoordTaskStatus::Failed).await {
         VerdictGate::Proceed => {}
         VerdictGate::AlreadyThere => {
@@ -448,6 +469,7 @@ pub async fn handle_workflow_reject_step(
 /// review-gated task and discard its completed work + pending verdict.
 pub async fn handle_task_pause(
     request: JsonRpcRequest,
+    store: Arc<dyn TeamStore>,
     coord_store: Arc<dyn CoordTaskStore>,
 ) -> JsonRpcResponse {
     debug!("Handling teams.task.pause request");
@@ -455,22 +477,12 @@ pub async fn handle_task_pause(
         Ok(p) => p,
         Err(resp) => return resp,
     };
-    let current = match coord_store.get_task(&params.task_id).await {
-        Ok(Some(t)) => t,
-        Ok(None) => {
-            return JsonRpcResponse::error(
-                request.id,
-                RESOURCE_NOT_FOUND,
-                format!("Task '{}' not found", params.task_id),
-            )
-        }
-        Err(e) => {
-            return JsonRpcResponse::error(
-                request.id,
-                INTERNAL_ERROR,
-                format!("Failed to fetch task: {e}"),
-            )
-        }
+    // Resolve + gate in one step: `gate_task` performs the same lookup the
+    // handler used to do itself, so a foreign task is indistinguishable from
+    // an absent one and a store error fails closed.
+    let current = match gate_task(request.id.clone(), &store, &coord_store, &params.task_id).await {
+        Ok(t) => t,
+        Err(resp) => return resp,
     };
     match current.status {
         // WaitingReview is deliberately NOT pausable: resume always returns a
@@ -528,6 +540,7 @@ pub async fn handle_task_pause(
 /// so the dispatcher can pick it up on the next tick.
 pub async fn handle_task_resume(
     request: JsonRpcRequest,
+    store: Arc<dyn TeamStore>,
     coord_store: Arc<dyn CoordTaskStore>,
 ) -> JsonRpcResponse {
     debug!("Handling teams.task.resume request");
@@ -535,22 +548,12 @@ pub async fn handle_task_resume(
         Ok(p) => p,
         Err(resp) => return resp,
     };
-    let current = match coord_store.get_task(&params.task_id).await {
-        Ok(Some(t)) => t,
-        Ok(None) => {
-            return JsonRpcResponse::error(
-                request.id,
-                RESOURCE_NOT_FOUND,
-                format!("Task '{}' not found", params.task_id),
-            )
-        }
-        Err(e) => {
-            return JsonRpcResponse::error(
-                request.id,
-                INTERNAL_ERROR,
-                format!("Failed to fetch task: {e}"),
-            )
-        }
+    // Resolve + gate in one step: `gate_task` performs the same lookup the
+    // handler used to do itself, so a foreign task is indistinguishable from
+    // an absent one and a store error fails closed.
+    let current = match gate_task(request.id.clone(), &store, &coord_store, &params.task_id).await {
+        Ok(t) => t,
+        Err(resp) => return resp,
     };
     if current.status != CoordTaskStatus::Paused {
         return JsonRpcResponse::error(
@@ -600,6 +603,7 @@ pub async fn handle_task_resume(
 /// preserved — a fresh attempt is started on next dispatcher tick.
 pub async fn handle_task_retry(
     request: JsonRpcRequest,
+    store: Arc<dyn TeamStore>,
     coord_store: Arc<dyn CoordTaskStore>,
 ) -> JsonRpcResponse {
     debug!("Handling teams.task.retry request");
@@ -607,22 +611,12 @@ pub async fn handle_task_retry(
         Ok(p) => p,
         Err(resp) => return resp,
     };
-    let current = match coord_store.get_task(&params.task_id).await {
-        Ok(Some(t)) => t,
-        Ok(None) => {
-            return JsonRpcResponse::error(
-                request.id,
-                RESOURCE_NOT_FOUND,
-                format!("Task '{}' not found", params.task_id),
-            )
-        }
-        Err(e) => {
-            return JsonRpcResponse::error(
-                request.id,
-                INTERNAL_ERROR,
-                format!("Failed to fetch task: {e}"),
-            )
-        }
+    // Resolve + gate in one step: `gate_task` performs the same lookup the
+    // handler used to do itself, so a foreign task is indistinguishable from
+    // an absent one and a store error fails closed.
+    let current = match gate_task(request.id.clone(), &store, &coord_store, &params.task_id).await {
+        Ok(t) => t,
+        Err(resp) => return resp,
     };
     if matches!(current.status, CoordTaskStatus::InProgress) {
         return JsonRpcResponse::error(
@@ -670,6 +664,7 @@ pub async fn handle_task_retry(
 /// run. Marks the task as Skipped so downstream dependents unblock.
 pub async fn handle_task_skip(
     request: JsonRpcRequest,
+    store: Arc<dyn TeamStore>,
     coord_store: Arc<dyn CoordTaskStore>,
 ) -> JsonRpcResponse {
     debug!("Handling teams.task.skip request");
@@ -677,6 +672,12 @@ pub async fn handle_task_skip(
         Ok(p) => p,
         Err(resp) => return resp,
     };
+    // Unlike its siblings, skip never read the task first — it wrote blind. So
+    // the gate is the ONLY lookup here, and without it this is the one task
+    // verb a foreign caller could still land.
+    if let Err(resp) = gate_task(request.id.clone(), &store, &coord_store, &params.task_id).await {
+        return resp;
+    }
     if let Err(e) = coord_store
         .update_task(
             &params.task_id,

@@ -7,6 +7,7 @@ use crate::gateway::protocol::{JsonRpcRequest, JsonRpcResponse, INTERNAL_ERROR, 
 use crate::gateway::router::SessionKey;
 use crate::gateway::session_store::types::SessionFilter;
 use crate::gateway::session_store::SessionStore;
+use crate::gateway::visibility;
 
 use super::types::{HistoryMessage, SessionInfo};
 
@@ -49,6 +50,7 @@ pub async fn handle_list_db(
 
     let filter = SessionFilter {
         agent_id: agent_id.map(|s| s.to_string()),
+        owner_visible_to: visibility::visible_owner_filter(),
         ..Default::default()
     };
     match manager.list_sessions(filter).await {
@@ -190,6 +192,15 @@ pub async fn handle_history_db(
         }
     };
 
+    let meta = match manager.get_metadata(&session_key).await {
+        Ok(Some(m)) => m,
+        Ok(None) => return visibility::not_found_response(request.id),
+        Err(_) => return visibility::not_found_response(request.id), // fail closed (GC 3)
+    };
+    if !visibility::session_visible(&meta) {
+        return visibility::not_found_response(request.id); // same error as missing (GC 4)
+    }
+
     match manager.get_history(&session_key, limit).await {
         Ok(messages) => {
             let history: Vec<HistoryMessage> = messages
@@ -277,7 +288,7 @@ pub async fn handle_usage_db(
     request: JsonRpcRequest,
     manager: Arc<dyn SessionStore>,
 ) -> JsonRpcResponse {
-    let session_key = match request
+    let session_key_str = match request
         .params
         .as_ref()
         .and_then(|p| p.get("session_key"))
@@ -287,53 +298,62 @@ pub async fn handle_usage_db(
         None => return JsonRpcResponse::error(request.id, INVALID_PARAMS, "Missing session_key"),
     };
 
-    // Get session metadata for usage stats
-    match manager.list_sessions(SessionFilter::default()).await {
-        Ok(sessions) => {
-            let session_meta = sessions.iter().find(|s| s.key == session_key);
-
-            let (input_tokens, output_tokens, total, message_count, created_at, last_active_at) =
-                session_meta.map_or((0, 0, 0, 0, None, None), |s| {
-                    (
-                        s.input_tokens as u64,
-                        s.output_tokens as u64,
-                        s.total_tokens as u64,
-                        s.message_count as u64,
-                        chrono::DateTime::from_timestamp(s.created_at, 0).map(|dt| dt.to_rfc3339()),
-                        chrono::DateTime::from_timestamp(s.last_active_at, 0)
-                            .map(|dt| dt.to_rfc3339()),
-                    )
-                });
-
-            let (cost_usd, cost_status) = session_usage_cost(
-                session_meta.map_or(0.0, |s| s.estimated_cost_usd),
-                session_meta.and_then(|s| s.model_provider.as_deref()),
-                session_meta.and_then(|s| s.model.as_deref()),
-                input_tokens,
-                output_tokens,
-            );
-
-            JsonRpcResponse::success(
+    let session_key = match SessionKey::from_key_string(&session_key_str) {
+        Some(k) => k,
+        None => {
+            return JsonRpcResponse::error(
                 request.id,
-                json!({
-                    "session_key": session_key,
-                    "tokens": total,
-                    "input_tokens": input_tokens,
-                    "output_tokens": output_tokens,
-                    "messages": message_count,
-                    "created_at": created_at,
-                    "last_active_at": last_active_at,
-                    "cost_usd": cost_usd,
-                    "cost_status": cost_status,
-                }),
-            )
+                INVALID_PARAMS,
+                "Invalid session_key format",
+            );
         }
-        Err(e) => JsonRpcResponse::error(
-            request.id,
-            INTERNAL_ERROR,
-            format!("Failed to query sessions: {e}"),
-        ),
+    };
+
+    // Fetch metadata directly by key rather than scanning every session
+    // (the old implementation called `list_sessions(SessionFilter::default())`
+    // and linear-searched) — this is also the enforcement point: a session
+    // that exists but belongs to someone else must read exactly like one
+    // that doesn't exist (GC 4).
+    let session_meta = match manager.get_metadata(&session_key).await {
+        Ok(Some(m)) => m,
+        Ok(None) => return visibility::not_found_response(request.id),
+        Err(_) => return visibility::not_found_response(request.id), // fail closed (GC 3)
+    };
+    if !visibility::session_visible(&session_meta) {
+        return visibility::not_found_response(request.id); // same error as missing (GC 4)
     }
+
+    let input_tokens = session_meta.input_tokens as u64;
+    let output_tokens = session_meta.output_tokens as u64;
+    let total = session_meta.total_tokens as u64;
+    let message_count = session_meta.message_count as u64;
+    let created_at =
+        chrono::DateTime::from_timestamp(session_meta.created_at, 0).map(|dt| dt.to_rfc3339());
+    let last_active_at =
+        chrono::DateTime::from_timestamp(session_meta.last_active_at, 0).map(|dt| dt.to_rfc3339());
+
+    let (cost_usd, cost_status) = session_usage_cost(
+        session_meta.estimated_cost_usd,
+        session_meta.model_provider.as_deref(),
+        session_meta.model.as_deref(),
+        input_tokens,
+        output_tokens,
+    );
+
+    JsonRpcResponse::success(
+        request.id,
+        json!({
+            "session_key": session_key_str,
+            "tokens": total,
+            "input_tokens": input_tokens,
+            "output_tokens": output_tokens,
+            "messages": message_count,
+            "created_at": created_at,
+            "last_active_at": last_active_at,
+            "cost_usd": cost_usd,
+            "cost_status": cost_status,
+        }),
+    )
 }
 
 /// Handle sessions.preview RPC request with database backend
@@ -370,6 +390,15 @@ pub async fn handle_preview_db(
             );
         }
     };
+
+    let meta = match manager.get_metadata(&session_key).await {
+        Ok(Some(m)) => m,
+        Ok(None) => return visibility::not_found_response(request.id),
+        Err(_) => return visibility::not_found_response(request.id), // fail closed (GC 3)
+    };
+    if !visibility::session_visible(&meta) {
+        return visibility::not_found_response(request.id); // same error as missing (GC 4)
+    }
 
     match manager.get_session_preview(&session_key, limit).await {
         Ok(preview) => {
@@ -455,6 +484,227 @@ mod tests {
 
     fn s(v: &str) -> Option<String> {
         Some(v.to_string())
+    }
+
+    /// P1 visibility chokepoint — pinned per task-6-brief.md Step 1. Same
+    /// discipline as `owner_scope_tests` in `session_store/mod.rs`: dispatch
+    /// through the real handler with `CALLER_USER` scoped around the call,
+    /// exactly as `process_request` scopes it in production.
+    mod visibility_guards {
+        use super::super::{handle_history_db, handle_preview_db, handle_usage_db};
+        use super::*;
+        use crate::gateway::caller_identity::CALLER_USER;
+        use crate::gateway::protocol::RESOURCE_NOT_FOUND;
+        use crate::scope::{with_scope, ScopeAttribution};
+
+        fn store(temp: &tempfile::TempDir) -> Arc<dyn SessionStore> {
+            Arc::new(
+                SessionManager::new(SessionManagerConfig {
+                    db_path: temp.path().join("visibility.db"),
+                    ..Default::default()
+                })
+                .unwrap(),
+            )
+        }
+
+        fn list_request() -> JsonRpcRequest {
+            JsonRpcRequest {
+                jsonrpc: "2.0".into(),
+                method: "sessions.list".into(),
+                params: None,
+                id: Some(json!(1)),
+            }
+        }
+
+        fn keyed_request(method: &str, session_key: &str) -> JsonRpcRequest {
+            JsonRpcRequest {
+                jsonrpc: "2.0".into(),
+                method: method.into(),
+                params: Some(json!({ "session_key": session_key })),
+                id: Some(json!(1)),
+            }
+        }
+
+        async fn seed(store: &Arc<dyn SessionStore>) -> (SessionKey, SessionKey, SessionKey) {
+            let alice_1 = SessionKey::from_key_string("agent:alicevis1:main").unwrap();
+            let alice_2 = SessionKey::from_key_string("agent:alicevis2:main").unwrap();
+            let bob_1 = SessionKey::from_key_string("agent:bobvis1:main").unwrap();
+            let legacy = SessionKey::from_key_string("agent:legacyvis1:main").unwrap();
+
+            with_scope(
+                Some(ScopeAttribution::personal("u-alice")),
+                store.get_or_create(&alice_1),
+            )
+            .await
+            .unwrap();
+            with_scope(
+                Some(ScopeAttribution::personal("u-alice")),
+                store.get_or_create(&alice_2),
+            )
+            .await
+            .unwrap();
+            with_scope(
+                Some(ScopeAttribution::personal("u-bob")),
+                store.get_or_create(&bob_1),
+            )
+            .await
+            .unwrap();
+            store.get_or_create(&legacy).await.unwrap();
+
+            (alice_1, bob_1, legacy)
+        }
+
+        /// spec §9-1 shape: alice creates 2, bob creates 1, one legacy row.
+        /// Dispatching `sessions.list` under each caller's scope must return
+        /// exactly that caller's own sessions.
+        #[tokio::test]
+        async fn sessions_list_is_scoped_to_the_caller() {
+            let temp = tempfile::tempdir().unwrap();
+            let store = store(&temp);
+            seed(&store).await;
+
+            let as_bob = CALLER_USER
+                .scope(
+                    Some("u-bob".to_string()),
+                    handle_list_db(list_request(), store.clone()),
+                )
+                .await;
+            let bob_sessions = as_bob.result.unwrap()["sessions"].as_array().unwrap().len();
+            assert_eq!(bob_sessions, 1, "bob sees only his own session");
+
+            let as_owner = CALLER_USER
+                .scope(
+                    Some(crate::gateway::security::store::OWNER_USER_ID.to_string()),
+                    handle_list_db(list_request(), store.clone()),
+                )
+                .await;
+            let owner_keys: Vec<String> = as_owner.result.unwrap()["sessions"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|s| s["key"].as_str().unwrap().to_string())
+                .collect();
+            assert!(
+                !owner_keys.iter().any(|k| k.contains("bobvis1")),
+                "owner must not see bob's session"
+            );
+            assert!(
+                owner_keys.iter().any(|k| k.contains("legacyvis1")),
+                "owner must see the legacy (unscoped) row — legacy = owner"
+            );
+
+            let unrestricted = handle_list_db(list_request(), store.clone()).await;
+            let all = unrestricted.result.unwrap()["sessions"]
+                .as_array()
+                .unwrap()
+                .len();
+            assert_eq!(all, 4, "no CALLER_USER scope = every owner");
+        }
+
+        #[tokio::test]
+        async fn sessions_history_denies_cross_user_as_not_found() {
+            let temp = tempfile::tempdir().unwrap();
+            let store = store(&temp);
+            let (alice_key, _bob_key, _legacy) = seed(&store).await;
+            let alice_key_str = alice_key.to_key_string();
+
+            let as_bob = CALLER_USER
+                .scope(
+                    Some("u-bob".to_string()),
+                    handle_history_db(
+                        keyed_request("sessions.history", &alice_key_str),
+                        store.clone(),
+                    ),
+                )
+                .await;
+            assert_eq!(
+                as_bob.error.as_ref().map(|e| e.code),
+                Some(RESOURCE_NOT_FOUND)
+            );
+
+            // Byte-identical to a genuinely nonexistent key (no existence oracle).
+            let never_existed = "agent:nosuchsession999:main";
+            let as_bob_missing = CALLER_USER
+                .scope(
+                    Some("u-bob".to_string()),
+                    handle_history_db(
+                        keyed_request("sessions.history", never_existed),
+                        store.clone(),
+                    ),
+                )
+                .await;
+            assert_eq!(
+                serde_json::to_string(&as_bob.error).unwrap(),
+                serde_json::to_string(&as_bob_missing.error).unwrap(),
+            );
+
+            // alice herself, and an unrestricted (internal/no-scope) caller,
+            // may still read it. Note OWNER_USER_ID is NOT special here — a
+            // stamped session belongs exclusively to its stamped owner, not
+            // to the org-era owner id; only a legacy (never-stamped) row
+            // reads as OWNER_USER_ID's.
+            let as_alice = CALLER_USER
+                .scope(
+                    Some("u-alice".to_string()),
+                    handle_history_db(
+                        keyed_request("sessions.history", &alice_key_str),
+                        store.clone(),
+                    ),
+                )
+                .await;
+            assert!(as_alice.error.is_none());
+
+            let unrestricted = handle_history_db(
+                keyed_request("sessions.history", &alice_key_str),
+                store.clone(),
+            )
+            .await;
+            assert!(unrestricted.error.is_none());
+        }
+
+        #[tokio::test]
+        async fn sessions_preview_denies_cross_user_as_not_found() {
+            let temp = tempfile::tempdir().unwrap();
+            let store = store(&temp);
+            let (alice_key, _bob_key, _legacy) = seed(&store).await;
+            let alice_key_str = alice_key.to_key_string();
+
+            let as_bob = CALLER_USER
+                .scope(
+                    Some("u-bob".to_string()),
+                    handle_preview_db(
+                        keyed_request("sessions.preview", &alice_key_str),
+                        store.clone(),
+                    ),
+                )
+                .await;
+            assert_eq!(
+                as_bob.error.as_ref().map(|e| e.code),
+                Some(RESOURCE_NOT_FOUND)
+            );
+        }
+
+        #[tokio::test]
+        async fn session_usage_denies_cross_user_as_not_found() {
+            let temp = tempfile::tempdir().unwrap();
+            let store = store(&temp);
+            let (alice_key, _bob_key, _legacy) = seed(&store).await;
+            let alice_key_str = alice_key.to_key_string();
+
+            let as_bob = CALLER_USER
+                .scope(
+                    Some("u-bob".to_string()),
+                    handle_usage_db(
+                        keyed_request("session.usage", &alice_key_str),
+                        store.clone(),
+                    ),
+                )
+                .await;
+            assert_eq!(
+                as_bob.error.as_ref().map(|e| e.code),
+                Some(RESOURCE_NOT_FOUND)
+            );
+        }
     }
 
     /// The run loop resolves a stored `exec_tier` on every turn, so the Panel

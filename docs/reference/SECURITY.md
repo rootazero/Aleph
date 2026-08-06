@@ -984,6 +984,304 @@ which devices are connected right now). Both take effect immediately rather
 than at the next handshake. Rejected remote connects and flood-guard
 closes are recorded in the security audit log (`AuthFailure` / `RateLimited`).
 
+### 多用户角色层（P0）{#multi-user-roles-p0}
+
+The trust boundary above answers "is this connection authorized at all";
+this layer answers "authorized as **whom**, and with **what** authority."
+Landed as the P0 identity foundation
+(`docs/superpowers/plans/2026-08-04-p0-identity-foundation.md`), it stays
+strictly additive to the single-tier model — a single-machine deployment
+sees byte-identical behavior before and after.
+
+- **Users table.** `src/gateway/security/store/users.rs` adds a `users` table
+  (schema v14): `user_id`, `display_name`, `role ∈ {admin, member}`,
+  `status ∈ {active, deactivated}`, `created_at`. `role` drives the
+  admin/member boundary below; `status = deactivated` walls every connection
+  bound to that user, immediately (see deactivation below).
+- **Device / pairing linking.** Two independent binding paths feed the same
+  `users` table, both with identical COALESCE semantics ("an unbound rebind
+  never clobbers an existing binding; a still-unbound row after the write
+  defaults to the owner"):
+  - **Panel devices** (`devices.user_id`): `gateway.ticket.create` can bind a
+    bootstrap ticket to a `user_id`; the device that exchanges it
+    (`DeviceTokenManager::exchange_bootstrap_ticket`) inherits the binding via
+    `upsert_device`'s `COALESCE(excluded.user_id, devices.user_id)`, and
+    `set_device_user_if_unbound` defaults a brand-new unbound pairing to the
+    owner.
+  - **Channel senders** (`pairing_store.approved_senders.user_id`): approving
+    a channel sender (`PairingStore::approve`) can bind the same way;
+    `sender_user(channel, sender_id)` resolves it with the same
+    bound-is-sticky / unbound-defaults-to-owner semantics.
+- **Resolved per connection**, not just per credential:
+  `handlers/connect.rs::resolve_connection_identity` turns an authorized
+  connection into `(Option<user_id>, role)` — loopback and any
+  authorized-but-unbound credential (legacy shared token, a pre-v14 device row
+  with no `user_id`) still resolve to the implicit owner as `"operator"` (the
+  zero-change guarantee); a device bound to an `admin`-role user resolves to
+  `"operator"`, one bound to a `member`-role user resolves to `"member"`; a
+  device bound to a **deactivated** user, or whose `user_id` points at a row
+  no longer in `users` (dangling reference), fails **closed** to
+  `("guest", None)` — a lookup that could not be performed, or a link known to
+  be broken, must never silently grant full authority. The same fail-closed
+  rule covers the no-store degrade: no store **and** a presented `device_id`
+  ⇒ guest (a binding lookup that could not be performed is not "unbound"),
+  while no store and no device keeps the pre-P0 owner fallback.
+  The pair rides `CALLER_ROLE` / `CALLER_USER` task-locals
+  (`src/gateway/caller_identity.rs`) scoped around every `process_request`
+  call, and it is echoed back to the client in the `connect` response
+  (`role` / `authorized` / `needs_token`) — the **resolved** role, not the
+  credential-only verdict, so a member renders a member UI and a deactivated
+  user's still-valid device gets the ordinary walled response instead of a
+  false `operator` + a dead UI.
+- **Two gates, not one.** The login wall (`wall_admits`,
+  `src/gateway/server/handler.rs`) is the *guest* wall and admits both
+  authorized roles — `"operator"` and `"member"` — for every method; a walled
+  connection may only send `connect`. The admin/member split is the *separate*,
+  deeper gate below, at the `process_request` chokepoint. Conflating them
+  refuses real members everything and then flood-guard-kicks them as abusers.
+- **Admin / member method boundary** (spec §4.6). `method_admin.rs`'s
+  `method_requires_admin` classifies RPC **methods** by prefix — sibling of
+  the pre-existing `method_authz.rs`, which classifies **tools** for the
+  channel chat-tier gate; the two are separate axes (method vs. tool) and
+  don't substitute for each other. A prefix match gates the whole family by
+  default (fail-closed for privilege); a short allowlist re-opens member-safe
+  reads inside an otherwise-admin family. The table below is a **summary**;
+  the authoritative classification is `method_admin.rs`'s `ADMIN_PREFIXES` +
+  `MEMBER_CARVE_OUTS` themselves, whose module doc records the mechanical
+  sweep (**74 method families**) and the reasoning for every non-obvious open
+  ruling. That file is both the enforcement point and the audit trail — there
+  is no separate report artifact to consult.
+
+  | Family | Verdict | Why |
+  |---|---|---|
+  | `gateway.*`, `users.*`, `cluster.*`, `services.*` | **admin** | Trust-boundary credentials/tokens/devices, principal management, fleet membership, server process control |
+  | `providers.*`, `embedding_providers.*`, `generation_providers.*`, `channels.*`, `channel.*`, `discord.*` | **admin** | Server-global provider/channel credentials & config |
+  | `config.*`, `secrets.*`, and 11 Settings-page `*_config.*` families (`security_config.` … `route_config.`), `routing_rules.*`, `logs.*` | **admin** | Server configuration surfaces (Settings page) |
+  | `extensions.*`, `mcp.*`, `mcp_config.*`, `skills.*`, `bundled.*`, `plugins.*`/`plugin.*`, `hooks.*`, `runtimes.*` | **admin** | Install-class capability surfaces |
+  | `agents.*` (carve-outs `agents.list`/`agents.get`), `identity.*`, `moa.*`, `acp.*` | **admin** | Server-global persona/shared config, not per-user |
+  | `cron.*`, `heartbeat.*` (carve-outs `.list`/`.get`/`.runs`) | **admin** | Scheduled automation — mirrors `method_authz.rs`'s existing tool-tier ruling, so the RPC surface isn't a lower-privilege bypass of it |
+  | `daemon.*`, `wizard.*`, `diagnostics.*`, `pty.*`, `exec.*` | **admin** | Fleet lifecycle, raw interactive shell, exec-approval gate resolution |
+  | `tools.*` | **admin** | `tools.invoke` dispatches straight off the raw `ToolRegistry`, so none of the loop's gates run there — including the per-tool operator gate (`method_authz.rs`'s `OPERATOR_TOOLS`: `cron_manage`, `hooks_manage`, `agent_identity`, …), which its own hard floor does not cover. An RPC surface must not be a lower-privilege bypass of an existing tool-tier decision, and via `cron_manage` a member could schedule a run that executes as trusted-internal. The family is gated whole (E2E-oriented surface by its own module doc); a member-safe read carve-out is a P1 call |
+  | `connect`, `chat.*`, `sessions.*`, `memory.*`, `projects.*`, `artifacts.*`, `fs.*`, `teams.*`, `workspace.*`, `voice.*`, `graph.*` | **open** | Member daily / caller's-own-data surfaces; per-user *visibility* filtering is P1's job, not this gate's |
+  | `users.me`, `users.list`, `agents.list`, `agents.get`, `heartbeat.list`/`.get`/`.runs` | **open** | Member-safe reads, carved out of otherwise-admin families |
+
+  Enforced at **one chokepoint** inside `process_request`
+  (`src/gateway/server/handler.rs`) — both WS dispatch stations (the
+  `do_lane_dispatch` closure and the idempotency `Proceed` arm) scope
+  `CALLER_ROLE` around `process_request`, so this single check covers both. A
+  `"member"` role hitting an admin-classified method is refused with the same
+  error code the login wall uses for non-`connect` methods on walled
+  connections. `None` (cron/internal) and `"operator"` pass every method; a
+  `"guest"` connection never reaches this check for non-`connect` methods
+  because the login wall above already refuses it first.
+- **Deactivation kicks live Panel sessions.** `users.update { status:
+  "deactivated" }` revokes every live **Panel device** bound to that user
+  through the same `revoke_device_and_kick` pipeline `gateway.devices.revoke`
+  uses (demote the connection to guest, then close the socket) — not a second
+  implementation. See `src/gateway/CLAUDE.md`'s revocation landmines for the
+  ordering / single-source discipline that pipeline depends on.
+  **Scope, precisely:** this covers `devices.user_id` bindings, i.e. WS/Panel
+  connections. Approved **channel senders** linked to the same user
+  (`approved_senders.user_id`) are *not* revoked in P0 — inbound channel access
+  control is unchanged (`inbound_router::check_permission` + `pairing_store`
+  remain the sole authority there), and `sender_user()` has no consumer yet, so
+  the link is recorded but carries no authority to withdraw. Cutting a
+  deactivated user off a chat channel is still `channel.pairing.revoke`.
+- **Role changes take effect on live connections.** `users.update { role }`
+  re-stamps `caller_role` on the user's already-open Panel connections
+  (`restamp_live_connections`), because the wire role is latched into
+  `ConnectionState` at the `connect` handshake and read from there on every
+  later frame — a store-only write would leave a demoted admin holding admin
+  authority on its open tab until it happened to reconnect. Promotion and
+  demotion both; a connection already walled at `"guest"` (revoked device /
+  deactivated user) is never promoted this way — only a fresh `connect` lifts
+  the wall.
+- **Implicit owner, zero migration.** `ensure_bootstrap_owner` runs at every
+  store open: if `users` is empty it mints `u-owner` (`admin`, `active`) and
+  adopts every un-owned **panel** device (`devices.user_id IS NULL AND
+  device_type = 'panel'`; shared cluster-node rows are machines, never
+  adopted). Every pre-existing single-user deployment therefore ends up with
+  exactly one user, owning every device it already had — loopback and legacy
+  credentials keep resolving to that same owner as full operator, so the
+  single-user experience is unchanged.
+
+### 多用户数据隔离层（P1）{#multi-user-isolation-p1}
+
+The P0 layer above answers "authorized as whom"; this layer answers "can
+that identity SEE this particular row of data." Landed as the P1 data
+isolation plan (`docs/superpowers/plans/2026-08-05-p1-data-isolation.md`),
+it is partition-key composition (spec §3): a new `src/scope/` vocabulary
+rides the *existing* `project_scope.rs` suffix mechanism for memory, new
+`owner_user_id`/`scope_id` columns on sessions and background-work stores,
+one ambient `ScopeAttribution` task-local seeded at gateway dispatch and at
+every `tokio::spawn` run boundary, and a single predicate family every
+scoped-data RPC handler and the WS event-delivery filter both consume.
+Legacy rows (no owner field) read as owner-owned — adoption by absence, zero
+backfill migration; the single-user experience is byte-identical before and
+after (verified by `single_user_fixture_is_byte_identical_after_upgrade`,
+`src/gateway/isolation_acceptance.rs`).
+
+- **Scope vocabulary** (`src/scope/mod.rs`). `ScopeId::{Org, Personal(user_id),
+  Project(project_id)}` and `ScopeAttribution { owner_user_id, scope }`.
+  `Org`/`Personal`/`Project` render to `"org"` / `"personal:<id>"` /
+  `"project:<id>"` and compose directly with `project_scope::scoped_agent_id`'s
+  suffix grammar — the `proj-*` (legacy project-directory feature) / `u-*`
+  (personal) / `p-*` (project, P2) suffix families are siblings, never
+  nested. Carried by a `tokio::task_local!` (`with_scope`/`current_scope`),
+  scoped around every dispatch by `server::handler::
+  dispatch_with_caller_context` exactly like P0's `CALLER_USER`/
+  `CALLER_ROLE` — and, like those, does NOT cross a `tokio::spawn` boundary:
+  any run-work spawn must re-seed it explicitly (see the
+  `src/gateway/CLAUDE.md` landmine below).
+- **Visibility chokepoint** (`src/gateway/visibility.rs`). `effective_owner`
+  is the ONE place "who owns this row" is decided: a session's own
+  `owner_user_id`, or `OWNER_USER_ID` for a legacy/pre-P1 row with none
+  (adoption by absence). `session_visible` and `partition_visible` turn that
+  into a boolean for a session row / a `<base>__<suffix>` memory partition
+  id respectively; `visible_owner_filter` is `None` for an unrestricted
+  (internal/cron/A2A) caller — the zero-change guarantee for
+  single-user/internal callers — or `Some(caller)` for a scoped one.
+  `not_found_response` is the single, byte-identical `RESOURCE_NOT_FOUND`
+  response every addressed-key denial returns — see "NOT_FOUND over
+  forbidden" below. Any handler that writes its own `meta.owner_user_id ==
+  caller` comparison instead of calling one of these predicates, or filters
+  `sessions.list` without setting `SessionFilter::owner_visible_to`, is
+  exactly the bypass this module exists to prevent.
+- **Registry + regression net** (`src/gateway/method_visibility.rs`). NOT a
+  dispatch gate — a durable table pairing every scoped-data RPC method with
+  its enforcement shape (`KeyChecked` / `PartitionChecked` / `ListFiltered`)
+  and a pin test that fails loudly if a method's enforcement call is ever
+  removed. Sibling of P0's `method_admin.rs` (same shape, different
+  question: that one asks "does this method need operator role," this one
+  asks "does this method's answer depend on who's asking, and is that
+  enforced"). Covers `sessions.*`/`session.*`/`chat.*`,
+  `memory.*`/`artifacts.*`/`clarification.*`/`subagent.tree`/`graph.query`
+  and (since 2026-08-06) all 34 addressed `teams.*` methods — see that
+  file's module doc for the full per-method breakdown.
+- **Team ownership** (`src/teams/scoped.rs`). P1 originally shipped `teams.*`
+  as org-shared: `Team` had no owner field, so there was nothing to check
+  without first inventing an ownership model. That was overturned by human
+  ruling on 2026-08-06. `Team` now carries `owner_user_id` on the same
+  adoption-by-absence terms as a session, stamped inside
+  `SqliteTeamStore::create_team` so every creation path (RPC, `team_create`,
+  `team_from_template`, template materialization) lands owned.
+  **Enforcement is a `TeamStore` decorator, not a per-call-site check** —
+  teams are reachable from the gateway AND from ~30 `team_*` builtin tools a
+  model calls mid-run, and putting the predicate on the one path both cross
+  is what makes the tool half enforced rather than "the Panel half enforced
+  and the chat half wide open". `ScopedTeamStore::wrap` is applied at the
+  single construction site (`builder::agent_init::coord_stores`); publishing
+  the raw store anywhere else is the bypass.
+  - The resolver is `scope::ambient_owner()` — the gateway `CALLER_USER`
+    identity first, falling back to the run-seeded `ScopeAttribution`.
+    `CALLER_USER` alone is dead inside a spawned run, so a team predicate
+    built on `visible_owner_filter()` would be fail-open for every tool call.
+  - The gateway still gates explicitly
+    (`handlers::teams::visibility::{gate_team, gate_task}`) for the two things
+    a decorator cannot do: produce the byte-identical `not_found` response,
+    and reach the ~20 methods that address a team through the `coord_tasks`
+    DAG — a different database the team store cannot see. A task with no team
+    reads as an unstamped record (the legacy owner's), never as public.
+  - Six `team_*` tools are the tool-side twin of that second case
+    (`team_task_control`, `workflow_step_review`, `task_comment`,
+    `task_exit_journal`, `task_submit`, `team_workflow_canvas`): they address
+    a task or team through `CoordTaskStore` alone, so they call
+    `teams::task_team_reachable` after their own lookup. `team_workflow_canvas`
+    is gated despite being read-only — its `export` enumerates every task in a
+    team, and it is the one face that hands out ids for the other five.
+    **Any new tool that reaches a coord task by id owes the same call**; the
+    decorator will not catch it.
+- **Event delivery** (`src/gateway/event_visibility.rs`). The event-bus
+  analogue of the RPC chokepoint above: `EventScopeGuard` (P0) is
+  role-based and default-allow for ordinary session/run events, so without
+  this every connected member would receive every OTHER user's live run
+  stream. `EventVisibilityIndex` is the 4th `&&` term in `server::handler`'s
+  `should_forward` filter chain — it classifies each delivered frame's
+  session identity (`session_identity_of`: by session key directly, by
+  `run_id` through a seeded run→session cache, or `Global` for org-level
+  infrastructure) and denies unless the caller is that session's
+  `effective_owner`. Fails closed: an unresolvable `run_id` (cache miss) or
+  a walled `caller_user: None` connection is denied, never admitted by
+  default.
+- **Background-work ownership.** `goal::Goal` and `looping::LoopState` both
+  carry the same `owner_user_id`/`scope_id` pair, stamped once at creation
+  from `scope::current_scope()` (`with_owner_scope`) and preserved across
+  updates (e.g. `GoalStore::commit_field_update`'s status CAS never
+  clobbers it). **Deactivation freeze** (spec §10): `users.update { status:
+  "deactivated" }` freezes background work owned by that user (e.g.
+  `GoalStore::pause_all_owned_by`) — one-way, no auto-resume on
+  reactivation (spec silent on the reverse; recorded as a deliberate P1
+  scope boundary, not an oversight).
+- **Scope is immutable for a session's lifetime** (spec §10).
+  `owner_user_id`/`scope_id` are stamped once, at session creation
+  (`SessionMetadata::stamp_attribution`, the CREATE branch only — reading an
+  EXISTING row, even as its owner, never (re)stamps it;
+  `single_user_fixture_is_byte_identical_after_upgrade` pins this directly).
+  This is also why the curated-memory envelope can stay in the prompt's
+  Stable (cacheable) zone per session (CLAUDE.md §2.18): per-user bytes are
+  per-session stable.
+- **NOT_FOUND over forbidden.** Every addressed-key visibility denial
+  (`sessions.history`, `artifacts.read_text`, `sessions.new` on a foreign
+  key, …) returns the EXACT SAME `RESOURCE_NOT_FOUND` response a genuinely
+  missing key would — never a distinct "forbidden"/"not authorized" shape.
+  Confirming existence to an unauthorized caller is itself a leak;
+  `visibility::not_found_response` is the single byte-identical response
+  every one of these sites returns, and its own test serializes both cases
+  and compares the bytes.
+- **The §11 honesty boundary, restated.** This layer is **privacy-grade
+  isolation** — it protects against ACCIDENTAL cross-user exposure between
+  cooperating users on one server (the stated goal: two users cannot see
+  each other's sessions, memory, artifacts, or live events). It is
+  explicitly **NOT malicious-member-grade**: a member is still trusted code
+  execution inside the same process, sandbox, and filesystem as the owner.
+  The hardening below (member default exec tier `Ask`, an explicit
+  `tools.invoke` allowlist starting at `team_from_template`, `memory_search`
+  denied to members) raises the cost of a hostile member; it does not
+  remove that trust assumption. `role-aware per-tool tool_permissions` was
+  considered and dropped as YAGNI (R10) in favor of this narrower set.
+- **Known gaps (deliberate, recorded, not silently dropped):**
+  1. `stream.running_set_changed` is `Global` in `event_visibility.rs`, not
+     owner-scoped — every member currently sees every OTHER user's active
+     `session_key`s and `run_id`s (no message content). It is the SOLE feed
+     of the member sidebar's running-session indicator
+     (`interfaces/webchat/src/state/sessions.rs::SessionMap::server_running`
+     is documented as purely server-authoritative), so gating it
+     operator-only would silently break every member's OWN sidebar
+     indicator; left unfixed pending a real fix — per-connection payload
+     projection, which needs a payload-rewrite step the delivery loop's
+     pass/fail-only `should_forward` doesn't have. See
+     `event_visibility.rs`'s module doc.
+  2. `sessions.set_topic` and `chat.context_estimate` take a
+     caller-supplied `session_key` with no ownership check — a
+     title-rename side effect and a token-count-only read, respectively;
+     reviewed and deferred as lower severity.
+  3. `chat.send`'s Simulated-execution fallback path (used only when no LLM
+     provider is configured — `AgentRunManager::start_run`, which has no
+     `SessionStore` dependency) is not covered by the real-provider path's
+     `existing_session_is_visible` check.
+  4. `slash_command.rs::execute_direct_tool` (the `/toolname` L0 fast path)
+     bypasses `ScopedToolService` entirely, with no allowlist — but it IS
+     tier-aware (routes through `resolve_exec_tier`), so the gap only opens
+     if a member explicitly escalates their own session to `Auto`/`Full`
+     (the member default is `Ask`). Pre-existing, not introduced by P1;
+     recommended as a follow-up task.
+  5. `teams.chat.cancel` is addressed by `run_id` against the process-global
+     `BackgroundAgentTracker`, which has no run → team mapping to gate on.
+     Left open on the §4.11 reasoning that a run id is an unguessable
+     capability the caller can only have received from their own
+     `teams.chat.send` response or a `team.<id>.fanout` event they were
+     already entitled to. **The condition that invalidates this**: adding any
+     `teams.*` ENUMERATION face that hands run ids out across users. Recorded
+     at the handler.
+  6. The legacy `proj-*` (project-directory feature) write side of
+     `OPEN_LOOPS.md` is pinned `project_scoped = false` on both read and
+     write for a `proj-` session — widening it needs a persisted project
+     root on the session-close path that doesn't exist yet. Personal scope
+     still applies on top; this is a narrower, pre-existing gap, not a P1
+     regression.
+- **Explicitly out of scope for P1**: pushing routing/notifications TO
+  members (spec §8, P3).
+
 ### Network boundary = reachability
 
 - **Default — loopback only.** `aleph-server` binds `127.0.0.1`
@@ -1354,9 +1652,11 @@ from the pre-revert build:
 - No user-editable floor under `Full` in hermes' sense (an `approvals.deny` glob
   that survives yolo). `[policies.tool_permissions]` `deny` overrides already
   cover ~80% of it, since an explicit entry beats the tier.
-- The Panel's approval card has no reason input yet — `/deny <reason>` works
-  from channels and the RPC accepts `reason`, but the Panel UI sends a bare
-  deny (UI-only gap, `interfaces/webchat`).
+- ~~The Panel's approval card has no reason input yet~~ **closed**: the card
+  now has a "Deny with reason…" entry (inline input, Enter/confirm submits
+  `reason` on `exec.approval.resolve`), matching kimi-cli's approval option 4.
+  The TUI overlay still sends a bare deny — it resolves by decision index and
+  has no free-text input mode.
 
 ---
 

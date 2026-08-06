@@ -1153,12 +1153,15 @@ impl DreamDaemon {
                 };
                 let mut report = pipeline.run(ctx).await?;
 
-                // Per-project namespace maintenance (gated). The base agent ran
-                // the full pipeline above; project namespaces created by
-                // `note_manage` under `{base}__proj-*` get the note-maintenance
-                // subset so their notes are linted/consolidated/synthesised too.
-                // The global-only stages (feedback floor, skill lifecycle, daily
-                // digest) are excluded — those stay cross-project.
+// Per-namespace maintenance (gated). The base agent ran the
+                // full pipeline above; scoped namespaces created under
+                // `{base}__proj-*` (legacy project-directory feature) AND
+                // `{base}__u-*` (P1 personal scope) get the note-maintenance
+                // subset so their notes are linted/consolidated/synthesised
+                // too (`list_scoped_agent_ids` scans every sibling suffix
+                // family — see project_scope.rs). The global-only stages
+                // (feedback floor, skill lifecycle, daily digest) are
+                // excluded — those stay cross-namespace.
                 //
                 // Each namespace governs *itself*: it folds its own event log
                 // into its own gate, personality and best-health checkpoint, and

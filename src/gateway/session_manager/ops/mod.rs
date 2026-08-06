@@ -51,6 +51,10 @@ fn map_session_metadata(row: &rusqlite::Row) -> Result<SessionMetadata, rusqlite
         // Column added later; `.ok()` + default keeps a pre-migration row (or a
         // NULL) reading as 0.0 rather than panicking.
         estimated_cost_usd: row.get::<_, Option<f64>>(18).ok().flatten().unwrap_or(0.0),
+        // P1 columns; `.ok()` keeps a pre-migration row reading as `None`
+        // (legacy, adoption-by-absence) rather than panicking.
+        owner_user_id: row.get(19).ok(),
+        scope_id: row.get(20).ok(),
         ..Default::default()
     })
 }

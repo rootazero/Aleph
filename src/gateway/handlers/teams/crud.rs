@@ -11,6 +11,7 @@ use crate::teams::{NewTeam, NewTeamMember, TeamStore};
 use crate::gateway::event_bus::GatewayEventBus;
 use crate::gateway::events::{ChangeKind, GatewayEventFrame};
 use crate::gateway::handlers::parse_params;
+use crate::gateway::handlers::teams::visibility::gate_team;
 use crate::gateway::protocol::{
     JsonRpcRequest, JsonRpcResponse, INTERNAL_ERROR, INVALID_PARAMS, RESOURCE_NOT_FOUND,
 };
@@ -67,22 +68,9 @@ pub async fn handle_get(
         Err(resp) => return resp,
     };
 
-    let team = match store.get_team(&params.team_id).await {
-        Ok(Some(t)) => t,
-        Ok(None) => {
-            return JsonRpcResponse::error(
-                request.id,
-                RESOURCE_NOT_FOUND,
-                format!("Team '{}' not found", params.team_id),
-            )
-        }
-        Err(e) => {
-            return JsonRpcResponse::error(
-                request.id,
-                INTERNAL_ERROR,
-                format!("Failed to get team '{}': {}", params.team_id, e),
-            )
-        }
+    let team = match gate_team(request.id.clone(), &store, &params.team_id).await {
+        Ok(t) => t,
+        Err(resp) => return resp,
     };
 
     let members = match store.get_members(&params.team_id).await {
@@ -132,6 +120,10 @@ pub async fn handle_disband(
         Err(resp) => return resp,
     };
 
+    if let Err(resp) = gate_team(request.id.clone(), &store, &params.team_id).await {
+        return resp;
+    }
+
     match store.disband_team(&params.team_id).await {
         Ok(()) => {
             // Victory-claim trigger, identical to the `team_disband` tool arm.
@@ -174,6 +166,14 @@ pub async fn handle_delete(
         Err(resp) => return resp,
     };
     let team_id = params.team_id;
+
+    // 0) Ownership gate BEFORE the cascade: `delete_team` is itself gated by the
+    //    scoped store, but the cascade below reaches four other databases the
+    //    team store cannot see, so a denial has to stop here rather than rely
+    //    on step 1 erroring out.
+    if let Err(resp) = gate_team(request.id.clone(), &store, &team_id).await {
+        return resp;
+    }
 
     // 1) Authoritative gate + remove team row (disbanded check inside delete_team).
     //    Fail immediately on error — do not cascade to subordinate stores.
@@ -231,6 +231,9 @@ pub async fn handle_delete_basic(
         Ok(p) => p,
         Err(resp) => return resp,
     };
+    if let Err(resp) = gate_team(request.id.clone(), &store, &params.team_id).await {
+        return resp;
+    }
     match store.delete_team(&params.team_id).await {
         Ok(()) => {
             notify_team_changed(&event_bus, &params.team_id, ChangeKind::Deleted);
@@ -400,6 +403,9 @@ pub async fn handle_rename(
             INVALID_PARAMS,
             "team_id and a non-blank name are required".to_string(),
         );
+    }
+    if let Err(resp) = gate_team(request.id.clone(), &store, &params.team_id).await {
+        return resp;
     }
     match store.rename_team(&params.team_id, name).await {
         Ok(()) => {

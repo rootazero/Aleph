@@ -7,6 +7,11 @@ pub struct DeviceUpsertData<'a> {
     pub fingerprint: &'a str,
     pub role: &'a str,
     pub scopes: &'a [String],
+    /// User to bind this device to. `None` leaves an existing binding
+    /// untouched on re-pair (see `SecurityStore::upsert_device`'s
+    /// `COALESCE(excluded.user_id, devices.user_id)` — mine-4 sibling of the
+    /// `device_type`/`revoked_at` ON CONFLICT invariants documented there).
+    pub user_id: Option<&'a str>,
 }
 
 /// Device row from database

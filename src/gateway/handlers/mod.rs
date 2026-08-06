@@ -118,6 +118,7 @@ pub mod tools_cancel;
 pub mod tools_invoke;
 pub mod tools_visibility;
 pub mod trace_replay;
+pub mod users;
 pub mod version;
 pub mod voice;
 pub mod wizard;
@@ -126,6 +127,8 @@ pub mod workspace;
 pub use config::{handle_get_full_config, handle_patch_config};
 pub use identity::{IdentityHandlerContext, SharedIdentityCtx};
 
+use crate::gateway::event_bus::GatewayEventBus;
+use crate::gateway::security::store::SecurityStore;
 use crate::gateway::security::SharedTokenManager;
 use crate::sync_primitives::{Arc, AsyncRwLock};
 use std::collections::HashMap;
@@ -399,13 +402,20 @@ impl HandlerRegistry {
             )
         });
 
-        // Session compact — no SessionStore needed: manual compaction operates
-        // on the session *event log* (the source the prompt is rebuilt from),
-        // resolved from the process-wide handles, not on the `messages` read
-        // projection. So it is registered for real here rather than as a
-        // "wire in Gateway startup" placeholder.
+        // Session compact (requires SessionStore — placeholder). Manual
+        // compaction itself still operates on the session *event log* (the
+        // source the prompt is rebuilt from) through process-wide handles,
+        // not the `messages` read projection — but the RPC now also needs
+        // the store for the P1 visibility gate (the response discloses the
+        // addressed session's real conversation summary), so this can no
+        // longer be registered for real without one. See `builder/handlers/
+        // session.rs::register_session_handlers` for the wired version.
         registry.register("session.compact", |req| async move {
-            session::handle_compact_db(req).await
+            JsonRpcResponse::error(
+                req.id,
+                INTERNAL_ERROR,
+                "session.compact requires SessionStore — wire in Gateway startup".to_string(),
+            )
         });
 
         // Session truncate (requires SessionStore — placeholder)
@@ -528,6 +538,48 @@ impl HandlerRegistry {
             registry.register("projects.get", move |req| {
                 let s = s.clone();
                 async move { projects::handle_get(req, s).await }
+            });
+        }
+
+        // User (principal) catalogue — backed by `SecurityStore`'s `users`
+        // table (Task 1 of the P0 identity foundation). The store here is a
+        // fresh in-memory instance (owner auto-bootstrapped by
+        // `SecurityStore::in_memory()`); mirrors the `projects.*` default
+        // above — this keeps `users.*` usable in test harnesses that boot via
+        // `HandlerRegistry::new()` directly. Real wiring happens at boot with
+        // the SAME `SecurityStore` Arc used for connect auth, and the real
+        // connection map / event bus for the deactivation device kick (see
+        // `commands/start/mod.rs`).
+        {
+            let default_store = Arc::new(
+                SecurityStore::in_memory()
+                    .expect("in-memory SecurityStore for users.* default registration"),
+            );
+            let default_kick = users::UserDeactivationKick {
+                connections: Arc::new(AsyncRwLock::new(HashMap::new())),
+                event_bus: Arc::new(GatewayEventBus::new()),
+            };
+            let s = default_store.clone();
+            registry.register("users.me", move |req| {
+                let s = s.clone();
+                async move { users::handle_me(req, s).await }
+            });
+            let s = default_store.clone();
+            registry.register("users.list", move |req| {
+                let s = s.clone();
+                async move { users::handle_list(req, s).await }
+            });
+            let s = default_store.clone();
+            registry.register("users.create", move |req| {
+                let s = s.clone();
+                async move { users::handle_create(req, s).await }
+            });
+            let s = default_store;
+            let kick = default_kick;
+            registry.register("users.update", move |req| {
+                let s = s.clone();
+                let kick = kick.clone();
+                async move { users::handle_update(req, s, kick).await }
             });
         }
 
@@ -706,10 +758,16 @@ impl HandlerRegistry {
         // disabled or simulated mode), it simply returns an error.
         registry.register("dreaming.run_now", dreaming::handle_run_now);
 
-        // Background sub-agent tree snapshot — read-only, stateless (reads the
-        // process-global BackgroundAgentTracker). Backs the panel's cold-start;
-        // live deltas arrive via the `run.subagent_tree` relay.
-        registry.register("subagent.tree", subagent::handle_tree);
+        // Background sub-agent tree snapshot — reads the process-global
+        // BackgroundAgentTracker (no per-boot state), but P1 (spec §11-1c)
+        // added a SessionStore dependency for per-user visibility filtering,
+        // so this is now a phase-1 placeholder like the others below;
+        // `register_artifact_handlers`-adjacent wiring overrides it at boot
+        // phase 2 once the store exists. Backs the panel's cold-start; live
+        // deltas arrive via the `run.subagent_tree` relay.
+        registry.register("subagent.tree", |req| async move {
+            service_unavailable(req, "subagent.tree requires SessionStore (boot phase 2)")
+        });
 
         // Insights introspection handler — needs MemoryBackend; the real
         // handler is wired in Gateway startup (register_memory_handlers).

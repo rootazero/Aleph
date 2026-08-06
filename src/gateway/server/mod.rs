@@ -43,10 +43,18 @@ pub struct ConnectionState {
     pub subscriptions: Vec<String>,
     /// Connection metadata
     pub metadata: HashMap<String, String>,
-    /// Event-scope permissions. LAN-trust treats every connection as the
-    /// implicit operator, so the connect handshake stamps the `"*"`
-    /// wildcard here; `EventScopeGuard` then delivers guarded topics
-    /// (approval banners, config.changed) to every connected client.
+    /// Event-scope permissions, stamped at the `connect` handshake from the
+    /// **resolved role** via
+    /// [`event_scope::scope_for_role`](crate::gateway::event_scope::scope_for_role)
+    /// and re-stamped in place by `handlers::users::restamp_live_connections`
+    /// when that role changes. Operator ⇒ the `"*"` wildcard; member and walled
+    /// ⇒ empty.
+    ///
+    /// Read by exactly one consumer, [`EventScopeGuard::can_receive`] on the
+    /// per-event delivery path, and that guard is *default-allow*: an empty
+    /// scope still receives every unguarded topic (chat, session, `agent.run.*`)
+    /// and only loses the admin-guarded prefixes — `approval.*`,
+    /// `surface.approval`, `config.changed`, `pairing.*`, `guest.*`.
     pub permissions: Vec<String>,
     /// Resolved client IP (the trusted-proxy-forwarded client behind a
     /// reverse proxy, else the raw socket peer). The per-IP connection cap
@@ -71,6 +79,9 @@ pub struct ConnectionState {
     /// record. Read by [`invalidate_device_sessions`] so a per-device revoke can
     /// strip authority from exactly the right sockets.
     pub device_id: Option<String>,
+    /// Authenticated user behind this connection (`users.user_id`), resolved at
+    /// `connect` together with `caller_role`. `None` for walled connections.
+    pub caller_user: Option<String>,
 }
 
 impl ConnectionState {
@@ -92,6 +103,7 @@ impl ConnectionState {
                 "guest".to_string()
             },
             device_id: None,
+            caller_user: None,
         }
     }
 }
@@ -119,6 +131,10 @@ pub async fn invalidate_device_sessions(
     for state in conns.values_mut() {
         if state.device_id.as_deref() == Some(device_id) {
             state.caller_role = "guest".to_string();
+            // caller_user is resolved together with caller_role (see its doc
+            // comment) — a downgrade to guest must clear it too, or a walled
+            // connection would keep reading a stale authenticated user.
+            state.caller_user = None;
             state.permissions.clear();
             hit += 1;
         }
@@ -203,6 +219,17 @@ pub struct GatewaySharedState {
     /// of connected `role:node` peers; populated by the connect handler.
     pub node_registry: Arc<crate::cluster::NodeRegistry>,
     pub exec_approval_manager: Option<Arc<crate::exec::manager::ExecApprovalManager>>,
+    /// Session store handle for the owner-scoped WS event filter (P1 data
+    /// isolation, spec §5.4 — `event_visibility::EventVisibilityIndex`).
+    /// `None` in probe/legacy wiring: the 4th filter term is then skipped
+    /// (zero-change guarantee), matching every other `Option<Arc<...>>`
+    /// dependency in this struct.
+    pub session_store: Option<Arc<dyn crate::gateway::session_store::SessionStore>>,
+    /// Process-shared run→session / session→owner cache backing the
+    /// owner-scoped WS event filter. Always constructed (unlike
+    /// `session_store`) — the index itself is cheap and harmless to warm
+    /// even when no store is wired to consult it.
+    pub event_visibility: Arc<crate::gateway::event_visibility::EventVisibilityIndex>,
 }
 
 /// Configuration for the Gateway server
@@ -391,6 +418,11 @@ pub struct GatewayServer {
     /// [`GatewayServer::set_audit_log`] and cloned into `GatewaySharedState`.
     /// `None` in test/probe constructors ⇒ auth events go unrecorded.
     audit_log: Option<crate::security::audit::SecurityAuditLog>,
+    /// See [`GatewaySharedState::session_store`]. Installed by
+    /// [`GatewayServer::set_session_store`].
+    session_store: Option<Arc<dyn crate::gateway::session_store::SessionStore>>,
+    /// See [`GatewaySharedState::event_visibility`]. Always constructed.
+    event_visibility: Arc<crate::gateway::event_visibility::EventVisibilityIndex>,
 }
 
 impl GatewayServer {
@@ -442,6 +474,10 @@ impl GatewayServer {
             node_registry: Arc::new(crate::cluster::NodeRegistry::new()),
             exec_approval_manager: None,
             audit_log: None,
+            session_store: None,
+            event_visibility: Arc::new(
+                crate::gateway::event_visibility::EventVisibilityIndex::new(),
+            ),
         }
     }
 
@@ -494,6 +530,10 @@ impl GatewayServer {
             node_registry: Arc::new(crate::cluster::NodeRegistry::new()),
             exec_approval_manager: None,
             audit_log: None,
+            session_store: None,
+            event_visibility: Arc::new(
+                crate::gateway::event_visibility::EventVisibilityIndex::new(),
+            ),
         }
     }
 
@@ -577,6 +617,19 @@ impl GatewayServer {
         self.audit_log = Some(log);
     }
 
+    /// Install the `SessionStore` so the WS event-delivery loop can resolve
+    /// session ownership for the owner-scoped event filter (P1 data
+    /// isolation, spec §5.4 — `event_visibility::EventVisibilityIndex`).
+    /// `None` (unset) skips that 4th filter term entirely, matching pre-P1
+    /// delivery behavior — the same zero-change guarantee every other
+    /// `Option<Arc<...>>` dependency on this struct provides.
+    pub fn set_session_store(
+        &mut self,
+        store: Arc<dyn crate::gateway::session_store::SessionStore>,
+    ) {
+        self.session_store = Some(store);
+    }
+
     /// Get the current number of active connections
     pub async fn connection_count(&self) -> usize {
         self.connections.read().await.len()
@@ -635,6 +688,8 @@ impl GatewayServer {
             }),
             node_registry: self.node_registry.clone(),
             exec_approval_manager: self.exec_approval_manager.clone(),
+            session_store: self.session_store.clone(),
+            event_visibility: self.event_visibility.clone(),
         });
 
         // Strip query strings from the Panel/control-plane fallback before any
@@ -1015,6 +1070,88 @@ mod tests {
         assert!(parsed.is_error());
     }
 
+    /// Multi-user role gate (spec §4.6), integration-level: a `"member"`
+    /// caller must be refused at the `process_request` chokepoint before
+    /// registry dispatch, on a real admin-family method
+    /// (`config.schema` — one of the `config.` prefix's registered
+    /// built-ins). An `"operator"` caller must reach the real handler and
+    /// get a normal success response — proving the gate does not
+    /// collaterally block the role it is supposed to pass.
+    #[tokio::test]
+    async fn member_is_refused_admin_methods_at_the_chokepoint() {
+        let handlers_arc = Arc::new(HandlerRegistry::new());
+        let chain = MiddlewareChain::new(
+            handlers_arc.clone(),
+            Arc::new(RateLimiter::new(RateLimitConfig::default())),
+        );
+        let req = r#"{"jsonrpc":"2.0","id":1,"method":"config.schema","params":{}}"#;
+
+        let resp_member = crate::gateway::caller_identity::CALLER_ROLE
+            .scope(
+                Some("member".to_string()),
+                handler::process_request(req, &chain),
+            )
+            .await;
+        let parsed_member: JsonRpcResponse = serde_json::from_str(&resp_member).unwrap();
+        assert!(
+            parsed_member.is_error(),
+            "member must be refused: {resp_member}"
+        );
+        assert_eq!(
+            parsed_member.error.unwrap().code,
+            crate::gateway::protocol::AUTH_REQUIRED,
+            "refusal must use the same error code as the login wall"
+        );
+
+        let resp_operator = crate::gateway::caller_identity::CALLER_ROLE
+            .scope(
+                Some("operator".to_string()),
+                handler::process_request(req, &chain),
+            )
+            .await;
+        let parsed_operator: JsonRpcResponse = serde_json::from_str(&resp_operator).unwrap();
+        assert!(
+            parsed_operator.is_success(),
+            "operator must pass the gate and reach the real handler: {resp_operator}"
+        );
+
+        // A caller with no CALLER_ROLE scope at all (internal/cron) is
+        // trusted by the same predicate as operator — `current_caller_role()`
+        // returns `None` outside a scope, and the gate only refuses `Some("member")`.
+        let resp_internal = handler::process_request(req, &chain).await;
+        let parsed_internal: JsonRpcResponse = serde_json::from_str(&resp_internal).unwrap();
+        assert!(
+            parsed_internal.is_success(),
+            "internal/cron callers (no CALLER_ROLE scope) must pass the gate: {resp_internal}"
+        );
+    }
+
+    /// Over-gating guard, sibling of `member_is_refused_admin_methods_at_the_chokepoint`:
+    /// a `"member"` caller hitting a real, registered, member-open method
+    /// (`health` — not in `method_admin::ADMIN_PREFIXES`) must reach the
+    /// real handler and succeed, not be collaterally refused by the gate.
+    #[tokio::test]
+    async fn member_passes_a_member_open_method_at_the_chokepoint() {
+        let handlers_arc = Arc::new(HandlerRegistry::new());
+        let chain = MiddlewareChain::new(
+            handlers_arc.clone(),
+            Arc::new(RateLimiter::new(RateLimitConfig::default())),
+        );
+        let req = r#"{"jsonrpc":"2.0","id":1,"method":"health","params":{}}"#;
+
+        let resp_member = crate::gateway::caller_identity::CALLER_ROLE
+            .scope(
+                Some("member".to_string()),
+                handler::process_request(req, &chain),
+            )
+            .await;
+        let parsed_member: JsonRpcResponse = serde_json::from_str(&resp_member).unwrap();
+        assert!(
+            parsed_member.is_success(),
+            "member must reach a member-open method: {resp_member}"
+        );
+    }
+
     #[test]
     fn test_gateway_config_default() {
         let config = GatewayConfig::default();
@@ -1239,6 +1376,7 @@ mod device_invalidation_tests {
     fn authorized(conn: &str, device_id: Option<&str>) -> (String, ConnectionState) {
         let mut cs = ConnectionState::new("10.0.0.9".parse().unwrap());
         cs.caller_role = "operator".to_string();
+        cs.caller_user = Some(format!("u-{conn}"));
         cs.permissions = vec!["*".to_string()];
         cs.device_id = device_id.map(String::from);
         (conn.to_string(), cs)
@@ -1264,12 +1402,22 @@ mod device_invalidation_tests {
         for hit in ["a", "b"] {
             let s = &map[hit];
             assert_eq!(s.caller_role, "guest", "{hit} must fall behind the wall");
+            assert_eq!(
+                s.caller_user, None,
+                "{hit} must lose its authenticated user alongside the role — \
+                 caller_user is resolved together with caller_role"
+            );
             assert!(s.permissions.is_empty(), "{hit} must lose event scope");
         }
         for spared in ["c", "d"] {
             assert_eq!(
                 map[spared].caller_role, "operator",
                 "{spared} must be untouched by a per-device revoke"
+            );
+            assert_eq!(
+                map[spared].caller_user,
+                Some(format!("u-{spared}")),
+                "{spared} must keep its authenticated user"
             );
         }
     }

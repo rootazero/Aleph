@@ -32,7 +32,7 @@ use crate::routing::session_key::SessionKey;
 use crate::sync_primitives::Arc;
 use crate::verification::stop_hooks::{execute_stop_hooks_arc, StopHookContext};
 
-type SessionManager = Option<Arc<dyn crate::gateway::session_store::SessionStore>>;
+pub(super) type SessionManager = Option<Arc<dyn crate::gateway::session_store::SessionStore>>;
 
 /// Wall-clock now (Unix epoch ms); 0 only if the clock predates the epoch.
 pub(super) fn now_ms() -> u64 {
@@ -46,7 +46,12 @@ pub(super) fn now_ms() -> u64 {
 /// budget goes unenforced this round (the iteration/deadline caps still bind).
 /// With enrolled delegation members (tree budget v1) this is the TREE total:
 /// own session plus each member's spend since it joined.
-async fn live_tokens(
+///
+/// Shared with the wake service (`goal_wait::claim_and_spawn`): "compute the
+/// token total for a claim" has exactly one answer, and the short-circuit above
+/// is half of it — a wake that called `tree_tokens` directly read session state
+/// for goals that have no budget to enforce.
+pub(super) async fn live_tokens(
     session_manager: &SessionManager,
     session_key: &SessionKey,
     goal: &crate::goal::Goal,
@@ -67,6 +72,71 @@ pub(super) async fn origin_of(
         .origin_route(session_key)
         .await
         .map(|(ch, conv)| (reg, ch, conv))
+}
+
+/// [`origin_of`]'s sibling for the one place that must resolve an origin
+/// WITHOUT a live agent: `spawn_continuation_run`'s agent-miss race, where the
+/// agent was deleted during the delay and `registry.get` comes back empty. The
+/// session's origin metadata lives in the session store, not the agent, so a
+/// bare store handle is enough — `AgentInstance::origin_route` only ever reads
+/// `self.session_store` anyway, and `session_manager` here is a clone of that
+/// SAME shared store (both sourced from `start`'s one `session_store`, see
+/// `AgentInstance::new`). Delegates to `origin_route_from_store` so this is
+/// not a second, driftable copy of the lookup.
+pub(super) async fn origin_of_via_store(
+    session_manager: Option<&Arc<dyn crate::gateway::session_store::SessionStore>>,
+    session_key: &SessionKey,
+) -> Option<OriginRoute> {
+    let reg = crate::gateway::event_emitter::origin_fanout::channel_registry()?;
+    let sm = session_manager?;
+    crate::gateway::agent_instance::origin_route_from_store(sm, session_key)
+        .await
+        .map(|(ch, conv)| (reg, ch, conv))
+}
+
+/// Push a goal's terminal/stop note to the session's origin channel (R5), for
+/// every site that must notify WITHOUT already holding a live agent. Returns
+/// whether the notice was delivered.
+///
+/// The `parse key → registry.get → origin → notify` ladder had grown three
+/// copies at three different completeness levels — no store fallback here, a
+/// store fallback and two named `warn!` floors there, store-only and one floor
+/// in `execute`. Each was locally correct and the divergence WAS the bug: the
+/// wake-side `Exhausted` branch dropped its push entirely whenever
+/// `registry.get` missed, and that miss is a REAL case rather than a deletion
+/// race — `rearm_parked_goals` reaches it via `claim_and_spawn` at boot, before
+/// agent loading is guaranteed complete.
+///
+/// Every failure floor carries the note, because on these paths the note is the
+/// only surviving record of why the pursuit ended, and an unparseable session id
+/// and a missing origin are different operational problems.
+///
+/// Sites that DO hold a live agent stay on plain `origin_of` + `notify_origin`:
+/// re-resolving through a registry lookup there would be strictly worse.
+pub(super) async fn notify_goal_stop(
+    registry: &Arc<crate::gateway::agent_instance::AgentRegistry>,
+    session_manager: Option<&Arc<dyn crate::gateway::session_store::SessionStore>>,
+    session: &str,
+    note: &str,
+) -> bool {
+    let Some(key) = SessionKey::parse(session) else {
+        warn!(session = %session, note = %note,
+            "goal pursuit: unparseable session key; the stop notice has no origin to reach");
+        return false;
+    };
+    // The origin lives in the session STORE, not the agent, so a bare store
+    // handle is enough when the agent is absent.
+    let origin = match registry.get(key.agent_id()).await {
+        Some(agent) => origin_of(&agent, &key).await,
+        None => origin_of_via_store(session_manager, &key).await,
+    };
+    let Some(origin) = origin else {
+        warn!(session = %session, agent = %key.agent_id(), note = %note,
+            "goal pursuit: no origin resolvable (agent unregistered, no store-bound origin); the stop notice was not delivered");
+        return false;
+    };
+    notify_origin(Some(&origin), format!("⏹ {note}")).await;
+    true
 }
 
 /// Post-run continuation hook for the session's standing goal. Fires after every
@@ -178,6 +248,7 @@ pub(super) async fn post_run(
                 policy_meta.clone(),
                 workspace.map(Path::to_path_buf),
                 deps.event_bus.clone(),
+                session_manager.clone(),
                 Some(delay_ms),
                 ContinuationKind::Goal { wake_ms },
             );
@@ -204,6 +275,7 @@ pub(super) async fn post_run(
             // the raw live total here is safe.
             arbitrate_gate(
                 deps,
+                session_manager,
                 session_key,
                 &session,
                 agent,
@@ -268,6 +340,7 @@ fn gate_veto(result: &crate::verification::stop_hooks::StopHookAggregateResult) 
 #[allow(clippy::too_many_arguments)]
 async fn arbitrate_gate(
     deps: &ContinuationDeps,
+    session_manager: &SessionManager,
     session_key: &SessionKey,
     session: &str,
     agent: &Arc<AgentInstance>,
@@ -374,6 +447,7 @@ async fn arbitrate_gate(
                 policy_meta.clone(),
                 workspace.map(Path::to_path_buf),
                 deps.event_bus.clone(),
+                session_manager.clone(),
                 Some(0),
                 ContinuationKind::Goal { wake_ms },
             );
@@ -404,42 +478,116 @@ pub(super) fn clear_goal_welded_strategy(session: &str) {
     }
 }
 
-/// A continuation run failed (non-cancellation, non-busy): transition the goal to
-/// `Blocked` with the error and notify the origin channel. Without this a
-/// transient failure leaves the goal a stuck `Active` with no in-flight run —
-/// a silent stall — and `Blocked` goals are invisible in the prompt, so the
-/// channel notice is the user's only signal that unattended pursuit halted.
+/// Default retry window when a transient failure carries no `Retry-After`.
+const TRANSIENT_PARK_FALLBACK_MS: u64 = 300_000;
+
+/// Ceiling on a single transient-failure park, even when the provider's own
+/// `Retry-After` asks for more. Mirrors `providers::failover::MAX_COOLDOWN`
+/// (10 minutes, `src/providers/failover/mod.rs`) — the retry machinery's own
+/// answer to "how long is it sane to honor a server-stated rate-limit/cooldown
+/// hint" (`Decision::RateLimited` clamps the identical kind of hint the same
+/// way: `hint.unwrap_or(DEFAULT_MODEL_COOLDOWN).min(MAX_COOLDOWN)` in
+/// `src/providers/failover/provider.rs`) — rather than inventing a second
+/// number for the same question. Kept as a local constant instead of an
+/// import: the value is shared because the underlying question is the same,
+/// not because the goal-park path should take a dependency on the failover
+/// module's internal circuit-breaker tuning. Must stay `>=
+/// TRANSIENT_PARK_FALLBACK_MS`, or the no-hint default would itself get
+/// silently clamped down.
+const TRANSIENT_PARK_MAX_MS: u64 = 600_000;
+
+/// A continuation run failed (non-cancellation, non-busy). Route it by what
+/// KIND of failure it was — the classification is not ours to invent:
+/// [`ExecutionError::receipt_kind`] is already the single source three user
+/// surfaces read, and its own doc records that a rate-limit or network
+/// signature at this layer means every provider and model in the chain was
+/// tried, so the failure is genuinely transient.
+///
+/// - Transient (`RateLimited` / `Unreachable`) → PARK on the wait barrier and
+///   let the wake pipeline resume it — specifically
+///   `GoalWakeService::sweep_once`, which is the one waker that covers a timer
+///   barrier written OUTSIDE `post_run` (this is the failure arm; `post_run`
+///   only runs on the success arm, and the park clears the failed run's pending
+///   marker, so no in-flight timer survives it). Blocking here used to be a
+///   verdict on a 429: it made the goal invisible in the prompt, deleted the
+///   welded plan, and pushed "pursuit halted" for something the codebase's own
+///   classifier labels "retry is worthwhile, soon". The wait itself is bounded
+///   independently of everything else — floored at 1s and capped at
+///   [`TRANSIENT_PARK_MAX_MS`] by [`crate::goal::pursuit::bound_transient_park_delay_ms`]
+///   — because neither of the other two backstops covers a single park's
+///   DURATION: the iteration cap only bounds how many times this can repeat
+///   (the failed run already spent an iteration at claim time, the wake
+///   spends another), and the wall-clock deadline only rejects a wake that
+///   lands past it (`fires_out_of_bounds`, and only when a deadline is set at
+///   all) — neither stops one hop from parking for however long a provider's
+///   `Retry-After` claims.
+/// - Everything else → `Blocked` with the error and an origin notice, exactly
+///   as before. Without it a transient failure leaves the goal a stuck
+///   `Active` with no in-flight run — a silent stall — and `Blocked` goals are
+///   invisible in the prompt, so the channel notice is the user's only signal.
 pub(super) async fn block_goal_on_failure(
     session: &str,
     error: &ExecutionError,
     origin: Option<&OriginRoute>,
 ) {
-    let reason: String = format!("{error}").chars().take(300).collect();
-    if let Some(store) = crate::goal::global() {
-        let note = format!(
-            "Autonomous pursuit was halted by an error and blocked for your \
-             guidance: {reason}. Review progress, then clear or re-set the \
-             goal to continue."
+    let Some(store) = crate::goal::global() else {
+        return;
+    };
+    let raw = format!("{error}");
+    let kind = error.receipt_kind();
+    let now = now_ms();
+
+    if matches!(
+        kind,
+        crate::gateway::i18n::ReceiptKind::RateLimited
+            | crate::gateway::i18n::ReceiptKind::Unreachable
+    ) {
+        let hint = crate::providers::llm_retry::extract_retry_after_str(&raw);
+        let delay_ms = crate::goal::pursuit::bound_transient_park_delay_ms(
+            hint,
+            TRANSIENT_PARK_FALLBACK_MS,
+            TRANSIENT_PARK_MAX_MS,
         );
-        // Atomic: only blocks a goal still being pursued — never clobbers one the
-        // failed run had already marked complete/blocked, nor one the user
-        // cleared while the failure landed.
-        match store.block_if_active(session, &note, now_ms()) {
+        let note = crate::goal::pursuit::transient_park_note(kind.code(), delay_ms);
+        match store.park_if_active(session, now.saturating_add(delay_ms), &note, now) {
             Ok(true) => {
-                clear_goal_welded_strategy(session);
-                // Notify ONLY when a goal was actually blocked: when the failed
-                // run had already terminated its own goal (or the user cleared
-                // it), a "pursuit halted" push would be a false alarm.
-                notify_origin(
-                    origin,
-                    format!("⚠️ Autonomous pursuit of your standing goal halted: {reason}"),
-                )
-                .await;
+                // Deliberately NOT clearing the welded strategy: a provider
+                // outage did not invalidate the plan.
+                info!(session = %session, code = kind.code(), delay_ms,
+                    "goal pursuit: transient provider failure; parked for retry");
+                notify_origin(origin, format!("⏸ {note}")).await;
             }
-            Ok(false) => {} // nothing left to block — stay silent.
+            Ok(false) => {} // nothing active to park — stay silent.
             Err(e) => warn!(error = %e, session = %session,
-                "goal pursuit: failed to persist failure block"),
+                "goal pursuit: failed to persist transient park"),
         }
+        return;
+    }
+
+    let reason: String = raw.chars().take(300).collect();
+    let note = format!(
+        "Autonomous pursuit was halted by an error and blocked for your \
+         guidance: {reason}. Review progress, then clear or re-set the \
+         goal to continue."
+    );
+    // Atomic: only blocks a goal still being pursued — never clobbers one the
+    // failed run had already marked complete/blocked, nor one the user
+    // cleared while the failure landed.
+    match store.block_if_active(session, &note, now) {
+        Ok(true) => {
+            clear_goal_welded_strategy(session);
+            // Notify ONLY when a goal was actually blocked: when the failed
+            // run had already terminated its own goal (or the user cleared
+            // it), a "pursuit halted" push would be a false alarm.
+            notify_origin(
+                origin,
+                format!("⚠️ Autonomous pursuit of your standing goal halted: {reason}"),
+            )
+            .await;
+        }
+        Ok(false) => {} // nothing left to block — stay silent.
+        Err(e) => warn!(error = %e, session = %session,
+            "goal pursuit: failed to persist failure block"),
     }
 }
 

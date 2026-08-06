@@ -272,6 +272,49 @@ pub fn get_preset(name: &str) -> Option<&'static ProviderPreset> {
     PRESETS.get(lower.as_str())
 }
 
+/// One provider's model ladder: `base` first, then any rungs of the preset's
+/// curated `fallback_models` chain the base did not list.
+///
+/// The preset chain *is* the single curated ladder per provider, and this
+/// function is its only merge point — every surface consumes the same leaf so
+/// they cannot disagree:
+///
+/// * **failover walk** (`deps_builder/provider_chain.rs`): seeds `base` with
+///   the operator's `models`, giving the in-provider failover ladder.
+/// * **`providers.catalog` picker roster**: seeds `base` with the operator's
+///   `models`, or `[default_model]` when the operator listed none.
+///
+/// Base entries keep priority (they are explicit intent) and the first entry
+/// stays whatever the caller seeded, which is also what `price_hint` reads.
+/// Rungs are appended case-insensitively deduplicated; empty rungs are
+/// dropped so a bring-your-own-model relay (`requires_explicit_model`)
+/// contributes nothing.
+///
+/// The merge is skipped when the operator moved `base_url` off the preset: a
+/// relocated endpoint serves its own inventory (same guard as discovery's
+/// `models_url` override), and the curated ids would be opaque 400s there.
+/// The aux model is deliberately *not* a rung — it is the cheap tier for
+/// background jobs, not a failover candidate for the main loop.
+#[must_use]
+pub fn model_ladder(
+    name: &str,
+    base: Vec<String>,
+    operator_base_url: Option<&str>,
+) -> Vec<String> {
+    let mut models = base;
+    if let Some(preset) = get_preset(name) {
+        let unmoved = operator_base_url.is_none_or(|u| u == preset.base_url);
+        if unmoved {
+            for rung in preset.fallback_models {
+                if !rung.is_empty() && !models.iter().any(|m| m.eq_ignore_ascii_case(rung)) {
+                    models.push((*rung).to_string());
+                }
+            }
+        }
+    }
+    models
+}
+
 /// Get a preset with override support.
 ///
 /// Resolution order:

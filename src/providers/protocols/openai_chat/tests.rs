@@ -921,6 +921,45 @@ fn test_parse_sse_empty_content_skipped() {
 }
 
 #[test]
+fn test_parse_sse_in_band_error_object() {
+    // OpenRouter / DashScope style: HTTP 200 with an `{"error": {...}}`
+    // chunk instead of a non-2xx status. Must surface as exactly one
+    // `ProviderDelta::Error` so the retry/failover path sees the failure.
+    let mut tracker = IndexIdTracker::new();
+    let mut pending = VecDeque::new();
+    let data = r#"{"error":{"message":"Rate limit exceeded","type":"rate_limit_error","code":429}}"#;
+    parse_chat_sse_event(data, &mut tracker, &mut pending);
+
+    assert_eq!(pending.len(), 1);
+    let delta = pending.pop_front().unwrap().unwrap();
+    assert!(matches!(delta, ProviderDelta::Error(msg) if msg == "Rate limit exceeded"));
+}
+
+#[test]
+fn test_parse_sse_in_band_error_string() {
+    let mut tracker = IndexIdTracker::new();
+    let mut pending = VecDeque::new();
+    let data = r#"{"error":"model not found"}"#;
+    parse_chat_sse_event(data, &mut tracker, &mut pending);
+
+    assert_eq!(pending.len(), 1);
+    let delta = pending.pop_front().unwrap().unwrap();
+    assert!(matches!(delta, ProviderDelta::Error(msg) if msg == "model not found"));
+}
+
+#[test]
+fn test_parse_sse_in_band_error_without_message_falls_back() {
+    let mut tracker = IndexIdTracker::new();
+    let mut pending = VecDeque::new();
+    let data = r#"{"error":{"type":"server_error"}}"#;
+    parse_chat_sse_event(data, &mut tracker, &mut pending);
+
+    assert_eq!(pending.len(), 1);
+    let delta = pending.pop_front().unwrap().unwrap();
+    assert!(matches!(delta, ProviderDelta::Error(msg) if msg == "Unknown provider error"));
+}
+
+#[test]
 fn test_parse_sse_reasoning_content_delta() {
     // DeepSeek-R1 / Moonshot-Kimi stream chain-of-thought via `reasoning_content`.
     let mut tracker = IndexIdTracker::new();

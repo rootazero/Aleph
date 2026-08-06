@@ -71,12 +71,19 @@ impl FlowRunTool {
                 max: MAX_FLOW_DEPTH,
             });
         }
+        // P1 data isolation: this dispatch happens synchronously inside the
+        // enclosing harness's task tree (no spawn boundary crossed yet), so
+        // the ambient scope task-local — established around the parent run —
+        // is still live here.
+        let ambient_scope = crate::scope::current_scope();
         let req = FlowRequest {
             flow_id: Some(input.flow_id),
             agent_id: String::new(), // ignored when flow_id is explicit
             input: FlowInput::Prompt(input.input),
             channel: None,
             session_hint: None,
+            owner_user_id: ambient_scope.as_ref().map(|a| a.owner_user_id.clone()),
+            scope_id: ambient_scope.map(|a| a.scope.render()),
             parent_session: Some(ctx.parent_session_key),
             depth: ctx.current_depth.saturating_add(1),
             tool_service: None,

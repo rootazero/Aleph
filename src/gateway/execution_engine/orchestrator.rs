@@ -32,12 +32,20 @@ where
             })?
             .clone();
 
+        // P1 data isolation: this legacy plumbing-only path has no
+        // `RunRequest` metadata to draw on, so it inherits whatever ambient
+        // scope task-local is live in the caller's task tree (`None` for
+        // most current callers — Task 13 integration tests / unattended
+        // internal callers, per the doc above).
+        let ambient_scope = crate::scope::current_scope();
         let req = FlowRequest {
             flow_id: None,
             agent_id,
             input: FlowInput::Prompt(input_text),
             channel,
             session_hint: Some(session_key),
+            owner_user_id: ambient_scope.as_ref().map(|a| a.owner_user_id.clone()),
+            scope_id: ambient_scope.map(|a| a.scope.render()),
             parent_session: None,
             depth: 0,
             tool_service: None,

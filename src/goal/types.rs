@@ -168,6 +168,25 @@ pub struct Goal {
     /// `#[serde(default)]` → old payloads read `None`.
     #[serde(default)]
     pub workspace: Option<String>,
+    /// P1 data isolation: the user id that created this goal, stamped once
+    /// at `goal(action='set')` time from `scope::current_scope()` inside the
+    /// creating run. Owned by the claim pipeline exactly like `workspace` —
+    /// preserved across tool updates by `GoalStore::commit_field_update` and
+    /// re-emitted into hook-less wake continuations (`GoalWakeService`) so a
+    /// wake's `memory.project_scoped` / retrieval reads never fall back to the
+    /// unscoped namespace. `#[serde(default)]` → old (pre-P1) payloads read
+    /// `None` — unscoped, legacy owner semantics, zero behavior change;
+    /// `skip_serializing_if` → a legacy row round-trips byte-identical
+    /// instead of gaining an `"owner_user_id":null` key, matching
+    /// `SessionMetadata`'s two fields exactly.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub owner_user_id: Option<String>,
+    /// The rendered scope boundary (`scope::ScopeId::render()`) paired with
+    /// [`Self::owner_user_id`]. Always set/cleared together with it — see
+    /// [`Self::with_owner_scope`]. `#[serde(default)]` → old payloads read
+    /// `None`; `skip_serializing_if` → they round-trip unchanged.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub scope_id: Option<String>,
 }
 
 /// One delegation session enrolled in a goal's shared token budget.
@@ -222,6 +241,8 @@ impl Goal {
             budget_members: Vec::new(),
             completed_at_ms: None,
             workspace: None,
+            owner_user_id: None,
+            scope_id: None,
         }
     }
 
@@ -293,6 +314,17 @@ impl Goal {
     #[must_use]
     pub fn with_workspace(mut self, workspace: Option<String>) -> Self {
         self.workspace = workspace;
+        self
+    }
+
+    /// Stamp (or clear) the owning scope attribution. Set once at creation
+    /// from `scope::current_scope()`; claim-pipeline-owned thereafter, like
+    /// `workspace` — deliberately does not bump `updated_at_ms` (config, not
+    /// a lifecycle transition).
+    #[must_use]
+    pub fn with_owner_scope(mut self, attr: Option<&crate::scope::ScopeAttribution>) -> Self {
+        self.owner_user_id = attr.map(|a| a.owner_user_id.clone());
+        self.scope_id = attr.map(|a| a.scope.render());
         self
     }
 
@@ -631,6 +663,39 @@ mod tests {
         let budgeted = after.with_budget(Some(100));
         assert_eq!(budgeted.tokens_used(12_345), 0, "no spend at baseline");
         assert!(budgeted.over_budget(12_500), "250 over a 100 budget");
+    }
+
+    #[test]
+    fn new_goal_has_no_owner_scope() {
+        let g = sample();
+        assert_eq!(g.owner_user_id, None);
+        assert_eq!(g.scope_id, None);
+    }
+
+    #[test]
+    fn with_owner_scope_stamps_both_fields_without_bumping_updated_at() {
+        let attr = crate::scope::ScopeAttribution::personal("u-alice");
+        let g = sample();
+        let after = g.clone().with_owner_scope(Some(&attr));
+        assert_eq!(after.owner_user_id.as_deref(), Some("u-alice"));
+        assert_eq!(after.scope_id.as_deref(), Some("personal:u-alice"));
+        assert_eq!(after.updated_at_ms, g.updated_at_ms, "config, no bump");
+        assert_eq!(g.owner_user_id, None, "original unchanged");
+        // None clears both, mirroring with_workspace(None).
+        let cleared = after.with_owner_scope(None);
+        assert_eq!(cleared.owner_user_id, None);
+        assert_eq!(cleared.scope_id, None);
+    }
+
+    #[test]
+    fn old_payload_without_owner_scope_deserializes_none() {
+        let json = r#"{"id":"goal-1","session_id":"s","objective":"o",
+            "status":"active","token_budget":null,"tokens_at_start":0,
+            "pursuit":{"mode":"passive"},"created_at_ms":1,"updated_at_ms":1,
+            "note":null,"continuations_used":0,"gate_outcome":"unchecked"}"#;
+        let g: Goal = serde_json::from_str(json).expect("deserialize old payload");
+        assert_eq!(g.owner_user_id, None);
+        assert_eq!(g.scope_id, None);
     }
 
     #[test]

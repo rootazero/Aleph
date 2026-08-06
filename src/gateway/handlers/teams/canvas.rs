@@ -55,19 +55,18 @@ pub async fn handle_chat_send(
         );
     }
 
-    // Team must exist (404 for an unknown id). We don't bind it here — the
-    // broadcaster re-reads team + roster per dispatch round.
-    match store.get_team(&params.team_id).await {
-        Ok(Some(_)) => {}
-        Ok(None) => {
-            return JsonRpcResponse::error(
-                request.id,
-                RESOURCE_NOT_FOUND,
-                format!("Team '{}' not found", params.team_id),
-            )
-        }
-        Err(e) => return JsonRpcResponse::error(request.id, INTERNAL_ERROR, format!("{e}")),
-    };
+    // Team must exist AND belong to the caller (404 for either — same
+    // response). We don't bind it here: the broadcaster re-reads team + roster
+    // per dispatch round, through the same scoped store.
+    if let Err(resp) = crate::gateway::handlers::teams::visibility::gate_team(
+        request.id.clone(),
+        &store,
+        &params.team_id,
+    )
+    .await
+    {
+        return resp;
+    }
 
     // Group-chat broadcast needs the message store for the shared transcript.
     let Some(msg_store) = msg_store else {
@@ -178,7 +177,18 @@ pub struct ChatCancelParams {
 /// teams.chat.cancel — stop an in-flight `teams.chat.send` fan-out tree.
 ///
 /// `run_id` is the id `teams.chat.send` returned (the tree's tracker node,
-/// registered by `dispatch_user`). Order matters: poison FIRST so the
+/// registered by `dispatch_user`).
+///
+/// **P1 note — deliberately not ownership-gated.** The tracker is process
+/// global and keyed by run id, and there is no run → team mapping to gate on.
+/// It stays open on the same reasoning §4.11 applied to `BackgroundAgentTracker`
+/// by-id access: a run id is an unguessable capability the caller can only have
+/// received from their own `teams.chat.send` response or from a
+/// `team.<id>.fanout` event they were already entitled to. The rule that
+/// matters is that no ENUMERATION face hands run ids out across users — if one
+/// is ever added to `teams.*`, this handler needs a real gate at the same time.
+///
+/// Order matters: poison FIRST so the
 /// recursive fan-out spawns no new members while we walk, THEN abort every
 /// in-flight member run through the engine's per-run CancellationToken path —
 /// the same `ExecutionAdapter::cancel` the `agent.cancel` RPC uses. Pure I/O

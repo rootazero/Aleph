@@ -52,13 +52,22 @@ pub struct TaskExitJournalOutput {
 
 #[derive(Clone)]
 pub struct TaskExitJournalTool {
+    team_store: Option<Arc<dyn crate::teams::TeamStore>>,
     coord_store: Arc<dyn CoordTaskStore>,
     current_agent_id: String,
 }
 
 impl TaskExitJournalTool {
+    /// Wire the ownership gate — see [`crate::teams::task_team_reachable`].
+    #[must_use]
+    pub fn with_team_store(mut self, store: Option<Arc<dyn crate::teams::TeamStore>>) -> Self {
+        self.team_store = store;
+        self
+    }
+
     pub fn new(coord_store: Arc<dyn CoordTaskStore>, current_agent_id: String) -> Self {
         Self {
+            team_store: None,
             coord_store,
             current_agent_id,
         }
@@ -91,6 +100,20 @@ impl AlephTool for TaskExitJournalTool {
             confidence = ?args.confidence,
             "task_exit_journal: upsert"
         );
+        // Ownership gate — the lookup exists only for it; this tool upserted
+        // by id without ever reading the task.
+        let not_found = || AlephError::invalid_input(format!("task '{}' not found", args.task_id));
+        let task = self
+            .coord_store
+            .get_task(&args.task_id)
+            .await?
+            .ok_or_else(not_found)?;
+        if !crate::teams::task_team_reachable(self.team_store.as_ref(), task.team_id.as_deref())
+            .await
+        {
+            return Err(not_found());
+        }
+
         let journal = self
             .coord_store
             .upsert_task_journal(NewTaskExitJournal {

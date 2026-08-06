@@ -150,6 +150,7 @@ fn settled_echo(status: CoordTaskStatus, verdict: &WorkflowStepReviewArgs) -> Op
 pub struct WorkflowStepReviewTool {
     coord_store: Arc<dyn CoordTaskStore>,
     current_agent_id: String,
+    team_store: Option<Arc<dyn crate::teams::TeamStore>>,
 }
 
 impl WorkflowStepReviewTool {
@@ -157,7 +158,15 @@ impl WorkflowStepReviewTool {
         Self {
             coord_store,
             current_agent_id,
+            team_store: None,
         }
+    }
+
+    /// Wire the ownership gate — see [`crate::teams::task_team_reachable`].
+    #[must_use]
+    pub fn with_team_store(mut self, store: Option<Arc<dyn crate::teams::TeamStore>>) -> Self {
+        self.team_store = store;
+        self
     }
 }
 
@@ -211,6 +220,37 @@ impl AlephTool for WorkflowStepReviewTool {
                 }
             }
         };
+        // Ownership gate, before any verdict is echoed or written.
+        //
+        // Absent and foreign refuse with ONE error, which also tightens the
+        // absent case: this used to fall through to the write path with an
+        // empty snapshot, recording a verdict against a task id that does not
+        // exist. Mapping "foreign" onto that old tolerance would have meant
+        // writing a verdict onto ANOTHER USER's task. Matches the contract its
+        // RPC twin `teams.workflow.approve_step` now enforces.
+        {
+            let task_id = match &args {
+                WorkflowStepReviewArgs::Approve { task_id, .. }
+                | WorkflowStepReviewArgs::Reject { task_id, .. }
+                | WorkflowStepReviewArgs::Retry { task_id }
+                | WorkflowStepReviewArgs::Skip { task_id, .. } => task_id,
+            };
+            let reachable = match task_snapshot.as_ref() {
+                None => false,
+                Some(t) => {
+                    crate::teams::task_team_reachable(
+                        self.team_store.as_ref(),
+                        t.team_id.as_deref(),
+                    )
+                    .await
+                }
+            };
+            if !reachable {
+                return Err(AlephError::invalid_input(format!(
+                    "task '{task_id}' not found"
+                )));
+            }
+        }
         let criteria = task_snapshot
             .as_ref()
             .map(|t| read_acceptance_criteria(&t.metadata))

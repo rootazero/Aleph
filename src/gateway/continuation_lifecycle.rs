@@ -21,12 +21,19 @@
 
 use tracing::{info, warn};
 
-/// Honestly terminate a session's active goal: block it with `note` and
-/// delete its welded strategy so a stale plan can neither steer later turns
-/// nor block a fresh start. Best-effort; returns whether an ACTIVE goal was
-/// actually blocked (terminal goals are never clobbered —
-/// `block_if_active`'s contract). Consumers: the epoch-retirement seam below
-/// and the `ResumeCoordinator` abandon paths.
+/// Honestly terminate a session's goal: block it from either non-terminal
+/// state and delete its welded strategy so a stale plan can neither steer
+/// later turns nor block a fresh start. Best-effort; returns whether a goal
+/// was actually retired (terminal goals are never clobbered —
+/// [`crate::goal::GoalStore::block_if_not_terminal`]'s contract).
+///
+/// `Paused` is retired alongside `Active` for the same reason the loop side
+/// retires paused loops: the epoch bump (or delete) makes the old session
+/// unreachable, and a goal can only be re-armed from its own session, so a
+/// `Paused` goal left behind is one `goal(action='list')` keeps advertising
+/// and nobody can ever restart. Consumers: the epoch-retirement seam below.
+/// The `ResumeCoordinator` abandon paths use the narrower
+/// [`block_abandonable_session_goal`] instead.
 pub fn block_session_goal(session: &str, note: &str) -> bool {
     let Some(store) = crate::goal::global() else {
         return false;
@@ -34,17 +41,17 @@ pub fn block_session_goal(session: &str, note: &str) -> bool {
     let now_ms = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map_or(0, |d| d.as_millis() as u64);
-    match store.block_if_active(session, note, now_ms) {
+    match store.block_if_not_terminal(session, note, now_ms) {
         Ok(true) => {
             if let Some(strat) = crate::strategy::global() {
                 let _ = strat.delete(&crate::strategy::goal_key(session));
             }
-            info!(session = %session, "active goal blocked: {note}");
+            info!(session = %session, "goal retired: {note}");
             true
         }
         Ok(false) => false,
         Err(e) => {
-            warn!(session = %session, error = %e, "failed to block active goal");
+            warn!(session = %session, error = %e, "failed to retire session goal");
             false
         }
     }

@@ -36,6 +36,24 @@ mod tests {
         Arc::new(store)
     }
 
+    /// A team store pre-seeded with the literal team ids a fixture addresses.
+    ///
+    /// Every task-facing handler now resolves its team through the ownership
+    /// gate, so a team id that exists in no store is (correctly) 404 — these
+    /// fixtures predate that and name their teams `"T"` / `"team-x"`.
+    async fn team_store_with(ids: &[&str]) -> Arc<dyn crate::teams::TeamStore> {
+        let conn = rusqlite::Connection::open_in_memory().expect("open in-memory db");
+        let store = crate::teams::store::SqliteTeamStore::new(conn);
+        store.migrate().await.expect("migrate");
+        for id in ids {
+            store
+                .insert_team_with_id(id, id)
+                .await
+                .expect("seed fixture team");
+        }
+        Arc::new(store)
+    }
+
     fn create_req(params: serde_json::Value) -> JsonRpcRequest {
         JsonRpcRequest {
             jsonrpc: "2.0".to_string(),
@@ -48,8 +66,10 @@ mod tests {
     #[tokio::test]
     async fn create_task_trims_subject_and_returns_task() {
         let store = coord_store().await;
+        let teams = team_store_with(&["T"]).await;
         let resp = handle_create_task(
             create_req(json!({"team_id": "T", "subject": "  Ship it  ", "priority": "high"})),
+            teams,
             store,
         )
         .await;
@@ -66,8 +86,13 @@ mod tests {
     #[tokio::test]
     async fn create_task_rejects_blank_subject() {
         let store = coord_store().await;
-        let resp =
-            handle_create_task(create_req(json!({"team_id": "T", "subject": "   "})), store).await;
+        let teams = team_store_with(&["T"]).await;
+        let resp = handle_create_task(
+            create_req(json!({"team_id": "T", "subject": "   "})),
+            teams,
+            store,
+        )
+        .await;
 
         let err = resp.error.expect("expected an error");
         assert_eq!(err.code, INVALID_PARAMS);
@@ -76,8 +101,10 @@ mod tests {
     #[tokio::test]
     async fn create_task_rejects_unknown_priority() {
         let store = coord_store().await;
+        let teams = team_store_with(&["T"]).await;
         let resp = handle_create_task(
             create_req(json!({"team_id": "T", "subject": "x", "priority": "urgent"})),
+            teams,
             store,
         )
         .await;
@@ -89,12 +116,14 @@ mod tests {
     #[tokio::test]
     async fn create_task_with_owner_auto_injects_managed_by_dispatcher() {
         let store = coord_store().await;
+        let teams = team_store_with(&["T"]).await;
         let resp = handle_create_task(
             create_req(json!({
                 "team_id": "T",
                 "subject": "auto-dispatch",
                 "owner": "worker-a",
             })),
+            teams,
             store,
         )
         .await;
@@ -113,8 +142,10 @@ mod tests {
         // Orphan tasks (no owner yet) shouldn't auto-claim the dispatcher
         // namespace — they're parked until a leader assigns them.
         let store = coord_store().await;
+        let teams = team_store_with(&["T"]).await;
         let resp = handle_create_task(
             create_req(json!({ "team_id": "T", "subject": "orphan" })),
+            teams,
             store,
         )
         .await;
@@ -130,6 +161,7 @@ mod tests {
     #[tokio::test]
     async fn create_task_respects_caller_supplied_managed_by_override() {
         let store = coord_store().await;
+        let teams = team_store_with(&["T"]).await;
         let resp = handle_create_task(
             create_req(json!({
                 "team_id": "T",
@@ -137,6 +169,7 @@ mod tests {
                 "owner": "worker-x",
                 "metadata": {"managed_by": "team_delegate"},
             })),
+            teams,
             store,
         )
         .await;
@@ -293,8 +326,10 @@ mod tests {
     async fn chat_thread_empty_store_returns_items_array() {
         // Verifies: "returns items array structure" + "None artifact_store degrades gracefully"
         let store = coord_store().await;
+        let teams = team_store_with(&["team-x"]).await;
         let resp = handle_chat_thread(
             chat_thread_req("team-x"),
+            teams,
             store,
             None, // no artifact store — must not error
         )
@@ -346,7 +381,13 @@ mod tests {
             .await
             .expect("create second task");
 
-        let resp = handle_chat_thread(chat_thread_req("team-y"), store, None).await;
+        let resp = handle_chat_thread(
+            chat_thread_req("team-y"),
+            team_store_with(&["team-y"]).await,
+            store,
+            None,
+        )
+        .await;
 
         assert!(resp.error.is_none(), "unexpected error: {:?}", resp.error);
         let items = resp.result.expect("result")["items"].clone();
@@ -409,7 +450,13 @@ mod tests {
             .await
             .expect("create artifact");
 
-        let resp = handle_chat_thread(chat_thread_req("team-z"), coord, Some(artifacts)).await;
+        let resp = handle_chat_thread(
+            chat_thread_req("team-z"),
+            team_store_with(&["team-z"]).await,
+            coord,
+            Some(artifacts),
+        )
+        .await;
         assert!(resp.error.is_none(), "unexpected error: {:?}", resp.error);
         let items = resp.result.expect("result")["items"].clone();
         let arr = items.as_array().expect("items is array");
@@ -759,6 +806,7 @@ mod snapshot_handler_tests {
         // list
         let resp = handle_snapshot_list(
             req("teams.snapshot.list", json!({ "team_id": team_id })),
+            teams.clone(),
             snap.clone(),
         )
         .await;
@@ -772,6 +820,7 @@ mod snapshot_handler_tests {
         // get
         let resp = handle_snapshot_get(
             req("teams.snapshot.get", json!({ "snapshot_id": sid })),
+            teams.clone(),
             snap.clone(),
         )
         .await;
@@ -796,6 +845,7 @@ mod snapshot_handler_tests {
         // delete
         let resp = handle_snapshot_delete(
             req("teams.snapshot.delete", json!({ "snapshot_id": sid })),
+            teams.clone(),
             snap.clone(),
         )
         .await;
@@ -805,6 +855,7 @@ mod snapshot_handler_tests {
         // delete again → existed:false (idempotent)
         let resp = handle_snapshot_delete(
             req("teams.snapshot.delete", json!({ "snapshot_id": sid })),
+            teams.clone(),
             snap.clone(),
         )
         .await;
@@ -814,6 +865,7 @@ mod snapshot_handler_tests {
         // get after delete → not found
         let resp = handle_snapshot_get(
             req("teams.snapshot.get", json!({ "snapshot_id": sid })),
+            teams.clone(),
             snap.clone(),
         )
         .await;
@@ -823,7 +875,7 @@ mod snapshot_handler_tests {
 
     #[tokio::test]
     async fn list_works_without_params() {
-        let (_teams, _coord, snap, _team_id) = setup().await;
+        let (teams, _coord, snap, _team_id) = setup().await;
         let resp = handle_snapshot_list(
             JsonRpcRequest {
                 jsonrpc: "2.0".into(),
@@ -831,6 +883,7 @@ mod snapshot_handler_tests {
                 params: None,
                 id: Some(serde_json::Value::Number(1.into())),
             },
+            teams.clone(),
             snap.clone(),
         )
         .await;

@@ -9,6 +9,7 @@ use crate::agents::swarm::tasks::{CoordTaskFilter, CoordTaskStore};
 use crate::sync_primitives::Arc;
 
 use crate::gateway::handlers::parse_params;
+use crate::gateway::handlers::teams::visibility::{gate_task, gate_team};
 use crate::gateway::protocol::{
     JsonRpcRequest, JsonRpcResponse, INTERNAL_ERROR, INVALID_PARAMS, RESOURCE_NOT_FOUND,
 };
@@ -29,6 +30,7 @@ pub struct ListTasksParams {
 /// Handle `teams.list_tasks` — list all `CoordTasks` for a team with optional status/owner filter
 pub async fn handle_list_tasks(
     request: JsonRpcRequest,
+    store: Arc<dyn crate::teams::TeamStore>,
     coord_store: Arc<dyn CoordTaskStore>,
 ) -> JsonRpcResponse {
     debug!("Handling teams.list_tasks request");
@@ -37,6 +39,9 @@ pub async fn handle_list_tasks(
         Ok(p) => p,
         Err(resp) => return resp,
     };
+    if let Err(resp) = gate_team(request.id.clone(), &store, &params.team_id).await {
+        return resp;
+    }
 
     use crate::agents::swarm::tasks::CoordTaskStatus;
     // Full 10-variant vocabulary via the single-source parser; an unknown
@@ -93,6 +98,7 @@ pub struct UpdateTaskParams {
 /// inside the store, so any subscriber sees the change automatically.
 pub async fn handle_update_task(
     request: JsonRpcRequest,
+    store: Arc<dyn crate::teams::TeamStore>,
     coord_store: Arc<dyn CoordTaskStore>,
 ) -> JsonRpcResponse {
     debug!("Handling teams.update_task request");
@@ -101,6 +107,9 @@ pub async fn handle_update_task(
         Ok(p) => p,
         Err(resp) => return resp,
     };
+    if let Err(resp) = gate_task(request.id.clone(), &store, &coord_store, &params.task_id).await {
+        return resp;
+    }
 
     use crate::agents::swarm::tasks::{CoordTaskStatus, CoordTaskUpdate};
 
@@ -191,6 +200,7 @@ pub struct CreateTaskParams {
 /// emission happens inside the store, so the kanban panel refreshes itself.
 pub async fn handle_create_task(
     request: JsonRpcRequest,
+    store: Arc<dyn crate::teams::TeamStore>,
     coord_store: Arc<dyn CoordTaskStore>,
 ) -> JsonRpcResponse {
     debug!("Handling teams.create_task request");
@@ -199,6 +209,9 @@ pub async fn handle_create_task(
         Ok(p) => p,
         Err(resp) => return resp,
     };
+    if let Err(resp) = gate_team(request.id.clone(), &store, &params.team_id).await {
+        return resp;
+    }
 
     let subject = params.subject.trim();
     if subject.is_empty() {
@@ -277,6 +290,7 @@ pub struct TaskIdParams {
 /// first. The drawer renders this as the "Runs" timeline.
 pub async fn handle_list_task_runs(
     request: JsonRpcRequest,
+    store: Arc<dyn crate::teams::TeamStore>,
     coord_store: Arc<dyn CoordTaskStore>,
 ) -> JsonRpcResponse {
     debug!("Handling teams.list_task_runs request");
@@ -285,6 +299,9 @@ pub async fn handle_list_task_runs(
         Ok(p) => p,
         Err(resp) => return resp,
     };
+    if let Err(resp) = gate_task(request.id.clone(), &store, &coord_store, &params.task_id).await {
+        return resp;
+    }
 
     match coord_store.list_task_runs(&params.task_id).await {
         Ok(runs) => JsonRpcResponse::success(request.id, json!({ "runs": runs })),
@@ -311,6 +328,7 @@ pub struct AddTaskCommentParams {
 /// by workers to leave handoff context and by panel users to annotate state.
 pub async fn handle_add_task_comment(
     request: JsonRpcRequest,
+    store: Arc<dyn crate::teams::TeamStore>,
     coord_store: Arc<dyn CoordTaskStore>,
 ) -> JsonRpcResponse {
     debug!("Handling teams.add_task_comment request");
@@ -319,6 +337,9 @@ pub async fn handle_add_task_comment(
         Ok(p) => p,
         Err(resp) => return resp,
     };
+    if let Err(resp) = gate_task(request.id.clone(), &store, &coord_store, &params.task_id).await {
+        return resp;
+    }
 
     let author = params.author.trim();
     let body = params.body.trim();
@@ -354,6 +375,7 @@ pub async fn handle_add_task_comment(
 /// oldest first.
 pub async fn handle_list_task_comments(
     request: JsonRpcRequest,
+    store: Arc<dyn crate::teams::TeamStore>,
     coord_store: Arc<dyn CoordTaskStore>,
 ) -> JsonRpcResponse {
     debug!("Handling teams.list_task_comments request");
@@ -362,6 +384,9 @@ pub async fn handle_list_task_comments(
         Ok(p) => p,
         Err(resp) => return resp,
     };
+    if let Err(resp) = gate_task(request.id.clone(), &store, &coord_store, &params.task_id).await {
+        return resp;
+    }
 
     match coord_store.list_task_comments(&params.task_id).await {
         Ok(comments) => JsonRpcResponse::success(request.id, json!({ "comments": comments })),
@@ -388,6 +413,7 @@ pub async fn handle_list_task_comments(
 /// convention.
 pub async fn handle_list_task_events(
     request: JsonRpcRequest,
+    store: Arc<dyn crate::teams::TeamStore>,
     coord_store: Arc<dyn CoordTaskStore>,
     event_store: Arc<dyn crate::teams::events::EventLogStore>,
 ) -> JsonRpcResponse {
@@ -397,6 +423,9 @@ pub async fn handle_list_task_events(
         Ok(p) => p,
         Err(resp) => return resp,
     };
+    if let Err(resp) = gate_task(request.id.clone(), &store, &coord_store, &params.task_id).await {
+        return resp;
+    }
 
     // Look up the task to discover its team_id; without one, no team_events
     // can reference it (team_events.team_id is NOT NULL).
@@ -471,6 +500,7 @@ pub async fn handle_list_task_events(
 /// Handle teams.task.trace — return the unified audit timeline for one task.
 pub async fn handle_task_trace(
     request: JsonRpcRequest,
+    store: Arc<dyn crate::teams::TeamStore>,
     coord_store: Arc<dyn CoordTaskStore>,
     event_store: Option<Arc<dyn crate::teams::events::EventLogStore>>,
     artifact_store: Option<Arc<dyn crate::teams::artifacts::ArtifactStore>>,
@@ -481,6 +511,9 @@ pub async fn handle_task_trace(
         Ok(p) => p,
         Err(resp) => return resp,
     };
+    if let Err(resp) = gate_task(request.id.clone(), &store, &coord_store, &params.task_id).await {
+        return resp;
+    }
 
     let task = match coord_store.get_task(&params.task_id).await {
         Ok(Some(t)) => t,
@@ -590,6 +623,7 @@ pub struct ThreadItem {
 /// autonomous dispatcher's task `result` text carries each member's outcome.
 pub async fn handle_chat_thread(
     request: JsonRpcRequest,
+    store: Arc<dyn crate::teams::TeamStore>,
     coord_store: Arc<dyn crate::agents::swarm::tasks::CoordTaskStore>,
     artifact_store: Option<Arc<dyn crate::teams::artifacts::ArtifactStore>>,
 ) -> JsonRpcResponse {
@@ -599,6 +633,9 @@ pub async fn handle_chat_thread(
         Ok(p) => p,
         Err(resp) => return resp,
     };
+    if let Err(resp) = gate_team(request.id.clone(), &store, &params.team_id).await {
+        return resp;
+    }
 
     let mut items: Vec<ThreadItem> = Vec::new();
 
@@ -722,6 +759,7 @@ pub(crate) fn map_history(msgs: Vec<crate::teams::messages::TeamMessage>) -> Vec
 /// return an empty items array rather than an error (idempotent cold-open).
 pub async fn handle_chat_history(
     request: JsonRpcRequest,
+    store: Arc<dyn crate::teams::TeamStore>,
     msg_store: Arc<dyn crate::teams::messages::MessageStore>,
 ) -> JsonRpcResponse {
     debug!("Handling teams.chat.history request");
@@ -730,6 +768,9 @@ pub async fn handle_chat_history(
         Ok(p) => p,
         Err(resp) => return resp,
     };
+    if let Err(resp) = gate_team(request.id.clone(), &store, &params.team_id).await {
+        return resp;
+    }
 
     // 200 chat bubbles is ample for the Panel's initial hydrate. The store
     // query is a raw tail over `team_messages`, which also carries directed
@@ -758,6 +799,7 @@ pub async fn handle_chat_history(
 /// teams.task.journal.get — fetch the journal for one task, or null.
 pub async fn handle_task_journal_get(
     request: JsonRpcRequest,
+    store: Arc<dyn crate::teams::TeamStore>,
     coord_store: Arc<dyn CoordTaskStore>,
 ) -> JsonRpcResponse {
     debug!("Handling teams.task.journal.get request");
@@ -765,6 +807,9 @@ pub async fn handle_task_journal_get(
         Ok(p) => p,
         Err(resp) => return resp,
     };
+    if let Err(resp) = gate_task(request.id.clone(), &store, &coord_store, &params.task_id).await {
+        return resp;
+    }
     match coord_store.get_task_journal(&params.task_id).await {
         Ok(journal) => JsonRpcResponse::success(request.id, json!({ "journal": journal })),
         Err(e) => JsonRpcResponse::error(
@@ -783,6 +828,7 @@ pub struct TeamJournalListParams {
 /// teams.task.journal.list — list all journals for a team, newest first.
 pub async fn handle_task_journal_list(
     request: JsonRpcRequest,
+    store: Arc<dyn crate::teams::TeamStore>,
     coord_store: Arc<dyn CoordTaskStore>,
 ) -> JsonRpcResponse {
     debug!("Handling teams.task.journal.list request");
@@ -790,6 +836,9 @@ pub async fn handle_task_journal_list(
         Ok(p) => p,
         Err(resp) => return resp,
     };
+    if let Err(resp) = gate_team(request.id.clone(), &store, &params.team_id).await {
+        return resp;
+    }
     match coord_store.list_team_journals(&params.team_id).await {
         Ok(journals) => JsonRpcResponse::success(request.id, json!({ "journals": journals })),
         Err(e) => JsonRpcResponse::error(

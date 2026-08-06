@@ -23,6 +23,7 @@ use alephcore::gateway::GatewayServer;
 pub(super) fn register_trace_handlers(
     server: &mut GatewayServer,
     resilience_db: Option<Arc<alephcore::resilience::StateDatabase>>,
+    session_store: Arc<dyn alephcore::gateway::session_store::SessionStore>,
 ) {
     // Phase-2 always overrides phase-1 to guarantee a deterministic response.
     // When state DB is absent, the override returns SERVICE_UNAVAILABLE with
@@ -40,10 +41,19 @@ pub(super) fn register_trace_handlers(
             async move { alephcore::gateway::handlers::trace_replay::handle_get(req, db).await }
         });
 
+        // `trace.by_runs` is the one member-reachable method in this family
+        // (the Panel replays tool calls on every session open), so it is
+        // owner-scoped in the handler rather than admin-gated — it takes the
+        // `SessionStore` to KeyCheck the addressed session and to intersect
+        // the requested runs with that session's own. See its doc.
         let trace_by_runs_db = trace_db;
+        let trace_sessions = session_store;
         server.handlers_mut().register("trace.by_runs", move |req| {
             let db = trace_by_runs_db.clone();
-            async move { alephcore::gateway::handlers::trace_replay::handle_by_runs(req, db).await }
+            let sessions = trace_sessions.clone();
+            async move {
+                alephcore::gateway::handlers::trace_replay::handle_by_runs(req, db, sessions).await
+            }
         });
     } else {
         server
@@ -103,9 +113,11 @@ pub(super) fn register_common_handlers(
 
         // Register chat handlers (abort, history, clear work for both real and simulated)
         let rm_abort = rm.clone();
+        let sm_abort = session_store.clone();
         server.handlers_mut().register("chat.abort", move |req| {
             let manager = rm_abort.clone();
-            async move { chat_handlers::handle_abort(req, manager).await }
+            let store = sm_abort.clone();
+            async move { chat_handlers::handle_abort(req, manager, store).await }
         });
     }
 

@@ -193,6 +193,7 @@ mod tests {
                 created_at: 0,
                 disbanded_at: None,
                 protocol: None,
+                owner_user_id: None,
             },
             members: vec![],
             tasks: vec![],

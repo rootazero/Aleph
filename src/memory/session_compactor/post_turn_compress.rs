@@ -39,7 +39,7 @@ impl SessionCompactor {
         // summaries, transcript index) — including the spawned pre-compress
         // task — inherits this resolved id, so no task-local is ever read
         // across a `tokio::spawn` boundary.
-        let agent_id = crate::memory::project_scope::scoped_or_base(
+        let agent_id = crate::memory::project_scope::session_write_id(
             agent.id(),
             self.project_scoped,
             project_root,

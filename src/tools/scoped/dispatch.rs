@@ -16,6 +16,23 @@ use crate::tools::service::ToolError;
 use super::ledger::ApprovalRecord;
 use super::ScopedToolService;
 
+/// Result size (per [`crate::tool_output::ingress::size_hint`]) at which the
+/// ingress clean moves off the async executor onto a blocking worker. Below it
+/// the spawn/join handoff costs more than the cleaning itself.
+const INGRESS_BLOCKING_THRESHOLD: usize = 128 * 1024;
+
+/// The outcome handed to Layer 2 when the ingress worker itself failed:
+/// an honest placeholder instead of the tool's output. See `run_ingress` for
+/// why omission-with-a-note beats both crashing the loop and silent loss.
+fn ingress_failed_outcome() -> crate::tool_output::ingress::IngressOutcome {
+    crate::tool_output::ingress::IngressOutcome {
+        model_facing: "[ingress worker failed; tool output omitted]".to_string(),
+        reduced_from: None,
+        reductions: Vec::new(),
+        compressed: false,
+    }
+}
+
 /// XML-escape any literal `<system-reminder>` / `</system-reminder>` boundary
 /// tokens inside untrusted hook-context text.
 ///
@@ -1091,10 +1108,10 @@ impl ScopedToolService {
     }
 
     /// Apply Layer 2 of the budget pipeline (`compress → persist-if-large
-    /// → truncate`) to a successful tool output. Reuses the existing
-    /// per-tool compression hook (`compress_tool_output`) and the shared
-    /// `result_store` if one is wired; falls back to head+tail truncation
-    /// otherwise.
+    /// → truncate`) to a successful tool output. The clean/trim half is the
+    /// ingress pass (`tool_output::ingress::clean_for_ingress`); the
+    /// persist/truncate half is `result_processing::apply_result_budget`,
+    /// which sees the ingress outcome verbatim.
     async fn apply_layer_two(
         &self,
         name: &str,
@@ -1130,81 +1147,33 @@ impl ScopedToolService {
         // nothing, so the success path stays byte-identical.
         super::artifact_harvest::annotate_media_failures(&mut out.value, &media_failures);
 
-        // Compress first: hands JSON to the per-tool summarizer that
-        // already exists in `tool_output::compressor`. The text we feed
-        // into Layer 2 reflects what the LLM will ultimately see.
-        let mut raw = match &out.value {
-            Value::String(s) => s.clone(),
-            other => other.to_string(),
-        };
-        let compressed = crate::tool_output::compressor::compress_tool_output(name, &raw);
-
         let explicit = self.inner.max_result_tokens_for(name);
         let budget = crate::tools::result_processing::resolve_result_budget(name, explicit);
 
-        // Ingress hygiene — the local clean/trim/summarise pass, applied only
-        // when the result is already over the tool's declared budget so the
-        // common case stays byte-for-byte identical.
-        //
-        // It has to run on `out.value` rather than on `compressed`: flattening a
-        // typed tool result with `Value::to_string()` escapes every newline and
-        // collapses the whole thing onto one line, which blinds both
+        // Ingress clean — per-tool compression, then (only when over budget)
+        // field-level hygiene. Both stages run on `out.value` while its text
+        // fields still carry real newlines: flattening first escapes every
+        // newline and collapses the result onto one line, which blinds both
         // content-aware cleaners (`structured::classify` needs lines;
-        // `distill_output` iterates `text.lines()`). See `tool_output::hygiene`.
+        // `distill_output` iterates `text.lines()`). See `tool_output::ingress`.
         //
         // `reduced_from` hands Layer 2 the untouched original so the offloaded
-        // blob — the model's way back to the dropped detail — is the full output,
-        // not the reduction.
-        let mut model_facing = compressed;
-        let mut reduced_from: Option<String> = None;
-        if let Some(limit) = budget {
-            if crate::context::budget::pressure::estimate_tokens_smart(&model_facing) > limit {
-                let mut cleaned = out.value.clone();
-                // The tool's own declared budget sizes the reduction. It was
-                // already in scope here and thrown away: the reducers used
-                // fixed caps and the head/tail truncator downstream then cut
-                // whatever they produced, so a signal-aware selection was
-                // finished off by a blind one.
-                let reductions =
-                    crate::tool_output::hygiene::clean_result_value(&mut cleaned, Some(limit));
-                if !reductions.is_empty() {
-                    let flattened = match &cleaned {
-                        Value::String(s) => s.clone(),
-                        other => other.to_string(),
-                    };
-                    // Hygiene's own "never grow" guard measures each field
-                    // against the RAW value it walked, which is not the string
-                    // it is about to displace. For the DevTools family the
-                    // compressor has already cut the output hard, so a
-                    // reduction that is a genuine 30% win over the raw field
-                    // can still be several times larger than `compressed` —
-                    // and swapping it in made an over-budget result bigger.
-                    // Compare against what we would otherwise send.
-                    let before =
-                        crate::context::budget::pressure::estimate_tokens_smart(&model_facing);
-                    let after = crate::context::budget::pressure::estimate_tokens_smart(&flattened);
-                    if after < before {
-                        for r in &reductions {
-                            tracing::debug!(
-                                tool = name,
-                                field = %r.field,
-                                method = ?r.method,
-                                tokens_before = r.tokens_before,
-                                tokens_after = r.tokens_after,
-                                "ingress hygiene reduced a tool-result field"
-                            );
-                        }
-                        model_facing = flattened;
-                        // The offloaded blob is the model's only way back to the
-                        // detail that was dropped, so it has to be the untouched
-                        // original — `compressed` is itself a lossy cut (a
-                        // head/tail byte slice for `compress_generic`), and
-                        // persisting it made the reduction irreversible while
-                        // still calling the file "Full output".
-                        reduced_from = Some(std::mem::take(&mut raw));
-                    }
-                }
-            }
+        // blob — the model's way back to the dropped detail — is the full
+        // output, not the reduction.
+        let outcome = self.run_ingress(name, &mut out.value, budget).await;
+
+        if outcome.compressed {
+            tracing::debug!(tool = name, "ingress compressed a tool-result field");
+        }
+        for r in &outcome.reductions {
+            tracing::debug!(
+                tool = name,
+                field = %r.field,
+                method = ?r.method,
+                tokens_before = r.tokens_before,
+                tokens_after = r.tokens_after,
+                "ingress hygiene reduced a tool-result field"
+            );
         }
 
         // Per-call file name suffix, so concurrent calls to the same tool do
@@ -1226,10 +1195,10 @@ impl ScopedToolService {
         let processed = crate::tools::result_processing::apply_result_budget(
             &call_id,
             name,
-            &model_facing,
+            &outcome.model_facing,
             self.result_store.as_deref(),
             budget,
-            reduced_from.as_deref(),
+            outcome.reduced_from.as_deref(),
         );
 
         // Extension hooks observe large tool results offloaded to disk.
@@ -1248,6 +1217,73 @@ impl ScopedToolService {
 
         out.value = Value::String(processed.text);
         out
+    }
+
+    /// Run the ingress clean ([`clean_for_ingress`]) over `value`, moving the
+    /// work onto a blocking worker thread when the result is large enough that
+    /// doing it inline would stall the async executor.
+    ///
+    /// The compression and reduction passes are synchronous line/byte
+    /// processing over what can be a multi-hundred-KB value — a `cargo test`
+    /// wall or a browser snapshot — and this runs on the tool-call path of the
+    /// agent loop, where a 100 ms blocking stretch delays every other task on
+    /// the runtime. Under [`INGRESS_BLOCKING_THRESHOLD`] (the overwhelming
+    /// majority of calls) the direct call is cheaper than the handoff.
+    ///
+    /// `value` is `mem::take`n into the worker (the worker is `'static`, so it
+    /// must own what it touches) and **not** written back afterwards: the
+    /// caller installs `outcome.model_facing` as the result wholesale, so the
+    /// value's post-ingress state is unobservable either way — which is also
+    /// why `clean_for_ingress` can leave rejected hygiene mutations in place
+    /// (see its doc).
+    ///
+    /// A panicking or cancelled worker must not take the tool call down with
+    /// it: the result is replaced with an honest placeholder. Panics here are
+    /// by definition a bug in the cleaners, but an agent that loses one tool
+    /// result can re-run the tool; an agent whose loop crashed cannot. Silent
+    /// omission was rejected — a placeholder the model can see beats a result
+    /// that vanishes.
+    async fn run_ingress(
+        &self,
+        name: &str,
+        value: &mut Value,
+        budget: Option<usize>,
+    ) -> crate::tool_output::ingress::IngressOutcome {
+        if crate::tool_output::ingress::size_hint(value) < INGRESS_BLOCKING_THRESHOLD {
+            return crate::tool_output::ingress::clean_for_ingress(name, value, budget);
+        }
+        let tool_name = name.to_owned();
+        let mut owned = std::mem::take(value);
+        let joined = tokio::task::spawn_blocking(move || {
+            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                crate::tool_output::ingress::clean_for_ingress(&tool_name, &mut owned, budget)
+            }))
+        })
+        .await;
+        match joined {
+            Ok(Ok(outcome)) => outcome,
+            Ok(Err(panic)) => {
+                let detail = panic
+                    .downcast_ref::<&str>()
+                    .copied()
+                    .or_else(|| panic.downcast_ref::<String>().map(String::as_str))
+                    .unwrap_or("<non-string payload>");
+                tracing::error!(
+                    tool = name,
+                    panic = detail,
+                    "ingress worker panicked; tool output omitted"
+                );
+                ingress_failed_outcome()
+            }
+            Err(join_error) => {
+                tracing::error!(
+                    tool = name,
+                    error = %join_error,
+                    "ingress worker failed to join; tool output omitted"
+                );
+                ingress_failed_outcome()
+            }
+        }
     }
 
     /// Wrap a `ToolError` text payload with the standard external-content

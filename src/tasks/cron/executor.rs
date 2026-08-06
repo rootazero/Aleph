@@ -445,6 +445,18 @@ fn build_cron_metadata(snapshot: &JobSnapshot) -> HashMap<String, String> {
             "true".to_string(),
         );
     }
+    // P1 data isolation: cron has no completing run to inherit metadata from
+    // (this run IS the first), so rehydrate owner/scope from the job's
+    // persisted fields — the same fail-closed reconstruction the goal wake
+    // service uses for its own hook-less continuations. `from_persisted`
+    // requires both columns coherent; a legacy (pre-P1) job with neither set
+    // emits nothing here → the run stays unscoped, zero behavior change.
+    if let Some(attr) = crate::scope::ScopeAttribution::from_persisted(
+        snapshot.owner_user_id.as_deref(),
+        snapshot.scope_id.as_deref(),
+    ) {
+        crate::scope::stamp_metadata(&mut metadata, &attr);
+    }
     metadata
 }
 
@@ -655,6 +667,8 @@ mod tests {
             session_target: SessionTarget::Isolated,
             marked_at: 1_000_000,
             trigger_source: TriggerSource::Schedule,
+            owner_user_id: None,
+            scope_id: None,
         }
     }
 
@@ -717,6 +731,51 @@ mod tests {
             metadata.get("conversation_id").map(String::as_str),
             Some("123456")
         );
+    }
+
+    /// `build_cron_metadata` rehydrates owner/scope from the job snapshot's
+    /// persisted fields — the fire path has no completing run to inherit
+    /// metadata from, so it must reconstruct attribution itself.
+    #[test]
+    fn owned_snapshot_emits_scope_metadata_keys() {
+        let mut snapshot = make_test_snapshot();
+        snapshot.owner_user_id = Some("u-alice".to_string());
+        snapshot.scope_id = Some("personal:u-alice".to_string());
+        let metadata = build_cron_metadata(&snapshot);
+        assert_eq!(
+            metadata
+                .get(crate::scope::OWNER_META_KEY)
+                .map(String::as_str),
+            Some("u-alice")
+        );
+        assert_eq!(
+            metadata
+                .get(crate::scope::SCOPE_META_KEY)
+                .map(String::as_str),
+            Some("personal:u-alice")
+        );
+    }
+
+    /// A legacy (pre-P1) job with no owner/scope columns emits neither key —
+    /// the run stays unscoped, zero behavior change.
+    #[test]
+    fn legacy_unowned_snapshot_emits_no_scope_metadata() {
+        let metadata = build_cron_metadata(&make_test_snapshot());
+        assert!(!metadata.contains_key(crate::scope::OWNER_META_KEY));
+        assert!(!metadata.contains_key(crate::scope::SCOPE_META_KEY));
+    }
+
+    /// Fail-closed: an owner present with an unparseable/incoherent scope_id
+    /// must not emit a half-written attribution (mirrors
+    /// `ScopeAttribution::from_persisted`'s own "never guess" contract).
+    #[test]
+    fn incoherent_snapshot_emits_no_scope_metadata() {
+        let mut snapshot = make_test_snapshot();
+        snapshot.owner_user_id = Some("u-alice".to_string());
+        snapshot.scope_id = None;
+        let metadata = build_cron_metadata(&snapshot);
+        assert!(!metadata.contains_key(crate::scope::OWNER_META_KEY));
+        assert!(!metadata.contains_key(crate::scope::SCOPE_META_KEY));
     }
 
     #[test]

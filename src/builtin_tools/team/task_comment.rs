@@ -35,6 +35,7 @@ pub struct TaskCommentOutput {
 /// retries / reviewers can read the trail of handoff notes.
 #[derive(Clone)]
 pub struct TaskCommentTool {
+    team_store: Option<Arc<dyn crate::teams::TeamStore>>,
     store: Arc<dyn CoordTaskStore>,
     current_agent_id: String,
 }
@@ -42,9 +43,17 @@ pub struct TaskCommentTool {
 impl TaskCommentTool {
     pub fn new(store: Arc<dyn CoordTaskStore>, current_agent_id: String) -> Self {
         Self {
+            team_store: None,
             store,
             current_agent_id,
         }
+    }
+
+    /// Wire the ownership gate — see [`crate::teams::task_team_reachable`].
+    #[must_use]
+    pub fn with_team_store(mut self, store: Option<Arc<dyn crate::teams::TeamStore>>) -> Self {
+        self.team_store = store;
+        self
     }
 }
 
@@ -73,6 +82,23 @@ impl AlephTool for TaskCommentTool {
                 message: "task_comment: body must not be empty".into(),
                 suggestion: Some("Pass a non-empty `body` describing the handoff context".into()),
             });
+        }
+
+        // Ownership gate. This tool wrote by id without ever reading the task,
+        // so the lookup exists only for the gate — and an absent task and a
+        // foreign one produce the same refusal.
+        let not_found = || {
+            crate::error::AlephError::invalid_input(format!("task '{}' not found", args.task_id))
+        };
+        let task = self
+            .store
+            .get_task(&args.task_id)
+            .await?
+            .ok_or_else(not_found)?;
+        if !crate::teams::task_team_reachable(self.team_store.as_ref(), task.team_id.as_deref())
+            .await
+        {
+            return Err(not_found());
         }
 
         let comment = self

@@ -44,10 +44,30 @@ pub struct GroupChatSession {
     pub source_channel: String,
     /// The session key from the originating channel.
     pub source_session_key: String,
+    /// The user this session belongs to (P1 data isolation), captured from
+    /// the ambient [`crate::scope`] attribution at creation.
+    ///
+    /// `None` for a session created outside any dispatch scope (internal,
+    /// cron, a direct in-process construction) — read through
+    /// [`crate::gateway::visibility::stamped_owner_visible`], which resolves
+    /// that absence to the org-era single operator exactly like a pre-P1
+    /// session row. Never read this field directly for a visibility decision.
+    ///
+    /// `source_session_key` is deliberately NOT the ownership signal: on the
+    /// RPC path it defaults to the sentinel `"rpc:direct"`, which names no
+    /// session at all, so it can answer "who owns this" for channel-started
+    /// sessions only. The stamp is the same one `SessionMetadata`, `LoopState`
+    /// and `Goal` carry.
+    pub owner_user_id: Option<String>,
 }
 
 impl GroupChatSession {
     /// Create a new group chat session.
+    ///
+    /// Stamps `owner_user_id` from the ambient scope here rather than at the
+    /// call sites — mirroring `SessionMetadata::stamp_attribution`'s
+    /// placement inside `get_or_create` — so no construction path can forget
+    /// it and silently produce an unowned (= operator-owned) session.
     #[must_use]
     pub fn new(
         id: String,
@@ -66,6 +86,7 @@ impl GroupChatSession {
             created_at: chrono::Utc::now().timestamp(),
             source_channel,
             source_session_key,
+            owner_user_id: crate::scope::current_scope().map(|attr| attr.owner_user_id),
         }
     }
 

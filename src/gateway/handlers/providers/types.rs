@@ -238,4 +238,12 @@ pub struct CatalogEntryView {
     /// empty string as if it were a choice.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub requires_explicit_model: bool,
+    /// The exact model ids the picker should offer for this provider,
+    /// computed backend-side through the same `presets::model_ladder` leaf
+    /// the failover walk merges through: operator `models` first (or
+    /// `default_model` when none are listed), then unlisted curated
+    /// `fallback_models` rungs — skipped entirely when the operator moved
+    /// `base_url` off the preset, where curated ids would be opaque 400s.
+    /// The picker renders this verbatim and must not re-derive it (R4).
+    pub roster: Vec<String>,
 }

@@ -138,10 +138,11 @@ pub struct AgentHarnessRunner {
 
     /// Mirror of `MemoryConfig.project_scoped`. The d0/d1/d2 session summaries
     /// the compactor's reuse path reads are *written* under
-    /// `scoped_or_base(agent, project_scoped, current_project_root())` (see
+    /// `session_write_id(agent, project_scoped, current_project_root())` (see
     /// `memory::session_compactor::prepare_history`); the reuse read filters
     /// `WHERE agent_id = ?`, so the compactor must resolve the same scoped id
-    /// or `try_reuse` silently matches nothing whenever project scoping is on.
+    /// or `try_reuse` silently matches nothing whenever project or personal
+    /// scoping is on.
     pub memory_project_scoped: bool,
 
     /// Tool catalog — owns the `ToolHealthCache` whose

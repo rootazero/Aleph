@@ -49,6 +49,14 @@ fn now_unix_secs() -> i64 {
 }
 
 /// Aggregate per-tool usage for the requested agent/window.
+///
+/// P1 partition isolation (spec §11-1c): the caller-supplied `agent_id` has
+/// the same grammar as `memory.search`'s, and the report discloses which
+/// tools a partition ran, how often, how often they failed, and how many
+/// distinct sessions were involved. An invisible partition reads as a
+/// real-but-empty one — the report is produced by the REAL aggregator over
+/// zero rows (`empty_tool_usage_report`), so it is byte-identical to a
+/// partition that genuinely ran nothing, and the store is never touched.
 pub async fn handle_tools(request: JsonRpcRequest, db: MemoryBackend) -> JsonRpcResponse {
     let params: ToolInsightsParams = request
         .params
@@ -67,6 +75,17 @@ pub async fn handle_tools(request: JsonRpcRequest, db: MemoryBackend) -> JsonRpc
         .unwrap_or(DEFAULT_WINDOW_SECONDS);
     let top_n = params.top_n.filter(|n| *n > 0).unwrap_or(DEFAULT_TOP_N);
     let since = now_unix_secs().saturating_sub(window);
+
+    // P1 partition isolation — see this fn's doc.
+    if !crate::gateway::visibility::partition_visible(agent_id) {
+        return JsonRpcResponse::success(
+            request.id,
+            json!({
+                "ok": true,
+                "report": crate::memory::insights::empty_tool_usage_report(window, top_n),
+            }),
+        );
+    }
 
     match aggregate_tool_usage(db.as_ref(), agent_id, since, window, top_n, FETCH_LIMIT).await {
         Ok(report) => JsonRpcResponse::success(
@@ -111,6 +130,48 @@ mod tests {
         let top_n2 = p2.top_n.filter(|n| *n > 0).unwrap_or(DEFAULT_TOP_N);
         assert_eq!(window2, DEFAULT_WINDOW_SECONDS);
         assert_eq!(top_n2, DEFAULT_TOP_N);
+    }
+
+    /// Final-review I6: a foreign partition's tool-usage report is
+    /// byte-identical to a partition that ran nothing — same shape, no
+    /// oracle — while the caller's own partition still answers.
+    #[tokio::test]
+    async fn tools_report_for_a_foreign_partition_is_indistinguishable_from_empty() {
+        use crate::gateway::caller_identity::CALLER_USER;
+        use crate::memory::store::sqlite::SqliteMemoryBackend;
+        use crate::sync_primitives::Arc;
+
+        let db: MemoryBackend =
+            Arc::new(SqliteMemoryBackend::in_memory().expect("in-memory backend"));
+        let req = |agent: &str| {
+            JsonRpcRequest::with_id(
+                "insights.tools",
+                Some(json!({ "agent_id": agent })),
+                json!(1),
+            )
+        };
+
+        let denied = CALLER_USER
+            .scope(
+                Some("u-bob".to_string()),
+                handle_tools(req("main__u-alice"), db.clone()),
+            )
+            .await;
+        // `main__u-bob` is bob's own, empty, partition — a genuine empty
+        // result through the real aggregator.
+        let genuine = CALLER_USER
+            .scope(
+                Some("u-bob".to_string()),
+                handle_tools(req("main__u-bob"), db.clone()),
+            )
+            .await;
+
+        assert_eq!(
+            serde_json::to_string(&denied.result).unwrap(),
+            serde_json::to_string(&genuine.result).unwrap(),
+            "a denied partition must be byte-identical to a genuinely empty one"
+        );
+        assert_eq!(denied.result.as_ref().unwrap()["report"]["total"], 0);
     }
 
     #[test]

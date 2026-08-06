@@ -99,12 +99,36 @@ pub async fn handle_create(
 /// ```json
 /// {"jsonrpc":"2.0","method":"workspace.list","id":1}
 /// ```
+///
+/// # P1 partition isolation — and what it does NOT cover
+///
+/// A workspace serializes as an [`AgentEnv`], which carries `env_vars`,
+/// `system_prompt_override` and `allowed_tools`. Each row is filtered by
+/// `visibility::partition_visible` on its id, the same predicate the
+/// `memory.*`/`graph.*` family uses, so an id composed with the partition
+/// grammar (`<base>__u-alice`) is invisible to everyone else.
+///
+/// That is defense in depth, NOT a closed boundary, and the distinction is
+/// recorded here rather than implied by the presence of a check: a workspace
+/// id is a user-chosen name (`"project-aleph"`), it encodes no owner, and the
+/// `agent_envs` table has no owner column — so an ordinary workspace passes
+/// this predicate for every caller and one member can still read another's
+/// `env_vars`. Closing it needs an owner column plus a migration (the stamp
+/// `SessionMetadata`/`GroupChatSession`/`LoopState` carry), which is a
+/// schema change and a product decision, not a handler fix. See the P1
+/// final-fix report.
 pub async fn handle_list(
     request: JsonRpcRequest,
     workspace_manager: Arc<AgentEnvStore>,
 ) -> JsonRpcResponse {
     match workspace_manager.list(false).await {
-        Ok(workspaces) => JsonRpcResponse::success(request.id, json!({ "workspaces": workspaces })),
+        Ok(workspaces) => {
+            let visible: Vec<_> = workspaces
+                .into_iter()
+                .filter(|w| crate::gateway::visibility::partition_visible(&w.id))
+                .collect();
+            JsonRpcResponse::success(request.id, json!({ "workspaces": visible }))
+        }
         Err(e) => JsonRpcResponse::error(
             request.id,
             INTERNAL_ERROR,
@@ -131,6 +155,11 @@ pub struct GetParams {
 /// ```json
 /// {"jsonrpc":"2.0","method":"workspace.get","params":{"id":"crypto"},"id":1}
 /// ```
+///
+/// P1 partition isolation, with the same coverage boundary [`handle_list`]
+/// documents: an invisible partition-composed id gets this method's OWN
+/// "not found" response, byte-identical to an id that does not exist, and
+/// the store is not read for it.
 pub async fn handle_get(
     request: JsonRpcRequest,
     workspace_manager: Arc<AgentEnvStore>,
@@ -140,13 +169,20 @@ pub async fn handle_get(
         Err(e) => return e,
     };
 
-    match workspace_manager.get(&params.id).await {
-        Ok(Some(ws)) => JsonRpcResponse::success(request.id, json!({ "workspace": ws })),
-        Ok(None) => JsonRpcResponse::error(
-            request.id,
+    let not_found = || {
+        JsonRpcResponse::error(
+            request.id.clone(),
             RESOURCE_NOT_FOUND,
             format!("Workspace '{}' not found", params.id),
-        ),
+        )
+    };
+    if !crate::gateway::visibility::partition_visible(&params.id) {
+        return not_found();
+    }
+
+    match workspace_manager.get(&params.id).await {
+        Ok(Some(ws)) => JsonRpcResponse::success(request.id, json!({ "workspace": ws })),
+        Ok(None) => not_found(),
         Err(e) => JsonRpcResponse::error(
             request.id,
             INTERNAL_ERROR,
@@ -364,6 +400,72 @@ pub async fn handle_agent_bindings(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Final-review I6, defense-in-depth half: a partition-composed workspace
+    /// id belonging to another user is invisible, and `get` denies with this
+    /// method's own not-found rather than a distinct error.
+    ///
+    /// What this test deliberately does NOT claim: that ordinary workspaces
+    /// are isolated. `"crypto"` carries no owner, so it passes the predicate
+    /// for everyone — see [`handle_list`]'s doc for why closing that needs a
+    /// schema change.
+    #[tokio::test]
+    async fn get_denies_a_foreign_partition_composed_id_as_not_found() {
+        use crate::gateway::caller_identity::CALLER_USER;
+
+        let temp = tempfile::tempdir().unwrap();
+        let store = Arc::new(
+            AgentEnvStore::new(crate::gateway::agent_env::AgentEnvStoreConfig {
+                db_path: temp.path().join("agent_envs.db"),
+                default_profile: "default".to_string(),
+                archive_after_days: 0,
+            })
+            .expect("agent env store"),
+        );
+        let req = |id: &str| {
+            JsonRpcRequest::with_id("workspace.get", Some(json!({ "id": id })), json!(1))
+        };
+
+        let denied = CALLER_USER
+            .scope(
+                Some("u-bob".to_string()),
+                handle_get(req("main__u-alice"), store.clone()),
+            )
+            .await;
+        let missing = CALLER_USER
+            .scope(
+                Some("u-bob".to_string()),
+                handle_get(req("main__u-alice"), store.clone()),
+            )
+            .await;
+        assert!(denied.result.is_none(), "no AgentEnv may be serialized");
+        assert_eq!(
+            denied.error.as_ref().map(|e| e.code),
+            Some(RESOURCE_NOT_FOUND)
+        );
+        assert_eq!(
+            serde_json::to_string(&denied).unwrap(),
+            serde_json::to_string(&missing).unwrap(),
+            "a denied id and a nonexistent id must be byte-identical"
+        );
+
+        // Not a false positive: bob's own composed id and an ordinary
+        // uncomposed id both get past the predicate (and then legitimately
+        // 404, since nothing was created).
+        for id in ["main__u-bob", "crypto"] {
+            let resp = CALLER_USER
+                .scope(
+                    Some("u-bob".to_string()),
+                    handle_get(req(id), store.clone()),
+                )
+                .await;
+            assert_eq!(
+                resp.error.as_ref().map(|e| e.code),
+                Some(RESOURCE_NOT_FOUND),
+                "{id} should reach the store and report a genuine miss"
+            );
+        }
+    }
 
     #[test]
     fn test_create_params_deserialization() {

@@ -54,6 +54,15 @@ pub struct ApprovalAction {
     pub analysis: Option<CommandAnalysis>,
     /// Why the gate fired — the prose beneath the summary.
     pub reason: String,
+    /// The session-grant identity of this action — the same
+    /// [`grant_fingerprint`] key the dispatch gate's session memory and the
+    /// denial ledger use. `Some` only for tool calls, where the raw input is
+    /// known at construction; `None` for command elevations and bare route
+    /// escalations, whose identity lives outside this struct. Stamped onto the
+    /// pending approval record so a session-level grant can cascade to other
+    /// ALREADY-PENDING approvals of the same action (concurrent subagent /
+    /// teams broadcast), not just suppress later re-prompts.
+    pub grant_key: Option<String>,
 }
 
 impl ApprovalAction {
@@ -68,6 +77,7 @@ impl ApprovalAction {
             cwd: None,
             analysis,
             reason: reason.into(),
+            grant_key: Some(grant_fingerprint(name, input)),
         }
     }
 
@@ -91,6 +101,9 @@ impl ApprovalAction {
             cwd: cwd.map(|p| p.display().to_string()),
             analysis: Some(analysis),
             reason: reason.into(),
+            // The elevation gate keys its ledger on the normalized capability
+            // summary, which this struct never sees — no grant identity here.
+            grant_key: None,
         }
     }
 
@@ -104,6 +117,7 @@ impl ApprovalAction {
             cwd: None,
             analysis: None,
             reason: reason.into(),
+            grant_key: None,
         }
     }
 

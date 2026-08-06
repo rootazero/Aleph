@@ -219,6 +219,7 @@ mod tests {
                 fingerprint: device_id,
                 role: "operator",
                 scopes: &["*".to_string()],
+                user_id: None,
             })
             .unwrap();
     }
