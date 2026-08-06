@@ -235,6 +235,23 @@ impl SqliteTeamStore {
 
         Ok(())
     }
+
+    /// Insert a team with a caller-chosen id, unowned.
+    ///
+    /// Test-only. Production ids are UUIDs minted by `create_team`; handler
+    /// fixtures address teams by literal ids (`"T"`, `"team-x"`) that predate
+    /// the ownership gate and would otherwise have to be rewritten wholesale.
+    #[cfg(test)]
+    pub async fn insert_team_with_id(&self, id: &str, name: &str) -> crate::error::Result<()> {
+        let conn = self.conn.lock().await;
+        conn.execute(
+            "INSERT INTO teams (id, name, description, leader_id, status, created_at) \
+             VALUES (?1, ?2, '', 'leader', 'active', ?3)",
+            params![id, name, now_epoch()],
+        )
+        .map_err(db_err)?;
+        Ok(())
+    }
 }
 
 /// Add a column to a table only if it does not already exist.

@@ -418,6 +418,146 @@ async fn two_users_cannot_see_each_other_end_to_end() {
     );
 }
 
+/// The `teams.*` half of §9-1, added when the family was tightened
+/// (2026-08-06). Same acceptance shape as the test above, driven through the
+/// real handlers: alice creates a team and a task in it; bob — a legitimate,
+/// logged-in second user — sees an empty list and gets the SAME `not found`
+/// response for every addressed method, whether he names the team or one of
+/// its tasks.
+#[tokio::test]
+async fn two_users_cannot_see_each_others_teams() {
+    use crate::gateway::handlers::teams::{
+        handle_create_task, handle_get, handle_list, handle_list_tasks, handle_rename,
+        handle_task_skip,
+    };
+    use crate::teams::{ScopedTeamStore, SqliteTeamStore, TeamStore};
+
+    let raw = SqliteTeamStore::new(rusqlite::Connection::open_in_memory().unwrap());
+    raw.migrate().await.unwrap();
+    let teams: Arc<dyn TeamStore> = ScopedTeamStore::wrap(Arc::new(raw));
+
+    let coord_conn = rusqlite::Connection::open_in_memory().unwrap();
+    let coord_raw = crate::agents::swarm::tasks::store::SqliteCoordTaskStore::new(coord_conn);
+    coord_raw.migrate().await.unwrap();
+    let coord: Arc<dyn crate::agents::swarm::tasks::CoordTaskStore> = Arc::new(coord_raw);
+
+    // --- alice creates a team and one task in it -----------------------------
+    let team = as_caller(
+        "u-alice",
+        teams.create_team(crate::teams::NewTeam {
+            name: "Alice Squad".to_string(),
+            description: String::new(),
+            leader_id: "agent-main".to_string(),
+        }),
+    )
+    .await
+    .expect("alice creates her team");
+
+    let created = as_caller(
+        "u-alice",
+        handle_create_task(
+            req(
+                "teams.create_task",
+                Some(json!({ "team_id": team.id, "subject": "ship it" })),
+            ),
+            teams.clone(),
+            coord.clone(),
+        ),
+    )
+    .await;
+    assert!(created.error.is_none(), "alice creates her own task");
+    let task_id = created.result.expect("result")["task"]["id"]
+        .as_str()
+        .expect("task id")
+        .to_string();
+
+    // --- bob sees nothing ----------------------------------------------------
+    let bob_list = as_caller("u-bob", handle_list(req("teams.list", None), teams.clone())).await;
+    assert_eq!(
+        bob_list.result.expect("success")["teams"]
+            .as_array()
+            .expect("teams array")
+            .len(),
+        0,
+        "bob must not see alice's team in teams.list"
+    );
+
+    let team_addressed = json!({ "team_id": team.id });
+    let by_team: Vec<crate::gateway::protocol::JsonRpcResponse> = vec![
+        as_caller(
+            "u-bob",
+            handle_get(
+                req("teams.get", Some(team_addressed.clone())),
+                teams.clone(),
+                coord.clone(),
+            ),
+        )
+        .await,
+        as_caller(
+            "u-bob",
+            handle_list_tasks(
+                req("teams.list_tasks", Some(team_addressed.clone())),
+                teams.clone(),
+                coord.clone(),
+            ),
+        )
+        .await,
+        as_caller(
+            "u-bob",
+            handle_rename(
+                req(
+                    "teams.rename",
+                    Some(json!({ "team_id": team.id, "name": "Bob Squad" })),
+                ),
+                teams.clone(),
+                Arc::new(crate::gateway::event_bus::GatewayEventBus::new()),
+            ),
+        )
+        .await,
+    ];
+    for resp in &by_team {
+        let err = resp.error.as_ref().expect("bob must be refused");
+        assert_eq!(err.code, RESOURCE_NOT_FOUND);
+        assert_eq!(
+            err.message,
+            format!("Team '{}' not found", team.id),
+            "the denial must be the SAME response an absent team produces"
+        );
+    }
+
+    // Task-addressed: the half a team_id-keyed sweep would have missed.
+    let skip = as_caller(
+        "u-bob",
+        handle_task_skip(
+            req("teams.task.skip", Some(json!({ "task_id": task_id }))),
+            teams.clone(),
+            coord.clone(),
+        ),
+    )
+    .await;
+    let err = skip.error.as_ref().expect("bob must be refused");
+    assert_eq!(err.code, RESOURCE_NOT_FOUND);
+    assert_eq!(err.message, format!("Task '{task_id}' not found"));
+
+    // --- and alice's team is untouched --------------------------------------
+    let alice_get = as_caller(
+        "u-alice",
+        handle_get(
+            req("teams.get", Some(team_addressed)),
+            teams.clone(),
+            coord.clone(),
+        ),
+    )
+    .await;
+    let result = alice_get.result.expect("alice reads her own team");
+    assert_eq!(result["team"]["name"], "Alice Squad");
+    assert_eq!(
+        result["tasks"].as_array().expect("tasks").len(),
+        1,
+        "alice's task survived bob's skip attempt"
+    );
+}
+
 /// Spec §9-2: a pre-P1 single-user fixture must read back byte-identical
 /// after the P1 code is deployed. Three data shapes, each hand-authored
 /// exactly as P0-era code would have left it on disk (never through the new

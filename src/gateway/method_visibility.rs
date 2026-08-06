@@ -287,18 +287,42 @@
 //!   needs an owner column plus a migration — a schema and product decision,
 //!   not a handler fix. Both handlers' docs say so at the site.
 //!
-//! ## `teams.*`
+//! ## `teams.*` (tightened 2026-08-06 — was `OrgShared`)
 //!
-//! Registered as [`Treatment::OrgShared`], not because it was audited clean
-//! but because the plan
-//! (`docs/superpowers/plans/2026-08-05-p1-data-isolation.md`, Task 6) ruled
-//! the family org-level and deferred project scoping to P2. `Team` carries no
-//! owner field at all, so there is nothing this table's predicates could
-//! check without first inventing an ownership model — which is a product
-//! decision, not a fix. It is listed rather than omitted so the registry
-//! stops being silently incomplete: an `OrgShared` entry with a reason is a
-//! recorded decision, absence is indistinguishable from an oversight. The
-//! ruling is pending human confirmation (see `ORG_SHARED_REASONS`).
+//! P1 shipped this family as [`Treatment::OrgShared`]: `Team` carried no owner
+//! field, so there was nothing to check without first inventing an ownership
+//! model, and the plan deferred that to P2. The human ruled otherwise —
+//! tighten it in P1 — so `Team` now carries `owner_user_id` on the same
+//! adoption-by-absence terms as a session, and every addressed method below is
+//! enforced.
+//!
+//! The enforcement shape differs from the rest of this table in one way worth
+//! knowing before extending it. Teams are reachable from BOTH the gateway and
+//! the `team_*` builtin tools, so the predicate lives in a `TeamStore`
+//! decorator (`teams::scoped::ScopedTeamStore`) that both surfaces cross,
+//! rather than at 50 call sites. The handlers still gate explicitly — via
+//! `handlers::teams::visibility::{gate_team, gate_task}` — for the two things
+//! a decorator cannot do: shape the byte-identical `not_found` response, and
+//! reach the ~20 methods that address a team through the `coord_tasks` DAG (a
+//! different database) rather than by `team_id`.
+//!
+//! Three `teams.*` methods are deliberately absent rather than registered:
+//!
+//! - `teams.create` — creates; there is no addressed record to check yet, same
+//!   ruling as `session.create` / `group_chat.start`. The new row is stamped.
+//! - `teams.list_templates` — reads template files off disk; carries no user
+//!   data of any kind.
+//! - `teams.chat.cancel` — addressed by `run_id` against the process-global
+//!   `BackgroundAgentTracker`, with no run → team mapping to gate on. Left open
+//!   on the §4.11 reasoning (an unguessable capability the caller can only have
+//!   received from their own `teams.chat.send`), recorded at the handler. If a
+//!   `teams.*` ENUMERATION face for run ids is ever added, this needs a real
+//!   gate in the same change.
+//!
+//! Like every list in this file it is a curated pin, not a generated one: a
+//! brand-new `teams.*` sibling does not fail a test by being absent. The
+//! prefix-shaped `OrgShared` ruling used to give the family that property, and
+//! removing it is the cost of enforcing per-method treatments.
 //!
 //! ## Known gaps NOT covered by this table (found during the sweep, not
 //! fixed — flagged here exactly as `method_admin.rs` flags its own
@@ -412,6 +436,40 @@ pub const SCOPED_METHODS: &[(&str, Treatment)] = &[
     ("insights.tools", Treatment::PartitionChecked),
     ("workspace.list", Treatment::ListFiltered),
     ("workspace.get", Treatment::PartitionChecked),
+    // --- teams.* (see the module doc's `teams.*` section) ---
+    ("teams.list", Treatment::ListFiltered),
+    ("teams.snapshot.list", Treatment::ListFiltered),
+    ("teams.get", Treatment::KeyChecked),
+    ("teams.rename", Treatment::KeyChecked),
+    ("teams.disband", Treatment::KeyChecked),
+    ("teams.delete", Treatment::KeyChecked),
+    ("teams.usage", Treatment::KeyChecked),
+    ("teams.chat.send", Treatment::KeyChecked),
+    ("teams.chat.thread", Treatment::KeyChecked),
+    ("teams.chat.history", Treatment::KeyChecked),
+    ("teams.list_tasks", Treatment::KeyChecked),
+    ("teams.create_task", Treatment::KeyChecked),
+    ("teams.update_task", Treatment::KeyChecked),
+    ("teams.list_task_runs", Treatment::KeyChecked),
+    ("teams.add_task_comment", Treatment::KeyChecked),
+    ("teams.list_task_comments", Treatment::KeyChecked),
+    ("teams.list_task_events", Treatment::KeyChecked),
+    ("teams.task.trace", Treatment::KeyChecked),
+    ("teams.task.pause", Treatment::KeyChecked),
+    ("teams.task.resume", Treatment::KeyChecked),
+    ("teams.task.retry", Treatment::KeyChecked),
+    ("teams.task.skip", Treatment::KeyChecked),
+    ("teams.task.journal.get", Treatment::KeyChecked),
+    ("teams.task.journal.list", Treatment::KeyChecked),
+    ("teams.workflow.approve_step", Treatment::KeyChecked),
+    ("teams.workflow.reject_step", Treatment::KeyChecked),
+    ("teams.acp_member.add", Treatment::KeyChecked),
+    ("teams.acp_member.remove", Treatment::KeyChecked),
+    ("teams.acp_member.list", Treatment::KeyChecked),
+    ("teams.snapshot.create", Treatment::KeyChecked),
+    ("teams.snapshot.get", Treatment::KeyChecked),
+    ("teams.snapshot.restore", Treatment::KeyChecked),
+    ("teams.snapshot.delete", Treatment::KeyChecked),
 ];
 
 /// Whole families ruled [`Treatment::OrgShared`], as prefixes.
@@ -425,15 +483,19 @@ pub const SCOPED_METHODS: &[(&str, Treatment)] = &[
 /// file is the sibling of) makes the ruling cover the family by construction.
 ///
 /// Every entry needs a reason in [`ORG_SHARED_REASONS`], enforced by test.
-const ORG_SHARED_PREFIXES: &[&str] = &["teams."];
+///
+/// Empty since 2026-08-06: `teams.` was the only entry and its ruling was
+/// overturned — every method in the family is now individually enforced and
+/// listed in [`SCOPED_METHODS`]. The mechanism stays because the shape is
+/// right for the next family that genuinely is shared by design; an empty list
+/// is a stronger statement than a deleted one, namely that nothing today
+/// claims "shared" without a per-method audit.
+const ORG_SHARED_PREFIXES: &[&str] = &[];
 
 /// `OrgShared` entries carry a one-line reason at the point they're listed,
 /// keyed by the exact method or by the family prefix
 /// ([`ORG_SHARED_PREFIXES`]).
-pub const ORG_SHARED_REASONS: &[(&str, &str)] = &[(
-    "teams.",
-    "org-level AI-team infrastructure; project scoping arrives in P2 — pending human ruling",
-)];
+pub const ORG_SHARED_REASONS: &[(&str, &str)] = &[];
 
 #[must_use]
 pub fn treatment_of(method: &str) -> Option<Treatment> {
@@ -641,10 +703,7 @@ mod tests {
     }
 
     /// Final-review C2/C3: the families the parameter-keyed sweep could not
-    /// see. `teams.*` is ruled org-shared BY THE PLAN, not by an audit — it
-    /// is listed so the ruling is recorded rather than looking like an
-    /// oversight, and the prefix form means a new `teams.*` sibling inherits
-    /// the ruling instead of silently dropping out of the table.
+    /// see.
     #[test]
     fn final_review_families_are_registered() {
         assert_eq!(treatment_of("trace.by_runs"), Some(Treatment::KeyChecked));
@@ -663,10 +722,69 @@ mod tests {
         // `group_chat.start` creates; there is no addressed record to check,
         // same ruling as `session.create`.
         assert_eq!(treatment_of("group_chat.start"), None);
+    }
 
-        for m in ["teams.list", "teams.chat.history", "teams.some_future_rpc"] {
-            assert_eq!(treatment_of(m), Some(Treatment::OrgShared), "{m}");
+    /// The `teams.*` family, tightened 2026-08-06. Curated pin: a deletion or
+    /// typo in the block above fails here by name.
+    ///
+    /// The three deliberate absences are asserted too — an unregistered method
+    /// and a method someone forgot are indistinguishable in `treatment_of`, so
+    /// the ruling has to be written down somewhere that breaks if reversed.
+    #[test]
+    fn every_teams_method_is_registered_or_deliberately_absent() {
+        for m in ["teams.list", "teams.snapshot.list"] {
+            assert_eq!(treatment_of(m), Some(Treatment::ListFiltered), "{m}");
         }
+        // `agents.teams` returns the same filtered summaries but is NOT listed:
+        // `method_admin.rs` gates the whole `agents.` family to operators, and
+        // this table's `every_scoped_method_stays_open_to_members_in_method_admin`
+        // requires the two tables to agree. Its result set is still filtered —
+        // by the store decorator, which does not care which surface asked.
+        assert_eq!(treatment_of("agents.teams"), None);
+        for m in [
+            "teams.get",
+            "teams.rename",
+            "teams.disband",
+            "teams.delete",
+            "teams.usage",
+            "teams.chat.send",
+            "teams.chat.thread",
+            "teams.chat.history",
+            "teams.list_tasks",
+            "teams.create_task",
+            "teams.update_task",
+            "teams.list_task_runs",
+            "teams.add_task_comment",
+            "teams.list_task_comments",
+            "teams.list_task_events",
+            "teams.task.trace",
+            "teams.task.pause",
+            "teams.task.resume",
+            "teams.task.retry",
+            "teams.task.skip",
+            "teams.task.journal.get",
+            "teams.task.journal.list",
+            "teams.workflow.approve_step",
+            "teams.workflow.reject_step",
+            "teams.acp_member.add",
+            "teams.acp_member.remove",
+            "teams.acp_member.list",
+            "teams.snapshot.create",
+            "teams.snapshot.get",
+            "teams.snapshot.restore",
+            "teams.snapshot.delete",
+        ] {
+            assert_eq!(treatment_of(m), Some(Treatment::KeyChecked), "{m}");
+        }
+        for m in ["teams.create", "teams.list_templates", "teams.chat.cancel"] {
+            assert_eq!(
+                treatment_of(m),
+                None,
+                "{m} is deliberately unregistered — see the module doc's teams.* section"
+            );
+        }
+        // The family-wide OrgShared ruling is gone; nothing may inherit it.
+        assert_eq!(treatment_of("teams.some_future_rpc"), None);
     }
 
     /// Final-review I6: the five same-shape siblings Task 7's sweep stopped
