@@ -107,6 +107,11 @@ fn isolate_aleph_home() {
     });
 }
 
+// The REGISTRY_INIT mutex guard below is held across an await ON PURPOSE (see
+// the serialisation rationale at the guard site): each test runs its own
+// current-thread runtime, so parking this thread blocks no other test's
+// executor.
+#[allow(clippy::await_holding_lock)]
 async fn build_pipeline(
     mode: MemoryInjectionMode,
 ) -> (

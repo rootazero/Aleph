@@ -158,7 +158,9 @@
     "approval_expires": "Expires in",
     "approval_allow_once": "Approve once",
     "approval_allow_session": "Approve for session",
-    "approval_deny": "Deny"
+    "approval_deny": "Deny",
+    "approval_deny_with_reason": "Deny with reason…",
+    "approval_deny_reason_placeholder": "Tell the model what to do instead"
   },
   "dashboard": {
     "title": "System Overview",
