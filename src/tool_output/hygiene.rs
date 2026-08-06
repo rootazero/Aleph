@@ -60,19 +60,12 @@ use super::fence::rewrite_interior;
 use super::sanitize::sanitize_command_output;
 use super::scale_to_budget;
 use super::structured::{self, ContentKind};
+use super::walk::{walk_text_fields, MAX_WALK_DEPTH};
 
 /// Token floor a single string field must clear before the content-type router
 /// is worth running. Below this, a reduction's header can cost more than the
 /// lines it drops.
 const MIN_FIELD_TOKENS: usize = 150;
-
-/// Cap on recursive descent into nested `serde_json::Value`s. The walker would
-/// otherwise spend unbounded time on circular reference cycles (the FAILED test
-/// in the suite uses a self-referential envelope), and on pathological inputs
-/// tools occasionally produce (a deeply nested config dump). Four is enough for
-/// any tool result shape observed in production; the relevant test deliberately
-/// walks past it to confirm the recursion bails rather than spinning.
-const MAX_DEPTH: usize = 4;
 
 /// How a field was shortened.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -97,7 +90,6 @@ impl ReductionMethod {
     /// the reduction stays reversible" decision: sanitising loses nothing a
     /// model could want back, so it must not trigger a persist.
     #[must_use]
-    #[allow(dead_code)]
     pub const fn is_lossy(self) -> bool {
         !matches!(self, Self::Sanitized)
     }
@@ -130,53 +122,25 @@ pub struct FieldReduction {
 #[must_use]
 pub fn clean_result_value(value: &mut Value, budget_tokens: Option<usize>) -> Vec<FieldReduction> {
     let mut out = Vec::new();
-    let mut path = Vec::new();
-    walk(value, &mut path, 0, budget_tokens, &mut out);
+    // The walker is shared with the DevTools compressor (`walk` module): both
+    // stages editing the same value must see the same field set, or a field's
+    // treatment would depend on which stage ran first.
+    walk_text_fields(value, MAX_WALK_DEPTH, &mut |path, field| {
+        if let Some((method, before, after)) = reduce_field(field, budget_tokens) {
+            out.push(FieldReduction {
+                field: if path.is_empty() {
+                    // A bare `Value::String` root — an MCP text result.
+                    "<result>".to_string()
+                } else {
+                    path.join(".")
+                },
+                method,
+                tokens_before: before,
+                tokens_after: after,
+            });
+        }
+    });
     out
-}
-
-fn walk(
-    value: &mut Value,
-    path: &mut Vec<String>,
-    depth: usize,
-    budget_tokens: Option<usize>,
-    out: &mut Vec<FieldReduction>,
-) {
-    if depth > MAX_DEPTH {
-        return;
-    }
-    match value {
-        Value::String(s) => {
-            if let Some((method, before, after)) = reduce_field(s, budget_tokens) {
-                out.push(FieldReduction {
-                    field: if path.is_empty() {
-                        // A bare `Value::String` root — an MCP text result.
-                        "<result>".to_string()
-                    } else {
-                        path.join(".")
-                    },
-                    method,
-                    tokens_before: before,
-                    tokens_after: after,
-                });
-            }
-        }
-        Value::Object(map) => {
-            for (key, child) in map.iter_mut() {
-                path.push(key.clone());
-                walk(child, path, depth + 1, budget_tokens, out);
-                path.pop();
-            }
-        }
-        Value::Array(items) => {
-            for (idx, child) in items.iter_mut().enumerate() {
-                path.push(idx.to_string());
-                walk(child, path, depth + 1, budget_tokens, out);
-                path.pop();
-            }
-        }
-        _ => {}
-    }
 }
 
 /// How many salient lines a tier-2 digest may emit under `budget_tokens`.

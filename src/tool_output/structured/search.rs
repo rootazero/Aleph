@@ -114,8 +114,7 @@ pub(super) fn looks_like_search(lines: &[&str]) -> bool {
     matches >= 4 && matches * 100 >= non_empty * 60
 }
 
-pub(super) fn reduce_search(text: &str, profile: &Profile) -> Option<Reduction> {
-    let lines: Vec<&str> = text.lines().collect();
+pub(super) fn reduce_search(lines: &[&str], profile: &Profile) -> Option<Reduction> {
     let total = lines.len();
 
     // Group match-line indices by file, preserving first-seen file order.
@@ -167,7 +166,7 @@ pub(super) fn reduce_search(text: &str, profile: &Profile) -> Option<Reduction> 
         if kept.len() >= profile.search_total {
             break;
         }
-        kept.extend(select_for_file(&lines, idxs, profile.search_per_file));
+        kept.extend(select_for_file(lines, idxs, profile.search_per_file));
     }
     kept.sort_unstable();
     kept.dedup();
@@ -177,7 +176,7 @@ pub(super) fn reduce_search(text: &str, profile: &Profile) -> Option<Reduction> 
     if kept.len() >= total {
         return None; // nothing dropped
     }
-    let mut body = render_selected(&lines, &kept, total, profile);
+    let mut body = render_selected(lines, &kept, total, profile);
     // Dropping whole files has to be visible: otherwise a sweep across 400 files
     // reads as a complete answer covering 20. Counted from what actually survived
     // rendering, not from the group count — the overall cap and the truncate
@@ -229,9 +228,12 @@ fn select_for_file(lines: &[&str], idxs: &[usize], max_per_file: usize) -> Vec<u
     }
     if sel.len() - 1 < budget {
         let remaining = budget - (sel.len() - 1);
+        // Membership tested once per middle line; a linear scan over `errs`
+        // made that quadratic in the per-file hit count.
+        let err_set: std::collections::HashSet<usize> = errs.iter().copied().collect();
         for &i in middle
             .iter()
-            .filter(|&&i| !errs.contains(&i))
+            .filter(|&&i| !err_set.contains(&i))
             .take(remaining)
         {
             sel.push(i);
@@ -248,7 +250,8 @@ mod tests {
     use super::*;
 
     fn reduce(text: &str) -> Option<Reduction> {
-        reduce_search(text, &Profile::DEFAULT)
+        let lines: Vec<&str> = text.lines().collect();
+        reduce_search(&lines, &Profile::DEFAULT)
     }
 
     #[test]
@@ -381,7 +384,9 @@ mod tests {
             }
         }
         let wide = reduce(&s).expect("default must reduce");
-        let tight = reduce_search(&s, &Profile::for_token_budget(500)).expect("tight must reduce");
+        let tight_lines: Vec<&str> = s.lines().collect();
+        let tight = reduce_search(&tight_lines, &Profile::for_token_budget(500))
+            .expect("tight must reduce");
         assert!(
             tight.tally.kept() < wide.tally.kept(),
             "tight kept {} vs default {}",

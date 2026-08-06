@@ -310,11 +310,15 @@ pub fn reduce_within(text: &str, budget_tokens: Option<usize>) -> Option<Reducti
         if lines.len() < kind.min_lines() {
             continue;
         }
+        // The line reducers take the already-collected `lines` — each used to
+        // re-collect `text.lines()` on its own, paying the split once per
+        // candidate kind. `reduce_json` keeps the whole text: it parses rather
+        // than selects lines, so it never collected them.
         let reduced = match kind {
-            ContentKind::Diff => diff::reduce_diff(text, &profile),
-            ContentKind::Search => search::reduce_search(text, &profile),
+            ContentKind::Diff => diff::reduce_diff(&lines, &profile),
+            ContentKind::Search => search::reduce_search(&lines, &profile),
             ContentKind::Json => json::reduce_json(text, &profile),
-            ContentKind::Log => log::reduce_log(text, &profile),
+            ContentKind::Log => log::reduce_log(&lines, &profile),
         };
         // Central size guard — the single place that decides whether a
         // reduction was worth it. Each reducer only has to decide *what* is
@@ -476,7 +480,10 @@ pub(super) fn render_selected(
 /// whole-line allocations per line, which for the 200 KB minified line above is
 /// 800 KB of copying to decide what to throw away. `needle` must already be
 /// lowercase.
-pub(super) fn contains_ignore_ascii_case(haystack: &str, needle: &str) -> bool {
+///
+/// `pub(crate)` because [`distill`](crate::tool_output::distill) had the same
+/// per-line lowercase copy on the same hot path and now shares this.
+pub(crate) fn contains_ignore_ascii_case(haystack: &str, needle: &str) -> bool {
     let (h, n) = (haystack.as_bytes(), needle.as_bytes());
     if n.is_empty() || h.len() < n.len() {
         return n.is_empty();
