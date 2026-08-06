@@ -72,6 +72,13 @@ pub struct CcPluginJson {
 
     /// Aleph-specific extensions (optional, ignored by Claude Code)
     pub aleph: Option<JsonValue>,
+
+    /// P3.5 — lazy activation hints. Plugin author can declare which
+    /// surfaces they serve so `ActivationPlanner` doesn't have to load
+    /// every plugin eagerly at boot. Mirrors openclaw's `activation`
+    /// block. Optional field; absence = legacy "always load".
+    #[serde(default)]
+    pub activation: Option<crate::extension::activation::ActivationHints>,
 }
 
 /// Author in CC plugin.json — either a plain string or an object
@@ -246,6 +253,7 @@ pub fn parse_cc_plugin_json_content(
         aleph_extensions: aleph_ext,
         // Memory extension manifest — not available in CC JSON format
         memory_manifest: None,
+        activation: None,
     };
 
     Ok(manifest)

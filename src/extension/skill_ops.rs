@@ -165,6 +165,12 @@ impl ExtensionManager {
     // ── Configuration Access ──────────────────────────────────────────────────
 
     /// Get all MCP server configurations from config
+    ///
+    /// Both local stdio and remote HTTP/SSE transports are returned in their
+    /// unified [`McpServerConfig`] shape — `PluginLoader::load_mcp_plugin`
+    /// dispatches on the variant when starting the server. A disabled
+    /// server (`enabled = false`) is dropped here so it never reaches the
+    /// loader.
     pub async fn get_mcp_servers(&self) -> HashMap<String, McpServerConfig> {
         let mut servers = HashMap::new();
 
@@ -174,21 +180,42 @@ impl ExtensionManager {
                     config::McpConfig::Local {
                         command,
                         environment,
+                        enabled,
                         ..
                     } => {
+                        if !enabled {
+                            continue;
+                        }
                         let cmd = command.first().cloned().unwrap_or_default();
                         let args = command.get(1..).unwrap_or(&[]).to_vec();
                         servers.insert(
                             name.clone(),
-                            McpServerConfig {
+                            McpServerConfig::Stdio {
                                 command: cmd,
                                 args,
                                 env: environment.clone(),
                             },
                         );
                     }
-                    config::McpConfig::Remote { url, .. } => {
-                        tracing::debug!("Remote MCP server {} at {} not yet supported", name, url);
+                    config::McpConfig::Remote {
+                        url,
+                        enabled,
+                        headers,
+                        oauth,
+                        timeout,
+                    } => {
+                        if !enabled {
+                            continue;
+                        }
+                        servers.insert(
+                            name.clone(),
+                            McpServerConfig::Remote {
+                                url: url.clone(),
+                                headers: headers.clone(),
+                                oauth: oauth.clone(),
+                                timeout_ms: *timeout,
+                            },
+                        );
                     }
                 }
             }
