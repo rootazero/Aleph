@@ -109,6 +109,9 @@ fn team_history_item_to_message(index: usize, item: TeamMessageItem) -> ChatMess
         // out of the Telegram-style grouping pass.
         agent_id: (role == "assistant").then_some(item.from_agent),
         plan_archive: None,
+        // `teams.chat.history` is the legacy group-broadcast surface (not a
+        // P2 project room) — it carries no `author_user_id`.
+        author_user_id: None,
     }
 }
 
@@ -236,6 +239,9 @@ pub(crate) async fn hydrate_session_history(
                             text_finalized: false,
                             agent_id: None,
                             plan_archive: None,
+                            // The room member who typed this turn (P2 Task
+                            // 6/8), when it was sent inside a project room.
+                            author_user_id: m.author_user_id.clone(),
                         });
                     });
                 }
@@ -1834,6 +1840,7 @@ mod gauge_tests {
             context_tokens: None,
             context_window: None,
             total_tokens: None,
+            author_user_id: None,
         }
     }
 
@@ -1847,6 +1854,7 @@ mod gauge_tests {
             context_tokens: used,
             context_window: window,
             total_tokens: total,
+            author_user_id: None,
         }
     }
 

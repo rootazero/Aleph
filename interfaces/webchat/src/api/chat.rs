@@ -23,6 +23,12 @@ pub struct ChatMessage {
     pub context_window: Option<u32>,
     #[serde(default)]
     pub total_tokens: Option<u64>,
+    /// The human principal who typed this turn, when it was sent inside a
+    /// project room (P2 Task 6). `None` for a single-user session, a
+    /// pre-P2 core, or an assistant/system row. Mirrors
+    /// `gateway::handlers::chat::ChatMessage::author_user_id` on the wire.
+    #[serde(default)]
+    pub author_user_id: Option<String>,
 }
 
 /// Response from chat.send
@@ -63,6 +69,14 @@ impl ChatApi {
     /// `RunRequest.workspace_override` so the agent's tool calls run
     /// inside that folder instead of `~/.aleph/workspaces/{agent_id}`.
     ///
+    /// `project_id` — the project ROOM this turn belongs to (P2), distinct
+    /// from `project_root`. The session's stored scope outranks this after
+    /// the first turn, so resending it every turn is safe and idempotent.
+    /// CRITICAL: a project-room send must pass `project_root: None` — an
+    /// explicit `project_root` outranks the room's workspace binding and is
+    /// REFUSED server-side for remote chat-tier callers. Callers must not
+    /// set both.
+    ///
     /// `voice_input` — true when `message` is an ASR-transcribed spoken
     /// utterance (voice loop / dictation). Core then arms the session's
     /// voice-mode prompt layer and the `[voice]` low-TTFT model pin.
@@ -74,6 +88,7 @@ impl ChatApi {
         attachments: Vec<ChatAttachment>,
         agent_id: Option<&str>,
         project_root: Option<&str>,
+        project_id: Option<&str>,
         model_override: Option<&crate::api::providers::ModelOverride>,
         exec_tier: Option<&str>,
         mode: Option<&str>,
@@ -98,6 +113,7 @@ impl ChatApi {
             "attachments": attachments_json,
             "agent_id": agent_id,
             "project_root": project_root,
+            "project_id": project_id,
             "model_override": model_override,
             // The tier rides on the message because a brand-new conversation
             // has no session to write it to yet — and the first turn is exactly

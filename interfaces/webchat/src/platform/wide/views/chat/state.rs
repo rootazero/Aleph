@@ -345,6 +345,13 @@ pub struct ChatMessage {
     /// `messages` in `SessionSnapshot`) and a full reload (via replay).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub plan_archive: Option<super::plan::PlanView>,
+    /// The human principal who typed this turn, when it was sent inside a
+    /// project room (P2 Task 6/8). `None` for a single-user session, a
+    /// pre-P2 core, or an assistant/system row. `MessageBubble` renders it as
+    /// a display-name label above a user bubble, but only when it differs
+    /// from the viewer's own id — never for the viewer's own messages.
+    #[serde(default)]
+    pub author_user_id: Option<String>,
 }
 
 /// Terminal status for a tool row whose outcome never reached the panel: the
@@ -581,6 +588,22 @@ pub struct ChatState {
     /// composer's "enter project workspace ▾" chip so the user always sees which
     /// folder they're operating against.
     pub active_project_name: RwSignal<Option<String>>,
+    /// `Some(project_id)` when this conversation is a project room (P2 Task
+    /// 8), rather than a plain single-agent chat. Every `ChatApi::send` call
+    /// site reads this to attach `project_id` and force `project_root` to
+    /// `None` (the two are mutually exclusive — an explicit `project_root`
+    /// outranks the room's workspace binding and is refused server-side for
+    /// remote chat-tier callers).
+    ///
+    /// Unlike `team_id` (ephemeral, re-entered via compose — see
+    /// `clear_team_context`'s doc), a room's binding must survive a tab swap:
+    /// it rides in [`SessionSnapshot`] and is left untouched by
+    /// `clear_session()`, mirroring `active_project_root`'s treatment. It is
+    /// set exactly once, when the room's conversation is opened
+    /// (`components::project_page`), and never mutated afterwards — each
+    /// project gets its own `ConvId`, so there is no "switching root within
+    /// one conversation" case to handle here.
+    pub room_project_id: RwSignal<Option<String>>,
     /// User-selected per-turn model override (chat-window picker).
     ///
     /// `None` means "use the agent's configured default + fallback chain"
@@ -689,6 +712,7 @@ impl ChatState {
             repair_pulse: RwSignal::new(0),
             active_project_root: RwSignal::new(None),
             active_project_name: RwSignal::new(None),
+            room_project_id: RwSignal::new(None),
             selected_model: RwSignal::new(None),
             pending_model_override: RwSignal::new(None),
             run_costs: RwSignal::new(std::collections::HashMap::new()),
@@ -786,6 +810,7 @@ impl ChatState {
                 iteration: None,
                 agent_id: None,
                 plan_archive: Some(p),
+                author_user_id: None,
             });
         });
         self.plan.set(None);
@@ -969,6 +994,7 @@ impl ChatState {
                 iteration: None,
                 agent_id: None,
                 plan_archive: None,
+                author_user_id: None,
             });
         });
         self.error_message.set(None);
@@ -1006,6 +1032,7 @@ impl ChatState {
                 iteration: Some(1),
                 agent_id: None,
                 plan_archive: None,
+                author_user_id: None,
             });
         });
         self.active_run_id.set(Some(run_id.to_string()));
@@ -1056,6 +1083,7 @@ impl ChatState {
                         text_finalized: false,
                         agent_id: None,
                         plan_archive: None,
+                        author_user_id: None,
                     });
                 } else {
                     msgs[idx].iteration = Some(iteration);
@@ -1463,6 +1491,7 @@ impl ChatState {
             stop_suppresses_next_drain: self.stop_suppresses_next_drain.get_untracked(),
             active_project_root: self.active_project_root.get_untracked(),
             active_project_name: self.active_project_name.get_untracked(),
+            room_project_id: self.room_project_id.get_untracked(),
             selected_model: self.selected_model.get_untracked(),
             next_msg_id: self.next_msg_id.get_untracked(),
             context_usage: self.context_usage.get_untracked(),
@@ -1491,6 +1520,7 @@ impl ChatState {
             .set(snap.stop_suppresses_next_drain);
         self.active_project_root.set(snap.active_project_root);
         self.active_project_name.set(snap.active_project_name);
+        self.room_project_id.set(snap.room_project_id);
         self.selected_model.set(snap.selected_model);
         // A model requested from outside the chat view (MoA "Use in chat")
         // survives this restore: apply it over the snapshot value, then consume.
@@ -1543,6 +1573,9 @@ pub struct SessionSnapshot {
     pub stop_suppresses_next_drain: bool,
     pub active_project_root: Option<String>,
     pub active_project_name: Option<String>,
+    /// See [`ChatState::room_project_id`] — persisted (unlike `team_id`) so a
+    /// room conversation stays a room across a tab swap.
+    pub room_project_id: Option<String>,
     pub selected_model: Option<crate::api::providers::ModelOverride>,
     pub next_msg_id: u64,
     /// Last completed turn's context-window occupancy, so the gauge survives a

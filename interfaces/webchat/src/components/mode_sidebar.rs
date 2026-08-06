@@ -27,6 +27,7 @@ pub enum PanelMode {
     Memory,
     Agents,
     Teams,
+    Projects,
     Extensions,
     Settings,
     /// Phone-only ••• tab landing — a sections menu for the management modes
@@ -44,6 +45,8 @@ impl PanelMode {
             Self::Agents
         } else if path.starts_with("/teams") {
             Self::Teams
+        } else if path.starts_with("/projects") {
+            Self::Projects
         } else if path.starts_with("/extensions") {
             Self::Extensions
         } else if path.starts_with("/dashboard") {
@@ -88,6 +91,7 @@ pub fn ModeSidebar() -> impl IntoView {
                     PanelMode::Agents => view! { <AgentsSidebar /> }.into_any(),
                     PanelMode::Memory => view! { <MemorySidebar /> }.into_any(),
                     PanelMode::Teams => view! { <crate::views::teams::TeamsSidebar /> }.into_any(),
+                    PanelMode::Projects => view! { <crate::components::sidebar::projects::ProjectsSidebar /> }.into_any(),
                     PanelMode::Extensions => view! { <crate::views::extensions::ExtensionsSidebar /> }.into_any(),
                     PanelMode::Settings => view! { <SettingsSidebar /> }.into_any(),
                     // /more is a phone-only route; desktop never reaches it.
@@ -195,6 +199,7 @@ mod tests {
             PanelMode::Chat,
             PanelMode::Memory,
             PanelMode::Agents,
+            PanelMode::Projects,
             PanelMode::Settings,
         ] {
             assert!(!m.under_more(), "{m:?} should not be under More");

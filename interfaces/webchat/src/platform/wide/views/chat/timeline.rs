@@ -406,6 +406,7 @@ mod tests {
             iteration: None,
             agent_id: None,
             plan_archive: None,
+            author_user_id: None,
         }
     }
 
@@ -425,6 +426,7 @@ mod tests {
             timestamp: None,
             agent_id: None,
             plan_archive: None,
+            author_user_id: None,
         }
     }
 
@@ -444,6 +446,7 @@ mod tests {
             timestamp: None,
             agent_id: None,
             plan_archive: None,
+            author_user_id: None,
         }
     }
 
@@ -463,6 +466,7 @@ mod tests {
             timestamp: None,
             agent_id: None,
             plan_archive: None,
+            author_user_id: None,
         }
     }
 
@@ -512,6 +516,7 @@ mod tests {
             timestamp: None,
             agent_id: None,
             plan_archive: None,
+            author_user_id: None,
         }
     }
 
@@ -534,6 +539,7 @@ mod tests {
             timestamp: None,
             agent_id: None,
             plan_archive: None,
+            author_user_id: None,
         }
     }
 
