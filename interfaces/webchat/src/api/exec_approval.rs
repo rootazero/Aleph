@@ -68,13 +68,24 @@ impl ExecApprovalApi {
     }
 
     /// Resolve a pending approval. `decision` is the kebab-case wire value:
-    /// "allow-once" | "allow-session" | "deny".
-    pub async fn resolve(state: &DashboardState, id: String, decision: &str) -> Result<(), String> {
-        let params = serde_json::json!({
+    /// "allow-once" | "allow-session" | "deny". `reason` is the operator's
+    /// free-text objection on a deny — the server relays it verbatim to the
+    /// model ("The user said: …") so it re-plans on the actual objection.
+    /// Blank reasons are dropped; the field is omitted rather than sent empty.
+    pub async fn resolve(
+        state: &DashboardState,
+        id: String,
+        decision: &str,
+        reason: Option<String>,
+    ) -> Result<(), String> {
+        let mut params = serde_json::json!({
             "id": id,
             "decision": decision,
             "resolved_by": "Operator (Panel)",
         });
+        if let Some(reason) = reason.filter(|r| !r.trim().is_empty()) {
+            params["reason"] = serde_json::Value::String(reason);
+        }
         state.rpc_call("exec.approval.resolve", params).await?;
         Ok(())
     }

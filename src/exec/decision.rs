@@ -29,6 +29,12 @@ pub struct ExecApprovalRequest {
     /// the group-chat bypass where any paired member could approve another
     /// member's action. See `ManagerCallbackSink::handle_callback`.
     pub originator_user_id: Option<String>,
+    /// Session-grant identity of the action being approved
+    /// ([`crate::sandbox::exec_approval::ApprovalAction::grant_key`]). `None`
+    /// for approvals with no action identity (cluster node approvals, bare
+    /// route escalations) — those never participate in the session-grant
+    /// cascade.
+    pub grant_key: Option<String>,
 }
 
 /// Backward compatibility type alias

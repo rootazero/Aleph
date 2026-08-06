@@ -84,6 +84,7 @@ mod tests {
             session_key: "telegram:123".to_string(),
             reason: None,
             originator_user_id: None,
+            grant_key: None,
         }
     }
 

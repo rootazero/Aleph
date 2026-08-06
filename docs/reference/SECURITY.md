@@ -1354,9 +1354,11 @@ from the pre-revert build:
 - No user-editable floor under `Full` in hermes' sense (an `approvals.deny` glob
   that survives yolo). `[policies.tool_permissions]` `deny` overrides already
   cover ~80% of it, since an explicit entry beats the tier.
-- The Panel's approval card has no reason input yet — `/deny <reason>` works
-  from channels and the RPC accepts `reason`, but the Panel UI sends a bare
-  deny (UI-only gap, `interfaces/webchat`).
+- ~~The Panel's approval card has no reason input yet~~ **closed**: the card
+  now has a "Deny with reason…" entry (inline input, Enter/confirm submits
+  `reason` on `exec.approval.resolve`), matching kimi-cli's approval option 4.
+  The TUI overlay still sends a bare deny — it resolves by decision index and
+  has no free-text input mode.
 
 ---
 

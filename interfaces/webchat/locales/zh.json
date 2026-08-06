@@ -158,7 +158,9 @@
     "approval_expires": "剩余",
     "approval_allow_once": "批准一次",
     "approval_allow_session": "本会话批准",
-    "approval_deny": "拒绝"
+    "approval_deny": "拒绝",
+    "approval_deny_with_reason": "拒绝并说明理由…",
+    "approval_deny_reason_placeholder": "告诉模型应该怎么做"
   },
   "dashboard": {
     "title": "系统概览",
