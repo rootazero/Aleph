@@ -1629,7 +1629,12 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
         }
         tracing::warn!(error = %e, "project store migration failed; rooms will be unavailable");
     }
-    register_projects_handlers(&mut server, &project_store, args.daemon);
+    register_projects_handlers(
+        &mut server,
+        &project_store,
+        &auth_bundle.security_store,
+        args.daemon,
+    );
 
     // Cross-platform directory-browse RPCs that back the Panel's
     // `<DirectoryBrowser />`. Gated by `[projects].allowed_roots` (default

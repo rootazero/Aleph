@@ -324,6 +324,33 @@
 //! prefix-shaped `OrgShared` ruling used to give the family that property, and
 //! removing it is the cost of enforcing per-method treatments.
 //!
+//! ## `projects.*` (P2 project rooms)
+//!
+//! A project room's roster IS its authorization (spec §6.1), so the predicate
+//! is `visibility::project_visible` — membership, not owner equality. That is
+//! the one structural difference from every family above: two different users
+//! both legitimately see the same record.
+//!
+//! Enforcement is a single admission point in the handler file,
+//! `handlers::projects::gate_project`, plus `require_owner` for the
+//! owner-level verbs. `projects.list` filters; `projects.get` / `remove` /
+//! `touch` / `rename` / `archive` / `member.*` are addressed and gated.
+//!
+//! Three siblings are deliberately absent rather than registered:
+//!
+//! - `projects.create` — creates an unbound room; no addressed record exists
+//!   yet. Same ruling as `session.create` / `teams.create` / `group_chat.start`.
+//! - `projects.add` — registers a folder. Also a creation surface: it resolves
+//!   the caller off the ambient scope and collapses onto THEIR row for that
+//!   path (`ProjectStore::find_by_path_for`, owner-keyed unique index), so it
+//!   can never land on another user's room. There is no caller-supplied id to
+//!   check.
+//! - `projects.create_blank` — `mkdir` + `add`; same ruling, one layer up.
+//!
+//! Those three are asserted absent by name in the pin test below, because an
+//! unregistered method and a method someone forgot are indistinguishable in
+//! [`treatment_of`].
+//!
 //! ## Known gaps NOT covered by this table (found during the sweep, not
 //! fixed — flagged here exactly as `method_admin.rs` flags its own
 //! follow-ups)
@@ -470,6 +497,16 @@ pub const SCOPED_METHODS: &[(&str, Treatment)] = &[
     ("teams.snapshot.get", Treatment::KeyChecked),
     ("teams.snapshot.restore", Treatment::KeyChecked),
     ("teams.snapshot.delete", Treatment::KeyChecked),
+    // --- projects.* (P2 project rooms — see the module doc's section) ---
+    ("projects.list", Treatment::ListFiltered),
+    ("projects.get", Treatment::KeyChecked),
+    ("projects.remove", Treatment::KeyChecked),
+    ("projects.touch", Treatment::KeyChecked),
+    ("projects.rename", Treatment::KeyChecked),
+    ("projects.archive", Treatment::KeyChecked),
+    ("projects.member.add", Treatment::KeyChecked),
+    ("projects.member.remove", Treatment::KeyChecked),
+    ("projects.member.list", Treatment::KeyChecked),
 ];
 
 /// Whole families ruled [`Treatment::OrgShared`], as prefixes.
@@ -785,6 +822,40 @@ mod tests {
         }
         // The family-wide OrgShared ruling is gone; nothing may inherit it.
         assert_eq!(treatment_of("teams.some_future_rpc"), None);
+    }
+
+    /// The `projects.*` family (P2 project rooms). Curated pin: a deletion or
+    /// typo in the block above fails here by name.
+    ///
+    /// The three deliberate absences are asserted too, for the same reason the
+    /// `teams.*` pin asserts its own — `treatment_of` cannot tell "ruled a
+    /// creation surface" from "nobody looked".
+    #[test]
+    fn every_projects_method_is_registered_or_deliberately_absent() {
+        assert_eq!(
+            treatment_of("projects.list"),
+            Some(Treatment::ListFiltered),
+            "projects.list"
+        );
+        for m in [
+            "projects.get",
+            "projects.remove",
+            "projects.touch",
+            "projects.rename",
+            "projects.archive",
+            "projects.member.add",
+            "projects.member.remove",
+            "projects.member.list",
+        ] {
+            assert_eq!(treatment_of(m), Some(Treatment::KeyChecked), "{m}");
+        }
+        for m in ["projects.create", "projects.add", "projects.create_blank"] {
+            assert_eq!(
+                treatment_of(m),
+                None,
+                "{m} is deliberately unregistered — see the module doc's projects.* section"
+            );
+        }
     }
 
     /// Final-review I6: the five same-shape siblings Task 7's sweep stopped

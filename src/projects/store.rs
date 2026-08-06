@@ -18,6 +18,7 @@
 //! [`create_blank`]: ProjectStore::create_blank
 //! [`find_by_path`]: ProjectStore::find_by_path
 
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 use std::time::SystemTime;
@@ -533,6 +534,30 @@ impl ProjectStore {
             let mut out = Vec::new();
             for row in rows {
                 out.push(row.map_err(db_err)?);
+            }
+            Ok(out)
+        })
+    }
+
+    /// Every project's roster in ONE query, keyed by project id.
+    ///
+    /// Exists so a list endpoint that renders rosters does not run
+    /// [`Self::members`] once per row. Projects with an empty roster are
+    /// absent from the map rather than present-and-empty — a caller rendering
+    /// a list should treat "missing" as "no members", which is what the table
+    /// actually says.
+    pub fn rosters(&self) -> Result<HashMap<String, Vec<String>>, ProjectError> {
+        self.with_conn(|conn| {
+            let mut stmt = conn
+                .prepare("SELECT project_id, user_id FROM project_members ORDER BY added_at")
+                .map_err(db_err)?;
+            let rows = stmt
+                .query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))
+                .map_err(db_err)?;
+            let mut out: HashMap<String, Vec<String>> = HashMap::new();
+            for row in rows {
+                let (project_id, user_id) = row.map_err(db_err)?;
+                out.entry(project_id).or_default().push(user_id);
             }
             Ok(out)
         })

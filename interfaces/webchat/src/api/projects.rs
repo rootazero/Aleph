@@ -9,11 +9,23 @@ use crate::context::DashboardState;
 use serde::{Deserialize, Serialize};
 
 /// Mirrors `gateway::handlers::projects::ProjectView`.
+///
+/// `workspace_path` is `None` for a project room that is not bound to a folder
+/// — the picker only ever shows bound rows, so it renders those as empty, but
+/// the two states are distinguishable here on purpose (the pre-P2 wire spelled
+/// both `""`).
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ProjectInfo {
     pub id: String,
     pub name: String,
-    pub path: String,
+    #[serde(default)]
+    pub owner_user_id: Option<String>,
+    #[serde(default)]
+    pub workspace_path: Option<String>,
+    #[serde(default)]
+    pub status: String,
+    #[serde(default)]
+    pub member_ids: Vec<String>,
     pub created_at: i64,
     pub last_used_at: i64,
 }

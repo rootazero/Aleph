@@ -89,13 +89,18 @@ pub(in crate::commands::start) fn register_workspace_handlers(
 
 // ─── register_projects_handlers ──────────────────────────────────────────────
 
-/// Wire the per-user project catalogue (`~/.aleph/projects.json`).
+/// Wire the project rooms surface (`~/.aleph/data/projects.db`).
 ///
-/// These methods drive the desktop Panel's "Enter Project" picker: list /
-/// add an existing folder / create a blank one / remove / touch / get.
+/// One table, two views: the same rows back the desktop Panel's "Enter
+/// Project" picker (list / add an existing folder / create a blank one /
+/// remove / touch / get) and the P2 project room (create / rename / archive /
+/// roster). `users_store` is the SAME `SecurityStore` Arc `users.*` and
+/// connect auth use — the roster verbs need it to reject a member id that
+/// names no active principal, and to let an org admin act as owner.
 pub(in crate::commands::start) fn register_projects_handlers(
     server: &mut GatewayServer,
     project_store: &Arc<alephcore::projects::ProjectStore>,
+    users_store: &Arc<alephcore::gateway::security::SecurityStore>,
     daemon: bool,
 ) {
     use alephcore::gateway::handlers::projects as projects_handlers;
@@ -122,7 +127,8 @@ pub(in crate::commands::start) fn register_projects_handlers(
         server,
         "projects.remove",
         projects_handlers::handle_remove,
-        project_store
+        project_store,
+        users_store
     );
     register_handler!(
         server,
@@ -136,15 +142,63 @@ pub(in crate::commands::start) fn register_projects_handlers(
         projects_handlers::handle_get,
         project_store
     );
+    register_handler!(
+        server,
+        "projects.create",
+        projects_handlers::handle_create,
+        project_store
+    );
+    register_handler!(
+        server,
+        "projects.rename",
+        projects_handlers::handle_rename,
+        project_store,
+        users_store
+    );
+    register_handler!(
+        server,
+        "projects.archive",
+        projects_handlers::handle_archive,
+        project_store,
+        users_store
+    );
+    register_handler!(
+        server,
+        "projects.member.add",
+        projects_handlers::handle_member_add,
+        project_store,
+        users_store
+    );
+    register_handler!(
+        server,
+        "projects.member.remove",
+        projects_handlers::handle_member_remove,
+        project_store,
+        users_store
+    );
+    register_handler!(
+        server,
+        "projects.member.list",
+        projects_handlers::handle_member_list,
+        project_store
+    );
 
     if !daemon {
         println!("Project methods:");
-        println!("  - projects.list         : List recent projects (sorted by last_used_at)");
-        println!("  - projects.add          : Register an existing folder as a project");
-        println!("  - projects.create_blank : Create + register a new empty folder");
-        println!("  - projects.remove       : Drop a project entry (does not delete the folder)");
-        println!("  - projects.touch        : Bump last_used_at for a project");
-        println!("  - projects.get          : Fetch a single project by ID");
+        println!("  - projects.list          : List my projects (sorted by last_used_at)");
+        println!("  - projects.add           : Register an existing folder as a project");
+        println!("  - projects.create_blank  : Create + register a new empty folder");
+        println!("  - projects.create        : Create an unbound project room");
+        println!("  - projects.get           : Fetch a single project by ID");
+        println!("  - projects.rename        : Rename a project (owner/admin)");
+        println!(
+            "  - projects.archive       : Archive a project, keeping its roster (owner/admin)"
+        );
+        println!("  - projects.remove        : Drop a project entry (does not delete the folder)");
+        println!("  - projects.touch         : Bump last_used_at for a project");
+        println!("  - projects.member.add    : Add a user to a project roster (owner/admin)");
+        println!("  - projects.member.remove : Remove a user from a project roster (owner/admin)");
+        println!("  - projects.member.list   : List a project's roster");
         println!();
     }
 }
