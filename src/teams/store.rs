@@ -191,14 +191,6 @@ impl SqliteTeamStore {
             );
 
             CREATE INDEX IF NOT EXISTS idx_team_members_agent ON team_members(agent_id);
-
-            -- Enforce team-name uniqueness at the database layer so concurrent
-            -- `create_team` calls with the same name can't both succeed and
-            -- leave a first-match-wins shadow row that name-based lookups can
-            -- never reach. Only active teams participate — a previously-active
-            -- name may legitimately reappear after a disband.
-            CREATE UNIQUE INDEX IF NOT EXISTS idx_teams_name_active
-                ON teams(name) WHERE status = 'active';
             "#,
         )
         .map_err(db_err)?;
@@ -232,6 +224,33 @@ impl SqliteTeamStore {
         // uses (`gateway::visibility::owner_or_legacy`), so pre-P1 teams read
         // as the org-era single operator's without touching a single row.
         add_column_if_missing(&conn, "teams", "owner_user_id", "TEXT")?;
+
+        // Team-name uniqueness, scoped to the owner.
+        //
+        // The database-layer constraint exists so concurrent `create_team`
+        // calls with the same name can't both succeed and leave a
+        // first-match-wins shadow row that name-based lookups never reach.
+        // Only active teams participate — a name may legitimately reappear
+        // after a disband.
+        //
+        // It used to be global, which turned into a cross-user existence
+        // oracle the moment teams got owners: a member naming their team
+        // "Roadmap" would be told one already exists, learning both that
+        // another user has a team and what it is called — and being blocked
+        // from a name they cannot see. Keyed on the EFFECTIVE owner
+        // (`COALESCE`, matching `visibility::owner_or_legacy`) rather than the
+        // raw column, because SQLite treats NULLs as distinct in a unique
+        // index: keying on the raw column would silently drop the constraint
+        // entirely for every legacy row, which is every row in a
+        // single-user database.
+        conn.execute_batch(&format!(
+            "DROP INDEX IF EXISTS idx_teams_name_active;
+             CREATE UNIQUE INDEX IF NOT EXISTS idx_teams_owner_name_active
+                 ON teams(COALESCE(owner_user_id, '{owner}'), name)
+                 WHERE status = 'active';",
+            owner = crate::gateway::security::store::OWNER_USER_ID,
+        ))
+        .map_err(db_err)?;
 
         Ok(())
     }

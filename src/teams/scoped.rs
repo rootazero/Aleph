@@ -253,6 +253,46 @@ mod tests {
         assert_eq!(denied, missing);
     }
 
+    /// Team names are unique PER OWNER, not globally. A global constraint is
+    /// a cross-user existence oracle — bob would be told alice's team name is
+    /// taken, learning both that it exists and what it is called, and be
+    /// blocked from a name he cannot see.
+    #[tokio::test]
+    async fn two_users_may_each_have_a_team_of_the_same_name() {
+        let s = store().await;
+        create_as(&s, "u-alice", "Roadmap").await;
+
+        let bobs = with_scope(
+            Some(ScopeAttribution::personal("u-bob")),
+            s.create_team(new_team("Roadmap")),
+        )
+        .await
+        .expect("bob may name his own team Roadmap");
+        assert_eq!(bobs.owner_user_id.as_deref(), Some("u-bob"));
+
+        // ...but one user still cannot hold two active teams of one name.
+        let dup = with_scope(
+            Some(ScopeAttribution::personal("u-bob")),
+            s.create_team(new_team("Roadmap")),
+        )
+        .await;
+        assert!(dup.is_err(), "the per-owner constraint must still bite");
+    }
+
+    /// The legacy half of the same rule: unowned rows collapse onto the
+    /// effective owner, so a single-user database keeps the exact constraint
+    /// it had before the index was re-keyed. Without the `COALESCE`, SQLite's
+    /// distinct-NULLs rule would drop the constraint for every legacy row.
+    #[tokio::test]
+    async fn unowned_teams_still_collide_with_each_other() {
+        let s = store().await;
+        s.create_team(new_team("Shared")).await.unwrap();
+        assert!(
+            s.create_team(new_team("Shared")).await.is_err(),
+            "two unowned teams of one name must still collide"
+        );
+    }
+
     /// Zero-change guarantee: a caller with no ambient owner (cron, internal
     /// sweep, in-process test) is unrestricted, exactly as before P1.
     #[tokio::test]
