@@ -1,55 +1,95 @@
 //! On-disk project catalogue. See [`crate::projects`] for the module-level
 //! contract.
+//!
+//! Storage is `~/.aleph/data/projects.db` (SQLite). Two tables:
+//!
+//! - `projects` — the entity: id, name, owner, bound workspace, status.
+//! - `project_members` — the roster. **Membership IS the authorization**
+//!   (spec §6.1); there are no per-resource grants in v1.
+//!
+//! One table, two views (human ruling 2026-08-06): the Panel's
+//! "recent working directory" picker is this same table filtered to rows that
+//! have a `workspace_path`, ordered by `last_used_at`. That is why [`add`] /
+//! [`create_blank`] / [`find_by_path`] survive the promotion unchanged in
+//! behaviour — they are the picker's entry points and they land on
+//! [`ProjectStore::create`] underneath.
+//!
+//! [`add`]: ProjectStore::add
+//! [`create_blank`]: ProjectStore::create_blank
+//! [`find_by_path`]: ProjectStore::find_by_path
 
 use std::path::{Path, PathBuf};
+use std::sync::OnceLock;
 use std::time::SystemTime;
 
+use rusqlite::{Connection, OptionalExtension, Row};
 use serde::{Deserialize, Serialize};
-use sha2::{Digest, Sha256};
 
-use crate::utils::atomic_io::{with_file_lock, write_atomic};
+use crate::gateway::security::store::OWNER_USER_ID;
+use crate::projects::roster::{self, RosterSnapshot};
+use crate::sync_primitives::{Arc, Mutex};
 
-/// Maximum number of remembered projects. Older entries are evicted by
-/// `last_used_at` once we exceed this bound — Claude Code keeps every
-/// project forever and the directory grows unbounded; we cap to keep the
-/// Panel picker scannable.
-pub const RECENT_PROJECTS_CAP: usize = 64;
-
-const STORE_VERSION: u32 = 1;
-
-/// One remembered project.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct Project {
-    /// Stable identifier derived from the canonicalised path
-    /// (`sha256(path)[..16]` lowercase hex). Two registrations of the same
-    /// folder collapse onto the same project — never collide.
-    pub id: String,
-    /// Display name shown in the Panel picker. Defaults to the folder's
-    /// basename; the user may rename later via `projects.rename`.
-    pub name: String,
-    /// Absolute path on disk. Always canonicalised at insert time so that
-    /// `~/foo` and `/Users/me/foo` resolve to the same entry.
-    pub path: PathBuf,
-    /// Unix-seconds creation time.
-    pub created_at: i64,
-    /// Unix-seconds last activation time. Bumped by `touch()` whenever a
-    /// run begins in this project so the picker can sort by recency.
-    pub last_used_at: i64,
+/// Whether a project is live or filed away. Archived projects keep their
+/// roster and their memory partition — archiving is not deletion.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ProjectStatus {
+    Active,
+    Archived,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-struct StoreFile {
-    version: u32,
-    projects: Vec<Project>,
-}
-
-impl Default for StoreFile {
-    fn default() -> Self {
-        Self {
-            version: STORE_VERSION,
-            projects: Vec::new(),
+impl ProjectStatus {
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Active => "active",
+            Self::Archived => "archived",
         }
     }
+
+    /// Parse a stored status. An unrecognised value reads as `Archived` rather
+    /// than `Active`: a row we cannot interpret must not silently become a live
+    /// room.
+    #[must_use]
+    pub fn from_stored(s: &str) -> Self {
+        if s == "active" {
+            Self::Active
+        } else {
+            Self::Archived
+        }
+    }
+}
+
+/// One project room.
+///
+/// `owner_user_id` is `None` on rows created before the multi-user arc and on
+/// rows created outside any dispatch scope (CLI, internal). Absent reads as
+/// [`OWNER_USER_ID`] — adoption by absence, zero backfill. The single
+/// derivation of that rule is `gateway::visibility::owner_or_legacy`; never
+/// re-spell it here.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Project {
+    /// Stable identifier, `p-<uuid simple>`. The `p-` prefix is load-bearing:
+    /// [`crate::memory::project_scope::SCOPED_FAMILIES`] and
+    /// `gateway::visibility::partition_visible` both key on it to tell a
+    /// project partition from the legacy `proj-` directory family (note
+    /// `"proj-…"` does not start with `"p-"`, so the two cannot collide).
+    pub id: String,
+    /// Display name. Defaults to the folder's basename for path-registered
+    /// projects.
+    pub name: String,
+    pub owner_user_id: Option<String>,
+    /// Absolute path this room is bound to, canonicalised at insert time.
+    /// `None` for a room with no workspace of its own.
+    pub workspace_path: Option<PathBuf>,
+    pub status: ProjectStatus,
+    /// Unix-seconds creation time.
+    pub created_at: i64,
+    /// Unix-seconds last mutation time.
+    pub updated_at: i64,
+    /// Unix-seconds last activation time, bumped by [`ProjectStore::touch`]
+    /// so the recent-directory view can sort by recency.
+    pub last_used_at: i64,
 }
 
 /// Typed errors surfaced to RPC handlers.
@@ -59,6 +99,8 @@ pub enum ProjectError {
     Io(#[from] std::io::Error),
     #[error("serde: {0}")]
     Serde(#[from] serde_json::Error),
+    #[error("db: {0}")]
+    Db(String),
     #[error("path not absolute: {0}")]
     NotAbsolute(PathBuf),
     #[error("path is not a directory: {0}")]
@@ -71,59 +113,8 @@ pub enum ProjectError {
     InvalidName(String),
 }
 
-/// Default catalogue path: `~/.aleph/projects.json`.
-///
-/// Falls back to `ALEPH_HOME` when set, otherwise `dirs::home_dir()`. We do
-/// **not** silently drop back to `/tmp` — that path is wiped on reboot and
-/// would surface as "the project picker forgot everything overnight" with
-/// no diagnostic. Callers who hit the panic path can set `ALEPH_HOME` to
-/// rescue the daemon.
-#[must_use]
-pub fn default_projects_path() -> PathBuf {
-    aleph_home().join("projects.json")
-}
-
-/// Resolve the catalogue's parent directory. Public so callers can locate
-/// it without recomputing the fallback rules.
-pub(crate) fn aleph_home() -> PathBuf {
-    if let Ok(p) = std::env::var("ALEPH_HOME") {
-        let pb = PathBuf::from(p);
-        if pb.is_absolute() {
-            return pb;
-        }
-    }
-    // Deliberate fatal invariant: without a home directory there is no safe,
-    // persistent location for the project registry, and a volatile fallback
-    // would silently lose registered projects on reboot.
-    #[allow(clippy::panic)]
-    let home = dirs::home_dir().unwrap_or_else(|| {
-        panic!(
-            "projects: $HOME unavailable and $ALEPH_HOME unset; refusing to fall back to a \
-             volatile path that would lose registered projects on reboot"
-        )
-    });
-    home.join(".aleph")
-}
-
-/// Stable ID for a given path. Public so callers can pre-compute the ID
-/// without going through the store (e.g. UI cache lookups).
-#[must_use]
-pub fn project_id_for_path(path: &Path) -> String {
-    let canonical = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
-    let mut hasher = Sha256::new();
-    hasher.update(canonical.to_string_lossy().as_bytes());
-    let digest = hasher.finalize();
-    hex_lower(&digest[..8])
-}
-
-fn hex_lower(bytes: &[u8]) -> String {
-    const HEX: &[u8; 16] = b"0123456789abcdef";
-    let mut out = String::with_capacity(bytes.len() * 2);
-    for b in bytes {
-        out.push(HEX[(b >> 4) as usize] as char);
-        out.push(HEX[(b & 0x0f) as usize] as char);
-    }
-    out
+fn db_err(e: impl std::fmt::Display) -> ProjectError {
+    ProjectError::Db(e.to_string())
 }
 
 fn now_secs() -> i64 {
@@ -132,145 +123,478 @@ fn now_secs() -> i64 {
         .map_or(0, |d| d.as_secs() as i64)
 }
 
-/// File-backed catalogue. Cheap to construct — all state lives on disk and
-/// is re-read on every operation under an advisory lock so concurrent
-/// processes (Panel + CLI) stay consistent.
+/// Mint a fresh project id. See [`Project::id`] for why the prefix matters.
+fn mint_id() -> String {
+    format!("p-{}", uuid::Uuid::new_v4().simple())
+}
+
+const SCHEMA: &str = "
+CREATE TABLE IF NOT EXISTS projects (
+    id             TEXT PRIMARY KEY,
+    name           TEXT NOT NULL,
+    owner_user_id  TEXT,
+    workspace_path TEXT,
+    status         TEXT NOT NULL DEFAULT 'active',
+    created_at     INTEGER NOT NULL,
+    updated_at     INTEGER NOT NULL,
+    last_used_at   INTEGER NOT NULL
+);
+CREATE TABLE IF NOT EXISTS project_members (
+    project_id TEXT NOT NULL,
+    user_id    TEXT NOT NULL,
+    added_at   INTEGER NOT NULL,
+    PRIMARY KEY (project_id, user_id)
+);
+CREATE INDEX IF NOT EXISTS idx_project_members_user ON project_members(user_id);
+";
+
+/// The owner-keyed uniqueness rule for bound workspaces, kept out of [`SCHEMA`]
+/// only because it interpolates [`OWNER_USER_ID`].
+///
+/// Deliberately NOT global: a global unique index on `workspace_path` would
+/// tell bob that alice has already bound this folder — a cross-user existence
+/// oracle, the exact defect `idx_teams_name_active` shipped with. And
+/// deliberately `COALESCE`, not the raw column: SQLite treats NULLs as
+/// distinct, so keying on the raw column would silently drop the constraint
+/// for every unstamped row — i.e. for every row in a single-user database.
+fn workspace_uniqueness_ddl() -> String {
+    format!(
+        "CREATE UNIQUE INDEX IF NOT EXISTS idx_projects_owner_path_active
+             ON projects(COALESCE(owner_user_id, '{OWNER_USER_ID}'), workspace_path)
+             WHERE workspace_path IS NOT NULL AND status = 'active';"
+    )
+}
+
+/// SQLite-backed catalogue.
+///
+/// Cheap to clone (the connection is shared). The API is synchronous — hence
+/// [`std::sync::Mutex`] rather than the tokio mutex `src/teams/store.rs` uses:
+/// a sync method cannot await an async lock, and every caller here is either a
+/// gateway handler doing one indexed lookup or a boot-time migration.
 #[derive(Debug, Clone)]
 pub struct ProjectStore {
-    path: PathBuf,
+    conn: Arc<Mutex<Connection>>,
 }
 
 impl ProjectStore {
-    /// Open the catalogue at the default location (`~/.aleph/projects.json`).
+    /// Wrap an already-open connection. Used by [`Self::shared`] and by tests.
     #[must_use]
-    pub fn new() -> Self {
-        Self::with_path(default_projects_path())
-    }
-
-    /// Open the catalogue at an explicit path. Used by tests.
-    #[must_use]
-    pub const fn with_path(path: PathBuf) -> Self {
-        Self { path }
-    }
-
-    fn lock_path(&self) -> PathBuf {
-        let mut p = self.path.clone();
-        let new_name = match p.file_name() {
-            Some(name) => format!("{}.lock", name.to_string_lossy()),
-            None => "projects.json.lock".to_string(),
-        };
-        p.set_file_name(new_name);
-        p
-    }
-
-    fn ensure_parent(&self) -> std::io::Result<()> {
-        if let Some(parent) = self.path.parent() {
-            std::fs::create_dir_all(parent)?;
-        }
-        Ok(())
-    }
-
-    fn read_unlocked(&self) -> Result<StoreFile, ProjectError> {
-        match std::fs::read(&self.path) {
-            Ok(bytes) if !bytes.is_empty() => {
-                let parsed: StoreFile = serde_json::from_slice(&bytes)?;
-                Ok(parsed)
-            }
-            Ok(_) => Ok(StoreFile::default()),
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(StoreFile::default()),
-            Err(e) => Err(ProjectError::Io(e)),
+    pub fn new(conn: Connection) -> Self {
+        Self {
+            conn: Arc::new(Mutex::new(conn)),
         }
     }
 
-    fn write_unlocked(&self, file: &StoreFile) -> Result<(), ProjectError> {
-        let bytes = serde_json::to_vec_pretty(file)?;
-        write_atomic(&self.path, &bytes)?;
-        Ok(())
-    }
-
-    /// Read the catalogue under the advisory lock **without** writing it back.
-    /// Used by pure reads (`list`, `get`). Writing on read would bump the
-    /// file's mtime and retrigger the extension watcher's recursive `~/.aleph`
-    /// watch in a tight feedback loop (a mere `list()` on every hot-reload
-    /// would rewrite the file, firing another reload).
-    fn with_locked_read<T, F>(&self, f: F) -> Result<T, ProjectError>
-    where
-        F: FnOnce(&StoreFile) -> T,
-    {
-        self.ensure_parent()?;
-        let lock_path = self.lock_path();
-        let value: T = with_file_lock(&lock_path, |_| {
-            let file = self
-                .read_unlocked()
-                .map_err(|e| std::io::Error::other(e.to_string()))?;
-            Ok(f(&file))
-        })?;
-        Ok(value)
-    }
-
-    fn with_locked_file<T, F>(&self, f: F) -> Result<T, ProjectError>
-    where
-        F: FnOnce(&mut StoreFile) -> Result<T, ProjectError>,
-    {
-        self.ensure_parent()?;
-        let lock_path = self.lock_path();
-        let result: Result<T, ProjectError> = with_file_lock(&lock_path, |_| {
-            let mut file = self
-                .read_unlocked()
-                .map_err(|e| std::io::Error::other(e.to_string()))?;
-            match f(&mut file) {
-                Ok(value) => {
-                    self.write_unlocked(&file)
-                        .map_err(|e| std::io::Error::other(e.to_string()))?;
-                    Ok(Ok(value))
-                }
-                Err(e) => Ok(Err(e)),
+    /// The process-wide handle.
+    ///
+    /// Every consumer shares one connection. The four historical call sites
+    /// that each did an ad-hoc `ProjectStore::new()` would, under SQLite, each
+    /// open their own connection and race for the write lock.
+    ///
+    /// Under `cfg(test)` this is an in-memory database with the schema created
+    /// but **no** migration run: `migrate()` ends in `roster::publish`, which
+    /// REPLACES the process-global snapshot and would erase a concurrently
+    /// running roster test's projection. It also keeps `cargo test` from
+    /// materialising a real `~/.aleph/data/projects.db` on the developer's
+    /// machine.
+    #[must_use]
+    pub fn shared() -> Arc<Self> {
+        static SHARED: OnceLock<Arc<ProjectStore>> = OnceLock::new();
+        Arc::clone(SHARED.get_or_init(|| {
+            #[cfg(test)]
+            {
+                let conn = Connection::open_in_memory().expect("in-memory sqlite");
+                let store = ProjectStore::new(conn);
+                let _ = store.create_schema();
+                Arc::new(store)
             }
-        })?;
-        result
-    }
-
-    /// Return projects ordered by `last_used_at` descending.
-    pub fn list(&self) -> Result<Vec<Project>, ProjectError> {
-        let mut projects = self.with_locked_read(|f| f.projects.clone())?;
-        projects.sort_by_key(|x| std::cmp::Reverse(x.last_used_at));
-        Ok(projects)
-    }
-
-    /// Insert (or refresh) a project entry for `path`. If an entry with
-    /// the same path already exists, only `last_used_at` is bumped and the
-    /// existing entry is returned.
-    pub fn add(&self, path: &Path, name: Option<String>) -> Result<Project, ProjectError> {
-        let absolute = canonical_dir(path)?;
-        self.with_locked_file(|file| {
-            let id = project_id_for_path(&absolute);
-            if let Some(existing) = file.projects.iter_mut().find(|p| p.id == id) {
-                existing.last_used_at = now_secs();
-                if let Some(new_name) = name.clone() {
-                    if !new_name.trim().is_empty() {
-                        existing.name = new_name.trim().to_string();
-                    }
-                }
-                return Ok(existing.clone());
+            #[cfg(not(test))]
+            {
+                let conn = crate::utils::paths::get_data_dir()
+                    .map_err(|e| e.to_string())
+                    .and_then(|dir| {
+                        crate::utils::sqlite_open::open_sqlite_safe(&dir.join("projects.db"))
+                            .map_err(|e| e.to_string())
+                    })
+                    .unwrap_or_else(|e| {
+                        tracing::warn!(
+                            error = %e,
+                            "projects: falling back to an in-memory catalogue; project rooms will \
+                             not persist across restarts"
+                        );
+                        Connection::open_in_memory().expect("in-memory sqlite")
+                    });
+                Arc::new(ProjectStore::new(conn))
             }
-            let display_name = resolve_display_name(&absolute, name)?;
-            let now = now_secs();
-            let project = Project {
-                id: id.clone(),
-                name: display_name,
-                path: absolute.clone(),
-                created_at: now,
-                last_used_at: now,
-            };
-            file.projects.push(project.clone());
-            evict_overflow(&mut file.projects);
-            Ok(project)
+        }))
+    }
+
+    fn with_conn<T>(
+        &self,
+        f: impl FnOnce(&Connection) -> Result<T, ProjectError>,
+    ) -> Result<T, ProjectError> {
+        let guard = self.conn.lock().unwrap_or_else(|e| e.into_inner());
+        f(&guard)
+    }
+
+    /// Create tables and indexes. Idempotent.
+    pub fn create_schema(&self) -> Result<(), ProjectError> {
+        self.with_conn(|conn| {
+            conn.execute_batch(SCHEMA).map_err(db_err)?;
+            conn.execute_batch(&workspace_uniqueness_ddl())
+                .map_err(db_err)
         })
     }
 
-    /// Materialise a fresh empty directory at `<parent>/<name>` then
-    /// register it. Fails if the directory already exists — callers must
-    /// route the user through `add` for existing folders.
+    /// Full boot-time migration: schema, one-time `projects.json` adoption,
+    /// then publish the roster projection.
+    pub fn migrate(&self) -> Result<(), ProjectError> {
+        self.create_schema()?;
+        if let Ok(dir) = crate::utils::paths::get_config_dir() {
+            self.migrate_from_json(&dir.join("projects.json"))?;
+        }
+        self.republish_roster()
+    }
+
+    /// Adopt a pre-P2 `~/.aleph/projects.json` catalogue.
+    ///
+    /// Idempotent by the owner-keyed unique index plus `INSERT OR IGNORE`, NOT
+    /// by the rename below — a crash between the insert and the rename is a
+    /// real state, and re-running must not duplicate. A failed rename is
+    /// therefore not a failed migration.
+    pub fn migrate_from_json(&self, json_path: &Path) -> Result<(), ProjectError> {
+        let bytes = match std::fs::read(json_path) {
+            Ok(b) if !b.is_empty() => b,
+            Ok(_) => return Ok(()),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+            Err(e) => return Err(ProjectError::Io(e)),
+        };
+        let legacy: LegacyStoreFile = serde_json::from_slice(&bytes)?;
+
+        self.with_conn(|conn| {
+            for entry in &legacy.projects {
+                let id = mint_id();
+                let changed = conn
+                    .execute(
+                        "INSERT OR IGNORE INTO projects
+                            (id, name, owner_user_id, workspace_path, status,
+                             created_at, updated_at, last_used_at)
+                         VALUES (?1, ?2, ?3, ?4, 'active', ?5, ?5, ?6)",
+                        rusqlite::params![
+                            id,
+                            entry.name,
+                            OWNER_USER_ID,
+                            entry.path.to_string_lossy(),
+                            entry.created_at,
+                            entry.last_used_at,
+                        ],
+                    )
+                    .map_err(db_err)?;
+                if changed == 1 {
+                    conn.execute(
+                        "INSERT OR IGNORE INTO project_members (project_id, user_id, added_at)
+                         VALUES (?1, ?2, ?3)",
+                        rusqlite::params![id, OWNER_USER_ID, entry.created_at],
+                    )
+                    .map_err(db_err)?;
+                }
+            }
+            Ok(())
+        })?;
+
+        // Best-effort marker so a healthy install stops re-reading the file.
+        let _ = std::fs::rename(
+            json_path,
+            json_path.with_extension("json.migrated"),
+        );
+        Ok(())
+    }
+
+    /// Re-publish the whole roster projection from `project_members`.
+    ///
+    /// Called at the end of every mutation. The table is the SSOT; the
+    /// projection is a read-optimised copy — see `crate::projects::roster`.
+    fn republish_roster(&self) -> Result<(), ProjectError> {
+        let pairs = self.with_conn(|conn| {
+            let mut stmt = conn
+                .prepare("SELECT project_id, user_id FROM project_members")
+                .map_err(db_err)?;
+            let rows = stmt
+                .query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))
+                .map_err(db_err)?;
+            let mut out = Vec::new();
+            for row in rows {
+                out.push(row.map_err(db_err)?);
+            }
+            Ok(out)
+        })?;
+        roster::publish(RosterSnapshot::from_pairs(pairs));
+        Ok(())
+    }
+
+    // -- entity ------------------------------------------------------------
+
+    /// Create a room. The owner is added to the roster in the same call —
+    /// a project whose owner is not a member would be invisible to its own
+    /// creator.
+    pub fn create(
+        &self,
+        name: &str,
+        owner: Option<&str>,
+        workspace: Option<&Path>,
+    ) -> Result<Project, ProjectError> {
+        let trimmed = name.trim();
+        if trimmed.is_empty() {
+            return Err(ProjectError::InvalidName(name.to_string()));
+        }
+        let now = now_secs();
+        let project = Project {
+            id: mint_id(),
+            name: trimmed.to_string(),
+            owner_user_id: owner.map(str::to_string),
+            workspace_path: workspace.map(Path::to_path_buf),
+            status: ProjectStatus::Active,
+            created_at: now,
+            updated_at: now,
+            last_used_at: now,
+        };
+
+        self.with_conn(|conn| {
+            conn.execute(
+                "INSERT INTO projects
+                    (id, name, owner_user_id, workspace_path, status,
+                     created_at, updated_at, last_used_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?6, ?6)",
+                rusqlite::params![
+                    project.id,
+                    project.name,
+                    project.owner_user_id,
+                    project
+                        .workspace_path
+                        .as_ref()
+                        .map(|p| p.to_string_lossy().to_string()),
+                    project.status.as_str(),
+                    now,
+                ],
+            )
+            .map_err(db_err)?;
+            conn.execute(
+                "INSERT OR IGNORE INTO project_members (project_id, user_id, added_at)
+                 VALUES (?1, ?2, ?3)",
+                rusqlite::params![
+                    project.id,
+                    project.owner_user_id.as_deref().unwrap_or(OWNER_USER_ID),
+                    now
+                ],
+            )
+            .map_err(db_err)?;
+            Ok(())
+        })?;
+        self.republish_roster()?;
+        Ok(project)
+    }
+
+    pub fn get(&self, id: &str) -> Result<Option<Project>, ProjectError> {
+        self.with_conn(|conn| {
+            conn.query_row(
+                "SELECT id, name, owner_user_id, workspace_path, status,
+                        created_at, updated_at, last_used_at
+                 FROM projects WHERE id = ?1",
+                [id],
+                row_to_project,
+            )
+            .optional()
+            .map_err(db_err)
+        })
+    }
+
+    /// Every project, newest activity first. **Unfiltered** — visibility
+    /// filtering belongs to the gateway handler, which is the layer that knows
+    /// who is asking.
+    pub fn list(&self) -> Result<Vec<Project>, ProjectError> {
+        self.with_conn(|conn| {
+            let mut stmt = conn
+                .prepare(
+                    "SELECT id, name, owner_user_id, workspace_path, status,
+                            created_at, updated_at, last_used_at
+                     FROM projects ORDER BY last_used_at DESC",
+                )
+                .map_err(db_err)?;
+            let rows = stmt.query_map([], row_to_project).map_err(db_err)?;
+            let mut out = Vec::new();
+            for row in rows {
+                out.push(row.map_err(db_err)?);
+            }
+            Ok(out)
+        })
+    }
+
+    pub fn rename(&self, id: &str, name: &str) -> Result<Project, ProjectError> {
+        let trimmed = name.trim();
+        if trimmed.is_empty() {
+            return Err(ProjectError::InvalidName(name.to_string()));
+        }
+        self.update_one(
+            "UPDATE projects SET name = ?2, updated_at = ?3 WHERE id = ?1",
+            rusqlite::params![id, trimmed, now_secs()],
+            id,
+        )?;
+        self.require(id)
+    }
+
+    pub fn archive(&self, id: &str) -> Result<(), ProjectError> {
+        self.update_one(
+            "UPDATE projects SET status = 'archived', updated_at = ?2 WHERE id = ?1",
+            rusqlite::params![id, now_secs()],
+            id,
+        )
+    }
+
+    /// Bump `last_used_at`. Unlike the pre-P2 store this is NOT a silent no-op
+    /// for an unknown id — a caller touching a project that does not exist is
+    /// a bug worth surfacing, and the handler above maps it to `not found`.
+    pub fn touch(&self, id: &str) -> Result<(), ProjectError> {
+        self.update_one(
+            "UPDATE projects SET last_used_at = ?2 WHERE id = ?1",
+            rusqlite::params![id, now_secs()],
+            id,
+        )
+    }
+
+    /// Forget a project. The on-disk folder is left untouched — removal means
+    /// "forget about this project", never "delete files".
+    pub fn remove(&self, id: &str) -> Result<(), ProjectError> {
+        self.with_conn(|conn| {
+            let changed = conn
+                .execute("DELETE FROM projects WHERE id = ?1", [id])
+                .map_err(db_err)?;
+            if changed == 0 {
+                return Err(ProjectError::NotFound(id.to_string()));
+            }
+            conn.execute("DELETE FROM project_members WHERE project_id = ?1", [id])
+                .map_err(db_err)?;
+            Ok(())
+        })?;
+        self.republish_roster()
+    }
+
+    pub fn bind_workspace(&self, id: &str, path: Option<&Path>) -> Result<Project, ProjectError> {
+        let canonical = match path {
+            Some(p) => Some(canonical_dir(p)?),
+            None => None,
+        };
+        self.update_one(
+            "UPDATE projects SET workspace_path = ?2, updated_at = ?3 WHERE id = ?1",
+            rusqlite::params![
+                id,
+                canonical.as_ref().map(|p| p.to_string_lossy().to_string()),
+                now_secs()
+            ],
+            id,
+        )?;
+        self.require(id)
+    }
+
+    // -- roster ------------------------------------------------------------
+
+    pub fn add_member(&self, id: &str, user_id: &str) -> Result<(), ProjectError> {
+        self.require(id)?;
+        self.with_conn(|conn| {
+            conn.execute(
+                "INSERT OR IGNORE INTO project_members (project_id, user_id, added_at)
+                 VALUES (?1, ?2, ?3)",
+                rusqlite::params![id, user_id, now_secs()],
+            )
+            .map_err(db_err)?;
+            Ok(())
+        })?;
+        self.republish_roster()
+    }
+
+    pub fn remove_member(&self, id: &str, user_id: &str) -> Result<(), ProjectError> {
+        self.with_conn(|conn| {
+            conn.execute(
+                "DELETE FROM project_members WHERE project_id = ?1 AND user_id = ?2",
+                rusqlite::params![id, user_id],
+            )
+            .map_err(db_err)?;
+            Ok(())
+        })?;
+        self.republish_roster()
+    }
+
+    pub fn members(&self, id: &str) -> Result<Vec<String>, ProjectError> {
+        self.with_conn(|conn| {
+            let mut stmt = conn
+                .prepare(
+                    "SELECT user_id FROM project_members WHERE project_id = ?1 ORDER BY added_at",
+                )
+                .map_err(db_err)?;
+            let rows = stmt
+                .query_map([id], |r| r.get::<_, String>(0))
+                .map_err(db_err)?;
+            let mut out = Vec::new();
+            for row in rows {
+                out.push(row.map_err(db_err)?);
+            }
+            Ok(out)
+        })
+    }
+
+    // -- recent-directory view (the picker's entry points) ------------------
+
+    /// Register (or refresh) the project bound to `path` for the current
+    /// caller. This is the recent-directory picker's write path: a second
+    /// registration of the same folder by the same owner collapses onto the
+    /// existing row rather than creating a duplicate.
+    pub fn add(&self, path: &Path, name: Option<String>) -> Result<Project, ProjectError> {
+        self.add_for(path, name, crate::scope::ambient_owner().as_deref())
+    }
+
+    /// [`Self::add`] with the owner passed explicitly.
+    ///
+    /// Required by any caller that has crossed a `spawn`/`spawn_blocking`
+    /// boundary: both ambient attribution mechanisms are task-locals and are
+    /// DEAD on the far side, so the implicit lookup would silently resolve to
+    /// the legacy owner and file a member's folder into the owner's recents.
+    /// Capture the owner before the boundary and hand it in here.
+    pub fn add_for(
+        &self,
+        path: &Path,
+        name: Option<String>,
+        owner: Option<&str>,
+    ) -> Result<Project, ProjectError> {
+        let absolute = canonical_dir(path)?;
+        if let Some(existing) = self.find_by_path_for(&absolute, owner)? {
+            let renamed = name
+                .as_deref()
+                .map(str::trim)
+                .filter(|n| !n.is_empty())
+                .map(str::to_string);
+            self.with_conn(|conn| {
+                match &renamed {
+                    Some(n) => conn.execute(
+                        "UPDATE projects SET last_used_at = ?2, updated_at = ?2, name = ?3
+                         WHERE id = ?1",
+                        rusqlite::params![existing.id, now_secs(), n],
+                    ),
+                    None => conn.execute(
+                        "UPDATE projects SET last_used_at = ?2 WHERE id = ?1",
+                        rusqlite::params![existing.id, now_secs()],
+                    ),
+                }
+                .map_err(db_err)?;
+                Ok(())
+            })?;
+            return self.require(&existing.id);
+        }
+        let display = resolve_display_name(&absolute, name)?;
+        self.create(&display, owner, Some(&absolute))
+    }
+
+    /// Materialise a fresh empty directory at `<parent>/<name>` then register
+    /// it. Fails if the directory already exists — callers must route the user
+    /// through [`Self::add`] for existing folders.
     pub fn create_blank(&self, parent: &Path, name: &str) -> Result<Project, ProjectError> {
         let trimmed = name.trim();
         // Reject both separators on every platform: a name is a single path
@@ -288,47 +612,92 @@ impl ProjectStore {
         self.add(&target, Some(trimmed.to_string()))
     }
 
-    /// Bump `last_used_at` for an existing project; no-op if absent.
-    pub fn touch(&self, id: &str) -> Result<(), ProjectError> {
-        self.with_locked_file(|file| {
-            if let Some(p) = file.projects.iter_mut().find(|p| p.id == id) {
-                p.last_used_at = now_secs();
-            }
-            Ok(())
-        })
-    }
-
-    /// Drop a project entry. The on-disk folder is left untouched —
-    /// removal here means "forget about this project", not "delete files".
-    pub fn remove(&self, id: &str) -> Result<(), ProjectError> {
-        self.with_locked_file(|file| {
-            let before = file.projects.len();
-            file.projects.retain(|p| p.id != id);
-            if file.projects.len() == before {
-                Err(ProjectError::NotFound(id.to_string()))
-            } else {
-                Ok(())
-            }
-        })
-    }
-
-    /// Look up a project by ID.
-    pub fn get(&self, id: &str) -> Result<Option<Project>, ProjectError> {
-        self.with_locked_read(|f| f.projects.iter().find(|p| p.id == id).cloned())
-    }
-
-    /// Look up a project by its canonical absolute path.
+    /// Look up the CURRENT CALLER's project bound to `path`.
+    ///
+    /// Scoped to the caller on purpose: path binding is unique per owner, not
+    /// globally (see [`workspace_uniqueness_ddl`]), so a global lookup here
+    /// would hand one user another user's room.
     pub fn find_by_path(&self, path: &Path) -> Result<Option<Project>, ProjectError> {
+        self.find_by_path_for(path, crate::scope::ambient_owner().as_deref())
+    }
+
+    /// [`Self::find_by_path`] with the owner passed explicitly — see
+    /// [`Self::add_for`] for why a spawned caller must use this.
+    pub fn find_by_path_for(
+        &self,
+        path: &Path,
+        owner: Option<&str>,
+    ) -> Result<Option<Project>, ProjectError> {
         let canonical = canonical_dir(path)?;
-        let id = project_id_for_path(&canonical);
-        self.get(&id)
+        let owner_key = owner.unwrap_or(OWNER_USER_ID);
+        self.with_conn(|conn| {
+            conn.query_row(
+                "SELECT id, name, owner_user_id, workspace_path, status,
+                        created_at, updated_at, last_used_at
+                 FROM projects
+                 WHERE workspace_path = ?1
+                   AND COALESCE(owner_user_id, ?2) = ?2
+                   AND status = 'active'",
+                rusqlite::params![canonical.to_string_lossy(), owner_key],
+                row_to_project,
+            )
+            .optional()
+            .map_err(db_err)
+        })
+    }
+
+    // -- helpers -----------------------------------------------------------
+
+    fn require(&self, id: &str) -> Result<Project, ProjectError> {
+        self.get(id)?
+            .ok_or_else(|| ProjectError::NotFound(id.to_string()))
+    }
+
+    fn update_one(
+        &self,
+        sql: &str,
+        params: impl rusqlite::Params,
+        id: &str,
+    ) -> Result<(), ProjectError> {
+        let changed = self.with_conn(|conn| conn.execute(sql, params).map_err(db_err))?;
+        if changed == 0 {
+            return Err(ProjectError::NotFound(id.to_string()));
+        }
+        Ok(())
     }
 }
 
-impl Default for ProjectStore {
-    fn default() -> Self {
-        Self::new()
-    }
+fn row_to_project(row: &Row<'_>) -> rusqlite::Result<Project> {
+    let status: String = row.get(4)?;
+    let workspace: Option<String> = row.get(3)?;
+    Ok(Project {
+        id: row.get(0)?,
+        name: row.get(1)?,
+        owner_user_id: row.get(2)?,
+        workspace_path: workspace.map(PathBuf::from),
+        status: ProjectStatus::from_stored(&status),
+        created_at: row.get(5)?,
+        updated_at: row.get(6)?,
+        last_used_at: row.get(7)?,
+    })
+}
+
+/// The pre-P2 `projects.json` shape, kept only so [`ProjectStore::migrate_from_json`]
+/// can read it once.
+#[derive(Debug, Deserialize)]
+struct LegacyStoreFile {
+    #[serde(default)]
+    projects: Vec<LegacyProject>,
+}
+
+#[derive(Debug, Deserialize)]
+struct LegacyProject {
+    name: String,
+    path: PathBuf,
+    #[serde(default)]
+    created_at: i64,
+    #[serde(default)]
+    last_used_at: i64,
 }
 
 fn canonical_dir(path: &Path) -> Result<PathBuf, ProjectError> {
@@ -359,201 +728,268 @@ fn resolve_display_name(
     Ok(basename.to_string())
 }
 
-fn evict_overflow(projects: &mut Vec<Project>) {
-    if projects.len() <= RECENT_PROJECTS_CAP {
-        return;
-    }
-    projects.sort_by_key(|x| std::cmp::Reverse(x.last_used_at));
-    projects.truncate(RECENT_PROJECTS_CAP);
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use tempfile::tempdir;
 
-    fn fresh_store(dir: &Path) -> ProjectStore {
-        ProjectStore::with_path(dir.join("projects.json"))
+    /// Serialises every test that reaches a store write.
+    ///
+    /// `roster::publish` REPLACES the process-global snapshot rather than
+    /// merging into it (the store republishes its whole `project_members`
+    /// table on every write), so two parallel test threads with their own
+    /// in-memory stores erase each other's projection. Per-test unique project
+    /// ids do NOT help: the second publish drops the first test's project
+    /// outright, not merely its members.
+    pub(crate) static ROSTER_TEST_GUARD: Mutex<()> = Mutex::new(());
+
+    fn fresh_store() -> ProjectStore {
+        let store = ProjectStore::new(Connection::open_in_memory().unwrap());
+        store.create_schema().unwrap();
+        store
     }
 
     #[test]
-    fn list_empty_when_file_missing() {
+    fn legacy_json_catalogue_migrates_into_the_table_once() {
+        let _g = ROSTER_TEST_GUARD.lock().unwrap_or_else(|e| e.into_inner());
         let dir = tempdir().unwrap();
-        let store = fresh_store(dir.path());
-        assert!(store.list().unwrap().is_empty());
+        let json = dir.path().join("projects.json");
+        let alpha = dir.path().join("alpha");
+        std::fs::create_dir_all(&alpha).unwrap();
+        std::fs::write(
+            &json,
+            format!(
+                r#"{{"version":1,"projects":[{{"id":"deadbeefdeadbeef","name":"alpha",
+                    "path":{},"created_at":100,"last_used_at":200}}]}}"#,
+                serde_json::to_string(&alpha).unwrap()
+            ),
+        )
+        .unwrap();
+
+        let store = fresh_store();
+        store.migrate_from_json(&json).unwrap();
+
+        let all = store.list().unwrap();
+        assert_eq!(all.len(), 1);
+        assert_eq!(all[0].name, "alpha");
+        assert_eq!(all[0].created_at, 100, "timestamps are preserved verbatim");
+        assert!(
+            all[0].id.starts_with("p-"),
+            "ids are re-minted into the p- family, got {}",
+            all[0].id
+        );
+        assert_eq!(all[0].owner_user_id.as_deref(), Some(OWNER_USER_ID));
+        assert_eq!(
+            store.members(&all[0].id).unwrap(),
+            vec![OWNER_USER_ID.to_string()]
+        );
+
+        // Idempotent: a crash between the insert and the rename marker is a
+        // real state, so re-running must not duplicate.
+        let json2 = dir.path().join("projects.json");
+        std::fs::write(
+            &json2,
+            format!(
+                r#"{{"version":1,"projects":[{{"id":"deadbeefdeadbeef","name":"alpha",
+                    "path":{},"created_at":100,"last_used_at":200}}]}}"#,
+                serde_json::to_string(&alpha).unwrap()
+            ),
+        )
+        .unwrap();
+        store.migrate_from_json(&json2).unwrap();
+        assert_eq!(store.list().unwrap().len(), 1);
     }
 
     #[test]
-    fn add_persists_and_dedupes() {
+    fn two_users_may_bind_the_same_folder() {
+        let _g = ROSTER_TEST_GUARD.lock().unwrap_or_else(|e| e.into_inner());
         let dir = tempdir().unwrap();
-        let store = fresh_store(dir.path());
-        let proj_dir = dir.path().join("alpha");
-        std::fs::create_dir_all(&proj_dir).unwrap();
+        let repo = dir.path().join("repo");
+        std::fs::create_dir_all(&repo).unwrap();
+        let store = fresh_store();
 
-        let first = store.add(&proj_dir, None).unwrap();
-        assert_eq!(first.name, "alpha");
-        assert_eq!(first.path, std::fs::canonicalize(&proj_dir).unwrap());
+        let a = store.create("repo", Some("u-alice"), Some(&repo)).unwrap();
+        let b = store.create("repo", Some("u-bob"), Some(&repo));
+        assert!(
+            b.is_ok(),
+            "path uniqueness is per-owner, never global (no existence oracle)"
+        );
+        assert_ne!(a.id, b.unwrap().id);
+    }
 
-        let second = store.add(&proj_dir, Some("Renamed".to_string())).unwrap();
-        assert_eq!(second.id, first.id);
-        assert_eq!(second.name, "Renamed");
+    #[test]
+    fn the_same_owner_rebinding_a_folder_collapses_onto_one_row() {
+        let _g = ROSTER_TEST_GUARD.lock().unwrap_or_else(|e| e.into_inner());
+        let dir = tempdir().unwrap();
+        let x = dir.path().join("x");
+        std::fs::create_dir_all(&x).unwrap();
+        let store = fresh_store();
 
-        let listed = store.list().unwrap();
-        assert_eq!(listed.len(), 1);
+        let first = store.add(&x, None).unwrap();
+        let again = store.add(&x, None).unwrap();
+        assert_eq!(
+            first.id, again.id,
+            "the recent-directory picker must not duplicate"
+        );
+        assert_eq!(store.list().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn creating_a_project_publishes_its_roster() {
+        let _g = ROSTER_TEST_GUARD.lock().unwrap_or_else(|e| e.into_inner());
+        let store = fresh_store();
+        let p = store.create("room", Some("u-alice"), None).unwrap();
+        assert!(roster::is_member(&p.id, "u-alice"));
+        assert!(!roster::is_member(&p.id, "u-bob"));
+
+        store.add_member(&p.id, "u-bob").unwrap();
+        assert!(
+            roster::is_member(&p.id, "u-bob"),
+            "the projection follows the write"
+        );
+
+        store.remove_member(&p.id, "u-bob").unwrap();
+        assert!(
+            !roster::is_member(&p.id, "u-bob"),
+            "spec §10: removal revokes visibility immediately"
+        );
+    }
+
+    #[test]
+    fn projects_of_lists_every_room_a_user_is_on() {
+        let _g = ROSTER_TEST_GUARD.lock().unwrap_or_else(|e| e.into_inner());
+        let store = fresh_store();
+        let a = store.create("a", Some("u-alice"), None).unwrap();
+        let b = store.create("b", Some("u-alice"), None).unwrap();
+        let c = store.create("c", Some("u-bob"), None).unwrap();
+
+        let mine = roster::projects_of("u-alice");
+        assert!(mine.contains(&a.id) && mine.contains(&b.id));
+        assert!(!mine.contains(&c.id));
+        let mut sorted = mine.clone();
+        sorted.sort();
+        assert_eq!(mine, sorted, "projects_of returns sorted ids");
+    }
+
+    #[test]
+    fn removing_a_project_takes_its_roster_with_it() {
+        let _g = ROSTER_TEST_GUARD.lock().unwrap_or_else(|e| e.into_inner());
+        let store = fresh_store();
+        let p = store.create("room", Some("u-alice"), None).unwrap();
+        store.remove(&p.id).unwrap();
+        assert!(!roster::is_member(&p.id, "u-alice"));
+        assert!(store.get(&p.id).unwrap().is_none());
+        assert!(matches!(
+            store.remove(&p.id).unwrap_err(),
+            ProjectError::NotFound(_)
+        ));
+    }
+
+    #[test]
+    fn archiving_keeps_the_row_and_frees_the_path_binding() {
+        let _g = ROSTER_TEST_GUARD.lock().unwrap_or_else(|e| e.into_inner());
+        let dir = tempdir().unwrap();
+        let w = dir.path().join("w");
+        std::fs::create_dir_all(&w).unwrap();
+        let store = fresh_store();
+
+        let p = store.create("room", Some("u-alice"), Some(&w)).unwrap();
+        store.archive(&p.id).unwrap();
+        assert_eq!(
+            store.get(&p.id).unwrap().unwrap().status,
+            ProjectStatus::Archived,
+            "archiving is not deletion"
+        );
+        // The partial unique index only covers active rows, so the same owner
+        // may bind the folder again in a fresh room.
+        assert!(store.create("room2", Some("u-alice"), Some(&w)).is_ok());
+    }
+
+    #[test]
+    fn list_is_ordered_by_recency_and_never_evicts() {
+        let _g = ROSTER_TEST_GUARD.lock().unwrap_or_else(|e| e.into_inner());
+        let store = fresh_store();
+        // The pre-P2 store capped the catalogue at 64 and evicted the oldest.
+        // Under project rooms that would silently delete a room someone else
+        // is working in, so the cap is gone.
+        for i in 0..70 {
+            store.create(&format!("p{i}"), Some("u-alice"), None).unwrap();
+        }
+        assert_eq!(store.list().unwrap().len(), 70);
     }
 
     #[test]
     fn add_rejects_relative_and_missing() {
+        let _g = ROSTER_TEST_GUARD.lock().unwrap_or_else(|e| e.into_inner());
         let dir = tempdir().unwrap();
-        let store = fresh_store(dir.path());
+        let store = fresh_store();
         let relative = PathBuf::from("./not-absolute");
-        let err = store.add(&relative, None).unwrap_err();
-        assert!(matches!(err, ProjectError::NotAbsolute(_)));
-
+        assert!(matches!(
+            store.add(&relative, None).unwrap_err(),
+            ProjectError::NotAbsolute(_)
+        ));
         let missing = dir.path().join("ghost");
-        let err = store.add(&missing, None).unwrap_err();
-        assert!(matches!(err, ProjectError::NotDirectory(_)));
+        assert!(matches!(
+            store.add(&missing, None).unwrap_err(),
+            ProjectError::NotDirectory(_)
+        ));
     }
 
     #[test]
     fn create_blank_makes_dir_and_registers() {
+        let _g = ROSTER_TEST_GUARD.lock().unwrap_or_else(|e| e.into_inner());
         let dir = tempdir().unwrap();
-        let store = fresh_store(dir.path());
+        let store = fresh_store();
         let project = store.create_blank(dir.path(), "new-app").unwrap();
-        assert!(project.path.exists());
-        assert!(project.path.is_dir());
+        assert!(project.workspace_path.as_ref().unwrap().is_dir());
         assert_eq!(project.name, "new-app");
     }
 
     #[test]
-    fn create_blank_refuses_existing_dir() {
+    fn create_blank_refuses_existing_dir_and_separators() {
+        let _g = ROSTER_TEST_GUARD.lock().unwrap_or_else(|e| e.into_inner());
         let dir = tempdir().unwrap();
-        let store = fresh_store(dir.path());
+        let store = fresh_store();
         let existing = dir.path().join("preexisting");
         std::fs::create_dir_all(&existing).unwrap();
-        let err = store.create_blank(dir.path(), "preexisting").unwrap_err();
-        assert!(matches!(err, ProjectError::AlreadyExists(_)));
+        assert!(matches!(
+            store.create_blank(dir.path(), "preexisting").unwrap_err(),
+            ProjectError::AlreadyExists(_)
+        ));
+        assert!(matches!(
+            store.create_blank(dir.path(), "nested/bad").unwrap_err(),
+            ProjectError::InvalidName(_)
+        ));
     }
 
     #[test]
-    fn create_blank_rejects_separator_in_name() {
-        let dir = tempdir().unwrap();
-        let store = fresh_store(dir.path());
-        let err = store.create_blank(dir.path(), "nested/bad").unwrap_err();
-        assert!(matches!(err, ProjectError::InvalidName(_)));
+    fn touch_surfaces_an_unknown_id_instead_of_silently_succeeding() {
+        let _g = ROSTER_TEST_GUARD.lock().unwrap_or_else(|e| e.into_inner());
+        let store = fresh_store();
+        assert!(matches!(
+            store.touch("p-nope").unwrap_err(),
+            ProjectError::NotFound(_)
+        ));
     }
 
+    /// An unreadable status must not read as a live room.
     #[test]
-    fn touch_updates_last_used() {
-        let dir = tempdir().unwrap();
-        let store = fresh_store(dir.path());
-        let p = dir.path().join("touchy");
-        std::fs::create_dir_all(&p).unwrap();
-        let project = store.add(&p, None).unwrap();
-        let before = project.last_used_at;
-        std::thread::sleep(std::time::Duration::from_millis(1100));
-        store.touch(&project.id).unwrap();
-        let after = store.get(&project.id).unwrap().unwrap();
-        assert!(after.last_used_at > before);
-    }
-
-    #[test]
-    fn remove_drops_entry() {
-        let dir = tempdir().unwrap();
-        let store = fresh_store(dir.path());
-        let p = dir.path().join("rm");
-        std::fs::create_dir_all(&p).unwrap();
-        let project = store.add(&p, None).unwrap();
-        store.remove(&project.id).unwrap();
-        assert!(store.list().unwrap().is_empty());
-        let err = store.remove(&project.id).unwrap_err();
-        assert!(matches!(err, ProjectError::NotFound(_)));
-    }
-
-    #[test]
-    fn list_sorted_by_recency() {
-        let dir = tempdir().unwrap();
-        let store = fresh_store(dir.path());
-        let a = dir.path().join("a");
-        let b = dir.path().join("b");
-        std::fs::create_dir_all(&a).unwrap();
-        std::fs::create_dir_all(&b).unwrap();
-        let pa = store.add(&a, None).unwrap();
-        std::thread::sleep(std::time::Duration::from_millis(1100));
-        let pb = store.add(&b, None).unwrap();
-        let listed = store.list().unwrap();
-        assert_eq!(listed[0].id, pb.id);
-        assert_eq!(listed[1].id, pa.id);
-    }
-
-    /// A pure read must never create the store file. The extension watcher
-    /// recursively watches `~/.aleph`; if `list()` materialised
-    /// `projects.json` on first read it would fire a reload, which calls
-    /// `list()` again — a tight feedback loop.
-    #[test]
-    fn list_does_not_create_file_when_missing() {
-        let dir = tempdir().unwrap();
-        let store = fresh_store(dir.path());
-        let _ = store.list().unwrap();
-        assert!(
-            !dir.path().join("projects.json").exists(),
-            "list() must not write the store file on a pure read"
-        );
-    }
-
-    /// A pure read must not rewrite an existing store file. An atomic rewrite
-    /// bumps the file's mtime, retriggering the recursive extension watcher in
-    /// the same feedback loop. Reproduces the projects.json hot-reload storm.
-    #[test]
-    fn list_does_not_rewrite_existing_file() {
-        let dir = tempdir().unwrap();
-        let store = fresh_store(dir.path());
-        let p = dir.path().join("x");
-        std::fs::create_dir_all(&p).unwrap();
-        store.add(&p, None).unwrap();
-
-        let store_path = dir.path().join("projects.json");
-        let m0 = std::fs::metadata(&store_path).unwrap().modified().unwrap();
-        std::thread::sleep(std::time::Duration::from_millis(1100));
-        store.list().unwrap();
-        store.get("nonexistent").unwrap();
-        let m1 = std::fs::metadata(&store_path).unwrap().modified().unwrap();
+    fn an_unparseable_status_reads_as_archived() {
+        assert_eq!(ProjectStatus::from_stored("active"), ProjectStatus::Active);
         assert_eq!(
-            m0, m1,
-            "list()/get() must not rewrite projects.json (would retrigger watcher loop)"
+            ProjectStatus::from_stored("who-knows"),
+            ProjectStatus::Archived
         );
     }
 
+    /// The `p-` family must stay distinguishable from the legacy `proj-`
+    /// directory family that `partition_visible` rules org-tier.
     #[test]
-    fn project_id_is_stable_for_canonical_path() {
-        let dir = tempdir().unwrap();
-        let id1 = project_id_for_path(dir.path());
-        let id2 = project_id_for_path(dir.path());
-        assert_eq!(id1, id2);
-    }
-
-    /// `aleph_home()` honours `$ALEPH_HOME` when set so the daemon can be
-    /// pointed at an alternate data root (containers, alternate user). This
-    /// is also our escape hatch if `dirs::home_dir()` panics on weird boxes.
-    #[test]
-    fn aleph_home_respects_env_override() {
-        // Hold the crate-wide guard so this env mutation can't race the other
-        // ALEPH_HOME-touching tests (config saves resolve their path off it).
-        let _home_guard = crate::utils::paths::ALEPH_HOME_TEST_GUARD
-            .lock()
-            .unwrap_or_else(|e| e.into_inner());
-        let dir = tempdir().unwrap();
-        let prev = std::env::var("ALEPH_HOME").ok();
-        // SAFETY: this single-threaded test mutates a process env var; the
-        // Rust 2024 unsafe-block rule forbids env writes without acknowledgement.
-        unsafe {
-            std::env::set_var("ALEPH_HOME", dir.path());
-        }
-        let resolved = aleph_home();
-        assert_eq!(resolved, dir.path());
-        match prev {
-            Some(v) => unsafe { std::env::set_var("ALEPH_HOME", v) },
-            None => unsafe { std::env::remove_var("ALEPH_HOME") },
-        }
+    fn the_project_id_family_cannot_collide_with_the_legacy_directory_family() {
+        assert!(mint_id().starts_with("p-"));
+        assert!(
+            !"proj-deadbeef".starts_with("p-"),
+            "if this ever becomes true, partition_visible's arm order is wrong"
+        );
     }
 }

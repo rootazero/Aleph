@@ -19,6 +19,12 @@ use crate::sync_primitives::Arc;
 /// Serializable view of a project — `path` is stringified so JSON consumers
 /// (Panel, CLI) never have to deal with platform-specific `PathBuf` wire
 /// formats.
+///
+/// An unbound room (no `workspace_path`) renders as an empty `path`. That is
+/// tolerable only because no RPC can create one yet: `ProjectStore::create` is
+/// reachable in this commit solely through the path-registering entry points.
+/// The roster-RPC task replaces this view with the full entity (owner, status,
+/// members, nullable workspace) and the Panel is updated in the same change.
 #[derive(Debug, Clone, Serialize)]
 pub struct ProjectView {
     pub id: String,
@@ -33,7 +39,10 @@ impl From<Project> for ProjectView {
         Self {
             id: p.id,
             name: p.name,
-            path: p.path.to_string_lossy().to_string(),
+            path: p
+                .workspace_path
+                .map(|w| w.to_string_lossy().to_string())
+                .unwrap_or_default(),
             created_at: p.created_at,
             last_used_at: p.last_used_at,
         }

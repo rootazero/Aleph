@@ -501,14 +501,16 @@ impl HandlerRegistry {
             )
         });
 
-        // Project catalogue — backed by `~/.aleph/projects.json`. The store is
-        // stateless (every op re-reads under an fs2 lock) so the default
-        // instance is safe to share across all handler closures. Real wiring
-        // happens in `register_projects_handlers`; this default registration
-        // keeps `projects.*` usable in test harnesses that boot via
-        // `HandlerRegistry::new()` directly.
+        // Project catalogue — backed by `~/.aleph/data/projects.db`. Every
+        // consumer shares ONE connection (`ProjectStore::shared`); an ad-hoc
+        // per-closure store would open its own connection and race for the
+        // SQLite write lock. Real wiring happens in
+        // `register_projects_handlers`; this default registration keeps
+        // `projects.*` usable in test harnesses that boot via
+        // `HandlerRegistry::new()` directly (under `cfg(test)` the shared
+        // handle is in-memory, so this never touches the developer's home).
         {
-            let default_store = Arc::new(crate::projects::ProjectStore::new());
+            let default_store = crate::projects::ProjectStore::shared();
             let s = default_store.clone();
             registry.register("projects.list", move |req| {
                 let s = s.clone();

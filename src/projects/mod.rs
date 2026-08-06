@@ -1,24 +1,27 @@
-//! Project workspace registry.
+//! Project rooms.
 //!
-//! Maintains a small JSON-backed catalogue of user-chosen project
-//! folders so the desktop Panel can offer an "Enter Project → New Blank Project /
-//! Use Existing Folder" picker without re-asking on every send.
+//! A `Project` is a room: a name, an owner, a roster, and optionally a bound
+//! workspace directory. Membership IS the authorization (spec §6.1) — there
+//! are no per-resource grants in v1 — and the room's scope id
+//! (`project:<id>`) is what sessions and memory partitions hang off.
 //!
-//! Each `Project` simply pairs a user-friendly `name` with the absolute
-//! filesystem path that becomes `RunRequest.workspace_override` for any
-//! chat run launched from it. The store is intentionally tiny — it does
-//! not own the directory contents, it only remembers which directories
-//! the user has opted into as Aleph projects, and when each was last
-//! used.
+//! **One table, two views.** The desktop Panel's "recent working directory"
+//! picker is this same catalogue filtered to rows with a `workspace_path`,
+//! ordered by `last_used_at`; the project sidebar is the same table filtered
+//! by roster. They are deliberately not two entities — "project" meaning two
+//! different things in one codebase is the confusion this promotion exists to
+//! remove.
 //!
-//! Persistence: `~/.aleph/projects.json`, atomic writes, fs2 advisory
-//! lock on the sidecar `.lock` so concurrent CLI/Panel writes are safe.
+//! Persistence: `~/.aleph/data/projects.db` (SQLite). The pre-P2
+//! `~/.aleph/projects.json` catalogue is adopted once at boot and renamed
+//! aside; see [`ProjectStore::migrate_from_json`].
+//!
+//! [`roster`] is a read-optimised projection of the membership table, NOT a
+//! second source of truth — read its module doc before touching it.
 
 mod run_context;
+pub mod roster;
 mod store;
 
 pub use run_context::{current as current_project_root, with_project_root};
-pub use store::{
-    default_projects_path, project_id_for_path, Project, ProjectError, ProjectStore,
-    RECENT_PROJECTS_CAP,
-};
+pub use store::{Project, ProjectError, ProjectStatus, ProjectStore};

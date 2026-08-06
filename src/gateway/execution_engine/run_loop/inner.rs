@@ -93,9 +93,15 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
             && !request.metadata.contains_key("team_worktree_path")
         {
             let path = effective_workspace.clone();
+            // Capture the owner HERE, before the blocking boundary: both
+            // ambient-attribution mechanisms are task-locals and are dead
+            // inside `spawn_blocking`, so letting the store resolve it there
+            // would silently file this user's folder into the legacy owner's
+            // recents (and hand them back the owner's row).
+            let owner = crate::scope::ambient_owner();
             tokio::task::spawn_blocking(move || {
-                let store = crate::projects::ProjectStore::new();
-                match store.find_by_path(&path) {
+                let store = crate::projects::ProjectStore::shared();
+                match store.find_by_path_for(&path, owner.as_deref()) {
                     Ok(Some(project)) => {
                         if let Err(e) = store.touch(&project.id) {
                             tracing::debug!(
@@ -109,7 +115,7 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
                         // The user ran with a project_root that is not yet in
                         // the catalogue (CLI / programmatic entry). Register
                         // it so the desktop picker shows it next time.
-                        if let Err(e) = store.add(&path, None) {
+                        if let Err(e) = store.add_for(&path, None, owner.as_deref()) {
                             tracing::debug!(
                                 error = %e,
                                 project = %path.display(),
