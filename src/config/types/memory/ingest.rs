@@ -87,6 +87,12 @@ pub struct CuratedSection {
     pub memory_char_limit: usize,
     pub user_char_limit: usize,
     pub legacy_warn_threshold: f32,
+    /// Char budget for the `<OpenLoops>` block of the curated envelope.
+    pub open_loops_char_limit: usize,
+    /// Days after which a persisted open-loops capture stops being injected;
+    /// `0` disables the ceiling. See [`CuratedConfig::open_loops_max_age_days`]
+    /// for why a block that names its own capture date still needs one.
+    pub open_loops_max_age_days: u32,
 }
 
 impl Default for CuratedSection {
@@ -96,6 +102,8 @@ impl Default for CuratedSection {
             memory_char_limit: c.memory_char_limit,
             user_char_limit: c.user_char_limit,
             legacy_warn_threshold: c.legacy_warn_threshold,
+            open_loops_char_limit: c.open_loops_char_limit,
+            open_loops_max_age_days: c.open_loops_max_age_days,
         }
     }
 }
@@ -111,6 +119,8 @@ impl From<CuratedSection> for CuratedConfig {
             memory_char_limit: s.memory_char_limit,
             user_char_limit: s.user_char_limit,
             legacy_warn_threshold: s.legacy_warn_threshold,
+            open_loops_char_limit: s.open_loops_char_limit,
+            open_loops_max_age_days: s.open_loops_max_age_days,
         }
     }
 }
@@ -137,6 +147,37 @@ mod tests {
         let cfg: CompoundIngestConfig = serde_json::from_str("{}").unwrap();
         assert_eq!(cfg.dedup_noop_threshold, 0.985);
         assert!(cfg.dedup_enabled);
+    }
+
+    /// Every `[memory.curated]` key must survive the hop into the struct the
+    /// provider actually reads. The `From` impl is a field-by-field copy, so a
+    /// key added to one side and forgotten on the other compiles cleanly and
+    /// is simply never honoured — the shape that left the whole section inert
+    /// until round 2. Each field is given a value no default could produce.
+    #[test]
+    fn every_curated_key_reaches_the_config_the_provider_reads() {
+        use super::{CuratedConfig, CuratedSection};
+
+        let section = CuratedSection {
+            memory_char_limit: 7_777,
+            user_char_limit: 6_666,
+            legacy_warn_threshold: 0.42,
+            open_loops_char_limit: 5_555,
+            open_loops_max_age_days: 99,
+        };
+        let cfg: CuratedConfig = section.clone().into();
+        assert_eq!(cfg.memory_char_limit, section.memory_char_limit);
+        assert_eq!(cfg.user_char_limit, section.user_char_limit);
+        assert!((cfg.legacy_warn_threshold - section.legacy_warn_threshold).abs() < f32::EPSILON);
+        assert_eq!(cfg.open_loops_char_limit, section.open_loops_char_limit);
+        assert_eq!(cfg.open_loops_max_age_days, section.open_loops_max_age_days);
+
+        // And a bare table still lands on the defaults (struct-level
+        // `serde(default)`), so adding keys never breaks an existing config.
+        let bare: CuratedSection = serde_json::from_str("{}").unwrap();
+        let d = CuratedSection::default();
+        assert_eq!(bare.open_loops_char_limit, d.open_loops_char_limit);
+        assert_eq!(bare.open_loops_max_age_days, d.open_loops_max_age_days);
     }
 
     #[test]

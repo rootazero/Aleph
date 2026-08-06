@@ -1327,7 +1327,25 @@ mod tests {
     /// output — its findings enumerate every check id — and keeping only what
     /// nothing else says: that the filters exist, and which check is the
     /// expensive one.
-    const CATALOG_DESCRIPTION_CEILING_BYTES: usize = 81_270;
+    /// 2026-08-06, the memory D1–D4 round-3 pass: 81,270 -> 82,462 B. The D4
+    /// acknowledgment contract had only its positive half — "acknowledge after
+    /// a successful write" — stated on all three ladder writers, while every
+    /// one of them can settle WITHOUT writing and still return a successful
+    /// tool result (over-budget hot zone, spent retry budget, a correction
+    /// already on record). The model had no instruction for the case where the
+    /// user asked for something durable and the system declined, so it either
+    /// reported a save that never happened or went quiet. Against the three
+    /// questions: (1) the refusal SHAPE is a runtime fact — which field says
+    /// nothing landed, and that it is not an error — not a lesson in how to
+    /// think; (2) a stronger model still cannot infer that
+    /// `flag_user_correction` keys its duplicate check on severity, so
+    /// escalation stays open; (3) `no_sentence_is_stated_twice` covers the
+    /// catalog and passes. Paid for in part by cutting `remember`'s one-line
+    /// copy of the destination ladder (-167 B): the authoritative ladder ships
+    /// in `MemoryProtocolLayer` on every non-Minimal request, and a second
+    /// abbreviated copy in a tool is exactly the near-repeat question 3 asks
+    /// about.
+    const CATALOG_DESCRIPTION_CEILING_BYTES: usize = 82_462;
 
     #[test]
     fn catalog_description_bytes_ratchet() {
