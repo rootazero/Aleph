@@ -24,7 +24,7 @@
 //! other's projection, and per-test unique project ids do **not** help: the
 //! second `publish` drops the first test's project outright, not merely its
 //! members. Every test that reaches a store write therefore serialises on
-//! `store::tests::ROSTER_TEST_GUARD`.
+//! [`TEST_GUARD`].
 
 use std::collections::{HashMap, HashSet};
 use std::sync::{OnceLock, RwLock};
@@ -68,6 +68,20 @@ pub fn is_member(project_id: &str, user_id: &str) -> bool {
         .get(project_id)
         .is_some_and(|m| m.contains(user_id))
 }
+
+/// Serialises every test that publishes a roster.
+///
+/// [`publish`] REPLACES the snapshot rather than merging into it (the store
+/// republishes its whole `project_members` table on every write), so two
+/// parallel test threads holding their own in-memory stores erase each other's
+/// projection. Per-test unique project ids do NOT help: the second publish
+/// drops the first test's project outright, not merely its members.
+///
+/// Lives here rather than in `store::tests` because the state being guarded is
+/// this module's, and because `projects::store` is a private module — the
+/// gateway's visibility tests need the same guard.
+#[cfg(test)]
+pub static TEST_GUARD: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
 /// Every project `user_id` belongs to, sorted for deterministic SQL.
 #[must_use]

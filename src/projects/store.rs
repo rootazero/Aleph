@@ -303,10 +303,7 @@ impl ProjectStore {
         })?;
 
         // Best-effort marker so a healthy install stops re-reading the file.
-        let _ = std::fs::rename(
-            json_path,
-            json_path.with_extension("json.migrated"),
-        );
+        let _ = std::fs::rename(json_path, json_path.with_extension("json.migrated"));
         Ok(())
     }
 
@@ -733,15 +730,10 @@ mod tests {
     use super::*;
     use tempfile::tempdir;
 
-    /// Serialises every test that reaches a store write.
-    ///
-    /// `roster::publish` REPLACES the process-global snapshot rather than
-    /// merging into it (the store republishes its whole `project_members`
-    /// table on every write), so two parallel test threads with their own
-    /// in-memory stores erase each other's projection. Per-test unique project
-    /// ids do NOT help: the second publish drops the first test's project
-    /// outright, not merely its members.
-    pub(crate) static ROSTER_TEST_GUARD: Mutex<()> = Mutex::new(());
+    /// Serialising guard for every test that publishes a roster — see
+    /// [`roster::TEST_GUARD`] for why it exists and why it lives there rather
+    /// than here.
+    use crate::projects::roster::TEST_GUARD as ROSTER_TEST_GUARD;
 
     fn fresh_store() -> ProjectStore {
         let store = ProjectStore::new(Connection::open_in_memory().unwrap());
@@ -913,7 +905,9 @@ mod tests {
         // Under project rooms that would silently delete a room someone else
         // is working in, so the cap is gone.
         for i in 0..70 {
-            store.create(&format!("p{i}"), Some("u-alice"), None).unwrap();
+            store
+                .create(&format!("p{i}"), Some("u-alice"), None)
+                .unwrap();
         }
         assert_eq!(store.list().unwrap().len(), 70);
     }
