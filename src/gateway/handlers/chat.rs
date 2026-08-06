@@ -77,6 +77,11 @@ pub struct SendParams {
     /// session gets the voice-mode prompt layer and the `[voice]` model pin.
     #[serde(default)]
     pub voice_input: bool,
+    /// Open this conversation in a project room (P2). Only consulted when the
+    /// session does not exist yet — a session's scope is immutable. See
+    /// [`AgentRunParams::project_id`].
+    #[serde(default)]
+    pub project_id: Option<String>,
 }
 
 const fn default_stream() -> bool {
@@ -243,6 +248,7 @@ pub async fn handle_send(
         exec_tier: params.exec_tier,
         mode: params.mode,
         voice_input: params.voice_input,
+        project_id: params.project_id,
     };
 
     // Start the run
