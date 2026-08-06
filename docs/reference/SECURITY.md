@@ -1130,9 +1130,34 @@ after (verified by `single_user_fixture_is_byte_identical_after_upgrade`,
   removed. Sibling of P0's `method_admin.rs` (same shape, different
   question: that one asks "does this method need operator role," this one
   asks "does this method's answer depend on who's asking, and is that
-  enforced"). Covers `sessions.*`/`session.*`/`chat.*` and
-  `memory.*`/`artifacts.*`/`clarification.*`/`subagent.tree`/`graph.query` —
-  see that file's module doc for the full per-method breakdown.
+  enforced"). Covers `sessions.*`/`session.*`/`chat.*`,
+  `memory.*`/`artifacts.*`/`clarification.*`/`subagent.tree`/`graph.query`
+  and (since 2026-08-06) all 34 addressed `teams.*` methods — see that
+  file's module doc for the full per-method breakdown.
+- **Team ownership** (`src/teams/scoped.rs`). P1 originally shipped `teams.*`
+  as org-shared: `Team` had no owner field, so there was nothing to check
+  without first inventing an ownership model. That was overturned by human
+  ruling on 2026-08-06. `Team` now carries `owner_user_id` on the same
+  adoption-by-absence terms as a session, stamped inside
+  `SqliteTeamStore::create_team` so every creation path (RPC, `team_create`,
+  `team_from_template`, template materialization) lands owned.
+  **Enforcement is a `TeamStore` decorator, not a per-call-site check** —
+  teams are reachable from the gateway AND from ~30 `team_*` builtin tools a
+  model calls mid-run, and putting the predicate on the one path both cross
+  is what makes the tool half enforced rather than "the Panel half enforced
+  and the chat half wide open". `ScopedTeamStore::wrap` is applied at the
+  single construction site (`builder::agent_init::coord_stores`); publishing
+  the raw store anywhere else is the bypass.
+  - The resolver is `scope::ambient_owner()` — the gateway `CALLER_USER`
+    identity first, falling back to the run-seeded `ScopeAttribution`.
+    `CALLER_USER` alone is dead inside a spawned run, so a team predicate
+    built on `visible_owner_filter()` would be fail-open for every tool call.
+  - The gateway still gates explicitly
+    (`handlers::teams::visibility::{gate_team, gate_task}`) for the two things
+    a decorator cannot do: produce the byte-identical `not_found` response,
+    and reach the ~20 methods that address a team through the `coord_tasks`
+    DAG — a different database the team store cannot see. A task with no team
+    reads as an unstamped record (the legacy owner's), never as public.
 - **Event delivery** (`src/gateway/event_visibility.rs`). The event-bus
   analogue of the RPC chokepoint above: `EventScopeGuard` (P0) is
   role-based and default-allow for ordinary session/run events, so without
@@ -1207,7 +1232,15 @@ after (verified by `single_user_fixture_is_byte_identical_after_upgrade`,
      if a member explicitly escalates their own session to `Auto`/`Full`
      (the member default is `Ask`). Pre-existing, not introduced by P1;
      recommended as a follow-up task.
-  5. The legacy `proj-*` (project-directory feature) write side of
+  5. `teams.chat.cancel` is addressed by `run_id` against the process-global
+     `BackgroundAgentTracker`, which has no run → team mapping to gate on.
+     Left open on the §4.11 reasoning that a run id is an unguessable
+     capability the caller can only have received from their own
+     `teams.chat.send` response or a `team.<id>.fanout` event they were
+     already entitled to. **The condition that invalidates this**: adding any
+     `teams.*` ENUMERATION face that hands run ids out across users. Recorded
+     at the handler.
+  6. The legacy `proj-*` (project-directory feature) write side of
      `OPEN_LOOPS.md` is pinned `project_scoped = false` on both read and
      write for a `proj-` session — widening it needs a persisted project
      root on the session-close path that doesn't exist yet. Personal scope
