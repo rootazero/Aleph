@@ -1158,6 +1158,15 @@ after (verified by `single_user_fixture_is_byte_identical_after_upgrade`,
     and reach the ~20 methods that address a team through the `coord_tasks`
     DAG — a different database the team store cannot see. A task with no team
     reads as an unstamped record (the legacy owner's), never as public.
+  - Six `team_*` tools are the tool-side twin of that second case
+    (`team_task_control`, `workflow_step_review`, `task_comment`,
+    `task_exit_journal`, `task_submit`, `team_workflow_canvas`): they address
+    a task or team through `CoordTaskStore` alone, so they call
+    `teams::task_team_reachable` after their own lookup. `team_workflow_canvas`
+    is gated despite being read-only — its `export` enumerates every task in a
+    team, and it is the one face that hands out ids for the other five.
+    **Any new tool that reaches a coord task by id owes the same call**; the
+    decorator will not catch it.
 - **Event delivery** (`src/gateway/event_visibility.rs`). The event-bus
   analogue of the RPC chokepoint above: `EventScopeGuard` (P0) is
   role-based and default-allow for ordinary session/run events, so without
