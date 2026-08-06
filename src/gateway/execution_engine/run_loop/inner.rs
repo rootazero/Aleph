@@ -1268,6 +1268,22 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
                     //     `gauge_model` the context gauge and cost estimate
                     //     use, so all three agree.
                     serving_model: None,
+                    // Primary user-facing sessions carry no parent binding;
+                    // sub-agent / team / background dispatchers set this
+                    // when they know the parent session (R7/R10: pure
+                    // pass-through from their context — no judgment near
+                    // the wire). `None` keeps `## Operating Envelope`
+                    // byte-identical for the 99% case.
+                    parent: None,
+                    // Same: primary dispatch has no `run_id`; set by
+                    // sub-agent dispatchers when their background tracker
+                    // has minted one. `None` keeps the prompt byte-identical.
+                    run_id: None,
+                    // `response_language` is bound at the gateway layer
+                    // (chat.send / voice / cron) from the request pill /
+                    // session default; primary dispatch inherits whatever
+                    // the gateway already resolved.
+                    response_language: None,
                 },
                 // This turn's explicit model pick. Cloned because the request is
                 // rebuilt on each retry iteration of the enclosing loop.

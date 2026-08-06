@@ -64,7 +64,7 @@ fn phase3_with_resolved_context_basic_path_emits_operational_guidelines() {
     // RuntimeContextLayer requires `runtime_context` to be populated on
     // the ResolvedContext — left as None here, so layer is silent.
     assert!(
-        !prompt.contains("## Runtime Environment"),
+        !prompt.contains("<environment_context>"),
         "RuntimeContextLayer should stay silent without runtime_context attached"
     );
 }
@@ -109,7 +109,7 @@ fn phase3_with_behavior_name_anthropic_stays_silent_on_basic_path() {
 fn phase4_with_runtime_context_populated_emits_runtime_environment_on_basic_path() {
     // Phase 4 F1: when a `ResolvedContext` carries a populated
     // `runtime_context`, `RuntimeContextLayer` (priority 1720, Dynamic)
-    // must emit its single-line `## Runtime Environment` summary even on
+    // must emit its single-line `<environment_context>` summary even on
     // the Basic path. Mirrors `harness_bridge::build_system_prompt`
     // populating the field with `RuntimeContext::collect(...)`.
     use crate::thinker::context::ContextAggregator;
@@ -136,7 +136,7 @@ fn phase4_with_runtime_context_populated_emits_runtime_environment_on_basic_path
     let prompt = builder.build_system_prompt(&[]);
 
     assert!(
-        prompt.contains("## Runtime Environment"),
+        prompt.contains("<environment_context>"),
         "RuntimeContextLayer must emit on Basic path when runtime_context is populated"
     );
     // Per-run / per-hour facts ride the Dynamic runtime line…
@@ -314,14 +314,14 @@ fn test_build_system_prompt_with_context_includes_runtime_context() {
     // Runtime context should be present. `os=` moved to the Stable
     // `## Environment` bullet (`- **OS**: linux (x86_64)`); the Dynamic line owns
     // the per-run facts.
-    assert!(prompt.contains("## Runtime Environment"));
-    assert!(prompt.contains("cwd=/home/user"));
-    assert!(prompt.contains("model=gpt-4"));
+    assert!(prompt.contains("<environment_context>"));
+    assert!(prompt.contains("<cwd>/home/user</cwd>"));
+    assert!(prompt.contains("<model>gpt-4</model>"));
     assert!(prompt.contains("- **OS**: linux (x86_64)"));
 
     // Runtime context is a dynamic layer (priority 1710) so it appears
     // after stable layers like environment (priority 300).
-    let runtime_pos = prompt.find("## Runtime Environment").unwrap();
+    let runtime_pos = prompt.find("<environment_context>").unwrap();
     let env_pos = prompt.find("## Environment").unwrap();
     assert!(
         runtime_pos > env_pos,
@@ -347,7 +347,7 @@ fn test_build_system_prompt_with_context_no_runtime_context() {
     let prompt = builder.with_resolved_context(ctx).build_system_prompt(&[]);
 
     // Runtime context section should NOT be present
-    assert!(!prompt.contains("## Runtime Environment"));
+    assert!(!prompt.contains("<environment_context>"));
 }
 
 #[test]
@@ -391,7 +391,7 @@ fn test_full_prompt_with_all_enhancements_background_mode() {
 
     // 1. RuntimeContext should be present
     assert!(
-        prompt.contains("## Runtime Environment"),
+        prompt.contains("<environment_context>"),
         "Missing RuntimeContext section"
     );
     // OS is stated once, by the Stable `## Environment` bullet — not by the
@@ -447,7 +447,7 @@ fn test_full_prompt_with_all_enhancements_background_mode() {
     let protocol_pos = prompt.find("Response Protocol Tokens").unwrap();
     let guidelines_pos = prompt.find("System Operational Awareness").unwrap();
     let citation_pos = prompt.find("Citation Standards").unwrap();
-    let runtime_pos = prompt.find("## Runtime Environment").unwrap();
+    let runtime_pos = prompt.find("<environment_context>").unwrap();
 
     assert!(
         env_pos < protocol_pos,
@@ -545,7 +545,7 @@ fn test_interactive_prompt_minimal_token_overhead() {
 
     // 1. RuntimeContext SHOULD be present (always injected when provided)
     assert!(
-        prompt.contains("## Runtime Environment"),
+        prompt.contains("<environment_context>"),
         "RuntimeContext should be present in WebRich mode"
     );
     assert!(
@@ -554,7 +554,7 @@ fn test_interactive_prompt_minimal_token_overhead() {
     );
     assert!(!prompt.contains("os=linux"), "OS stated twice");
     assert!(
-        prompt.contains("model=gpt-4"),
+        prompt.contains("<model>gpt-4</model>"),
         "Missing model info in WebRich mode"
     );
 

@@ -127,6 +127,7 @@ impl Sandbox for NoopSandbox {
             writable_roots: Vec::new(),
             network: crate::sandbox::summary::NetworkState::AllowAll,
             max_memory_mb: None,
+            permission_profile_id: None,
         })
     }
 }

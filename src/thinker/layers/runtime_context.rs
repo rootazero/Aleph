@@ -4,6 +4,18 @@
 //! which left their relative order resolved only by registration sequence
 //! (a latent ordering hazard). The harness wiring (`prompt_build.rs`) and the
 //! build-path test already document this layer as 1720 — the code now agrees.
+//!
+//! Renders the **codex-aligned `<environment_context>` XML block** whose
+//! shape mirrors codex's `FileSystemContext::render()` from
+//! `codex/codex-rs/core/src/context/environment_context.rs`: a single tag,
+//! with body sub-elements for cwd / repo / git / model / time, optionally
+//! nested `<parent kind="…">id</parent>` for sub-agent runs. The XML
+//! boundary buys two things the pipe-separated markdown line that used to
+//! ship here could not: (a) a tag-delimited region downstream tooling can
+//! match on (`<environment_context>` start/end, same role
+//! `markdown_excerpt::split_wikilinks` plays for note excerpts), and (b) a
+//! hard character boundary so the model cannot be tricked into "closing"
+//! the section and forging a sibling at top prompt scope.
 
 use crate::thinker::prompt_layer::{AssemblyPath, LayerInput, LayerStability, PromptLayer};
 use crate::thinker::prompt_mode::PromptMode;
@@ -34,14 +46,27 @@ impl PromptLayer for RuntimeContextLayer {
             Some(c) => c,
             None => return,
         };
-        if let Some(ref runtime_ctx) = ctx.runtime_context {
-            // Only the per-run / per-hour half: cwd, repo, branch, model, time.
-            // The process-invariant half (OS/arch, shell, host) is rendered once
-            // by `EnvironmentLayer` in the Stable prefix — see
-            // `RuntimeContext`'s module docs for the split.
-            output.push_str(&runtime_ctx.to_dynamic_line());
-            output.push_str("\n\n");
+        let Some(ref runtime_ctx) = ctx.runtime_context else {
+            return;
+        };
+        // Belt-and-braces: skip emitting the XML when there is nothing inside
+        // it worth rendering (internal-tooling path that called `collect()`
+        // with no model handed in). Cheap, and keeps the prompt byte-identical
+        // for paths that have always been empty.
+        if !runtime_ctx.has_dynamic_facts() {
+            return;
         }
+
+        // Parent binding comes from `ResolvedContext` via the envelope's
+        // `parent` field. The mapping is established by the harness bridge
+        // (`prompt_build::resolve_prompt_context`) — we only render. A `None`
+        // here drops the `<parent>` element entirely; this is the common path
+        // (primary user-facing session) so the prompt stays byte-identical
+        // for the 99 % case.
+        let parent = ctx.envelope_parent.as_ref().map(|p| (p.kind.as_str(), p.id.as_str()));
+        let block = runtime_ctx.to_environment_context_block(parent);
+        output.push_str(&block);
+        output.push_str("\n\n");
     }
 }
 

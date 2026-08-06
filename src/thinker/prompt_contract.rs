@@ -160,6 +160,11 @@ fn fixed_sandbox_summary() -> crate::sandbox::SandboxSummary {
         writable_roots: vec![std::path::PathBuf::from("/home/u/projects/demo-wsp")],
         network: crate::sandbox::NetworkState::AllowAll,
         max_memory_mb: Some(512),
+        // `None` here keeps the `Permission profile:` bullet out of the
+        // scaffold measurement; adding the field to production dispatch
+        // wiring automatically starts measuring it on every paradigm where
+        // it lights up. See §2.3 round.
+        permission_profile_id: None,
     }
 }
 
@@ -355,7 +360,20 @@ fn reachable_layers() {
 /// `special_actions` 1,234 → 313 and `memory_protocol` 2,938 → 1,187, both by
 /// moving per-tool how-to into the tool `DESCRIPTION`s that already stated it,
 /// less 75 B for the parallel-dispatch fact rescued into `role`.
-const SCAFFOLD_CEILING_BYTES: usize = 7_495;
+///
+/// **Updated 2026-08-06 (§2.3 round)**: `RuntimeContext::to_dynamic_line` →
+/// `RuntimeContext::to_environment_context_block`. The new XML format is
+/// 8 elements (`<environment_context> <cwd> <repo> <git> <model> <time>`,
+/// plus the open/close pair), where the previous markdown format used
+/// `<key>=<value>` pairs in a single-line pipe-separated block. The byte
+/// delta is approximately `+2 × 8 ≈ 16` per element × 6 fixed elements
+/// = ~96 bytes per render, of which ~69 hit the `production_shaped`
+/// fixture below (cwd/repo/git are filled in by the test, model/time are
+/// constant strings). **Content is unchanged**: the same facts the model
+/// saw before, now inside a tag-delimited region downstream tooling can
+/// match on (`<environment_context>` start/end, codex parity). No `prompt`
+/// prose was added.
+const SCAFFOLD_CEILING_BYTES: usize = 7_600;
 
 /// No paradigm's fixed scaffold may grow past the ceiling.
 #[test]
@@ -432,7 +450,13 @@ fn scaffold_bytes_ratchet() {
 /// was blamed for. A layer's rating is about the bytes that *can* vary; its
 /// measured size here is about the bytes that *do* render. Those are different
 /// questions, and this ratchet only ever answers the second one.
-const DYNAMIC_TAIL_CEILING_BYTES: usize = 1_017;
+///
+/// **Updated 2026-08-06 (§2.3 round)**: the `<environment_context>` XML
+/// block now renders into the dynamic tail where the old
+/// `## Runtime Environment` line did. Same content, same cache lifetime;
+/// the byte delta tracks `SCAFFOLD_CEILING_BYTES` and is +~69 B for the
+/// reason noted there.
+const DYNAMIC_TAIL_CEILING_BYTES: usize = 1_100;
 
 /// The uncached half of the system prompt may not grow past its ceiling.
 #[test]

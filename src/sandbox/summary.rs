@@ -100,6 +100,15 @@ pub struct SandboxSummary {
     pub network: NetworkState,
     /// Hard memory ceiling on each command, if configured.
     pub max_memory_mb: Option<u64>,
+    /// Optional stable, audit-friendly identifier of the active permission
+    /// profile. `None` for legacy / mock sandboxes (anywhere the profile-id
+    /// book-keeping hasn't been wired in yet) — the bullet stays out of
+    /// the prompt, and the byte stream stays byte-identical for the common
+    /// path. `Some(id)` enables the `- Permission profile: <id>` line in
+    /// `OperatingEnvelopeLayer` so the model (and the audit log) can tag a
+    /// tool call against the exact policy it ran under.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub permission_profile_id: Option<String>,
 }
 
 /// Coarse network state for prompt rendering. Mirrors `NetworkPolicy` but
@@ -161,6 +170,7 @@ impl SandboxSummary {
             writable_roots,
             network: NetworkState::from_policy(&caps.network),
             max_memory_mb: caps.max_memory_mb,
+            permission_profile_id: None,
         }
     }
 
@@ -175,7 +185,18 @@ impl SandboxSummary {
             writable_roots: vec![worktree_path],
             network: NetworkState::AllowAll,
             max_memory_mb: None,
+            permission_profile_id: None,
         }
+    }
+
+    /// Builder helper: attach a permission-profile id post-construction.
+    /// Keeps `from_baseline` and `isolated_worktree` free of an extra
+    /// argument while still letting dispatchers opt into the
+    /// `## Operating Envelope` bullet line when they wire one up.
+    #[must_use]
+    pub fn with_permission_profile_id(mut self, id: impl Into<String>) -> Self {
+        self.permission_profile_id = Some(id.into());
+        self
     }
 
     /// The active posture as the ordered [`PolicyTier`] enum (parsed from the
@@ -233,6 +254,41 @@ impl SandboxSummary {
             .map(|p| p.display().to_string())
             .collect();
         Some(format!("Writable roots: {}", paths.join(", ")))
+    }
+
+    /// Single-line network posture descriptor for the dynamic
+    /// `## Operating Envelope` section. Mirrors the wording used in
+    /// [`Self::lines`] so the model sees the same descriptor in both halves
+    /// of the prompt. Returns `None` when the network state has no
+    /// interesting descriptor — but in practice every variant renders a
+    /// line, so the caller can use this as `Option<String>` uniformly.
+    #[must_use]
+    pub fn network_prompt_line(&self) -> Option<String> {
+        let line = match &self.network {
+            NetworkState::Denied => "Network: denied".to_string(),
+            NetworkState::AllowAll => "Network: allowed (all hosts)".to_string(),
+            NetworkState::AllowHosts { hosts } => {
+                if hosts.is_empty() {
+                    "Network: allowed (no hosts configured)".to_string()
+                } else {
+                    format!("Network: allowed (hosts: {})", hosts.join(", "))
+                }
+            }
+        };
+        Some(line)
+    }
+
+    /// Stable permission-profile id for the active sandbox posture, when one
+    /// is configured. Lets the model (and the audit log) tag a tool call
+    /// against the exact policy it ran under — useful for postmortem and
+    /// for cross-session comparisons when several profiles share a tier
+    /// tag. `None` until a dispatcher hands a profile id in (legacy /
+    /// mock sandboxes don't), so the bullet stays absent for the common
+    /// path.
+    #[must_use]
+    pub fn permission_profile_prompt_line(&self) -> Option<String> {
+        let profile_id = self.permission_profile_id.as_deref()?;
+        Some(format!("Permission profile: {profile_id}"))
     }
 
     /// Single source for both renderings, so the operator view and the two
@@ -406,6 +462,74 @@ mod tests {
         assert_eq!(summary.policy_tier, "read-only");
         assert!(summary.writable_roots_line().is_none());
         assert_eq!(summary.to_prompt_lines(), summary.posture_lines());
+    }
+
+    #[test]
+    fn network_prompt_line_renders_all_three_variants() {
+        // Three variants, three wordings — single source so the
+        // `OperatingEnvelopeLayer` and `sandbox-debug` cannot drift.
+        let denied = SandboxSummary {
+            backend: "b",
+            policy_tier: "read-only",
+            writable_roots: vec![],
+            network: NetworkState::Denied,
+            max_memory_mb: None,
+            permission_profile_id: None,
+        };
+        assert_eq!(denied.network_prompt_line().as_deref(), Some("Network: denied"));
+
+        let allow_all = SandboxSummary {
+            backend: "b",
+            policy_tier: "danger-full-access",
+            writable_roots: vec![],
+            network: NetworkState::AllowAll,
+            max_memory_mb: None,
+            permission_profile_id: None,
+        };
+        assert_eq!(
+            allow_all.network_prompt_line().as_deref(),
+            Some("Network: allowed (all hosts)")
+        );
+
+        let empty_hosts = SandboxSummary {
+            backend: "b",
+            policy_tier: "workspace-write",
+            writable_roots: vec![],
+            network: NetworkState::AllowHosts { hosts: vec![] },
+            max_memory_mb: None,
+            permission_profile_id: None,
+        };
+        assert_eq!(
+            empty_hosts.network_prompt_line().as_deref(),
+            Some("Network: allowed (no hosts configured)")
+        );
+    }
+
+    #[test]
+    fn permission_profile_prompt_line_is_none_then_some_after_with() {
+        let summary =
+            SandboxSummary::from_baseline("b", &SandboxCapabilities::strict());
+        assert!(summary.permission_profile_prompt_line().is_none());
+        let summary = summary.with_permission_profile_id("drafts-v1");
+        assert_eq!(
+            summary.permission_profile_prompt_line().as_deref(),
+            Some("Permission profile: drafts-v1")
+        );
+    }
+
+    #[test]
+    fn with_permission_profile_id_round_trips_on_worktree_path() {
+        // The `isolated_worktree` constructor leaves `permission_profile_id`
+        // `None`; the builder helper is the only way to set it. Pin both
+        // halves of the round-trip so a refactor cannot silently drop one.
+        let summary =
+            SandboxSummary::isolated_worktree(PathBuf::from("/wt/aleph-foo"))
+                .with_permission_profile_id("iso-v2");
+        assert_eq!(summary.permission_profile_id.as_deref(), Some("iso-v2"));
+        assert_eq!(
+            summary.permission_profile_prompt_line().as_deref(),
+            Some("Permission profile: iso-v2")
+        );
     }
 
     #[test]

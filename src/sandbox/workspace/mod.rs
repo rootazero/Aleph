@@ -146,6 +146,7 @@ impl Sandbox for WorkspaceSandbox {
             // here would invite it to assume egress it does not actually have.
             network: crate::sandbox::summary::NetworkState::Denied,
             max_memory_mb: None,
+            permission_profile_id: None,
         })
     }
 

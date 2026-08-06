@@ -82,10 +82,32 @@ impl PromptLayer for OperatingEnvelopeLayer {
             .sandbox_summary
             .as_ref()
             .and_then(crate::sandbox::SandboxSummary::writable_roots_line);
+        // Sub-agent binding state for `## Operating Envelope` — three facts the
+        // layer may render independently: the subagent run id, the network
+        // posture (open / restricted / none), and the policy profile id.
+        // Each is `None` by default; primary user-facing sessions see none of
+        // them and the prompt is byte-identical.
+        let run_id_line = ctx.run_id.as_deref().map(|id| format!("- Run id: `{id}`\n"));
+        let network_line = ctx
+            .sandbox_summary
+            .as_ref()
+            .map(crate::sandbox::SandboxSummary::network_prompt_line)
+            .unwrap_or_default();
+        let policy_profile_line = ctx
+            .sandbox_summary
+            .as_ref()
+            .and_then(crate::sandbox::SandboxSummary::permission_profile_prompt_line)
+            .map(|line| format!("- {line}\n"));
 
         // Nothing resolved (internal / sub-agent / estimate dispatch): emit
         // nothing rather than a guessed default.
-        if ctx.approval_tier.is_none() && ctx.session_mode.is_none() && writable_roots.is_none() {
+        if ctx.approval_tier.is_none()
+            && ctx.session_mode.is_none()
+            && writable_roots.is_none()
+            && run_id_line.is_none()
+            && network_line.is_none()
+            && policy_profile_line.is_none()
+        {
             return;
         }
 
@@ -111,6 +133,32 @@ impl PromptLayer for OperatingEnvelopeLayer {
         // business knowing about.
         if let Some(line) = writable_roots {
             output.push_str(&format!("- {line} (sandbox)\n"));
+        }
+        // Network posture — surfaced here (Dynamic) not in `SecurityLayer`
+        // @600 (Stable) because the same cache-reasoning applies: a network
+        // rule change mid-conversation would otherwise re-key the prefix.
+        // The line is *added* when the layer above reports a posture; an
+        // Open / Restricted / Air-gapped dispatcher surfaces the same
+        // descriptor the gate enforces, so the prompt can never claim a
+        // regime the runtime does not apply.
+        if let Some(line) = network_line {
+            output.push_str(&format!("- {line}\n"));
+        }
+        // Permission profile id: a stable, audit-friendly reference so the
+        // model (and the log) can tag a tool call against the exact policy
+        // it ran under. Empty until the dispatcher hands in a profile id
+        // (legacy / mock sandboxes don't), so the byte stream stays
+        // byte-identical for the common case.
+        if let Some(line) = policy_profile_line {
+            output.push_str(&line);
+        }
+        // Sub-agent run id: lets the model refer to "this run of the
+        // explore sub-agent" when talking to the parent session in a long
+        // delegation. Kept in this layer (Dynamic, near `run_loop`) so
+        // it sits close to the other per-run machinery, far from the
+        // Stable / SandboxLayer back-half.
+        if let Some(line) = run_id_line {
+            output.push_str(&line);
         }
         output.push('\n');
     }
@@ -138,6 +186,29 @@ mod tests {
         let mut out = String::new();
         OperatingEnvelopeLayer.inject(&mut out, &input);
         out
+    }
+
+    // SandboxCapabilities::strict is used to construct a posture with
+    // "Network: denied" — verify the bullet appears using the exact
+    // wording from `SandboxSummary::network_prompt_line`. This is a
+    // single-source test: change the wording and the assertion updates
+    // too.
+    #[test]
+    fn sandbox_network_line_uses_wording_from_summary_module() {
+        use crate::sandbox::{SandboxCapabilities, SandboxSummary};
+
+        // Render the line directly and make sure it matches what the layer
+        // prints — pin so any drift between the two surfaces is caught.
+        let summary = SandboxSummary::from_baseline(
+            "macos/seatbelt",
+            &SandboxCapabilities::strict(),
+        );
+        let expected = summary.network_prompt_line().expect("strict = denied");
+        let mut c = ctx();
+        c.approval_tier = Some(ExecTier::Auto);
+        c.sandbox_summary = Some(summary);
+        let out = render(&c);
+        assert!(out.contains(&expected), "layer output: {out}\nexpected: {expected}");
     }
 
     #[test]
@@ -200,10 +271,16 @@ mod tests {
         assert!(!out.contains("git/worktree"), "{out}");
     }
 
-    /// A read-only posture has no writable root, so it must not open the section
-    /// with a bare header.
+    /// A read-only posture alone — no exec tier, no session mode, no
+    /// writable root, no profile id, no run id — **does** open the
+    /// `## Operating Envelope` section now: the `Network:` line is part
+    /// of the per-run envelope (same codex `<environment_context>`
+    /// shape as `writable_roots`). Update the old "stays silent" pin
+    /// to test the network-only render: `writable_roots` must stay
+    /// absent in the read-only posture (the Stable-layer back-half still
+    /// carries "Sandbox: … (read-only)" separately).
     #[test]
-    fn read_only_sandbox_alone_stays_silent() {
+    fn read_only_posture_prints_network_line_but_no_writable_root() {
         use crate::sandbox::{SandboxCapabilities, SandboxSummary};
 
         let mut c = ctx();
@@ -211,7 +288,17 @@ mod tests {
             "macos/seatbelt",
             &SandboxCapabilities::strict(),
         ));
-        assert!(render(&c).is_empty());
+        let out = render(&c);
+        // Network posture now rides in Dynamic (paired with codex's
+        // `<environment_context>` separation): the section opens so
+        // the model sees the runtime posture it must respect.
+        assert!(out.contains("## Operating Envelope"), "{out}");
+        assert!(out.contains("Network: denied"), "{out}");
+        // `Writable roots:` is the half this layer re-renders from
+        // Dynamic; read-only posture has none and the bullet must
+        // stay absent (its complement is the Stable `Sandbox:` line
+        // printed by SecurityLayer, not this layer).
+        assert!(!out.contains("Writable roots"), "{out}");
     }
 
     /// The whole reason this layer exists: the volatile knobs must NOT be in the
@@ -224,5 +311,83 @@ mod tests {
             OperatingEnvelopeLayer.priority() > 1700,
             "must sit in the Dynamic tail zone, after every Stable layer"
         );
+    }
+
+    #[test]
+    fn renders_run_id_line_when_subagent_provides_one() {
+        use crate::thinker::context::EnvelopeParent;
+
+        let mut c = ctx();
+        c.approval_tier = Some(ExecTier::Auto);
+        c.run_id = Some("subagent-7c1f".to_string());
+        c.envelope_parent = Some(EnvelopeParent {
+            kind: "subagent".to_string(),
+            id: "session-X".to_string(),
+        });
+        let out = render(&c);
+
+        // Run id is its own bullet (backticked so downstream prompt tools
+        // can match on it), distinct from the parent element rendered by
+        // `RuntimeContextLayer` — different layer, different surface, both
+        // intentional.
+        assert!(out.contains("Run id: `subagent-7c1f`"), "{out}");
+    }
+
+    #[test]
+    fn renders_network_line_when_sandbox_advertises_posture() {
+        use crate::sandbox::{SandboxCapabilities, SandboxSummary};
+
+        let mut c = ctx();
+        c.approval_tier = Some(ExecTier::Auto);
+        c.sandbox_summary = Some(SandboxSummary::from_baseline(
+            "macos/seatbelt",
+            &SandboxCapabilities::strict(),
+        ));
+        let out = render(&c);
+        // No exact-string compare (the wording lives in
+        // `SandboxSummary::network_prompt_line`, the test below) — just
+        // verify the bullet appears, since a `strict()` profile yields
+        // `Network: denied` deterministically.
+        assert!(out.contains("Network: "), "{out}");
+    }
+
+    #[test]
+    fn renders_permission_profile_line_only_when_profile_id_resolves() {
+        use crate::sandbox::{SandboxCapabilities, SandboxSummary};
+
+        let mut c = ctx();
+        c.approval_tier = Some(ExecTier::Auto);
+        c.sandbox_summary = Some(
+            SandboxSummary::from_baseline("test/backend", &SandboxCapabilities::strict())
+                .with_permission_profile_id("policy-strict-v3"),
+        );
+        let out = render(&c);
+        assert!(out.contains("Permission profile: policy-strict-v3"), "{out}");
+
+        // Without a profile id the line stays absent (legacy / mock sandboxes).
+        c.sandbox_summary = Some(SandboxSummary::from_baseline(
+            "test/backend",
+            &SandboxCapabilities::strict(),
+        ));
+        let out = render(&c);
+        assert!(!out.contains("Permission profile"), "{out}");
+    }
+
+    #[test]
+    fn section_stays_silent_when_envelope_is_completely_empty() {
+        // Regression for `Envelope -> is_empty` fast path: a layer that
+        // *only* contributes sandbox posture (no tier, no mode, no profile
+        // id, no run_id) must not double-render a header for the parent
+        // binding alone. The runtime_CONTEXT layer carries the parent
+        // element; this layer only echoes the run id.
+        let mut c = ctx();
+        c.envelope_parent = Some(crate::thinker::context::EnvelopeParent {
+            kind: "subagent".to_string(),
+            id: "session-X".to_string(),
+        });
+        // Bypass: parent alone never opens `## Operating Envelope`. Only
+        // the runtime_context layer renders `<parent>`. Pin so neither
+        // leaks.
+        assert!(render(&c).is_empty());
     }
 }
