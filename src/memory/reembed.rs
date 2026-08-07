@@ -72,8 +72,11 @@ pub async fn reembed_all(
 ) -> Result<ReembedResult, AlephError> {
     let mut result = ReembedResult::default();
 
-    // Discover agent IDs from filesystem subdirectories of memory_dir
-    let agent_ids = discover_agent_ids(memory_dir).await;
+    // Every corpus on disk — base agents and composed scoped partitions alike
+    // (`project_scope::list_note_corpora` is the single answer to "which
+    // corpora exist"; this used to keep its own copy that also treated a
+    // dot-prefixed directory such as a stray staging dir as an agent).
+    let agent_ids = crate::memory::project_scope::list_note_corpora(memory_dir);
 
     let signature = crate::memory::embedding_signature::provider_signature(embedder.as_ref());
     let force_all = match database.get_embedding_signature() {
@@ -156,25 +159,6 @@ pub async fn reembed_all(
     }
 
     Ok(result)
-}
-
-/// Discover agent IDs by listing immediate subdirectories of `memory_dir`.
-async fn discover_agent_ids(memory_dir: &Path) -> Vec<String> {
-    let mut agent_ids = Vec::new();
-    let mut read_dir = match tokio::fs::read_dir(memory_dir).await {
-        Ok(rd) => rd,
-        Err(_) => return agent_ids,
-    };
-    while let Ok(Some(entry)) = read_dir.next_entry().await {
-        if let Ok(ft) = entry.file_type().await {
-            if ft.is_dir() {
-                if let Some(name) = entry.file_name().to_str() {
-                    agent_ids.push(name.to_owned());
-                }
-            }
-        }
-    }
-    agent_ids
 }
 
 /// Note paths whose stored vector already matches the indexed content.

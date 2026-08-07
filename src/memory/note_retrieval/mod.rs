@@ -836,17 +836,18 @@ impl<S: NoteStore + Send + Sync + 'static> NoteFactRetrieval<S> {
         Ok(all_results)
     }
 
-    /// Discover all agent IDs by listing subdirectories of the memory dir,
-    /// then retrieve across all of them.
+    /// Discover every note corpus on disk
+    /// ([`crate::memory::project_scope::list_note_corpora`]) and retrieve
+    /// across all of them.
     ///
-    /// Returns empty if no agents or memory dir is unreadable.
+    /// Returns empty if there are no corpora or the memory dir is unreadable.
     pub async fn retrieve_all_agents(
         &self,
         query: &str,
         memory_dir: &std::path::Path,
         limit: usize,
     ) -> Result<Vec<ScoredFact>, AlephError> {
-        let agent_ids = discover_agent_ids(memory_dir).await;
+        let agent_ids = crate::memory::project_scope::list_note_corpora(memory_dir);
         if agent_ids.is_empty() {
             return Ok(Vec::new());
         }
@@ -860,27 +861,6 @@ fn now_unix() -> i64 {
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap_or_default()
         .as_secs() as i64
-}
-
-/// Discover agent IDs by reading directory names under `memory_dir`.
-async fn discover_agent_ids(memory_dir: &std::path::Path) -> Vec<String> {
-    let mut agents = Vec::new();
-    let mut dir = match tokio::fs::read_dir(memory_dir).await {
-        Ok(d) => d,
-        Err(_) => return agents,
-    };
-    while let Ok(Some(entry)) = dir.next_entry().await {
-        let name = entry.file_name().to_string_lossy().to_string();
-        if name.starts_with('.') {
-            continue;
-        }
-        if let Ok(ft) = entry.file_type().await {
-            if ft.is_dir() {
-                agents.push(name);
-            }
-        }
-    }
-    agents
 }
 
 #[cfg(test)]
