@@ -185,6 +185,18 @@ where
         // Ensure session exists in memory + SQLite before adding messages
         agent.ensure_session(&request.session_key).await;
 
+        // The claim broadcast inside `admit_run` above went out BEFORE that row
+        // existed, so the per-connection projection
+        // (`event_visibility::EventVisibilityIndex::project_for`) could not
+        // resolve this session key and dropped it — every Panel recorded an
+        // empty running set at that seq. Re-publish now that the key resolves.
+        // Without this the sidebar's running dot stays dark for the ENTIRE
+        // first turn of every new conversation: for a single in-flight run the
+        // only later frame is the release at run end, which excludes the key
+        // too. See `SessionRunRegistry::republish_running_set` for why it must
+        // carry a higher seq.
+        self.session_run_registry.republish_running_set();
+
         // Check if this is the first real user message (for auto-topic generation).
         // Slash commands routed via fast-path don't count — they bypass
         // add_message entirely, so history stays empty for the next real message.

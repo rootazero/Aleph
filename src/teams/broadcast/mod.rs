@@ -170,7 +170,8 @@ fn newly_waiting_review(pre: &[String], post: &[String]) -> Vec<String> {
 }
 
 /// Hard capacity for [`FANOUT_TEAMS`]. Same hygiene as the gateway's
-/// visibility caches (`event_visibility.rs`): FIFO eviction past the cap, so a
+/// visibility caches (`event_visibility.rs`), through the same shared rule
+/// (`utils::fifo_cache::remember`): FIFO eviction past the cap, so a
 /// long-uptime process never grows the index unbounded.
 const MAX_TRACKED_FANOUTS: usize = 4096;
 
@@ -207,13 +208,7 @@ struct FanoutTeamIndex {
 
 impl FanoutTeamIndex {
     fn record(&mut self, run_id: String, team_id: String, cap: usize) {
-        crate::gateway::event_visibility::remember(
-            &mut self.order,
-            &mut self.map,
-            run_id,
-            team_id,
-            cap,
-        );
+        crate::utils::fifo_cache::remember(&mut self.order, &mut self.map, run_id, team_id, cap);
     }
 
     fn team_of(&self, run_id: &str) -> Option<String> {

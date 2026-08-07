@@ -13,6 +13,10 @@ pub use aleph_protocol::jsonrpc::{
     ToolCallContext as ProtoToolCallContext,
     ToolCallParams as ProtoToolCallParams,
     ToolCallResult as ProtoToolCallResult,
+    // The refusal body that travels with `AUTH_REQUIRED` on the admin gate.
+    // Re-exported here so gateway code reaches the code and its message through
+    // one path, and so the Panel's copy of that message stays impossible.
+    ADMIN_REQUIRED_MESSAGE,
     // Error codes
     AUTH_REQUIRED,
     INTERNAL_ERROR,

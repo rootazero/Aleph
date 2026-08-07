@@ -1343,10 +1343,11 @@ after (verified by `single_user_fixture_is_byte_identical_after_upgrade`,
      provider is configured — `AgentRunManager::start_run`, which has no
      `SessionStore` dependency) is not covered by the real-provider path's
      `existing_session_is_visible` check.
-  2. **The running-set projection races a new session's row into existence,
-     and the self-heal its own comment promises has no producer** (high; a
-     regression this round introduced, and it fires on a single-user loopback
-     box too). `SessionRunRegistry::try_claim` is the FIRST statement of
+  2. **The running-set projection raced a new session's row into existence,
+     and the self-heal its own comment promised had no producer** (was high; a
+     regression this round introduced, and it fired on a single-user loopback
+     box too — **resolved**, see the end of this item).
+     `SessionRunRegistry::try_claim` is the FIRST statement of
      `ExecutionEngine::admit_run` and it broadcasts `RunningSetChanged`; the
      session row is not written until `agent.ensure_session(...)`, at least two
      await points later. `EventVisibilityIndex::project_for` resolves each
@@ -1363,10 +1364,26 @@ after (verified by `single_user_fixture_is_byte_identical_after_upgrade`,
      forwarded whole. The RPC twin `visible_running_keys` drops the key for the
      same reason, so the cold-load seed does not cover it either, and
      `gateway_metrics.rs`'s "it self-heals on the next
-     `stream.running_set_changed`" is false whenever there is only one
-     in-flight run — that sentence must be corrected with the fix. The fix is
-     to give the projection an owner it can resolve before the row exists (the
-     claim site already knows the caller), NOT to relax the drop rule.
+     `stream.running_set_changed`" was false whenever there is only one
+     in-flight run.
+     **Resolved (2026-08-07) by giving the promised self-heal a producer, not
+     by relaxing the drop rule** (an element whose owner does not resolve is
+     still dropped — widening that would admit another user's imminent run, and
+     the key string itself names an agent/peer). `execute.rs` calls
+     `SessionRunRegistry::republish_running_set()` immediately after
+     `agent.ensure_session(...)`: the same set, re-published at a FRESH seq now
+     that the key resolves. The bump is load-bearing —
+     `SessionMap::set_server_running` discards any frame whose seq is `<=` the
+     one it holds, so a re-publish at the claim's seq would have been inert.
+     The RPC twin `visible_running_keys` is unchanged and still drops a key
+     polled inside that window; it needs no change because the repair frame
+     arrives on the event plane and outranks the cold-load seed
+     (`seed_server_running` applies only while `server_seq == 0`). Pinned by
+     `session_run_registry.rs::a_new_sessions_key_reaches_its_owner_once_its_row_exists`
+     (asserts the projected payload and the seq ordering) plus a source-level
+     pin that `execute.rs` re-publishes AFTER the row is created — the full
+     `ExecutionEngine::execute` has no unit-level harness, so without it the
+     wire could be deleted with every test still green.
   3. **The team event plane's resolver is installed under a narrower condition
      than the one that produces the frames it classifies** (medium; the
      direction is fail-closed, but the effect is a total silent outage that did
@@ -1405,18 +1422,26 @@ after (verified by `single_user_fixture_is_byte_identical_after_upgrade`,
      input added to that struct in `tools/scoped/builder.rs` alone leaves the
      fast path deciding on a stale shape — silently, and only for slash
      commands. Converging the two constructions is the open work.
-  5. `gateway.metrics.run_concurrency`'s `per_agent` is the one un-narrowed
-     identity array in a response this round made member-reachable (low). The
-     handler narrows `running_sessions` and `busy_queue.per_session` and passes
-     `ConcurrencySnapshot::per_agent` (`Vec<AgentSlotUsage>`, i.e.
-     `{agent_id, in_use}`) through verbatim, so a member learns which agent
-     personas have live runs right now — the same class of fact ("who is doing
-     something at this moment") the session-key narrowing removed. Mitigated:
-     `agents.list`/`agents.get` are themselves member carve-outs, so the ids are
-     not new, only the live-activity correlation. The recorded defect is the
-     carve-out's own justification in `method_admin.rs` — "the aggregate
-     counters ... are load numbers, not identities" — which is false for this
-     array and will make the next reviewer skip it.
+  5. `gateway.metrics.run_concurrency`'s `per_agent` was the one un-narrowed
+     identity array in a response this round made member-reachable (was low —
+     **resolved**). The handler narrowed `running_sessions` and
+     `busy_queue.per_session` but passed `ConcurrencySnapshot::per_agent`
+     (`Vec<AgentSlotUsage>`, i.e. `{agent_id, in_use}`) through verbatim, so a
+     member learned which agent personas have live runs right now — the same
+     class of fact ("who is doing something at this moment") the session-key
+     narrowing removed. `agents.list`/`agents.get` are themselves member
+     carve-outs, so the ids were not new, only the live-activity correlation.
+     **Resolved (2026-08-07)**: the handler now removes `per_agent` from the
+     response whenever `visibility::visible_owner_filter()` is `Some` — the
+     same predicate that narrows the two session arrays — and an unrestricted
+     (internal / operator) caller still receives the whole snapshot. What a
+     member gets is COUNTERS only (`global_in_use` / `global_total` /
+     `per_agent_cap` / `waiting` / `busy_queue.total_waiting`). The carve-out's
+     justification in `method_admin.rs` was corrected to say so rather than
+     carrying an exception in prose, which is how the next reviewer gets told
+     to skip it. Pinned by
+     `gateway_metrics.rs::the_per_agent_breakdown_is_withheld_from_a_scoped_caller`,
+     which proves the "present unless dropped" premise in the same test.
   6. The no-existence-oracle property of the `workspace.*` writes is stated but
      not pinned (low). `the_workspace_writes_deny_a_foreign_partition_composed_id`
      archives the same composed id twice as the same non-owner and compares the
@@ -1427,18 +1452,23 @@ after (verified by `single_user_fixture_is_byte_identical_after_upgrade`,
      asserted nowhere. `visibility::not_found_response`'s own test does assert
      it for the sessions side; this one should be rewritten against a genuinely
      absent id.
-  7. The Panel's `ADMIN_GATE_MESSAGE` drift guard cannot fire (low).
-     `settings/network/cluster.rs` copies the server's refusal string with a doc
-     comment claiming "a reword on the server shows up as a failing assertion in
-     a file that renders it" — but `aleph-panel` does not depend on `alephcore`,
-     and the test feeds its own constant into `fleet_error_label`, so it is
-     green for any value of that constant. Reword `handler.rs`'s "Not
-     authorized: this method requires operator privileges" and every member who
-     opens the cluster page silently gets the raw English protocol string
-     instead of the localized explanation, with both crates' tests still
-     passing. A guard that can actually fire needs the literal in
-     `shared/protocol` — the one crate both sides depend on — which is a larger
-     move than this round took.
+  7. The admin gate's refusal wording is now ONE constant, not a Panel copy of
+     a server literal (resolved). `settings/network/cluster.rs` used to
+     transcribe the server's refusal string and claim a doc comment's worth of
+     drift protection it could not deliver: `aleph-panel` does not depend on
+     `alephcore`, and its test fed its OWN constant into `fleet_error_label`, so
+     rewording `handler.rs` would have stranded every member who opens the
+     cluster page on the raw English protocol string with both crates' tests
+     still green. The wording moved to
+     `aleph_protocol::jsonrpc::ADMIN_REQUIRED_MESSAGE` — the one crate both
+     sides already depend on — and both the emit site (`server/handler.rs`, via
+     `gateway::protocol`'s re-export beside `AUTH_REQUIRED`) and the match site
+     read it, so there is no reword that moves one side without the other. The
+     Panel test now feeds that shared constant in, which is what makes it able
+     to fail: drift the Panel's recognition away from the server's words and the
+     refusal falls through to the raw string, tripping its `assert_ne!`. The
+     residual is the ordinary one — someone re-inlining a literal at either site
+     — and no test catches that.
 - **Explicitly out of scope for P1**: pushing routing/notifications TO
   members (spec §8, P3).
 

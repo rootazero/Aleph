@@ -48,8 +48,13 @@ pub async fn handle_gateway_metrics_lanes(
 /// be TOLD this key exists", where "I could not work out whose this is" must
 /// never mean "everyone's". The cost is that a run claimed a few milliseconds
 /// before its session row is written is briefly absent from a member's gauge;
-/// it self-heals on the next `stream.running_set_changed`, and the event plane
-/// makes the identical trade for the identical reason.
+/// the event plane makes the identical trade for the identical reason, and the
+/// repair for both lives on the event plane — `execute.rs` re-publishes
+/// `stream.running_set_changed` at a fresh seq the moment `ensure_session`
+/// makes the row resolvable (`SessionRunRegistry::republish_running_set`). A
+/// cold load that lands inside that window sees a short gauge until that frame
+/// arrives; it is NOT repaired by a later poll, because
+/// `SessionMap::seed_server_running` only applies before any frame has come in.
 async fn running_key_is_visible(store: &dyn SessionStore, key: &str) -> bool {
     let Some(parsed) = SessionKey::from_key_string(key) else {
         return false;
@@ -101,17 +106,33 @@ async fn visible_running_keys(store: &dyn SessionStore, keys: Vec<String>) -> Ve
 /// admin-gating it (the `gateway.` family default) made the seed and the gauge
 /// dead for exactly the population the filtering is for.
 ///
-/// The AGGREGATE counters stay process-wide on purpose and the registry entry
-/// must not be read as claiming otherwise: `run_concurrency`'s slot totals /
-/// per-agent breakdown and `busy_queue.total_waiting` are load numbers, not
-/// identities — they are the gauge's entire purpose, and a member seeing "6/8
-/// slots in use" learns how busy the server is, not whose work it is doing.
+/// **`run_concurrency.per_agent` is DROPPED for a scoped caller**, for the same
+/// reason and by the same predicate: `{agent_id, in_use}` names which agent
+/// personas hold a live run *right now*, which is the identity-and-timing fact
+/// the two session arrays were narrowed to remove, not a load number. An
+/// unrestricted caller (internal / operator — `visible_owner_filter()` is
+/// `None`) still gets the whole snapshot.
+///
+/// What genuinely IS load and stays process-wide for everyone:
+/// `global_in_use` / `global_total` / `per_agent_cap` / `waiting` and
+/// `busy_queue.total_waiting`. A member seeing "6/8 slots in use" learns how
+/// busy the server is, not whose work it is doing — that is the gauge's entire
+/// purpose.
 pub async fn handle_gateway_metrics_run_concurrency(
     request: JsonRpcRequest,
     run_manager: Arc<AgentRunManager>,
     sessions: Arc<dyn SessionStore>,
 ) -> JsonRpcResponse {
-    let run_concurrency = run_manager.concurrency_snapshot();
+    let mut run_concurrency =
+        serde_json::to_value(run_manager.concurrency_snapshot()).unwrap_or_else(|_| json!({}));
+    // `per_agent` is the third identity array in this response. Drop it for a
+    // scoped caller exactly as the two session arrays are narrowed — same
+    // predicate, same reason.
+    if visibility::visible_owner_filter().is_some() {
+        if let Some(obj) = run_concurrency.as_object_mut() {
+            obj.remove("per_agent");
+        }
+    }
     let running_sessions =
         visible_running_keys(sessions.as_ref(), run_manager.running_sessions()).await;
     // Backlog waiting *behind* the run slots. Without it the gauge showed a
@@ -520,5 +541,57 @@ mod tests {
             !lanes.contains(&bob),
             "bob's queued message must not be enumerated to alice"
         );
+    }
+
+    /// The third identity array in this response. `per_agent` is
+    /// `[{agent_id, in_use}]` — which agent personas hold a live run *right
+    /// now* — so leaving it verbatim hands a member the same live-activity
+    /// correlation the two session arrays were narrowed to remove. It is
+    /// dropped for a scoped caller, not summarised and not excused in a
+    /// comment; an unrestricted (internal / operator) caller still gets it.
+    ///
+    /// Both arms run against the same handler in the same test, so the
+    /// "present unless dropped" premise is proved here rather than assumed.
+    #[tokio::test]
+    async fn the_per_agent_breakdown_is_withheld_from_a_scoped_caller() {
+        let (sessions, _temp) = empty_session_store();
+
+        let unrestricted = handle_gateway_metrics_run_concurrency(
+            JsonRpcRequest::with_id("gateway.metrics.run_concurrency", None, json!(1)),
+            real_run_manager(),
+            sessions.clone(),
+        )
+        .await
+        .result
+        .expect("ok");
+        assert!(
+            unrestricted["run_concurrency"]["per_agent"].is_array(),
+            "the premise: an unrestricted caller receives the whole snapshot"
+        );
+
+        let scoped = CALLER_USER
+            .scope(Some("u-alice".to_string()), async {
+                handle_gateway_metrics_run_concurrency(
+                    JsonRpcRequest::with_id("gateway.metrics.run_concurrency", None, json!(2)),
+                    real_run_manager(),
+                    sessions.clone(),
+                )
+                .await
+            })
+            .await
+            .result
+            .expect("ok");
+        assert!(
+            scoped["run_concurrency"]
+                .as_object()
+                .expect("run_concurrency is an object")
+                .get("per_agent")
+                .is_none(),
+            "a member must not learn which agent personas are running right now"
+        );
+        // The LOAD numbers — the reason the carve-out exists at all — survive.
+        assert_eq!(scoped["run_concurrency"]["global_total"], 8);
+        assert_eq!(scoped["run_concurrency"]["global_in_use"], 0);
+        assert_eq!(scoped["run_concurrency"]["waiting"], 0);
     }
 }

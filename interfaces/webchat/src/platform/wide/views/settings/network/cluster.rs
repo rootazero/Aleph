@@ -22,6 +22,7 @@
 
 use crate::api::cluster::{ClusterApi, EnrollResult, Environment};
 use crate::context::DashboardState;
+use aleph_protocol::jsonrpc::ADMIN_REQUIRED_MESSAGE;
 use leptos::prelude::*;
 use leptos::task::spawn_local;
 
@@ -59,15 +60,16 @@ fn now_unix() -> i64 {
 /// Copy for a failed fleet read. Pure function — the page renders an error
 /// STATE, it never claims a verdict of its own.
 ///
-/// The admin gate refuses with `AUTH_REQUIRED` + "Not authorized: this method
-/// requires operator privileges", but the Panel's RPC layer keeps only
-/// `error.message` (the code is dropped in `context.rs`'s response arm), so the
-/// recognisable part is the message text. That substring is a **copy hint, not
-/// a second source of truth**: if the server ever rewords it, this falls
-/// through to showing the server's own words verbatim — degraded copy, never a
-/// wrong claim, and never a client-side permission decision.
+/// The admin gate refuses with `AUTH_REQUIRED` + a fixed message, but the
+/// Panel's RPC layer keeps only `error.message` (the code is dropped in
+/// `context.rs`'s response arm), so the message text is the only recognisable
+/// part. It is matched through [`ADMIN_REQUIRED_MESSAGE`] — **the same
+/// `aleph_protocol` constant the server emits**, not a copy of it — so a reword
+/// moves the server and this match in one edit and can no longer strand every
+/// member on the raw English string. Everything else falls through verbatim:
+/// degraded copy beats a wrong claim, and this is never a permission decision.
 fn fleet_error_label(err: &str) -> String {
-    if err.contains("requires operator privileges") {
+    if err.contains(ADMIN_REQUIRED_MESSAGE) {
         "集群管理需要 operator 权限,当前连接的角色无法读取节点拓扑。".to_string()
     } else {
         err.to_string()
@@ -367,24 +369,23 @@ pub fn ClusterSection() -> impl IntoView {
 
 #[cfg(test)]
 mod tests {
-    use super::{fleet_error_label, join_command, last_seen_label};
+    use super::{fleet_error_label, join_command, last_seen_label, ADMIN_REQUIRED_MESSAGE};
 
-    /// The refusal this page is now expected to receive — the admin gate's own
-    /// message, byte-for-byte, from `server::handler`'s `method_requires_admin`
-    /// arm. Written out here rather than paraphrased so a reword on the server
-    /// shows up as a failing assertion in a file that renders it.
-    const ADMIN_GATE_MESSAGE: &str = "Not authorized: this method requires operator privileges";
-
+    /// Fed the SERVER's own refusal — `aleph_protocol`'s constant, which
+    /// `gateway::server::handler` emits verbatim — not a local transcription of
+    /// it. That is what makes this assertion able to fail: if this page's
+    /// recognition ever drifts away from the words the server actually sends,
+    /// the refusal falls through to the raw string and `assert_ne!` fires.
     #[test]
     fn a_refused_fleet_read_renders_as_a_role_explanation() {
-        let label = fleet_error_label(ADMIN_GATE_MESSAGE);
+        let label = fleet_error_label(ADMIN_REQUIRED_MESSAGE);
         assert!(
             label.contains("operator"),
             "the refusal must be explained, not echoed as a bare protocol \
              string: {label}"
         );
         assert_ne!(
-            label, ADMIN_GATE_MESSAGE,
+            label, ADMIN_REQUIRED_MESSAGE,
             "the operator-privilege refusal is the one case this page has \
              better copy for"
         );

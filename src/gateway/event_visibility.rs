@@ -93,6 +93,19 @@
 //! cannot be resolved — are stated at that method, because they are the two
 //! ways a well-meaning change breaks it.
 //!
+//! Dropping an unresolvable element is coupled to WHEN the frame is produced,
+//! and the coupling had to be paid for: `SessionRunRegistry::try_claim`
+//! broadcasts from the first statement of `ExecutionEngine::admit_run`, before
+//! the session row exists, so a brand-new conversation's key was dropped from
+//! the only frame that would have lit its dot. The seq is then spent, the next
+//! frame is the release at run end (which excludes the key too), and nothing
+//! re-fetches — the dot stayed dark for the whole first turn. The fix is a
+//! PRODUCER, not a looser rule: `execute.rs` calls
+//! `SessionRunRegistry::republish_running_set` right after `ensure_session`,
+//! re-publishing the same set at a fresh seq once the key resolves. Any new
+//! projected frame owes the same question: is this id resolvable at the
+//! instant the frame is produced?
+//!
 //! Deliberately NOT a `PayloadProjector` trait, a projector registry, or a
 //! three-variant `Delivery` enum (R10/P6): one topic, one arm, one consumer.
 //! `Option<Value>` is the whole shape, and `None` — one string compare — is
@@ -126,6 +139,7 @@ use crate::gateway::session_store::SessionStore;
 use crate::gateway::visibility::{owner_and_scope_visible_to, owner_or_legacy};
 use crate::sync_primitives::Arc;
 use crate::teams::TeamStore;
+use crate::utils::fifo_cache::remember;
 use aleph_protocol::team_topic::team_topic_id;
 
 /// Which session (if any) a delivered event frame is attributable to, keyed
@@ -295,38 +309,12 @@ pub fn session_identity_of(topic: &str, data: Option<&Value>) -> SessionIdentity
 
 /// Mirrors `streaming/relay.rs`'s `StreamRegistry` hygiene: a hard capacity
 /// cap plus insertion-order (FIFO) eviction, so a long-uptime process with
-/// many runs/sessions/teams never grows any of these caches unbounded.
+/// many runs/sessions/teams never grows any of these caches unbounded. The
+/// eviction rule itself is `utils::fifo_cache::remember`; only the caps live
+/// with their owners.
 const MAX_TRACKED_RUNS: usize = 4096;
 const MAX_CACHED_SESSION_OWNERS: usize = 4096;
 const MAX_CACHED_TEAM_OWNERS: usize = 4096;
-
-/// Insert into a bounded insertion-order cache, evicting the oldest key once
-/// `cap` is exceeded.
-///
-/// Written once and shared rather than copied a fourth time: this module's run
-/// index, session-ownership cache and team-owner cache all need byte-identical
-/// hygiene, as does `teams::broadcast`'s fan-out `run_id → team_id` index, and
-/// four hand-copied versions of a `while len > cap` loop is how one of them
-/// ends up unbounded after a refactor nobody applied everywhere. `pub(crate)`
-/// for that fourth caller only — the caps themselves stay with their owners.
-pub(crate) fn remember<V>(
-    order: &mut VecDeque<String>,
-    map: &mut HashMap<String, V>,
-    key: String,
-    value: V,
-    cap: usize,
-) {
-    if !map.contains_key(&key) {
-        order.push_back(key.clone());
-    }
-    map.insert(key, value);
-    while map.len() > cap {
-        let Some(oldest) = order.pop_front() else {
-            break;
-        };
-        map.remove(&oldest);
-    }
-}
 
 #[derive(Default)]
 struct RunIndex {
@@ -598,9 +586,15 @@ impl EventVisibilityIndex {
                 // loopback resolves to `Some(OWNER_USER_ID)` so a single-user
                 // box runs this path too.
                 //
-                // Deny THIS frame and re-resolve on the next one (a dropped
-                // early frame self-heals via `run_complete`'s summary
-                // reconciliation on the client — see the module doc).
+                // Deny THIS frame and re-resolve on the next one. For run
+                // frames the dropped early frame self-heals via
+                // `run_complete`'s summary reconciliation on the client (see
+                // the module doc). For the `running_set_changed` PROJECTION
+                // there is no such client-side reconciliation, so "the next
+                // one" is a real producer, not a hope:
+                // `SessionRunRegistry::republish_running_set`, called by
+                // `execute.rs` immediately after `ensure_session` — see the
+                // projection section of the module doc.
                 Ok(None) => return false,
                 // Store error: fail closed, and don't cache a transient
                 // failure as a permanent "no owner" — matching
@@ -1266,6 +1260,12 @@ mod tests {
             assert!(
                 !index
                     .event_admits("team.t1.message", None, caller, &sessions, None)
+                    .await,
+                "with no TeamStore there is no honest answer for {caller:?}"
+            );
+        }
+    }
+
     /// The `if let` gate a call site sits directly under, scraped from source:
     /// the last `if let` before `marker`, up to the `{` opening its block.
     fn enclosing_if_let_gate(src: &str, marker: &str) -> String {
@@ -1351,12 +1351,6 @@ mod tests {
                  which requires `{store}`, but the frames' PRODUCER requires only \
                  {producer_needs:?}. Whenever `{store}` is absent every connection — \
                  operator included — silently denies team chat."
-            );
-        }
-    }
-
-                    .await,
-                "with no TeamStore there is no honest answer for {caller:?}"
             );
         }
     }
@@ -2025,5 +2019,36 @@ mod tests {
                 "{topic} must not be rewritten — even carrying a `running` field"
             );
         }
+    }
+
+    /// The projected frame must keep publishing in the `{method, params}`
+    /// STREAM wire form, because that is what makes the projection land on the
+    /// bytes that go out.
+    ///
+    /// `server::handler::event_wire_form` inserts the projected payload at
+    /// `.params` unconditionally — correct for a stream-form frame, whose
+    /// payload already lives there. Lose the `stream_method()` and
+    /// `event_bus::publish_frame` emits the bare `{topic, data}` form instead:
+    /// the projection would be inserted into a NEW `params` key, the wrap
+    /// branch would fire, and the ORIGINAL un-narrowed `running` array — every
+    /// user's in-flight session keys — would ride out under `params.data`.
+    /// Every test in this module would stay green, because they all project
+    /// the payload directly rather than re-deriving the envelope.
+    ///
+    /// A cross-module coincidence held this together; this is the pin. It
+    /// belongs beside the projection, not beside the delivery loop, because
+    /// the projection is what silently becomes wrong.
+    #[test]
+    fn the_projected_frame_must_keep_its_stream_wire_form() {
+        let frame = GatewayEventFrame::RunningSetChanged {
+            seq: 1,
+            running: vec!["agent:main:main".to_string()],
+        };
+        assert_eq!(
+            frame.stream_method(),
+            Some(RUNNING_SET_TOPIC),
+            "a bare {{topic, data}} RunningSetChanged puts the un-narrowed \
+             array back on the wire under `params.data`"
+        );
     }
 }

@@ -29,8 +29,8 @@ use crate::gateway::lane::{ChannelClass, LaneManager};
 use crate::gateway::middleware::MiddlewareChain;
 use crate::gateway::presence::{PresenceEntry, PresenceTracker};
 use crate::gateway::protocol::{
-    JsonRpcRequest, JsonRpcResponse, AUTH_REQUIRED, IDEMPOTENCY_KEY_REQUIRED, INTERNAL_ERROR,
-    PARSE_ERROR, RATE_LIMITED,
+    JsonRpcRequest, JsonRpcResponse, ADMIN_REQUIRED_MESSAGE, AUTH_REQUIRED,
+    IDEMPOTENCY_KEY_REQUIRED, INTERNAL_ERROR, PARSE_ERROR, RATE_LIMITED,
 };
 use crate::gateway::rate_limiter::{scope_for_method, RateLimitError, RateLimitKey, RateLimiter};
 use crate::gateway::state_version::StateVersionTracker;
@@ -1892,7 +1892,10 @@ pub(super) async fn process_request(text: &str, middleware_chain: &MiddlewareCha
         return serde_json::to_string(&JsonRpcResponse::error(
             request.id.clone(),
             AUTH_REQUIRED,
-            "Not authorized: this method requires operator privileges".to_string(),
+            // Shared with the Panel through `aleph_protocol` — the wording is
+            // not local to this arm, because the cluster page keys its role
+            // explanation off these exact words.
+            ADMIN_REQUIRED_MESSAGE.to_string(),
         ))
         .unwrap_or_default();
     }

@@ -24,6 +24,18 @@ pub const INTERNAL_ERROR: i32 = -32603;
 
 /// Authentication required
 pub const AUTH_REQUIRED: i32 = -32000;
+
+/// The body [`AUTH_REQUIRED`] carries when a `member` connection asks for an
+/// operator-only method (the server's `gateway::method_admin` prefix gate).
+///
+/// It lives in this crate — the one both the server and the Panel depend on —
+/// because BOTH sides read it: the server emits it as the refusal, and the
+/// Panel matches on it to swap the raw protocol string for a role explanation
+/// (`settings/network/cluster.rs`'s `fleet_error_label`). A copy on either side
+/// would let a reword strand every member on raw English with both crates'
+/// tests still green; with one constant a reword moves both sides at once.
+pub const ADMIN_REQUIRED_MESSAGE: &str = "Not authorized: this method requires operator privileges";
+
 /// Rate limit exceeded
 pub const RATE_LIMITED: i32 = -32002;
 /// Agent execution error

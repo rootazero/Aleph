@@ -252,10 +252,12 @@ const MEMBER_CARVE_OUTS: &[&str] = &[
     // were silently dead for every member — the RPC fallback that the
     // `stream.running_set_changed` event's own "members still need their own
     // red dot" rationale leaned on did not work for the population that
-    // rationale is about. Safe now that the handler narrows its two
-    // session-key arrays to the caller itself (2026-08-07, `ListFiltered` in
-    // `method_visibility`); the aggregate slot/queue counters it also returns
-    // are load numbers, not identities. Siblings (`gateway.metrics.lanes`,
+    // rationale is about. Safe now that the handler drops every identity from
+    // the response for a scoped caller (2026-08-07, `ListFiltered` in
+    // `method_visibility`): the two session-key arrays are narrowed to the
+    // caller and `run_concurrency.per_agent` — which names the agent personas
+    // holding live slots right now — is removed outright. What remains is
+    // slot/queue COUNTERS. Siblings (`gateway.metrics.lanes`,
     // `gateway.metrics.subagent_concurrency`) stay gated — narrowing those is
     // a separate, not-yet-made decision.
     "gateway.metrics.run_concurrency",

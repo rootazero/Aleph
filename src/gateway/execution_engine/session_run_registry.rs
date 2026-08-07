@@ -55,6 +55,31 @@ impl SessionRunRegistry {
         }
     }
 
+    /// Re-publish the CURRENT running set under a FRESH sequence number.
+    ///
+    /// [`Self::try_claim`]'s broadcast is the first statement of
+    /// `ExecutionEngine::admit_run`, several `.await` points before
+    /// `AgentInstance::ensure_session` writes the session's row. The
+    /// per-connection projection
+    /// (`event_visibility::EventVisibilityIndex::project_for`) drops any
+    /// element whose row cannot be resolved — the fail-closed direction, and
+    /// correct — so on the first turn of a BRAND-NEW conversation that claim
+    /// frame reaches every socket with the new key already removed. Nothing
+    /// re-fetches: for a single in-flight run the next `RunningSetChanged` is
+    /// the RELEASE at run end, which excludes the key too, and the Panel's
+    /// cold-load seed only applies before any frame has arrived. So the row
+    /// becoming resolvable needs its own frame, published by `execute.rs`
+    /// immediately after `ensure_session`.
+    ///
+    /// The seq bump is load-bearing, not cosmetic: `SessionMap::
+    /// set_server_running` discards any frame whose `seq` is `<=` the one it
+    /// already holds, so re-publishing at the claim's seq would be a silent
+    /// no-op on every connected Panel.
+    pub(super) fn republish_running_set(&self) {
+        self.seq.fetch_add(1, Ordering::AcqRel);
+        self.broadcast_change();
+    }
+
     /// Atomically claim this session's single run slot. `true` = claimed,
     /// `false` = a run is already active on this session (caller routes the
     /// message to the per-session `BusyInputMode` steer/interrupt/queue path).
@@ -260,5 +285,138 @@ mod tests {
         reg.release(&s, "STALE");
         let (seq4, _) = reg.running_snapshot();
         assert_eq!(seq3, seq4, "no-op release does not bump seq");
+    }
+
+    /// Regression: the running dot for the FIRST turn of a brand-new
+    /// conversation.
+    ///
+    /// `try_claim` is the first statement of `ExecutionEngine::admit_run`,
+    /// two `.await` points before `ensure_session` writes the session row, so
+    /// the claim's frame is projected per connection
+    /// (`event_visibility::EventVisibilityIndex::project_for`) against a key
+    /// that resolves to nothing and is dropped — fail-closed and correct, but
+    /// it means the socket receives `running: []`. Nothing re-fetched it: the
+    /// next `RunningSetChanged` for a single in-flight run is the release at
+    /// run end (which excludes the key too) and the Panel's cold-load seed
+    /// only applies before any frame has arrived. The dot stayed dark for the
+    /// whole turn — on a plain single-user loopback box too, where the caller
+    /// resolves to `Some(OWNER_USER_ID)`.
+    ///
+    /// Both assertions are on the DELIVERED, PROJECTED payload — the bytes a
+    /// Panel acts on — plus the seq, because `SessionMap::set_server_running`
+    /// discards any frame whose seq is `<=` the one it already recorded: a
+    /// re-publish that reused the claim's seq would be an inert fix.
+    #[tokio::test]
+    async fn a_new_sessions_key_reaches_its_owner_once_its_row_exists() {
+        use crate::gateway::event_visibility::EventVisibilityIndex;
+        use crate::gateway::session_store::file_backend::{
+            FileSessionStore, FileSessionStoreConfig,
+        };
+        use crate::gateway::session_store::SessionStore;
+
+        const RUNNING_SET_METHOD: &str = "stream.running_set_changed";
+
+        fn delivered(rx: &mut tokio::sync::broadcast::Receiver<String>) -> serde_json::Value {
+            let raw = rx.try_recv().expect("publish_frame delivers synchronously");
+            let wire: serde_json::Value = serde_json::from_str(&raw).unwrap();
+            assert_eq!(
+                wire["method"], RUNNING_SET_METHOD,
+                "the registry's only frame is the running set"
+            );
+            wire
+        }
+
+        async fn projected_keys(
+            index: &EventVisibilityIndex,
+            wire: &serde_json::Value,
+            store: &Arc<dyn SessionStore>,
+        ) -> Vec<String> {
+            let payload = index
+                .project_for(
+                    wire["method"].as_str().unwrap(),
+                    wire.get("params"),
+                    Some("u-newcomer"),
+                    store,
+                )
+                .await
+                .expect("the running set is always projected, never waved through");
+            payload["running"]
+                .as_array()
+                .expect("a projected frame still carries a `running` array")
+                .iter()
+                .map(|v| v.as_str().unwrap().to_string())
+                .collect()
+        }
+
+        let temp = tempfile::TempDir::new().unwrap();
+        let store = FileSessionStore::new(FileSessionStoreConfig {
+            base_dir: temp.path().to_path_buf(),
+            ..Default::default()
+        })
+        .unwrap();
+
+        let bus = Arc::new(GatewayEventBus::new());
+        let mut rx = bus.subscribe();
+        let reg = SessionRunRegistry::default();
+        reg.set_event_bus(Arc::clone(&bus));
+
+        let session = sk("newcomer-agent", "conv-first-ever");
+        let key = session.to_key_string();
+        // ONE index across both frames on purpose: an absent row must not be
+        // cached as a permanent denial, or the repair frame would be dropped too.
+        let index = EventVisibilityIndex::new();
+
+        // 1. Admission claims the slot while the row still does not exist.
+        assert!(reg.try_claim(&session, "run-first"));
+        let claim_frame = delivered(&mut rx);
+        let store_dyn: Arc<dyn SessionStore> = Arc::new(store);
+        assert!(
+            projected_keys(&index, &claim_frame, &store_dyn)
+                .await
+                .is_empty(),
+            "the premise: at claim time the key resolves to nobody and is dropped"
+        );
+
+        // 2. `execute.rs` creates the row (`agent.ensure_session`).
+        crate::scope::with_scope(
+            Some(crate::scope::ScopeAttribution::personal("u-newcomer")),
+            store_dyn.get_or_create(&session),
+        )
+        .await
+        .unwrap();
+
+        // 3. …and immediately re-publishes. THIS is the wire under test.
+        reg.republish_running_set();
+        let repair_frame = delivered(&mut rx);
+        assert_eq!(
+            projected_keys(&index, &repair_frame, &store_dyn).await,
+            vec![key],
+            "the owner must be told their brand-new session is running"
+        );
+        assert!(
+            repair_frame["params"]["seq"].as_u64().unwrap()
+                > claim_frame["params"]["seq"].as_u64().unwrap(),
+            "a re-publish at the claim's seq is discarded by the client and fixes nothing"
+        );
+    }
+
+    /// The production wire for the frame the test above proves is needed:
+    /// `execute.rs` must re-publish AFTER `ensure_session`, not before. A
+    /// source-level pin because the full `ExecutionEngine::execute` needs a
+    /// live orchestrator to run a turn and so has no unit-level harness —
+    /// without this, deleting the call leaves every test green.
+    #[test]
+    fn execute_republishes_the_running_set_after_creating_the_session_row() {
+        let src = include_str!("execute.rs");
+        let ensure = src
+            .find("agent.ensure_session(&request.session_key).await;")
+            .expect("execute.rs still creates the session row");
+        let republish = src
+            .find("session_run_registry.republish_running_set()")
+            .expect("execute.rs must re-publish the running set once the row exists");
+        assert!(
+            republish > ensure,
+            "the re-publish must run AFTER the row exists, or it projects to nothing again"
+        );
     }
 }
