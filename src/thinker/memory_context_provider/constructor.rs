@@ -447,12 +447,19 @@ mod tests {
     use crate::memory::curated::CuratedConfig;
     use crate::memory::notes::orientation::types::TokenBudget;
 
+    /// Covers `CuratedSection -> CuratedConfig` and the builder that stores it
+    /// — **not** that boot takes this path.
+    ///
+    /// It cannot: it constructs its own provider. That gap was real for as long
+    /// as this test existed, because `init_memory_context_provider_with_extensions`
+    /// never called `with_curated_config` and this was the only caller in the
+    /// tree. What guards the boot path now is that the factory takes the section
+    /// as a parameter with no default, so omitting it does not compile. Do not
+    /// re-add a default to "simplify" the signature.
     #[test]
-    fn configured_curated_limits_reach_the_provider() {
+    fn configured_curated_section_converts_and_lands_on_the_builder() {
         // `[memory.curated] memory_char_limit = 9001` — deliberately not the
-        // default. Before this wire existed every construction path hardcoded
-        // `CuratedConfig::default()`, so the parsed section was inert no matter
-        // what the user wrote.
+        // default, so a conversion that silently produced defaults would fail.
         let section: CuratedSection =
             serde_json::from_str(r#"{"memory_char_limit": 9001}"#).unwrap();
         assert_ne!(

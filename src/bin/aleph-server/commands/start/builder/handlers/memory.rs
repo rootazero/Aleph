@@ -325,12 +325,19 @@ pub(in crate::commands::start) async fn init_command_handler(
 
 // ─── init_memory_context_provider ────────────────────────────────────────────
 
+/// `curated` is a required parameter rather than a defaulted one on purpose.
+/// `[memory.curated]` reached the provider through exactly one call — a unit
+/// test that built its own provider — for as long as this factory omitted it,
+/// so every knob in the section persisted to `config.toml` and changed nothing.
+/// Making it a parameter turns "forgot to pass the section" into a compile
+/// error at every construction site, which no test can do.
 pub(in crate::commands::start) fn init_memory_context_provider(
     memory_db: &MemoryBackend,
     embedder: Option<std::sync::Arc<dyn alephcore::memory::EmbeddingProvider>>,
     provider: Option<std::sync::Arc<dyn alephcore::providers::AiProvider>>,
     assembler_config: alephcore::AssemblerConfig,
     injection_mode: alephcore::MemoryInjectionMode,
+    curated: alephcore::memory::curated::CuratedConfig,
 ) -> std::sync::Arc<alephcore::thinker::MemoryContextProvider> {
     init_memory_context_provider_with_extensions(
         memory_db,
@@ -338,6 +345,7 @@ pub(in crate::commands::start) fn init_memory_context_provider(
         provider,
         assembler_config,
         injection_mode,
+        curated,
         None,
         None,
         None,
@@ -358,6 +366,10 @@ pub(in crate::commands::start) fn init_memory_context_provider_with_extensions(
     // the default (Hybrid) and an `injection_mode = "tools"` deployment would
     // still auto-inject memory/orientation/profile into every prompt.
     injection_mode: alephcore::MemoryInjectionMode,
+    // `[memory.curated]` — the char budgets and the open-loops age ceiling that
+    // decide how the always-on curated envelope renders. See
+    // `init_memory_context_provider`'s doc for why this is not defaulted.
+    curated: alephcore::memory::curated::CuratedConfig,
     extensions: Option<std::sync::Arc<alephcore::memory::extensions::MemoryExtensionRegistry>>,
     wiki: Option<std::sync::Arc<dyn alephcore::memory::notes::orientation::NoteOrientation>>,
     profile_synthesizer: Option<
@@ -374,7 +386,9 @@ pub(in crate::commands::start) fn init_memory_context_provider_with_extensions(
         ),
         None => alephcore::thinker::MemoryContextProvider::new(memory_db.clone(), embedder),
     };
-    let mcp = mcp.with_injection_mode(injection_mode);
+    let mcp = mcp
+        .with_injection_mode(injection_mode)
+        .with_curated_config(curated);
     let mcp = if let Some(ext) = extensions {
         mcp.with_extensions(ext)
     } else {

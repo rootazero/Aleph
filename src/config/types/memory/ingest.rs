@@ -81,7 +81,12 @@ impl Default for QueryFilerConfig {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+// `Copy` because every field is a scalar and its whole purpose is to be handed
+// to `CuratedConfig` (itself `Copy`) at each construction site. Without it the
+// boot factories read `app_config.memory.curated` behind a shared reference and
+// would need a `.clone()` per call — noise that makes the wire look expensive
+// and invites someone to "optimise" it back out.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, JsonSchema)]
 #[serde(default)]
 pub struct CuratedSection {
     pub memory_char_limit: usize,
@@ -110,9 +115,19 @@ impl Default for CuratedSection {
 
 /// Consumed by the `MemoryContextProvider` factory
 /// (`init_memory_context_provider_with_extensions` →
-/// `MemoryContextProvider::with_curated_config`). Until that call existed every
-/// construction path hardcoded `CuratedConfig::default()`, so both char limits
-/// were unreachable from config no matter what the user wrote.
+/// `MemoryContextProvider::with_curated_config`), which takes the section as a
+/// **required parameter** so no construction site can silently fall back to
+/// `CuratedConfig::default()`.
+///
+/// It has to be required because it was not, twice. Every construction path
+/// once hardcoded the default; a factory call was then said to fix that, and
+/// this doc said so — but the only `with_curated_config` caller in the tree was
+/// a unit test that built its own provider, so all five keys still persisted to
+/// `config.toml` and changed nothing at runtime (`memory_char_limit` /
+/// `user_char_limit` / `legacy_warn_threshold` from the start, the two
+/// `open_loops_*` keys from the day they were added). A test that constructs
+/// the thing it is testing cannot tell you that boot constructs it the same
+/// way; a parameter with no default can.
 impl From<CuratedSection> for CuratedConfig {
     fn from(s: CuratedSection) -> Self {
         Self {
@@ -165,7 +180,7 @@ mod tests {
             open_loops_char_limit: 5_555,
             open_loops_max_age_days: 99,
         };
-        let cfg: CuratedConfig = section.clone().into();
+        let cfg: CuratedConfig = section.into();
         assert_eq!(cfg.memory_char_limit, section.memory_char_limit);
         assert_eq!(cfg.user_char_limit, section.user_char_limit);
         assert!((cfg.legacy_warn_threshold - section.legacy_warn_threshold).abs() < f32::EPSILON);
