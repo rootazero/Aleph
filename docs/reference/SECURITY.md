@@ -136,7 +136,7 @@ explicit `[policies.tool_permissions]` entry names the tool.
 |------|--------------------|-------|
 | `Ask` | every mutating / side-effecting tool | read-only tools stay allowed, so the model can still investigate |
 | `Auto` *(default)* | the irreversible tail only | `*_delete`, `vault_*`, `team_disband`, an MCP server's `destructiveHint`, and `file_ops` `delete` / `move` (argument-level) |
-| `Full` | nothing | the command-policy floor still applies |
+| `Full` | nothing *(the tier asks nothing — see the two floors below)* | the command-policy floor and each tool's own `requires_confirmation` declaration both survive |
 
 ### The lattice (who wins)
 
@@ -145,8 +145,23 @@ explicit [policies.tool_permissions] entry   (exact name > glob)
         ↓  (nothing named this tool)
 configured `default`   TIGHTENED BY   the tier's verdict
         ↓  (restrictive_min — the tier can only raise, never widen)
+tool-declared confirmation gate              (CONFIRMATION_REQUIRED_TOOLS + MCP destructiveHint)
+        ↓  (read by check_confirmation_gate independently of the tier)
 [sandbox.command_policy] hardline floor      (no tier can lower it — not even Full)
 ```
+
+⚠️ **`Full` means "the tier gates nothing", not "nothing is gated."** The
+second-from-bottom row is easy to miss because it is not part of
+`effective_permission`'s lattice at all: `ScopedToolService::check_confirmation_gate`
+consults `requires_confirmation(name)` **independently of the tier and of any
+explicit `allow`**. So `vault_store` / `agent_delete` / `team_disband` /
+`skill_install` and any MCP tool carrying `destructiveHint` still raise a card
+under `Full` — and in an **unattended** run (goal / loop / cron continuation)
+still auto-deny, because unattended is fail-closed. That is deliberate: these are
+the operations whose blast radius does not shrink because an operator set a
+permissive tier. The variant doc on `ExecTier::Full` and the model-facing
+`approval_prompt_line` both used to say "nothing pauses for confirmation", which
+was the same statement told three times and false in all three.
 
 `effective_permission(permissions, tier, facts)` is the **only** place this
 precedence exists. Both consumers — `ScopedToolService::permission_for` (the
@@ -244,6 +259,26 @@ model is told the run is unattended.
 Teams (dispatcher / broadcast) are deliberately **not** stamped: a member run's
 approvals resolve to a Panel card, and the user who dispatched the team is the
 operator watching it.
+
+**刻意不做 · session grants do NOT survive into an unattended continuation
+(评估于 2026-08-07, 用户裁定)。** In `confirm_with_memory` the `if self.unattended`
+auto-deny sits **before** the session-grant short-circuit, so an action a human
+approved with "本会话批准" is refused again on the next `goal`/`loop` continuation
+of the same `SessionKey` — even though the grant is fingerprinted on
+(tool + normalized args) and lives in that session's own bucket. Moving the two
+blocks would make "approve once, the loop stops asking" work, and was
+considered.
+
+It is **not** being changed. The order is the trust boundary, not an accident:
+it is what keeps the evidence for executing something with nobody watching a
+*present* decision rather than a remembered click from earlier in the session.
+CLAUDE.md 判据清单 §0 states the rule this instantiates — 「按状态做的闸，`Err`
+必须是拒绝不能是放行」. The cost is bounded and visible: the auto-deny carries an
+actionable hint telling the model to call `goal(action='update',
+status='blocked')`, and the decision is filed on both durable trails, so the run
+reports and hands back rather than stalling silently. Do not "fix" this by
+reordering; if the ask returns, the answer is to make the continuation
+attended (give it a routable approval channel), not to widen the gate.
 
 ---
 

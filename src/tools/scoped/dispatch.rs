@@ -987,7 +987,24 @@ impl ScopedToolService {
                         });
                     }
                 }
+                // Third of three "refused without asking anyone" arms in this
+                // file (`check_operator_gate`, `check_confirmation_gate`, and
+                // this one). The other two were each retrofitted with
+                // `record_gate_refusal` for the same stated reason — a gate
+                // decision that leaves no trace at all — and this one never
+                // followed. Without it a hook-requested confirmation that
+                // could not be raised looks, on replay, like an ordinary tool
+                // error: no `SessionEvent::ToolCallDenied`, no
+                // `ApprovalRecord::Denied`, and nothing to tell the model an
+                // authorization was withheld rather than a call having failed.
                 None => {
+                    self.record_gate_refusal(
+                        name,
+                        &input,
+                        "auto-denied: a BeforeToolCall hook requested confirmation and no \
+                         approval channel is available",
+                    )
+                    .await;
                     return Err(ToolError::Execution {
                         name: name.to_string(),
                         cause: format!(
