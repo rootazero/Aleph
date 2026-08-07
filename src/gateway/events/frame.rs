@@ -147,11 +147,26 @@ pub enum GatewayEventFrame {
     SessionUpdated {
         session_key: String,
         /// Channel that triggered the update (`metadata["channel_id"]` of the
-        /// run), e.g. "telegram". `None` for Panel-originated runs and
-        /// topic/title updates — lets clients distinguish "another surface
-        /// touched this session" (refresh) from "my own run" (ignore).
+        /// run), e.g. "telegram". `Some("gui:chat")` for Panel-originated runs
+        /// — every Panel connection hardcodes that literal (`api/chat.rs`), so
+        /// this names the surface CLASS and can never name a connection.
+        /// `None` only for topic/title/state edits, which no run caused
+        /// (`SessionManager::emit_session_updated`).
         #[serde(default, skip_serializing_if = "Option::is_none")]
         origin_channel: Option<String>,
+        /// The run that caused this update. `None` exactly where
+        /// `origin_channel` is `None` — same producer, same reason.
+        ///
+        /// This is the identity `origin_channel` structurally cannot be. A
+        /// client holding the run id its own `chat.send` returned knows the
+        /// update is its own and must NOT re-hydrate over a transcript it
+        /// already streamed; every other client — a second tab of the same
+        /// user, a second member of a project room — sees a run it did not
+        /// start and re-hydrates. Buys no new exposure: this frame is
+        /// classified `BySessionKey`, the same audience `RunAccepted` already
+        /// hands the identical run id to.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        origin_run_id: Option<String>,
     },
     /// Authoritative running-session set changed (a run was claimed or
     /// released). `seq` is a monotonic version stamped by the

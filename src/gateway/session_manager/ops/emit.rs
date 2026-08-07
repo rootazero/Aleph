@@ -5,8 +5,15 @@ impl SessionManager {
         if let Some(bus) = &self.event_bus {
             let frame = crate::gateway::events::GatewayEventFrame::SessionUpdated {
                 session_key: session_key.to_string(),
-                // Topic/title/state updates have no triggering channel.
+                // Topic/title/state updates have no triggering channel — and,
+                // for the same reason, no triggering run. This is the ONE
+                // publisher of this frame that is not inside a run; the other
+                // five all name theirs (`ExecutionEngine::publish_session_updated`
+                // — four call sites — and its `SimpleExecutionEngine` twin).
+                // A client reads the pair as "nobody ran anything" and leaves
+                // its transcript alone.
                 origin_channel: None,
+                origin_run_id: None,
             };
             let _ = bus.publish_frame(&frame);
         }

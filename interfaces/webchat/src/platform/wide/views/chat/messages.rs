@@ -110,6 +110,26 @@ pub(crate) fn MessageList() -> impl IntoView {
     let i18n = use_i18n();
     let scroll_ref = NodeRef::<leptos::html::Div>::new();
 
+    // The author label below (`MessageBubble`) is the only thing in this crate
+    // that renders a `user_id`, so the fetch that resolves ids to names belongs
+    // HERE — at the surface that renders it — not at whichever page happens to
+    // remember. `ProjectRoomPage` and `SettingsTab` also call it, but neither
+    // is on the path a user takes when they open a room session from the
+    // ordinary chat sidebar (a room session legitimately appears there, via
+    // `session_visible_to`). On that path `my_user_id` stayed `None`, which
+    // makes `author_label`'s self-suppression vacuously false: every message,
+    // including the viewer's own, got labelled with a raw `u-…` id.
+    // `ensure_loaded` guards on `loading` + "already populated", so a third
+    // call site is free. `use_context` (not `expect_context`) for the same
+    // reason `MessageBubble` uses it: a storybook/test mount without the
+    // directory or the socket must still render.
+    if let (Some(dir), Some(dash)) = (
+        use_context::<UserDirectoryState>(),
+        use_context::<crate::context::DashboardState>(),
+    ) {
+        dir.ensure_loaded(dash);
+    }
+
     // Memoized timeline: the flat message vector folded into day-separated
     // render rows. Recomputes only when `messages` changes (not on every
     // reactive read), so the per-day segmentation is paid once per update.

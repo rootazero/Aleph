@@ -72,6 +72,43 @@ struct AgentEntry {
     is_default: bool,
 }
 
+/// Should a `run.session_updated` frame re-hydrate the open transcript from
+/// `chat.history`?
+///
+/// The question is "did somebody ELSE touch this session", and the only field
+/// that can answer it is `origin_run_id`. `origin_channel` cannot: every Panel
+/// connection hardcodes the literal `"gui:chat"` (`api/chat.rs`), so reading
+/// that literal as "my own update" is a channel-CLASS test standing in for an
+/// identity test — it says "mine" for a second tab of the same user and for
+/// every other member of a project room, and those turns then never appear
+/// until the viewer reselects the session.
+///
+/// Three answers, in the order the arms take them:
+/// - **No origin at all** ⇒ no run caused this. A topic/title/state edit
+///   (`SessionManager::emit_session_updated`); the sidebar row already
+///   refreshed above and the transcript is untouched by it.
+/// - **A run we started** ⇒ skip. The live `run.*` stream already built the
+///   correct transcript, and reloading over it replaces clean tool/step rows
+///   with raw fallback bubbles the instant the run completes.
+/// - **Anything else** ⇒ re-hydrate. An external surface (Telegram, Slack…), a
+///   second tab, another room member — all runs this Panel did not start.
+///
+/// A run id we cannot see (`None` with a real origin) counts as somebody
+/// else's. That is only reachable against a core older than this field, and it
+/// is the safer half of that skew: a needless reload is cosmetic and self-heals,
+/// whereas silently never showing a room peer's message is the defect this
+/// predicate exists to fix.
+fn session_update_needs_rehydrate(
+    origin_channel: &str,
+    origin_run_id: Option<&str>,
+    started_here: impl Fn(&str) -> bool,
+) -> bool {
+    if origin_channel.is_empty() {
+        return false;
+    }
+    origin_run_id.is_none_or(|run| !started_here(run))
+}
+
 /// The server stores the user's own group-chat messages under this reserved
 /// `from_agent` handle (mirror of `teams::broadcast::RESERVED_USER_HANDLE`). On
 /// history replay they must render as right-aligned user bubbles, not as
@@ -530,15 +567,8 @@ pub fn ChatSidebar() -> impl IntoView {
             .get("origin_channel")
             .and_then(|v| v.as_str())
             .unwrap_or("");
-        // The Panel's own `chat.send` runs publish `origin_channel: "gui:chat"`
-        // (see api/chat.rs) — NOT an empty origin, contrary to what this guard
-        // originally assumed. Treat `gui:chat` as "our own update" and skip the
-        // re-hydrate: the live `run.*` stream already built the correct
-        // transcript, and reloading from `chat.history` here would clobber those
-        // clean tool/step rows with raw fallback bubbles the instant the run
-        // completes. Genuine external surfaces (Telegram, Slack, …) carry their
-        // real channel id and still trigger the mirror refresh.
-        if origin.is_empty() || origin == "gui:chat" {
+        let origin_run = event.data.get("origin_run_id").and_then(|v| v.as_str());
+        if !session_update_needs_rehydrate(origin, origin_run, crate::api::chat::is_own_run) {
             return;
         }
         let Some(sk) = event.data.get("session_key").and_then(|v| v.as_str()) else {
@@ -1904,5 +1934,70 @@ mod gauge_tests {
         let u = occupancy_from_history(&h).expect("gauge");
         assert_eq!(u.used_tokens, 30_000);
         assert_eq!(u.window_tokens, 200_000);
+    }
+}
+
+#[cfg(test)]
+mod rehydrate_tests {
+    use super::session_update_needs_rehydrate;
+
+    const MINE: &str = "run-this-tab-sent-it";
+    const THEIRS: &str = "run-someone-else-sent-it";
+
+    fn started_here(run: &str) -> bool {
+        run == MINE
+    }
+
+    /// The defect this predicate replaces: `origin_channel` is `"gui:chat"` for
+    /// BOTH of these frames, so the old channel-class test answered "mine" to
+    /// both and a second member's turn never reached the transcript. The two
+    /// assertions must disagree while the channel is held constant — that is the
+    /// whole claim, and either one alone would still pass under the old rule.
+    #[test]
+    fn gui_chat_alone_no_longer_decides_it() {
+        assert!(
+            !session_update_needs_rehydrate("gui:chat", Some(MINE), started_here),
+            "our own run must not reload over the transcript we just streamed"
+        );
+        assert!(
+            session_update_needs_rehydrate("gui:chat", Some(THEIRS), started_here),
+            "another Panel's run on this session must reload — same channel literal"
+        );
+    }
+
+    /// An update no run caused (topic rename, title, lifecycle) leaves the
+    /// transcript alone. This arm is deliberately KEPT: those frames publish
+    /// with no origin at all.
+    #[test]
+    fn an_update_no_run_caused_is_not_a_rehydrate() {
+        assert!(!session_update_needs_rehydrate("", None, started_here));
+        // Belt and braces: an absent channel wins even if a run id leaked in.
+        assert!(!session_update_needs_rehydrate(
+            "",
+            Some(THEIRS),
+            started_here
+        ));
+    }
+
+    /// External surfaces keep working: they carry their real channel id, and
+    /// their run was never started here.
+    #[test]
+    fn an_external_surface_still_mirrors() {
+        assert!(session_update_needs_rehydrate(
+            "telegram",
+            Some(THEIRS),
+            started_here
+        ));
+    }
+
+    /// Against a core that predates `origin_run_id`, an unidentifiable run
+    /// counts as somebody else's — the safer half of that version skew.
+    #[test]
+    fn an_unidentified_run_counts_as_someone_elses() {
+        assert!(session_update_needs_rehydrate(
+            "gui:chat",
+            None,
+            started_here
+        ));
     }
 }

@@ -232,6 +232,7 @@ where
             self.publish_session_updated(
                 &request.session_key,
                 request.metadata.get("channel_id").map(String::as_str),
+                &request.run_id,
             );
         }
 
@@ -631,6 +632,7 @@ where
                 self.publish_session_updated(
                     &request.session_key,
                     request.metadata.get("channel_id").map(String::as_str),
+                    &request.run_id,
                 );
 
                 // Persist the user-chosen project folder onto the session so the

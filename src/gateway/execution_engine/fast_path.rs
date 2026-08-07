@@ -100,6 +100,7 @@ where
         self.publish_session_updated(
             &request.session_key,
             request.metadata.get("channel_id").map(String::as_str),
+            &request.run_id,
         );
 
         // Clear the session-level "running" marker now that the final message
@@ -220,6 +221,7 @@ where
         self.publish_session_updated(
             &request.session_key,
             request.metadata.get("channel_id").map(String::as_str),
+            &request.run_id,
         );
         warn!(
             run_id = %run_id,

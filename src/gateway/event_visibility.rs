@@ -1545,6 +1545,7 @@ mod tests {
             GatewayEventFrame::SessionUpdated {
                 session_key: "agent:main:main".into(),
                 origin_channel: None,
+                origin_run_id: None,
             },
             GatewayEventFrame::RunningSetChanged {
                 seq: 1,

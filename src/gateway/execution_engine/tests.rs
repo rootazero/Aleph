@@ -180,8 +180,13 @@ async fn test_session_state_returns_to_idle_after_run() {
 /// announcement is bus-published rather than emitter-emitted so it reaches the
 /// Panel for channel-originated runs too — `ReplyEmitter` only routes
 /// channel-facing events and would otherwise drop it. We also pin that the
-/// run's `metadata["channel_id"]` is surfaced as `origin_channel`, which the
-/// Panel uses to distinguish external updates from its own runs.
+/// run's `metadata["channel_id"]` is surfaced as `origin_channel`, and that the
+/// RUN that caused the update is surfaced as `origin_run_id` — the latter is
+/// what a client compares against the run ids its own `chat.send` returned, so
+/// dropping it at the publish site turns "my own update" into "somebody else's"
+/// (a transcript clobber) and "somebody else's" into nothing at all (a room
+/// peer's message never appears). `origin_channel` cannot answer that question:
+/// every Panel connection sends the same `gui:chat` literal.
 ///
 /// Exercised against `SimpleExecutionEngine` (the harness-friendly engine); the
 /// production path is `ExecutionEngine::<P, R>::execute` (execute.rs), which
@@ -232,6 +237,7 @@ async fn test_first_message_publishes_session_updated_on_bus() {
         crate::gateway::events::GatewayEventFrame::SessionUpdated {
             session_key,
             origin_channel,
+            origin_run_id,
         } => {
             assert_eq!(
                 session_key,
@@ -241,6 +247,86 @@ async fn test_first_message_publishes_session_updated_on_bus() {
                 origin_channel.as_deref(),
                 Some("telegram"),
                 "the run's channel_id metadata must surface as origin_channel"
+            );
+            assert_eq!(
+                origin_run_id.as_deref(),
+                Some("run-new-session"),
+                "the frame must name the run that caused it — a client cannot \
+                 tell its own update from a peer's without it"
+            );
+        }
+        other => panic!("expected SessionUpdated frame, got {other:?}"),
+    }
+}
+
+/// The Panel case, which is the whole reason `origin_run_id` exists.
+///
+/// A Panel `chat.send` hardcodes `"channel": "gui:chat"` (`api/chat.rs`), so
+/// EVERY Panel connection — a second tab of the same user, a second member of a
+/// project room — stamps the identical `origin_channel`. A client that reads
+/// that literal as "this is my own update" is answering an identity question
+/// with a class answer, and is wrong for every connection but the one that sent.
+/// So the frame must still carry something only the sender holds: the run id its
+/// own `chat.send` response returned.
+///
+/// Asserted together on purpose — `origin_channel == "gui:chat"` is the premise
+/// that makes `origin_run_id` load-bearing, and a test that pinned only the run
+/// id would go green if the channel literal quietly became per-connection.
+#[tokio::test]
+async fn panel_originated_session_update_names_its_run_not_just_gui_chat() {
+    let temp = tempfile::tempdir().unwrap();
+    let sm = test_session_manager(&temp);
+    let config = AgentInstanceConfig {
+        agent_id: "test-panel-origin".to_string(),
+        workspace: temp.path().join("workspace"),
+        agent_dir: temp.path().join("agents/test-panel-origin"),
+        ..Default::default()
+    };
+
+    let agent = Arc::new(AgentInstance::new(config, sm).unwrap());
+    let emitter = Arc::new(TestEmitter::new());
+    let bus = Arc::new(crate::gateway::event_bus::GatewayEventBus::new());
+    let mut typed_rx = bus.subscribe_typed();
+    let engine =
+        SimpleExecutionEngine::new(ExecutionEngineConfig::default()).with_event_bus(bus.clone());
+
+    let mut metadata = HashMap::new();
+    metadata.insert("channel_id".to_string(), "gui:chat".to_string());
+    let request = RunRequest {
+        run_id: "run-from-tab-a".to_string(),
+        input: "hello from a Panel tab".to_string(),
+        session_key: SessionKey::main("test-panel-origin"),
+        timeout_secs: Some(5),
+        metadata,
+        attachments: Vec::new(),
+        pending_media: Arc::new(tokio::sync::Mutex::new(Vec::new())),
+        sandbox_override: None,
+        workspace_override: None,
+        max_iterations_override: None,
+        model_override: None,
+    };
+
+    engine.execute(request, agent, emitter).await.unwrap();
+
+    let frame = typed_rx
+        .try_recv()
+        .expect("first message should publish a SessionUpdated frame on the bus");
+    match frame {
+        crate::gateway::events::GatewayEventFrame::SessionUpdated {
+            origin_channel,
+            origin_run_id,
+            ..
+        } => {
+            assert_eq!(
+                origin_channel.as_deref(),
+                Some("gui:chat"),
+                "the premise: every Panel connection stamps this same literal"
+            );
+            assert_eq!(
+                origin_run_id.as_deref(),
+                Some("run-from-tab-a"),
+                "…so the run id is the only thing in this frame that tells the \
+                 sending tab apart from every other Panel watching the session"
             );
         }
         other => panic!("expected SessionUpdated frame, got {other:?}"),

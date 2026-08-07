@@ -3,6 +3,65 @@
 use crate::context::DashboardState;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use std::cell::RefCell;
+use std::collections::VecDeque;
+
+/// How many of this Panel's own run ids to remember.
+///
+/// The only reader is the `run.session_updated` re-hydrate decision, which asks
+/// about the run that *just* touched the open session — so an id ageing off the
+/// back cannot produce a wrong lasting answer, only one extra (idempotent)
+/// history reload. Sized well past any plausible number of runs between two
+/// consecutive updates of one session.
+const OWN_RUN_MEMORY: usize = 64;
+
+thread_local! {
+    /// Run ids this Panel started, oldest first.
+    ///
+    /// Written by exactly ONE place — [`ChatApi::send`]'s success arm, i.e. the
+    /// instant the server hands this process a run id. That is deliberate and
+    /// is the property the whole mechanism rests on: "did I start this run?"
+    /// must not depend on four send sites all remembering to register, because
+    /// a fifth one will not. `record_own_run` is private to this module, so the
+    /// compiler forbids a second recorder; `chat_send_is_the_only_way_to_start_a_run`
+    /// covers the other half — a new module issuing the RPC itself.
+    ///
+    /// A `thread_local` rather than a Leptos signal because the fact is about
+    /// the *process*, not about any component's lifetime: it must outlive the
+    /// conversation tab that sent (`SessionMap::route` is cleared on
+    /// `settle_run`, and the update that matters most arrives right after the
+    /// run completes) and it is never rendered, so nothing should re-run when
+    /// it changes.
+    static OWN_RUNS: RefCell<VecDeque<String>> = const { RefCell::new(VecDeque::new()) };
+}
+
+/// Remember a run id this Panel started. Idempotent — a steered send returns a
+/// run id the client already holds, and re-recording it must not evict a
+/// younger one.
+fn record_own_run(run_id: &str) {
+    if run_id.is_empty() {
+        return;
+    }
+    OWN_RUNS.with_borrow_mut(|runs| {
+        if runs.iter().any(|r| r == run_id) {
+            return;
+        }
+        if runs.len() >= OWN_RUN_MEMORY {
+            runs.pop_front();
+        }
+        runs.push_back(run_id.to_string());
+    });
+}
+
+/// Did THIS Panel start this run?
+///
+/// The question `origin_channel` cannot answer: every Panel connection sends
+/// the literal `"gui:chat"`, so a channel comparison says "mine" for a second
+/// tab of the same user and for every other member of a project room.
+#[must_use]
+pub fn is_own_run(run_id: &str) -> bool {
+    OWN_RUNS.with_borrow(|runs| runs.iter().any(|r| r == run_id))
+}
 
 /// A single chat message (from history).
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -125,7 +184,12 @@ impl ChatApi {
             "voice_input": voice_input,
         });
         let result = state.rpc_call("chat.send", params).await?;
-        serde_json::from_value(result).map_err(|e| e.to_string())
+        let resp: ChatSendResponse = serde_json::from_value(result).map_err(|e| e.to_string())?;
+        // The single producer of "runs this Panel started" (see `OWN_RUNS`).
+        // Recorded here rather than at the send sites so a new one cannot be
+        // born already broken: the server telling US a run id IS the fact.
+        record_own_run(&resp.run_id);
+        Ok(resp)
     }
 
     /// Abort a running agent, and abandon whatever that session still has
@@ -212,11 +276,112 @@ impl ChatApi {
 mod tests {
     use super::*;
 
+    /// `OWN_RUNS` is a `thread_local`, and libtest runs the whole file on ONE
+    /// thread under `--test-threads=1`. Tests that assert absolute lengths must
+    /// therefore start from a known state rather than from whatever ran before.
+    fn clear_ledger() {
+        OWN_RUNS.with_borrow_mut(VecDeque::clear);
+    }
+
     #[test]
     fn estimate_response_round_trips() {
         let v = serde_json::json!({ "used_tokens": 12_000, "window_tokens": 200_000 });
         let r: ContextEstimateResponse = serde_json::from_value(v).unwrap();
         assert_eq!(r.used_tokens, 12_000);
         assert_eq!(r.window_tokens, 200_000);
+    }
+
+    /// A recorded run is ours; a run id this Panel never saw from its own
+    /// `chat.send` is not. That second half is the whole point — it is what a
+    /// second tab of the same user, and every other member of a project room,
+    /// answers for the run that just updated the session.
+    #[test]
+    fn a_recorded_run_is_ours_and_an_unseen_one_is_not() {
+        clear_ledger();
+        record_own_run("run-mine-1");
+        assert!(is_own_run("run-mine-1"));
+        assert!(
+            !is_own_run("run-from-another-panel"),
+            "a run this Panel never started must not read as its own"
+        );
+    }
+
+    /// The ledger is bounded, and the bound evicts the OLDEST — evicting the
+    /// newest would make the mechanism fail exactly on the run whose update is
+    /// still in flight.
+    #[test]
+    fn the_ledger_is_bounded_and_evicts_oldest_first() {
+        clear_ledger();
+        record_own_run("run-eviction-canary");
+        for i in 0..OWN_RUN_MEMORY {
+            record_own_run(&format!("run-filler-{i}"));
+        }
+        assert!(
+            !is_own_run("run-eviction-canary"),
+            "the first id must have aged off once the bound is exceeded"
+        );
+        assert!(
+            is_own_run(&format!("run-filler-{}", OWN_RUN_MEMORY - 1)),
+            "the newest id must survive"
+        );
+        assert_eq!(OWN_RUNS.with_borrow(VecDeque::len), OWN_RUN_MEMORY);
+    }
+
+    /// Re-recording a run id must not consume a slot: a queue flush that steers
+    /// into a live run gets the SAME run id back from every `chat.send` in the
+    /// batch, so a naive push would evict `OWN_RUN_MEMORY` real ids per flush.
+    #[test]
+    fn re_recording_the_same_run_does_not_consume_a_slot() {
+        clear_ledger();
+        let before = OWN_RUNS.with_borrow(VecDeque::len);
+        record_own_run("run-steered");
+        let after_first = OWN_RUNS.with_borrow(VecDeque::len);
+        record_own_run("run-steered");
+        record_own_run("run-steered");
+        assert_eq!(OWN_RUNS.with_borrow(VecDeque::len), after_first);
+        assert_eq!(after_first, before + 1);
+    }
+
+    /// The ledger's single producer is `ChatApi::send`, which is only sound
+    /// while `ChatApi::send` is the crate's only way to start a run. Recording
+    /// at the four *call sites* of `send` was the obvious alternative and was
+    /// rejected: that shape is born one site short every time a fifth send path
+    /// appears, and the symptom is silent — the sender re-hydrates over its own
+    /// transcript, which reads as a rendering glitch, not a wiring bug.
+    ///
+    /// `record_own_run` itself is private to this module, so the compiler
+    /// already forbids a second recorder elsewhere. What the compiler cannot
+    /// see is a new module issuing the RPC directly and never being recorded at
+    /// all — which is what this scans for.
+    #[test]
+    fn chat_send_is_the_only_way_to_start_a_run() {
+        let sources = crate::disposed_reads::rust_sources(&crate::disposed_reads::src_dir());
+        assert!(
+            sources.len() > 50,
+            "found {} sources — the walk is broken, not the code",
+            sources.len()
+        );
+        let needle = "\"chat.send\"";
+        let mut callers = Vec::new();
+        for path in sources {
+            let Ok(src) = std::fs::read_to_string(&path) else {
+                continue;
+            };
+            if src.contains(needle) {
+                callers.push(path.display().to_string());
+            }
+        }
+        assert_eq!(
+            callers.len(),
+            1,
+            "`chat.send` must be issued from api/chat.rs alone — every other \
+             caller starts a run this Panel then fails to recognise as its own. \
+             Callers: {callers:?}"
+        );
+        assert!(
+            callers[0].ends_with("api/chat.rs"),
+            "the one caller moved out of api/chat.rs: {}",
+            callers[0]
+        );
     }
 }

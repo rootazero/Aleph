@@ -27,14 +27,16 @@
 
 use std::path::{Path, PathBuf};
 
-fn src_dir() -> PathBuf {
+/// Shared with sibling source-level guards (e.g. `api::chat`'s single-producer
+/// pin) so "where is this crate's source" has one answer, not one per guard.
+pub(crate) fn src_dir() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("src")
 }
 
 /// Every `.rs` file under `root`. Walking the tree (rather than `include_str!`)
 /// is deliberate: a file added later must be covered without anyone remembering
 /// this guard exists.
-fn rust_sources(root: &Path) -> Vec<PathBuf> {
+pub(crate) fn rust_sources(root: &Path) -> Vec<PathBuf> {
     let mut out = Vec::new();
     let mut stack = vec![root.to_path_buf()];
     while let Some(dir) = stack.pop() {

@@ -1432,28 +1432,38 @@ attribution, and a bound workspace as the room's default cwd.
   org-shared. A room does not partition the sandbox, the filesystem, or the
   credential store — two rooms with bound workspaces are two directories,
   not two trust domains.
+- **"Is this my own update?" is answered by run, not by channel.** A room is
+  the first surface where two different Panel connections legitimately watch
+  one session, and the frame that tells a Panel to re-hydrate
+  (`stream.session_updated`) used to be judged by `origin_channel`. That field
+  is a surface CLASS — every Panel connection hardcodes the literal
+  `"gui:chat"` (`api/chat.rs`) — so reading it as "mine" said "mine" for a
+  second tab of the same user and for every other member of the room, and
+  their turns never appeared until someone reselected the session. The frame
+  therefore also carries `origin_run_id`: the run that caused the update,
+  stamped at all five publish sites (`ExecutionEngine::publish_session_updated`
+  and its `SimpleExecutionEngine` twin; the sixth publisher,
+  `SessionManager::emit_session_updated`, is a topic/title edit no run caused
+  and carries neither field). A client re-hydrates iff the run is one its own
+  `chat.send` did not return. This buys no new exposure: the frame is
+  classified `BySessionKey`, the same audience `RunAccepted` already hands the
+  identical run id to. It is deliberately NOT a per-connection or per-device
+  id — a run id fixes two tabs of one user as well, and mints no new identity
+  concept.
 - **Known gaps (deliberate, recorded, not silently dropped):**
-  1. **Two Panels in the same room don't see each other's messages live.**
-     `chat_sidebar.rs`'s `run.session_updated` handler reads
-     `origin_channel == "gui:chat"` as "my own update, skip rehydrate", but
-     every Panel connection sends that same literal — so a second member
-     only sees new room messages on reselect/reload. Pre-existing, but
-     rooms are the FIRST surface where two different Panel connections
-     legitimately watch one session. The fix is a connection-level origin
-     identity on the event; user ruling 2026-08-06: ship P2 without it.
-  2. `projects.*` has no tool surface (R8 gap): rooms can only be managed
+  1. `projects.*` has no tool surface (R8 gap): rooms can only be managed
      over RPC (Panel), not by conversation. Pre-existing family shape —
      the whole `projects.*` namespace was RPC-only before P2.
-  3. Channel-originated runs bypass `build_run_request`, so a channel
+  2. Channel-originated runs bypass `build_run_request`, so a channel
      session cannot acquire a room's bound workspace (or a room scope at
      all). The P2 acceptance surface is the Panel; channels-into-rooms is
      spec §11-3 / P4.
-  4. `resume_coordinator::retrigger` does not re-check the binding: a
+  3. `resume_coordinator::retrigger` does not re-check the binding: a
      resumed room run whose folder vanished degrades to the agent workspace
      (background sweep, nobody to tell) where `build_run_request` refuses
      loudly (a human is there). The asymmetry is deliberate and documented
      at both sites.
-  5. `[projects] allowed_roots` (the `fs.*` browse fence) is NOT layered
+  4. `[projects] allowed_roots` (the `fs.*` browse fence) is NOT layered
      onto the three binding writers — the config-tier gate above is the
      only fence. Layering it on would change existing picker behaviour; a
      separate product decision.
