@@ -1308,7 +1308,9 @@ attribution, and a bound workspace as the room's default cwd.
   owner-only verbs (rename, archive, roster mutation, workspace binding).
   Visibility is the roster, full stop. Any new predicate that reaches for
   `owner_user_id` to answer a can-see question re-opens the bug class P2's
-  `member_visible` family exists to prevent.
+  roster predicates (`projects::roster::is_member`, reached through
+  `visibility::project_visible` / `session_visible_to` / `partition_visible`)
+  exist to prevent.
 - **`not_found` vs `forbidden` — the boundary is visibility, not
   politeness.** A caller who cannot SEE the project (not on the roster) gets
   the byte-identical `RESOURCE_NOT_FOUND` of P1 — confirming existence is a
@@ -1334,7 +1336,20 @@ attribution, and a bound workspace as the room's default cwd.
 - **Author attribution is display-grade, not signature-grade.** The
   `[name]` speaker labels a room prompt carries come from
   `SessionEvent::UserMessage.author_user_id`, stamped server-side from the
-  authenticated caller — a member cannot forge the LABEL. But message
+  authenticated caller — a member cannot forge the LABEL. The chain is one
+  hop end to end and there is deliberately no request parameter in it:
+  `build_run_request` reads `caller_identity::current_caller_user()` into
+  `AUTHOR_USER_KEY`, and every emission site takes the label from that key
+  (`scope::room_author_from_metadata`, or `ambient_room_author` via the
+  task-local `run_loop::with_request_scope` seeds from the same key). A turn
+  that carries no author at all — a legacy row, or a channel-driven run whose
+  inbound router stamps the scope but not the speaker — falls back to the
+  room's own `owner_user_id`; that is a wrong-but-honest label on a turn
+  nobody claimed, not a forgeable one. **Deriving the label from the run's
+  scope instead is the failure mode to watch for**: every member's run in a
+  room carries the ROOM's attribution (that is what shares the memory
+  partition), so a scope-derived label silently names the session's creator on
+  everyone's message. But message
   BODIES are unauthenticated prose: a member can still type
   `\n[someone-else]: …` inside their own message. Deliberate (recorded at
   `speaker_label`): room members are same-server operators under the

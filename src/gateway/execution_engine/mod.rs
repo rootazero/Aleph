@@ -182,9 +182,12 @@ pub const BUSY_INPUT_MODE_KEY: &str = "busy_input_mode";
 /// whoever is typing. Reading the author off the scope stamp would make every
 /// member of a room look like its owner.
 ///
-/// Two consumers: the shared-room busy-lane rule
-/// ([`BusyInputMode::for_shared_room`]) and the speaker label the prompt
-/// renders for a multi-human room.
+/// Two consumers, and both read it out of this map rather than re-deriving it:
+/// the shared-room busy-lane rule ([`BusyInputMode::for_shared_room`]), and the
+/// speaker label the prompt renders for a multi-human room —
+/// `scope::room_author_from_metadata` for the engines that hold the request,
+/// `run_loop::with_request_scope` → `scope::ambient_room_author` for the main
+/// path's session seeder, which holds neither the request nor `CALLER_USER`.
 pub const AUTHOR_USER_KEY: &str = "author_user_id";
 
 /// Metadata key carrying the originating channel's tool permission override as

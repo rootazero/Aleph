@@ -122,6 +122,28 @@ impl ProjectsApi {
         serde_json::from_value(project).map_err(|e| e.to_string())
     }
 
+    /// Get-or-create the room's canonical chat session key.
+    ///
+    /// A room is ONE conversation for every member (spec §6.4), so the mapping
+    /// is server-side: this used to be a per-browser `localStorage` entry,
+    /// which meant the second member to open a room found nothing, started a
+    /// fresh session and never saw anyone else's turns. `agent_id` is only a
+    /// proposal — a room whose session another member already claimed answers
+    /// with that key regardless of which agent this Panel defaults to.
+    pub async fn room_session(
+        state: &DashboardState,
+        id: &str,
+        agent_id: &str,
+    ) -> Result<String, String> {
+        let params = serde_json::json!({ "id": id, "agent_id": agent_id });
+        let result = state.rpc_call("projects.room_session", params).await?;
+        result
+            .get("session_key")
+            .and_then(serde_json::Value::as_str)
+            .map(str::to_string)
+            .ok_or_else(|| "missing session_key in response".to_string())
+    }
+
     /// Rename a room. Owner-only server-side.
     pub async fn rename(
         state: &DashboardState,

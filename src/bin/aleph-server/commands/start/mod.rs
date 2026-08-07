@@ -2421,6 +2421,9 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
                 agent_result.execution_adapter.clone(),
                 agent_result.agent_registry.clone(),
             );
+            // The resumed run's owner/scope comes off this store's persisted
+            // session row — see `ResumeCoordinator::stamp_persisted_scope`.
+            let sessions_for_resume = session_store_for_reconcile.clone();
             tokio::spawn(async move {
                 let rr = reconciler.reconcile_interrupted().await;
                 tracing::info!(
@@ -2446,6 +2449,7 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
                             resume_cfg,
                             exec_adapter,
                             registry,
+                            sessions_for_resume,
                         );
                         let report = coordinator.resume_interrupted_runs().await;
                         tracing::info!(

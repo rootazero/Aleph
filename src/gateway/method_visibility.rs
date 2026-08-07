@@ -517,6 +517,7 @@ pub const SCOPED_METHODS: &[(&str, Treatment)] = &[
     ("projects.member.add", Treatment::KeyChecked),
     ("projects.member.remove", Treatment::KeyChecked),
     ("projects.member.list", Treatment::KeyChecked),
+    ("projects.room_session", Treatment::KeyChecked),
 ];
 
 /// Whole families ruled [`Treatment::OrgShared`], as prefixes.
@@ -857,6 +858,7 @@ mod tests {
             "projects.member.add",
             "projects.member.remove",
             "projects.member.list",
+            "projects.room_session",
         ] {
             assert_eq!(treatment_of(m), Some(Treatment::KeyChecked), "{m}");
         }

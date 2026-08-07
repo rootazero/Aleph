@@ -17,7 +17,7 @@
 //! locale YAML pipeline. A follow-up can port these strings the same way any
 //! other single-language surface would be localized.
 //!
-//! ## Room chat = a dedicated conversation per project
+//! ## Room chat = ONE conversation per project, shared by every member
 //! Does NOT mount a second `<ChatView />` — see that component's doc for why
 //! (every mount independently subscribes/unsubscribes the `stream.*` /
 //! `team.*` Gateway topics, so a second instance unmounting would kill the
@@ -26,12 +26,15 @@
 //! `pub(crate)`) directly, and drives the same `SessionMap` machinery
 //! `ChatSidebar::on_select_session` uses to reopen a past session: find (or
 //! open) a dedicated `ConvId`, `activate()` it into the singleton
-//! `ChatState`, and mark it via `ChatState::room_project_id`. The
-//! `project_id -> session_key` mapping is remembered in `localStorage`
-//! (`session_key_storage`) since the server has no `projects.get`-reachable
-//! "this room's session" field.
+//! `ChatState`, and mark it via `ChatState::room_project_id`.
+//!
+//! The `project_id -> session_key` mapping is **server-side**
+//! (`projects.room_session`, persisted on the `projects` row). It used to live
+//! in this device's `localStorage`, which cannot express a fact shared between
+//! devices: the second member to enter a room found nothing there, opened a
+//! brand-new session, and the two never saw each other's messages on any
+//! surface.
 
-mod session_key_storage;
 mod settings;
 
 use leptos::prelude::*;
@@ -244,10 +247,10 @@ fn PlaceholderTab() -> impl IntoView {
     }
 }
 
-/// The room's live chat surface. Opens (or reopens) this project's dedicated
-/// conversation exactly once per mount, then renders the same `MessageList`
-/// + `InputArea` the single-agent `ChatView` uses — see this module's doc
-/// for why `ChatView` itself is not mounted a second time.
+/// The room's live chat surface: resolves the room's server-side session,
+/// activates it as the current conversation, then renders the same
+/// `MessageList` + `InputArea` the single-agent `ChatView` uses — see this
+/// module's doc for why `ChatView` itself is not mounted a second time.
 #[component]
 fn RoomChat(project: ProjectInfo) -> impl IntoView {
     let dash = expect_context::<DashboardState>();
@@ -255,21 +258,42 @@ fn RoomChat(project: ProjectInfo) -> impl IntoView {
     let session_map = expect_context::<SessionMap>();
     let workspace = use_context::<WorkspaceState>();
     let i18n = use_i18n();
+    let location = leptos_router::hooks::use_location();
+    // One open at a time. The effect's body is async, so without this a second
+    // trigger arriving mid-fetch would open a second conversation for the same
+    // room and leave the first orphaned in the tab strip.
+    let opening = StoredValue::new(false);
 
-    // Open (or reopen) the room's conversation exactly once when this tab
-    // mounts. Every read below is `_untracked`, so the effect fires once and
-    // never again for this component's lifetime — a project switch fully
-    // remounts `RoomChat` (see `ProjectRoomPage`'s doc), which is the only
-    // time this needs to re-run.
+    // Re-open the room's conversation whenever it is not the active one and
+    // this page is the surface the user is actually looking at.
+    //
+    // Both tracked reads earn their place. `session_map.active` is what makes
+    // it re-run: `MainContent` only toggles CSS `display` (`app.rs`), so
+    // `RoomChat` is never unmounted — leaving for `/chat`, selecting another
+    // conversation and coming back used to strand this tab rendering (and
+    // sending into) that other conversation. The path read is what stops the
+    // fix from becoming a bug of its own: without it, selecting a conversation
+    // on the `/chat` page would make this still-mounted effect immediately
+    // steal it back.
     Effect::new({
         let project_id = project.id.clone();
         let project_name = project.name.clone();
         move |_| {
-            if chat.room_project_id.get_untracked().as_deref() == Some(project_id.as_str()) {
-                // Already the active room (e.g. a re-render that didn't
-                // actually remount) — do not reopen/rehydrate.
+            let _ = session_map.active.get();
+            let on_this_page =
+                crate::components::mode_sidebar::PanelMode::from_path(&location.pathname.get())
+                    == crate::components::mode_sidebar::PanelMode::Projects;
+            if !on_this_page {
                 return;
             }
+            if chat.room_project_id.get_untracked().as_deref() == Some(project_id.as_str()) {
+                // Already the active room — do not reopen/rehydrate.
+                return;
+            }
+            if opening.get_value() {
+                return;
+            }
+            opening.set_value(true);
             let project_id = project_id.clone();
             let project_name = project_name.clone();
             let locale = i18n.get_locale_untracked();
@@ -281,47 +305,35 @@ fn RoomChat(project: ProjectInfo) -> impl IntoView {
                         .map(|r| r.default_id)
                         .unwrap_or_default(),
                 };
-                if let Some(key) = session_key_storage::load(&project_id) {
-                    let conv = session_map.conv_for_session_key(&key).unwrap_or_else(|| {
-                        session_map.open_conversation(&agent_id, project_name.clone())
-                    });
-                    session_map.activate(chat, conv);
-                    chat.clear_team_context();
-                    chat.room_project_id.set(Some(project_id.clone()));
-                    chat.session_key.set(Some(key.clone()));
-                    // Mirror `ChatSidebar::on_select_session`: only hydrate
-                    // when there is nothing live to preserve — a
-                    // conversation already open (background `ChatState`)
-                    // is at least as fresh as `chat.history`.
-                    if chat.messages.with_untracked(Vec::is_empty) {
-                        spawn_local(hydrate_session_history(dash, chat, workspace, key, locale));
-                    }
-                } else {
-                    let conv = session_map.open_conversation(&agent_id, project_name);
-                    session_map.activate(chat, conv);
-                    chat.clear_session();
-                    chat.clear_team_context();
-                    chat.room_project_id.set(Some(project_id));
+                // The room's canonical session, shared with every other
+                // member. `agent_id` is only this Panel's proposal — a room
+                // somebody already opened answers with the key it has.
+                let key = ProjectsApi::room_session(&dash, &project_id, &agent_id).await;
+                opening.set_value(false);
+                let Ok(key) = key else {
+                    // A room we cannot resolve a session for is one we cannot
+                    // chat in. Leave the current conversation alone rather
+                    // than activating an empty tab that sends nowhere.
+                    return;
+                };
+                let conv = session_map
+                    .conv_for_session_key(&key)
+                    .unwrap_or_else(|| session_map.open_conversation(&agent_id, project_name));
+                session_map.activate(chat, conv);
+                chat.clear_team_context();
+                chat.room_project_id.set(Some(project_id));
+                chat.session_key.set(Some(key.clone()));
+                // Mirror `ChatSidebar::on_select_session`: only hydrate when
+                // there is nothing live to preserve — a conversation already
+                // open (background `ChatState`) is at least as fresh as
+                // `chat.history`.
+                if chat.messages.with_untracked(Vec::is_empty) {
+                    spawn_local(hydrate_session_history(dash, chat, workspace, key, locale));
                 }
                 if let Some(ws) = workspace {
                     ws.reset();
                 }
             });
-        }
-    });
-
-    // Persist the session_key the moment this room's conversation gets one
-    // (its first `chat.send` response) — idempotent, safe to re-run on every
-    // change while this room stays the active conversation.
-    Effect::new({
-        let project_id = project.id.clone();
-        move |_| {
-            if chat.room_project_id.get().as_deref() != Some(project_id.as_str()) {
-                return;
-            }
-            if let Some(sk) = chat.session_key.get() {
-                session_key_storage::store(&project_id, &sk);
-            }
         }
     });
 

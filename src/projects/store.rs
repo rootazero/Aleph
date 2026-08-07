@@ -91,6 +91,15 @@ pub struct Project {
     /// Unix-seconds last activation time, bumped by [`ProjectStore::touch`]
     /// so the recent-directory view can sort by recency.
     pub last_used_at: i64,
+    /// The room's canonical chat session, or `None` before any member has
+    /// opened it.
+    ///
+    /// Server-side because it is a fact shared BETWEEN devices: a room is one
+    /// conversation for every member (spec §6.4), and the per-browser
+    /// `localStorage` map this replaces could not express that — each member's
+    /// Panel opened its own session and never saw the others' turns.
+    /// [`ProjectStore::claim_session_key`] is the only writer.
+    pub current_session_key: Option<String>,
 }
 
 /// Typed errors surfaced to RPC handlers.
@@ -131,14 +140,15 @@ fn mint_id() -> String {
 
 const SCHEMA: &str = "
 CREATE TABLE IF NOT EXISTS projects (
-    id             TEXT PRIMARY KEY,
-    name           TEXT NOT NULL,
-    owner_user_id  TEXT,
-    workspace_path TEXT,
-    status         TEXT NOT NULL DEFAULT 'active',
-    created_at     INTEGER NOT NULL,
-    updated_at     INTEGER NOT NULL,
-    last_used_at   INTEGER NOT NULL
+    id                  TEXT PRIMARY KEY,
+    name                TEXT NOT NULL,
+    owner_user_id       TEXT,
+    workspace_path      TEXT,
+    status              TEXT NOT NULL DEFAULT 'active',
+    created_at          INTEGER NOT NULL,
+    updated_at          INTEGER NOT NULL,
+    last_used_at        INTEGER NOT NULL,
+    current_session_key TEXT
 );
 CREATE TABLE IF NOT EXISTS project_members (
     project_id TEXT NOT NULL,
@@ -243,7 +253,8 @@ impl ProjectStore {
         self.with_conn(|conn| {
             conn.execute_batch(SCHEMA).map_err(db_err)?;
             conn.execute_batch(&workspace_uniqueness_ddl())
-                .map_err(db_err)
+                .map_err(db_err)?;
+            add_current_session_key_column(conn)
         })
     }
 
@@ -308,26 +319,37 @@ impl ProjectStore {
         Ok(())
     }
 
-    /// Re-publish the whole roster projection from `project_members`.
+    /// Re-publish the whole roster projection from `project_members`, from
+    /// INSIDE the caller's connection lock.
     ///
-    /// Called at the end of every mutation. The table is the SSOT; the
-    /// projection is a read-optimised copy — see `crate::projects::roster`.
-    fn republish_roster(&self) -> Result<(), ProjectError> {
-        let pairs = self.with_conn(|conn| {
-            let mut stmt = conn
-                .prepare("SELECT project_id, user_id FROM project_members")
-                .map_err(db_err)?;
-            let rows = stmt
-                .query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))
-                .map_err(db_err)?;
-            let mut out = Vec::new();
-            for row in rows {
-                out.push(row.map_err(db_err)?);
-            }
-            Ok(out)
-        })?;
+    /// Every roster mutation calls this in the same [`Self::with_conn`] closure
+    /// that performed the write, so the snapshot read and the publish cannot be
+    /// interleaved by a second mutation. Taking the lock twice — write, release,
+    /// re-take, read, publish — let two concurrent writers publish in the
+    /// opposite order to the one they committed in, and the loser's stale
+    /// snapshot resurrected a just-removed member until the next roster write.
+    /// `is_member` is the whole room authorization predicate, so that direction
+    /// of failure is fail-open.
+    fn republish_roster_locked(conn: &Connection) -> Result<(), ProjectError> {
+        let mut stmt = conn
+            .prepare("SELECT project_id, user_id FROM project_members")
+            .map_err(db_err)?;
+        let rows = stmt
+            .query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))
+            .map_err(db_err)?;
+        let mut pairs = Vec::new();
+        for row in rows {
+            pairs.push(row.map_err(db_err)?);
+        }
         roster::publish(RosterSnapshot::from_pairs(pairs));
         Ok(())
+    }
+
+    /// [`Self::republish_roster_locked`] for callers that hold no lock yet —
+    /// boot migration only. A mutation must never use this: see that function's
+    /// doc for the interleaving it exists to prevent.
+    fn republish_roster(&self) -> Result<(), ProjectError> {
+        self.with_conn(Self::republish_roster_locked)
     }
 
     // -- entity ------------------------------------------------------------
@@ -355,6 +377,7 @@ impl ProjectStore {
             created_at: now,
             updated_at: now,
             last_used_at: now,
+            current_session_key: None,
         };
 
         self.with_conn(|conn| {
@@ -386,9 +409,8 @@ impl ProjectStore {
                 ],
             )
             .map_err(db_err)?;
-            Ok(())
+            Self::republish_roster_locked(conn)
         })?;
-        self.republish_roster()?;
         Ok(project)
     }
 
@@ -396,7 +418,7 @@ impl ProjectStore {
         self.with_conn(|conn| {
             conn.query_row(
                 "SELECT id, name, owner_user_id, workspace_path, status,
-                        created_at, updated_at, last_used_at
+                        created_at, updated_at, last_used_at, current_session_key
                  FROM projects WHERE id = ?1",
                 [id],
                 row_to_project,
@@ -414,7 +436,7 @@ impl ProjectStore {
             let mut stmt = conn
                 .prepare(
                     "SELECT id, name, owner_user_id, workspace_path, status,
-                            created_at, updated_at, last_used_at
+                            created_at, updated_at, last_used_at, current_session_key
                      FROM projects ORDER BY last_used_at DESC",
                 )
                 .map_err(db_err)?;
@@ -471,9 +493,8 @@ impl ProjectStore {
             }
             conn.execute("DELETE FROM project_members WHERE project_id = ?1", [id])
                 .map_err(db_err)?;
-            Ok(())
-        })?;
-        self.republish_roster()
+            Self::republish_roster_locked(conn)
+        })
     }
 
     pub fn bind_workspace(&self, id: &str, path: Option<&Path>) -> Result<Project, ProjectError> {
@@ -496,17 +517,22 @@ impl ProjectStore {
     // -- roster ------------------------------------------------------------
 
     pub fn add_member(&self, id: &str, user_id: &str) -> Result<(), ProjectError> {
-        self.require(id)?;
         self.with_conn(|conn| {
+            let exists: bool = conn
+                .prepare("SELECT 1 FROM projects WHERE id = ?1")
+                .and_then(|mut stmt| stmt.exists([id]))
+                .map_err(db_err)?;
+            if !exists {
+                return Err(ProjectError::NotFound(id.to_string()));
+            }
             conn.execute(
                 "INSERT OR IGNORE INTO project_members (project_id, user_id, added_at)
                  VALUES (?1, ?2, ?3)",
                 rusqlite::params![id, user_id, now_secs()],
             )
             .map_err(db_err)?;
-            Ok(())
-        })?;
-        self.republish_roster()
+            Self::republish_roster_locked(conn)
+        })
     }
 
     pub fn remove_member(&self, id: &str, user_id: &str) -> Result<(), ProjectError> {
@@ -516,9 +542,45 @@ impl ProjectStore {
                 rusqlite::params![id, user_id],
             )
             .map_err(db_err)?;
-            Ok(())
-        })?;
-        self.republish_roster()
+            Self::republish_roster_locked(conn)
+        })
+    }
+
+    // -- canonical room session --------------------------------------------
+
+    /// Claim `candidate` as this room's canonical chat session, or return the
+    /// key a member already claimed.
+    ///
+    /// Get-or-create, atomic: the conditional `UPDATE … WHERE
+    /// current_session_key IS NULL` and the read-back run in one
+    /// [`Self::with_conn`] closure, so two members opening the room at the same
+    /// moment converge — the loser adopts the winner's key instead of forking a
+    /// second conversation. Returns the effective key, which is `candidate`
+    /// only when this call is the one that claimed it.
+    pub fn claim_session_key(&self, id: &str, candidate: &str) -> Result<String, ProjectError> {
+        self.with_conn(|conn| {
+            conn.execute(
+                "UPDATE projects SET current_session_key = ?2
+                 WHERE id = ?1 AND current_session_key IS NULL",
+                rusqlite::params![id, candidate],
+            )
+            .map_err(db_err)?;
+            let claimed: Option<Option<String>> = conn
+                .query_row(
+                    "SELECT current_session_key FROM projects WHERE id = ?1",
+                    [id],
+                    |r| r.get::<_, Option<String>>(0),
+                )
+                .optional()
+                .map_err(db_err)?;
+            match claimed {
+                // The row exists and the UPDATE above cannot have left it NULL,
+                // so an inner `None` means a concurrent `remove` won the race —
+                // report it as the missing project it now is.
+                Some(Some(key)) => Ok(key),
+                _ => Err(ProjectError::NotFound(id.to_string())),
+            }
+        })
     }
 
     pub fn members(&self, id: &str) -> Result<Vec<String>, ProjectError> {
@@ -655,7 +717,7 @@ impl ProjectStore {
         self.with_conn(|conn| {
             conn.query_row(
                 "SELECT id, name, owner_user_id, workspace_path, status,
-                        created_at, updated_at, last_used_at
+                        created_at, updated_at, last_used_at, current_session_key
                  FROM projects
                  WHERE workspace_path = ?1
                    AND COALESCE(owner_user_id, ?2) = ?2
@@ -701,7 +763,32 @@ fn row_to_project(row: &Row<'_>) -> rusqlite::Result<Project> {
         created_at: row.get(5)?,
         updated_at: row.get(6)?,
         last_used_at: row.get(7)?,
+        current_session_key: row.get(8)?,
     })
+}
+
+/// Add `projects.current_session_key` to a database created before rooms had a
+/// canonical session.
+///
+/// Idempotent — called on every open. SQLite has no `ALTER TABLE … ADD COLUMN
+/// IF NOT EXISTS`, so the `pragma_table_info` probe guards it by hand, the same
+/// way `gateway::pairing_store` adds `approved_senders.user_id`. No backfill:
+/// `NULL` is the correct value for every existing room (nobody has opened its
+/// chat yet), and it is exactly what [`ProjectStore::claim_session_key`] treats
+/// as unclaimed.
+fn add_current_session_key_column(conn: &Connection) -> Result<(), ProjectError> {
+    let present: bool = conn
+        .prepare("SELECT 1 FROM pragma_table_info('projects') WHERE name = 'current_session_key'")
+        .and_then(|mut stmt| stmt.exists([]))
+        .map_err(db_err)?;
+    if !present {
+        conn.execute(
+            "ALTER TABLE projects ADD COLUMN current_session_key TEXT",
+            [],
+        )
+        .map_err(db_err)?;
+    }
+    Ok(())
 }
 
 /// The pre-P2 `projects.json` shape, kept only so [`ProjectStore::migrate_from_json`]
@@ -999,6 +1086,136 @@ mod tests {
             ProjectStatus::from_stored("who-knows"),
             ProjectStatus::Archived
         );
+    }
+
+    /// A room's canonical session is claimed once and never re-minted: the
+    /// second member to open the room adopts the first member's key, which is
+    /// what makes a room ONE conversation rather than one per device.
+    #[test]
+    fn the_first_claim_wins_and_later_callers_adopt_it() {
+        let _g = ROSTER_TEST_GUARD.lock().unwrap_or_else(|e| e.into_inner());
+        let store = fresh_store();
+        let p = store.create("room", Some("u-alice"), None).unwrap();
+        assert_eq!(
+            store.get(&p.id).unwrap().unwrap().current_session_key,
+            None,
+            "a fresh room has no session until someone opens its chat"
+        );
+
+        let alice = store
+            .claim_session_key(&p.id, "agent:main:room-alice")
+            .unwrap();
+        assert_eq!(alice, "agent:main:room-alice");
+
+        // Bob's Panel proposes its own candidate (his default agent may differ)
+        // and must still land on Alice's conversation.
+        let bob = store
+            .claim_session_key(&p.id, "agent:coder:room-bob")
+            .unwrap();
+        assert_eq!(bob, "agent:main:room-alice");
+        assert_eq!(
+            store
+                .get(&p.id)
+                .unwrap()
+                .unwrap()
+                .current_session_key
+                .as_deref(),
+            Some("agent:main:room-alice"),
+            "the claim is durable, not per-call"
+        );
+    }
+
+    #[test]
+    fn claiming_a_session_for_an_unknown_room_is_not_found() {
+        let _g = ROSTER_TEST_GUARD.lock().unwrap_or_else(|e| e.into_inner());
+        let store = fresh_store();
+        assert!(matches!(
+            store
+                .claim_session_key("p-nope", "agent:main:x")
+                .unwrap_err(),
+            ProjectError::NotFound(_)
+        ));
+    }
+
+    /// Two members opening the same room at the same instant must converge on
+    /// one key. The claim is a conditional UPDATE plus a read-back inside a
+    /// single connection lock, so the loser reads the winner's value rather
+    /// than overwriting it.
+    #[test]
+    fn concurrent_claims_all_return_the_same_key() {
+        let _g = ROSTER_TEST_GUARD.lock().unwrap_or_else(|e| e.into_inner());
+        let store = fresh_store();
+        let p = store.create("room", Some("u-alice"), None).unwrap();
+
+        let barrier = std::sync::Arc::new(std::sync::Barrier::new(8));
+        let handles: Vec<_> = (0..8)
+            .map(|i| {
+                let store = store.clone();
+                let id = p.id.clone();
+                let barrier = std::sync::Arc::clone(&barrier);
+                std::thread::spawn(move || {
+                    barrier.wait();
+                    store
+                        .claim_session_key(&id, &format!("agent:main:room-{i}"))
+                        .unwrap()
+                })
+            })
+            .collect();
+
+        let keys: Vec<String> = handles.into_iter().map(|h| h.join().unwrap()).collect();
+        let persisted = store.get(&p.id).unwrap().unwrap().current_session_key;
+        assert_eq!(persisted.as_deref(), Some(keys[0].as_str()));
+        assert!(
+            keys.iter().all(|k| *k == keys[0]),
+            "every caller must see one room session, got {keys:?}"
+        );
+    }
+
+    /// The projection must never survive its own table: after concurrent
+    /// roster churn the published snapshot has to agree with
+    /// `project_members`. With the publish outside the mutation's lock, a
+    /// preempted writer could publish a snapshot read BEFORE another writer's
+    /// delete and resurrect a removed member — fail-open, since `is_member` is
+    /// the whole room authorization predicate.
+    #[test]
+    fn concurrent_roster_writes_never_leave_a_stale_projection() {
+        let _g = ROSTER_TEST_GUARD.lock().unwrap_or_else(|e| e.into_inner());
+        let store = fresh_store();
+        let p = store.create("room", Some("u-alice"), None).unwrap();
+
+        let barrier = std::sync::Arc::new(std::sync::Barrier::new(2));
+        let handles: Vec<_> = ["u-bob", "u-carol"]
+            .iter()
+            .map(|user| {
+                let store = store.clone();
+                let id = p.id.clone();
+                let user = (*user).to_string();
+                let barrier = std::sync::Arc::clone(&barrier);
+                std::thread::spawn(move || {
+                    barrier.wait();
+                    for _ in 0..200 {
+                        store.add_member(&id, &user).unwrap();
+                        store.remove_member(&id, &user).unwrap();
+                    }
+                })
+            })
+            .collect();
+        for h in handles {
+            h.join().unwrap();
+        }
+
+        assert_eq!(
+            store.members(&p.id).unwrap(),
+            vec!["u-alice".to_string()],
+            "the table itself must end with only the owner"
+        );
+        for gone in ["u-bob", "u-carol"] {
+            assert!(
+                !roster::is_member(&p.id, gone),
+                "{gone} was removed but the projection still admits them"
+            );
+        }
+        assert!(roster::is_member(&p.id, "u-alice"));
     }
 
     /// The `p-` family must stay distinguishable from the legacy `proj-`

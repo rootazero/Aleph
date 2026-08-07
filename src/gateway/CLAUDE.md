@@ -118,7 +118,7 @@
 
 > 详见 [SECURITY.md 项目房间层（P2）](../../docs/reference/SECURITY.md#project-rooms-p2)。以下三条是本目录内、新代码最容易踩空的连线。
 
-- **地雷 E（房间的可见性判据是名册，不是 owner 列）**：`projects` 行的 `owner_user_id` 记的是**创建者**，只用于 owner-only 动词（rename / archive / roster / bind_workspace）；「谁能看」一律问 `member_visible` / 名册。拿 owner 列答 can-see 会把每个成员都判成外人（或反过来）。拒绝形状有分界：**看不见 → `gate_project` 给逐字节相同的 `not_found`**（存在性即泄漏）；**看得见但角色不够 → `require_owner` 给诚实的 `PERMISSION_DENIED`**（他已知道房间存在，forbidden 不泄漏且可行动）。新的 `projects.*` 动词先问自己落在哪一侧。
+- **地雷 E（房间的可见性判据是名册，不是 owner 列）**：`projects` 行的 `owner_user_id` 记的是**创建者**，只用于 owner-only 动词（rename / archive / roster / bind_workspace）；「谁能看」一律问名册（`projects::roster::is_member`，经 `visibility::project_visible` / `session_visible_to` / `partition_visible` 到达）。拿 owner 列答 can-see 会把每个成员都判成外人（或反过来）。拒绝形状有分界：**看不见 → `gate_project` 给逐字节相同的 `not_found`**（存在性即泄漏）；**看得见但角色不够 → `require_owner` 给诚实的 `PERMISSION_DENIED`**（他已知道房间存在，forbidden 不泄漏且可行动）。新的 `projects.*` 动词先问自己落在哪一侧。
 - **地雷 F（`workspace_path` 的写入者与读取者共用一道闸）**：绑定目录是房间会话的默认 cwd，所以**每一个**能写 `workspace_path` 的动词（`projects.add` / `create_blank` / `bind_workspace`，以及未来任何新写入者）都必须过 `caller_identity::caller_may_choose_directory()`——与 `agent.run` 的显式 `project_root` 同一个谓词。漏一个写入者就是「两步都合法、合起来等价」的绕闸路径（先注册目录、再进房间聊天）。解绑是降权，刻意豁免。成员**使用**绑定不需要闸——目录是 owner 经闸选的，成员只是继承。
 - **地雷 G（会话入房后 scope 是 tier-1 事实，别读 `params.project_id`）**：`resolve_attribution` 的第一优先级是会话**已存储**的 scope——Panel 只在开房那一回合发 `project_id`，之后每回合都不带。任何按房间分派的新逻辑（默认 cwd、记忆路由、名册谓词）都必须读**已解析的** `ScopeAttribution`，读请求参数会让第一条消息生效、之后每一条静默退回默认。同族：`run_loop/inner.rs` 的目录簿写入对房间回合要走 scope 短路（按 `project_id` `touch`），不能走 owner-keyed 路径查找——`ambient_owner()` 是**说话人**不是房主，每个成员每回合都会查空并给共享文件夹注册一行重复的个人项目。
 

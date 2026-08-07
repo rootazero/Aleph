@@ -495,9 +495,7 @@ pub(super) async fn try_inject_steering(
         // The INTERRUPTING request's scope, not the running one's: in a room
         // the whole point is that whoever steers is not necessarily whoever
         // started the run, and the transcript has to say which.
-        author_user_id: crate::scope::room_author(
-            crate::scope::scope_from_metadata(&request.metadata).as_ref(),
-        ),
+        author_user_id: crate::scope::room_author_from_metadata(&request.metadata),
     };
 
     match orchestrator

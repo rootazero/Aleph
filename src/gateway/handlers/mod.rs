@@ -595,10 +595,15 @@ impl HandlerRegistry {
                 let u = u.clone();
                 async move { projects::handle_member_remove(req, s, u).await }
             });
-            let s = default_store;
+            let s = default_store.clone();
             registry.register("projects.member.list", move |req| {
                 let s = s.clone();
                 async move { projects::handle_member_list(req, s).await }
+            });
+            let s = default_store;
+            registry.register("projects.room_session", move |req| {
+                let s = s.clone();
+                async move { projects::handle_room_session(req, s).await }
             });
         }
 

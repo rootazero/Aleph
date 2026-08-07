@@ -964,7 +964,18 @@ impl ChatState {
     /// Set the active project and reset the session (1:1 project↔session
     /// binding per the agreed UX model). Passing `None` exits project mode
     /// and the chat reverts to running inside `~/.aleph/workspaces/{agent_id}`.
+    ///
+    /// A no-op inside a project room. The room's conversation belongs to every
+    /// member, and `clear_session()` deliberately does not clear
+    /// `room_project_id` — so without this guard, picking a folder here wiped
+    /// `session_key` while leaving the room flag set, and the next message
+    /// silently forked a SECOND room session that nobody else was in. The
+    /// room's working directory is its owner's `bind_workspace` choice, which
+    /// this picker is not.
     pub fn set_active_project(&self, root: Option<String>, name: Option<String>) {
+        if self.room_project_id.get_untracked().is_some() {
+            return;
+        }
         let switching = self.active_project_root.get_untracked() != root;
         self.active_project_root.set(root);
         self.active_project_name.set(name);

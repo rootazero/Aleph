@@ -600,6 +600,62 @@ pub async fn handle_touch(request: JsonRpcRequest, store: Arc<ProjectStore>) -> 
 }
 
 // ============================================================================
+// projects.room_session
+// ============================================================================
+
+#[derive(Debug, Deserialize)]
+pub struct RoomSessionParams {
+    pub id: String,
+    /// The agent whose session the caller would open. Only consulted when
+    /// nobody has claimed the room's session yet; once claimed, the stored key
+    /// names its own agent and this is ignored. Absent normalises to the
+    /// default agent.
+    #[serde(default)]
+    pub agent_id: Option<String>,
+}
+
+/// Get-or-create the room's canonical chat session key.
+///
+/// This is what makes a project room ONE conversation. Before it, the
+/// `project_id → session_key` map lived in each browser's `localStorage`, so
+/// the second member to enter a room found nothing, opened a fresh session and
+/// talked to the agent alone — the members shared a memory partition and a
+/// workspace but never a transcript.
+///
+/// The claim is atomic inside [`ProjectStore::claim_session_key`], so two
+/// members opening the room simultaneously converge instead of forking. The
+/// candidate is only a proposal: a caller whose default agent differs still
+/// receives the key that was actually claimed.
+pub async fn handle_room_session(
+    request: JsonRpcRequest,
+    store: Arc<ProjectStore>,
+) -> JsonRpcResponse {
+    let params: RoomSessionParams = match parse_params(&request) {
+        Ok(p) => p,
+        Err(e) => return e,
+    };
+    let project = match gate_project(&store, request.id.clone(), &params.id) {
+        Ok(p) => p,
+        Err(denial) => return denial,
+    };
+    let candidate = crate::gateway::router::SessionKey::project_room(
+        params.agent_id.unwrap_or_default(),
+        &project.id,
+    )
+    .to_key_string();
+    match store.claim_session_key(&project.id, &candidate) {
+        Ok(session_key) => JsonRpcResponse::success(
+            request.id,
+            json!({ "id": project.id, "session_key": session_key }),
+        ),
+        // A room that vanished between the gate and the claim is unreachable
+        // for the same reason a room the caller cannot see is — same response.
+        Err(ProjectError::NotFound(_)) => project_not_found(request.id, &params.id),
+        Err(e) => project_error_response(request.id, e),
+    }
+}
+
+// ============================================================================
 // projects.member.add / projects.member.remove / projects.member.list
 // ============================================================================
 
@@ -1360,5 +1416,115 @@ mod tests {
         )
         .await;
         assert!(added.error.is_none(), "{:?}", added.error);
+    }
+
+    // ── projects.room_session (C1) ──────────────────────────────────────
+
+    fn session_key_of(resp: &JsonRpcResponse) -> String {
+        resp.result
+            .as_ref()
+            .and_then(|r| r.get("session_key"))
+            .and_then(Value::as_str)
+            .unwrap_or_else(|| panic!("expected a session_key, got {:?}", resp.error))
+            .to_string()
+    }
+
+    /// The whole point of C1: two members of one room resolve to ONE session,
+    /// even though each Panel proposes its own default agent. Before this,
+    /// each browser minted its own key from `localStorage` and the members
+    /// never saw each other's turns.
+    #[tokio::test]
+    async fn two_members_of_a_room_resolve_to_the_same_session() {
+        let (store, _users, project, _guard) = room();
+
+        let alice = as_caller(
+            "u-alice",
+            Some("member"),
+            true,
+            handle_room_session(
+                rpc(
+                    "projects.room_session",
+                    json!({ "id": project.id, "agent_id": "main" }),
+                ),
+                store.clone(),
+            ),
+        )
+        .await;
+        let bob = as_caller(
+            "u-bob",
+            Some("member"),
+            false,
+            handle_room_session(
+                rpc(
+                    "projects.room_session",
+                    json!({ "id": project.id, "agent_id": "coder" }),
+                ),
+                store.clone(),
+            ),
+        )
+        .await;
+
+        assert_eq!(session_key_of(&alice), session_key_of(&bob));
+        assert_eq!(
+            session_key_of(&alice),
+            crate::gateway::router::SessionKey::project_room("main", &project.id).to_key_string(),
+            "the first caller's candidate is the one that sticks"
+        );
+        // Re-entering the room reuses it rather than forking a second one.
+        let again = as_caller(
+            "u-alice",
+            Some("member"),
+            true,
+            handle_room_session(
+                rpc("projects.room_session", json!({ "id": project.id })),
+                store,
+            ),
+        )
+        .await;
+        assert_eq!(session_key_of(&again), session_key_of(&alice));
+    }
+
+    /// A stranger must not learn that the room exists, and must not be able to
+    /// mint its session either. Same refusal shape as every other addressed
+    /// `projects.*` verb, byte for byte.
+    #[tokio::test]
+    async fn a_stranger_asking_for_a_rooms_session_gets_not_found() {
+        let (store, _users, project, _guard) = room();
+
+        let denied = as_caller(
+            "u-mallory",
+            Some("member"),
+            false,
+            handle_room_session(
+                rpc("projects.room_session", json!({ "id": project.id })),
+                store.clone(),
+            ),
+        )
+        .await;
+        let missing = as_caller(
+            "u-mallory",
+            Some("member"),
+            false,
+            handle_room_session(
+                rpc("projects.room_session", json!({ "id": "p-never-minted" })),
+                store.clone(),
+            ),
+        )
+        .await;
+        assert_eq!(err_of(&denied).0, RESOURCE_NOT_FOUND);
+        assert_eq!(
+            err_of(&denied).1.replace(&project.id, "p-never-minted"),
+            err_of(&missing).1,
+            "a refused room and a missing room must be indistinguishable"
+        );
+        assert!(
+            store
+                .get(&project.id)
+                .unwrap()
+                .unwrap()
+                .current_session_key
+                .is_none(),
+            "a refused caller must not have claimed the room's session"
+        );
     }
 }

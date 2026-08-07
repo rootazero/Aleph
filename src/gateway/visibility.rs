@@ -118,18 +118,6 @@ pub fn project_visible(project_id: &str) -> bool {
     }
 }
 
-/// [`project_visible`]'s sibling for records reachable from BOTH the gateway
-/// and an agent run's tools — the same resolver split as
-/// [`stamped_owner_visible`] vs [`ambient_owner_visible`], for the same
-/// reason: `CALLER_USER` is dead inside a spawned run.
-#[must_use]
-pub fn ambient_project_visible(project_id: &str) -> bool {
-    match crate::scope::ambient_owner() {
-        None => true,
-        Some(actor) => crate::projects::roster::is_member(project_id, &actor),
-    }
-}
-
 /// Whether `meta` is visible to `actor` — the EXPLICIT-actor form of
 /// [`session_visible`].
 ///

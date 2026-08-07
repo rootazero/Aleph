@@ -266,14 +266,11 @@ pub(crate) fn InputArea() -> impl IntoView {
         // A project-room conversation (`room_project_id` set) sends
         // `project_id` and forces `project_root` to `None` — an explicit
         // `project_root` outranks the room's workspace binding and is
-        // refused server-side for remote chat-tier callers. This guard is
-        // unconditional (not merely a courtesy): `ProjectMenu`
-        // (`project_menu.rs`) is NOT suppressed while a room conversation is
-        // active — its picker chip stays visible/clickable and could still
-        // set `active_project_root` on this same `ChatState` — so the `if
-        // room_project_id.is_some()` check below is the ONLY thing
-        // preventing both from being set at once. Known gap, not fixed here:
-        // see the P2 Task 8 report's "deliberate scope decisions".
+        // refused server-side for remote chat-tier callers. Kept
+        // unconditional even though `ProjectMenu` is now hidden in a room and
+        // `ChatState::set_active_project` early-returns there: this is the
+        // last of the three, and it is the one that holds if a future surface
+        // writes `active_project_root` by some other route.
         let room_project_id = chat.room_project_id.get();
         let project_root = if room_project_id.is_some() {
             None
@@ -1315,7 +1312,14 @@ pub(crate) fn InputArea() -> impl IntoView {
 
                         // Migrated from the old project row — now level
                         // with the attach paperclip. Dropdowns still flip upward.
-                        <ProjectMenu />
+                        // Hidden in a project room: the room's working
+                        // directory is the owner's `bind_workspace` choice and
+                        // a member picking a folder here would be choosing
+                        // nothing (`build_run_request` forces `project_root`
+                        // to `None` for a room turn).
+                        <Show when=move || chat.room_project_id.get().is_none()>
+                            <ProjectMenu />
+                        </Show>
                         <crate::components::model_picker::ModelPicker />
                         // Per-session usage mode (chat / work / code) + tool
                         // execution tier (Ask / Auto / Full). Hidden in team

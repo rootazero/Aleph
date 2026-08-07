@@ -189,6 +189,12 @@ pub(in crate::commands::start) fn register_projects_handlers(
         projects_handlers::handle_member_list,
         project_store
     );
+    register_handler!(
+        server,
+        "projects.room_session",
+        projects_handlers::handle_room_session,
+        project_store
+    );
 
     if !daemon {
         println!("Project methods:");
@@ -209,6 +215,7 @@ pub(in crate::commands::start) fn register_projects_handlers(
         println!("  - projects.member.add    : Add a user to a project roster (owner/admin)");
         println!("  - projects.member.remove : Remove a user from a project roster (owner/admin)");
         println!("  - projects.member.list   : List a project's roster");
+        println!("  - projects.room_session  : Get-or-create the room's shared chat session key");
         println!();
     }
 }

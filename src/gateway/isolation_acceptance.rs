@@ -564,14 +564,17 @@ async fn two_users_cannot_see_each_others_teams() {
     );
 }
 
-/// Reproduce the task-local nesting a real dispatch applies to a turn taken
-/// INSIDE a project room: the ambient scope is the ROOM's
-/// (`ScopeId::Project`), while `CALLER_USER` remains the individual member who
-/// is speaking. The divergence is the point — see
+/// Reproduce the task-local nesting a real GATEWAY DISPATCH applies to an RPC
+/// issued from inside a project room: the ambient scope is the ROOM's
+/// (`ScopeId::Project`), while `CALLER_USER` is the individual member who is
+/// asking. The divergence is the point — see
 /// `gateway::handlers::agent::resolve_attribution` and
 /// `execution_engine::AUTHOR_USER_KEY`: every member's turn in a room carries
 /// the room's attribution (that is what shares the memory partition), so
 /// "whose turn is this" needs its own fact.
+///
+/// NOT the shape of a turn's INTERIOR — see [`as_room_turn`], which is the one
+/// to use for anything an agent run emits.
 async fn as_room_member<F, T>(user: &str, project_id: &str, fut: F) -> T
 where
     F: std::future::Future<Output = T>,
@@ -582,6 +585,36 @@ where
             scope: crate::scope::ScopeId::Project(project_id.to_string()),
         }),
         CALLER_USER.scope(Some(user.to_string()), fut),
+    )
+    .await
+}
+
+/// Reproduce the task-local nesting the INTERIOR of a room's agent run sees —
+/// the context every `SessionEvent::UserMessage` writer actually runs in.
+///
+/// Three facts, and taking any of them from the wrong place is a defect this
+/// suite has to be able to see:
+///
+/// - **The ambient scope's `owner_user_id` is `room_owner`, not the speaker**,
+///   identically for every member. That is what `resolve_attribution` path 1
+///   rebuilds from the session row, and it is what puts both members' memory in
+///   one partition. A helper that set it to the speaker would make the label's
+///   fallback agree with the correct answer by accident and pass while
+///   production stamped the room's creator on everyone's message.
+/// - **The speaker rides its own task-local**, seeded by
+///   `run_loop::with_request_scope` from the request's `AUTHOR_USER_KEY`.
+/// - **`CALLER_USER` is dead.** Every emission site runs inside a bare
+///   `tokio::spawn` (`busy_queue/spawn.rs`), which task-locals do not cross.
+async fn as_room_turn<F, T>(speaker: &str, room_owner: &str, project_id: &str, fut: F) -> T
+where
+    F: std::future::Future<Output = T>,
+{
+    with_scope(
+        Some(ScopeAttribution {
+            owner_user_id: room_owner.to_string(),
+            scope: crate::scope::ScopeId::Project(project_id.to_string()),
+        }),
+        crate::scope::with_room_author(Some(speaker.to_string()), fut),
     )
     .await
 }
@@ -916,12 +949,19 @@ async fn the_model_can_tell_two_room_members_apart() {
     crate::scope::directory::record("u-room-alice", "Alice");
     crate::scope::directory::record("u-room-bob", "Bob");
 
+    // Alice created the room, so hers is the `owner_user_id` on the session
+    // row and therefore on EVERY member's run — including Bob's.
     async fn said_in_room(user: &str, text: &str, seq: u64) -> SessionEventRecord {
-        let author = as_room_member(user, "p-standup", async {
+        let author = as_room_turn(user, "u-room-alice", "p-standup", async {
             crate::scope::ambient_room_author()
         })
         .await;
-        assert!(author.is_some(), "a room turn must be attributed");
+        assert_eq!(
+            author.as_deref(),
+            Some(user),
+            "the label names the speaker; deriving it from the run's scope \
+             would name the room's creator on every message"
+        );
         user_event(text, seq, author)
     }
 
@@ -944,11 +984,16 @@ async fn the_model_can_tell_two_room_members_apart() {
         }
     }
 
-    // The control: the same helper under a PERSONAL scope must produce no
-    // author, so a solo session's prompt is byte-identical to pre-P2.
-    let solo = as_caller("u-room-alice", async {
-        crate::scope::ambient_room_author()
-    })
+    // The control: a personal session produces no author even when a speaker
+    // IS seeded, so a solo session's prompt stays byte-identical to pre-P2.
+    // Seeding the author is what makes this a real control — without it the
+    // assertion would also pass for a build that simply never labels anything.
+    let solo = with_scope(
+        Some(ScopeAttribution::personal("u-room-alice")),
+        crate::scope::with_room_author(Some("u-room-alice".to_string()), async {
+            crate::scope::ambient_room_author()
+        }),
+    )
     .await;
     assert_eq!(
         solo, None,
