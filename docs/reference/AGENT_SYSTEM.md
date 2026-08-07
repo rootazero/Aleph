@@ -228,6 +228,7 @@ The Thinker is responsible for LLM interactions and decision making.
 | `SecurityContext` | `security_context.rs` | Policy-driven permissions |
 | `ContextAggregator` | `context.rs` | Reconcile interaction and security |
 | `SoulManifest` | `soul.rs` | SOUL.md structured parser (for `identity.get` preview) |
+| `AgentIdentityProfile` | `identity_profile.rs` | IDENTITY.md structured parser (name/role/vibe/emoji/language) |
 | identity files | `identity_files.rs` | Single file-based identity source (SOUL.md), read/written by `self_config` + `identity.*` |
 
 ### Thinking Levels
@@ -400,7 +401,9 @@ For background/scheduled tasks, two additional decision types:
 
 **Location**: `src/thinker/identity_files.rs` (file I/O — the single source of truth),
 `src/thinker/layers/{soul,profile}.rs` (prompt injection), `src/thinker/soul.rs`
-(`SoulManifest` structured parser, used only for the `identity.get` preview).
+(`SoulManifest` structured parser, used only for the `identity.get` preview),
+`src/thinker/identity_profile.rs` (`AgentIdentityProfile` — the single structured
+parser for `IDENTITY.md`'s rich fields).
 
 The Embodiment Engine gives the AI a consistent identity and personality from a
 **single file-based source of truth** — the per-agent identity files under
@@ -453,6 +456,46 @@ pub struct SoulVoice {
 }
 ```
 
+### AgentIdentityProfile
+
+Structured view of an agent's `IDENTITY.md` rich fields, parsed by
+`AgentIdentityProfile::{from_markdown, from_agent_dir}`. This is the **single**
+`IDENTITY.md` parser — do not hand-roll `strip_prefix("**Name:**")` scans, which is
+what `agent_manager::crud` used to do before delegating here.
+
+```rust
+pub struct AgentIdentityProfile {
+    pub name: Option<String>,     // **Name:**
+    pub role: Option<String>,     // **Role:**     — archetype-seeded at creation
+    pub vibe: Option<String>,     // **Vibe:**     — archetype-seeded at creation
+    pub emoji: Option<String>,    // **Emoji:**    — archetype-seeded at creation
+    pub language: Option<String>, // **Language:** — unseeded
+}
+```
+
+Every field is `Option` so callers can distinguish *unset* from *set to something*.
+Three parsing rules matter, because the creation template walks straight into all
+three:
+
+1. **Decoration is stripped** — `**`, `_`, `` ` ``, and a fully-parenthesized value.
+2. **Dashes fold to ASCII** — the template writes a typographic em dash
+   (`your signature — swap if you like`), which would otherwise never match an
+   ASCII-authored placeholder constant.
+3. **Placeholders and trailing asides read as `None`** — `- **Role:** systems thinker
+   _(edit to taste)_` yields `Some("systems thinker")`, while the shipped
+   `- **Language:** _(preferred language for conversation)_` yields `None` rather
+   than a language literally named "preferred language for conversation".
+
+Parsing is deliberately **infallible** (empty profile, never `Result`): identity is
+decorative metadata, and no caller has a better answer to a malformed file than
+"treat the agent as unnamed", so an error type would only push `unwrap_or_default()`
+to every call site.
+
+> The `round_trips_every_archetype_seeded_template` test asserts every archetype's
+> generated template parses back to the exact `role_hint()` / `vibe_hint()` /
+> `emoji_hint()` it was built from, so the template format and the parser cannot
+> drift apart.
+
 ### Soul File Format (Markdown)
 
 ```markdown
@@ -486,7 +529,7 @@ daemon's boot agent) — the same files `self_config` writes.
 
 | Method | Description |
 |--------|-------------|
-| `identity.get` | Live `SOUL.md` (raw markdown + parsed `SoulManifest` preview) + identity-file status |
+| `identity.get` | Live `SOUL.md` (raw markdown + parsed `SoulManifest` preview), parsed `IDENTITY.md` rich fields (`identity`), + identity-file status |
 | `identity.set` | Write an identity file (`SOUL.md` by default), snapshotting the prior version |
 | `identity.clear` | Snapshot and remove `SOUL.md` (revert to the default persona) |
 | `identity.list` | List identity files (exists / size / path) |
