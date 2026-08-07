@@ -1783,16 +1783,31 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
         }
     }
 
-    // Team management (team store created inside register_agent_handlers)
+    // The WS event-delivery loop needs the team handle on ITS OWN condition:
+    // `team.<id>.*` frames carry team chat bodies and are published as raw
+    // `{topic,data}` strings, so `event_visibility` resolves them to a team
+    // OWNER rather than to a session (see that module's doc), and `teams: None`
+    // DENIES every connection, operator included.
+    //
+    // The producer of those frames — the `teams.chat.send` registration driving
+    // `GroupChatBroadcaster` / `publish_team_event`, in
+    // `builder/agent_init/mod.rs` — is gated on `team_store` ALONE, so the
+    // resolver is gated on `team_store` alone too. It must never be widened to
+    // also require `coord_task_store`: that is a different database
+    // (`coord.db` vs `teams.db`) whose failure to open is a supported
+    // warn-and-continue degraded boot, and on that path team chat would keep
+    // publishing frames that every connection silently denies, with no error
+    // and no log line anywhere. Pinned by `event_visibility.rs`'s
+    // `the_team_resolver_gate_is_no_narrower_than_its_frame_producers_gate`.
+    if let Some(ref ts) = agent_result.team_store {
+        server.set_team_store(ts.clone());
+    }
+
+    // Team management (team store created inside register_agent_handlers).
+    // `register_teams_handlers` genuinely needs both stores, so it — unlike the
+    // resolver above — stays under the two-store condition.
     if let (Some(ref ts), Some(ref cs)) = (&agent_result.team_store, &agent_result.coord_task_store)
     {
-        // The WS event-delivery loop needs the SAME handle: `team.<id>.*`
-        // frames carry team chat bodies and are published as raw `{topic,data}`
-        // strings, so `event_visibility` resolves them to a team OWNER rather
-        // than to a session (see that module's doc). Without this the whole
-        // plane has no resolver and is denied to everyone — the fail-closed
-        // half of the same wire.
-        server.set_team_store(ts.clone());
         register_teams_handlers(
             &mut server,
             ts,

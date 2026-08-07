@@ -1266,6 +1266,95 @@ mod tests {
             assert!(
                 !index
                     .event_admits("team.t1.message", None, caller, &sessions, None)
+    /// The `if let` gate a call site sits directly under, scraped from source:
+    /// the last `if let` before `marker`, up to the `{` opening its block.
+    fn enclosing_if_let_gate(src: &str, marker: &str) -> String {
+        let at = src
+            .find(marker)
+            .unwrap_or_else(|| panic!("no `{marker}` in source — this pin has gone vacuous"));
+        let gate_start = src[..at].rfind("if let ").unwrap_or_else(|| {
+            panic!("`{marker}` sits under no `if let` at all — re-read this pin's doc")
+        });
+        let tail = &src[gate_start..];
+        let brace = tail
+            .find('{')
+            .unwrap_or_else(|| panic!("unterminated `if let` before `{marker}`"));
+        tail[..brace].to_string()
+    }
+
+    /// Every `*_store` binding a gate expression names, sorted and deduped.
+    fn stores_named(gate: &str) -> Vec<String> {
+        let mut v: Vec<String> = gate
+            .split(|c: char| !(c.is_alphanumeric() || c == '_'))
+            .filter(|t| t.ends_with("_store"))
+            .map(str::to_string)
+            .collect();
+        v.sort();
+        v.dedup();
+        v
+    }
+
+    /// SOURCE-level pin: the `TeamStore` handle this module needs in order to
+    /// resolve `team.<id>.*` must be installed under a condition no NARROWER
+    /// than the one registering the PRODUCER of those frames.
+    ///
+    /// `team_admits` denies outright when `teams` is `None` (pinned directly by
+    /// `a_team_topic_with_no_team_store_denies_everyone`), and that denial is
+    /// silent by design — refusal is the common case, so nothing logs it. So if
+    /// boot installs the resolver under a condition the producer does not
+    /// share, team group chat keeps publishing while EVERY connection, operator
+    /// included, drops the frames: no error on any surface, no log line.
+    ///
+    /// The narrower condition this pin was written against was `team_store &&
+    /// coord_task_store` — two different databases (`teams.db` / `coord.db`)
+    /// opened by two different files, where `coord.db` failing is an explicitly
+    /// supported warn-and-continue degraded boot. See 地雷 H in
+    /// `src/gateway/CLAUDE.md`.
+    ///
+    /// Source text is what is left to assert on: both sites are boot wiring in
+    /// the `aleph-server` binary target, reachable only by running `start`.
+    #[test]
+    fn the_team_resolver_gate_is_no_narrower_than_its_frame_producers_gate() {
+        const RESOLVER_SRC: &str = include_str!("../bin/aleph-server/commands/start/mod.rs");
+        const PRODUCER_SRC: &str =
+            include_str!("../bin/aleph-server/commands/start/builder/agent_init/mod.rs");
+        const RESOLVER_CALL: &str = "server.set_team_store(";
+        const PRODUCER_CALL: &str = ".register(\"teams.chat.send\"";
+
+        assert_eq!(
+            RESOLVER_SRC.matches(RESOLVER_CALL).count(),
+            1,
+            "expected exactly one `{RESOLVER_CALL}` in boot: zero means this pin has \
+             gone vacuous, more than one means a second install site needs its own \
+             gate checked here"
+        );
+        assert_eq!(
+            PRODUCER_SRC.matches(PRODUCER_CALL).count(),
+            1,
+            "expected exactly one `{PRODUCER_CALL}` registration; the scraper has \
+             stopped matching the call shape"
+        );
+
+        let resolver_gate = enclosing_if_let_gate(RESOLVER_SRC, RESOLVER_CALL);
+        let producer_gate = enclosing_if_let_gate(PRODUCER_SRC, PRODUCER_CALL);
+        let producer_needs = stores_named(&producer_gate);
+
+        assert!(
+            producer_needs.iter().any(|s| s == "team_store"),
+            "producer gate `{producer_gate}` names no team store — the scraper is \
+             reading the wrong `if let`"
+        );
+        for store in stores_named(&resolver_gate) {
+            assert!(
+                producer_needs.contains(&store),
+                "boot installs the `team.<id>.*` resolver under `{resolver_gate}`, \
+                 which requires `{store}`, but the frames' PRODUCER requires only \
+                 {producer_needs:?}. Whenever `{store}` is absent every connection — \
+                 operator included — silently denies team chat."
+            );
+        }
+    }
+
                     .await,
                 "with no TeamStore there is no honest answer for {caller:?}"
             );
