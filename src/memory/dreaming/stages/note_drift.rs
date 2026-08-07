@@ -284,7 +284,9 @@ async fn mark_contradictory(ctx: &DreamContext, path: &str, superseded_by: &str)
         return;
     }
 
-    // Reconcile notes_index/FTS/embedding/tags with the new disk content.
+    // Reconcile notes_index/FTS/embedding/tags with the new disk content —
+    // `index_file` runs the vector leg too, so the banner is part of what the
+    // note's embedding describes rather than drift the next boot merely counts.
     // Best-effort: a reindex failure must not abort the dream cycle.
     if let Some((category, _)) = path.split_once('/') {
         let _ = ctx
@@ -366,7 +368,9 @@ async fn mark_stale(ctx: &DreamContext, path: &str) {
         return;
     }
 
-    // Reconcile notes_index/FTS/embedding/tags with the new disk content.
+    // Reconcile notes_index/FTS/embedding/tags with the new disk content —
+    // `index_file` runs the vector leg too, so the banner is part of what the
+    // note's embedding describes rather than drift the next boot merely counts.
     // Best-effort: a reindex failure must not abort the dream cycle.
     if let Some((category, _)) = path.split_once('/') {
         let _ = ctx
