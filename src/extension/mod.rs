@@ -23,7 +23,6 @@
 //!                       (unified hooks)
 //! ```
 
-pub mod activation;
 pub mod config;
 pub mod discovery;
 pub mod hooks;
@@ -41,6 +40,7 @@ mod manager_global;
 pub mod manifest;
 pub mod mcp_config;
 mod plugin_ops;
+pub mod plugin_trust;
 pub mod registry;
 mod service_manager;
 mod service_ops;
@@ -177,7 +177,7 @@ pub struct ExtensionManager {
     /// in the allowlist. Default is `permissive()` (legacy behaviour:
     /// every plugin loads). Updated by [`Self::set_owner_trust_policy`].
     owner_trust_policy:
-        Arc<crate::sync_primitives::RwLock<crate::extension::activation::OwnerTrustPolicy>>,
+        Arc<crate::sync_primitives::RwLock<crate::extension::plugin_trust::OwnerTrustPolicy>>,
 
     /// Live MCP manager handle, used to register plugin-owned MCP servers as
     /// **transient** (runtime-only) servers. `None` until [`Self::set_mcp_handle`]
@@ -295,7 +295,7 @@ impl ExtensionManager {
             internal_writes: Arc::new(InternalWriteTracker::default()),
             reload_count: AtomicU64::new(0),
             owner_trust_policy: Arc::new(crate::sync_primitives::RwLock::new(
-                crate::extension::activation::OwnerTrustPolicy::permissive(),
+                crate::extension::plugin_trust::OwnerTrustPolicy::permissive(),
             )),
         })
     }
@@ -340,7 +340,7 @@ impl ExtensionManager {
     /// gate `Workspace` and `Global` plugins (Bundled/Config always pass).
     /// Pass [`OwnerTrustPolicy::permissive`] to revert to the legacy
     /// "load every plugin" behaviour.
-    pub fn set_owner_trust_policy(&self, policy: crate::extension::activation::OwnerTrustPolicy) {
+    pub fn set_owner_trust_policy(&self, policy: crate::extension::plugin_trust::OwnerTrustPolicy) {
         *self
             .owner_trust_policy
             .write()
@@ -351,7 +351,7 @@ impl ExtensionManager {
     /// `extensions.stat` / `plugin trust <id>` so operators can read what
     /// the manager is currently enforcing.
     #[must_use]
-    pub fn current_owner_trust_policy(&self) -> crate::extension::activation::OwnerTrustPolicy {
+    pub fn current_owner_trust_policy(&self) -> crate::extension::plugin_trust::OwnerTrustPolicy {
         self.owner_trust_policy
             .read()
             .unwrap_or_else(|e| e.into_inner())
