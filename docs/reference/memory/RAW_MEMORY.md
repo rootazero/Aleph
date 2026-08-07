@@ -191,6 +191,14 @@ See: [docs/superpowers/specs/2026-04-13-memory-evolution-spec1-capture-hooks-des
 
 The remaining ingestable rows are grouped by prompt-affecting source identity (a mixed drain MUST be split — the ingestor derives its per-source prompt from `raws[0].source`, so ungrouped Reflection/SessionEnd/Delegation rows would silently degrade to whichever source was fetched first). Each group goes through `CompoundIngestor::ingest_batch`, which writes/updates markdown notes under `<memory_dir>/<workspace>/<category>/<file>.md`; rows are marked processed per group right after that group's ingest settles (a failed group stays unprocessed and retries; an empty plan defers rows still within a 6-hour grace window). The latest `created_at` of the drained batch becomes the new `last_compression_timestamp`.
 
+#### Partitions a flush is responsible for
+
+`raw_memories` is keyed by `agent_id`, and **one session writes into more than one partition**: turn-level rows go through `project_scope::session_write_id` (composed with the project namespace and/or the session's personal scope when either axis is active) while the SessionEnd digest is filed under the bare agent id. The hourly background tick iterates `unprocessed_agent_ids()` and so covers all of them; the real-time flush (`memory::flush::flush_agent_memory`, Pillar 2) drained only the id it was handed.
+
+`flush_partitions` now resolves the base id **plus every composed sibling** (`{base}__…`) that currently holds unprocessed rows, and drains each. Without it, with project or personal scoping enabled, "real-time flush" was real time for the digest and up to an hour for everything the session actually said — while `FlushRegistry::await_ready`, keyed on the base id, told the next session the consolidation it was waiting for had finished.
+
+Matched on the `{base}__` prefix, never a bare `starts_with(base)`: `main` and `mainframe` are unrelated corpora, not parent and child. A failure to enumerate degrades to the base partition alone rather than skipping the flush.
+
 ### 7.2 recall_context
 
 `src/builtin_tools/recall_context.rs` is the LLM-facing tool that lets the model recover pre-compression conversation details. `RecallContextTool::call_impl` builds the path prefix `aleph://session/{session_id}/raw/` and calls `get_raw_by_path_prefix(prefix, "default", args.max_results)`. Each returned `RawMemory` becomes a `RecalledFragment { content, relevance_score: 1.0, source_path: r.path }`. The `aleph://session/{id}/raw/{seq}` convention is produced by `SessionCompactor::store_raw_chunk` (see §6.1); this is the only path scheme `recall_context` reads.
