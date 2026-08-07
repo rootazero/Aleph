@@ -61,6 +61,31 @@ pub async fn serve_webchat(
     Ok(())
 }
 
+/// Map a [`BuildRunError`] onto the wire.
+///
+/// One function, both real-engine handlers: a project denial must produce the
+/// SAME `RESOURCE_NOT_FOUND` shape `projects.get` produces for an id that was
+/// never minted, on `agent.run` and `chat.send` alike. Two hand-written
+/// mappings would drift, and the direction they drift in — one of them saying
+/// `INVALID_PARAMS: not a member` — is a cross-user existence oracle.
+fn build_run_error_response(
+    id: Option<serde_json::Value>,
+    err: alephcore::gateway::handlers::agent::BuildRunError,
+) -> alephcore::gateway::JsonRpcResponse {
+    use alephcore::gateway::handlers::agent::BuildRunError;
+    use alephcore::gateway::protocol::{INVALID_PARAMS, RESOURCE_NOT_FOUND};
+    match err {
+        BuildRunError::Invalid(msg) => {
+            alephcore::gateway::JsonRpcResponse::error(id, INVALID_PARAMS, msg)
+        }
+        BuildRunError::ProjectNotFound(pid) => alephcore::gateway::JsonRpcResponse::error(
+            id,
+            RESOURCE_NOT_FOUND,
+            format!("project not found: {pid}"),
+        ),
+    }
+}
+
 /// Handle agent.run with real `ExecutionEngine`
 ///
 /// `agent.run` is `chat.send` with a different param spelling — same router,
@@ -199,13 +224,18 @@ where
     // override, voice pin) is built by the one shared builder both this real
     // engine path and the Simulated-fallback `AgentRunManager::start_run`
     // call — see `gateway::handlers::agent::build_run_request`.
-    let run_request =
-        match build_run_request(run_id.clone(), &session_key, params, Some(&app_config)).await {
-            Ok(r) => r,
-            Err(e) => {
-                return alephcore::gateway::JsonRpcResponse::error(request.id, INVALID_PARAMS, e);
-            }
-        };
+    let run_request = match build_run_request(
+        run_id.clone(),
+        &session_key,
+        params,
+        Some(&app_config),
+        Some(&session_manager),
+    )
+    .await
+    {
+        Ok(r) => r,
+        Err(e) => return build_run_error_response(request.id, e),
+    };
 
     // Spawn onto the shared per-session busy wait lane (same queue the inbound
     // router uses for channel messages).
@@ -377,19 +407,19 @@ where
         exec_tier: params.exec_tier,
         mode: params.mode,
         voice_input: params.voice_input,
+        project_id: params.project_id,
     };
     let mut run_request = match build_run_request(
         run_id.clone(),
         &session_key,
         run_params,
         Some(&app_config),
+        Some(&session_manager),
     )
     .await
     {
         Ok(r) => r,
-        Err(e) => {
-            return alephcore::gateway::JsonRpcResponse::error(request.id, INVALID_PARAMS, e);
-        }
+        Err(e) => return build_run_error_response(request.id, e),
     };
 
     // Slash command detection: resolve via CommandParser and emit the

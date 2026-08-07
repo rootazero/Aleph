@@ -715,6 +715,71 @@ mod owner_scope_tests {
         assert_eq!(all_sessions.len(), 4, "no filter = every owner");
     }
 
+    /// The list path's half of project rooms (P2).
+    ///
+    /// A room's sessions are owned by whoever created them, so an
+    /// owner-equality filter hides them from every other member — the room
+    /// works when addressed directly but never appears in the sidebar, with no
+    /// error anywhere. This is the regression that pins both backends onto
+    /// `visibility::session_visible_to`.
+    async fn list_sessions_shows_a_member_a_room_they_did_not_create(store: Arc<dyn SessionStore>) {
+        let _guard = crate::projects::roster::TEST_GUARD
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let projects =
+            crate::projects::ProjectStore::new(rusqlite::Connection::open_in_memory().unwrap());
+        projects.create_schema().unwrap();
+        let room = projects.create("room", Some("u-alice"), None).unwrap();
+        projects.add_member(&room.id, "u-bob").unwrap();
+
+        // alice opens the room session and also has one of her own.
+        crate::scope::with_scope(
+            Some(ScopeAttribution {
+                owner_user_id: "u-alice".to_string(),
+                scope: crate::scope::ScopeId::Project(room.id.clone()),
+            }),
+            store.get_or_create(&key_for("room-1")),
+        )
+        .await
+        .unwrap();
+        crate::scope::with_scope(
+            Some(ScopeAttribution::personal("u-alice")),
+            store.get_or_create(&key_for("alice-private")),
+        )
+        .await
+        .unwrap();
+
+        let bob = store
+            .list_sessions(SessionFilter {
+                owner_visible_to: Some("u-bob".to_string()),
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+        assert_eq!(
+            bob.len(),
+            1,
+            "bob sees the room he is a member of and nothing else"
+        );
+        assert_eq!(
+            bob[0].scope_id.as_deref(),
+            Some(crate::scope::ScopeId::Project(room.id.clone()).render()).as_deref()
+        );
+
+        projects.remove_member(&room.id, "u-bob").unwrap();
+        let bob_after = store
+            .list_sessions(SessionFilter {
+                owner_visible_to: Some("u-bob".to_string()),
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+        assert!(
+            bob_after.is_empty(),
+            "removal from the roster takes the room out of the list immediately"
+        );
+    }
+
     #[tokio::test]
     async fn file_backend_owner_scope_stamping() {
         let temp = TempDir::new().unwrap();
@@ -726,6 +791,8 @@ mod owner_scope_tests {
         get_or_create_on_existing_session_never_restamps(file_store(&temp)).await;
         let temp = TempDir::new().unwrap();
         list_sessions_filters_by_owner_visible_to(file_store(&temp)).await;
+        let temp = TempDir::new().unwrap();
+        list_sessions_shows_a_member_a_room_they_did_not_create(file_store(&temp)).await;
     }
 
     #[tokio::test]
@@ -739,5 +806,7 @@ mod owner_scope_tests {
         get_or_create_on_existing_session_never_restamps(sqlite_store(&temp)).await;
         let temp = TempDir::new().unwrap();
         list_sessions_filters_by_owner_visible_to(sqlite_store(&temp)).await;
+        let temp = TempDir::new().unwrap();
+        list_sessions_shows_a_member_a_room_they_did_not_create(sqlite_store(&temp)).await;
     }
 }

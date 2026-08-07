@@ -115,7 +115,15 @@ pub fn PhoneComposer() -> impl IntoView {
 
         let session_key = chat.session_key.get_untracked();
         let agent_id = chat.agent_id.get_untracked();
-        let project_root = chat.active_project_root.get_untracked();
+        // Room conversations are entered from the wide Projects surface, but
+        // `ChatState` is shared with the phone composer at any viewport
+        // width, so the same room-vs-picker exclusivity applies here too.
+        let room_project_id = chat.room_project_id.get_untracked();
+        let project_root = if room_project_id.is_some() {
+            None
+        } else {
+            chat.active_project_root.get_untracked()
+        };
         // Tier every send, mode only on the first — one rule, one place.
         let (tier, mode) = session_dials_for_send(
             session_key.is_some(),
@@ -131,6 +139,7 @@ pub fn PhoneComposer() -> impl IntoView {
                 api_attachments,
                 agent_id.as_deref(),
                 project_root.as_deref(),
+                room_project_id.as_deref(),
                 // No per-turn model pill on phone: the agent's model governs.
                 None,
                 tier.as_deref(),
@@ -272,7 +281,12 @@ pub fn PhoneComposer() -> impl IntoView {
         }
         let session_key = chat.session_key.get_untracked();
         let agent_id = chat.agent_id.get_untracked();
-        let project_root = chat.active_project_root.get_untracked();
+        let room_project_id = chat.room_project_id.get_untracked();
+        let project_root = if room_project_id.is_some() {
+            None
+        } else {
+            chat.active_project_root.get_untracked()
+        };
         // Same rule as the typed send. A queue flush almost always has a live
         // session, so `mode` is `None` in practice — but not when the very
         // first thing a user does is queue two prompts.
@@ -303,6 +317,7 @@ pub fn PhoneComposer() -> impl IntoView {
                     api_attachments,
                     agent_id.as_deref(),
                     project_root.as_deref(),
+                    room_project_id.as_deref(),
                     None,
                     tier.as_deref(),
                     mode.as_deref(),

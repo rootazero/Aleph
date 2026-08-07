@@ -63,7 +63,10 @@ impl PromptLayer for RuntimeContextLayer {
         // here drops the `<parent>` element entirely; this is the common path
         // (primary user-facing session) so the prompt stays byte-identical
         // for the 99 % case.
-        let parent = ctx.envelope_parent.as_ref().map(|p| (p.kind.as_str(), p.id.as_str()));
+        let parent = ctx
+            .envelope_parent
+            .as_ref()
+            .map(|p| (p.kind.as_str(), p.id.as_str()));
         let block = runtime_ctx.to_environment_context_block(parent);
         output.push_str(&block);
         output.push_str("\n\n");

@@ -1626,10 +1626,25 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
         );
     }
 
-    // Project catalogue (~/.aleph/projects.json). Stateless store — every
-    // op re-reads under an fs2 lock so CLI/Panel writes stay consistent.
-    let project_store = Arc::new(alephcore::projects::ProjectStore::new());
-    register_projects_handlers(&mut server, &project_store, args.daemon);
+    // Project rooms (~/.aleph/data/projects.db). One shared connection for the
+    // whole process. `migrate()` creates the schema, adopts a pre-P2
+    // `projects.json` catalogue once, and publishes the roster projection that
+    // every visibility predicate reads. Degrade, never panic: a store that
+    // cannot migrate leaves the roster empty, which fails closed (no member
+    // sees any room) rather than open.
+    let project_store = alephcore::projects::ProjectStore::shared();
+    if let Err(e) = project_store.migrate() {
+        if !args.daemon {
+            eprintln!("Warning: Project store migration failed: {e}. Project rooms disabled.");
+        }
+        tracing::warn!(error = %e, "project store migration failed; rooms will be unavailable");
+    }
+    register_projects_handlers(
+        &mut server,
+        &project_store,
+        &auth_bundle.security_store,
+        args.daemon,
+    );
 
     // Cross-platform directory-browse RPCs that back the Panel's
     // `<DirectoryBrowser />`. Gated by `[projects].allowed_roots` (default
@@ -2449,6 +2464,9 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
                 agent_result.execution_adapter.clone(),
                 agent_result.agent_registry.clone(),
             );
+            // The resumed run's owner/scope comes off this store's persisted
+            // session row — see `ResumeCoordinator::stamp_persisted_scope`.
+            let sessions_for_resume = session_store_for_reconcile.clone();
             tokio::spawn(async move {
                 let rr = reconciler.reconcile_interrupted().await;
                 tracing::info!(
@@ -2474,6 +2492,7 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
                             resume_cfg,
                             exec_adapter,
                             registry,
+                            sessions_for_resume,
                         );
                         let report = coordinator.resume_interrupted_runs().await;
                         tracing::info!(

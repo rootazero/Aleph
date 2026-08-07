@@ -1,3 +1,4 @@
+pub mod projects;
 pub mod session_status_bar;
 pub mod sidebar_item;
 pub mod types;

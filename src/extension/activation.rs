@@ -251,6 +251,17 @@ pub enum ActivationReason {
     OnAgentHarness,
     /// Plugin declared `on_routes` and this is a `Route` trigger.
     OnRoute,
+    /// Plugin declared no `activation` block at all, so it keeps the
+    /// pre-planner behaviour: loaded eagerly at boot, therefore matching
+    /// every trigger.
+    ///
+    /// Distinct from an *empty* `activation` block, which matches nothing —
+    /// that is a config error the caller should warn about. This variant
+    /// exists so "matched because it is legacy" is expressible; without it
+    /// the legacy case would have to return an empty reason list, which
+    /// [`match_reasons`] already spends its last three lines defining as
+    /// "did not match".
+    LegacyAlwaysLoad,
 }
 
 /// A single `(plugin_id, origin, reasons)` triple in an [`ActivationPlan`].
@@ -363,9 +374,7 @@ impl OwnerTrustPolicy {
             // Bundled (built-in plugins) and Config (operator-explicit) are
             // always trusted — the operator put them there on purpose.
             PluginOrigin::Bundled | PluginOrigin::Config => true,
-            PluginOrigin::Workspace | PluginOrigin::Global => {
-                self.allowlist.contains(plugin_id)
-            }
+            PluginOrigin::Workspace | PluginOrigin::Global => self.allowlist.contains(plugin_id),
         }
     }
 }
@@ -479,7 +488,15 @@ fn match_reasons(
     // Legacy "always load" semantics: a plugin that declared no hints
     // (None) matches every trigger — it was loaded eagerly at boot, so
     // every caller should still see it.
-    let hints = hints?;
+    //
+    // This was `let hints = hints?;`, which is the exact inverse: `?` turns
+    // "no hints" into "no match", so every plugin predating the `activation`
+    // block — which today is all of them — would have been planned out of
+    // existence. Nothing caught it because the planner has no production
+    // caller yet, so only its own test could see the difference.
+    let Some(hints) = hints else {
+        return Some(vec![ActivationReason::LegacyAlwaysLoad]);
+    };
 
     // A plugin that *did* declare an `activation` block but left every
     // list empty matches nothing. That's a config error — surface as
@@ -663,15 +680,9 @@ mod tests {
             records: vec![record("p", PluginOrigin::Workspace, Some(&h))],
             trust: OwnerTrustPolicy::default(),
         };
-        let plan_tool = planner.plan(
-            ActivationTrigger::Capability(CapabilityKind::Tool),
-            &input,
-        );
+        let plan_tool = planner.plan(ActivationTrigger::Capability(CapabilityKind::Tool), &input);
         assert_eq!(plan_tool.plugin_ids, vec!["p".to_string()]);
-        let plan_hook = planner.plan(
-            ActivationTrigger::Capability(CapabilityKind::Hook),
-            &input,
-        );
+        let plan_hook = planner.plan(ActivationTrigger::Capability(CapabilityKind::Hook), &input);
         assert!(plan_hook.is_empty());
     }
 

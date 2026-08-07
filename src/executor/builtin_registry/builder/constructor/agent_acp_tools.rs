@@ -141,9 +141,13 @@ impl BuiltinToolRegistry {
                 Arc::clone(wm),
                 config.event_bus.clone(),
             );
-            let unbind =
-                agent_manage::AgentUnbindTool::new(Arc::clone(ar), Arc::clone(wm), config.event_bus.clone());
-            let update = agent_manage::AgentUpdateTool::new(Arc::clone(ar), config.agent_manager.clone());
+            let unbind = agent_manage::AgentUnbindTool::new(
+                Arc::clone(ar),
+                Arc::clone(wm),
+                config.event_bus.clone(),
+            );
+            let update =
+                agent_manage::AgentUpdateTool::new(Arc::clone(ar), config.agent_manager.clone());
 
             // Register agent tools WITH their parameter schemas so LLMs
             // know which arguments to pass.

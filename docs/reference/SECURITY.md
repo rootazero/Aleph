@@ -1282,6 +1282,123 @@ after (verified by `single_user_fixture_is_byte_identical_after_upgrade`,
 - **Explicitly out of scope for P1**: pushing routing/notifications TO
   members (spec §8, P3).
 
+### 项目房间层（P2）{#project-rooms-p2}
+
+P1 answers "can this identity see this row"; this layer adds the first
+SHARED scope with more than one legitimate reader-writer. Landed as the P2
+project-rooms plan (`docs/superpowers/plans/2026-08-06-p2-project-rooms.md`):
+`projects` promoted to a SQLite entity with `owner_user_id` + a
+`project_members` roster, sessions openable in `ScopeId::Project`, memory
+routed to the room partition (`p-*` suffix family), per-message author
+attribution, and a bound workspace as the room's default cwd.
+
+- **Membership IS the authorization model — there are no per-resource
+  grants.** One roster row answers every question for that project: session
+  visibility, memory-partition visibility, event delivery, RPC access. There
+  is no per-session ACL, no per-note sharing, no capability tokens inside a
+  room. Adding a member grants everything the room contains at once;
+  removing them revokes everything at once (and the removal is immediate —
+  the roster projection (`src/projects/roster.rs`) is published by the
+  store inside its own write lock, so the next predicate evaluation already
+  excludes them). Anything needing finer sharing than "in the room / not in
+  the room" is a different feature, not a variation of this one.
+- **`owner_user_id` means CREATOR, not "the one who can see it."** The P1
+  vocabulary (`effective_owner`, adoption-by-absence) keeps working for
+  personal rows, but for a project row the owner column only decides
+  owner-only verbs (rename, archive, roster mutation, workspace binding).
+  Visibility is the roster, full stop. Any new predicate that reaches for
+  `owner_user_id` to answer a can-see question re-opens the bug class P2's
+  roster predicates (`projects::roster::is_member`, reached through
+  `visibility::project_visible` / `session_visible_to` / `partition_visible`)
+  exist to prevent.
+- **`not_found` vs `forbidden` — the boundary is visibility, not
+  politeness.** A caller who cannot SEE the project (not on the roster) gets
+  the byte-identical `RESOURCE_NOT_FOUND` of P1 — confirming existence is a
+  leak (`gate_project`). A caller who can see it but lacks the ROLE for an
+  owner-only verb gets an honest `PERMISSION_DENIED` (`require_owner`) —
+  they already know the room exists, so "forbidden" leaks nothing and is
+  actionable ("ask the owner"). Pinned by
+  `a_stranger_binding_gets_not_found_not_permission_denied`.
+- **The workspace binding is a privilege, and it has three writers.**
+  Turning `workspace_path` into the room's runtime cwd (a dormant display
+  field waking up) retroactively made every writer of that column a
+  directory-choice authority: `projects.add`, `projects.create_blank`, and
+  `projects.bind_workspace` all carry the same
+  `caller_identity::caller_may_choose_directory()` gate (config-tier OR
+  loopback) — the same predicate `agent.run`'s explicit `project_root`
+  param enforces. Without the write-side gate, "register a folder, then
+  chat in it" is a two-step route to an arbitrary server directory in which
+  both steps are individually legal. Unbinding is a de-escalation and is
+  deliberately exempt — it must stay reachable from the connection that got
+  stuck. Members do NOT need the gate to *use* the room's binding: the
+  owner chose the directory through a gated verb; the member only inherits
+  that choice.
+- **Author attribution is display-grade, not signature-grade.** The
+  `[name]` speaker labels a room prompt carries come from
+  `SessionEvent::UserMessage.author_user_id`, stamped server-side from the
+  authenticated caller — a member cannot forge the LABEL. There is
+  deliberately no request parameter anywhere in the chain:
+  `build_run_request` reads `caller_identity::current_caller_user()` into
+  `AUTHOR_USER_KEY`, and every emission site takes the label from that key —
+  `scope::room_author_from_metadata` for the four sites that hold the request,
+  and `scope::ambient_room_author` for the three `session_seed` sites, which
+  hold neither the request nor `CALLER_USER` and read a task-local instead.
+  A turn that carries no author at all — a legacy row, or a channel-driven run
+  whose inbound router stamps the scope but not the speaker — falls back to the
+  room's own `owner_user_id`; that is a wrong-but-honest label on a turn
+  nobody claimed, not a forgeable one.
+
+  **The failure mode to watch for is the label degrading to that fallback on a
+  turn that DID name its author**, because it degrades silently and the wrong
+  answer is plausible: every member's run in a room carries the ROOM's
+  attribution (that is what shares the memory partition), so the fallback names
+  the session's creator on everyone's message. It has one cause — the author
+  task-local being dropped at a boundary the scope survives. `with_room_author`
+  is therefore seeded at exactly the two places `with_scope` is
+  (`run_loop::with_request_scope`, and inside `orchestrator::dispatch`'s
+  `tokio::spawn`), and any new spawn between a seeding point and an emission
+  site owes the same capture-and-re-seed pair. Pinned across the real dispatch
+  spawn by `tests/gateway_chat_room_author_across_spawn.rs`; a test that nests
+  the two task-locals in one task cannot see this class of break. But message
+  BODIES are unauthenticated prose: a member can still type
+  `\n[someone-else]: …` inside their own message. Deliberate (recorded at
+  `speaker_label`): room members are same-server operators under the
+  single-layer trust model; rewriting user prose to defend against peers of
+  equal privilege costs more than it buys.
+- **The §11 honesty boundary applies unchanged.** Project isolation is
+  privacy-grade, exactly like P1 — it prevents ACCIDENTAL cross-room and
+  cross-user exposure between cooperating users. All three §11 hard
+  boundaries hold for rooms too: members share one process and one OS
+  account; the vault is org-level, not per-room; org-tier memory remains
+  org-shared. A room does not partition the sandbox, the filesystem, or the
+  credential store — two rooms with bound workspaces are two directories,
+  not two trust domains.
+- **Known gaps (deliberate, recorded, not silently dropped):**
+  1. **Two Panels in the same room don't see each other's messages live.**
+     `chat_sidebar.rs`'s `run.session_updated` handler reads
+     `origin_channel == "gui:chat"` as "my own update, skip rehydrate", but
+     every Panel connection sends that same literal — so a second member
+     only sees new room messages on reselect/reload. Pre-existing, but
+     rooms are the FIRST surface where two different Panel connections
+     legitimately watch one session. The fix is a connection-level origin
+     identity on the event; user ruling 2026-08-06: ship P2 without it.
+  2. `projects.*` has no tool surface (R8 gap): rooms can only be managed
+     over RPC (Panel), not by conversation. Pre-existing family shape —
+     the whole `projects.*` namespace was RPC-only before P2.
+  3. Channel-originated runs bypass `build_run_request`, so a channel
+     session cannot acquire a room's bound workspace (or a room scope at
+     all). The P2 acceptance surface is the Panel; channels-into-rooms is
+     spec §11-3 / P4.
+  4. `resume_coordinator::retrigger` does not re-check the binding: a
+     resumed room run whose folder vanished degrades to the agent workspace
+     (background sweep, nobody to tell) where `build_run_request` refuses
+     loudly (a human is there). The asymmetry is deliberate and documented
+     at both sites.
+  5. `[projects] allowed_roots` (the `fs.*` browse fence) is NOT layered
+     onto the three binding writers — the config-tier gate above is the
+     only fence. Layering it on would change existing picker behaviour; a
+     separate product decision.
+
 ### Network boundary = reachability
 
 - **Default — loopback only.** `aleph-server` binds `127.0.0.1`

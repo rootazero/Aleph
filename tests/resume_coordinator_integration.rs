@@ -16,6 +16,8 @@ use alephcore::gateway::agent_instance::AgentRegistry;
 use alephcore::gateway::event_emitter::EventEmitter;
 use alephcore::gateway::execution_adapter::ExecutionAdapter;
 use alephcore::gateway::execution_engine::{ExecutionError, RunRequest, RunStatus};
+use alephcore::gateway::session_store::file_backend::{FileSessionStore, FileSessionStoreConfig};
+use alephcore::gateway::session_store::SessionStore;
 use alephcore::gateway::ResumeCoordinator;
 use alephcore::routing::session_key::SessionKey;
 use alephcore::session::events::{now_ms, RunOutcome, SessionEvent, TurnId};
@@ -103,6 +105,30 @@ fn store() -> Arc<dyn SessionEventStore> {
     Arc::new(SqliteEventStore::new(conn))
 }
 
+/// A real `SessionStore` in its own directory, so parallel tests in this
+/// binary cannot see each other's session rows.
+///
+/// The coordinator reads the resumed session's persisted owner/scope from
+/// here. A test that seeds no row gets the legacy/pre-P1 shape — no row, no
+/// scope stamp, resume behaves exactly as it did before P1.
+fn sessions() -> Arc<dyn SessionStore> {
+    static ROOT: std::sync::OnceLock<tempfile::TempDir> = std::sync::OnceLock::new();
+    static NEXT: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+    let n = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let base = ROOT
+        .get_or_init(|| tempfile::tempdir().expect("tempdir"))
+        .path()
+        .join(format!("sessions-{n}"));
+    std::fs::create_dir_all(&base).expect("session dir");
+    Arc::new(
+        FileSessionStore::new(FileSessionStoreConfig {
+            base_dir: base,
+            ..Default::default()
+        })
+        .expect("file session store"),
+    )
+}
+
 /// Process-global goal store shared by every test in this binary —
 /// `goal::init_global` is a first-set-wins `OnceCell`, so tests must share
 /// one store and distinguish themselves by unique session keys.
@@ -142,6 +168,7 @@ async fn seed_interrupted_run(store: &Arc<dyn SessionEventStore>, sid: &SessionK
             },
             at: at + 1,
             synthetic: false,
+            author_user_id: None,
         },
         SessionEvent::RunStarted {
             run_id: "run-1".into(),
@@ -165,6 +192,63 @@ async fn seed_interrupted_run(store: &Arc<dyn SessionEventStore>, sid: &SessionK
     }
 }
 
+/// I2: a resumed run in a project room must reach the engine carrying the
+/// ROOM's scope, not just its folder.
+///
+/// Driven through the whole production path — a real session row stamped by
+/// `get_or_create` under the room's ambient scope, the real boot scan, and the
+/// metadata the `ExecutionAdapter` actually receives — because the defect was
+/// precisely that `retrigger` built its metadata without ever consulting the
+/// row. `run_loop::with_request_scope` reads this map and nothing else, and
+/// `scope_from_metadata` is fail-closed: an unstamped resume runs unscoped and
+/// writes the room's memory to the base partition, which is org-tier and shared
+/// with every user.
+#[tokio::test]
+async fn a_resumed_room_run_reaches_the_engine_with_the_rooms_scope() {
+    let store = store();
+    let sid = SessionKey::main("resume-scope");
+    seed_interrupted_run(&store, &sid).await;
+
+    // The durable row the coordinator has to rehydrate from, written the way
+    // production writes it: `get_or_create` stamps whatever scope is ambient.
+    let sessions = sessions();
+    alephcore::scope::with_scope(
+        Some(alephcore::scope::ScopeAttribution {
+            owner_user_id: "u-alice".to_string(),
+            scope: alephcore::scope::ScopeId::Project("p-standup".to_string()),
+        }),
+        sessions.get_or_create(&sid),
+    )
+    .await
+    .expect("session row");
+
+    let adapter = Arc::new(RecordingAdapter::new());
+    let calls = adapter.calls.clone();
+    let registry = registry_with_agent(sid.agent_id()).await;
+
+    let coordinator = ResumeCoordinator::new(
+        store.clone(),
+        ResumeConfig::default(),
+        adapter as Arc<dyn ExecutionAdapter>,
+        registry,
+        sessions,
+    );
+    assert_eq!(coordinator.resume_interrupted_runs().await.resumed, 1);
+
+    let calls = calls.lock().await;
+    let (_key, metadata) = calls.first().expect("the resumed run reached the adapter");
+    // Assert through the consumer, not the raw keys: this is the exact call
+    // `with_request_scope` makes on the way into the run.
+    let scope = alephcore::scope::scope_from_metadata(metadata)
+        .expect("a resumed room run must carry a scope");
+    assert_eq!(
+        scope.scope,
+        alephcore::scope::ScopeId::Project("p-standup".to_string()),
+        "the resumed run must stay in the room, not fall back to the org partition"
+    );
+    assert_eq!(scope.owner_user_id, "u-alice");
+}
+
 #[tokio::test]
 async fn interrupted_run_is_repaired_and_retriggered() {
     let store = store();
@@ -180,6 +264,7 @@ async fn interrupted_run_is_repaired_and_retriggered() {
         ResumeConfig::default(),
         adapter as Arc<dyn ExecutionAdapter>,
         registry,
+        sessions(),
     );
     let report = coordinator.resume_interrupted_runs().await;
 
@@ -232,6 +317,7 @@ async fn disabled_config_never_triggers_execute() {
         cfg,
         adapter as Arc<dyn ExecutionAdapter>,
         registry,
+        sessions(),
     );
     let report = coordinator.resume_interrupted_runs().await;
 
@@ -299,6 +385,7 @@ async fn crash_loop_cap_abandons_instead_of_retriggering() {
         ResumeConfig::default(),
         adapter as Arc<dyn ExecutionAdapter>,
         registry,
+        sessions(),
     );
     let report = coordinator.resume_interrupted_runs().await;
 
@@ -384,6 +471,7 @@ async fn crash_loop_cap_abandons_instead_of_retriggering() {
         ResumeConfig::default(),
         Arc::new(RecordingAdapter::new()) as Arc<dyn ExecutionAdapter>,
         registry_with_agent(passive_sid.agent_id()).await,
+        sessions(),
     );
     coordinator2.resume_interrupted_runs().await;
     assert_eq!(
@@ -434,6 +522,7 @@ async fn too_old_candidate_abandons_and_blocks_the_goal() {
         ResumeConfig::default(),
         adapter as Arc<dyn ExecutionAdapter>,
         registry,
+        sessions(),
     );
     let report = coordinator.resume_interrupted_runs().await;
 
@@ -513,6 +602,7 @@ async fn resumed_channel_run_reinherits_the_channels_guest_clamp_and_deny_layer(
         ResumeConfig::default(),
         adapter as Arc<dyn ExecutionAdapter>,
         registry,
+        sessions(),
     );
     let report = coordinator.resume_interrupted_runs().await;
     assert_eq!(report.resumed, 1);
@@ -565,6 +655,7 @@ async fn resumed_run_with_no_routable_origin_is_marked_unattended() {
         ResumeConfig::default(),
         adapter as Arc<dyn ExecutionAdapter>,
         registry,
+        sessions(),
     );
     assert_eq!(coordinator.resume_interrupted_runs().await.resumed, 1);
 

@@ -30,10 +30,17 @@ use super::engine::ExecutionEngine;
 // Agent loop execution
 // ============================================================================
 
-/// Establishes this run's scope attribution (owner/scope) as a task-local for
-/// `fut`'s duration, derived from `request.metadata` — see
-/// [`crate::scope::stamp_metadata`] at the two origin sites
-/// (`build_run_request`, the channel inbound router's `execute_for_context_inner`).
+/// Establishes this run's scope attribution (owner/scope) and this turn's
+/// speaker as task-locals for `fut`'s duration, both derived from
+/// `request.metadata` — see [`crate::scope::stamp_metadata`] and
+/// [`super::AUTHOR_USER_KEY`] at the two origin sites (`build_run_request`, the
+/// channel inbound router's `execute_for_context_inner`).
+///
+/// The two travel together on purpose. The scope names the ROOM, the author
+/// names whoever is typing, and in a project room those genuinely differ; the
+/// main path's user-message writer (`harness_bridge::session_seed`) reaches
+/// neither the request nor `CALLER_USER`, so seeding both here is what keeps
+/// the transcript label and the memory partition talking about the same turn.
 ///
 /// Extracted from [`ExecutionEngine::run_agent_loop`]'s wrapping nest for
 /// testability: unlike the other layers in that nest (agent id, project
@@ -43,7 +50,12 @@ pub(super) async fn with_request_scope<F, T>(request: &RunRequest, fut: F) -> T
 where
     F: std::future::Future<Output = T>,
 {
-    crate::scope::with_scope(crate::scope::scope_from_metadata(&request.metadata), fut).await
+    let author = request.metadata.get(super::AUTHOR_USER_KEY).cloned();
+    crate::scope::with_scope(
+        crate::scope::scope_from_metadata(&request.metadata),
+        crate::scope::with_room_author(author, fut),
+    )
+    .await
 }
 
 impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionEngine<P, R> {

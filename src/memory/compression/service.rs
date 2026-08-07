@@ -360,7 +360,24 @@ impl CompressionService {
             // ProfileSynthesizer fires INDEPENDENTLY of compound ingest
             // result: a malformed LLM plan must not block USER.md updates.
             // Fire-and-forget, never block the compression flow.
-            if let Some(ps) = self.profile_synthesizer.clone() {
+            //
+            // …except in a shared project room (P2), where "whose USER.md" has
+            // no answer. This scheduler runs on a background task over
+            // `SELECT DISTINCT agent_id FROM raw_memories`, long after the runs
+            // that wrote those rows finished, so the ambient scope is gone and
+            // the partition id is all we have — hence the id-shaped twin of
+            // `profile_floor_id`. Without this the room's compaction summaries
+            // would synthesize a "user profile" out of several people's turns,
+            // once per session end, into a file the `user_profile` tool (which
+            // reads the BASE id) can never read back.
+            if self.profile_synthesizer.is_some()
+                && crate::memory::project_scope::partition_is_shared_room(workspace_id)
+            {
+                tracing::debug!(
+                    partition = %workspace_id,
+                    "ProfileSynthesizer: skipped — a shared room has no single user to profile"
+                );
+            } else if let Some(ps) = self.profile_synthesizer.clone() {
                 let session_end_raws: Vec<_> = raw_memories
                     .iter()
                     .filter(|r| matches!(&r.source, RawMemorySource::SessionEnd { .. }))

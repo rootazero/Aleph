@@ -103,16 +103,60 @@ pub fn ambient_owner_visible(owner_user_id: Option<&str>) -> bool {
     }
 }
 
+/// Whether the current gateway caller may see records scoped to `project_id`
+/// (P2 project rooms).
+///
+/// **Membership IS the authorization** (spec §6.1) — v1 has no per-resource
+/// grants, so "is the actor on this room's roster" is the whole predicate.
+/// The unrestricted arm comes first, exactly as in every other predicate in
+/// this module, so cron / A2A / in-process callers are unchanged.
+#[must_use]
+pub fn project_visible(project_id: &str) -> bool {
+    match visible_owner_filter() {
+        None => true,
+        Some(caller) => crate::projects::roster::is_member(project_id, &caller),
+    }
+}
+
+/// Whether `meta` is visible to `actor` — the EXPLICIT-actor form of
+/// [`session_visible`].
+///
+/// List filtering receives the actor as a
+/// [`SessionFilter::owner_visible_to`](crate::gateway::session_store::types::SessionFilter)
+/// string rather than through the task-local, and both `SessionStore` backends
+/// filter in memory, so this is the one predicate they share. Keeping it here
+/// rather than at the two `retain` sites is what stops the project rule from
+/// being enforced on one backend and not the other.
+///
+/// A project-scoped session is a shared room: its `owner_user_id` records WHO
+/// CREATED IT, which is not the visibility question. Ask the roster instead —
+/// otherwise a member sees the room's messages (they can address the session)
+/// but the room never appears in their session list, with no error anywhere.
+#[must_use]
+pub fn session_visible_to(meta: &SessionMetadata, actor: &str) -> bool {
+    if let Some(crate::scope::ScopeId::Project(p)) = meta
+        .scope_id
+        .as_deref()
+        .and_then(crate::scope::ScopeId::parse)
+    {
+        return crate::projects::roster::is_member(&p, actor);
+    }
+    effective_owner(meta) == actor
+}
+
 /// Whether `meta` is visible to the current caller.
 ///
 /// An unrestricted caller (see [`visible_owner_filter`]) sees every session.
-/// A scoped caller sees only sessions whose [`effective_owner`] equals their
-/// own user id — legacy rows (`owner_user_id: None`) read as owned by
-/// [`OWNER_USER_ID`], so only that user (or an unrestricted caller) sees
-/// them, matching Global Constraint 2.
+/// A scoped caller sees their own sessions — legacy rows
+/// (`owner_user_id: None`) read as owned by [`OWNER_USER_ID`], so only that
+/// user (or an unrestricted caller) sees them, matching Global Constraint 2 —
+/// plus every session in a project room they are on the roster of.
 #[must_use]
 pub fn session_visible(meta: &SessionMetadata) -> bool {
-    stamped_owner_visible(meta.owner_user_id.as_deref())
+    match visible_owner_filter() {
+        None => true,
+        Some(caller) => session_visible_to(meta, &caller),
+    }
 }
 
 /// The response for an addressed-key visibility failure.
@@ -164,10 +208,9 @@ pub async fn existing_session_is_visible(store: &dyn SessionStore, key: &Session
 ///   IS the owning user's id verbatim (see that module's doc), so this is a
 ///   direct string comparison, not a second parse of the suffix.
 ///
-/// Unknown suffix families (anything that is not `proj-` and does not match
-/// the caller) fail closed for a scoped caller — there is no positive-match
-/// arm for them, so e.g. a `p-*` (project scope, P2) partition is invisible
-/// to every member until P2 adds the membership check that would let one in.
+/// Unknown suffix families (anything that is not `proj-`, not `p-`, and does
+/// not match the caller) fail closed for a scoped caller — there is no
+/// positive-match arm for them.
 #[must_use]
 pub fn partition_visible(partition_id: &str) -> bool {
     let Some((_base, suffix)) = partition_id.split_once(crate::memory::project_scope::NS_SEP)
@@ -176,6 +219,13 @@ pub fn partition_visible(partition_id: &str) -> bool {
     };
     if suffix.starts_with("proj-") {
         return true;
+    }
+    // `p-*` (project scope): the roster decides. Checked AFTER `proj-` so the
+    // legacy directory family keeps its org-tier ruling — note `"proj-…"` does
+    // not start with `"p-"`, so the two families cannot collide (pinned by
+    // `projects::store::tests::the_project_id_family_cannot_collide_with_the_legacy_directory_family`).
+    if suffix.starts_with("p-") {
+        return project_visible(suffix);
     }
     match visible_owner_filter() {
         None => true,
@@ -364,6 +414,178 @@ mod tests {
         );
     }
 
+    // ── P2 project rooms ────────────────────────────────────────────────
+
+    /// Build a room owned by alice with `extra` also on the roster.
+    ///
+    /// Holds `roster::TEST_GUARD` for the caller's lifetime — `publish`
+    /// replaces the process-global snapshot, so parallel roster tests erase
+    /// each other without it.
+    fn room_with(extra: &[&str]) -> (crate::projects::Project, std::sync::MutexGuard<'static, ()>) {
+        let guard = crate::projects::roster::TEST_GUARD
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let store =
+            crate::projects::ProjectStore::new(rusqlite::Connection::open_in_memory().unwrap());
+        store.create_schema().unwrap();
+        let p = store.create("room", Some("u-alice"), None).unwrap();
+        for u in extra {
+            store.add_member(&p.id, u).unwrap();
+        }
+        (p, guard)
+    }
+
+    fn project_session(project_id: &str, creator: &str) -> SessionMetadata {
+        SessionMetadata {
+            owner_user_id: Some(creator.to_string()),
+            scope_id: Some(crate::scope::ScopeId::Project(project_id.to_string()).render()),
+            ..Default::default()
+        }
+    }
+
+    /// The whole point of a room: a member who did NOT create the session can
+    /// still see it. Ownership answers "who made this", not "who may look".
+    #[tokio::test]
+    async fn a_project_session_is_visible_to_every_member_not_just_its_creator() {
+        let (p, _guard) = room_with(&["u-bob"]);
+        let meta = project_session(&p.id, "u-alice");
+
+        assert!(
+            CALLER_USER
+                .scope(Some("u-bob".to_string()), async { session_visible(&meta) })
+                .await,
+            "membership, not ownership, decides for a project session"
+        );
+        assert!(
+            !CALLER_USER
+                .scope(Some("u-carol".to_string()), async {
+                    session_visible(&meta)
+                })
+                .await,
+            "a non-member sees nothing"
+        );
+        assert!(
+            session_visible(&meta),
+            "unrestricted internal callers are unchanged"
+        );
+    }
+
+    /// spec §10: 移出项目成员立即失去可见性. No cache to invalidate, no
+    /// reconnect required.
+    #[tokio::test]
+    async fn removing_a_member_revokes_visibility_immediately() {
+        let guard = crate::projects::roster::TEST_GUARD
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let store =
+            crate::projects::ProjectStore::new(rusqlite::Connection::open_in_memory().unwrap());
+        store.create_schema().unwrap();
+        let p = store.create("room", Some("u-alice"), None).unwrap();
+        store.add_member(&p.id, "u-bob").unwrap();
+        let meta = project_session(&p.id, "u-alice");
+
+        assert!(
+            CALLER_USER
+                .scope(Some("u-bob".to_string()), async { session_visible(&meta) })
+                .await
+        );
+        store.remove_member(&p.id, "u-bob").unwrap();
+        assert!(
+            !CALLER_USER
+                .scope(Some("u-bob".to_string()), async { session_visible(&meta) })
+                .await,
+            "revocation must be immediate"
+        );
+        drop(guard);
+    }
+
+    /// The list path and the addressed path must agree. They are different
+    /// functions (`session_visible_to` takes the actor explicitly because both
+    /// store backends filter in memory from a `SessionFilter` string), so this
+    /// pins that they cannot drift.
+    #[tokio::test]
+    async fn the_explicit_actor_form_agrees_with_the_task_local_form() {
+        let (p, _guard) = room_with(&["u-bob"]);
+        let meta = project_session(&p.id, "u-alice");
+
+        for (actor, expected) in [("u-bob", true), ("u-carol", false)] {
+            assert_eq!(session_visible_to(&meta, actor), expected);
+            assert_eq!(
+                CALLER_USER
+                    .scope(Some(actor.to_string()), async { session_visible(&meta) })
+                    .await,
+                expected,
+                "actor {actor}"
+            );
+        }
+    }
+
+    /// A personal session inside a member's account is NOT visible to their
+    /// room-mates. Sharing a project does not share everything else.
+    #[tokio::test]
+    async fn sharing_a_room_does_not_share_personal_sessions() {
+        let (_p, _guard) = room_with(&["u-bob"]);
+        let personal = SessionMetadata {
+            owner_user_id: Some("u-alice".to_string()),
+            scope_id: Some(crate::scope::ScopeId::Personal("u-alice".into()).render()),
+            ..Default::default()
+        };
+        assert!(
+            !CALLER_USER
+                .scope(Some("u-bob".to_string()), async {
+                    session_visible(&personal)
+                })
+                .await
+        );
+    }
+
+    /// The memory partition follows the same roster.
+    #[tokio::test]
+    async fn a_project_partition_follows_the_roster() {
+        let (p, _guard) = room_with(&[]);
+        let partition = format!("main__{}", p.id);
+
+        assert!(
+            CALLER_USER
+                .scope(Some("u-alice".to_string()), async {
+                    partition_visible(&partition)
+                })
+                .await
+        );
+        assert!(
+            !CALLER_USER
+                .scope(Some("u-bob".to_string()), async {
+                    partition_visible(&partition)
+                })
+                .await
+        );
+        // The legacy project-DIRECTORY family is a different thing and keeps
+        // its org-tier ruling — it must not be swept up by the new `p-` arm.
+        assert!(
+            CALLER_USER
+                .scope(Some("u-bob".to_string()), async {
+                    partition_visible("main__proj-deadbeef")
+                })
+                .await
+        );
+    }
+
+    /// An unknown room id is invisible, not an error and not a grant.
+    #[tokio::test]
+    async fn an_unknown_project_is_invisible_to_a_scoped_caller() {
+        assert!(
+            !CALLER_USER
+                .scope(Some("u-alice".to_string()), async {
+                    project_visible("p-never-created")
+                })
+                .await
+        );
+        assert!(
+            project_visible("p-never-created"),
+            "…but an unrestricted caller is unchanged"
+        );
+    }
+
     /// The full partition matrix pinned by the Task 7 brief: (suffix family,
     /// caller) → expected. Each case scopes `CALLER_USER` around the read so
     /// task-local state never leaks between cases.
@@ -416,10 +638,9 @@ mod tests {
         // ...and visible to an unrestricted (internal/cron) caller.
         assert!(partition_visible("main__u-alice"));
 
-        // Unknown suffix family (not `proj-`, not the caller's own id): fails
-        // closed for a scoped member even though it superficially "looks
-        // like" a partition suffix (e.g. a future `p-*` project scope before
-        // P2 wires membership).
+        // A `p-` suffix that names no room on this caller's roster fails
+        // closed — `partition_visible` never grants on the shape of a suffix,
+        // only on the roster behind it.
         assert!(
             !CALLER_USER
                 .scope(Some("u-alice".to_string()), async {

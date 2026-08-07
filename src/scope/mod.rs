@@ -22,6 +22,8 @@
 
 use std::collections::HashMap;
 
+pub mod directory;
+
 /// A scope identifier representing the visibility boundary for an agent or resource.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ScopeId {
@@ -130,6 +132,7 @@ pub const SCOPE_META_KEY: &str = "scope_id";
 
 tokio::task_local! {
     static CURRENT_ATTRIBUTION: Option<ScopeAttribution>;
+    static CURRENT_ROOM_AUTHOR: Option<String>;
 }
 
 /// Run `fut` with the given scope attribution visible to [`current_scope`] for
@@ -178,6 +181,97 @@ pub fn current_scope() -> Option<ScopeAttribution> {
 pub fn ambient_owner() -> Option<String> {
     crate::gateway::caller_identity::current_caller_user()
         .or_else(|| current_scope().map(|attr| attr.owner_user_id))
+}
+
+/// Who to stamp as the author of a `SessionEvent::UserMessage` written under
+/// `scope` — or `None` when the message cannot have a second possible author.
+///
+/// Single source for spec §6.2's "only project rooms are labelled". A personal
+/// or org session has exactly one human in it, so an author stamp there is
+/// noise that buys nothing and costs prompt bytes on every replayed message.
+///
+/// `author` is this turn's speaker, carried on the request as
+/// [`crate::gateway::execution_engine::AUTHOR_USER_KEY`] and stamped by
+/// `handlers::agent::build_run_request` from the authenticated caller. It is
+/// passed explicitly because neither ambient mechanism can answer the question
+/// at an emission site: every emission runs inside a spawned run, where
+/// `CALLER_USER` is dead, and `scope.owner_user_id` names the ROOM's owner —
+/// that is precisely what makes the members share one memory partition, so
+/// reading it labels every member's message with whoever created the session.
+///
+/// `attr.owner_user_id` remains the fallback for a turn that carries no author
+/// at all: a legacy row, or a channel-driven run whose inbound router stamps
+/// the scope but not the speaker.
+#[must_use]
+pub fn room_author(scope: Option<&ScopeAttribution>, author: Option<&str>) -> Option<String> {
+    let attr = scope?;
+    if !matches!(attr.scope, ScopeId::Project(_)) {
+        return None;
+    }
+    Some(author.map_or_else(|| attr.owner_user_id.clone(), str::to_string))
+}
+
+/// [`room_author`] for a caller holding the request's metadata map — the shape
+/// `fast_path`, `SimpleExecutionEngine` and the steering writer need, none of
+/// which enters the run's task-local nest.
+///
+/// Reads BOTH facts out of the one map, so a fifth emission site cannot pick up
+/// the scope and forget the speaker — which is exactly how the label came to
+/// name the session's creator on every turn.
+#[must_use]
+pub fn room_author_from_metadata(meta: &HashMap<String, String>) -> Option<String> {
+    room_author(
+        scope_from_metadata(meta).as_ref(),
+        meta.get(crate::gateway::execution_engine::AUTHOR_USER_KEY)
+            .map(String::as_str),
+    )
+}
+
+/// Run `fut` with `author` visible to [`ambient_room_author`].
+///
+/// **Seeded at exactly the two places [`with_scope`] is, and it must stay that
+/// way.** The author and the scope answer two halves of one question — who is
+/// speaking, and which room they are speaking in — so a boundary that carries
+/// one without the other produces a confidently wrong label rather than a
+/// missing one:
+///
+/// 1. `run_loop::with_request_scope`, from the request's `AUTHOR_USER_KEY`.
+/// 2. `orchestrator::dispatch`, re-seeded inside its `tokio::spawn` from a
+///    value captured on the caller's side — task-locals do not cross a spawn,
+///    and the main path's user-message writer
+///    (`harness_bridge::session_seed`) lives on the far side of that one.
+///
+/// A new spawn boundary between a seeding point and an emission site owes the
+/// same capture-and-re-seed pair. Getting it wrong is silent: see
+/// [`room_author`] for what the fallback then reports.
+pub async fn with_room_author<F, T>(author: Option<String>, fut: F) -> T
+where
+    F: std::future::Future<Output = T>,
+{
+    CURRENT_ROOM_AUTHOR.scope(author, fut).await
+}
+
+/// This turn's speaker, if one was seeded by [`with_room_author`].
+#[must_use]
+pub fn current_room_author() -> Option<String> {
+    CURRENT_ROOM_AUTHOR.try_with(Clone::clone).ok().flatten()
+}
+
+/// Ambient-shaped twin of [`room_author`], for emission sites that run inside
+/// the run's task-local nest (everything under
+/// `gateway::execution_engine::run_loop::with_request_scope`, which is where
+/// `harness_bridge::session_seed` writes the main path's user message).
+///
+/// ⚠️ **A caller outside that nest reads `None` forever and the label silently
+/// never appears.** `fast_path` and `SimpleExecutionEngine` are separate
+/// engines that never enter it; they hold both facts in `request.metadata` and
+/// must go through [`room_author`] with [`scope_from_metadata`] instead. This
+/// is the same two-shapes split as
+/// `memory::project_scope::{profile_floor_id, partition_is_shared_room}`: one
+/// question, two call sites, two different things in hand.
+#[must_use]
+pub fn ambient_room_author() -> Option<String> {
+    room_author(current_scope().as_ref(), current_room_author().as_deref())
 }
 
 /// Reconstruct a `ScopeAttribution` from metadata.
@@ -285,6 +379,153 @@ mod tests {
         let attr = ScopeAttribution::from_persisted(Some("u-alice"), Some("org"))
             .expect("org is a coherent scope");
         assert_eq!(attr.scope, ScopeId::Org);
+    }
+
+    fn attr(owner: &str, scope: ScopeId) -> ScopeAttribution {
+        ScopeAttribution {
+            owner_user_id: owner.to_string(),
+            scope,
+        }
+    }
+
+    #[test]
+    fn only_a_project_room_stamps_an_author() {
+        // The predicate is "can this session have a second speaker", NOT "is
+        // there a scope" — the latter is structurally true for every P1 session
+        // and would put a redundant label on every personal message, on every
+        // turn, forever.
+        assert_eq!(
+            room_author(
+                Some(&attr("u-alice", ScopeId::Project("p-room".into()))),
+                None
+            ),
+            Some("u-alice".to_string())
+        );
+        assert_eq!(
+            room_author(
+                Some(&attr("u-alice", ScopeId::Personal("u-alice".into()))),
+                Some("u-alice")
+            ),
+            None
+        );
+        assert_eq!(
+            room_author(Some(&attr("u-alice", ScopeId::Org)), Some("u-alice")),
+            None
+        );
+        assert_eq!(room_author(None, Some("u-alice")), None);
+    }
+
+    /// The label names the SPEAKER. Every run in a room carries the room's
+    /// attribution (that is what shares the memory partition), so deriving the
+    /// author from the scope labels every member's message with the session's
+    /// creator — the exact defect this signature exists to make impossible.
+    #[test]
+    fn the_author_is_the_speaker_not_the_scopes_owner() {
+        assert_eq!(
+            room_author(
+                Some(&attr("u-alice", ScopeId::Project("p-room".into()))),
+                Some("u-bob")
+            ),
+            Some("u-bob".to_string()),
+            "bob typed it; alice merely created the room"
+        );
+    }
+
+    /// A turn that names no author at all (a legacy row, or a channel-driven
+    /// run whose router stamps the scope but not the speaker) still gets a
+    /// label rather than none — just the room owner's.
+    #[test]
+    fn an_unstamped_turn_falls_back_to_the_rooms_owner() {
+        assert_eq!(
+            room_author(
+                Some(&attr("u-alice", ScopeId::Project("p-room".into()))),
+                None
+            ),
+            Some("u-alice".to_string())
+        );
+    }
+
+    #[tokio::test]
+    async fn the_ambient_twin_reads_none_outside_a_scope() {
+        // Documented trap: `fast_path` and `SimpleExecutionEngine` never enter
+        // the run's scope nest, so they must go through `room_author` with
+        // `scope_from_metadata` instead. If this ever starts returning a value
+        // outside a scope, that documented warning has gone stale.
+        assert_eq!(ambient_room_author(), None);
+        let inside = with_scope(
+            Some(attr("u-alice", ScopeId::Project("p-room".into()))),
+            async { ambient_room_author() },
+        )
+        .await;
+        assert_eq!(
+            inside,
+            Some("u-alice".to_string()),
+            "no author seeded → the room owner"
+        );
+    }
+
+    /// The ambient twin must carry the SPEAKER, not the scope owner, all the
+    /// way to an emission site on the far side of a spawn.
+    ///
+    /// Deliberately crosses a real `tokio::spawn` with the capture-and-re-seed
+    /// pair `orchestrator::dispatch` uses, because the same assertion nested in
+    /// ONE task passes against a build whose author dies at that boundary —
+    /// which is precisely how the first fix round shipped a label naming the
+    /// room's creator on every message. `session_seed`, the main path's
+    /// user-message writer, sits past exactly such a spawn and has no metadata
+    /// map to fall back on.
+    #[tokio::test]
+    async fn the_ambient_twin_carries_the_speaker_across_a_spawn() {
+        let seen = with_scope(
+            Some(attr("u-alice", ScopeId::Project("p-room".into()))),
+            with_room_author(Some("u-bob".to_string()), async {
+                let captured_scope = current_scope();
+                let captured_author = current_room_author();
+                tokio::spawn(with_scope(
+                    captured_scope,
+                    with_room_author(captured_author, async { ambient_room_author() }),
+                ))
+                .await
+                .expect("emission task")
+            }),
+        )
+        .await;
+        assert_eq!(seen, Some("u-bob".to_string()));
+    }
+
+    /// The same nest with the author NOT re-seeded across the spawn — the
+    /// exact bug this pair guards. It does not error; it silently reports the
+    /// room's owner, which is why no test caught it the first time.
+    #[tokio::test]
+    async fn dropping_the_author_at_a_spawn_silently_reports_the_room_owner() {
+        let seen = with_scope(
+            Some(attr("u-alice", ScopeId::Project("p-room".into()))),
+            with_room_author(Some("u-bob".to_string()), async {
+                let captured_scope = current_scope();
+                tokio::spawn(with_scope(captured_scope, async { ambient_room_author() }))
+                    .await
+                    .expect("emission task")
+            }),
+        )
+        .await;
+        assert_eq!(
+            seen,
+            Some("u-alice".to_string()),
+            "carrying the scope without the author is not a missing label, it \
+             is a confidently wrong one"
+        );
+    }
+
+    /// The author task-local obeys the same spawn rule as the scope one, so a
+    /// new background producer cannot silently inherit a stale speaker.
+    #[tokio::test]
+    async fn the_author_task_local_does_not_cross_spawn() {
+        with_room_author(Some("u-bob".to_string()), async {
+            assert_eq!(current_room_author().as_deref(), Some("u-bob"));
+            let handle = tokio::spawn(async { current_room_author() });
+            assert!(handle.await.unwrap().is_none());
+        })
+        .await;
     }
 
     #[test]

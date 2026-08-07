@@ -106,10 +106,10 @@ impl MemoryTraceTool {
         "Drill a memory claim down to ground-truth evidence: profile section / note / raw id \
          → source notes → raw memories → original transcript text. Returns the evidence chain; \
          missing raws are marked as pruned rather than causing an error.\n\n\
-         Use `kind: \"write_decision\"` for the mirror question — why a fact is NOT in hot \
-         memory. It returns one row per `remember` write ATTEMPT (newest first), refusals \
-         included, each with a machine-readable `reason` (written / duplicate / over_budget / \
-         scanner_rejected / no_match / batch_aborted / retry_cap_reached / …). `target` is a \
+         Use `kind: \"write_decision\"` for the mirror question — why a fact is NOT in memory. \
+         It returns one row per `remember` OR `flag_user_correction` write ATTEMPT (newest \
+         first), refusals included, each with a machine-readable `reason` (written / duplicate / \
+         over_budget / scanner_rejected / …). `target` is a \
          literal substring of the recorded subject; pass an empty string to browse recent \
          decisions. Answer \"why didn't you remember that?\" from these rows, not from \
          recollection.";

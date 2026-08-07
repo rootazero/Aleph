@@ -500,7 +500,7 @@ mod tests {
     #[tokio::test]
     async fn concurrent_refreshes_are_single_flighted() {
         use std::sync::atomic::{AtomicUsize, Ordering};
-        use tokio::io::AsyncWriteExt;
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
         // Tiny HTTP server counting `/models` hits, slow enough that two
         // concurrent refreshes genuinely overlap.
@@ -511,6 +511,22 @@ mod tests {
         let server = tokio::spawn(async move {
             while let Ok((mut socket, _)) = listener.accept().await {
                 hits_server.fetch_add(1, Ordering::SeqCst);
+                // Drain the request head before answering. Dropping a socket
+                // that still holds unread bytes sends RST, not FIN — and on
+                // Windows that reset discards the response sitting in the
+                // client's receive buffer (WSAECONNRESET 10054), failing the
+                // test deterministically while Unix happens to win the race.
+                let mut head = Vec::new();
+                let mut buf = [0u8; 1024];
+                while let Ok(n) = socket.read(&mut buf).await {
+                    if n == 0 {
+                        break;
+                    }
+                    head.extend_from_slice(&buf[..n]);
+                    if head.windows(4).any(|w| w == b"\r\n\r\n") {
+                        break;
+                    }
+                }
                 tokio::time::sleep(Duration::from_millis(200)).await;
                 let body = r#"{"data":[{"id":"probe-model"}]}"#;
                 let response = format!(
@@ -519,6 +535,8 @@ mod tests {
                     body
                 );
                 let _ = socket.write_all(response.as_bytes()).await;
+                // Graceful FIN so the client reads EOF, never a reset.
+                let _ = socket.shutdown().await;
             }
         });
 

@@ -99,6 +99,31 @@ impl SessionKey {
         }
     }
 
+    /// Create the canonical session key for a P2 project room.
+    ///
+    /// A `Main` variant with the project id as its `main_key`, following the
+    /// same shape `gateway::agent_env` uses for its `agent-env-*` keys. Two
+    /// properties are load-bearing:
+    ///
+    /// - [`Self::is_interactive`] is `true`. A room chat has humans in it; the
+    ///   `Task` variant (whose rendering `agent:{id}:room:{project}` would also
+    ///   have been available) is the automated-origin family and would suppress
+    ///   the strategic planner on every member's first turn.
+    /// - `agent:{agent}:p-…` cannot collide with the agent's personal
+    ///   `agent:{agent}:main`, so a room never lands in a member's own session
+    ///   and never inherits its epoch sequence.
+    ///
+    /// The caller persists the rendered string once per room
+    /// (`ProjectStore::claim_session_key`); it is not re-derived per member,
+    /// because members may resolve different default agents.
+    pub fn project_room(agent_id: impl Into<String>, project_id: &str) -> Self {
+        Self::Main {
+            agent_id: normalize_agent_id(&agent_id.into()),
+            main_key: sanitize_component(project_id),
+            epoch: 0,
+        }
+    }
+
     /// Create a per-peer DM session key (legacy compatibility alias).
     pub fn peer(agent_id: impl Into<String>, peer_id: impl Into<String>) -> Self {
         Self::dm(agent_id, "", peer_id, DmScope::PerPeer)
@@ -622,6 +647,26 @@ mod tests {
     fn test_main_constructor() {
         let key = SessionKey::main("main");
         assert_eq!(key.agent_id(), "main");
+    }
+
+    /// The room key must round-trip through the wire form the Panel sends
+    /// back on every turn, stay interactive, and never collide with the
+    /// agent's own main session.
+    #[test]
+    fn a_project_room_key_round_trips_and_stays_interactive() {
+        let key = SessionKey::project_room("main", "p-7f3a9c");
+        let wire = key.to_key_string();
+        assert_eq!(wire, "agent:main:p-7f3a9c");
+        assert_eq!(SessionKey::from_key_string(&wire), Some(key.clone()));
+        assert!(
+            key.is_interactive(),
+            "a room chat has humans in it; the planner gate keys on this"
+        );
+        assert_ne!(wire, SessionKey::main("main").to_key_string());
+        assert_ne!(
+            key.base_key_pattern(),
+            SessionKey::main("main").to_key_string()
+        );
     }
 
     #[test]

@@ -216,6 +216,8 @@ fn push_bubble(chat: ChatState, role: &str, text: &str, agent_id: Option<String>
             text_finalized: true,
             agent_id,
             plan_archive: None,
+            // Legacy group broadcast (not a P2 project room).
+            author_user_id: None,
         });
     });
 }

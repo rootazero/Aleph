@@ -121,6 +121,7 @@ async fn seed_history(
                 },
                 at: now_ms(),
                 synthetic: false,
+                author_user_id: crate::scope::ambient_room_author(),
             },
         )
         .await
@@ -158,6 +159,7 @@ async fn seed_multimodal(
                     content,
                     at: now_ms(),
                     synthetic: false,
+                    author_user_id: crate::scope::ambient_room_author(),
                 },
             )
             .await
@@ -178,6 +180,10 @@ pub(super) async fn emit_message(
             content,
             at: now_ms(),
             synthetic: false,
+            // Also stamps `History`'s replayed prior turns, which is right for
+            // the same reason the stamp exists: that transcript was supplied by
+            // *this* caller, so in a room it belongs to them and nobody else.
+            author_user_id: crate::scope::ambient_room_author(),
         }
     } else {
         SessionEvent::AssistantMessage {

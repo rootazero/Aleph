@@ -171,6 +171,25 @@ pub enum BusyInputMode {
 /// default to `Steer`).
 pub const BUSY_INPUT_MODE_KEY: &str = "busy_input_mode";
 
+/// Metadata key carrying the human who wrote THIS turn's message
+/// (`users.user_id`), stamped by `handlers::agent::build_run_request` from the
+/// authenticated caller.
+///
+/// Distinct from the scope stamp (`scope::OWNER_META_KEY`) on purpose, and a
+/// project room is exactly where the two diverge: every run in a room carries
+/// the ROOM's attribution — that is what puts each member's memory writes in
+/// the shared partition — so the scope owner names the room's owner, not
+/// whoever is typing. Reading the author off the scope stamp would make every
+/// member of a room look like its owner.
+///
+/// Two consumers, and both read it out of this map rather than re-deriving it:
+/// the shared-room busy-lane rule ([`BusyInputMode::for_shared_room`]), and the
+/// speaker label the prompt renders for a multi-human room —
+/// `scope::room_author_from_metadata` for the engines that hold the request,
+/// `run_loop::with_request_scope` → `scope::ambient_room_author` for the main
+/// path's session seeder, which holds neither the request nor `CALLER_USER`.
+pub const AUTHOR_USER_KEY: &str = "author_user_id";
+
 /// Metadata key carrying the originating channel's tool permission override as
 /// a JSON-serialized `ToolPermissionsConfig`. Stamped by the inbound router
 /// from the channel's `ChannelPolicyConfig` (`tool_permissions` block); absent
@@ -220,6 +239,55 @@ impl BusyInputMode {
     #[must_use]
     pub fn from_metadata(metadata: &HashMap<String, String>) -> Self {
         Self::from_wire(metadata.get(BUSY_INPUT_MODE_KEY).map(String::as_str))
+    }
+
+    /// Downgrade to [`Queue`] when this turn would disturb SOMEBODY ELSE's
+    /// in-flight run in a shared project room (P2, spec §10).
+    ///
+    /// `Steer` and `Interrupt` are authority over your own turn: one injects
+    /// into a loop you started, the other cancels it. Neither is authority over
+    /// a room-mate's turn — in a room, applying them across authors would let
+    /// any member silently redirect or kill another member's work, and the knob
+    /// that grants it is a personal preference nobody else consented to.
+    ///
+    /// Deliberately narrow, and each condition earns its place:
+    ///
+    /// - **Only in a project scope.** A personal session has one human by
+    ///   construction, so the rule can never fire there; a room is the only
+    ///   place two authors share one transcript.
+    /// - **Only when the authors differ.** One person sending two messages in a
+    ///   row keeps `Steer` — that is the coalescing the queue auto-drain
+    ///   depends on, and breaking it here would look exactly like the
+    ///   `mark_admitted` bug (`Steer` silently degrading to `Queue`) while
+    ///   having a completely different cause.
+    /// - **Unknown author reads as "not the same person".** An unstamped
+    ///   incoming turn against a stamped running one queues, rather than
+    ///   assuming they match.
+    #[must_use]
+    pub fn for_shared_room(
+        self,
+        incoming: &HashMap<String, String>,
+        running: &HashMap<String, String>,
+    ) -> Self {
+        let in_a_room = incoming
+            .get(crate::scope::SCOPE_META_KEY)
+            .and_then(|s| crate::scope::ScopeId::parse(s))
+            .is_some_and(|s| matches!(s, crate::scope::ScopeId::Project(_)));
+        if !in_a_room {
+            return self;
+        }
+        let same_author = match (incoming.get(AUTHOR_USER_KEY), running.get(AUTHOR_USER_KEY)) {
+            (Some(a), Some(b)) => a == b,
+            // Neither turn names an author: an unrestricted/internal producer
+            // on both sides, which is the pre-P2 single-writer world.
+            (None, None) => true,
+            _ => false,
+        };
+        if same_author {
+            self
+        } else {
+            Self::Queue
+        }
     }
 }
 
@@ -416,6 +484,88 @@ impl ExecutionError {
             | Self::Fallthrough { .. }
             | Self::Orchestrator(_) => ReceiptKind::Failed,
         }
+    }
+}
+
+#[cfg(test)]
+mod shared_room_lane_tests {
+    use super::{BusyInputMode, AUTHOR_USER_KEY};
+    use std::collections::HashMap;
+
+    fn turn(scope: Option<&str>, author: Option<&str>) -> HashMap<String, String> {
+        let mut m = HashMap::new();
+        if let Some(s) = scope {
+            m.insert(crate::scope::SCOPE_META_KEY.to_string(), s.to_string());
+        }
+        if let Some(a) = author {
+            m.insert(AUTHOR_USER_KEY.to_string(), a.to_string());
+        }
+        m
+    }
+
+    /// The rule itself: another member's run is not yours to steer or kill.
+    #[test]
+    fn a_room_mates_run_forces_queue_whatever_the_knob_says() {
+        let incoming = turn(Some("project:p-1"), Some("u-bob"));
+        let running = turn(Some("project:p-1"), Some("u-alice"));
+        for knob in [BusyInputMode::Steer, BusyInputMode::Interrupt] {
+            assert_eq!(
+                knob.for_shared_room(&incoming, &running),
+                BusyInputMode::Queue,
+                "{knob:?} must not reach across authors"
+            );
+        }
+    }
+
+    /// The separation the plan asked for explicitly: this rule downgrades on
+    /// AUTHORSHIP. A person sending two messages in a row still steers — the
+    /// coalescing the queue auto-drain depends on. If this ever fails, the bug
+    /// is here and NOT the `busy_queue::mark_admitted` bug that presents with
+    /// the identical symptom.
+    #[test]
+    fn the_same_person_speaking_twice_in_a_room_still_steers() {
+        let alice = turn(Some("project:p-1"), Some("u-alice"));
+        assert_eq!(
+            BusyInputMode::Steer.for_shared_room(&alice, &alice),
+            BusyInputMode::Steer
+        );
+        assert_eq!(
+            BusyInputMode::Interrupt.for_shared_room(&alice, &alice),
+            BusyInputMode::Interrupt
+        );
+    }
+
+    /// A personal session has one human by construction, so the rule may never
+    /// fire there — not even when the stamps somehow disagree.
+    #[test]
+    fn a_personal_session_is_untouched() {
+        let incoming = turn(Some("personal:u-alice"), Some("u-bob"));
+        let running = turn(Some("personal:u-alice"), Some("u-alice"));
+        assert_eq!(
+            BusyInputMode::Steer.for_shared_room(&incoming, &running),
+            BusyInputMode::Steer
+        );
+        // An unstamped (pre-P1) pair likewise.
+        let bare = turn(None, None);
+        assert_eq!(
+            BusyInputMode::Interrupt.for_shared_room(&bare, &bare),
+            BusyInputMode::Interrupt
+        );
+    }
+
+    /// One side unstamped reads as "not the same person" — queue, do not guess.
+    #[test]
+    fn an_unknown_author_in_a_room_queues_rather_than_assuming_a_match() {
+        let anonymous = turn(Some("project:p-1"), None);
+        let alice = turn(Some("project:p-1"), Some("u-alice"));
+        assert_eq!(
+            BusyInputMode::Steer.for_shared_room(&anonymous, &alice),
+            BusyInputMode::Queue
+        );
+        assert_eq!(
+            BusyInputMode::Steer.for_shared_room(&alice, &anonymous),
+            BusyInputMode::Queue
+        );
     }
 }
 

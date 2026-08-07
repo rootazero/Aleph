@@ -414,7 +414,10 @@ impl SessionStore for FileSessionStore {
                 }
             }
             if let Some(ref owner) = filter.owner_visible_to {
-                if crate::gateway::visibility::effective_owner(&meta) != owner {
+                // `session_visible_to`, not `effective_owner ==`: a project
+                // room's rows belong to their creator but are visible to the
+                // whole roster.
+                if !crate::gateway::visibility::session_visible_to(&meta, owner) {
                     continue;
                 }
             }

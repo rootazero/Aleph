@@ -778,6 +778,63 @@ fn ReflectionSettings(config: RwSignal<Option<MemoryConfig>>) -> impl IntoView {
                     <label class="font-medium">{t!(i18n, settings.memory.open_loop_inject_prompt)}</label>
                 </div>
                 <p class="text-xs text-text-tertiary">{t!(i18n, settings.memory.open_loop_inject_hint)}</p>
+
+                // The two bounds on what the toggles above produce. They live
+                // in `[memory.curated]`, not `reflection`, but an operator who
+                // switches injection on and cannot see the age ceiling has
+                // been shown half the mechanism — indented here rather than
+                // filed under their own section for that reason.
+                <div class="pl-6 border-l-2 border-border space-y-3">
+                    <div>
+                        <label class="block text-sm font-medium mb-1">
+                            {t!(i18n, settings.memory.open_loop_max_age_days)}
+                        </label>
+                        <input
+                            type="number"
+                            min="0"
+                            prop:value=move || {
+                                config.get().map(|c| c.curated.open_loops_max_age_days).unwrap_or(14)
+                            }
+                            on:input=move |ev| {
+                                if let Some(mut cfg) = config.get() {
+                                    if let Ok(val) = event_target_value(&ev).parse() {
+                                        cfg.curated.open_loops_max_age_days = val;
+                                        config.set(Some(cfg));
+                                    }
+                                }
+                            }
+                            class="w-full px-3 py-2 border border-border rounded bg-surface-raised"
+                        />
+                        <p class="text-xs text-text-tertiary mt-1">
+                            {t!(i18n, settings.memory.open_loop_max_age_hint)}
+                        </p>
+                    </div>
+
+                    <div>
+                        <label class="block text-sm font-medium mb-1">
+                            {t!(i18n, settings.memory.open_loop_char_limit)}
+                        </label>
+                        <input
+                            type="number"
+                            min="0"
+                            prop:value=move || {
+                                config.get().map(|c| c.curated.open_loops_char_limit).unwrap_or(2000)
+                            }
+                            on:input=move |ev| {
+                                if let Some(mut cfg) = config.get() {
+                                    if let Ok(val) = event_target_value(&ev).parse() {
+                                        cfg.curated.open_loops_char_limit = val;
+                                        config.set(Some(cfg));
+                                    }
+                                }
+                            }
+                            class="w-full px-3 py-2 border border-border rounded bg-surface-raised"
+                        />
+                        <p class="text-xs text-text-tertiary mt-1">
+                            {t!(i18n, settings.memory.open_loop_char_limit_hint)}
+                        </p>
+                    </div>
+                </div>
             </div>
         </div>
     }

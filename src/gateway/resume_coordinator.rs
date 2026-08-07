@@ -86,6 +86,40 @@ pub(crate) fn latest_project_root(markers: &[SessionEventRecord]) -> Option<std:
     })
 }
 
+/// Build a resumed run's metadata: the resume marker, the original working
+/// directory, and the session's owner/scope attribution.
+///
+/// The scope is the half that used to be missing. `run_loop::with_request_scope`
+/// reads this map and nothing else, and `scope_from_metadata` is fail-closed —
+/// so a resume that carries only `project_root` runs UNSCOPED, and
+/// `session_write_id` falls through to the base partition, which
+/// `partition_visible` rules org-tier and shares with everyone. A resumed room's
+/// memory landed where every user could read it, silently.
+///
+/// `from_persisted` requires both columns present and coherent, so a legacy
+/// (pre-P1) session stamps nothing and resumes exactly as it did before — the
+/// same zero-change carve-out `goal_wait::rehydrate_owner_scope` and cron's
+/// executor take, from the same durable columns.
+pub(crate) fn resume_metadata(
+    workspace_override: Option<&std::path::Path>,
+    session_meta: Option<&crate::gateway::session_store::types::SessionMetadata>,
+) -> HashMap<String, String> {
+    let mut metadata: HashMap<String, String> = HashMap::new();
+    metadata.insert("resume".to_string(), "true".to_string());
+    if let Some(p) = workspace_override {
+        metadata.insert("project_root".to_string(), p.display().to_string());
+    }
+    if let Some(attr) = session_meta.and_then(|m| {
+        crate::scope::ScopeAttribution::from_persisted(
+            m.owner_user_id.as_deref(),
+            m.scope_id.as_deref(),
+        )
+    }) {
+        crate::scope::stamp_metadata(&mut metadata, &attr);
+    }
+    metadata
+}
+
 /// Walk a full session event log and return a synthetic `ToolError` for
 /// every `ToolCallRequested` whose `call_id` has no matching `ToolResult`
 /// or `ToolError`. The returned events are ready to append to the log; the
@@ -128,6 +162,11 @@ pub struct ResumeCoordinator {
     config: ResumeConfig,
     execution_adapter: Arc<dyn ExecutionAdapter>,
     agent_registry: Arc<AgentRegistry>,
+    /// Source of the resumed session's persisted owner/scope. See
+    /// [`ResumeCoordinator::retrigger`] for why a resume that carries the
+    /// workspace but not the scope writes the room's memory to the org
+    /// partition.
+    session_store: Arc<dyn crate::gateway::session_store::SessionStore>,
     /// Bounds the boot resume burst. `max_concurrent` permits.
     semaphore: Arc<Semaphore>,
 }
@@ -139,6 +178,7 @@ impl ResumeCoordinator {
         config: ResumeConfig,
         execution_adapter: Arc<dyn ExecutionAdapter>,
         agent_registry: Arc<AgentRegistry>,
+        session_store: Arc<dyn crate::gateway::session_store::SessionStore>,
     ) -> Self {
         let permits = config.max_concurrent.max(1);
         Self {
@@ -146,6 +186,7 @@ impl ResumeCoordinator {
             config,
             execution_adapter,
             agent_registry,
+            session_store,
             semaphore: Arc::new(Semaphore::new(permits)),
         }
     }
@@ -421,11 +462,10 @@ impl ResumeCoordinator {
             SessionError::Other(format!("resume: agent '{agent_id}' not registered"))
         })?;
 
-        let mut metadata: HashMap<String, String> = HashMap::new();
-        metadata.insert("resume".to_string(), "true".to_string());
-        if let Some(p) = workspace_override.as_ref() {
-            metadata.insert("project_root".to_string(), p.display().to_string());
-        }
+        let mut metadata = resume_metadata(
+            workspace_override.as_deref(),
+            self.persisted_session_meta(session_id).await.as_ref(),
+        );
         self.stamp_origin_identity(&agent, session_id, &mut metadata)
             .await;
 
@@ -483,6 +523,28 @@ impl ResumeCoordinator {
 
         drop(permit);
         result
+    }
+
+    /// The resumed session's durable row, or `None` when it cannot be read.
+    ///
+    /// A store error is logged and swallowed: an unscoped resume is the
+    /// pre-existing behaviour, and refusing to resume over it would turn a
+    /// crash recovery into a lost conversation.
+    async fn persisted_session_meta(
+        &self,
+        session_id: &SessionId,
+    ) -> Option<crate::gateway::session_store::types::SessionMetadata> {
+        match self.session_store.get_metadata(session_id).await {
+            Ok(meta) => meta,
+            Err(e) => {
+                tracing::warn!(
+                    session = ?session_id,
+                    error = %e,
+                    "resume: session metadata unreadable; resuming unscoped"
+                );
+                None
+            }
+        }
     }
 
     /// Re-derive the run identity the session's origin channel imposes.
@@ -687,6 +749,50 @@ mod tests {
     fn latest_project_root_returns_none_for_legacy_runs() {
         let markers = vec![rec(1, run_started(10), 10)];
         assert_eq!(latest_project_root(&markers), None);
+    }
+
+    /// I2: a resumed run must carry the session's SCOPE, not just its folder.
+    /// Without the stamp the run is unscoped and its memory writes land in the
+    /// base partition — org-tier, readable by everyone — which for a project
+    /// room means the room's memory leaks out of the room.
+    #[test]
+    fn a_resumed_room_run_carries_the_rooms_scope() {
+        use crate::gateway::session_store::types::SessionMetadata;
+
+        let room = SessionMetadata {
+            owner_user_id: Some("u-alice".to_string()),
+            scope_id: Some(crate::scope::ScopeId::Project("p-standup".into()).render()),
+            ..Default::default()
+        };
+        let meta = resume_metadata(Some(std::path::Path::new("/srv/room")), Some(&room));
+
+        assert_eq!(meta.get("resume").map(String::as_str), Some("true"));
+        assert!(meta.contains_key("project_root"), "the folder still rides");
+        // Assert through the consumer, not the raw keys: `with_request_scope`
+        // reaches the run through exactly this call.
+        let scope = crate::scope::scope_from_metadata(&meta)
+            .expect("a project-scoped session must resolve a scope");
+        assert_eq!(
+            scope.scope,
+            crate::scope::ScopeId::Project("p-standup".into())
+        );
+        assert_eq!(scope.owner_user_id, "u-alice");
+    }
+
+    /// A legacy (pre-P1) row, or no row at all, stamps nothing — the resume
+    /// behaves exactly as it did before, rather than guessing an attribution.
+    #[test]
+    fn a_legacy_session_resumes_unscoped_exactly_as_before() {
+        use crate::gateway::session_store::types::SessionMetadata;
+
+        for meta in [
+            resume_metadata(None, None),
+            resume_metadata(None, Some(&SessionMetadata::default())),
+        ] {
+            assert!(crate::scope::scope_from_metadata(&meta).is_none());
+            assert_eq!(meta.get("resume").map(String::as_str), Some("true"));
+            assert!(!meta.contains_key("project_root"));
+        }
     }
 
     #[test]

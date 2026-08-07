@@ -18,12 +18,13 @@ use leptos_router::hooks::{use_location, use_navigate};
 /// advanced-features zone, below "project management". The `Extensions` arms in
 /// `route_of`/`label_of`/`icon_of` are still needed for the trigger button,
 /// which mirrors the current section whenever the route is `/extensions`.
-const ALL_MODES: [PanelMode; 6] = [
+const ALL_MODES: [PanelMode; 7] = [
     PanelMode::Chat,
     PanelMode::Dashboard,
     PanelMode::Memory,
     PanelMode::Agents,
     PanelMode::Teams,
+    PanelMode::Projects,
     PanelMode::Settings,
 ];
 
@@ -35,6 +36,7 @@ const fn route_of(mode: PanelMode) -> &'static str {
         PanelMode::Memory => "/memory",
         PanelMode::Agents => "/agents",
         PanelMode::Teams => "/teams",
+        PanelMode::Projects => "/projects",
         PanelMode::Extensions => "/extensions",
         PanelMode::More => "/more",
         PanelMode::Settings => "/settings",
@@ -49,6 +51,10 @@ fn label_of(mode: PanelMode, i18n: I18nContext<Locale>) -> String {
         PanelMode::Memory => t_string!(i18n, nav.memory).to_string(),
         PanelMode::Agents => t_string!(i18n, nav.agents).to_string(),
         PanelMode::Teams => t_string!(i18n, nav.teams).to_string(),
+        // Not localized (yet): the new P2 project-rooms surface, like `More`
+        // below, ships with a plain literal rather than a new locale key —
+        // see `components/project_page.rs`'s module doc for the tradeoff.
+        PanelMode::Projects => "项目".to_string(),
         PanelMode::Extensions => t_string!(i18n, nav.extensions).to_string(),
         PanelMode::More => "More".to_string(),
         PanelMode::Settings => t_string!(i18n, nav.settings).to_string(),
@@ -72,6 +78,9 @@ const fn icon_of(mode: PanelMode) -> &'static str {
         }
         PanelMode::Teams => {
             r#"<path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/>"#
+        }
+        PanelMode::Projects => {
+            r#"<path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7z"/>"#
         }
         PanelMode::Extensions => {
             r#"<path d="M20.5 11H19V7a2 2 0 0 0-2-2h-4V3.5a2.5 2.5 0 0 0-5 0V5H4a2 2 0 0 0-2 2v3.8h1.5a2.2 2.2 0 1 1 0 4.4H2V19a2 2 0 0 0 2 2h3.8v-1.5a2.2 2.2 0 1 1 4.4 0V21H17a2 2 0 0 0 2-2v-4h1.5a2.5 2.5 0 0 0 0-5z"/>"#

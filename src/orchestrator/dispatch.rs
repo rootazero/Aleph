@@ -908,6 +908,17 @@ impl Orchestrator {
         let owner_user_id = req.owner_user_id.clone();
         // rust-doctor-disable-next-line excessive-clone
         let scope_id = req.scope_id.clone();
+        // P2 speaker label — the SAME boundary and the same reason as the two
+        // above, but this one has no `FlowRequest` field to be re-derived from,
+        // so the live task-local is captured here on the caller's side. It is
+        // live: `dispatch` is awaited inside `run_loop::with_request_scope`,
+        // which seeds it from the request's `AUTHOR_USER_KEY`.
+        //
+        // Dropping it does not fail loudly. `ambient_room_author` degrades to
+        // the scope's `owner_user_id`, which in a room is the ROOM's owner —
+        // so every member's message would be labelled with whoever created the
+        // session, on a path with no error anywhere.
+        let room_author = crate::scope::current_room_author();
 
         tokio::spawn(async move {
             let _lock = SessionLockGuard {
@@ -951,22 +962,25 @@ impl Orchestrator {
                     workspace_override.clone(),
                     crate::scope::with_scope(
                         scope_attr,
-                        harness.run(
-                            session_key,
-                            spec_clone,
-                            input_clone,
-                            sandbox_clone,
-                            event_tx,
-                            cancel_clone,
-                            tool_service_override,
-                            trace_sink,
-                            interaction_manifest,
-                            workspace_override,
-                            max_iterations_override,
-                            transient_context,
-                            think_level,
-                            envelope,
-                            model_directive,
+                        crate::scope::with_room_author(
+                            room_author,
+                            harness.run(
+                                session_key,
+                                spec_clone,
+                                input_clone,
+                                sandbox_clone,
+                                event_tx,
+                                cancel_clone,
+                                tool_service_override,
+                                trace_sink,
+                                interaction_manifest,
+                                workspace_override,
+                                max_iterations_override,
+                                transient_context,
+                                think_level,
+                                envelope,
+                                model_directive,
+                            ),
                         ),
                     ),
                 ),

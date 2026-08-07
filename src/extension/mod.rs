@@ -176,9 +176,8 @@ pub struct ExtensionManager {
     /// `Workspace` / `Global` origins are only loaded when their id is
     /// in the allowlist. Default is `permissive()` (legacy behaviour:
     /// every plugin loads). Updated by [`Self::set_owner_trust_policy`].
-    owner_trust_policy: Arc<
-        crate::sync_primitives::RwLock<crate::extension::activation::OwnerTrustPolicy>,
-    >,
+    owner_trust_policy:
+        Arc<crate::sync_primitives::RwLock<crate::extension::activation::OwnerTrustPolicy>>,
 
     /// Live MCP manager handle, used to register plugin-owned MCP servers as
     /// **transient** (runtime-only) servers. `None` until [`Self::set_mcp_handle`]
@@ -341,10 +340,7 @@ impl ExtensionManager {
     /// gate `Workspace` and `Global` plugins (Bundled/Config always pass).
     /// Pass [`OwnerTrustPolicy::permissive`] to revert to the legacy
     /// "load every plugin" behaviour.
-    pub fn set_owner_trust_policy(
-        &self,
-        policy: crate::extension::activation::OwnerTrustPolicy,
-    ) {
+    pub fn set_owner_trust_policy(&self, policy: crate::extension::activation::OwnerTrustPolicy) {
         *self
             .owner_trust_policy
             .write()
@@ -878,15 +874,16 @@ impl ExtensionManager {
         // so discovery is union-of-all; isolating which project sees which
         // plugin at runtime is a separate, deferred concern. A failure to read
         // the registry degrades to global-only discovery.
-        let project_plugin_parents: Vec<PathBuf> = crate::projects::ProjectStore::new()
+        let project_plugin_parents: Vec<PathBuf> = crate::projects::ProjectStore::shared()
             .list()
             .map(|projects| {
                 projects
                     .into_iter()
-                    .flat_map(|p| {
+                    .filter_map(|p| p.workspace_path)
+                    .flat_map(|root| {
                         [
-                            p.path.join(".aleph/plugins"),
-                            p.path.join(".aleph/plugins.local"),
+                            root.join(".aleph/plugins"),
+                            root.join(".aleph/plugins.local"),
                         ]
                     })
                     .collect()
@@ -937,9 +934,9 @@ impl ExtensionManager {
         // hook so it only fires while that project is the active workspace —
         // discovery is union-of-all (daemon = one process), firing is scoped.
         // A failure to read the registry degrades to global + CWD only.
-        let project_roots: Vec<PathBuf> = crate::projects::ProjectStore::new()
+        let project_roots: Vec<PathBuf> = crate::projects::ProjectStore::shared()
             .list()
-            .map(|projects| projects.into_iter().map(|p| p.path).collect())
+            .map(|projects| projects.into_iter().filter_map(|p| p.workspace_path).collect())
             .unwrap_or_default();
         let user_hooks = crate::extension::hooks::load_user_hooks(cwd.as_deref(), &project_roots);
         let mut executor = self.hook_executor.write().await;

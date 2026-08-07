@@ -248,6 +248,7 @@ pub(super) async fn fresh_session(
                 },
                 at: now_ms(),
                 synthetic: false,
+                author_user_id: None,
             },
         )
         .await

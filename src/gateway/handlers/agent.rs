@@ -108,6 +108,15 @@ pub struct AgentRunParams {
     /// (default `false`) clears the flag.
     #[serde(default)]
     pub voice_input: bool,
+    /// Open this turn's session in a project room (P2, spec §6.2).
+    ///
+    /// Only consulted when the session does not exist yet. A session's scope is
+    /// immutable (spec §10) — re-sending to an existing session with a
+    /// different `project_id` does NOT move it, because its memory partition,
+    /// its transcript and every artifact already written under the old scope
+    /// cannot follow. See [`build_run_request`]'s attribution branch.
+    #[serde(default)]
+    pub project_id: Option<String>,
 }
 
 const fn default_stream() -> bool {
@@ -268,13 +277,19 @@ impl AgentRunManager {
             }
         };
 
+        // `sessions: None` — the Simulated-execution fallback has no
+        // `SessionStore` (see this type's doc and `method_visibility.rs`'s
+        // carve-out for the same reason). Errors are surfaced as strings on
+        // this path; the real-engine handlers keep the typed variants.
         let request = build_run_request(
             run_id.clone(),
             &session_key,
             params,
             self.app_config.as_ref(),
+            None,
         )
-        .await?;
+        .await
+        .map_err(|e| e.to_string())?;
 
         // Capture the originating surface before `request` is moved into the
         // spawn — used below to decide cross-surface reply fan-out.
@@ -401,6 +416,147 @@ impl AgentRunManager {
     }
 }
 
+/// Why a turn could not be turned into a [`RunRequest`].
+///
+/// Two variants, because the transports must map them to different JSON-RPC
+/// codes and collapsing them would either turn a visibility denial into a
+/// chatty `INVALID_PARAMS` (which tells the caller the project exists) or a
+/// param complaint into a silent not-found.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum BuildRunError {
+    /// Malformed or unacceptable params → `INVALID_PARAMS`.
+    Invalid(String),
+    /// The turn named a project the caller cannot reach — or the check itself
+    /// could not complete. Maps to `RESOURCE_NOT_FOUND` with the SAME message
+    /// a project id that was never minted produces, so `chat.send` cannot be
+    /// used as a cross-user existence oracle.
+    ProjectNotFound(String),
+}
+
+impl From<String> for BuildRunError {
+    fn from(s: String) -> Self {
+        BuildRunError::Invalid(s)
+    }
+}
+
+impl std::fmt::Display for BuildRunError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            BuildRunError::Invalid(s) => f.write_str(s),
+            BuildRunError::ProjectNotFound(id) => write!(f, "project not found: {id}"),
+        }
+    }
+}
+
+/// Resolve this turn's owner/scope attribution. **Two paths — writing only
+/// one of them is the P2 bug this function exists to prevent.**
+///
+/// 1. **The session already exists** → its stored scope wins, full stop
+///    (spec §10: a session's scope is immutable). The request's `project_id`
+///    has no say. Getting this backwards means a run's memory writes land in a
+///    different partition than the session's own stored scope — silently, with
+///    no error anywhere, visible only as "the agent forgot".
+/// 2. **The session does not exist yet** → the request decides. A
+///    `project_id` the caller is not on the roster of is refused with the same
+///    response an id that was never minted produces.
+///
+/// A legacy/unstamped EXISTING session keeps legacy semantics (personal to the
+/// caller), matching `SessionMetadata`'s adoption-by-absence rule rather than
+/// retro-stamping a row nobody asked to move.
+///
+/// `sessions: None` (the Simulated-execution fallback, which has no store)
+/// cannot distinguish the two paths and takes path 2 for every turn. That is
+/// the documented carve-out, not an oversight: without a store there is no
+/// stored scope to honor.
+async fn resolve_attribution(
+    sessions: Option<&Arc<dyn crate::gateway::session_store::SessionStore>>,
+    session_key: &SessionKey,
+    project_id: Option<&str>,
+) -> Result<Option<crate::scope::ScopeAttribution>, BuildRunError> {
+    let user = crate::gateway::caller_identity::current_caller_user();
+
+    if let Some(store) = sessions {
+        match store.get_metadata(session_key).await {
+            Ok(Some(meta)) => {
+                // Path 1: the row owns its scope.
+                return Ok(crate::scope::ScopeAttribution::from_persisted(
+                    meta.owner_user_id.as_deref(),
+                    meta.scope_id.as_deref(),
+                )
+                .or_else(|| {
+                    user.as_deref()
+                        .map(crate::scope::ScopeAttribution::personal)
+                }));
+            }
+            Ok(None) => {}
+            Err(e) => {
+                // Fail closed: an unresolvable session must not fall through to
+                // the request's own claim about which project this is.
+                tracing::warn!(error = %e, "projects: session scope lookup failed closed");
+                return Err(BuildRunError::ProjectNotFound(
+                    project_id.unwrap_or_default().to_string(),
+                ));
+            }
+        }
+    }
+
+    // Path 2: a session that does not exist yet.
+    match project_id {
+        // An explicit, reachable `project_id` ALWAYS produces a project stamp,
+        // even for an unrestricted caller (cron opening a room's session). The
+        // owner falls back to the legacy owner by absence — the same rule the
+        // rest of P1 reads an unstamped row with. Deriving the owner from
+        // `user` alone would silently drop the project scope for exactly the
+        // callers that named it most explicitly.
+        Some(pid) if crate::gateway::visibility::project_visible(pid) => {
+            Ok(Some(crate::scope::ScopeAttribution {
+                owner_user_id: user
+                    .clone()
+                    .unwrap_or_else(|| crate::gateway::security::store::OWNER_USER_ID.to_string()),
+                scope: crate::scope::ScopeId::Project(pid.to_string()),
+            }))
+        }
+        // Absent OR foreign project: one refusal, no oracle.
+        Some(pid) => Err(BuildRunError::ProjectNotFound(pid.to_string())),
+        None => Ok(user
+            .as_deref()
+            .map(crate::scope::ScopeAttribution::personal)),
+    }
+}
+
+/// The folder a run under `attribution` should work in, or `None` for a
+/// personal/org session or an unbound room.
+///
+/// No visibility check here on purpose: `attribution` is what
+/// [`resolve_attribution`] already admitted — either the session's own stored
+/// scope or a `project_id` that passed `project_visible`. Re-asking would be
+/// the second derivation, and asking a DIFFERENT question (is the caller on
+/// the roster *now*) would mean a member removed mid-session gets a run with
+/// no workspace instead of no access.
+///
+/// A store failure reads as "unbound" rather than propagating: the fallback is
+/// the agent's own workspace, which is where the turn would have run before P2
+/// anyway. The alternative — refusing the turn because SQLite hiccuped — turns
+/// a degraded catalogue into a dead chat room.
+fn bound_workspace_of(
+    attribution: Option<&crate::scope::ScopeAttribution>,
+) -> Option<std::path::PathBuf> {
+    let crate::scope::ScopeId::Project(project_id) = &attribution?.scope else {
+        return None;
+    };
+    match crate::projects::ProjectStore::shared().get(project_id) {
+        Ok(project) => project?.workspace_path,
+        Err(e) => {
+            tracing::warn!(
+                project_id = %project_id,
+                error = %e,
+                "projects: workspace lookup failed; falling back to the agent workspace"
+            );
+            None
+        }
+    }
+}
+
 /// Build the [`RunRequest`] for one Panel-originated turn (`agent.run` /
 /// `chat.send`).
 ///
@@ -416,14 +572,23 @@ impl AgentRunManager {
 /// `app_config` is `None` for test / host-only constructions: the locale and
 /// the `[voice]` model pin are then skipped rather than guessed.
 ///
-/// Errors are user-facing strings; callers map them to their transport's error
-/// shape.
+/// `sessions` is `None` on the Simulated-execution fallback path, which has no
+/// `SessionStore` at all — the SAME carve-out `method_visibility.rs` already
+/// records for `chat.send` / `agent.run`. Without a store this cannot tell an
+/// existing session from a new one, so it treats every turn as new; see
+/// [`resolve_attribution`].
+///
+/// Callers map [`BuildRunError`] to their transport's error shape — the two
+/// variants must NOT be flattened, because one is a bad-params complaint and
+/// the other is a visibility denial that has to stay byte-identical to a
+/// project id that was never minted.
 pub async fn build_run_request(
     run_id: String,
     session_key: &SessionKey,
     params: AgentRunParams,
     app_config: Option<&Arc<RwLock<crate::Config>>>,
-) -> Result<RunRequest, String> {
+    sessions: Option<&Arc<dyn crate::gateway::session_store::SessionStore>>,
+) -> Result<RunRequest, BuildRunError> {
     let session_key_str = session_key.to_key_string();
 
     // Record voice mode for this session BEFORE the run spawns, so prompt
@@ -485,14 +650,22 @@ pub async fn build_run_request(
         metadata.insert("caller_role".to_string(), role);
     }
 
-    // P1 data isolation: stamp the run's owner/scope attribution from the
-    // authenticated caller (resolved at `connect`, live here inside
-    // `process_request`'s task tree). Unauthenticated / non-gateway callers
-    // stamp nothing — legacy owner semantics.
-    if let Some(user) = crate::gateway::caller_identity::current_caller_user() {
-        crate::scope::stamp_metadata(
-            &mut metadata,
-            &crate::scope::ScopeAttribution::personal(&user),
+    // P1 data isolation + P2 project rooms: stamp the run's owner/scope
+    // attribution. Two paths, and writing only the second is the silent bug
+    // this comment exists to prevent — see `resolve_attribution`.
+    let attribution =
+        resolve_attribution(sessions, session_key, params.project_id.as_deref()).await?;
+    if let Some(attr) = attribution.as_ref() {
+        crate::scope::stamp_metadata(&mut metadata, attr);
+    }
+
+    // Who typed THIS message — a different fact from the scope owner above,
+    // and in a project room they genuinely differ (every run in a room carries
+    // the room's attribution). See `AUTHOR_USER_KEY`.
+    if let Some(author) = crate::gateway::caller_identity::current_caller_user() {
+        metadata.insert(
+            crate::gateway::execution_engine::AUTHOR_USER_KEY.to_string(),
+            author,
         );
     }
 
@@ -502,46 +675,68 @@ pub async fn build_run_request(
         metadata.insert("locale".to_string(), lang.to_string());
     }
 
-    // Validate and resolve optional project_root. We refuse anything that
-    // isn't an existing absolute directory so the rest of the engine can
-    // assume the override is safe to chdir/scan into.
+    // Resolve this turn's working directory. Three tiers, highest first:
+    //
+    //   1. `params.project_root` — the caller names a folder for THIS turn.
+    //      Gated: naming an arbitrary server directory is a config-tier
+    //      capability (`caller_may_choose_directory`).
+    //   2. the room's bound `workspace_path` — the session is scoped to a
+    //      project that has a folder. NOT gated here, because the binding was
+    //      already written through the same gate (`projects.bind_workspace` /
+    //      `add` / `create_blank` all call it). A remote member chatting in a
+    //      room the owner bound is not choosing a directory; they are using
+    //      one that was chosen for them.
+    //   3. neither — the agent's own default workspace, resolved downstream.
+    //
+    // Tier 2 keys off the RESOLVED attribution, not `params.project_id`: a
+    // session's stored scope wins over the request (see `resolve_attribution`),
+    // and the Panel only sends `project_id` on the turn that opens the room.
+    // Reading the param would give the first message a workspace and every
+    // later one the agent default — silently, mid-conversation.
     let workspace_override = match params.project_root.as_deref() {
         Some(raw) => {
-            // Layer-2 (config tier) gate: choosing/creating a working
-            // directory is a config-tier capability. A chat-tier caller
-            // (remote Panel paired at "chat", or an external channel stamped
-            // "guest") is locked to its default workspace and may not pick an
-            // arbitrary project_root. Absent role (trusted local/internal
-            // run) and "operator" pass — mirrors
-            // `TurnContext::caller_is_operator`.
-            //
-            // Desktop App: the local Panel runs over loopback. Allow a
-            // project_root override from any loopback connection regardless
-            // of pairing tier — on the desktop the local operator IS the
-            // user. Remote LAN connections (non-loopback, chat-tier) stay
-            // gated, so opening `[gateway] host = "0.0.0.0"` does not hand
-            // arbitrary working-directory selection to every LAN device.
-            let role = crate::gateway::caller_identity::current_caller_role();
-            let is_config_tier = !matches!(role.as_deref(), Some(r) if r != "operator");
-            let is_loopback = crate::gateway::caller_identity::current_caller_is_loopback();
-            if !is_config_tier && !is_loopback {
+            if !crate::gateway::caller_identity::caller_may_choose_directory() {
                 return Err(format!(
                     "choosing a working directory requires config-tier authorization \
                      or a local (loopback) connection; this connection is paired at \
                      chat level from a remote address (project_root: {raw})"
-                ));
+                )
+                .into());
             }
             let path = std::path::PathBuf::from(raw);
             if !path.is_absolute() {
-                return Err(format!("project_root must be absolute: {raw}"));
+                return Err(format!("project_root must be absolute: {raw}").into());
             }
             if !path.is_dir() {
-                return Err(format!("project_root is not a directory: {raw}"));
+                return Err(format!("project_root is not a directory: {raw}").into());
             }
             metadata.insert("project_root".to_string(), path.display().to_string());
             Some(path)
         }
-        None => None,
+        None => bound_workspace_of(attribution.as_ref())
+            .map(|path| {
+                // Fail loud rather than falling back to the agent's default
+                // workspace. A room whose folder was unmounted or deleted
+                // would otherwise keep answering — with every file tool
+                // silently operating somewhere nobody in the room expects.
+                // The cost is real and deliberate: an offline external drive
+                // makes the room unusable until somebody re-binds it (bind to
+                // `null` to go back to the agent default).
+                if !path.is_dir() {
+                    return Err(BuildRunError::from(format!(
+                        "this project's folder is missing: {} — re-bind the project \
+                         to another folder (projects.bind_workspace) or restore it",
+                        path.display()
+                    )));
+                }
+                // Same fact, same representation as tier 1: anything reading
+                // `metadata["project_root"]` must not be able to tell which
+                // tier put the run there (`resume_coordinator` mirrors the
+                // override the same way).
+                metadata.insert("project_root".to_string(), path.display().to_string());
+                Ok(path)
+            })
+            .transpose()?,
     };
 
     // Composer-chosen execution tier. Unknown ids are rejected rather than
@@ -915,6 +1110,7 @@ mod tests {
             exec_tier: None,
             mode: None,
             voice_input: false,
+            project_id: None,
         };
 
         let result = manager.start_run(params).await.unwrap();
@@ -957,6 +1153,7 @@ mod tests {
             exec_tier: None,
             mode: None,
             voice_input: true,
+            project_id: None,
         };
         let result = manager.start_run(voice_params).await.unwrap();
         assert!(
@@ -980,6 +1177,7 @@ mod tests {
             exec_tier: None,
             mode: None,
             voice_input: false,
+            project_id: None,
         };
         let result2 = manager.start_run(typed_params).await.unwrap();
         assert_eq!(result2.session_key, result.session_key);
@@ -1050,6 +1248,7 @@ mod tests {
             exec_tier: None,
             mode: None,
             voice_input: false,
+            project_id: None,
         };
         manager.start_run(params).await.expect("start_run");
 
@@ -1149,12 +1348,13 @@ mod tests {
             exec_tier: None,
             mode: None,
             voice_input: false,
+            project_id: None,
         };
 
         let request = crate::gateway::caller_identity::CALLER_ROLE
             .scope(
                 Some("guest".to_string()),
-                build_run_request("run-1".to_string(), &session_key, params, None),
+                build_run_request("run-1".to_string(), &session_key, params, None, None),
             )
             .await
             .expect("build_run_request");
@@ -1205,6 +1405,7 @@ mod tests {
             exec_tier: None,
             mode: None,
             voice_input: false,
+            project_id: None,
         }
     }
 
@@ -1222,7 +1423,7 @@ mod tests {
             ..base_params()
         };
 
-        let request = build_run_request("run-tier".to_string(), &session_key, params, None)
+        let request = build_run_request("run-tier".to_string(), &session_key, params, None, None)
             .await
             .expect("build_run_request");
 
@@ -1247,11 +1448,11 @@ mod tests {
             ..base_params()
         };
 
-        let err = build_run_request("run-bad".to_string(), &session_key, params, None)
+        let err = build_run_request("run-bad".to_string(), &session_key, params, None, None)
             .await
             .expect_err("an unknown tier must not silently fall back");
         assert!(
-            err.contains("yolo"),
+            err.to_string().contains("yolo"),
             "error should name the bad tier: {err}"
         );
     }
@@ -1268,7 +1469,7 @@ mod tests {
             ..base_params()
         };
 
-        let request = build_run_request("run-mode".to_string(), &session_key, params, None)
+        let request = build_run_request("run-mode".to_string(), &session_key, params, None, None)
             .await
             .expect("build_run_request");
 
@@ -1289,11 +1490,11 @@ mod tests {
             ..base_params()
         };
 
-        let err = build_run_request("run-bad-mode".to_string(), &session_key, params, None)
+        let err = build_run_request("run-bad-mode".to_string(), &session_key, params, None, None)
             .await
             .expect_err("an unknown mode must not silently fall back");
         assert!(
-            err.contains("game"),
+            err.to_string().contains("game"),
             "error should name the bad mode: {err}"
         );
     }
@@ -1320,6 +1521,7 @@ mod tests {
             exec_tier: None,
             mode: None,
             voice_input: false,
+            project_id: None,
         };
 
         let result = manager.start_run(params).await.unwrap();
@@ -1353,6 +1555,7 @@ mod tests {
             exec_tier: None,
             mode: None,
             voice_input: false,
+            project_id: None,
         };
 
         let result = crate::gateway::caller_identity::CALLER_ROLE
@@ -1386,6 +1589,7 @@ mod tests {
             exec_tier: None,
             mode: None,
             voice_input: false,
+            project_id: None,
         };
 
         let result = crate::gateway::caller_identity::CALLER_ROLE
@@ -1422,6 +1626,7 @@ mod tests {
             exec_tier: None,
             mode: None,
             voice_input: false,
+            project_id: None,
         };
 
         // chat-tier role but loopback connection → allowed.
@@ -1435,6 +1640,191 @@ mod tests {
         assert!(
             result.is_ok(),
             "loopback chat-tier project_root override must succeed: {result:?}"
+        );
+    }
+
+    // ------------------------------------------------------------------
+    // Tier 2: the room's bound workspace (P2 Task 7)
+    // ------------------------------------------------------------------
+
+    /// A room in the process-global catalogue `bound_workspace_of` reads,
+    /// optionally bound to `dir`, with `u-alice` on its roster. The returned
+    /// guard serialises the roster projection — `republish_roster` REPLACES
+    /// it, so a concurrent roster test would otherwise erase this room.
+    ///
+    /// `ProjectStore::shared()` is process-global and outlives each test, and
+    /// its unique index is `(owner, workspace_path)`. Callers therefore bind a
+    /// FRESH `TempDir` rather than `std::env::temp_dir()` — two tests sharing
+    /// one path make whichever runs second fail on the index, and which one
+    /// that is depends on the scheduler.
+    fn room_in_the_shared_catalogue(
+        dir: Option<&std::path::Path>,
+    ) -> (String, std::sync::MutexGuard<'static, ()>) {
+        let guard = crate::projects::roster::TEST_GUARD
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let store = crate::projects::ProjectStore::shared();
+        let project = store
+            .create("workspace binding room", Some("u-alice"), dir)
+            .expect("create room");
+        (project.id, guard)
+    }
+
+    /// The headline of Task 7: chatting in a bound room puts the run in the
+    /// room's folder, with no `project_root` on the request at all.
+    #[tokio::test]
+    async fn a_project_session_defaults_its_cwd_to_the_bound_workspace() {
+        let folder = tempfile::tempdir().expect("tempdir");
+        let dir = std::fs::canonicalize(folder.path()).expect("canonical");
+        let (project_id, _guard) = room_in_the_shared_catalogue(Some(&dir));
+
+        let session_key = AgentRouter::new().route(None, None, None, None).await;
+        let params = AgentRunParams {
+            project_id: Some(project_id),
+            ..base_params()
+        };
+
+        let request = crate::gateway::caller_identity::CALLER_USER
+            .scope(
+                Some("u-alice".to_string()),
+                build_run_request("run-room".to_string(), &session_key, params, None, None),
+            )
+            .await
+            .expect("build_run_request");
+
+        assert_eq!(request.workspace_override.as_deref(), Some(dir.as_path()));
+        assert_eq!(
+            request.metadata.get("project_root").map(String::as_str),
+            Some(dir.display().to_string().as_str()),
+            "metadata must mirror the override on BOTH tiers — a reader must \
+             not be able to tell which one put the run there"
+        );
+    }
+
+    /// The plan's second test: the config-tier gate belongs to *choosing* a
+    /// directory. A remote member running in a folder the owner already chose
+    /// is not choosing one, so the gate must not fire here — otherwise every
+    /// remote member of a bound room is locked out of the room's whole point.
+    #[tokio::test]
+    async fn a_member_does_not_need_the_config_gate_to_use_the_bound_workspace() {
+        let folder = tempfile::tempdir().expect("tempdir");
+        let dir = std::fs::canonicalize(folder.path()).expect("canonical");
+        let (project_id, _guard) = room_in_the_shared_catalogue(Some(&dir));
+        crate::projects::ProjectStore::shared()
+            .add_member(&project_id, "u-bob")
+            .expect("bob joins");
+
+        let session_key = AgentRouter::new().route(None, None, None, None).await;
+        let params = AgentRunParams {
+            project_id: Some(project_id),
+            ..base_params()
+        };
+
+        // Remote AND chat-tier: exactly the connection tier 1 refuses.
+        let request = crate::gateway::caller_identity::CALLER_USER
+            .scope(
+                Some("u-bob".to_string()),
+                crate::gateway::caller_identity::CALLER_ROLE.scope(
+                    Some("member".to_string()),
+                    crate::gateway::caller_identity::CALLER_IS_LOOPBACK.scope(
+                        false,
+                        build_run_request(
+                            "run-remote-member".to_string(),
+                            &session_key,
+                            params,
+                            None,
+                            None,
+                        ),
+                    ),
+                ),
+            )
+            .await
+            .expect("a bound room must be usable by its remote members");
+
+        assert_eq!(request.workspace_override.as_deref(), Some(dir.as_path()));
+    }
+
+    /// Unbound rooms and personal sessions are unchanged: the agent's own
+    /// workspace, resolved downstream from `workspace_override: None`.
+    #[tokio::test]
+    async fn an_unbound_room_leaves_the_workspace_to_the_agent() {
+        let (project_id, _guard) = room_in_the_shared_catalogue(None);
+
+        let session_key = AgentRouter::new().route(None, None, None, None).await;
+        let params = AgentRunParams {
+            project_id: Some(project_id),
+            ..base_params()
+        };
+
+        let request = crate::gateway::caller_identity::CALLER_USER
+            .scope(
+                Some("u-alice".to_string()),
+                build_run_request("run-unbound".to_string(), &session_key, params, None, None),
+            )
+            .await
+            .expect("build_run_request");
+
+        assert!(request.workspace_override.is_none());
+        assert!(!request.metadata.contains_key("project_root"));
+    }
+
+    /// A room whose folder went away refuses the turn instead of quietly
+    /// running in the agent's default workspace — where every file tool would
+    /// then operate somewhere nobody in the room expects.
+    #[tokio::test]
+    async fn a_room_whose_folder_vanished_refuses_the_turn_loudly() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let dir = std::fs::canonicalize(tmp.path()).expect("canonical");
+        let (project_id, _guard) = room_in_the_shared_catalogue(Some(&dir));
+        drop(tmp); // the folder is gone, the binding is not
+
+        let session_key = AgentRouter::new().route(None, None, None, None).await;
+        let params = AgentRunParams {
+            project_id: Some(project_id),
+            ..base_params()
+        };
+
+        let err = crate::gateway::caller_identity::CALLER_USER
+            .scope(
+                Some("u-alice".to_string()),
+                build_run_request("run-gone".to_string(), &session_key, params, None, None),
+            )
+            .await
+            .expect_err("a missing bound folder must not silently fall back");
+        assert!(
+            err.to_string().contains("folder is missing"),
+            "unexpected error: {err}"
+        );
+    }
+
+    /// Tier 1 still outranks tier 2, and still through the gate — a caller
+    /// who names a folder for this turn gets that folder, not the room's.
+    #[tokio::test]
+    async fn an_explicit_project_root_still_outranks_the_binding() {
+        let folder = tempfile::tempdir().expect("tempdir");
+        let bound = std::fs::canonicalize(folder.path()).expect("canonical");
+        let (project_id, _guard) = room_in_the_shared_catalogue(Some(&bound));
+        let chosen = tempfile::tempdir().expect("tempdir");
+
+        let session_key = AgentRouter::new().route(None, None, None, None).await;
+        let params = AgentRunParams {
+            project_id: Some(project_id),
+            project_root: Some(chosen.path().display().to_string()),
+            ..base_params()
+        };
+
+        let request = crate::gateway::caller_identity::CALLER_USER
+            .scope(
+                Some("u-alice".to_string()),
+                build_run_request("run-explicit".to_string(), &session_key, params, None, None),
+            )
+            .await
+            .expect("build_run_request");
+
+        assert_eq!(
+            request.workspace_override.as_deref(),
+            Some(chosen.path()),
+            "the per-turn choice wins"
         );
     }
 
@@ -1654,6 +2044,7 @@ mod tests {
                 exec_tier: None,
                 mode: None,
                 voice_input,
+                project_id: None,
             }
         }
 
@@ -1710,5 +2101,276 @@ mod tests {
         assert_eq!(pref.preset.as_deref(), Some("deep"));
         assert!(!pref.one_shot);
         crate::providers::session_moa_handle::clear_session_moa(&key);
+    }
+
+    /// P2 project rooms: the attribution branch in [`build_run_request`].
+    mod project_scope {
+        use super::*;
+        use crate::gateway::caller_identity::CALLER_USER;
+        use crate::projects::roster::TEST_GUARD as ROSTER_TEST_GUARD;
+        use crate::projects::ProjectStore;
+        use crate::scope::{ScopeAttribution, ScopeId};
+        use std::sync::MutexGuard;
+
+        /// A room owned by alice with bob on the roster, plus a session store.
+        /// The guard serialises the roster projection (it is process-global and
+        /// `publish` REPLACES rather than merges).
+        fn room() -> (
+            Arc<dyn SessionStore>,
+            String,
+            tempfile::TempDir,
+            MutexGuard<'static, ()>,
+        ) {
+            let guard = ROSTER_TEST_GUARD.lock().unwrap_or_else(|e| e.into_inner());
+            let projects = ProjectStore::new(rusqlite::Connection::open_in_memory().unwrap());
+            projects.create_schema().unwrap();
+            let p = projects.create("room", Some("u-alice"), None).unwrap();
+            projects.add_member(&p.id, "u-bob").unwrap();
+
+            let tmp = tempfile::tempdir().unwrap();
+            let store: Arc<dyn SessionStore> = Arc::new(
+                FileSessionStore::new(FileSessionStoreConfig {
+                    base_dir: tmp.path().join("sessions"),
+                    ..FileSessionStoreConfig::default()
+                })
+                .unwrap(),
+            );
+            (store, p.id, tmp, guard)
+        }
+
+        fn params(project_id: Option<&str>) -> AgentRunParams {
+            AgentRunParams {
+                input: "hi".into(),
+                session_key: None,
+                channel: None,
+                peer_id: None,
+                stream: false,
+                thinking: None,
+                attachments: vec![],
+                agent_id: None,
+                project_root: None,
+                model_override: None,
+                exec_tier: None,
+                mode: None,
+                voice_input: false,
+                project_id: project_id.map(str::to_string),
+            }
+        }
+
+        fn stamped(req: &RunRequest) -> (Option<&str>, Option<&str>) {
+            (
+                req.metadata
+                    .get(crate::scope::OWNER_META_KEY)
+                    .map(|s| s.as_str()),
+                req.metadata
+                    .get(crate::scope::SCOPE_META_KEY)
+                    .map(|s| s.as_str()),
+            )
+        }
+
+        #[tokio::test]
+        async fn a_project_session_is_stamped_with_the_project_scope_not_the_creator() {
+            let (store, pid, _tmp, _guard) = room();
+            let key = SessionKey::Main {
+                agent_id: "main".into(),
+                main_key: "new-1".into(),
+                epoch: 0,
+            };
+
+            let req = CALLER_USER
+                .scope(
+                    Some("u-alice".to_string()),
+                    build_run_request("r1".into(), &key, params(Some(&pid)), None, Some(&store)),
+                )
+                .await
+                .expect("a member may open a room session");
+
+            assert_eq!(
+                stamped(&req),
+                (Some("u-alice"), Some(format!("project:{pid}").as_str())),
+                "owner is the author; scope is the ROOM, not the author"
+            );
+        }
+
+        #[tokio::test]
+        async fn a_non_member_cannot_open_a_session_in_a_project() {
+            let (store, pid, _tmp, _guard) = room();
+            let key = SessionKey::Main {
+                agent_id: "main".into(),
+                main_key: "new-2".into(),
+                epoch: 0,
+            };
+
+            let denied = CALLER_USER
+                .scope(
+                    Some("u-mallory".to_string()),
+                    build_run_request("r2".into(), &key, params(Some(&pid)), None, Some(&store)),
+                )
+                .await
+                .expect_err("a stranger must be refused");
+            let unknown = CALLER_USER
+                .scope(
+                    Some("u-mallory".to_string()),
+                    build_run_request(
+                        "r3".into(),
+                        &key,
+                        params(Some("p-never-minted")),
+                        None,
+                        Some(&store),
+                    ),
+                )
+                .await
+                .expect_err("an unminted id must be refused");
+
+            // No oracle: both are ProjectNotFound, differing only in the id the
+            // caller supplied and already knows.
+            assert!(matches!(denied, BuildRunError::ProjectNotFound(ref id) if *id == pid));
+            assert!(
+                matches!(unknown, BuildRunError::ProjectNotFound(ref id) if id == "p-never-minted")
+            );
+            // And the refusal happened BEFORE anything created a session row.
+            assert!(store.get_metadata(&key).await.unwrap().is_none());
+        }
+
+        #[tokio::test]
+        async fn an_existing_sessions_scope_wins_over_the_request() {
+            let (store, pid, _tmp, _guard) = room();
+            let key = SessionKey::Main {
+                agent_id: "main".into(),
+                main_key: "personal-1".into(),
+                epoch: 0,
+            };
+
+            // alice opens a PERSONAL session first.
+            crate::scope::with_scope(
+                Some(ScopeAttribution::personal("u-alice")),
+                store.get_or_create(&key),
+            )
+            .await
+            .unwrap();
+
+            // ...then re-sends to it claiming it is a project session.
+            let req = CALLER_USER
+                .scope(
+                    Some("u-alice".to_string()),
+                    build_run_request("r4".into(), &key, params(Some(&pid)), None, Some(&store)),
+                )
+                .await
+                .expect("re-sending to your own session is fine");
+
+            assert_eq!(
+                stamped(&req),
+                (Some("u-alice"), Some("personal:u-alice")),
+                "spec §10: a session's scope is immutable — the request does not move it"
+            );
+            // The row on disk is untouched too.
+            let meta = store.get_metadata(&key).await.unwrap().unwrap();
+            assert_eq!(meta.scope_id.as_deref(), Some("personal:u-alice"));
+        }
+
+        #[tokio::test]
+        async fn a_second_member_may_speak_in_the_room() {
+            let (store, pid, _tmp, _guard) = room();
+            let key = SessionKey::Main {
+                agent_id: "main".into(),
+                main_key: "room-1".into(),
+                epoch: 0,
+            };
+
+            // alice creates the room session.
+            crate::scope::with_scope(
+                Some(ScopeAttribution {
+                    owner_user_id: "u-alice".into(),
+                    scope: ScopeId::Project(pid.clone()),
+                }),
+                store.get_or_create(&key),
+            )
+            .await
+            .unwrap();
+
+            // bob — a member, not the creator — sends into it.
+            let req = CALLER_USER
+                .scope(
+                    Some("u-bob".to_string()),
+                    build_run_request("r5".into(), &key, params(None), None, Some(&store)),
+                )
+                .await
+                .expect("a member may speak in the room");
+
+            assert_eq!(
+                stamped(&req),
+                (Some("u-alice"), Some(format!("project:{pid}").as_str())),
+                "the run inherits the ROOM's attribution, so bob's memory writes \
+                 land in the room's partition, not his own"
+            );
+        }
+
+        /// The Simulated-execution carve-out, stated as a test rather than only
+        /// as a doc comment: with no store there is no stored scope to honor,
+        /// so every turn takes the new-session path.
+        #[tokio::test]
+        async fn without_a_session_store_every_turn_takes_the_new_session_path() {
+            let (_store, pid, _tmp, _guard) = room();
+            let key = SessionKey::Main {
+                agent_id: "main".into(),
+                main_key: "no-store".into(),
+                epoch: 0,
+            };
+
+            let req = CALLER_USER
+                .scope(
+                    Some("u-alice".to_string()),
+                    build_run_request("r6".into(), &key, params(Some(&pid)), None, None),
+                )
+                .await
+                .expect("no store still resolves the request's own claim");
+            assert_eq!(
+                stamped(&req),
+                (Some("u-alice"), Some(format!("project:{pid}").as_str()))
+            );
+        }
+
+        /// An unrestricted caller (cron, A2A, in-process) that names a room must
+        /// still get the project stamp — deriving the owner from the caller
+        /// alone would silently drop the scope for the callers that named it
+        /// most explicitly.
+        #[tokio::test]
+        async fn an_unrestricted_caller_naming_a_room_still_gets_the_project_scope() {
+            let (store, pid, _tmp, _guard) = room();
+            let key = SessionKey::Main {
+                agent_id: "main".into(),
+                main_key: "room-2".into(),
+                epoch: 0,
+            };
+
+            let req = build_run_request("r7".into(), &key, params(Some(&pid)), None, Some(&store))
+                .await
+                .expect("unrestricted callers are never refused");
+            assert_eq!(
+                stamped(&req),
+                (Some("u-owner"), Some(format!("project:{pid}").as_str())),
+                "owner by absence, project scope honored"
+            );
+        }
+
+        /// No `project_id` at all keeps the pre-P2 personal stamp verbatim.
+        #[tokio::test]
+        async fn a_turn_without_a_project_id_is_unchanged_from_p1() {
+            let (store, _pid, _tmp, _guard) = room();
+            let key = SessionKey::Main {
+                agent_id: "main".into(),
+                main_key: "plain-1".into(),
+                epoch: 0,
+            };
+
+            let req = CALLER_USER
+                .scope(
+                    Some("u-alice".to_string()),
+                    build_run_request("r8".into(), &key, params(None), None, Some(&store)),
+                )
+                .await
+                .expect("ordinary turn");
+            assert_eq!(stamped(&req), (Some("u-alice"), Some("personal:u-alice")));
+        }
     }
 }

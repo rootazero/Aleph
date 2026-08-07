@@ -1010,7 +1010,12 @@ async fn send_utterance(
     // session's agent/model/tier selections).
     let sk = chat.session_key.get_untracked();
     let aid = chat.agent_id.get_untracked();
-    let pr = chat.active_project_root.get_untracked();
+    let room_project_id = chat.room_project_id.get_untracked();
+    let pr = if room_project_id.is_some() {
+        None
+    } else {
+        chat.active_project_root.get_untracked()
+    };
     let mo = chat.selected_model.get_untracked();
     let tier = chat.session_exec_tier.get_untracked();
     // First-send-only carriage (see composer/mod.rs typed path): an existing
@@ -1032,6 +1037,7 @@ async fn send_utterance(
         vec![],
         aid.as_deref(),
         pr.as_deref(),
+        room_project_id.as_deref(),
         mo.as_ref(),
         tier.as_deref(),
         mode.as_deref(),

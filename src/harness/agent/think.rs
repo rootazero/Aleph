@@ -969,17 +969,8 @@ impl AgentHarness {
             // difference is we set TerminateReason::StopHookHalt and exit
             // immediately (no further turns).
             let new_turn = uuid::Uuid::new_v4();
-            let halt_event = SessionEvent::UserMessage {
-                turn_id: new_turn,
-                content: MessageContent {
-                    text: format!("[stop hook halt] {reason}"),
-                    blocks: Vec::new(),
-                    thinking: None,
-                    thinking_signature: None,
-                },
-                at: crate::session::events::now_ms(),
-                synthetic: true,
-            };
+            let halt_event =
+                SessionEvent::synthetic_user(new_turn, format!("[stop hook halt] {reason}"));
             self.deps.session.emit_event(session_id, halt_event).await?;
             // ② Close the tool_use blocks this halted turn emitted but never ran
             // — otherwise the prompt builder drops them as orphans and erases the
@@ -1028,17 +1019,8 @@ impl AgentHarness {
                 reason: reason.clone(),
             });
             let new_turn = uuid::Uuid::new_v4();
-            let block_event = SessionEvent::UserMessage {
-                turn_id: new_turn,
-                content: MessageContent {
-                    text: format!("[verifier veto] {reason}"),
-                    blocks: Vec::new(),
-                    thinking: None,
-                    thinking_signature: None,
-                },
-                at: crate::session::events::now_ms(),
-                synthetic: true,
-            };
+            let block_event =
+                SessionEvent::synthetic_user(new_turn, format!("[verifier veto] {reason}"));
             self.deps
                 .session
                 .emit_event(session_id, block_event)
@@ -1520,6 +1502,7 @@ mod tests {
             },
             at: now_ms(),
             synthetic: false,
+            author_user_id: None,
         }
     }
 

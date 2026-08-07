@@ -1,8 +1,14 @@
-//! P1 data-isolation acceptance tests (spec §9).
+//! Data-isolation acceptance tests (spec §9, §13).
 //!
-//! These are the two acceptance tests the P1 branch is named for:
+//! The two P1 acceptance tests this module is named for:
 //! - [`two_users_cannot_see_each_other_end_to_end`] (spec §9-1)
 //! - [`single_user_fixture_is_byte_identical_after_upgrade`] (spec §9-2)
+//!
+//! …and P2's, which is the same isolation read from the other side — what a
+//! shared room DOES share, and what it still must not:
+//! - [`two_members_share_one_room_memory_and_nobody_elses`] (spec §8/§13)
+//! - [`the_model_can_tell_two_room_members_apart`] (spec §6.2)
+//! - [`two_members_of_a_room_work_in_the_same_bound_folder`] (spec §8, Task 7)
 //!
 //! Every RPC surface below is exercised through its REAL handler function —
 //! the exact same one `HandlerRegistry` wires up in production
@@ -558,6 +564,227 @@ async fn two_users_cannot_see_each_others_teams() {
     );
 }
 
+/// Reproduce the task-local nesting a real GATEWAY DISPATCH applies to an RPC
+/// issued from inside a project room: the ambient scope is the ROOM's
+/// (`ScopeId::Project`), while `CALLER_USER` is the individual member who is
+/// asking. The divergence is the point — see
+/// `gateway::handlers::agent::resolve_attribution` and
+/// `execution_engine::AUTHOR_USER_KEY`: every member's turn in a room carries
+/// the room's attribution (that is what shares the memory partition), so
+/// "whose turn is this" needs its own fact.
+///
+/// NOT the shape of a turn's INTERIOR — see [`as_room_turn`], which is the one
+/// to use for anything an agent run emits.
+async fn as_room_member<F, T>(user: &str, project_id: &str, fut: F) -> T
+where
+    F: std::future::Future<Output = T>,
+{
+    with_scope(
+        Some(ScopeAttribution {
+            owner_user_id: user.to_string(),
+            scope: crate::scope::ScopeId::Project(project_id.to_string()),
+        }),
+        CALLER_USER.scope(Some(user.to_string()), fut),
+    )
+    .await
+}
+
+/// Reproduce the task-local nesting the INTERIOR of a room's agent run sees —
+/// the context every `SessionEvent::UserMessage` writer actually runs in.
+///
+/// Four facts, and taking any of them from the wrong place is a defect this
+/// suite has to be able to see:
+///
+/// - **The ambient scope's `owner_user_id` is `room_owner`, not the speaker**,
+///   identically for every member. That is what `resolve_attribution` path 1
+///   rebuilds from the session row, and it is what puts both members' memory in
+///   one partition. A helper that set it to the speaker would make the label's
+///   fallback agree with the correct answer by accident and pass while
+///   production stamped the room's creator on everyone's message.
+/// - **The speaker rides its own task-local**, seeded by
+///   `run_loop::with_request_scope` from the request's `AUTHOR_USER_KEY`.
+/// - **A real `tokio::spawn` sits between the seeding and the emission**, and
+///   both task-locals are captured before it and re-seeded inside — the shape
+///   `Orchestrator::dispatch` uses. Nesting them in ONE task is a sequence
+///   production never presents, and it is what made the first fix round pass
+///   while every room message carried the wrong name.
+/// - **`CALLER_USER` is dead** on the far side, which is why nothing here
+///   scopes it.
+///
+/// Division of labour: this proves the prompt RENDERS a correct author. That
+/// `dispatch` really performs the re-seed is a different claim, proven against
+/// the production wiring by
+/// `tests/gateway_chat_room_author_across_spawn.rs`.
+async fn as_room_turn<F, T>(speaker: &str, room_owner: &str, project_id: &str, fut: F) -> T
+where
+    F: std::future::Future<Output = T> + Send + 'static,
+    T: Send + 'static,
+{
+    with_scope(
+        Some(ScopeAttribution {
+            owner_user_id: room_owner.to_string(),
+            scope: crate::scope::ScopeId::Project(project_id.to_string()),
+        }),
+        crate::scope::with_room_author(Some(speaker.to_string()), async move {
+            let captured_scope = crate::scope::current_scope();
+            let captured_author = crate::scope::current_room_author();
+            tokio::spawn(with_scope(
+                captured_scope,
+                crate::scope::with_room_author(captured_author, fut),
+            ))
+            .await
+            .expect("the emission task must not panic")
+        }),
+    )
+    .await
+}
+
+/// Spec §8/§13 (P2 acceptance): **两用户在同一项目群聊协作，项目记忆共享.**
+///
+/// The storage half of the P2 acceptance criterion, driven through the real
+/// derivation (`project_scope::session_read_ids`) and the real `memory.search`
+/// handler under the same task-locals a dispatch applies. Four claims, and the
+/// last two are the ones that fail silently if the room arms are wrong:
+///
+/// 1. Alice writes in the room; **Bob's recall union contains that partition**
+///    — one room, one memory, whoever is speaking.
+/// 2. A non-member addressing the room's partition gets an EMPTY result, not
+///    an error: `memory.search` must not become an existence oracle.
+/// 3. Neither member's recall union contains ANY personal partition — a room
+///    recalls the org tier and itself, and nobody's private memory. Asserted on
+///    the whole vec, because a third entry sneaking in leaks with no error.
+/// 4. The profile floor is ABSENT in the room. "Whose USER.md" has no answer
+///    here; a predicate spelled `current_scope().is_some()` would admit the
+///    creator's and report nothing.
+#[tokio::test]
+async fn two_members_share_one_room_memory_and_nobody_elses() {
+    use crate::memory::project_scope::{profile_floor_id, session_read_ids, session_write_id};
+    use crate::projects::ProjectStore;
+
+    let _guard = crate::projects::roster::TEST_GUARD
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+
+    let temp = TempDir::new().unwrap();
+    let memory: Arc<SqliteMemoryBackend> =
+        Arc::new(SqliteMemoryBackend::new(&temp.path().join("memory.db")).unwrap());
+
+    // A real room with a real roster: alice owns it, bob is on it, mallory is
+    // not. The roster IS the authorization (spec §6.1) — there is no second
+    // per-resource grant to forget to set.
+    let projects = ProjectStore::new(rusqlite::Connection::open_in_memory().unwrap());
+    projects.create_schema().unwrap();
+    let room = projects
+        .create("shared room", Some("u-alice"), None)
+        .unwrap();
+    projects.add_member(&room.id, "u-bob").unwrap();
+
+    // ── 1. Alice speaks in the room ──
+    let alice_wrote_to = as_room_member("u-alice", &room.id, async {
+        let partition = session_write_id("main", false, None);
+        memory
+            .insert_raw_memory(
+                &RawMemory::new(
+                    "the room agreed to ship on friday".to_string(),
+                    RawMemorySource::Reflection,
+                )
+                .with_agent(partition.clone()),
+            )
+            .await
+            .unwrap();
+        partition
+    })
+    .await;
+
+    // ── 2. Bob, a different member of the SAME room, recalls it ──
+    let bob_reads = as_room_member("u-bob", &room.id, async {
+        session_read_ids("main", false, None)
+    })
+    .await;
+    assert!(
+        bob_reads.contains(&alice_wrote_to),
+        "one room, one memory: bob's recall union must contain the partition \
+         alice wrote to ({alice_wrote_to}): {bob_reads:?}"
+    );
+
+    let bob_search = as_room_member(
+        "u-bob",
+        &room.id,
+        handle_search(
+            req(
+                "memory.search",
+                Some(json!({ "agent_id": alice_wrote_to.clone() })),
+            ),
+            memory.clone(),
+        ),
+    )
+    .await;
+    let rows = bob_search.result.expect("success, not an error")["memories"]
+        .as_array()
+        .expect("memories array")
+        .clone();
+    assert!(
+        rows.iter().any(|m| m["user_input"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("friday")),
+        "bob must recall what alice taught the agent in their shared room: {rows:?}"
+    );
+
+    // ── 3. A stranger gets emptiness, not an error ──
+    let mallory_search = as_caller(
+        "u-mallory",
+        handle_search(
+            req(
+                "memory.search",
+                Some(json!({ "agent_id": alice_wrote_to.clone() })),
+            ),
+            memory.clone(),
+        ),
+    )
+    .await;
+    let mallory_rows = mallory_search
+        .result
+        .expect("a denial must look like an empty result, never an error")["memories"]
+        .as_array()
+        .expect("memories array")
+        .clone();
+    assert!(
+        mallory_rows.is_empty(),
+        "a non-member must not read the room's partition: {mallory_rows:?}"
+    );
+
+    // ── 4. The room recalls nobody's personal memory, and has no profile ──
+    assert_eq!(
+        bob_reads,
+        vec!["main".to_string(), alice_wrote_to.clone()],
+        "a room recalls the org tier and itself — a third entry here is a \
+         cross-user leak that reports nothing"
+    );
+    let alice_reads = as_room_member("u-alice", &room.id, async {
+        session_read_ids("main", false, None)
+    })
+    .await;
+    assert_eq!(
+        alice_reads, bob_reads,
+        "the room resolves identically for every member — that IS the sharing"
+    );
+    for ids in [&alice_reads, &bob_reads] {
+        assert!(
+            !ids.iter().any(|id| id.contains("__u-")),
+            "not even the creator's personal memory is recalled in a room: {ids:?}"
+        );
+    }
+    assert_eq!(
+        as_room_member("u-alice", &room.id, async {
+            profile_floor_id("main", false, None)
+        })
+        .await,
+        None,
+        "a room has no 'the user' whose profile could be the floor"
+    );
+}
+
 /// Spec §9-2: a pre-P1 single-user fixture must read back byte-identical
 /// after the P1 code is deployed. Three data shapes, each hand-authored
 /// exactly as P0-era code would have left it on disk (never through the new
@@ -716,4 +943,192 @@ async fn single_user_fixture_is_byte_identical_after_upgrade() {
         legacy_note_content,
         "the base-partition note must survive the P1 upgrade untouched"
     );
+}
+
+/// Spec §6.2 (P2 acceptance, other half): **两用户在同一项目群聊协作** — the
+/// collaboration half of the criterion whose storage half is
+/// [`two_members_share_one_room_memory_and_nobody_elses`].
+///
+/// Sharing one memory partition is what makes the room a room; being able to
+/// tell the members apart is what makes it a *conversation*. Both are needed,
+/// and only the second exists in bytes the model reads — which is why this
+/// asserts on the built prompt and not on the events.
+///
+/// End to end through the real path: [`crate::scope::room_author`] decides
+/// whether a message gets an author at all, `SessionEvent::UserMessage` carries
+/// it, and `harness::agent::prompt::build_prompt` — the ONE place events become
+/// model messages — renders it. A personal-scope turn is included as the
+/// control, because the failure this guards against is not "the label is
+/// wrong": it is the label being absent, which merges two people into one voice
+/// and reports nothing.
+#[tokio::test]
+async fn the_model_can_tell_two_room_members_apart() {
+    use crate::providers::message::{ContentBlock, UnifiedMessage};
+    use crate::session::events::{MessageContent, SessionEvent, SessionEventRecord};
+
+    crate::scope::directory::record("u-room-alice", "Alice");
+    crate::scope::directory::record("u-room-bob", "Bob");
+
+    // Alice created the room, so hers is the `owner_user_id` on the session
+    // row and therefore on EVERY member's run — including Bob's.
+    async fn said_in_room(user: &str, text: &str, seq: u64) -> SessionEventRecord {
+        let author = as_room_turn(user, "u-room-alice", "p-standup", async {
+            crate::scope::ambient_room_author()
+        })
+        .await;
+        assert_eq!(
+            author.as_deref(),
+            Some(user),
+            "the label names the speaker; deriving it from the run's scope \
+             would name the room's creator on every message"
+        );
+        user_event(text, seq, author)
+    }
+
+    fn user_event(text: &str, seq: u64, author: Option<String>) -> SessionEventRecord {
+        SessionEventRecord {
+            seq,
+            created_at_ms: 1_000 + seq as i64,
+            event: SessionEvent::UserMessage {
+                turn_id: uuid::Uuid::new_v4(),
+                content: MessageContent {
+                    text: text.to_string(),
+                    blocks: Vec::new(),
+                    thinking: None,
+                    thinking_signature: None,
+                },
+                at: 1_000 + seq as i64,
+                synthetic: false,
+                author_user_id: author,
+            },
+        }
+    }
+
+    // The control: a personal session produces no author even when a speaker
+    // IS seeded, so a solo session's prompt stays byte-identical to pre-P2.
+    // Seeding the author is what makes this a real control — without it the
+    // assertion would also pass for a build that simply never labels anything.
+    let solo = with_scope(
+        Some(ScopeAttribution::personal("u-room-alice")),
+        crate::scope::with_room_author(Some("u-room-alice".to_string()), async {
+            crate::scope::ambient_room_author()
+        }),
+    )
+    .await;
+    assert_eq!(
+        solo, None,
+        "a personal session has no second speaker to name"
+    );
+
+    let events = vec![
+        said_in_room("u-room-alice", "let's ship on friday", 1).await,
+        said_in_room("u-room-bob", "i need one more day", 2).await,
+        user_event("and nobody typed this one", 3, None),
+    ];
+
+    let texts: Vec<String> = crate::harness::agent::prompt::build_prompt(&events, 0)
+        .into_iter()
+        .filter_map(|m| match m {
+            UnifiedMessage::User { content } => content.into_iter().find_map(|b| match b {
+                ContentBlock::Text { text, .. } => Some(text),
+                _ => None,
+            }),
+            _ => None,
+        })
+        .collect();
+
+    assert_eq!(
+        texts,
+        vec![
+            "[Alice]: let's ship on friday".to_string(),
+            "[Bob]: i need one more day".to_string(),
+            "and nobody typed this one".to_string(),
+        ]
+    );
+}
+
+/// Spec §8 (P2 acceptance, Task 7): **collaborating in a room means working in
+/// the same folder** — the third leg beside shared memory and distinguishable
+/// speakers.
+///
+/// Driven through the real `handlers::agent::build_run_request`, the one
+/// gateway→engine hand-off, under the task-locals a real dispatch applies. The
+/// two claims that fail silently:
+///
+/// 1. **Both members resolve to the same directory**, from a binding neither of
+///    them named on the request. A per-member fallback to the agent workspace
+///    would look like a working room right up until one of them saved a file.
+/// 2. **A remote, chat-tier member is not gated.** The config-tier gate guards
+///    *choosing* a directory; using one the owner already chose is not
+///    choosing. Getting this wrong locks every remote member out of the room's
+///    entire purpose, and it fails as a permission error nobody would connect
+///    to project rooms.
+///
+/// The personal-session control is what proves the workspace came from the
+/// room and not from something ambient in the fixture.
+#[tokio::test]
+async fn two_members_of_a_room_work_in_the_same_bound_folder() {
+    use crate::gateway::caller_identity::{CALLER_IS_LOOPBACK, CALLER_ROLE};
+    use crate::gateway::handlers::agent::{build_run_request, AgentRunParams};
+    use crate::gateway::router::AgentRouter;
+
+    let _guard = crate::projects::roster::TEST_GUARD
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+    let folder = TempDir::new().expect("tempdir");
+    let canonical = std::fs::canonicalize(folder.path()).expect("canonical");
+
+    let store = crate::projects::ProjectStore::shared();
+    let room = store
+        .create(
+            "shared workspace room",
+            Some("u-ws-alice"),
+            Some(&canonical),
+        )
+        .expect("create room");
+    store.add_member(&room.id, "u-ws-bob").expect("bob joins");
+
+    // Remote AND chat-tier for both: the tier `project_root` refuses.
+    async fn cwd_for(user: &str, project_id: Option<&str>) -> Option<std::path::PathBuf> {
+        let session_key = AgentRouter::new().route(None, None, None, None).await;
+        let params = AgentRunParams {
+            input: "where are we working".to_string(),
+            session_key: None,
+            channel: Some("gui:chat".to_string()),
+            peer_id: None,
+            stream: false,
+            thinking: None,
+            attachments: vec![],
+            agent_id: None,
+            project_root: None,
+            model_override: None,
+            exec_tier: None,
+            mode: None,
+            voice_input: false,
+            project_id: project_id.map(str::to_string),
+        };
+        CALLER_USER
+            .scope(
+                Some(user.to_string()),
+                CALLER_ROLE.scope(
+                    Some("member".to_string()),
+                    CALLER_IS_LOOPBACK.scope(
+                        false,
+                        build_run_request(format!("run-{user}"), &session_key, params, None, None),
+                    ),
+                ),
+            )
+            .await
+            .expect("a room member's turn must build")
+            .workspace_override
+    }
+
+    let alice = cwd_for("u-ws-alice", Some(&room.id)).await;
+    let bob = cwd_for("u-ws-bob", Some(&room.id)).await;
+    assert_eq!(alice.as_deref(), Some(canonical.as_path()));
+    assert_eq!(bob, alice, "one room, one working directory");
+
+    // Control: outside the room the same person gets no override at all, so
+    // the folder above can only have come from the binding.
+    assert_eq!(cwd_for("u-ws-alice", None).await, None);
 }

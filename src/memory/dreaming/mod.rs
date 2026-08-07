@@ -1153,7 +1153,7 @@ impl DreamDaemon {
                 };
                 let mut report = pipeline.run(ctx).await?;
 
-// Per-namespace maintenance (gated). The base agent ran the
+                // Per-namespace maintenance (gated). The base agent ran the
                 // full pipeline above; scoped namespaces created under
                 // `{base}__proj-*` (legacy project-directory feature) AND
                 // `{base}__u-*` (P1 personal scope) get the note-maintenance
