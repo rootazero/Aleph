@@ -94,7 +94,20 @@ const ADMIN_PREFIXES: &[&str] = &[
     "users.", // principal management (carve-outs: me / list) — not yet
     // registered (lands in Task 5); gated pre-emptively so the gate
     // precedes the surface.
-    "cluster.",  // enroll / deregister — fleet membership.
+    "cluster.", // enroll / deregister — fleet membership.
+    // The READ face of that same fleet (`environments.list`): node ids, names,
+    // tags, command inventories and last-seen times for every machine in the
+    // cluster. Gating `cluster.` alone gated the two WRITES and left the
+    // enumeration open; the Panel compensated with a client-side
+    // `is_operator()` check, which could never have been the enforcement point
+    // — that role is captured once at connect and `restamp_live_connections`
+    // can invalidate it without telling the client. Prefix-gated (not
+    // method-gated) so a future `environments.get`/`.describe` is gated by
+    // default. The delivery-side half is `event_scope.rs`'s `node.` rule:
+    // `node.connected`/`node.disconnected` carry the same ids and names, so
+    // gating only the RPC would leave a member who hand-subscribes `node.**`
+    // reading the fleet live. Neither half implies the other.
+    "environments.",
     "services.", // background service lifecycle (start/stop/list/status) —
     // server process control, not caller's-own-data.
     // --- Agent persona management: server-global roster, not per-user ---
@@ -279,8 +292,12 @@ mod tests {
             // users. (given — pre-emptive, Task 5 surface)
             "users.create",
             "users.update",
-            // cluster. / services.
+            // cluster. / environments. / services.
             "cluster.enroll",
+            // The fleet's read face. It lived outside `cluster.` all along and
+            // was therefore open to every member until 2026-08-07; the Panel's
+            // client-side `is_operator()` block was the only thing hiding it.
+            "environments.list",
             "services.start",
             // agents. (fix round — Finding 1)
             "agents.create",

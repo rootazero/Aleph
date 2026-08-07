@@ -37,14 +37,6 @@ pub struct GatewayEvent {
 // Event handler callback type
 type EventHandler = Arc<dyn Fn(GatewayEvent) + Send + Sync>;
 
-/// Pure predicate for the single-tier Gateway-token model: an authorized
-/// connection reports the `"operator"` role (loopback, or a remote that
-/// presented a valid token) and has full local-equivalent authority. Anything
-/// else is unauthorized (login wall). Extracted for host-side unit testing.
-pub(crate) fn role_is_operator(role: Option<&str>) -> bool {
-    role == Some("operator")
-}
-
 /// localStorage key holding the legacy shared Gateway token. Kept for backward
 /// compatibility with old `?token=` links and manually-entered tokens.
 /// This is a key name, not a credential value.
@@ -349,12 +341,17 @@ pub struct DashboardState {
     /// belong to a background conversation whose `ChatState` isn't mounted.
     pub pending_clarifications: RwSignal<Vec<PendingAskView>>,
 
-    /// Connection role captured from the `connect` response. `Some("operator")`
-    /// once authorized (loopback, or a remote that presented a valid Gateway
-    /// token); `None` before the first successful connect. Read by
-    /// `is_operator()`.
-    pub role: RwSignal<Option<String>>,
-
+    // The `connect` response's `role` is DELIBERATELY not kept (2026-08-07).
+    // It had exactly one reader, `is_operator()`, which had exactly one
+    // consuming view — the cluster settings page — and a client-captured role
+    // cannot be an enforcement point: it is stamped once at handshake, and
+    // `handlers::users::restamp_live_connections` can promote or demote that
+    // same live connection without telling the client, so the cached value is
+    // wrong in both directions after a `users.update`. Authorization is
+    // server-side (`method_admin.rs` for RPCs, `event_scope.rs` for topics);
+    // a surface that a member may not use now learns so from the refusal it
+    // gets back. Do not reintroduce this field to hide admin UI — that is the
+    // same gate under a new name.
     /// True when the `connect` response reported `needs_token` — a remote
     /// connection without a valid Gateway token. Drives the full-screen login
     /// wall (token box). False for loopback / authorized connections.
@@ -580,28 +577,18 @@ impl DashboardState {
             pending_approvals: RwSignal::new(Vec::new()),
             approval_subscription_id: StoredValue::new(None),
             pending_clarifications: RwSignal::new(Vec::new()),
-            role: RwSignal::new(None),
             needs_token: RwSignal::new(false),
             token_was_rejected: RwSignal::new(false),
             connection_failure: RwSignal::new(None),
         }
     }
 
-    /// Reactive predicate: did this connection report the `operator` role?
-    /// Consults the `role` captured from the `connect` response.
-    /// Returns false before the first successful connect. Used by
-    /// operator-only settings surfaces to gate UI up front.
-    #[must_use]
-    pub fn is_operator(&self) -> bool {
-        role_is_operator(self.role.get().as_deref())
-    }
-
-    /// Capture the connection `role` + `needs_token` verdict from a `connect`
-    /// response. Missing fields reset to a safe default (no role / not walled),
-    /// keeping the signals consistent across reconnects.
-    fn capture_role(&self, resp: &Value) {
-        self.role
-            .set(resp.get("role").and_then(|r| r.as_str()).map(String::from));
+    /// Capture the `needs_token` verdict from a `connect` response. A missing
+    /// field resets to the safe default (not walled), keeping the signal
+    /// consistent across reconnects. The response also carries a `role`; it is
+    /// deliberately ignored — see the note above the `needs_token` field for
+    /// why the client keeps no copy of it.
+    fn capture_connect_verdict(&self, resp: &Value) {
         self.needs_token.set(
             resp.get("needs_token")
                 .and_then(serde_json::Value::as_bool)
@@ -813,7 +800,7 @@ impl DashboardState {
             Ok(r) => r,
             Err(e) => return Handshake::Failed(classify(FailureStage::Handshake, Some(&e), false)),
         };
-        self.capture_role(&resp);
+        self.capture_connect_verdict(&resp);
         if resp.get("authorized").and_then(serde_json::Value::as_bool) == Some(true) {
             // A bootstrap exchange returns a fresh device token; store it for
             // subsequent reconnects and clear any legacy token.
@@ -1493,8 +1480,8 @@ pub fn DashboardContext(children: Children) -> impl IntoView {
 #[cfg(test)]
 mod tests {
     use super::{
-        classify_credential, query_with_bootstrap_ticket, role_is_operator, strip_params,
-        ws_url_for, SubmittedCredential,
+        classify_credential, query_with_bootstrap_ticket, strip_params, ws_url_for,
+        SubmittedCredential,
     };
 
     /// What `scrub_credentials_from_url` actually strips — both credential
@@ -1564,26 +1551,6 @@ mod tests {
             query_with_bootstrap_ticket("?bt=aleph-bt-expired&token=aleph-old", "aleph-bt-1"),
             "bt=aleph-bt-1"
         );
-    }
-
-    #[test]
-    fn operator_role_is_operator() {
-        assert!(role_is_operator(Some("operator")));
-    }
-
-    #[test]
-    fn guest_role_is_not_operator() {
-        assert!(!role_is_operator(Some("guest")));
-    }
-
-    #[test]
-    fn missing_role_is_not_operator() {
-        assert!(!role_is_operator(None));
-    }
-
-    #[test]
-    fn unknown_role_is_not_operator() {
-        assert!(!role_is_operator(Some("node")));
     }
 
     #[test]

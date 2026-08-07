@@ -1054,7 +1054,7 @@ sees byte-identical behavior before and after.
 
   | Family | Verdict | Why |
   |---|---|---|
-  | `gateway.*`, `users.*`, `cluster.*`, `services.*` | **admin** | Trust-boundary credentials/tokens/devices, principal management, fleet membership, server process control |
+  | `gateway.*`, `users.*`, `cluster.*`, `environments.*`, `services.*` | **admin** | Trust-boundary credentials/tokens/devices, principal management, fleet membership, server process control. `environments.list` is the fleet's READ face and lived outside the `cluster.` prefix until 2026-08-07; its delivery-side twin is `event_scope.rs`'s `node.` rule, since `node.connected`/`node.disconnected` carry the same ids |
   | `providers.*`, `embedding_providers.*`, `generation_providers.*`, `channels.*`, `channel.*`, `discord.*` | **admin** | Server-global provider/channel credentials & config |
   | `config.*`, `secrets.*`, and 11 Settings-page `*_config.*` families (`security_config.` … `route_config.`), `routing_rules.*`, `logs.*` | **admin** | Server configuration surfaces (Settings page) |
   | `extensions.*`, `mcp.*`, `mcp_config.*`, `skills.*`, `bundled.*`, `plugins.*`/`plugin.*`, `hooks.*`, `runtimes.*` | **admin** | Install-class capability surfaces |
