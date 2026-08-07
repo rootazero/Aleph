@@ -182,8 +182,11 @@ where
             "Agent execution started"
         );
 
-        // Ensure session exists in memory + SQLite before adding messages
-        agent.ensure_session(&request.session_key).await;
+        // Ensure session exists in memory + SQLite before adding messages.
+        // Scoped: the CREATE branch stamps `owner_user_id`/`scope_id` from the
+        // ambient scope, which no producer still has by here (they all spawn).
+        // See `run_loop::ensure_session_under_request_scope`.
+        super::run_loop::ensure_session_under_request_scope(&agent, &request).await;
 
         // The claim broadcast inside `admit_run` above went out BEFORE that row
         // existed, so the per-connection projection

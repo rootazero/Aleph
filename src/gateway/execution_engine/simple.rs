@@ -78,7 +78,9 @@ impl SimpleExecutionEngine {
 
         // Ensure the session row exists before any state transitions; tests and
         // fallback paths may run without the global SessionService initialized.
-        agent.ensure_session(&request.session_key).await;
+        // Scoped for the same reason the full engine scopes it — see
+        // `run_loop::ensure_session_under_request_scope`.
+        super::run_loop::ensure_session_under_request_scope(&agent, &request).await;
 
         // Atomically check Idle and transition to Running to close the TOCTOU
         // window between an is_idle() probe and the later set_state(Running).

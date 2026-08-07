@@ -408,9 +408,15 @@ mod tests {
     #[test]
     fn execute_republishes_the_running_set_after_creating_the_session_row() {
         let src = include_str!("execute.rs");
+        // The needle is the scoped helper, not `agent.ensure_session` directly:
+        // creating the row without `run_loop::ensure_session_under_request_scope`
+        // leaves `owner_user_id`/`scope_id` NULL (the task-local does not cross
+        // the producers' `tokio::spawn`), and an unstamped row is exactly what
+        // the projection below cannot resolve. Both properties are about the
+        // same statement, so they share one anchor.
         let ensure = src
-            .find("agent.ensure_session(&request.session_key).await;")
-            .expect("execute.rs still creates the session row");
+            .find("run_loop::ensure_session_under_request_scope(&agent, &request).await;")
+            .expect("execute.rs still creates the session row under the run's own scope");
         let republish = src
             .find("session_run_registry.republish_running_set()")
             .expect("execute.rs must re-publish the running set once the row exists");
