@@ -525,6 +525,28 @@ impl ResumeCoordinator {
         result
     }
 
+    /// The resumed session's durable row, or `None` when it cannot be read.
+    ///
+    /// A store error is logged and swallowed: an unscoped resume is the
+    /// pre-existing behaviour, and refusing to resume over it would turn a
+    /// crash recovery into a lost conversation.
+    async fn persisted_session_meta(
+        &self,
+        session_id: &SessionId,
+    ) -> Option<crate::gateway::session_store::types::SessionMetadata> {
+        match self.session_store.get_metadata(session_id).await {
+            Ok(meta) => meta,
+            Err(e) => {
+                tracing::warn!(
+                    session = ?session_id,
+                    error = %e,
+                    "resume: session metadata unreadable; resuming unscoped"
+                );
+                None
+            }
+        }
+    }
+
     /// Re-derive the run identity the session's origin channel imposes.
     ///
     /// A resumed run used to be born with `{resume, project_root}` and nothing
@@ -555,28 +577,6 @@ impl ResumeCoordinator {
     /// full origin route keeps it — its approval is genuinely deliverable and the
     /// human on the other end can `/approve`. Same rule, same reasons, as
     /// `tasks::cron::executor::build_cron_metadata`.
-    /// The resumed session's durable row, or `None` when it cannot be read.
-    ///
-    /// A store error is logged and swallowed: an unscoped resume is the
-    /// pre-existing behaviour, and refusing to resume over it would turn a
-    /// crash recovery into a lost conversation.
-    async fn persisted_session_meta(
-        &self,
-        session_id: &SessionId,
-    ) -> Option<crate::gateway::session_store::types::SessionMetadata> {
-        match self.session_store.get_metadata(session_id).await {
-            Ok(meta) => meta,
-            Err(e) => {
-                tracing::warn!(
-                    session = ?session_id,
-                    error = %e,
-                    "resume: session metadata unreadable; resuming unscoped"
-                );
-                None
-            }
-        }
-    }
-
     async fn stamp_origin_identity(
         &self,
         agent: &Arc<AgentInstance>,

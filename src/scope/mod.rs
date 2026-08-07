@@ -229,10 +229,21 @@ pub fn room_author_from_metadata(meta: &HashMap<String, String>) -> Option<Strin
 
 /// Run `fut` with `author` visible to [`ambient_room_author`].
 ///
-/// Seeded from the same metadata map, at the same single point, as
-/// [`with_scope`] — `run_loop::with_request_scope`. Keeping the two together is
-/// what stops the label and the partition from ever disagreeing about which
-/// turn they belong to.
+/// **Seeded at exactly the two places [`with_scope`] is, and it must stay that
+/// way.** The author and the scope answer two halves of one question — who is
+/// speaking, and which room they are speaking in — so a boundary that carries
+/// one without the other produces a confidently wrong label rather than a
+/// missing one:
+///
+/// 1. `run_loop::with_request_scope`, from the request's `AUTHOR_USER_KEY`.
+/// 2. `orchestrator::dispatch`, re-seeded inside its `tokio::spawn` from a
+///    value captured on the caller's side — task-locals do not cross a spawn,
+///    and the main path's user-message writer
+///    (`harness_bridge::session_seed`) lives on the far side of that one.
+///
+/// A new spawn boundary between a seeding point and an emission site owes the
+/// same capture-and-re-seed pair. Getting it wrong is silent: see
+/// [`room_author`] for what the fallback then reports.
 pub async fn with_room_author<F, T>(author: Option<String>, fut: F) -> T
 where
     F: std::future::Future<Output = T>,
@@ -453,18 +464,56 @@ mod tests {
         );
     }
 
-    /// The ambient twin must carry the SPEAKER through the run's task-local
-    /// nest, not the scope owner. `session_seed` — the main path's user-message
-    /// writer — has no metadata map in hand, so this task-local is the only
-    /// thing standing between it and mislabelling every room turn.
+    /// The ambient twin must carry the SPEAKER, not the scope owner, all the
+    /// way to an emission site on the far side of a spawn.
+    ///
+    /// Deliberately crosses a real `tokio::spawn` with the capture-and-re-seed
+    /// pair `orchestrator::dispatch` uses, because the same assertion nested in
+    /// ONE task passes against a build whose author dies at that boundary —
+    /// which is precisely how the first fix round shipped a label naming the
+    /// room's creator on every message. `session_seed`, the main path's
+    /// user-message writer, sits past exactly such a spawn and has no metadata
+    /// map to fall back on.
     #[tokio::test]
-    async fn the_ambient_twin_prefers_the_seeded_speaker() {
+    async fn the_ambient_twin_carries_the_speaker_across_a_spawn() {
         let seen = with_scope(
             Some(attr("u-alice", ScopeId::Project("p-room".into()))),
-            with_room_author(Some("u-bob".to_string()), async { ambient_room_author() }),
+            with_room_author(Some("u-bob".to_string()), async {
+                let captured_scope = current_scope();
+                let captured_author = current_room_author();
+                tokio::spawn(with_scope(
+                    captured_scope,
+                    with_room_author(captured_author, async { ambient_room_author() }),
+                ))
+                .await
+                .expect("emission task")
+            }),
         )
         .await;
         assert_eq!(seen, Some("u-bob".to_string()));
+    }
+
+    /// The same nest with the author NOT re-seeded across the spawn — the
+    /// exact bug this pair guards. It does not error; it silently reports the
+    /// room's owner, which is why no test caught it the first time.
+    #[tokio::test]
+    async fn dropping_the_author_at_a_spawn_silently_reports_the_room_owner() {
+        let seen = with_scope(
+            Some(attr("u-alice", ScopeId::Project("p-room".into()))),
+            with_room_author(Some("u-bob".to_string()), async {
+                let captured_scope = current_scope();
+                tokio::spawn(with_scope(captured_scope, async { ambient_room_author() }))
+                    .await
+                    .expect("emission task")
+            }),
+        )
+        .await;
+        assert_eq!(
+            seen,
+            Some("u-alice".to_string()),
+            "carrying the scope without the author is not a missing label, it \
+             is a confidently wrong one"
+        );
     }
 
     /// The author task-local obeys the same spawn rule as the scope one, so a

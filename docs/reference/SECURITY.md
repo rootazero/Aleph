@@ -1336,20 +1336,30 @@ attribution, and a bound workspace as the room's default cwd.
 - **Author attribution is display-grade, not signature-grade.** The
   `[name]` speaker labels a room prompt carries come from
   `SessionEvent::UserMessage.author_user_id`, stamped server-side from the
-  authenticated caller — a member cannot forge the LABEL. The chain is one
-  hop end to end and there is deliberately no request parameter in it:
+  authenticated caller — a member cannot forge the LABEL. There is
+  deliberately no request parameter anywhere in the chain:
   `build_run_request` reads `caller_identity::current_caller_user()` into
-  `AUTHOR_USER_KEY`, and every emission site takes the label from that key
-  (`scope::room_author_from_metadata`, or `ambient_room_author` via the
-  task-local `run_loop::with_request_scope` seeds from the same key). A turn
-  that carries no author at all — a legacy row, or a channel-driven run whose
-  inbound router stamps the scope but not the speaker — falls back to the
+  `AUTHOR_USER_KEY`, and every emission site takes the label from that key —
+  `scope::room_author_from_metadata` for the four sites that hold the request,
+  and `scope::ambient_room_author` for the three `session_seed` sites, which
+  hold neither the request nor `CALLER_USER` and read a task-local instead.
+  A turn that carries no author at all — a legacy row, or a channel-driven run
+  whose inbound router stamps the scope but not the speaker — falls back to the
   room's own `owner_user_id`; that is a wrong-but-honest label on a turn
-  nobody claimed, not a forgeable one. **Deriving the label from the run's
-  scope instead is the failure mode to watch for**: every member's run in a
-  room carries the ROOM's attribution (that is what shares the memory
-  partition), so a scope-derived label silently names the session's creator on
-  everyone's message. But message
+  nobody claimed, not a forgeable one.
+
+  **The failure mode to watch for is the label degrading to that fallback on a
+  turn that DID name its author**, because it degrades silently and the wrong
+  answer is plausible: every member's run in a room carries the ROOM's
+  attribution (that is what shares the memory partition), so the fallback names
+  the session's creator on everyone's message. It has one cause — the author
+  task-local being dropped at a boundary the scope survives. `with_room_author`
+  is therefore seeded at exactly the two places `with_scope` is
+  (`run_loop::with_request_scope`, and inside `orchestrator::dispatch`'s
+  `tokio::spawn`), and any new spawn between a seeding point and an emission
+  site owes the same capture-and-re-seed pair. Pinned across the real dispatch
+  spawn by `tests/gateway_chat_room_author_across_spawn.rs`; a test that nests
+  the two task-locals in one task cannot see this class of break. But message
   BODIES are unauthenticated prose: a member can still type
   `\n[someone-else]: …` inside their own message. Deliberate (recorded at
   `speaker_label`): room members are same-server operators under the

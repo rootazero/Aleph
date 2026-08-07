@@ -592,7 +592,7 @@ where
 /// Reproduce the task-local nesting the INTERIOR of a room's agent run sees —
 /// the context every `SessionEvent::UserMessage` writer actually runs in.
 ///
-/// Three facts, and taking any of them from the wrong place is a defect this
+/// Four facts, and taking any of them from the wrong place is a defect this
 /// suite has to be able to see:
 ///
 /// - **The ambient scope's `owner_user_id` is `room_owner`, not the speaker**,
@@ -603,18 +603,38 @@ where
 ///   production stamped the room's creator on everyone's message.
 /// - **The speaker rides its own task-local**, seeded by
 ///   `run_loop::with_request_scope` from the request's `AUTHOR_USER_KEY`.
-/// - **`CALLER_USER` is dead.** Every emission site runs inside a bare
-///   `tokio::spawn` (`busy_queue/spawn.rs`), which task-locals do not cross.
+/// - **A real `tokio::spawn` sits between the seeding and the emission**, and
+///   both task-locals are captured before it and re-seeded inside — the shape
+///   `Orchestrator::dispatch` uses. Nesting them in ONE task is a sequence
+///   production never presents, and it is what made the first fix round pass
+///   while every room message carried the wrong name.
+/// - **`CALLER_USER` is dead** on the far side, which is why nothing here
+///   scopes it.
+///
+/// Division of labour: this proves the prompt RENDERS a correct author. That
+/// `dispatch` really performs the re-seed is a different claim, proven against
+/// the production wiring by
+/// `tests/gateway_chat_room_author_across_spawn.rs`.
 async fn as_room_turn<F, T>(speaker: &str, room_owner: &str, project_id: &str, fut: F) -> T
 where
-    F: std::future::Future<Output = T>,
+    F: std::future::Future<Output = T> + Send + 'static,
+    T: Send + 'static,
 {
     with_scope(
         Some(ScopeAttribution {
             owner_user_id: room_owner.to_string(),
             scope: crate::scope::ScopeId::Project(project_id.to_string()),
         }),
-        crate::scope::with_room_author(Some(speaker.to_string()), fut),
+        crate::scope::with_room_author(Some(speaker.to_string()), async move {
+            let captured_scope = crate::scope::current_scope();
+            let captured_author = crate::scope::current_room_author();
+            tokio::spawn(with_scope(
+                captured_scope,
+                crate::scope::with_room_author(captured_author, fut),
+            ))
+            .await
+            .expect("the emission task must not panic")
+        }),
     )
     .await
 }
