@@ -541,13 +541,7 @@ impl ContextCompactor {
         // loss reported as a successful LlmSummary. Stripping first routes the
         // degenerate case to the deterministic-truncation fallback below.
         let llm_result = tokio::time::timeout(self.config.timeout, self.call_llm(&prompt)).await;
-        let summary = match llm_result {
-            Ok(Ok(raw)) => {
-                let stripped = strip_analysis_block(&raw);
-                (!stripped.trim().is_empty()).then_some(stripped)
-            }
-            Ok(Err(_)) | Err(_) => None,
-        };
+        let summary = accept_summary("window", self.config.timeout, llm_result);
 
         // The user's own turns come back verbatim above whichever summary the
         // window collapses into (B13) — computed once here because both arms
@@ -734,13 +728,7 @@ impl ContextCompactor {
         };
 
         let llm_result = tokio::time::timeout(self.config.timeout, self.call_llm(&prompt)).await;
-        let merged = match llm_result {
-            Ok(Ok(raw)) => {
-                let stripped = strip_analysis_block(&raw);
-                (!stripped.trim().is_empty()).then_some(stripped)
-            }
-            Ok(Err(_)) | Err(_) => None,
-        };
+        let merged = accept_summary("merge", self.config.timeout, llm_result);
         let (body, strategy) = match merged {
             Some(s) => (s, CompactStrategy::LlmSummary),
             None if self.config.fallback_to_truncation => {
@@ -834,13 +822,7 @@ impl ContextCompactor {
         // Strip before the emptiness check: an analysis-only response (no
         // <summary> block) strips to an empty string, which must fall back to
         // deterministic truncation rather than seed a child session with "".
-        let stripped = match llm_result {
-            Ok(Ok(raw)) => {
-                let s = strip_analysis_block(&raw);
-                (!s.trim().is_empty()).then_some(s)
-            }
-            _ => None,
-        };
+        let stripped = accept_summary("slice", self.config.timeout, llm_result);
         Ok(stripped.unwrap_or_else(|| deterministic_truncation(messages)))
     }
 
@@ -1017,6 +999,69 @@ pub(crate) fn serialize_transcript(messages: &[UnifiedMessage]) -> String {
 /// sites below read clearly.
 fn estimate_tokens(text: &str) -> usize {
     crate::context::budget::pressure::estimate_tokens_smart(text)
+}
+
+/// Accept a summarizer response, or say — out loud — why it was rejected.
+///
+/// Single source for all three side-channel summarization call sites (window
+/// compaction, incremental merge, session-split slice). They were three copies
+/// of `Ok(Err(_)) | Err(_) => None`, which discards the error **value**, and
+/// this 2000-line file had exactly one `tracing::` call — on the zero-cost
+/// cache-reuse path.
+///
+/// The cost of that silence is a whole deployment class: a third-party
+/// Anthropic-compatible `base_url` (a first-class supported setup) plus tier-2
+/// auto-routing clones the main provider config and swaps only the model to
+/// that preset's `default_aux_model`. If the proxy does not serve that model,
+/// every summarization 404s. Boot succeeds (the config is well-formed), and
+/// this provider is wrapped by neither `FailoverProvider` nor
+/// `MeteringProvider` — so there is no failover, no `ProviderUsage`, and
+/// nothing in the billing view either. Compaction silently degrades to
+/// first-line truncation from day one, forever, with no log line, metric or
+/// doctor check naming the summarizer. The compaction circuit breaker does
+/// eventually trip, but it reports pressure, not cause.
+///
+/// Deliberately NOT surfaced to the model (A2): the model does not choose the
+/// summarizer and cannot act on this. It is an operator fact, so it belongs on
+/// the operator's channel.
+fn accept_summary(
+    stage: &'static str,
+    timeout: std::time::Duration,
+    llm_result: Result<anyhow::Result<String>, tokio::time::error::Elapsed>,
+) -> Option<String> {
+    match llm_result {
+        Ok(Ok(raw)) => {
+            let stripped = strip_analysis_block(&raw);
+            if stripped.trim().is_empty() {
+                tracing::warn!(
+                    target: "context_budget",
+                    stage,
+                    "context summarizer returned no <summary> block; \
+                     falling back to deterministic truncation"
+                );
+                return None;
+            }
+            Some(stripped)
+        }
+        Ok(Err(e)) => {
+            tracing::warn!(
+                target: "context_budget",
+                stage,
+                error = %e,
+                "context summarizer call failed; falling back to deterministic truncation"
+            );
+            None
+        }
+        Err(_elapsed) => {
+            tracing::warn!(
+                target: "context_budget",
+                stage,
+                timeout_secs = timeout.as_secs(),
+                "context summarizer timed out; falling back to deterministic truncation"
+            );
+            None
+        }
+    }
 }
 
 /// Deterministic truncation: keep only the first line of each message.
