@@ -17,8 +17,7 @@ impl PromptLayer for SoulLayer {
         // (`build_system_prompt_cached_with_mode`). Without it, SOUL.md — which
         // `IdentityFilesLayer` defers here via `HANDLED_ELSEWHERE` — would
         // vanish from every production prompt (same class of bug the Role /
-        // Citation layers were fixed for). `Soul` is kept for the legacy
-        // soul-path builders still exercised by tests.
+        // Citation layers were fixed for).
         &[AssemblyPath::Cached]
     }
     fn stability(&self) -> LayerStability {

@@ -8,6 +8,7 @@
 
 pub mod context;
 pub mod identity_files;
+pub mod identity_profile;
 pub mod interaction;
 pub mod layers;
 pub mod memory_context_provider;
