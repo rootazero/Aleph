@@ -87,8 +87,10 @@ pub(super) fn register_trace_handlers(
 }
 
 /// Register status/cancel/chat/agent.list/gateway.* handlers shared by both
-/// execution modes, then signal gateway readiness. `session_store` is consumed
-/// (moved into the `chat.clear` handler) exactly as in the original inline body.
+/// execution modes, then signal gateway readiness. `session_store` is cloned
+/// into each handler that needs it; the last consumer is
+/// `gateway.metrics.run_concurrency`, which narrows its session-key arrays to
+/// the caller (see that handler's doc).
 pub(super) fn register_common_handlers(
     server: &mut GatewayServer,
     run_manager: &Option<Arc<AgentRunManager>>,
@@ -133,7 +135,7 @@ pub(super) fn register_common_handlers(
         async move { chat_handlers::handle_clear(req, manager).await }
     });
 
-    let sm_rewind = session_store;
+    let sm_rewind = session_store.clone();
     server.handlers_mut().register("chat.rewind", move |req| {
         let manager = sm_rewind.clone();
         async move { chat_handlers::handle_rewind(req, manager).await }
@@ -227,15 +229,20 @@ pub(super) fn register_common_handlers(
     // AgentRunManager (Task 8, audit 3.4). Reaches the execution engine's
     // `ConcurrencyLimiter` snapshot through the same `Arc<dyn
     // ExecutionAdapter>` indirection `agent.status`/`agent.cancel` already
-    // use — `run_manager` is `Some` in both real and simulated boot modes.
+    // use — `run_manager` is `Some` in both real and simulated boot modes. It
+    // also takes the `SessionStore`: the two session-key arrays it returns are
+    // narrowed to the caller (the RPC half of the `stream.running_set_changed`
+    // projection — see that handler's doc), which needs each key's owner row.
     if let Some(ref rm) = run_manager {
         use alephcore::gateway::handlers::gateway_metrics::handle_gateway_metrics_run_concurrency;
         let rm_concurrency = rm.clone();
+        let concurrency_sessions = session_store.clone();
         server
             .handlers_mut()
             .register("gateway.metrics.run_concurrency", move |req| {
                 let manager = rm_concurrency.clone();
-                async move { handle_gateway_metrics_run_concurrency(req, manager).await }
+                let sessions = concurrency_sessions.clone();
+                async move { handle_gateway_metrics_run_concurrency(req, manager, sessions).await }
             });
         if !daemon {
             println!("  gateway.metrics.run_concurrency: wired");

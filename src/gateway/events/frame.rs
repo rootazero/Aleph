@@ -159,7 +159,12 @@ pub enum GatewayEventFrame {
     /// and ignore any older-or-equal frame so a reordered delivery self-heals.
     /// `running` is the full set of backend session keys with an in-flight run
     /// — the sidebar red-dot reads this directly (server-authoritative, no
-    /// client refcount). Payload is intentionally the registry's own data only
+    /// client refcount). **As PUBLISHED that set spans every user; what a
+    /// connection receives is narrowed to the sessions that connection may see**
+    /// (`event_visibility::EventVisibilityIndex::project_for` rewrites the array
+    /// per socket, and still sends the frame when the result is empty). So a
+    /// client's `running` is already its own, and `seq` is unchanged by the
+    /// rewrite. Payload is intentionally the registry's own data only
     /// (no `ConcurrencySnapshot`) so the registry can emit it without reaching
     /// the limiter; gauge consumers re-fetch `run_concurrency` on receipt.
     RunningSetChanged {

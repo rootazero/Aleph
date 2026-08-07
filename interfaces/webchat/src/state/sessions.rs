@@ -45,6 +45,13 @@ pub struct SessionMap {
     /// Server-authoritative running state: maintained by `RunningSetChanged` events (or cold-load seed),
     /// the set of backend `session_key`s with in-flight runs. The sole input source for the red dot — purely server-authoritative,
     /// client refcounts are not consulted (eliminates false positives / false negatives).
+    ///
+    /// Since 2026-08-07 the server narrows both feeds to THIS user before they leave the process
+    /// (`event_visibility::EventVisibilityIndex::project_for` for the event, the same predicate inside
+    /// `gateway.metrics.run_concurrency` for the seed), so this is "my running sessions", not the
+    /// server's — byte-identical on a single-user box. An empty set is a real answer, not a dropped
+    /// frame; do not "optimise" the server into suppressing it, because [`Self::set_server_running`]'s
+    /// seq guard would then latch whatever dot was last lit.
     server_running: RwSignal<HashSet<String>>,
     /// The last successfully applied `RunningSetChanged.seq`. Monotonically increasing; used to drop out-of-order / duplicate frames.
     /// `0` = no events received yet (window where cold-load seed may apply).
@@ -332,7 +339,8 @@ impl SessionMap {
         self.server_running.with(|s| s.contains(sk))
     }
 
-    /// Reactive read: current count of server-authoritative running sessions — sole entry point for the sidebar bottom "active" counter.
+    /// Reactive read: current count of server-authoritative running sessions VISIBLE TO THIS USER
+    /// (see [`Self::server_running`]) — sole entry point for the sidebar bottom "active" counter.
     ///
     /// Reads the same `server_running` signal as the per-row red dot [`Self::is_running_session_key`], so
     /// the two are always consistent: any `RunningSetChanged` event refreshes the count and dots together, preventing

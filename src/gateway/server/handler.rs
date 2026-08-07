@@ -445,6 +445,42 @@ fn extract_topic_and_data(event_obj: &serde_json::Value) -> (&str, Option<&serde
     (topic, data)
 }
 
+/// The exact bytes a connection receives for one already-admitted event.
+///
+/// Two jobs, in this order:
+///
+/// 1. **Apply the per-connection payload projection**, if
+///    [`EventVisibilityIndex::project_for`](crate::gateway::event_visibility::EventVisibilityIndex::project_for)
+///    produced one. A projected payload replaces `.params`, because every frame
+///    that method has an arm for is published through `publish_frame`'s STREAM
+///    branch, which puts the frame body exactly there — the same place
+///    [`extract_topic_and_data`]'s caller read it from to make the decision.
+/// 2. **Wrap the bare `TopicEvent` form** (`{topic, data}`, no `method`) into a
+///    JSON-RPC notification so the Panel can dispatch it via `method == "event"`.
+///
+/// A frame that is neither projected nor wrapped is forwarded as the ORIGINAL
+/// string, not a re-serialization of the parse — byte-identical output and no
+/// serialization cost for the overwhelming majority of frames. That is what
+/// pays for the projection: this used to re-parse `original` from scratch just
+/// to answer question 2.
+fn event_wire_form(
+    mut event_obj: serde_json::Value,
+    projected_payload: Option<serde_json::Value>,
+    original: String,
+) -> String {
+    let rewritten = projected_payload.is_some();
+    if let (Some(payload), Some(obj)) = (projected_payload, event_obj.as_object_mut()) {
+        obj.insert("params".to_string(), payload);
+    }
+    if event_obj.get("topic").is_some() && event_obj.get("method").is_none() {
+        serde_json::json!({ "method": "event", "params": event_obj }).to_string()
+    } else if rewritten {
+        event_obj.to_string()
+    } else {
+        original
+    }
+}
+
 /// The guest login wall: may a connection stamped with `role` send `method`?
 ///
 /// The wall is the *guest* wall and nothing else — it separates "this
@@ -1512,9 +1548,15 @@ async fn handle_connection(
                         if device_revoked_id(&event_json).is_some() {
                             continue;
                         }
+                        // Parse ONCE. This value is what the filter chain reads
+                        // and what the wire-form step below rewrites/wraps —
+                        // it used to be parsed a second time purely to decide
+                        // whether to wrap, which is what paid for the payload
+                        // projection now folded in here.
+                        let parsed = serde_json::from_str::<serde_json::Value>(&event_json).ok();
                         // Try to extract topic from event for filtering
-                        let should_forward = if let Ok(event_obj) = serde_json::from_str::<serde_json::Value>(&event_json) {
-                            let (topic, event_data) = extract_topic_and_data(&event_obj);
+                        let (should_forward, projected_payload) = if let Some(event_obj) = parsed.as_ref() {
+                            let (topic, event_data) = extract_topic_and_data(event_obj);
 
                             // Permission-based scope guard check + surface audience +
                             // caller identity for the owner-scoped event filter (P1,
@@ -1554,7 +1596,7 @@ async fn handle_connection(
                                 .note_frame(topic, visibility_payload)
                                 .await;
 
-                            scope_allowed
+                            let admits = scope_allowed
                                 && crate::gateway::surface::delivery::audience_allows(
                                     event_data,
                                     channel_kind,
@@ -1576,28 +1618,43 @@ async fn handle_connection(
                                     // 4th term entirely — zero-change guarantee, see
                                     // `GatewaySharedState::session_store`.
                                     None => true,
+                                };
+
+                            // 5th term, and the only one that is not pass/fail:
+                            // one frame (`stream.running_set_changed`) carries a
+                            // set spanning every user, so it is admitted whole and
+                            // its ARRAY is narrowed for this connection instead.
+                            // `None` for every other topic — see
+                            // `EventVisibilityIndex::project_for`, including why a
+                            // narrowed-to-empty frame must still be SENT.
+                            let projected = match (admits, ctx.session_store.as_ref()) {
+                                (true, Some(store)) => {
+                                    ctx.event_visibility
+                                        .project_for(
+                                            topic,
+                                            visibility_payload,
+                                            event_caller_user.as_deref(),
+                                            store,
+                                        )
+                                        .await
                                 }
+                                _ => None,
+                            };
+                            (admits, projected)
                         } else {
                             // Can't parse event, forward by default
-                            true
+                            (true, None)
                         };
 
                         if should_forward {
                             debug!("Forwarding event to {}", conn_id);
-                            // Wrap TopicEvent into JSON-RPC notification format
-                            // so the panel can dispatch it via method == "event"
-                            let wire_json = if let Ok(event_obj) = serde_json::from_str::<serde_json::Value>(&event_json) {
-                                if event_obj.get("topic").is_some() && event_obj.get("method").is_none() {
-                                    // TopicEvent format -> wrap as JSON-RPC notification
-                                    serde_json::json!({
-                                        "method": "event",
-                                        "params": event_obj,
-                                    }).to_string()
-                                } else {
-                                    event_json
+                            // Apply the projection (if any) and wrap the bare
+                            // TopicEvent form — see `event_wire_form`.
+                            let wire_json = match parsed {
+                                Some(event_obj) => {
+                                    event_wire_form(event_obj, projected_payload, event_json)
                                 }
-                            } else {
-                                event_json
+                                None => event_json,
                             };
                             if let Err(e) = write.send(WsMessage::Text(wire_json.into())).await {
                                 error!("Failed to send event to {}: {}", conn_id, e);
@@ -2866,6 +2923,162 @@ mod tests {
             !index
                 .event_admits(topic2, visibility_payload2, Some("bob"), &store, None)
                 .await
+        );
+    }
+
+    /// The running-set projection end to end, through the SAME four steps the
+    /// delivery loop runs — real `publish_frame` bytes → one parse →
+    /// `extract_topic_and_data` → the loop's `visibility_payload` fallback →
+    /// `project_for` → [`event_wire_form`] — and asserted on the BYTES that
+    /// would be written to the socket, not on the projection's return value.
+    ///
+    /// The frame stays admitted (`Global`); what changes is what it says.
+    #[tokio::test]
+    async fn the_running_set_frame_reaches_the_wire_narrowed_to_this_connection() {
+        use crate::gateway::event_visibility::EventVisibilityIndex;
+        use crate::gateway::router::SessionKey;
+        use crate::gateway::session_store::SessionStore;
+
+        let (store, _temp) = visibility_test_store();
+        let alice_key = SessionKey::main("wire-alice");
+        let bob_key = SessionKey::main("wire-bob");
+        for (key, owner) in [(&alice_key, "alice"), (&bob_key, "bob")] {
+            crate::scope::with_scope(
+                Some(crate::scope::ScopeAttribution::personal(owner)),
+                store.get_or_create(key),
+            )
+            .await
+            .unwrap();
+        }
+        let store: Arc<dyn SessionStore> = Arc::new(store);
+
+        let bus = GatewayEventBus::new();
+        let mut rx = bus.subscribe();
+        bus.publish_frame(&GatewayEventFrame::RunningSetChanged {
+            seq: 12,
+            running: vec![alice_key.to_key_string(), bob_key.to_key_string()],
+        })
+        .unwrap();
+        let event_json = rx.try_recv().unwrap();
+        assert!(
+            event_json.contains(&bob_key.to_key_string()),
+            "the frame as PUBLISHED carries every user's key — otherwise this \
+             test would pass without any projection at all"
+        );
+
+        let parsed: serde_json::Value = serde_json::from_str(&event_json).unwrap();
+        let (topic, event_data) = extract_topic_and_data(&parsed);
+        let visibility_payload = event_data.or_else(|| parsed.get("params"));
+
+        let index = EventVisibilityIndex::new();
+        assert!(
+            index
+                .event_admits(topic, visibility_payload, Some("alice"), &store, None)
+                .await,
+            "the frame itself stays Global — suppressing it would latch alice's \
+             red dot on the seq guard"
+        );
+        let projected = index
+            .project_for(topic, visibility_payload, Some("alice"), &store)
+            .await;
+
+        let wire = event_wire_form(parsed, projected, event_json.clone());
+        assert_ne!(wire, event_json, "the bytes on the wire must have changed");
+        let sent: serde_json::Value = serde_json::from_str(&wire).unwrap();
+        assert_eq!(
+            sent["method"], "stream.running_set_changed",
+            "still the same notification the Panel dispatches on"
+        );
+        assert_eq!(
+            sent["params"]["running"],
+            serde_json::json!([alice_key.to_key_string()]),
+            "alice is told about her own session and nobody else's"
+        );
+        assert_eq!(
+            sent["params"]["seq"], 12,
+            "the client's ordering guard must survive the rewrite verbatim"
+        );
+    }
+
+    /// The other half of [`event_wire_form`]'s contract, and the reason the
+    /// projection is affordable: a frame with nothing to project is forwarded
+    /// as the ORIGINAL bytes — no re-serialization, byte-identical — while the
+    /// bare `TopicEvent` form is still wrapped exactly as before.
+    #[test]
+    fn an_unprojected_frame_is_forwarded_as_its_original_bytes() {
+        let bus = GatewayEventBus::new();
+        let mut rx = bus.subscribe();
+        bus.publish_frame(&GatewayEventFrame::RunAccepted {
+            run_id: "r1".to_string(),
+            session_key: "agent:main:main".to_string(),
+            accepted_at: "t".to_string(),
+        })
+        .unwrap();
+        let stream_json = rx.try_recv().unwrap();
+        let parsed: serde_json::Value = serde_json::from_str(&stream_json).unwrap();
+        assert_eq!(
+            event_wire_form(parsed, None, stream_json.clone()),
+            stream_json,
+            "a stream-form frame nobody projected must be forwarded verbatim"
+        );
+
+        bus.publish_frame(&GatewayEventFrame::SessionLifecycleChanged {
+            session_key: "agent:main:main".to_string(),
+            old_state: None,
+            new_state: "active".to_string(),
+            reason: None,
+        })
+        .unwrap();
+        let topic_json = rx.try_recv().unwrap();
+        let parsed: serde_json::Value = serde_json::from_str(&topic_json).unwrap();
+        let wrapped: serde_json::Value =
+            serde_json::from_str(&event_wire_form(parsed, None, topic_json)).unwrap();
+        assert_eq!(
+            wrapped["method"], "event",
+            "the bare TopicEvent form is still wrapped for the Panel"
+        );
+        assert_eq!(wrapped["params"]["topic"], "session.lifecycle.changed");
+    }
+
+    /// Source-level pin for the delivery loop, which has no unit-testable seam
+    /// of its own — it is one `tokio::select!` arm inside the socket task, so
+    /// every function it calls can be green while the loop calls none of them.
+    /// Two facts about it are invisible from everywhere else:
+    ///
+    /// 1. the event JSON is parsed exactly ONCE per frame (it was parsed a
+    ///    second time for years, purely to decide whether to wrap a
+    ///    `TopicEvent` — deleting that is what pays for the projection), and
+    /// 2. `EventVisibilityIndex::project_for` is actually CALLED there.
+    ///
+    /// Only the PRODUCTION half of the file is inspected (everything above the
+    /// first test module) and the needles are assembled at runtime, so neither
+    /// the tests above nor this one can count as a match.
+    #[test]
+    fn the_delivery_loop_parses_each_event_once_and_projects_it() {
+        let src = include_str!("handler.rs");
+        let production = src
+            .split(&format!("#[cfg{}]", "(test)"))
+            .next()
+            .expect("the file has a production half");
+
+        let parse_needle = format!(
+            "serde_json::from_str::<serde_json::Value>(&{}_json)",
+            "event"
+        );
+        assert_eq!(
+            production.matches(&parse_needle).count(),
+            1,
+            "the delivery loop must parse each event exactly once; a second \
+             `{parse_needle}` means the double parse is back"
+        );
+
+        let project_needle = format!("{}_for(", "project");
+        assert_eq!(
+            production.matches(&project_needle).count(),
+            1,
+            "the payload projection must be wired into the delivery loop — \
+             `project_for` is fully tested in `event_visibility`, and with no \
+             call site here that proves nothing"
         );
     }
 }

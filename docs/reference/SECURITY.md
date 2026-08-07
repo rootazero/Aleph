@@ -1226,6 +1226,23 @@ after (verified by `single_user_fixture_is_byte_identical_after_upgrade`,
   (`no_published_team_topic_suffix_classifies_as_global`) covers that
   producer shape instead, and the id is extracted structurally so a suffix
   added later is scoped rather than broadcast.
+  - **One frame is PROJECTED rather than admitted or denied** (2026-08-07).
+    `stream.running_set_changed` carries `{seq, running: Vec<String>}` — every
+    in-flight session KEY in the process, spanning every user (keys only; the
+    claim that it also carries `run_id`s was wrong). Neither boolean is right
+    for it: forwarding it whole hands every member everyone else's live
+    session keys, and gating the topic operator-only extinguishes each
+    member's OWN sidebar red dot, which this frame is the authoritative feed
+    for. So it stays `Global` and `EventVisibilityIndex::project_for` narrows
+    its ARRAY per connection through the same `session_admits` every other
+    frame uses. Two invariants: the frame is still SENT when the array comes
+    back empty (the Panel drops any frame with `seq <= server_seq`, so a
+    suppressed one latches a stale dot for the rest of the connection), and an
+    element whose owner cannot be resolved is DROPPED, never passed through.
+    The same set has a second producer — `gateway.metrics.run_concurrency`,
+    the Panel's cold-load seed for those dots — filtered by the same rule and
+    carved out of the admin gate in the same change, because a fallback that
+    is admin-gated does not work for the population the filtering is for.
 - **Background-work ownership.** `goal::Goal` and `looping::LoopState` both
   carry the same `owner_user_id`/`scope_id` pair, stamped once at creation
   from `scope::current_scope()` (`with_owner_scope`) and preserved across
@@ -1263,28 +1280,17 @@ after (verified by `single_user_fixture_is_byte_identical_after_upgrade`,
   remove that trust assumption. `role-aware per-tool tool_permissions` was
   considered and dropped as YAGNI (R10) in favor of this narrower set.
 - **Known gaps (deliberate, recorded, not silently dropped):**
-  1. `stream.running_set_changed` is `Global` in `event_visibility.rs`, not
-     owner-scoped — every member currently sees every OTHER user's active
-     `session_key`s and `run_id`s (no message content). It is the SOLE feed
-     of the member sidebar's running-session indicator
-     (`interfaces/webchat/src/state/sessions.rs::SessionMap::server_running`
-     is documented as purely server-authoritative), so gating it
-     operator-only would silently break every member's OWN sidebar
-     indicator; left unfixed pending a real fix — per-connection payload
-     projection, which needs a payload-rewrite step the delivery loop's
-     pass/fail-only `should_forward` doesn't have. See
-     `event_visibility.rs`'s module doc.
-  2. `chat.send`'s Simulated-execution fallback path (used only when no LLM
+  1. `chat.send`'s Simulated-execution fallback path (used only when no LLM
      provider is configured — `AgentRunManager::start_run`, which has no
      `SessionStore` dependency) is not covered by the real-provider path's
      `existing_session_is_visible` check.
-  3. `slash_command.rs::execute_direct_tool` (the `/toolname` L0 fast path)
+  2. `slash_command.rs::execute_direct_tool` (the `/toolname` L0 fast path)
      bypasses `ScopedToolService` entirely, with no allowlist — but it IS
      tier-aware (routes through `resolve_exec_tier`), so the gap only opens
      if a member explicitly escalates their own session to `Auto`/`Full`
      (the member default is `Ask`). Pre-existing, not introduced by P1;
      recommended as a follow-up task.
-  4. The legacy `proj-*` (project-directory feature) write side of
+  3. The legacy `proj-*` (project-directory feature) write side of
      `OPEN_LOOPS.md` is pinned `project_scoped = false` on both read and
      write for a `proj-` session — widening it needs a persisted project
      root on the session-close path that doesn't exist yet. Personal scope

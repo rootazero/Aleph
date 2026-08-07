@@ -68,33 +68,41 @@
 //! OPERATOR — a naive owner-equality check would deny the operator delivery
 //! of a member's approval card, breaking the one workflow that exists to let
 //! an admin act on a non-owned session's behalf. `RunningSetChanged` carries a
-//! `Vec<String>` spanning every user's in-flight sessions with no single
-//! owner to check against; it stays `Global` (session KEYS only, no message
-//! content — matches its pre-P1 unfiltered behavior as the sidebar red-dot
-//! signal). See [`session_identity_of`]'s doc and the
+//! `Vec<String>` spanning every user's in-flight sessions with no single owner
+//! to check against, so pass/fail is the wrong question for it entirely; it
+//! stays `Global` and its ARRAY is narrowed per connection instead — see the
+//! next section. See [`session_identity_of`]'s doc and the
 //! `every_frame_variant_is_classified` pin test for the full, reviewed list.
 //!
-//! ## Known gap: `RunningSetChanged` leaks cross-user session keys (fix round 1)
+//! ## Payload projection: the one frame narrowed rather than admitted
 //!
-//! Review flagged that any member currently sees every OTHER user's active
-//! `session_key`s via `stream.running_set_changed` — not org-public, not
-//! guarded by `EventScopeGuard`. The obvious fix (add its topic to
-//! `EventScopeGuard::default_rules()`'s guarded set, operator-only) was
-//! checked against actual Panel consumption first, per this task's own
-//! "verify before guessing" discipline, and REJECTED: `interfaces/webchat/
-//! src/state/sessions.rs::SessionMap::server_running` is documented as "the
-//! SOLE input source for the red dot — purely server-authoritative, client
-//! refcounts are not consulted," fed exclusively by this event
-//! (`components/chat_sidebar.rs:480`). Gating it operator-only would silently
-//! break every MEMBER's OWN sidebar running-indicator for their OWN sessions
-//! — the opposite of a P1 isolation fix. Left `Global`, unfixed, and
-//! recorded here (not silently dropped) pending a real fix: per-connection
-//! payload projection (filter `running` down to the receiving connection's
-//! visible session keys before send) needs a payload-REWRITE step this
-//! module's boolean `event_admits` doesn't have — the delivery loop's
-//! `should_forward` is pass/fail only, never rewrites the wire bytes it
-//! forwards. That is new infrastructure, not a term in this filter chain,
-//! and is out of scope for this task.
+//! `stream.running_set_changed` cannot be answered with a boolean. Its payload
+//! is `{seq, running: Vec<String>}` — every in-flight session key in the
+//! process, spanning every user — and BOTH available booleans are wrong.
+//! Forwarding it whole hands every member every other member's live session
+//! keys (agent persona, channel peer id, activity timing). Gating the topic
+//! operator-only (the obvious fix, correctly rejected once already) silently
+//! extinguishes each member's OWN sidebar red dot, which this frame is the
+//! authoritative server-side feed for.
+//!
+//! So this module has a second entry point beside [`EventVisibilityIndex::
+//! event_admits`]: [`EventVisibilityIndex::project_for`] rewrites the payload
+//! per connection, keeping only the elements that connection's caller could
+//! already see through `session_admits`. Its two invariants — always send the
+//! frame, even when the array comes back empty; drop any element whose owner
+//! cannot be resolved — are stated at that method, because they are the two
+//! ways a well-meaning change breaks it.
+//!
+//! Deliberately NOT a `PayloadProjector` trait, a projector registry, or a
+//! three-variant `Delivery` enum (R10/P6): one topic, one arm, one consumer.
+//! `Option<Value>` is the whole shape, and `None` — one string compare — is
+//! every other frame in the system.
+//!
+//! The same array has a SECOND producer, and fixing either alone leaves the
+//! other broken: `gateway.metrics.run_concurrency` returns the identical set
+//! over RPC (the Panel's cold-load seed for the red dot, and its usage gauge).
+//! It is filtered by the same rule in `handlers::gateway_metrics`, which is
+//! what makes that method's `ListFiltered` registration true.
 //!
 //! ## Fail-closed
 //!
@@ -139,6 +147,16 @@ pub enum SessionIdentity {
     /// already covered by a different gate (see module doc).
     Global,
 }
+
+/// The one topic this module PROJECTS rather than admits/denies, and the one
+/// payload field it rewrites. Named once because two bodies match on them —
+/// [`session_identity_of`]'s `Global` arm and
+/// [`EventVisibilityIndex::project_for`]'s single arm — and a literal that
+/// disagrees between those two is silent: the classification keeps saying
+/// `Global` while the projection stops firing, i.e. the leak comes back with
+/// every test still green.
+const RUNNING_SET_TOPIC: &str = "stream.running_set_changed";
+const RUNNING_SET_FIELD: &str = "running";
 
 fn str_field(data: Option<&Value>, field: &str) -> Option<String> {
     data.and_then(|d| d.get(field))
@@ -219,9 +237,12 @@ pub fn session_identity_of(topic: &str, data: Option<&Value>) -> SessionIdentity
             None => SessionIdentity::Global,
         },
 
-        // Broadcast red-dot spanning every owner's running sessions — see
-        // module doc "Deliberately Global".
-        "stream.running_set_changed" => SessionIdentity::Global,
+        // Broadcast red-dot spanning every owner's running sessions. `Global`
+        // is the right CLASSIFICATION — no one owns this frame — and is not the
+        // whole answer: its `running` array is narrowed per connection by
+        // [`EventVisibilityIndex::project_for`]. Gating the topic instead would
+        // extinguish every member's OWN red dot; see the module doc.
+        RUNNING_SET_TOPIC => SessionIdentity::Global,
 
         // Not a `GatewayEventFrame` variant — republished by
         // `subagent_tree_relay.rs` via a hand-built
@@ -455,6 +476,70 @@ impl EventVisibilityIndex {
                 self.team_admits(&team_id, caller, teams).await
             }
         }
+    }
+
+    /// The per-connection payload PROJECTION — [`Self::event_admits`]'s
+    /// sibling for the one frame whose honest answer is not "yes or no" but
+    /// "yes, this much of it".
+    ///
+    /// Returns `Some(payload)` — a replacement for the frame's own payload
+    /// object — when this caller must receive a narrowed copy, and `None` for
+    /// every other topic, which is one string compare and lets the delivery
+    /// loop forward the bytes it already holds untouched. Only
+    /// [`RUNNING_SET_TOPIC`] has an arm; see the module doc for why that frame
+    /// is `Global` and still not deliverable verbatim.
+    ///
+    /// Two properties this must keep, both of which look safe to break:
+    ///
+    /// 1. **The frame is still sent when the array comes back empty.** The
+    ///    Panel's `SessionMap::set_server_running` discards any frame whose
+    ///    `seq` is `<= server_seq`, so SUPPRESSING one does not merely go
+    ///    unrendered — it consumes that seq, and no later frame can then clear
+    ///    a dot that is already lit. An empty `running` is the meaningful
+    ///    answer "nothing of yours is running"; silence latches the stale dot
+    ///    for the rest of the connection. Hence a payload rewrite here and no
+    ///    new `false` in `event_admits`.
+    /// 2. **An element whose owner cannot be resolved is DROPPED, never passed
+    ///    through.** [`Self::session_admits`] already fails closed on a
+    ///    malformed key, an absent row and a store error; applying it per
+    ///    element inherits that rule rather than re-deriving it. A walled
+    ///    connection (`caller_user: None`) resolves nothing and therefore
+    ///    receives an empty array — same fail-closed direction as
+    ///    `event_admits`, expressed in the shape this frame needs.
+    pub async fn project_for(
+        &self,
+        topic: &str,
+        data: Option<&Value>,
+        caller_user: Option<&str>,
+        store: &Arc<dyn SessionStore>,
+    ) -> Option<Value> {
+        match topic {
+            RUNNING_SET_TOPIC => {}
+            _ => return None,
+        }
+        // No array to narrow ⇒ nothing this projection could leak, and
+        // rewriting a shape we do not recognize is worse than forwarding it.
+        // `the_published_frame_is_projected_through_its_real_wire_shape` pins
+        // both the topic and the field name against the real producer, so a
+        // rename cannot land here as a silent no-op.
+        let payload = data?.as_object()?;
+        let running = payload.get(RUNNING_SET_FIELD).and_then(Value::as_array)?;
+
+        let mut visible: Vec<Value> = Vec::with_capacity(running.len());
+        if let Some(caller) = caller_user {
+            for entry in running {
+                let Some(key) = entry.as_str() else {
+                    continue; // not a session key ⇒ not resolvable ⇒ dropped
+                };
+                if self.session_admits(key, caller, store).await {
+                    visible.push(Value::String(key.to_string()));
+                }
+            }
+        }
+
+        let mut projected = payload.clone();
+        projected.insert(RUNNING_SET_FIELD.to_string(), Value::Array(visible));
+        Some(Value::Object(projected))
     }
 
     async fn insert_run(&self, run_id: String, session_key: String) {
@@ -1612,5 +1697,243 @@ mod tests {
             None,
             "the oldest entry must be evicted under capacity pressure"
         );
+    }
+
+    // ── Payload projection (`stream.running_set_changed`) ────────────────
+
+    /// Read the projected array back out of whatever `project_for` returned,
+    /// so every assertion below is about the REPLACEMENT PAYLOAD that would go
+    /// on the wire — not about the call having happened.
+    fn projected_keys(projected: &Value) -> Vec<String> {
+        projected[RUNNING_SET_FIELD]
+            .as_array()
+            .expect("a projected running-set frame still carries a `running` array")
+            .iter()
+            .map(|v| v.as_str().expect("session keys are strings").to_string())
+            .collect()
+    }
+
+    /// The projection is pinned to the REAL producer, not to a hand-written
+    /// payload: publish an actual `RunningSetChanged` through the real event
+    /// bus, take the bytes off the wire, and project those. This is what
+    /// catches a rename of either literal (`stream.running_set_changed` /
+    /// `running`) — a mismatch there is otherwise silent, because
+    /// `session_identity_of` keeps saying `Global` while the projection quietly
+    /// stops firing and the whole array goes back on the wire.
+    #[tokio::test]
+    async fn the_published_frame_is_projected_through_its_real_wire_shape() {
+        use crate::gateway::event_bus::GatewayEventBus;
+
+        let (store, _temp) = test_store();
+        let alice_key = SessionKey::main("proj-wire-alice");
+        let bob_key = SessionKey::main("proj-wire-bob");
+        stamp_owner(&store, &alice_key, "u-alice").await;
+        stamp_owner(&store, &bob_key, "u-bob").await;
+        let store: Arc<dyn SessionStore> = Arc::new(store);
+
+        let bus = GatewayEventBus::new();
+        let mut rx = bus.subscribe();
+        bus.publish_frame(&GatewayEventFrame::RunningSetChanged {
+            seq: 9,
+            running: vec![alice_key.to_key_string(), bob_key.to_key_string()],
+        })
+        .unwrap();
+        let wire: Value =
+            serde_json::from_str(&rx.try_recv().expect("publish_frame delivers synchronously"))
+                .unwrap();
+
+        // Exactly the two strings `server::handler`'s delivery loop derives.
+        let topic = wire["method"].as_str().expect("stream-form frame");
+        let payload = wire.get("params");
+        assert_eq!(
+            topic, RUNNING_SET_TOPIC,
+            "the producer's wire topic and this module's constant must agree"
+        );
+
+        let index = EventVisibilityIndex::new();
+        let projected = index
+            .project_for(topic, payload, Some("u-alice"), &store)
+            .await
+            .expect("the real published frame must be projected, not waved through");
+        assert_eq!(
+            projected_keys(&projected),
+            vec![alice_key.to_key_string()],
+            "alice must be told about her own session and nobody else's"
+        );
+        assert_eq!(
+            projected["seq"], 9,
+            "the projection replaces `running` only — `seq` is the client's \
+             ordering guard and must survive verbatim"
+        );
+    }
+
+    /// Invariant 1, the one that is dangerous to get wrong: a caller with
+    /// nothing running must still receive the FRAME, carrying an empty array.
+    /// `SessionMap::set_server_running` drops any frame with `seq <=
+    /// server_seq`, so suppressing this one burns the seq and latches whatever
+    /// dot was last lit for the rest of the connection.
+    #[tokio::test]
+    async fn a_caller_with_nothing_running_still_gets_a_frame_carrying_an_empty_set() {
+        let (store, _temp) = test_store();
+        let alice_key = SessionKey::main("proj-empty-alice");
+        stamp_owner(&store, &alice_key, "u-alice").await;
+        let store: Arc<dyn SessionStore> = Arc::new(store);
+
+        let payload = serde_json::json!({
+            "type": "running_set_changed",
+            "seq": 4,
+            "running": [alice_key.to_key_string()],
+        });
+        let index = EventVisibilityIndex::new();
+        let projected = index
+            .project_for(RUNNING_SET_TOPIC, Some(&payload), Some("u-bob"), &store)
+            .await
+            .expect("an empty result is a FRAME, never a suppression");
+        assert!(
+            projected_keys(&projected).is_empty(),
+            "bob sees none of alice's sessions"
+        );
+        assert_eq!(projected["seq"], 4);
+    }
+
+    /// Invariant 2: an element that cannot be resolved to an owner is dropped,
+    /// never forwarded. Three ways to be unresolvable — a string that is not a
+    /// session key at all, a well-formed key with no row behind it, and a
+    /// non-string element — and all three must vanish rather than ride along
+    /// because "we couldn't tell whose it was".
+    #[tokio::test]
+    async fn an_unresolvable_element_is_dropped_not_passed_through() {
+        let (store, _temp) = test_store();
+        let mine = SessionKey::main("proj-unres-mine");
+        stamp_owner(&store, &mine, "u-alice").await;
+        let store: Arc<dyn SessionStore> = Arc::new(store);
+
+        let ghost = SessionKey::main("proj-unres-never-created").to_key_string();
+        let payload = serde_json::json!({
+            "seq": 1,
+            "running": [
+                mine.to_key_string(),
+                ghost,
+                "this is not a session key",
+                17,
+            ],
+        });
+        let index = EventVisibilityIndex::new();
+        let projected = index
+            .project_for(RUNNING_SET_TOPIC, Some(&payload), Some("u-alice"), &store)
+            .await
+            .expect("projected");
+        assert_eq!(
+            projected_keys(&projected),
+            vec![mine.to_key_string()],
+            "only the element whose owner actually resolved survives"
+        );
+    }
+
+    /// P2: the projection asks the same question the rest of the event plane
+    /// asks, so a ROOM's running session reaches every member of the roster —
+    /// not just whoever created it. Owner-equality would keep bob's dot dark
+    /// for a room he is legitimately in, and would do it silently.
+    #[tokio::test]
+    async fn a_rooms_running_session_reaches_every_member_of_its_roster() {
+        let _guard = crate::projects::roster::TEST_GUARD
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+
+        let projects =
+            crate::projects::ProjectStore::new(rusqlite::Connection::open_in_memory().unwrap());
+        projects.create_schema().unwrap();
+        let room = projects.create("proj room", Some("u-alice"), None).unwrap();
+        projects.add_member(&room.id, "u-bob").unwrap();
+
+        let (store, _temp) = test_store();
+        let room_key = SessionKey::main("proj-room-session");
+        crate::scope::with_scope(
+            Some(crate::scope::ScopeAttribution {
+                owner_user_id: "u-alice".to_string(),
+                scope: crate::scope::ScopeId::Project(room.id.clone()),
+            }),
+            store.get_or_create(&room_key),
+        )
+        .await
+        .unwrap();
+        let store: Arc<dyn SessionStore> = Arc::new(store);
+
+        let payload = serde_json::json!({
+            "seq": 2,
+            "running": [room_key.to_key_string()],
+        });
+        let index = EventVisibilityIndex::new();
+        for member in ["u-alice", "u-bob"] {
+            let projected = index
+                .project_for(RUNNING_SET_TOPIC, Some(&payload), Some(member), &store)
+                .await
+                .expect("projected");
+            assert_eq!(
+                projected_keys(&projected),
+                vec![room_key.to_key_string()],
+                "{member} is on the roster and must see the room's dot"
+            );
+        }
+        let outsider = index
+            .project_for(RUNNING_SET_TOPIC, Some(&payload), Some("u-mallory"), &store)
+            .await
+            .expect("projected");
+        assert!(
+            projected_keys(&outsider).is_empty(),
+            "a non-member sees nothing of the room"
+        );
+    }
+
+    /// A walled connection resolves no identity, so it must be told about
+    /// nothing — the same fail-closed direction `event_admits` takes for
+    /// `caller_user: None`, expressed as an empty array rather than a drop.
+    #[tokio::test]
+    async fn a_walled_connection_receives_an_empty_running_set() {
+        let (store, _temp) = test_store();
+        let key = SessionKey::main("proj-walled");
+        stamp_owner(&store, &key, "u-alice").await;
+        let store: Arc<dyn SessionStore> = Arc::new(store);
+
+        let payload = serde_json::json!({ "seq": 1, "running": [key.to_key_string()] });
+        let projected = EventVisibilityIndex::new()
+            .project_for(RUNNING_SET_TOPIC, Some(&payload), None, &store)
+            .await
+            .expect("still a frame");
+        assert!(projected_keys(&projected).is_empty());
+    }
+
+    /// The 99% path. Every other topic returns `None` so the delivery loop
+    /// forwards the bytes it already holds — including topics that DO carry a
+    /// session identity, because those are answered by `event_admits`, not
+    /// here. Two arms would mean two places to decide the same thing.
+    #[tokio::test]
+    async fn no_other_topic_is_projected() {
+        let (store, _temp) = test_store();
+        let store: Arc<dyn SessionStore> = Arc::new(store);
+        let index = EventVisibilityIndex::new();
+        let payload = serde_json::json!({
+            "seq": 1,
+            "running": ["agent:main:main"],
+            "session_key": "agent:main:main",
+            "run_id": "r1",
+        });
+        for topic in [
+            "stream.session_updated",
+            "stream.agent_trace",
+            "stream.run_accepted",
+            "team.t1.message",
+            "session.lifecycle.changed",
+            "channel.message",
+            "some.topic.nobody.classified",
+        ] {
+            assert!(
+                index
+                    .project_for(topic, Some(&payload), Some("u-alice"), &store)
+                    .await
+                    .is_none(),
+                "{topic} must not be rewritten — even carrying a `running` field"
+            );
+        }
     }
 }

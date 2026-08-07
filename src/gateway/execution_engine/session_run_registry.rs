@@ -118,6 +118,12 @@ impl SessionRunRegistry {
     /// running indicators on a fresh load, and for runs started by another
     /// interface (daemon / Telegram / another Panel) — cases client-side
     /// run-event refcounting alone can't see.
+    ///
+    /// This returns the WHOLE process's set. That handler narrows it to the
+    /// calling user before it leaves the process, the same way `broadcast_change`'s
+    /// frame is narrowed per socket (`event_visibility::EventVisibilityIndex::
+    /// project_for`) — the two are one decision, because they seed and then
+    /// maintain the same red dot.
     #[must_use]
     pub(super) fn running_keys(&self) -> Vec<String> {
         self.running

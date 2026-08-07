@@ -306,6 +306,30 @@
 //! `AgentEnvError::AlreadyExists` value and is byte-identical to a genuine id
 //! collision.
 //!
+//! ## `gateway.metrics.run_concurrency` (2026-08-07)
+//!
+//! The one entry in this table whose method is not a `sessions.*`-shaped data
+//! surface, and the only one registered as the RPC HALF of an event-plane fix.
+//! It returns `running_sessions` — every in-flight session key in the process
+//! — which is byte-for-byte the array `stream.running_set_changed` carries;
+//! `busy_queue.per_session` names sessions the same way. Both are now
+//! **ListFiltered** through the same predicate the event plane's
+//! `EventVisibilityIndex::project_for` applies element-wise, so the two
+//! producers of that set cannot diverge (pinned in `handlers/gateway_metrics.rs`).
+//!
+//! It also moved OUT of the admin gate in the same change
+//! (`method_admin::MEMBER_CARVE_OUTS`): the `gateway.` prefix had it gated, so
+//! the Panel's cold-load seed for the sidebar red dot and its usage gauge were
+//! already dead for every member — filtering it is what makes carving it open
+//! safe, and carving it open is what makes the filtering worth having.
+//!
+//! ⚠️ Read the label narrowly, exactly as with `workspace.*`: the AGGREGATE
+//! counters in the same response (`run_concurrency`'s slot totals and per-agent
+//! breakdown, `busy_queue.total_waiting`) are deliberately NOT filtered. They
+//! are load numbers with no identity in them and they are the gauge's entire
+//! purpose; `ListFiltered` here means "every array that names a session is
+//! filtered", not "every field is per-user".
+//!
 //! ## `teams.*` (tightened 2026-08-06 — was `OrgShared`)
 //!
 //! P1 shipped this family as [`Treatment::OrgShared`]: `Team` carried no owner
@@ -507,6 +531,11 @@ pub const SCOPED_METHODS: &[(&str, Treatment)] = &[
     ("workspace.create", Treatment::PartitionChecked),
     ("workspace.update", Treatment::PartitionChecked),
     ("workspace.archive", Treatment::PartitionChecked),
+    // The RPC half of the `stream.running_set_changed` payload projection —
+    // same set, same predicate, opposite transport. See the module doc's own
+    // section for what the label does and does not claim about the aggregate
+    // counters in the same response.
+    ("gateway.metrics.run_concurrency", Treatment::ListFiltered),
     // --- teams.* (see the module doc's `teams.*` section) ---
     ("teams.list", Treatment::ListFiltered),
     ("teams.snapshot.list", Treatment::ListFiltered),
@@ -955,6 +984,37 @@ mod tests {
             treatment_of("workspace.archive"),
             treatment_of("workspace.get")
         );
+    }
+
+    /// `gateway.metrics.run_concurrency` is registered AND carved out of the
+    /// admin gate, and those two facts are one decision: the carve-out is only
+    /// safe because the response is filtered, and the filtering is only worth
+    /// having because a member can now reach it. Its metric siblings did NOT
+    /// move, which is what keeps the carve-out narrow.
+    #[test]
+    fn the_running_set_gauge_is_list_filtered_and_member_reachable() {
+        assert_eq!(
+            treatment_of("gateway.metrics.run_concurrency"),
+            Some(Treatment::ListFiltered)
+        );
+        assert!(
+            !crate::gateway::method_admin::method_requires_admin("gateway.metrics.run_concurrency"),
+            "registering it here is pointless while the admin gate refuses it"
+        );
+        for sibling in [
+            "gateway.metrics.lanes",
+            "gateway.metrics.subagent_concurrency",
+        ] {
+            assert_eq!(
+                treatment_of(sibling),
+                None,
+                "{sibling} names no session and must not be claimed by this table"
+            );
+            assert!(
+                crate::gateway::method_admin::method_requires_admin(sibling),
+                "{sibling} must stay admin-gated"
+            );
+        }
     }
 
     /// `trace.list`/`trace.get` are absent from this table on purpose: they

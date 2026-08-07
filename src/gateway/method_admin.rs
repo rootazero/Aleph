@@ -87,9 +87,9 @@
 const ADMIN_PREFIXES: &[&str] = &[
     // --- Gateway trust boundary: tokens, tickets, devices, credentials ---
     "gateway.", // token.{current,rotate}, ticket.create, devices.{list,revoke},
-    // identity.get, metrics.*, credentials, flow.reload — no read-only
-    // member-safe carve-out exists in this family (verified: no
-    // `gateway.status` method is registered anywhere).
+    // identity.get, metrics.*, credentials, flow.reload. One carve-out since
+    // 2026-08-07: `gateway.metrics.run_concurrency`, whose response is now
+    // narrowed to the caller instead of refused (see MEMBER_CARVE_OUTS).
     // --- Principal / fleet / process management ---
     "users.", // principal management (carve-outs: me / list) — not yet
     // registered (lands in Task 5); gated pre-emptively so the gate
@@ -234,6 +234,18 @@ const MEMBER_CARVE_OUTS: &[&str] = &[
     // session's own) — see `handlers/trace_replay.rs::handle_by_runs`. Its
     // siblings stay gated; this carve-out is as narrow as `tools.invoke`'s.
     "trace.by_runs",
+    // The Panel's cold-load seed for the sidebar running dot, and its usage
+    // gauge. Admin-gating it (inherited from the `gateway.` family) meant both
+    // were silently dead for every member — the RPC fallback that the
+    // `stream.running_set_changed` event's own "members still need their own
+    // red dot" rationale leaned on did not work for the population that
+    // rationale is about. Safe now that the handler narrows its two
+    // session-key arrays to the caller itself (2026-08-07, `ListFiltered` in
+    // `method_visibility`); the aggregate slot/queue counters it also returns
+    // are load numbers, not identities. Siblings (`gateway.metrics.lanes`,
+    // `gateway.metrics.subagent_concurrency`) stay gated — narrowing those is
+    // a separate, not-yet-made decision.
+    "gateway.metrics.run_concurrency",
 ];
 
 #[must_use]
@@ -361,6 +373,33 @@ mod tests {
         }
     }
 
+    /// The `gateway.` family's one carve-out (2026-08-07). It exists because
+    /// the response is NARROWED for a member rather than refused — the RPC half
+    /// of the `stream.running_set_changed` projection — so the carve-out and
+    /// `handle_gateway_metrics_run_concurrency`'s filtering are one decision:
+    /// if that filtering is ever removed, this line has to go with it.
+    #[test]
+    fn run_concurrency_is_carved_open_but_its_gateway_siblings_stay_gated() {
+        assert!(
+            !method_requires_admin("gateway.metrics.run_concurrency"),
+            "gateway.metrics.run_concurrency must stay open — it is the Panel's \
+             cold-load seed for a member's OWN running dot, and it filters its \
+             session-key arrays to the caller in the handler"
+        );
+        for sibling in [
+            "gateway.metrics.lanes",
+            "gateway.metrics.subagent_concurrency",
+            "gateway.token.rotate",
+            "gateway.devices.list",
+        ] {
+            assert!(
+                method_requires_admin(sibling),
+                "{sibling} must stay admin-gated — only \
+                 gateway.metrics.run_concurrency is carved out"
+            );
+        }
+    }
+
     #[test]
     fn member_daily_methods_stay_open() {
         for m in [
@@ -397,6 +436,7 @@ mod tests {
             "subagent.tree",
             "agent.run",
             "trace.by_runs",
+            "gateway.metrics.run_concurrency",
             "session.compact",
             "command.execute",
             "commands.list",
