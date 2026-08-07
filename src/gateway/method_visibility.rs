@@ -279,13 +279,32 @@
 //!   (`memory::insights::empty_tool_usage_report`) so it is byte-identical to
 //!   a partition that ran nothing and cannot drift as the report type grows.
 //! - `workspace.list` → **ListFiltered**, `workspace.get` →
-//!   **PartitionChecked**. ⚠️ These two are DEFENSE IN DEPTH ONLY and the
+//!   **PartitionChecked**. ⚠️ These are DEFENSE IN DEPTH ONLY and the
 //!   table would overstate them if read as more: a workspace id is a
 //!   user-chosen name that encodes no owner and `agent_envs` has no owner
 //!   column, so an ordinary workspace passes `partition_visible` for every
 //!   caller and its `env_vars` are still cross-user readable. Closing that
 //!   needs an owner column plus a migration — a schema and product decision,
-//!   not a handler fix. Both handlers' docs say so at the site.
+//!   not a handler fix. Every handler's doc says so at the site.
+//!
+//! ## `workspace.*` writes (2026-08-07)
+//!
+//! The round above gated the two READS and left `workspace.create` /
+//! `workspace.update` / `workspace.archive` untouched, which is the wrong half
+//! to stop at: a write into a partition you cannot read is strictly worse than
+//! a read. All three are now **PartitionChecked** on the same
+//! `visibility::partition_visible(&params.id)` call, under the identical
+//! honesty boundary above — an ordinary `"crypto"` still passes for everyone.
+//! What they buy is the composed-id half: without them a member can create or
+//! archive `main__u-alice`, a row that only ALICE's filtered `workspace.list`
+//! then shows, carrying attacker-supplied `env_vars` /
+//! `system_prompt_override` / `allowed_tools`.
+//!
+//! Each denial reuses that method's OWN existing response rather than a new
+//! shared one — `update`/`archive` already have a "not found", and `create`
+//! has none, so its denial is built from the real
+//! `AgentEnvError::AlreadyExists` value and is byte-identical to a genuine id
+//! collision.
 //!
 //! ## `teams.*` (tightened 2026-08-06 — was `OrgShared`)
 //!
@@ -369,17 +388,18 @@
 //! fixed — flagged here exactly as `method_admin.rs` flags its own
 //! follow-ups)
 //!
-//! `sessions.set_topic` and `chat.context_estimate` take a caller-supplied
-//! `session_key` with no ownership check today; deferred deliberately (lower
-//! severity — a title-rename side effect and a token-count-only read,
-//! respectively — and reviewed as out of this round's scope). The
-//! Simulated-fallback `chat.send` path (see the `chat.send` bullet above) is
-//! also a known, deliberate gap. `memory.reembed` is intentionally absent
-//! from the table (whole-store maintenance, no per-user `agent_id` to check
-//! — see the pin test). All are recorded here as the durable home for the
+//! The Simulated-fallback `chat.send` path (see the `chat.send` bullet above)
+//! is a known, deliberate gap. `memory.reembed` is intentionally absent from
+//! the table (whole-store maintenance, no per-user `agent_id` to check — see
+//! the pin test). Both are recorded here as the durable home for the
 //! follow-up, same convention as `method_admin.rs`'s notes.
 //! (`graph.update_note`/`rename_note`/`delete_note` were in this list until
-//! Task 7 fix round 2 closed them — see that section above.)
+//! Task 7 fix round 2 closed them — see that section above.
+//! `sessions.set_topic` and `chat.context_estimate` were in it until
+//! 2026-08-07; the deferral rested on two mis-descriptions — the first is a
+//! cross-user WRITE that renames the title in the victim's own sidebar, and
+//! the second discloses the addressed session's PINNED MODEL via
+//! `window_tokens`, not just a token count. Both are registered below.)
 //!
 //! ## `OrgShared`
 //!
@@ -438,6 +458,12 @@ pub const SCOPED_METHODS: &[(&str, Treatment)] = &[
     ("sessions.new", Treatment::KeyChecked),
     ("sessions.patch", Treatment::KeyChecked),
     ("sessions.set_project_root", Treatment::KeyChecked),
+    // Cross-user WRITE: the topic is the title the victim's own sidebar
+    // renders. Gated 2026-08-07 with `handle_truncate_db`'s block verbatim.
+    ("sessions.set_topic", Treatment::KeyChecked),
+    // Gated 2026-08-07 via `existing_session_is_visible` (a not-yet-created
+    // session is not a denial); denial reuses the handler's own `null`.
+    ("chat.context_estimate", Treatment::KeyChecked),
     ("session.compact", Treatment::KeyChecked),
     ("session.truncate", Treatment::KeyChecked),
     ("sessions.compaction.list", Treatment::KeyChecked),
@@ -477,6 +503,10 @@ pub const SCOPED_METHODS: &[(&str, Treatment)] = &[
     ("insights.tools", Treatment::PartitionChecked),
     ("workspace.list", Treatment::ListFiltered),
     ("workspace.get", Treatment::PartitionChecked),
+    // --- workspace.* writes (see the module doc's own section) ---
+    ("workspace.create", Treatment::PartitionChecked),
+    ("workspace.update", Treatment::PartitionChecked),
+    ("workspace.archive", Treatment::PartitionChecked),
     // --- teams.* (see the module doc's `teams.*` section) ---
     ("teams.list", Treatment::ListFiltered),
     ("teams.snapshot.list", Treatment::ListFiltered),
@@ -639,15 +669,15 @@ mod tests {
     #[test]
     fn unregistered_method_reads_as_none_not_a_default_treatment() {
         // No silent "assume KeyChecked" default — an unlisted method must
-        // read as unclassified, not falsely covered. `sessions.set_topic`,
-        // `chat.context_estimate`, and `memory.reembed` (whole-store, no
-        // `agent_id` at all) are DELIBERATE, documented gaps (see module
-        // doc) — not silently dropped, but also not falsely claimed.
-        // (`memory.trace` and `graph.update_note` were examples here until
-        // Task 7 fix rounds 1/2 registered them — see those pin tests.)
-        assert_eq!(treatment_of("sessions.set_topic"), None);
-        assert_eq!(treatment_of("chat.context_estimate"), None);
+        // read as unclassified, not falsely covered. `memory.reembed`
+        // (whole-store maintenance, no `agent_id` at all) is a DELIBERATE,
+        // documented gap — not silently dropped, but also not falsely
+        // claimed. (`memory.trace` and `graph.update_note` were examples here
+        // until Task 7 fix rounds 1/2 registered them; `sessions.set_topic`
+        // and `chat.context_estimate` until 2026-08-07 — see those pin
+        // tests.)
         assert_eq!(treatment_of("memory.reembed"), None);
+        assert_eq!(treatment_of("a.method.nobody.registered"), None);
     }
 
     /// Task 7 fix round 1's own pin.
@@ -903,6 +933,27 @@ mod tests {
         assert_eq!(
             treatment_of("workspace.list"),
             Some(Treatment::ListFiltered)
+        );
+    }
+
+    /// The four RPCs this table spent a round describing as deliberate gaps
+    /// (`sessions.set_topic` / `chat.context_estimate`) or simply never
+    /// enumerating (the three `workspace.*` writes). Pinned by name because
+    /// they have each already been read once and ruled "lower severity" —
+    /// this is the assertion that fails if the gate is dropped again.
+    #[test]
+    fn the_four_formerly_ungated_scoped_rpcs_are_registered() {
+        for m in ["sessions.set_topic", "chat.context_estimate"] {
+            assert_eq!(treatment_of(m), Some(Treatment::KeyChecked), "{m}");
+        }
+        for m in ["workspace.create", "workspace.update", "workspace.archive"] {
+            assert_eq!(treatment_of(m), Some(Treatment::PartitionChecked), "{m}");
+        }
+        // The writes must not be claimed as MORE than their read siblings:
+        // same predicate, same treatment, same documented boundary.
+        assert_eq!(
+            treatment_of("workspace.archive"),
+            treatment_of("workspace.get")
         );
     }
 

@@ -624,6 +624,13 @@ pub async fn handle_truncate_db(
 /// Params:
 ///   - `session_key` (required): session key string
 ///   - topic (required): new topic string (max 100 chars)
+///
+/// P1 visibility: KeyChecked, the same block [`handle_truncate_db`] runs, and
+/// for the same reason — this is a cross-user **write**. The topic is the
+/// title the Panel sidebar renders, so an unchecked caller could rename any
+/// other user's conversation (defacement, and a channel into a surface the
+/// victim reads). It was deferred once as "a title-rename side effect"; the
+/// side effect lands in the victim's own UI.
 pub async fn handle_set_topic_db(
     request: JsonRpcRequest,
     manager: Arc<dyn SessionStore>,
@@ -669,6 +676,16 @@ pub async fn handle_set_topic_db(
             );
         }
     };
+
+    let meta = match manager.get_metadata(&session_key).await {
+        Ok(Some(m)) => m,
+        Ok(None) => return visibility::not_found_response(request.id),
+        Err(_) => return visibility::not_found_response(request.id), // fail closed (GC 3)
+    };
+    if !visibility::session_visible(&meta) {
+        // Same error as missing (GC 4) — before the rename below.
+        return visibility::not_found_response(request.id);
+    }
 
     match manager.set_topic(&session_key, topic).await {
         Ok(()) => JsonRpcResponse::success(
@@ -1257,6 +1274,102 @@ mod tests {
                 history.len(),
                 1,
                 "a denied truncate must not remove the foreign session's messages"
+            );
+        }
+
+        /// `sessions.set_topic` is a cross-user WRITE: the topic is the title
+        /// the owner's own sidebar renders, so an ungated caller renames
+        /// somebody else's conversation. The assertion that matters is the
+        /// stored topic AFTER the denial — a check that merely returned the
+        /// right error code while the `UPDATE` still ran would pass a
+        /// response-shape-only test.
+        #[tokio::test]
+        async fn sessions_set_topic_denies_cross_user_and_leaves_the_title_intact() {
+            let temp = tempdir().unwrap();
+            let store = store(&temp);
+            let alice_key = alice_session(&store).await;
+            let alice_key_str = alice_key.to_key_string();
+
+            // Alice names her own conversation first, so the deny case has a
+            // real value to preserve rather than an absent one.
+            let mine = JsonRpcRequest {
+                jsonrpc: "2.0".into(),
+                method: "sessions.set_topic".into(),
+                params: Some(json!({
+                    "session_key": alice_key_str,
+                    "topic": "alice's quarterly plan",
+                })),
+                id: Some(json!(1)),
+            };
+            let as_alice = CALLER_USER
+                .scope(
+                    Some("u-alice".to_string()),
+                    handle_set_topic_db(mine, store.clone()),
+                )
+                .await;
+            assert!(as_alice.error.is_none(), "the owner may rename her own");
+            assert_eq!(
+                store
+                    .get_metadata(&alice_key)
+                    .await
+                    .unwrap()
+                    .unwrap()
+                    .topic
+                    .as_deref(),
+                Some("alice's quarterly plan")
+            );
+
+            let theirs = JsonRpcRequest {
+                jsonrpc: "2.0".into(),
+                method: "sessions.set_topic".into(),
+                params: Some(json!({
+                    "session_key": alice_key_str,
+                    "topic": "renamed-by-bob",
+                })),
+                id: Some(json!(1)),
+            };
+            let as_bob = CALLER_USER
+                .scope(
+                    Some("u-bob".to_string()),
+                    handle_set_topic_db(theirs, store.clone()),
+                )
+                .await;
+            assert_eq!(
+                as_bob.error.as_ref().map(|e| e.code),
+                Some(RESOURCE_NOT_FOUND)
+            );
+            assert_eq!(
+                store
+                    .get_metadata(&alice_key)
+                    .await
+                    .unwrap()
+                    .unwrap()
+                    .topic
+                    .as_deref(),
+                Some("alice's quarterly plan"),
+                "a denied set_topic must not rewrite the foreign session's title"
+            );
+
+            // Byte-identical to a genuinely nonexistent key (no existence
+            // oracle): the rename target's existence must not be learnable.
+            let missing = JsonRpcRequest {
+                jsonrpc: "2.0".into(),
+                method: "sessions.set_topic".into(),
+                params: Some(json!({
+                    "session_key": "agent:nosuchtopickey:main",
+                    "topic": "renamed-by-bob",
+                })),
+                id: Some(json!(1)),
+            };
+            let as_bob_missing = CALLER_USER
+                .scope(
+                    Some("u-bob".to_string()),
+                    handle_set_topic_db(missing, store.clone()),
+                )
+                .await;
+            assert_eq!(
+                serde_json::to_string(&as_bob).unwrap(),
+                serde_json::to_string(&as_bob_missing).unwrap(),
             );
         }
     }

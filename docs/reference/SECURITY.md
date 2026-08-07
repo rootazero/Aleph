@@ -1274,21 +1274,17 @@ after (verified by `single_user_fixture_is_byte_identical_after_upgrade`,
      projection, which needs a payload-rewrite step the delivery loop's
      pass/fail-only `should_forward` doesn't have. See
      `event_visibility.rs`'s module doc.
-  2. `sessions.set_topic` and `chat.context_estimate` take a
-     caller-supplied `session_key` with no ownership check — a
-     title-rename side effect and a token-count-only read, respectively;
-     reviewed and deferred as lower severity.
-  3. `chat.send`'s Simulated-execution fallback path (used only when no LLM
+  2. `chat.send`'s Simulated-execution fallback path (used only when no LLM
      provider is configured — `AgentRunManager::start_run`, which has no
      `SessionStore` dependency) is not covered by the real-provider path's
      `existing_session_is_visible` check.
-  4. `slash_command.rs::execute_direct_tool` (the `/toolname` L0 fast path)
+  3. `slash_command.rs::execute_direct_tool` (the `/toolname` L0 fast path)
      bypasses `ScopedToolService` entirely, with no allowlist — but it IS
      tier-aware (routes through `resolve_exec_tier`), so the gap only opens
      if a member explicitly escalates their own session to `Auto`/`Full`
      (the member default is `Ask`). Pre-existing, not introduced by P1;
      recommended as a follow-up task.
-  5. The legacy `proj-*` (project-directory feature) write side of
+  4. The legacy `proj-*` (project-directory feature) write side of
      `OPEN_LOOPS.md` is pinned `project_scoped = false` on both read and
      write for a `proj-` session — widening it needs a persisted project
      root on the session-close path that doesn't exist yet. Personal scope

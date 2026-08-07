@@ -1408,15 +1408,20 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
                 // exist. Captures the harness handle so the gauge can show an estimated
                 // occupancy for sessions that never ran an LLM turn. Registered here (not in
                 // register_common_handlers) because that seam has no orchestrator handle.
+                // `session_store` rides along for the P1 visibility gate — the estimate is
+                // derived from the addressed session's event log and pinned model, so it is
+                // caller-dependent data (see the handler's doc).
                 {
                     let harness = orch.harness.clone();
+                    let estimate_sessions = session_store.clone();
                     server
                         .handlers_mut()
                         .register("chat.context_estimate", move |req| {
                             let harness = harness.clone();
+                            let sessions = estimate_sessions.clone();
                             async move {
                                 alephcore::gateway::handlers::chat::handle_context_estimate(
-                                    req, harness,
+                                    req, harness, sessions,
                                 )
                                 .await
                             }
