@@ -641,15 +641,40 @@ mod tests {
             store.get("main__u-alice").await.unwrap().is_some(),
             "a denied archive must not soft-delete the foreign workspace"
         );
-        // …and byte-identical to archiving something that never existed.
-        let missing = as_bob(handle_archive(
-            req("workspace.archive", json!({ "id": "main__u-alice" })),
+        // …and no existence oracle: the refusal must read the same whether
+        // the row is there or not. `main__u-carol` is archived by bob twice —
+        // once while it has never been created, once after it has — so what
+        // varies between the two responses is EXISTENCE and nothing else.
+        //
+        // The id is deliberately held fixed rather than comparing two
+        // different ids: this method's not-found message echoes the id the
+        // caller itself supplied, so two ids would differ on the wire for a
+        // reason that leaks nothing, and the comparison would have to be
+        // weakened to survive it. Two calls that differ in neither id nor
+        // store state would instead compare a call to itself and could not
+        // fail at all.
+        let never_created = as_bob(handle_archive(
+            req("workspace.archive", json!({ "id": "main__u-carol" })),
+            store.clone(),
+        ))
+        .await;
+        store
+            .create("main__u-carol", "default", None)
+            .await
+            .unwrap();
+        let now_exists = as_bob(handle_archive(
+            req("workspace.archive", json!({ "id": "main__u-carol" })),
             store.clone(),
         ))
         .await;
         assert_eq!(
-            serde_json::to_string(&archived).unwrap(),
-            serde_json::to_string(&missing).unwrap()
+            serde_json::to_string(&never_created).unwrap(),
+            serde_json::to_string(&now_exists).unwrap(),
+            "the refusal must not tell bob whether main__u-carol exists"
+        );
+        assert!(
+            store.get("main__u-carol").await.unwrap().is_some(),
+            "…and neither denied archive may soft-delete the row"
         );
 
         // --- the boundary, asserted rather than implied ------------------
