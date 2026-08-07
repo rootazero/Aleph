@@ -801,3 +801,220 @@ fn handle_reasoning_appends() {
         other => panic!("Expected Assistant message, got: {other:?}"),
     }
 }
+
+/// A streaming turn puts the same text on the wire twice - as `ResponseChunk`
+/// deltas and again in full as `AgentTrace{TextEmitted{Final}}`. The TUI
+/// subscribes to no topics, so it receives both, and both used to append.
+///
+/// The existing single-projection tests stayed green because each feeds only
+/// one of the two streams; this one interleaves them in production order.
+/// `think.rs` emits `TurnStarted` on every turn, so the "no agent_trace" branch
+/// those tests exercise is unreachable in a real run.
+#[test]
+fn a_streamed_turn_appends_its_text_exactly_once() {
+    let mut state = AppState::new("s".into(), "m".into());
+
+    state.handle_gateway_event(StreamEvent::RunAccepted {
+        run_id: "run-1".into(),
+        session_key: "s".into(),
+        accepted_at: "2026-03-04T00:00:00Z".into(),
+    });
+    state.handle_gateway_event(StreamEvent::AgentTrace {
+        run_id: "run-1".into(),
+        seq: 1,
+        event: AgentTraceEvent::TurnStarted { iteration: 1 },
+    });
+    for (i, piece) in ["Hel", "lo, ", "世界!"].iter().enumerate() {
+        state.handle_gateway_event(StreamEvent::ResponseChunk {
+            run_id: "run-1".into(),
+            seq: 2 + i as u64,
+            content: (*piece).to_string(),
+            chunk_index: u32::try_from(i).unwrap(),
+            is_final: false,
+            is_intermediate: false,
+        });
+    }
+    state.handle_gateway_event(StreamEvent::AgentTrace {
+        run_id: "run-1".into(),
+        seq: 9,
+        event: AgentTraceEvent::TextEmitted {
+            iteration: 1,
+            stream: AgentTraceTextKind::Final,
+            text: "Hello, 世界!".into(),
+        },
+    });
+
+    match &state.messages[1] {
+        ChatMessage::Assistant { content, .. } => assert_eq!(content, "Hello, 世界!"),
+        other => panic!("Expected Assistant message, got: {other:?}"),
+    }
+}
+
+/// A turn whose text never streamed (mock provider, or an output guardrail
+/// holding the full text back) must still land in full from the trace event.
+#[test]
+fn an_unstreamed_turn_still_takes_its_full_final_text() {
+    let mut state = AppState::new("s".into(), "m".into());
+
+    state.handle_gateway_event(StreamEvent::AgentTrace {
+        run_id: "run-1".into(),
+        seq: 1,
+        event: AgentTraceEvent::TurnStarted { iteration: 1 },
+    });
+    state.handle_gateway_event(StreamEvent::AgentTrace {
+        run_id: "run-1".into(),
+        seq: 2,
+        event: AgentTraceEvent::TextEmitted {
+            iteration: 1,
+            stream: AgentTraceTextKind::Final,
+            text: "no deltas for this one".into(),
+        },
+    });
+
+    match &state.messages[1] {
+        ChatMessage::Assistant { content, .. } => assert_eq!(content, "no deltas for this one"),
+        other => panic!("Expected Assistant message, got: {other:?}"),
+    }
+}
+
+/// Every turn restarts the watermark, so turn 2's text is not clipped by how
+/// much turn 1 streamed. Both turns land in the same bubble
+/// (`ensure_assistant_message` reuses the trailing Assistant message), which is
+/// what made the original doubling accumulate rather than show up as a stray
+/// second message.
+#[test]
+fn a_second_turn_is_not_clipped_by_the_first_turns_watermark() {
+    let mut state = AppState::new("s".into(), "m".into());
+
+    for iteration in 1..=2usize {
+        let base = iteration as u64 * 10;
+        state.handle_gateway_event(StreamEvent::AgentTrace {
+            run_id: "run-1".into(),
+            seq: base,
+            event: AgentTraceEvent::TurnStarted { iteration },
+        });
+        state.handle_gateway_event(StreamEvent::ResponseChunk {
+            run_id: "run-1".into(),
+            seq: base + 1,
+            content: format!("turn{iteration} "),
+            chunk_index: 0,
+            is_final: false,
+            is_intermediate: false,
+        });
+        state.handle_gateway_event(StreamEvent::AgentTrace {
+            run_id: "run-1".into(),
+            seq: base + 2,
+            event: AgentTraceEvent::TextEmitted {
+                iteration,
+                stream: AgentTraceTextKind::Final,
+                text: format!("turn{iteration} "),
+            },
+        });
+    }
+
+    match &state.messages[1] {
+        ChatMessage::Assistant { content, .. } => assert_eq!(content, "turn1 turn2 "),
+        other => panic!("Expected Assistant message, got: {other:?}"),
+    }
+}
+
+/// `agent_trace` is a deliberately-lossy mirror (bounded mpsc + `try_send`), so
+/// a tool-heavy run can drop a `ToolCallCompleted` and leave the row spinning
+/// forever. `RunComplete` must reconcile against the authoritative
+/// `summary.tool_summaries` - the invariant the protocol documents and the
+/// Panel already implements, and which the TUI was never wired to.
+#[test]
+fn a_dropped_completion_is_repaired_by_the_run_summary() {
+    use aleph_protocol::events::{ToolErrorItem, ToolSummaryItem};
+
+    let mut state = AppState::new("s".into(), "m".into());
+    state.handle_gateway_event(StreamEvent::AgentTrace {
+        run_id: "run-1".into(),
+        seq: 1,
+        event: AgentTraceEvent::ToolCallStarted {
+            iteration: 1,
+            call: aleph_protocol::AgentTraceToolCallStart {
+                tool_id: "t1".into(),
+                tool_name: "bash".into(),
+                input: serde_json::json!({"command": "ls"}),
+            },
+        },
+    });
+    // ToolCallCompleted for t1 is DROPPED here - that is the whole point.
+    assert_eq!(
+        state.find_tool_mut("t1").unwrap().status,
+        ToolStatus::Running
+    );
+
+    state.handle_gateway_event(StreamEvent::RunComplete {
+        run_id: "run-1".into(),
+        seq: 2,
+        summary: RunSummary {
+            tool_calls: 2,
+            tool_summaries: vec![
+                ToolSummaryItem {
+                    tool_id: "t1".into(),
+                    tool_name: "bash".into(),
+                    emoji: "\u{1f4bb}".into(),
+                    duration_ms: 120,
+                    success: true,
+                },
+                // This one's *start* frame was dropped too: reconstruct the
+                // row, do not skip it.
+                ToolSummaryItem {
+                    tool_id: "t2".into(),
+                    tool_name: "file_read".into(),
+                    emoji: "\u{1f4c4}".into(),
+                    duration_ms: 8,
+                    success: false,
+                },
+            ],
+            errors: vec![ToolErrorItem {
+                tool_name: "file_read".into(),
+                error: "no such file".into(),
+                tool_id: "t2".into(),
+            }],
+            ..Default::default()
+        },
+        total_duration_ms: 500,
+    });
+
+    let t1 = state.find_tool_mut("t1").unwrap();
+    assert_eq!(t1.status, ToolStatus::Success);
+    assert_eq!(t1.duration, Some(Duration::from_millis(120)));
+    let t2 = state.find_tool_mut("t2").unwrap();
+    assert_eq!(t2.status, ToolStatus::Failed);
+    assert_eq!(t2.error.as_deref(), Some("no such file"));
+}
+
+/// A row the authoritative record does not mention either must still stop
+/// spinning: the run is over, so `Running` is the one thing it cannot be.
+/// `Unknown`, never `Success` - do not guess a terminal state.
+#[test]
+fn a_row_absent_from_the_summary_settles_to_unknown() {
+    let mut state = AppState::new("s".into(), "m".into());
+    state.handle_gateway_event(StreamEvent::AgentTrace {
+        run_id: "run-1".into(),
+        seq: 1,
+        event: AgentTraceEvent::ToolCallStarted {
+            iteration: 1,
+            call: aleph_protocol::AgentTraceToolCallStart {
+                tool_id: "ghost".into(),
+                tool_name: "bash".into(),
+                input: serde_json::json!({}),
+            },
+        },
+    });
+
+    state.handle_gateway_event(StreamEvent::RunError {
+        run_id: "run-1".into(),
+        seq: 2,
+        error: "provider exploded".into(),
+        error_code: None,
+    });
+
+    assert_eq!(
+        state.find_tool_mut("ghost").unwrap().status,
+        ToolStatus::Unknown
+    );
+}

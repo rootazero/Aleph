@@ -29,6 +29,7 @@ impl AppState {
                 self.run_started_at = Some(Instant::now());
                 self.current_run_uses_agent_trace = false;
                 self.current_run_trace_summary_applied = false;
+                self.turn_streamed_len = 0;
                 self.is_connected = true;
                 Action::None
             }
@@ -90,9 +91,21 @@ impl AppState {
                 duration_ms,
                 ..
             } => {
-                if self.current_run_uses_agent_trace {
-                    return Action::None;
-                }
+                // Deliberately NOT gated on `current_run_uses_agent_trace`, and
+                // deliberately asymmetric with `ToolStart` above.
+                //
+                // `ToolEnd` rides the authoritative stream while
+                // `AgentTrace{ToolCallCompleted}` rides the lossy mirror, so
+                // letting this one through is what settles a row whose trace
+                // frame was dropped. It is safe to double-apply because
+                // `finish_tool_execution` only ever moves a row to a terminal
+                // state and no-ops on an unknown id.
+                //
+                // `ToolStart` stays gated: `start_tool_execution` RESETS a row
+                // to Running and clears its duration/error, so an out-of-order
+                // arrival would un-complete a finished tool — and the trace
+                // mirror's `summarize_tool_input` params render better than the
+                // raw ones here.
                 if matches!(self.tool_progress_mode, ToolProgressMode::Off) {
                     return Action::None;
                 }
@@ -111,6 +124,11 @@ impl AppState {
             }
 
             StreamEvent::ResponseChunk { content, .. } => {
+                // Deliberately NOT gated on `current_run_uses_agent_trace`:
+                // `TextEmitted{Final}` arrives once per turn, so gating here
+                // would kill the live typewriter. The de-dup happens on the
+                // other side — see `turn_streamed_len`.
+                self.turn_streamed_len += content.len();
                 self.append_assistant_content(&content);
                 Action::ScrollToBottomIfAutoScroll
             }
@@ -129,6 +147,13 @@ impl AppState {
                 }
                 self.current_run_uses_agent_trace = false;
                 self.current_run_trace_summary_applied = false;
+                self.turn_streamed_len = 0;
+                // End-of-stream reconciliation against the authoritative
+                // terminal record — the live rows came off the lossy
+                // `agent_trace` mirror. Order matters: fill from the summary
+                // first, then settle whatever it did not mention.
+                self.reconcile_tools_from_summary(&summary.tool_summaries, &summary.errors);
+                self.settle_orphan_tools();
                 self.mark_current_assistant_complete();
 
                 // Surface non-clean terminations (a hit cap / exhausted budget)
@@ -160,6 +185,11 @@ impl AppState {
                 self.dismiss_pending_approval();
                 self.current_run_uses_agent_trace = false;
                 self.current_run_trace_summary_applied = false;
+                self.turn_streamed_len = 0;
+                // No summary on this path, so there is nothing to reconcile
+                // against — but the run is over, so a spinning row is a lie
+                // either way.
+                self.settle_orphan_tools();
                 self.mark_current_assistant_complete();
 
                 self.add_system_message(format!("Error: {error}"));
