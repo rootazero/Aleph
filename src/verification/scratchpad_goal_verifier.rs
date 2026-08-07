@@ -33,6 +33,7 @@ use async_trait::async_trait;
 use tokio_util::sync::CancellationToken;
 
 use crate::builtin_tools::scratchpad_registry;
+use crate::memory::scratchpad::ScratchpadSnapshot;
 use crate::memory::ScratchpadManager;
 use crate::verification::turn_verifier::{TurnVerifier, TurnVerifyContext, VerifierVerdict};
 
@@ -94,37 +95,69 @@ impl TurnVerifier for ScratchpadGoalVerifier {
             return VerifierVerdict::Continue;
         }
 
-        let pending = snapshot.incomplete();
-        let objective = snapshot.objective.as_deref().unwrap_or("");
-        let listed = pending
-            .iter()
-            .take(MAX_LISTED)
-            .map(|i| {
-                if i.is_in_progress() {
-                    format!("- {} (in progress)", i.text)
-                } else {
-                    format!("- {}", i.text)
-                }
-            })
-            .collect::<Vec<_>>()
-            .join("\n");
-        let overflow = pending.len().saturating_sub(MAX_LISTED);
-        let more_note = if overflow > 0 {
-            format!("\n…and {overflow} more.")
-        } else {
-            String::new()
-        };
-        let reason = format!(
-            "Your execution list for the objective \"{objective}\" still has {n} \
-             incomplete step(s):\n{listed}{more_note}\n\nKeep working through them \
-             one at a time — mark the step you are working on with \
-             `scratchpad(action='start_item', …)` and each finished step with \
-             `scratchpad(action='complete_item', …)`. If the objective is already \
-             fully achieved, call `scratchpad(action='clear', …)` to finish.",
-            n = pending.len(),
-        );
-        VerifierVerdict::Veto { reason }
+        VerifierVerdict::Veto {
+            reason: veto_reason(&snapshot),
+        }
     }
+}
+
+/// The model-facing veto text.
+///
+/// Split out from [`ScratchpadGoalVerifier::verify`] so the rendering — the
+/// only part that can be wrong — is testable without a live workspace on disk.
+fn veto_reason(snapshot: &ScratchpadSnapshot) -> String {
+    // Enumerate the FULL list, then filter — the index shown must be the one
+    // `complete_item` takes.
+    //
+    // This used to list `snapshot.incomplete()`, a filtered sublist whose
+    // positions have nothing to do with the item-index space, while the
+    // instruction below names the index-addressed `complete_item`. On a plan
+    // whose first step was already `[x]` the model read the second line of the
+    // veto, called `complete_item(0)` — in range, so no bounds error and
+    // `success: true` — and re-marked the step that was already done. The real
+    // step stayed pending, `has_pending_work()` stayed true, the next stop
+    // attempt was vetoed identically, and the run burned `steer_max` before
+    // surfacing "⚠️ 目标未达成".
+    //
+    // Same principle `plan_carry.rs` was built on: "丢掉已完成项会让模型手里的每个
+    // 下标都错位" (FEATURE_LOCATOR §3.13 ⑥). This was the one model-facing
+    // surface still dropping them.
+    let pending: Vec<(usize, &crate::memory::scratchpad::PlanItem)> = snapshot
+        .items
+        .iter()
+        .enumerate()
+        .filter(|(_, i)| !i.is_done())
+        .collect();
+    let objective = snapshot.objective.as_deref().unwrap_or("");
+    let listed = pending
+        .iter()
+        .take(MAX_LISTED)
+        .map(|(idx, i)| {
+            if i.is_in_progress() {
+                format!("- [{idx}] {} (in progress)", i.text)
+            } else {
+                format!("- [{idx}] {}", i.text)
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    let overflow = pending.len().saturating_sub(MAX_LISTED);
+    let more_note = if overflow > 0 {
+        format!("\n…and {overflow} more.")
+    } else {
+        String::new()
+    };
+    format!(
+        "Your execution list for the objective \"{objective}\" still has {n} \
+         incomplete step(s) (the number in brackets is the item index):\
+         \n{listed}{more_note}\n\nKeep working through them one at a time — \
+         mark the step you are working on with \
+         `scratchpad(action='start_item', item_index=N)` and each finished \
+         step with `scratchpad(action='complete_item', item_index=N)`, using \
+         the bracketed index. If the objective is already fully achieved, \
+         call `scratchpad(action='clear', …)` to finish.",
+        n = pending.len(),
+    )
 }
 
 #[cfg(test)]
@@ -173,5 +206,51 @@ mod tests {
         // A session key that was never registered → dormant.
         let ctx = ctx_stopping(Some("sess-never-registered-xyz"));
         assert!(v.verify(&ctx, &cancel).await.is_continue());
+    }
+
+    /// The veto names `complete_item`, which is index-addressed — so the
+    /// indices it prints must be the ones that tool takes.
+    ///
+    /// It used to enumerate `incomplete()`, a filtered sublist. With any step
+    /// already done, position-in-the-veto and item-index diverge; the model
+    /// then "completes" an already-done step, the veto repeats verbatim, and
+    /// the run grinds to `steer_max`. Nothing errors — `complete_item` on an
+    /// in-range done item returns success.
+    #[test]
+    fn the_veto_prints_absolute_item_indices_not_positions_in_the_pending_list() {
+        use crate::memory::scratchpad::{PlanItem, PlanItemStatus, ScratchpadSnapshot};
+
+        let snapshot = ScratchpadSnapshot {
+            objective: Some("Ship auth".to_string()),
+            items: vec![
+                PlanItem {
+                    text: "Design schema".into(),
+                    status: PlanItemStatus::Done,
+                },
+                PlanItem {
+                    text: "Write migration".into(),
+                    status: PlanItemStatus::InProgress,
+                },
+                PlanItem {
+                    text: "Backfill".into(),
+                    status: PlanItemStatus::Pending,
+                },
+            ],
+        };
+
+        let reason = veto_reason(&snapshot);
+        assert!(
+            reason.contains("- [1] Write migration (in progress)"),
+            "got: {reason}"
+        );
+        assert!(reason.contains("- [2] Backfill"), "got: {reason}");
+        assert!(
+            !reason.contains("[0]"),
+            "index 0 is the DONE step and must not appear: {reason}"
+        );
+        assert!(
+            reason.contains("still has 2 incomplete step(s)"),
+            "got: {reason}"
+        );
     }
 }
