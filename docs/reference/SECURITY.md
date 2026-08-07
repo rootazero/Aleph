@@ -1384,28 +1384,38 @@ after (verified by `single_user_fixture_is_byte_identical_after_upgrade`,
      pin that `execute.rs` re-publishes AFTER the row is created — the full
      `ExecutionEngine::execute` has no unit-level harness, so without it the
      wire could be deleted with every test still green.
-  3. **The team event plane's resolver is installed under a narrower condition
-     than the one that produces the frames it classifies** (medium; the
-     direction is fail-closed, but the effect is a total silent outage that did
-     not exist before this round). `event_visibility::event_admits` resolves
-     `team.<id>.*` through `ConnectionContext`'s `TeamStore`, and `teams: None`
-     denies. That handle is installed by `server.set_team_store(...)` inside
-     `start/mod.rs`'s `if let (Some(ref ts), Some(ref cs)) =
-     (&agent_result.team_store, &agent_result.coord_task_store)`, while the
-     PRODUCER — the `teams.chat.send` registration driving
-     `GroupChatBroadcaster` / `publish_team_event` — sits under
-     `builder/agent_init/mod.rs`'s `if let Some(ts) = team_store.clone()`, i.e.
-     `team_store` ALONE. The two stores open two
-     different databases from two different files (`teams.db` vs `coord.db`),
-     and coord init returns `(None, None)` on any of three warn-and-continue
-     paths (data-dir resolve, `open_sqlite_safe`, `migrate`). So a corrupt,
-     locked or unwritable `coord.db` — an explicitly supported degraded boot
-     that prints "Task coordination tools disabled" and carries on — leaves team
-     chat publishing frames that EVERY connection, operator included, denies:
-     no error, no log line at the denial, zero live frames. Deferred rather than
-     fixed because the correction is boot wiring (widen the condition to
-     `team_store` alone) that this round did not otherwise open; the criterion
-     it teaches is recorded in `src/gateway/CLAUDE.md`.
+  3. **The team event plane's resolver was installed under a narrower condition
+     than the one that produces the frames it classifies** (resolved in-round,
+     kept here for the criterion it teaches). `event_visibility::event_admits`
+     resolves `team.<id>.*` through `ConnectionContext`'s `TeamStore`, and
+     `teams: None` denies. That handle was installed by
+     `server.set_team_store(...)` inside `start/mod.rs`'s
+     `if let (Some(ref ts), Some(ref cs)) = (&agent_result.team_store,
+     &agent_result.coord_task_store)`, while the PRODUCER — the
+     `teams.chat.send` registration driving `GroupChatBroadcaster` /
+     `publish_team_event` — sits under `builder/agent_init/mod.rs`'s
+     `if let Some(ts) = team_store.clone()`, i.e. `team_store` ALONE. The two
+     stores open two different databases from two different files (`teams.db`
+     vs `coord.db`), and coord init returns `(None, None)` on any of three
+     warn-and-continue paths (data-dir resolve, `open_sqlite_safe`, `migrate`).
+     So a corrupt, locked or unwritable `coord.db` — an explicitly supported
+     degraded boot that prints "Task coordination tools disabled" and carries
+     on — left team chat publishing frames that EVERY connection, operator
+     included, denied: no error, no log line at the denial, zero live frames.
+     Note the direction was fail-CLOSED, which is why nothing surfaced it: the
+     leak this round closed stayed closed, and the cost was a total silent
+     outage instead. `set_team_store` now hangs on `agent_result.team_store`
+     alone (`register_teams_handlers` stays under the two-store tuple — it
+     genuinely needs both), pinned at source level by
+     `event_visibility.rs::the_team_resolver_gate_is_no_narrower_than_its_frame_producers_gate`,
+     which reads the enclosing `if let` at both sites and asserts the resolver's
+     `*_store` set is a SUBSET of the producer's. **The durable criterion: a
+     classifier's resolution handle must not be gated more narrowly than the
+     frames it classifies are produced** — narrower means the whole feature goes
+     dark in the fail-closed direction, for everyone, with nothing logged. It
+     generalises past this one handle: any `ConnectionContext` dependency a
+     visibility predicate DENIES on is a second, independent switch that can
+     turn a feature off from a wiring site nobody associates with it.
   4. `slash_command.rs::execute_direct_tool` (the `/toolname` L0 fast path) was
      recorded here as "bypasses `ScopedToolService` entirely, with no
      allowlist". That description was wrong and is corrected rather than
@@ -1442,16 +1452,20 @@ after (verified by `single_user_fixture_is_byte_identical_after_upgrade`,
      to skip it. Pinned by
      `gateway_metrics.rs::the_per_agent_breakdown_is_withheld_from_a_scoped_caller`,
      which proves the "present unless dropped" premise in the same test.
-  6. The no-existence-oracle property of the `workspace.*` writes is stated but
-     not pinned (low). `the_workspace_writes_deny_a_foreign_partition_composed_id`
-     archives the same composed id twice as the same non-owner and compares the
-     two serialized responses; both calls take the identical `partition_visible`
-     deny branch before touching the store, so the assertion is `f(x) == f(x)`
-     and cannot fail. The property that matters — a DENIED composed id and a
-     composed id that was never created produce byte-identical refusals — is
-     asserted nowhere. `visibility::not_found_response`'s own test does assert
-     it for the sessions side; this one should be rewritten against a genuinely
-     absent id.
+  6. The no-existence-oracle property of the `workspace.*` writes was stated but
+     not pinned (resolved in-round; the shape is worth keeping).
+     `the_workspace_writes_deny_a_foreign_partition_composed_id` used to archive
+     the same composed id twice as the same non-owner and compare the two
+     serialized responses — but both calls took the identical
+     `partition_visible` deny branch before touching the store, so the assertion
+     was literally `f(x) == f(x)`: it could not fail, and the id it called
+     "something that never existed" had been created earlier in the same test.
+     It now archives a genuinely absent composed id, creates it, archives again,
+     and compares — `f(x, absent) == f(x, present)`, which an existence oracle
+     inserted into the deny branch actually breaks. **The criterion: a
+     byte-equality assertion is only a no-oracle proof if the two sides differ
+     in the state being probed.** Two calls that take the same early-return
+     branch prove nothing, and they read exactly like a real guard.
   7. The admin gate's refusal wording is now ONE constant, not a Panel copy of
      a server literal (resolved). `settings/network/cluster.rs` used to
      transcribe the server's refusal string and claim a doc comment's worth of
