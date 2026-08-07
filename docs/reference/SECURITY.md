@@ -1325,7 +1325,30 @@ after (verified by `single_user_fixture_is_byte_identical_after_upgrade`,
   the workspace half narrowly, exactly as its handlers do: a workspace id is a
   user-chosen name encoding no owner and `agent_envs` has no owner column, so
   the gate buys defence in depth against partition-composed ids
-  (`main__u-alice`) and nothing more.
+  (`main__u-alice`) and nothing more. **The 2026-08-08 real-machine QA
+  exercised that residual and it is a WRITE, not only a read**: a member
+  renamed and then archived a workspace the operator had just created, both
+  returning `ok`. Earlier wording here and in the handler named only
+  "read another's `env_vars`", understating it by a verb class. Closing it
+  needs an owner column and a migration — a schema change and a product
+  decision, tracked as an open gap rather than fixed in a handler.
+- **Session `owner_user_id` / `scope_id` were never stamped on any run path
+  until 2026-08-08, and the P1/P2 predicates that read them were therefore
+  inert.** `SessionMetadata::stamp_attribution` reads `scope::current_scope()`
+  on `get_or_create`'s CREATE branch, and every producer of a run hands the
+  request to a `tokio::spawn`ed task, so the ambient scope was `None` exactly
+  where the row was written — even though `build_run_request` had already
+  resolved the attribution into `request.metadata`. Every session persisted
+  with both columns NULL and was adopted as owner-owned. Two consequences worth
+  keeping: the member-facing symptoms all read as *missing features* rather
+  than as a leak (own sessions absent from `sessions.list`, own session
+  "not found" to `sessions.set_topic`), and the operator-read audit above could
+  never fire, because `caller_could_reach` compared against an `effective_owner`
+  that was always the operator. Fixed by
+  `run_loop::ensure_session_under_request_scope`, which re-derives the scope
+  from the metadata (not from a captured task-local — `current_scope()` is
+  `None` in the gateway dispatch loop too, so the metadata map is the only
+  place the resolved attribution exists).
 - **`OPEN_LOOPS.md`'s `proj-` handling is settled, not an open gap.**
   `session_reflection::open_loops_path` resolves through
   `memory::project_scope::session_write_id(agent_id, false, None)`: the legacy

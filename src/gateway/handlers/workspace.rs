@@ -139,8 +139,18 @@ pub async fn handle_create(
 /// recorded here rather than implied by the presence of a check: a workspace
 /// id is a user-chosen name (`"project-aleph"`), it encodes no owner, and the
 /// `agent_envs` table has no owner column — so an ordinary workspace passes
-/// this predicate for every caller and one member can still read another's
-/// `env_vars`. Closing it needs an owner column plus a migration (the stamp
+/// this predicate for every caller.
+///
+/// **The residual is write, not just read.** The 2026-08-08 real-machine QA
+/// exercised it: a member renamed and then archived a workspace the operator
+/// had just created, both returning `ok`. An earlier wording here named only
+/// "one member can read another's `env_vars`", which understated it by a
+/// whole verb class — `update` and `archive` take the same plain id and clear
+/// the same vacuous predicate. (That QA also produced a *false* pass on the
+/// list side: `handle_list` looked filtered only because the member had
+/// archived the row one call earlier and `list(false)` skips archived.)
+///
+/// Closing it needs an owner column plus a migration (the stamp
 /// `SessionMetadata`/`GroupChatSession`/`LoopState` carry), which is a
 /// schema change and a product decision, not a handler fix. See the P1
 /// final-fix report.
