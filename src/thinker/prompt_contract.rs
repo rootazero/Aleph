@@ -788,3 +788,62 @@ fn stable_prefix_ignores_per_run_facts() {
         );
     }
 }
+
+/// A subagent's whole system prompt must be byte-identical across two spawns
+/// of the same shape.
+///
+/// **The two guards above cannot see this path.** Both hardcode
+/// `AssemblyPath::Cached`, `production_shaped` never threads a
+/// `chain_context`, and `chain_context` sits in [`CONDITIONALLY_SILENT`] — so
+/// the byte ratchet reads 0 B for it. Three exemptions stacked, and the only
+/// place `ChainContextLayer` actually renders — a subagent on
+/// `AssemblyPath::Basic` — fell through all of them.
+///
+/// The assertion is on the WHOLE assembled string, not the stable half. Doing
+/// it on `execute_stable_with_mode` would be vacuous by construction:
+/// `ChainContextLayer` is `Dynamic`, so the stable half excludes it and would
+/// pass green while the defect was live. It would also be testing something no
+/// production caller does — `build_system_prompt` runs `pipeline.execute`, and
+/// Basic never splits.
+///
+/// That distinction is the whole point. Basic produces ONE unsplit system
+/// block, and the Anthropic adapter's lone cache breakpoint covers all of it,
+/// so a single per-spawn byte anywhere in here re-keys `tools` (~82 KB of
+/// builtin descriptions alone) plus the entire system prompt on every spawn:
+/// `cache_creation` at 1.25×, `cache_read` pinned at 0, and a fresh
+/// OpenAI `pck_` bucket each time. That is exactly what the `Chain id:` line
+/// used to do. Nothing errors, no test goes red, and the model behaves
+/// perfectly — the symptom appears only on the bill.
+///
+/// Goes through `PromptBuilder::build_system_prompt`, the same entry
+/// `agents::subagent_spawner::spawn` calls, so post-pipeline welds are covered
+/// too.
+#[test]
+fn basic_path_prefix_is_stable_across_spawns() {
+    use crate::harness::chain_context::ChainContext;
+    use crate::thinker::prompt_builder::PromptBuilder;
+
+    // Two different parent runs ⇒ two different chain ids, same depth/budget.
+    let a = ChainContext::new().child().unwrap();
+    let b = ChainContext::new().child().unwrap();
+    assert_ne!(
+        a.chain_id, b.chain_id,
+        "the fixture must really differ, or this guard proves nothing"
+    );
+
+    let build = |chain: &ChainContext| {
+        PromptBuilder::new(PromptConfig::default())
+            .with_chain_context(chain.clone())
+            .build_system_prompt(&[])
+    };
+
+    assert_eq!(
+        build(&a),
+        build(&b),
+        "a subagent's system prompt varies between spawns. Basic is one unsplit \
+         block under a single cache breakpoint, so every spawn now re-pays the \
+         whole tools+system prefix at cache-creation rates with zero cache_read. \
+         Find the per-spawn byte (a uuid, a clock, a counter, an unsorted map) \
+         and move it out of the Basic path."
+    );
+}
