@@ -232,6 +232,7 @@ async fn a_resumed_room_run_reaches_the_engine_with_the_rooms_scope() {
         adapter as Arc<dyn ExecutionAdapter>,
         registry,
         sessions,
+        None,
     );
     assert_eq!(coordinator.resume_interrupted_runs().await.resumed, 1);
 
@@ -265,6 +266,7 @@ async fn interrupted_run_is_repaired_and_retriggered() {
         adapter as Arc<dyn ExecutionAdapter>,
         registry,
         sessions(),
+        None,
     );
     let report = coordinator.resume_interrupted_runs().await;
 
@@ -318,6 +320,7 @@ async fn disabled_config_never_triggers_execute() {
         adapter as Arc<dyn ExecutionAdapter>,
         registry,
         sessions(),
+        None,
     );
     let report = coordinator.resume_interrupted_runs().await;
 
@@ -386,6 +389,7 @@ async fn crash_loop_cap_abandons_instead_of_retriggering() {
         adapter as Arc<dyn ExecutionAdapter>,
         registry,
         sessions(),
+        None,
     );
     let report = coordinator.resume_interrupted_runs().await;
 
@@ -472,6 +476,7 @@ async fn crash_loop_cap_abandons_instead_of_retriggering() {
         Arc::new(RecordingAdapter::new()) as Arc<dyn ExecutionAdapter>,
         registry_with_agent(passive_sid.agent_id()).await,
         sessions(),
+        None,
     );
     coordinator2.resume_interrupted_runs().await;
     assert_eq!(
@@ -523,6 +528,7 @@ async fn too_old_candidate_abandons_and_blocks_the_goal() {
         adapter as Arc<dyn ExecutionAdapter>,
         registry,
         sessions(),
+        None,
     );
     let report = coordinator.resume_interrupted_runs().await;
 
@@ -603,6 +609,7 @@ async fn resumed_channel_run_reinherits_the_channels_guest_clamp_and_deny_layer(
         adapter as Arc<dyn ExecutionAdapter>,
         registry,
         sessions(),
+        None,
     );
     let report = coordinator.resume_interrupted_runs().await;
     assert_eq!(report.resumed, 1);
@@ -656,6 +663,7 @@ async fn resumed_run_with_no_routable_origin_is_marked_unattended() {
         adapter as Arc<dyn ExecutionAdapter>,
         registry,
         sessions(),
+        None,
     );
     assert_eq!(coordinator.resume_interrupted_runs().await.resumed, 1);
 
@@ -668,4 +676,90 @@ async fn resumed_run_with_no_routable_origin_is_marked_unattended() {
     // No origin channel ⇒ no channel clamp to re-derive; the Panel's own
     // operator semantics are unchanged.
     assert!(!metadata.contains_key("caller_role"));
+}
+
+/// Adapter that publishes one frame through whatever emitter it is handed,
+/// standing in for the real engine's `RunAccepted`.
+struct EmittingAdapter;
+
+#[async_trait]
+impl ExecutionAdapter for EmittingAdapter {
+    async fn execute(
+        &self,
+        request: RunRequest,
+        _agent: Arc<AgentInstance>,
+        emitter: Arc<dyn EventEmitter + Send + Sync>,
+    ) -> Result<(), ExecutionError> {
+        emitter
+            .emit(alephcore::gateway::StreamEvent::RunAccepted {
+                run_id: request.run_id.clone(),
+                session_key: request.session_key.to_key_string(),
+                accepted_at: "0".to_string(),
+            })
+            .await
+            .expect("emit");
+        Ok(())
+    }
+
+    async fn cancel(&self, run_id: &str) -> Result<(), ExecutionError> {
+        Err(ExecutionError::RunNotFound(run_id.to_string()))
+    }
+
+    async fn get_status(&self, _run_id: &str) -> Option<RunStatus> {
+        None
+    }
+
+    async fn active_run_count(&self) -> usize {
+        0
+    }
+}
+
+/// A crash-recovered run must be visible to, and stoppable from, the UIs.
+///
+/// Asserted at the CONSUMER end (a bus subscriber), not by inspecting which
+/// emitter was constructed. `RunAccepted` is load-bearing twice over: it seeds
+/// `event_visibility::EventVisibilityIndex`, which fail-closed-drops every
+/// later frame of a run it never saw accepted, and it is the only carrier of
+/// the `run_id` that `chat.abort` / `agent.cancel` require. With the resumed
+/// run wired to a bare `CollectingEventEmitter`, the sidebar lit up (the run
+/// registry broadcasts `RunningSetChanged` regardless) while the transcript
+/// stayed empty and no UI could stop the run.
+#[tokio::test]
+async fn a_resumed_run_reaches_the_gateway_bus() {
+    let store = store();
+    let sid = SessionKey::main("main");
+    seed_interrupted_run(&store, &sid).await;
+
+    let bus = Arc::new(alephcore::gateway::event_bus::GatewayEventBus::new());
+    let mut rx = bus.subscribe_typed();
+
+    let coordinator = ResumeCoordinator::new(
+        store.clone(),
+        ResumeConfig::default(),
+        Arc::new(EmittingAdapter) as Arc<dyn ExecutionAdapter>,
+        registry_with_agent(sid.agent_id()).await,
+        sessions(),
+        Some(bus),
+    );
+    assert_eq!(coordinator.resume_interrupted_runs().await.resumed, 1);
+
+    let mut saw_accepted = None;
+    while let Ok(frame) = rx.try_recv() {
+        if let alephcore::gateway::events::frame::GatewayEventFrame::RunAccepted {
+            run_id,
+            session_key,
+            ..
+        } = frame
+        {
+            saw_accepted = Some((run_id, session_key));
+            break;
+        }
+    }
+    let (run_id, session_key) = saw_accepted
+        .expect("the resumed run must publish RunAccepted on the bus, not into a collector");
+    assert!(
+        !run_id.is_empty(),
+        "chat.abort has no other way to address this run"
+    );
+    assert_eq!(session_key, sid.to_key_string());
 }

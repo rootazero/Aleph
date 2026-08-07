@@ -167,6 +167,16 @@ pub struct ResumeCoordinator {
     /// workspace but not the scope writes the room's memory to the org
     /// partition.
     session_store: Arc<dyn crate::gateway::session_store::SessionStore>,
+    /// Where a resumed run's live frames go. `None` in tests and non-gateway
+    /// contexts (behaviour-identical to the old collect-and-drop path).
+    ///
+    /// Without it a recovered run is *visibly running and provably
+    /// unstoppable*: `SessionRunRegistry::try_claim` broadcasts
+    /// `RunningSetChanged` unconditionally so the sidebar lights up, while the
+    /// `run_id` minted below never reaches a client — and that run_id is the
+    /// only key `chat.abort` and `agent.cancel` accept. See
+    /// [`ResumeCoordinator::retrigger`].
+    event_bus: Option<Arc<crate::gateway::event_bus::GatewayEventBus>>,
     /// Bounds the boot resume burst. `max_concurrent` permits.
     semaphore: Arc<Semaphore>,
 }
@@ -179,6 +189,7 @@ impl ResumeCoordinator {
         execution_adapter: Arc<dyn ExecutionAdapter>,
         agent_registry: Arc<AgentRegistry>,
         session_store: Arc<dyn crate::gateway::session_store::SessionStore>,
+        event_bus: Option<Arc<crate::gateway::event_bus::GatewayEventBus>>,
     ) -> Self {
         let permits = config.max_concurrent.max(1);
         Self {
@@ -187,6 +198,7 @@ impl ResumeCoordinator {
             execution_adapter,
             agent_registry,
             session_store,
+            event_bus,
             semaphore: Arc::new(Semaphore::new(permits)),
         }
     }
@@ -485,15 +497,34 @@ impl ResumeCoordinator {
             model_override: None,
         };
 
-        let collector = Arc::new(CollectingEventEmitter::new());
+        // Broadcast the recovered run live (Panel / CLI / `aleph watch`) when a
+        // bus is wired; collect-and-drop otherwise so tests and non-gateway
+        // contexts stay behaviour-identical. Same two arms as
+        // `execute::spawn_continuation_run` and `handlers::agent`.
+        //
+        // This is not cosmetic. `SessionRunRegistry::try_claim` broadcasts
+        // `RunningSetChanged` unconditionally, so the sidebar shows the session
+        // as running the moment the resume claims its slot — while a bare
+        // collector emits no `RunAccepted`, and `RunAccepted` is both the seed
+        // `event_visibility` needs to resolve every later frame of that run AND
+        // the only carrier of the `run_id` that `chat.abort` / `agent.cancel`
+        // require. A crash-recovered long run was therefore visibly running and
+        // unstoppable from every UI until it finished or the daemon was killed
+        // again.
         let base: Arc<dyn crate::gateway::event_emitter::EventEmitter + Send + Sync> =
-            Arc::clone(&collector) as _;
+            match &self.event_bus {
+                Some(bus) => Arc::new(crate::gateway::event_emitter::GatewayEventEmitter::new(
+                    Arc::clone(bus),
+                )),
+                None => Arc::new(CollectingEventEmitter::new()),
+            };
         // Fan the recovered run's final reply out to the session's bound
         // origin channel — the human who asked. Without this the resumed run
         // completed into a collect-and-drop emitter: the crash-recovered
         // answer existed only in the session log and the Telegram/Slack user
         // never heard back (R5). Mirrors `spawn_continuation_run`; a Panel-
-        // only session (`gui:chat`, no origin route) keeps the bare collector.
+        // only session (`gui:chat`, no origin route) has no channel to fan out
+        // to and rides the bus alone.
         // Best-effort: the boot scan may outrun a slow channel connect — the
         // fanout decorator warns-and-drops on send failure, never fails the
         // resumed run itself.
