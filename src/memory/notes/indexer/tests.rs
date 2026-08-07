@@ -1441,3 +1441,227 @@ fn every_alias_target_is_a_registered_category() {
         );
     }
 }
+
+// ---------------------------------------------------------------------------
+// Reconcile-with-disk: every corpus, and the legs a re-index owes the file
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn index_file_refreshes_the_vector_for_the_bytes_it_just_indexed() {
+    // `index_file` is what every writer that edits a note's bytes WITHOUT going
+    // through write_note uses — the dream stages that patch frontmatter, repair
+    // a wikilink or stamp a supersession banner, and the vault watcher picking
+    // up an external edit. It used to run the index leg alone, so the note's
+    // vector went on describing the pre-edit text; three call sites' comments
+    // claimed otherwise and the drift surfaced only as a `stale_vectors` count
+    // at the next boot.
+    //
+    // Asserting on `stale_vector_paths` (embedded_hash vs content_hash) rather
+    // than "a vector exists": a vector left over from the previous body exists
+    // too, and that is exactly the bug.
+    // rust-doctor-disable-next-line unwrap-in-production
+    let dir = TempDir::new().unwrap();
+    let db = create_test_db();
+    // rust-doctor-disable-next-line excessive-clone
+    let indexer = NoteIndexer::new(dir.path().to_path_buf(), db.clone())
+        .with_embedder(Arc::new(StubEmbedder));
+
+    let cat_dir = setup_category_dir(dir.path(), AGENT, "learning").await;
+    let file = cat_dir.join("drifty.md");
+    // rust-doctor-disable-next-line unwrap-in-production
+    fs::write(&file, sample_md("learning", &["first body"], &[]))
+        .await
+        .unwrap();
+    // rust-doctor-disable-next-line unwrap-in-production
+    assert!(indexer.index_file(AGENT, "learning", &file).await.unwrap());
+    // rust-doctor-disable-next-line unwrap-in-production
+    assert!(
+        db.stale_vector_paths(AGENT).await.unwrap().is_empty(),
+        "a freshly indexed file must have a vector for its own bytes"
+    );
+
+    // Someone rewrites the file behind the indexer's back, then re-indexes it.
+    // rust-doctor-disable-next-line unwrap-in-production
+    fs::write(&file, sample_md("learning", &["rewritten body"], &[]))
+        .await
+        .unwrap();
+    // rust-doctor-disable-next-line unwrap-in-production
+    assert!(indexer.index_file(AGENT, "learning", &file).await.unwrap());
+    // rust-doctor-disable-next-line unwrap-in-production
+    assert!(
+        db.stale_vector_paths(AGENT).await.unwrap().is_empty(),
+        "re-indexing an edited file must re-embed it, not leave the old vector"
+    );
+}
+
+#[tokio::test]
+async fn index_file_resolves_dangling_links_that_now_point_at_it() {
+    // The other half a first-class write does: a note that only now exists must
+    // resolve other notes' `[[wikilink]]`s to it. Without this leg a note
+    // created outside Aleph stayed unreachable in the graph until some later
+    // global `relink_unresolved`.
+    // rust-doctor-disable-next-line unwrap-in-production
+    let dir = TempDir::new().unwrap();
+    let db = create_test_db();
+    // rust-doctor-disable-next-line excessive-clone
+    let indexer = NoteIndexer::new(dir.path().to_path_buf(), db.clone());
+
+    // A note linking to a target that does not exist yet → dangling edge.
+    let plan_dir = setup_category_dir(dir.path(), AGENT, "plan").await;
+    let linker = plan_dir.join("linker.md");
+    // rust-doctor-disable-next-line unwrap-in-production
+    fs::write(
+        &linker,
+        sample_md("plan", &["needs the target"], &["target"]),
+    )
+    .await
+    .unwrap();
+    // rust-doctor-disable-next-line unwrap-in-production
+    indexer.index_file(AGENT, "plan", &linker).await.unwrap();
+    // rust-doctor-disable-next-line unwrap-in-production
+    let before = db
+        .get_outgoing_link_rows("plan/linker", AGENT)
+        .await
+        .unwrap();
+    assert_eq!(
+        before.iter().map(|r| r.status.as_str()).collect::<Vec<_>>(),
+        vec!["dangling"],
+        "precondition: the target does not exist yet"
+    );
+
+    // The target appears on disk from outside and is reconciled.
+    let ref_dir = setup_category_dir(dir.path(), AGENT, "reference").await;
+    let target = ref_dir.join("target.md");
+    // rust-doctor-disable-next-line unwrap-in-production
+    fs::write(&target, sample_md("reference", &["i exist now"], &[]))
+        .await
+        .unwrap();
+    // rust-doctor-disable-next-line unwrap-in-production
+    indexer
+        .index_file(AGENT, "reference", &target)
+        .await
+        .unwrap();
+
+    // rust-doctor-disable-next-line unwrap-in-production
+    let after = db
+        .get_outgoing_link_rows("plan/linker", AGENT)
+        .await
+        .unwrap();
+    assert_eq!(
+        after.iter().map(|r| r.status.as_str()).collect::<Vec<_>>(),
+        vec!["active"],
+        "indexing the target must revive the edge that was waiting for it"
+    );
+}
+
+#[tokio::test]
+async fn full_rebuild_all_reconciles_every_corpus_not_just_the_default_agent() {
+    // The boot pass called `full_rebuild(default_agent_id)` and stopped there,
+    // so for every project namespace (`{base}__proj-…`), session scope
+    // (`__u-…` / `__p-…`) and non-default agent, the index was never reconciled
+    // with disk: rename/delete orphans lingered forever and scan-order dangling
+    // links were never retried. Those corpora are the same enumeration the
+    // dream daemon already fans its nightly maintenance over.
+    // rust-doctor-disable-next-line unwrap-in-production
+    let dir = TempDir::new().unwrap();
+    let db = create_test_db();
+    // rust-doctor-disable-next-line excessive-clone
+    let indexer = NoteIndexer::new(dir.path().to_path_buf(), db.clone());
+
+    const SCOPED: &str = "default__proj-abc123";
+    const OTHER: &str = "researcher";
+    for agent in [AGENT, SCOPED, OTHER] {
+        let cat_dir = setup_category_dir(dir.path(), agent, "reference").await;
+        // rust-doctor-disable-next-line unwrap-in-production
+        fs::write(
+            cat_dir.join("note.md"),
+            sample_md("reference", &["corpus content"], &[]),
+        )
+        .await
+        .unwrap();
+    }
+
+    let stats = indexer.full_rebuild_all(AGENT).await;
+    assert!(
+        stats.failed.is_empty(),
+        "no corpus may be left unreconciled"
+    );
+    assert_eq!(stats.corpora, 3);
+    for agent in [AGENT, SCOPED, OTHER] {
+        // rust-doctor-disable-next-line unwrap-in-production
+        assert_eq!(
+            db.list_notes(agent).await.unwrap().len(),
+            1,
+            "corpus {agent} must be indexed by the boot reconcile"
+        );
+    }
+
+    // The prune half reaches the non-default corpora too: a file deleted while
+    // the server was down must not leave a recallable index row behind.
+    // rust-doctor-disable-next-line unwrap-in-production
+    fs::remove_file(dir.path().join(SCOPED).join("reference").join("note.md"))
+        .await
+        .unwrap();
+    let stats = indexer.full_rebuild_all(AGENT).await;
+    assert_eq!(stats.total.pruned, 1);
+    // rust-doctor-disable-next-line unwrap-in-production
+    assert!(db.list_notes(SCOPED).await.unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn full_rebuild_all_scaffolds_only_the_agent_it_was_asked_about() {
+    // Scaffolding (`ensure_dirs`, the only thing in the repo that materialises
+    // the 21 category directories) is a write; reconciling is a repair pass.
+    // Fanning the write over every namespace a disk scan turns up would leave
+    // 20 empty directories in each project vault — a new visible side-effect of
+    // a pass whose job is to *observe* disk.
+    // rust-doctor-disable-next-line unwrap-in-production
+    let dir = TempDir::new().unwrap();
+    let db = create_test_db();
+    // rust-doctor-disable-next-line excessive-clone
+    let indexer = NoteIndexer::new(dir.path().to_path_buf(), db);
+
+    const SCOPED: &str = "default__proj-abc123";
+    let cat_dir = setup_category_dir(dir.path(), SCOPED, "reference").await;
+    // rust-doctor-disable-next-line unwrap-in-production
+    fs::write(
+        cat_dir.join("note.md"),
+        sample_md("reference", &["scoped content"], &[]),
+    )
+    .await
+    .unwrap();
+
+    indexer.full_rebuild_all(AGENT).await;
+
+    assert!(
+        dir.path().join(AGENT).join("plan").is_dir(),
+        "the agent the operator runs keeps its scaffold"
+    );
+    assert!(
+        !dir.path().join(SCOPED).join("plan").exists(),
+        "a namespace discovered on disk must not be scaffolded by a repair pass"
+    );
+    assert!(
+        dir.path().join(SCOPED).join("reference").is_dir(),
+        "…and the directory it actually uses is untouched"
+    );
+}
+
+#[tokio::test]
+async fn full_rebuild_all_still_scaffolds_the_default_agent_on_a_fresh_install() {
+    // A fresh install has no corpus directories at all; the single-agent boot
+    // pass created the default agent's category scaffold via `ensure_dirs` and
+    // that must survive the fan-out.
+    // rust-doctor-disable-next-line unwrap-in-production
+    let dir = TempDir::new().unwrap();
+    let db = create_test_db();
+    // rust-doctor-disable-next-line excessive-clone
+    let indexer = NoteIndexer::new(dir.path().to_path_buf(), db);
+
+    let stats = indexer.full_rebuild_all(AGENT).await;
+    assert_eq!(stats.corpora, 1);
+    assert!(stats.failed.is_empty());
+    for cat in CATEGORY_DIRS {
+        assert!(dir.path().join(AGENT).join(cat).is_dir(), "missing {cat}");
+    }
+}

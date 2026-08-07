@@ -120,10 +120,37 @@ pub struct IndexStats {
     pub stale_vectors: usize,
 }
 
-/// Per-file outcome from `index_one_file`. Mirrors the `bool` returned by
-/// `NoteIndexer::index_file` but is named for clarity in the parallel path.
+/// Aggregate outcome of [`NoteIndexer::full_rebuild_all`].
+///
+/// `failed` is carried rather than folded into `total.errors` because the two
+/// answer different questions: `errors` counts files that would not parse
+/// (normal on a hand-edited vault), `failed` names corpora whose reconcile did
+/// not run at all — the only shape that can leave a whole namespace unmaintained
+/// while the summary line still looks healthy.
+#[derive(Debug, Clone, Default)]
+pub struct RebuildAllStats {
+    /// How many corpora were attempted.
+    pub corpora: usize,
+    /// Sum of the per-corpus [`IndexStats`].
+    pub total: IndexStats,
+    /// `(corpus, error)` for each corpus whose reconcile returned `Err`.
+    pub failed: Vec<(String, String)>,
+}
+
+/// What `index_one_file` actually wrote, for the callers that owe the file
+/// further side-effects.
+///
+/// `Skipped` means the on-disk content hash already matched the index — the
+/// single reason a self-write (which indexed the file the moment it wrote it)
+/// costs nothing when a rebuild or the vault watcher sees it again.
 enum IndexOutcome {
-    Indexed,
+    /// The index row was (re-)written. Carries the file text and the parsed
+    /// aliases so the caller can run the vector / inbound-link legs without
+    /// reading and reparsing the file a second time.
+    Indexed {
+        content: String,
+        aliases: Vec<String>,
+    },
     Skipped,
 }
 
@@ -133,7 +160,13 @@ enum IndexOutcome {
 /// Free function (rather than a method on `NoteIndexer`) so it can be cheaply
 /// called from inside spawned `tokio` tasks that own only an `Arc<S>` clone of
 /// the store — avoids forcing `&self` capture into `'static` futures.
-async fn index_one_file<S: NoteStore + Send + Sync + 'static>(
+///
+/// **This is the index leg only.** It deliberately does not embed and does not
+/// backfill inbound links: `full_rebuild` calls it once per file across a whole
+/// corpus and *reports* vector drift rather than paying to repair it, then does
+/// the link pass once globally (`relink_unresolved`). Callers reconciling a
+/// single file want the opposite trade — see [`NoteIndexer::index_file`].
+async fn index_one_file<S: NoteStore + Send + Sync>(
     path: &Path,
     agent_id: &str,
     category: &str,
@@ -157,7 +190,10 @@ async fn index_one_file<S: NoteStore + Send + Sync + 'static>(
     let mut note = KnowledgeNote::from_markdown(title, &content)?;
     crate::memory::notes::governance::supersession::sync_body_to_frontmatter(&mut note, &content);
     store.index_note(&note, agent_id, category).await?;
-    Ok(IndexOutcome::Indexed)
+    Ok(IndexOutcome::Indexed {
+        aliases: note.aliases,
+        content,
+    })
 }
 
 /// Indexes markdown note files into a `NoteStore`.
@@ -333,22 +369,39 @@ impl<S: NoteStore> NoteIndexer<S> {
         Ok(())
     }
 
-    /// Full rebuild: scan all `.md` files across all category dirs for an agent,
-    /// parse, and index.
+    /// Provision an agent's category scaffold, then reconcile its index with
+    /// disk. See [`Self::reconcile_corpus`] for the reconcile half.
+    ///
+    /// Scaffolding is a *write*: `ensure_dirs` is the only thing in the repo
+    /// that materialises the 21 category directories, and it is what makes an
+    /// agent's vault look provisioned in a file browser. That is right for the
+    /// agent the operator is running and wrong to fan over every namespace a
+    /// disk scan happens to turn up — which is why the fan-out
+    /// ([`Self::full_rebuild_all`]) splits the two.
+    pub async fn full_rebuild(&self, agent_id: &str) -> Result<IndexStats, AlephError>
+    where
+        S: 'static,
+    {
+        self.ensure_dirs(agent_id).await?;
+        self.reconcile_corpus(agent_id).await
+    }
+
+    /// Reconcile one corpus' index with the `.md` files on disk: scan every
+    /// category dir, (re-)index what changed, prune rows whose file is gone,
+    /// sweep orphan vectors, report vector drift, and retry dangling links.
     ///
     /// Skips files whose `content_hash` matches the existing index entry.
+    /// Creates nothing — it only ever reads the tree it is reconciling.
     ///
     /// Phase B B3: each category is scanned in its own `tokio` task so the
     /// directory walks and `SQLite` reads/writes overlap. Concurrency is bounded
     /// by `std::thread::available_parallelism()` (falling back to 1 on probing
     /// failure) — a runtime probe that avoids pulling in `num_cpus`.
     // rust-doctor-disable-next-line high-cyclomatic-complexity
-    pub async fn full_rebuild(&self, agent_id: &str) -> Result<IndexStats, AlephError>
+    pub async fn reconcile_corpus(&self, agent_id: &str) -> Result<IndexStats, AlephError>
     where
         S: 'static,
     {
-        self.ensure_dirs(agent_id).await?;
-
         let parallelism = std::thread::available_parallelism()
             .map_or(1, |n| n.get())
             .max(1);
@@ -390,7 +443,7 @@ impl<S: NoteStore> NoteIndexer<S> {
                     }
                     // rust-doctor-disable-next-line excessive-clone
                     match index_one_file(&path, &agent_id, &category, store.clone()).await {
-                        Ok(IndexOutcome::Indexed) => local.indexed += 1,
+                        Ok(IndexOutcome::Indexed { .. }) => local.indexed += 1,
                         Ok(IndexOutcome::Skipped) => local.skipped += 1,
                         Err(e) => {
                             tracing::warn!(
@@ -428,8 +481,9 @@ impl<S: NoteStore> NoteIndexer<S> {
         // Non-destructive: only rows with NO file on disk are removed — never a
         // file, never a row that still has content. Scoped to scannable
         // CATEGORY_DIRS so out-of-scope rows (e.g. `archive/`) are untouched.
-        // Orphan vectors are left as-is: the search join already tolerates them
-        // and no delete path clears `notes_vec_map`.
+        // `remove_note_index` takes the note's vector with it, so this prune
+        // leaves no orphan behind; the sweep below is for the ghosts that
+        // predate that behaviour.
         let agent_dir = self.memory_dir.join(agent_id);
         for entry in self.store.list_notes(agent_id).await? {
             if !CATEGORY_DIRS.contains(&entry.category.as_str()) {
@@ -491,23 +545,103 @@ impl<S: NoteStore> NoteIndexer<S> {
         Ok(total)
     }
 
-    /// Index a single file.
+    /// Reconcile **every** note corpus on disk, plus `always_include` whether or
+    /// not it exists yet.
+    ///
+    /// [`Self::full_rebuild`] answers "is this one corpus' index consistent with
+    /// its files". Nothing answered "is *memory* consistent with disk": the boot
+    /// pass called `full_rebuild(default_agent_id)` and stopped there, so for
+    /// every other corpus — each project namespace (`{base}__proj-…`), each
+    /// session scope (`{base}__u-…` / `{base}__p-…`), and every non-default
+    /// agent — the index row left behind by a rename never got pruned, a
+    /// `[[wikilink]]` that dangled only because of scan order never got retried,
+    /// and vector drift was never even counted. Those corpora are not exotic:
+    /// `project_scope::list_note_corpora` is the same enumeration the dream
+    /// daemon already fans its nightly maintenance over.
+    ///
+    /// `always_include` (the default agent) is unioned in and is the **only**
+    /// corpus that gets scaffolded: a fresh install still gets its category
+    /// directories created by `ensure_dirs`, exactly as the single-agent boot
+    /// pass did, while a namespace merely discovered on disk is reconciled and
+    /// not written to. A discovered corpus exists because something already
+    /// wrote a note into it, and `write_note` creates the category directory it
+    /// needs; materialising all 21 in every project namespace would be a new
+    /// visible side-effect of what is otherwise a repair pass.
+    ///
+    /// Corpora are reconciled **sequentially** — each reconcile already fans out
+    /// across categories up to `available_parallelism()`, so an outer fan-out
+    /// would only multiply peak SQLite contention on one connection.
+    /// A corpus that fails is recorded and the pass continues: one unreadable
+    /// namespace must not decide whether the others get reconciled.
+    pub async fn full_rebuild_all(&self, always_include: &str) -> RebuildAllStats
+    where
+        S: 'static,
+    {
+        let mut corpora = crate::memory::project_scope::list_note_corpora(&self.memory_dir);
+        if !corpora.iter().any(|c| c == always_include) {
+            corpora.push(always_include.to_string());
+            corpora.sort();
+        }
+
+        let mut out = RebuildAllStats {
+            corpora: corpora.len(),
+            ..RebuildAllStats::default()
+        };
+        for corpus in corpora {
+            let reconciled = if corpus == always_include {
+                self.full_rebuild(&corpus).await
+            } else {
+                self.reconcile_corpus(&corpus).await
+            };
+            match reconciled {
+                Ok(s) => {
+                    out.total.indexed += s.indexed;
+                    out.total.skipped += s.skipped;
+                    out.total.errors += s.errors;
+                    out.total.pruned += s.pruned;
+                    out.total.stale_vectors += s.stale_vectors;
+                }
+                Err(e) => {
+                    tracing::warn!(corpus = %corpus, error = %e, "full_rebuild_all: corpus failed");
+                    out.failed.push((corpus, e.to_string()));
+                }
+            }
+        }
+        out
+    }
+
+    /// Reconcile a single file on disk into the index — the entry point for
+    /// every writer that changed a note's bytes *without* going through
+    /// [`Self::write_note`] / [`Self::write_note_raw`] (the dream stages that
+    /// patch frontmatter, repair a wikilink, or stamp a supersession banner),
+    /// and for the vault watcher picking up an edit made outside Aleph.
     ///
     /// Returns `Ok(true)` if the file was (re-)indexed, `Ok(false)` if skipped
     /// because the content hash is unchanged.
+    ///
+    /// **Runs the same post-write side-effects a first-class write does.** It
+    /// used to be the index leg alone, while three call sites' comments claimed
+    /// it reconciled "notes_index/FTS/embedding/tags" — so every dream cycle
+    /// that lint-fixed or supersede-banner'd a note left that note's vector
+    /// describing the *pre-edit* text, and the drift was visible only as a
+    /// `stale_vectors` count at the next boot. A file that arrives from outside
+    /// (Obsidian, an editor, a `git checkout` of the vault) has the same two
+    /// needs: its vector must match its bytes, and a note that only now exists
+    /// must resolve other notes' dangling `[[wikilink]]`s to it. Both legs are
+    /// best-effort by contract (`finalize_side_effects` logs and continues), and
+    /// both are skipped entirely on the unchanged-hash path, so a self-write
+    /// that already indexed itself still costs one hash comparison.
     pub async fn index_file(
         &self,
         agent_id: &str,
         category: &str,
         path: &Path,
     ) -> Result<bool, AlephError> {
-        let content = fs::read_to_string(path)
-            .await
-            .map_err(|e| AlephError::ConfigError {
-                message: format!("Failed to read {path:?}: {e}"),
-                suggestion: None,
-            })?;
-
+        // rust-doctor-disable-next-line excessive-clone
+        let outcome = index_one_file(path, agent_id, category, self.store.clone()).await?;
+        let IndexOutcome::Indexed { content, aliases } = outcome else {
+            return Ok(false);
+        };
         let title =
             path.file_stem()
                 .and_then(|s| s.to_str())
@@ -515,24 +649,8 @@ impl<S: NoteStore> NoteIndexer<S> {
                     message: format!("Invalid filename: {path:?}"),
                     suggestion: None,
                 })?;
-
-        let hash = sha2_hash(&content);
-
-        // Check if the index already has this hash — skip if unchanged.
-        let note_path = format!("{category}/{title}");
-
-        if let Some(existing) = self.store.get_note_index(&note_path, agent_id).await? {
-            if existing.content_hash == hash {
-                return Ok(false);
-            }
-        }
-
-        let mut note = KnowledgeNote::from_markdown(title, &content)?;
-        crate::memory::notes::governance::supersession::sync_body_to_frontmatter(
-            &mut note, &content,
-        );
-        self.store.index_note(&note, agent_id, category).await?;
-
+        self.finalize_side_effects(agent_id, category, title, &content, &aliases, true)
+            .await;
         Ok(true)
     }
 

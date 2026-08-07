@@ -157,22 +157,31 @@ pub fn scoped_or_base(base: &str, project_scoped: bool, project_root: Option<&Pa
 /// scoped sibling directory.
 const SCOPED_FAMILIES: [&str; 3] = ["proj-", "u-", "p-"];
 
-/// Enumerate the scoped composed agent ids that already have memory on disk
-/// for a given base agent, across every sibling suffix family
-/// ([`SCOPED_FAMILIES`]).
+/// Enumerate every note **corpus** that has memory on disk under `memory_dir`.
 ///
-/// The note store lays memory out as `note/{agent_id}/…`, so the scoped
-/// namespaces created by [`scoped_agent_id`] surface as sibling directories
-/// named `{base}__<family>-<ref>`. This scans `memory_dir` and returns exactly
-/// those names (sorted for deterministic iteration), letting the dream daemon
-/// fan its per-namespace maintenance over every namespace that actually has
-/// notes — a namespace the user never wrote a note in needs no maintenance,
-/// and the base directory itself is intentionally excluded (the caller
-/// maintains the base separately). Returns an empty vec when the dir is
-/// absent or unreadable, so an off / fresh install is a clean no-op.
+/// A corpus is one `note/{agent_id}/` directory — the partition key every note
+/// table is keyed by. A base agent id and each composed scoped id
+/// (`{base}__u-…`, `{base}__p-…`, `{base}__proj-…`) are corpora in exactly the
+/// same sense: they differ only in how the id was composed, never in how the
+/// notes underneath are stored, indexed, embedded or maintained. Anything that
+/// maintains "all of memory" therefore has to iterate this, not just the
+/// default agent.
+///
+/// **This is the single source for "which corpora exist".** It used to be
+/// answered three times — `note_retrieval::discover_agent_ids` (skipped
+/// dot-directories), `reembed::discover_agent_ids` (did not, so a stray
+/// `.something` was re-embedded as if it were an agent), and
+/// [`list_scoped_agent_ids`] (only the siblings of one base). Three answers to
+/// one question is how a maintenance pass silently covers a different set than
+/// the pass next to it.
+///
+/// Dot-prefixed directories are excluded: the note tree carries editor and
+/// staging state (`.obsidian/` per agent, atomic-write temp files) and none of
+/// it is a partition. Returns an empty vec when the dir is absent or unreadable
+/// — a fresh install is a clean no-op, and this is a *sensor*: it never creates
+/// the directory it measures.
 #[must_use]
-pub fn list_scoped_agent_ids(memory_dir: &Path, base: &str) -> Vec<String> {
-    let prefix = format!("{base}{NS_SEP}");
+pub fn list_note_corpora(memory_dir: &Path) -> Vec<String> {
     let Ok(entries) = std::fs::read_dir(memory_dir) else {
         return Vec::new();
     };
@@ -180,13 +189,36 @@ pub fn list_scoped_agent_ids(memory_dir: &Path, base: &str) -> Vec<String> {
         .flatten()
         .filter(|e| e.file_type().is_ok_and(|t| t.is_dir()))
         .filter_map(|e| e.file_name().into_string().ok())
+        .filter(|name| !name.is_empty() && !name.starts_with('.'))
+        .collect();
+    ids.sort();
+    ids.dedup();
+    ids
+}
+
+/// Enumerate the scoped composed agent ids that already have memory on disk
+/// for a given base agent, across every sibling suffix family
+/// ([`SCOPED_FAMILIES`]).
+///
+/// The note store lays memory out as `note/{agent_id}/…`, so the scoped
+/// namespaces created by [`scoped_agent_id`] surface as sibling directories
+/// named `{base}__<family>-<ref>`. This filters [`list_note_corpora`] down to
+/// exactly those names (sorted for deterministic iteration), letting the dream
+/// daemon fan its per-namespace maintenance over every namespace that actually
+/// has notes — a namespace the user never wrote a note in needs no maintenance,
+/// and the base directory itself is intentionally excluded (the caller
+/// maintains the base separately). Returns an empty vec when the dir is
+/// absent or unreadable, so an off / fresh install is a clean no-op.
+#[must_use]
+pub fn list_scoped_agent_ids(memory_dir: &Path, base: &str) -> Vec<String> {
+    let prefix = format!("{base}{NS_SEP}");
+    list_note_corpora(memory_dir)
+        .into_iter()
         .filter(|name| {
             name.strip_prefix(&prefix)
                 .is_some_and(|ns| SCOPED_FAMILIES.iter().any(|fam| ns.starts_with(fam)))
         })
-        .collect();
-    ids.sort();
-    ids
+        .collect()
 }
 
 /// Resolve the storage agent id for a memory WRITE within the *current
@@ -371,6 +403,43 @@ mod tests {
     fn list_scoped_agent_ids_missing_dir_is_empty() {
         let missing = PathBuf::from("/no/such/aleph/memory/dir");
         assert!(list_scoped_agent_ids(&missing, "main").is_empty());
+    }
+
+    #[test]
+    fn list_note_corpora_returns_every_partition_and_nothing_else() {
+        // The single answer to "which corpora exist". Base agents and composed
+        // scoped ids are corpora in the same sense; editor/staging state is not.
+        let dir = tempdir().unwrap();
+        let root = dir.path();
+        std::fs::create_dir(root.join("main")).unwrap();
+        std::fs::create_dir(root.join("main__proj-aaaa")).unwrap();
+        std::fs::create_dir(root.join("main__u-owner")).unwrap();
+        std::fs::create_dir(root.join("researcher")).unwrap();
+        // Not partitions: a dot-directory (the shape `.obsidian`/staging dirs
+        // take) and a plain file.
+        std::fs::create_dir(root.join(".staging")).unwrap();
+        std::fs::write(root.join("README.md"), b"x").unwrap();
+
+        assert_eq!(
+            list_note_corpora(root),
+            vec![
+                "main".to_string(),
+                "main__proj-aaaa".to_string(),
+                "main__u-owner".to_string(),
+                "researcher".to_string(),
+            ]
+        );
+    }
+
+    #[test]
+    fn list_note_corpora_missing_dir_is_empty_and_creates_nothing() {
+        let dir = tempdir().unwrap();
+        let missing = dir.path().join("note");
+        assert!(list_note_corpora(&missing).is_empty());
+        assert!(
+            !missing.exists(),
+            "a sensor must never create the directory it measures"
+        );
     }
 
     #[test]
