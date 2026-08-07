@@ -195,7 +195,11 @@ fn normalize_value(raw: &str) -> String {
     }
 
     value = value.replace(['\u{2013}', '\u{2014}'], "-");
-    value.split_whitespace().collect::<Vec<_>>().join(" ").to_lowercase()
+    value
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+        .to_lowercase()
 }
 
 /// Strip decoration from a raw value and return it only if it is a genuine,
@@ -334,7 +338,9 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         std::fs::write(dir.path().join("IDENTITY.md"), "- **Name:** Disk\n").unwrap();
         assert_eq!(
-            AgentIdentityProfile::from_agent_dir(dir.path()).name.as_deref(),
+            AgentIdentityProfile::from_agent_dir(dir.path())
+                .name
+                .as_deref(),
             Some("Disk")
         );
     }
@@ -354,7 +360,8 @@ mod tests {
     #[test]
     fn round_trips_every_archetype_seeded_template() {
         for archetype in SoulArchetype::ALL {
-            let md = crate::config::agent_resolver::templates::default_identity("Tester", archetype);
+            let md =
+                crate::config::agent_resolver::templates::default_identity("Tester", archetype);
             let p = AgentIdentityProfile::from_markdown(&md);
             assert_eq!(p.name.as_deref(), Some("Tester"), "{archetype:?}");
             assert_eq!(

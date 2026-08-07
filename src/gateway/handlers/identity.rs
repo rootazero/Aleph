@@ -345,11 +345,7 @@ mod tests {
         .unwrap();
 
         let ctx = ctx_with_agent(tmp.path(), "main");
-        let resp = handle_get(
-            JsonRpcRequest::with_id("identity.get", None, json!(1)),
-            ctx,
-        )
-        .await;
+        let resp = handle_get(JsonRpcRequest::with_id("identity.get", None, json!(1)), ctx).await;
         assert!(resp.is_success());
         let identity = &resp.result.unwrap()["identity"];
         assert_eq!(identity["name"], "Ada");
