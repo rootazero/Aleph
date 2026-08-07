@@ -118,6 +118,10 @@ struct ConnectionContext {
     /// spec §5.4). `None` ⇒ that 4th filter term is skipped (zero-change
     /// guarantee — see `GatewaySharedState::session_store`).
     session_store: Option<Arc<dyn crate::gateway::session_store::SessionStore>>,
+    /// Team store for the same filter's `team.<id>.*` plane (team chat bodies,
+    /// published as raw `{topic,data}` strings). `None` ⇒ those frames are
+    /// denied — see `GatewaySharedState::team_store`.
+    team_store: Option<Arc<dyn crate::teams::TeamStore>>,
     /// Process-shared run→session / session→owner cache backing the filter.
     /// See `crate::gateway::event_visibility`.
     event_visibility: Arc<crate::gateway::event_visibility::EventVisibilityIndex>,
@@ -254,6 +258,7 @@ pub(super) async fn ws_upgrade_handler(
             exec_approval_manager: state.exec_approval_manager.clone(),
             audit_log: state.audit_log.clone(),
             session_store: state.session_store.clone(),
+            team_store: state.team_store.clone(),
             event_visibility: state.event_visibility.clone(),
         };
         if let Err(e) = handle_connection(socket, peer_addr, ctx).await {
@@ -1563,6 +1568,7 @@ async fn handle_connection(
                                                 visibility_payload,
                                                 event_caller_user.as_deref(),
                                                 store,
+                                                ctx.team_store.as_ref(),
                                             )
                                             .await
                                     }
@@ -2853,12 +2859,12 @@ mod tests {
 
         assert!(
             index
-                .event_admits(topic2, visibility_payload2, Some("alice"), &store)
+                .event_admits(topic2, visibility_payload2, Some("alice"), &store, None)
                 .await
         );
         assert!(
             !index
-                .event_admits(topic2, visibility_payload2, Some("bob"), &store)
+                .event_admits(topic2, visibility_payload2, Some("bob"), &store, None)
                 .await
         );
     }

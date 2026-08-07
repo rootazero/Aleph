@@ -1197,12 +1197,22 @@ after (verified by `single_user_fixture_is_byte_identical_after_upgrade`,
   this every connected member would receive every OTHER user's live run
   stream. `EventVisibilityIndex` is the 4th `&&` term in `server::handler`'s
   `should_forward` filter chain — it classifies each delivered frame's
-  session identity (`session_identity_of`: by session key directly, by
-  `run_id` through a seeded run→session cache, or `Global` for org-level
-  infrastructure) and denies unless the caller is that session's
-  `effective_owner`. Fails closed: an unresolvable `run_id` (cache miss) or
-  a walled `caller_user: None` connection is denied, never admitted by
-  default.
+  identity (`session_identity_of`: by session key directly, by `run_id`
+  through a seeded run→session cache, by `team_id` for the `team.<id>.*`
+  plane, or `Global` for org-level infrastructure) and then resolves that
+  identity to an owner through the same predicates the RPC path uses
+  (`visibility::owner_and_scope_visible_to` for a session — so a project
+  room's frames follow its roster, not its creator — and
+  `visibility::owner_or_legacy` for a team). Fails closed: an unresolvable
+  `run_id` (cache miss), an unresolvable `team_id`, or a walled
+  `caller_user: None` connection is denied, never admitted by default.
+  The `team.<id>.*` half needs its own arm because `publish_team_event`
+  emits a raw `{topic, data}` envelope with no `GatewayEventFrame` variant
+  behind it, so the compile-anchored `every_frame_variant_is_classified`
+  pin cannot see it — a SOURCE-level pin
+  (`no_published_team_topic_suffix_classifies_as_global`) covers that
+  producer shape instead, and the id is extracted structurally so a suffix
+  added later is scoped rather than broadcast.
 - **Background-work ownership.** `goal::Goal` and `looping::LoopState` both
   carry the same `owner_user_id`/`scope_id` pair, stamped once at creation
   from `scope::current_scope()` (`with_owner_scope`) and preserved across

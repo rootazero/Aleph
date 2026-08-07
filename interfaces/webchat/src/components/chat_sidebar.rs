@@ -20,7 +20,9 @@ use crate::views::chat::agent_identity::agent_color_for_id;
 use crate::views::chat::state::{
     ChatMessage, ChatState, ContextUsage, MemberStatus, TeamMemberView,
 };
-use crate::views::chat::team_events::{parse_team_topic, TeamTopicKind};
+// The topic grammar is the protocol crate's, not a view module's: the server
+// classifies delivery from the same parser (`event_visibility`).
+use aleph_protocol::team_topic::{parse_team_topic, TeamTopicKind};
 
 use web_sys::HtmlInputElement;
 

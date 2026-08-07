@@ -3,57 +3,20 @@
 //! and the fan-out tree's run lifecycle. Parallel to
 //! `events.rs::subscribe_run_events` (single-agent), kept separate for
 //! zero-regression of the single-agent path.
+//!
+//! The topic grammar itself is NOT this module's — it lives in
+//! `aleph_protocol::team_topic`, which the server reads too (its
+//! `event_visibility::session_identity_of` decides from the same team id
+//! whether a frame reaches this connection at all). This module is the
+//! rendering consumer of that grammar; the tests for it live beside it.
 
+use aleph_protocol::team_topic::{parse_team_topic, TeamTopicKind};
 use leptos::prelude::*;
 use leptos::task::spawn_local;
 
 use super::state::{ChatMessage, ChatPhase, ChatState, MemberStatus};
 use crate::api::teams::{TaskFilter, TeamsApi};
 use crate::context::{DashboardState, GatewayEvent};
-
-/// Which `team.<id>.<kind>` event arrived. `Task` folds the 4-segment
-/// `team.<id>.task.<verb>` family — the verb is redundant with the payload's
-/// `status`, which is what the upsert actually reads.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum TeamTopicKind {
-    /// A member's deliverable reply → an attributed bubble.
-    Message,
-    /// A broadcaster notice (guard explanation, member failure) → system chip.
-    System,
-    /// Member presence transition → roster status dot.
-    Activity,
-    /// Coordination-task create/update → task strip + drawer.
-    Task,
-    /// Fan-out tree lifecycle (`started` / `settled`) → run id + phase.
-    Fanout,
-}
-
-/// Split a `team.<team_id>.<kind>` topic into its team id and kind.
-///
-/// Team ids are opaque and may contain dots, so the kind is matched as a
-/// **suffix** rather than by positional split. Returns `None` for anything that
-/// is not a per-team topic — notably `team.changed`, the global 2-segment
-/// team-list invalidation the sidebar listens to.
-#[must_use]
-pub fn parse_team_topic(topic: &str) -> Option<(&str, TeamTopicKind)> {
-    let rest = topic.strip_prefix("team.")?;
-    const SUFFIXES: [(&str, TeamTopicKind); 4] = [
-        (".message", TeamTopicKind::Message),
-        (".system", TeamTopicKind::System),
-        (".activity", TeamTopicKind::Activity),
-        (".fanout", TeamTopicKind::Fanout),
-    ];
-    for (suffix, kind) in SUFFIXES {
-        if let Some(team_id) = rest.strip_suffix(suffix) {
-            return (!team_id.is_empty()).then_some((team_id, kind));
-        }
-    }
-    // `team.<id>.task.<verb>` — the verb is free-form, so anchor on the
-    // `.task.` separator instead of a fixed suffix.
-    let idx = rest.rfind(".task.")?;
-    let team_id = &rest[..idx];
-    (!team_id.is_empty()).then_some((team_id, TeamTopicKind::Task))
-}
 
 /// Subscribe to `team.*` events and project them onto team-chat state. Returns
 /// the subscription id for cleanup (caller `unsubscribe_events` on teardown).
@@ -220,62 +183,4 @@ fn push_bubble(chat: ChatState, role: &str, text: &str, agent_id: Option<String>
             author_user_id: None,
         });
     });
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn parses_every_per_team_topic_kind() {
-        assert_eq!(
-            parse_team_topic("team.t1.message"),
-            Some(("t1", TeamTopicKind::Message))
-        );
-        assert_eq!(
-            parse_team_topic("team.t1.system"),
-            Some(("t1", TeamTopicKind::System))
-        );
-        assert_eq!(
-            parse_team_topic("team.t1.activity"),
-            Some(("t1", TeamTopicKind::Activity))
-        );
-        assert_eq!(
-            parse_team_topic("team.t1.fanout"),
-            Some(("t1", TeamTopicKind::Fanout))
-        );
-        assert_eq!(
-            parse_team_topic("team.t1.task.created"),
-            Some(("t1", TeamTopicKind::Task))
-        );
-    }
-
-    #[test]
-    fn ignores_the_global_team_changed_topic() {
-        // The sidebar's team-list invalidation shares the `team.` prefix but is
-        // not per-team — projecting it would push an empty bubble.
-        assert_eq!(parse_team_topic("team.changed"), None);
-    }
-
-    #[test]
-    fn ignores_foreign_and_malformed_topics() {
-        assert_eq!(parse_team_topic("stream.response_chunk"), None);
-        assert_eq!(parse_team_topic("team."), None);
-        assert_eq!(parse_team_topic("team..message"), None);
-        assert_eq!(parse_team_topic("team.t1.unknown"), None);
-    }
-
-    #[test]
-    fn team_id_may_contain_dots() {
-        // Ids are opaque; suffix matching (not positional split) keeps a dotted
-        // id addressable instead of silently misrouting its events.
-        assert_eq!(
-            parse_team_topic("team.acme.eu.west.message"),
-            Some(("acme.eu.west", TeamTopicKind::Message))
-        );
-        assert_eq!(
-            parse_team_topic("team.acme.eu.west.task.updated"),
-            Some(("acme.eu.west", TeamTopicKind::Task))
-        );
-    }
 }

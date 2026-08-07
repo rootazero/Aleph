@@ -225,6 +225,12 @@ pub struct GatewaySharedState {
     /// (zero-change guarantee), matching every other `Option<Arc<...>>`
     /// dependency in this struct.
     pub session_store: Option<Arc<dyn crate::gateway::session_store::SessionStore>>,
+    /// Team store handle for the same filter's `team.<id>.*` plane, whose
+    /// frames resolve to a TEAM's owner rather than a session's. `None` in
+    /// probe/legacy wiring and in any deployment with no team database — those
+    /// frames are then denied, not waved through (nothing can publish them
+    /// either; see `event_visibility::EventVisibilityIndex::event_admits`).
+    pub team_store: Option<Arc<dyn crate::teams::TeamStore>>,
     /// Process-shared run→session / session→owner cache backing the
     /// owner-scoped WS event filter. Always constructed (unlike
     /// `session_store`) — the index itself is cheap and harmless to warm
@@ -421,6 +427,9 @@ pub struct GatewayServer {
     /// See [`GatewaySharedState::session_store`]. Installed by
     /// [`GatewayServer::set_session_store`].
     session_store: Option<Arc<dyn crate::gateway::session_store::SessionStore>>,
+    /// See [`GatewaySharedState::team_store`]. Installed by
+    /// [`GatewayServer::set_team_store`].
+    team_store: Option<Arc<dyn crate::teams::TeamStore>>,
     /// See [`GatewaySharedState::event_visibility`]. Always constructed.
     event_visibility: Arc<crate::gateway::event_visibility::EventVisibilityIndex>,
 }
@@ -475,6 +484,7 @@ impl GatewayServer {
             exec_approval_manager: None,
             audit_log: None,
             session_store: None,
+            team_store: None,
             event_visibility: Arc::new(
                 crate::gateway::event_visibility::EventVisibilityIndex::new(),
             ),
@@ -531,6 +541,7 @@ impl GatewayServer {
             exec_approval_manager: None,
             audit_log: None,
             session_store: None,
+            team_store: None,
             event_visibility: Arc::new(
                 crate::gateway::event_visibility::EventVisibilityIndex::new(),
             ),
@@ -630,6 +641,16 @@ impl GatewayServer {
         self.session_store = Some(store);
     }
 
+    /// Install the `TeamStore` so the WS event-delivery loop can resolve the
+    /// OWNER of a `team.<id>.*` frame — the raw-string event plane that carries
+    /// team chat bodies and has no `GatewayEventFrame` variant behind it (see
+    /// `event_visibility`'s module doc). Pass the same ownership-scoped handle
+    /// every other consumer receives (`builder::agent_init::coord_stores`);
+    /// leaving it unset denies those frames rather than broadcasting them.
+    pub fn set_team_store(&mut self, store: Arc<dyn crate::teams::TeamStore>) {
+        self.team_store = Some(store);
+    }
+
     /// Get the current number of active connections
     pub async fn connection_count(&self) -> usize {
         self.connections.read().await.len()
@@ -689,6 +710,7 @@ impl GatewayServer {
             node_registry: self.node_registry.clone(),
             exec_approval_manager: self.exec_approval_manager.clone(),
             session_store: self.session_store.clone(),
+            team_store: self.team_store.clone(),
             event_visibility: self.event_visibility.clone(),
         });
 

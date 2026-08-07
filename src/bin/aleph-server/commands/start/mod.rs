@@ -1781,6 +1781,13 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
     // Team management (team store created inside register_agent_handlers)
     if let (Some(ref ts), Some(ref cs)) = (&agent_result.team_store, &agent_result.coord_task_store)
     {
+        // The WS event-delivery loop needs the SAME handle: `team.<id>.*`
+        // frames carry team chat bodies and are published as raw `{topic,data}`
+        // strings, so `event_visibility` resolves them to a team OWNER rather
+        // than to a session (see that module's doc). Without this the whole
+        // plane has no resolver and is denied to everyone — the fail-closed
+        // half of the same wire.
+        server.set_team_store(ts.clone());
         register_teams_handlers(
             &mut server,
             ts,

@@ -21,6 +21,7 @@ mod ids;
 pub mod jsonrpc;
 pub mod plan;
 pub mod subagent_tree;
+pub mod team_topic;
 pub mod thinking;
 pub mod trace_presentation;
 pub mod trace_replay;

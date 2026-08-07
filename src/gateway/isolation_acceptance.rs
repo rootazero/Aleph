@@ -326,6 +326,7 @@ async fn two_users_cannot_see_each_other_end_to_end() {
                 Some(&alice_trace_frame),
                 Some("u-bob"),
                 &sessions,
+                None,
             )
             .await,
         "bob must not be admitted to alice's simulated run event"
@@ -362,6 +363,7 @@ async fn two_users_cannot_see_each_other_end_to_end() {
                 Some(&alice_trace_frame),
                 Some(OWNER_USER_ID),
                 &sessions,
+                None,
             )
             .await,
         "the operator is not exempt from session ownership for live events either"
@@ -418,6 +420,7 @@ async fn two_users_cannot_see_each_other_end_to_end() {
                 Some(&alice_trace_frame),
                 Some("u-alice"),
                 &sessions,
+                None,
             )
             .await,
         "alice must be admitted to her own run event — the guard must not be a false positive"
@@ -562,6 +565,60 @@ async fn two_users_cannot_see_each_others_teams() {
         1,
         "alice's task survived bob's skip attempt"
     );
+
+    // --- ...and bob sees nothing on the EVENT plane either -------------------
+    // The `teams.*` RPC family above was tightened; the `team.<id>.*` event
+    // plane was not, and shipped `Global` — `team.<id>.message` carries a
+    // member agent's deliverable text verbatim, so every connected user
+    // received every other user's team chat. It survived the compile-anchored
+    // `every_frame_variant_is_classified` pin because `publish_team_event`
+    // emits a raw `{topic,data}` string with no `GatewayEventFrame` behind it.
+    //
+    // These calls are deliberately NOT wrapped in `as_caller`: the WS delivery
+    // loop is the socket's own task, outside every dispatch scope, so this is
+    // the shape the resolution actually runs in.
+    let temp = TempDir::new().unwrap();
+    let sessions: Arc<dyn SessionStore> = Arc::new(
+        SessionManager::new(SessionManagerConfig {
+            db_path: temp.path().join("sessions.db"),
+            ..Default::default()
+        })
+        .unwrap(),
+    );
+    let events = EventVisibilityIndex::new();
+    let bubble = json!({
+        "agent_id": "agent-main",
+        "text": "ship it before friday",
+        "final": true,
+    });
+    for suffix in ["message", "activity", "system", "fanout", "task.created"] {
+        let topic = format!("team.{}.{suffix}", team.id);
+        assert!(
+            events
+                .event_admits(
+                    &topic,
+                    Some(&bubble),
+                    Some("u-alice"),
+                    &sessions,
+                    Some(&teams)
+                )
+                .await,
+            "{topic}: alice must still receive her own team's live frames"
+        );
+        assert!(
+            !events
+                .event_admits(
+                    &topic,
+                    Some(&bubble),
+                    Some("u-bob"),
+                    &sessions,
+                    Some(&teams)
+                )
+                .await,
+            "{topic}: bob must not receive the live frames of a team he cannot \
+             even see through `teams.get`"
+        );
+    }
 }
 
 /// Reproduce the task-local nesting a real GATEWAY DISPATCH applies to an RPC
@@ -876,27 +933,27 @@ async fn every_room_member_receives_the_rooms_live_frames() {
     ] {
         assert!(
             events
-                .event_admits(topic, Some(data), Some("u-live-bob"), &sessions)
+                .event_admits(topic, Some(data), Some("u-live-bob"), &sessions, None)
                 .await,
             "{topic}: a room member who did not create the session must receive \
              the room's frames — including his own turn's"
         );
         assert!(
             events
-                .event_admits(topic, Some(data), Some("u-live-alice"), &sessions)
+                .event_admits(topic, Some(data), Some("u-live-alice"), &sessions, None)
                 .await,
             "{topic}: the creator must still be admitted — the fix must not be a \
              blanket allow that happens to include bob"
         );
         assert!(
             !events
-                .event_admits(topic, Some(data), Some("u-live-mallory"), &sessions)
+                .event_admits(topic, Some(data), Some("u-live-mallory"), &sessions, None)
                 .await,
             "{topic}: a logged-in non-member must not receive the room's frames"
         );
         assert!(
             !events
-                .event_admits(topic, Some(data), Some(OWNER_USER_ID), &sessions)
+                .event_admits(topic, Some(data), Some(OWNER_USER_ID), &sessions, None)
                 .await,
             "{topic}: the operator is not on the roster either — same rule as \
              `sessions.list` (see two_users_cannot_see_each_other_end_to_end)"
@@ -911,7 +968,8 @@ async fn every_room_member_receives_the_rooms_live_frames() {
                 "stream.agent_trace",
                 Some(&trace),
                 Some("u-live-bob"),
-                &sessions
+                &sessions,
+                None
             )
             .await,
         "an ex-member must stop receiving the room's frames immediately: the \
@@ -923,7 +981,8 @@ async fn every_room_member_receives_the_rooms_live_frames() {
                 "stream.agent_trace",
                 Some(&trace),
                 Some("u-live-alice"),
-                &sessions
+                &sessions,
+                None
             )
             .await,
         "removing bob must not disturb anyone else's delivery"
