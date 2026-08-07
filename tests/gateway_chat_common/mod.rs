@@ -197,6 +197,7 @@ pub fn orchestrator_with_stub(runner: Arc<StubHarnessRunner>) -> Arc<Orchestrato
         named_providers: HashMap::new(),
         verifier_chain: None,
         context_budget_config: None,
+        context_budget_refiner: None,
         skill_system: None,
         guardrails: None,
         stall_config: None,

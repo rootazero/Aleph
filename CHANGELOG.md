@@ -5,7 +5,37 @@ All notable changes to the Aleph project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [26.7.31]
+## [26.8.6]
+
+§2.3 Context Mode round 2 — codex-aligned XML envelope, sub-agent binding,
+sandbox posture surface. **Pure §2.3 wiring**: not a feature rollout, an
+harness cleanup. Three pieces:
+
+- `<environment_context>` XML block replaces the markdown pipe-separated
+  line in `RuntimeContextLayer` (priority 1720, Dynamic). Same facts the
+  model always saw (cwd / repo / git branch / model / time), now inside a
+  tag-delimited region downstream prompt-splitters can match on (same
+  role `markdown_excerpt::split_wikilinks` plays for note excerpts).
+  Pure swap, prompt cache-keyed identically.
+- `TurnEnvelope` carries a sub-agent binding (`parent: Option<EnvelopeParent>` +
+  `run_id: Option<String>`); sub-agent / team dispatches can now tag the
+  block with `<parent kind="…">…</parent>` and the dynamic tail with `- Run id: …`.
+  Primary dispatch defaults to `None` and stays byte-identical.
+- `OperatingEnvelopeLayer` echoes the sandbox posture's network line and a
+  new "Permission profile" line into `## Operating Envelope`. `SandboxSummary`
+  adds an `Option<String>` profile-id field (`#[serde(default, skip)]`,
+  backward-compatible) and a `with_permission_profile_id` builder helper.
+
+Helpers side: `xml_util` adds `open_block_with_attrs` / `push_text_element` /
+`close_block` (three primitives, ~30 LOC) so the new XML block can be rendered
+without hand-balancing tags and so attribute values route through `escape_xml_attr`
+(text content stays through `escape_xml`). `RuntimeContext::resolve_working_dir`
+emits a structured `cwd_downgrade_total = 1` field for any `doctor` probe to
+count project-root churn. Ratchets: `SCAFFOLD_CEILING_BYTES` 7 495 → 7 600 and
+`DYNAMIC_TAIL_CEILING_BYTES` 1 017 → 1 100 (the +105 / +83 bytes are the XML
+tag overhead; content is unchanged).
+
+## [26.7.31] 
 
 Bigger again — 400 commits over ten days, 1,506 files, +115k/−56k. Three
 threads. First, **Linux becomes a first-class desktop target**: a full AT-SPI2

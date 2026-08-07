@@ -122,19 +122,24 @@ pub fn classify_exhausted(raw: &str) -> RetryVerdict {
 
     let msg = raw.to_lowercase();
 
-    // D3: "overloaded" beats 429 here as well (see `classify`). After local
+    // D3: transient overload beats 429 here as well (see `classify`), judged by
+    // the SAME word list (`is_transient_overload`) — this arm used to re-derive
+    // a narrower one ("overloaded"/529 only), so an Anthropic 429 body like
+    // "receiving too many requests at the moment" was a transient overload in
+    // `classify` but fell through to the 429 arm here once the in-place budget
+    // was spent, and was misread as a *model-specific* rate limit: the walk
+    // then sidelined a perfectly healthy model into cooldown. After local
     // retries have been exhausted, escalate transient overload to Fallback —
     // the local backoff didn't help, so a sibling provider is the next bet.
-    let account_patterns = ["account", "organization", "billing", "quota exceeded"];
-    let is_account_scoped = account_patterns.iter().any(|p| msg.contains(p));
-    if !is_account_scoped && (msg.contains("overloaded") || has_status_code(&msg, 529)) {
+    let is_account_scoped = ACCOUNT_SCOPE_PATTERNS.iter().any(|p| msg.contains(p));
+    if !is_account_scoped && is_transient_overload(&msg) {
         return RetryVerdict::Fallback {
             reason: format!("provider overloaded after retries: {raw}"),
         };
     }
 
     // 429 rate limit → classify as model-specific (Fallback) vs account-wide (Fatal).
-    if has_status_code(&msg, 429) || msg.contains("rate limit") || msg.contains("rate_limit") {
+    if is_rate_limit_text(&msg) {
         return classify_rate_limit(raw);
     }
 
@@ -222,6 +227,63 @@ pub fn extract_retry_after_str(raw: &str) -> Option<Duration> {
     Some(Duration::from_secs(secs))
 }
 
+/// Words that mark a rate limit as *account/org-scoped* (switching providers
+/// or models cannot help) rather than model-specific. Shared by [`classify`],
+/// [`classify_exhausted`] and [`classify_rate_limit`] — the three used to
+/// re-declare this list per site, the same drift pattern the
+/// `is_transient_overload` word list suffered (see D3).
+const ACCOUNT_SCOPE_PATTERNS: &[&str] = &[
+    "account",
+    "organization",
+    "billing",
+    "quota exceeded",
+    "quota_exceeded",
+];
+
+/// Every wording a provider uses to say "you are rate-limited" WITHOUT
+/// necessarily sending a clean HTTP 429 — some wrap the throttle in a 200 or a
+/// generic 4xx/5xx body (the set Bifrost's `IsRateLimitErrorMessage` matches
+/// for the same reason). Shared by [`classify`] and [`classify_exhausted`] so
+/// the in-place and exhausted verdicts can never disagree on what a rate
+/// limit sounds like.
+///
+/// Narrowness contract (same as [`CONTEXT_OVERFLOW_PATTERNS`]): every entry
+/// must be a phrase that only ever appears in a throttling context. Deliberately
+/// EXCLUDED from Bifrost's wider list:
+///
+/// * `"requests per"` / `"limit exceeded"` — fire on ordinary prose and on
+///   non-throttle ceilings ("payload limit exceeded");
+/// * `"usage limit"` — an *account-level* spending cap, already surfaced as a
+///   typed non-retryable error by the adapters
+///   (`protocols::openai_common::usage_limit`); here it would be misread as
+///   model-specific;
+/// * `"rate increased"` — matches "error rate increased".
+const RATE_LIMIT_TEXT_PATTERNS: &[&str] = &[
+    "rate limit",
+    "rate_limit",
+    "ratelimit",
+    "too many requests",
+    "throttled",
+    "throttling",
+    "rate exceeded",
+    "rpm exceeded",
+    "tpm exceeded",
+    "tokens per minute",
+    "requests per minute",
+    "requests per second",
+    "concurrent requests limit",
+    "burst_rate",
+];
+
+/// Whether `msg` (lowercased) reads as a rate limit: a real 429 status token,
+/// or any throttle wording a provider might wrap in another status code.
+fn is_rate_limit_text(msg_lower: &str) -> bool {
+    has_status_code(msg_lower, 429)
+        || RATE_LIMIT_TEXT_PATTERNS
+            .iter()
+            .any(|p| msg_lower.contains(p))
+}
+
 /// Classify a 429 rate limit error into Fallback or Fatal.
 ///
 /// - Model-specific rate limits (error mentions a model name or per-model quota)
@@ -233,8 +295,7 @@ fn classify_rate_limit(raw: &str) -> RetryVerdict {
     let msg = raw.to_lowercase();
 
     // Account-wide / org-level → Fatal (switching won't help)
-    let account_patterns = ["account", "organization", "billing", "quota exceeded"];
-    if account_patterns.iter().any(|p| msg.contains(p)) {
+    if ACCOUNT_SCOPE_PATTERNS.iter().any(|p| msg.contains(p)) {
         return RetryVerdict::Fatal;
     }
 
@@ -371,8 +432,7 @@ pub fn classify(raw: &str) -> RetryVerdict {
     // jitter retry that would have ridden out the transient spike. Account /
     // org / quota errors keep their Fatal verdict even if the message text
     // happens to mention overload, since switching providers can't help.
-    let account_patterns = ["account", "organization", "billing", "quota exceeded"];
-    let is_account_scoped = account_patterns.iter().any(|p| msg.contains(p));
+    let is_account_scoped = ACCOUNT_SCOPE_PATTERNS.iter().any(|p| msg.contains(p));
 
     if !is_account_scoped && is_transient_overload(&msg) {
         let delay = extract_retry_after_str(raw).unwrap_or(Duration::from_secs(2));
@@ -382,12 +442,21 @@ pub fn classify(raw: &str) -> RetryVerdict {
     // Rate-limit (429) → classify as model-specific vs account-wide.
     // Model-specific limits benefit from switching providers (Fallback);
     // account-wide limits propagate immediately (Fatal).
-    if has_status_code(&msg, 429) || msg.contains("rate limit") || msg.contains("rate_limit") {
+    if is_rate_limit_text(&msg) {
         return classify_rate_limit(raw);
     }
 
-    // Transient network errors → 300 ms base
-    for pattern in &["connection", "reset", "timeout", "eof", "broken pipe"] {
+    // Transient network errors → 300 ms base. Both spellings of a timeout are
+    // listed: reqwest's own timeout body reads "operation timed out", which
+    // does not contain the substring "timeout".
+    for pattern in &[
+        "connection",
+        "reset",
+        "timeout",
+        "timed out",
+        "eof",
+        "broken pipe",
+    ] {
         if msg.contains(pattern) {
             return RetryVerdict::Retry {
                 delay: Duration::from_millis(300),
@@ -626,6 +695,75 @@ mod tests {
         );
     }
 
+    /// Bifrost parity: every throttle wording that arrives WITHOUT a clean
+    /// HTTP 429 (wrapped in a 200/4xx/5xx body) must still read as a
+    /// model-specific rate limit.
+    #[test]
+    fn rate_limit_text_recognises_throttles_without_a_clean_429() {
+        for body in [
+            "HTTP 200 stream stalled: ratelimit applied by gateway",
+            "error 503: too many requests queued",
+            "Request was throttled by the upstream API",
+            "upstream throttling in effect",
+            "HTTP 500: rate exceeded",
+            "rpm exceeded for this key",
+            "tpm exceeded: try later",
+            "tokens per minute cap hit",
+            "requests per minute ceiling reached",
+            "requests per second ceiling reached",
+            "concurrent requests limit reached",
+            "azure error: burst_rate exceeded",
+        ] {
+            assert!(
+                matches!(classify(body), RetryVerdict::Fallback { .. }),
+                "throttle wording must classify as rate limit, got {:?} for {body:?}",
+                classify(body)
+            );
+        }
+    }
+
+    /// The guard-rail for the list's narrowness: lookalike prose that Bifrost
+    /// matches but we deliberately do NOT (see `RATE_LIMIT_TEXT_PATTERNS`)
+    /// must not be hijacked into the rate-limit path.
+    #[test]
+    fn rate_limit_text_stays_narrow_against_lookalikes() {
+        // "limit exceeded" fires on non-throttle ceilings.
+        assert_eq!(
+            classify("upload failed: payload limit exceeded"),
+            RetryVerdict::Fatal
+        );
+        // "rate increased" matches ordinary prose ("error rate increased").
+        assert_eq!(
+            classify("metrics: error rate increased after deploy"),
+            RetryVerdict::Fatal
+        );
+        // A bare account spending cap is the adapters' typed-error territory,
+        // not a model-specific Fallback here.
+        assert_eq!(classify("account usage limit reached"), RetryVerdict::Fatal);
+        // The transient-overload phrasing still beats the bare "too many
+        // requests" wording: Retry, not Fallback.
+        let overload = "HTTP 429: We're receiving too many requests at the moment";
+        assert!(
+            matches!(classify(overload), RetryVerdict::Retry { .. }),
+            "transient overload must still win, got {:?}",
+            classify(overload)
+        );
+    }
+
+    #[test]
+    fn quota_exceeded_underscore_form_is_account_scoped_fatal() {
+        // The underscore spelling of an account quota (Bifrost list) joins the
+        // shared account-scope list: switching models cannot help.
+        assert_eq!(
+            classify("HTTP 429: quota_exceeded for this api key"),
+            RetryVerdict::Fatal
+        );
+        assert_eq!(
+            classify_exhausted("HTTP 429: quota_exceeded for this api key"),
+            RetryVerdict::Fatal
+        );
+    }
+
     #[test]
     fn test_classify_fatal() {
         let err = anyhow::anyhow!("HTTP 401 Unauthorized");
@@ -832,6 +970,41 @@ mod tests {
             classify_exhausted(&err.to_string()),
             RetryVerdict::Fallback { .. }
         ));
+    }
+
+    /// The exhausted-path overload arm must use the SAME word list as
+    /// [`classify`] (`is_transient_overload`). Anthropic's transient-throttle
+    /// 429 carries neither "overloaded" nor 529, so the old narrower list let
+    /// it fall through to the 429 arm, where `classify_rate_limit` read it as
+    /// a *model-specific* limit — and the walk sidelined a healthy model into
+    /// cooldown for a server-side transient spike.
+    #[test]
+    fn test_classify_exhausted_anthropic_transient_429_is_overload_not_rate_limit() {
+        let raw = r#"Rate limit error: Anthropic API rate limited (429): {"error":{"type":"rate_limit_error","message":"We're receiving too many requests at the moment. Please wait a moment and try again."},"type":"error"}"#;
+        match classify_exhausted(raw) {
+            RetryVerdict::Fallback { reason } => assert!(
+                reason.starts_with("provider overloaded"),
+                "transient overload must not read as a model rate limit, got: {reason}"
+            ),
+            other => panic!("expected Fallback for transient overload, got {other:?}"),
+        }
+    }
+
+    /// reqwest renders a connect/operation timeout as "operation timed out" —
+    /// a string that does not contain "timeout". Missing it made every reqwest
+    /// timeout `Fatal` to the string classifier: no in-place retry, and a
+    /// network blip escalated straight to a provider advance.
+    #[test]
+    fn test_classify_reqwest_timed_out_is_transient() {
+        let err = anyhow::anyhow!(
+            "error sending request for url (https://api.example.com/v1): operation timed out"
+        );
+        assert_eq!(
+            classify(&err.to_string()),
+            RetryVerdict::Retry {
+                delay: Duration::from_millis(300)
+            }
+        );
     }
 
     #[test]

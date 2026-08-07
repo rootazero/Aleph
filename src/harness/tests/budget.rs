@@ -486,6 +486,7 @@ const BUDGETED: [&str; 12] = [
 ///     too, outside this budget.) Three questions: (1) scaffolding — request
 ///     shape, no judgement; (2) yes — prefix construction is a provider fact;
 ///     (3) one real consumer, all six grace sites funnel through here.
+///
 /// **Round 10 (2026-08-03): 5109 → 5142 (+33).** The last of FEATURE_LOCATOR
 /// §2.18's follow-up ledger (item 2), and the one the ledger itself deferred as
 /// "touches the R10 budget, needs its own proposal". Measured, not arithmetic.

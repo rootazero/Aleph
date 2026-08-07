@@ -111,10 +111,7 @@ mod tests {
     #[test]
     fn reason_codes_are_stable_strings() {
         let cases: Vec<(AgentManageError, &str)> = vec![
-            (
-                AgentManageError::InvalidId("a".into()),
-                "invalid_id",
-            ),
+            (AgentManageError::InvalidId("a".into()), "invalid_id"),
             (
                 AgentManageError::AgentNotFound {
                     agent_id: "x".into(),

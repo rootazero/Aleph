@@ -11,9 +11,35 @@ pub mod adapters;
 pub mod cc_plugin_json;
 pub mod cc_plugin_toml;
 pub mod config_validation;
+pub mod manifest_cache;
 pub mod parsers;
 pub mod toml_types;
 mod types;
+
+// Re-export the LRU cache + global default instance so the rest of the
+// extension system (specifically `ExtensionManager::load_all` and the hot
+// reload path) can consult + populate it without holding its own copy.
+pub use manifest_cache::{ManifestCache, MAX_ENTRIES};
+
+/// Process-wide manifest parse cache.
+///
+/// Single shared instance (LRU, 512 entries — see [`MAX_ENTRIES`]). Used by
+/// `parse_manifest_from_dir_cached_global` for hot paths (boot, hot-reload);
+/// tests can ignore it and pass their own cache to
+/// [`parse_manifest_from_dir_sync_with`] to keep isolation.
+pub static GLOBAL_MANIFEST_CACHE: std::sync::OnceLock<ManifestCache> = std::sync::OnceLock::new();
+
+/// Convenience accessor that initializes the global cache on first use.
+#[must_use]
+pub fn global_manifest_cache() -> &'static ManifestCache {
+    GLOBAL_MANIFEST_CACHE.get_or_init(ManifestCache::new)
+}
+
+/// Like [`parse_manifest_from_dir_sync`] but consults + populates the
+/// process-wide [`GLOBAL_MANIFEST_CACHE`].
+pub fn parse_manifest_from_dir_cached_global(dir: &Path) -> ExtensionResult<PluginManifest> {
+    parse_manifest_from_dir_sync_with(dir, Some(global_manifest_cache()))
+}
 
 // Re-export TOML types and parsing
 pub use cc_plugin_json::{
@@ -236,30 +262,90 @@ pub async fn parse_manifest_from_dir(dir: &Path) -> ExtensionResult<PluginManife
 
 /// Synchronous version of `parse_manifest_from_dir`
 pub fn parse_manifest_from_dir_sync(dir: &Path) -> ExtensionResult<PluginManifest> {
+    parse_manifest_from_dir_sync_with(dir, None)
+}
+
+/// Synchronous version of `parse_manifest_from_dir` that consults and
+/// populates a [`ManifestCache`]. Cache hits skip the parse + deserialize
+/// entirely; the (path, size, mtime, ctime, dev, ino) tuple invalidates the
+/// entry on any in-place edit.
+///
+/// When `cache` is `None`, this is identical to
+/// [`parse_manifest_from_dir_sync`].
+pub fn parse_manifest_from_dir_sync_with(
+    dir: &Path,
+    cache: Option<&manifest_cache::ManifestCache>,
+) -> ExtensionResult<PluginManifest> {
     // 1. .claude-plugin/plugin.toml (CC-compat, preferred)
     let cc_toml_path = dir.join(CC_PLUGIN_TOML);
-    if cc_toml_path.exists() {
-        return parse_cc_plugin_toml_sync(dir);
+    if let Some(outcome) = try_cached_or_parse(&cc_toml_path, dir, cache, parse_cc_plugin_toml_sync)
+    {
+        return outcome;
     }
 
     // 2. .claude-plugin/plugin.json (CC-compat, read-only)
     let cc_json_path = dir.join(CC_PLUGIN_JSON);
-    if cc_json_path.exists() {
-        return parse_cc_plugin_json_sync(dir);
+    if let Some(outcome) = try_cached_or_parse(&cc_json_path, dir, cache, parse_cc_plugin_json_sync)
+    {
+        return outcome;
     }
 
     // 3. aleph.plugin.toml (deprecated — warn)
     let aleph_toml_path = dir.join(ALEPH_PLUGIN_TOML);
-    if aleph_toml_path.exists() {
+    if let Some(outcome) = try_cached_or_parse(&aleph_toml_path, dir, cache, |d| {
         tracing::warn!(
-            "Plugin at {:?} uses deprecated aleph.plugin.toml format. Migrate to .claude-plugin/plugin.toml",
-            dir
-        );
-        return parse_aleph_plugin_toml_sync(dir);
+                "Plugin at {:?} uses deprecated aleph.plugin.toml format. Migrate to .claude-plugin/plugin.toml",
+                d
+            );
+        parse_aleph_plugin_toml_sync(d)
+    }) {
+        return outcome;
     }
 
     // 4. Auto-discover (no manifest file at all)
     auto_discover_manifest(dir)
+}
+
+/// Look up the parsed manifest in `cache` for `manifest_path`; on miss, call
+/// `parser(dir)` to produce one and (if `cache` is provided) populate it.
+///
+/// Returns `None` when `manifest_path` does not exist on disk (caller should
+/// move to the next candidate). Returns `Some(result)` when the file
+/// existed — the inner `Result` propagates parse errors so the caller
+/// doesn't accidentally fall through to the next candidate on a bad
+/// manifest.
+fn try_cached_or_parse<F>(
+    manifest_path: &Path,
+    dir: &Path,
+    cache: Option<&manifest_cache::ManifestCache>,
+    parser: F,
+) -> Option<ExtensionResult<PluginManifest>>
+where
+    F: FnOnce(&Path) -> ExtensionResult<PluginManifest>,
+{
+    if !manifest_path.exists() {
+        return None;
+    }
+
+    if let Some(cache) = cache {
+        if let Ok(meta) = std::fs::metadata(manifest_path) {
+            if let Some(manifest) = cache.get(manifest_path, &meta) {
+                return Some(Ok(manifest));
+            }
+        }
+    }
+
+    match parser(dir) {
+        Ok(manifest) => {
+            if let Some(cache) = cache {
+                if let Ok(meta) = std::fs::metadata(manifest_path) {
+                    cache.put(manifest_path, &meta, manifest.clone());
+                }
+            }
+            Some(Ok(manifest))
+        }
+        Err(e) => Some(Err(e)),
+    }
 }
 
 // =============================================================================

@@ -63,21 +63,6 @@ impl A2AClientPool {
     }
 
     /// Health check by fetching the agent card endpoint
-    /// Test-only pool-size observers. Cut from the production surface in
-    /// `dafc57bc6` as unused accessors; restored under `cfg(test)` because that
-    /// cut left their tests behind and broke the lib-test build. The tests they
-    /// serve cover real `get_or_create` / `remove` behaviour — only the
-    /// observation of it went through these.
-    #[cfg(test)]
-    pub(crate) async fn len(&self) -> usize {
-        self.clients.read().await.len()
-    }
-
-    #[cfg(test)]
-    pub(crate) async fn is_empty(&self) -> bool {
-        self.clients.read().await.is_empty()
-    }
-
     pub async fn health_check(&self, agent_id: &str) -> AgentHealth {
         let client = {
             let clients = self.clients.read().await;

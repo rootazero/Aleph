@@ -371,6 +371,38 @@ fn decide_model_rate_limit_honors_typed_retry_after() {
 }
 
 #[test]
+fn decide_model_rate_limit_falls_back_to_body_retry_after() {
+    // When the typed error carries no `suggestion`, the Retry-After stated in
+    // the message body must still win over the blind default cooldown —
+    // `classify_rate_limit` already parsed that same text into the reason
+    // string, so the hint exists; only the decision discarded it.
+    let e = AlephError::RateLimitError {
+        message: "HTTP 429 too many requests. Retry after 30 seconds.".into(),
+        suggestion: None,
+    };
+    assert_eq!(
+        decide(&e, 0, 2),
+        Decision::RateLimited(Some(Duration::from_secs(30)))
+    );
+}
+
+#[test]
+fn decide_token_count_borrowing_400_digits_is_not_a_bad_request() {
+    // `contains("400")` also fires inside a token count, and the Fatal arm used
+    // to abort the whole walk (`Decision::Stop`) on such a transient error.
+    // `has_status_code` confines the match to a real status token.
+    let e = AlephError::provider("upstream hiccup: used 400123 tokens; invalid response");
+    assert!(
+        matches!(decide(&e, 0, 2), Decision::RetrySame(_)),
+        "a token count must not read as HTTP 400, got {:?}",
+        decide(&e, 0, 2)
+    );
+    // …while a genuine 400 still stops the walk immediately.
+    let e = AlephError::provider("HTTP 400 Bad Request: invalid parameter");
+    assert_eq!(decide(&e, 0, 2), Decision::Stop);
+}
+
+#[test]
 fn decide_overload_429_honors_typed_retry_after() {
     // Item #1 on the in-place-retry path: a server-overload 429 whose
     // Retry-After sits in `suggestion` retries in place with the server's
@@ -428,10 +460,12 @@ fn decide_transient_overload_429_gets_limited_retry_budget() {
     // gets one brief in-place retry so a transient spike has a chance to
     // clear, but we no longer ride it out for tens of seconds: a provider
     // that is consistently overloaded should fail fast in interactive chat.
-    // Once the single overload retry is exhausted it escalates to the
-    // per-model cooldown path (RateLimited), which process() turns into a
-    // sibling-model migration and, only if the provider's models are exhausted,
-    // a provider advance.
+    // Once the single overload retry is exhausted the failure escalates as a
+    // PROVIDER-level transient (advance the chain) — it must NOT become a
+    // per-model cooldown (`RateLimited`), which sidelined a perfectly healthy
+    // model for a server-side transient spike (the `classify_exhausted`
+    // overload arm used a narrower word list than `classify` and misread this
+    // exact body as a model-specific rate limit).
     let e = AlephError::RateLimitError {
         message: "Anthropic API rate limited (429): We're receiving too many \
                   requests at the moment. Please wait a moment and try again."
@@ -439,7 +473,10 @@ fn decide_transient_overload_429_gets_limited_retry_budget() {
         suggestion: None,
     };
     assert!(matches!(decide(&e, 0, 2), Decision::RetrySame(_)));
-    assert_eq!(decide(&e, 1, 2), Decision::RateLimited(None));
+    assert_eq!(
+        decide(&e, 1, 2),
+        Decision::NextProvider(FailureKind::Transient)
+    );
 }
 
 #[test]
@@ -464,7 +501,8 @@ fn decide_kimi_overloaded_429_fails_over_after_one_retry() {
 #[test]
 fn decide_overload_429_budget_is_independent_of_max_retries() {
     // Even if the operator configures a large `max_retries`, an overload must
-    // not ride it out: the budget stays at one extra attempt.
+    // not ride it out: the budget stays at one extra attempt, then the chain
+    // advances (provider-level transient — never a model cooldown).
     let e = AlephError::RateLimitError {
         message: "Anthropic API rate limited (429): We're receiving too many \
                   requests at the moment. Please wait a moment and try again."
@@ -472,7 +510,10 @@ fn decide_overload_429_budget_is_independent_of_max_retries() {
         suggestion: None,
     };
     assert!(matches!(decide(&e, 0, 10), Decision::RetrySame(_)));
-    assert_eq!(decide(&e, 1, 10), Decision::RateLimited(None));
+    assert_eq!(
+        decide(&e, 1, 10),
+        Decision::NextProvider(FailureKind::Transient)
+    );
 }
 
 #[test]
@@ -1974,6 +2015,102 @@ async fn a_saturated_lone_candidate_is_still_attempted() {
     // rust-doctor-disable-next-line unwrap-in-production
     let resp = fp.process(RequestPayload::new(&msgs)).await.unwrap();
     assert_eq!(resp.text_content(), "primary");
+}
+
+#[tokio::test]
+async fn a_pinned_provider_is_dialed_even_when_saturated() {
+    use crate::config::types::{ModelRouteConfig, ProviderRateLimit};
+    // `route_policy::pin_beats_over_limit_gate` promises a pin leads its tier
+    // even when rate-saturated; the walk's saturation gate used to skip the
+    // pinned candidate anyway — the two halves of one rule contradicted each
+    // other, and the operator's explicit pick was passed over for a fallback.
+    let primary = ScriptProvider::ok("primary");
+    let fb = ScriptProvider::ok("fb");
+    let stats = Arc::new(LoadStats::new());
+    let handle = Arc::new(RouteHandle::from_config(&ModelRouteConfig {
+        cloud_provider: Some("primary".to_string()),
+        rate_limits: [(
+            "primary".to_string(),
+            ProviderRateLimit {
+                rpm: Some(1),
+                tpm: None,
+            },
+        )]
+        .into_iter()
+        .collect(),
+        ..Default::default()
+    }));
+    let fp = FailoverProvider::new(
+        // rust-doctor-disable-next-line excessive-clone
+        Arc::new(StaticDefault::new(primary.clone())),
+        vec![tiered_node("fb", fb.clone(), EndpointTier::Cloud)],
+        HashMap::new(),
+        FailoverHealth::default(),
+        FailoverConfig::default(),
+    )
+    .with_route_live(handle)
+    // rust-doctor-disable-next-line excessive-clone
+    .with_load_stats(stats.clone());
+
+    // Saturate the primary's rpm window. An unpinned saturated provider would
+    // yield here (see `a_saturated_primary_yields_to_a_healthy_fallback`); the
+    // pinned one must still be dialed.
+    drop(stats.begin("primary"));
+
+    let msgs = [UnifiedMessage::user("hi")];
+    // rust-doctor-disable-next-line unwrap-in-production
+    let resp = fp.process(RequestPayload::new(&msgs)).await.unwrap();
+    assert_eq!(resp.text_content(), "primary");
+    assert_eq!(
+        primary.call_count(),
+        1,
+        "the pin must beat the saturation gate"
+    );
+    assert_eq!(fb.call_count(), 0);
+}
+
+#[tokio::test]
+async fn a_pinned_provider_with_an_open_circuit_is_still_skipped() {
+    use crate::config::types::ModelRouteConfig;
+    // The pin exempts capacity yield, NOT failure: a pinned provider whose
+    // credential is dead (permanent failure opens the circuit on the first
+    // strike) is skipped exactly like any other candidate while a healthy
+    // sibling remains.
+    let primary = ScriptProvider::err("primary", "HTTP 403 Forbidden: bad key");
+    let fb = ScriptProvider::ok("fb");
+    let handle = Arc::new(RouteHandle::from_config(&ModelRouteConfig {
+        cloud_provider: Some("primary".to_string()),
+        ..Default::default()
+    }));
+    let fp = FailoverProvider::new(
+        // rust-doctor-disable-next-line excessive-clone
+        Arc::new(StaticDefault::new(primary.clone())),
+        vec![tiered_node("fb", fb.clone(), EndpointTier::Cloud)],
+        HashMap::new(),
+        FailoverHealth::default(),
+        FailoverConfig::default(),
+    )
+    .with_route_live(handle);
+
+    let msgs = [UnifiedMessage::user("hi")];
+    // First request: the pinned primary leads, and its dead key opens the
+    // circuit on strike one (permanent failure).
+    // rust-doctor-disable-next-line unwrap-in-production
+    let resp = fp.process(RequestPayload::new(&msgs)).await.unwrap();
+    assert_eq!(resp.text_content(), "fb");
+    assert_eq!(primary.call_count(), 1);
+    assert!(fp.circuit_open("primary").await);
+
+    // Second request: circuit open with a later candidate remaining — the pin
+    // does not buy the dead provider another dial.
+    // rust-doctor-disable-next-line unwrap-in-production
+    let resp = fp.process(RequestPayload::new(&msgs)).await.unwrap();
+    assert_eq!(resp.text_content(), "fb");
+    assert_eq!(
+        primary.call_count(),
+        1,
+        "a pin must not exempt an open circuit"
+    );
 }
 
 #[tokio::test(start_paused = true)]

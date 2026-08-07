@@ -895,7 +895,7 @@ async fn single_user_fixture_is_byte_identical_after_upgrade() {
         .with_curated_config(CuratedConfig {
             memory_char_limit: 4000,
             user_char_limit: 4000,
-            legacy_warn_threshold: 0.95,
+            ..CuratedConfig::default()
         })
         .with_curated_root_for_test(curated_dir.clone());
 

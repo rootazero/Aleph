@@ -137,7 +137,6 @@ impl MemoryContextProvider {
         // "helpfully" widen just the read side again.
         let open_loops_id =
             crate::memory::project_scope::session_write_id(base_agent_id, false, None);
-        const OPEN_LOOPS_CHAR_LIMIT: usize = 2000;
         let open_loops_block = if super::helpers::open_loop_inject() {
             self.adopt_owner_curated_file(&open_loops_id, "OPEN_LOOPS.md")
                 .await;
@@ -146,9 +145,15 @@ impl MemoryContextProvider {
                 .with_file_name("OPEN_LOOPS.md");
             match tokio::fs::read_to_string(&path).await {
                 Ok(body) => {
+                    // Same clock shape the writer stamps with
+                    // (`SessionReflector`'s `today`), so "how old is this
+                    // capture" is answered in one calendar, not two.
+                    let today = chrono::Utc::now().format("%Y-%m-%d").to_string();
                     let block = crate::memory::curated::snapshot::render_open_loops_block(
                         &body,
-                        OPEN_LOOPS_CHAR_LIMIT,
+                        self.curated_config.open_loops_char_limit,
+                        self.curated_config.open_loops_max_age_days,
+                        &today,
                     );
                     (!block.is_empty()).then_some(block)
                 }
@@ -266,7 +271,7 @@ mod tests {
             .with_curated_config(CuratedConfig {
                 memory_char_limit: 200,
                 user_char_limit: 200,
-                legacy_warn_threshold: 0.95,
+                ..CuratedConfig::default()
             })
             .with_curated_root_for_test(root.to_path_buf())
     }
@@ -467,10 +472,14 @@ mod tests {
             .unwrap();
         // Mirrors the writer exactly: OPEN_LOOPS.md always lands under the
         // BARE dir, even for a project-scoped session (write side pins to
-        // `session_write_id(base, false, None)`).
+        // `session_write_id(base, false, None)`), and stamped through the
+        // writer's own header helper so the age ceiling reads it as fresh —
+        // this test is about WHICH directory is read, not about staleness.
+        let today = chrono::Utc::now().format("%Y-%m-%d").to_string();
+        let stamp = crate::memory::curated::snapshot::open_loops_capture_header(&today);
         tokio::fs::write(
             base.join("OPEN_LOOPS.md"),
-            "<!-- captured 2026-01-01 -->\n- bare open loop\n",
+            format!("{stamp}\n- bare open loop\n"),
         )
         .await
         .unwrap();
@@ -484,7 +493,7 @@ mod tests {
         // proves the pin, not just an accident of the file being absent.
         tokio::fs::write(
             scoped.join("OPEN_LOOPS.md"),
-            "<!-- captured 2026-01-01 -->\n- must never be read\n",
+            format!("{stamp}\n- must never be read\n"),
         )
         .await
         .unwrap();
@@ -511,6 +520,69 @@ mod tests {
         assert!(
             !rendered.contains("must never be read"),
             "OPEN_LOOPS.md read must NOT resolve the proj- dir: {rendered}"
+        );
+    }
+
+    /// The age ceiling has to be enforced where the block is actually built,
+    /// not just where it is rendered: `capture_curated` is the only production
+    /// caller, and a config knob that stops at the config struct is the
+    /// severed-wire shape this repo keeps re-finding. Asserts the EFFECT (a
+    /// stale capture never reaches the envelope), not that the call happened.
+    #[tokio::test]
+    async fn a_stale_open_loops_capture_never_reaches_the_envelope() {
+        use crate::memory::curated::snapshot::open_loops_capture_header;
+        crate::thinker::memory_context_provider::set_open_loop_inject(true);
+
+        let dir = tempfile::tempdir().unwrap();
+        let agent_dir = dir.path().join("agent-stale");
+        tokio::fs::create_dir_all(&agent_dir).await.unwrap();
+        tokio::fs::write(agent_dir.join("MEMORY.md"), "a durable fact\n§\n")
+            .await
+            .unwrap();
+
+        let long_ago = (chrono::Utc::now() - chrono::Duration::days(90))
+            .format("%Y-%m-%d")
+            .to_string();
+        tokio::fs::write(
+            agent_dir.join("OPEN_LOOPS.md"),
+            format!(
+                "{}\n- chase the deploy nobody remembers\n",
+                open_loops_capture_header(&long_ago)
+            ),
+        )
+        .await
+        .unwrap();
+
+        // Default ceiling (14 days) → the 90-day-old capture is dropped, while
+        // the rest of the envelope is unaffected.
+        let msg = provider_rooted_at(dir.path())
+            .build_curated_message("agent-stale", "ses-1")
+            .await
+            .unwrap();
+        let rendered = format!("{msg:?}");
+        assert!(rendered.contains("a durable fact"), "{rendered}");
+        assert!(
+            !rendered.contains("chase the deploy nobody remembers"),
+            "a 90-day-old capture must not be injected: {rendered}"
+        );
+
+        // Ceiling off → the same file is injected, proving the knob (not some
+        // unrelated read failure) is what suppressed it above.
+        let no_ceiling = provider_rooted_at(dir.path()).with_curated_config(
+            crate::memory::curated::CuratedConfig {
+                memory_char_limit: 200,
+                user_char_limit: 200,
+                open_loops_max_age_days: 0,
+                ..crate::memory::curated::CuratedConfig::default()
+            },
+        );
+        let msg = no_ceiling
+            .build_curated_message("agent-stale", "ses-2")
+            .await
+            .unwrap();
+        assert!(
+            format!("{msg:?}").contains("chase the deploy nobody remembers"),
+            "with the ceiling disabled the same capture must still arrive"
         );
     }
 

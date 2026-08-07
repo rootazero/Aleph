@@ -283,7 +283,7 @@ mod tests {
             }),
             CapabilityDeclaration::Skill(make_skill()),
             CapabilityDeclaration::Agent(make_agent()),
-            CapabilityDeclaration::McpServer(McpServerConfig {
+            CapabilityDeclaration::McpServer(McpServerConfig::Stdio {
                 command: "npx".to_string(),
                 args: vec![],
                 env: std::collections::HashMap::new(),

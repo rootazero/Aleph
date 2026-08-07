@@ -296,11 +296,7 @@ pub fn get_preset(name: &str) -> Option<&'static ProviderPreset> {
 /// The aux model is deliberately *not* a rung — it is the cheap tier for
 /// background jobs, not a failover candidate for the main loop.
 #[must_use]
-pub fn model_ladder(
-    name: &str,
-    base: Vec<String>,
-    operator_base_url: Option<&str>,
-) -> Vec<String> {
+pub fn model_ladder(name: &str, base: Vec<String>, operator_base_url: Option<&str>) -> Vec<String> {
     let mut models = base;
     if let Some(preset) = get_preset(name) {
         let unmoved = operator_base_url.is_none_or(|u| u == preset.base_url);

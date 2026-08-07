@@ -449,14 +449,19 @@ mod tests {
     fn loopback_resolves_to_owner_operator() {
         let store = seeded_store(); // in_memory + ensure_bootstrap_owner (ran in migrate)
         let (user, role) = resolve_connection_identity(true, None, &store);
-        assert_eq!(user.as_deref(), Some(crate::gateway::security::store::OWNER_USER_ID));
+        assert_eq!(
+            user.as_deref(),
+            Some(crate::gateway::security::store::OWNER_USER_ID)
+        );
         assert_eq!(role, "operator");
     }
 
     #[test]
     fn device_of_member_user_resolves_member_role() {
         let store = seeded_store();
-        store.create_user("u-alice", "Alice", UserRole::Member).unwrap();
+        store
+            .create_user("u-alice", "Alice", UserRole::Member)
+            .unwrap();
         upsert_panel_device(&store, "dev-a", "u-alice"); // fixture: upsert + set user_id
         let (user, role) = resolve_connection_identity(false, Some("dev-a"), &store);
         assert_eq!(user.as_deref(), Some("u-alice"));
@@ -466,7 +471,9 @@ mod tests {
     #[test]
     fn device_of_admin_user_resolves_operator_role() {
         let store = seeded_store();
-        store.create_user("u-root", "Root", UserRole::Admin).unwrap();
+        store
+            .create_user("u-root", "Root", UserRole::Admin)
+            .unwrap();
         upsert_panel_device(&store, "dev-r", "u-root");
         let (user, role) = resolve_connection_identity(false, Some("dev-r"), &store);
         assert_eq!(user.as_deref(), Some("u-root"));
@@ -488,8 +495,12 @@ mod tests {
     #[test]
     fn deactivated_user_resolves_guest() {
         let store = seeded_store();
-        store.create_user("u-gone", "Gone", UserRole::Member).unwrap();
-        store.update_user("u-gone", None, None, Some(UserStatus::Deactivated)).unwrap();
+        store
+            .create_user("u-gone", "Gone", UserRole::Member)
+            .unwrap();
+        store
+            .update_user("u-gone", None, None, Some(UserStatus::Deactivated))
+            .unwrap();
         upsert_panel_device(&store, "dev-g", "u-gone");
         let (user, role) = resolve_connection_identity(false, Some("dev-g"), &store);
         assert_eq!(user, None);
@@ -502,7 +513,10 @@ mod tests {
         // full operator as the implicit owner (zero-change guarantee).
         let store = seeded_store();
         let (user, role) = resolve_connection_identity(false, None, &store);
-        assert_eq!(user.as_deref(), Some(crate::gateway::security::store::OWNER_USER_ID));
+        assert_eq!(
+            user.as_deref(),
+            Some(crate::gateway::security::store::OWNER_USER_ID)
+        );
         assert_eq!(role, "operator");
     }
 
@@ -529,6 +543,8 @@ mod tests {
         }
         // The gate predicate refuses ONLY Some("member") — asserted at the
         // chokepoint test in Task 4; here we pin the classifier side.
-        assert!(!crate::gateway::method_admin::method_requires_admin("chat.send"));
+        assert!(!crate::gateway::method_admin::method_requires_admin(
+            "chat.send"
+        ));
     }
 }

@@ -154,9 +154,9 @@ fn render_message(channel: &str, agent_id: &str, outcome: &BindOutcome) -> Strin
         format!("Channel '{channel}' is already using agent '{agent_id}'.")
     } else {
         match outcome.previous_agent.as_deref() {
-            Some(prev) => format!(
-                "Switched channel '{channel}' from agent '{prev}' to '{agent_id}'."
-            ),
+            Some(prev) => {
+                format!("Switched channel '{channel}' from agent '{prev}' to '{agent_id}'.")
+            }
             None => format!("Bound channel '{channel}' to agent '{agent_id}'."),
         }
     }
@@ -268,7 +268,10 @@ mod tests {
             .await
             .unwrap_err();
         let msg = err.to_string();
-        assert!(msg.contains("no active channel") || msg.contains("No active channel"), "got: {msg}");
+        assert!(
+            msg.contains("no active channel") || msg.contains("No active channel"),
+            "got: {msg}"
+        );
     }
 
     #[tokio::test]
@@ -291,4 +294,3 @@ mod tests {
         assert!(out.message.contains("already using"));
     }
 }
-

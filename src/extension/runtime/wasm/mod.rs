@@ -9,6 +9,7 @@ mod capability_kernel;
 mod credential_injector;
 mod host_functions;
 mod limits;
+mod secret_resolver;
 
 pub use allowlist::{AllowlistError, AllowlistValidator};
 pub use capabilities::{
@@ -18,6 +19,9 @@ pub use capabilities::{
 pub use capability_kernel::{CapabilityError, WasmCapabilityKernel};
 pub use credential_injector::{inject_credential, CredentialError};
 pub use limits::WasmResourceLimits;
+pub use secret_resolver::{
+    shared_resolver, DenyAllSecretResolver, InMemorySecretResolver, SecretResolver,
+};
 
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -62,8 +66,30 @@ impl WasmRuntime {
         Self::default()
     }
 
-    /// Load a WASM plugin
+    /// Load a WASM plugin.
+    ///
+    /// Installs a [`DenyAllSecretResolver`] as the secret resolver — the
+    /// plugin can declare `http.credentials` but they will be no-ops until a
+    /// caller installs a real resolver via
+    /// [`WasmCapabilityKernel::with_secret_resolver`] (e.g. through
+    /// [`Self::load_plugin_with_secrets`]).
     pub fn load_plugin(&mut self, manifest: &PluginManifest) -> Result<(), ExtensionError> {
+        self.load_plugin_with_resolver(manifest, None)
+    }
+
+    /// Load a WASM plugin with an optional host-side secret resolver.
+    ///
+    /// When `resolver` is `None`, the kernel falls back to
+    /// [`DenyAllSecretResolver`] — outbound `http_fetch` calls then bypass
+    /// credential injection and the plugin must supply its own
+    /// `Authorization` header (the legacy behaviour). When the resolver is
+    /// `Some`, `inject_credential` runs host-side and the plugin guest never
+    /// sees the secret value.
+    pub fn load_plugin_with_resolver(
+        &mut self,
+        manifest: &PluginManifest,
+        resolver: Option<Arc<dyn SecretResolver>>,
+    ) -> Result<(), ExtensionError> {
         let wasm_path = manifest.entry_path()?;
 
         if !wasm_path.exists() {
@@ -79,12 +105,16 @@ impl WasmRuntime {
         let limits = manifest.wasm_resource_limits.clone().unwrap_or_default();
         let call_timeout = std::time::Duration::from_secs(limits.timeout_secs);
 
-        // Create per-plugin capability kernel
-        let kernel = Arc::new(WasmCapabilityKernel::new(
-            manifest.id.clone(),
-            capabilities,
-            limits,
-        ));
+        // Build the per-plugin kernel. The resolver is installed via the
+        // builder so the kernel can be cloned freely; the default
+        // deny-all resolver preserves the legacy "plugin supplies its own
+        // credentials" behaviour when no resolver is provided.
+        let resolver: Arc<dyn SecretResolver> =
+            resolver.unwrap_or_else(|| Arc::new(DenyAllSecretResolver));
+        let kernel = Arc::new(
+            WasmCapabilityKernel::new(manifest.id.clone(), capabilities, limits)
+                .with_secret_resolver(resolver),
+        );
 
         // Create host state for Extism UserData
         let host_state = UserData::new(host_functions::HostState {

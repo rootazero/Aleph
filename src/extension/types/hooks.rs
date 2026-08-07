@@ -408,15 +408,82 @@ pub struct HookConfig {
 // MCP Types
 // =============================================================================
 
-/// MCP server configuration
+/// MCP server configuration.
+///
+/// Aleph supports two transports:
+/// - [`McpServerConfig::Stdio`] — a local child process speaking MCP over
+///   stdio. The original and most common shape.
+/// - [`McpServerConfig::Remote`] — an HTTP/SSE endpoint that speaks MCP's
+///   Streamable HTTP / SSE wire format. Lets a plugin connect to a hosted MCP
+///   server without spawning a child process.
+///
+/// The `#[serde(tag = "type")]` shape means manifests / configs declare the
+/// transport explicitly: `{ "type": "stdio", "command": [...] }` or
+/// `{ "type": "remote", "url": "https://mcp.example.com/api" }`. A bare
+/// `{ "command": "npx", "args": [...] }` object (no `type`) deserialises as
+/// the default [`McpServerConfig::Stdio`] variant for backward compatibility.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct McpServerConfig {
-    /// Command to execute
-    pub command: String,
-    /// Command arguments
-    #[serde(default)]
-    pub args: Vec<String>,
-    /// Environment variables
-    #[serde(default)]
-    pub env: HashMap<String, String>,
+#[serde(tag = "type", rename_all = "lowercase")]
+pub enum McpServerConfig {
+    /// Local stdio MCP server (default — used when the `type` field is absent
+    /// or set to `stdio`).
+    #[serde(alias = "stdio")]
+    Stdio {
+        /// Command to execute
+        command: String,
+        /// Command arguments
+        #[serde(default)]
+        args: Vec<String>,
+        /// Environment variables
+        #[serde(default)]
+        env: HashMap<String, String>,
+    },
+    /// Remote MCP server (HTTP/SSE transport).
+    Remote {
+        /// Server URL
+        url: String,
+        /// Custom request headers
+        #[serde(default)]
+        headers: HashMap<String, String>,
+        /// OAuth credentials for the remote server
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        oauth: Option<crate::extension::config::OAuthConfig>,
+        /// Per-request timeout in milliseconds
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        timeout_ms: Option<u64>,
+    },
+}
+
+impl McpServerConfig {
+    /// Whether this server is a stdio transport (the original shape, which
+    /// PluginLoader spawns as a child process).
+    #[must_use]
+    pub const fn is_stdio(&self) -> bool {
+        matches!(self, Self::Stdio { .. })
+    }
+
+    /// Whether this server is a remote HTTP/SSE transport.
+    #[must_use]
+    pub const fn is_remote(&self) -> bool {
+        matches!(self, Self::Remote { .. })
+    }
+
+    /// Stdio-only accessor. Returns `None` for [`Self::Remote`] so callers
+    /// that assume a child process can be told "no process, this is HTTP".
+    #[must_use]
+    pub fn stdio_command(&self) -> Option<(&str, &[String], &HashMap<String, String>)> {
+        match self {
+            Self::Stdio { command, args, env } => Some((command, args, env)),
+            Self::Remote { .. } => None,
+        }
+    }
+
+    /// Remote-only accessor. Returns `None` for [`Self::Stdio`].
+    #[must_use]
+    pub fn remote_url(&self) -> Option<&str> {
+        match self {
+            Self::Remote { url, .. } => Some(url),
+            Self::Stdio { .. } => None,
+        }
+    }
 }

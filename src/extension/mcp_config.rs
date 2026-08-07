@@ -5,6 +5,8 @@
 //!
 //! # .mcp.json Format
 //!
+//! ## stdio transport (default)
+//!
 //! ```json
 //! {
 //!   "mcpServers": {
@@ -17,11 +19,44 @@
 //! }
 //! ```
 //!
+//! ## remote transports: `http` and `sse`
+//!
+//! ```json
+//! {
+//!   "mcpServers": {
+//!     "remote-server": {
+//!       "type": "http",
+//!       "url": "https://mcp.example.com/api",
+//!       "headers": { "Authorization": "Bearer ${ALEPH_PLUGIN_ROOT}/token" }
+//!     },
+//!     "event-server": {
+//!       "type": "sse",
+//!       "url": "https://events.example.com/sse"
+//!     }
+//!   }
+//! }
+//! ```
+//!
+//! `type` is the only transport discriminator, and its three legal values are
+//! `stdio` | `http` | `sse` — the same vocabulary `.mcp.json` uses elsewhere in
+//! the ecosystem. There is no `"remote"` value: "remote" names the *category*
+//! (`http` and `sse` both dial a URL), not a spelling you can put on the wire.
+//! Anything else is a hard parse error rather than a silently dropped server.
+//!
+//! The `type` field defaults to `stdio` when omitted, so existing plugin
+//! manifests continue to work unchanged.
+//!
 //! # Variable Substitution
 //!
-//! The following variables are expanded in `command`, `args`, and `env` values:
+//! The following variables are expanded in `command`, `args`, `url`, `env`,
+//! and `headers` values:
 //! - `${CLAUDE_PLUGIN_ROOT}` — absolute path to the plugin directory
 //! - `${ALEPH_PLUGIN_ROOT}` — same as above (Aleph alias)
+//!
+//! (`${ALEPH_PLUGIN_DATA}` lives in the higher-level `McpManagerConfig::env`
+//! / `McpManagerConfig::headers` substitution path, not here — those are
+//! resolved at spawn time by the manager actor so they see the
+//! post-`mcp.list` / `mcp.install` view of the user's data dir.)
 
 use std::collections::HashMap;
 use std::path::Path;
@@ -29,7 +64,7 @@ use std::path::Path;
 use serde::Deserialize;
 
 use crate::extension::error::{ExtensionError, ExtensionResult};
-use crate::mcp::McpManagerConfig;
+use crate::mcp::{McpManagerConfig, McpTransportType};
 
 /// Raw .mcp.json file structure
 #[derive(Debug, Deserialize)]
@@ -38,14 +73,35 @@ struct McpJsonFile {
     mcp_servers: HashMap<String, McpJsonServerEntry>,
 }
 
-/// A single server entry in .mcp.json
+/// A single server entry in .mcp.json.
+///
+/// Either a stdio entry (`command` + `args` + `env`) or a remote entry
+/// (`url` + `headers`). The `type` discriminator defaults to `stdio` when
+/// absent so existing plugins continue to parse.
 #[derive(Debug, Deserialize)]
 struct McpJsonServerEntry {
-    command: String,
+    /// The `type` discriminator. Named `transport` in Rust because that is
+    /// what it selects, but the **JSON key is `type`** — a sibling `transport`
+    /// key in `.mcp.json` is not read, and serde drops unknown keys silently,
+    /// so do not let prose here grow a second spelling for this one field.
+    #[serde(default = "default_transport", rename = "type")]
+    transport: String,
+    // stdio fields
+    #[serde(default)]
+    command: Option<String>,
     #[serde(default)]
     args: Vec<String>,
     #[serde(default)]
     env: HashMap<String, String>,
+    // remote fields
+    #[serde(default)]
+    url: Option<String>,
+    #[serde(default)]
+    headers: HashMap<String, String>,
+}
+
+fn default_transport() -> String {
+    "stdio".to_string()
 }
 
 /// Read `.mcp.json` from a plugin directory and return MCP manager configs.
@@ -97,22 +153,68 @@ fn parse_mcp_json_content(
         let server_id = format!("plugin:{plugin_id}/{server_name}");
         let display_name = format!("{server_name} ({plugin_id})");
 
-        let command = substitute_vars(&entry.command, &plugin_root);
-        let args: Vec<String> = entry
-            .args
-            .iter()
-            .map(|a| substitute_vars(a, &plugin_root))
-            .collect();
-        let env: HashMap<String, String> = entry
-            .env
-            .iter()
-            .map(|(k, v)| (k.clone(), substitute_vars(v, &plugin_root)))
-            .collect();
+        let transport = match entry.transport.as_str() {
+            "stdio" => McpTransportType::Stdio,
+            "http" => McpTransportType::Http,
+            "sse" => McpTransportType::Sse,
+            other => {
+                return Err(format!(
+                    "unknown MCP transport type '{other}' for server '{server_name}' \
+                 (expected one of: stdio, http, sse)"
+                ))
+            }
+        };
 
-        let config = McpManagerConfig::stdio(&server_id, &display_name, &command)
-            .with_args(args)
-            .with_env(env)
-            .with_auto_start(true);
+        let config = match transport {
+            McpTransportType::Stdio => {
+                // stdio entries require `command`. Refuse ambiguous configs
+                // rather than spawning a phantom process.
+                let command = entry.command.ok_or_else(|| {
+                    format!(
+                        "MCP stdio server '{server_name}' is missing 'command' \
+                         (either add it or set `\"type\": \"http\"` with a `url`)"
+                    )
+                })?;
+                let cmd = substitute_vars(&command, &plugin_root);
+                let args: Vec<String> = entry
+                    .args
+                    .iter()
+                    .map(|a| substitute_vars(a, &plugin_root))
+                    .collect();
+                let env: HashMap<String, String> = entry
+                    .env
+                    .iter()
+                    .map(|(k, v)| (k.clone(), substitute_vars(v, &plugin_root)))
+                    .collect();
+                McpManagerConfig::stdio(&server_id, &display_name, &cmd)
+                    .with_args(args)
+                    .with_env(env)
+                    .with_auto_start(true)
+            }
+            McpTransportType::Http | McpTransportType::Sse => {
+                // remote entries require `url`. Refuse ambiguous configs.
+                let url = entry.url.ok_or_else(|| {
+                    format!(
+                        "MCP remote server '{server_name}' is missing 'url' \
+                         (either add it or set `\"type\": \"stdio\"` with a `command`)"
+                    )
+                })?;
+                let url = substitute_vars(&url, &plugin_root);
+                let headers: HashMap<String, String> = entry
+                    .headers
+                    .iter()
+                    .map(|(k, v)| (k.clone(), substitute_vars(v, &plugin_root)))
+                    .collect();
+                let mut config = if transport == McpTransportType::Sse {
+                    McpManagerConfig::sse(&server_id, &display_name, &url)
+                } else {
+                    McpManagerConfig::http(&server_id, &display_name, &url)
+                };
+                config.headers = headers;
+                config.auto_start = true;
+                config
+            }
+        };
 
         result.insert(server_id, config);
     }
@@ -244,5 +346,168 @@ mod tests {
         let config = &result["plugin:my-plugin/srv"];
         assert_eq!(config.id, "plugin:my-plugin/srv");
         assert!(config.name.contains("my-plugin"));
+    }
+
+    #[test]
+    fn test_parse_mcp_json_remote_http_transport() {
+        let content = r#"{
+            "mcpServers": {
+                "remote-srv": {
+                    "type": "http",
+                    "url": "https://mcp.example.com/api",
+                    "headers": { "Authorization": "Bearer ${ALEPH_PLUGIN_ROOT}/token" }
+                }
+            }
+        }"#;
+
+        let result = parse_mcp_json_content(content, Path::new("/p/x"), "remote-plugin").unwrap();
+
+        let config = result
+            .get("plugin:remote-plugin/remote-srv")
+            .expect("server must be registered");
+        use crate::mcp::McpTransportType;
+        assert_eq!(config.transport, McpTransportType::Http);
+        assert_eq!(config.url.as_deref(), Some("https://mcp.example.com/api"));
+        assert_eq!(
+            config.command, None,
+            "remote transport must not carry a command"
+        );
+        assert!(config.args.is_empty());
+        assert!(config.auto_start, "remote servers auto-start by default");
+        assert_eq!(
+            config.headers.get("Authorization").map(String::as_str),
+            Some("Bearer /p/x/token"),
+            "expected plugin_root + /token substitution in the Authorization header"
+        );
+    }
+
+    /// The module doc promises `${ALEPH_PLUGIN_DATA}` is *not* expanded here —
+    /// it belongs to the manager actor's spawn-time pass, which is the only
+    /// one that sees the post-`mcp.install` view of the data dir. That
+    /// contract had no test, and the first thing to reach for it was a typo
+    /// in the test above asserting the opposite.
+    #[test]
+    fn plugin_data_var_survives_this_layer_untouched() {
+        let content = r#"{
+            "mcpServers": {
+                "srv": {
+                    "type": "http",
+                    "url": "https://mcp.example.com/api",
+                    "headers": { "Authorization": "Bearer ${ALEPH_PLUGIN_DATA}/token" }
+                }
+            }
+        }"#;
+
+        let result = parse_mcp_json_content(content, Path::new("/p/x"), "p").unwrap();
+        let config = result.get("plugin:p/srv").unwrap();
+        assert_eq!(
+            config.headers.get("Authorization").map(String::as_str),
+            Some("Bearer ${ALEPH_PLUGIN_DATA}/token"),
+            "this layer must hand ${{ALEPH_PLUGIN_DATA}} onward verbatim"
+        );
+    }
+
+    #[test]
+    fn test_parse_mcp_json_remote_sse_transport() {
+        let content = r#"{
+            "mcpServers": {
+                "events": {
+                    "type": "sse",
+                    "url": "https://events.example.com/sse"
+                }
+            }
+        }"#;
+
+        let result = parse_mcp_json_content(content, Path::new("/p/x"), "ev").unwrap();
+        use crate::mcp::McpTransportType;
+        let config = result.get("plugin:ev/events").unwrap();
+        assert_eq!(config.transport, McpTransportType::Sse);
+        assert_eq!(
+            config.url.as_deref(),
+            Some("https://events.example.com/sse")
+        );
+    }
+
+    #[test]
+    fn test_parse_mcp_json_default_transport_is_stdio() {
+        // Bare entry without `type` must still parse as stdio (backward-compat).
+        let content = r#"{
+            "mcpServers": {
+                "legacy": { "command": "node", "args": ["server.js"] }
+            }
+        }"#;
+        let result = parse_mcp_json_content(content, Path::new("/p/x"), "legacy").unwrap();
+        use crate::mcp::McpTransportType;
+        let config = result.get("plugin:legacy/legacy").unwrap();
+        assert_eq!(config.transport, McpTransportType::Stdio);
+        assert_eq!(config.command.as_deref(), Some("node"));
+    }
+
+    #[test]
+    fn test_parse_mcp_json_stdio_without_command_errors() {
+        let content = r#"{
+            "mcpServers": {
+                "broken": { "args": ["x"] }
+            }
+        }"#;
+        let err = parse_mcp_json_content(content, Path::new("/p/x"), "broken").unwrap_err();
+        assert!(
+            err.contains("missing 'command'"),
+            "stdio without command must be a hard error: {err}"
+        );
+    }
+
+    #[test]
+    fn test_parse_mcp_json_remote_without_url_errors() {
+        let content = r#"{
+            "mcpServers": {
+                "broken": { "type": "http", "headers": {} }
+            }
+        }"#;
+        let err = parse_mcp_json_content(content, Path::new("/p/x"), "broken").unwrap_err();
+        assert!(
+            err.contains("missing 'url'"),
+            "remote without url must be a hard error: {err}"
+        );
+    }
+
+    #[test]
+    fn test_parse_mcp_json_unknown_transport_errors() {
+        let content = r#"{
+            "mcpServers": {
+                "broken": { "type": "telnet" }
+            }
+        }"#;
+        let err = parse_mcp_json_content(content, Path::new("/p/x"), "broken").unwrap_err();
+        assert!(
+            err.contains("unknown MCP transport type 'telnet'"),
+            "unknown transport must surface a clear error: {err}"
+        );
+    }
+
+    /// `"remote"` is the one wrong spelling with a pedigree: this module's own
+    /// doc comment, its stdio error hint, and three of its tests all promised
+    /// it while the parser never accepted it, so it shipped as four statements
+    /// of a fact only one of which was true. It stays rejected — but the
+    /// rejection has to name the legal set, because the people who reach this
+    /// error are the ones who read the old docs.
+    #[test]
+    fn the_remote_spelling_is_rejected_and_the_error_names_the_legal_set() {
+        let content = r#"{
+            "mcpServers": {
+                "srv": { "type": "remote", "url": "https://mcp.example.com/api" }
+            }
+        }"#;
+        let err = parse_mcp_json_content(content, Path::new("/p/x"), "remote-plugin").unwrap_err();
+        assert!(
+            err.contains("unknown MCP transport type 'remote'"),
+            "'remote' must be rejected, not silently coerced: {err}"
+        );
+        for legal in ["stdio", "http", "sse"] {
+            assert!(
+                err.contains(legal),
+                "error must point at '{legal}' so the author can fix it: {err}"
+            );
+        }
     }
 }

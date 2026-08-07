@@ -111,6 +111,13 @@ struct CandidatePlan {
     /// now. Empty whenever no ceilings are configured (the default), so the
     /// gate below is a no-op on an unconfigured deployment.
     saturated: std::collections::HashSet<String>,
+    /// The single route-state generation this plan was ordered from. Carried
+    /// so the walk's gates (the saturation gate's pin exemption) and the
+    /// empty-chain error read the SAME snapshot that produced the candidate
+    /// set — re-reading the live handle mid-walk could observe a config that
+    /// hot-swapped in after the ordering pass and name a mode that had nothing
+    /// to do with why the chain is empty.
+    route: Arc<RouteState>,
 }
 
 /// One step of the chain the next request would walk, as rendered by
@@ -486,6 +493,7 @@ impl FailoverProvider {
                 load_balance: LoadBalanceStrategy::default(),
                 targets: Arc::new(RouteTargets::default()),
                 limits: Arc::new(RateLimits::default()),
+                health_probe_interval_secs: 0,
             }),
         }
     }
@@ -755,6 +763,7 @@ impl FailoverProvider {
         CandidatePlan {
             candidates: out,
             saturated,
+            route,
         }
     }
 
@@ -1000,12 +1009,26 @@ impl FailoverProvider {
                 // a later candidate, and is still attempted when it is the last
                 // one (the chain must never starve).
                 //
+                // A pinned provider is EXEMPT, judged by the same
+                // `targets.is_pinned` the ordering used: an operator pin is an
+                // explicit hard signal, and `order_candidates_balanced` already
+                // promises a pin leads its tier even when rate-saturated ("pin
+                // beats the over-limit gate"). Skipping it here anyway made the
+                // two halves of the same rule contradict each other — the pin
+                // sorted first and was then passed over. The exemption covers
+                // capacity yield only: the circuit-breaker and pacing gates
+                // still skip a pinned candidate, because a pin does not exempt
+                // failure.
+                //
                 // Without this the ceiling only ever *re-ordered* the fallback
                 // pool, and the primary slot — which is not part of that pool —
                 // ignored it completely: on a single-provider or primary-heavy
                 // deployment `[route].rate_limits` changed nothing at all
                 // except a number in `route_status`.
-                if plan.saturated.contains(&cand.name) && idx + 1 < total {
+                if plan.saturated.contains(&cand.name)
+                    && !plan.route.targets.is_pinned(&cand.name)
+                    && idx + 1 < total
+                {
                     tracing::debug!(
                         provider = %cand.name,
                         "failover: provider at its configured rate ceiling, deferring \
@@ -1143,7 +1166,14 @@ impl FailoverProvider {
                         // provider a moment later — counting both would publish
                         // a phantom provider row whose latency is the sum of two
                         // nested dials (see `NESTED_CHAIN_NODE`).
-                        let _load_guard = self
+                        //
+                        // Named (not `_`-prefixed) so the RetrySame arm can drop
+                        // it BEFORE the backoff sleep: the attempt is over once
+                        // the error is classified, and holding the count through
+                        // the sleep made a provider that is merely *waiting to
+                        // retry* look in-flight for the whole backoff — LeastBusy
+                        // and the rate windows read that as real load.
+                        let load_guard = self
                             .load
                             .as_ref()
                             .filter(|_| cand.name != super::NESTED_CHAIN_NODE)
@@ -1169,7 +1199,7 @@ impl FailoverProvider {
                                 // LatencyAware ordering reflects reality, and the
                                 // token usage into the rolling rate window so
                                 // UsageBased / the over-limit gate see real TPM.
-                                if let Some(g) = &_load_guard {
+                                if let Some(g) = &load_guard {
                                     g.record_latency(started.elapsed());
                                     if let Some(u) = &resp.usage {
                                         g.record_tokens(billed_tokens(u));
@@ -1279,6 +1309,12 @@ impl FailoverProvider {
                                         delay_ms = jittered.as_millis() as u64,
                                         error = %e, "failover: transient, retrying in place",
                                     );
+                                    // The attempt ended with the error; only the
+                                    // wait remains. Release the in-flight count
+                                    // before sleeping so the backoff does not
+                                    // read as load (a fresh guard is taken when
+                                    // the retry actually goes out).
+                                    drop(load_guard);
                                     tokio::time::sleep(jittered).await;
                                     attempt += 1;
                                     continue;
@@ -1358,8 +1394,12 @@ impl FailoverProvider {
             Err(last_error.unwrap_or_else(|| {
                 if total == 0 {
                     // Nothing was attempted, so there is no provider error to
-                    // report — only the policy that emptied the chain.
-                    empty_chain_error(self.route_snapshot().mode)
+                    // report — only the policy that emptied the chain. Read the
+                    // mode from the SAME route generation that ordered the
+                    // (empty) candidate set: re-reading the live handle here
+                    // could name a mode that hot-swapped in after the ordering
+                    // pass and had no part in emptying the chain.
+                    empty_chain_error(plan.route.mode)
                 } else {
                     AlephError::provider(format!("all {total} failover candidates failed"))
                 }

@@ -551,7 +551,6 @@ mod review_tests {
             .list_tasks(CoordTaskFilter {
                 team_id: Some("t1".into()),
                 status: Some(CoordTaskStatus::Unsatisfiable),
-                ..Default::default()
             })
             .await
             .unwrap();
@@ -562,7 +561,6 @@ mod review_tests {
             .list_tasks(CoordTaskFilter {
                 team_id: Some("t1".into()),
                 status: Some(CoordTaskStatus::Blocked),
-                ..Default::default()
             })
             .await
             .unwrap();

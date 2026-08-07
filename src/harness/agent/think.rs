@@ -598,6 +598,21 @@ impl AgentHarness {
             }
         };
 
+        // Overflow drain (claude-code parity; explicit ContextWindowExceeded +
+        // pi-Case-3 silent truncated overflow). Runs BEFORE the empty-response
+        // and resume-nudge loops: those append/re-issue against an already-full
+        // prompt, while the drain compacts first. Bounded by the rescue's
+        // one-shot cap. See `rescue::drain_context_overflow`.
+        rescue::drain_context_overflow(
+            self,
+            &mut response,
+            &mut response_was_streamed,
+            &rescue_cx,
+            &mut messages,
+            parent_cancel,
+        )
+        .await?;
+
         // 3a. Empty-response guard (H3). A response with no text, no
         // tool_calls and no thinking is a provider failure mode, not a
         // terminal turn — left unchecked it is misreported to the user as a
@@ -642,23 +657,6 @@ impl AgentHarness {
                 }
             };
         }
-        // 3b-pre. Context-window-exceeded recovery (claude-code parity).
-        // `model_context_window_exceeded` means the *context window* — not
-        // the output cap — filled mid-generation. The resume-nudge loop in
-        // 3b would append more messages and re-hit the wall, so route this to
-        // reactive compaction FIRST, before 3b ever appends. The drain helper
-        // is bounded by the one-shot reactive-compact cap, so a model that
-        // keeps overflowing cannot spin. See `rescue::drain_context_overflow`.
-        rescue::drain_context_overflow(
-            self,
-            &mut response,
-            &mut response_was_streamed,
-            &rescue_cx,
-            &mut messages,
-            parent_cancel,
-        )
-        .await?;
-
         // 3b. max_output_tokens recovery (claude-code parity, query.ts:1188).
         // When the provider hits its output-token cap mid-stream we get
         // `stop_reason == MaxTokens` plus whatever partial text it managed
@@ -734,9 +732,9 @@ impl AgentHarness {
         }
         // 3b-post. The 3b resume loop appends a partial + nudge to `messages`
         // and re-issues; that larger request can itself overflow the *context
-        // window*, yielding a `ContextWindowExceeded` response that the 3b-pre
-        // drain (which ran before 3b) already passed. Drain it again here so a
-        // post-resume overflow is recovered instead of slipping through as a
+        // window*, yielding a `ContextWindowExceeded` (or silent-overflow)
+        // response that the pre-3a drain already passed. Drain it again here so
+        // a post-resume overflow is recovered instead of slipping through as a
         // degraded terminal turn. The same one-shot reactive-compact cap bounds
         // both drains jointly — a second overflow after the cap is spent
         // surfaces the error rather than spinning. No-op (zero LLM cost) on the

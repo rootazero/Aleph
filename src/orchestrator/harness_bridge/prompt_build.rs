@@ -857,6 +857,13 @@ async fn resolve_prompt_context(
     // exact partition the tool surface was built with. `None` on internal /
     // subagent dispatch leaves the mode line absent.
     resolved_context.session_mode = envelope.session_mode;
+    // Sub-agent binding: forwarded verbatim from the envelope so the
+    // `<environment_context>` block can print `<parent kind="…">…</parent>` for
+    // sub-agent / team / background dispatches that carry a parent session.
+    // The discriminator is chosen by the dispatcher (validated against the
+    // few allowed tokens at the run-loop boundary, not here — pure pass-through
+    // in the harness bridge per R7/R10, "no judgment near the wire").
+    resolved_context.envelope_parent = envelope.parent.clone();
     resolved_context
 }
 

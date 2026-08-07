@@ -518,6 +518,9 @@ impl ToolRegistry for BuiltinToolRegistry {
             "browser_wait_for" => {
                 Box::pin(async move { self.browser_wait_for_tool.call_json(arguments).await })
             }
+            "browser_batch" => {
+                Box::pin(async move { self.browser_batch_tool.call_json(arguments).await })
+            }
             "browser_console" => {
                 Box::pin(async move { self.browser_console_tool.call_json(arguments).await })
             }
@@ -790,7 +793,8 @@ impl ToolRegistry for BuiltinToolRegistry {
 
             // Agent management tools — snapshot session context into arguments
             // to avoid race conditions from concurrent reads of the shared handle.
-            "agent_create" | "agent_list" | "agent_delete" | "agent_switch" | "agent_unbind" | "agent_update" => {
+            "agent_create" | "agent_list" | "agent_delete" | "agent_switch" | "agent_unbind"
+            | "agent_update" => {
                 // Snapshot session context into tool arguments before async execution
                 let arguments = {
                     let mut args = arguments;
@@ -846,7 +850,9 @@ impl ToolRegistry for BuiltinToolRegistry {
                     }),
                     "agent_update" => Box::pin(async move {
                         let tool = self.agent_update_tool.as_ref().ok_or_else(|| {
-                            AlephError::tool("agent_update not available: no AgentRegistry configured")
+                            AlephError::tool(
+                                "agent_update not available: no AgentRegistry configured",
+                            )
                         })?;
                         tool.call_json(arguments).await
                     }),

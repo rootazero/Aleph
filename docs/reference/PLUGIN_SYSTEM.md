@@ -364,6 +364,41 @@ MCP 插件的 `.mcp.json` server 现已作为 **transient（仅运行时，不�
 - **卸载清理**：`unload_runtime_plugin` 在卸载前捕获 server id，卸载后 `remove_transient_server` 拆除，避免残留进程/工具。
 - `list_servers` 同时列出 transient client（不止 config），使 `mcp.list` 与 tool bridge 的 lag-recovery `resync_all` 都能感知插件 server。
 
+### 远程 MCP transport
+
+`.mcp.json` 现支持 HTTP/SSE 远程 transport，格式与 CC 兼容：
+
+```json
+{
+  "mcpServers": {
+    "remote-srv": {
+      "type": "remote",
+      "url": "https://mcp.example.com/api",
+      "headers": { "Authorization": "Bearer ${ALEPH_PLUGIN_ROOT}/token" }
+    },
+    "events": {
+      "type": "remote",
+      "url": "https://events.example.com/sse",
+      "transport": "sse"
+    }
+  }
+}
+```
+
+`type` 默认是 `stdio`，所以现有插件无需修改。`McpServerConfig` 现在是 enum：
+`Stdio { command, args, env } | Remote { url, headers, oauth?, timeout_ms? }`，由
+`PluginLoader::load_mcp_plugin` 直接路由到对应的 `McpTransportType`。`McpJsonServerEntry`
+解析器对缺失字段（stdio 无 `command` / remote 无 `url` / 未知 `type`）做 hard error，
+不让 spawn 进入半配置状态。
+
+### 内联 MCP 工具自动发现
+
+`McpScope::provision` 在 spawn 完所有 inline MCP server 后，立刻调用每个
+`InlineMcpHandle.process.list_tools()` 并把返回的工具转换为
+`ToolRegistration`（name 命名空间化为 `<server>:<tool>`，`plugin_id = "inline:<server>"`）。
+子 agent 的工具表面现在能看到 inline server 的工具，而不只是 referenced global tools。
+失败 list 的 inline server 不会破坏其他 server——降级 log。
+
 ### WASM Tool Discovery
 当前状态：WASM 插件可加载，但工具未自动注册。
 需要：从 WASM 模块导出函数列表中发现并注册 tools。
@@ -371,6 +406,70 @@ MCP 插件的 `.mcp.json` server 现已作为 **transient（仅运行时，不�
 ### Aleph-plugins 仓库
 当前状态：目录结构已迁移到 CC 兼容格式（`.claude-plugin/plugin.toml`），Node.js 插件标记为 `runtime = "mcp"` 但 `src/index.js` 仍是旧 IPC 格式。
 需要：将每个 Node.js 插件的入口文件改为 MCP Server SDK 实现。
+
+---
+
+## WASM Credential Injection（host-side 落地）
+
+WASM plugin 的 `http.credentials: Vec<CredentialBinding>` 字段声明 host-pattern +
+secret 名 + 注入策略（Bearer/Basic/Header/Query/UrlPath）。host 端的
+`host_functions::try_http_fetch` 现在在 egress 前实际调用
+`credential_injector::inject_credential`，通过 `WasmCapabilityKernel` 持有的
+`SecretResolver` 解析 secret 名。Plugin guest 永远不接触明文 secret 值——这是
+**live property**，不再是 goal。
+
+`SecretResolver` trait + `InMemorySecretResolver` / `DenyAllSecretResolver` 实现在
+`src/extension/runtime/wasm/secret_resolver.rs`。生产部署可通过自定义 resolver
+对接 Aleph vault（替换默认的 deny-all）。已修复 `WasmCapabilityKernel` 的 header
+注释中 "NOT yet done" 的过时措辞。
+
+---
+
+## Manifest 解析缓存（openclaw parity）
+
+`manifest_cache::ManifestCache`（`src/extension/manifest/manifest_cache.rs`）—
+LRU（512 条），key = `(canonical path, size, mtime, ctime, dev, ino)`。Boot 时
+`parse_manifest_from_dir_cached_global(dir)` 自动咨询/填充；热重载期间任何
+in-place 编辑都会改变 key tuple，cache 自然 miss。openclaw 也有相同模式
+（`plugin-cache-primitives.createPluginCacheKey`），但 Aleph 版本借助 Rust
+类型系统多加了 `dev`/`ino` 字段以对抗硬链接替换。
+
+---
+
+## Lazy Activation Planner（P3.5 — openclaw parity）
+
+Aleph 现在支持 plugin manifest 声明**懒激活 hint**，boot 时不一定要加载所有插件：
+
+```toml
+[plugin.activation]
+on_commands      = ["/my-plugin:list", "/my-plugin:refine"]
+on_providers     = ["my-custom-llm"]
+on_channels      = ["telegram"]
+on_capabilities  = ["tool", "hook"]
+on_agent_harnesses = ["research"]
+```
+
+`ActivationPlanner::plan(trigger, &PlanInput)` 给定 trigger（command/provider/channel/
+capability/agent_harness/route）返回应该激活的 plugin id 列表 + 每个 plugin 的
+reason。匹配规则：legacy `None` hints = always load（向后兼容）；`Some(empty)`
+= matches nothing（manifest 配置错误，会被 `load_all` 日志告警）；`Some(non-empty)`
+= 精确匹配（command/provider/channel/route 是 case-insensitive）。
+
+TOML 解析当前返回 `None`（保留旧行为）。JSON adapter 可直接读到 `activation`
+字段（cc_plugin_json 的 `PluginManifest` Deserialize）。
+
+---
+
+## Owner Trust Policy（P3.5 — openclaw parity）
+
+Aleph 暴露 `OwnerTrustPolicy::permissive()` (默认) 和
+`OwnerTrustPolicy::restrictive(allowlist)`。restrictive 模式下，`Bundled` 和
+`Config` origin 的插件始终可加载；`Workspace` 和 `Global` origin 的插件必须在
+allowlist 中。`ExtensionManager::set_owner_trust_policy(policy)` 切换策略；
+`current_owner_trust_policy()` 暴露给 operator。`LoadSummary.skipped_by_trust`
+记录被策略跳过的 plugin 数，让 operator 看到"装了但没启用"的 plugin。
+
+这对应 openclaw 的 `passesManifestOwnerBasePolicy` + bundled 短路。
 
 ---
 

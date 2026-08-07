@@ -286,8 +286,10 @@ mod is_clipboard_enabled_master_switch {
 
     #[test]
     fn master_disabled_forces_clipboard_off_regardless_of_per_tool_flag() {
-        let mut cfg = UnifiedToolsConfig::default();
-        cfg.enabled = false;
+        let mut cfg = UnifiedToolsConfig {
+            enabled: false,
+            ..Default::default()
+        };
         cfg.native.clipboard = Some(ClipboardToolConfig { enabled: true });
         assert!(
             !cfg.is_clipboard_enabled(),

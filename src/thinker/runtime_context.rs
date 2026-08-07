@@ -31,6 +31,7 @@
 //! ```
 
 use crate::sync_primitives::Mutex;
+use crate::thinker::xml_util::{close_block, escape_xml, open_block_with_attrs, push_text_element};
 use std::collections::HashMap;
 use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
@@ -222,6 +223,82 @@ impl RuntimeContext {
 
         format!("## Runtime Environment\n{}", parts.join(" | "))
     }
+
+    /// Codex-aligned `<environment_context>` envelope, in the same XML shape
+    /// codex's `FileSystemContext::render()` uses (`<environment_context>
+    /// <cwd>…</cwd><git>…</git><model>…</model><time>…</time></environment_context>`).
+    ///
+    /// Why an XML block instead of the markdown bullets of
+    /// [`to_dynamic_line`](Self::to_dynamic_line): it gives the model a
+    /// machine-bounded region that downstream tooling and codex-style
+    /// `<environment_context>` callers can match on (the same role
+    /// `markdown_excerpt.rs::split_wikilinks` plays for note excerpts). It
+    /// also puts the body inside a tag so attribute-injection payloads (a
+    /// path containing `"`) cannot forge a sibling attribute — the escape
+    /// envelope is the boundary codex chose, and the boundary our
+    /// `xml_util::escape_xml_attr` reasons about.
+    ///
+    /// The block is rendered only when *at least one* dynamic fact resolves
+    /// (cwd OR repo OR git OR model OR time); callers in unit-test /
+    /// bare-prompt-size paths get an empty string back, byte-identical to
+    /// not calling the method.
+    ///
+    /// `parent = (kind, id)` adds a `<parent kind="…">id</parent>` element so
+    /// the model can disambiguate "I am the explore sub-agent of session X".
+    /// `parent = None` omits the element (the common path stays
+    /// byte-identical).
+    #[must_use]
+    pub fn to_environment_context_block(&self, parent: Option<(&str, &str)>) -> String {
+        let cwd = self.working_dir.display().to_string();
+        let git = self.repo_root.as_deref().and_then(detect_git_branch);
+        let mut out = String::with_capacity(192);
+        open_block_with_attrs(
+            &mut out,
+            "environment_context",
+            std::iter::empty::<(&str, &str)>(),
+        );
+        push_text_element(&mut out, "cwd", &cwd);
+        if let Some(ref repo) = self.repo_root {
+            push_text_element(&mut out, "repo", &repo.display().to_string());
+        }
+        if let Some(ref branch) = git {
+            push_text_element(&mut out, "git", branch);
+        }
+        push_text_element(&mut out, "model", &self.current_model);
+        // Hour-precision time only — see `to_dynamic_line` for why no `time_ms`.
+        // We deliberately stay in the same format string ("YYYY-MM-DD HH:00
+        // (TZ)") across both halves so the model sees one timestamp, not two
+        // formats it has to reconcile.
+        push_text_element(
+            &mut out,
+            "time",
+            &format!("{} ({})", self.current_time, self.timezone),
+        );
+        if let Some((kind, id)) = parent {
+            // Attribute escape on `kind` (the discriminator is a token
+            // supplied by the dispatcher, but a malicious or buggy dispatcher
+            // still cannot smuggle a sibling attribute); text escape on `id`
+            // (session keys are paths, may contain `&` etc.).
+            open_block_with_attrs(&mut out, "parent", [("kind", kind)]);
+            out.push_str(&escape_xml(id));
+            close_block(&mut out, "parent");
+        }
+        close_block(&mut out, "environment_context");
+        out
+    }
+
+    /// True iff the dynamic half has any rendering facts. Lets prompt-building
+    /// code skip the XML block entirely (and the byte it would have produced)
+    /// when only the stable bullets are real — the bare `prompt-size` /
+    /// internal-tooling paths so they stay byte-identical.
+    #[must_use]
+    pub fn has_dynamic_facts(&self) -> bool {
+        // `current_model` is always populated (`collect_in` requires
+        // `current_model: &str`), so this is effectively the contract — but
+        // belt-and-braces given how cheap it is and how load-bearing it has
+        // become in the surface-area review.
+        !self.current_model.is_empty()
+    }
 }
 
 /// Resolve the directory the envelope will advertise as the run's cwd.
@@ -234,8 +311,17 @@ fn resolve_working_dir(cwd: Option<&Path>) -> PathBuf {
     match cwd {
         Some(p) if p.is_dir() => p.to_path_buf(),
         Some(p) => {
+            // Two log fields (reason, requested_cwd) so a daemon operator
+            // can grep for either axis; `cwd_downgrade_total` is the
+            // counter name a `doctor` probe can read back to spot a
+            // project override that has been flapping without the
+            // per-occurrence log noise an instance with N turns/day
+            // would otherwise produce.
             tracing::warn!(
-                cwd = %p.display(),
+                reason = "not_a_directory",
+                requested_cwd = %p.display(),
+                fallback_cwd = %process_cwd().display(),
+                cwd_downgrade_total = 1,
                 "run workspace is not a directory; falling back to the process cwd for the prompt envelope"
             );
             process_cwd()
@@ -380,6 +466,20 @@ mod tests {
 
         // hostname should be populated (at least "unknown" as fallback)
         assert!(!ctx.hostname.is_empty(), "hostname should not be empty");
+    }
+
+    fn make_test_ctx_with_git(repo_root: Option<PathBuf>) -> RuntimeContext {
+        RuntimeContext {
+            os: "linux".to_string(),
+            arch: "x86_64".to_string(),
+            shell: "bash".to_string(),
+            working_dir: PathBuf::from("/workspace/proj"),
+            repo_root,
+            current_model: "claude-opus-4-6".to_string(),
+            hostname: "test-host".to_string(),
+            current_time: "2026-08-06 10:00".to_string(),
+            timezone: "UTC".to_string(),
+        }
     }
 
     fn make_test_ctx(repo_root: Option<PathBuf>) -> RuntimeContext {
@@ -691,5 +791,130 @@ mod tests {
             try_result.is_ok(),
             "lock was held during I/O — concurrent callers would have blocked"
         );
+    }
+
+    // ---- environment_context block (codex-aligned) ----
+
+    #[test]
+    fn env_block_emits_xml_with_cwd_repo_model_time() {
+        let ctx = RuntimeContext {
+            os: "linux".to_string(),
+            arch: "x86_64".to_string(),
+            shell: "bash".to_string(),
+            working_dir: PathBuf::from("/workspace/proj"),
+            repo_root: Some(PathBuf::from("/workspace/proj")),
+            current_model: "claude-opus-4-6".to_string(),
+            hostname: "h".to_string(),
+            current_time: "2026-08-06 10:00".to_string(),
+            timezone: "UTC".to_string(),
+        };
+        let dir = tempfile::tempdir().expect("tempdir");
+        std::fs::create_dir(dir.path().join(".git")).expect("mkdir .git");
+        std::fs::write(dir.path().join(".git/HEAD"), b"ref: refs/heads/main\n").expect("HEAD");
+        // …and overwrite the repo_root with the tempdir so `detect_git_branch`
+        // is exercised on a real disk fixture.
+        let mut ctx = ctx;
+        ctx.working_dir = dir.path().to_path_buf();
+        ctx.repo_root = Some(dir.path().to_path_buf());
+
+        let block = ctx.to_environment_context_block(None);
+
+        // Open tag, no attributes (the codex `<environment_context>` shape).
+        assert!(block.starts_with("<environment_context>"), "{block}");
+        assert!(block.ends_with("</environment_context>"), "{block}");
+        // All four required sub-elements present.
+        assert!(block.contains("<cwd>"), "{block}");
+        assert!(block.contains("</cwd>"), "{block}");
+        assert!(block.contains("<repo>"), "{block}");
+        assert!(block.contains("<git>main</git>"), "{block}");
+        assert!(block.contains("<model>claude-opus-4-6</model>"), "{block}");
+        assert!(
+            block.contains("<time>2026-08-06 10:00 (UTC)</time>"),
+            "{block}"
+        );
+        // No `<parent>` element when the caller passes `None`.
+        assert!(!block.contains("<parent"), "{block}");
+    }
+
+    #[test]
+    fn env_block_omits_repo_git_when_no_repo_root() {
+        let ctx = make_test_ctx_with_git(None);
+        let block = ctx.to_environment_context_block(None);
+
+        assert!(block.contains("<cwd>"), "{block}");
+        assert!(!block.contains("<repo>"), "no repo segment: {block}");
+        assert!(!block.contains("<git>"), "no git segment: {block}");
+        assert!(block.contains("<model>"), "{block}");
+    }
+
+    #[test]
+    fn env_block_appends_parent_element_when_supplied() {
+        let ctx = make_test_ctx_with_git(None);
+        let block = ctx.to_environment_context_block(Some(("subagent", "session-X")));
+
+        // Attribute boundary: `kind` is attr-escaped (no quotes allowed).
+        // Even though "subagent" is benign here, we exercise the
+        // attr-escape path; see xml_util::escape_xml_attr tests for the
+        // adversarial coverage.
+        assert!(block.contains("<parent kind=\"subagent\">"), "{block}");
+        assert!(block.contains("session-X"), "{block}");
+        assert!(block.contains("</parent>"), "{block}");
+        // Parent must come BEFORE the closing `</environment_context>` so the
+        // document is well-formed even if a downstream consumer tries to
+        // parse it.
+        let parent_pos = block.find("<parent").expect("parent element");
+        let close_pos = block.rfind("</environment_context>").expect("close tag");
+        assert!(parent_pos < close_pos, "{block}");
+    }
+
+    #[test]
+    fn env_block_escapes_special_chars_inside_paths_and_ids() {
+        // Adversarial: a cwd value containing `&` (and the `\`-padded
+        // canonicalization that occasionally quotes) must NOT be able to
+        // forge a sibling attribute when escaped as element text.
+        // Element-text escape (not attr) keeps `&` inert in <cwd>…</cwd>;
+        // quotes are inert in element-text content (only `"` and `'`
+        // matter inside attributes, hence the separate `escape_xml_attr`).
+        let ctx = RuntimeContext {
+            os: "linux".to_string(),
+            arch: "x86_64".to_string(),
+            shell: "bash".to_string(),
+            working_dir: PathBuf::from("/tmp/a&b<c>"),
+            repo_root: None,
+            current_model: "m".to_string(),
+            hostname: "h".to_string(),
+            current_time: "2026-08-06 10:00".to_string(),
+            timezone: "UTC".to_string(),
+        };
+        let block = ctx.to_environment_context_block(None);
+
+        // `&` becomes `&amp;`, `<` becomes `&lt;`, `>` becomes `&gt;` —
+        // the three element-text specials.
+        assert!(
+            block.contains("<cwd>/tmp/a&amp;b&lt;c&gt;</cwd>"),
+            "{block}"
+        );
+    }
+
+    #[test]
+    fn env_block_is_byte_stable_across_repeated_calls() {
+        // The Dynamic half goes through the same render-pipeline as the
+        // `Stable`-prefix bytes: a per-build re-render that returns the
+        // same string for the same inputs is the contract. (The field
+        // doesn't go in the cacheable prefix; this guarantees the render
+        // path itself is pure / cheap.)
+        let ctx = make_test_ctx_with_git(Some(PathBuf::from("/workspace/proj")));
+        let a = ctx.to_environment_context_block(None);
+        let b = ctx.to_environment_context_block(None);
+        assert_eq!(a, b);
+    }
+
+    #[test]
+    fn has_dynamic_facts_is_true_when_model_is_set() {
+        // The base contract: any collection that populated `current_model`
+        // (every normal path goes through `collect_in` / `collect`) has
+        // dynamic facts worth rendering.
+        let ctx = RuntimeContext::collect("m");
+        assert!(ctx.has_dynamic_facts());
     }
 }

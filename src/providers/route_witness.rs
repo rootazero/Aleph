@@ -74,16 +74,28 @@
 //! In-memory and best-effort by design, exactly like the trace mirror: this must
 //! never be able to fail a request or grow without bound. Entries are removed by
 //! [`take`]; runs that never reach a taker (subagent and team child sessions get
-//! their own session keys) are bounded by [`MAX_TRACKED_SESSIONS`].
+//! their own session keys) are bounded by [`MAX_TRACKED_SESSIONS`], whose
+//! overflow evicts the *least recently written* entry rather than wiping the
+//! whole map — a bulk clear used to erase the witnesses of runs still in flight
+//! (a session's record is only taken when its run ends, so every in-flight run
+//! was collateral).
+//!
+//! Concurrency note: the key is the *session*, not the run — two runs sharing
+//! one session key interleave on one record (run B's entry-time [`clear`] drops
+//! run A's witness). Making the key run-scoped would need a run id in
+//! `RequestPayload.metadata`, which today carries only `session_id`
+//! (`harness::agent::think::build_request_payload`); threading one through the
+//! harness↔gateway layers is out of scope for a best-effort diagnostic.
 
 use crate::sync_primitives::RwLock;
 use std::collections::HashMap;
 use std::sync::OnceLock;
 
-/// Upper bound on tracked sessions. Reaching it clears the map rather than
-/// refusing further writes: this is best-effort diagnostic state, and a
-/// permanently wedged recorder (which refusing writes would produce once enough
-/// un-taken child sessions accumulated) is worse than dropping some history.
+/// Upper bound on tracked sessions. Reaching it evicts the least recently
+/// written entry rather than refusing further writes: this is best-effort
+/// diagnostic state, and a permanently wedged recorder (which refusing writes
+/// would produce once enough un-taken child sessions accumulated) is worse than
+/// dropping the stalest history.
 const MAX_TRACKED_SESSIONS: usize = 256;
 
 /// One endpoint the walk dialed: a provider, and the model it was asked for.
@@ -166,10 +178,73 @@ pub fn witness_key(session_key: &str) -> String {
         .map_or_else(|| session_key.to_string(), |k| k.to_key_string())
 }
 
-static WITNESSES: OnceLock<RwLock<HashMap<String, RouteWitness>>> = OnceLock::new();
+/// The bounded store behind the process-global map. Holds an insertion clock
+/// alongside each record so overflow can evict the *least recently written*
+/// entry (LRU) instead of clearing everything — the old bulk `clear()` at the
+/// cap wiped the witnesses of runs still in flight, which are exactly the
+/// records about to be read.
+///
+/// A record's age refreshes on every write: a session with a run in flight
+/// (many turns, one `record_success` each) is the *freshest* thing in the map
+/// and therefore the last to be evicted.
+#[derive(Default)]
+struct BoundedWitnesses {
+    /// Monotonic insertion clock; each write takes the next tick.
+    seq: u64,
+    map: HashMap<String, (u64, RouteWitness)>,
+}
 
-fn map() -> &'static RwLock<HashMap<String, RouteWitness>> {
-    WITNESSES.get_or_init(|| RwLock::new(HashMap::new()))
+impl BoundedWitnesses {
+    fn record(&mut self, key: String, attempted: Dialed, served: Dialed) {
+        if !self.map.contains_key(&key) && self.map.len() >= MAX_TRACKED_SESSIONS {
+            // Evict exactly the stalest entry. O(n) at the cap only, and the
+            // cap is the exceptional path — cheap insurance against wedging.
+            if let Some(oldest) = self
+                .map
+                .iter()
+                .min_by_key(|(_, (tick, _))| *tick)
+                .map(|(k, _)| k.clone())
+            {
+                self.map.remove(&oldest);
+            }
+        }
+        self.seq += 1;
+        let tick = self.seq;
+        self.map
+            .entry(key)
+            .and_modify(|(t, w)| {
+                *t = tick;
+                w.served = served.clone();
+            })
+            .or_insert_with(|| {
+                (
+                    tick,
+                    RouteWitness {
+                        first: attempted,
+                        served,
+                    },
+                )
+            });
+    }
+
+    fn take(&mut self, key: &str) -> Option<RouteWitness> {
+        self.map.remove(key).map(|(_, w)| w)
+    }
+
+    fn clear(&mut self, key: &str) {
+        self.map.remove(key);
+    }
+
+    #[cfg(test)]
+    fn len(&self) -> usize {
+        self.map.len()
+    }
+}
+
+static WITNESSES: OnceLock<RwLock<BoundedWitnesses>> = OnceLock::new();
+
+fn map() -> &'static RwLock<BoundedWitnesses> {
+    WITNESSES.get_or_init(|| RwLock::new(BoundedWitnesses::default()))
 }
 
 /// Record a successful dial for `session_key`.
@@ -180,17 +255,10 @@ fn map() -> &'static RwLock<HashMap<String, RouteWitness>> {
 /// "this run set out for A and last got its answer from B".
 pub fn record_success(session_key: &str, attempted: Dialed, served: Dialed) {
     let key = witness_key(session_key);
-    let mut guard = map().write().unwrap_or_else(|e| e.into_inner());
-    if guard.len() >= MAX_TRACKED_SESSIONS && !guard.contains_key(&key) {
-        guard.clear();
-    }
-    guard
-        .entry(key)
-        .and_modify(|w| w.served = served.clone())
-        .or_insert_with(|| RouteWitness {
-            first: attempted,
-            served,
-        });
+    map()
+        .write()
+        .unwrap_or_else(|e| e.into_inner())
+        .record(key, attempted, served);
 }
 
 /// Remove and return `session_key`'s record.
@@ -201,7 +269,7 @@ pub fn take(session_key: &str) -> Option<RouteWitness> {
     map()
         .write()
         .unwrap_or_else(|e| e.into_inner())
-        .remove(&witness_key(session_key))
+        .take(&witness_key(session_key))
 }
 
 /// Drop `session_key`'s record without reading it.
@@ -215,7 +283,7 @@ pub fn clear(session_key: &str) {
     map()
         .write()
         .unwrap_or_else(|e| e.into_inner())
-        .remove(&witness_key(session_key));
+        .clear(&witness_key(session_key));
 }
 
 #[cfg(test)]
@@ -381,6 +449,73 @@ mod tests {
         assert!(
             take(&k).is_some(),
             "the recorder must still accept writes after an overflow clear"
+        );
+    }
+
+    /// Eviction unit tests drive `BoundedWitnesses` directly: the process-global
+    /// map is shared with every other test in this binary, so asserting *which*
+    /// entry was evicted requires a private store.
+    fn store_with(keys: &[&str]) -> BoundedWitnesses {
+        let mut store = BoundedWitnesses::default();
+        for (i, k) in keys.iter().enumerate() {
+            store.record(
+                (*k).to_string(),
+                Dialed::new(format!("p{i}"), None),
+                Dialed::new(format!("p{i}"), None),
+            );
+        }
+        store
+    }
+
+    #[test]
+    fn overflow_evicts_only_the_stalest_entry() {
+        // The old cap behaviour was `map.clear()`: it dropped EVERY in-flight
+        // run's witness to make room for one new key. Now exactly one entry —
+        // the least recently written — pays for the newcomer.
+        let keys: Vec<String> = (0..MAX_TRACKED_SESSIONS).map(|i| format!("k{i}")).collect();
+        let refs: Vec<&str> = keys.iter().map(String::as_str).collect();
+        let mut store = store_with(&refs);
+
+        store.record(
+            "new".to_string(),
+            Dialed::new("p", None),
+            Dialed::new("p", None),
+        );
+
+        assert_eq!(store.len(), MAX_TRACKED_SESSIONS);
+        assert!(store.take("k0").is_none(), "the oldest entry is evicted");
+        assert!(store.take("k1").is_some(), "its neighbour survives");
+        assert!(store.take("new").is_some(), "and the newcomer was admitted");
+    }
+
+    #[test]
+    fn writing_refreshes_eviction_age_so_in_flight_runs_survive() {
+        // A run in flight keeps writing (one record per turn); LRU aging makes
+        // it the freshest entry in the map, so overflow evicts the stale idle
+        // sessions first instead of the run about to be read.
+        let keys: Vec<String> = (0..MAX_TRACKED_SESSIONS).map(|i| format!("k{i}")).collect();
+        let refs: Vec<&str> = keys.iter().map(String::as_str).collect();
+        let mut store = store_with(&refs);
+
+        // k0 is the oldest — but it is still being written (in-flight run).
+        store.record(
+            "k0".to_string(),
+            Dialed::new("p0", None),
+            Dialed::new("p0-next", None),
+        );
+        store.record(
+            "new".to_string(),
+            Dialed::new("p", None),
+            Dialed::new("p", None),
+        );
+
+        assert!(
+            store.take("k0").is_some(),
+            "an actively-written (in-flight) record must survive the overflow"
+        );
+        assert!(
+            store.take("k1").is_none(),
+            "the now-stalest idle entry pays instead"
         );
     }
 

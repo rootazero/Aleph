@@ -914,3 +914,211 @@ async fn reloaded_near_full_session_continues_not_bricked() {
         "the run must persist the model's non-empty final text; got: {recorded:#?}",
     );
 }
+
+// ---------------------------------------------------------------------------
+// Silent truncated-overflow guard (pi `overflow.ts` Case 3 parity): a provider
+// that reports stop_reason=length with ZERO output once the INPUT alone fills
+// the window — no error, no ContextWindowExceeded. The guard must route this
+// to reactive compaction instead of the empty-retry / resume-nudge loops.
+// ---------------------------------------------------------------------------
+
+/// Provider emulating the z.ai / MiMo silent-overflow shape: the first
+/// `silent_calls` calls return `stop_reason == MaxTokens` with no content and
+/// a usage report whose prompt alone is `prompt_tokens`; after that, clean
+/// text. `usize::MAX` = never recovers on its own.
+struct SilentTruncatedOverflowProvider {
+    calls: AtomicUsize,
+    prompt_tokens: u32,
+    silent_calls: usize,
+    success_text: String,
+}
+
+impl SilentTruncatedOverflowProvider {
+    fn new(prompt_tokens: u32, silent_calls: usize, success_text: &str) -> Arc<Self> {
+        Arc::new(Self {
+            calls: AtomicUsize::new(0),
+            prompt_tokens,
+            silent_calls,
+            success_text: success_text.to_string(),
+        })
+    }
+    fn call_count(&self) -> usize {
+        self.calls.load(Ordering::SeqCst)
+    }
+}
+
+impl AiProvider for SilentTruncatedOverflowProvider {
+    fn process<'a>(
+        &'a self,
+        _payload: RequestPayload<'a>,
+    ) -> Pin<Box<dyn Future<Output = AlephResult<ProviderResponse>> + Send + 'a>> {
+        let success = self.success_text.clone();
+        Box::pin(async move {
+            let n = self.calls.fetch_add(1, Ordering::SeqCst);
+            if n < self.silent_calls {
+                Ok(ProviderResponse {
+                    stop_reason: crate::providers::adapter::StopReason::MaxTokens,
+                    usage: Some(crate::providers::adapter::TokenUsage {
+                        input_tokens: self.prompt_tokens,
+                        ..Default::default()
+                    }),
+                    ..Default::default()
+                })
+            } else {
+                Ok(ProviderResponse::text_only(success))
+            }
+        })
+    }
+    fn name(&self) -> &str {
+        "silent_truncated_overflow"
+    }
+    fn color(&self) -> &str {
+        "#000000"
+    }
+}
+
+/// Provider returning `MaxTokens` WITH partial text and a full-window prompt:
+/// the genuine output-cap shape 3b exists for. The guard must NOT fire on it.
+struct GenuineOutputCapProvider {
+    calls: AtomicUsize,
+    prompt_tokens: u32,
+}
+
+impl GenuineOutputCapProvider {
+    fn new(prompt_tokens: u32) -> Arc<Self> {
+        Arc::new(Self {
+            calls: AtomicUsize::new(0),
+            prompt_tokens,
+        })
+    }
+    fn call_count(&self) -> usize {
+        self.calls.load(Ordering::SeqCst)
+    }
+}
+
+impl AiProvider for GenuineOutputCapProvider {
+    fn process<'a>(
+        &'a self,
+        _payload: RequestPayload<'a>,
+    ) -> Pin<Box<dyn Future<Output = AlephResult<ProviderResponse>> + Send + 'a>> {
+        Box::pin(async move {
+            self.calls.fetch_add(1, Ordering::SeqCst);
+            Ok(ProviderResponse {
+                stop_reason: crate::providers::adapter::StopReason::MaxTokens,
+                usage: Some(crate::providers::adapter::TokenUsage {
+                    input_tokens: self.prompt_tokens,
+                    output_tokens: 500,
+                    ..Default::default()
+                }),
+                ..ProviderResponse::text_only("partial answer chunk".to_string())
+            })
+        })
+    }
+    fn name(&self) -> &str {
+        "genuine_output_cap"
+    }
+    fn color(&self) -> &str {
+        "#000000"
+    }
+}
+
+/// The core fix: `MaxTokens` + zero output + prompt alone ≥ budget IS a
+/// context overflow. The guard routes it to the reactive-compaction rescue —
+/// the stub compactor's LLM call fails, so the deterministic floor runs and
+/// the single retry recovers. Before the guard, this shape burned the
+/// empty-retry and resume-nudge budgets and died as EmptyResponseExhausted
+/// without ever compacting.
+#[tokio::test]
+async fn silent_truncated_overflow_routes_to_reactive_compaction() {
+    let session = MockSession::new(vec![
+        turn_started_event(),
+        user_message_event("oversized input"),
+    ]);
+    // Prompt alone (250k) exceeds the 200k budget; recovers on the 2nd call.
+    let llm = SilentTruncatedOverflowProvider::new(250_000, 1, "rescued from silent overflow");
+    let mut deps = build_deps(session.clone(), llm.clone(), Some(stub_compactor()));
+    deps.context_budget = Some(Arc::new(Mutex::new(ContextBudget::new(&budget_config()))));
+    let harness = AgentHarness::new(deps);
+
+    let state = harness
+        .run_turn(&sample_session_id(), &mut NoopHarnessCallback)
+        .await
+        .expect("the silent overflow must be rescued into a clean turn");
+
+    assert_eq!(state, TurnState::Done);
+    assert_eq!(
+        llm.call_count(),
+        2,
+        "guard fires on the first response; the compactor's LLM fails, so the floor + one retry recovers",
+    );
+    assert_eq!(
+        harness.reactive_compact_attempts_for_tests(),
+        1,
+        "the rescue consumes exactly one LLM-compaction slot",
+    );
+    // The truncated first call billed the full 250k prompt; it was discarded
+    // by the rescue, so its tokens must be in the run total.
+    assert!(
+        harness.total_tokens() >= 250_000,
+        "the discarded silent-overflow call was billed; got {}",
+        harness.total_tokens(),
+    );
+}
+
+/// Negative control: the same MaxTokens + zero-output shape with a prompt
+/// BELOW the budget is not a context overflow — the guard stays silent, no
+/// rescue slot is consumed, and the legacy empty/nudge retry cadence runs
+/// unchanged (1 primary + 2 empty retries + 3 resume-nudge retries = 6).
+#[tokio::test]
+async fn guard_stays_silent_when_prompt_is_below_budget() {
+    let session = MockSession::new(vec![turn_started_event(), user_message_event("hi")]);
+    let llm = SilentTruncatedOverflowProvider::new(1_000, usize::MAX, "never");
+    let mut deps = build_deps(session.clone(), llm.clone(), Some(stub_compactor()));
+    deps.context_budget = Some(Arc::new(Mutex::new(ContextBudget::new(&budget_config()))));
+    let harness = AgentHarness::new(deps);
+
+    let _ = harness
+        .run_turn(&sample_session_id(), &mut NoopHarnessCallback)
+        .await;
+
+    assert_eq!(
+        harness.reactive_compact_attempts_for_tests(),
+        0,
+        "a sub-budget prompt must NOT consume a rescue slot",
+    );
+    assert_eq!(
+        llm.call_count(),
+        6,
+        "legacy cadence untouched: 1 primary + 2 empty retries + 3 resume nudges",
+    );
+}
+
+/// Negative control: `MaxTokens` WITH partial text is the genuine output-cap
+/// case — even with a full-window prompt, the resume-nudge loop (not
+/// compaction) is the right recovery. The guard must not fire.
+#[tokio::test]
+async fn guard_stays_silent_for_genuine_output_cap_with_partial_text() {
+    let session = MockSession::new(vec![
+        turn_started_event(),
+        user_message_event("write a very long essay"),
+    ]);
+    let llm = GenuineOutputCapProvider::new(250_000);
+    let mut deps = build_deps(session.clone(), llm.clone(), Some(stub_compactor()));
+    deps.context_budget = Some(Arc::new(Mutex::new(ContextBudget::new(&budget_config()))));
+    let harness = AgentHarness::new(deps);
+
+    let _ = harness
+        .run_turn(&sample_session_id(), &mut NoopHarnessCallback)
+        .await;
+
+    assert_eq!(
+        harness.reactive_compact_attempts_for_tests(),
+        0,
+        "partial text = genuine output cap; compaction must NOT fire",
+    );
+    assert_eq!(
+        llm.call_count(),
+        4,
+        "1 primary + 3 resume-nudge retries, no empty retries (text is non-empty)",
+    );
+}

@@ -1,7 +1,6 @@
 //! Incremental save tests (fix config loss during migration)
 
 use super::super::*;
-use std::collections::HashMap;
 use std::fs;
 use tempfile::TempDir;
 

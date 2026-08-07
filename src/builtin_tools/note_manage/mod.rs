@@ -225,7 +225,10 @@ impl AlephTool for NoteManageTool {
          the write or re-echo the note into another memory tool. Acknowledge to the user in \
          one short sentence, in the user's language, saying what was recorded and where it \
          landed — use the `destination` field from the result. Never quote the stored \
-         content back verbatim.";
+         content back verbatim. \
+         IF NOTHING LANDED (no `destination` in the result): never acknowledge a save that \
+         did not happen — say in one short sentence that it was not saved, or say nothing \
+         about memory at all.";
 
     type Args = NoteManageArgs;
     type Output = NoteManageResult;

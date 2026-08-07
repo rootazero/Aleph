@@ -96,6 +96,25 @@ impl FailoverHealth {
         self.0.write().await.remove(name).is_some()
     }
 
+    /// Open `name`'s circuit directly, as if a failure had just tripped it.
+    ///
+    /// Test-only (`gateway::health_prober`): the prober's recovery policy is
+    /// unit-tested against a genuinely open breaker without driving a whole
+    /// failing provider walk first.
+    #[cfg(test)]
+    pub(crate) async fn open_for_test(&self, name: &str) {
+        self.0.write().await.insert(
+            name.to_string(),
+            HealthState {
+                circuit: CircuitState::Open,
+                last_failure: Some(Instant::now()),
+                failure_count: 1,
+                last_error: None,
+                cooldown: Duration::from_secs(300),
+            },
+        );
+    }
+
     /// Snapshot every tracked provider's breaker state, name-sorted.
     /// Diagnostic only — the hot path keeps using `circuit_allows`.
     pub async fn snapshot(&self) -> Vec<ProviderHealthView> {

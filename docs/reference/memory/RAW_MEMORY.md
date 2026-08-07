@@ -33,7 +33,6 @@ CREATE TABLE IF NOT EXISTS raw_memories (
     agent_id        TEXT NOT NULL DEFAULT 'default',
     session_id      TEXT,
     path            TEXT,
-    layer           TEXT,
     attachment_text TEXT,
     is_processed    INTEGER DEFAULT 0,
     created_at      INTEGER NOT NULL
@@ -52,7 +51,6 @@ Column notes:
 - `agent_id` — agent/workspace scope; `CompressionService` consumes one agent at a time.
 - `session_id` — nullable; populated for transcript and session-compressed rows.
 - `path` — VFS-style traceability pointer (see §6 for path conventions).
-- `layer` — reserved column (currently unused by writers; summary depth is encoded inside `path` as `d0`/`d1`/`d2`).
 - `attachment_text` — extracted text from file attachments, injected into the prompt during compression.
 - `is_processed` — `0` = pending compression, `1` = consumed. The partial index only covers `is_processed = 0`, keeping the pending-work query cheap as the table grows.
 - `created_at` — Unix epoch seconds.
@@ -109,14 +107,15 @@ pub struct RawMemory {
     pub agent_id: String,
     pub session_id: Option<String>,
     pub path: Option<String>,
-    pub layer: Option<String>,
     pub attachment_text: Option<String>,
     pub is_processed: bool,
     pub created_at: i64,
 }
 ```
 
-`RawMemory::new(content, source)` defaults `agent_id = "default"`, generates a UUID, and stamps `created_at`. Builder methods `with_agent`, `with_session`, `with_path`, `with_layer`, and `with_attachment_text` decorate the record before insertion.
+`RawMemory::new(content, source)` defaults `agent_id = "default"`, generates a UUID, and stamps `created_at`. Builder methods `with_agent`, `with_session`, `with_path`, and `with_attachment_text` decorate the record before insertion.
+
+> **Removed 2026-08-06:** the `layer` column / field and its `with_layer` builder. It had zero producers and zero consumers — every row ever written carried `NULL` — while nine SELECT/INSERT statements still named it. Summary depth was always encoded in `path` (`d0`/`d1`/`d2`); "reserved for later" outlived the later. The column is nullable with no default, so dropping it from the DDL and the statements leaves existing databases readable (the stale column is simply never touched again) — the migration this was deferred over did not exist.
 
 **Persistence format.** `RawMemorySource` uses `to_persisted()` → `(&'static str, Option<String>)` for SQLite storage, where the optional JSON detail carries variant-specific data:
 

@@ -44,6 +44,17 @@ pub(crate) fn wait_probe_func(condition: &WaitCondition) -> String {
                  ? {WAIT_PROBE_FOUND:?} : 'absent'"
             )
         }
+        WaitCondition::TextGone(text) => {
+            let needle = serde_json::to_string(text).unwrap_or_else(|_| "\"\"".into());
+            // No body yet ⇒ the text is trivially absent ⇒ found. That is the
+            // correct polarity for "wait until the spinner disappears" — the
+            // alternative (absent until a body exists) would hang on pages
+            // that legitimately render no body text at all.
+            format!(
+                "() => (!!document.body && document.body.innerText.includes({needle})) \
+                 ? 'absent' : {WAIT_PROBE_FOUND:?}"
+            )
+        }
         WaitCondition::Selector(selector) => {
             let needle = serde_json::to_string(selector).unwrap_or_else(|_| "\"\"".into());
             format!(
@@ -55,6 +66,9 @@ pub(crate) fn wait_probe_func(condition: &WaitCondition) -> String {
             let needle = serde_json::to_string(substr).unwrap_or_else(|_| "\"\"".into());
             format!("() => location.href.includes({needle}) ? {WAIT_PROBE_FOUND:?} : 'absent'")
         }
+        // `Time` never reaches this probe — `poll_wait_for` short-circuits it
+        // into a plain sleep. This arm exists for match exhaustiveness only.
+        WaitCondition::Time(_) => format!("() => {WAIT_PROBE_FOUND:?}"),
     }
 }
 
@@ -70,6 +84,13 @@ pub(crate) async fn poll_wait_for<B: BrowserBackend + ?Sized>(
     condition: &WaitCondition,
     timeout_ms: u64,
 ) -> Result<bool, BrowserError> {
+    // A plain delay never touches the page: sleep it out and report found.
+    // `ms` is pre-clamped into the safe window by the tool layer, and a delay
+    // IS the condition — `timeout_ms` does not apply to it.
+    if let WaitCondition::Time(ms) = condition {
+        tokio::time::sleep(Duration::from_millis(*ms)).await;
+        return Ok(true);
+    }
     let probe = wait_probe_func(condition);
     let deadline = tokio::time::Instant::now() + Duration::from_millis(timeout_ms);
     loop {

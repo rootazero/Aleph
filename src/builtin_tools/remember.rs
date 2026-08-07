@@ -489,9 +489,8 @@ impl AlephTool for RememberTool {
          Phrase each entry as a declarative fact about the user or environment (\"User \
          prefers X\"), never as an imperative to yourself (\"Always do X\"): an imperative \
          is re-read next session as a standing order and can override a later request.\n\n\
-         ROUTING: the authoritative destination ladder lives in the memory protocol \
-         section of your system prompt. One-line map: searchable knowledge → `note_manage`; \
-         transient task state → `scratchpad`; session outcomes → captured automatically.\n\n\
+         ROUTING: the authoritative destination ladder — which of the memory tools a given \
+         fact belongs in — is stated in your system prompt, not here.\n\n\
          ACTIONS:\n\
          - add: append a new fact (rejects duplicates / over-budget; suggests replace)\n\
          - replace: substitute via a short unique substring of an existing entry\n\
@@ -515,7 +514,10 @@ impl AlephTool for RememberTool {
          AFTER A SUCCESSFUL WRITE: the write is final — do not repeat or re-verify it, and \
          do not re-echo the entry into another memory tool. Acknowledge to the user in one \
          short sentence, in the user's language, saying what was recorded and that it lives \
-         in always-loaded hot memory. Do not quote the entry back.";
+         in always-loaded hot memory. Do not quote the entry back. \
+         IF NOTHING LANDED (`written: false`, including `retry_exhausted: true`): never \
+         acknowledge a save that did not happen — if the user explicitly asked you to remember \
+         it, say in one short sentence that it was not saved and why.";
 
     type Args = RememberArgs;
     type Output = RememberOutput;

@@ -1,9 +1,10 @@
 //! Context-budget derivation and building.
 
+use crate::config::types::phase6_wiring::ModelThresholdToml;
 use crate::config::types::ProviderConfig;
 use crate::config::Config;
 use crate::context::budget::ContextBudgetConfig;
-use crate::providers::model_catalog::capabilities_for;
+use crate::providers::model_catalog::{capabilities_for, resolve_context_window_with_override};
 
 /// Default model context-window estimate (tokens) used when neither the
 /// primary provider nor the capability catalog reveals the active model's
@@ -423,6 +424,175 @@ pub fn build_context_budget_config(
         diminishing_threshold: 500,
         max_splits: 3,
     })
+}
+
+// =============================================================================
+// Per-run serving-model refinement
+// =============================================================================
+
+/// Boot-time companion to [`build_context_budget_config`] that re-keys the
+/// (deliberately conservative, chain-minimum) budget onto the model ACTUALLY
+/// serving each run.
+///
+/// The startup config is frozen to the smallest window on the failover chain —
+/// the right floor for in-request migrations, but blind to per-run model
+/// selection: a session `select_model` pick, an agent `model_hint`, or a
+/// brain-level strict pin can all put a run on a model the chain-min
+/// derivation never saw, while the context gauge already follows that serving
+/// model (`runner_impl`'s `gauge_model`). A run pinned to a NARROWER model
+/// than the chain minimum then compacts against a budget its real window
+/// cannot honour (only the reactive rescue saves it), and a per-model
+/// threshold override keys off the chain-min model rather than the model in
+/// use. pi and opencode both evaluate compaction timing against the CURRENT
+/// model every turn; this refiner closes that gap per run, without weakening
+/// the failover floor: the refined budget is `min(chain_min, serving)` — it
+/// can only compact EARLIER, never later than the startup-safe value.
+#[derive(Debug, Clone)]
+pub struct ContextBudgetRefiner {
+    /// Operator-pinned `[context_budget] token_budget` — honored verbatim
+    /// (same back-compat contract as the startup path).
+    explicit_token_budget: Option<u64>,
+    /// Raw global thresholds, pre-fold, so the serving model's override
+    /// re-matches against the same fallback chain as the startup fold.
+    global_warning: Option<f64>,
+    global_critical: Option<f64>,
+    /// Per-model override entries (`[[context_budget.model_thresholds]]`).
+    model_thresholds: Vec<ModelThresholdToml>,
+    /// Primary provider key + its declared `max_tokens` reserve override,
+    /// applied only when the serving provider IS the primary (mirrors
+    /// [`derive_token_budget`]'s reserve precedence for that provider).
+    primary_provider_key: String,
+    primary_max_tokens: Option<u32>,
+}
+
+/// Capture the refinement inputs from `[context_budget]`. Returns `None`
+/// under exactly the same gate as [`build_context_budget_config`] (section
+/// absent or disabled), so the two handles always come and go together.
+#[must_use]
+pub fn build_context_budget_refiner(
+    config: &Config,
+    primary_provider_key: &str,
+) -> Option<ContextBudgetRefiner> {
+    let cb = config.context_budget.as_ref()?;
+    if !cb.enabled {
+        return None;
+    }
+    Some(ContextBudgetRefiner {
+        explicit_token_budget: cb.token_budget,
+        global_warning: cb.warning_threshold,
+        global_critical: cb.critical_threshold,
+        model_thresholds: cb.model_thresholds.clone(),
+        primary_provider_key: primary_provider_key.to_string(),
+        primary_max_tokens: config
+            .providers
+            .get(primary_provider_key)
+            .and_then(|p| p.max_tokens),
+    })
+}
+
+impl ContextBudgetRefiner {
+    /// Re-key `base` (the chain-minimum startup config) onto the model serving
+    /// this run.
+    ///
+    /// - **budget**: `min(base, serving window − reserve)` unless the operator
+    ///   pinned `token_budget` verbatim. The min keeps in-request failover
+    ///   migrations safe: refinement can never relax the budget past the
+    ///   chain-minimum floor.
+    /// - **thresholds**: the per-model override re-matches against the serving
+    ///   model/provider (first-match-wins, same semantics as the startup
+    ///   fold); unset fields fall back to the global config, then the
+    ///   window-aware / flat defaults — computed against the REFINED budget,
+    ///   so the spike-headroom band tracks the numbers actually in force.
+    /// - **fresh tail**: re-derived from the refined budget, so a narrower
+    ///   serving model also protects a smaller recent tail.
+    ///
+    /// Byte-identical to `base` in the common case (the serving model is the
+    /// primary's own model whose window already sits at or above the chain
+    /// minimum), and whenever the serving model is unidentifiable (absent
+    /// from the capability catalog AND no configured window override) — an
+    /// unknown model id must never drag the budget down to the conservative
+    /// catalog fallback on guesswork. Any refined combination that would fail
+    /// the startup threshold-ordering gate also falls back to `base` (already
+    /// validated) instead of disabling the budget mid-flight.
+    #[must_use]
+    pub fn refine_for_serving_model(
+        &self,
+        base: &ContextBudgetConfig,
+        serving_model: &str,
+        serving_provider: &str,
+        window_override: Option<u32>,
+    ) -> ContextBudgetConfig {
+        let caps = capabilities_for(serving_model);
+        if caps.is_none() && window_override.is_none_or(|w| w == 0) {
+            return base.clone();
+        }
+        let window = u64::from(resolve_context_window_with_override(
+            window_override,
+            serving_model,
+        ));
+        let reserve = if serving_provider.eq_ignore_ascii_case(&self.primary_provider_key) {
+            self.primary_max_tokens.map(u64::from)
+        } else {
+            None
+        }
+        .or_else(|| caps.map(|c| u64::from(c.max_output_tokens)))
+        .unwrap_or(DEFAULT_OUTPUT_RESERVE);
+        let serving_usable = window.saturating_sub(reserve).max(MIN_USABLE_BUDGET);
+
+        let token_budget = match self.explicit_token_budget {
+            Some(explicit) => explicit,
+            None => base.token_budget.min(serving_usable),
+        };
+        if token_budget == 0 {
+            return base.clone();
+        }
+
+        let model_override = ModelThresholdToml::first_match(
+            &self.model_thresholds,
+            Some(serving_model),
+            serving_provider,
+        );
+        let critical_threshold = model_override
+            .and_then(|o| o.critical_threshold)
+            .or(self.global_critical)
+            .unwrap_or(DEFAULT_CRITICAL_THRESHOLD);
+        let auto_warning = window_aware_warning_default(token_budget, critical_threshold);
+        let warning_threshold = model_override
+            .and_then(|o| o.warning_threshold)
+            .or(self.global_warning)
+            .unwrap_or(auto_warning);
+        // Same defensive gate as the startup fold — but degrading to the
+        // (already validated) base rather than disabling the budget.
+        if !(warning_threshold > 0.0
+            && warning_threshold < critical_threshold
+            && critical_threshold <= 1.0)
+        {
+            return base.clone();
+        }
+
+        let refined = ContextBudgetConfig {
+            token_budget,
+            warning_threshold,
+            critical_threshold,
+            fresh_tail_count: window_aware_fresh_tail(token_budget),
+            ..base.clone()
+        };
+        if refined.token_budget != base.token_budget
+            || refined.warning_threshold != base.warning_threshold
+            || refined.critical_threshold != base.critical_threshold
+        {
+            tracing::info!(
+                serving_model,
+                serving_provider,
+                base_budget = base.token_budget,
+                refined_budget = refined.token_budget,
+                warning = refined.warning_threshold,
+                critical = refined.critical_threshold,
+                "context budget refined for the run's serving model"
+            );
+        }
+        refined
+    }
 }
 
 #[cfg(test)]
@@ -974,5 +1144,202 @@ mod tests {
         // warning — the predicate guards the division-by-intent.
         assert!(!chain_min_materially_undercuts_primary(0, 0));
         assert!(!chain_min_materially_undercuts_primary(50_000, 0));
+    }
+
+    // ── per-run serving-model refinement (G1) ────────────────────────────
+
+    /// Field-wise equality helper: `ContextBudgetConfig` does not derive
+    /// `PartialEq`, and these tests care about every decision-relevant field.
+    fn assert_cfg_eq(a: &ContextBudgetConfig, b: &ContextBudgetConfig) {
+        assert_eq!(a.token_budget, b.token_budget, "token_budget");
+        assert_eq!(a.warning_threshold, b.warning_threshold, "warning");
+        assert_eq!(a.critical_threshold, b.critical_threshold, "critical");
+        assert_eq!(a.token_estimate_ratio, b.token_estimate_ratio, "ratio");
+        assert_eq!(a.fresh_tail_count, b.fresh_tail_count, "fresh_tail");
+        assert_eq!(a.circuit_breaker_max, b.circuit_breaker_max, "breaker");
+        assert_eq!(a.diminishing_window, b.diminishing_window, "dim_window");
+        assert_eq!(
+            a.diminishing_threshold, b.diminishing_threshold,
+            "dim_threshold"
+        );
+        assert_eq!(a.max_splits, b.max_splits, "max_splits");
+    }
+
+    #[test]
+    fn refiner_none_when_section_missing_or_disabled() {
+        let cfg = Config::default();
+        assert!(build_context_budget_refiner(&cfg, "primary").is_none());
+        let cfg = cfg_with_context_budget(Some(ContextBudgetToml {
+            enabled: false,
+            ..ContextBudgetToml::default()
+        }));
+        assert!(build_context_budget_refiner(&cfg, "primary").is_none());
+    }
+
+    #[test]
+    fn refine_is_byte_identical_when_serving_model_is_the_budget_model() {
+        // Common case: single provider, run served by the primary's own
+        // (catalog-known) model — refinement must reproduce the startup
+        // config exactly, field for field.
+        let cb = ContextBudgetToml {
+            enabled: true,
+            ..ContextBudgetToml::default()
+        };
+        let cfg = cfg_with_primary("moonshot", ProviderConfig::test_config("kimi-k2"), cb);
+        let base = build_context_budget_config(&cfg, "moonshot").expect("some");
+        let refiner = build_context_budget_refiner(&cfg, "moonshot").expect("some");
+        let refined = refiner.refine_for_serving_model(&base, "kimi-k2", "moonshot", None);
+        assert_cfg_eq(&refined, &base);
+    }
+
+    #[test]
+    fn refine_shrinks_budget_for_narrower_serving_model() {
+        // A 1M-window primary whose run got pinned (select_model / hint) to a
+        // 256k model: the budget must drop to the serving model's usable
+        // window, with thresholds and fresh-tail re-derived — otherwise the
+        // run compacts against a budget its real window cannot honour.
+        let cb = ContextBudgetToml {
+            enabled: true,
+            ..ContextBudgetToml::default()
+        };
+        let cfg = cfg_with_primary("claude", big_primary(), cb);
+        let base = build_context_budget_config(&cfg, "claude").expect("some");
+        assert_eq!(base.token_budget, 936_000);
+        let refiner = build_context_budget_refiner(&cfg, "claude").expect("some");
+        let refined = refiner.refine_for_serving_model(&base, "kimi-k2", "moonshot", None);
+        let kimi_usable = 262_144 - 32_768;
+        assert_eq!(refined.token_budget, kimi_usable);
+        assert_eq!(
+            refined.warning_threshold,
+            window_aware_warning_default(kimi_usable, DEFAULT_CRITICAL_THRESHOLD)
+        );
+        assert!(refined.warning_threshold < base.warning_threshold);
+        assert_eq!(
+            refined.fresh_tail_count,
+            window_aware_fresh_tail(kimi_usable)
+        );
+        assert!(refined.fresh_tail_count < base.fresh_tail_count);
+    }
+
+    #[test]
+    fn refine_never_relaxes_budget_above_chain_min() {
+        // Serving model WIDER than the chain minimum: the budget stays at the
+        // chain-minimum floor — refinement can only compact earlier, never
+        // later, so in-request failover safety is preserved.
+        let fb = FallbackProviderToml {
+            chain: vec!["small".to_string()],
+            provider: None,
+            max_retries: None,
+        };
+        let cfg = cfg_chain_budget(
+            ("big", big_primary()),
+            Some(fb),
+            vec![("small", ProviderConfig::test_config("kimi-k2"))],
+        );
+        let base = build_context_budget_config(&cfg, "big").expect("some");
+        assert_eq!(base.token_budget, 262_144 - 32_768, "chain-min is kimi");
+        let refiner = build_context_budget_refiner(&cfg, "big").expect("some");
+        // Run served by the 1M primary model; the runner passes the
+        // provider's configured window override, exactly as production does.
+        let refined =
+            refiner.refine_for_serving_model(&base, "claude-sonnet-4-6", "big", Some(1_000_000));
+        assert_cfg_eq(&refined, &base);
+    }
+
+    #[test]
+    fn refine_honours_explicit_token_budget_verbatim() {
+        // Operator-pinned budget wins even against a much narrower serving
+        // model — the same back-compat contract as the startup path.
+        let cb = ContextBudgetToml {
+            enabled: true,
+            token_budget: Some(500_000),
+            ..ContextBudgetToml::default()
+        };
+        let cfg = cfg_with_primary("claude", big_primary(), cb);
+        let base = build_context_budget_config(&cfg, "claude").expect("some");
+        let refiner = build_context_budget_refiner(&cfg, "claude").expect("some");
+        let refined = refiner.refine_for_serving_model(&base, "kimi-k2", "moonshot", None);
+        assert_eq!(refined.token_budget, 500_000);
+    }
+
+    #[test]
+    fn refine_rekeys_threshold_override_to_serving_model() {
+        // The startup fold keys overrides off the chain-min model; a run
+        // actually served by a DIFFERENT model must match ITS override.
+        let cb = ContextBudgetToml {
+            enabled: true,
+            model_thresholds: vec![ModelThresholdToml {
+                model: "kimi".to_string(),
+                warning_threshold: Some(0.60),
+                critical_threshold: Some(0.78),
+            }],
+            ..ContextBudgetToml::default()
+        };
+        let cfg = cfg_with_primary("claude", big_primary(), cb);
+        let base = build_context_budget_config(&cfg, "claude").expect("some");
+        // "kimi" does not match claude-sonnet → base keeps the flat defaults.
+        assert_eq!(base.critical_threshold, DEFAULT_CRITICAL_THRESHOLD);
+        let refiner = build_context_budget_refiner(&cfg, "claude").expect("some");
+        let refined = refiner.refine_for_serving_model(&base, "kimi-k2", "moonshot", None);
+        assert_eq!(refined.warning_threshold, 0.60);
+        assert_eq!(refined.critical_threshold, 0.78);
+    }
+
+    #[test]
+    fn refine_unknown_serving_model_without_window_override_returns_base() {
+        // An unidentifiable serving model (catalog miss, no configured window)
+        // must NOT drag the budget down to the conservative catalog fallback —
+        // refinement only acts on trustworthy window data.
+        let cb = ContextBudgetToml {
+            enabled: true,
+            ..ContextBudgetToml::default()
+        };
+        let cfg = cfg_with_primary("claude", big_primary(), cb);
+        let base = build_context_budget_config(&cfg, "claude").expect("some");
+        let refiner = build_context_budget_refiner(&cfg, "claude").expect("some");
+        let refined =
+            refiner.refine_for_serving_model(&base, "totally-unknown-model", "claude", None);
+        assert_cfg_eq(&refined, &base);
+    }
+
+    #[test]
+    fn refine_uses_configured_window_override_for_unknown_serving_model() {
+        // With `[providers.*] context_window` set, even a catalog-unknown
+        // serving model refines against the declared window (mirrors
+        // `derive_token_budget`'s config-first precedence).
+        let mut pc = ProviderConfig::test_config("my-custom-model");
+        pc.context_window = Some(64_000);
+        let cb = ContextBudgetToml {
+            enabled: true,
+            ..ContextBudgetToml::default()
+        };
+        let cfg = cfg_with_primary("local", pc, cb);
+        let base = build_context_budget_config(&cfg, "local").expect("some");
+        let refiner = build_context_budget_refiner(&cfg, "local").expect("some");
+        let refined =
+            refiner.refine_for_serving_model(&base, "my-custom-model", "local", Some(64_000));
+        assert_eq!(refined.token_budget, 64_000 - DEFAULT_OUTPUT_RESERVE);
+        assert_cfg_eq(&refined, &base);
+    }
+
+    #[test]
+    fn refine_inverted_serving_override_falls_back_to_base() {
+        // A per-model override that inverts the thresholds (warning >=
+        // critical) must not kill the run mid-flight: degrade to the
+        // startup-validated base instead of disabling the budget.
+        let cb = ContextBudgetToml {
+            enabled: true,
+            model_thresholds: vec![ModelThresholdToml {
+                model: "kimi".to_string(),
+                warning_threshold: Some(0.90),
+                critical_threshold: Some(0.70),
+            }],
+            ..ContextBudgetToml::default()
+        };
+        let cfg = cfg_with_primary("claude", big_primary(), cb);
+        let base = build_context_budget_config(&cfg, "claude").expect("some");
+        let refiner = build_context_budget_refiner(&cfg, "claude").expect("some");
+        let refined = refiner.refine_for_serving_model(&base, "kimi-k2", "moonshot", None);
+        assert_cfg_eq(&refined, &base);
     }
 }

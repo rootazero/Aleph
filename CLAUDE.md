@@ -328,7 +328,9 @@
 
 - **`~/.aleph` 下的任何路径，写它的和读它的必须是同一个函数** —— 不是"看起来一样的两段代码"；`dirs::home_dir()` 出现在 `src/` 里基本都是这个 bug 的候选（`ALEPH_HOME` 未设时逐字节相同，本机永远测不出来）。守卫 `utils::paths::tests::no_hand_rolled_aleph_home_outside_the_allowlist` 是**源码级**的 → §2.16 §5.8
 - **`MEMORY.md` 是一种格式不是一篇文档**（`\n§\n` 分隔）—— 当散文写会让 curated store 进 **legacy 静默模式**（`remember(add)` 恒 `LegacyBlocked`，占位散文被当记忆事实注入 prompt）；新 agent 种子必须是**空字符串** → §2.16
-- **内容进 `<CuratedMemory>` 前必须 `escape_xml`**（热区是 Stable 层，一条 `</CuratedMemory>` 在此后每次请求里闭合信封）；**预算数 chars 不数 bytes** → §2.16
+- **内容进 `<CuratedMemory>` 前必须 `escape_xml`**（热区是 Stable 层，一条 `</CuratedMemory>` 在此后每次请求里闭合信封）；**凡以 chars 命名的阈值就得数 chars**——预算如此，`min_user_chars` 这类**门**同样如此（数 bytes ⇒ CJK 拿 3 倍额度，恰恰是门要挡的那种会话花掉一次 LLM 调用）→ §2.16
+- **只在「跑到底」时才重写的文件，没有任何过期机制** —— 每一条早返回都让上一份原样留着，而它可能坐在常开区。**让它说出自己的捕获日期只是让模型知道它多老，不阻止它到达**；缺的那道闸就是**已经被解析出来的那个日期**。且「读不出日期」必须判**过期**——把「判断不了」读成「新鲜」正好让无界那一档从为它设的闸里走过去 → §2.16
+- **一条只覆盖一条轨的台账，等于把它承诺的那个问题只在那条轨上回答** —— `memory_trace(kind:"write_decision")` 对用户承诺「为什么没记住」，而生产者一度只有 `remember`：热区为真、往下一级静默为空。**写入工具的规矩写在 prompt 里而不写在代码里，同理**（rung 2 的「同一条修正别登记两次」曾只是一句话，rung 1 从第一天就结构性拒绝逐字重复）→ §2.16
 - **写进 frontmatter 的模型输出必须过 `yaml_scalar`** —— 一条解析失败让整篇笔记从语料里**永久消失**（三处都只 `debug!`）→ §2.5
 - **召回信号按笔记的真实归属命名空间记账** —— 别用 `agent_ids.first()` 当代表标签（`NoteDecay.access_weight` 读的是 scoped id）；**对 prompt 没有贡献的命中不该赚到信号** → §2.5
 - **排序即预算优先级** —— `hydrate` 严格按序扣槽位，"常开地板"必须排在前面才钉得住；注释写 "can never be dropped" 不构成保证 → §2.5

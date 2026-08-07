@@ -148,6 +148,16 @@ pub struct ModelRouteConfig {
     /// serialisation deterministic.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub rate_limits: BTreeMap<String, ProviderRateLimit>,
+
+    /// Background health-probe interval for circuit-open providers, in
+    /// seconds. `None`/`0` (default) disables the prober: probing spends real
+    /// requests (and money) against the endpoint, so it is strictly opt-in.
+    /// When set, a background task pings each provider whose circuit breaker
+    /// is open and resets the breaker on a successful ping, so a low-traffic
+    /// provider does not stay sidelined for the full breaker cooldown waiting
+    /// for a real request to probe it. Hot-tunable via `route_config.update`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub health_probe_interval_secs: Option<u64>,
 }
 
 #[cfg(test)]
@@ -283,5 +293,18 @@ mod tests {
         let o = c.rate_limits.get("ollama").unwrap();
         assert_eq!(o.rpm, Some(1000));
         assert_eq!(o.tpm, None);
+    }
+
+    #[test]
+    fn health_probe_interval_defaults_off_and_round_trips() {
+        // Off by default and off the wire (probing spends real requests).
+        let c = ModelRouteConfig::default();
+        assert_eq!(c.health_probe_interval_secs, None);
+        let json = serde_json::to_string(&c).unwrap();
+        assert!(!json.contains("health_probe_interval_secs"));
+
+        let c: ModelRouteConfig =
+            toml::from_str("mode = \"auto\"\nhealth_probe_interval_secs = 60\n").unwrap();
+        assert_eq!(c.health_probe_interval_secs, Some(60));
     }
 }

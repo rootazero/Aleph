@@ -12,6 +12,8 @@ A separate, single-file *curated hot memory* lives at
 - **Frozen snapshot:** captured once per `(agent_id, session_key)` and reused for every prompt build in the session. Refreshes only on compression-run completion or session end (Hermes-inspired prefix-cache stability).
 - **Threat scanning:** every write goes through `content_scanner` (prompt-injection / exfiltration / SSH access / invisible-unicode patterns).
 - **Legacy compatibility:** existing free-format `MEMORY.md` is read as a single legacy entry; `add` is blocked until the LLM curates it via `replace` / `remove`.
+- **Third block of the same envelope:** `OPEN_LOOPS.md` (written by `SessionReflector`, injected as `<OpenLoops>`) takes its char budget and its **staleness ceiling** from the same `[memory.curated]` section (`open_loops_char_limit`, `open_loops_max_age_days`, default 14 days). The ceiling exists because the file is rewritten *only* when a reflection runs to completion: naming the capture date tells the model how old the loops are, it does not stop them arriving. An unreadable/absent capture date counts as expired.
+- **Acknowledgment contract (D4), both halves:** after a landed write, one short sentence in the user's language naming the destination (never quoting the content). After a settled call that wrote **nothing** — over-budget, `retry_exhausted`, or a duplicate refusal — never acknowledge a save that did not happen. Both halves are asserted over one list of the three ladder writers in `memory_protocol.rs`, so they cannot end up covering different tools.
 
 Module: `src/memory/curated/`. Spec: `docs/superpowers/specs/2026-05-01-memory-evolution-spec-a-curated-hot-snapshot-design.md`.
 

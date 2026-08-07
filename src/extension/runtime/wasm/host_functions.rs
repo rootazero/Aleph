@@ -148,6 +148,64 @@ fn try_http_fetch(kernel: &WasmCapabilityKernel, request: &str) -> Result<String
     let timeout = std::time::Duration::from_secs(http.timeout_secs);
     let max_response_bytes = http.max_response_bytes;
 
+    // ─── Credential injection (host-side, before egress) ──────────────────
+    // The plugin declares `http.credentials: Vec<CredentialBinding>` in its
+    // manifest; each binding names a secret + injection strategy + host
+    // patterns. The resolver supplies the secret value, the injector applies
+    // it to headers / URL — the plugin guest never sees the plaintext.
+    //
+    // We collect every binding's resolved value into a single slice up front
+    // (rather than calling inject_credential once per binding with a fresh
+    // Vec) so the host has one consistent view of the secret store across
+    // all bindings. This matters when two bindings share a `secret_name`:
+    // resolving once prevents a TOCTOU race against a resolver that mutates.
+    let mut resolved_secrets: Vec<(String, String)> = Vec::with_capacity(http.credentials.len());
+    for binding in &http.credentials {
+        if let Some(value) = kernel.resolve_secret(&binding.secret_name) {
+            // `inject_credential` looks up by name; duplicates are harmless
+            // (first-match wins).
+            if !resolved_secrets
+                .iter()
+                .any(|(n, _)| n == &binding.secret_name)
+            {
+                resolved_secrets.push((binding.secret_name.clone(), value));
+            }
+        }
+    }
+
+    // Apply each binding in declaration order. Order matters when two
+    // bindings target the same URL: a later Bearer binding can override an
+    // earlier Authorization header.
+    let mut egress_headers: Vec<(String, String)> = req
+        .headers
+        .iter()
+        .map(|(k, v)| (k.clone(), v.clone()))
+        .collect();
+    let mut egress_url = req.url.clone();
+    for binding in &http.credentials {
+        match super::credential_injector::inject_credential(
+            binding,
+            &egress_url,
+            &mut egress_headers,
+            &resolved_secrets,
+        ) {
+            Ok(Some(modified_url)) => {
+                egress_url = modified_url;
+            }
+            Ok(None) => {
+                // Header-only mutation, or host-pattern did not match (silent
+                // skip). Both are correct outcomes.
+            }
+            Err(err) => {
+                // A declared binding matched the URL host but the resolver
+                // returned `None` for its secret name — surface as a hard
+                // failure rather than silently dropping the credential and
+                // letting the request through unauthenticated.
+                return Err(format!("credential injection failed: {err}"));
+            }
+        }
+    }
+
     // Run the blocking client on a dedicated OS thread: reqwest::blocking spins
     // its own runtime internally, which would panic if nested inside the host's
     // tokio worker. A fresh std thread carries no ambient runtime.
@@ -169,8 +227,8 @@ fn try_http_fetch(kernel: &WasmCapabilityKernel, request: &str) -> Result<String
                             .map_err(|e| format!("client build failed: {e}"))?;
                         let parsed_method = reqwest::Method::from_bytes(method.as_bytes())
                             .map_err(|e| format!("invalid method: {e}"))?;
-                        let mut builder = client.request(parsed_method, req.url.as_str());
-                        for (k, v) in &req.headers {
+                        let mut builder = client.request(parsed_method, egress_url.as_str());
+                        for (k, v) in &egress_headers {
                             builder = builder.header(k.as_str(), v.as_str());
                         }
                         if !body.is_empty() {

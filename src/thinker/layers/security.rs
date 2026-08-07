@@ -147,6 +147,7 @@ mod tests {
             writable_roots: vec![std::path::PathBuf::from("/ws/abc")],
             network: NetworkState::AllowAll,
             max_memory_mb: Some(512),
+            permission_profile_id: None,
         });
 
         let layer = SecurityLayer;

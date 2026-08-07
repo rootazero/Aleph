@@ -202,7 +202,9 @@ pub fn build_failover_chain(
     // the same provider/tier picture the chain is built from — so the diagnostic
     // and the engine can never describe different provider sets. Logged loudly
     // here (a silent no-op knob is the failure mode) and carried into
-    // `route_status` for the model.
+    // `route_status` for the model. This is only the BOOT generation: the
+    // `route_config.update` write path re-computes the list on every hot apply
+    // (`RouteObservability::hot_apply_problems`), against the same tier catalog.
     let problems = crate::providers::route_policy::route_problems(&config.route, &tier_catalog);
     for problem in &problems {
         tracing::warn!(
@@ -280,7 +282,15 @@ pub fn build_failover_chain(
         // rust-doctor-disable-next-line excessive-clone
         route: route_handle.clone(),
         chain: Some(global_chain),
-        problems,
+        // Boot generation of the inert-`[route]` list; the hot write path
+        // republishes it through the shared `ArcSwap` (cloned handles share
+        // the same cell, like every other handle in this bundle).
+        problems: Arc::new(arc_swap::ArcSwap::from_pointee(problems)),
+        // The same tier catalog the chain and the boot problem list were built
+        // from, so a hot-applied config's problems are computed against the
+        // identical provider picture.
+        // rust-doctor-disable-next-line excessive-clone
+        tiers: Arc::new(tier_catalog.clone()),
     };
 
     // Per-`provider_hint` overrides: one FailoverProvider per non-primary

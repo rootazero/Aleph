@@ -516,7 +516,7 @@ pub fn parse_mcp_config_file(
             continue;
         }
 
-        caps.push(CapabilityDeclaration::McpServer(McpServerConfig {
+        caps.push(CapabilityDeclaration::McpServer(McpServerConfig::Stdio {
             command,
             args,
             env,
@@ -1122,9 +1122,13 @@ mod tests {
 
         match &caps[0] {
             CapabilityDeclaration::McpServer(m) => {
-                assert_eq!(m.command, "node");
-                assert_eq!(m.args, vec![format!("{}/server.js", dir.path().display())]);
-                assert_eq!(m.env.get("ROOT"), Some(&dir.path().display().to_string()));
+                assert_eq!(m.is_stdio(), true, "expected stdio transport");
+                let (command, args, env) = m
+                    .stdio_command()
+                    .expect("stdio accessor must succeed on a stdio entry");
+                assert_eq!(command, "node");
+                assert_eq!(args, &vec![format!("{}/server.js", dir.path().display())]);
+                assert_eq!(env.get("ROOT"), Some(&dir.path().display().to_string()));
             }
             other => panic!("Expected McpServer, got {:?}", other),
         }

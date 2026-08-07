@@ -485,6 +485,30 @@ impl HarnessRunner for AgentHarnessRunner {
             .as_ref()
         {
             Some(cfg) => {
+                // Per-run serving-model refinement (§2.2): the startup config
+                // is sized for the chain-MINIMUM window (failover-safe floor),
+                // but this run's serving model (`gauge_model`, folding the
+                // session select_model pick / agent model_hint / brain pin)
+                // may be a model that derivation never saw. Re-key budget,
+                // per-model thresholds, and fresh-tail onto it — min-floored
+                // by the chain-minimum, so refinement can only compact
+                // earlier, never later. `refined` owns the per-run config;
+                // everything below (budget, compactor tail, preflight
+                // preventive band) reads the same refined value, keeping the
+                // three consumers consistent by construction.
+                let refined;
+                let cfg = match self.context_budget_refiner.as_ref() {
+                    Some(refiner) => {
+                        refined = refiner.refine_for_serving_model(
+                            cfg,
+                            &gauge_model,
+                            &cost_provider,
+                            self.primary_context_window,
+                        );
+                        &refined
+                    }
+                    None => cfg,
+                };
                 let mut budget_inner = ContextBudget::new(cfg);
                 // Seed ONLY the tokenizer-calibration factor from the previous
                 // run on the same model (see CALIBRATION_CARRYOVER below): the

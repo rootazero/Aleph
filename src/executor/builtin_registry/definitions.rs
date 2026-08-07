@@ -560,6 +560,11 @@ pub const BUILTIN_TOOL_DEFINITIONS: &[BuiltinToolDefinition] = &[
         requires_config: false,
     },
     BuiltinToolDefinition {
+        name: "browser_batch",
+        description: <crate::builtin_tools::browser_tools::batch::BrowserBatchTool as crate::tools::AlephTool>::DESCRIPTION,
+        requires_config: false,
+    },
+    BuiltinToolDefinition {
         name: "browser_console",
         description: <crate::builtin_tools::browser_tools::console::BrowserConsoleTool as crate::tools::AlephTool>::DESCRIPTION,
         requires_config: false,
@@ -1070,7 +1075,8 @@ pub fn create_tool_boxed(
         // BuiltinToolRegistry::with_config() — agent_create/list/delete/switch
         // need agent_registry + workspace_manager; agent_info builds its own
         // catalog.
-        "agent_create" | "agent_list" | "agent_delete" | "agent_switch" | "agent_unbind" | "agent_update" | "agent_info" => None,
+        "agent_create" | "agent_list" | "agent_delete" | "agent_switch" | "agent_unbind"
+        | "agent_update" | "agent_info" => None,
         // self_config requires the per-agent agent_id, injected at construction time
         // in BuiltinToolRegistry — cannot be created standalone here.
         "self_config" => None,
@@ -1151,10 +1157,10 @@ pub fn create_tool_boxed(
         "browser_open" | "browser_click" | "browser_type" | "browser_screenshot"
         | "browser_snapshot" | "browser_navigate" | "browser_tabs" | "browser_select"
         | "browser_evaluate" | "browser_fill_form" | "browser_press_key" | "browser_wait_for"
-        | "browser_console" | "browser_hover" | "browser_scroll" | "browser_pdf"
-        | "browser_network" | "browser_dialog" | "browser_drag" | "browser_upload"
-        | "browser_resize" | "browser_emulate" | "browser_cookies" | "browser_session"
-        | "browser_profile" => None,
+        | "browser_batch" | "browser_console" | "browser_hover" | "browser_scroll"
+        | "browser_pdf" | "browser_network" | "browser_dialog" | "browser_drag"
+        | "browser_upload" | "browser_resize" | "browser_emulate" | "browser_cookies"
+        | "browser_session" | "browser_profile" => None,
         // Skill management tools — always available
         // Phase 2: share the process-wide initialized SkillSystem so
         // skill_status/install/manage see the same registry as the gateway.
@@ -1322,7 +1328,25 @@ mod tests {
     /// output — its findings enumerate every check id — and keeping only what
     /// nothing else says: that the filters exist, and which check is the
     /// expensive one.
-    const CATALOG_DESCRIPTION_CEILING_BYTES: usize = 81_270;
+    /// 2026-08-06, the memory D1–D4 round-3 pass: 81,270 -> 82,462 B. The D4
+    /// acknowledgment contract had only its positive half — "acknowledge after
+    /// a successful write" — stated on all three ladder writers, while every
+    /// one of them can settle WITHOUT writing and still return a successful
+    /// tool result (over-budget hot zone, spent retry budget, a correction
+    /// already on record). The model had no instruction for the case where the
+    /// user asked for something durable and the system declined, so it either
+    /// reported a save that never happened or went quiet. Against the three
+    /// questions: (1) the refusal SHAPE is a runtime fact — which field says
+    /// nothing landed, and that it is not an error — not a lesson in how to
+    /// think; (2) a stronger model still cannot infer that
+    /// `flag_user_correction` keys its duplicate check on severity, so
+    /// escalation stays open; (3) `no_sentence_is_stated_twice` covers the
+    /// catalog and passes. Paid for in part by cutting `remember`'s one-line
+    /// copy of the destination ladder (-167 B): the authoritative ladder ships
+    /// in `MemoryProtocolLayer` on every non-Minimal request, and a second
+    /// abbreviated copy in a tool is exactly the near-repeat question 3 asks
+    /// about.
+    const CATALOG_DESCRIPTION_CEILING_BYTES: usize = 82_462;
 
     #[test]
     fn catalog_description_bytes_ratchet() {
@@ -1394,6 +1418,7 @@ mod tests {
         assert!(names.contains(&"browser_fill_form".to_string()));
         assert!(names.contains(&"browser_press_key".to_string()));
         assert!(names.contains(&"browser_wait_for".to_string()));
+        assert!(names.contains(&"browser_batch".to_string()));
         assert!(names.contains(&"browser_console".to_string()));
         assert!(names.contains(&"browser_hover".to_string()));
         assert!(names.contains(&"browser_scroll".to_string()));
@@ -1461,6 +1486,7 @@ mod tests {
         assert!(create_tool_boxed("browser_fill_form", None).is_none());
         assert!(create_tool_boxed("browser_press_key", None).is_none());
         assert!(create_tool_boxed("browser_wait_for", None).is_none());
+        assert!(create_tool_boxed("browser_batch", None).is_none());
         assert!(create_tool_boxed("browser_console", None).is_none());
         assert!(create_tool_boxed("browser_profile", None).is_none());
     }

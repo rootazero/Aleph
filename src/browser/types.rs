@@ -54,16 +54,24 @@ pub enum HistoryNav {
 }
 
 /// Condition a `wait_for` call polls for on a tab (openclaw parity:
-/// text / selector / url). Internal to the backend contract — the tool layer
-/// builds one from its args, so no serde derives are needed here.
+/// text / textGone / selector / url / time). Internal to the backend
+/// contract — the tool layer builds one from its args, so no serde derives
+/// are needed here.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum WaitCondition {
     /// The rendered page text contains this substring.
     Text(String),
+    /// The rendered page text no longer contains this substring (openclaw
+    /// `textGone` parity) — the wait for a spinner / "Loading…" to disappear.
+    TextGone(String),
     /// A CSS selector matches at least one element.
     Selector(String),
     /// The tab's current URL contains this substring.
     UrlContains(String),
+    /// Plain delay in milliseconds (openclaw `time` parity) — for animations
+    /// and debounced renders that expose no observable condition. Never
+    /// polled; resolves after the (pre-clamped) delay.
+    Time(u64),
 }
 
 /// Options for taking a screenshot.

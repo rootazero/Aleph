@@ -47,7 +47,6 @@ fn row_to_raw_memory(row: &rusqlite::Row) -> rusqlite::Result<RawMemory> {
         agent_id: row.get("agent_id")?,
         session_id: row.get("session_id")?,
         path: row.get("path")?,
-        layer: row.get("layer")?,
         attachment_text: row.get("attachment_text")?,
         is_processed: is_processed_int != 0,
         created_at: row.get("created_at")?,
@@ -66,8 +65,8 @@ impl RawMemoryStore for SqliteMemoryBackend {
 
         conn.execute(
             "INSERT INTO raw_memories \
-             (id, content, source, source_detail, agent_id, session_id, path, layer, attachment_text, is_processed, created_at) \
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
+             (id, content, source, source_detail, agent_id, session_id, path, attachment_text, is_processed, created_at) \
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
             params![
                 raw.id,
                 raw.content,
@@ -76,7 +75,6 @@ impl RawMemoryStore for SqliteMemoryBackend {
                 raw.agent_id,
                 raw.session_id,
                 raw.path,
-                raw.layer,
                 raw.attachment_text,
                 i64::from(raw.is_processed),
                 raw.created_at,
@@ -93,8 +91,8 @@ impl RawMemoryStore for SqliteMemoryBackend {
 
         conn.execute(
             "INSERT OR IGNORE INTO raw_memories \
-             (id, content, source, source_detail, agent_id, session_id, path, layer, attachment_text, is_processed, created_at) \
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
+             (id, content, source, source_detail, agent_id, session_id, path, attachment_text, is_processed, created_at) \
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
             params![
                 raw.id,
                 raw.content,
@@ -103,7 +101,6 @@ impl RawMemoryStore for SqliteMemoryBackend {
                 raw.agent_id,
                 raw.session_id,
                 raw.path,
-                raw.layer,
                 raw.attachment_text,
                 i64::from(raw.is_processed),
                 raw.created_at,
@@ -123,7 +120,7 @@ impl RawMemoryStore for SqliteMemoryBackend {
 
         let mut stmt = conn
             .prepare(
-                "SELECT id, content, source, source_detail, agent_id, session_id, path, layer, attachment_text, \
+                "SELECT id, content, source, source_detail, agent_id, session_id, path, attachment_text, \
                  is_processed, created_at \
                  FROM raw_memories \
                  WHERE is_processed = 0 AND agent_id = ?1 \
@@ -234,7 +231,7 @@ impl RawMemoryStore for SqliteMemoryBackend {
         let pattern = like_prefix_pattern(path_prefix);
         let mut stmt = conn
             .prepare(
-                "SELECT id, content, source, source_detail, agent_id, session_id, path, layer, attachment_text, \
+                "SELECT id, content, source, source_detail, agent_id, session_id, path, attachment_text, \
                  is_processed, created_at \
                  FROM raw_memories \
                  WHERE path LIKE ?1 ESCAPE '\\' AND agent_id = ?2 \
@@ -268,7 +265,7 @@ impl RawMemoryStore for SqliteMemoryBackend {
         let pattern = like_prefix_pattern(path_prefix);
         let mut stmt = conn
             .prepare(
-                "SELECT id, content, source, source_detail, agent_id, session_id, path, layer, attachment_text, \
+                "SELECT id, content, source, source_detail, agent_id, session_id, path, attachment_text, \
                  is_processed, created_at \
                  FROM raw_memories \
                  WHERE path LIKE ?1 ESCAPE '\\' AND agent_id = ?2 AND created_at > ?3 \
@@ -302,7 +299,7 @@ impl RawMemoryStore for SqliteMemoryBackend {
 
         let mut stmt = conn
             .prepare(
-                "SELECT id, content, source, source_detail, agent_id, session_id, path, layer, attachment_text, \
+                "SELECT id, content, source, source_detail, agent_id, session_id, path, attachment_text, \
                  is_processed, created_at \
                  FROM raw_memories \
                  WHERE path = ?1 AND agent_id = ?2 \
@@ -335,7 +332,7 @@ impl RawMemoryStore for SqliteMemoryBackend {
 
         let mut stmt = conn
             .prepare(
-                "SELECT id, content, source, source_detail, agent_id, session_id, path, layer, attachment_text, \
+                "SELECT id, content, source, source_detail, agent_id, session_id, path, attachment_text, \
                  is_processed, created_at \
                  FROM raw_memories \
                  WHERE source = ?1 AND agent_id = ?2 \
@@ -371,7 +368,7 @@ impl RawMemoryStore for SqliteMemoryBackend {
         // ?1 = agent_id; ?2 .. ?N+1 = ids
         let placeholders: Vec<String> = (0..ids.len()).map(|i| format!("?{}", i + 2)).collect();
         let sql = format!(
-            "SELECT id, content, source, source_detail, agent_id, session_id, path, layer, attachment_text, \
+            "SELECT id, content, source, source_detail, agent_id, session_id, path, attachment_text, \
              is_processed, created_at \
              FROM raw_memories \
              WHERE agent_id = ?1 AND id IN ({})",
@@ -403,7 +400,7 @@ impl RawMemoryStore for SqliteMemoryBackend {
         let conn = lock_conn!(self)?;
         let mut stmt = conn
             .prepare(
-                "SELECT id, content, source, source_detail, agent_id, session_id, path, layer, attachment_text, \
+                "SELECT id, content, source, source_detail, agent_id, session_id, path, attachment_text, \
                  is_processed, created_at \
                  FROM raw_memories \
                  WHERE agent_id = ?1 AND session_id = ?2 \
@@ -756,8 +753,8 @@ mod tests {
             let conn = backend.conn.lock().unwrap();
             conn.execute(
                 "INSERT INTO raw_memories \
-                 (id, content, source, source_detail, agent_id, session_id, path, layer, attachment_text, is_processed, created_at) \
-                 VALUES ('legacy-1', 'legacy content', 'tool_output', NULL, 'agent-legacy', NULL, NULL, NULL, NULL, 0, 1000)",
+                 (id, content, source, source_detail, agent_id, session_id, path, attachment_text, is_processed, created_at) \
+                 VALUES ('legacy-1', 'legacy content', 'tool_output', NULL, 'agent-legacy', NULL, NULL, NULL, 0, 1000)",
                 [],
             )
             .unwrap();
