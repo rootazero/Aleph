@@ -204,10 +204,13 @@ impl AlephTool for AgentUpdateTool {
 /// Apply the runtime patch to the `AgentInstanceConfig`. Today the live
 /// `AgentInstanceConfig` is not `mut`-friendly post-construction — the
 /// fields a model can patch (name / model / system_prompt / display_name)
-/// are stored on the config struct but the harness reads from
-/// `SoulManifest`/`ResolvedAgent` at prompt-build time. We still record the
-/// change so `fields_changed` is honest about what the call did; a future
-/// PR that wires a true live config swap will pick this up here.
+/// are stored on the config struct, while the harness rebuilds the prompt
+/// each turn from the on-disk identity files (`SOUL.md` via `SoulLayer`,
+/// `AGENTS.md` via `ProfileLayer`) and the resolved agent definition. We
+/// still record the change so `fields_changed` is honest about what the call
+/// did; the durable write happens in `build_toml_patch` →
+/// `AgentManager::update`, and a future PR that wires a true live config swap
+/// will pick this up here.
 fn apply_runtime_patch(
     _config: &AgentInstanceConfig,
     args: &AgentUpdateArgs,

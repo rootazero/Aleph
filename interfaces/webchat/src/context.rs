@@ -1158,9 +1158,7 @@ impl DashboardState {
                             // on the gateway, so the one-time client-side handlers stay
                             // registered.
                             for topic in state_for_subscribe.topics_to_replay() {
-                                if let Err(e) =
-                                    state_for_subscribe.subscribe_topic(&topic).await
-                                {
+                                if let Err(e) = state_for_subscribe.subscribe_topic(&topic).await {
                                     web_sys::console::error_1(
                                         &format!("Failed to subscribe to {topic} events: {e}")
                                             .into(),

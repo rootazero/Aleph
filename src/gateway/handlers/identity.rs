@@ -14,7 +14,7 @@
 //!
 //! | Method | Description |
 //! |--------|-------------|
-//! | identity.get   | Live `SOUL.md` (raw + parsed structured preview) + identity-file status |
+//! | identity.get   | Live `SOUL.md` (raw + parsed structured preview), parsed `IDENTITY.md` rich fields, + identity-file status |
 //! | identity.set   | Write an identity file (`SOUL.md` by default), snapshotting the prior version |
 //! | identity.clear | Snapshot and remove `SOUL.md` (revert to the default persona) |
 //! | identity.list  | List identity files (exists / size / path) |
@@ -33,6 +33,7 @@ use crate::thinker::identity_files::{
     backup_identity_file, list_identity_file_status, validate_identity_file_name,
     write_identity_file,
 };
+use crate::thinker::identity_profile::AgentIdentityProfile;
 use crate::thinker::soul::SoulManifest;
 
 /// The default identity file that `get` / `set` / `clear` target when the
@@ -103,8 +104,9 @@ pub type SharedIdentityCtx = Arc<IdentityHandlerContext>;
 // ============================================================================
 
 /// Handle `identity.get` — return the live `SOUL.md` (raw + a best-effort
-/// structured preview parsed via [`SoulManifest::from_file`]) plus the status
-/// of every identity file.
+/// structured preview parsed via [`SoulManifest::from_markdown`]), the parsed
+/// rich-identity fields from `IDENTITY.md`, plus the status of every identity
+/// file.
 pub async fn handle_get(request: JsonRpcRequest, ctx: SharedIdentityCtx) -> JsonRpcResponse {
     let (agent_id, agent_dir) = match ctx.resolve(request.params.as_ref()) {
         Ok(v) => v,
@@ -113,9 +115,24 @@ pub async fn handle_get(request: JsonRpcRequest, ctx: SharedIdentityCtx) -> Json
 
     let soul_path = agent_dir.join(DEFAULT_IDENTITY_FILE);
     let soul_md = tokio::fs::read_to_string(&soul_path).await.ok();
-    // Structured preview parsed from the live SOUL.md. Best-effort: an
-    // unparseable or absent file still returns its raw text (or null).
-    let parsed = SoulManifest::from_file(&soul_path).ok();
+    // Structured preview parsed from the text already read above. Parsing the
+    // in-memory string rather than re-opening the path keeps this handler off
+    // blocking `std::fs` inside the async runtime and removes a second read
+    // that could observe a different file than the one returned as `soul_md`.
+    let parsed = soul_md
+        .as_deref()
+        .and_then(|c| SoulManifest::from_markdown(c).ok());
+
+    // Rich identity fields (name / role / vibe / emoji / language) parsed from
+    // IDENTITY.md. These are archetype-seeded at creation and were previously
+    // write-only — no reader existed, so no caller could render the agent's
+    // chosen emoji or name without re-implementing the parse.
+    let identity_dir = agent_dir.clone();
+    let profile =
+        tokio::task::spawn_blocking(move || AgentIdentityProfile::from_agent_dir(&identity_dir))
+            .await
+            .unwrap_or_default();
+
     let files = list_identity_file_status(&agent_dir);
     let has_custom_identity = files.iter().any(|f| f.exists);
 
@@ -123,6 +140,7 @@ pub async fn handle_get(request: JsonRpcRequest, ctx: SharedIdentityCtx) -> Json
         "agent_id": agent_id,
         "soul_md": soul_md.map_or(Value::Null, Value::String),
         "parsed": serde_json::to_value(&parsed).unwrap_or(Value::Null),
+        "identity": serde_json::to_value(&profile).unwrap_or(Value::Null),
         "files": serde_json::to_value(&files).unwrap_or_default(),
         "has_custom_identity": has_custom_identity,
     });
@@ -305,6 +323,37 @@ mod tests {
         assert_eq!(r["has_custom_identity"], false);
         // All canonical files listed, none existing.
         assert_eq!(r["files"].as_array().unwrap().len(), 5);
+    }
+
+    #[tokio::test]
+    async fn get_exposes_parsed_identity_md_fields() {
+        // Regression: IDENTITY.md's rich fields are archetype-seeded at agent
+        // creation but had no reader — `identity.get` could return the raw
+        // SOUL.md while no caller could learn the agent's name or emoji
+        // without re-implementing the parse. The `identity` block closes that.
+        let tmp = TempDir::new().unwrap();
+        let agent_dir = tmp.path().join("main");
+        tokio::fs::create_dir_all(&agent_dir).await.unwrap();
+        tokio::fs::write(
+            agent_dir.join("IDENTITY.md"),
+            "- **Name:** Ada\n\
+             - **Role:** librarian _(edit to taste)_\n\
+             - **Emoji:** 📚\n\
+             - **Language:** _(preferred language for conversation)_\n",
+        )
+        .await
+        .unwrap();
+
+        let ctx = ctx_with_agent(tmp.path(), "main");
+        let resp = handle_get(JsonRpcRequest::with_id("identity.get", None, json!(1)), ctx).await;
+        assert!(resp.is_success());
+        let identity = &resp.result.unwrap()["identity"];
+        assert_eq!(identity["name"], "Ada");
+        // The editorial aside is stripped; the seeded value survives.
+        assert_eq!(identity["role"], "librarian");
+        assert_eq!(identity["emoji"], "📚");
+        // A bare placeholder must not be reported as a real value.
+        assert!(identity["language"].is_null());
     }
 
     #[tokio::test]

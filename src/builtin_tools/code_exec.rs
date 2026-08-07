@@ -391,6 +391,29 @@ Examples:
             }
         }
 
+        // Inject Aleph session context into the child environment so any
+        // shell / python / node script the model spawns can self-identify.
+        // `ALEPH_SESSION_ID` mirrors the per-session workspace key the
+        // sandbox already targets — same value, surfaced for the script.
+        // `ALEPH_TOOL_NAME` lets a script detect that it is running under
+        // Aleph (vs. a plain interactive shell) and opt into defensive
+        // paths (e.g. `[[ -n "$ALEPH_SESSION_ID" ]] && rm -rf build/`).
+        // Both are sourced from task-locals already on this stack, so there
+        // is no extra IPC cost; values are stable for the call.
+        env.insert(
+            "ALEPH_SESSION_ID".to_string(),
+            serde_json::to_string(&session_id).unwrap_or_else(|_| format!("{session_id:?}")),
+        );
+        env.insert(
+            "ALEPH_TOOL_NAME".to_string(),
+            match args.language {
+                Language::Shell => "bash",
+                Language::Python => "code_exec:python",
+                Language::JavaScript => "code_exec:javascript",
+            }
+            .to_string(),
+        );
+
         let cmd = SandboxCommand {
             session_id,
             program: invocation.program,
@@ -1478,6 +1501,70 @@ mod tests {
             justification_seen_by_sandbox(Some("   \n  ".to_string())).await,
             None
         );
+    }
+
+    /// Aleph context vars (ALEPH_SESSION_ID / ALEPH_TOOL_NAME) are injected
+    /// into the child env so a script can self-identify — `bash` actually
+    /// gets the literal string `"bash"` (it is the BashExecTool wrapper),
+    /// not `"code_exec:shell"`, so scripts that test `[[ $ALEPH_TOOL_NAME ==
+    /// bash ]]` work without the model remembering the wrapper detail.
+    /// Session id is the JSON form the sandbox already uses for its
+    /// workspace key — same value, surfaced for the script.
+    async fn env_seen_by_sandbox(language: Language) -> (String, String) {
+        let mock = MockSandbox::new(ok_output(""));
+        let sandbox: Arc<dyn Sandbox> = mock.clone();
+        let tool = CodeExecTool::new().with_sandbox(sandbox);
+        let session = sid();
+        SESSION_ID
+            .scope(session.clone(), async {
+                tool.call(CodeExecArgs {
+                    language,
+                    code: "echo hi".to_string(),
+                    working_dir: None,
+                    timeout_seconds: Some(3),
+                    allow_network: false,
+                    allow_subprocess: false,
+                    extra_writable_paths: Vec::new(),
+                    justification: None,
+                })
+                .await
+                .unwrap();
+            })
+            .await;
+        let calls = mock.calls.lock().await;
+        let cmd = &calls[0];
+        (
+            cmd.env.get("ALEPH_SESSION_ID").cloned().unwrap_or_default(),
+            cmd.env.get("ALEPH_TOOL_NAME").cloned().unwrap_or_default(),
+        )
+    }
+
+    #[tokio::test]
+    async fn bash_child_env_carries_aleph_session_and_tool_name() {
+        let session = sid();
+        let expected_id = serde_json::to_string(&session).unwrap();
+        SESSION_ID
+            .scope(session.clone(), async {
+                let (id, name) = env_seen_by_sandbox(Language::Shell).await;
+                assert_eq!(id, expected_id, "session id is the JSON sandbox form");
+                assert_eq!(name, "bash", "shell wraps as bash, not code_exec:shell");
+            })
+            .await;
+    }
+
+    #[tokio::test]
+    async fn non_shell_languages_carry_code_exec_tool_name() {
+        // Python / JS callers go straight through `code_exec` — the
+        // ALEPH_TOOL_NAME matches the language so a python script can tell
+        // itself apart from a bash one.
+        SESSION_ID
+            .scope(sid(), async {
+                let (_, name_py) = env_seen_by_sandbox(Language::Python).await;
+                assert_eq!(name_py, "code_exec:python");
+                let (_, name_js) = env_seen_by_sandbox(Language::JavaScript).await;
+                assert_eq!(name_js, "code_exec:javascript");
+            })
+            .await;
     }
 
     #[test]
