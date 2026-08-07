@@ -7,6 +7,7 @@ pub mod artifact_ping;
 mod impls;
 mod instant_buffer;
 pub mod origin_fanout;
+pub mod redacting;
 pub mod team_fanout;
 mod types;
 
@@ -21,6 +22,7 @@ pub use types::{
 
 pub use impls::{CollectingEventEmitter, DynEventEmitter, GatewayEventEmitter, NoOpEventEmitter};
 pub use instant_buffer::InstantBufferingEmitter;
+pub use redacting::RedactingEmitter;
 
 /// The gateway event bus injected once at boot (`team_fanout::set_team_event_bus`).
 /// The slot is not team-specific: any out-of-band producer that must reach the
