@@ -174,29 +174,65 @@ pub struct ChatCancelParams {
     pub run_id: String,
 }
 
+/// The response an uncancellable `run_id` produces — whether no such fan-out
+/// was ever minted here, it already settled, or it belongs to a team the caller
+/// cannot reach.
+///
+/// One constructor so the three causes stay byte-identical. Ownership is
+/// resolved BEFORE the tracker is consulted, so a caller holding someone else's
+/// tree id learns nothing from the reply — not even that the run exists. Same
+/// no-existence-oracle contract as
+/// [`visibility::team_not_found`](crate::gateway::handlers::teams::visibility::team_not_found),
+/// keyed on the id the caller supplied, and the wording is the one this handler
+/// already returned for an unknown id so a single-user deployment sees
+/// byte-identical output to before.
+#[must_use]
+fn fanout_not_cancellable(id: Option<serde_json::Value>, run_id: &str) -> JsonRpcResponse {
+    JsonRpcResponse::error(
+        id,
+        RESOURCE_NOT_FOUND,
+        format!("No running team-chat fan-out with run_id '{run_id}' (already settled or unknown)"),
+    )
+}
+
 /// teams.chat.cancel — stop an in-flight `teams.chat.send` fan-out tree.
 ///
 /// `run_id` is the id `teams.chat.send` returned (the tree's tracker node,
-/// registered by `dispatch_user`).
+/// registered by `register_fanout`).
 ///
-/// **P1 note — deliberately not ownership-gated.** The tracker is process
-/// global and keyed by run id, and there is no run → team mapping to gate on.
-/// It stays open on the same reasoning §4.11 applied to `BackgroundAgentTracker`
-/// by-id access: a run id is an unguessable capability the caller can only have
-/// received from their own `teams.chat.send` response or from a
-/// `team.<id>.fanout` event they were already entitled to. The rule that
-/// matters is that no ENUMERATION face hands run ids out across users — if one
-/// is ever added to `teams.*`, this handler needs a real gate at the same time.
+/// **Ownership gate (2026-08-07).** The tracker is process-global and keyed by
+/// run id, so the run → team mapping this needs comes from
+/// [`broadcast::team_of_fanout_run`](crate::teams::broadcast::team_of_fanout_run),
+/// recorded at the single point a tree run id is minted. The team is then run
+/// through the same [`gate_team`](super::visibility::gate_team) every other
+/// addressed `teams.*` method uses, so this handler is enforced by the one
+/// ownership predicate rather than a second derivation of it. A team deleted
+/// mid-fan-out therefore refuses even its owner — the same fail-closed reading
+/// `gate_task` gives an orphaned task, and the fan-out's own recursion already
+/// stops at the next level when `get_team` comes back empty.
 ///
-/// Order matters: poison FIRST so the
+/// It was previously open, on the recorded reasoning that a run id is an
+/// unguessable capability obtainable only from one's own `teams.chat.send`
+/// response or a `team.<id>.fanout` event one was already entitled to. Both
+/// halves of that are the wrong kind of guarantee: the entitlement clause made
+/// this handler's safety depend on another subsystem's event-classification
+/// table with no compile-time link to it, and that table did not in fact hold —
+/// the whole `team.*` plane classified as `Global`, so every connected user
+/// received every other user's tree run ids until the plane was owner-scoped in
+/// the same round as this gate.
+///
+/// Order matters twice. The gate runs BEFORE the poison: a refused caller must
+/// not be able to kill a fan-out on their way to a `not_found`, which is the
+/// difference between a gate and a decoration. Then poison FIRST so the
 /// recursive fan-out spawns no new members while we walk, THEN abort every
 /// in-flight member run through the engine's per-run CancellationToken path —
 /// the same `ExecutionAdapter::cancel` the `agent.cancel` RPC uses. Pure I/O
-/// plumbing (R4): no reasoning, no new registry — the tree lives in the
-/// process-global `BackgroundAgentTracker`.
+/// plumbing (R4): no reasoning — the tree lives in the process-global
+/// `BackgroundAgentTracker`.
 pub async fn handle_chat_cancel(
     request: JsonRpcRequest,
     context: Arc<crate::gateway::context::GatewayContext>,
+    store: Arc<dyn TeamStore>,
 ) -> JsonRpcResponse {
     let params: ChatCancelParams = match parse_params(&request) {
         Ok(p) => p,
@@ -211,19 +247,28 @@ pub async fn handle_chat_cancel(
         );
     }
 
+    // 0. Ownership. An id this process never minted is unattributable and is
+    //    refused for the same reason a foreign team is: fail closed, and say
+    //    the same thing either way.
+    let Some(team_id) = crate::teams::broadcast::team_of_fanout_run(&params.run_id) else {
+        return fanout_not_cancellable(request.id, &params.run_id);
+    };
+    if crate::gateway::handlers::teams::visibility::gate_team(request.id.clone(), &store, &team_id)
+        .await
+        .is_err()
+    {
+        // Deliberately NOT the gate's own team-shaped response: it names the
+        // team id, which is precisely the identifier a caller who could not
+        // see the team must not learn.
+        return fanout_not_cancellable(request.id, &params.run_id);
+    }
+
     let tracker = crate::agents::background_tracker::BackgroundAgentTracker::global();
     // 1. Poison the tree: fires the tree-level token stored at registration,
     //    so dispatch/run_member spawn no further members.
     let tree_found = tracker.cancel(&params.run_id);
     if !tree_found {
-        return JsonRpcResponse::error(
-            request.id,
-            RESOURCE_NOT_FOUND,
-            format!(
-                "No running team-chat fan-out with run_id '{}' (already settled or unknown)",
-                params.run_id
-            ),
-        );
+        return fanout_not_cancellable(request.id, &params.run_id);
     }
     // 2. Walk the tree: every still-running member registered under this
     //    run_id gets its engine run aborted (fires the per-run token). A

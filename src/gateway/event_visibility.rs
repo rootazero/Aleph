@@ -279,14 +279,16 @@ const MAX_TRACKED_RUNS: usize = 4096;
 const MAX_CACHED_SESSION_OWNERS: usize = 4096;
 const MAX_CACHED_TEAM_OWNERS: usize = 4096;
 
-/// Insert into one of this module's three caches, evicting in insertion order
-/// once `cap` is exceeded.
+/// Insert into a bounded insertion-order cache, evicting the oldest key once
+/// `cap` is exceeded.
 ///
-/// Written once and shared rather than copied a third time: the run index, the
-/// session-ownership cache and the team-owner cache all need byte-identical
-/// hygiene, and three hand-copied versions of a `while len > cap` loop is how
-/// one of them ends up unbounded after a refactor nobody applied everywhere.
-fn remember<V>(
+/// Written once and shared rather than copied a fourth time: this module's run
+/// index, session-ownership cache and team-owner cache all need byte-identical
+/// hygiene, as does `teams::broadcast`'s fan-out `run_id → team_id` index, and
+/// four hand-copied versions of a `while len > cap` loop is how one of them
+/// ends up unbounded after a refactor nobody applied everywhere. `pub(crate)`
+/// for that fourth caller only — the caps themselves stay with their owners.
+pub(crate) fn remember<V>(
     order: &mut VecDeque<String>,
     map: &mut HashMap<String, V>,
     key: String,

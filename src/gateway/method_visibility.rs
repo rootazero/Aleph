@@ -306,18 +306,23 @@
 //! reach the ~20 methods that address a team through the `coord_tasks` DAG (a
 //! different database) rather than by `team_id`.
 //!
-//! Three `teams.*` methods are deliberately absent rather than registered:
+//! `teams.chat.cancel` is the one entry that is addressed by something other
+//! than a `team_id` or a `task_id`: its key is the fan-out tree's `run_id`. It
+//! resolves that to a team through `teams::broadcast::team_of_fanout_run` — an
+//! index written at the single point a tree run id is minted — and then calls
+//! the same `gate_team` as its siblings, so it is `KeyChecked` through one
+//! indirection rather than a third derivation of the predicate. It was
+//! deliberately absent until 2026-08-07 on the reasoning that a run id is an
+//! unguessable capability; that reasoning outsourced the property to the event
+//! plane's classification table, which was handing every user every other
+//! user's tree run ids the whole time.
+//!
+//! Two `teams.*` methods are deliberately absent rather than registered:
 //!
 //! - `teams.create` — creates; there is no addressed record to check yet, same
 //!   ruling as `session.create` / `group_chat.start`. The new row is stamped.
 //! - `teams.list_templates` — reads template files off disk; carries no user
 //!   data of any kind.
-//! - `teams.chat.cancel` — addressed by `run_id` against the process-global
-//!   `BackgroundAgentTracker`, with no run → team mapping to gate on. Left open
-//!   on the §4.11 reasoning (an unguessable capability the caller can only have
-//!   received from their own `teams.chat.send`), recorded at the handler. If a
-//!   `teams.*` ENUMERATION face for run ids is ever added, this needs a real
-//!   gate in the same change.
 //!
 //! Like every list in this file it is a curated pin, not a generated one: a
 //! brand-new `teams.*` sibling does not fail a test by being absent. The
@@ -481,6 +486,9 @@ pub const SCOPED_METHODS: &[(&str, Treatment)] = &[
     ("teams.delete", Treatment::KeyChecked),
     ("teams.usage", Treatment::KeyChecked),
     ("teams.chat.send", Treatment::KeyChecked),
+    // Addressed by the fan-out tree's `run_id`, resolved to its team through
+    // `teams::broadcast::team_of_fanout_run` before the shared `gate_team`.
+    ("teams.chat.cancel", Treatment::KeyChecked),
     ("teams.chat.thread", Treatment::KeyChecked),
     ("teams.chat.history", Treatment::KeyChecked),
     ("teams.list_tasks", Treatment::KeyChecked),
@@ -772,12 +780,16 @@ mod tests {
         assert_eq!(treatment_of("group_chat.start"), None);
     }
 
-    /// The `teams.*` family, tightened 2026-08-06. Curated pin: a deletion or
-    /// typo in the block above fails here by name.
+    /// The `teams.*` family, tightened 2026-08-06 (`teams.chat.cancel` joined
+    /// it 2026-08-07). Curated pin: a deletion or typo in the block above fails
+    /// here by name.
     ///
-    /// The three deliberate absences are asserted too — an unregistered method
-    /// and a method someone forgot are indistinguishable in `treatment_of`, so
-    /// the ruling has to be written down somewhere that breaks if reversed.
+    /// The two remaining deliberate absences are asserted too — an unregistered
+    /// method and a method someone forgot are indistinguishable in
+    /// `treatment_of`, so the ruling has to be written down somewhere that
+    /// breaks if reversed. `teams.chat.cancel` used to be the third; moving it
+    /// into the enforced loop is what makes this pin fail if the gate is ever
+    /// removed again.
     #[test]
     fn every_teams_method_is_registered_or_deliberately_absent() {
         for m in ["teams.list", "teams.snapshot.list"] {
@@ -796,6 +808,9 @@ mod tests {
             "teams.delete",
             "teams.usage",
             "teams.chat.send",
+            // Keyed by a fan-out `run_id`, not a `team_id` — resolved through
+            // the mint-time index, then gated by the same `gate_team`.
+            "teams.chat.cancel",
             "teams.chat.thread",
             "teams.chat.history",
             "teams.list_tasks",
@@ -824,7 +839,7 @@ mod tests {
         ] {
             assert_eq!(treatment_of(m), Some(Treatment::KeyChecked), "{m}");
         }
-        for m in ["teams.create", "teams.list_templates", "teams.chat.cancel"] {
+        for m in ["teams.create", "teams.list_templates"] {
             assert_eq!(
                 treatment_of(m),
                 None,

@@ -1625,6 +1625,11 @@ pub(in crate::commands::start) async fn register_agent_handlers(
                 let chat_team_planner = team_planner_provider.clone();
                 let chat_event_bus = event_bus.clone();
                 let chat_coord_store = coord_store.clone();
+                // teams.chat.cancel resolves its run_id to a team and gates it
+                // through the same ScopedTeamStore teams.chat.send uses, so it
+                // needs its own handle taken before `ts` moves into the send
+                // closure below.
+                let chat_cancel_store = ts.clone();
                 // Map the optional [team_broadcast] TOML onto the runtime config.
                 // Each field falls back to the live BroadcastConfig::default() (no
                 // default duplication / drift). A `0` for any guard would make a
@@ -1695,8 +1700,10 @@ pub(in crate::commands::start) async fn register_agent_handlers(
                     .handlers_mut()
                     .register("teams.chat.cancel", move |req| {
                         let ctx = chat_cancel_ctx.clone();
+                        let store = chat_cancel_store.clone();
                         async move {
-                            alephcore::gateway::handlers::teams::handle_chat_cancel(req, ctx).await
+                            alephcore::gateway::handlers::teams::handle_chat_cancel(req, ctx, store)
+                                .await
                         }
                     });
             }

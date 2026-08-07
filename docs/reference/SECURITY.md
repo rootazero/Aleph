@@ -1156,8 +1156,12 @@ after (verified by `single_user_fixture_is_byte_identical_after_upgrade`,
   asks "does this method's answer depend on who's asking, and is that
   enforced"). Covers `sessions.*`/`session.*`/`chat.*`,
   `memory.*`/`artifacts.*`/`clarification.*`/`subagent.tree`/`graph.query`
-  and (since 2026-08-06) all 34 addressed `teams.*` methods — see that
-  file's module doc for the full per-method breakdown.
+  and (since 2026-08-06) every `teams.*` method that addresses a record or
+  filters a list, `teams.chat.cancel` included since 2026-08-07 — see that
+  file's module doc for the full per-method breakdown and for the two
+  siblings deliberately left out of the table. The literal count that used to
+  stand here is gone on purpose — it disagreed with the table by one; the
+  table is the source.
 - **Team ownership** (`src/teams/scoped.rs`). P1 originally shipped `teams.*`
   as org-shared: `Team` had no owner field, so there was nothing to check
   without first inventing an ownership model. That was overturned by human
@@ -1182,6 +1186,15 @@ after (verified by `single_user_fixture_is_byte_identical_after_upgrade`,
     and reach the ~20 methods that address a team through the `coord_tasks`
     DAG — a different database the team store cannot see. A task with no team
     reads as an unstamped record (the legacy owner's), never as public.
+  - `teams.chat.cancel` is a third shape: its key is a fan-out tree
+    `run_id`, which neither store can resolve. `register_fanout` — the single
+    point a tree run id is minted — records `run_id → team_id` in a bounded
+    index (`teams::broadcast::team_of_fanout_run`), and the handler resolves
+    through it into the same `gate_team`. It was open until 2026-08-07 on the
+    reasoning that a run id is an unguessable capability; that made this
+    handler's safety depend on the event plane's classification table, which
+    was in fact broadcasting every user's tree run ids to everyone. A gate
+    that is really another subsystem's invariant is not a gate.
   - Six `team_*` tools are the tool-side twin of that second case
     (`team_task_control`, `workflow_step_review`, `task_comment`,
     `task_exit_journal`, `task_submit`, `team_workflow_canvas`): they address
@@ -1275,15 +1288,7 @@ after (verified by `single_user_fixture_is_byte_identical_after_upgrade`,
      if a member explicitly escalates their own session to `Auto`/`Full`
      (the member default is `Ask`). Pre-existing, not introduced by P1;
      recommended as a follow-up task.
-  5. `teams.chat.cancel` is addressed by `run_id` against the process-global
-     `BackgroundAgentTracker`, which has no run → team mapping to gate on.
-     Left open on the §4.11 reasoning that a run id is an unguessable
-     capability the caller can only have received from their own
-     `teams.chat.send` response or a `team.<id>.fanout` event they were
-     already entitled to. **The condition that invalidates this**: adding any
-     `teams.*` ENUMERATION face that hands run ids out across users. Recorded
-     at the handler.
-  6. The legacy `proj-*` (project-directory feature) write side of
+  5. The legacy `proj-*` (project-directory feature) write side of
      `OPEN_LOOPS.md` is pinned `project_scoped = false` on both read and
      write for a `proj-` session — widening it needs a persisted project
      root on the session-close path that doesn't exist yet. Personal scope
