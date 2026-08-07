@@ -139,18 +139,26 @@ fn phase4_with_runtime_context_populated_emits_runtime_environment_on_basic_path
         prompt.contains("<environment_context>"),
         "RuntimeContextLayer must emit on Basic path when runtime_context is populated"
     );
-    // Per-run / per-hour facts ride the Dynamic runtime line…
-    assert!(prompt.contains("cwd=/srv/aleph"));
-    assert!(prompt.contains("model=test-provider"));
+    // Per-run / per-hour facts ride the Dynamic `<environment_context>` block,
+    // as XML elements — `to_dynamic_line`'s `key=value` shape was retired in
+    // the §2.3 round (see `prompt_contract.rs`), and asserting the retired
+    // spelling is why this test sat red.
+    assert!(prompt.contains("<cwd>/srv/aleph</cwd>"), "{prompt}");
+    assert!(prompt.contains("<model>test-provider</model>"), "{prompt}");
     assert!(prompt.contains("(UTC)"));
     // …while the process-invariant ones are stated ONCE, by the Stable
     // `## Environment` section, in its Markdown-bullet shape.
     assert!(prompt.contains("- **OS**: linux (aarch64)"), "{prompt}");
     assert!(prompt.contains("- **Shell**: fish"), "{prompt}");
     assert!(prompt.contains("- **Host**: ci-runner"), "{prompt}");
-    // Neither half may restate the other's facts (R9).
-    assert!(!prompt.contains("os=linux"), "{prompt}");
-    assert!(!prompt.contains("arch=aarch64"), "{prompt}");
+    // Neither half may restate the other's facts (R9). These have to name the
+    // *current* dynamic spelling: `os=linux` became unfalsifiable the moment
+    // the block stopped emitting `key=value` at all, and a guard that cannot
+    // fail is not a guard.
+    assert!(!prompt.contains("<os>"), "OS stated twice: {prompt}");
+    assert!(!prompt.contains("<arch>"), "arch stated twice: {prompt}");
+    assert!(!prompt.contains("<shell>"), "shell stated twice: {prompt}");
+    assert!(!prompt.contains("<host"), "host stated twice: {prompt}");
     assert!(!prompt.contains("shell=fish"), "{prompt}");
     assert!(!prompt.contains("host=ci-runner"), "{prompt}");
 }
@@ -400,10 +408,12 @@ fn test_full_prompt_with_all_enhancements_background_mode() {
         prompt.contains("- **OS**: macOS 15.3"),
         "Missing OS info: {prompt}"
     );
-    assert!(!prompt.contains("os=macOS 15.3"), "OS stated twice");
+    // Names the current dynamic spelling: `os=…` cannot appear now that the
+    // block emits XML elements, so asserting its absence pinned nothing.
+    assert!(!prompt.contains("<os>"), "OS stated twice: {prompt}");
     assert!(
-        prompt.contains("model=claude-opus-4-6"),
-        "Missing model info"
+        prompt.contains("<model>claude-opus-4-6</model>"),
+        "Missing model info: {prompt}"
     );
 
     // 2. Protocol tokens should be present (Background has SilentReply)
