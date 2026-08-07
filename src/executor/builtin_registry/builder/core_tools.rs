@@ -4,8 +4,8 @@ use crate::builtin_tools::skill_reader::{
     ListSkillsTool as SkillListTool, ReadSkillTool as SkillReadTool,
 };
 use crate::builtin_tools::{
-    AutomationTool, CodeExecTool, CtxSearchTool, DesktopTool, FileEditTool, FileOpsTool,
-    FileReadTool, FileWriteTool, MediaTool, PdfGenerateTool, PermissionTool, PimTool,
+    AutomationTool, BashExecTool, CodeExecTool, CtxSearchTool, DesktopTool, FileEditTool,
+    FileOpsTool, FileReadTool, FileWriteTool, MediaTool, PdfGenerateTool, PermissionTool, PimTool,
     ReadConfigGuideTool, RecallEventsTool, ScratchpadTool, SearchTool, SelfManageTool, SystemTool,
 };
 use crate::tool_metadata::{ToolSource, UnifiedTool};
@@ -75,7 +75,7 @@ impl BuiltinToolRegistry {
         reg(
             tools,
             "bash",
-            "Execute bash/shell commands (convenience wrapper for code_exec with shell)",
+            <BashExecTool as crate::tools::AlephTool>::DESCRIPTION,
             schema::<crate::builtin_tools::bash_exec::BashExecArgs>("bash"),
         );
         reg(
