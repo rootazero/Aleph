@@ -1225,7 +1225,9 @@ after (verified by `single_user_fixture_is_byte_identical_after_upgrade`,
   pin cannot see it — a SOURCE-level pin
   (`no_published_team_topic_suffix_classifies_as_global`) covers that
   producer shape instead, and the id is extracted structurally so a suffix
-  added later is scoped rather than broadcast.
+  added later is scoped rather than broadcast. ⚠️ Resolving through a store
+  makes delivery depend on that store's HANDLE being installed; it currently is
+  not, on one supported degraded boot — see known gap #3 below.
   - **One frame is PROJECTED rather than admitted or denied** (2026-08-07).
     `stream.running_set_changed` carries `{seq, running: Vec<String>}` — every
     in-flight session KEY in the process, spanning every user (keys only; the
@@ -1243,6 +1245,11 @@ after (verified by `single_user_fixture_is_byte_identical_after_upgrade`,
     the Panel's cold-load seed for those dots — filtered by the same rule and
     carved out of the admin gate in the same change, because a fallback that
     is admin-gated does not work for the population the filtering is for.
+    ⚠️ The drop rule interacts with WHEN the frame is published, and that
+    interaction is an open defect: the claim broadcasts before the session row
+    exists, so a new conversation's first turn resolves to nothing and is
+    dropped from both producers. See known gap #2 below — the fix belongs at
+    the resolution step, not in the drop rule.
 - **Background-work ownership.** `goal::Goal` and `looping::LoopState` both
   carry the same `owner_user_id`/`scope_id` pair, stamped once at creation
   from `scope::current_scope()` (`with_owner_scope`) and preserved across
@@ -1303,23 +1310,135 @@ after (verified by `single_user_fixture_is_byte_identical_after_upgrade`,
   negative siblings. There is deliberately **no query API and no separate
   retention policy** for these rows: the drain's existing horizon applies and
   the table is read with SQL, per R10.
+- **A caller-supplied key is a gate on WRITES too** (2026-08-07). Four
+  surfaces took an addressed key and never asked whose it was; each is now
+  closed with the predicate its own in-file neighbour already used —
+  `sessions.set_topic` and `chat.context_estimate` through
+  `visibility::session_visible` / `existing_session_is_visible`, and
+  `workspace.{create,update,archive}` through `partition_visible`. Two
+  descriptions are corrected in passing, because they are the reason these sat
+  open: `sessions.set_topic` is a cross-user WRITE, not a read, and
+  `chat.context_estimate` is not "a token-count-only read" — it resolves the
+  addressed session's pinned model to return `window_tokens` (a model-identity
+  oracle on someone else's session) and its `Some`-vs-`None` answer is an
+  existence oracle, the exact thing `not_found_response` exists to deny. Read
+  the workspace half narrowly, exactly as its handlers do: a workspace id is a
+  user-chosen name encoding no owner and `agent_envs` has no owner column, so
+  the gate buys defence in depth against partition-composed ids
+  (`main__u-alice`) and nothing more.
+- **`OPEN_LOOPS.md`'s `proj-` handling is settled, not an open gap.**
+  `session_reflection::open_loops_path` resolves through
+  `memory::project_scope::session_write_id(agent_id, false, None)`: the legacy
+  project-DIRECTORY feature is deliberately not threaded onto this write path,
+  because there is no live `current_project_root()` task-local at session-close
+  time to resolve it with. The READ side (`capture_curated` via
+  `resolve_storage_id`) is pinned to the same `false`/`None`, so the two agree
+  and a non-personal session falls through to the base id exactly as it did
+  before P1 — personal scope, which is P1's actual mandate, still applies on
+  top. This has been re-triaged as an isolation gap more than once; it is not
+  one. Widening it is a feature decision about the legacy project-directory
+  namespace and needs a persisted project root on the session-close path first.
 - **Known gaps (deliberate, recorded, not silently dropped):**
   1. `chat.send`'s Simulated-execution fallback path (used only when no LLM
      provider is configured — `AgentRunManager::start_run`, which has no
      `SessionStore` dependency) is not covered by the real-provider path's
      `existing_session_is_visible` check.
-  2. `slash_command.rs::execute_direct_tool` (the `/toolname` L0 fast path)
-     bypasses `ScopedToolService` entirely, with no allowlist — but it IS
-     tier-aware (routes through `resolve_exec_tier`), so the gap only opens
-     if a member explicitly escalates their own session to `Auto`/`Full`
-     (the member default is `Ask`). Pre-existing, not introduced by P1;
-     recommended as a follow-up task.
-  3. The legacy `proj-*` (project-directory feature) write side of
-     `OPEN_LOOPS.md` is pinned `project_scoped = false` on both read and
-     write for a `proj-` session — widening it needs a persisted project
-     root on the session-close path that doesn't exist yet. Personal scope
-     still applies on top; this is a narrower, pre-existing gap, not a P1
-     regression.
+  2. **The running-set projection races a new session's row into existence,
+     and the self-heal its own comment promises has no producer** (high; a
+     regression this round introduced, and it fires on a single-user loopback
+     box too). `SessionRunRegistry::try_claim` is the FIRST statement of
+     `ExecutionEngine::admit_run` and it broadcasts `RunningSetChanged`; the
+     session row is not written until `agent.ensure_session(...)`, at least two
+     await points later. `EventVisibilityIndex::project_for` resolves each
+     element through `session_admits`, which returns false on `Ok(None)` —
+     deliberately, since "I could not work out whose this is" must never mean
+     "everyone's" — so the brand-new key is DROPPED and the socket receives
+     `{seq: N, running: []}`. `SessionMap::set_server_running` records seq N
+     with an empty set, and the next `RunningSetChanged` is the RELEASE at run
+     end, which also excludes the key; nothing else re-fetches
+     (`seed_server_running` is cold-load-on-mount only, and the running dot is
+     documented as purely server-authoritative). Net: the sidebar dot and the
+     "active" counter stay dark for the entire first turn of every NEW
+     conversation — behaviour that worked before this round, when the frame was
+     forwarded whole. The RPC twin `visible_running_keys` drops the key for the
+     same reason, so the cold-load seed does not cover it either, and
+     `gateway_metrics.rs`'s "it self-heals on the next
+     `stream.running_set_changed`" is false whenever there is only one
+     in-flight run — that sentence must be corrected with the fix. The fix is
+     to give the projection an owner it can resolve before the row exists (the
+     claim site already knows the caller), NOT to relax the drop rule.
+  3. **The team event plane's resolver is installed under a narrower condition
+     than the one that produces the frames it classifies** (medium; the
+     direction is fail-closed, but the effect is a total silent outage that did
+     not exist before this round). `event_visibility::event_admits` resolves
+     `team.<id>.*` through `ConnectionContext`'s `TeamStore`, and `teams: None`
+     denies. That handle is installed by `server.set_team_store(...)` inside
+     `start/mod.rs`'s `if let (Some(ref ts), Some(ref cs)) =
+     (&agent_result.team_store, &agent_result.coord_task_store)`, while the
+     PRODUCER — the `teams.chat.send` registration driving
+     `GroupChatBroadcaster` / `publish_team_event` — sits under
+     `builder/agent_init/mod.rs`'s `if let Some(ts) = team_store.clone()`, i.e.
+     `team_store` ALONE. The two stores open two
+     different databases from two different files (`teams.db` vs `coord.db`),
+     and coord init returns `(None, None)` on any of three warn-and-continue
+     paths (data-dir resolve, `open_sqlite_safe`, `migrate`). So a corrupt,
+     locked or unwritable `coord.db` — an explicitly supported degraded boot
+     that prints "Task coordination tools disabled" and carries on — leaves team
+     chat publishing frames that EVERY connection, operator included, denies:
+     no error, no log line at the denial, zero live frames. Deferred rather than
+     fixed because the correction is boot wiring (widen the condition to
+     `team_store` alone) that this round did not otherwise open; the criterion
+     it teaches is recorded in `src/gateway/CLAUDE.md`.
+  4. `slash_command.rs::execute_direct_tool` (the `/toolname` L0 fast path) was
+     recorded here as "bypasses `ScopedToolService` entirely, with no
+     allowlist". That description was wrong and is corrected rather than
+     carried forward. `slash_gate_reason` builds the SAME `ToolFacts`
+     `ScopedToolService` builds and runs the SAME `effective_permission`, then
+     applies the argument-keyed destructive filter, the declared
+     `requires_confirmation` gate (at every tier, `Full` included), and — for a
+     non-operator caller — `method_authz::tool_requires_operator` plus the
+     dangerous-tool floor. A call that trips any clause is not run ungated: it
+     returns `ExecutionError::Fallthrough` into the full agent loop, where
+     `ScopedToolService` re-decides it with the real facts and can raise the
+     approval card. The residual is narrower and different in kind: this path
+     CONSTRUCTS its own `ToolFacts`, a second statement of one fact, so a third
+     input added to that struct in `tools/scoped/builder.rs` alone leaves the
+     fast path deciding on a stale shape — silently, and only for slash
+     commands. Converging the two constructions is the open work.
+  5. `gateway.metrics.run_concurrency`'s `per_agent` is the one un-narrowed
+     identity array in a response this round made member-reachable (low). The
+     handler narrows `running_sessions` and `busy_queue.per_session` and passes
+     `ConcurrencySnapshot::per_agent` (`Vec<AgentSlotUsage>`, i.e.
+     `{agent_id, in_use}`) through verbatim, so a member learns which agent
+     personas have live runs right now — the same class of fact ("who is doing
+     something at this moment") the session-key narrowing removed. Mitigated:
+     `agents.list`/`agents.get` are themselves member carve-outs, so the ids are
+     not new, only the live-activity correlation. The recorded defect is the
+     carve-out's own justification in `method_admin.rs` — "the aggregate
+     counters ... are load numbers, not identities" — which is false for this
+     array and will make the next reviewer skip it.
+  6. The no-existence-oracle property of the `workspace.*` writes is stated but
+     not pinned (low). `the_workspace_writes_deny_a_foreign_partition_composed_id`
+     archives the same composed id twice as the same non-owner and compares the
+     two serialized responses; both calls take the identical `partition_visible`
+     deny branch before touching the store, so the assertion is `f(x) == f(x)`
+     and cannot fail. The property that matters — a DENIED composed id and a
+     composed id that was never created produce byte-identical refusals — is
+     asserted nowhere. `visibility::not_found_response`'s own test does assert
+     it for the sessions side; this one should be rewritten against a genuinely
+     absent id.
+  7. The Panel's `ADMIN_GATE_MESSAGE` drift guard cannot fire (low).
+     `settings/network/cluster.rs` copies the server's refusal string with a doc
+     comment claiming "a reword on the server shows up as a failing assertion in
+     a file that renders it" — but `aleph-panel` does not depend on `alephcore`,
+     and the test feeds its own constant into `fleet_error_label`, so it is
+     green for any value of that constant. Reword `handler.rs`'s "Not
+     authorized: this method requires operator privileges" and every member who
+     opens the cluster page silently gets the raw English protocol string
+     instead of the localized explanation, with both crates' tests still
+     passing. A guard that can actually fire needs the literal in
+     `shared/protocol` — the one crate both sides depend on — which is a larger
+     move than this round took.
 - **Explicitly out of scope for P1**: pushing routing/notifications TO
   members (spec §8, P3).
 
@@ -1346,6 +1465,21 @@ attribution, and a bound workspace as the room's default cwd.
   Anything needing finer sharing than "in the room / not in the room" is a
   different feature, not a variation of this one.
 
+  **Those four questions are the whole list, and BACKGROUND WORK is
+  deliberately not one of them** (human ruling, 2026-08-07). A loop, goal, cron
+  job or group-chat session started inside a room stays visible to the person
+  who started it, never to the roster: `visibility::stamped_owner_visible` /
+  `ambient_owner_visible` are owner-only by design — **a room does not own its
+  members' background work.** The scope fact needed to answer otherwise is
+  already persisted and deliberately unread on this path
+  (`LoopState::scope_id`, `Goal::scope_id`, `CronJob::scope_id` all carry
+  `project:<id>`), so it reads like a severed wire and is not one; the
+  predicates' own doc says so at the site. The direction is fail-CLOSED, so
+  "the room can't see my loop" is a decision, not a bug — widening it is a
+  product change and needs a ruling first, and the shape would then be ONE
+  scope-aware sibling delegating to the same `roster::is_member`, never a
+  second inlined membership check at the call sites.
+
   **The promise is scoped to the predicates, and there is exactly one other
   ingress.** `/artifact/<cap>/<id>/<file>`
   (`src/gateway/server/artifact_route.rs`) is a **bearer** byte route: its
@@ -1368,7 +1502,10 @@ attribution, and a bound workspace as the room's default cwd.
   Visibility is the roster, full stop. Any new predicate that reaches for
   `owner_user_id` to answer a can-see question re-opens the bug class P2's
   roster predicates (`projects::roster::is_member`, reached through
-  `visibility::project_visible` / `session_visible_to` / `partition_visible`)
+  `visibility::project_visible` / `session_visible_to` / `partition_visible`
+  — and, since 2026-08-07, event delivery reaches the roster through the very
+  same `owner_and_scope_visible_to` body rather than the owner-equality copy it
+  had kept from P1)
   exist to prevent.
 - **`not_found` vs `forbidden` — the boundary is visibility, not
   politeness.** A caller who cannot SEE the project (not on the roster) gets
