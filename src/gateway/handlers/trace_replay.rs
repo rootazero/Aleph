@@ -24,14 +24,34 @@
 //!   session open to replay tool calls into the transcript — so it is carved
 //!   back open for members and owner-scoped HERE instead, see
 //!   [`handle_by_runs`].
+//!
+//! ## The operator's half is ratified, and audited (human ruling, 2026-08-07)
+//!
+//! Admin-gating `trace.list`/`trace.get` decides WHO may read; it says nothing
+//! about whether that read is recorded. It was not: an operator could read any
+//! member's full transcript and leave no trace of having done so, while P1's
+//! own acceptance test asserts elsewhere that "the operator is not exempt from
+//! session ownership". Both statements were about different things and read as
+//! a contradiction.
+//!
+//! The ruling keeps the capability — an operator debugging a member's run is
+//! the reason these methods exist — and adds the missing half:
+//! [`AuditEventType::ScopedContentRead`](crate::security::audit::AuditEventType::ScopedContentRead)
+//! is emitted from both handlers when the caller could NOT have reached that
+//! content through the ordinary owner-scoped surface. Reading your OWN trace
+//! is not an event, so a single-user box records nothing at all — that is what
+//! keeps the log readable enough to be worth having. See
+//! [`caller_could_reach`] for why the predicate is `session_visible_to` and
+//! not a bare owner comparison.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 use crate::gateway::protocol::{JsonRpcRequest, JsonRpcResponse, INTERNAL_ERROR, INVALID_PARAMS};
 use crate::gateway::router::SessionKey;
 use crate::gateway::session_store::SessionStore;
 use crate::gateway::visibility;
 use crate::resilience::StateDatabase;
+use crate::security::audit::{AuditEntry, SecurityAuditLog};
 use crate::sync_primitives::Arc;
 use aleph_protocol::{AgentTraceReplay, AgentTraceReplayEntry, AgentTraceTaskSummary};
 use serde::Deserialize;
@@ -68,14 +88,24 @@ const MAX_HISTORY_SCAN: usize = 500;
 /// ## Why this takes a `session_key`
 ///
 /// A trace row records only its `task_id`, so "who owns this run" cannot be
-/// answered from the trace store, and the `agent_tasks` table does not close
-/// the gap either: root-agent runs — exactly the ones the Panel replays —
-/// have no task row at all (see [`handle_get`], which synthesizes a summary
-/// for them). The run→session index `event_visibility` keeps is live-only; it
-/// evicts on `RunComplete`, and this method reads history.
+/// answered from the trace store itself, and the run→session index
+/// `event_visibility` keeps is live-only — it evicts on `RunComplete`, and
+/// this method reads history.
 ///
-/// So the caller names the session instead, and the session is the thing
-/// whose ownership IS recorded. Two checks, in order:
+/// This doc used to add that `agent_tasks` "does not close the gap either:
+/// root-agent runs — exactly the ones the Panel replays — have no task row at
+/// all". That is false for any run that HAS traces to replay, and the false
+/// premise is a large part of why this family's ownership looked unanswerable
+/// for as long as it did: `execute.rs` switches trace persistence on ONLY when
+/// the `agent_tasks` insert succeeded (`trace_task_persisted.then(...)`), and
+/// nothing anywhere deletes a task row. The 2026-08-07 audit walks that hop
+/// ([`session_of_run`]) precisely because it is there.
+///
+/// This method still names the session rather than walking the hop, for the
+/// two reasons that survive the correction: it is an ADDRESSED surface, so it
+/// owes the byte-identical `not_found` a wrong key produces; and holding the
+/// session is what lets it intersect the requested runs with that session's
+/// own. Two checks, in order:
 ///
 /// 1. the addressed session is KeyChecked exactly like every other addressed
 ///    surface (`visibility::session_visible`, denying with
@@ -161,6 +191,56 @@ pub async fn handle_by_runs(
     JsonRpcResponse::success(request.id, json!({ "runs": runs }))
 }
 
+/// The session a persisted run belongs to, or `None` when that cannot be
+/// established.
+///
+/// A `task_traces` row records only its `task_id`; the run's session key is
+/// one hop away, on the `agent_tasks` row
+/// (`execution_engine::persistence::persist_run_task_started` writes
+/// `request.session_key.to_key_string()` there, and trace persistence is
+/// switched on by that same insert succeeding — `execute.rs`'s
+/// `trace_task_persisted.then(...)` — so a persisted trace normally HAS a
+/// row). "Normally" is not "always", which is why every caller of this treats
+/// `None` as unattributable rather than as harmless.
+async fn session_of_run(db: &StateDatabase, task_id: &str) -> Option<String> {
+    match db.get_agent_task(task_id).await {
+        Ok(Some(task)) => Some(task.parent_session_id),
+        _ => None,
+    }
+}
+
+/// Whether `caller` could have reached this session's content through the
+/// ordinary owner-scoped surface — i.e. whether this read needed the admin
+/// gate at all.
+///
+/// The ruling's words are "the session's `effective_owner`", but a bare
+/// `effective_owner(&meta) == caller` is the exact comparison
+/// `visibility`'s module doc forbids handlers from writing, and after P2 it is
+/// also wrong: a project room's `owner_user_id` is its CREATOR, so every other
+/// member of a room would be recorded as reading somebody else's transcript
+/// while `trace.by_runs` hands them the same bytes without a gate. The
+/// question the audit actually asks is "did the admin gate let this through",
+/// and the predicate for that is the one `handle_by_runs` denies with:
+/// [`visibility::session_visible_to`].
+///
+/// Fails toward RECORDING: an unattributable read — no task row, a key that
+/// no longer parses, a deleted session, a store error — is one we cannot
+/// prove was the caller's own, and silence about it would be the same
+/// fail-soft-read-as-absence this repo has been bitten by before.
+async fn caller_could_reach(
+    sessions: &dyn SessionStore,
+    session_id: Option<&str>,
+    caller: &str,
+) -> bool {
+    let Some(key) = session_id.and_then(SessionKey::from_key_string) else {
+        return false;
+    };
+    matches!(
+        sessions.get_metadata(&key).await,
+        Ok(Some(meta)) if visibility::session_visible_to(&meta, caller)
+    )
+}
+
 #[derive(Debug, Default, Deserialize)]
 struct TraceListParams {
     #[serde(default)]
@@ -174,7 +254,20 @@ struct TraceListParams {
 const DEFAULT_LIMIT: usize = 50;
 const MAX_LIMIT: usize = 200;
 
-pub async fn handle_list(request: JsonRpcRequest, db: Arc<StateDatabase>) -> JsonRpcResponse {
+/// Read-only: page through the process-wide index of persisted traces.
+///
+/// Admin-gated (`method_admin.rs`'s `trace.` prefix) because it enumerates
+/// EVERY run in the process, across every user. That capability is ratified;
+/// what it now also does is leave a record of itself — one
+/// `ScopedContentRead` entry per call when the page names a run the caller
+/// could not have reached on their own, never one per row, and nothing at all
+/// when every run on the page is theirs (see this module's doc).
+pub async fn handle_list(
+    request: JsonRpcRequest,
+    db: Arc<StateDatabase>,
+    sessions: Arc<dyn SessionStore>,
+    audit: Option<SecurityAuditLog>,
+) -> JsonRpcResponse {
     let params: TraceListParams = match request.params.as_ref() {
         Some(v) => serde_json::from_value(v.clone()).unwrap_or_default(),
         None => TraceListParams::default(),
@@ -186,6 +279,42 @@ pub async fn handle_list(request: JsonRpcRequest, db: Arc<StateDatabase>) -> Jso
         .await
     {
         Ok(tasks) => {
+            // An unscoped caller (cron / in-process) resolves to `None` here
+            // and is not audited, exactly as it is not filtered — the same
+            // zero-change arm every predicate in `visibility` opens with.
+            if let (Some(log), Some(caller)) = (audit.as_ref(), visibility::visible_owner_filter())
+            {
+                let mut reach: HashMap<String, bool> = HashMap::new();
+                for task in &tasks {
+                    let session = session_of_run(&db, &task.task_id).await;
+                    // Memoised per SESSION, not per task: a page is usually a
+                    // handful of conversations, and the session lookup is the
+                    // expensive half (the `agent_tasks` hop is a point query).
+                    let reachable = match reach.get(session.as_deref().unwrap_or_default()) {
+                        Some(known) => *known,
+                        None => {
+                            let known =
+                                caller_could_reach(sessions.as_ref(), session.as_deref(), &caller)
+                                    .await;
+                            reach.insert(session.clone().unwrap_or_default(), known);
+                            known
+                        }
+                    };
+                    if !reachable {
+                        log.log(AuditEntry::scoped_content_read(
+                            caller.clone(),
+                            session,
+                            format!(
+                                "trace.list: page of {} includes run {} the caller cannot reach",
+                                tasks.len(),
+                                task.task_id
+                            ),
+                        ));
+                        break;
+                    }
+                }
+            }
+
             // Cursor exhaustion: if fewer than `limit` rows returned, there's
             // no next page. Otherwise, the next page starts strictly before
             // the smallest last_timestamp in this page.
@@ -226,10 +355,23 @@ pub async fn handle_list(request: JsonRpcRequest, db: Arc<StateDatabase>) -> Jso
 /// (= `run_id`), as the `AgentTraceReplay` envelope the panel deserializes:
 /// `{ task: AgentTraceTaskSummary, traces: [{ step, event }] }`. The traces
 /// come from the `task_traces` observability table; the task summary from the
-/// `agent_tasks` table (synthesized from the trace stream when no task row
-/// exists, e.g. root-agent runs). A task with no persisted traces is "not
-/// found".
-pub async fn handle_get(request: JsonRpcRequest, db: Arc<StateDatabase>) -> JsonRpcResponse {
+/// `agent_tasks` table, synthesized from the trace stream when no task row
+/// exists. That fallback is defensive, not routine — a persisted trace
+/// normally HAS a task row (see [`handle_by_runs`]) — which is why an
+/// unattributable read is treated as one worth recording rather than as the
+/// common case. A task with no persisted traces is "not found".
+///
+/// Admin-gated, and the read is RECORDED when the run's session is one the
+/// caller could not have reached through `trace.by_runs` — the ratified
+/// operator capability plus its accountability half (see this module's doc).
+/// The record is emitted only on the path that actually returns bytes: the
+/// two early "not found" arms above disclose nothing and are not reads.
+pub async fn handle_get(
+    request: JsonRpcRequest,
+    db: Arc<StateDatabase>,
+    sessions: Arc<dyn SessionStore>,
+    audit: Option<SecurityAuditLog>,
+) -> JsonRpcResponse {
     let task_id = match request
         .params
         .as_ref()
@@ -268,8 +410,24 @@ pub async fn handle_get(request: JsonRpcRequest, db: Arc<StateDatabase>) -> Json
         .and_then(|t| serde_json::to_value(&t.event).ok())
         .and_then(|v| v.get("kind").and_then(|k| k.as_str()).map(String::from));
 
-    let task = match db.get_agent_task(&task_id).await {
-        Ok(Some(t)) => AgentTraceTaskSummary {
+    let task_row = db.get_agent_task(&task_id).await.ok().flatten();
+
+    // The bytes are about to go out; record the read first, so a serialization
+    // failure below cannot be the difference between a disclosed transcript
+    // and an unrecorded one.
+    if let (Some(log), Some(caller)) = (audit.as_ref(), visibility::visible_owner_filter()) {
+        let session = task_row.as_ref().map(|t| t.parent_session_id.clone());
+        if !caller_could_reach(sessions.as_ref(), session.as_deref(), &caller).await {
+            log.log(AuditEntry::scoped_content_read(
+                caller,
+                session,
+                format!("trace.get: read {} events of run {task_id}", traces.len()),
+            ));
+        }
+    }
+
+    let task = match task_row {
+        Some(t) => AgentTraceTaskSummary {
             task_id: t.id,
             session_id: t.parent_session_id,
             agent_id: t.agent_id,
@@ -282,8 +440,9 @@ pub async fn handle_get(request: JsonRpcRequest, db: Arc<StateDatabase>) -> Json
             trace_count: traces.len(),
             last_event_kind,
         },
-        // No task row (e.g. root-agent run): synthesize from the trace stream.
-        _ => {
+        // No task row: synthesize from the trace stream. Defensive — see the
+        // doc above for why this is not the routine case it used to claim.
+        None => {
             let first_ts = traces.first().map_or(0, |t| t.timestamp.max(0) as u64);
             let last_ts = traces.last().map_or(0, |t| t.timestamp.max(0) as u64);
             AgentTraceTaskSummary {
@@ -338,6 +497,37 @@ mod tests {
         db.insert_agent_task(&AgentTask::new(run_id, "s", "coder", "x", RiskLevel::Low))
             .await
             .unwrap();
+        for (i, t) in texts.iter().enumerate() {
+            db.insert_trace(&TaskTrace::new(
+                run_id,
+                i as u32,
+                AgentTraceEvent::TextEmitted {
+                    iteration: i,
+                    stream: AgentTraceTextKind::Final,
+                    text: (*t).to_string(),
+                },
+            ))
+            .await
+            .unwrap();
+        }
+    }
+
+    /// [`seed_run`]'s sibling for the audit tests: the `agent_tasks` row names
+    /// a REAL session key, which is the shape production writes
+    /// (`execution_engine::persistence::persist_run_task_started` stores
+    /// `request.session_key.to_key_string()`) and the hop
+    /// [`session_of_run`] walks. `seed_run` keeps its `"s"` placeholder on
+    /// purpose so the older tests still cover the unattributable path.
+    async fn seed_run_in(db: &StateDatabase, run_id: &str, key: &SessionKey, texts: &[&str]) {
+        db.insert_agent_task(&AgentTask::new(
+            run_id,
+            key.to_key_string(),
+            "coder",
+            "x",
+            RiskLevel::Low,
+        ))
+        .await
+        .unwrap();
         for (i, t) in texts.iter().enumerate() {
             db.insert_trace(&TaskTrace::new(
                 run_id,
@@ -548,8 +738,15 @@ mod tests {
     async fn get_returns_replay_envelope_for_task_id() {
         let db = Arc::new(StateDatabase::in_memory().unwrap());
         seed_run(&db, "run-a", &["a0", "a1", "a2"]).await;
+        let temp = TempDir::new().unwrap();
 
-        let resp = handle_get(req(json!({ "task_id": "run-a" })), db).await;
+        let resp = handle_get(
+            req(json!({ "task_id": "run-a" })),
+            db,
+            session_store(&temp),
+            None,
+        )
+        .await;
 
         let result = resp.result.expect("success");
         // The panel deserializes the whole AgentTraceReplay envelope.
@@ -565,7 +762,8 @@ mod tests {
     #[tokio::test]
     async fn get_missing_task_id_is_invalid_params() {
         let db = Arc::new(StateDatabase::in_memory().unwrap());
-        let resp = handle_get(req(json!({})), db).await;
+        let temp = TempDir::new().unwrap();
+        let resp = handle_get(req(json!({})), db, session_store(&temp), None).await;
         assert!(resp.result.is_none());
         assert_eq!(resp.error.unwrap().message, "Missing task_id");
     }
@@ -573,8 +771,236 @@ mod tests {
     #[tokio::test]
     async fn get_unknown_task_is_not_found() {
         let db = Arc::new(StateDatabase::in_memory().unwrap());
-        let resp = handle_get(req(json!({ "task_id": "nope" })), db).await;
+        let temp = TempDir::new().unwrap();
+        let resp = handle_get(
+            req(json!({ "task_id": "nope" })),
+            db,
+            session_store(&temp),
+            None,
+        )
+        .await;
         assert!(resp.result.is_none());
         assert_eq!(resp.error.unwrap().message, "Trace not found");
+    }
+
+    // ───────────── RULING 2 (2026-08-07): ratified, and audited ─────────────
+
+    /// The whole ruling in one test: the operator STILL GETS THE BYTES (this
+    /// is a ratification, not a new denial — assert the transcript text is in
+    /// the response, or the test would also pass against a handler that
+    /// refused), and the read now names itself in the audit log — who read,
+    /// whose session, which run.
+    #[tokio::test]
+    async fn trace_get_of_another_users_run_is_served_and_audited() {
+        let db = Arc::new(StateDatabase::in_memory().unwrap());
+        let temp = TempDir::new().unwrap();
+        let sessions = session_store(&temp);
+        let alice_key = SessionKey::main("conv-alice");
+        seed_session(&sessions, &alice_key, "u-alice", &["run-a"]).await;
+        seed_run_in(&db, "run-a", &alice_key, &["alice's secret prompt"]).await;
+
+        let (log, mut rx) = crate::security::audit::SecurityAuditLog::new(8);
+        let resp = CALLER_USER
+            .scope(
+                Some("u-bob".to_string()),
+                handle_get(
+                    req(json!({ "task_id": "run-a" })),
+                    db,
+                    sessions,
+                    Some(log.clone()),
+                ),
+            )
+            .await;
+
+        let result = resp
+            .result
+            .expect("the operator read is ratified, not denied");
+        assert!(
+            serde_json::to_string(&result)
+                .unwrap()
+                .contains("alice's secret prompt"),
+            "the ruling KEEPS the capability — if this ever stops serving bytes \
+             the audit half is pointless: {result}"
+        );
+
+        let entry = rx.try_recv().expect("the read must leave a record");
+        assert_eq!(
+            entry.event_type,
+            crate::security::audit::AuditEventType::ScopedContentRead
+        );
+        assert_eq!(
+            entry.actor_user.as_deref(),
+            Some("u-bob"),
+            "the record must name WHO read — the question the log could not \
+             answer before this variant existed"
+        );
+        assert_eq!(
+            entry.session_id.as_deref(),
+            Some(alice_key.to_key_string().as_str()),
+            "…and WHOSE session was read"
+        );
+        assert!(entry.detail.contains("run-a"), "{}", entry.detail);
+        assert!(
+            !entry.detail.contains("alice's secret prompt"),
+            "the audit record must name the read, never carry its content: {}",
+            entry.detail
+        );
+        assert!(rx.try_recv().is_err(), "exactly one entry per read");
+    }
+
+    /// The clause that keeps the log worth reading: your own transcript is not
+    /// an audit event. A single-user box is entirely this case, so getting it
+    /// wrong would drown the table in records of the owner reading himself.
+    #[tokio::test]
+    async fn trace_get_of_your_own_run_is_not_audited() {
+        let db = Arc::new(StateDatabase::in_memory().unwrap());
+        let temp = TempDir::new().unwrap();
+        let sessions = session_store(&temp);
+        let key = SessionKey::main("conv-alice");
+        seed_session(&sessions, &key, "u-alice", &["run-a"]).await;
+        seed_run_in(&db, "run-a", &key, &["a0"]).await;
+
+        let (log, mut rx) = crate::security::audit::SecurityAuditLog::new(8);
+        let resp = CALLER_USER
+            .scope(
+                Some("u-alice".to_string()),
+                handle_get(
+                    req(json!({ "task_id": "run-a" })),
+                    db,
+                    sessions,
+                    Some(log.clone()),
+                ),
+            )
+            .await;
+
+        assert!(resp.result.is_some(), "alice must still get her own trace");
+        assert!(
+            rx.try_recv().is_err(),
+            "reading your own trace is not an audit event"
+        );
+    }
+
+    /// A room member is not the room session's `owner_user_id` — its creator
+    /// is — so an owner-equality predicate would file every OTHER member's
+    /// perfectly ordinary read as a cross-user disclosure. The predicate is
+    /// `session_visible_to`, the same one `trace.by_runs` denies with, so what
+    /// gets recorded is "the admin gate was needed", not "you are not the
+    /// creator".
+    #[tokio::test]
+    async fn a_room_members_read_of_the_rooms_run_is_not_audited() {
+        let _guard = crate::projects::roster::TEST_GUARD
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let project_id = format!("p-{}", uuid::Uuid::new_v4().simple());
+        crate::projects::roster::publish(crate::projects::roster::RosterSnapshot::from_pairs([
+            (project_id.clone(), "u-alice".to_string()),
+            (project_id.clone(), "u-bob".to_string()),
+        ]));
+
+        let db = Arc::new(StateDatabase::in_memory().unwrap());
+        let temp = TempDir::new().unwrap();
+        let sessions = session_store(&temp);
+        let key = SessionKey::main("conv-room");
+        // Created BY alice, scoped to the room: `owner_user_id` is alice.
+        crate::scope::with_scope(
+            Some(crate::scope::ScopeAttribution {
+                owner_user_id: "u-alice".to_string(),
+                scope: crate::scope::ScopeId::Project(project_id.clone()),
+            }),
+            sessions.get_or_create(&key),
+        )
+        .await
+        .unwrap();
+        seed_run_in(&db, "run-room", &key, &["shared room turn"]).await;
+
+        let (log, mut rx) = crate::security::audit::SecurityAuditLog::new(8);
+        let resp = CALLER_USER
+            .scope(
+                Some("u-bob".to_string()),
+                handle_get(
+                    req(json!({ "task_id": "run-room" })),
+                    db,
+                    sessions,
+                    Some(log.clone()),
+                ),
+            )
+            .await;
+
+        assert!(resp.result.is_some(), "bob is on the roster");
+        assert!(
+            rx.try_recv().is_err(),
+            "a roster member reading the room's own run is not a cross-user read"
+        );
+    }
+
+    /// `trace.list` enumerates every run in the process. One record per CALL
+    /// naming the first run the caller cannot reach — not one per row, which
+    /// would make a 50-row page 50 rows of log.
+    #[tokio::test]
+    async fn trace_list_records_one_entry_when_the_page_names_a_foreign_run() {
+        let db = Arc::new(StateDatabase::in_memory().unwrap());
+        let temp = TempDir::new().unwrap();
+        let sessions = session_store(&temp);
+        let alice_key = SessionKey::main("conv-alice");
+        let bob_key = SessionKey::main("conv-bob");
+        seed_session(&sessions, &alice_key, "u-alice", &[]).await;
+        seed_session(&sessions, &bob_key, "u-bob", &[]).await;
+        seed_run_in(&db, "run-alice", &alice_key, &["a0"]).await;
+        seed_run_in(&db, "run-bob", &bob_key, &["b0"]).await;
+
+        let (log, mut rx) = crate::security::audit::SecurityAuditLog::new(8);
+        let resp = CALLER_USER
+            .scope(
+                Some("u-bob".to_string()),
+                handle_list(req(json!({})), db, sessions, Some(log.clone())),
+            )
+            .await;
+
+        let traces = resp.result.expect("success")["traces"]
+            .as_array()
+            .expect("traces array")
+            .len();
+        assert_eq!(traces, 2, "the enumeration itself is unchanged — ratified");
+
+        let entry = rx
+            .try_recv()
+            .expect("enumerating a foreign run is recorded");
+        assert_eq!(
+            entry.event_type,
+            crate::security::audit::AuditEventType::ScopedContentRead
+        );
+        assert_eq!(entry.actor_user.as_deref(), Some("u-bob"));
+        assert!(entry.detail.contains("trace.list"), "{}", entry.detail);
+        assert!(
+            rx.try_recv().is_err(),
+            "one entry per call, not one per row"
+        );
+    }
+
+    /// …and the page that is entirely your own records nothing, which is the
+    /// single-user box's whole experience of this feature.
+    #[tokio::test]
+    async fn trace_list_of_only_your_own_runs_is_not_audited() {
+        let db = Arc::new(StateDatabase::in_memory().unwrap());
+        let temp = TempDir::new().unwrap();
+        let sessions = session_store(&temp);
+        let bob_key = SessionKey::main("conv-bob");
+        seed_session(&sessions, &bob_key, "u-bob", &[]).await;
+        seed_run_in(&db, "run-bob-1", &bob_key, &["b0"]).await;
+        seed_run_in(&db, "run-bob-2", &bob_key, &["b1"]).await;
+
+        let (log, mut rx) = crate::security::audit::SecurityAuditLog::new(8);
+        let resp = CALLER_USER
+            .scope(
+                Some("u-bob".to_string()),
+                handle_list(req(json!({})), db, sessions, Some(log.clone())),
+            )
+            .await;
+
+        assert!(resp.result.is_some());
+        assert!(
+            rx.try_recv().is_err(),
+            "a page of your own runs is not a cross-user read"
+        );
     }
 }

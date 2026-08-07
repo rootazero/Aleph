@@ -1279,6 +1279,30 @@ after (verified by `single_user_fixture_is_byte_identical_after_upgrade`,
   denied to members) raises the cost of a hostile member; it does not
   remove that trust assumption. `role-aware per-tool tool_permissions` was
   considered and dropped as YAGNI (R10) in favor of this narrower set.
+- **The operator is a privileged content reader by design, and those reads
+  are audited** (human ruling, 2026-08-07). The predicates above are about
+  IDENTITY: nobody, operator included, gets a session they do not own out of
+  `sessions.list`, `chat.history` or the event bus — which is what this
+  layer's acceptance test means when it says "the operator is not exempt from
+  session ownership" (`isolation_acceptance.rs`), and it is a statement about
+  those surfaces, not about the operator's total reach. The operator ALSO has
+  a debugging surface those predicates do not answer for: `trace.list` /
+  `trace.get` return any run's persisted prompts, tool inputs and tool outputs,
+  admin-gated instead of owner-scoped, and that is deliberate — an operator who
+  cannot read a failing member's run cannot support it. The half that was
+  missing was accountability, not authority: such a read now emits one
+  `AuditEventType::ScopedContentRead` into `security_audit_log`, naming the
+  actor (`actor_user`, the column this ruling added), the session read and the
+  run — never the content. Reading your OWN trace is not an event, so a
+  single-user box records nothing; the predicate is
+  `visibility::session_visible_to`, not owner-equality, so a project room's
+  members reading their own room's runs are not filed as cross-user readers
+  either. Pinned by `trace_replay.rs`'s
+  `trace_get_of_another_users_run_is_served_and_audited` (which asserts the
+  bytes still arrive — this is a ratification, not a new denial) and its three
+  negative siblings. There is deliberately **no query API and no separate
+  retention policy** for these rows: the drain's existing horizon applies and
+  the table is read with SQL, per R10.
 - **Known gaps (deliberate, recorded, not silently dropped):**
   1. `chat.send`'s Simulated-execution fallback path (used only when no LLM
      provider is configured — `AgentRunManager::start_run`, which has no

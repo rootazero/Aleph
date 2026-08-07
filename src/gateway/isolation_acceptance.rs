@@ -333,6 +333,18 @@ async fn two_users_cannot_see_each_other_end_to_end() {
     );
 
     // ══════════════════ Owner: sees the legacy fixture, not alice's ══════════════════
+    //
+    // Scope of the two assertions below, stated because they were read for a
+    // while as a broader claim than they make (human ruling, 2026-08-07): the
+    // operator's IDENTITY buys no exemption from the visibility predicates —
+    // alice's session is not in his list and her frames are not on his socket.
+    // That is not a claim that no route to her content exists. `trace.list` /
+    // `trace.get` are exactly such a route, admin-gated rather than
+    // owner-scoped, and ratified: an operator who cannot read a failing
+    // member's run cannot support it. What that route now also does is record
+    // itself (`AuditEventType::ScopedContentRead` — see
+    // `handlers::trace_replay`), which is what stops these two statements from
+    // contradicting each other.
 
     let owner_list = as_caller(
         OWNER_USER_ID,
@@ -353,7 +365,8 @@ async fn two_users_cannot_see_each_other_end_to_end() {
         !owner_sessions
             .iter()
             .any(|s| s["key"] == alice_key_str.as_str()),
-        "owner is not exempt from alice's ownership boundary: {owner_sessions:?}"
+        "owner is not exempt from alice's ownership boundary on THIS surface — \
+         sessions.list is owner-filtered for him too: {owner_sessions:?}"
     );
 
     assert!(
@@ -366,7 +379,8 @@ async fn two_users_cannot_see_each_other_end_to_end() {
                 None,
             )
             .await,
-        "the operator is not exempt from session ownership for live events either"
+        "the operator is not exempt from session ownership for live events either \
+         — the event bus asks the same predicate of him as of anyone"
     );
 
     // ══════════════════════ Alice: sees her own everything ══════════════════════

@@ -628,6 +628,18 @@ impl GatewayServer {
         self.audit_log = Some(log);
     }
 
+    /// A clone of the installed [`SecurityAuditLog`], for boot-time wiring
+    /// that hands a *handler* its own sender rather than reading it off the
+    /// connection (`trace.list` / `trace.get` record cross-user content reads
+    /// — see `handlers::trace_replay`). `None` before
+    /// [`GatewayServer::set_audit_log`] runs and in test/probe constructors,
+    /// which is why any registration that wants it must be ordered after the
+    /// setter; the trace registration says so at its own call site.
+    #[must_use]
+    pub fn audit_log(&self) -> Option<crate::security::audit::SecurityAuditLog> {
+        self.audit_log.clone()
+    }
+
     /// Install the `SessionStore` so the WS event-delivery loop can resolve
     /// session ownership for the owner-scoped event filter (P1 data
     /// isolation, spec §5.4 — `event_visibility::EventVisibilityIndex`).

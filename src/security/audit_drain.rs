@@ -72,6 +72,7 @@ mod tests {
             severity: AuditSeverity::Warn,
             source_ip: None,
             session_id: Some("sess-1".to_string()),
+            actor_user: None,
             detail: detail.to_string(),
         }
     }
@@ -94,6 +95,40 @@ mod tests {
             .query_row("SELECT COUNT(*) FROM security_audit_log", [], |r| r.get(0))
             .unwrap();
         assert_eq!(count, 2);
+    }
+
+    /// The actor is only worth having if it survives to the table. A field on
+    /// the in-memory struct that the `INSERT` never binds is the shape
+    /// `memory::explain`'s deleted `memory_audit_log` had — an audit
+    /// vocabulary for an audit that never happened, which reads to an operator
+    /// as "nothing occurred".
+    #[tokio::test]
+    async fn the_actor_reaches_the_sql_column() {
+        let store = Arc::new(SecurityStore::in_memory().unwrap());
+        let (tx, rx) = mpsc::channel(4);
+        let handle = spawn_audit_drain(rx, store.clone());
+
+        tx.send(AuditEntry::scoped_content_read(
+            "u-bob",
+            Some("main:conv-alice".to_string()),
+            "trace.get: read 3 events of run run-a",
+        ))
+        .await
+        .unwrap();
+        drop(tx);
+        handle.await.unwrap();
+
+        let conn = store.conn.lock().unwrap_or_else(|e| e.into_inner());
+        let (event_type, actor, session): (String, Option<String>, Option<String>) = conn
+            .query_row(
+                "SELECT event_type, actor_user, session_id FROM security_audit_log",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+            )
+            .unwrap();
+        assert_eq!(event_type, "scoped_content_read");
+        assert_eq!(actor.as_deref(), Some("u-bob"));
+        assert_eq!(session.as_deref(), Some("main:conv-alice"));
     }
 
     #[tokio::test]

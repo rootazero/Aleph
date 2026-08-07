@@ -16,10 +16,27 @@ use std::sync::Arc;
 use aleph_protocol::{AgentTraceEvent, AgentTraceTextKind};
 use alephcore::gateway::handlers::trace_replay::{handle_get, handle_list};
 use alephcore::gateway::protocol::JsonRpcRequest;
+use alephcore::gateway::session_store::file_backend::{FileSessionStore, FileSessionStoreConfig};
+use alephcore::gateway::session_store::SessionStore;
 use alephcore::resilience::database::StateDatabase;
 use alephcore::resilience::{AgentTask, RiskLevel, TaskTrace};
 use serde_json::json;
 use tempfile::TempDir;
+
+/// The audit dependency both handlers took on 2026-08-07 (they record an
+/// operator reading somebody else's transcript — see `trace_replay`'s module
+/// doc). Empty on purpose: no `CALLER_USER` is scoped around an integration
+/// call, so the audit arm short-circuits before it reaches the store, and the
+/// pagination behaviour these tests are about is unchanged by it.
+fn empty_session_store(tmp: &TempDir) -> Arc<dyn SessionStore> {
+    Arc::new(
+        FileSessionStore::new(FileSessionStoreConfig {
+            base_dir: tmp.path().join("sessions"),
+            ..Default::default()
+        })
+        .expect("open FileSessionStore"),
+    )
+}
 
 /// Construct a fresh on-disk StateDatabase in a temp dir. We can't reach
 /// `StateDatabase::in_memory()` from an integration test (it is gated by
@@ -70,7 +87,7 @@ async fn seed_db(n: usize) -> (TempDir, Arc<StateDatabase>) {
 async fn list_returns_paginated_set_with_cursor() {
     let (_tmp, db) = seed_db(5).await;
     let req = JsonRpcRequest::with_id("trace.list", Some(json!({"limit": 2})), json!(1));
-    let resp = handle_list(req, db).await;
+    let resp = handle_list(req, db, empty_session_store(&_tmp), None).await;
     assert!(resp.is_success(), "expected success: {:?}", resp.error);
     let result = resp.result.unwrap();
     assert_eq!(result["traces"].as_array().unwrap().len(), 2);
@@ -85,7 +102,7 @@ async fn list_returns_paginated_set_with_cursor() {
 async fn list_returns_null_cursor_when_exhausted() {
     let (_tmp, db) = seed_db(2).await;
     let req = JsonRpcRequest::with_id("trace.list", Some(json!({"limit": 10})), json!(1));
-    let resp = handle_list(req, db).await;
+    let resp = handle_list(req, db, empty_session_store(&_tmp), None).await;
     let result = resp.result.unwrap();
     assert_eq!(result["traces"].as_array().unwrap().len(), 2);
     assert!(
@@ -100,7 +117,7 @@ async fn list_cursor_advances_without_overlap() {
     let (_tmp, db) = seed_db(5).await;
 
     let req_a = JsonRpcRequest::with_id("trace.list", Some(json!({"limit": 2})), json!(1));
-    let resp_a = handle_list(req_a, db.clone()).await;
+    let resp_a = handle_list(req_a, db.clone(), empty_session_store(&_tmp), None).await;
     let result_a = resp_a.result.unwrap();
     let cursor = result_a["next_cursor"].clone();
     assert!(!cursor.is_null());
@@ -110,7 +127,7 @@ async fn list_cursor_advances_without_overlap() {
         Some(json!({"limit": 2, "before_timestamp": cursor})),
         json!(2),
     );
-    let resp_b = handle_list(req_b, db).await;
+    let resp_b = handle_list(req_b, db, empty_session_store(&_tmp), None).await;
     let result_b = resp_b.result.unwrap();
 
     let a_ids: Vec<&str> = result_a["traces"]
@@ -133,7 +150,7 @@ async fn get_returns_known_trace_by_id() {
     let (_tmp, db) = seed_db(1).await;
     // Traces are keyed by their owning task_id (run id), not the SQLite row id.
     let req = JsonRpcRequest::with_id("trace.get", Some(json!({"task_id": "task-0"})), json!(1));
-    let resp = handle_get(req, db).await;
+    let resp = handle_get(req, db, empty_session_store(&_tmp), None).await;
     assert!(resp.is_success(), "expected success: {:?}", resp.error);
     let result = resp.result.unwrap();
     assert_eq!(result["task"]["task_id"], "task-0");
@@ -143,7 +160,7 @@ async fn get_returns_known_trace_by_id() {
 async fn get_returns_error_for_missing_trace_id() {
     let (_tmp, db) = seed_db(1).await;
     let req = JsonRpcRequest::with_id("trace.get", Some(json!({"task_id": "task-9999"})), json!(1));
-    let resp = handle_get(req, db).await;
+    let resp = handle_get(req, db, empty_session_store(&_tmp), None).await;
     assert!(!resp.is_success());
     let err = resp.error.unwrap();
     assert!(err.message.to_lowercase().contains("not found"));
