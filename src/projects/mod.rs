@@ -19,8 +19,8 @@
 //! [`roster`] is a read-optimised projection of the membership table, NOT a
 //! second source of truth — read its module doc before touching it.
 
-mod run_context;
 pub mod roster;
+mod run_context;
 mod store;
 
 pub use run_context::{current as current_project_root, with_project_root};

@@ -936,7 +936,12 @@ impl ExtensionManager {
         // A failure to read the registry degrades to global + CWD only.
         let project_roots: Vec<PathBuf> = crate::projects::ProjectStore::shared()
             .list()
-            .map(|projects| projects.into_iter().filter_map(|p| p.workspace_path).collect())
+            .map(|projects| {
+                projects
+                    .into_iter()
+                    .filter_map(|p| p.workspace_path)
+                    .collect()
+            })
             .unwrap_or_default();
         let user_hooks = crate::extension::hooks::load_user_hooks(cwd.as_deref(), &project_roots);
         let mut executor = self.hook_executor.write().await;

@@ -16,7 +16,7 @@
 //!
 //! # async fn example() {
 //! let manager = ClarificationManager::new();
-//! let request = ClarificationRequest::text("ask-1", "Which language?", None);
+//! let request = ClarificationRequest::text("Which language?");
 //! let rx = manager
 //!     .register("telegram:bot:123:user", request, Duration::from_secs(600))
 //!     .await;
@@ -337,12 +337,11 @@ mod tests {
     use crate::clarification::{ClarificationOption, ClarificationResultType};
 
     fn text_request() -> ClarificationRequest {
-        ClarificationRequest::text("ask-1", "Which language?", None)
+        ClarificationRequest::text("Which language?")
     }
 
     fn select_request() -> ClarificationRequest {
         ClarificationRequest::select(
-            "ask-2",
             "Pick a style:",
             vec![
                 ClarificationOption::new("pro", "Professional"),

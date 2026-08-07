@@ -112,16 +112,16 @@ impl ClarifyTaskMeta {
     /// mirrors `AskUserTool::build_request` so number/label/free-text matching
     /// behaves identically for workflow clarifications and `ask_user`.
     #[must_use]
-    pub fn build_request(&self, request_id: &str) -> ClarificationRequest {
+    pub fn build_request(&self) -> ClarificationRequest {
         if self.choices.is_empty() {
-            ClarificationRequest::text(request_id, &self.question, None)
+            ClarificationRequest::text(&self.question)
         } else {
             let options: Vec<ClarificationOption> = self
                 .choices
                 .iter()
                 .map(|c| ClarificationOption::new(c, c))
                 .collect();
-            ClarificationRequest::select(request_id, &self.question, options)
+            ClarificationRequest::select(&self.question, options)
         }
     }
 
@@ -194,10 +194,10 @@ mod tests {
     #[test]
     fn build_request_text_vs_select() {
         assert_eq!(
-            text_meta().build_request("id").clarification_type,
+            text_meta().build_request().clarification_type,
             ClarificationType::Text
         );
-        let req = select_meta().build_request("id");
+        let req = select_meta().build_request();
         assert_eq!(req.clarification_type, ClarificationType::Select);
         assert_eq!(req.options.as_ref().map(|o| o.len()), Some(2));
     }
