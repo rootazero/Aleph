@@ -551,6 +551,111 @@ mod tests {
         assert_eq!(response.status(), StatusCode::NOT_FOUND);
     }
 
+    /// **A DOCUMENTED BOUNDARY, NOT A BUG — read this before "fixing" it.**
+    ///
+    /// P2's membership rule promises that removing a member revokes the whole
+    /// room in one stroke. That promise is scoped to the four PREDICATES —
+    /// session visibility, memory-partition visibility, event delivery, RPC
+    /// access — all of which consult `projects::roster` live and flip on the
+    /// next evaluation (`visibility::removing_a_member_revokes_visibility_immediately`
+    /// pins that half). This route is the other ingress, and it is deliberately
+    /// not covered: it is a **bearer** route whose eight guards contain no
+    /// identity check at all (see the module doc's table), and the capability
+    /// names a SESSION, never a user, so there is nothing here that *could* ask
+    /// whether the holder is still on the roster.
+    ///
+    /// Revoking on removal was considered and refused: the capability is
+    /// session-wide, so expiring it would also break the REMAINING members'
+    /// already-rendered `<img src>` URLs until their next `artifacts.list`
+    /// re-mints. The accepted boundary is the bearer window bounded by
+    /// [`crate::gateway::security::artifact_caps::CAP_TTL`] — the same posture
+    /// a published-link threat model takes for the same shape.
+    ///
+    /// This test states that as a fact rather than an assumption, so that
+    /// anyone who ever does build revocation meets a red test naming the
+    /// decision they are reversing. SECURITY.md `#project-rooms-p2` carries the
+    /// same statement in prose and names this test.
+    #[tokio::test]
+    async fn a_removed_members_minted_artifact_url_survives_until_ttl() {
+        use crate::gateway::router::SessionKey;
+        use crate::gateway::session_store::types::SessionMetadata;
+        use crate::gateway::visibility::session_visible_to;
+        use crate::projects::ProjectStore;
+
+        // `roster::publish` REPLACES the process-global projection, so every
+        // test that writes a roster serialises on this guard.
+        let _roster_guard = crate::projects::roster::TEST_GUARD
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+
+        let fx = fixture();
+        let projects = ProjectStore::new(rusqlite::Connection::open_in_memory().unwrap());
+        projects.create_schema().expect("schema");
+        let room = projects
+            .create("room", Some("u-alice"), None)
+            .expect("room");
+        projects.add_member(&room.id, "u-bob").expect("add member");
+
+        // The room's canonical chat session, in the shape `projects.room_session`
+        // claims, created by alice — `owner_user_id` records who opened the room
+        // first, which is exactly why it cannot answer "who may look".
+        let session = SessionKey::project_room("main", &room.id).to_key_string();
+        let meta = SessionMetadata {
+            key: session.clone(),
+            owner_user_id: Some("u-alice".to_string()),
+            scope_id: Some(crate::scope::ScopeId::Project(room.id.clone()).render()),
+            ..Default::default()
+        };
+        let record = fx
+            .store
+            .put(
+                &session,
+                None,
+                ArtifactOrigin::Outbound,
+                "room-chart.png",
+                "image/png",
+                b"ROOM-BYTES",
+            )
+            .await
+            .expect("put");
+
+        // Bob is on the roster, so `artifacts.list`'s `deny_unless_visible`
+        // admits him and the capability behind his URL is legitimately minted.
+        assert!(
+            session_visible_to(&meta, "u-bob"),
+            "a member must be able to list the room's artifacts, hence to mint"
+        );
+        let cap = ArtifactCapabilities::mint(&session);
+
+        projects
+            .remove_member(&room.id, "u-bob")
+            .expect("remove member");
+
+        // The removal really landed. Without this the assertion below would
+        // pass just as happily against a `remove_member` that did nothing —
+        // and would be pinning the absence of a roster, not the boundary.
+        assert!(
+            !session_visible_to(&meta, "u-bob"),
+            "removal must flip the predicate every RPC and every event consults"
+        );
+
+        // …and the byte route, which never asked, still serves.
+        let response = fx
+            .app
+            .oneshot(request(
+                &format!("/artifact/{cap}/{}/room-chart.png", record.id),
+                [127, 0, 0, 1],
+            ))
+            .await
+            .expect("response");
+        assert_eq!(
+            response.status(),
+            StatusCode::OK,
+            "the bearer window is bounded by CAP_TTL, not by the roster"
+        );
+        assert_eq!(body_bytes(response).await, b"ROOM-BYTES");
+    }
+
     #[tokio::test]
     async fn a_traversal_id_is_rejected() {
         let fx = fixture();

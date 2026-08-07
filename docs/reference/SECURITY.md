@@ -1314,11 +1314,29 @@ attribution, and a bound workspace as the room's default cwd.
   visibility, memory-partition visibility, event delivery, RPC access. There
   is no per-session ACL, no per-note sharing, no capability tokens inside a
   room. Adding a member grants everything the room contains at once;
-  removing them revokes everything at once (and the removal is immediate —
-  the roster projection (`src/projects/roster.rs`) is published by the
-  store inside its own write lock, so the next predicate evaluation already
-  excludes them). Anything needing finer sharing than "in the room / not in
-  the room" is a different feature, not a variation of this one.
+  removing them revokes it **across every one of those four predicates at
+  once**, immediately — the roster projection (`src/projects/roster.rs`) is
+  published by the store inside its own write lock, so the next predicate
+  evaluation already excludes them. Pinned by
+  `visibility.rs::removing_a_member_revokes_visibility_immediately`.
+  Anything needing finer sharing than "in the room / not in the room" is a
+  different feature, not a variation of this one.
+
+  **The promise is scoped to the predicates, and there is exactly one other
+  ingress.** `/artifact/<cap>/<id>/<file>`
+  (`src/gateway/server/artifact_route.rs`) is a **bearer** byte route: its
+  eight guards contain no identity check, and the capability names a SESSION,
+  not a user, so removal has nothing to revoke there. An URL an ex-member
+  minted through a then-legitimate `artifacts.list` / `session.export_html`
+  keeps serving those bytes for the remainder of the capability's 8-hour TTL
+  (`security::artifact_caps::CAP_TTL`); the same applies to a `users.update`
+  deactivation, whose kick covers `devices.user_id` bindings (WS/Panel), not
+  a URL already copied. That bounded bearer window is an accepted boundary,
+  not a gap: the capability is session-wide, so revoking it on member removal
+  would also break the REMAINING members' already-rendered `<img src>` URLs
+  until their next `artifacts.list` re-mints. Pinned as a stated fact by
+  `artifact_route.rs::a_removed_members_minted_artifact_url_survives_until_ttl`
+  — a red test is how anyone reversing this decision will learn it was one.
 - **`owner_user_id` means CREATOR, not "the one who can see it."** The P1
   vocabulary (`effective_owner`, adoption-by-absence) keeps working for
   personal rows, but for a project row the owner column only decides
