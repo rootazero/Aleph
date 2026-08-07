@@ -58,6 +58,7 @@ where
                         },
                         at: crate::session::events::now_ms(),
                         synthetic: false,
+                        author_user_id: crate::scope::room_author_from_metadata(&request.metadata),
                     },
                 )
                 .await;
@@ -167,6 +168,7 @@ where
                         },
                         at: crate::session::events::now_ms(),
                         synthetic: false,
+                        author_user_id: crate::scope::room_author_from_metadata(&request.metadata),
                     },
                 )
                 .await;

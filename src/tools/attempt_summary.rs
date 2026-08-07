@@ -318,6 +318,7 @@ mod tests {
                 },
                 at: now_ms(),
                 synthetic: false,
+                author_user_id: None,
             }),
             tcr("c1", "search"),
             mk(SessionEvent::ToolResult {

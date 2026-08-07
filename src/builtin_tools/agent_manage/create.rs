@@ -7,7 +7,7 @@ use tracing::{info, warn};
 
 use crate::config::agent_manager::AgentManager;
 use crate::config::agent_resolver::initialize_agent_identity;
-use crate::config::types::agents_def::{AgentDefinition, AgentModelRef, AgentIdentity};
+use crate::config::types::agents_def::{AgentDefinition, AgentIdentity, AgentModelRef};
 use crate::error::Result;
 use crate::gateway::agent_env::AgentEnvStore;
 use crate::gateway::agent_instance::{AgentInstance, AgentInstanceConfig, AgentRegistry};
@@ -244,8 +244,7 @@ impl AlephTool for AgentCreateTool {
         //    duplicated the path layout, so a `ALEPH_HOME=/srv/aleph` boot would
         //    have written agent dirs to `~/.aleph` while the rest of the system
         //    read from `/srv/aleph/agents`.
-        let home = crate::discovery::aleph_home_dir()
-            .map_err(|_| AgentManageError::NoHomeDir)?;
+        let home = crate::discovery::aleph_home_dir().map_err(|_| AgentManageError::NoHomeDir)?;
         let agents_state_root = home.join("agents");
         let agent_state_dir = agents_state_root.join(&args.id);
 
@@ -268,10 +267,7 @@ impl AlephTool for AgentCreateTool {
         tokio::fs::write(agent_state_dir.join("SOUL.md"), &soul_content)
             .await
             .map_err(|e| {
-                AgentManageError::Io(format!(
-                    "Failed to write SOUL.md for '{}': {}",
-                    args.id, e
-                ))
+                AgentManageError::Io(format!("Failed to write SOUL.md for '{}': {}", args.id, e))
             })?;
 
         // Initialize the rest of the identity directory (AGENTS.md, MEMORY.md, …).
@@ -332,9 +328,9 @@ impl AlephTool for AgentCreateTool {
                  ## Instructions\n\n\
                  Add workspace-specific instructions here.\n"
             );
-            tokio::fs::write(&agents_md, content).await.map_err(|e| {
-                AgentManageError::Io(format!("Failed to write AGENTS.md: {e}"))
-            })?;
+            tokio::fs::write(&agents_md, content)
+                .await
+                .map_err(|e| AgentManageError::Io(format!("Failed to write AGENTS.md: {e}")))?;
         }
 
         // IDENTITY.md / TOOLS.md are owned by `initialize_agent_identity` above
@@ -347,9 +343,10 @@ impl AlephTool for AgentCreateTool {
         //    `AgentInstanceConfig::default()` uses, so omitting `model` here
         //    and omitting it in TOML both fall through to the system default
         //    — there's no second hardcoded string to drift out of sync.
-        let model = args.model.clone().unwrap_or_else(|| {
-            AgentInstanceConfig::default().model
-        });
+        let model = args
+            .model
+            .clone()
+            .unwrap_or_else(|| AgentInstanceConfig::default().model);
         let config = AgentInstanceConfig {
             agent_id: args.id.clone(),
             workspace: workspace_path.clone(),
@@ -587,7 +584,7 @@ mod tests {
         // SOUL.md was written; AGENTS.md / IDENTITY.md seeded; description
         // appended. All three should land in `~/.aleph/agents/newagent/`.
         let _ = CatalogRegistry::new(); // ensure import path used
-        // (the path test below is sufficient — see create test fixture above.)
+                                        // (the path test below is sufficient — see create test fixture above.)
     }
 
     #[tokio::test]

@@ -317,6 +317,7 @@ pub async fn handle(
                         content: mc,
                         at,
                         synthetic: false,
+                        author_user_id: None,
                     },
                     "assistant" => crate::session::events::SessionEvent::AssistantMessage {
                         turn_id,

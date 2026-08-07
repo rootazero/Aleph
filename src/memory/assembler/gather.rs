@@ -38,18 +38,23 @@ pub(crate) struct Gatherer {
     /// cross-project knowledge. Independently, a personal-scoped session
     /// (`crate::scope::current_scope`) always unions in the user's own
     /// namespace regardless of this flag — see `project_scope::session_read_ids`.
-    /// The two floors split (P1 "Floors 分床"): the user-profile floor follows
-    /// the session's personal scope (`session_write_id`), the feedback floor
-    /// stays under the base id unconditionally (org-wide standing rules).
+    /// The two floors split (P1/P2 "Floors 分床"): the user-profile floor
+    /// follows the session's personal scope and vanishes entirely in a shared
+    /// project room (`profile_floor_id`), the feedback floor stays under the
+    /// base id unconditionally (org-wide standing rules).
     pub project_scoped: bool,
 }
 
 impl Gatherer {
     pub async fn gather(&self, input: &GatherInputs) -> Vec<Candidate> {
-        // The user-profile floor follows personal scope; the feedback floor
-        // stays under the base id (org-wide) regardless — see the field doc
-        // on `project_scoped` and project_scope.rs's "Floors 分床" invariant.
-        let user_floor_id = crate::memory::project_scope::session_write_id(
+        // The user-profile floor follows personal scope and is ABSENT in a
+        // shared project room; the feedback floor stays under the base id
+        // (org-wide) regardless — see the field doc on `project_scoped` and
+        // project_scope.rs's "Floors 分床" invariant. `None` here means "no
+        // profile is admissible", not "resolve it somewhere else": the whole
+        // reason `profile_floor_id` returns an `Option` is that a room has no
+        // "the user" to have a profile.
+        let user_floor_id = crate::memory::project_scope::profile_floor_id(
             &input.agent_id,
             self.project_scoped,
             crate::projects::current_project_root().as_deref(),
@@ -58,7 +63,12 @@ impl Gatherer {
             self.fetch_notes(&input.query, &input.agent_id, input.pool_limit),
             self.fetch_snapshot(&input.agent_id, input.session_id.as_deref()),
             self.fetch_raws(&input.agent_id, input.session_id.as_deref(), &input.filter),
-            self.profile.load(&user_floor_id),
+            async {
+                match user_floor_id.as_deref() {
+                    Some(id) => self.profile.load(id).await,
+                    None => None,
+                }
+            },
             self.feedback_floor.load(&input.agent_id),
             self.fetch_daily_insight(),
         );

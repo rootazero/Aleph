@@ -165,7 +165,9 @@ mod tests {
     fn expired_ticket_rejected() {
         let store = store();
         // TTL of -1 makes it immediately expired.
-        store.create_bootstrap_ticket("bt-expired", -1, None).unwrap();
+        store
+            .create_bootstrap_ticket("bt-expired", -1, None)
+            .unwrap();
 
         assert_eq!(
             store.consume_bootstrap_ticket("bt-expired", None),
@@ -186,7 +188,9 @@ mod tests {
     fn prune_removes_expired_tickets() {
         let store = store();
         store.create_bootstrap_ticket("bt-old", -1, None).unwrap();
-        store.create_bootstrap_ticket("bt-fresh", 60_000, None).unwrap();
+        store
+            .create_bootstrap_ticket("bt-fresh", 60_000, None)
+            .unwrap();
 
         let pruned = store
             .prune_expired_bootstrap_tickets(current_timestamp_ms())

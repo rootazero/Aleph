@@ -129,10 +129,11 @@ impl SessionStore for SessionManager {
         }
         // Deliberate deviation from the P1 plan's "SQL COALESCE(owner_user_id, ?)"
         // instruction: filtering in memory (like `active_minutes` above) keeps the
-        // effective-owner fallback single-sourced in `visibility::effective_owner`
-        // instead of re-deriving it a second time in SQL.
+        // visibility rule single-sourced in `visibility::session_visible_to`
+        // instead of re-deriving it a second time in SQL. That predicate also
+        // covers project rooms, where the roster — not the creator — decides.
         if let Some(ref owner) = filter.owner_visible_to {
-            sessions.retain(|s| crate::gateway::visibility::effective_owner(s) == owner);
+            sessions.retain(|s| crate::gateway::visibility::session_visible_to(s, owner));
         }
         if let Some(limit) = filter.limit {
             sessions.truncate(limit);

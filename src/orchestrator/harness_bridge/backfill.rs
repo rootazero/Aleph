@@ -77,6 +77,7 @@ pub(crate) async fn backfill_events_from_messages(
                 },
                 at: msg.timestamp,
                 synthetic: false,
+                author_user_id: None,
             }),
             "assistant" => Some(SessionEvent::AssistantMessage {
                 turn_id: uuid::Uuid::new_v4(),
@@ -243,6 +244,7 @@ mod tests {
                     },
                     at: 500,
                     synthetic: false,
+                    author_user_id: None,
                 },
                 500,
             )

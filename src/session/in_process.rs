@@ -359,6 +359,7 @@ mod tests {
             },
             at: now_ms(),
             synthetic: false,
+            author_user_id: None,
         };
 
         svc.emit_event(&id, user("my bank pin is 1234"))
@@ -459,6 +460,7 @@ mod tests {
                 },
                 at: now_ms(),
                 synthetic: false,
+                author_user_id: None,
             },
         )
         .await

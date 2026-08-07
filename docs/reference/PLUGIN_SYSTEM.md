@@ -436,31 +436,35 @@ in-place 编辑都会改变 key tuple，cache 自然 miss。openclaw 也有相�
 
 ---
 
-## Lazy Activation Planner（P3.5 — openclaw parity）
+## Lazy Activation Planner —— ❌ 已删除（2026-08-07）
 
-Aleph 现在支持 plugin manifest 声明**懒激活 hint**，boot 时不一定要加载所有插件：
+**不存在懒激活。所有 enabled 插件在 boot 时一次性加载。** `[plugin.activation]`
+块**不被任何 adapter 读取**，写了等于没写。
 
-```toml
-[plugin.activation]
-on_commands      = ["/my-plugin:list", "/my-plugin:refine"]
-on_providers     = ["my-custom-llm"]
-on_channels      = ["telegram"]
-on_capabilities  = ["tool", "hook"]
-on_agent_harnesses = ["research"]
-```
+曾经有过一个 openclaw `activation-planner.ts` 的 Rust 移植
+（`src/extension/activation.rs` 的 `ActivationPlanner` / `ActivationHints` /
+`ActivationTrigger` / `ActivationPlan` / `CapabilityKind` / `tier_kinds`，约 600 行），
+本轮按 R10 YAGNI 整体删除。删的理由比「planner 没有生产调用者」更深一层：
+`PluginManifest.activation` **从来没有非 `None` 过**——三个 manifest adapter
+（`cc_plugin_json` / `cc_plugin_toml` / `toml_types`）在各自的构造点全部硬编码
+`activation: None`，其中 `cc_plugin_json` 甚至把这个块反序列化进自己的 DTO 之后
+再丢掉。所以写了 `activation` 块的插件作者既没拿到懒加载，也没拿到任何诊断。
 
-`ActivationPlanner::plan(trigger, &PlanInput)` 给定 trigger（command/provider/channel/
-capability/agent_harness/route）返回应该激活的 plugin id 列表 + 每个 plugin 的
-reason。匹配规则：legacy `None` hints = always load（向后兼容）；`Some(empty)`
-= matches nothing（manifest 配置错误，会被 `load_all` 日志告警）；`Some(non-empty)`
-= 精确匹配（command/provider/channel/route 是 case-insensitive）。
+**重连不是补一个调用点**：懒激活需要一条「按 trigger 重入」的加载路径，而
+`load_plugins` 是 boot 时对插件目录的一次性遍历——那条路径得先造出来。要复活
+请从 openclaw 的 `activation-planner.ts` 和
+`git log --follow src/extension/plugin_trust.rs` 起步，不要从被删的 Rust 起步——
+它从未对着真实 registry 跑过。
 
-TOML 解析当前返回 `None`（保留旧行为）。JSON adapter 可直接读到 `activation`
-字段（cc_plugin_json 的 `PluginManifest` Deserialize）。
+存活下来的是同文件里的 `OwnerTrustPolicy`（见下节），文件已随之更名为
+`src/extension/plugin_trust.rs`。
 
 ---
 
 ## Owner Trust Policy（P3.5 — openclaw parity）
+
+锚点 `src/extension/plugin_trust.rs`（该文件曾名 `activation.rs`，
+activation planner 删除后按内容更名）。
 
 Aleph 暴露 `OwnerTrustPolicy::permissive()` (默认) 和
 `OwnerTrustPolicy::restrictive(allowlist)`。restrictive 模式下，`Bundled` 和

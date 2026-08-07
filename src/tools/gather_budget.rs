@@ -327,6 +327,7 @@ mod tests {
                 },
                 at: now_ms(),
                 synthetic: false,
+                author_user_id: None,
             }),
             mk(SessionEvent::ToolResult {
                 turn_id: uuid::Uuid::nil(),

@@ -501,14 +501,28 @@ impl HandlerRegistry {
             )
         });
 
-        // Project catalogue — backed by `~/.aleph/projects.json`. The store is
-        // stateless (every op re-reads under an fs2 lock) so the default
-        // instance is safe to share across all handler closures. Real wiring
-        // happens in `register_projects_handlers`; this default registration
-        // keeps `projects.*` usable in test harnesses that boot via
-        // `HandlerRegistry::new()` directly.
+        // The principal registry these defaults share. ONE instance for both
+        // the `projects.*` and `users.*` blocks below: the roster verbs reject
+        // a member id that names no active principal, so wiring them to a
+        // different users table than `users.list` serves would make a test
+        // harness contradict itself. Fresh in-memory (owner auto-bootstrapped
+        // by `SecurityStore::in_memory()`); real wiring at boot uses the SAME
+        // Arc as connect auth (see `commands/start/mod.rs`).
+        let default_security_store = Arc::new(
+            SecurityStore::in_memory()
+                .expect("in-memory SecurityStore for default registrations"),
+        );
+
+        // Project catalogue — backed by `~/.aleph/data/projects.db`. Every
+        // consumer shares ONE connection (`ProjectStore::shared`); an ad-hoc
+        // per-closure store would open its own connection and race for the
+        // SQLite write lock. Real wiring happens in
+        // `register_projects_handlers`; this default registration keeps
+        // `projects.*` usable in test harnesses that boot via
+        // `HandlerRegistry::new()` directly (under `cfg(test)` the shared
+        // handle is in-memory, so this never touches the developer's home).
         {
-            let default_store = Arc::new(crate::projects::ProjectStore::new());
+            let default_store = crate::projects::ProjectStore::shared();
             let s = default_store.clone();
             registry.register("projects.list", move |req| {
                 let s = s.clone();
@@ -525,36 +539,84 @@ impl HandlerRegistry {
                 async move { projects::handle_create_blank(req, s).await }
             });
             let s = default_store.clone();
+            let u = default_security_store.clone();
             registry.register("projects.remove", move |req| {
                 let s = s.clone();
-                async move { projects::handle_remove(req, s).await }
+                let u = u.clone();
+                async move { projects::handle_remove(req, s, u).await }
             });
             let s = default_store.clone();
             registry.register("projects.touch", move |req| {
                 let s = s.clone();
                 async move { projects::handle_touch(req, s).await }
             });
-            let s = default_store;
+            let s = default_store.clone();
             registry.register("projects.get", move |req| {
                 let s = s.clone();
                 async move { projects::handle_get(req, s).await }
             });
+            let s = default_store.clone();
+            registry.register("projects.create", move |req| {
+                let s = s.clone();
+                async move { projects::handle_create(req, s).await }
+            });
+            let s = default_store.clone();
+            let u = default_security_store.clone();
+            registry.register("projects.rename", move |req| {
+                let s = s.clone();
+                let u = u.clone();
+                async move { projects::handle_rename(req, s, u).await }
+            });
+            let s = default_store.clone();
+            let u = default_security_store.clone();
+            registry.register("projects.archive", move |req| {
+                let s = s.clone();
+                let u = u.clone();
+                async move { projects::handle_archive(req, s, u).await }
+            });
+            let s = default_store.clone();
+            let u = default_security_store.clone();
+            registry.register("projects.bind_workspace", move |req| {
+                let s = s.clone();
+                let u = u.clone();
+                async move { projects::handle_bind_workspace(req, s, u).await }
+            });
+            let s = default_store.clone();
+            let u = default_security_store.clone();
+            registry.register("projects.member.add", move |req| {
+                let s = s.clone();
+                let u = u.clone();
+                async move { projects::handle_member_add(req, s, u).await }
+            });
+            let s = default_store.clone();
+            let u = default_security_store.clone();
+            registry.register("projects.member.remove", move |req| {
+                let s = s.clone();
+                let u = u.clone();
+                async move { projects::handle_member_remove(req, s, u).await }
+            });
+            let s = default_store.clone();
+            registry.register("projects.member.list", move |req| {
+                let s = s.clone();
+                async move { projects::handle_member_list(req, s).await }
+            });
+            let s = default_store;
+            registry.register("projects.room_session", move |req| {
+                let s = s.clone();
+                async move { projects::handle_room_session(req, s).await }
+            });
         }
 
         // User (principal) catalogue — backed by `SecurityStore`'s `users`
-        // table (Task 1 of the P0 identity foundation). The store here is a
-        // fresh in-memory instance (owner auto-bootstrapped by
-        // `SecurityStore::in_memory()`); mirrors the `projects.*` default
-        // above — this keeps `users.*` usable in test harnesses that boot via
+        // table (Task 1 of the P0 identity foundation). Shares
+        // `default_security_store` with the `projects.*` block above — this
+        // keeps `users.*` usable in test harnesses that boot via
         // `HandlerRegistry::new()` directly. Real wiring happens at boot with
         // the SAME `SecurityStore` Arc used for connect auth, and the real
         // connection map / event bus for the deactivation device kick (see
         // `commands/start/mod.rs`).
         {
-            let default_store = Arc::new(
-                SecurityStore::in_memory()
-                    .expect("in-memory SecurityStore for users.* default registration"),
-            );
+            let default_store = default_security_store;
             let default_kick = users::UserDeactivationKick {
                 connections: Arc::new(AsyncRwLock::new(HashMap::new())),
                 event_bus: Arc::new(GatewayEventBus::new()),

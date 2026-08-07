@@ -44,6 +44,7 @@ pub mod system;
 pub mod team_chat;
 pub mod teams;
 pub mod trace;
+pub mod users;
 pub mod workspace;
 
 // Re-export all public types for backward compatibility (crate::api::Foo)
@@ -71,4 +72,5 @@ pub use security::*;
 pub use settings::*;
 pub use system::*;
 pub use trace::*;
+pub use users::*;
 pub use workspace::*;

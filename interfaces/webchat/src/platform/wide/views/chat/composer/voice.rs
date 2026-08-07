@@ -113,7 +113,12 @@ fn transcribe_and_send(
                 // keeps the behaviour byte-identical rather than short-circuiting.
                 let sk = chat.session_key.try_get_untracked().flatten();
                 let aid = chat.agent_id.try_get_untracked().flatten();
-                let pr = chat.active_project_root.try_get_untracked().flatten();
+                let room_project_id = chat.room_project_id.try_get_untracked().flatten();
+                let pr = if room_project_id.is_some() {
+                    None
+                } else {
+                    chat.active_project_root.try_get_untracked().flatten()
+                };
                 let mo = chat.selected_model.try_get_untracked().flatten();
                 let tier = chat.session_exec_tier.try_get_untracked().flatten();
                 // First-send-only carriage (see composer/mod.rs typed path):
@@ -133,6 +138,7 @@ fn transcribe_and_send(
                     Vec::<ChatAttachment>::new(),
                     aid.as_deref(),
                     pr.as_deref(),
+                    room_project_id.as_deref(),
                     mo.as_ref(),
                     tier.as_deref(),
                     mode.as_deref(),

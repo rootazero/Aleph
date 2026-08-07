@@ -228,6 +228,7 @@ fn user_message_event(text: &str) -> SessionEvent {
         },
         at: now_ms(),
         synthetic: false,
+        author_user_id: None,
     }
 }
 

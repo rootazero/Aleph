@@ -101,6 +101,7 @@ mod tests {
             text_finalized: false,
             agent_id: None,
             plan_archive: None,
+            author_user_id: None,
         }
     }
 

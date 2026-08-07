@@ -21,10 +21,7 @@ pub fn validate_agent_id(id: &str) -> Result<(), String> {
         return Err("Agent ID cannot be empty".to_string());
     }
     if id.len() > 64 {
-        return Err(format!(
-            "Agent ID too long ({} chars, max 64)",
-            id.len()
-        ));
+        return Err(format!("Agent ID too long ({} chars, max 64)", id.len()));
     }
     let first = id.chars().next().expect("non-empty checked above");
     if !first.is_ascii_lowercase() && !first.is_ascii_digit() {

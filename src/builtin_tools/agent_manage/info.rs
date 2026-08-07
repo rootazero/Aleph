@@ -100,10 +100,7 @@ impl AgentInfoTool {
     /// keeps the `new` 1-arg signature so all existing callers and tests
     /// compile unchanged.
     #[must_use]
-    pub fn with_store(
-        mut self,
-        store: Arc<crate::gateway::agent_env::AgentEnvStore>,
-    ) -> Self {
+    pub fn with_store(mut self, store: Arc<crate::gateway::agent_env::AgentEnvStore>) -> Self {
         self.store = Some(store);
         self
     }

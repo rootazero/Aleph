@@ -164,7 +164,10 @@ fn try_http_fetch(kernel: &WasmCapabilityKernel, request: &str) -> Result<String
         if let Some(value) = kernel.resolve_secret(&binding.secret_name) {
             // `inject_credential` looks up by name; duplicates are harmless
             // (first-match wins).
-            if !resolved_secrets.iter().any(|(n, _)| n == &binding.secret_name) {
+            if !resolved_secrets
+                .iter()
+                .any(|(n, _)| n == &binding.secret_name)
+            {
                 resolved_secrets.push((binding.secret_name.clone(), value));
             }
         }
@@ -241,8 +244,8 @@ fn try_http_fetch(kernel: &WasmCapabilityKernel, request: &str) -> Result<String
                             })
                             .collect();
                         let mut bytes = Vec::new();
-                            let response_cap = u64::try_from(max_response_bytes)
-                                .map_or(u64::MAX, |size| size.saturating_add(1));
+                        let response_cap = u64::try_from(max_response_bytes)
+                            .map_or(u64::MAX, |size| size.saturating_add(1));
                         resp.take(response_cap)
                             .read_to_end(&mut bytes)
                             .map_err(|e| format!("failed to read response: {e}"))?;

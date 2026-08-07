@@ -74,6 +74,37 @@ pub fn current_caller_user() -> Option<String> {
     CALLER_USER.try_with(|u| u.clone()).ok().flatten()
 }
 
+/// Whether this connection may point a working directory at an arbitrary
+/// server-side folder.
+///
+/// Layer-2 (config tier): choosing or creating a working directory is a
+/// config-tier capability. A chat-tier caller — a remote Panel paired at
+/// "chat", or an external channel stamped "guest" — is locked to its default
+/// workspace. Absent role (a trusted local/internal run: cron, A2A, an
+/// in-process test) and `"operator"` pass, mirroring
+/// `TurnContext::caller_is_operator`.
+///
+/// Desktop App: the local Panel runs over loopback, so any loopback connection
+/// passes regardless of pairing tier — on the desktop the local operator IS the
+/// user. Remote LAN connections stay gated, so opening
+/// `[gateway] host = "0.0.0.0"` does not hand arbitrary working-directory
+/// selection to every device on the network.
+///
+/// **One predicate, four call sites, and that is the point.** P2 made a
+/// project room's `workspace_path` the default cwd for every member's run
+/// (`handlers::agent::build_run_request`), which is only safe because the
+/// binding itself was written through a gate at least this strong. The three
+/// writers — `projects.add`, `projects.create_blank`, `projects.bind_workspace`
+/// — therefore ask the same question as the per-run `project_root` override.
+/// Gating only the run would leave "register a folder, then chat in it" as a
+/// two-step path to the same place, with both steps legal.
+#[must_use]
+pub fn caller_may_choose_directory() -> bool {
+    let role = current_caller_role();
+    let is_config_tier = !matches!(role.as_deref(), Some(r) if r != "operator");
+    is_config_tier || current_caller_is_loopback()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -98,5 +129,51 @@ mod tests {
             .await;
         assert_eq!(seen.as_deref(), Some("u-alice"));
         assert_eq!(current_caller_user(), None); // unset outside a scope
+    }
+
+    /// Cron, A2A and in-process tests carry no role at all and keep their
+    /// pre-multi-user freedom — the same first arm every P1 predicate opens
+    /// with.
+    #[tokio::test]
+    async fn an_unrestricted_caller_may_choose_a_directory() {
+        assert!(caller_may_choose_directory());
+    }
+
+    #[tokio::test]
+    async fn a_remote_chat_tier_caller_may_not() {
+        let allowed = CALLER_ROLE
+            .scope(Some("member".to_string()), async {
+                CALLER_IS_LOOPBACK
+                    .scope(false, async { caller_may_choose_directory() })
+                    .await
+            })
+            .await;
+        assert!(!allowed);
+    }
+
+    /// The desktop App's own Panel: chat-tier by pairing, but local. The
+    /// loopback arm is what keeps zero-config single-machine use working.
+    #[tokio::test]
+    async fn the_same_caller_over_loopback_may() {
+        let allowed = CALLER_ROLE
+            .scope(Some("member".to_string()), async {
+                CALLER_IS_LOOPBACK
+                    .scope(true, async { caller_may_choose_directory() })
+                    .await
+            })
+            .await;
+        assert!(allowed);
+    }
+
+    #[tokio::test]
+    async fn a_remote_operator_may() {
+        let allowed = CALLER_ROLE
+            .scope(Some("operator".to_string()), async {
+                CALLER_IS_LOOPBACK
+                    .scope(false, async { caller_may_choose_directory() })
+                    .await
+            })
+            .await;
+        assert!(allowed);
     }
 }

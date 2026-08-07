@@ -18,10 +18,10 @@ use serde::{Deserialize, Serialize};
 use tracing::info;
 
 use crate::error::Result;
-use crate::gateway::agent_env::AgentEnvStore;
 use crate::gateway::agent_binding::unbind_channel_agent;
-use crate::gateway::agent_instance::AgentRegistry;
 use crate::gateway::agent_binding::BindError;
+use crate::gateway::agent_env::AgentEnvStore;
+use crate::gateway::agent_instance::AgentRegistry;
 use crate::gateway::event_bus::GatewayEventBus;
 use crate::sync_primitives::Arc;
 use crate::tools::AlephTool;
@@ -109,16 +109,15 @@ impl AlephTool for AgentUnbindTool {
         info!(channel = %args.__channel, "Agent unbind requested");
 
         let channel = args.__channel.trim().to_string();
-        let previous_agent = unbind_channel_agent(
-            &self.workspace_mgr,
-            self.event_bus.as_deref(),
-            &channel,
-        )
-        .map_err(map_unbind_error)?;
+        let previous_agent =
+            unbind_channel_agent(&self.workspace_mgr, self.event_bus.as_deref(), &channel)
+                .map_err(map_unbind_error)?;
 
         let no_op = previous_agent.is_none();
         let message = match &previous_agent {
-            Some(prev) => format!("Cleared active-agent binding for channel '{channel}' (was '{prev}')."),
+            Some(prev) => {
+                format!("Cleared active-agent binding for channel '{channel}' (was '{prev}').")
+            }
             None => format!("Channel '{channel}' was already unbound."),
         };
 
@@ -221,6 +220,9 @@ mod tests {
             .await
             .unwrap_err();
         let msg = err.to_string();
-        assert!(msg.contains("no active channel") || msg.contains("No active channel"), "got: {msg}");
+        assert!(
+            msg.contains("no active channel") || msg.contains("No active channel"),
+            "got: {msg}"
+        );
     }
 }

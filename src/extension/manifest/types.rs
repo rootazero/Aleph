@@ -329,18 +329,6 @@ pub struct PluginManifest {
     /// Parsed from aleph.plugin.toml or .claude-plugin/plugin.toml [memory].
     #[serde(skip)]
     pub memory_manifest: Option<crate::memory::extensions::manifest::MemoryManifestSection>,
-
-    /// P3.5 — lazy activation hints. A plugin can declare which surfaces it
-    /// serves (`on_commands`, `on_providers`, `on_channels`,
-    /// `on_capabilities`, `on_agent_harnesses`) so
-    /// [`crate::extension::activation::ActivationPlanner`] can decide at
-    /// boot whether the plugin needs to be eagerly loaded or can wait for
-    /// its first trigger. Mirrors openclaw's `activation` block in
-    /// `openclaw.plugin.json`. Empty/default = the legacy "always load"
-    /// behaviour (backwards compatible — every existing plugin keeps the
-    /// same boot cost).
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub activation: Option<crate::extension::activation::ActivationHints>,
 }
 
 impl PluginManifest {
@@ -390,8 +378,6 @@ impl PluginManifest {
             aleph_extensions: None,
             // Memory extension manifest section
             memory_manifest: None,
-            // P3.5 — lazy activation hints (None = "always load" legacy default)
-            activation: None,
         }
     }
 

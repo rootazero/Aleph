@@ -668,12 +668,18 @@ pub(in crate::commands::start) async fn register_agent_handlers(
             use alephcore::memory::store::sqlite::recall_signals::RecallHit;
 
             // Build a fresh assembler dedicated to the reflector (same config as MCP).
+            // This provider is built for its `assembler()` alone and never
+            // renders the curated envelope, so the section is passed for
+            // uniformity rather than need — but it is passed, because a second
+            // construction site quietly holding different budgets from the
+            // first is exactly how `[memory.curated]` went inert to begin with.
             let reflector_mcp = super::init_memory_context_provider(
                 memory_db,
                 Some(emb),
                 Some(prov.clone()),
                 app_config.memory.assembler_config(),
                 app_config.memory.injection_mode,
+                app_config.memory.curated.into(),
             );
             let reflector_assembler = reflector_mcp.assembler();
 
@@ -1027,6 +1033,10 @@ pub(in crate::commands::start) async fn register_agent_handlers(
                 // `memory.injection_mode` — Tools deployments must not have
                 // orientation/profile/memory auto-injected into prompts.
                 app_config.memory.injection_mode,
+                // `[memory.curated]` — this is the provider that renders the
+                // curated envelope, so this is the call that makes the section
+                // mean anything at all.
+                app_config.memory.curated.into(),
                 Some(memory_ext_registry.clone()),
                 orientation.clone(),
                 profile_synth.clone(),

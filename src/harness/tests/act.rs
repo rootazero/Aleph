@@ -288,6 +288,7 @@ fn user_message_event(text: &str) -> SessionEvent {
         },
         at: now_ms(),
         synthetic: false,
+        author_user_id: None,
     }
 }
 
@@ -582,6 +583,7 @@ async fn think_rebuilds_tool_use_turn_in_prompt() {
             },
             at: now_ms(),
             synthetic: false,
+            author_user_id: None,
         },
         SessionEvent::AssistantMessage {
             turn_id,

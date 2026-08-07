@@ -86,6 +86,7 @@ pub fn MemoryView() -> impl IntoView {
                                 <FactDecaySettings config=config />
                                 <DreamingSettings config=config />
                                 <ReflectionSettings config=config />
+                                <CuratedEnvelopeSettings config=config />
                                 <StorageBackupSettings config=config />
                                 <RetrievalDebugPanel />
                                 <DreamInsightsPanel />
@@ -99,6 +100,18 @@ pub fn MemoryView() -> impl IntoView {
                                     >
                                         {move || if saving.get() { t_string!(i18n, common.saving).to_string() } else { t_string!(i18n, common.save).to_string() }}
                                     </button>
+                                    // Every knob on this page writes `[memory]`, and the
+                                    // server classifies that whole section as
+                                    // `ReloadImpact::Restart` (`config/reload_impact.rs` —
+                                    // `LIVE_SECTIONS` is route/behavior/execution only): the
+                                    // subsystems that consume it captured their configuration
+                                    // at boot and nothing rebuilds them from a live edit.
+                                    // Saying so is not a second source of truth, it is the
+                                    // only place the operator can learn that a saved change
+                                    // has not happened yet.
+                                    <p class="text-xs text-text-tertiary mt-3">
+                                        {t!(i18n, settings.memory.restart_required_hint)}
+                                    </p>
                                 </div>
                             </div>
                         }.into_any()
@@ -778,6 +791,169 @@ fn ReflectionSettings(config: RwSignal<Option<MemoryConfig>>) -> impl IntoView {
                     <label class="font-medium">{t!(i18n, settings.memory.open_loop_inject_prompt)}</label>
                 </div>
                 <p class="text-xs text-text-tertiary">{t!(i18n, settings.memory.open_loop_inject_hint)}</p>
+
+                // The two bounds on what the toggles above produce. They live
+                // in `[memory.curated]`, not `reflection`, but an operator who
+                // switches injection on and cannot see the age ceiling has
+                // been shown half the mechanism — indented here rather than
+                // filed under their own section for that reason.
+                <div class="pl-6 border-l-2 border-border space-y-3">
+                    <div>
+                        <label class="block text-sm font-medium mb-1">
+                            {t!(i18n, settings.memory.open_loop_max_age_days)}
+                        </label>
+                        <input
+                            type="number"
+                            min="0"
+                            prop:value=move || {
+                                config.get().map(|c| c.curated.open_loops_max_age_days).unwrap_or(14)
+                            }
+                            on:input=move |ev| {
+                                if let Some(mut cfg) = config.get() {
+                                    if let Ok(val) = event_target_value(&ev).parse() {
+                                        cfg.curated.open_loops_max_age_days = val;
+                                        config.set(Some(cfg));
+                                    }
+                                }
+                            }
+                            class="w-full px-3 py-2 border border-border rounded bg-surface-raised"
+                        />
+                        <p class="text-xs text-text-tertiary mt-1">
+                            {t!(i18n, settings.memory.open_loop_max_age_hint)}
+                        </p>
+                    </div>
+
+                    <div>
+                        <label class="block text-sm font-medium mb-1">
+                            {t!(i18n, settings.memory.open_loop_char_limit)}
+                        </label>
+                        <input
+                            type="number"
+                            min="0"
+                            prop:value=move || {
+                                config.get().map(|c| c.curated.open_loops_char_limit).unwrap_or(2000)
+                            }
+                            on:input=move |ev| {
+                                if let Some(mut cfg) = config.get() {
+                                    if let Ok(val) = event_target_value(&ev).parse() {
+                                        cfg.curated.open_loops_char_limit = val;
+                                        config.set(Some(cfg));
+                                    }
+                                }
+                            }
+                            class="w-full px-3 py-2 border border-border rounded bg-surface-raised"
+                        />
+                        <p class="text-xs text-text-tertiary mt-1">
+                            {t!(i18n, settings.memory.open_loop_char_limit_hint)}
+                        </p>
+                    </div>
+                </div>
+            </div>
+        </div>
+    }
+}
+
+// ============================================================================
+// Section D2: Curated Envelope Budgets (`[memory.curated]`)
+// ============================================================================
+
+/// The three `[memory.curated]` budgets that are **not** about open loops.
+///
+/// The section's other two keys (`open_loops_char_limit` /
+/// `open_loops_max_age_days`) render inside [`ReflectionSettings`] instead,
+/// indented under the toggles that decide whether the block they bound is
+/// produced at all. Splitting one config section across two places is
+/// deliberate: the operator's question is "what does the agent always see",
+/// not "which TOML table is this in".
+#[component]
+fn CuratedEnvelopeSettings(config: RwSignal<Option<MemoryConfig>>) -> impl IntoView {
+    let i18n = use_i18n();
+    view! {
+        <div class="bg-surface-raised p-6 rounded-lg border border-border">
+            <h2 class="text-lg font-semibold mb-2">{t!(i18n, settings.memory.curated_envelope)}</h2>
+            <p class="text-sm text-text-tertiary mb-4">
+                {t!(i18n, settings.memory.curated_envelope_desc)}
+            </p>
+
+            <div class="space-y-4">
+                <div class="grid grid-cols-2 gap-4">
+                    <div>
+                        <label class="block text-sm font-medium mb-1">
+                            {t!(i18n, settings.memory.memory_char_limit)}
+                        </label>
+                        <input
+                            type="number"
+                            min="0"
+                            prop:value=move || {
+                                config.get().map(|c| c.curated.memory_char_limit).unwrap_or(2200)
+                            }
+                            on:input=move |ev| {
+                                if let Some(mut cfg) = config.get() {
+                                    if let Ok(val) = event_target_value(&ev).parse() {
+                                        cfg.curated.memory_char_limit = val;
+                                        config.set(Some(cfg));
+                                    }
+                                }
+                            }
+                            class="w-full px-3 py-2 border border-border rounded bg-surface-raised"
+                        />
+                        <p class="text-xs text-text-tertiary mt-1">
+                            {t!(i18n, settings.memory.memory_char_limit_hint)}
+                        </p>
+                    </div>
+
+                    <div>
+                        <label class="block text-sm font-medium mb-1">
+                            {t!(i18n, settings.memory.user_char_limit)}
+                        </label>
+                        <input
+                            type="number"
+                            min="0"
+                            prop:value=move || {
+                                config.get().map(|c| c.curated.user_char_limit).unwrap_or(1375)
+                            }
+                            on:input=move |ev| {
+                                if let Some(mut cfg) = config.get() {
+                                    if let Ok(val) = event_target_value(&ev).parse() {
+                                        cfg.curated.user_char_limit = val;
+                                        config.set(Some(cfg));
+                                    }
+                                }
+                            }
+                            class="w-full px-3 py-2 border border-border rounded bg-surface-raised"
+                        />
+                        <p class="text-xs text-text-tertiary mt-1">
+                            {t!(i18n, settings.memory.user_char_limit_hint)}
+                        </p>
+                    </div>
+                </div>
+
+                <div>
+                    <label class="block text-sm font-medium mb-1">
+                        {t!(i18n, settings.memory.legacy_warn_threshold)}
+                    </label>
+                    <input
+                        type="number"
+                        step="0.01"
+                        min="0"
+                        max="1"
+                        prop:value=move || {
+                            config.get().map(|c| c.curated.legacy_warn_threshold).unwrap_or(0.95)
+                        }
+                        on:input=move |ev| {
+                            if let Some(mut cfg) = config.get() {
+                                if let Ok(val) = event_target_value(&ev).parse() {
+                                    cfg.curated.legacy_warn_threshold = val;
+                                    config.set(Some(cfg));
+                                }
+                            }
+                        }
+                        class="w-full px-3 py-2 border border-border rounded bg-surface-raised"
+                    />
+                    <p class="text-xs text-text-tertiary mt-1">
+                        {t!(i18n, settings.memory.legacy_warn_threshold_hint)}
+                    </p>
+                </div>
             </div>
         </div>
     }

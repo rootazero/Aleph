@@ -86,7 +86,7 @@ pub fn ProjectMenu() -> impl IntoView {
         spawn_local(async move {
             match ProjectsApi::add(&dash, &path, None).await {
                 Ok(project) => {
-                    chat.set_active_project(Some(project.path.clone()), Some(project.name));
+                    chat.set_active_project(project.workspace_path.clone(), Some(project.name));
                     if let Some(ws) = workspace {
                         ws.reset();
                     }
@@ -210,7 +210,7 @@ pub fn ProjectMenu() -> impl IntoView {
                                 let proj_for_click = project.clone();
                                 let dash_for_click = dashboard;
                                 let label = project.name.clone();
-                                let path = project.path;
+                                let path = project.workspace_path.clone().unwrap_or_default();
                                 view! {
                                     <button
                                         type="button"
@@ -223,7 +223,7 @@ pub fn ProjectMenu() -> impl IntoView {
                                                 let _ = ProjectsApi::touch(&dash, &id).await;
                                             });
                                             chat.set_active_project(
-                                                Some(proj.path.clone()),
+                                                proj.workspace_path.clone(),
                                                 Some(proj.name),
                                             );
                                             if let Some(ws) = workspace {

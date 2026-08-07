@@ -977,6 +977,7 @@ mod tests {
             },
             at: at + 1,
             synthetic: false,
+            author_user_id: None,
         };
 
         store.append(&sid, 1, &e1, at).await.unwrap();
@@ -1137,6 +1138,7 @@ mod tests {
             },
             at,
             synthetic: false,
+            author_user_id: None,
         }
     }
 

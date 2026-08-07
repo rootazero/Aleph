@@ -518,22 +518,17 @@ async fn execute_merge(
     keeper_note.updated_at = chrono::Utc::now().timestamp();
 
     // --- Write the merged keeper note ---
+    // `write_note` is a full write: it indexes, re-embeds and backfills inbound
+    // links from the bytes it just put on disk. The `index_file` call that used
+    // to follow was structurally a no-op — it hashes the same file and skips on
+    // the hash `write_note` had just recorded — so it only ever bought a wasted
+    // read and the impression that the write path needed a chaperone.
     ctx.indexer
         .write_note(&agent_id, keeper_category, &keeper_note)
         .await
         .map_err(|e| {
             AlephError::other(format!(
                 "NoteConsolidate: failed to write merged keeper {keeper_path}: {e}"
-            ))
-        })?;
-
-    // Re-index the keeper
-    ctx.indexer
-        .index_file(&agent_id, keeper_category, &keeper_file)
-        .await
-        .map_err(|e| {
-            AlephError::other(format!(
-                "NoteConsolidate: failed to re-index keeper {keeper_path}: {e}"
             ))
         })?;
 

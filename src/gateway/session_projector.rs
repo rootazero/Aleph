@@ -225,7 +225,12 @@ pub(crate) async fn project_event(
                             role: row.role,
                             content: row.text,
                             timestamp: rec.created_at_ms,
-                            metadata: None,
+                            // String-valued, matching every other key in this
+                            // bag (`agent_instance::build_message_metadata`);
+                            // the history handler reads them all with `as_str`.
+                            metadata: row
+                                .author_user_id
+                                .map(|u| serde_json::json!({ "author_user_id": u })),
                             input_tokens: 0,
                             output_tokens: 0,
                             tool_call_id: row.tool_call_id,
@@ -300,6 +305,7 @@ mod tests {
             content: msg_content("hi"),
             at: 0,
             synthetic: false,
+            author_user_id: None,
         }
     }
 

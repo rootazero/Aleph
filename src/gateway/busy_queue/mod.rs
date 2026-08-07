@@ -640,19 +640,25 @@ mod tests {
 
     #[test]
     fn cancel_queued_run_targets_exactly_one_ticket() {
+        // Run ids are a PROCESS-GLOBAL namespace here: `cancel_queued_run`
+        // scans every lane, not just this session's, so a test that reaches
+        // across lanes must not reuse an id a concurrent test holds. Two of
+        // `deliver.rs`'s tests used to hold live tickets literally named
+        // "run-b" while this one cancelled by that name — flaky, and only
+        // under enough parallel load to line the schedules up.
         let s = "bq-test-cancel-run";
-        let a = register(s, CAP, "run-a").unwrap();
-        let b = register(s, CAP, "run-b").unwrap();
+        let a = register(s, CAP, "bq-cancel-a").unwrap();
+        let b = register(s, CAP, "bq-cancel-b").unwrap();
 
-        assert!(cancel_queued_run("run-b"));
+        assert!(cancel_queued_run("bq-cancel-b"));
         assert!(b.is_cancelled());
         assert!(!a.is_cancelled(), "siblings must be untouched");
 
         // A run id that is not queued (already running, or finished) is a miss,
         // so the caller can fall through to the engine's own cancel path.
-        assert!(!cancel_queued_run("run-not-queued"));
+        assert!(!cancel_queued_run("bq-cancel-not-queued"));
         // Re-cancelling the same ticket is also a miss (already abandoned).
-        assert!(!cancel_queued_run("run-b"));
+        assert!(!cancel_queued_run("bq-cancel-b"));
     }
 
     #[test]

@@ -112,7 +112,24 @@ where
             // absent → Steer) decides what happens to this message. The run
             // was never registered, so there is nothing to undo on either
             // path.
-            match super::BusyInputMode::from_metadata(&request.metadata) {
+            // P2 (spec §10): in a shared project room, `Steer` / `Interrupt`
+            // are authority over YOUR OWN turn, not a room-mate's. Resolve the
+            // sibling's metadata and let `for_shared_room` decide — the guard
+            // is a no-op outside a project scope and for two turns by the same
+            // author, so nothing pre-P2 changes shape. The read guard is
+            // dropped before the match: the `Interrupt` arm takes the same lock
+            // again, and holding it across a queued writer would deadlock.
+            let running_meta = {
+                let runs = self.active_runs.read().await;
+                super::steering::find_steering_target_id(&runs, run_id, &request.session_key)
+                    .and_then(|id| runs.get(&id).map(|r| r.request.metadata.clone()))
+            };
+            let busy_mode = match running_meta {
+                Some(m) => super::BusyInputMode::from_metadata(&request.metadata)
+                    .for_shared_room(&request.metadata, &m),
+                None => super::BusyInputMode::from_metadata(&request.metadata),
+            };
+            match busy_mode {
                 super::BusyInputMode::Interrupt => {
                     // Cancel the running sibling on THIS session — AND any
                     // in-flight delegated children it owns — then let the inbound

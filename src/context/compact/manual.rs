@@ -517,6 +517,7 @@ mod tests {
                     thinking_signature: None,
                 },
                 synthetic: false,
+                author_user_id: None,
                 at: now_ms(),
             },
         )

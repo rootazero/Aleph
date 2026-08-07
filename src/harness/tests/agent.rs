@@ -192,6 +192,7 @@ async fn fresh_session(agent_id: &str) -> (Arc<InProcessActorSessionService>, Se
                 },
                 at: now_ms(),
                 synthetic: false,
+                author_user_id: None,
             },
         )
         .await
@@ -270,6 +271,7 @@ async fn emit_user(
                 },
                 at: now_ms(),
                 synthetic,
+                author_user_id: None,
             },
         )
         .await

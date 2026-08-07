@@ -3,6 +3,17 @@
 //!
 //! - [`super::messages`] — list + bubble + hero + send-error banner
 //! - [`super::composer`] — textarea + attachments + slash palette + send
+//!
+//! `MainContent` (`app.rs`) keeps this component permanently mounted at `/`
+//! (CSS `display` toggling, never unmounted) even while another mode is in
+//! view. Do NOT mount a second `<ChatView />` anywhere else — every mount
+//! independently `subscribe_topic("stream.*")` / `"team.*"` and tears the
+//! subscription down again in `on_cleanup`, so a second instance unmounting
+//! (e.g. navigating away from a page that embedded it) would kill this one's
+//! event stream too. `components::project_page::RoomChat` (P2 Task 8) needs
+//! a live chat surface inside a *different* route and works around this by
+//! mounting `MessageList` + `InputArea` directly instead — both are inert
+//! with respect to topic subscriptions; only `ChatView` itself owns those.
 
 use super::composer::InputArea;
 use super::messages::MessageList;

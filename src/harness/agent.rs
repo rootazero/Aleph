@@ -35,7 +35,7 @@ use crate::harness::trait_def::{HarnessError, TurnState, TurnStep};
 use crate::orchestrator::dispatch::{TerminateReason, TokenBreakdown, ToolInvocation};
 use crate::providers::adapter::NativeToolCall;
 
-use crate::session::events::{MessageContent, SessionEvent, SessionEventRecord, TurnId};
+use crate::session::events::{SessionEvent, SessionEventRecord, TurnId};
 use crate::session::service::SessionId;
 use crate::verification::{ToolCallSummary, TOOL_HISTORY_WINDOW};
 
@@ -642,18 +642,10 @@ impl AgentHarness {
                                 // self-correct or wrap up (mirrors the G1
                                 // max-steps hint). Structural trigger, R10-safe.
                                 if cap > 1 && consecutive_failure_turns == cap - 1 {
-                                    let warn = SessionEvent::UserMessage {
-                                        turn_id: uuid::Uuid::new_v4(),
-                                        content: MessageContent {
-                                            text: crate::thinker::nudges::SOFT_FAILURE_WARNING
-                                                .to_string(),
-                                            blocks: Vec::new(),
-                                            thinking: None,
-                                            thinking_signature: None,
-                                        },
-                                        at: crate::session::events::now_ms(),
-                                        synthetic: true,
-                                    };
+                                    let warn = SessionEvent::synthetic_user(
+                                        uuid::Uuid::new_v4(),
+                                        crate::thinker::nudges::SOFT_FAILURE_WARNING.to_string(),
+                                    );
                                     if let Err(e) =
                                         self.deps.session.emit_event(&current_session, warn).await
                                     {

@@ -87,7 +87,10 @@ impl PromptLayer for OperatingEnvelopeLayer {
         // posture (open / restricted / none), and the policy profile id.
         // Each is `None` by default; primary user-facing sessions see none of
         // them and the prompt is byte-identical.
-        let run_id_line = ctx.run_id.as_deref().map(|id| format!("- Run id: `{id}`\n"));
+        let run_id_line = ctx
+            .run_id
+            .as_deref()
+            .map(|id| format!("- Run id: `{id}`\n"));
         let network_line = ctx
             .sandbox_summary
             .as_ref()
@@ -199,16 +202,17 @@ mod tests {
 
         // Render the line directly and make sure it matches what the layer
         // prints — pin so any drift between the two surfaces is caught.
-        let summary = SandboxSummary::from_baseline(
-            "macos/seatbelt",
-            &SandboxCapabilities::strict(),
-        );
+        let summary =
+            SandboxSummary::from_baseline("macos/seatbelt", &SandboxCapabilities::strict());
         let expected = summary.network_prompt_line().expect("strict = denied");
         let mut c = ctx();
         c.approval_tier = Some(ExecTier::Auto);
         c.sandbox_summary = Some(summary);
         let out = render(&c);
-        assert!(out.contains(&expected), "layer output: {out}\nexpected: {expected}");
+        assert!(
+            out.contains(&expected),
+            "layer output: {out}\nexpected: {expected}"
+        );
     }
 
     #[test]
@@ -362,7 +366,10 @@ mod tests {
                 .with_permission_profile_id("policy-strict-v3"),
         );
         let out = render(&c);
-        assert!(out.contains("Permission profile: policy-strict-v3"), "{out}");
+        assert!(
+            out.contains("Permission profile: policy-strict-v3"),
+            "{out}"
+        );
 
         // Without a profile id the line stays absent (legacy / mock sandboxes).
         c.sandbox_summary = Some(SandboxSummary::from_baseline(

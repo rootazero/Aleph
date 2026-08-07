@@ -15,6 +15,7 @@ pub mod orientation;
 pub mod retrieval;
 pub mod search_result;
 pub mod store;
+pub mod watcher;
 mod wikilink;
 
 pub use dedup::find_similar_notes;
@@ -22,7 +23,7 @@ pub use governance::gate::{
     CandidateNote, DefaultNoteWriteGate, GateOutcome, GateThresholds, NoteWriteAction,
     NoteWriteGate,
 };
-pub use indexer::{canonicalize_category, IndexStats, NoteIndexer, CATEGORY_DIRS};
+pub use indexer::{canonicalize_category, IndexStats, NoteIndexer, RebuildAllStats, CATEGORY_DIRS};
 pub use note::{
     is_structural_strong, sanitize_note_path, sanitize_title, tags_mark_permanent, FactProvenance,
     KnowledgeNote, ProvenanceOrigin, Relation, Severity, STRUCTURAL_STRONG,

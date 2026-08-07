@@ -6,4 +6,5 @@ pub mod notifications;
 pub mod run_clock;
 pub mod sessions;
 pub mod typewriter;
+pub mod user_directory;
 pub mod viewport;

@@ -181,6 +181,23 @@ fn AppContent() -> impl IntoView {
     // split-column sharing (see above).
     provide_context(StoreState::new());
 
+    // Process-wide user_id -> display_name projection (P2 Task 8) — read by
+    // project-room message attribution and the roster picker. Provided once
+    // here (not per-consumer) so a bubble and a roster row that both resolve
+    // the same id share one `users.list` fetch instead of each re-fetching.
+    provide_context(crate::state::user_directory::UserDirectoryState::new());
+
+    // Project rooms tab state — lifted above both columns, mirrors
+    // `teams_tab_state` below: the left-column `ProjectsSidebar` and the
+    // main-area `ProjectsView` share one `selected_project_id` signal. This
+    // is the "current project" — global, NOT per-conversation (landmine:
+    // FEATURE_LOCATOR §4.7 — a per-session signal here would reset every
+    // time the user switches chat tabs, which "which project page am I
+    // looking at" must never do). The room conversation's OWN project
+    // binding is the opposite: it lives on `ChatState::room_project_id` and
+    // rides `SessionSnapshot` per-conversation — see that field's doc.
+    provide_context(crate::components::project_page::ProjectsTabState::new());
+
     // Teams tab state — lifted above both columns so the left-column
     // `TeamsSidebar` and the main-area `TeamsView` share the same sub-tab
     // and selected-team signals. Previously `TeamsView` provided this
@@ -531,6 +548,17 @@ fn MainContent() -> impl IntoView {
                 view! { <PhoneTeams /> }.into_any()
             } else {
                 view! { <TeamsView /> }.into_any()
+            }}
+        </div>
+        // Project rooms (P2 Task 8) — desktop/wide only, like the workspace
+        // pane itself. No phone screen exists for this yet (out of scope for
+        // this task); on a narrow viewport the route still resolves but
+        // simply shows nothing, exactly like `/more` on desktop.
+        <div style:display=move || if mode.get() == PanelMode::Projects { "contents" } else { "none" }>
+            {move || if form_factor.form_factor.get() == FormFactor::Phone {
+                ().into_any()
+            } else {
+                view! { <crate::components::project_page::ProjectsView /> }.into_any()
             }}
         </div>
         <div style:display=move || if mode.get() == PanelMode::Extensions { "contents" } else { "none" }>

@@ -284,6 +284,34 @@ open_loops_max_age_days = 14   # stop injecting a capture older than this; 0 = n
                                # the next completed reflection re-stamps the file.
 ```
 
+**The section reached the running provider for the first time on 2026-08-07.**
+`init_memory_context_provider_with_extensions` had never called
+`with_curated_config`; the only caller in the tree was a unit test that built its
+own provider, so all five keys parsed, persisted, and changed nothing — the two
+`open_loops_*` ones from the day they were added, the three budgets from the
+start. The factory now takes the section as a **parameter with no default**, so
+a construction site that omits it fails to compile. Do not reintroduce a default
+to shorten the signature.
+
+All five keys are reachable from the Panel (Settings → Memory & Knowledge). They
+render in two places, matching the split above rather than the TOML table: the two
+`open_loops_*` budgets sit indented under the **Reflection** toggles that decide
+whether the block they bound is produced at all, the three envelope budgets get
+their own **Curated Envelope Budgets** section. `memory_config.get` serializes the
+whole backend `[memory]` section, so the panel DTO
+(`interfaces/webchat/src/api/memory_config.rs::CuratedSettings`) must carry one
+field per key — a key the DTO cannot express is a knob the operator can never
+reach, and on the write path it survives only because `handle_update`'s merge is
+recursive. The same DTO deliberately carries **no** `rerank` field: reranking is
+owned by `rerank_config.get`/`update` and edited on its own page, and mirroring
+it here spelled `model` against the backend's `models` (which carries
+`alias = "model"`), so every save from this page merged both spellings of one
+aliased field and died on `duplicate field 'models'`. Do not re-add a mirror of a
+section this page does not own. **`[memory]` is `ReloadImpact::Restart`** (`config/reload_impact.rs` —
+`LIVE_SECTIONS` is route/behavior/execution only): saving persists to `config.toml`
+but nothing rebuilds the boot-captured `CuratedConfig`, which is why the page
+carries a restart note under its save button.
+
 Compression **scheduling** lives under `[policies]`, not `[memory]` (`src/config/types/policies/memory.rs`):
 
 ```toml

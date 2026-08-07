@@ -838,7 +838,10 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(outcome.bytes, 4);
-        assert!(outcome.unchanged, "byte-equal rewrite must report unchanged");
+        assert!(
+            outcome.unchanged,
+            "byte-equal rewrite must report unchanged"
+        );
         assert_eq!(fs::read_to_string(&outcome.canonical).unwrap(), "same");
     }
 }

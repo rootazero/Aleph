@@ -208,7 +208,10 @@ mod tests {
     #[tokio::test]
     async fn list_returns_only_paired_panels() {
         let ctx = ctx();
-        let ticket = ctx.device_token_mgr.create_bootstrap_ticket(None, None).unwrap();
+        let ticket = ctx
+            .device_token_mgr
+            .create_bootstrap_ticket(None, None)
+            .unwrap();
         ctx.device_token_mgr
             .exchange_bootstrap_ticket(&ticket, Some("panel-1".to_string()), None, None)
             .unwrap();
@@ -225,12 +228,17 @@ mod tests {
     #[tokio::test]
     async fn connected_flag_joins_the_presence_roster() {
         let ctx = ctx();
-        let ticket = ctx.device_token_mgr.create_bootstrap_ticket(None, None).unwrap();
+        let ticket = ctx
+            .device_token_mgr
+            .create_bootstrap_ticket(None, None)
+            .unwrap();
         for id in ["panel-online", "panel-offline"] {
             let t = if id == "panel-online" {
                 ticket.clone()
             } else {
-                ctx.device_token_mgr.create_bootstrap_ticket(None, None).unwrap()
+                ctx.device_token_mgr
+                    .create_bootstrap_ticket(None, None)
+                    .unwrap()
             };
             ctx.device_token_mgr
                 .exchange_bootstrap_ticket(&t, Some(id.to_string()), None, None)
@@ -277,7 +285,10 @@ mod tests {
     #[tokio::test]
     async fn revoke_invalidates_the_device_token() {
         let ctx = ctx();
-        let ticket = ctx.device_token_mgr.create_bootstrap_ticket(None, None).unwrap();
+        let ticket = ctx
+            .device_token_mgr
+            .create_bootstrap_ticket(None, None)
+            .unwrap();
         let paired = ctx
             .device_token_mgr
             .exchange_bootstrap_ticket(&ticket, Some("panel-1".to_string()), None, None)

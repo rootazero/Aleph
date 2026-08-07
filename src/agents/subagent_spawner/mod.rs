@@ -364,6 +364,7 @@ pub async fn spawn(base: &SpawnerBase, req: SpawnRequest<'_>) -> Result<LoopRunR
                     },
                     at: now_ms(),
                     synthetic: false,
+                    author_user_id: None,
                 },
             )
             .await

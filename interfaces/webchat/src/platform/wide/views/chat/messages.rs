@@ -12,6 +12,7 @@ use crate::components::markdown::TypewriterRenderer;
 use crate::components::tool_card::ToolCard;
 use crate::i18n::{t, t_string, use_i18n};
 use crate::state::layout::WorkspaceState;
+use crate::state::user_directory::UserDirectoryState;
 use crate::state::viewport::FormFactor;
 use leptos::prelude::*;
 use std::collections::HashMap;
@@ -649,6 +650,32 @@ fn MessageBubble(message: ChatMessage, clock: String) -> impl IntoView {
     // without prop-drilling a callback through MessageList → MessageBubble.
     let chat = expect_context::<ChatState>();
 
+    // Project-room attribution (P2 Task 6/8): a display-name label above a
+    // user bubble, shown only when the turn carries a DIFFERENT author than
+    // the viewer — never for the viewer's own messages, and never for
+    // assistant/system rows (those don't carry `author_user_id` at all —
+    // see `ChatMessage::author_user_id`'s doc).
+    //
+    // A reactive closure, not a plain value computed once: `UserDirectoryState`
+    // populates `my_user_id` / its name map asynchronously (`ensure_loaded`),
+    // and a bubble routinely mounts before that resolves — freezing the "is
+    // this my own message" check at its pre-fetch (`None`) state would
+    // mislabel the viewer's own history on every fresh room visit.
+    // `use_context` (not `expect_context`): a storybook/test mount without
+    // `UserDirectoryState` provided simply renders no label.
+    let author_user_id = message.author_user_id.clone();
+    let author_label = move || {
+        if !is_user {
+            return None;
+        }
+        let author = author_user_id.clone()?;
+        let dir = use_context::<UserDirectoryState>()?;
+        if dir.my_user_id.get().as_deref() == Some(author.as_str()) {
+            return None;
+        }
+        Some(dir.display_name(&author))
+    };
+
     // Cost + tokens for the run that produced this bubble (`run_complete`'s
     // summary; core does the pricing, we render it). Reactive — the summary
     // lands after the bubble mounts. Nothing renders for user bubbles, for runs
@@ -840,24 +867,33 @@ fn MessageBubble(message: ChatMessage, clock: String) -> impl IntoView {
                 }.into_any()
             } else {
                 // Original layout for user and single-agent assistant messages.
+                // The `flex-col items-end` wrapper only ever gains a visible
+                // second child (the author label) on a `is_user` bubble —
+                // `author_label()` is unconditionally `None` for assistant
+                // rows, so this is a no-op wrapper there.
                 view! {
-                    <div class=bubble_class>
-                        {tool_calls_view}
-                        {if is_user {
-                            view! {
-                                <div class="whitespace-pre-wrap break-words text-sm leading-relaxed">
-                                    {content}
-                                </div>
-                            }.into_any()
-                        } else {
-                            // Assistant text — always the paced renderer; it keeps
-                            // sweeping past stream completion and falls back to
-                            // full Markdown for history/finished text.
-                            view! { <TypewriterRenderer content=content message_id=message_id is_streaming=is_streaming /> }.into_any()
-                        }}
-                        {error_view}
-                        {model_view}
-                        {cost_view}
+                    <div class="flex flex-col items-end gap-0.5">
+                        {move || author_label().map(|name| view! {
+                            <span class="text-[11px] text-text-tertiary mr-1">{name}</span>
+                        })}
+                        <div class=bubble_class>
+                            {tool_calls_view}
+                            {if is_user {
+                                view! {
+                                    <div class="whitespace-pre-wrap break-words text-sm leading-relaxed">
+                                        {content}
+                                    </div>
+                                }.into_any()
+                            } else {
+                                // Assistant text — always the paced renderer; it keeps
+                                // sweeping past stream completion and falls back to
+                                // full Markdown for history/finished text.
+                                view! { <TypewriterRenderer content=content message_id=message_id is_streaming=is_streaming /> }.into_any()
+                            }}
+                            {error_view}
+                            {model_view}
+                            {cost_view}
+                        </div>
                     </div>
                 }.into_any()
             }}

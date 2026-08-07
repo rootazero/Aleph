@@ -237,7 +237,7 @@ Every wikilink target and typed relation is upserted into `notes_links` (§8) as
 
 ### 6.1 Write Flow
 
-`index_file(agent_id, category, path)` is the per-file write path:
+`index_file(agent_id, category, path)` is the per-file **reconcile** path — "this file's bytes changed, make the index agree":
 
 ```text
 +--------------------+     +---------------------+     +-------------------+
@@ -259,7 +259,19 @@ Every wikilink target and typed relation is upserted into `notes_links` (§8) as
                                                         |   • notes_links  |
                                                         |   • notes_fts    |
                                                         +------------------+
+                                                                 |
+                                                                 v
+                                                     +-------------------------+
+                                                     | finalize_side_effects   |
+                                                     |  • backfill_inbound_    |
+                                                     |    links (revive edges  |
+                                                     |    waiting on this note)|
+                                                     |  • refresh_embedding    |
+                                                     |    (vector ← new bytes) |
+                                                     +-------------------------+
 ```
+
+**`index_file` runs the same post-write legs a first-class write does**, and only on the changed path — the skip branch returns before them, so a self-write that already indexed itself costs one hash comparison. It used to be the `index_note` leg alone while its call sites' comments claimed it reconciled "notes_index/FTS/embedding/tags"; the five callers that rewrite a note's bytes without going through `write_note*` (`note_lint` frontmatter fix and link repair, `note_drift` supersede/stale banners, and the vault watcher of §6.4) therefore left each note's **vector describing the pre-edit text**, drift that surfaced only as a `stale_vectors` count at the next boot. `index_one_file` — the free function `reconcile_corpus` calls once per file — deliberately keeps the opposite trade: no embed (a whole corpus's re-embed is a cost the operator asks for via `reembed_all`) and one global `relink_unresolved` instead of a per-file backfill.
 
 Write entry points on `NoteIndexer`:
 
@@ -296,9 +308,35 @@ degrade gracefully to the legacy create-everything behaviour (P7).
 
 `CompressionScheduler` in `src/memory/compression/scheduler.rs` is now just a turn counter: it tracks `pending_turns: AtomicU32`, and `should_trigger_compression()` returns `CompressionTrigger::TurnThreshold(n)` when `pending_turns >= turn_threshold` (default 20, `[policies.memory.compression]`) or `None` otherwise. The earlier `IdleTimeout` / `SessionEnd` / `ManualRequest` / `BackgroundSchedule` variants and the idle timer were removed — none had a live production path (the manual / session-end / background flows call `CompressionService::compress()` directly, bypassing the scheduler). The live triggers are: turn threshold, the hourly background tick (`background_interval_seconds = 3600`), the session-end flush, the correction flush (`flag_user_correction`), and the `memory.compress` RPC. When a run fires, `CompressionService` (`src/memory/compression/service.rs`) drains a batch from `raw_memories`, splits it per source, and routes each group through `CompoundIngestor::ingest_batch`, which plans and dispatches `Create` / `Append` / `Update` note writes via `NoteIndexer` (see `RAW_MEMORY.md` §7.1).
 
-### 6.3 Cold-Start `full_rebuild()`
+### 6.3 Cold-Start reconcile — one corpus, and all of them
 
-`full_rebuild(agent_id) -> IndexStats` scans `memory_dir/{agent_id}/{category}/*.md` for every category in `CATEGORY_DIRS`, parses each file through `KnowledgeNote::from_markdown`, and calls `NoteStore::index_note`. Files whose SHA-256 matches the existing `notes_index.content_hash` are skipped, yielding a cheap no-op on warm databases. After the scan, a **reconcile pass** drops any index row for the agent whose backing `.md` file no longer exists on disk (orphans from a rename / deletion / agent-id relocation), then `prune_orphan_vectors` sweeps embedding rows whose path has no `notes_index` row (best-effort — a sweep failure never fails the rebuild), and `relink_unresolved` retries raw wikilink edges now that every note is indexed. The returned `IndexStats { indexed, skipped, errors, pruned }` makes the operation observable; parse failures are logged and counted rather than aborting the whole rebuild. This is the repair path if the SQLite index is deleted or goes out of sync with the markdown files.
+`reconcile_corpus(agent_id) -> IndexStats` scans `memory_dir/{agent_id}/{category}/*.md` for every category in `CATEGORY_DIRS`, parses each file through `KnowledgeNote::from_markdown`, and calls `NoteStore::index_note`. Files whose SHA-256 matches the existing `notes_index.content_hash` are skipped, yielding a cheap no-op on warm databases. After the scan it drops any index row for the agent whose backing `.md` file no longer exists on disk (orphans from a rename / deletion / agent-id relocation), `prune_orphan_vectors` sweeps embedding rows whose path has no `notes_index` row (best-effort — a sweep failure never fails the reconcile), `stale_vector_paths` **reports** (never repairs) how many notes carry a vector computed from an older body, and `relink_unresolved` retries raw wikilink edges now that every note is indexed. The returned `IndexStats { indexed, skipped, errors, pruned, stale_vectors }` makes the operation observable; parse failures are logged and counted rather than aborting the whole pass. This is the repair path if the SQLite index is deleted or goes out of sync with the markdown files.
+
+`full_rebuild(agent_id)` = `ensure_dirs` (materialise the 21 category directories) **+** `reconcile_corpus`. The split is load-bearing: scaffolding is a *write* and reconciling is a *repair*, and only the first is right to apply to an agent the operator is actually running.
+
+`full_rebuild_all(always_include) -> RebuildAllStats` is what boot calls. It reconciles **every corpus on disk** — `project_scope::list_note_corpora`, the single enumeration of "which `note/{agent_id}/` partitions exist" — scaffolding only `always_include` (the default agent, so a fresh install still gets its vault laid out). A base agent id and each composed scoped id (`{base}__proj-…` project namespace, `{base}__u-…` personal scope, `{base}__p-…` project scope) are corpora in exactly the same sense; they differ only in how the id was composed, never in how the notes underneath are stored, indexed or maintained.
+
+> **Why this is not cosmetic.** Boot used to call `full_rebuild(default_agent_id)` and stop. For every other corpus nothing ever reconciled the index with disk: a note renamed or deleted while the server was down kept a recallable index row *forever*, a `[[wikilink]]` that dangled only because of category scan order was never retried, and vector drift was not even counted. Corpora multiply with the `[memory] project_scoped` toggle and with session scoping, and the dream daemon already fans its nightly maintenance over exactly this enumeration — the boot pass was the one maintenance job that did not.
+
+Corpora are reconciled sequentially: each reconcile already fans out over categories up to `available_parallelism()`, so an outer fan-out would only multiply peak contention on the single SQLite connection. A corpus whose reconcile returns `Err` is recorded in `RebuildAllStats::failed` (name + error) and the pass continues — kept separate from `total.errors`, which counts *files* that would not parse (normal on a hand-edited vault). A whole namespace left unmaintained is a different fact from a bad file, and folding them together is how it would stay invisible.
+
+### 6.4 Vault watcher — markdown edited outside Aleph
+
+`src/memory/notes/watcher.rs`. `spawn_note_vault_watcher(indexer)` puts one debounced recursive watch (`notify` + `notify-debouncer-full`, 750 ms settle) over the whole note root and returns a `NoteVaultWatcher`; **dropping it stops the watch**, so the server binds it for the process lifetime.
+
+The markdown is the source of truth and every agent directory gets an `.obsidian/` vault config written into it (§9) — i.e. the product tells the user to open their memory in Obsidian. Until this existed nothing honoured that: an edit made outside Aleph changed the truth and search, links and the graph went on serving the old body until the next restart (and, before §6.3, forever for any corpus but the default agent's). A deletion was worse — the index row survived, so recall kept surfacing a note whose file was gone.
+
+Three decisions worth not reversing:
+
+- **The filesystem, not the event kind, decides the action.** For each settled `.md` path: `metadata()` succeeds → `index_file` (which no-ops on an unchanged hash, so Aleph's own writes are free); `NotFound` → `remove_note_index` with the usual inbound-link tombstone semantics; **any other error → skip**. "I could not look" is not evidence of "it does not exist", and the other branch deletes. Event kinds coalesce and differ per platform; current state does not.
+- **The watched root is canonicalized first.** Notifications report canonical paths (macOS resolves `/var` → `/private/var`; any home or volume symlink resolves the same way), so a watcher holding the un-resolved root would `strip_prefix` every incoming path to `None` and classify the entire vault as "not a note" — running, and doing nothing, with no symptom at all. This was caught by the end-to-end test, not by the path-grammar unit tests, which is the reason that test exists.
+- **A bulk batch becomes a corpus reconcile.** Above `MAX_PATHS_PER_BATCH` (128) changed files in one window — a vault sync, a `git checkout`, an import — the affected corpora go through `reconcile_corpus` instead of 128 individual round-trips. It hash-skips too, so at that size it is the cheap path. (`reconcile_corpus`, not `full_rebuild`: a watcher reacts to what the user did to their files; provisioning directories is not part of that.)
+
+`classify` accepts exactly `{root}/{agent_id}/{category}/{title}.md` with `category ∈ CATEGORY_DIRS`. Everything else in the tree is deliberately out: agent-root scaffold (`index.md` / `SCHEMA.md` / `LOG.md` / `USER.md`, regenerated every dream cycle), `archive/` (where `NoteDecay` parks cold notes — re-indexing from there would resurrect every archived note the moment its file was touched), dot-directories, and atomic-write staging files.
+
+There is **no config flag to disable it.** It does not choose a behaviour on the user's behalf; it makes the index tell the truth about files the user already owns. If the watch cannot be established the caller logs it and the process behaves exactly as it did before the module existed.
+
+> Comparison: EverOS runs the same idea as a `watchdog` observer feeding a durable `md_change_state` queue in SQLite, so a crash mid-sync replays on restart. Aleph's queue is in-process and a crash simply loses the pending batch — recovered by the boot reconcile of §6.3, which EverOS's design does not have an equivalent of. The trade is deliberate: no new table, no new migration, and the crash window is covered by a pass that has to exist anyway.
 
 ## 7. `NoteStore` Trait
 

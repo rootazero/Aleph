@@ -60,6 +60,38 @@ const BUDGETED: [&str; 12] = [
 /// What the 12 files actually total today, under the documented measurement.
 /// Frozen, so the overrun cannot keep growing the way it grew to here.
 ///
+/// **P2 Task 6 (2026-08-06): 5127 → 5103 (−24).** Speaker labels for multi-human
+/// project rooms, and the first time the ratchet caught the *ceiling itself*
+/// having drifted: `CEILING` read 5146 while the measured total was 5127, so a
+/// +5 change would have passed silently. It is lowered to the measurement here,
+/// which is what the ratchet is for.
+///
+/// The change had to reach `prompt.rs` — the events→`UnifiedMessage` walk is the
+/// one place a user turn becomes something the model reads — so it went in as
+/// **one call, not one more branch**. `user_turn_text` (in `thinker/nudges.rs`,
+/// the sink this file's own list names for model-facing copy) absorbed the
+/// `user_interjection_note` `if/else` *and* the new label, turning 10 lines of
+/// wording decisions into 6 lines of delegation: **prompt.rs −4**. The wording
+/// itself — which decoration wraps which, and why that order keeps
+/// `is_synthetic_reminder` byte-identical — is cognition and now lives in one
+/// place instead of straddling the boundary.
+///
+/// The rest is `SessionEvent::synthetic_user`: three hand-built literals of the
+/// same harness-authored message (`agent.rs` soft-failure warning, `think.rs`
+/// stop-hook halt and verifier veto) collapsed to one constructor in
+/// `session/events.rs`, **−23**. That is the third copy, so P6's rule of three
+/// fired on schedule; the reason to collapse it rather than add
+/// `author_user_id: None` three times is that a harness-authored message having
+/// no human author is now true *by construction*. A fourth synthetic message in
+/// the loop cannot get it wrong, and cannot spend budget getting it right.
+///
+/// Net **−24**, so no R10 three-question answer is owed. For the record the new
+/// field would have passed it anyway: (1) scaffolding — "who typed this" is a
+/// runtime fact of the log, and no judgment is made about it; (2) a stronger
+/// model needs it *more*, since nothing about model strength lets it infer
+/// authorship from an unlabelled merged transcript; (3) two consumers today, the
+/// prompt and (P2 Task 8) the Panel bubble.
+///
 /// **Batch 1 (2026-07-14): 5997 → 5863.** Pure deletion — dead trait (`Harness`
 /// and its default `run()`), dead callback channels (`on_complete`,
 /// `on_tool_call`), dead telemetry (`on_init_seam`), and two byte-identical
@@ -483,7 +515,7 @@ const BUDGETED: [&str; 12] = [
 ///     `fresh_tail_count`, and it is the only caller that needs the count — which
 ///     is exactly why the count is returned by a second function rather than
 ///     forced on every caller.
-const CEILING: usize = 5146;
+const CEILING: usize = 5103;
 
 fn repo_root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))

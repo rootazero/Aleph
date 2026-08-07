@@ -1626,10 +1626,25 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
         );
     }
 
-    // Project catalogue (~/.aleph/projects.json). Stateless store — every
-    // op re-reads under an fs2 lock so CLI/Panel writes stay consistent.
-    let project_store = Arc::new(alephcore::projects::ProjectStore::new());
-    register_projects_handlers(&mut server, &project_store, args.daemon);
+    // Project rooms (~/.aleph/data/projects.db). One shared connection for the
+    // whole process. `migrate()` creates the schema, adopts a pre-P2
+    // `projects.json` catalogue once, and publishes the roster projection that
+    // every visibility predicate reads. Degrade, never panic: a store that
+    // cannot migrate leaves the roster empty, which fails closed (no member
+    // sees any room) rather than open.
+    let project_store = alephcore::projects::ProjectStore::shared();
+    if let Err(e) = project_store.migrate() {
+        if !args.daemon {
+            eprintln!("Warning: Project store migration failed: {e}. Project rooms disabled.");
+        }
+        tracing::warn!(error = %e, "project store migration failed; rooms will be unavailable");
+    }
+    register_projects_handlers(
+        &mut server,
+        &project_store,
+        &auth_bundle.security_store,
+        args.daemon,
+    );
 
     // Cross-platform directory-browse RPCs that back the Panel's
     // `<DirectoryBrowser />`. Gated by `[projects].allowed_roots` (default
@@ -1783,10 +1798,21 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
     // NoteIndexer — the canonical write+reindex path. Built once and shared
     // between graph.update_note (panel node editor) and the startup full_rebuild
     // below, so we never construct two indexers over the same memory dir.
-    let note_indexer = Arc::new(alephcore::memory::notes::NoteIndexer::new(
-        note_memory_dir.clone(),
-        memory_db.clone(),
-    ));
+    // The embedder is attached: this indexer backs both `graph.update_note`
+    // (the panel node editor) and the vault watcher below, and both hand it a
+    // note whose *bytes just changed*. Without embed-on-write those two writers
+    // leave the note's vector describing the previous body — the note stays
+    // findable by keyword and quietly drops out of semantic recall — until
+    // somebody runs a whole-corpus `reembed_all`. `None` (no embedding provider
+    // configured) is a graceful no-op, exactly as it is for every other writer.
+    let note_indexer = {
+        let indexer =
+            alephcore::memory::notes::NoteIndexer::new(note_memory_dir.clone(), memory_db.clone());
+        Arc::new(match agent_result.embedder.clone() {
+            Some(embedder) => indexer.with_embedder(embedder),
+            None => indexer,
+        })
+    };
 
     // Graph visualization handlers (wired with MemoryBackend + default agent +
     // the shared NoteIndexer for the write path)
@@ -1797,36 +1823,58 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
         Some(&note_indexer),
     );
 
-    // Rebuild note index at startup (scans ~/.aleph/memory/note/{agent_id}/)
+    // Reconcile the note index with disk at startup, across EVERY corpus under
+    // ~/.aleph/memory/note/ — not just the default agent. Each project
+    // namespace and session scope (`{base}__proj-…` / `__u-…` / `__p-…`) and
+    // each non-default agent is a corpus in exactly the same sense, and used to
+    // be reconciled by nothing at all. Once that pass exists, the vault watcher
+    // below keeps it true for the rest of the process's life.
     {
         let indexer = note_indexer.clone();
         let agent_id = default_agent_id.clone();
         tokio::spawn(async move {
-            tracing::info!(agent = %agent_id, "Rebuilding note index");
-            match indexer.full_rebuild(&agent_id).await {
-                Ok(stats) => {
-                    tracing::info!(
-                        indexed = stats.indexed,
-                        skipped = stats.skipped,
-                        errors = stats.errors,
-                        pruned = stats.pruned,
-                        // The summary line is what an operator actually reads,
-                        // so the vector drift has to appear on it. Without this
-                        // the only production consumer of `IndexStats` dropped
-                        // `stale_vectors` on the floor — the field had no reader
-                        // anywhere in the repo — and a boot reporting
-                        // `errors=0` looked healthy while every note's vector
-                        // was missing or outdated. A count near the note total
-                        // is the shape a misconfigured embedding dimension
-                        // makes; `reembed_all` is the repair.
-                        stale_vectors = stats.stale_vectors,
-                        "Note index rebuild complete"
-                    );
-                }
-                Err(e) => tracing::warn!(error = %e, "Failed to rebuild note index at startup"),
+            tracing::info!(agent = %agent_id, "Reconciling note index with disk");
+            let stats = indexer.full_rebuild_all(&agent_id).await;
+            tracing::info!(
+                corpora = stats.corpora,
+                indexed = stats.total.indexed,
+                skipped = stats.total.skipped,
+                errors = stats.total.errors,
+                pruned = stats.total.pruned,
+                // The summary line is what an operator actually reads,
+                // so the vector drift has to appear on it. Without this
+                // the only production consumer of `IndexStats` dropped
+                // `stale_vectors` on the floor — the field had no reader
+                // anywhere in the repo — and a boot reporting
+                // `errors=0` looked healthy while every note's vector
+                // was missing or outdated. A count near the note total
+                // is the shape a misconfigured embedding dimension
+                // makes; `reembed_all` is the repair.
+                stale_vectors = stats.total.stale_vectors,
+                "Note index rebuild complete"
+            );
+            for (corpus, error) in &stats.failed {
+                tracing::warn!(%corpus, %error, "Note corpus left unreconciled at startup");
             }
         });
     }
+
+    // Vault watcher: pick up markdown edited outside Aleph. Every agent
+    // directory gets an `.obsidian/` vault config written into it, i.e. the
+    // product tells the user to open their memory in Obsidian — but until now
+    // an edit made there stayed invisible to search, links, and the graph until
+    // the next restart (and, before the pass above, forever for any corpus but
+    // the default agent's). Best-effort: a watch that cannot be established is
+    // logged and the server runs exactly as it did before.
+    let _note_vault_watcher = match alephcore::memory::notes::watcher::spawn_note_vault_watcher(
+        note_indexer.clone(),
+    ) {
+        Ok(w) => Some(w),
+        Err(e) => {
+            tracing::warn!(error = %e, "Note vault watcher unavailable; external edits to the note vault will only be picked up at restart");
+            None
+        }
+    };
 
     // Identity handlers operate on the default agent's identity files
     // (`~/.aleph/agents/{id}/SOUL.md` …) — the single source of truth shared
@@ -2416,6 +2464,9 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
                 agent_result.execution_adapter.clone(),
                 agent_result.agent_registry.clone(),
             );
+            // The resumed run's owner/scope comes off this store's persisted
+            // session row — see `ResumeCoordinator::stamp_persisted_scope`.
+            let sessions_for_resume = session_store_for_reconcile.clone();
             tokio::spawn(async move {
                 let rr = reconciler.reconcile_interrupted().await;
                 tracing::info!(
@@ -2441,6 +2492,7 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
                             resume_cfg,
                             exec_adapter,
                             registry,
+                            sessions_for_resume,
                         );
                         let report = coordinator.resume_interrupted_runs().await;
                         tracing::info!(

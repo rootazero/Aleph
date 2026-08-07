@@ -55,10 +55,15 @@ const DOCTOR_REPAIR_PROMPT: &str = "运行 doctor 工具诊断系统健康状况
 全部处理后再次运行 doctor 验证，并简要报告修复结果。";
 
 /// Textarea + side buttons + palette popup + injection-guard banner.
-/// Mounted by [`super::view::ChatView`] at the viewport bottom.
+/// Mounted by [`super::view::ChatView`] at the viewport bottom, and (P2 Task
+/// 8) directly by `components::project_page::RoomChat` — a project room's
+/// chat tab reuses this and [`super::messages::MessageList`] rather than
+/// re-mounting `ChatView` itself, which would double-subscribe the
+/// `stream.*`/`team.*` Gateway topics `ChatView` owns (see that component's
+/// doc). `pub(crate)` for that second caller.
 #[component]
 #[must_use]
-pub(super) fn InputArea() -> impl IntoView {
+pub(crate) fn InputArea() -> impl IntoView {
     let dashboard = expect_context::<DashboardState>();
     let chat = expect_context::<ChatState>();
     let sessions = expect_context::<SessionMap>();
@@ -258,7 +263,20 @@ pub(super) fn InputArea() -> impl IntoView {
 
         let session_key = chat.session_key.get();
         let agent_id = chat.agent_id.get();
-        let project_root = chat.active_project_root.get();
+        // A project-room conversation (`room_project_id` set) sends
+        // `project_id` and forces `project_root` to `None` — an explicit
+        // `project_root` outranks the room's workspace binding and is
+        // refused server-side for remote chat-tier callers. Kept
+        // unconditional even though `ProjectMenu` is now hidden in a room and
+        // `ChatState::set_active_project` early-returns there: this is the
+        // last of the three, and it is the one that holds if a future surface
+        // writes `active_project_root` by some other route.
+        let room_project_id = chat.room_project_id.get();
+        let project_root = if room_project_id.is_some() {
+            None
+        } else {
+            chat.active_project_root.get()
+        };
         // Per-turn model override stamped on ChatState → daemon's run
         // loop short-circuits its provider-fallback chain.
         let model_override = chat.selected_model.get();
@@ -280,6 +298,7 @@ pub(super) fn InputArea() -> impl IntoView {
             let sk = session_key.as_deref();
             let aid = agent_id.as_deref();
             let pr = project_root.as_deref();
+            let pid = room_project_id.as_deref();
             let mo = model_override.as_ref();
             match ChatApi::send(
                 &dash,
@@ -288,6 +307,7 @@ pub(super) fn InputArea() -> impl IntoView {
                 api_attachments,
                 aid,
                 pr,
+                pid,
                 mo,
                 tier.as_deref(),
                 mode.as_deref(),
@@ -471,7 +491,13 @@ pub(super) fn InputArea() -> impl IntoView {
         }
         let session_key = chat.session_key.get_untracked();
         let agent_id = chat.agent_id.get_untracked();
-        let project_root = chat.active_project_root.get_untracked();
+        // Same room-vs-picker exclusivity as the typed send above.
+        let room_project_id = chat.room_project_id.get_untracked();
+        let project_root = if room_project_id.is_some() {
+            None
+        } else {
+            chat.active_project_root.get_untracked()
+        };
         let model_override = chat.selected_model.get_untracked();
         // Same rule as the typed send above. A queue flush all but always has
         // a live session, so `mode` is None in practice.
@@ -519,6 +545,7 @@ pub(super) fn InputArea() -> impl IntoView {
                     api_attachments,
                     agent_id.as_deref(),
                     project_root.as_deref(),
+                    room_project_id.as_deref(),
                     model_override.as_ref(),
                     tier.as_deref(),
                     mode.as_deref(),
@@ -1285,7 +1312,14 @@ pub(super) fn InputArea() -> impl IntoView {
 
                         // Migrated from the old project row — now level
                         // with the attach paperclip. Dropdowns still flip upward.
-                        <ProjectMenu />
+                        // Hidden in a project room: the room's working
+                        // directory is the owner's `bind_workspace` choice and
+                        // a member picking a folder here would be choosing
+                        // nothing (`build_run_request` forces `project_root`
+                        // to `None` for a room turn).
+                        <Show when=move || chat.room_project_id.get().is_none()>
+                            <ProjectMenu />
+                        </Show>
                         <crate::components::model_picker::ModelPicker />
                         // Per-session usage mode (chat / work / code) + tool
                         // execution tier (Ask / Auto / Full). Hidden in team

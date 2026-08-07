@@ -12,6 +12,16 @@ pub struct ProjectedRow {
     pub text: String,
     pub tool_call_id: Option<String>,
     pub tool_name: Option<String>,
+    /// Who typed this, in a multi-human project room (spec §6.2). Carried here
+    /// rather than resolved later because this projection is the ONLY place the
+    /// event and the row exist at the same time — `MessageRecord` has no event
+    /// to go back to.
+    ///
+    /// This is the *user-facing* half of the same fact the prompt renders as
+    /// `[label]:`. The two are deliberately separate paths (CLAUDE.md §1: the
+    /// `messages` table is what the USER sees, `session_events` is what the
+    /// MODEL sees) and neither is derived from the other.
+    pub author_user_id: Option<String>,
 }
 
 /// Pure map: one session event → at most one projected message row.
@@ -23,10 +33,18 @@ pub fn project_row(event: &SessionEvent) -> Option<ProjectedRow> {
         text,
         tool_call_id: None,
         tool_name: None,
+        author_user_id: None,
     };
     match event {
-        // rust-doctor-disable-next-line excessive-clone
-        SessionEvent::UserMessage { content, .. } => Some(plain("user", content.text.clone())),
+        SessionEvent::UserMessage {
+            content,
+            author_user_id,
+            ..
+        } => Some(ProjectedRow {
+            // rust-doctor-disable-next-line excessive-clone
+            author_user_id: author_user_id.clone(),
+            ..plain("user", content.text.clone())
+        }),
         SessionEvent::AssistantMessage { content, .. } => {
             // rust-doctor-disable-next-line excessive-clone
             Some(plain("assistant", content.text.clone()))
@@ -45,6 +63,7 @@ pub fn project_row(event: &SessionEvent) -> Option<ProjectedRow> {
             tool_call_id: Some(call_id.clone()),
             // rust-doctor-disable-next-line excessive-clone
             tool_name: Some(name.clone()),
+            author_user_id: None,
         }),
         SessionEvent::ToolResult {
             call_id, output, ..
@@ -54,6 +73,7 @@ pub fn project_row(event: &SessionEvent) -> Option<ProjectedRow> {
             // rust-doctor-disable-next-line excessive-clone
             tool_call_id: Some(call_id.clone()),
             tool_name: None,
+            author_user_id: None,
         }),
         SessionEvent::ToolError { call_id, error, .. } => Some(ProjectedRow {
             role: "tool".into(),
@@ -62,6 +82,7 @@ pub fn project_row(event: &SessionEvent) -> Option<ProjectedRow> {
             // rust-doctor-disable-next-line excessive-clone
             tool_call_id: Some(call_id.clone()),
             tool_name: None,
+            author_user_id: None,
         }),
         _ => None,
     }
@@ -126,6 +147,7 @@ mod tests {
             },
             at: 1,
             synthetic: false,
+            author_user_id: None,
         };
         let r = project_row(&user).unwrap();
         assert_eq!(r.role, "user");

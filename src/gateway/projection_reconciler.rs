@@ -231,6 +231,7 @@ mod tests {
                     content: mc("hi"),
                     at: 2,
                     synthetic: false,
+                    author_user_id: None,
                 },
             ),
             (
@@ -410,6 +411,7 @@ mod tests {
                     content: mc("q"),
                     at: 2,
                     synthetic: false,
+                    author_user_id: None,
                 },
             ),
             (
