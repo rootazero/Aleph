@@ -41,6 +41,24 @@ use lru::LruCache;
 
 use super::types::PluginManifest;
 
+/// Returns `(dev, ino)` for a file. On Unix, both are taken from
+/// `std::os::unix::fs::MetadataExt` so the key still catches hardlink swaps
+/// and in-place file replacements. On platforms where that trait is not
+/// available (e.g. Windows), both fields are reported as `0` — the cache
+/// still invalidates correctly via `(path, size, mtime, ctime)` and just
+/// loses the cross-device / hardlink-replacement distinction that Unix
+/// callers rely on.
+#[cfg(unix)]
+fn device_and_inode(meta: &std::fs::Metadata) -> (u64, u64) {
+    use std::os::unix::fs::MetadataExt;
+    (meta.dev(), meta.ino())
+}
+
+#[cfg(not(unix))]
+fn device_and_inode(_meta: &std::fs::Metadata) -> (u64, u64) {
+    (0, 0)
+}
+
 /// Maximum number of manifest entries cached in-process.
 ///
 /// Mirrors openclaw's `MAX_PLUGIN_MANIFEST_LOAD_CACHE_ENTRIES`. Each entry
@@ -66,14 +84,14 @@ impl ManifestCacheKey {
     /// the underlying parse will surface the real error).
     #[must_use]
     pub(crate) fn from_path_and_stat(path: &Path, meta: &std::fs::Metadata) -> Option<Self> {
-        use std::os::unix::fs::MetadataExt;
+        let (dev, ino) = device_and_inode(meta);
         Some(Self {
             path: path.to_path_buf(),
             size: meta.len(),
             mtime: meta.modified().ok()?,
             ctime: meta.created().or_else(|_| meta.modified()).ok()?,
-            dev: meta.dev(),
-            ino: meta.ino(),
+            dev,
+            ino,
         })
     }
 }
