@@ -706,6 +706,19 @@ mod tests {
         // and `chat.context_estimate` until 2026-08-07 — see those pin
         // tests.)
         assert_eq!(treatment_of("memory.reembed"), None);
+        // `memory.clear` / `memory.clearFacts` are HARD-ERROR STUBS: both
+        // handlers take `_db` and return `INTERNAL_ERROR` unconditionally
+        // (bulk clearing does not exist in the notes-based memory model), so
+        // they touch no partition and there is nothing to check. They ARE
+        // registered as RPCs, so every `memory.` sweep finds them and every
+        // reviewer re-derives "unregistered — is that a gap?" from scratch.
+        // Pinned with the reason so nobody has to. This assertion fails if
+        // someone registers them; it CANNOT see the handler growing a real
+        // body, which is the premise the ruling rests on — a body makes them
+        // `PartitionChecked` and this pin is the line to delete.
+        for m in ["memory.clear", "memory.clearFacts"] {
+            assert_eq!(treatment_of(m), None, "{m}");
+        }
         assert_eq!(treatment_of("a.method.nobody.registered"), None);
     }
 
@@ -801,8 +814,31 @@ mod tests {
     /// Every `OrgShared` entry — exact or family prefix — must carry a
     /// one-line reason. "Shared by design" and "nobody looked" are
     /// indistinguishable without one.
+    ///
+    /// Both sources are empty today, so the loop below iterates zero times and
+    /// on its own this test cannot fail — a guard chaining two empty iterators
+    /// is indistinguishable from a deleted guard. The two assertions in front
+    /// of it state the emptiness itself, which CAN fail: they are what makes
+    /// the ruling "nothing in this table claims 'shared' without a per-method
+    /// audit" a checked fact rather than a comment. Adding a genuinely
+    /// org-shared family is expected to fail here; the fix is to name it in
+    /// the assertion (the same convention as the `deliberately absent` pins),
+    /// at which point the reason loop starts doing the work it was written for.
     #[test]
     fn org_shared_entries_all_carry_reasons() {
+        assert!(
+            !SCOPED_METHODS
+                .iter()
+                .any(|(_, t)| *t == Treatment::OrgShared),
+            "no method in SCOPED_METHODS is OrgShared today; if you added one, \
+             give it a reason in ORG_SHARED_REASONS and name it here"
+        );
+        assert!(
+            ORG_SHARED_PREFIXES.is_empty(),
+            "no family is ruled OrgShared today (teams.* was the last one and \
+             its ruling was overturned 2026-08-06); if you added one, give it a \
+             reason in ORG_SHARED_REASONS and name it here"
+        );
         let exact = SCOPED_METHODS
             .iter()
             .filter(|(_, t)| *t == Treatment::OrgShared)

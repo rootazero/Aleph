@@ -1378,20 +1378,33 @@ attribution, and a bound workspace as the room's default cwd.
   they already know the room exists, so "forbidden" leaks nothing and is
   actionable ("ask the owner"). Pinned by
   `a_stranger_binding_gets_not_found_not_permission_denied`.
-- **The workspace binding is a privilege, and it has three writers.**
-  Turning `workspace_path` into the room's runtime cwd (a dormant display
-  field waking up) retroactively made every writer of that column a
-  directory-choice authority: `projects.add`, `projects.create_blank`, and
-  `projects.bind_workspace` all carry the same
+- **The workspace binding is a privilege, and it has four writers — three
+  gated, one exempt by invariant.** Turning `workspace_path` into the room's
+  runtime cwd (a dormant display field waking up) retroactively made every
+  writer of that column a directory-choice authority: `projects.add`,
+  `projects.create_blank`, and `projects.bind_workspace` all carry the same
   `caller_identity::caller_may_choose_directory()` gate (config-tier OR
   loopback) — the same predicate `agent.run`'s explicit `project_root`
   param enforces. Without the write-side gate, "register a folder, then
   chat in it" is a two-step route to an arbitrary server directory in which
-  both steps are individually legal. Unbinding is a de-escalation and is
+  both steps are individually legal. The fourth writer is
+  `execution_engine::run_loop::inner`, which auto-registers a run's
+  `workspace_override` into the catalogue so a CLI/programmatic cwd appears
+  in the picker; it is exempt because it never *introduces* a directory — it
+  records the one the run is already executing in, granting no reach, only
+  visibility in a list. That moves the authority question upstream to
+  whichever producer set `workspace_override` (a gated `project_root` param,
+  a gate-written room binding, a channel's configured `default_workspace`, a
+  resumed or inherited workspace), so the rule has two halves: a new writer
+  of `workspace_path` that *chooses* a directory owes the gate, and a new
+  *source* of `workspace_override` owes a gate at its own choice point.
+  Unbinding is a de-escalation and is
   deliberately exempt — it must stay reachable from the connection that got
   stuck. Members do NOT need the gate to *use* the room's binding: the
   owner chose the directory through a gated verb; the member only inherits
-  that choice.
+  that choice. The full census lives in
+  `gateway::handlers::projects`'s module doc, with a back-reference at the
+  fourth writer.
 - **Author attribution is display-grade, not signature-grade.** The
   `[name]` speaker labels a room prompt carries come from
   `SessionEvent::UserMessage.author_user_id`, stamped server-side from the
@@ -1464,9 +1477,9 @@ attribution, and a bound workspace as the room's default cwd.
      loudly (a human is there). The asymmetry is deliberate and documented
      at both sites.
   4. `[projects] allowed_roots` (the `fs.*` browse fence) is NOT layered
-     onto the three binding writers — the config-tier gate above is the
-     only fence. Layering it on would change existing picker behaviour; a
-     separate product decision.
+     onto the three directory-choosing binding writers — the config-tier
+     gate above is the only fence. Layering it on would change existing
+     picker behaviour; a separate product decision.
 
 ### Network boundary = reachability
 

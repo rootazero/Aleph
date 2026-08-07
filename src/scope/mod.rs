@@ -1,14 +1,23 @@
 //! Scope vocabulary and ambient attribution for data isolation.
 //!
 //! This module implements the spec §5.1 vocabulary for scope taxonomy:
-//! - `Org`: organization-wide scope
 //! - `Personal(String)`: personal scope for a user (ref format: `u-<uuid>` from users.rs:162)
-//! - `Project(String)`: project scope (ref format: `p-…` reserved for P2)
+//! - `Project(String)`: project scope (ref format: `p-…`, P2 project rooms)
+//! - `Org`: organization-wide scope — **vocabulary only, no producer.** No
+//!   production site constructs this variant and nothing writes the string
+//!   `"org"` into a `scope_id` stamp, so no live session, loop, cron job or
+//!   memory partition is org-scoped. The only way to obtain one is
+//!   [`ScopeId::parse`] reading a persisted column, i.e. a hand-edited row. It
+//!   is kept on purpose — the 3-kind taxonomy is the spec's deliberate
+//!   vocabulary and the whole cost is this file's own `render`/`parse` arms.
+//!   Do not read its presence as a shipped feature, and do not delete it as
+//!   dead code.
 //!
-//! The `Personal` and `Project` refs are the P0 id formats verbatim, so
-//! `partition_suffix` composes directly with `project_scope::scoped_agent_id`.
-//! The three suffix families — `proj-*` (legacy directory feature), `u-*` (personal),
-//! `p-*` (project) — are siblings, never nested.
+//! The `Personal` and `Project` refs are the P0 id formats verbatim, so the
+//! sites that compose partitions destructure the enum and hand the ref straight
+//! to `project_scope::scoped_agent_id` (`session_write_id` / `session_read_ids`
+//! / `profile_floor_id`). The three suffix families — `proj-*` (legacy directory
+//! feature), `u-*` (personal), `p-*` (project) — are siblings, never nested.
 //!
 //! The task-local follows `src/projects/run_context.rs`'s contract verbatim:
 //! children spawned via `tokio::spawn` MUST capture the attribution before the
@@ -27,7 +36,8 @@ pub mod directory;
 /// A scope identifier representing the visibility boundary for an agent or resource.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ScopeId {
-    /// Organization-wide scope; visible to all members.
+    /// Organization-wide scope. Vocabulary only — no producer; see the module
+    /// doc before treating a match on this arm as reachable.
     Org,
     /// Personal scope for a specific user. Ref is the user ID (e.g., `u-alice`).
     Personal(String),
@@ -68,18 +78,6 @@ impl ScopeId {
                     None
                 }
             }
-        }
-    }
-
-    /// Extract the partition suffix (the ref) from this scope.
-    /// - `Org` → `None`
-    /// - `Personal(u)` → `Some(u)`
-    /// - `Project(p)` → `Some(p)`
-    pub fn partition_suffix(&self) -> Option<&str> {
-        match self {
-            ScopeId::Org => None,
-            ScopeId::Personal(ref_id) => Some(ref_id),
-            ScopeId::Project(ref_id) => Some(ref_id),
         }
     }
 }
@@ -312,19 +310,6 @@ mod tests {
             ScopeId::parse("group:x"),
             None,
             "unknown kind is invalid — fail closed"
-        );
-    }
-
-    #[test]
-    fn partition_suffix_is_the_ref_verbatim() {
-        assert_eq!(ScopeId::Org.partition_suffix(), None);
-        assert_eq!(
-            ScopeId::Personal("u-alice".into()).partition_suffix(),
-            Some("u-alice")
-        );
-        assert_eq!(
-            ScopeId::Project("p-x7f2".into()).partition_suffix(),
-            Some("p-x7f2")
         );
     }
 

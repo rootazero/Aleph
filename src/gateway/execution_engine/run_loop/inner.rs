@@ -144,6 +144,20 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
                         // The user ran with a project_root that is not yet in
                         // the catalogue (CLI / programmatic entry). Register
                         // it so the desktop picker shows it next time.
+                        //
+                        // This is the FOURTH writer of `workspace_path` and
+                        // the only one that skips `require_directory_choice` —
+                        // see the census in `gateway::handlers::projects`'s
+                        // module doc. Exempt because it never INTRODUCES a
+                        // directory: it records the one this run is already
+                        // executing in. The authority for that choice was
+                        // settled by whichever producer set
+                        // `workspace_override` (gated `project_root`, a
+                        // gate-written room binding, channel config, a resumed
+                        // or inherited workspace). So a new, ungated SOURCE of
+                        // `workspace_override` — not a change here — is what
+                        // would silently turn this line into a way to write
+                        // the column without the gate.
                         if let Err(e) = store.add_for(&path, None, owner.as_deref()) {
                             tracing::debug!(
                                 error = %e,

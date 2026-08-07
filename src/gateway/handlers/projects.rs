@@ -12,14 +12,42 @@
 //! has a `workspace_path` — and `bind_workspace` is the verb that moves a row
 //! between the two views in either direction.
 //!
-//! ## The three writers of `workspace_path`
+//! ## The four writers of `workspace_path` — three gated, one exempt
 //!
-//! `add`, `create_blank` and `bind_workspace`. Since P2 (Task 7) that column
-//! is the default working directory of every run in the room, so all three go
-//! through [`require_directory_choice`] — the same config-tier predicate the
-//! per-turn `project_root` override uses. Adding a fourth writer without it
-//! reopens "register a folder, then chat in it", a two-step path to an
-//! arbitrary server directory with both steps legal.
+//! `add`, `create_blank` and `bind_workspace` are the three that CHOOSE a
+//! directory. Since P2 (Task 7) that column is the default working directory
+//! of every run in the room, so all three go through
+//! [`require_directory_choice`] — the same config-tier predicate the per-turn
+//! `project_root` override uses. Adding a fifth writer without it reopens
+//! "register a folder, then chat in it", a two-step path to an arbitrary
+//! server directory with both steps legal.
+//!
+//! The fourth is `execution_engine::run_loop::inner`, which auto-registers a
+//! run's `workspace_override` into the catalogue (via `ProjectStore::add_for`)
+//! so a CLI/programmatic cwd shows up in the desktop picker next time. It is
+//! exempt, and the exemption is an invariant rather than an oversight: **it
+//! never introduces a directory, it only records one the run is already
+//! executing in.** It grants no reach — it makes an already-held cwd visible
+//! in a list.
+//!
+//! Which means the authority question is settled UPSTREAM, at whichever
+//! producer decided the run's cwd, and there are several: `handlers::agent`
+//! (gated — a caller-named `project_root` needs
+//! `caller_may_choose_directory()`; a room's bound path was gated when bound),
+//! a channel's configured `default_workspace` (operator-written config, and
+//! room runs take the by-id branch before this one anyway), a resumed run's
+//! persisted path, a workspace inherited by a subagent or team member (team
+//! WORKTREE runs are excluded here outright, by the `team_worktree_path`
+//! metadata key). Do not read that list as exhaustive — read the rule:
+//!
+//! - a new writer of `workspace_path` that CHOOSES a directory owes
+//!   [`require_directory_choice`];
+//! - a new SOURCE of `workspace_override` owes a gate at its own choice point,
+//!   because this line will faithfully catalogue whatever it produces.
+//!
+//! The count is load-bearing: leaving it at three means whoever adds a
+//! genuinely new writer believes they are the fourth when they are the fifth,
+//! and looks for three precedents when there are four.
 //!
 //! ## The four verdicts (spec §6.3)
 //!

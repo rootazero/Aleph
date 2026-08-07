@@ -11,6 +11,13 @@
 //! there would put N round-trips on the list path; making it async would spread
 //! virally through every P1 predicate.
 //!
+//! [`is_member`] is the whole read surface, deliberately. A `projects_of(user)`
+//! lister was carried here until 2026-08-07 for a SQL-pushdown consumer
+//! (`SessionFilter::visible_scope_ids`) that CLAUDE.md records as deliberately
+//! NOT built — room visibility is decided by the in-memory predicate both
+//! `SessionStore` backends share, precisely so it cannot be enforced on one
+//! backend and not the other. Do not re-add the lister without that consumer.
+//!
 //! Cross-process caveat: a second process writing `projects.db` will not be
 //! seen here. Roster mutation is RPC-only (this process) today. **If a CLI
 //! roster subcommand is ever added it MUST go through IPC, not straight to the
@@ -82,17 +89,3 @@ pub fn is_member(project_id: &str, user_id: &str) -> bool {
 /// gateway's visibility tests need the same guard.
 #[cfg(test)]
 pub static TEST_GUARD: std::sync::Mutex<()> = std::sync::Mutex::new(());
-
-/// Every project `user_id` belongs to, sorted for deterministic SQL.
-#[must_use]
-pub fn projects_of(user_id: &str) -> Vec<String> {
-    let guard = cell().read().unwrap_or_else(|e| e.into_inner());
-    let mut ids: Vec<String> = guard
-        .members
-        .iter()
-        .filter(|(_, m)| m.contains(user_id))
-        .map(|(p, _)| p.clone())
-        .collect();
-    ids.sort();
-    ids
-}
