@@ -19,19 +19,29 @@
 //! }
 //! ```
 //!
-//! ## remote transport (HTTP/SSE)
+//! ## remote transports: `http` and `sse`
 //!
 //! ```json
 //! {
 //!   "mcpServers": {
 //!     "remote-server": {
-//!       "type": "remote",
+//!       "type": "http",
 //!       "url": "https://mcp.example.com/api",
 //!       "headers": { "Authorization": "Bearer ${ALEPH_PLUGIN_ROOT}/token" }
+//!     },
+//!     "event-server": {
+//!       "type": "sse",
+//!       "url": "https://events.example.com/sse"
 //!     }
 //!   }
 //! }
 //! ```
+//!
+//! `type` is the only transport discriminator, and its three legal values are
+//! `stdio` | `http` | `sse` — the same vocabulary `.mcp.json` uses elsewhere in
+//! the ecosystem. There is no `"remote"` value: "remote" names the *category*
+//! (`http` and `sse` both dial a URL), not a spelling you can put on the wire.
+//! Anything else is a hard parse error rather than a silently dropped server.
 //!
 //! The `type` field defaults to `stdio` when omitted, so existing plugin
 //! manifests continue to work unchanged.
@@ -66,10 +76,14 @@ struct McpJsonFile {
 /// A single server entry in .mcp.json.
 ///
 /// Either a stdio entry (`command` + `args` + `env`) or a remote entry
-/// (`url` + `headers` + optional `transport: "sse"`). The `type` discriminator
-/// defaults to `stdio` when absent so existing plugins continue to parse.
+/// (`url` + `headers`). The `type` discriminator defaults to `stdio` when
+/// absent so existing plugins continue to parse.
 #[derive(Debug, Deserialize)]
 struct McpJsonServerEntry {
+    /// The `type` discriminator. Named `transport` in Rust because that is
+    /// what it selects, but the **JSON key is `type`** — a sibling `transport`
+    /// key in `.mcp.json` is not read, and serde drops unknown keys silently,
+    /// so do not let prose here grow a second spelling for this one field.
     #[serde(default = "default_transport", rename = "type")]
     transport: String,
     // stdio fields
@@ -158,7 +172,7 @@ fn parse_mcp_json_content(
                 let command = entry.command.ok_or_else(|| {
                     format!(
                         "MCP stdio server '{server_name}' is missing 'command' \
-                         (either add it or set `\"type\": \"remote\"` with a `url`)"
+                         (either add it or set `\"type\": \"http\"` with a `url`)"
                     )
                 })?;
                 let cmd = substitute_vars(&command, &plugin_root);
@@ -339,9 +353,9 @@ mod tests {
         let content = r#"{
             "mcpServers": {
                 "remote-srv": {
-                    "type": "remote",
+                    "type": "http",
                     "url": "https://mcp.example.com/api",
-                    "headers": { "Authorization": "Bearer ${ALEPH_PLUGIN_DATA}/token" }
+                    "headers": { "Authorization": "Bearer ${ALEPH_PLUGIN_ROOT}/token" }
                 }
             }
         }"#;
@@ -367,14 +381,39 @@ mod tests {
         );
     }
 
+    /// The module doc promises `${ALEPH_PLUGIN_DATA}` is *not* expanded here —
+    /// it belongs to the manager actor's spawn-time pass, which is the only
+    /// one that sees the post-`mcp.install` view of the data dir. That
+    /// contract had no test, and the first thing to reach for it was a typo
+    /// in the test above asserting the opposite.
+    #[test]
+    fn plugin_data_var_survives_this_layer_untouched() {
+        let content = r#"{
+            "mcpServers": {
+                "srv": {
+                    "type": "http",
+                    "url": "https://mcp.example.com/api",
+                    "headers": { "Authorization": "Bearer ${ALEPH_PLUGIN_DATA}/token" }
+                }
+            }
+        }"#;
+
+        let result = parse_mcp_json_content(content, Path::new("/p/x"), "p").unwrap();
+        let config = result.get("plugin:p/srv").unwrap();
+        assert_eq!(
+            config.headers.get("Authorization").map(String::as_str),
+            Some("Bearer ${ALEPH_PLUGIN_DATA}/token"),
+            "this layer must hand ${{ALEPH_PLUGIN_DATA}} onward verbatim"
+        );
+    }
+
     #[test]
     fn test_parse_mcp_json_remote_sse_transport() {
         let content = r#"{
             "mcpServers": {
                 "events": {
-                    "type": "remote",
-                    "url": "https://events.example.com/sse",
-                    "transport": "sse"
+                    "type": "sse",
+                    "url": "https://events.example.com/sse"
                 }
             }
         }"#;
@@ -422,7 +461,7 @@ mod tests {
     fn test_parse_mcp_json_remote_without_url_errors() {
         let content = r#"{
             "mcpServers": {
-                "broken": { "type": "remote", "headers": {} }
+                "broken": { "type": "http", "headers": {} }
             }
         }"#;
         let err = parse_mcp_json_content(content, Path::new("/p/x"), "broken").unwrap_err();
@@ -444,5 +483,31 @@ mod tests {
             err.contains("unknown MCP transport type 'telnet'"),
             "unknown transport must surface a clear error: {err}"
         );
+    }
+
+    /// `"remote"` is the one wrong spelling with a pedigree: this module's own
+    /// doc comment, its stdio error hint, and three of its tests all promised
+    /// it while the parser never accepted it, so it shipped as four statements
+    /// of a fact only one of which was true. It stays rejected — but the
+    /// rejection has to name the legal set, because the people who reach this
+    /// error are the ones who read the old docs.
+    #[test]
+    fn the_remote_spelling_is_rejected_and_the_error_names_the_legal_set() {
+        let content = r#"{
+            "mcpServers": {
+                "srv": { "type": "remote", "url": "https://mcp.example.com/api" }
+            }
+        }"#;
+        let err = parse_mcp_json_content(content, Path::new("/p/x"), "remote-plugin").unwrap_err();
+        assert!(
+            err.contains("unknown MCP transport type 'remote'"),
+            "'remote' must be rejected, not silently coerced: {err}"
+        );
+        for legal in ["stdio", "http", "sse"] {
+            assert!(
+                err.contains(legal),
+                "error must point at '{legal}' so the author can fix it: {err}"
+            );
+        }
     }
 }
