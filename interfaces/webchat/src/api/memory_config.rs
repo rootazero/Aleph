@@ -45,6 +45,19 @@ pub struct MemoryConfig {
     #[serde(default)]
     pub reflection: ReflectionConfig,
 
+    // Curated envelope budgets (`[memory.curated]`). A different config
+    // section from `reflection`, but the two knobs surfaced here bound the
+    // very block the `reflection.open_loop_*` toggles produce — turning open
+    // loops on while the ceiling that expires them stays invisible shows the
+    // operator half a mechanism.
+    //
+    // Only the two open-loop keys are mirrored. `memory_config.get` sends all
+    // five (it serializes the whole backend section) and serde drops the rest
+    // on the way in; `handle_update`'s merge is recursive, so writing back a
+    // partial `curated` object leaves the other three untouched.
+    #[serde(default)]
+    pub curated: CuratedSettings,
+
     // Storage — write-time semantic dedup gate
     #[serde(default = "default_dedup_threshold")]
     pub dedup_similarity_threshold: f32,
@@ -215,6 +228,38 @@ impl Default for ReflectionConfig {
             cooldown_minutes: default_reflection_cooldown(),
             open_loop_tracking: false,
             open_loop_inject_prompt: false,
+        }
+    }
+}
+
+/// The `[memory.curated]` knobs that bound the `<OpenLoops>` block.
+///
+/// Defaults mirror `CuratedConfig::default()` on the server. They only apply
+/// when `memory_config.get` has not answered yet — every real render reads
+/// what the daemon sent.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CuratedSettings {
+    /// Char budget for the `<OpenLoops>` block of the curated envelope.
+    #[serde(default = "default_open_loops_char_limit")]
+    pub open_loops_char_limit: usize,
+    /// Days after which a persisted open-loops capture stops being injected.
+    /// `0` disables the ceiling.
+    #[serde(default = "default_open_loops_max_age_days")]
+    pub open_loops_max_age_days: u32,
+}
+
+const fn default_open_loops_char_limit() -> usize {
+    2_000
+}
+const fn default_open_loops_max_age_days() -> u32 {
+    14
+}
+
+impl Default for CuratedSettings {
+    fn default() -> Self {
+        Self {
+            open_loops_char_limit: default_open_loops_char_limit(),
+            open_loops_max_age_days: default_open_loops_max_age_days(),
         }
     }
 }
