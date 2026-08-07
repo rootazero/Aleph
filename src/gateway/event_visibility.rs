@@ -24,10 +24,18 @@
 //! insertion-order-evicting hygiene `streaming/relay.rs`'s `StreamRegistry`
 //! already established for a similar per-run cache.
 //!
-//! Session-owner lookups (`session_key` → the owning user) go through a
-//! second bounded cache, filled on miss from the [`SessionStore`] via
-//! `visibility::effective_owner` — the SAME owner-resolution rule RPCs use,
-//! not a second one (spec §5.4's single-authority requirement extends here).
+//! Session-visibility lookups (`session_key` → may this caller see it) go
+//! through a second bounded cache. What that cache holds is the session row's
+//! `(owner_user_id, scope_id)` pair — the two FACTS — and never a per-caller
+//! verdict. The verdict itself is recomputed per caller per frame by
+//! `visibility::owner_and_scope_visible_to`, the same body
+//! `visibility::session_visible_to` runs for RPCs (spec §5.4's
+//! single-authority requirement extends here). Caching the pair rather than
+//! the answer is what makes P2's "removing a member takes effect at the next
+//! predicate evaluation" promise hold on this path too — a cached boolean
+//! would have nothing to invalidate — and it costs nothing: the roster read
+//! behind a room's answer is a synchronous in-memory `RwLock`
+//! ([`crate::projects::roster`]).
 //!
 //! ## Deliberately `Global`, not owner-scoped
 //!
@@ -81,8 +89,9 @@ use serde_json::Value;
 use tokio::sync::RwLock;
 
 use crate::gateway::router::SessionKey;
+use crate::gateway::session_store::types::SessionMetadata;
 use crate::gateway::session_store::SessionStore;
-use crate::gateway::visibility::effective_owner;
+use crate::gateway::visibility::owner_and_scope_visible_to;
 use crate::sync_primitives::Arc;
 
 /// Which session (if any) a delivered event frame is attributable to, keyed
@@ -231,10 +240,42 @@ struct RunIndex {
     map: HashMap<String, String>,
 }
 
+/// The two immutable facts a session row contributes to a visibility decision
+/// — everything `visibility::owner_and_scope_visible_to` reads, and nothing
+/// else. Both are stamped once at creation and never rewritten
+/// (`SessionMetadata::stamp_attribution`), which is what makes them safe to
+/// cache for the process lifetime; the ROSTER they are evaluated against is
+/// not cached here and is re-read on every frame.
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct SessionOwnership {
+    owner_user_id: Option<String>,
+    scope_id: Option<String>,
+}
+
+impl SessionOwnership {
+    fn of(meta: &SessionMetadata) -> Self {
+        Self {
+            owner_user_id: meta.owner_user_id.clone(),
+            scope_id: meta.scope_id.clone(),
+        }
+    }
+
+    fn visible_to(&self, caller: &str) -> bool {
+        owner_and_scope_visible_to(
+            self.owner_user_id.as_deref(),
+            self.scope_id.as_deref(),
+            caller,
+        )
+    }
+}
+
+/// `None` as a cached value means "this key can never resolve to a session"
+/// (a malformed key string), which denies every caller — deliberately NOT the
+/// same thing as an absent `owner_user_id`, which reads as the legacy owner.
 #[derive(Default)]
-struct OwnerCache {
+struct OwnershipCache {
     order: VecDeque<String>,
-    map: HashMap<String, Option<String>>,
+    map: HashMap<String, Option<SessionOwnership>>,
 }
 
 /// Process-shared (via `GatewaySharedState`/`ConnectionContext`, one
@@ -244,7 +285,7 @@ struct OwnerCache {
 #[derive(Default)]
 pub struct EventVisibilityIndex {
     runs: RwLock<RunIndex>,
-    owners: RwLock<OwnerCache>,
+    owners: RwLock<OwnershipCache>,
 }
 
 impl EventVisibilityIndex {
@@ -293,7 +334,7 @@ impl EventVisibilityIndex {
                 let Some(caller) = caller_user else {
                     return false;
                 };
-                self.owner_matches(&session_key, caller, store).await
+                self.session_admits(&session_key, caller, store).await
             }
             SessionIdentity::ByRunId(run_id) => {
                 let Some(caller) = caller_user else {
@@ -302,7 +343,7 @@ impl EventVisibilityIndex {
                 let Some(session_key) = self.session_key_for_run(&run_id).await else {
                     return false; // unresolvable — fail closed (see module doc)
                 };
-                self.owner_matches(&session_key, caller, store).await
+                self.session_admits(&session_key, caller, store).await
             }
         }
     }
@@ -331,11 +372,17 @@ impl EventVisibilityIndex {
         self.runs.read().await.map.get(run_id).cloned()
     }
 
-    /// Owner-equality check for a resolved session key, through the bounded
-    /// cache — fill-on-miss from `store`, via the SAME `effective_owner`
-    /// rule `visibility.rs`'s RPC-side predicates use (single authority,
-    /// spec §5.4).
-    async fn owner_matches(
+    /// Whether `caller` may see a resolved session key — the SAME body
+    /// `visibility.rs`'s RPC-side predicates run
+    /// ([`owner_and_scope_visible_to`], reached from `session_visible_to`
+    /// there), so a project room's frames follow the ROSTER and a personal
+    /// session's follow its owner.
+    ///
+    /// Only the session's two immutable facts are cached (fill-on-miss from
+    /// `store`); the caller is applied to them on every call. An owner-equality
+    /// check here — or a per-caller boolean in the cache — denies every member
+    /// of a room but its creator, and denies them silently.
+    async fn session_admits(
         &self,
         session_key: &str,
         caller: &str,
@@ -345,19 +392,19 @@ impl EventVisibilityIndex {
             let inner = self.owners.read().await;
             inner.map.get(session_key).cloned()
         } {
-            return cached.as_deref() == Some(caller);
+            return cached.is_some_and(|o| o.visible_to(caller));
         }
 
-        let owner = match SessionKey::from_key_string(session_key) {
+        let ownership = match SessionKey::from_key_string(session_key) {
             Some(key) => match store.get_metadata(&key).await {
-                Ok(Some(meta)) => Some(effective_owner(&meta).to_string()),
+                Ok(Some(meta)) => Some(SessionOwnership::of(&meta)),
                 // Row absent: TRANSIENT, exactly like the store error below,
                 // and for a reason that fires on the happy path of a brand-new
                 // conversation. `execute.rs` emits `RunAccepted{session_key}`
                 // BEFORE `ensure_session` creates the row, so the very first
                 // frame of a fresh session can arrive while the row does not
-                // exist yet. Caching that absence as `owner: None` would deny
-                // EVERY later frame for that session key — the cache has no
+                // exist yet. Caching that absence as an unresolvable key would
+                // deny EVERY later frame for that session key — the cache has no
                 // invalidation and evicts only by FIFO at
                 // `MAX_CACHED_SESSION_OWNERS` — so streaming for that
                 // conversation would stay dead for the process lifetime. It
@@ -374,23 +421,25 @@ impl EventVisibilityIndex {
                 // `visibility::existing_session_is_visible`'s own rule.
                 Err(_) => return false,
             },
-            // Malformed session_key string: cache as "no owner" so a
+            // Malformed session_key string: cache as unresolvable so a
             // repeated malformed key doesn't re-hit the parse on every event.
             // This one IS permanent — a string that does not parse today will
-            // not parse later, so nothing can invalidate it.
+            // not parse later, so nothing can invalidate it. It must stay
+            // distinct from a row whose `owner_user_id` is absent, which reads
+            // as the LEGACY owner and admits them.
             None => None,
         };
-        self.cache_owner(session_key.to_string(), owner.clone())
+        self.cache_ownership(session_key.to_string(), ownership.clone())
             .await;
-        owner.as_deref() == Some(caller)
+        ownership.is_some_and(|o| o.visible_to(caller))
     }
 
-    async fn cache_owner(&self, session_key: String, owner: Option<String>) {
+    async fn cache_ownership(&self, session_key: String, ownership: Option<SessionOwnership>) {
         let mut inner = self.owners.write().await;
         if !inner.map.contains_key(&session_key) {
             inner.order.push_back(session_key.clone());
         }
-        inner.map.insert(session_key, owner);
+        inner.map.insert(session_key, ownership);
         while inner.map.len() > MAX_CACHED_SESSION_OWNERS {
             let Some(oldest) = inner.order.pop_front() else {
                 break;

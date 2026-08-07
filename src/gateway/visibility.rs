@@ -5,10 +5,11 @@
 //! rows created outside any dispatch scope (cron, internal, A2A). Those rows
 //! read as owned by the org-era single operator — adoption-by-absence, not a
 //! missing value. [`owner_or_legacy`] is the one place that rule is encoded;
-//! [`effective_owner`] (used by both `SessionStore` backends'
-//! `SessionFilter::owner_visible_to` filter) and [`stamped_owner_visible`]
-//! (used by every non-session P1-stamped record) both call it, so the
-//! fallback can never drift between them.
+//! [`owner_and_scope_visible_to`] (the body behind both `SessionStore`
+//! backends' `SessionFilter::owner_visible_to` filter AND behind the event
+//! bus's per-frame check — see [`crate::gateway::event_visibility`]) and
+//! [`stamped_owner_visible`] (used by every non-session P1-stamped record)
+//! both call it, so the fallback can never drift between them.
 //!
 //! ALL user-visibility decisions for session-scoped RPCs live in this
 //! module. The resolution itself is not re-derived here — it is the P0
@@ -134,14 +135,36 @@ pub fn project_visible(project_id: &str) -> bool {
 /// but the room never appears in their session list, with no error anywhere.
 #[must_use]
 pub fn session_visible_to(meta: &SessionMetadata, actor: &str) -> bool {
-    if let Some(crate::scope::ScopeId::Project(p)) = meta
-        .scope_id
-        .as_deref()
-        .and_then(crate::scope::ScopeId::parse)
+    owner_and_scope_visible_to(
+        meta.owner_user_id.as_deref(),
+        meta.scope_id.as_deref(),
+        actor,
+    )
+}
+
+/// [`session_visible_to`]'s rule with its two inputs passed explicitly, for the
+/// one caller that holds those fields without a [`SessionMetadata`] around
+/// them: the event-delivery path
+/// ([`crate::gateway::event_visibility`]), whose per-session cache stores this
+/// pair rather than a whole metadata row.
+///
+/// Widening the signature rather than letting that path re-derive the rule is
+/// the point. Event delivery kept the pre-P2 owner-equality rule for exactly
+/// as long as it had its own copy of it, and nothing failed — a room's live
+/// frames simply never reached anyone but its creator. With the rule in one
+/// body, a third input to the room-vs-personal decision is a compile error at
+/// both call sites instead of a silent divergence.
+#[must_use]
+pub fn owner_and_scope_visible_to(
+    owner_user_id: Option<&str>,
+    scope_id: Option<&str>,
+    actor: &str,
+) -> bool {
+    if let Some(crate::scope::ScopeId::Project(p)) = scope_id.and_then(crate::scope::ScopeId::parse)
     {
         return crate::projects::roster::is_member(&p, actor);
     }
-    effective_owner(meta) == actor
+    owner_or_legacy(owner_user_id) == actor
 }
 
 /// Whether `meta` is visible to the current caller.

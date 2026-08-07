@@ -785,6 +785,151 @@ async fn two_members_share_one_room_memory_and_nobody_elses() {
     );
 }
 
+/// Spec §8/§13 (P2 acceptance, the LIVE half): **every member of a room
+/// receives the room's frames**, not only whoever opened the session.
+///
+/// [`two_members_share_one_room_memory_and_nobody_elses`] proves a room is one
+/// memory at rest; this proves it is one conversation in flight. Two different
+/// bodies answer those two questions — `visibility::session_visible_to` on the
+/// RPC path, [`EventVisibilityIndex::event_admits`] on the event bus — and for
+/// one release the second kept the pre-P2 owner-equality rule while the first
+/// learned the roster. That break is invisible from both ends: it fails CLOSED,
+/// so it leaks nothing and logs nothing; the room simply never comes alive for
+/// anyone but its creator — including on a member's OWN turn, because their
+/// run's frames hang off the room's session row, which the creator owns. So the
+/// run seeded below is BOB's.
+///
+/// The last beat is the one that fails if the verdict is ever memoised per
+/// caller: P2 promises removal takes effect at the next predicate evaluation,
+/// and this path has no invalidation hook anyone could call.
+#[tokio::test]
+async fn every_room_member_receives_the_rooms_live_frames() {
+    use crate::projects::ProjectStore;
+
+    let _guard = crate::projects::roster::TEST_GUARD
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+
+    let temp = TempDir::new().unwrap();
+    let sessions: Arc<dyn SessionStore> = Arc::new(
+        SessionManager::new(SessionManagerConfig {
+            db_path: temp.path().join("sessions.db"),
+            ..Default::default()
+        })
+        .unwrap(),
+    );
+
+    let projects = ProjectStore::new(rusqlite::Connection::open_in_memory().unwrap());
+    projects.create_schema().unwrap();
+    let room = projects
+        .create("live room", Some("u-live-alice"), None)
+        .unwrap();
+    projects.add_member(&room.id, "u-live-bob").unwrap();
+
+    let events = EventVisibilityIndex::new();
+    let key = SessionKey::main(unique("live-room-agent"));
+    let key_str = key.to_key_string();
+    let run_id = unique("run-live-bob");
+
+    // Alice opens the room, so hers is the row's `owner_user_id`.
+    as_room_member("u-live-alice", &room.id, sessions.get_or_create(&key))
+        .await
+        .unwrap();
+
+    // The fixture's whole point: bob is NOT this row's owner. If he were, every
+    // assertion below would pass under the owner-equality rule too.
+    let meta = sessions
+        .get_metadata(&key)
+        .await
+        .unwrap()
+        .expect("the room session row exists");
+    assert_eq!(meta.owner_user_id.as_deref(), Some("u-live-alice"));
+    assert_eq!(
+        meta.scope_id.as_deref(),
+        Some(format!("project:{}", room.id).as_str()),
+        "the room session must carry the room's scope, or this test proves nothing"
+    );
+
+    // Bob takes a turn in the room.
+    as_room_member(
+        "u-live-bob",
+        &room.id,
+        events.note_frame(
+            "stream.run_accepted",
+            Some(&json!({ "run_id": run_id, "session_key": key_str })),
+        ),
+    )
+    .await;
+
+    let trace = json!({
+        "run_id": run_id,
+        "seq": 1,
+        "event": { "kind": "turn_started", "iteration": 1 },
+    });
+    let updated = json!({ "session_key": key_str, "origin_channel": "gui:chat" });
+
+    // Both classifications must reach the roster: `stream.session_updated`
+    // names the session directly, `stream.agent_trace` only a run id.
+    for (topic, data) in [
+        ("stream.agent_trace", &trace),
+        ("stream.session_updated", &updated),
+    ] {
+        assert!(
+            events
+                .event_admits(topic, Some(data), Some("u-live-bob"), &sessions)
+                .await,
+            "{topic}: a room member who did not create the session must receive \
+             the room's frames — including his own turn's"
+        );
+        assert!(
+            events
+                .event_admits(topic, Some(data), Some("u-live-alice"), &sessions)
+                .await,
+            "{topic}: the creator must still be admitted — the fix must not be a \
+             blanket allow that happens to include bob"
+        );
+        assert!(
+            !events
+                .event_admits(topic, Some(data), Some("u-live-mallory"), &sessions)
+                .await,
+            "{topic}: a logged-in non-member must not receive the room's frames"
+        );
+        assert!(
+            !events
+                .event_admits(topic, Some(data), Some(OWNER_USER_ID), &sessions)
+                .await,
+            "{topic}: the operator is not on the roster either — same rule as \
+             `sessions.list` (see two_users_cannot_see_each_other_end_to_end)"
+        );
+    }
+
+    // ── Removal takes effect on the NEXT frame, with nothing to invalidate ──
+    projects.remove_member(&room.id, "u-live-bob").unwrap();
+    assert!(
+        !events
+            .event_admits(
+                "stream.agent_trace",
+                Some(&trace),
+                Some("u-live-bob"),
+                &sessions
+            )
+            .await,
+        "an ex-member must stop receiving the room's frames immediately: the \
+         cache holds the row's (owner, scope) facts, never a per-caller verdict"
+    );
+    assert!(
+        events
+            .event_admits(
+                "stream.agent_trace",
+                Some(&trace),
+                Some("u-live-alice"),
+                &sessions
+            )
+            .await,
+        "removing bob must not disturb anyone else's delivery"
+    );
+}
+
 /// Spec §9-2: a pre-P1 single-user fixture must read back byte-identical
 /// after the P1 code is deployed. Three data shapes, each hand-authored
 /// exactly as P0-era code would have left it on disk (never through the new
