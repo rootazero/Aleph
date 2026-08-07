@@ -292,12 +292,17 @@ mod tests {
     #[test]
     fn ticket_bound_to_user_stamps_device_user() {
         let (mgr, store) = manager_fixture();
-        store.create_user("u-alice", "Alice", UserRole::Member).unwrap();
+        store
+            .create_user("u-alice", "Alice", UserRole::Member)
+            .unwrap();
         let code = mgr.create_bootstrap_ticket(None, Some("u-alice")).unwrap();
         let result = mgr
             .exchange_bootstrap_ticket(&code, Some("dev-a".into()), None, None)
             .unwrap();
-        assert_eq!(store.device_user("dev-a").unwrap().as_deref(), Some("u-alice"));
+        assert_eq!(
+            store.device_user("dev-a").unwrap().as_deref(),
+            Some("u-alice")
+        );
         let _ = result; // token issuance shape unchanged
     }
 
@@ -307,21 +312,29 @@ mod tests {
         let code = mgr.create_bootstrap_ticket(None, None).unwrap();
         mgr.exchange_bootstrap_ticket(&code, Some("dev-b".into()), None, None)
             .unwrap();
-        assert_eq!(store.device_user("dev-b").unwrap().as_deref(), Some(OWNER_USER_ID));
+        assert_eq!(
+            store.device_user("dev-b").unwrap().as_deref(),
+            Some(OWNER_USER_ID)
+        );
     }
 
     #[test]
     fn repairing_does_not_silently_reassign_device_user() {
         // Mine-4 sibling: ON CONFLICT must COALESCE, not overwrite with NULL.
         let (mgr, store) = manager_fixture();
-        store.create_user("u-alice", "Alice", UserRole::Member).unwrap();
+        store
+            .create_user("u-alice", "Alice", UserRole::Member)
+            .unwrap();
         let t1 = mgr.create_bootstrap_ticket(None, Some("u-alice")).unwrap();
         mgr.exchange_bootstrap_ticket(&t1, Some("dev-a".into()), None, None)
             .unwrap();
         let t2 = mgr.create_bootstrap_ticket(None, None).unwrap(); // unbound re-pair
         mgr.exchange_bootstrap_ticket(&t2, Some("dev-a".into()), None, None)
             .unwrap();
-        assert_eq!(store.device_user("dev-a").unwrap().as_deref(), Some("u-alice"));
+        assert_eq!(
+            store.device_user("dev-a").unwrap().as_deref(),
+            Some("u-alice")
+        );
     }
 
     #[test]

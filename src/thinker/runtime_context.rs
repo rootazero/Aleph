@@ -252,7 +252,11 @@ impl RuntimeContext {
         let cwd = self.working_dir.display().to_string();
         let git = self.repo_root.as_deref().and_then(detect_git_branch);
         let mut out = String::with_capacity(192);
-        open_block_with_attrs(&mut out, "environment_context", std::iter::empty::<(&str, &str)>());
+        open_block_with_attrs(
+            &mut out,
+            "environment_context",
+            std::iter::empty::<(&str, &str)>(),
+        );
         push_text_element(&mut out, "cwd", &cwd);
         if let Some(ref repo) = self.repo_root {
             push_text_element(&mut out, "repo", &repo.display().to_string());
@@ -265,17 +269,17 @@ impl RuntimeContext {
         // We deliberately stay in the same format string ("YYYY-MM-DD HH:00
         // (TZ)") across both halves so the model sees one timestamp, not two
         // formats it has to reconcile.
-        push_text_element(&mut out, "time", &format!("{} ({})", self.current_time, self.timezone));
+        push_text_element(
+            &mut out,
+            "time",
+            &format!("{} ({})", self.current_time, self.timezone),
+        );
         if let Some((kind, id)) = parent {
             // Attribute escape on `kind` (the discriminator is a token
             // supplied by the dispatcher, but a malicious or buggy dispatcher
             // still cannot smuggle a sibling attribute); text escape on `id`
             // (session keys are paths, may contain `&` etc.).
-            open_block_with_attrs(
-                &mut out,
-                "parent",
-                [("kind", kind)],
-            );
+            open_block_with_attrs(&mut out, "parent", [("kind", kind)]);
             out.push_str(&escape_xml(id));
             close_block(&mut out, "parent");
         }
@@ -824,7 +828,10 @@ mod tests {
         assert!(block.contains("<repo>"), "{block}");
         assert!(block.contains("<git>main</git>"), "{block}");
         assert!(block.contains("<model>claude-opus-4-6</model>"), "{block}");
-        assert!(block.contains("<time>2026-08-06 10:00 (UTC)</time>"), "{block}");
+        assert!(
+            block.contains("<time>2026-08-06 10:00 (UTC)</time>"),
+            "{block}"
+        );
         // No `<parent>` element when the caller passes `None`.
         assert!(!block.contains("<parent"), "{block}");
     }
@@ -856,9 +863,7 @@ mod tests {
         // document is well-formed even if a downstream consumer tries to
         // parse it.
         let parent_pos = block.find("<parent").expect("parent element");
-        let close_pos = block
-            .rfind("</environment_context>")
-            .expect("close tag");
+        let close_pos = block.rfind("</environment_context>").expect("close tag");
         assert!(parent_pos < close_pos, "{block}");
     }
 
@@ -885,7 +890,10 @@ mod tests {
 
         // `&` becomes `&amp;`, `<` becomes `&lt;`, `>` becomes `&gt;` —
         // the three element-text specials.
-        assert!(block.contains("<cwd>/tmp/a&amp;b&lt;c&gt;</cwd>"), "{block}");
+        assert!(
+            block.contains("<cwd>/tmp/a&amp;b&lt;c&gt;</cwd>"),
+            "{block}"
+        );
     }
 
     #[test]

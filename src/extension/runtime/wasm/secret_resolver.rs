@@ -143,15 +143,15 @@ mod tests {
             "slack_token".to_string(),
             "xoxb-secret".to_string(),
         )]);
-        assert_eq!(resolver.resolve("slack_token"), Some("xoxb-secret".to_string()));
+        assert_eq!(
+            resolver.resolve("slack_token"),
+            Some("xoxb-secret".to_string())
+        );
     }
 
     #[test]
     fn in_memory_resolver_returns_none_for_unknown() {
-        let resolver = InMemorySecretResolver::new(vec![(
-            "a".to_string(),
-            "1".to_string(),
-        )]);
+        let resolver = InMemorySecretResolver::new(vec![("a".to_string(), "1".to_string())]);
         assert_eq!(resolver.resolve("b"), None);
     }
 
@@ -166,10 +166,7 @@ mod tests {
 
     #[test]
     fn in_memory_resolver_insert_skips_existing() {
-        let resolver = InMemorySecretResolver::new(vec![(
-            "k".to_string(),
-            "first".to_string(),
-        )]);
+        let resolver = InMemorySecretResolver::new(vec![("k".to_string(), "first".to_string())]);
         resolver.insert("k".to_string(), "second".to_string());
         assert_eq!(resolver.resolve("k"), Some("first".to_string()));
     }

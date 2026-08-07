@@ -927,7 +927,8 @@ fn test_parse_sse_in_band_error_object() {
     // `ProviderDelta::Error` so the retry/failover path sees the failure.
     let mut tracker = IndexIdTracker::new();
     let mut pending = VecDeque::new();
-    let data = r#"{"error":{"message":"Rate limit exceeded","type":"rate_limit_error","code":429}}"#;
+    let data =
+        r#"{"error":{"message":"Rate limit exceeded","type":"rate_limit_error","code":429}}"#;
     parse_chat_sse_event(data, &mut tracker, &mut pending);
 
     assert_eq!(pending.len(), 1);

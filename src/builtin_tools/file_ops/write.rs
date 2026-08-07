@@ -223,7 +223,10 @@ mod tests {
         .unwrap();
 
         assert!(out.success);
-        assert!(out.unchanged, "unchanged must be true for a byte-equal rewrite");
+        assert!(
+            out.unchanged,
+            "unchanged must be true for a byte-equal rewrite"
+        );
         assert_eq!(out.bytes_written, "same content".len() as u64);
         let after = fs::metadata(&file).unwrap().modified().unwrap();
         assert_eq!(before, after, "no-op write must not touch mtime");

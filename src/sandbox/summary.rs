@@ -476,7 +476,10 @@ mod tests {
             max_memory_mb: None,
             permission_profile_id: None,
         };
-        assert_eq!(denied.network_prompt_line().as_deref(), Some("Network: denied"));
+        assert_eq!(
+            denied.network_prompt_line().as_deref(),
+            Some("Network: denied")
+        );
 
         let allow_all = SandboxSummary {
             backend: "b",
@@ -507,8 +510,7 @@ mod tests {
 
     #[test]
     fn permission_profile_prompt_line_is_none_then_some_after_with() {
-        let summary =
-            SandboxSummary::from_baseline("b", &SandboxCapabilities::strict());
+        let summary = SandboxSummary::from_baseline("b", &SandboxCapabilities::strict());
         assert!(summary.permission_profile_prompt_line().is_none());
         let summary = summary.with_permission_profile_id("drafts-v1");
         assert_eq!(
@@ -522,9 +524,8 @@ mod tests {
         // The `isolated_worktree` constructor leaves `permission_profile_id`
         // `None`; the builder helper is the only way to set it. Pin both
         // halves of the round-trip so a refactor cannot silently drop one.
-        let summary =
-            SandboxSummary::isolated_worktree(PathBuf::from("/wt/aleph-foo"))
-                .with_permission_profile_id("iso-v2");
+        let summary = SandboxSummary::isolated_worktree(PathBuf::from("/wt/aleph-foo"))
+            .with_permission_profile_id("iso-v2");
         assert_eq!(summary.permission_profile_id.as_deref(), Some("iso-v2"));
         assert_eq!(
             summary.permission_profile_prompt_line().as_deref(),

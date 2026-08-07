@@ -1075,7 +1075,8 @@ pub fn create_tool_boxed(
         // BuiltinToolRegistry::with_config() — agent_create/list/delete/switch
         // need agent_registry + workspace_manager; agent_info builds its own
         // catalog.
-        "agent_create" | "agent_list" | "agent_delete" | "agent_switch" | "agent_unbind" | "agent_update" | "agent_info" => None,
+        "agent_create" | "agent_list" | "agent_delete" | "agent_switch" | "agent_unbind"
+        | "agent_update" | "agent_info" => None,
         // self_config requires the per-agent agent_id, injected at construction time
         // in BuiltinToolRegistry — cannot be created standalone here.
         "self_config" => None,

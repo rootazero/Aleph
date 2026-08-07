@@ -176,9 +176,8 @@ pub struct ExtensionManager {
     /// `Workspace` / `Global` origins are only loaded when their id is
     /// in the allowlist. Default is `permissive()` (legacy behaviour:
     /// every plugin loads). Updated by [`Self::set_owner_trust_policy`].
-    owner_trust_policy: Arc<
-        crate::sync_primitives::RwLock<crate::extension::activation::OwnerTrustPolicy>,
-    >,
+    owner_trust_policy:
+        Arc<crate::sync_primitives::RwLock<crate::extension::activation::OwnerTrustPolicy>>,
 
     /// Live MCP manager handle, used to register plugin-owned MCP servers as
     /// **transient** (runtime-only) servers. `None` until [`Self::set_mcp_handle`]
@@ -341,10 +340,7 @@ impl ExtensionManager {
     /// gate `Workspace` and `Global` plugins (Bundled/Config always pass).
     /// Pass [`OwnerTrustPolicy::permissive`] to revert to the legacy
     /// "load every plugin" behaviour.
-    pub fn set_owner_trust_policy(
-        &self,
-        policy: crate::extension::activation::OwnerTrustPolicy,
-    ) {
+    pub fn set_owner_trust_policy(&self, policy: crate::extension::activation::OwnerTrustPolicy) {
         *self
             .owner_trust_policy
             .write()

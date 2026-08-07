@@ -262,9 +262,7 @@ fn build_toml_patch(args: &AgentUpdateArgs) -> AgentPatch {
 /// "user supplied no patch at all". Walk the wire fields directly so a
 /// `{}-shaped` call returns `false` here.
 fn patch_has_changes(patch: &AgentPatch) -> bool {
-    patch.name.is_some()
-        || patch.identity.is_some()
-        || patch.model.is_some()
+    patch.name.is_some() || patch.identity.is_some() || patch.model.is_some()
 }
 
 // =============================================================================

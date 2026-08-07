@@ -278,34 +278,27 @@ pub fn parse_manifest_from_dir_sync_with(
 ) -> ExtensionResult<PluginManifest> {
     // 1. .claude-plugin/plugin.toml (CC-compat, preferred)
     let cc_toml_path = dir.join(CC_PLUGIN_TOML);
-    if let Some(outcome) =
-        try_cached_or_parse(&cc_toml_path, dir, cache, parse_cc_plugin_toml_sync)
+    if let Some(outcome) = try_cached_or_parse(&cc_toml_path, dir, cache, parse_cc_plugin_toml_sync)
     {
         return outcome;
     }
 
     // 2. .claude-plugin/plugin.json (CC-compat, read-only)
     let cc_json_path = dir.join(CC_PLUGIN_JSON);
-    if let Some(outcome) =
-        try_cached_or_parse(&cc_json_path, dir, cache, parse_cc_plugin_json_sync)
+    if let Some(outcome) = try_cached_or_parse(&cc_json_path, dir, cache, parse_cc_plugin_json_sync)
     {
         return outcome;
     }
 
     // 3. aleph.plugin.toml (deprecated — warn)
     let aleph_toml_path = dir.join(ALEPH_PLUGIN_TOML);
-    if let Some(outcome) = try_cached_or_parse(
-        &aleph_toml_path,
-        dir,
-        cache,
-        |d| {
-            tracing::warn!(
+    if let Some(outcome) = try_cached_or_parse(&aleph_toml_path, dir, cache, |d| {
+        tracing::warn!(
                 "Plugin at {:?} uses deprecated aleph.plugin.toml format. Migrate to .claude-plugin/plugin.toml",
                 d
             );
-            parse_aleph_plugin_toml_sync(d)
-        },
-    ) {
+        parse_aleph_plugin_toml_sync(d)
+    }) {
         return outcome;
     }
 

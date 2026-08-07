@@ -542,7 +542,10 @@ mod envelope_tests {
 
         env.cwd = None;
         env.serving_model = Some("claude".into());
-        assert!(!env.is_empty(), "serving_model must make envelope non-empty");
+        assert!(
+            !env.is_empty(),
+            "serving_model must make envelope non-empty"
+        );
 
         env.serving_model = None;
         env.parent = Some(EnvelopeParent {

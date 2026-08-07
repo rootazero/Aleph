@@ -34,4 +34,3 @@ fn test_device_crud() {
     assert!(store.revoke_device("dev-1").unwrap());
     assert!(!store.is_device_approved("dev-1").unwrap());
 }
-

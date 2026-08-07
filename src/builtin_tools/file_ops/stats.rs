@@ -385,7 +385,10 @@ mod tests {
         // big.rs is 100 lines, small.rs is 3 — big must precede small.
         let big_idx = files.iter().position(|f| f.name == "big.rs").unwrap();
         let small_idx = files.iter().position(|f| f.name == "small.rs").unwrap();
-        assert!(big_idx < small_idx, "big.rs ({big_idx}) must precede small.rs ({small_idx})");
+        assert!(
+            big_idx < small_idx,
+            "big.rs ({big_idx}) must precede small.rs ({small_idx})"
+        );
     }
 
     /// `sort_by=name` is the default and is stable / deterministic.

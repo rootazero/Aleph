@@ -143,10 +143,12 @@ fn parse_mcp_json_content(
             "stdio" => McpTransportType::Stdio,
             "http" => McpTransportType::Http,
             "sse" => McpTransportType::Sse,
-            other => return Err(format!(
-                "unknown MCP transport type '{other}' for server '{server_name}' \
+            other => {
+                return Err(format!(
+                    "unknown MCP transport type '{other}' for server '{server_name}' \
                  (expected one of: stdio, http, sse)"
-            )),
+                ))
+            }
         };
 
         let config = match transport {
@@ -352,7 +354,10 @@ mod tests {
         use crate::mcp::McpTransportType;
         assert_eq!(config.transport, McpTransportType::Http);
         assert_eq!(config.url.as_deref(), Some("https://mcp.example.com/api"));
-        assert_eq!(config.command, None, "remote transport must not carry a command");
+        assert_eq!(
+            config.command, None,
+            "remote transport must not carry a command"
+        );
         assert!(config.args.is_empty());
         assert!(config.auto_start, "remote servers auto-start by default");
         assert_eq!(
@@ -378,7 +383,10 @@ mod tests {
         use crate::mcp::McpTransportType;
         let config = result.get("plugin:ev/events").unwrap();
         assert_eq!(config.transport, McpTransportType::Sse);
-        assert_eq!(config.url.as_deref(), Some("https://events.example.com/sse"));
+        assert_eq!(
+            config.url.as_deref(),
+            Some("https://events.example.com/sse")
+        );
     }
 
     #[test]

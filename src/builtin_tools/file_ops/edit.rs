@@ -296,9 +296,8 @@ impl FileEditTool {
         // form it sent.
         for (i, op) in ops.iter().enumerate() {
             if op.old_string.is_empty() {
-                let err = ToolError::InvalidArgs(format!(
-                    "edits[{i}].old_string must not be empty"
-                ));
+                let err =
+                    ToolError::InvalidArgs(format!("edits[{i}].old_string must not be empty"));
                 notify_tool_result("file_edit", &err.to_string(), false);
                 return Err(err);
             }
@@ -432,9 +431,8 @@ impl FileEditTool {
                 LocateResult::Folded(r) => (r, true, false),
                 LocateResult::Crlf(r) => (r, false, true),
                 LocateResult::NotFound(diagnostic) => {
-                    let err = ToolError::Execution(format!(
-                        "edits[{i}] did not match: {diagnostic}"
-                    ));
+                    let err =
+                        ToolError::Execution(format!("edits[{i}] did not match: {diagnostic}"));
                     notify_tool_result("file_edit", &err.to_string(), false);
                     return Err(err);
                 }
@@ -517,9 +515,7 @@ impl FileEditTool {
         } else {
             ""
         };
-        let message = format!(
-            "Applied {replacements} edits in {path_str}{suffix}"
-        );
+        let message = format!("Applied {replacements} edits in {path_str}{suffix}");
         // Render the snippet around the *first* applied edit by start order —
         // it is the one most likely to be the "lead" edit the model cares
         // about verifying.
@@ -706,8 +702,8 @@ mod tests {
                 old_string: "it's here".to_string(),
                 new_string: "it is here".to_string(),
                 replace_all: false,
-            edits: vec![],
-            }
+                edits: vec![],
+            },
         )
         .await
         .unwrap();
@@ -734,8 +730,8 @@ mod tests {
                 old_string: "alpha\nbeta".to_string(),
                 new_string: "alpha\nBETA\nbeta".to_string(),
                 replace_all: false,
-            edits: vec![],
-            }
+                edits: vec![],
+            },
         )
         .await
         .unwrap();
@@ -763,8 +759,8 @@ mod tests {
                 old_string: "l4".to_string(),
                 new_string: "L4-EDITED".to_string(),
                 replace_all: false,
-            edits: vec![],
-            }
+                edits: vec![],
+            },
         )
         .await
         .unwrap();
@@ -804,8 +800,8 @@ mod tests {
                 old_string: "anything".to_string(),
                 new_string: "else".to_string(),
                 replace_all: false,
-            edits: vec![],
-            }
+                edits: vec![],
+            },
         )
         .await;
         assert!(result.unwrap_err().to_string().contains("binary"));
@@ -825,8 +821,8 @@ mod tests {
                 old_string: "hi".to_string(),
                 new_string: "yo".to_string(),
                 replace_all: false,
-            edits: vec![],
-            }
+                edits: vec![],
+            },
         )
         .await;
         assert!(result.unwrap_err().to_string().contains("UTF-8"));
@@ -845,8 +841,8 @@ mod tests {
                 old_string: String::new(),
                 new_string: "x".to_string(),
                 replace_all: false,
-            edits: vec![],
-            }
+                edits: vec![],
+            },
         )
         .await;
         assert!(result.is_err());
@@ -867,8 +863,8 @@ mod tests {
                 old_string: "            let x = 1;".to_string(),
                 new_string: "    let x = 2;".to_string(),
                 replace_all: false,
-            edits: vec![],
-            }
+                edits: vec![],
+            },
         )
         .await;
         let err = result.unwrap_err().to_string();
@@ -893,8 +889,8 @@ mod tests {
                 old_string: "one".to_string(),
                 new_string: "two".to_string(),
                 replace_all: false,
-            edits: vec![],
-            }
+                edits: vec![],
+            },
         )
         .await
         .unwrap();
@@ -1061,7 +1057,10 @@ mod tests {
         )
         .await;
         let err = result.unwrap_err().to_string();
-        assert!(err.contains("edits[1]") && err.contains("2 places"), "err: {err}");
+        assert!(
+            err.contains("edits[1]") && err.contains("2 places"),
+            "err: {err}"
+        );
         // File untouched on refusal.
         assert_eq!(fs::read_to_string(&file).unwrap(), "foo bar foo\n");
     }
@@ -1082,13 +1081,16 @@ mod tests {
                 old_string: String::new(),
                 new_string: String::new(),
                 replace_all: false,
-                edits: vec![EditOp {
-                    old_string: "x".to_string(),
-                    new_string: "y".to_string(),
-                }, EditOp {
-                    old_string: String::new(),
-                    new_string: "z".to_string(),
-                }],
+                edits: vec![
+                    EditOp {
+                        old_string: "x".to_string(),
+                        new_string: "y".to_string(),
+                    },
+                    EditOp {
+                        old_string: String::new(),
+                        new_string: "z".to_string(),
+                    },
+                ],
             },
         )
         .await;

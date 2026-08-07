@@ -109,8 +109,8 @@ impl WasmRuntime {
         // builder so the kernel can be cloned freely; the default
         // deny-all resolver preserves the legacy "plugin supplies its own
         // credentials" behaviour when no resolver is provided.
-        let resolver: Arc<dyn SecretResolver> = resolver
-            .unwrap_or_else(|| Arc::new(DenyAllSecretResolver));
+        let resolver: Arc<dyn SecretResolver> =
+            resolver.unwrap_or_else(|| Arc::new(DenyAllSecretResolver));
         let kernel = Arc::new(
             WasmCapabilityKernel::new(manifest.id.clone(), capabilities, limits)
                 .with_secret_resolver(resolver),

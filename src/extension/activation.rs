@@ -363,9 +363,7 @@ impl OwnerTrustPolicy {
             // Bundled (built-in plugins) and Config (operator-explicit) are
             // always trusted — the operator put them there on purpose.
             PluginOrigin::Bundled | PluginOrigin::Config => true,
-            PluginOrigin::Workspace | PluginOrigin::Global => {
-                self.allowlist.contains(plugin_id)
-            }
+            PluginOrigin::Workspace | PluginOrigin::Global => self.allowlist.contains(plugin_id),
         }
     }
 }
@@ -663,15 +661,9 @@ mod tests {
             records: vec![record("p", PluginOrigin::Workspace, Some(&h))],
             trust: OwnerTrustPolicy::default(),
         };
-        let plan_tool = planner.plan(
-            ActivationTrigger::Capability(CapabilityKind::Tool),
-            &input,
-        );
+        let plan_tool = planner.plan(ActivationTrigger::Capability(CapabilityKind::Tool), &input);
         assert_eq!(plan_tool.plugin_ids, vec!["p".to_string()]);
-        let plan_hook = planner.plan(
-            ActivationTrigger::Capability(CapabilityKind::Hook),
-            &input,
-        );
+        let plan_hook = planner.plan(ActivationTrigger::Capability(CapabilityKind::Hook), &input);
         assert!(plan_hook.is_empty());
     }
 
