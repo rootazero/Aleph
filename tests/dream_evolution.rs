@@ -42,12 +42,13 @@ async fn full_evolution_cycle_consolidate() {
         &DreamingConfig::default(),
         &MemoryDecayPolicy::default(),
     );
-    // Consolidate: lint, review, consolidate, feedback_distill, drift, index,
-    // co_recall_edges, graph_recompute, weave, mention_weave, decay,
-    // skill_lifecycle, goal_lessons_promote — mirrors the authoritative
-    // name-list test `pipeline_from_strategy_consolidate` in
-    // `src/memory/dreaming/mod.rs`, which is the source of truth for the count.
-    assert_eq!(pipeline.stages.len(), 13);
+    // Consolidate: lint, review, consolidate, feedback_distill,
+    // tool_failure_distill, drift, index, co_recall_edges, graph_recompute,
+    // weave, mention_weave, decay, skill_lifecycle, goal_lessons_promote —
+    // mirrors the authoritative name-list test
+    // `pipeline_from_strategy_consolidate` in `src/memory/dreaming/mod.rs`,
+    // which is the source of truth for the count.
+    assert_eq!(pipeline.stages.len(), 14);
     assert_eq!(
         pipeline.stages.last().map(|s| s.name()),
         Some("goal_lessons_promote")
@@ -120,11 +121,13 @@ async fn high_growth_selects_synthesize() {
         &MemoryDecayPolicy::default(),
     );
     // Synthesize: lint, review, consolidate, note_synthesis, skill_distill,
-    // feedback_distill, workflow_proposal, corpus_narrative, daily_digest
-    assert_eq!(pipeline.stages.len(), 9);
+    // feedback_distill, tool_failure_distill, workflow_proposal,
+    // corpus_narrative, daily_digest
+    assert_eq!(pipeline.stages.len(), 10);
     assert_eq!(pipeline.stages[4].name(), "skill_distill");
     assert_eq!(pipeline.stages[5].name(), "feedback_distill");
-    assert_eq!(pipeline.stages[6].name(), "workflow_proposal");
+    assert_eq!(pipeline.stages[6].name(), "tool_failure_distill");
+    assert_eq!(pipeline.stages[7].name(), "workflow_proposal");
 }
 
 /// Mutation gate forces Conserve on merge cycle.

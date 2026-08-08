@@ -34,6 +34,15 @@ pub struct DreamingConfig {
     pub feedback_distill_min_candidates: usize,
     #[serde(default = "super::defaults::default_feedback_lookback")]
     pub feedback_lookback: usize,
+    /// How many non-base note corpora one night of maintenance may run
+    /// (default: 8).
+    ///
+    /// The nightly fan-out visits every corpus on disk; each visit costs its
+    /// own LLM stages, so this is the direct dial on unattended nightly spend.
+    /// Corpora that do not fit tonight are not lost — they wait for the next
+    /// window, and a corpus with nothing changed is skipped for free.
+    #[serde(default = "super::defaults::default_dream_max_corpus_cycles_per_night")]
+    pub max_corpus_cycles_per_night: usize,
     /// Optional dedicated model for the dream pipeline's LLM stages.
     ///
     /// Every LLM stage here is a small classification or summarization task
@@ -63,6 +72,8 @@ impl Default for DreamingConfig {
             feedback_distill_min_candidates:
                 super::defaults::default_feedback_distill_min_candidates(),
             feedback_lookback: super::defaults::default_feedback_lookback(),
+            max_corpus_cycles_per_night: super::defaults::default_dream_max_corpus_cycles_per_night(
+            ),
             model: None,
         }
     }
@@ -85,5 +96,27 @@ impl Default for MemoryDecayPolicy {
             min_strength: super::defaults::default_memory_decay_min_strength(),
             protected_types: super::defaults::default_memory_decay_protected_types(),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The knob is operator-settable and unset siblings keep their defaults.
+    ///
+    /// (There is deliberately no guard tying this default to
+    /// `memory::dreaming::MAX_CORPUS_CYCLES_PER_NIGHT`: the default function
+    /// *is* that constant, so the compiler already enforces what a
+    /// source-scanning guard used to approximate.)
+    #[test]
+    fn the_nightly_corpus_budget_is_operator_overridable() {
+        let parsed: DreamingConfig =
+            toml::from_str("max_corpus_cycles_per_night = 2").expect("parses");
+        assert_eq!(parsed.max_corpus_cycles_per_night, 2);
+        assert_eq!(
+            parsed.feedback_lookback,
+            crate::config::types::memory::defaults::default_feedback_lookback()
+        );
     }
 }

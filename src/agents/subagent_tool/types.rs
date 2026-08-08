@@ -1,8 +1,60 @@
 //! Input argument types parsed out of the subagent tool JSON payload.
 
 /// A2 — default cap on concurrently-running subagent spawns per top-level
-/// agent run. Matches the deleted `Lane::Subagent` default.
-pub(super) const DEFAULT_MAX_CONCURRENT_SUBAGENTS: usize = 4;
+/// agent run. Matches the deleted `Lane::Subagent` default, and is what
+/// `[execution] max_concurrent_subagents` defaults to (that key binds to this
+/// constant, not to a second literal).
+pub const DEFAULT_MAX_CONCURRENT_SUBAGENTS: usize = 4;
+
+/// Floor for [`clamp_max_concurrent_subagents`]. `0` is not "disabled", it is a
+/// semaphore no child can ever acquire: every fan-out would park until its
+/// batch deadline and return partial results with nothing attempted.
+pub const MIN_CONCURRENT_SUBAGENTS: usize = 1;
+
+/// Ceiling for [`clamp_max_concurrent_subagents`]. Generous — the real limits
+/// (provider rate limits, the process's task budget) bite well before it — but
+/// finite, so a typo in `config.toml` cannot turn one `batch_tasks` call into
+/// an unbounded spawn storm.
+pub const MAX_CONCURRENT_SUBAGENTS_CEILING: usize = 64;
+
+/// Process-global cap read by [`SubagentTool::new`](super::SubagentTool::new)
+/// when it builds a run's concurrency semaphore.
+///
+/// A process global rather than a constructor argument because `SubagentTool`
+/// is constructed from several places (the gateway run loop, tool-scope tests,
+/// embedding code) and a builder that only one of them calls is how a knob ends
+/// up configurable in exactly one code path. The semaphore itself is still
+/// per-instance (per agent run), so a live `[execution]` patch binds on the
+/// next run rather than resizing a fan-out that is already in flight.
+static MAX_CONCURRENT_SUBAGENTS: std::sync::atomic::AtomicUsize =
+    std::sync::atomic::AtomicUsize::new(DEFAULT_MAX_CONCURRENT_SUBAGENTS);
+
+/// Clamp an operator-supplied cap into `[MIN, CEILING]`.
+#[must_use]
+pub const fn clamp_max_concurrent_subagents(requested: usize) -> usize {
+    if requested < MIN_CONCURRENT_SUBAGENTS {
+        MIN_CONCURRENT_SUBAGENTS
+    } else if requested > MAX_CONCURRENT_SUBAGENTS_CEILING {
+        MAX_CONCURRENT_SUBAGENTS_CEILING
+    } else {
+        requested
+    }
+}
+
+/// Install `[execution] max_concurrent_subagents`. Returns the value that
+/// actually took effect after clamping, so a caller reporting back to an
+/// operator reports the truth rather than the request.
+pub fn set_max_concurrent_subagents(requested: usize) -> usize {
+    let effective = clamp_max_concurrent_subagents(requested);
+    MAX_CONCURRENT_SUBAGENTS.store(effective, std::sync::atomic::Ordering::Relaxed);
+    effective
+}
+
+/// The cap a sub-agent fan-out started right now would run under.
+#[must_use]
+pub fn max_concurrent_subagents() -> usize {
+    MAX_CONCURRENT_SUBAGENTS.load(std::sync::atomic::Ordering::Relaxed)
+}
 
 /// Default bounded window for the `wait` action (seconds). When it elapses with
 /// the child still running, `wait` returns `still_running` and the parent model
@@ -214,4 +266,49 @@ pub(super) struct RunArgs {
     /// Optional extra guidance handed to the aggregator on top of the default
     /// "merge the strongest parts, resolve conflicts" instruction.
     pub(super) synthesis_instruction: Option<String>,
+}
+
+#[cfg(test)]
+mod concurrency_tests {
+    use super::*;
+
+    /// The clamp is what stands between `config.toml` and a semaphore that
+    /// either deadlocks every fan-out (`0`) or does not bound one at all.
+    #[test]
+    fn the_configured_cap_is_clamped_at_both_ends() {
+        assert_eq!(clamp_max_concurrent_subagents(0), MIN_CONCURRENT_SUBAGENTS);
+        assert_eq!(
+            clamp_max_concurrent_subagents(usize::MAX),
+            MAX_CONCURRENT_SUBAGENTS_CEILING
+        );
+        assert_eq!(clamp_max_concurrent_subagents(7), 7);
+        assert_eq!(
+            clamp_max_concurrent_subagents(DEFAULT_MAX_CONCURRENT_SUBAGENTS),
+            DEFAULT_MAX_CONCURRENT_SUBAGENTS
+        );
+    }
+
+    /// The setter reports what actually took effect, not what was asked for —
+    /// an operator who writes `max_concurrent_subagents = 0` must not be told
+    /// their fan-out is disabled when it is really running at width 1.
+    /// `serial` because the three tests that install a cap share one process
+    /// global (this one, `subagent_tool::tests::
+    /// a_new_tool_fans_out_at_the_configured_concurrency`, and
+    /// `config::live_apply::tests::
+    /// the_execution_arm_installs_the_subagent_concurrency_cap`). Each does
+    /// save → set → observe → restore, which the default parallel runner is
+    /// free to interleave — an intermittent failure that reads as a real bug.
+    #[test]
+    #[serial_test::serial(subagent_concurrency_cap)]
+    fn the_setter_reports_the_effective_value() {
+        let restore = max_concurrent_subagents();
+        assert_eq!(set_max_concurrent_subagents(0), MIN_CONCURRENT_SUBAGENTS);
+        assert_eq!(max_concurrent_subagents(), MIN_CONCURRENT_SUBAGENTS);
+        assert_eq!(
+            set_max_concurrent_subagents(usize::MAX),
+            MAX_CONCURRENT_SUBAGENTS_CEILING
+        );
+        set_max_concurrent_subagents(restore);
+        assert_eq!(max_concurrent_subagents(), restore);
+    }
 }

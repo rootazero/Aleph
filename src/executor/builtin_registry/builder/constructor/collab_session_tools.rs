@@ -21,7 +21,7 @@ impl BuiltinToolRegistry {
     pub(crate) fn build_collab_session_tools(
         config: &BuiltinToolConfig,
         tools: &mut HashMap<String, UnifiedTool>,
-        current_agent_id: &str,
+        boot_fallback_agent_id: &str,
     ) -> (
         Option<crate::builtin_tools::team::MessageSendTool>,
         Option<crate::builtin_tools::team::InboxReadTool>,
@@ -44,7 +44,10 @@ impl BuiltinToolRegistry {
         Option<crate::builtin_tools::session_complete::SessionCompleteTool>,
         Option<crate::builtin_tools::memory_reflect::MemoryReflectTool>,
     ) {
-        let current_agent_id = current_agent_id.to_string();
+        // Fallback only — see the identical note in `coord_team_tools.rs`. The
+        // acting identity is resolved per call by
+        // `builtin_tools::acting_agent::acting_agent_id`.
+        let current_agent_id = boot_fallback_agent_id.to_string();
         // Add message_send + inbox_read tools (if MessageRouter / Inbox are available)
         let (message_send_tool, inbox_read_tool) = {
             let current_agent_id = current_agent_id.clone();

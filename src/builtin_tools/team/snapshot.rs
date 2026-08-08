@@ -11,6 +11,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use tracing::info;
 
+use crate::builtin_tools::acting_agent::acting_agent_id;
 use crate::agents::swarm::tasks::CoordTaskStore;
 use crate::error::{AlephError, Result};
 use crate::sync_primitives::Arc;
@@ -93,6 +94,12 @@ pub struct TeamSnapshotTool {
 }
 
 impl TeamSnapshotTool {
+    /// The agent acting in THIS call — the identity of the running turn, not
+    /// the one this tool was constructed with. See [`acting_agent_id`].
+    fn actor(&self) -> String {
+        acting_agent_id(&self.current_agent_id)
+    }
+
     pub fn new(
         team_store: Arc<dyn TeamStore>,
         coord_store: Arc<dyn CoordTaskStore>,
@@ -107,9 +114,6 @@ impl TeamSnapshotTool {
         }
     }
 
-    pub fn set_current_agent_id(&mut self, agent_id: impl Into<String>) {
-        self.current_agent_id = agent_id.into();
-    }
 }
 
 #[async_trait]
@@ -135,7 +139,7 @@ impl AlephTool for TeamSnapshotTool {
             action = ?args.action,
             team_id = ?args.team_id,
             snapshot_id = ?args.snapshot_id,
-            caller = %self.current_agent_id,
+            caller = %self.actor(),
             "team_snapshot: dispatch"
         );
 

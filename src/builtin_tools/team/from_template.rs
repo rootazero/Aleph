@@ -9,6 +9,7 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use tracing::info;
 
+use crate::builtin_tools::acting_agent::acting_agent_id;
 use crate::agents::swarm::tasks::CoordTaskStore;
 use crate::config::agent_manager::AgentManager;
 use crate::error::{AlephError, Result};
@@ -88,6 +89,12 @@ pub struct TeamFromTemplateTool {
 }
 
 impl TeamFromTemplateTool {
+    /// The agent acting in THIS call — the identity of the running turn, not
+    /// the one this tool was constructed with. See [`acting_agent_id`].
+    fn actor(&self) -> String {
+        acting_agent_id(&self.current_agent_id)
+    }
+
     pub fn new(
         team_store: Arc<dyn TeamStore>,
         coord_store: Arc<dyn CoordTaskStore>,
@@ -106,9 +113,6 @@ impl TeamFromTemplateTool {
         }
     }
 
-    pub fn set_current_agent_id(&mut self, agent_id: impl Into<String>) {
-        self.current_agent_id = agent_id.into();
-    }
 }
 
 #[async_trait]
@@ -128,7 +132,7 @@ impl AlephTool for TeamFromTemplateTool {
         info!(
             template = %args.template,
             team_name = %args.team_name,
-            current_agent = %self.current_agent_id,
+            current_agent = %self.actor(),
             "team_from_template: materializing"
         );
 
@@ -154,7 +158,7 @@ impl AlephTool for TeamFromTemplateTool {
             team_name: args.team_name,
             description: args.description,
             goal: args.goal,
-            current_agent_id: self.current_agent_id.clone(),
+            current_agent_id: self.actor(),
         };
 
         let materialized = materialize_template(&deps, req).await.map_err(|e| {

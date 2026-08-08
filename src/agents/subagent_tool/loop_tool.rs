@@ -334,12 +334,7 @@ impl LoopTool for SubagentTool {
                         };
                     }
                     None => {
-                        return ToolResult::Error {
-                            error: format!(
-                                "No background sub-agent found with request_id '{request_id}'"
-                            ),
-                            retryable: false,
-                        };
+                        return unknown_request_id(&request_id, scope);
                     }
                 }
             }
@@ -396,12 +391,7 @@ impl LoopTool for SubagentTool {
                                 }),
                             }
                         }
-                        WaitOutcome::NotFound => ToolResult::Error {
-                            error: format!(
-                                "No background sub-agent found with request_id '{request_id}'"
-                            ),
-                            retryable: false,
-                        },
+                        WaitOutcome::NotFound => unknown_request_id(request_id, scope),
                     };
                 }
 
@@ -1590,6 +1580,44 @@ fn completed_row_json(request_id: &str, snap: &CompletedSnapshot) -> Value {
             "error": err,
             "duration_secs": snap.duration_secs,
         }),
+    }
+}
+
+/// W24 — the answer for a `request_id` the live tracker has never heard of.
+///
+/// Before consulting the sidecar this was unconditionally
+/// `Error{retryable:false, "No background sub-agent found …"}`, which conflates
+/// two entirely different situations and is wrong about the interesting one: a
+/// daemon restart is not a failure *of this call*, and the child may well have
+/// produced something before its process vanished (§3 — "cancellation is not a
+/// verdict"; a disappeared process is the same shape). If the cross-process
+/// sidecar knows the id, report the interruption as a **success** carrying
+/// whatever the child had done, so the model can re-delegate from evidence
+/// rather than from a dead end.
+///
+/// The genuinely-unknown id keeps the old error verbatim.
+fn unknown_request_id(request_id: &str, scope: Option<&str>) -> ToolResult {
+    match crate::agents::background_persistence::lookup(request_id, scope) {
+        Some(found) => ToolResult::Success {
+            output: json!({
+                "status": found.record.phase.status_label(),
+                "request_id": request_id,
+                "task": found.record.task,
+                "agent": found.record.agent,
+                "started_ms": found.record.started_ms,
+                "last_activity_ms": found.last_activity_ms,
+                "partial_result": found.partial_result,
+                "outcome": found.record.outcome,
+                "note": "This sub-agent belonged to a previous daemon process, so its live \
+                         state is gone. Anything above is what it managed to record before \
+                         the process ended — it is NOT a failure of the task. Re-delegate \
+                         whatever is still needed.",
+            }),
+        },
+        None => ToolResult::Error {
+            error: format!("No background sub-agent found with request_id '{request_id}'"),
+            retryable: false,
+        },
     }
 }
 

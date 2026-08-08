@@ -1057,9 +1057,7 @@ impl AiProvider for NeverAnsweringProvider {
 /// was actually given.
 #[tokio::test(start_paused = true)]
 async fn sync_batch_reclamps_each_child_to_its_wave_share() {
-    use super::types::{
-        max_run_timeout_secs, wave_aware_child_timeout_cap, DEFAULT_MAX_CONCURRENT_SUBAGENTS,
-    };
+    use super::types::{max_run_timeout_secs, wave_aware_child_timeout_cap};
 
     let tool = SubagentTool::new(
         Arc::new(NeverAnsweringProvider),
@@ -1070,8 +1068,12 @@ async fn sync_batch_reclamps_each_child_to_its_wave_share() {
         Arc::new(NoopTestToolService),
     );
     let requested = max_run_timeout_secs();
-    let rows = DEFAULT_MAX_CONCURRENT_SUBAGENTS + 1;
-    let expected_cap = wave_aware_child_timeout_cap(rows, DEFAULT_MAX_CONCURRENT_SUBAGENTS, 0);
+    // W27 — read the permit count off the tool's own semaphore rather than the
+    // compile-time default: the cap is configurable now, and production divides
+    // by what the semaphore actually holds.
+    let permits = tool.subagent_semaphore.available_permits();
+    let rows = permits + 1;
+    let expected_cap = wave_aware_child_timeout_cap(rows, permits, 0);
     assert!(
         expected_cap < requested,
         "test premise: one row more than the permit count is two waves"
@@ -1128,7 +1130,7 @@ async fn sync_batch_returns_partial_results_and_leaves_nothing_running() {
     .with_parent_session_id(root);
 
     // Starve the fan-out: every concurrency permit is held for the whole call.
-    let permits = u32::try_from(super::types::DEFAULT_MAX_CONCURRENT_SUBAGENTS).unwrap();
+    let permits = u32::try_from(tool.subagent_semaphore.available_permits()).unwrap();
     let _held = tool
         .subagent_semaphore
         .clone()
@@ -2597,4 +2599,118 @@ fn assert_rejects_main(result: &ToolResult, surface: &str) {
             unreachable!("{surface}: spawning a Primary-mode agent must fail; got {output}")
         }
     }
+}
+
+/// W24 end-to-end through the MODEL-FACING surface: a `request_id` whose daemon
+/// died must come back as a *success* naming the interruption and carrying what
+/// the child produced, not as `retryable:false, "No background sub-agent found"`
+/// — a message that cannot tell a typo apart from a restart and throws the
+/// partial work away.
+///
+/// Drives `check_status` (not the persistence module directly), because the
+/// module could work perfectly and the tool still return the old error: the
+/// not-found arm is the wire.
+#[tokio::test]
+async fn check_status_reports_a_restart_orphan_instead_of_an_unknown_id() {
+    use crate::agents::background_persistence as bp;
+
+    // The sidecar root is process-global, so hold the same gate the module's
+    // own tests take before pointing it anywhere.
+    let _gate = bp::test_gate();
+    let tmp = tempfile::tempdir().unwrap();
+    // A previous daemon incarnation registered a background child and got some
+    // way into it before dying.
+    bp::enable_for_test(tmp.path().to_path_buf());
+    bp::record_start("req-restart", "s-mine", "audit the crate", "explore");
+    bp::record_activity("req-restart", "grepped 41 files, three suspects left");
+    bp::disable_for_test();
+    // ...and this process boots against the same store.
+    bp::init_and_reconcile(tmp.path().to_path_buf());
+
+    let tool = SubagentTool::new(
+        Arc::new(MockAiProvider) as Arc<dyn AiProvider>,
+        crate::harness::chain_context::ChainContext::new(),
+        make_registry(),
+        make_tracker(),
+        in_mem_session(),
+        Arc::new(NoopTestToolService),
+    )
+    .with_parent_session_id("s-mine".to_string());
+
+    let result = tool
+        .execute(
+            json!({ "action": "check_status", "request_id": "req-restart" }),
+            CancellationToken::new(),
+        )
+        .await;
+
+    let ToolResult::Success { output } = result else {
+        bp::disable_for_test();
+        unreachable!("a restart orphan is not a failure of this call: {result:?}");
+    };
+    assert_eq!(output["status"], "interrupted_by_restart");
+    assert_eq!(output["task"], "audit the crate");
+    assert!(
+        output["partial_result"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("three suspects left"),
+        "the child's work must reach the model: {output}"
+    );
+
+    // A genuinely unknown id still reads as an error — the sidecar must not
+    // turn every typo into a plausible-looking orphan.
+    let unknown = tool
+        .execute(
+            json!({ "action": "check_status", "request_id": "req-typo" }),
+            CancellationToken::new(),
+        )
+        .await;
+    assert!(
+        matches!(unknown, ToolResult::Error { .. }),
+        "an id nobody ever heard of must still be an error: {unknown:?}"
+    );
+
+    // ...and another session still cannot read this one out of the sidecar.
+    let stranger = SubagentTool::new(
+        Arc::new(MockAiProvider) as Arc<dyn AiProvider>,
+        crate::harness::chain_context::ChainContext::new(),
+        make_registry(),
+        make_tracker(),
+        in_mem_session(),
+        Arc::new(NoopTestToolService),
+    )
+    .with_parent_session_id("s-other".to_string())
+    .execute(
+        json!({ "action": "check_status", "request_id": "req-restart" }),
+        CancellationToken::new(),
+    )
+    .await;
+    bp::disable_for_test();
+    assert!(
+        matches!(stranger, ToolResult::Error { .. }),
+        "the sidecar must be scoped like the tracker: {stranger:?}"
+    );
+}
+
+/// W27 — the operator's cap must actually reach the semaphore a run fans out
+/// through. Asserted on `available_permits` of a freshly built tool: dropping
+/// the `types::max_concurrent_subagents()` read from `SubagentTool::new` leaves
+/// every clamp test green and the knob inert.
+#[test]
+#[serial_test::serial(subagent_concurrency_cap)]
+fn a_new_tool_fans_out_at_the_configured_concurrency() {
+    use crate::agents::subagent_tool::{max_concurrent_subagents, set_max_concurrent_subagents};
+
+    let restore = max_concurrent_subagents();
+    // Deliberately not the default, so "it happens to be 4" cannot pass.
+    let widened = set_max_concurrent_subagents(9);
+    let tool = make_tool();
+    let observed = tool.subagent_semaphore.available_permits();
+    set_max_concurrent_subagents(restore);
+
+    assert_eq!(
+        observed, widened,
+        "the run's concurrency semaphore must be sized by [execution] max_concurrent_subagents"
+    );
 }

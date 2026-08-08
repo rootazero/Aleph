@@ -22,7 +22,7 @@ impl BuiltinToolRegistry {
     pub(crate) fn build_coord_team_tools(
         config: &BuiltinToolConfig,
         tools: &mut HashMap<String, UnifiedTool>,
-        current_agent_id: &str,
+        boot_fallback_agent_id: &str,
     ) -> (
         Option<crate::builtin_tools::task_manage::TaskCreateTool>,
         Option<crate::builtin_tools::task_manage::TaskUpdateTool>,
@@ -47,7 +47,14 @@ impl BuiltinToolRegistry {
         Option<crate::builtin_tools::team::TaskExitJournalTool>,
         Option<crate::builtin_tools::team::TeamDigestTool>,
     ) {
-        let current_agent_id = current_agent_id.to_string();
+        // NOT the acting identity. Every tool below re-resolves its actor per
+        // call through `builtin_tools::acting_agent::acting_agent_id`, which
+        // reads the running turn's `TURN_CONTEXT`. What is baked in here is
+        // only the fallback for calls made outside a turn scope (direct
+        // construction in tests, background paths). Boot cannot know who will
+        // be running in an hour, and it used to answer anyway — always with
+        // the literal "main".
+        let current_agent_id = boot_fallback_agent_id.to_string();
         // Add task coordination tools (if CoordTaskStore is available)
         let (task_create_tool, task_update_tool, task_list_tool, task_wait_tool, task_comment_tool) =
             if let Some(ref store) = config.coord_task_store {

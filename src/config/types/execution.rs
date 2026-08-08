@@ -65,6 +65,27 @@ pub struct ExecutionConfig {
     #[serde(default = "default_max_runs_per_agent")]
     pub max_runs_per_agent: usize,
 
+    /// Sub-agents one agent run may have executing concurrently (default: 4).
+    ///
+    /// Every other ceiling of this family is operator-configurable
+    /// (`max_runs_global`, `max_runs_per_agent`, `parallel_tool_concurrency`);
+    /// this one was a compile-time constant, so a deployment with a
+    /// high-throughput provider had no way to widen a fan-out and one behind a
+    /// tight rate limit had no way to narrow it.
+    ///
+    /// Clamped into `[1, 64]` at the enforcement point
+    /// (`agents::subagent_tool::clamp_max_concurrent_subagents`): `0` is a
+    /// semaphore no child can ever acquire (every fan-out would park until its
+    /// batch deadline), and an unbounded value trades a rate-limit wall for a
+    /// task-budget one.
+    ///
+    /// Raising it also widens the synchronous batch's wave arithmetic — a
+    /// `rows`-wide batch runs in `ceil(rows / permits)` waves and each child's
+    /// wall-clock share is divided by that count — so the per-child timeout cap
+    /// moves with this knob by construction.
+    #[serde(default = "default_max_concurrent_subagents")]
+    pub max_concurrent_subagents: usize,
+
     /// Messages that may wait in one session's busy FIFO lane (default: 32).
     ///
     /// Past this the newest arrival is refused up front (`REJECT_NEWEST`), so
@@ -124,6 +145,13 @@ const fn default_max_runs_per_agent() -> usize {
     3
 }
 
+/// Bound to the enforcement point's own default rather than a second literal
+/// `4`: the two must agree or a config-less deployment and a config-with-
+/// defaults deployment get different fan-out widths.
+const fn default_max_concurrent_subagents() -> usize {
+    crate::agents::subagent_tool::DEFAULT_MAX_CONCURRENT_SUBAGENTS
+}
+
 const fn default_busy_queue_max_per_session() -> usize {
     32
 }
@@ -150,6 +178,7 @@ impl Default for ExecutionConfig {
             mid_turn_steering: default_mid_turn_steering(),
             max_runs_global: default_max_runs_global(),
             max_runs_per_agent: default_max_runs_per_agent(),
+            max_concurrent_subagents: default_max_concurrent_subagents(),
             busy_queue_max_per_session: default_busy_queue_max_per_session(),
             busy_queue_max_wait_secs: default_busy_queue_max_wait_secs(),
             busy_queue_wake_fallback_secs: default_busy_queue_wake_fallback_secs(),
@@ -198,6 +227,21 @@ mod tests {
         assert_eq!(parsed.busy_queue_max_wait_secs, 1800);
         assert_eq!(parsed.busy_queue_wake_fallback_secs, 30);
         assert_eq!(parsed.max_pending_steering, 16);
+        // W27 — absent sub-agent cap keeps the compile-time constant that used
+        // to be the only answer, so nothing moves for existing TOML files.
+        assert_eq!(
+            parsed.max_concurrent_subagents,
+            crate::agents::subagent_tool::DEFAULT_MAX_CONCURRENT_SUBAGENTS
+        );
+    }
+
+    /// W27 — the point of the key: an operator can widen or narrow the
+    /// sub-agent fan-out without recompiling.
+    #[test]
+    fn the_subagent_concurrency_cap_is_operator_overridable() {
+        let parsed: ExecutionConfig = toml::from_str("max_concurrent_subagents = 12").unwrap();
+        assert_eq!(parsed.max_concurrent_subagents, 12);
+        assert_eq!(parsed.max_runs_global, 8, "unset siblings keep defaults");
     }
 
     #[test]

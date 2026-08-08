@@ -4,13 +4,25 @@
 //! through a `ToolSignalSink` and lands as a [`RawMemorySource::ToolInvocation`]
 //! row in `raw_memories`.
 //!
-//! The one reader of those rows is [`crate::memory::insights`] (the read-only
-//! `insights.tools` aggregation behind the admin RPC). The Dream cycle is NOT
-//! one: `compute_raw_metrics()` derives its signals from note index entries,
-//! `recall_hit_counts` and the prior `DreamReport` — it never touches
+//! These rows have exactly TWO readers, and both go through
+//! [`crate::memory::insights`]:
+//!
+//! * the read-only `insights.tools` aggregation behind the admin RPC
+//!   ([`crate::memory::insights::aggregate_tool_usage`]) — a number for a human;
+//! * the nightly
+//!   [`tool_failure_distill`](crate::memory::dreaming::stages::tool_failure_distill)
+//!   dream stage ([`crate::memory::insights::aggregate_tool_failures`]) — the
+//!   failure half turned into `lesson/` notes the model can retrieve.
+//!
+//! `compute_raw_metrics()` is still NOT one: it derives its signals from note
+//! index entries, `recall_hit_counts` and the prior `DreamReport`, never from
 //! `raw_memories`. `CompressionService` deliberately bypasses these rows too
-//! (they are telemetry, not knowledge), so `insights` is the whole consumer
-//! list; keep it that way or update this line.
+//! (they are telemetry, not knowledge). That is the whole consumer list; keep
+//! it that way or update these lines.
+//!
+//! The `content` string built below is not just a log line — it is the verbatim
+//! evidence the distiller shows the model. Changing its shape changes what the
+//! nightly prompt sees.
 //!
 //! The sink is per-session: `agent_id` and `session_id` are captured at
 //! construction time so the harness side just calls `record(...)` without

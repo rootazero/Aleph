@@ -75,7 +75,15 @@ pub struct BuiltinToolConfig {
     pub team_store: Option<Arc<dyn crate::teams::TeamStore>>,
     /// Artifact store for persisting task artifacts (delegation results, reports, etc.)
     pub artifact_store: Option<Arc<dyn crate::teams::artifacts::ArtifactStore>>,
-    /// Current agent ID for team tools (leader identity)
+    /// Boot-time fallback agent id. **Not** the acting identity: team,
+    /// messaging and collaborative-session tools resolve their actor per call
+    /// from the running turn (`builtin_tools::acting_agent::acting_agent_id`).
+    ///
+    /// Nothing in the tree sets this today, so every reader gets the `"main"`
+    /// default. That was the bug — the default used to *be* the answer, welding
+    /// `"main"` into ~20 tools as leader/actor for the process lifetime. It is
+    /// kept because the fallback still has to come from somewhere for calls
+    /// made outside a turn scope.
     pub current_agent_id: Option<String>,
     /// Current session key for team tools (parent session for spawned sub-agents)
     pub current_session_key: Option<crate::routing::SessionKey>,

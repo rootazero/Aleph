@@ -12,6 +12,15 @@
 //! is surfaced through the `insights.tools` admin RPC for introspection
 //! (panel widgets / `aleph` CLI), mirroring the `dreaming.run_now` handler.
 //!
+//! ## Two readers, one aggregator
+//!
+//! [`aggregate_tool_usage`] (admin RPC) and [`aggregate_tool_failures`] (the
+//! nightly `tool_failure_distill` dream stage) both fold the same rows through
+//! the same [`build_report`] core and the same [`fetch_tool_invocation_rows`]
+//! read. The failure path only *adds* verbatim evidence samples on top of the
+//! counts — it deliberately does not compute a second set of statistics, so
+//! "how often did `bash` fail" cannot have two answers in this repo.
+//!
 //! ## Scope boundary
 //!
 //! hermes' `insights.py` also reports per-model cost and per-platform token
@@ -87,7 +96,23 @@ pub async fn aggregate_tool_usage(
     top_n: usize,
     fetch_limit: usize,
 ) -> Result<ToolUsageReport, AlephError> {
-    let rows = store
+    let rows = fetch_tool_invocation_rows(store, agent_id, fetch_limit).await?;
+    Ok(build_report(&rows, since_unix_secs, window_seconds, top_n))
+}
+
+/// The one read of `ToolInvocation` rows. Both public aggregators go through
+/// it so a change to how the rows are addressed (source token, ordering,
+/// bound) lands on both at once.
+///
+/// Backends order newest-first and apply `fetch_limit` in SQL, so a truncation
+/// drops the OLDEST rows in the partition — which is the right end to lose for
+/// a "recent behaviour" question.
+async fn fetch_tool_invocation_rows(
+    store: &dyn RawMemoryStore,
+    agent_id: &str,
+    fetch_limit: usize,
+) -> Result<Vec<RawMemory>, AlephError> {
+    store
         .get_raw_by_source(
             // Probe variant; only the discriminator token matters for filtering.
             RawMemorySource::ToolInvocation {
@@ -98,8 +123,131 @@ pub async fn aggregate_tool_usage(
             agent_id,
             fetch_limit,
         )
-        .await?;
-    Ok(build_report(&rows, since_unix_secs, window_seconds, top_n))
+        .await
+}
+
+// --- Failure evidence (nightly `tool_failure_distill` reader) --------------
+
+/// Distinct failure messages surfaced per tool. Small on purpose: the LLM is
+/// being asked to name a recurring *pattern*, and three distinct signatures
+/// show a pattern as well as thirty do at a tenth of the prompt.
+const FAILURE_SAMPLES_PER_TOOL: usize = 3;
+/// Per-sample character cap. `RawMemoryToolSink` already truncates the error
+/// tail to 200 chars, so this only bounds pathological rows.
+const FAILURE_SAMPLE_MAX_CHARS: usize = 300;
+
+/// One tool's failure evidence: the counts (from the shared aggregator) plus a
+/// few verbatim raw-row bodies as proof.
+///
+/// The samples are the row `content` exactly as `RawMemoryToolSink` wrote it —
+/// deliberately NOT parsed into an "error signature" here. Deciding what the
+/// signature is, and whether it is worth remembering, is the model's job (R7);
+/// this struct only carries the evidence to it.
+#[derive(Debug, Clone, Serialize, PartialEq)]
+pub struct ToolFailureEvidence {
+    /// Tool name as recorded by the signal sink.
+    pub tool: String,
+    /// Failed invocations of this tool in the window.
+    pub failed: u64,
+    /// Total invocations of this tool in the window (the denominator).
+    pub attempts: u64,
+    /// Distinct failure bodies, newest first, capped.
+    pub samples: Vec<String>,
+}
+
+/// Counts + evidence for the tools that failed in the window.
+#[derive(Debug, Clone, Serialize, PartialEq)]
+pub struct ToolFailureDigest {
+    /// The very same report `insights.tools` renders — one aggregator, so the
+    /// nightly stage and the admin RPC can never disagree about the counts.
+    pub report: ToolUsageReport,
+    /// Per-tool failure evidence, in the report's order (most-used first),
+    /// restricted to tools with at least one failure.
+    pub failures: Vec<ToolFailureEvidence>,
+    /// Newest `created_at` among the in-window rows, or `0` when there were
+    /// none. This — not "now" — is the watermark a consumer may commit: it is
+    /// the last row it actually looked at, so a row written mid-cycle is
+    /// picked up next time instead of being skipped.
+    pub newest_created_at: i64,
+}
+
+/// Aggregate `ToolInvocation` rows into counts **and** failure evidence in one
+/// store read.
+///
+/// Same window/limit semantics as [`aggregate_tool_usage`]; `top_n` bounds the
+/// per-tool breakdown, and the failure list is derived from that same
+/// (already-truncated) breakdown so the two views cannot name different tools.
+pub async fn aggregate_tool_failures(
+    store: &dyn RawMemoryStore,
+    agent_id: &str,
+    since_unix_secs: i64,
+    window_seconds: i64,
+    top_n: usize,
+    fetch_limit: usize,
+) -> Result<ToolFailureDigest, AlephError> {
+    let rows = fetch_tool_invocation_rows(store, agent_id, fetch_limit).await?;
+    Ok(build_failure_digest(
+        &rows,
+        since_unix_secs,
+        window_seconds,
+        top_n,
+    ))
+}
+
+/// Pure core of [`aggregate_tool_failures`]: reuses [`build_report`] for every
+/// number, then walks the rows once more for verbatim evidence.
+fn build_failure_digest(
+    rows: &[RawMemory],
+    since_unix_secs: i64,
+    window_seconds: i64,
+    top_n: usize,
+) -> ToolFailureDigest {
+    let report = build_report(rows, since_unix_secs, window_seconds, top_n);
+
+    let mut newest_created_at = 0i64;
+    let mut samples: HashMap<&str, Vec<String>> = HashMap::new();
+    for r in rows {
+        if r.created_at < since_unix_secs {
+            continue;
+        }
+        let RawMemorySource::ToolInvocation {
+            tool_name, success, ..
+        } = &r.source
+        else {
+            continue;
+        };
+        newest_created_at = newest_created_at.max(r.created_at);
+        if *success {
+            continue;
+        }
+        let bucket = samples.entry(tool_name.as_str()).or_default();
+        if bucket.len() >= FAILURE_SAMPLES_PER_TOOL {
+            continue;
+        }
+        // UTF-8 safe truncation (P7) — never `&s[..n]`.
+        let body: String = r.content.chars().take(FAILURE_SAMPLE_MAX_CHARS).collect();
+        if !bucket.iter().any(|existing| existing == &body) {
+            bucket.push(body);
+        }
+    }
+
+    let failures: Vec<ToolFailureEvidence> = report
+        .tools
+        .iter()
+        .filter(|b| b.failed > 0)
+        .map(|b| ToolFailureEvidence {
+            tool: b.tool.clone(),
+            failed: b.failed,
+            attempts: b.count,
+            samples: samples.get(b.tool.as_str()).cloned().unwrap_or_default(),
+        })
+        .collect();
+
+    ToolFailureDigest {
+        report,
+        failures,
+        newest_created_at,
+    }
 }
 
 /// The report a partition with no invocations in the window produces.
@@ -387,6 +535,119 @@ mod tests {
         ) -> Result<Vec<RawMemory>, AlephError> {
             Ok(self.rows.lock().unwrap().clone())
         }
+    }
+
+    // ---- failure digest (the nightly distiller's read) ----
+
+    fn failing_row(id: &str, tool: &str, body: &str, created_at: i64) -> RawMemory {
+        let mut r = tool_row(id, tool, false, 5, created_at);
+        r.content = body.to_string();
+        r
+    }
+
+    /// The digest's numbers must BE the shared aggregator's numbers, not a
+    /// second tally: a failure count that disagreed with `insights.tools`
+    /// would make the nightly prompt argue with the admin RPC.
+    #[test]
+    fn failure_digest_counts_come_from_the_shared_report() {
+        let rows = vec![
+            failing_row("1", "bash", "tool bash failed in 5ms: exit 127", 100),
+            failing_row("2", "bash", "tool bash failed in 5ms: exit 127", 101),
+            tool_row("3", "bash", true, 5, 102),
+            tool_row("4", "read", true, 5, 103),
+        ];
+        let digest = build_failure_digest(&rows, 0, 3600, 10);
+        let report = build_report(&rows, 0, 3600, 10);
+        assert_eq!(digest.report, report, "one aggregator, not two");
+        assert_eq!(digest.failures.len(), 1, "only bash failed");
+        assert_eq!(digest.failures[0].tool, "bash");
+        assert_eq!(digest.failures[0].failed, 2);
+        assert_eq!(digest.failures[0].attempts, 3);
+    }
+
+    /// Evidence is verbatim and deduped: two byte-identical failures are one
+    /// signature, and the sample cap bounds what reaches the prompt.
+    #[test]
+    fn failure_samples_are_deduped_and_capped() {
+        let mut rows = vec![
+            failing_row("a", "bash", "tool bash failed: exit 127", 100),
+            failing_row("b", "bash", "tool bash failed: exit 127", 101),
+        ];
+        for i in 0..10 {
+            rows.push(failing_row(
+                &format!("d{i}"),
+                "bash",
+                &format!("tool bash failed: distinct {i}"),
+                200 + i,
+            ));
+        }
+        let digest = build_failure_digest(&rows, 0, 3600, 10);
+        let samples = &digest.failures[0].samples;
+        assert!(
+            samples.len() <= FAILURE_SAMPLES_PER_TOOL,
+            "samples must be capped, got {}",
+            samples.len()
+        );
+        let mut sorted = samples.clone();
+        sorted.sort();
+        sorted.dedup();
+        assert_eq!(sorted.len(), samples.len(), "samples must be distinct");
+        // The count still reflects EVERY failure, not just the sampled ones.
+        assert_eq!(digest.failures[0].failed, 12);
+    }
+
+    /// A long body must not be sliced mid-codepoint, and must not blow the
+    /// prompt budget. `&s[..n]` on this input panics.
+    #[test]
+    fn failure_sample_truncation_is_utf8_safe() {
+        let body = "错".repeat(FAILURE_SAMPLE_MAX_CHARS + 50);
+        let rows = vec![failing_row("1", "bash", &body, 100)];
+        let digest = build_failure_digest(&rows, 0, 3600, 10);
+        let s = &digest.failures[0].samples[0];
+        assert_eq!(s.chars().count(), FAILURE_SAMPLE_MAX_CHARS);
+    }
+
+    /// The watermark a consumer commits is the newest row it LOOKED AT, and it
+    /// counts successes too: a successful invocation after the last failure
+    /// still means "I have read up to here". Committing `now` instead would
+    /// skip rows written between the read and the commit.
+    #[test]
+    fn newest_created_at_is_the_last_row_seen_not_the_last_failure() {
+        let rows = vec![
+            failing_row("1", "bash", "boom", 100),
+            tool_row("2", "bash", true, 5, 500),
+        ];
+        let digest = build_failure_digest(&rows, 0, 3600, 10);
+        assert_eq!(digest.newest_created_at, 500);
+        // Rows below the cutoff are neither counted nor allowed to move it.
+        let digest = build_failure_digest(&rows, 200, 3600, 10);
+        assert_eq!(digest.newest_created_at, 500);
+        assert!(digest.failures.is_empty(), "the failure is out of window");
+    }
+
+    #[test]
+    fn no_failures_yields_an_empty_evidence_list_and_zero_watermark() {
+        let digest = build_failure_digest(&[], 0, 3600, 10);
+        assert!(digest.failures.is_empty());
+        assert_eq!(digest.newest_created_at, 0);
+        assert_eq!(digest.report.total, 0);
+    }
+
+    #[tokio::test]
+    async fn aggregate_tool_failures_reads_through_store() {
+        let store = MemStore {
+            rows: Mutex::new(vec![
+                failing_row("1", "bash", "tool bash failed: exit 1", 100),
+                tool_row("2", "read", true, 5, 100),
+            ]),
+        };
+        let digest = aggregate_tool_failures(&store, "agent-1", 0, 86_400, 10, 1000)
+            .await
+            .unwrap();
+        assert_eq!(digest.report.failed, 1);
+        assert_eq!(digest.failures.len(), 1);
+        assert_eq!(digest.failures[0].tool, "bash");
+        assert!(digest.failures[0].samples[0].contains("exit 1"));
     }
 
     #[tokio::test]

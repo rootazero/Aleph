@@ -1300,7 +1300,30 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
             announce_adapter,
             announce_registry,
             server.event_bus().clone(),
-        );
+        )
+        .await;
+    }
+
+    // Reconcile background sub-agents orphaned by the previous daemon and tell
+    // each affected parent session once. MUST stay after the announcer above:
+    // the grouped `SubAgentCompleted` broadcast has no subscriber before that
+    // (§9 — reconcile *after* subscribing). Fail-soft either way: the
+    // tombstones land on disk regardless and `subagent check_status` answers
+    // from them, so a missing data dir costs the notice, not the record.
+    match alephcore::utils::paths::get_background_subagents_dir() {
+        Ok(dir) => {
+            let orphans =
+                alephcore::agents::background_persistence::init_and_announce_orphans(dir).await;
+            if orphans > 0 {
+                tracing::info!(
+                    orphans,
+                    "Reconciled background sub-agents orphaned by a previous process"
+                );
+            }
+        }
+        Err(e) => {
+            tracing::warn!(error = %e, "Background sub-agent persistence disabled (no data dir)");
+        }
     }
 
     // Register the subagent tree relay — live spawn/progress/settle events are

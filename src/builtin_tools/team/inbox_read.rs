@@ -5,6 +5,7 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use tracing::debug;
 
+use crate::builtin_tools::acting_agent::acting_agent_id;
 use crate::error::{AlephError, Result};
 use crate::sync_primitives::Arc;
 use crate::teams::messages::inbox::Inbox;
@@ -67,6 +68,12 @@ pub struct InboxReadTool {
 }
 
 impl InboxReadTool {
+    /// The agent acting in THIS call — the identity of the running turn, not
+    /// the one this tool was constructed with. See [`acting_agent_id`].
+    fn actor(&self) -> String {
+        acting_agent_id(&self.current_agent_id)
+    }
+
     #[must_use]
     pub const fn new(inbox: Arc<Inbox>, current_agent_id: String) -> Self {
         Self {
@@ -90,7 +97,7 @@ impl AlephTool for InboxReadTool {
         debug!(
             team_id = %args.team_id,
             mode = %args.mode,
-            agent_id = %self.current_agent_id,
+            agent_id = %self.actor(),
             "inbox_read: reading messages"
         );
 
@@ -98,7 +105,7 @@ impl AlephTool for InboxReadTool {
         if args.count_only {
             let unread = self
                 .inbox
-                .peek_count(&self.current_agent_id, &args.team_id)
+                .peek_count(&self.actor(), &args.team_id)
                 .await?;
             let total = (unread.to + unread.cc) as usize;
             return Ok(InboxReadOutput {
@@ -118,7 +125,7 @@ impl AlephTool for InboxReadTool {
             _ if args.peek => {
                 self.inbox
                     .peek(
-                        &self.current_agent_id,
+                        &self.actor(),
                         &args.team_id,
                         args.msg_type.as_ref(),
                     )
@@ -127,7 +134,7 @@ impl AlephTool for InboxReadTool {
             _ => {
                 self.inbox
                     .read(
-                        &self.current_agent_id,
+                        &self.actor(),
                         &args.team_id,
                         args.msg_type.as_ref(),
                         args.mark_read,

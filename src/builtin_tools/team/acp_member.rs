@@ -15,6 +15,7 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use tracing::debug;
 
+use crate::builtin_tools::acting_agent::acting_agent_id;
 use crate::error::{AlephError, Result};
 use crate::sync_primitives::Arc;
 use crate::teams::{NewTeamMember, TeamMember, TeamMemberKind, TeamStore};
@@ -76,6 +77,12 @@ pub struct TeamAcpMemberTool {
 }
 
 impl TeamAcpMemberTool {
+    /// The agent acting in THIS call — the identity of the running turn, not
+    /// the one this tool was constructed with. See [`acting_agent_id`].
+    fn actor(&self) -> String {
+        acting_agent_id(&self.current_agent_id)
+    }
+
     pub fn new(store: Arc<dyn TeamStore>, current_agent_id: String) -> Self {
         Self {
             store,
@@ -93,7 +100,7 @@ impl TeamAcpMemberTool {
             .get_team(team_id)
             .await?
             .ok_or_else(|| AlephError::tool(format!("team not found: {team_id}")))?;
-        if team.leader_id != self.current_agent_id {
+        if team.leader_id != self.actor() {
             return Err(AlephError::tool(format!(
                 "only the team leader ('{}') can manage ACP members",
                 team.leader_id

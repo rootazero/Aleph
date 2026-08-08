@@ -95,6 +95,23 @@ pub const fn default_feedback_lookback() -> usize {
     50
 }
 
+/// Non-base note corpora the nightly maintenance fan-out may visit per night.
+///
+/// This is the knob that bounds **how much money one night of unattended
+/// maintenance can spend**: each corpus cycle runs its own LLM stages, so the
+/// nightly bill scales with this number times the per-corpus stage budgets
+/// (`feedback_distill_max_per_cycle`, `synthesis_max_insights`,
+/// `drift_max_pairs_per_run`), which bound the calls *within* one corpus.
+///
+/// The value *is* the `MAX_CORPUS_CYCLES_PER_NIGHT` constant the fan-out used
+/// before the knob existed — referenced, not copied — so an operator who never
+/// sets it sees the current behaviour unchanged and the two can never drift.
+/// A second literal `8` here would need a source-scanning guard to stay honest;
+/// a reference the type system checks needs nothing.
+pub const fn default_dream_max_corpus_cycles_per_night() -> usize {
+    crate::memory::dreaming::MAX_CORPUS_CYCLES_PER_NIGHT
+}
+
 pub const fn default_memory_decay_half_life_days() -> f32 {
     // Matches the value `NoteDecayStage` used as a hard-coded constant before
     // this policy was wired in, so activating the config keeps the live decay

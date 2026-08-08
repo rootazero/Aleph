@@ -394,7 +394,10 @@ mod tests {
             &review_stamped.metadata,
             serde_json::json!({ PAUSED_FROM_KEY: "waiting_review" }),
         );
-        assert_eq!(orphan_reset_status(&review_stamped), CoordTaskStatus::Pending);
+        assert_eq!(
+            orphan_reset_status(&review_stamped),
+            CoordTaskStatus::Pending
+        );
     }
 
     #[test]

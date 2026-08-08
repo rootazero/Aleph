@@ -24,8 +24,14 @@ use crate::tools::AlephTool;
 
 /// Path prefix every correction row is filed under — the same one
 /// `FeedbackDistill` reads back (Phase 3 D2) and the duplicate scan below
-/// queries. One constant, so the writer and both readers cannot drift.
-const CORRECTION_PATH_PREFIX: &str = "aleph://correction/";
+/// queries.
+///
+/// Re-exported from the reader rather than re-declared here. Both sides used
+/// to hold their own `"aleph://correction/"` literal under a comment promising
+/// they would stay in sync; a promise in a comment is exactly the enforcement
+/// §0 says does not exist. The truth source sits on the depended-upon side
+/// (`memory`), because that is the direction the crate graph already runs.
+use crate::memory::dreaming::stages::feedback_distill::CORRECTION_PATH_PREFIX;
 
 /// How far back the exact-duplicate scan looks, in seconds (24h).
 ///
@@ -421,6 +427,45 @@ mod tests {
             }
             other => panic!("expected Correction variant, got {:?}", other),
         }
+    }
+
+    /// The writer and the distiller must address the SAME rows.
+    ///
+    /// This is the assertion the two "must stay in sync" comments used to
+    /// stand in for. It does not compare the two constants (they are now one
+    /// constant, so that would be tautological) — it drives the real tool, then
+    /// asks the dream stage's own gate predicate whether it can see the result.
+    /// If the prefix, the agent partitioning, or the watermark key ever drift
+    /// apart again, this goes red instead of the correction going silently
+    /// unread.
+    #[tokio::test]
+    async fn a_logged_correction_is_visible_to_the_stage_that_distills_it() {
+        use crate::memory::dreaming::stages::feedback_distill::has_undistilled_corrections;
+
+        let backend = Arc::new(SqliteMemoryBackend::in_memory().unwrap());
+        let tool = FlagUserCorrectionTool::new(
+            backend.clone() as Arc<dyn RawMemoryStore>,
+            DEFAULT_AGENT_ID.to_string(),
+        );
+        let lookback = crate::config::types::memory::default_feedback_lookback();
+        let store: MemoryBackend = backend.clone();
+
+        assert!(
+            !has_undistilled_corrections(&store, DEFAULT_AGENT_ID, lookback).await,
+            "nothing logged yet"
+        );
+
+        let out = tool
+            .call(args("stop guessing at file paths", Severity::High))
+            .await
+            .unwrap();
+        assert!(out.success, "{}", out.message);
+
+        assert!(
+            has_undistilled_corrections(&store, DEFAULT_AGENT_ID, lookback).await,
+            "the distiller must see the row the tool just wrote — a writer and a \
+             reader that address different prefixes both look healthy in isolation"
+        );
     }
 
     #[tokio::test]

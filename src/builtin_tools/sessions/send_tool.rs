@@ -209,10 +209,10 @@ impl SessionsSendTool {
         self.context = Some(context);
     }
 
-    /// Set the current agent ID
-    pub fn set_current_agent_id(&mut self, agent_id: impl Into<String>) {
-        self.current_agent_id = agent_id.into();
-    }
+    // No `set_current_agent_id`: the dispatch arm builds this tool per call
+    // with `caller_agent_id()` (the running turn's identity), so a mutator
+    // would have had nothing left to correct. It had zero callers for exactly
+    // that reason — CUT rather than reconnected (R10 YAGNI).
 
     /// Fetch the last assistant reply from a target agent's session
     async fn fetch_last_reply(

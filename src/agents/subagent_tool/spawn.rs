@@ -96,6 +96,18 @@ impl SubagentTool {
                 model: model.clone(),
             },
         );
+        // W24 — mirror the registration into the cross-process sidecar so a
+        // daemon restart can still tell this parent what became of its child.
+        // Deliberately here and not inside `insert_running`: that seam also
+        // carries *presence-only* registrations (sync fan-out seats), whose
+        // results are returned inline and which must never come back as
+        // pollable orphans. No-op until the boot path enables persistence.
+        crate::agents::background_persistence::record_start(
+            &request_id,
+            &root_session,
+            &task,
+            &agent_def.id,
+        );
 
         // Phase 1 — emit Spawned so the panel tree shows the node immediately.
         emit_tree_event(
@@ -294,6 +306,25 @@ impl SubagentTool {
                     total_tokens: settled_tokens,
                 },
             );
+            // W24 — stamp the terminal state into the sidecar BEFORE handing
+            // the outcome to the tracker: from here on the disk record says
+            // "settled", so the next boot's orphan sweep leaves it alone. The
+            // terminal text goes down the same masked trail as the progress
+            // lines (one file, one redaction gate).
+            {
+                let (label, final_text) = match &outcome {
+                    CompletedOutcome::Ok { final_text, .. } => ("completed", final_text.clone()),
+                    CompletedOutcome::Err(msg) => (
+                        match tree_lifecycle {
+                            aleph_protocol::subagent_tree::NodeLifecycle::Cancelled => "cancelled",
+                            aleph_protocol::subagent_tree::NodeLifecycle::TimedOut => "timed_out",
+                            _ => "failed",
+                        },
+                        msg.clone(),
+                    ),
+                };
+                crate::agents::background_persistence::record_settled(&rid, label, &final_text);
+            }
             tracker.mark_completed(&rid, outcome);
             // Terminate the per-call cancel bridge watcher now the child run is
             // done (no-op if it already fired via cancel). Keeps background

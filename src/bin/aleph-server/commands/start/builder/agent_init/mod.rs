@@ -781,6 +781,18 @@ pub(in crate::commands::start) async fn register_agent_handlers(
         // Clone provider registry for topic generation before it's moved into engine
         let topic_provider_registry = provider_registry.clone();
 
+        // Install `[execution] max_concurrent_subagents` into the sub-agent
+        // fan-out enforcement point. Clamped inside the setter, so a typo
+        // cannot produce a semaphore of width 0. Deliberately NOT an
+        // `ExecutionEngineConfig` field: `SubagentTool::new` has several
+        // construction sites and reads this process-global directly, which is
+        // exactly why a builder-only knob would have been configurable on one
+        // code path only. The live-reload leg is wired in
+        // `config::live_apply`'s "execution" arm.
+        alephcore::agents::subagent_tool::set_max_concurrent_subagents(
+            app_config.execution.max_concurrent_subagents,
+        );
+
         let engine_config = ExecutionEngineConfig {
             default_timeout_secs: app_config.execution.default_timeout_secs,
             scratchpad_progress_push: app_config.execution.progress_push,

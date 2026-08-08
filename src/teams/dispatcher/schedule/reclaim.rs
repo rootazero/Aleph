@@ -135,10 +135,9 @@ impl TeamDispatcher {
             // transient store hiccup into a dead workflow); the bound simply
             // does not apply for that tick.
             let recoveries = match self.coord_store.list_task_runs(&task.id).await {
-                Ok(runs) => recovery_abandons_since(
-                    &runs,
-                    read_retry_budget_reset_at(&task.metadata),
-                ),
+                Ok(runs) => {
+                    recovery_abandons_since(&runs, read_retry_budget_reset_at(&task.metadata))
+                }
                 Err(e) => {
                     tracing::warn!(task_id = %task.id, error = %e,
                         "dispatcher: run history unreadable; recovering without counting");

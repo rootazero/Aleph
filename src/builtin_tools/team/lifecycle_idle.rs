@@ -9,6 +9,7 @@ use async_trait::async_trait;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
+use crate::builtin_tools::acting_agent::acting_agent_id;
 use crate::error::{AlephError, Result};
 use crate::sync_primitives::Arc;
 use crate::teams::messages::router::{MessageRouter, SendRequest};
@@ -48,6 +49,12 @@ pub struct LifecycleIdleTool {
 }
 
 impl LifecycleIdleTool {
+    /// The agent acting in THIS call — the identity of the running turn, not
+    /// the one this tool was constructed with. See [`acting_agent_id`].
+    fn actor(&self) -> String {
+        acting_agent_id(&self.current_agent_id)
+    }
+
     pub fn new(
         router: Arc<MessageRouter>,
         team_store: Arc<dyn TeamStore>,
@@ -79,7 +86,7 @@ impl AlephTool for LifecycleIdleTool {
             .await?
             .ok_or_else(|| AlephError::other(format!("Team '{}' not found", args.team_id)))?;
 
-        if team.leader_id == self.current_agent_id {
+        if team.leader_id == self.actor() {
             return Ok(LifecycleIdleOutput {
                 message_id: None,
                 message: "Caller is the team leader; idle signal is a no-op".to_string(),
@@ -94,7 +101,7 @@ impl AlephTool for LifecycleIdleTool {
         let subject = format!("Idle: {summary}");
         let content = format!(
             "Worker `{}` is idle.\n\nLast task: {}\n\n{}",
-            self.current_agent_id,
+            self.actor(),
             args.last_task_id.as_deref().unwrap_or("(none)"),
             summary,
         );
@@ -103,7 +110,7 @@ impl AlephTool for LifecycleIdleTool {
             .router
             .send(SendRequest {
                 team_id: args.team_id,
-                from_agent: self.current_agent_id.clone(),
+                from_agent: self.actor(),
                 to: vec![team.leader_id.clone()],
                 cc: vec![],
                 msg_type: MessageType::Idle,

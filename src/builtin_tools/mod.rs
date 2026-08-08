@@ -24,6 +24,7 @@
 
 pub mod a2a_tools;
 pub mod acp_tools;
+pub mod acting_agent;
 pub mod agent_identity;
 pub mod agent_manage;
 pub mod artifact_publish;

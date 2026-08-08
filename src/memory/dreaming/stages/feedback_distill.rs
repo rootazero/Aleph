@@ -26,8 +26,16 @@ use crate::providers::message::UnifiedMessage;
 
 use super::DreamStage;
 
-/// Path prefix used by `flag_user_correction` — must stay in sync with that tool.
-const CORRECTION_PATH_PREFIX: &str = "aleph://correction/";
+/// Path prefix every correction row is filed under.
+///
+/// THE constant, not a copy of one. `flag_user_correction` (the writer) and
+/// this stage (the reader) used to hold one `&str` literal each, both carrying
+/// a comment saying they must stay in sync — the shape §0 names outright: two
+/// statements of one fact, where changing only one is a silent lie. It lives
+/// here, on the **depended-upon** side: `builtin_tools` depends on `memory`, never
+/// the reverse, so this is the only direction that compiles without inverting
+/// the layer graph.
+pub const CORRECTION_PATH_PREFIX: &str = "aleph://correction/";
 /// How many existing feedback-notes to surface as candidates per cycle.
 const FEEDBACK_CANDIDATES_TOP_N: usize = 5;
 /// Watermark namespace key on `compression_metadata`. Distinct from

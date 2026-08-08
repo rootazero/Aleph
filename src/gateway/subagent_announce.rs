@@ -44,27 +44,36 @@ const RETRY_DELAYS_SECS: [u64; 3] = [0, 30, 120];
 /// Subscribe to `SubAgentCompleted` global events and announce each completed
 /// background subagent into its parent session. Registration mirrors the
 /// `TeamNotifier` pattern in `aleph-server` startup.
-pub fn spawn_subagent_announce(
+///
+/// Registration is **awaited**, not spawned: boot broadcasts a
+/// `SubAgentCompleted` of its own right after this call (the restart-orphan
+/// notice from `agents::background_persistence`), and a subscriber that is
+/// merely *scheduled* is a subscriber that is not listening yet. §9 — "a
+/// mechanism that builds state from an event stream must reconcile *after*
+/// subscribing"; the reconciliation is only after this if the subscription has
+/// actually landed.
+pub async fn spawn_subagent_announce(
     adapter: Arc<dyn ExecutionAdapter>,
     registry: Arc<AgentRegistry>,
     event_bus: Arc<GatewayEventBus>,
 ) {
-    tokio::spawn(async move {
-        let _sub = GlobalBus::global()
-            .subscribe_async(
-                EventFilter::new(vec![EventType::SubAgentCompleted]),
-                move |global_event| {
-                    let adapter = adapter.clone();
-                    let registry = registry.clone();
-                    let event_bus = event_bus.clone();
-                    tokio::spawn(async move {
-                        announce_one(adapter, registry, event_bus, global_event).await;
-                    });
-                },
-            )
-            .await;
-        info!("Subagent announce subscriber registered (SubAgentCompleted → parent session)");
-    });
+    // The returned id is a handle, not a guard: dropping it does not
+    // unsubscribe (see `GlobalBus::unsubscribe`), so this subscription lives
+    // for the process.
+    let _sub = GlobalBus::global()
+        .subscribe_async(
+            EventFilter::new(vec![EventType::SubAgentCompleted]),
+            move |global_event| {
+                let adapter = adapter.clone();
+                let registry = registry.clone();
+                let event_bus = event_bus.clone();
+                tokio::spawn(async move {
+                    announce_one(adapter, registry, event_bus, global_event).await;
+                });
+            },
+        )
+        .await;
+    info!("Subagent announce subscriber registered (SubAgentCompleted → parent session)");
 }
 
 /// Deliver one completion into the parent session.

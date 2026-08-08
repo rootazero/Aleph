@@ -5,6 +5,7 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use tracing::debug;
 
+use crate::builtin_tools::acting_agent::acting_agent_id;
 use crate::error::{AlephError, Result};
 use crate::sync_primitives::Arc;
 use crate::teams::sessions::coordinator::SessionCoordinator;
@@ -58,6 +59,12 @@ pub struct SessionCollaborateTool {
 }
 
 impl SessionCollaborateTool {
+    /// The agent acting in THIS call — the identity of the running turn, not
+    /// the one this tool was constructed with. See [`acting_agent_id`].
+    fn actor(&self) -> String {
+        acting_agent_id(&self.current_agent_id)
+    }
+
     #[must_use]
     pub const fn new(coordinator: Arc<SessionCoordinator>, current_agent_id: String) -> Self {
         Self {
@@ -89,7 +96,7 @@ impl AlephTool for SessionCollaborateTool {
             participants: args.participants.clone(),
             topic: args.topic.clone(),
             trigger: SessionTrigger::Explicit {
-                requested_by: self.current_agent_id.clone(),
+                requested_by: self.actor(),
             },
             thread_id: args.thread_id,
             max_rounds: args.max_rounds,
@@ -97,7 +104,7 @@ impl AlephTool for SessionCollaborateTool {
 
         let session = self
             .coordinator
-            .start_session(input, &self.current_agent_id)
+            .start_session(input, &self.actor())
             .await
             .map_err(|e| AlephError::other(format!("Failed to start session: {e}")))?;
 

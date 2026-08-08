@@ -19,6 +19,7 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use tracing::debug;
 
+use crate::builtin_tools::acting_agent::acting_agent_id;
 use crate::agents::swarm::tasks::{CoordTaskStore, NewTaskExitJournal, TaskExitJournal};
 use crate::error::{AlephError, Result};
 use crate::sync_primitives::Arc;
@@ -58,6 +59,12 @@ pub struct TaskExitJournalTool {
 }
 
 impl TaskExitJournalTool {
+    /// The agent acting in THIS call — the identity of the running turn, not
+    /// the one this tool was constructed with. See [`acting_agent_id`].
+    fn actor(&self) -> String {
+        acting_agent_id(&self.current_agent_id)
+    }
+
     /// Wire the ownership gate — see [`crate::teams::task_team_reachable`].
     #[must_use]
     pub fn with_team_store(mut self, store: Option<Arc<dyn crate::teams::TeamStore>>) -> Self {
@@ -118,7 +125,7 @@ impl AlephTool for TaskExitJournalTool {
             .coord_store
             .upsert_task_journal(NewTaskExitJournal {
                 task_id: args.task_id.clone(),
-                agent_id: self.current_agent_id.clone(),
+                agent_id: self.actor(),
                 summary: summary.to_string(),
                 decisions: args.decisions,
                 artifacts_ref: args.artifacts_ref,

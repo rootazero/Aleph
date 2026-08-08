@@ -24,9 +24,7 @@ use super::runner::{execute_member_task, MemberDispatchTarget, MemberRunStatus};
 use super::TeamDispatcher;
 use crate::agents::swarm::tasks::retry::is_retry_eligible;
 use crate::agents::swarm::tasks::timeout::effective_timeout_secs;
-use crate::agents::swarm::tasks::{
-    CoordTask, CoordTaskFilter, CoordTaskStatus, CoordTaskUpdate,
-};
+use crate::agents::swarm::tasks::{CoordTask, CoordTaskFilter, CoordTaskStatus, CoordTaskUpdate};
 use crate::sync_primitives::Arc;
 use crate::teams::artifacts::{ArtifactType, NewArtifact, TaskStatus};
 use crate::teams::context::InboxContextProvider;
@@ -346,9 +344,10 @@ impl TeamDispatcher {
         let run_status = outcome.status.run_status();
         let (run_summary, run_error) = match &outcome.status {
             MemberRunStatus::Completed => (outcome.reply.clone(), None),
-            MemberRunStatus::Failed | MemberRunStatus::Timeout | MemberRunStatus::Busy => {
-                (None, outcome.error.clone())
-            }
+            MemberRunStatus::Failed
+            | MemberRunStatus::Timeout
+            | MemberRunStatus::Busy
+            | MemberRunStatus::Cancelled => (None, outcome.error.clone()),
         };
         if let Err(e) = self
             .coord_store
@@ -446,10 +445,15 @@ impl TeamDispatcher {
                 self.fail_or_retry(&task, &err).await;
                 tracing::info!(task_id = %task_id, "dispatcher: target agent busy; attempt deferred without spending retry budget");
             }
-            // A run the cancel sweep stopped arrives here as `Failed` (see the
-            // TODO on `MemberRunStatus`). It is harmless in the dominant path:
-            // `finalize_disposition` already reported KeepForeignState for the
-            // terminal row, so this arm does not run at all.
+            // U2 — a run the cancel sweep stopped takes the same split as
+            // `Busy`: re-dispatched through `fail_or_retry`, but the run row
+            // was written `Abandoned`, so the retry budget is untouched. The
+            // cancellation judged nothing about the work.
+            MemberRunStatus::Cancelled => {
+                let err = outcome.error.unwrap_or_else(|| "run cancelled".to_string());
+                self.fail_or_retry(&task, &err).await;
+                tracing::info!(task_id = %task_id, "dispatcher: member run cancelled; attempt deferred without spending retry budget");
+            }
             MemberRunStatus::Failed | MemberRunStatus::Timeout => {
                 let err = outcome.error.unwrap_or_else(|| "unknown error".to_string());
                 // Bounded automatic retry: a transient attempt failure is

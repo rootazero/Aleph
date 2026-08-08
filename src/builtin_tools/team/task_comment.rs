@@ -9,6 +9,7 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use tracing::debug;
 
+use crate::builtin_tools::acting_agent::acting_agent_id;
 use crate::agents::swarm::tasks::CoordTaskStore;
 use crate::error::Result;
 use crate::sync_primitives::Arc;
@@ -41,6 +42,12 @@ pub struct TaskCommentTool {
 }
 
 impl TaskCommentTool {
+    /// The agent acting in THIS call — the identity of the running turn, not
+    /// the one this tool was constructed with. See [`acting_agent_id`].
+    fn actor(&self) -> String {
+        acting_agent_id(&self.current_agent_id)
+    }
+
     pub fn new(store: Arc<dyn CoordTaskStore>, current_agent_id: String) -> Self {
         Self {
             team_store: None,
@@ -72,7 +79,7 @@ impl AlephTool for TaskCommentTool {
     async fn call(&self, args: Self::Args) -> Result<Self::Output> {
         debug!(
             task_id = %args.task_id,
-            agent_id = %self.current_agent_id,
+            agent_id = %self.actor(),
             "task_comment: appending note"
         );
 
@@ -103,7 +110,7 @@ impl AlephTool for TaskCommentTool {
 
         let comment = self
             .store
-            .add_task_comment(&args.task_id, &self.current_agent_id, body)
+            .add_task_comment(&args.task_id, &self.actor(), body)
             .await?;
 
         Ok(TaskCommentOutput {

@@ -102,15 +102,15 @@ pub enum MemberRunStatus {
     /// gate now returns `AgentBusy` for a collision instead of folding the
     /// message inline into the sibling run.
     Busy,
-    // TODO(cancel-budget): a `Cancelled` variant belongs here, mapping to
-    // `TaskRunStatus::Abandoned` exactly as `Busy` does — a run the cancel
-    // sweep stopped is not a verdict on the work and must not spend a retry.
-    // It is not added yet only because `builtin_tools::team::delegate` matches
-    // this enum exhaustively and lives outside this change's scope; see the
-    // round report. Until then a cancelled run records as `Failed`, which is
-    // inert in the dominant path (the task is already terminal, so
-    // `fail_or_retry` returns without retrying) but does consume budget for a
-    // cancellation that leaves the row live.
+    /// The run was stopped by a cancellation (operator `run.cancel`, the
+    /// session cancel sweep, or a parent run tearing its children down).
+    ///
+    /// Not a verdict on the work: nothing about the task was judged, the
+    /// attempt was simply interrupted. Like [`Self::Busy`] it maps to
+    /// [`TaskRunStatus::Abandoned`](crate::agents::swarm::tasks::TaskRunStatus)
+    /// so `budget_failures_since` does not count it — a cancellation that
+    /// leaves the row live must not spend one of the task's retries.
+    Cancelled,
 }
 
 impl MemberRunStatus {
@@ -125,8 +125,26 @@ impl MemberRunStatus {
             Self::Completed => TaskRunStatus::Completed,
             Self::Failed => TaskRunStatus::Failed,
             Self::Timeout => TaskRunStatus::Timeout,
-            Self::Busy => TaskRunStatus::Abandoned,
+            Self::Busy | Self::Cancelled => TaskRunStatus::Abandoned,
         }
+    }
+}
+
+/// Which member-run outcome an execution-layer error is.
+///
+/// Two of the three classes are deliberately NOT failures: a busy target never
+/// started, and a cancelled run was interrupted rather than judged. Both map to
+/// `TaskRunStatus::Abandoned` and so leave the task's retry budget untouched.
+///
+/// Split out as a free function (rather than inline `match` arms in
+/// `execute_member_task`) so that classification is testable without standing
+/// up an execution adapter — the arm ordering is otherwise unreachable from a
+/// unit test, which is exactly how the cancellation case stayed miscategorised.
+fn classify_execution_error(err: &ExecutionError) -> MemberRunStatus {
+    match err {
+        ExecutionError::AgentBusy(_) => MemberRunStatus::Busy,
+        ExecutionError::Cancelled => MemberRunStatus::Cancelled,
+        _ => MemberRunStatus::Failed,
     }
 }
 
@@ -360,19 +378,20 @@ pub async fn execute_member_task(
                 error: None,
             }
         }
-        // A busy target is a scheduling collision, not an attempt outcome —
-        // classify it before the catch-all so it does not spend a retry the
-        // task never got to use.
-        Ok(Ok(Err(e @ ExecutionError::AgentBusy(_)))) => MemberRunOutcome {
-            status: MemberRunStatus::Busy,
-            reply: None,
-            error: Some(format!("Agent busy, attempt deferred: {e}")),
-        },
-        Ok(Ok(Err(e))) => MemberRunOutcome {
-            status: MemberRunStatus::Failed,
-            reply: None,
-            error: Some(format!("Execution failed: {e}")),
-        },
+        Ok(Ok(Err(e))) => {
+            let status = classify_execution_error(&e);
+            MemberRunOutcome {
+                status,
+                reply: None,
+                error: Some(match status {
+                    MemberRunStatus::Busy => format!("Agent busy, attempt deferred: {e}"),
+                    MemberRunStatus::Cancelled => {
+                        format!("Run cancelled, attempt not counted: {e}")
+                    }
+                    _ => format!("Execution failed: {e}"),
+                }),
+            }
+        }
         Ok(Err(join_err)) => MemberRunOutcome {
             status: MemberRunStatus::Failed,
             reply: None,
@@ -590,6 +609,40 @@ mod tests {
             budget_failures_since(&[failed, timed_out], None),
             2,
             "real attempt outcomes must still be counted"
+        );
+    }
+
+    /// U2 — a cancelled run is an interruption, not a verdict. Asserted the
+    /// same way as the busy case: against `budget_failures_since`, so the
+    /// property under test is "the budget does not count it", not "it happens
+    /// to be spelled Abandoned".
+    #[test]
+    fn a_cancelled_attempt_does_not_consume_the_retry_budget() {
+        let cancelled = run_row(MemberRunStatus::Cancelled.run_status());
+        assert_eq!(
+            budget_failures_since(&[cancelled], None),
+            0,
+            "a cancelled attempt is not a failed attempt"
+        );
+    }
+
+    /// U2 producer side — the arm that *makes* a `Cancelled` outcome. Without
+    /// this the enum variant could exist, map correctly, and still never be
+    /// reached: `ExecutionError::Cancelled` would fall through to the
+    /// `Failed` catch-all and spend a retry, with every mapping test green.
+    #[test]
+    fn a_cancelled_execution_error_classifies_as_cancelled() {
+        assert_eq!(
+            classify_execution_error(&ExecutionError::Cancelled),
+            MemberRunStatus::Cancelled
+        );
+        assert_eq!(
+            classify_execution_error(&ExecutionError::AgentBusy("x".into())),
+            MemberRunStatus::Busy
+        );
+        assert_eq!(
+            classify_execution_error(&ExecutionError::Failed("boom".into())),
+            MemberRunStatus::Failed
         );
     }
 

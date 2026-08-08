@@ -79,6 +79,11 @@ pub enum DelegateStatus {
     /// untried, so the caller can simply try again — collapsing it into
     /// `Failed` tells the model the member attempted and could not do it.
     Busy,
+    /// The member run was cancelled (operator stop / session cancel sweep)
+    /// before it could produce a verdict. Distinct from `Failed` for the same
+    /// reason `Busy` is: nothing about the work was judged, so the caller may
+    /// re-delegate, and the task row is left claimable rather than terminal.
+    Cancelled,
 }
 
 // =============================================================================
@@ -469,6 +474,22 @@ impl AlephTool for TeamDelegateTool {
                 Ok(TeamDelegateOutput {
                     task_id: task.id,
                     status: DelegateStatus::Busy,
+                    reply: None,
+                    error: Some(error),
+                })
+            }
+            // U2 — same treatment as `Busy`: the task row stays claimable
+            // because a cancellation judged nothing. Writing a terminal
+            // `Failed` here would both lie about the work and (via the run
+            // row) spend one of the task's retries.
+            MemberRunStatus::Cancelled => {
+                let error = outcome
+                    .error
+                    .unwrap_or_else(|| "Run cancelled before completion".to_string());
+                info!(task_id = %task.id, "team_delegate: member run cancelled; task left claimable");
+                Ok(TeamDelegateOutput {
+                    task_id: task.id,
+                    status: DelegateStatus::Cancelled,
                     reply: None,
                     error: Some(error),
                 })

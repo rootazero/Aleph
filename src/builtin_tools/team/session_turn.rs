@@ -5,6 +5,7 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use tracing::debug;
 
+use crate::builtin_tools::acting_agent::acting_agent_id;
 use crate::error::{AlephError, Result};
 use crate::sync_primitives::Arc;
 use crate::teams::sessions::coordinator::SessionCoordinator;
@@ -58,6 +59,12 @@ pub struct SessionTurnTool {
 }
 
 impl SessionTurnTool {
+    /// The agent acting in THIS call — the identity of the running turn, not
+    /// the one this tool was constructed with. See [`acting_agent_id`].
+    fn actor(&self) -> String {
+        acting_agent_id(&self.current_agent_id)
+    }
+
     #[must_use]
     pub const fn new(coordinator: Arc<SessionCoordinator>, current_agent_id: String) -> Self {
         Self {
@@ -80,14 +87,14 @@ impl AlephTool for SessionTurnTool {
         debug!(
             session_id = %args.session_id,
             mode = %args.mode,
-            agent_id = %self.current_agent_id,
+            agent_id = %self.actor(),
             "session_turn"
         );
 
         match args.mode.as_str() {
             "respond" => {
                 self.coordinator
-                    .submit_turn(&args.session_id, &self.current_agent_id, &args.content)
+                    .submit_turn(&args.session_id, &self.actor(), &args.content)
                     .await
                     .map_err(|e| AlephError::other(format!("Failed to submit turn: {e}")))?;
 
@@ -108,7 +115,7 @@ impl AlephTool for SessionTurnTool {
                 };
 
                 self.coordinator
-                    .finalize(&args.session_id, &self.current_agent_id, outcome)
+                    .finalize(&args.session_id, &self.actor(), outcome)
                     .await
                     .map_err(|e| AlephError::other(format!("Failed to conclude session: {e}")))?;
 
@@ -120,7 +127,7 @@ impl AlephTool for SessionTurnTool {
             }
             "cancel" => {
                 self.coordinator
-                    .cancel(&args.session_id, &self.current_agent_id)
+                    .cancel(&args.session_id, &self.actor())
                     .await
                     .map_err(|e| AlephError::other(format!("Failed to cancel session: {e}")))?;
 

@@ -701,3 +701,107 @@ async fn a_plural_category_never_creates_a_second_directory() {
         "a phantom plural directory was created"
     );
 }
+
+/// The per-action distillation ledger must reach the model, not just
+/// `dream_events.jsonl`.
+///
+/// `note_manage(action="evolution")` is the only model-reachable view of a
+/// dream cycle. Until this test existed it rendered the health score and the
+/// gate verdict and silently dropped `report.distill_actions` — so the record
+/// that answers "why was this lesson not remembered" was written by every
+/// distilling stage and readable by nobody the model can ask.
+///
+/// The assertion is on the rendered `content` of a real `evolution` call over
+/// a real on-disk event log: throwing away `render_distill_actions`' return
+/// value turns this red, which is what separates "the renderer is correct"
+/// from "the renderer is wired".
+#[tokio::test]
+async fn the_evolution_view_shows_why_a_distilled_lesson_was_dropped() {
+    use crate::memory::dreaming::event_log::{DreamEvent, EventLog};
+    use crate::memory::dreaming::{
+        DistillActionRecord, DistillOutcome, DreamReport, DreamStrategy, DreamValidationReport,
+        GateDecision, SelectionDecision, ValidationTier,
+    };
+
+    let (_dir, tool) = mk_tool();
+    let agent_dir = tool_memory_dir(&tool).join(crate::routing::DEFAULT_AGENT_ID);
+    std::fs::create_dir_all(&agent_dir).unwrap();
+
+    let distill_actions = vec![
+        DistillActionRecord {
+            stage: "tool_failure_distill".into(),
+            action_kind: "new".into(),
+            target_path: None,
+            title: Some("bash-quoting".into()),
+            confidence: Some(0.9),
+            severity: Some("high".into()),
+            outcome: DistillOutcome::Applied,
+            error: None,
+        },
+        DistillActionRecord {
+            stage: "feedback_distill".into(),
+            action_kind: "supersede".into(),
+            target_path: Some("feedback/tone".into()),
+            title: Some("tone".into()),
+            confidence: Some(0.4),
+            severity: Some("low".into()),
+            outcome: DistillOutcome::FilteredEvidence,
+            error: Some("target note is still being recalled".into()),
+        },
+    ];
+    let report = DreamReport {
+        distill_actions,
+        ..DreamReport::default()
+    };
+
+    let tier = || ValidationTier {
+        passed: true,
+        checks_run: 1,
+        checks_passed: 1,
+        issues: vec![],
+    };
+    let event = DreamEvent {
+        id: "dream_test_1".into(),
+        cycle: 1,
+        strategy: DreamStrategy::Consolidate,
+        selection: SelectionDecision {
+            strategy: DreamStrategy::Consolidate,
+            rationale: "test".into(),
+            personality_adjustment: 0.0,
+        },
+        gate_decision: GateDecision::Allow,
+        report,
+        validation: DreamValidationReport {
+            l1_format: tier(),
+            l2_consistency: tier(),
+            l3_semantic: None,
+            l4_retrospective: None,
+        },
+        duration_ms: 1,
+        created_at: 1_700_000_000,
+    };
+    EventLog::new(&agent_dir).append(&event).await.unwrap();
+
+    let result = tool
+        .handle_evolution(&NoteManageArgs {
+            action: NoteManageAction::Evolution,
+            ..blank_args()
+        })
+        .await
+        .unwrap();
+    let content = result.content.expect("evolution renders a report");
+
+    assert!(
+        content.contains("tool_failure_distill"),
+        "the stage that produced the action must be named: {content}"
+    );
+    assert!(
+        content.contains("target note is still being recalled"),
+        "the REASON a lesson was dropped is the whole point of the ledger: {content}"
+    );
+    assert!(
+        content.contains("bash-quoting"),
+        "an applied action must be visible too, so the ledger is not read as \
+         a failure-only list: {content}"
+    );
+}

@@ -19,6 +19,7 @@ pub mod note_synthesis;
 pub mod note_weave;
 pub mod skill_distill;
 pub mod skill_lifecycle;
+pub mod tool_failure_distill;
 pub mod workflow_proposal;
 
 pub use co_recall_edges::CoRecallEdgesStage;
@@ -38,6 +39,7 @@ pub use note_synthesis::NoteSynthesisStage;
 pub use note_weave::NoteWeaveStage;
 pub use skill_distill::SkillDistillStage;
 pub use skill_lifecycle::SkillLifecycleStage;
+pub use tool_failure_distill::ToolFailureDistillStage;
 pub use workflow_proposal::WorkflowProposalStage;
 
 /// Whether a provider error makes every further LLM call in this cycle futile.

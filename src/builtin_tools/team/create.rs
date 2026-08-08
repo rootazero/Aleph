@@ -5,6 +5,7 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use tracing::info;
 
+use crate::builtin_tools::acting_agent::acting_agent_id;
 use crate::builtin_tools::agent_manage::create::validate_agent_id;
 use crate::config::agent_manager::AgentManager;
 use crate::error::{AlephError, Result};
@@ -145,6 +146,12 @@ pub struct TeamCreateTool {
 }
 
 impl TeamCreateTool {
+    /// The agent acting in THIS call — the identity of the running turn, not
+    /// the one this tool was constructed with. See [`acting_agent_id`].
+    fn actor(&self) -> String {
+        acting_agent_id(&self.current_agent_id)
+    }
+
     pub fn new(
         store: Arc<dyn TeamStore>,
         registry: Arc<AgentRegistry>,
@@ -161,10 +168,6 @@ impl TeamCreateTool {
         }
     }
 
-    /// Set the current agent ID (called by `ExecutionEngine` before each run).
-    pub fn set_current_agent_id(&mut self, agent_id: impl Into<String>) {
-        self.current_agent_id = agent_id.into();
-    }
 
     /// Look up a built-in role prompt template by name.
     fn builtin_role_prompt(role: &str) -> Option<&'static str> {
@@ -216,7 +219,7 @@ impl TeamCreateTool {
         }
 
         if let Some(ref create_spec) = spec.create {
-            let leader_model = self.registry.get(&self.current_agent_id).await.map_or_else(
+            let leader_model = self.registry.get(&self.actor()).await.map_or_else(
                 || "claude-sonnet-4-5".to_string(),
                 |inst| inst.config().model.clone(),
             );
@@ -399,7 +402,7 @@ impl AlephTool for TeamCreateTool {
     type Output = TeamCreateOutput;
 
     async fn call(&self, args: Self::Args) -> Result<Self::Output> {
-        let leader_id = self.current_agent_id.clone();
+        let leader_id = self.actor();
 
         // Inject leader role prompt for the calling agent
         if let Some(instance) = self.registry.get(&leader_id).await {

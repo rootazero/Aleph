@@ -6,6 +6,7 @@ use async_trait::async_trait;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
+use crate::builtin_tools::acting_agent::acting_agent_id;
 use crate::error::{AlephError, Result};
 use crate::sync_primitives::Arc;
 use crate::teams::messages::router::{MessageRouter, SendRequest};
@@ -37,6 +38,12 @@ pub struct LifecycleRequestShutdownTool {
 }
 
 impl LifecycleRequestShutdownTool {
+    /// The agent acting in THIS call — the identity of the running turn, not
+    /// the one this tool was constructed with. See [`acting_agent_id`].
+    fn actor(&self) -> String {
+        acting_agent_id(&self.current_agent_id)
+    }
+
     pub fn new(
         router: Arc<MessageRouter>,
         team_store: Arc<dyn TeamStore>,
@@ -68,7 +75,7 @@ impl AlephTool for LifecycleRequestShutdownTool {
             .await?
             .ok_or_else(|| AlephError::other(format!("Team '{}' not found", args.team_id)))?;
 
-        if team.leader_id == self.current_agent_id {
+        if team.leader_id == self.actor() {
             return Err(AlephError::tool(
                 "lifecycle_request_shutdown: caller is the team leader; \
                  a leader cannot request its own shutdown via the team mailbox",
@@ -86,14 +93,14 @@ impl AlephTool for LifecycleRequestShutdownTool {
             .router
             .send(SendRequest {
                 team_id: args.team_id,
-                from_agent: self.current_agent_id.clone(),
+                from_agent: self.actor(),
                 to: vec![team.leader_id.clone()],
                 cc: vec![],
                 msg_type: MessageType::ShutdownRequest,
-                subject: format!("Shutdown request: {}", self.current_agent_id),
+                subject: format!("Shutdown request: {}", self.actor()),
                 content: format!(
                     "Worker `{}` requests shutdown.\n\nReason:\n{reason}",
-                    self.current_agent_id
+                    self.actor()
                 ),
                 reply_to: None,
                 attachments: vec![],

@@ -4,6 +4,7 @@ use async_trait::async_trait;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
+use crate::builtin_tools::acting_agent::acting_agent_id;
 use crate::error::{AlephError, Result};
 use crate::sync_primitives::Arc;
 use crate::teams::plans::PlanManager;
@@ -42,6 +43,12 @@ pub struct PlanResolveTool {
 }
 
 impl PlanResolveTool {
+    /// The agent acting in THIS call — the identity of the running turn, not
+    /// the one this tool was constructed with. See [`acting_agent_id`].
+    fn actor(&self) -> String {
+        acting_agent_id(&self.current_agent_id)
+    }
+
     #[must_use]
     pub const fn new(plan_manager: Arc<PlanManager>, current_agent_id: String) -> Self {
         Self {
@@ -63,11 +70,8 @@ impl AlephTool for PlanResolveTool {
     type Output = PlanResolveOutput;
 
     async fn call(&self, args: Self::Args) -> Result<Self::Output> {
-        let leader_id = if self.current_agent_id.is_empty() {
-            "leader"
-        } else {
-            self.current_agent_id.as_str()
-        };
+        let actor = self.actor();
+        let leader_id = if actor.is_empty() { "leader" } else { &actor };
 
         let decision = args.decision.trim().to_lowercase();
         match decision.as_str() {

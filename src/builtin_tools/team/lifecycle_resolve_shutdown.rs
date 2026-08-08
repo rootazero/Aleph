@@ -6,6 +6,7 @@ use async_trait::async_trait;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
+use crate::builtin_tools::acting_agent::acting_agent_id;
 use crate::error::{AlephError, Result};
 use crate::sync_primitives::Arc;
 use crate::teams::messages::router::{MessageRouter, SendRequest};
@@ -42,6 +43,12 @@ pub struct LifecycleResolveShutdownTool {
 }
 
 impl LifecycleResolveShutdownTool {
+    /// The agent acting in THIS call — the identity of the running turn, not
+    /// the one this tool was constructed with. See [`acting_agent_id`].
+    fn actor(&self) -> String {
+        acting_agent_id(&self.current_agent_id)
+    }
+
     #[must_use]
     pub const fn new(router: Arc<MessageRouter>, current_agent_id: String) -> Self {
         Self {
@@ -64,10 +71,11 @@ impl AlephTool for LifecycleResolveShutdownTool {
     type Output = LifecycleResolveShutdownOutput;
 
     async fn call(&self, args: Self::Args) -> Result<Self::Output> {
-        let leader_id = if self.current_agent_id.is_empty() {
+        let actor = self.actor();
+        let leader_id = if actor.is_empty() {
             "leader".to_string()
         } else {
-            self.current_agent_id.clone()
+            actor
         };
 
         let (msg_type, label) = match args.decision.trim().to_lowercase().as_str() {

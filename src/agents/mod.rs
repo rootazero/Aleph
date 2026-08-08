@@ -18,6 +18,7 @@ pub mod loader;
 pub(crate) mod tool_sets;
 
 pub mod allowlist_tool_service;
+pub mod background_persistence;
 pub mod background_tracker;
 pub mod forwarding_trace_sink;
 pub mod progress;

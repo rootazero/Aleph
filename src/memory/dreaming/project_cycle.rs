@@ -126,19 +126,32 @@ pub(super) enum NamespaceCycle {
 ///   [`has_undistilled_corrections`], i.e. the stage's own watermark read, so
 ///   the gate cannot disagree with the stage it is gating.
 ///
+/// * **undistilled tool failures.** `RawMemoryToolSink` writes one row per tool
+///   call keyed on the *turn's* agent, and `tool_failure_distill` is their only
+///   distiller. Exactly like corrections, those rows move no `updated_at` and
+///   enqueue no review, so a corpus whose only new work is "the same tool kept
+///   failing" would sit at `Idle` forever. The answer again comes from the
+///   stage's own predicate ([`has_undistilled_tool_failures`]) — same
+///   watermark, same window, same quorum — so gate and stage cannot disagree.
+///
 /// Deliberately **not** a config knob: this is not a policy about how eager
 /// maintenance should be, it is the observation that re-judging unchanged bytes
 /// cannot produce a different answer.
 ///
 /// [`has_undistilled_corrections`]: crate::memory::dreaming::stages::feedback_distill::has_undistilled_corrections
+/// [`has_undistilled_tool_failures`]: crate::memory::dreaming::stages::tool_failure_distill::has_undistilled_tool_failures
 #[must_use]
 pub(super) fn corpus_needs_maintenance(
     index: &[crate::memory::notes::store::NoteIndexEntry],
     since: i64,
     pending_reviews: usize,
     has_corrections: bool,
+    has_tool_failures: bool,
 ) -> bool {
-    has_corrections || pending_reviews > 0 || index.iter().any(|n| n.updated_at >= since)
+    has_corrections
+        || has_tool_failures
+        || pending_reviews > 0
+        || index.iter().any(|n| n.updated_at >= since)
 }
 
 /// Run one corpus's maintenance cycle, governed by that corpus's
@@ -206,18 +219,30 @@ pub(super) async fn run_namespace_cycle(
             deps.config.feedback_lookback,
         )
         .await;
+    // Fourth leg: tool failures recorded against THIS agent that
+    // `tool_failure_distill` has not consumed. Same shape as corrections —
+    // read through the stage's own predicate so gate and stage share one
+    // watermark.
+    let has_tool_failures =
+        crate::memory::dreaming::stages::tool_failure_distill::has_undistilled_tool_failures(
+            deps.database,
+            agent_id,
+        )
+        .await;
     if !corpus_needs_maintenance(
         &index,
         last_cycle_started_at,
         pending_reviews,
         has_corrections,
+        has_tool_failures,
     ) {
         tracing::debug!(
             agent = %agent_id,
             notes = index.len(),
             last_cycle_started_at,
             "corpus unchanged since its last dream cycle, its review queue is \
-             empty and it has no undistilled corrections; skipping"
+             empty and it has neither undistilled corrections nor undistilled \
+             tool failures; skipping"
         );
         return Ok(NamespaceCycle::Idle);
     }

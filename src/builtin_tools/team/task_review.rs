@@ -13,6 +13,7 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use tracing::{debug, warn};
 
+use crate::builtin_tools::acting_agent::acting_agent_id;
 use crate::agents::swarm::tasks::acceptance::require_grounding;
 use crate::agents::swarm::tasks::{
     CoordTaskStatus, CoordTaskStore, CoordTaskUpdate, ReviewVerdict, ReviewerKind,
@@ -132,6 +133,12 @@ pub struct TaskReviewTool {
 }
 
 impl TaskReviewTool {
+    /// The agent acting in THIS call — the identity of the running turn, not
+    /// the one this tool was constructed with. See [`acting_agent_id`].
+    fn actor(&self) -> String {
+        acting_agent_id(&self.current_agent_id)
+    }
+
     pub fn new(
         coord_store: Arc<dyn CoordTaskStore>,
         team_store: Arc<dyn TeamStore>,
@@ -190,10 +197,10 @@ impl AlephTool for TaskReviewTool {
                 .map(|t| t.leader_id),
             None => None,
         };
-        if !is_authorized(&self.current_agent_id, leader.as_deref()) {
+        if !is_authorized(&self.actor(), leader.as_deref()) {
             warn!(
                 task_id = %args.task_id,
-                caller = %self.current_agent_id,
+                caller = %self.actor(),
                 "task_review ignored: caller is not the team leader"
             );
             return Ok(TaskReviewOutput {
@@ -240,7 +247,7 @@ impl AlephTool for TaskReviewTool {
                 &args.task_id,
                 verdict,
                 ReviewerKind::LeadAgent,
-                Some(&self.current_agent_id),
+                Some(&self.actor()),
             )
             .await;
         // The verdict changes the task's STATUS, never its result. `result` is
@@ -263,7 +270,7 @@ impl AlephTool for TaskReviewTool {
         if let Some(fb) = args.feedback.as_deref().filter(|f| !f.trim().is_empty()) {
             let _ = self
                 .coord_store
-                .add_task_comment(&args.task_id, &self.current_agent_id, fb)
+                .add_task_comment(&args.task_id, &self.actor(), fb)
                 .await;
         }
         if let Some(g) = &args.grounding {
@@ -282,7 +289,7 @@ impl AlephTool for TaskReviewTool {
             );
             let _ = self
                 .coord_store
-                .add_task_comment(&args.task_id, &self.current_agent_id, &line)
+                .add_task_comment(&args.task_id, &self.actor(), &line)
                 .await;
         }
 

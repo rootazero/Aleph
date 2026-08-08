@@ -86,7 +86,14 @@ const DREAM_HISTORY_WINDOW: usize =
 /// (`project_cycle::corpus_needs_maintenance`) is what keeps that order from
 /// starving the tail, because a corpus already maintained is skipped for free on
 /// the next night and lets the queue drain.
-const MAX_CORPUS_CYCLES_PER_NIGHT: usize = 8;
+///
+/// **This is the DEFAULT, not the live value.** The fan-out reads
+/// `[memory.dreaming] max_corpus_cycles_per_night`; this constant is the number
+/// that knob falls back to when unset, and it is referenced directly by
+/// `config::types::memory::defaults::default_dream_max_corpus_cycles_per_night`
+/// — one number, one definition, checked by the type system rather than by a
+/// source-scanning guard.
+pub(crate) const MAX_CORPUS_CYCLES_PER_NIGHT: usize = 8;
 
 /// Every note corpus that the nightly fan-out should offer a maintenance cycle:
 /// all corpora on disk except `base`, which ran the full pipeline itself.
@@ -249,6 +256,12 @@ impl DreamPipeline {
                     min_candidates: dreaming_cfg.feedback_distill_min_candidates,
                     lookback: dreaming_cfg.feedback_lookback,
                 }),
+                // The failure rail, alongside the correction rail. Same
+                // frequent path for the same reason: a failure pattern is worth
+                // knowing about the next day, not the next high-growth cycle.
+                // Its own watermark + failure quorum make it a free no-op when
+                // nothing new broke, so this costs no LLM call on a quiet night.
+                Box::new(stages::ToolFailureDistillStage::default()),
                 Box::new(stages::NoteDriftStage {
                     max_pairs: dreaming_cfg.drift_max_pairs_per_run,
                 }),
@@ -304,6 +317,11 @@ impl DreamPipeline {
                     min_candidates: dreaming_cfg.feedback_distill_min_candidates,
                     lookback: dreaming_cfg.feedback_lookback,
                 }),
+                // Present on BOTH LLM paths, like FeedbackDistill: only one
+                // strategy runs per cycle, so a stage that lives on only one of
+                // them silently stops distilling for as long as the selector
+                // prefers the other.
+                Box::new(stages::ToolFailureDistillStage::default()),
                 // System-level co-occurrence mining: draft gated MetaSkill
                 // (workflow) proposals from recurring skill chains. Pure
                 // deterministic aggregation (no LLM) on the rarer high-growth
@@ -342,6 +360,16 @@ impl DreamPipeline {
     /// non-default agent had no consumer at all: written, surfaced back to the
     /// user as "distilled by the nightly dream cycle", and then never read.
     /// The corpus fan-out is the consumer, so the stage has to be in it.
+    ///
+    /// `tool_failure_distill` is NOT on this list either, and the reason is
+    /// the same one, checked rather than assumed: `RawMemoryToolSink` bakes the
+    /// *turn's* `agent_id` into every `ToolInvocation` row, so failures are
+    /// already partitioned per corpus. Every read and write the stage performs
+    /// — the rows, its watermark, the `lesson/` notes, the index refresh — is
+    /// keyed on `ctx.agent_id`. Running it base-only would mean a sub-agent
+    /// that keeps failing at the same tool never learns anything, while the
+    /// base agent's lessons would be silently derived from a partition it does
+    /// not own.
     const GLOBAL_ONLY_STAGES: &'static [&'static str] = &[
         "corpus_narrative",
         "skill_lifecycle",
@@ -1232,11 +1260,17 @@ impl DreamDaemon {
                 // nothing else in this file bounds. Corpora that skip (unchanged
                 // since their last cycle) cost no LLM call and so do not spend
                 // budget; only cycles that actually ran do.
+                //
+                // Read from config, not from `MAX_CORPUS_CYCLES_PER_NIGHT`: the
+                // right ceiling depends on how many partitions an install has
+                // and how much the operator is willing to spend, and neither is
+                // knowable here. The constant remains that knob's default.
+                let budget = self.config.max_corpus_cycles_per_night;
                 let mut spent = 0usize;
                 for ns in &corpora {
-                    if spent >= MAX_CORPUS_CYCLES_PER_NIGHT {
+                    if spent >= budget {
                         warn!(
-                            budget = MAX_CORPUS_CYCLES_PER_NIGHT,
+                            budget,
                             remaining = corpora.len() - spent,
                             "nightly per-corpus dream budget exhausted; \
                              remaining corpora wait for the next window"
@@ -1853,6 +1887,7 @@ mod tests {
                 "note_review",
                 "note_consolidate",
                 "feedback_distill",
+                "tool_failure_distill",
                 "note_drift",
                 "index_refresher",
                 "co_recall_edges",
@@ -1881,6 +1916,7 @@ mod tests {
                 "note_synthesis",
                 "skill_distill",
                 "feedback_distill",
+                "tool_failure_distill",
                 "workflow_proposal",
                 "corpus_narrative",
                 "daily_digest"
@@ -1907,6 +1943,9 @@ mod tests {
         // ...and the per-corpus subset must remain, in order. `feedback_distill`
         // belongs here: corrections are filed per agent by
         // `flag_user_correction`, and this fan-out is their only consumer.
+        // `tool_failure_distill` belongs here for the same reason: tool
+        // invocations are recorded under the turn's agent, so a sub-agent's
+        // failures only ever reach a distiller through this fan-out.
         assert_eq!(
             names,
             vec![
@@ -1916,6 +1955,7 @@ mod tests {
                 "note_synthesis",
                 "skill_distill",
                 "feedback_distill",
+                "tool_failure_distill",
             ]
         );
     }
@@ -2805,6 +2845,7 @@ mod tests {
             &[],
             1_000,
             0,
+            false,
             false
         ));
         // Notes, none touched since the last cycle started.
@@ -2812,6 +2853,7 @@ mod tests {
             &[note(500), note(999)],
             1_000,
             0,
+            false,
             false
         ));
         // One note written during the last cycle: a capped stage may still have
@@ -2820,6 +2862,7 @@ mod tests {
             &[note(500), note(1_000)],
             1_000,
             0,
+            false,
             false
         ));
         // Never dreamed.
@@ -2827,6 +2870,7 @@ mod tests {
             &[note(500)],
             0,
             0,
+            false,
             false
         ));
         // A pending review moves no `updated_at`, and `note_review` is the
@@ -2835,30 +2879,63 @@ mod tests {
             &[],
             1_000,
             1,
+            false,
             false
         ));
         // An undistilled correction moves no `updated_at` and enqueues no
         // review either. `feedback_distill` is its only consumer and it runs
         // inside this cycle, so a gate blind to it strands every correction
         // filed against a non-base agent.
-        assert!(project_cycle::corpus_needs_maintenance(&[], 1_000, 0, true));
+        assert!(project_cycle::corpus_needs_maintenance(
+            &[],
+            1_000,
+            0,
+            true,
+            false,
+        ));
+        // Same for tool failures: `tool_failure_distill` is their only consumer
+        // and they move no `updated_at` either. Without this leg a sub-agent
+        // that fails at the same tool every day would never be woken to learn
+        // from it — the note-content gate cannot see a raw_memory row.
+        assert!(project_cycle::corpus_needs_maintenance(
+            &[],
+            1_000,
+            0,
+            false,
+            true,
+        ));
     }
 
-    /// The fan-out's cost scales with the number of corpora, so it is bounded.
+    /// The fan-out's cost scales with the number of corpora, so it is bounded —
+    /// and the bound the operator configured is the one that bites.
+    ///
+    /// Driven with a budget DIFFERENT from `MAX_CORPUS_CYCLES_PER_NIGHT` on
+    /// purpose. At the default value this test would stay green even if the
+    /// loop still read the constant and ignored `[memory.dreaming]` entirely —
+    /// the "the config field exists, nothing reads it" shape, which no test
+    /// written at the default value can see.
     #[tokio::test]
-    async fn the_nightly_fan_out_stops_at_its_budget() {
+    async fn the_nightly_fan_out_stops_at_the_configured_budget() {
+        const CONFIGURED_BUDGET: usize = 3;
+        assert_ne!(
+            CONFIGURED_BUDGET, MAX_CORPUS_CYCLES_PER_NIGHT,
+            "this test is only meaningful when it disagrees with the default"
+        );
+
         let dir = std::env::temp_dir().join(format!("aleph_dream_budget_{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(&dir).unwrap();
         let store = Arc::new(SqliteMemoryBackend::new(&dir).unwrap());
 
-        let corpora: Vec<String> = (0..MAX_CORPUS_CYCLES_PER_NIGHT + 3)
+        let corpora: Vec<String> = (0..CONFIGURED_BUDGET + 3)
             .map(|i| format!("{DEFAULT_AGENT_ID}__u-user{i:02}"))
             .collect();
         for ns in &corpora {
             seed_corpus_note(&dir, &store, ns).await;
         }
 
-        let daemon = DreamDaemon::from_config(store.clone(), &MemoryConfig::default())
+        let mut memory_config = MemoryConfig::default();
+        memory_config.dreaming.max_corpus_cycles_per_night = CONFIGURED_BUDGET;
+        let daemon = DreamDaemon::from_config(store.clone(), &memory_config)
             .unwrap()
             .with_provider(Arc::new(MockProvider::new("")))
             .with_embedder(Arc::new(StubEmbedder))
@@ -2879,8 +2956,8 @@ mod tests {
             })
             .count();
         assert_eq!(
-            maintained, MAX_CORPUS_CYCLES_PER_NIGHT,
-            "the night's budget is a ceiling, not a suggestion"
+            maintained, CONFIGURED_BUDGET,
+            "the night's budget is the CONFIGURED ceiling, not the compiled-in default"
         );
     }
 }

@@ -288,6 +288,18 @@ pub fn get_scratchpad_bindings_path() -> Result<PathBuf> {
     Ok(get_data_dir()?.join("scratchpad_bindings.json"))
 }
 
+/// Get the directory for cross-process background sub-agent records.
+///
+/// Returns: `<data_dir>/background_subagents/`
+///
+/// One function so the boot-time reconciliation and every later read/write of
+/// a sub-agent sidecar resolve the same directory — the same discipline as the
+/// scratchpad bindings above (see
+/// [`crate::agents::background_persistence`]).
+pub fn get_background_subagents_dir() -> Result<PathBuf> {
+    Ok(get_data_dir()?.join("background_subagents"))
+}
+
 // ============================================================================
 // Multi-location Skills Discovery (OpenCode Compatible)
 // ============================================================================

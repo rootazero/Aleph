@@ -66,6 +66,17 @@ pub fn apply_live_sections(cfg: &Config, top_sections: &[&str]) -> Vec<&'static 
             },
             // New admission caps bind on the next run admission.
             "execution" => {
+                // W27 — the sub-agent fan-out cap is a process-global atomic
+                // read by `SubagentTool::new`, so it always lands (there is no
+                // handle that can be missing). It is applied first and its
+                // success is deliberately NOT folded into `landed`: the
+                // section's honest-downgrade verdict tracks the run-admission
+                // caps, which are the part that needs a live engine. Reporting
+                // `Live` because a knob that cannot fail succeeded would be the
+                // mirror of the bug this module exists to fix.
+                crate::agents::subagent_tool::set_max_concurrent_subagents(
+                    cfg.execution.max_concurrent_subagents,
+                );
                 crate::gateway::execution_engine::concurrency_handle::reconfigure_global(
                     cfg.execution.max_runs_global,
                     cfg.execution.max_runs_per_agent,
@@ -166,6 +177,32 @@ mod tests {
         // which the patcher already swapped — no boot-time handle involved.
         let cfg = Config::default();
         assert_eq!(apply_live_sections(&cfg, &["behavior"]), vec!["behavior"]);
+    }
+
+    /// W27 — the `execution` arm must actually push the sub-agent cap into the
+    /// enforcement point, not merely be declared live.
+    ///
+    /// Asserted by reading the value back out of `agents::subagent_tool`, which
+    /// is what `SubagentTool::new` consults: dropping the `set_…` call from the
+    /// arm leaves `every_live_section_has_an_apply_arm` and every clamp test
+    /// green while a patched `config.toml` changes nothing.
+    #[test]
+    #[serial_test::serial(subagent_concurrency_cap)]
+    fn the_execution_arm_installs_the_subagent_concurrency_cap() {
+        use crate::agents::subagent_tool::{
+            max_concurrent_subagents, set_max_concurrent_subagents,
+        };
+
+        let restore = max_concurrent_subagents();
+        let mut cfg = Config::default();
+        cfg.execution.max_concurrent_subagents = 11;
+        let _ = apply_live_sections(&cfg, &["execution"]);
+        let observed = max_concurrent_subagents();
+        set_max_concurrent_subagents(restore);
+        assert_eq!(
+            observed, 11,
+            "[execution] max_concurrent_subagents must reach the fan-out semaphore's source"
+        );
     }
 
     #[test]

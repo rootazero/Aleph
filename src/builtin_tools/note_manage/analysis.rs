@@ -114,6 +114,7 @@ impl NoteManageTool {
                     "- ⚠️ churn pathology: {reason} (cooldown {cooldown_remaining})\n"
                 ));
             }
+            content.push_str(&render_distill_actions(&ev.report.distill_actions));
             content.push('\n');
         }
 
@@ -141,4 +142,56 @@ impl NoteManageTool {
             search: None,
         })
     }
+}
+
+/// Render one cycle's per-action distillation ledger.
+///
+/// Without this, `DreamReport.distill_actions` existed only in
+/// `dream_events.jsonl`: the ledger that answers "why was this lesson NOT
+/// remembered" was written for every distilling stage (`skill_distill`,
+/// `feedback_distill`, `tool_failure_distill`) and read by nobody the model
+/// can reach. A ledger that covers a question on only one rail answers it on
+/// only that rail — and here it answered on none.
+///
+/// Grouped by stage so a reader can tell which production line dropped what;
+/// the reason (`error`, which also carries an LLM `skip` rationale) is the
+/// whole point of the row and is never elided.
+fn render_distill_actions(actions: &[crate::memory::dreaming::DistillActionRecord]) -> String {
+    use crate::memory::dreaming::DistillOutcome;
+
+    if actions.is_empty() {
+        return String::new();
+    }
+
+    let mut stages: Vec<&str> = actions.iter().map(|a| a.stage.as_str()).collect();
+    stages.sort_unstable();
+    stages.dedup();
+
+    let mut out = String::from("- distillation ledger:\n");
+    for stage in stages {
+        out.push_str(&format!("  - `{stage}`\n"));
+        for a in actions.iter().filter(|a| a.stage == stage) {
+            let outcome = match a.outcome {
+                DistillOutcome::Applied => "applied",
+                DistillOutcome::FilteredNonCandidate => "dropped (path not offered to the model)",
+                DistillOutcome::FilteredInvalid => "dropped (format/safety gate)",
+                DistillOutcome::FilteredEvidence => "dropped (recall evidence outweighed it)",
+                DistillOutcome::Error => "errored while applying",
+            };
+            let subject = a
+                .title
+                .as_deref()
+                .or(a.target_path.as_deref())
+                .unwrap_or("(untitled)");
+            out.push_str(&format!(
+                "    - {} `{}` → {outcome}",
+                a.action_kind, subject
+            ));
+            if let Some(reason) = a.error.as_deref().filter(|r| !r.is_empty()) {
+                out.push_str(&format!(" — {reason}"));
+            }
+            out.push('\n');
+        }
+    }
+    out
 }

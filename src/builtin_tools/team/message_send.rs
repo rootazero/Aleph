@@ -7,6 +7,7 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use tracing::debug;
 
+use crate::builtin_tools::acting_agent::acting_agent_id;
 use crate::error::{AlephError, Result};
 use crate::sync_primitives::Arc;
 use crate::teams::messages::mentions::{extract_mentions, MENTION_ALL};
@@ -71,6 +72,12 @@ pub struct MessageSendTool {
 }
 
 impl MessageSendTool {
+    /// The agent acting in THIS call — the identity of the running turn, not
+    /// the one this tool was constructed with. See [`acting_agent_id`].
+    fn actor(&self) -> String {
+        acting_agent_id(&self.current_agent_id)
+    }
+
     pub fn new(
         router: Arc<MessageRouter>,
         team_store: Arc<dyn TeamStore>,
@@ -117,7 +124,7 @@ impl AlephTool for MessageSendTool {
             members
                 .into_iter()
                 .map(|m| m.agent_id)
-                .filter(|id| id != &self.current_agent_id)
+                .filter(|id| id != &self.actor())
                 .collect::<Vec<_>>()
         } else if mention_ids.is_empty() {
             args.to
@@ -137,7 +144,7 @@ impl AlephTool for MessageSendTool {
             let already: HashSet<&str> = to.iter().map(|s| s.as_str()).collect();
             let mut additions: Vec<String> = Vec::new();
             for id in mention_ids {
-                if id == self.current_agent_id {
+                if id == self.actor() {
                     continue;
                 }
                 if !member_ids.contains(&id) {
@@ -158,7 +165,7 @@ impl AlephTool for MessageSendTool {
             cc = ?args.cc,
             msg_type = %args.msg_type.as_str(),
             subject = %args.subject,
-            from = %self.current_agent_id,
+            from = %self.actor(),
             broadcast = args.broadcast,
             mention_all,
             "message_send: sending message"
@@ -174,7 +181,7 @@ impl AlephTool for MessageSendTool {
             .router
             .send(SendRequest {
                 team_id: args.team_id,
-                from_agent: self.current_agent_id.clone(),
+                from_agent: self.actor(),
                 to,
                 cc: args.cc,
                 msg_type: args.msg_type,

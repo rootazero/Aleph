@@ -6,6 +6,7 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use tracing::debug;
 
+use crate::builtin_tools::acting_agent::acting_agent_id;
 use crate::error::{AlephError, Result};
 use crate::sync_primitives::Arc;
 use crate::teams::events::{EventLogStore, TeamEvent};
@@ -58,6 +59,12 @@ pub struct TeamDigestTool {
 }
 
 impl TeamDigestTool {
+    /// The agent acting in THIS call — the identity of the running turn, not
+    /// the one this tool was constructed with. See [`acting_agent_id`].
+    fn actor(&self) -> String {
+        acting_agent_id(&self.current_agent_id)
+    }
+
     pub fn new(
         team_store: Arc<dyn TeamStore>,
         event_store: Arc<dyn EventLogStore>,
@@ -166,7 +173,7 @@ impl AlephTool for TeamDigestTool {
                 .join("\n")
         };
 
-        let is_leader = team.leader_id == self.current_agent_id;
+        let is_leader = team.leader_id == self.actor();
 
         debug!(
             team_id = %args.team_id,

@@ -5,6 +5,7 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use tracing::debug;
 
+use crate::builtin_tools::acting_agent::acting_agent_id;
 use crate::agents::swarm::tasks::{CoordTaskStatus, CoordTaskStore, CoordTaskUpdate};
 use crate::error::{AlephError, Result};
 use crate::sync_primitives::Arc;
@@ -58,6 +59,12 @@ pub struct TaskSubmitTool {
 }
 
 impl TaskSubmitTool {
+    /// The agent acting in THIS call — the identity of the running turn, not
+    /// the one this tool was constructed with. See [`acting_agent_id`].
+    fn actor(&self) -> String {
+        acting_agent_id(&self.current_agent_id)
+    }
+
     pub fn new(
         store: Arc<dyn ArtifactStore>,
         coord_store: Option<Arc<dyn CoordTaskStore>>,
@@ -94,7 +101,7 @@ impl AlephTool for TaskSubmitTool {
             task_id = %args.task_id,
             artifact_type = %args.artifact_type.as_str(),
             title = %args.title,
-            agent_id = %self.current_agent_id,
+            agent_id = %self.actor(),
             "task_submit: creating artifact"
         );
 
@@ -123,7 +130,7 @@ impl AlephTool for TaskSubmitTool {
             .store
             .create_artifact(NewArtifact {
                 task_id: args.task_id.clone(),
-                agent_id: self.current_agent_id.clone(),
+                agent_id: self.actor(),
                 artifact_type: args.artifact_type,
                 title: args.title,
                 content: args.content,

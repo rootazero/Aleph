@@ -23,6 +23,11 @@ mod parse;
 mod spawn;
 mod types;
 
+pub use types::{
+    clamp_max_concurrent_subagents, max_concurrent_subagents, set_max_concurrent_subagents,
+    DEFAULT_MAX_CONCURRENT_SUBAGENTS, MAX_CONCURRENT_SUBAGENTS_CEILING, MIN_CONCURRENT_SUBAGENTS,
+};
+
 #[cfg(test)]
 mod tests;
 
@@ -39,8 +44,6 @@ use crate::sync_primitives::Arc;
 use crate::teams::messages::inbox::Inbox;
 use crate::teams::messages::router::MessageRouter;
 use crate::tools::service::ToolService;
-
-use types::DEFAULT_MAX_CONCURRENT_SUBAGENTS;
 
 // =============================================================================
 // SubagentTool struct
@@ -169,8 +172,12 @@ impl SubagentTool {
             capture_registry: None,
             parent_session_id: None,
             trace_sink: None,
+            // W27 — the operator's `[execution] max_concurrent_subagents`,
+            // falling back to `DEFAULT_MAX_CONCURRENT_SUBAGENTS` in any process
+            // that never installed one (CLI, tests). Per-instance semaphore, so
+            // the value binds per agent run.
             subagent_semaphore: Arc::new(tokio::sync::Semaphore::new(
-                DEFAULT_MAX_CONCURRENT_SUBAGENTS,
+                types::max_concurrent_subagents(),
             )),
             parent_cancel: None,
             plugin_registry: None,

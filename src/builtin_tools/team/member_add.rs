@@ -12,6 +12,7 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use tracing::info;
 
+use crate::builtin_tools::acting_agent::acting_agent_id;
 use crate::error::{AlephError, Result};
 use crate::gateway::agent_instance::AgentRegistry;
 use crate::sync_primitives::Arc;
@@ -64,7 +65,8 @@ pub struct TeamMemberAddOutput {
 pub struct TeamMemberAddTool {
     store: Arc<dyn TeamStore>,
     registry: Arc<AgentRegistry>,
-    /// Injected by `ExecutionEngine`: the ID of the agent calling this tool.
+    /// Fallback actor for calls made outside a turn scope. The live identity
+    /// comes from [`acting_agent_id`] — see [`Self::actor`].
     pub current_agent_id: String,
 }
 
@@ -81,9 +83,10 @@ impl TeamMemberAddTool {
         }
     }
 
-    /// Set the current agent ID (called by `ExecutionEngine` before each run).
-    pub fn set_current_agent_id(&mut self, agent_id: impl Into<String>) {
-        self.current_agent_id = agent_id.into();
+    /// The agent acting in THIS call — the running turn's identity, not the
+    /// one this tool was constructed with. See [`acting_agent_id`].
+    fn actor(&self) -> String {
+        acting_agent_id(&self.current_agent_id)
     }
 }
 
@@ -110,7 +113,7 @@ impl AlephTool for TeamMemberAddTool {
             .await?
             .ok_or_else(|| AlephError::tool(format!("team not found: {}", args.team_id)))?;
 
-        if team.leader_id != self.current_agent_id {
+        if team.leader_id != self.actor() {
             return Err(AlephError::tool(format!(
                 "only the team leader ('{}') can add members",
                 team.leader_id

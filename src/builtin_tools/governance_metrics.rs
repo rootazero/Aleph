@@ -21,13 +21,15 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 use crate::error::Result;
+// Single source for the correction path prefix: it lives on the side that is
+// depended upon (`memory` → `builtin_tools`, never the reverse), so the writer
+// (`flag_user_correction`), the distiller (`feedback_distill`) and this counter
+// cannot drift apart. A local literal here counted nothing the day the writer
+// changed its prefix, and nothing would have said so.
+use crate::memory::dreaming::stages::feedback_distill::CORRECTION_PATH_PREFIX;
 use crate::memory::store::sqlite::dream_reports::DreamPipelineStat;
 use crate::memory::store::MemoryBackend;
 use crate::tools::AlephTool;
-
-/// Path prefix under which `flag_user_correction` records a real user
-/// correction in `raw_memories`. The audit's "last N days real user correction count" signal.
-const CORRECTION_PATH_PREFIX: &str = "aleph://correction/";
 
 /// Default look-back window (days). Matches the audit loop's weekly cadence
 /// (the old probes hard-coded 604800s = 7d).
