@@ -27,6 +27,21 @@ const STREAM_TTL: Duration = Duration::from_secs(10 * 60);
 struct StreamEntry {
     tx: mpsc::Sender<Vec<u8>>,
     opened: Instant,
+    /// Who opened this stream, resolved at the ONE mint point.
+    ///
+    /// Recorded because a stream id is not a capability, whatever it looks
+    /// like: `voice.transcribe.delta` broadcasts that id to every connection on
+    /// every incremental transcription, and `stream.audio` / `stream.stop`
+    /// trusted whoever handed it back. The argument "ids are unguessable" was
+    /// being made about a value the same subsystem publishes — the same shape
+    /// as `teams.chat.cancel` (§5.22 ③): **a gate that rests on another
+    /// subsystem's invariant is not a gate**, and here the leaking producer and
+    /// the trusting consumer are in the same directory.
+    ///
+    /// `None` = opened outside any identity (cron / internal / single-user
+    /// loopback before any user resolution), which stays unrestricted, matching
+    /// every other predicate in the perimeter.
+    owner: Option<String>,
 }
 
 /// Active streams: stream_id → audio sender into the backend bridge task.
@@ -62,6 +77,9 @@ impl StreamRegistry {
             StreamEntry {
                 tx,
                 opened: Instant::now(),
+                // Resolved HERE, at the single mint point, the same shape
+                // `teams::broadcast::register_fanout` uses for tree run ids.
+                owner: crate::scope::ambient_owner(),
             },
         );
         id
@@ -69,6 +87,35 @@ impl StreamRegistry {
 
     pub async fn contains(&self, id: &str) -> bool {
         self.inner.lock().await.contains_key(id)
+    }
+
+    /// May the current caller act on `id`?
+    ///
+    /// An unknown id answers `true` so the caller keeps its existing "no such
+    /// stream" response — this predicate must not become a second way to learn
+    /// which ids exist.
+    ///
+    /// An entry minted with no owner is unrestricted; an entry minted BY a user
+    /// is that user's alone.
+    pub async fn caller_may_use(&self, id: &str) -> bool {
+        let guard = self.inner.lock().await;
+        match guard.get(id) {
+            None => true,
+            Some(e) => match (&e.owner, crate::scope::ambient_owner()) {
+                (None, _) => true,
+                (Some(_), None) => true,
+                (Some(owner), Some(caller)) => *owner == caller,
+            },
+        }
+    }
+
+    /// The owner stamped at mint time, for the delta payload.
+    pub async fn owner_of(&self, id: &str) -> Option<String> {
+        self.inner
+            .lock()
+            .await
+            .get(id)
+            .and_then(|e| e.owner.clone())
     }
 
     /// Clone the audio sender so the `audio` handler can push frames without
@@ -116,10 +163,19 @@ pub async fn start_stream(
     let id = reg.insert(audio_tx).await; // registry owns the ONLY audio_tx
     let pump_id = id.clone();
     let pump_reg = reg.clone();
+    // Captured before the spawn — task-locals do not cross the boundary, and
+    // the pump publishes long after this call returns. The payload carries it
+    // so `event_visibility` can route each delta to its speaker instead of
+    // broadcasting the TEXT OF WHAT THEY SAID to every connection.
+    let pump_owner = reg.owner_of(&id).await;
     tokio::spawn(async move {
         // pump owns ONLY delta_rx — no live audio_tx, so the backend can close.
         while let Some(delta) = delta_rx.recv().await {
-            let data = serde_json::json!({ "stream_id": pump_id, "delta": delta });
+            let data = serde_json::json!({
+                "stream_id": pump_id,
+                "delta": delta,
+                "owner_user_id": pump_owner,
+            });
             if let Err(e) = bus.publish_json(&TopicEvent::new("voice.transcribe.delta", data)) {
                 tracing::warn!(stream_id = %pump_id, err = %e, "voice delta publish failed");
             }
@@ -128,7 +184,11 @@ pub async fn start_stream(
         // "this stream is gone" (fall back to batch / reopen); the registry
         // entry is removed so a stop-less client can't leak the slot.
         pump_reg.remove(&pump_id).await;
-        let closed = serde_json::json!({ "stream_id": pump_id, "closed": true });
+        let closed = serde_json::json!({
+            "stream_id": pump_id,
+            "closed": true,
+            "owner_user_id": pump_owner,
+        });
         if let Err(e) = bus.publish_json(&TopicEvent::new("voice.transcribe.delta", closed)) {
             tracing::warn!(stream_id = %pump_id, err = %e, "voice closed publish failed");
         }

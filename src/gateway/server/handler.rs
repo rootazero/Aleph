@@ -2312,10 +2312,14 @@ mod tests {
         assert!(scope.is_empty(), "a member must not be stamped `*`");
 
         let guard = crate::gateway::event_scope::EventScopeGuard::default_rules();
-        assert!(!guard.can_receive("approval.requested", &scope));
         assert!(!guard.can_receive("surface.approval", &scope));
         assert!(!guard.can_receive("config.changed", &scope));
         assert!(!guard.can_receive("pairing.requested", &scope));
+        assert!(!guard.can_receive("pty.output", &scope));
+        // `approval.requested` deliberately passes THIS table since 2026-08-08
+        // — a member must be able to answer the gate blocking their own run.
+        // The per-session decision is made in `event_visibility`, pinned there.
+        assert!(guard.can_receive("approval.requested", &scope));
         // ...while his daily surfaces are untouched (default-allow guard).
         assert!(guard.can_receive("agent.run.started", &scope));
         assert!(guard.can_receive("chat.message", &scope));
