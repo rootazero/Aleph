@@ -182,6 +182,97 @@ impl CronStore {
     }
 }
 
+// ── Legacy-location migration ────────────────────────────────────────
+
+/// `SQLite` sidecars that must travel with the main database file. A WAL
+/// holding committed-but-uncheckpointed pages left behind would silently
+/// roll the copy back to the last checkpoint.
+const SQLITE_SIDECARS: [&str; 2] = ["-wal", "-shm"];
+
+/// Copy the cron store over from its pre-`ALEPH_HOME` location, once.
+///
+/// Until 2026-08-08 the `~/.aleph/` prefix in `db_path` was expanded off the
+/// real home, so an operator running with a relocated `ALEPH_HOME` had their
+/// jobs written to a directory nothing else in the process reads. Now that the
+/// prefix resolves correctly, that installation would boot into an empty
+/// scheduler — every job still on disk, just not where anyone looks.
+///
+/// Runs only when the new path has no store *and* the legacy one does, so it
+/// cannot clobber a live database and is a no-op on every subsequent boot.
+/// The legacy files are deliberately **left in place**: the copy is reversible
+/// by pointing `ALEPH_HOME` back, and a deletion would not be.
+///
+/// Failure is logged and never propagated. A daemon that refuses to start is
+/// strictly worse than one that starts with an empty scheduler the operator
+/// can still repair by hand — the log names both paths for exactly that.
+pub fn migrate_legacy_store(legacy: Option<&std::path::Path>, new_path: &std::path::Path) {
+    let Some(legacy) = legacy else {
+        return;
+    };
+    if legacy == new_path || new_path.exists() || !legacy.exists() {
+        return;
+    }
+
+    if let Some(parent) = new_path.parent() {
+        if let Err(e) = std::fs::create_dir_all(parent) {
+            warn!(
+                path = %parent.display(),
+                error = %e,
+                "cron: cannot create the new store directory; skipping legacy migration"
+            );
+            return;
+        }
+    }
+
+    // Main file first, then sidecars. Each lands via copy-to-temp + rename, so
+    // an interrupted migration leaves either nothing or a complete file — never
+    // a truncated database that `load()` would happily open.
+    for suffix in std::iter::once("").chain(SQLITE_SIDECARS) {
+        let from = with_suffix(legacy, suffix);
+        if !from.exists() {
+            continue;
+        }
+        let to = with_suffix(new_path, suffix);
+        if let Err(e) = copy_into_place(&from, &to) {
+            warn!(
+                from = %from.display(),
+                to = %to.display(),
+                error = %e,
+                "cron: legacy store migration failed; starting with an empty scheduler"
+            );
+            return;
+        }
+    }
+
+    info!(
+        from = %legacy.display(),
+        to = %new_path.display(),
+        "cron: migrated the task store to the ALEPH_HOME-resolved path (legacy copy left in place)"
+    );
+}
+
+/// Append `suffix` to a path's file name (`db` + `-wal` → `db-wal`).
+fn with_suffix(path: &std::path::Path, suffix: &str) -> PathBuf {
+    if suffix.is_empty() {
+        return path.to_path_buf();
+    }
+    let mut name = path.file_name().unwrap_or_default().to_os_string();
+    name.push(suffix);
+    path.with_file_name(name)
+}
+
+/// Copy `from` to `to` through a temporary file in the destination directory,
+/// then rename it into place.
+fn copy_into_place(from: &std::path::Path, to: &std::path::Path) -> std::io::Result<()> {
+    let tmp = with_suffix(to, ".migrating");
+    std::fs::copy(from, &tmp)?;
+    if let Err(e) = std::fs::rename(&tmp, to) {
+        let _ = std::fs::remove_file(&tmp);
+        return Err(e);
+    }
+    Ok(())
+}
+
 // ── Schema management ────────────────────────────────────────────────
 
 /// Create the `cron_jobs` table if it doesn't exist.
@@ -302,6 +393,74 @@ mod tests {
                 anchor_ms: None,
             },
         )
+    }
+
+    /// An installation whose jobs were written to the pre-`ALEPH_HOME`
+    /// location must find them again after the prefix started resolving
+    /// correctly — otherwise the scheduler boots empty with every job still
+    /// on disk and no error anywhere.
+    #[test]
+    fn migration_carries_jobs_over_from_the_legacy_location() {
+        let dir = TempDir::new().unwrap();
+        let legacy = dir.path().join("legacy").join("tasks.db");
+        let fresh = dir.path().join("relocated").join("data").join("tasks.db");
+
+        {
+            let mut store = CronStore::load(legacy.clone()).unwrap();
+            store.add_job(make_test_job("Daily Report"));
+            store.persist().unwrap();
+        }
+
+        migrate_legacy_store(Some(&legacy), &fresh);
+
+        let migrated = CronStore::load(fresh).unwrap();
+        assert_eq!(migrated.job_count(), 1);
+        assert_eq!(migrated.jobs()[0].name, "Daily Report");
+        assert!(
+            legacy.exists(),
+            "the legacy copy is left in place so the move stays reversible"
+        );
+    }
+
+    /// The migration must never touch a store that already exists at the new
+    /// path — that store is the live one.
+    #[test]
+    fn migration_never_clobbers_an_existing_store() {
+        let dir = TempDir::new().unwrap();
+        let legacy = dir.path().join("legacy").join("tasks.db");
+        let current = dir.path().join("current").join("tasks.db");
+
+        {
+            let mut store = CronStore::load(legacy.clone()).unwrap();
+            store.add_job(make_test_job("stale"));
+            store.persist().unwrap();
+        }
+        {
+            let mut store = CronStore::load(current.clone()).unwrap();
+            store.add_job(make_test_job("live"));
+            store.persist().unwrap();
+        }
+
+        migrate_legacy_store(Some(&legacy), &current);
+
+        let after = CronStore::load(current).unwrap();
+        assert_eq!(after.job_count(), 1);
+        assert_eq!(after.jobs()[0].name, "live");
+    }
+
+    #[test]
+    fn migration_is_a_noop_without_a_legacy_store() {
+        let dir = TempDir::new().unwrap();
+        let fresh = dir.path().join("data").join("tasks.db");
+
+        migrate_legacy_store(None, &fresh);
+        assert!(!fresh.exists());
+
+        migrate_legacy_store(Some(&dir.path().join("nothing-here.db")), &fresh);
+        assert!(
+            !fresh.exists(),
+            "an absent legacy store must create nothing"
+        );
     }
 
     #[test]

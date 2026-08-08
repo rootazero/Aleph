@@ -1,31 +1,112 @@
 //! `GoalLessonsPromoteStage` — graduate goal "lessons" into long-term memory.
 //!
 //! `Goal.lessons` is a ring buffer (cap `MAX_LESSONS`) injected into
-//! continuation prompts but otherwise ephemeral: dropped past the cap and gone
-//! when the goal is cleared. This stage promotes each goal's current lessons
+//! continuation prompts but otherwise ephemeral: dropped past the cap, and
+//! deleted with the goal row. This stage promotes each goal's current lessons
 //! into a per-goal note so they survive the ring and the goal's deletion, and
 //! can inform future goals (R9 — the article's "state file" becomes durable).
 //!
-//! Idempotency: `append_to_note` does NOT dedup facts, so the stage reads the
-//! existing note's facts and appends only genuinely-new ones. Stable when
+//! Idempotency: `append_to_note` does NOT dedup facts, so the promotion reads
+//! the existing note's facts and appends only genuinely-new ones. Stable when
 //! nothing is new; union-preserving across cycles (a promoted lesson stays even
 //! after the ring drops it). Goals are reached via the process-global
 //! `crate::goal::global()` (no `DreamContext` wiring); a store may be injected for
 //! tests. Global-only (goals are not project-namespaced).
+//!
+//! The per-goal promotion itself lives in [`promote_one`], NOT in the stage:
+//! `goal(action='clear')` deletes the goal row — and with it every lesson that
+//! has not graduated yet — hours before the next dream window opens, so it has
+//! to promote too. One implementation, two callers; two writers of the same
+//! note would drift on dedup rules and fact shape.
 
 use async_trait::async_trait;
 use tracing::{info, warn};
 
 use crate::error::AlephError;
-use crate::goal::GoalStore;
+use crate::goal::{Goal, GoalStore};
 use crate::memory::dreaming::DreamContext;
-use crate::memory::notes::KnowledgeNote;
+use crate::memory::notes::{KnowledgeNote, NoteIndexer};
+use crate::memory::store::SqliteMemoryBackend;
 use crate::sync_primitives::Arc;
 
 use super::DreamStage;
 
 /// Category (directory) under which per-goal lesson notes are written.
 const LESSONS_CATEGORY: &str = "goal-lessons";
+
+/// Note path a goal's promoted lessons live at (`goal-lessons/<goal id>`).
+/// `goal.id` is a stable `goal-<hex>` hash, so the path is deterministic and
+/// filesystem-safe. Single source shared by the writer and every cache-eviction
+/// site, so the two can never name different files.
+#[must_use]
+pub fn lessons_note_path(goal_id: &str) -> String {
+    format!("{LESSONS_CATEGORY}/{goal_id}")
+}
+
+/// Facts already recorded in this goal's lessons note, read straight from the
+/// markdown source of truth. Missing/unparsable note → empty (the append then
+/// creates it).
+async fn existing_facts(
+    indexer: &NoteIndexer<SqliteMemoryBackend>,
+    agent_id: &str,
+    goal_id: &str,
+) -> Vec<String> {
+    let file_path = indexer
+        .memory_dir()
+        .join(agent_id)
+        .join(LESSONS_CATEGORY)
+        .join(format!("{goal_id}.md"));
+    let Ok(md) = tokio::fs::read_to_string(&file_path).await else {
+        return Vec::new();
+    };
+    KnowledgeNote::from_markdown(goal_id, &md)
+        .map(|n| n.facts)
+        .unwrap_or_default()
+}
+
+/// Promote ONE goal's lessons into its per-goal note. Returns the number of
+/// facts actually appended — `0` when the goal has no lessons, when everything
+/// was already promoted (idempotent no-op), or when the append failed.
+///
+/// Fail-soft by construction: every caller is on a path that must not fail for
+/// a memory-layer problem (a nightly stage, and the user's `clear`).
+pub async fn promote_one(
+    indexer: &NoteIndexer<SqliteMemoryBackend>,
+    agent_id: &str,
+    goal: &Goal,
+) -> u32 {
+    if goal.lessons.is_empty() {
+        return 0;
+    }
+    let path = lessons_note_path(&goal.id);
+
+    // Read existing facts to dedup (append_to_note does NOT dedup facts).
+    let existing = existing_facts(indexer, agent_id, &goal.id).await;
+
+    // Desired facts: the objective (for human context) + each lesson.
+    let mut desired: Vec<String> = Vec::with_capacity(goal.lessons.len() + 1);
+    desired.push(format!("Objective: {}", goal.objective));
+    desired.extend(goal.lessons.iter().cloned());
+
+    let new_facts: Vec<String> = desired
+        .into_iter()
+        .filter(|f| !existing.contains(f))
+        .collect();
+    if new_facts.is_empty() {
+        return 0; // already promoted; idempotent no-op.
+    }
+
+    match indexer
+        .append_to_note(agent_id, &path, &new_facts, &[])
+        .await
+    {
+        Ok(()) => new_facts.len() as u32,
+        Err(e) => {
+            warn!(path = %path, error = %e, "GoalLessonsPromote: append failed");
+            0
+        }
+    }
+}
 
 #[derive(Default)]
 pub struct GoalLessonsPromoteStage {
@@ -59,45 +140,11 @@ impl DreamStage for GoalLessonsPromoteStage {
 
         let mut promoted = 0u32;
         for goal in goals {
-            if goal.lessons.is_empty() {
-                continue;
-            }
-            // Deterministic, filesystem-safe path: goal.id is a stable hash.
-            let path = format!("{LESSONS_CATEGORY}/{}", goal.id);
-
-            // Read existing facts to dedup (append_to_note does NOT dedup facts).
-            let existing: Vec<String> = match ctx.load_content(&path).await {
-                Some(md) => KnowledgeNote::from_markdown(&goal.id, &md)
-                    .map(|n| n.facts)
-                    .unwrap_or_default(),
-                // rust-doctor-disable-next-line unnecessary-allocation
-                None => Vec::new(),
-            };
-
-            // Desired facts: the objective (for human context) + each lesson.
-            let mut desired: Vec<String> = Vec::with_capacity(goal.lessons.len() + 1);
-            desired.push(format!("Objective: {}", goal.objective));
-            desired.extend(goal.lessons.iter().cloned());
-
-            let new_facts: Vec<String> = desired
-                .into_iter()
-                .filter(|f| !existing.contains(f))
-                .collect();
-            if new_facts.is_empty() {
-                continue; // already promoted; idempotent no-op.
-            }
-
-            match ctx
-                .indexer
-                .append_to_note(&ctx.agent_id, &path, &new_facts, &[])
-                .await
-            {
-                Ok(()) => {
-                    promoted += new_facts.len() as u32;
-                    // Evict the now-stale cached content (mirrors NoteWeave).
-                    ctx.note_contents.remove(&path);
-                }
-                Err(e) => warn!(path = %path, error = %e, "GoalLessonsPromote: append failed"),
+            let appended = promote_one(&ctx.indexer, &ctx.agent_id, &goal).await;
+            if appended > 0 {
+                promoted += appended;
+                // Evict the now-stale cached content (mirrors NoteWeave).
+                ctx.note_contents.remove(&lessons_note_path(&goal.id));
             }
         }
 
@@ -219,6 +266,32 @@ mod tests {
         };
         let out = stage.execute(ctx).await.unwrap();
         assert_eq!(out.report.goal_lessons_promoted, 0);
+    }
+
+    /// `promote_one` is the unit `goal(action='clear')` calls with no
+    /// `DreamContext` around it: it must write the note itself (and stay
+    /// idempotent) when driven directly.
+    #[tokio::test]
+    async fn promote_one_writes_the_note_and_is_idempotent() {
+        let (ctx, temp) = build_ctx().await;
+        let goal = Goal::new("sess-1", "Migrate auth", 0, 0)
+            .with_lesson_appended("run migrations first".into(), 1);
+
+        let first = promote_one(&ctx.indexer, &ctx.agent_id, &goal).await;
+        assert_eq!(first, 2, "objective + 1 lesson");
+
+        let note = temp
+            .join("default")
+            .join("goal-lessons")
+            .join(format!("{}.md", goal.id));
+        let body = tokio::fs::read_to_string(&note)
+            .await
+            .expect("lessons note must exist on disk");
+        assert!(body.contains("run migrations first"), "{body}");
+
+        // Second call reads the note it just wrote → nothing new.
+        let second = promote_one(&ctx.indexer, &ctx.agent_id, &goal).await;
+        assert_eq!(second, 0, "no duplicate facts");
     }
 
     #[tokio::test]

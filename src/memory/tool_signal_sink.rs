@@ -1,8 +1,16 @@
 //! `ToolSignalSink` — per-invocation tool metric capture.
 //!
 //! Spec 3 wiring: every tool call completion (success or failure) flows
-//! through a `ToolSignalSink` so the Dream cycle's `compute_raw_metrics()`
-//! can read cross-session statistics from `raw_memories`.
+//! through a `ToolSignalSink` and lands as a [`RawMemorySource::ToolInvocation`]
+//! row in `raw_memories`.
+//!
+//! The one reader of those rows is [`crate::memory::insights`] (the read-only
+//! `insights.tools` aggregation behind the admin RPC). The Dream cycle is NOT
+//! one: `compute_raw_metrics()` derives its signals from note index entries,
+//! `recall_hit_counts` and the prior `DreamReport` — it never touches
+//! `raw_memories`. `CompressionService` deliberately bypasses these rows too
+//! (they are telemetry, not knowledge), so `insights` is the whole consumer
+//! list; keep it that way or update this line.
 //!
 //! The sink is per-session: `agent_id` and `session_id` are captured at
 //! construction time so the harness side just calls `record(...)` without

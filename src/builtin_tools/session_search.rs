@@ -7,8 +7,17 @@
 //! Lazy fallback: for sessions that appear in raw FTS5 but have no summary yet,
 //! call `SummarySynthesizer::lazy_for` to synthesize on demand.
 //!
-//! Access-controlled: results are filtered by the caller's A2A policy so that
-//! an agent can only see transcripts from sessions it is allowed to reach.
+//! Access-controlled on two independent axes, and neither substitutes for the
+//! other:
+//!
+//! - **Which agent** may reach which — the caller's A2A policy
+//!   ([`SessionSearchTool::is_accessible`]).
+//! - **Which user** a session belongs to — P1/P2 isolation, through
+//!   [`crate::gateway::visibility::ambient_transcript_visible`]
+//!   ([`SessionSearchTool::transcript_visible`]). `search_messages` is a global
+//!   FTS5 sweep over every session on the install; the A2A policy is blind to
+//!   ownership, so this axis is the only thing standing between the model and
+//!   another person's private transcript.
 
 use async_trait::async_trait;
 use schemars::JsonSchema;
@@ -104,6 +113,33 @@ impl SessionSearchTool {
             .is_allowed(&self.caller_agent_id, session_agent_id)
     }
 
+    /// Whether this run may read `session_key`'s transcript at all (P1/P2 user
+    /// isolation), memoised per call.
+    ///
+    /// The A2A policy above answers a different question — which AGENT may
+    /// reach which agent — and is blind to WHO the session belongs to, so on a
+    /// multi-user install it let the model quote another person's private
+    /// conversation verbatim through the raw-FTS paths. The rule itself is not
+    /// re-derived here: `visibility::ambient_transcript_visible` is the one
+    /// body, so a room's transcript follows the roster exactly as it does in
+    /// `sessions.list`.
+    async fn transcript_visible(
+        &self,
+        session_key: &str,
+        memo: &mut std::collections::HashMap<String, bool>,
+    ) -> bool {
+        if let Some(known) = memo.get(session_key) {
+            return *known;
+        }
+        let visible = crate::gateway::visibility::ambient_transcript_visible(
+            self.context.session_store().as_ref(),
+            session_key,
+        )
+        .await;
+        memo.insert(session_key.to_string(), visible);
+        visible
+    }
+
     async fn call_impl(
         &self,
         args: SessionSearchArgs,
@@ -113,6 +149,11 @@ impl SessionSearchTool {
         notify_tool_start("session_search", &format!("搜索历史对话: {}", &args.query));
 
         let mut hits: Vec<SessionSearchHit> = Vec::new();
+        // Per-call memo for the P1/P2 transcript gate: both the summary path
+        // and the raw-FTS fallback ask about the same session keys, and each
+        // miss costs a `get_metadata` round trip.
+        let mut visible_memo: std::collections::HashMap<String, bool> =
+            std::collections::HashMap::new();
 
         // ① Primary retrieval — summaries only (skipped if assembler not available).
         if let Some(ref assembler) = self.assembler {
@@ -171,6 +212,15 @@ impl SessionSearchTool {
 
             // ③ Build hits, fetching evidence_quotes per surviving session.
             for c in &survivors {
+                // P1/P2 isolation. Checked BEFORE the evidence fetch: the
+                // quotes are raw transcript bytes, so a denied session must
+                // cost neither an FTS round trip nor a chance to leak one.
+                if !self
+                    .transcript_visible(&c.session_key, &mut visible_memo)
+                    .await
+                {
+                    continue;
+                }
                 let evidence = self
                     .fetch_evidence_quotes(&args.query, &c.session_key, 2)
                     .await
@@ -206,6 +256,16 @@ impl SessionSearchTool {
                 continue;
             }
             if !self.is_accessible(&raw.agent_id) {
+                continue;
+            }
+            // P1/P2 isolation. `search_messages` is a global FTS5 sweep over
+            // every session on the install and the A2A policy above is blind to
+            // WHO a session belongs to, so without this the model could quote
+            // another person's private conversation verbatim.
+            if !self
+                .transcript_visible(&raw.session_key, &mut visible_memo)
+                .await
+            {
                 continue;
             }
             if hits.len() >= args.max_results {

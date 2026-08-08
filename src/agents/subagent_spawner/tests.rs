@@ -554,6 +554,103 @@ mod tests {
         ran.unwrap().expect("spawn ok");
     }
 
+    /// W10 — a sub-agent QUEUED behind the concurrency semaphore must observe
+    /// its cancel token while parked on `acquire_owned`. Before the fix the
+    /// acquire was a bare `.await`, so cancelling a queued child did nothing
+    /// until every sub-agent ahead of it in the queue had finished running:
+    /// cancel latency equal to the whole queue's runtime, with no error and
+    /// nothing observable happening.
+    #[tokio::test]
+    async fn spawn_queued_behind_semaphore_honours_cancel() {
+        use tokio::sync::Semaphore;
+        let sem = Arc::new(Semaphore::new(1));
+        let provider = ScriptedProvider::new(vec![ProviderResponse::text_only("ok".into())]);
+        let mut base = make_base(provider);
+        base.subagent_semaphore = Some(sem.clone());
+
+        let agent = agent_with_allowed("capped", vec!["*"]);
+        // Hold the only permit for the whole test — nothing frees it, so the
+        // ONLY way this spawn returns is via the cancel arm.
+        let _held = sem.clone().acquire_owned().await.unwrap();
+
+        let cancel = CancellationToken::new();
+        let fire = cancel.clone();
+        tokio::spawn(async move {
+            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+            fire.cancel();
+        });
+
+        let out = tokio::time::timeout(
+            std::time::Duration::from_secs(3),
+            spawn(
+                &base,
+                SpawnRequest {
+                    agent_def: &agent,
+                    task: "noop",
+                    context_summary: None,
+                    model: None,
+                    timeout_secs: 60,
+                    cancel,
+                    isolation: None,
+                    strategy: None,
+                    session_mode: None,
+                },
+            ),
+        )
+        .await
+        .expect("cancel must unpark the queued spawn well before the timeout");
+
+        // Byte-exact: `background_tracker::lifecycle_from_outcome` matches this
+        // string by EQUALITY, so any other wording settles the panel node as
+        // `Failed` instead of `Cancelled`.
+        assert_eq!(
+            out.expect_err("a cancelled queue wait is an error, not a run"),
+            "sub-agent failed: cancelled"
+        );
+    }
+
+    /// W10 companion — a token cancelled BEFORE the spawn must not wait for a
+    /// permit at all. `biased` puts the cancel arm first so an already-fired
+    /// token wins outright; without the whole select the call parks on a
+    /// permit that (here) is never released.
+    #[tokio::test]
+    async fn spawn_with_pre_cancelled_token_does_not_queue_for_a_permit() {
+        use tokio::sync::Semaphore;
+        let sem = Arc::new(Semaphore::new(1));
+        let provider = ScriptedProvider::new(vec![ProviderResponse::text_only("ok".into())]);
+        let mut base = make_base(provider);
+        base.subagent_semaphore = Some(sem.clone());
+
+        let agent = agent_with_allowed("capped", vec!["*"]);
+        // The only permit is held for the whole test and never released.
+        let _held = sem.clone().acquire_owned().await.unwrap();
+
+        let cancel = CancellationToken::new();
+        cancel.cancel();
+
+        let err = tokio::time::timeout(
+            std::time::Duration::from_secs(3),
+            spawn(
+                &base,
+                SpawnRequest {
+                    agent_def: &agent,
+                    task: "noop",
+                    context_summary: None,
+                    model: None,
+                    timeout_secs: 60,
+                    cancel,
+                    isolation: None,
+                    strategy: None,
+                    session_mode: None,
+                },
+            ),
+        )
+        .await
+        .expect("a pre-cancelled spawn must not queue behind an unavailable permit")
+        .expect_err("a pre-cancelled spawn must not run");
+        assert_eq!(err, "sub-agent failed: cancelled");
+    }
+
     #[tokio::test]
     async fn spawn_multi_turn_counts_iterations_and_tool_calls() {
         let provider = ScriptedProvider::new(vec![

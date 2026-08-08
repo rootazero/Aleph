@@ -4,8 +4,16 @@
 //! single LLM call to distill first-person LESSONS — not a digest of what was
 //! discussed, but what to do differently next time, user preferences observed,
 //! and approaches that worked or failed. The distilled text is written as a
-//! [`RawMemorySource::Reflection`] row, which the compound ingestor then turns
-//! into `feedback/lessons` notes (via the lesson-tuned source prompt).
+//! [`RawMemorySource::Reflection`] row, which the compound ingestor then files
+//! under the lesson-tuned source prompt (`source_prompts::PROMPT_LESSON`) —
+//! landing as `lesson/` notes (the prompt classifies into
+//! `lesson | tool | learning | project | other`).
+//!
+//! Those are NOT `feedback/` notes: `feedback/` is written only by the
+//! `FeedbackDistill` dream stage from `flag_user_correction` rows, and it is
+//! `feedback/` alone that the assembler's always-on floor pins into every
+//! prompt. A reflection lesson competes for retrieval like any other note —
+//! deliberately, since nothing distilled it against a user correction.
 //!
 //! Gating (driven by [`ReflectionConfig`], an opt-in feature, default off):
 //!   - `enabled`          — master switch (the only default-off flag: the
@@ -149,7 +157,7 @@ impl SessionReflector {
         let stripped = strip_analysis_block(&output);
 
         // With open-loop tracking on, the model returns two labelled sections.
-        // Split them: lessons keep flowing to the feedback/lessons notes, while
+        // Split them: lessons keep flowing to the `lesson/` notes, while
         // open loops are persisted beside MEMORY.md for next-session injection
         // (R5 — "AI proactively reaches out"). Off → the whole output is the lessons body
         // (legacy behaviour, byte-for-byte unchanged).

@@ -14,6 +14,8 @@ use tracing::info;
 
 use crate::error::{AlephError, Result};
 use crate::goal::{Goal, GoalStatus, GoalStore, PursuitMode};
+use crate::memory::notes::NoteIndexer;
+use crate::memory::store::SqliteMemoryBackend;
 use crate::providers::AiProvider;
 use crate::sync_primitives::Arc;
 use crate::tools::AlephTool;
@@ -115,6 +117,10 @@ pub struct GoalTool {
     /// Tool-free planner provider; `None` → no Strategy is minted on `set`
     /// (byte-identical to today). Injected at the construction site.
     planner_provider: Option<Arc<dyn AiProvider>>,
+    /// Note indexer used to graduate a goal's lessons on `clear`. `None` → the
+    /// promotion is skipped (memory not configured, unit tests): a missing
+    /// handle must never fail the user's `clear`.
+    lesson_indexer: Option<Arc<NoteIndexer<SqliteMemoryBackend>>>,
 }
 
 impl GoalTool {
@@ -123,6 +129,7 @@ impl GoalTool {
             store,
             session_key: None,
             planner_provider: None,
+            lesson_indexer: None,
         }
     }
 
@@ -136,6 +143,48 @@ impl GoalTool {
     pub fn with_session_key_handle(mut self, handle: Option<Arc<RwLock<String>>>) -> Self {
         self.session_key = handle;
         self
+    }
+
+    /// Attach the note indexer used to graduate lessons before a goal row dies.
+    ///
+    /// `Goal.lessons` is a ring buffer that lives only on the goal row, and
+    /// `GoalLessonsPromoteStage` graduates it into `goal-lessons/<id>` at night.
+    /// Both `clear` (DELETE) and a re-objectiving `set` (overwrite) destroy the
+    /// row hours before that, so without this handle everything the pursuit
+    /// learned since the last dream window dies with it. `None` keeps the old
+    /// behaviour (destroy only) rather than failing the user's command.
+    #[must_use]
+    pub fn with_lesson_indexer(
+        mut self,
+        indexer: Option<Arc<NoteIndexer<SqliteMemoryBackend>>>,
+    ) -> Self {
+        self.lesson_indexer = indexer;
+        self
+    }
+
+    /// Land `goal`'s lessons in its per-goal note before the row goes away
+    /// (`clear`'s DELETE, or a `set` that replaces the objective). Returns the
+    /// number of facts appended (0 when there is no indexer, no lesson, or the
+    /// note already holds them).
+    ///
+    /// Awaited rather than spawned on purpose: this is the LAST moment these
+    /// lessons exist anywhere, so a fire-and-forget task that loses the race
+    /// with process exit would lose them for good. The write is a local file +
+    /// SQLite index.
+    ///
+    /// The agent id comes from the TARGET session key (a cross-session `clear`
+    /// may act on another agent's goal), falling back to the ambient turn's
+    /// agent and finally to the default agent.
+    async fn promote_lessons_before_loss(&self, session: &str, goal: &Goal) -> u32 {
+        let Some(indexer) = &self.lesson_indexer else {
+            return 0;
+        };
+        let agent_id = crate::routing::session_key::SessionKey::parse(session)
+            .map(|k| k.agent_id().to_string())
+            .or_else(crate::tools::turn_context::current_agent_id)
+            .unwrap_or_else(|| crate::routing::DEFAULT_AGENT_ID.to_string());
+        crate::memory::dreaming::stages::goal_lessons_promote::promote_one(indexer, &agent_id, goal)
+            .await
     }
 
     async fn session(&self) -> String {
@@ -729,7 +778,8 @@ token_budget. \
                 // reference change. A governed loop is read-only on its own
                 // reference; structural field ownership, not judgment (R7-clean,
                 // same class as the exec-tier metadata rules).
-                if self.store.get(&session)?.is_some() {
+                let previous = self.store.get(&session)?;
+                if previous.is_some() {
                     if let Some(owner) = governing_owner_or_refuse(&session)? {
                         return Err(AlephError::tool(format!(
                             "此会话的 goal objective 由 {owner} 治理（owns_reference edge）。\
@@ -767,6 +817,18 @@ token_budget. \
                 goal = goal.with_gate_command(args.gate_command.clone());
                 if let Some(minutes) = args.timeout_minutes {
                     goal = goal.with_deadline_ms(Some(deadline_from_minutes(now, minutes)));
+                }
+                // A `set` over an existing goal OVERWRITES the session's row, so
+                // a new objective destroys the old goal's lessons exactly the
+                // way `clear` does. Graduate them first, unless the id is
+                // unchanged (same objective = a re-set/continuation, whose
+                // lessons the nightly stage still owns).
+                if let Some(prev) = previous.filter(|p| p.id != goal.id) {
+                    let promoted = self.promote_lessons_before_loss(&session, &prev).await;
+                    if promoted > 0 {
+                        info!(session = %session, promoted,
+                            "goal set: promoted the replaced goal's lessons before overwrite");
+                    }
                 }
                 self.store.put(&goal)?;
                 // Objective-change auto-invalidation (spec §6): if a welded
@@ -1115,6 +1177,15 @@ token_budget. \
                         )));
                     }
                 }
+                // Graduate the lessons BEFORE the row goes away — the nightly
+                // `GoalLessonsPromoteStage` sweeps `list_all()`, so anything
+                // learned since the last dream window is destroyed by this
+                // DELETE otherwise. Best-effort: no indexer / a failed append
+                // must never fail the user's clear.
+                let promoted = match &existed {
+                    Some(goal) => self.promote_lessons_before_loss(&session, goal).await,
+                    None => 0,
+                };
                 self.store.delete(&session)?;
                 // Clear the goal-welded Strategy in lockstep with the
                 // authoritative goal deletion (spec §6 lifecycle). Best-effort:
@@ -1131,9 +1202,21 @@ token_budget. \
                         },
                     });
                 };
+                // Say so when lessons survived the clear: the user asked for the
+                // goal to go away, not for what it taught to go away, and the
+                // note path is how they (or a later goal) get it back.
+                let kept = match promoted {
+                    0 => String::new(),
+                    n => format!(
+                        " — {n} lesson fact(s) kept in {}",
+                        crate::memory::dreaming::stages::goal_lessons_promote::lessons_note_path(
+                            &prev.id
+                        )
+                    ),
+                };
                 Ok(GoalOutput {
                     success: true,
-                    message: format!("Standing goal cleared{scope}: {}", prev.objective),
+                    message: format!("Standing goal cleared{scope}: {}{kept}", prev.objective),
                 })
             }
             GoalAction::List => {
@@ -1533,6 +1616,104 @@ mod tests {
             .await
             .unwrap();
         assert!(out.message.to_lowercase().contains("no standing goal"));
+    }
+
+    /// `clear` DELETEs the goal row, and `GoalLessonsPromoteStage` only sweeps
+    /// goals that still exist — so before this fix everything the pursuit
+    /// learned since the last nightly dream window died with the row. The
+    /// lessons must be graduated into `goal-lessons/<id>` on the way out.
+    #[tokio::test]
+    async fn clear_promotes_lessons_before_deleting_the_goal() {
+        let dir = tempfile::tempdir().unwrap();
+        let mem_dir = dir.path().join("notes");
+        tokio::fs::create_dir_all(&mem_dir).await.unwrap();
+
+        let store = Arc::new(GoalStore::open(&dir.path().join("g.db")).unwrap());
+        let goal = Goal::new("sess-lessons", "ship it", 0, 0)
+            .with_lesson_appended("run migrations first".into(), 1);
+        store.put(&goal).unwrap();
+
+        let backend = Arc::new(SqliteMemoryBackend::in_memory().unwrap());
+        let tool = GoalTool::new(store.clone())
+            .with_session_key_handle(Some(Arc::new(RwLock::new("sess-lessons".to_string()))))
+            .with_lesson_indexer(Some(Arc::new(NoteIndexer::new(mem_dir.clone(), backend))));
+
+        let out = tool.call(args(GoalAction::Clear)).await.unwrap();
+        assert!(out.success);
+        assert!(
+            out.message.contains("lesson fact(s) kept"),
+            "clear must report what it preserved: {}",
+            out.message
+        );
+
+        // The session key is not a parseable `SessionKey`, so the promotion
+        // falls back to the default agent's note tree.
+        let note = mem_dir
+            .join(crate::routing::DEFAULT_AGENT_ID)
+            .join("goal-lessons")
+            .join(format!("{}.md", goal.id));
+        let body = tokio::fs::read_to_string(&note)
+            .await
+            .expect("lessons note must survive the clear");
+        assert!(body.contains("run migrations first"), "{body}");
+
+        // …and the goal itself is still gone.
+        assert!(store.get("sess-lessons").unwrap().is_none());
+    }
+
+    /// `set` with a new objective OVERWRITES the session's row — the same
+    /// destruction as `clear`, through a different verb. The replaced goal's
+    /// lessons must graduate on the way out too.
+    #[tokio::test]
+    async fn set_promotes_the_replaced_goals_lessons() {
+        let dir = tempfile::tempdir().unwrap();
+        let mem_dir = dir.path().join("notes");
+        tokio::fs::create_dir_all(&mem_dir).await.unwrap();
+
+        let store = Arc::new(GoalStore::open(&dir.path().join("g.db")).unwrap());
+        let old = Goal::new("sess-reset", "old objective", 0, 0)
+            .with_lesson_appended("the deploy needs a fresh token".into(), 1);
+        store.put(&old).unwrap();
+
+        let backend = Arc::new(SqliteMemoryBackend::in_memory().unwrap());
+        let tool = GoalTool::new(store.clone())
+            .with_session_key_handle(Some(Arc::new(RwLock::new("sess-reset".to_string()))))
+            .with_lesson_indexer(Some(Arc::new(NoteIndexer::new(mem_dir.clone(), backend))));
+
+        tool.call(GoalArgs {
+            objective: Some("brand new objective".into()),
+            ..args(GoalAction::Set)
+        })
+        .await
+        .unwrap();
+
+        let note = mem_dir
+            .join(crate::routing::DEFAULT_AGENT_ID)
+            .join("goal-lessons")
+            .join(format!("{}.md", old.id));
+        let body = tokio::fs::read_to_string(&note)
+            .await
+            .expect("replaced goal's lessons must survive the overwrite");
+        assert!(body.contains("the deploy needs a fresh token"), "{body}");
+    }
+
+    /// No indexer wired (memory disabled / unit tests) → `clear` still clears.
+    #[tokio::test]
+    async fn clear_without_a_lesson_indexer_still_clears() {
+        let (tool, _d) = tool_with_session("sess-no-indexer");
+        tool.call(GoalArgs {
+            objective: Some("y".into()),
+            ..args(GoalAction::Set)
+        })
+        .await
+        .unwrap();
+        let out = tool.call(args(GoalAction::Clear)).await.unwrap();
+        assert!(out.success, "{}", out.message);
+        assert!(
+            !out.message.contains("lesson fact(s) kept"),
+            "nothing was promoted: {}",
+            out.message
+        );
     }
 
     #[tokio::test]

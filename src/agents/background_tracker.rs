@@ -648,12 +648,74 @@ impl BackgroundAgentTracker {
             .collect()
     }
 
+    /// W11 — the **addressing** chokepoint: may a caller owning `scope` read,
+    /// wait on, or cancel `request_id`?
+    ///
+    /// The enumeration face (`list_running` / `all_completed` / `flat_nodes` /
+    /// `subagent_snapshot`) is already session-scoped, but scoping enumeration
+    /// alone only makes a foreign id hard to *guess* — it does not make it
+    /// unreachable. The tracker is process-global, so any model that came by
+    /// another session's request_id (an announce echo, a log line, a paste)
+    /// could still `check_status` its output or `cancel` its run. Every
+    /// by-id accessor on the model-facing path runs through here first.
+    ///
+    /// `scope = None` is unrestricted, matching every other `scope` parameter
+    /// on this type: CLI / direct construction / tests / RPC surfaces that
+    /// performed their own authorization.
+    ///
+    /// An out-of-scope id is deliberately indistinguishable from a typo — the
+    /// callers fold both into the same "unknown request_id" answer, so the
+    /// existence of another session's run is not itself disclosed.
+    #[must_use]
+    pub fn addressable(&self, request_id: &str, scope: Option<&str>) -> bool {
+        let Some(want) = scope else {
+            return true;
+        };
+        {
+            // Running first: `mark_completed` inserts into `completed` before
+            // removing from `running`, so an id can be briefly in both maps.
+            // Either copy carries the same `root_session`, but reading the
+            // live one keeps the answer stable across the transition.
+            let running = self.running.read().unwrap_or_else(|e| {
+                warn!("BackgroundAgentTracker lock poisoned, recovering");
+                e.into_inner()
+            });
+            if let Some(agent) = running.get(request_id) {
+                return agent.meta.root_session == want;
+            }
+        }
+        self.completed
+            .read()
+            .unwrap_or_else(|e| {
+                warn!("BackgroundAgentTracker lock poisoned, recovering");
+                e.into_inner()
+            })
+            .get(request_id)
+            .is_some_and(|c| c.meta.root_session == want)
+    }
+
     /// Cancel a running background agent. Returns `true` if the `request_id`
     /// was found in the running set and the `CancellationToken` was hit;
     /// `false` if no such running agent exists (already completed / never
     /// registered). The cooperative cancellation still relies on the
     /// running task observing the token at the next await point.
+    ///
+    /// Unscoped face, for callers that authorized the id themselves (the
+    /// `teams.chat.cancel` RPC walks its own run tree; CLI / tests hold no
+    /// session). Model-facing callers must use
+    /// [`cancel_in_scope`](Self::cancel_in_scope).
     pub fn cancel(&self, request_id: &str) -> bool {
+        self.cancel_in_scope(request_id, None)
+    }
+
+    /// [`cancel`](Self::cancel) behind the [`addressable`](Self::addressable)
+    /// chokepoint. An out-of-scope id reports `false` — the same answer a
+    /// never-registered id gets, so the caller's "no such sub-agent" message
+    /// covers both without disclosing the foreign run.
+    pub fn cancel_in_scope(&self, request_id: &str, scope: Option<&str>) -> bool {
+        if !self.addressable(request_id, scope) {
+            return false;
+        }
         let running = self.running.read().unwrap_or_else(|e| {
             warn!("BackgroundAgentTracker lock poisoned, recovering");
             e.into_inner()
@@ -732,10 +794,19 @@ impl BackgroundAgentTracker {
     }
 
     /// Non-destructively read a finished agent's outcome. Returns `None`
-    /// when the `request_id` was never registered or has been TTL-pruned.
-    /// Unlike a consume, repeated polls return the same snapshot — this is
-    /// what lets a parent re-check a completed subagent.
-    pub fn result_snapshot(&self, request_id: &str) -> Option<CompletedSnapshot> {
+    /// when the `request_id` was never registered, has been TTL-pruned, or
+    /// belongs to a session other than `scope` (W11 — see
+    /// [`addressable`](Self::addressable)). Unlike a consume, repeated polls
+    /// return the same snapshot — this is what lets a parent re-check a
+    /// completed subagent.
+    pub fn result_snapshot(
+        &self,
+        request_id: &str,
+        scope: Option<&str>,
+    ) -> Option<CompletedSnapshot> {
+        if !self.addressable(request_id, scope) {
+            return None;
+        }
         let completed = self.completed.read().unwrap_or_else(|e| {
             warn!("BackgroundAgentTracker lock poisoned, recovering");
             e.into_inner()
@@ -760,22 +831,27 @@ impl BackgroundAgentTracker {
     /// does not re-deliver it), [`WaitOutcome::TimedOut`] when the window closes
     /// with the agent still running, or [`WaitOutcome::NotFound`] for an unknown
     /// / TTL-pruned id. Thin wrapper over [`wait_any`](Self::wait_any).
-    pub async fn wait(&self, request_id: &str, timeout: Duration) -> WaitOutcome {
+    pub async fn wait(
+        &self,
+        request_id: &str,
+        scope: Option<&str>,
+        timeout: Duration,
+    ) -> WaitOutcome {
         let ids = [request_id.to_string()];
-        match self.wait_any(&ids, timeout).await {
+        match self.wait_any(&ids, scope, timeout).await {
             WaitAnyOutcome::Completed { snapshot, .. } => WaitOutcome::Completed(snapshot),
             // A single-id wait stays idempotent: `wait_any` reports a
             // second wait on the same id as `AllDelivered` (that distinction
             // only matters for draining a SET), but the caller asked about one
             // agent and the honest answer is still its result. Falls through to
             // `NotFound` only if the entry was TTL-pruned between the two.
-            WaitAnyOutcome::AllDelivered { .. } => match self.result_snapshot(request_id) {
+            WaitAnyOutcome::AllDelivered { .. } => match self.result_snapshot(request_id, scope) {
                 Some(snapshot) => WaitOutcome::Completed(snapshot),
                 None => WaitOutcome::NotFound,
             },
             WaitAnyOutcome::TimedOut { .. } => WaitOutcome::TimedOut {
                 elapsed_secs: self
-                    .running_meta(request_id)
+                    .running_meta(request_id, scope)
                     .map(|m| m.elapsed_secs)
                     .unwrap_or(0),
             },
@@ -807,7 +883,20 @@ impl BackgroundAgentTracker {
     /// one LLM turn per iteration. Bookkeeping the caller would otherwise have
     /// to do by hand is mechanical, so the harness does it (R10 scaffolding, no
     /// judgement about *what* the results mean).
-    pub async fn wait_any(&self, request_ids: &[String], timeout: Duration) -> WaitAnyOutcome {
+    ///
+    /// # Scope
+    ///
+    /// W11 — every by-id lookup below goes through
+    /// [`addressable`](Self::addressable), and it does so **inside the loop**,
+    /// not once on entry. A foreign id that completes while this call is
+    /// parked must not be claimable on the re-check either; filtering only at
+    /// the top would have left exactly that window open.
+    pub async fn wait_any(
+        &self,
+        request_ids: &[String],
+        scope: Option<&str>,
+        timeout: Duration,
+    ) -> WaitAnyOutcome {
         let deadline = Instant::now() + timeout;
         loop {
             // Arm the notifier BEFORE inspecting state: `Notified::enable`
@@ -825,7 +914,10 @@ impl BackgroundAgentTracker {
             let mut delivered: Vec<String> = Vec::new();
             let mut fresh: Option<(String, CompletedSnapshot)> = None;
             for id in request_ids {
-                if let Some(snapshot) = self.result_snapshot(id) {
+                // Scope is re-applied on EVERY lap, not just the first: an
+                // out-of-scope id that finishes while we are parked must not
+                // become claimable when the notifier wakes us.
+                if let Some(snapshot) = self.result_snapshot(id, scope) {
                     if self.is_consumed(id) {
                         delivered.push(id.clone());
                     } else if fresh.is_none() {
@@ -833,7 +925,7 @@ impl BackgroundAgentTracker {
                     }
                     continue;
                 }
-                if self.running_meta(id).is_some() {
+                if self.running_meta(id, scope).is_some() {
                     any_running = true;
                 }
             }
@@ -853,7 +945,7 @@ impl BackgroundAgentTracker {
                     // through so the model can fix the call in one shot
                     // (mirrors `annotate_unknown` on the success paths).
                     WaitAnyOutcome::NotFound {
-                        unknown_ids: self.unknown_ids(request_ids),
+                        unknown_ids: self.unknown_ids(request_ids, scope),
                     }
                 } else {
                     WaitAnyOutcome::AllDelivered {
@@ -864,7 +956,7 @@ impl BackgroundAgentTracker {
             let now = Instant::now();
             if now >= deadline {
                 return WaitAnyOutcome::TimedOut {
-                    still_running: self.still_running_ids(request_ids),
+                    still_running: self.still_running_ids(request_ids, scope),
                 };
             }
             let remaining = deadline - now;
@@ -872,7 +964,7 @@ impl BackgroundAgentTracker {
                 () = &mut notified => { /* something finished — re-check the set */ }
                 () = tokio::time::sleep(remaining) => {
                     return WaitAnyOutcome::TimedOut {
-                        still_running: self.still_running_ids(request_ids),
+                        still_running: self.still_running_ids(request_ids, scope),
                     };
                 }
             }
@@ -881,10 +973,10 @@ impl BackgroundAgentTracker {
 
     /// The subset of `request_ids` still in the running set — the `wait_any`
     /// timeout arm reports these so the caller knows which to keep waiting on.
-    fn still_running_ids(&self, request_ids: &[String]) -> Vec<String> {
+    fn still_running_ids(&self, request_ids: &[String], scope: Option<&str>) -> Vec<String> {
         request_ids
             .iter()
-            .filter(|id| self.running_meta(id).is_some())
+            .filter(|id| self.running_meta(id, scope).is_some())
             .cloned()
             .collect()
     }
@@ -1003,8 +1095,13 @@ impl BackgroundAgentTracker {
     }
 
     /// Lightweight metadata for one still-running agent. `None` when the
-    /// `request_id` is unknown (never registered, or already completed).
-    pub fn running_meta(&self, request_id: &str) -> Option<RunningMeta> {
+    /// `request_id` is unknown (never registered, or already completed) or
+    /// belongs to a session other than `scope` (W11 — see
+    /// [`addressable`](Self::addressable)).
+    pub fn running_meta(&self, request_id: &str, scope: Option<&str>) -> Option<RunningMeta> {
+        if !self.addressable(request_id, scope) {
+            return None;
+        }
         let running = self.running.read().unwrap_or_else(|e| {
             warn!("BackgroundAgentTracker lock poisoned, recovering");
             e.into_inner()
@@ -1055,19 +1152,27 @@ impl BackgroundAgentTracker {
             .collect()
     }
 
-    /// The subset of `request_ids` the tracker has never heard of — in neither
-    /// the running nor the completed map (typo'd, from another session, or
-    /// TTL-pruned).
+    /// The subset of `request_ids` the caller cannot address — in neither the
+    /// running nor the completed map (typo'd or TTL-pruned), or owned by a
+    /// session other than `scope`.
     ///
     /// `wait` used to silently ignore these: a set with one bad id parked for
     /// the full window and reported only on the good ones, so a typo looked
     /// exactly like a slow sub-agent. Reporting them lets the model fix the
     /// call instead of waiting again.
+    ///
+    /// W11 — folding the out-of-scope case in here is what makes the tool's
+    /// "unknown request_id" wording true again: before the addressing
+    /// chokepoint existed, a foreign id was omitted from this list *and*
+    /// readable through `check_status`, so the sentence shown to the model was
+    /// a lie in both directions.
     #[must_use]
-    pub fn unknown_ids(&self, request_ids: &[String]) -> Vec<String> {
+    pub fn unknown_ids(&self, request_ids: &[String], scope: Option<&str>) -> Vec<String> {
         request_ids
             .iter()
-            .filter(|id| self.result_snapshot(id).is_none() && self.running_meta(id).is_none())
+            .filter(|id| {
+                self.result_snapshot(id, scope).is_none() && self.running_meta(id, scope).is_none()
+            })
             .cloned()
             .collect()
     }
@@ -1358,9 +1463,9 @@ mod tests {
         tracker.mark_completed("fan-b", CompletedOutcome::ok_text("B"));
 
         let short = Duration::from_millis(50);
-        let first = tracker.wait_any(&ids, short).await;
-        let second = tracker.wait_any(&ids, short).await;
-        let third = tracker.wait_any(&ids, short).await;
+        let first = tracker.wait_any(&ids, None, short).await;
+        let second = tracker.wait_any(&ids, None, short).await;
+        let third = tracker.wait_any(&ids, None, short).await;
 
         let delivered = |outcome: &WaitAnyOutcome| match outcome {
             WaitAnyOutcome::Completed { request_id, .. } => request_id.clone(),
@@ -1395,11 +1500,11 @@ mod tests {
 
         let short = Duration::from_millis(50);
         assert!(matches!(
-            tracker.wait_any(&ids, short).await,
+            tracker.wait_any(&ids, None, short).await,
             WaitAnyOutcome::Completed { .. }
         ));
 
-        match tracker.wait_any(&ids, short).await {
+        match tracker.wait_any(&ids, None, short).await {
             WaitAnyOutcome::TimedOut { still_running } => {
                 assert_eq!(still_running, vec!["mix-running".to_string()]);
             }
@@ -1418,7 +1523,7 @@ mod tests {
 
         let short = Duration::from_millis(50);
         for attempt in 0..2 {
-            match tracker.wait("solo", short).await {
+            match tracker.wait("solo", None, short).await {
                 WaitOutcome::Completed(snap) => match snap.outcome {
                     CompletedOutcome::Ok { final_text, .. } => assert_eq!(final_text, "payload"),
                     other => panic!("attempt {attempt}: unexpected outcome {other:?}"),
@@ -1496,7 +1601,7 @@ mod tests {
             "known-done".to_string(),
             "typo".to_string(),
         ];
-        assert_eq!(tracker.unknown_ids(&probe), vec!["typo".to_string()]);
+        assert_eq!(tracker.unknown_ids(&probe, None), vec!["typo".to_string()]);
     }
 
     #[test]
@@ -1576,7 +1681,7 @@ mod tests {
         tracker.mark_completed("req-1", CompletedOutcome::ok_text("done"));
         assert!(tracker.list_running(None).is_empty());
         let snap = tracker
-            .result_snapshot("req-1")
+            .result_snapshot("req-1", None)
             .expect("completed entry present");
         match snap.outcome {
             CompletedOutcome::Ok { final_text, .. } => assert_eq!(final_text, "done"),
@@ -1597,7 +1702,7 @@ mod tests {
     #[test]
     fn result_snapshot_returns_none_for_unknown() {
         let tracker = BackgroundAgentTracker::new();
-        assert!(tracker.result_snapshot("unknown").is_none());
+        assert!(tracker.result_snapshot("unknown", None).is_none());
     }
 
     #[test]
@@ -1605,7 +1710,7 @@ mod tests {
         let tracker = BackgroundAgentTracker::new();
         tracker.mark_completed("old", CompletedOutcome::ok_text("old result"));
         tracker.cleanup(std::time::Duration::ZERO);
-        assert!(tracker.result_snapshot("old").is_none());
+        assert!(tracker.result_snapshot("old", None).is_none());
     }
 
     #[test]
@@ -1623,9 +1728,9 @@ mod tests {
             "completed map must be bounded by MAX_COMPLETED_RESULTS"
         );
         // The very first inserts are the oldest → evicted; the last one stays.
-        assert!(tracker.result_snapshot("rid-0").is_none());
+        assert!(tracker.result_snapshot("rid-0", None).is_none());
         assert!(tracker
-            .result_snapshot(&format!("rid-{}", total - 1))
+            .result_snapshot(&format!("rid-{}", total - 1), None)
             .is_some());
     }
 
@@ -1637,7 +1742,7 @@ mod tests {
         let token = CancellationToken::new();
         tracker.register("new-run".to_string(), token, "task".to_string());
         assert!(
-            tracker.result_snapshot("fresh").is_some(),
+            tracker.result_snapshot("fresh", None).is_some(),
             "register() must not evict a still-fresh completed entry"
         );
     }
@@ -1648,9 +1753,9 @@ mod tests {
         tracker.mark_completed("rid", CompletedOutcome::ok_text("answer"));
         // Two consecutive polls must both succeed — a consume would make
         // the second one return None and confuse the parent agent.
-        assert!(tracker.result_snapshot("rid").is_some());
+        assert!(tracker.result_snapshot("rid", None).is_some());
         assert!(
-            tracker.result_snapshot("rid").is_some(),
+            tracker.result_snapshot("rid", None).is_some(),
             "result_snapshot must not consume the completed entry"
         );
     }
@@ -1669,7 +1774,7 @@ mod tests {
                 total_tokens: 1234,
             },
         );
-        let snap = tracker.result_snapshot("rid").expect("present");
+        let snap = tracker.result_snapshot("rid", None).expect("present");
         assert_eq!(snap.task, "do work");
         match snap.outcome {
             CompletedOutcome::Ok {
@@ -1691,9 +1796,11 @@ mod tests {
         let tracker = BackgroundAgentTracker::new();
         let token = CancellationToken::new();
         tracker.register("rid".into(), token, "explore repo".into());
-        let meta = tracker.running_meta("rid").expect("running entry present");
+        let meta = tracker
+            .running_meta("rid", None)
+            .expect("running entry present");
         assert_eq!(meta.task, "explore repo");
-        assert!(tracker.running_meta("ghost").is_none());
+        assert!(tracker.running_meta("ghost", None).is_none());
     }
 
     #[test]
@@ -1768,7 +1875,9 @@ mod tests {
         }
         tracker.mark_completed("rid", CompletedOutcome::Err("boom".into()));
 
-        let snap = tracker.result_snapshot("rid").expect("completed entry");
+        let snap = tracker
+            .result_snapshot("rid", None)
+            .expect("completed entry");
         assert_eq!(
             snap.progress_tail.len(),
             PROGRESS_TAIL_LEN,
@@ -2029,7 +2138,7 @@ mod tests {
             tokio::time::sleep(Duration::from_millis(20)).await;
             t2.mark_completed("rid", CompletedOutcome::ok_text("done"));
         });
-        match tracker.wait("rid", Duration::from_secs(5)).await {
+        match tracker.wait("rid", None, Duration::from_secs(5)).await {
             WaitOutcome::Completed(snap) => match snap.outcome {
                 CompletedOutcome::Ok { final_text, .. } => assert_eq!(final_text, "done"),
                 CompletedOutcome::Err(e) => panic!("expected Ok, got Err({e})"),
@@ -2044,7 +2153,7 @@ mod tests {
     async fn wait_times_out_while_child_still_running() {
         let tracker = BackgroundAgentTracker::new();
         tracker.register("rid".into(), CancellationToken::new(), "slow".into());
-        match tracker.wait("rid", Duration::from_millis(30)).await {
+        match tracker.wait("rid", None, Duration::from_millis(30)).await {
             WaitOutcome::TimedOut { .. } => {}
             other => panic!("expected TimedOut, got {other:?}"),
         }
@@ -2056,7 +2165,7 @@ mod tests {
     async fn wait_returns_not_found_for_unknown_id() {
         let tracker = BackgroundAgentTracker::new();
         assert!(matches!(
-            tracker.wait("ghost", Duration::from_millis(10)).await,
+            tracker.wait("ghost", None, Duration::from_millis(10)).await,
             WaitOutcome::NotFound
         ));
     }
@@ -2068,7 +2177,7 @@ mod tests {
         let tracker = BackgroundAgentTracker::new();
         tracker.register("rid".into(), CancellationToken::new(), "fast".into());
         tracker.mark_completed("rid", CompletedOutcome::ok_text("early"));
-        match tracker.wait("rid", Duration::from_millis(10)).await {
+        match tracker.wait("rid", None, Duration::from_millis(10)).await {
             WaitOutcome::Completed(snap) => assert_eq!(snap.task, "fast"),
             other => panic!("expected Completed, got {other:?}"),
         }
@@ -2081,7 +2190,8 @@ mod tests {
         let tracker = Arc::new(BackgroundAgentTracker::new());
         tracker.register("rid".into(), CancellationToken::new(), "race".into());
         let t2 = tracker.clone();
-        let waiter = tokio::spawn(async move { t2.wait("rid", Duration::from_secs(30)).await });
+        let waiter =
+            tokio::spawn(async move { t2.wait("rid", None, Duration::from_secs(30)).await });
         // Give the waiter a moment to park on the notifier, then complete.
         tokio::time::sleep(Duration::from_millis(20)).await;
         tracker.mark_completed("rid", CompletedOutcome::ok_text("woke"));
@@ -2131,7 +2241,7 @@ mod tests {
             t2.mark_completed("b", CompletedOutcome::ok_text("b-done"));
         });
         let ids = vec!["a".to_string(), "b".to_string()];
-        match tracker.wait_any(&ids, Duration::from_secs(5)).await {
+        match tracker.wait_any(&ids, None, Duration::from_secs(5)).await {
             WaitAnyOutcome::Completed {
                 request_id,
                 snapshot,
@@ -2155,7 +2265,10 @@ mod tests {
         tracker.register("a".into(), CancellationToken::new(), "slow".into());
         tracker.register("b".into(), CancellationToken::new(), "slow".into());
         let ids = vec!["a".to_string(), "b".to_string()];
-        match tracker.wait_any(&ids, Duration::from_millis(30)).await {
+        match tracker
+            .wait_any(&ids, None, Duration::from_millis(30))
+            .await
+        {
             WaitAnyOutcome::TimedOut { mut still_running } => {
                 still_running.sort();
                 assert_eq!(still_running, vec!["a".to_string(), "b".to_string()]);
@@ -2173,7 +2286,10 @@ mod tests {
         let tracker = BackgroundAgentTracker::new();
         tracker.register("known".into(), CancellationToken::new(), "live".into());
         let ids = vec!["ghost1".to_string(), "ghost2".to_string()];
-        match tracker.wait_any(&ids, Duration::from_millis(10)).await {
+        match tracker
+            .wait_any(&ids, None, Duration::from_millis(10))
+            .await
+        {
             WaitAnyOutcome::NotFound { unknown_ids } => {
                 let mut got = unknown_ids.clone();
                 got.sort();
@@ -2202,7 +2318,10 @@ mod tests {
             "ghost1".to_string(),
             "ghost2".to_string(),
         ];
-        match tracker.wait_any(&ids, Duration::from_millis(10)).await {
+        match tracker
+            .wait_any(&ids, None, Duration::from_millis(10))
+            .await
+        {
             WaitAnyOutcome::TimedOut { still_running } => {
                 assert_eq!(still_running, vec!["known".to_string()]);
             }
@@ -2210,7 +2329,7 @@ mod tests {
         }
         // …and the ghosts are still nameable, which is what the tool layer
         // reports alongside the timeout.
-        let mut unknown = tracker.unknown_ids(&ids);
+        let mut unknown = tracker.unknown_ids(&ids, None);
         unknown.sort();
         assert_eq!(unknown, vec!["ghost1".to_string(), "ghost2".to_string()]);
     }
@@ -2294,9 +2413,9 @@ mod tests {
             );
         }
         assert!(!tracker.session_has_running(root));
-        assert!(tracker.running_meta("sync-child").is_none());
+        assert!(tracker.running_meta("sync-child", None).is_none());
         assert!(
-            tracker.result_snapshot("sync-child").is_none(),
+            tracker.result_snapshot("sync-child", None).is_none(),
             "running-only registration must not retain a completed entry"
         );
     }
@@ -2419,7 +2538,7 @@ mod tests {
         }));
         assert!(result.is_err(), "inner closure must have panicked");
         assert!(
-            tracker.running_meta("panicky").is_none(),
+            tracker.running_meta("panicky", None).is_none(),
             "guard must delist during panic unwind"
         );
     }
@@ -2438,7 +2557,8 @@ mod tests {
             SpawnMeta::default(),
         );
         let t2 = tracker.clone();
-        let waiter = tokio::spawn(async move { t2.wait("sync-x", Duration::from_secs(30)).await });
+        let waiter =
+            tokio::spawn(async move { t2.wait("sync-x", None, Duration::from_secs(30)).await });
         tokio::time::sleep(Duration::from_millis(20)).await;
         drop(reg);
         let outcome = tokio::time::timeout(Duration::from_secs(2), waiter)
@@ -2574,6 +2694,146 @@ mod tests {
             first,
             vec!["m2".to_string(), "m1".to_string(), "m3".to_string()],
             "sort is by started_at_ms (insertion order with 2ms gap) then id"
+        );
+    }
+
+    // -- W11: the addressing face ----------------------------------------
+
+    /// The tracker is process-global. Scoping only the ENUMERATION face made
+    /// a foreign request_id hard to guess, not unreachable: a model holding
+    /// one (announce echo, log line, paste) could still read the other
+    /// session's result and cancel its run. Every by-id verb now goes through
+    /// [`BackgroundAgentTracker::addressable`].
+    #[test]
+    fn foreign_request_id_is_not_addressable() {
+        let tracker = BackgroundAgentTracker::new();
+        register_in(&tracker, "mine", "s-mine");
+        register_in(&tracker, "theirs", "s-other");
+        tracker.mark_completed("theirs", CompletedOutcome::ok_text("secret result"));
+
+        let mine = Some("s-mine");
+
+        assert!(tracker.addressable("mine", mine));
+        assert!(!tracker.addressable("theirs", mine));
+
+        // Read faces: a foreign id answers exactly like a never-registered one.
+        assert!(
+            tracker.result_snapshot("theirs", mine).is_none(),
+            "another session's completed result must not be readable"
+        );
+        assert!(tracker.running_meta("theirs", mine).is_none());
+        assert!(
+            !tracker.cancel_in_scope("theirs", mine),
+            "another session's run must not be cancellable"
+        );
+
+        // The unscoped face (CLI / direct construction / tests) is unchanged.
+        assert!(tracker.result_snapshot("theirs", None).is_some());
+        assert!(tracker.addressable("theirs", None));
+    }
+
+    /// The `annotate_unknown` sentence shown to the model claims the id is
+    /// unknown. Before the addressing chokepoint a foreign id was omitted
+    /// from this list AND readable through `check_status` — the sentence was
+    /// false in both directions. An out-of-scope id must now be reported the
+    /// same way a typo is, so the two stay indistinguishable.
+    #[test]
+    fn unknown_ids_reports_out_of_scope_ids() {
+        let tracker = BackgroundAgentTracker::new();
+        register_in(&tracker, "mine", "s-mine");
+        register_in(&tracker, "theirs", "s-other");
+
+        let probe = vec!["mine".to_string(), "theirs".to_string(), "typo".to_string()];
+        let mut unknown = tracker.unknown_ids(&probe, Some("s-mine"));
+        unknown.sort();
+        assert_eq!(
+            unknown,
+            vec!["theirs".to_string(), "typo".to_string()],
+            "an out-of-scope id must be reported as unknown, exactly like a typo"
+        );
+
+        assert!(
+            tracker
+                .unknown_ids(&probe, None)
+                .contains(&"typo".to_string()),
+            "unscoped callers still only lose genuinely unknown ids"
+        );
+        assert!(!tracker
+            .unknown_ids(&probe, None)
+            .contains(&"theirs".to_string()));
+    }
+
+    /// The scope check lives INSIDE `wait_any`'s loop, not just at its
+    /// entrance: a foreign id that completes while the call is parked must
+    /// not be claimable on the notifier-driven re-check either. Filtering
+    /// once on entry would have left exactly that window open.
+    #[tokio::test]
+    async fn wait_any_does_not_claim_a_foreign_completion_while_parked() {
+        let tracker = Arc::new(BackgroundAgentTracker::new());
+        register_in(&tracker, "mine", "s-mine");
+        register_in(&tracker, "theirs", "s-other");
+
+        let ids = vec!["mine".to_string(), "theirs".to_string()];
+        let waiter = {
+            let t = tracker.clone();
+            let ids = ids.clone();
+            tokio::spawn(async move {
+                t.wait_any(&ids, Some("s-mine"), Duration::from_secs(5))
+                    .await
+            })
+        };
+
+        // The foreign run finishes first and wakes every parker.
+        tokio::time::sleep(Duration::from_millis(30)).await;
+        tracker.mark_completed("theirs", CompletedOutcome::ok_text("not yours"));
+
+        // ...and the in-scope one finishes after it, so the wait resolves
+        // deterministically instead of relying on a timeout.
+        tokio::time::sleep(Duration::from_millis(30)).await;
+        tracker.mark_completed("mine", CompletedOutcome::ok_text("yours"));
+
+        match waiter.await.expect("waiter task must not panic") {
+            WaitAnyOutcome::Completed {
+                request_id,
+                snapshot,
+            } => {
+                assert_eq!(
+                    request_id, "mine",
+                    "the foreign completion must never satisfy this wait"
+                );
+                match snapshot.outcome {
+                    CompletedOutcome::Ok { final_text, .. } => assert_eq!(final_text, "yours"),
+                    other => panic!("expected the in-scope result, got {other:?}"),
+                }
+            }
+            other => panic!("expected the in-scope completion, got {other:?}"),
+        }
+    }
+
+    /// W10 fallback — a sub-agent cancelled while QUEUED behind the
+    /// concurrency semaphore may settle without ever having had a session (or
+    /// even a running entry, if its registration was never made). The
+    /// no-running-entry arm of `mark_completed` must still produce a terminal
+    /// node, and the byte-exact producer string must still classify it as
+    /// Cancelled rather than Failed — otherwise the panel keeps a `Spawned`
+    /// row with no matching terminal state.
+    #[test]
+    fn cancelled_while_queued_settles_even_without_a_running_entry() {
+        let tracker = BackgroundAgentTracker::new();
+        tracker.mark_completed(
+            "queued-then-cancelled",
+            CompletedOutcome::Err("sub-agent failed: cancelled".to_string()),
+        );
+
+        let nodes = tracker.flat_nodes(None);
+        let node = nodes
+            .iter()
+            .find(|n| n.node_id == "queued-then-cancelled")
+            .expect("a terminal node must exist even with no prior registration");
+        assert_eq!(
+            node.lifecycle,
+            NodeLifecycle::Cancelled,
+            "the queue-cancel string must settle as Cancelled, not Failed"
         );
     }
 }

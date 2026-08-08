@@ -138,6 +138,30 @@ pub fn ambient_owner_visible(owner_user_id: Option<&str>) -> bool {
     }
 }
 
+/// The user a visibility check made from INSIDE an agent run acts for — the
+/// run-side twin of [`visible_owner_filter`].
+///
+/// `CALLER_USER` is dead past the `tokio::spawn` every run crosses, so a
+/// predicate built on [`visible_owner_filter`] alone is fail-OPEN for every
+/// tool call (see [`ambient_owner_visible`], which exists for the same reason).
+/// The resolution order is the one the rest of the crate already established:
+///
+/// 1. [`crate::scope::ambient_room_author`] — this turn's SPEAKER, when the run
+///    is a project room. In a room the ambient scope's `owner_user_id` names the
+///    room's CREATOR, identically for every member (that is what shares the
+///    memory partition), so asking the roster about it answers "does this room
+///    still exist" rather than "may this person read". The speaker is the actor.
+/// 2. [`crate::scope::ambient_owner`] — the gateway caller when one is live,
+///    else the run's ambient owner. `None` outside a room, so this is the
+///    ordinary answer for a personal / org run.
+///
+/// `None` means "no ambient actor" and is deliberately unrestricted (cron,
+/// background sweeps, in-process tests), matching every other predicate here.
+#[must_use]
+pub fn ambient_actor() -> Option<String> {
+    crate::scope::ambient_room_author().or_else(crate::scope::ambient_owner)
+}
+
 /// Whether the current gateway caller may see records scoped to `project_id`
 /// (P2 project rooms).
 ///
@@ -147,9 +171,16 @@ pub fn ambient_owner_visible(owner_user_id: Option<&str>) -> bool {
 /// this module, so cron / A2A / in-process callers are unchanged.
 #[must_use]
 pub fn project_visible(project_id: &str) -> bool {
-    match visible_owner_filter() {
+    project_visible_to(project_id, visible_owner_filter().as_deref())
+}
+
+/// [`project_visible`]'s rule with the actor passed explicitly, so the
+/// gateway-side and run-side resolvers cannot grow two copies of it.
+#[must_use]
+pub fn project_visible_to(project_id: &str, actor: Option<&str>) -> bool {
+    match actor {
         None => true,
-        Some(caller) => crate::projects::roster::is_member(project_id, &caller),
+        Some(caller) => crate::projects::roster::is_member(project_id, caller),
     }
 }
 
@@ -248,6 +279,37 @@ pub async fn existing_session_is_visible(store: &dyn SessionStore, key: &Session
     }
 }
 
+/// Whether the TRANSCRIPT of `session_key` may be read by the current agent
+/// run — the predicate every cross-session search surface owes.
+///
+/// Shape notes, each of which is a defect if taken from somewhere else:
+///
+/// - **Resolver is [`ambient_actor`], not [`visible_owner_filter`].** The only
+///   caller is a builtin tool, i.e. the far side of the run's `tokio::spawn`,
+///   where `CALLER_USER` is `None` — a gate built on it would be constantly
+///   true, which is the same as not having one.
+/// - **A key that does not parse, a row that is gone, and a store error are all
+///   DENIALS.** This answers "may I quote this transcript", so "I cannot work
+///   out whose it is" must never read as "it is everyone's" — the opposite
+///   direction from [`existing_session_is_visible`], which answers "may I
+///   address this key" and where a not-yet-created session is the ordinary
+///   first message of a new conversation.
+/// - **The rule itself is [`session_visible_to`]**, the same body both
+///   `SessionStore` backends' list filter goes through, so a room's transcript
+///   follows the roster here exactly as it does in `sessions.list`.
+pub async fn ambient_transcript_visible(store: &dyn SessionStore, session_key: &str) -> bool {
+    let Some(actor) = ambient_actor() else {
+        return true;
+    };
+    let Some(key) = SessionKey::from_key_string(session_key) else {
+        return false;
+    };
+    match store.get_metadata(&key).await {
+        Ok(Some(meta)) => session_visible_to(&meta, &actor),
+        Ok(None) | Err(_) => false,
+    }
+}
+
 /// Whether a partition-composed `agent_id` (spec §11-1c, Task 4's grammar:
 /// `<base>__<suffix>` via [`crate::memory::project_scope::NS_SEP`]) is
 /// visible to the current caller.
@@ -270,6 +332,22 @@ pub async fn existing_session_is_visible(store: &dyn SessionStore, key: &Session
 /// positive-match arm for them.
 #[must_use]
 pub fn partition_visible(partition_id: &str) -> bool {
+    partition_visible_to(partition_id, visible_owner_filter().as_deref())
+}
+
+/// [`partition_visible`]'s twin for surfaces reached from INSIDE an agent run
+/// — memory assembly, the builtin tools — where `CALLER_USER` is dead and
+/// [`visible_owner_filter`] would therefore be a constantly-true predicate.
+/// Resolver: [`ambient_actor`]. Same rule, one body.
+#[must_use]
+pub fn ambient_partition_visible(partition_id: &str) -> bool {
+    partition_visible_to(partition_id, ambient_actor().as_deref())
+}
+
+/// [`partition_visible`]'s rule with the actor passed explicitly — the single
+/// body both resolvers delegate to.
+#[must_use]
+pub fn partition_visible_to(partition_id: &str, actor: Option<&str>) -> bool {
     let Some((_base, suffix)) = partition_id.split_once(crate::memory::project_scope::NS_SEP)
     else {
         return true;
@@ -282,9 +360,9 @@ pub fn partition_visible(partition_id: &str) -> bool {
     // not start with `"p-"`, so the two families cannot collide (pinned by
     // `projects::store::tests::the_project_id_family_cannot_collide_with_the_legacy_directory_family`).
     if suffix.starts_with("p-") {
-        return project_visible(suffix);
+        return project_visible_to(suffix, actor);
     }
-    match visible_owner_filter() {
+    match actor {
         None => true,
         Some(caller) => suffix == caller,
     }
@@ -624,6 +702,101 @@ mod tests {
                     partition_visible("main__proj-deadbeef")
                 })
                 .await
+        );
+    }
+
+    // ── run-side resolver (memory assembly, builtin tools) ──────────────
+
+    /// The probe every run-side gate depends on, pinned: inside an agent run
+    /// `CALLER_USER` is dead, so a predicate resolved through
+    /// [`visible_owner_filter`] is CONSTANTLY TRUE there — the textbook
+    /// "恒真的谓词等于没判". [`ambient_actor`] is the resolver that is live.
+    #[tokio::test]
+    async fn the_run_side_resolver_is_live_where_the_gateway_one_is_dead() {
+        let alice = crate::scope::ScopeAttribution::personal("u-alice");
+        let (gateway_side, run_side) = crate::scope::with_scope(Some(alice.clone()), async {
+            (visible_owner_filter(), ambient_actor())
+        })
+        .await;
+        assert_eq!(
+            gateway_side, None,
+            "CALLER_USER does not survive the run's spawn"
+        );
+        assert_eq!(run_side.as_deref(), Some("u-alice"));
+
+        // The consequence, spelled out on a real partition: from inside
+        // alice's run the gateway-side predicate admits BOB's partition.
+        let (gateway_says, ambient_says) = crate::scope::with_scope(Some(alice), async {
+            (
+                partition_visible("main__u-bob"),
+                ambient_partition_visible("main__u-bob"),
+            )
+        })
+        .await;
+        assert!(gateway_says, "…which is why it must not be used here");
+        assert!(!ambient_says);
+    }
+
+    /// In a room the ambient scope's owner is the room's CREATOR, identically
+    /// for every member, so the roster question has to be asked about the
+    /// SPEAKER. `ambient_actor` prefers `scope::ambient_room_author` for
+    /// exactly this reason.
+    #[tokio::test]
+    async fn the_run_side_resolver_prefers_the_rooms_speaker_over_its_creator() {
+        let in_room = crate::scope::ScopeAttribution {
+            owner_user_id: "u-alice".to_string(),
+            scope: crate::scope::ScopeId::Project("p-room".to_string()),
+        };
+        let seen = crate::scope::with_scope(
+            Some(in_room),
+            crate::scope::with_room_author(Some("u-bob".to_string()), async { ambient_actor() }),
+        )
+        .await;
+        assert_eq!(seen.as_deref(), Some("u-bob"));
+    }
+
+    /// `session_search`'s gate. Note the direction of the last two cases: an
+    /// input this cannot attribute is a DENIAL, the opposite of
+    /// [`existing_session_is_visible`].
+    #[tokio::test]
+    async fn ambient_transcript_visible_denies_a_foreign_owner_inside_a_run() {
+        let temp = TempDir::new().unwrap();
+        let s = store(&temp);
+        let key = SessionKey::main("transcript-alice");
+        crate::scope::with_scope(
+            Some(crate::scope::ScopeAttribution::personal("u-alice")),
+            s.get_or_create(&key),
+        )
+        .await
+        .unwrap();
+        let key_string = key.to_key_string();
+
+        let as_run = |user: &str, target: &str| {
+            let attr = crate::scope::ScopeAttribution::personal(user);
+            let store = &s;
+            let target = target.to_string();
+            // No `CALLER_USER` — that is the shape a run actually has.
+            crate::scope::with_scope(Some(attr), async move {
+                ambient_transcript_visible(store, &target).await
+            })
+        };
+
+        assert!(
+            !as_run("u-bob", &key_string).await,
+            "bob's run must not read alice's transcript"
+        );
+        assert!(as_run("u-alice", &key_string).await, "…hers still is");
+        assert!(
+            !as_run("u-alice", "not-a-session-key").await,
+            "an unparseable key is a denial, not a pass"
+        );
+        assert!(
+            !as_run(
+                "u-alice",
+                &SessionKey::main("never-created").to_key_string()
+            )
+            .await,
+            "a row we cannot attribute is a denial, not a pass"
         );
     }
 

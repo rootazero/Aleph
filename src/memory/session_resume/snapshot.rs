@@ -24,6 +24,21 @@ pub struct SessionSnapshot {
     /// their empty id never matches a real agent, so they are skipped.
     #[serde(default)]
     pub agent_id: String,
+    /// Owning memory **partition** — [`super::snapshot_partition`]'s output for
+    /// the session's ambient scope at write time (`main`, `main__u-alice`,
+    /// `main__p-x7f2`).
+    ///
+    /// `agent_id` alone is the base id, which every user of the same agent
+    /// shares; it can therefore never separate alice's `/end-summary` from
+    /// bob's. This is the dimension that does, and the reader matches on it
+    /// exactly.
+    ///
+    /// `#[serde(default)]` keeps every legacy `resume.json` deserializable.
+    /// Their `None` is NOT read as "the base partition" — see
+    /// [`super::SnapshotReader::load_latest`] for why that is fail-closed on
+    /// purpose.
+    #[serde(default)]
+    pub scope_id: Option<String>,
     pub created_at: DateTime<Utc>,
     pub summary: String,
 }
@@ -37,6 +52,7 @@ mod tests {
         let snapshot = SessionSnapshot {
             session_id: "s-rt".into(),
             agent_id: "main".into(),
+            scope_id: Some("main__u-alice".into()),
             created_at: Utc::now(),
             summary: "Roundtrip test.".into(),
         };
@@ -44,7 +60,23 @@ mod tests {
         let restored: SessionSnapshot = serde_json::from_str(&json).unwrap();
         assert_eq!(restored.session_id, snapshot.session_id);
         assert_eq!(restored.agent_id, snapshot.agent_id);
+        assert_eq!(restored.scope_id, snapshot.scope_id);
         assert_eq!(restored.summary, snapshot.summary);
+    }
+
+    #[test]
+    fn legacy_snapshot_without_scope_id_deserializes_to_none() {
+        // Files written before the partition dimension existed carry no
+        // `scope_id`; they must keep loading, and their `None` must stay
+        // distinguishable from a real partition so the reader can fail closed.
+        let legacy = r#"{
+            "session_id": "old",
+            "agent_id": "main",
+            "created_at": "2026-01-01T00:00:00Z",
+            "summary": "Legacy snapshot."
+        }"#;
+        let restored: SessionSnapshot = serde_json::from_str(legacy).unwrap();
+        assert_eq!(restored.scope_id, None);
     }
 
     #[test]

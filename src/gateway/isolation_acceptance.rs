@@ -1350,3 +1350,261 @@ async fn two_members_of_a_room_work_in_the_same_bound_folder() {
     // the folder above can only have come from the binding.
     assert_eq!(cwd_for("u-ws-alice", None).await, None);
 }
+
+/// **W2 — the prior-session snapshot is partitioned like everything else.**
+///
+/// Every other source `memory::assembler::gather` fans out to is partitioned:
+/// notes through `project_scope::session_read_ids`, the user-profile floor
+/// through `profile_floor_id`. The resume snapshot was the one that was not —
+/// its only filter was the BASE agent id, which every user of that agent
+/// shares — so on a multi-user install one person's LLM-written `/end-summary`
+/// was injected verbatim into another person's system prompt. Same shape as
+/// `project_scope`'s `a_project_room_recalls_nobodys_personal_memory`, read
+/// through the real writer and the real reader.
+///
+/// Four claims, and the middle two are the ones that fail silently:
+///
+/// 1. Alice's own next session still resumes her summary (the feature works).
+/// 2. **Bob gets nothing** — not alice's, which is the leak.
+/// 3. **A room's summary does not follow its creator into a private session**,
+///    and a private summary does not surface in the room.
+/// 4. A member removed from the room stops getting the room's summary — the
+///    roster answers, exactly as it does for `sessions.list`.
+#[tokio::test]
+async fn a_prior_sessions_summary_never_crosses_a_partition() {
+    use crate::memory::session_resume::{SnapshotReader, SnapshotWriter};
+    use crate::scope::ScopeId;
+
+    let _guard = crate::projects::roster::TEST_GUARD
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+
+    let temp = TempDir::new().unwrap();
+    let writer = SnapshotWriter::new(temp.path());
+    let reader = SnapshotReader::new(temp.path());
+
+    let projects =
+        crate::projects::ProjectStore::new(rusqlite::Connection::open_in_memory().unwrap());
+    projects.create_schema().unwrap();
+    let room = projects
+        .create("shared room", Some("u-snap-alice"), None)
+        .unwrap();
+    projects.add_member(&room.id, "u-snap-bob").unwrap();
+
+    // Alice ends a private session; the room ends one too.
+    as_caller("u-snap-alice", async {
+        writer
+            .write_from_summary("agent:main:alice-prev", "Alice's private plan.", "main")
+            .unwrap();
+    })
+    .await;
+    as_room_member("u-snap-alice", &room.id, async {
+        writer
+            .write_from_summary("agent:main:room-prev", "The room's shared plan.", "main")
+            .unwrap();
+    })
+    .await;
+
+    // 1. Alice resumes her own.
+    let alice_resumes = as_caller("u-snap-alice", async {
+        reader.load_latest("main", "agent:main:alice-next")
+    })
+    .await;
+    assert_eq!(
+        alice_resumes.map(|s| s.summary),
+        Some("Alice's private plan.".to_string()),
+        "the resume chain must still work for its owner"
+    );
+
+    // 2. Bob gets NOTHING — this is the leak.
+    assert!(
+        as_caller("u-snap-bob", async {
+            reader.load_latest("main", "agent:main:bob-next")
+        })
+        .await
+        .is_none(),
+        "bob's system prompt must never carry alice's session summary"
+    );
+
+    // 3. The room's summary stays in the room, and alice's stays out of it.
+    let in_room = as_room_member("u-snap-bob", &room.id, async {
+        reader.load_latest("main", "agent:main:room-next")
+    })
+    .await;
+    assert_eq!(
+        in_room.map(|s| s.summary),
+        Some("The room's shared plan.".to_string()),
+        "every member resumes the ROOM's previous session — that is what a room is"
+    );
+    assert_ne!(
+        as_caller("u-snap-alice", async {
+            reader.load_latest("main", "agent:main:alice-next-2")
+        })
+        .await
+        .map(|s| s.summary),
+        Some("The room's shared plan.".to_string()),
+        "the room's summary must not follow its creator into a private session"
+    );
+
+    // 4. Removed from the roster ⇒ the room's summary is gone, immediately.
+    projects.remove_member(&room.id, "u-snap-bob").unwrap();
+    let after_removal = crate::scope::with_scope(
+        Some(ScopeAttribution {
+            owner_user_id: "u-snap-bob".to_string(),
+            scope: ScopeId::Project(room.id.clone()),
+        }),
+        crate::scope::with_room_author(Some("u-snap-bob".to_string()), async {
+            // The run-side shape: `CALLER_USER` is dead past the run's spawn,
+            // so the gate has to resolve its actor the ambient way or it is a
+            // constantly-true predicate.
+            let partition = crate::memory::session_resume::snapshot_partition("main");
+            crate::gateway::visibility::ambient_partition_visible(&partition)
+        }),
+    )
+    .await;
+    assert!(
+        !after_removal,
+        "a removed member must lose the room's partition with no cache to invalidate"
+    );
+}
+
+/// **W3 — `session_search` cannot read another user's transcript.**
+///
+/// The tool's own access control is the A2A policy, which answers "which AGENT
+/// may reach which" and is blind to WHO a session belongs to. Its raw-FTS
+/// fallback (`SessionStore::search_messages`) is a global sweep over every
+/// session on the install, so on a multi-user box the model could quote
+/// someone else's private conversation verbatim — summary AND evidence quote.
+///
+/// Driven through the REAL tool with `assembler: None`, which is exactly the
+/// fallback path, under the task-locals an agent RUN sees: `scope::with_scope`
+/// only, deliberately WITHOUT `CALLER_USER`. That is not a shortcut — it is the
+/// shape production presents (the run lives past a `tokio::spawn`, where
+/// `CALLER_USER` is `None`), and a gate resolved through
+/// `visibility::visible_owner_filter` would pass this test's happy path while
+/// being constantly true in production.
+#[tokio::test]
+async fn session_search_never_returns_another_users_transcript() {
+    use crate::builtin_tools::session_search::{SessionSearchArgs, SessionSearchTool};
+    use crate::gateway::agent_instance::{AgentInstance, AgentRegistry};
+    use crate::gateway::context::GatewayContext;
+    use crate::gateway::event_emitter::EventEmitter;
+    use crate::gateway::execution_adapter::ExecutionAdapter;
+    use crate::gateway::execution_engine::{ExecutionError, RunRequest, RunStatus};
+    use crate::gateway::inter_agent_policy::AgentToAgentPolicy;
+    use crate::gateway::session_store::types::MessageRecord;
+    use crate::tools::AlephTool;
+
+    struct NoRuns;
+    #[async_trait::async_trait]
+    impl ExecutionAdapter for NoRuns {
+        async fn execute(
+            &self,
+            _request: RunRequest,
+            _agent: Arc<AgentInstance>,
+            _emitter: Arc<dyn EventEmitter + Send + Sync>,
+        ) -> Result<(), ExecutionError> {
+            Ok(())
+        }
+        async fn cancel(&self, _run_id: &str) -> Result<(), ExecutionError> {
+            Ok(())
+        }
+        async fn get_status(&self, _run_id: &str) -> Option<RunStatus> {
+            None
+        }
+        async fn active_run_count(&self) -> usize {
+            0
+        }
+    }
+
+    let temp = TempDir::new().unwrap();
+    let sessions = Arc::new(
+        SessionManager::new(SessionManagerConfig {
+            db_path: temp.path().join("sessions.db"),
+            ..Default::default()
+        })
+        .unwrap(),
+    );
+    let context = Arc::new(GatewayContext::new(
+        sessions.clone(),
+        Arc::new(AgentRegistry::new()),
+        Arc::new(NoRuns),
+        // Permissive on purpose: the A2A axis must not be what makes this pass.
+        Arc::new(AgentToAgentPolicy::permissive()),
+    ));
+
+    // Alice writes something private. `get_or_create` stamps the row from the
+    // ambient scope, so this goes through `as_caller` — the same nesting a real
+    // dispatch applies.
+    let secret = format!("pineapple-{}", unique("secret"));
+    let alice_key = SessionKey::main(unique("ss-alice"));
+    let alice_key_string = alice_key.to_key_string();
+    as_caller("u-ss-alice", async {
+        sessions.get_or_create(&alice_key).await.unwrap();
+        sessions
+            .append_message(
+                &alice_key,
+                MessageRecord {
+                    id: unique("msg"),
+                    role: "user".to_string(),
+                    content: secret.clone(),
+                    timestamp: chrono::Utc::now().timestamp(),
+                    metadata: None,
+                    input_tokens: 0,
+                    output_tokens: 0,
+                    tool_call_id: None,
+                    tool_name: None,
+                },
+            )
+            .await
+            .unwrap();
+    })
+    .await;
+
+    let search = |user: &str| {
+        let context = context.clone();
+        let query = secret.clone();
+        let user = user.to_string();
+        async move {
+            let tool = SessionSearchTool::new(context, "main", None, None);
+            crate::scope::with_scope(
+                Some(ScopeAttribution::personal(&user)),
+                tool.call(SessionSearchArgs {
+                    query,
+                    max_results: 10,
+                }),
+            )
+            .await
+            .expect("session_search must not error")
+        }
+    };
+
+    // Bob: zero hits, and above all not the transcript bytes.
+    let for_bob = search("u-ss-bob").await;
+    assert!(
+        !for_bob
+            .hits
+            .iter()
+            .any(|h| h.session_key == alice_key_string),
+        "bob must not see alice's session in session_search"
+    );
+    assert!(
+        !for_bob
+            .hits
+            .iter()
+            .flat_map(|h| h.evidence_quotes.iter())
+            .any(|q| q.contains(&secret)),
+        "and above all must not be handed her transcript as an evidence quote"
+    );
+
+    // Alice: the same query DOES find it — otherwise this test would pass on a
+    // tool that simply returns nothing.
+    let for_alice = search("u-ss-alice").await;
+    assert!(
+        for_alice
+            .hits
+            .iter()
+            .any(|h| h.session_key == alice_key_string),
+        "the owner must still be able to search her own transcripts"
+    );
+}

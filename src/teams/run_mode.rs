@@ -15,6 +15,7 @@
 use std::collections::HashMap;
 
 use crate::config::types::policies::{SessionMode, MODE_SESSION_KEY};
+use crate::gateway::execution_engine::{BusyInputMode, BUSY_INPUT_MODE_KEY};
 use crate::routing::session_key::SessionKey;
 
 /// The mode every team-originated run executes in. `Work` is the identity
@@ -22,6 +23,19 @@ use crate::routing::session_key::SessionKey;
 /// team run's surface is exactly the registry minus whatever the member itself
 /// declared.
 pub const TEAM_RUN_MODE: SessionMode = SessionMode::Work;
+
+/// The busy-input policy every team-originated run declares.
+///
+/// A team run is a WHOLE DISPATCHED INTENT, not a remark. Left unset the gate
+/// falls back to `Steer`, and a same-session collision (a member @'ed twice in
+/// one round, a task re-dispatched onto a session whose predecessor is still
+/// draining) folds the new run's prompt into the running sibling as a bare
+/// `UserMessage` and returns `Ok(())` — the dispatcher records a completed run
+/// that executed nothing of what it asked, because everything a `RunRequest`
+/// carries beyond text (sandbox / workspace / iteration cap / timeout) is
+/// resolved AFTER the admission gate. `Queue` leaves the running sibling alone
+/// and surfaces `AgentBusy`, which both producers' callers already understand.
+pub const TEAM_RUN_BUSY_INPUT_MODE: BusyInputMode = BusyInputMode::Queue;
 
 /// `task_type` of a group-chat member run's session key
 /// (`teams::broadcast`, keyed by team id).
@@ -52,18 +66,27 @@ pub fn is_team_session(key: &SessionKey) -> bool {
     )
 }
 
-/// Stamp [`TEAM_RUN_MODE`] onto a team run's request metadata.
+/// Stamp [`TEAM_RUN_MODE`] and [`TEAM_RUN_BUSY_INPUT_MODE`] onto a team run's
+/// request metadata.
 ///
 /// `ExecutionEngine::resolve_turn_mode` treats a request-carried mode as
 /// highest precedence and persists it onto the session; from the second turn on
-/// `stored == requested` and the write short-circuits.
+/// `stored == requested` and the write short-circuits. The busy-input mode is
+/// read per-request by the admission gate (`BusyInputMode::from_metadata`) and
+/// never persisted.
 ///
 /// Called by both team run producers and nowhere else:
 /// `teams::broadcast::member_run_metadata` (group chat fan-out) and
 /// `teams::dispatcher::runner::task_run_metadata` (task dispatch / workflow
-/// steps).
+/// steps). Both facts are stamped HERE rather than at the two call sites: a
+/// second copy at each producer is a second source, and the one that drifts is
+/// always the one nobody re-reads.
 pub fn stamp(metadata: &mut HashMap<String, String>) {
     metadata.insert(MODE_SESSION_KEY.to_string(), TEAM_RUN_MODE.id().to_string());
+    metadata.insert(
+        BUSY_INPUT_MODE_KEY.to_string(),
+        TEAM_RUN_BUSY_INPUT_MODE.as_wire().to_string(),
+    );
 }
 
 #[cfg(test)]
@@ -125,6 +148,25 @@ mod tests {
         assert_eq!(
             metadata.get(MODE_SESSION_KEY).map(String::as_str),
             Some("work")
+        );
+    }
+
+    /// The wire value the gate parses must be `queue` — not merely "some
+    /// busy-input key is present". A typo here reads back as the `Steer`
+    /// fallback (`from_wire` maps every unknown string to it), which is
+    /// exactly the silent inline-fold this stamp exists to prevent.
+    #[test]
+    fn stamp_writes_the_queue_busy_input_mode() {
+        let mut metadata = HashMap::new();
+        stamp(&mut metadata);
+        assert_eq!(
+            metadata.get(BUSY_INPUT_MODE_KEY).map(String::as_str),
+            Some("queue")
+        );
+        assert_eq!(
+            BusyInputMode::from_metadata(&metadata),
+            BusyInputMode::Queue,
+            "the gate must parse a team run's stamp back as Queue"
         );
     }
 

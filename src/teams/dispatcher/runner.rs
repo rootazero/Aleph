@@ -27,7 +27,7 @@ use std::collections::HashMap;
 use crate::gateway::context::GatewayContext;
 use crate::gateway::event_emitter::team_fanout;
 use crate::gateway::event_emitter::NoOpEventEmitter;
-use crate::gateway::execution_engine::RunRequest;
+use crate::gateway::execution_engine::{ExecutionError, RunRequest};
 use crate::gateway::router::SessionKey;
 use crate::sandbox::{worktree as worktree_mod, Sandbox, WorktreeHandle, WorktreeSandbox};
 use crate::sync_primitives::Arc;
@@ -92,6 +92,33 @@ pub enum MemberRunStatus {
     Failed,
     /// The run exceeded its timeout and was aborted.
     Timeout,
+    /// The target agent was already running something, so this attempt never
+    /// started. Not a task failure — the work has not been tried yet, so it is
+    /// deliberately excluded from the retry budget (same reasoning as
+    /// [`TaskRunStatus::Abandoned`](crate::agents::swarm::tasks::TaskRunStatus)
+    /// for crash orphans) and re-dispatched after the usual backoff.
+    ///
+    /// Newly reachable since team runs stamp `busy_input_mode = "queue"`: the
+    /// gate now returns `AgentBusy` for a collision instead of folding the
+    /// message inline into the sibling run.
+    Busy,
+}
+
+impl MemberRunStatus {
+    /// The run-log row this outcome becomes. Single source for the mapping
+    /// because it decides retry-budget accounting: `budget_failures_since`
+    /// counts only `Failed` / `Timeout`, so anything that maps to `Abandoned`
+    /// is explicitly "this attempt does not count against the task".
+    #[must_use]
+    pub const fn run_status(self) -> crate::agents::swarm::tasks::TaskRunStatus {
+        use crate::agents::swarm::tasks::TaskRunStatus;
+        match self {
+            Self::Completed => TaskRunStatus::Completed,
+            Self::Failed => TaskRunStatus::Failed,
+            Self::Timeout => TaskRunStatus::Timeout,
+            Self::Busy => TaskRunStatus::Abandoned,
+        }
+    }
 }
 
 /// Outcome of running a member task. Never an `Err` — every failure mode is
@@ -324,6 +351,14 @@ pub async fn execute_member_task(
                 error: None,
             }
         }
+        // A busy target is a scheduling collision, not an attempt outcome —
+        // classify it before the catch-all so it does not spend a retry the
+        // task never got to use.
+        Ok(Ok(Err(e @ ExecutionError::AgentBusy(_)))) => MemberRunOutcome {
+            status: MemberRunStatus::Busy,
+            reply: None,
+            error: Some(format!("Agent busy, attempt deferred: {e}")),
+        },
         Ok(Ok(Err(e))) => MemberRunOutcome {
             status: MemberRunStatus::Failed,
             reply: None,
@@ -507,7 +542,47 @@ async fn fetch_last_reply(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::agents::swarm::tasks::retry::budget_failures_since;
+    use crate::agents::swarm::tasks::{CoordTaskRun, TaskRunStatus};
     use crate::teams::types::{TeamMember, TeamMemberKind};
+
+    fn run_row(status: TaskRunStatus) -> CoordTaskRun {
+        CoordTaskRun {
+            id: "r1".into(),
+            task_id: "t1".into(),
+            agent_id: "reviewer".into(),
+            started_at: 1,
+            ended_at: Some(2),
+            status,
+            summary: None,
+            error: None,
+            review_verdict: None,
+            reviewer_kind: None,
+            reviewer_id: None,
+        }
+    }
+
+    /// A busy target never ran, so its run row must not spend a retry. Asserted
+    /// against `budget_failures_since` itself rather than against the literal
+    /// `Abandoned`, because the property that matters is "the budget does not
+    /// count it" — renaming the status must not silently pass this.
+    #[test]
+    fn a_busy_attempt_does_not_consume_the_retry_budget() {
+        let busy = run_row(MemberRunStatus::Busy.run_status());
+        assert_eq!(
+            budget_failures_since(&[busy], None),
+            0,
+            "a deferred attempt is not a failed attempt"
+        );
+
+        let failed = run_row(MemberRunStatus::Failed.run_status());
+        let timed_out = run_row(MemberRunStatus::Timeout.run_status());
+        assert_eq!(
+            budget_failures_since(&[failed, timed_out], None),
+            2,
+            "real attempt outcomes must still be counted"
+        );
+    }
 
     fn agent_member() -> TeamMember {
         TeamMember {

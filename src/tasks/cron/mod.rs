@@ -84,6 +84,11 @@ impl CronService {
         let db_path = config.expand_db_path();
         let path = std::path::PathBuf::from(&db_path);
 
+        // One-time rescue of a store left at the pre-`ALEPH_HOME` location.
+        // Must run before `load()`, which would otherwise create an empty
+        // database at the new path and make the legacy one unreachable.
+        store::migrate_legacy_store(config.legacy_db_path().as_deref(), &path);
+
         let store = CronStore::load(path)?;
         let clock = Arc::new(SystemClock);
         let store = Arc::new(tokio::sync::Mutex::new(store));
@@ -181,18 +186,29 @@ impl CronService {
         Ok(())
     }
 
-    /// Enable a job by ID.
+    /// Enable a job by ID — and un-park it.
+    ///
+    /// Unconditional on purpose. `enabled` is not the whole story: phase 3
+    /// parks a permanently-failed job by clearing `next_run_at_ms` while
+    /// leaving `enabled == true`, and `recompute_next_run_maintenance` refuses
+    /// to refill it while the permanent classification stands. The old
+    /// `if !job.enabled` early return therefore short-circuited on exactly the
+    /// jobs an operator reaches for this call to fix, reported success, and
+    /// changed nothing — the job stayed dead. `enabled` was the wrong
+    /// predicate; see [`CronJobView::parked`] for the right one.
     pub async fn enable_job(&self, id: &str) -> Result<(), String> {
         {
             let mut store = self.state.store.lock().await;
             let job = store
                 .get_job_mut(id)
                 .ok_or_else(|| format!("job not found: {id}"))?;
-            if !job.enabled {
-                job.enabled = true;
-                job.updated_at = self.state.clock.now_ms();
-                service::ops::recompute_next_run_full(job, self.state.clock.as_ref());
-            }
+            job.enabled = true;
+            job.updated_at = self.state.clock.now_ms();
+            // Clear the permanent-failure classification *before* recomputing:
+            // it is what parked the job, and leaving it behind would let the
+            // next maintenance pass re-park it.
+            job.state.last_error_reason = None;
+            service::ops::recompute_next_run_full(job, self.state.clock.as_ref());
             store.persist()?;
         }
         self.emit_change(id, crate::gateway::events::ChangeKind::Updated);
@@ -209,6 +225,10 @@ impl CronService {
             if job.enabled {
                 job.enabled = false;
                 job.state.next_run_at_ms = None;
+                // Switching the job off withdraws any manual trigger that had
+                // not been picked up yet; leaving it armed would mislabel
+                // whatever *scheduled* run happens after the next enable.
+                job.state.manual_trigger_pending = false;
                 job.updated_at = self.state.clock.now_ms();
             }
             store.persist()?;
@@ -231,6 +251,12 @@ impl CronService {
 
     /// Trigger a job to run immediately by setting its `next_run_at_ms` to now.
     /// The timer loop will pick it up on the next tick.
+    ///
+    /// The run is also stamped as manual (`JobStateV2::manual_trigger_pending`,
+    /// consumed by `phase1_mark_due_jobs`). Pulling the schedule forward is
+    /// otherwise byte-identical to the schedule coming due, and phase 3 acts on
+    /// the difference: a `delete_after_run` one-shot must survive being run by
+    /// hand before its appointment.
     pub async fn run_job(&self, id: &str) -> Result<(), String> {
         {
             let mut store = self.state.store.lock().await;
@@ -245,6 +271,7 @@ impl CronService {
             }
             let now = self.state.clock.now_ms();
             job.state.next_run_at_ms = Some(now);
+            job.state.manual_trigger_pending = true;
             store.persist()?;
         }
         self.emit_change(id, crate::gateway::events::ChangeKind::StateChanged);
@@ -325,6 +352,77 @@ mod tests {
         service.delete_job(&id).await.unwrap();
         let jobs = service.list_jobs().await.unwrap();
         assert!(jobs.is_empty());
+    }
+
+    /// A job parked by a permanent failure is `enabled == true` with nothing
+    /// scheduled. `enable_job` used to short-circuit on `enabled` and report
+    /// success while changing nothing, so the one call an operator reaches for
+    /// to revive it was a no-op.
+    #[tokio::test]
+    async fn enable_job_unparks_a_permanently_failed_job() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let db_path = dir.path().join("cron.db").to_string_lossy().to_string();
+        let service = CronService::new(CronConfig {
+            db_path,
+            ..CronConfig::default()
+        })
+        .unwrap();
+
+        let id = service
+            .add_job(CronJob::new(
+                "Parked",
+                "agent-1",
+                "do something",
+                ScheduleKind::Every {
+                    every_ms: 60_000,
+                    anchor_ms: None,
+                },
+            ))
+            .await
+            .unwrap();
+
+        // Exactly the state phase 3 leaves behind on a permanent failure.
+        {
+            let mut store = service.state.store.lock().await;
+            let job = store.get_job_mut(&id).unwrap();
+            job.enabled = true;
+            job.state.next_run_at_ms = None;
+            job.state.last_run_status = Some(RunStatus::Error);
+            job.state.last_error_reason = Some(ErrorReason::Permanent("agent missing".to_string()));
+            store.persist().unwrap();
+        }
+
+        let parked = service.get_job(&id).await.unwrap();
+        assert!(parked.enabled, "the switch is still on — that is the trap");
+        assert!(parked.parked, "`parked` is what `enabled` cannot say");
+
+        service.enable_job(&id).await.unwrap();
+
+        let revived = service.get_job(&id).await.unwrap();
+        assert!(
+            revived.state.next_run_at_ms.is_some(),
+            "enable must reschedule a parked job, not report success and leave it dead"
+        );
+        assert!(!revived.parked);
+        assert!(
+            revived.state.last_error_reason.is_none(),
+            "the classification that parked it must not survive to re-park it"
+        );
+    }
+
+    /// The store must follow `ALEPH_HOME` like every other subsystem.
+    #[test]
+    fn service_store_lands_under_aleph_home() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let _guard = crate::utils::paths::AlephHomeEnvGuard::acquire_and_set(dir.path());
+
+        let service = CronService::new(CronConfig::default()).unwrap();
+        drop(service);
+
+        assert!(
+            dir.path().join("data").join("tasks.db").exists(),
+            "tasks.db must be created inside ALEPH_HOME"
+        );
     }
 
     #[tokio::test]

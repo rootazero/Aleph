@@ -176,6 +176,14 @@ fn emit_session_end(
             // follow-on session's first turn wait longer) and is deliberately
             // not taken here.
             let summary_guard = crate::memory::flush::global_registry().begin(&b_agent_id);
+            // Same reason as the reflection branch below: the snapshot's
+            // partition is derived from ambient scope, and a task-local crosses
+            // neither this `rt.spawn` nor the `spawn_blocking` inside
+            // `write_resume_snapshot`. Without carrying the row's persisted
+            // attribution across both boundaries every snapshot is stamped with
+            // the base partition, which the reader then treats as a miss for
+            // every scoped session.
+            let b_scope_attr = scope_attr.clone();
             rt.spawn(async move {
                 let _summary_guard = summary_guard;
                 if let Err(e) = summarizer.produce(&b_agent_id, &b_session_id).await {
@@ -197,7 +205,8 @@ fn emit_session_end(
                 // the sibling hooks. Skipped for a DELETED session — see
                 // `emit_session_end_raw_without_resume`.
                 if resume_snapshot {
-                    write_resume_snapshot(&summarizer, &b_agent_id, &b_session_id).await;
+                    write_resume_snapshot(&summarizer, &b_agent_id, &b_session_id, b_scope_attr)
+                        .await;
                 }
             });
         }
@@ -297,6 +306,7 @@ async fn write_resume_snapshot(
     summarizer: &crate::memory::session_search_summary::SessionEndSummarizer,
     agent_id: &str,
     session_id: &str,
+    scope_attr: Option<crate::scope::ScopeAttribution>,
 ) {
     let summary = match crate::memory::session_search_summary::retrieve_summary_fact(
         &summarizer.store,
@@ -333,8 +343,18 @@ async fn write_resume_snapshot(
     // gateway keys; the writer prefers the id embedded in the key itself.
     let owned_session = session_id.to_string();
     let owned_agent = agent_id.to_string();
+    // Derived HERE, under the session's re-established scope, and handed to the
+    // blocking closure — `snapshot_partition` reads `scope::current_scope()`,
+    // which is `None` on a `spawn_blocking` thread. Deriving it inside the
+    // closure (i.e. letting `write_from_summary` do it) stamps every snapshot
+    // with the base partition while the reader computes the scoped one, so the
+    // whole resume chain reads as a permanent miss for every scoped session.
+    let partition = crate::scope::with_scope(scope_attr, async {
+        crate::memory::session_resume::snapshot_partition(agent_id)
+    })
+    .await;
     let written = tokio::task::spawn_blocking(move || {
-        writer.write_from_summary(&owned_session, &summary, &owned_agent)
+        writer.write_from_summary_in_partition(&owned_session, &summary, &owned_agent, partition)
     })
     .await;
     let error: Option<String> = match written {

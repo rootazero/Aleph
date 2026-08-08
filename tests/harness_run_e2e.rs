@@ -141,7 +141,6 @@ fn make_harness(session: Arc<dyn SessionService>) -> AgentHarness {
         system_prompt: None,
         system_prompt_parts: None,
         recall_context: None,
-        chain_context: alephcore::harness::chain_context::ChainContext::default(),
         guardrails: None,
         max_iterations: None,
         power: None,

@@ -175,13 +175,33 @@ pub async fn spawn(base: &SpawnerBase, req: SpawnRequest<'_>) -> Result<LoopRunR
         .ok_or_else(|| "chain depth exceeded".to_string())?;
 
     // A2 — reserve a concurrency permit; held until `spawn` returns.
+    //
+    // W10 — this acquire is a park, and a park that ignores the cancel token
+    // sets this sub-agent's cancel latency to the total runtime of everything
+    // ahead of it in the queue: a queued child kept running its parent's
+    // cancel out for minutes with nothing observable happening. Criteria §3
+    // ("a tool that parks must listen to the cancellation token") applies to
+    // the queue wait exactly as it does to the run. `biased` so an
+    // already-cancelled token wins the race against a free permit.
+    //
+    // The error string is byte-exact on purpose:
+    // `background_tracker::lifecycle_from_outcome` matches
+    // `"sub-agent failed: cancelled"` by EQUALITY (any looser match would
+    // misclassify a tool message that merely mentions cancelling), so any
+    // other wording here settles the node as `Failed` instead of `Cancelled`.
     let _permit = match base.subagent_semaphore.as_ref() {
-        Some(sem) => Some(
-            sem.clone()
-                .acquire_owned()
-                .await
-                .map_err(|e| format!("sub-agent failed: subagent semaphore closed: {e}"))?,
-        ),
+        Some(sem) => {
+            let sem = sem.clone();
+            let permit = tokio::select! {
+                biased;
+                () = req.cancel.cancelled() => {
+                    return Err("sub-agent failed: cancelled".to_string());
+                }
+                permit = sem.acquire_owned() => permit
+                    .map_err(|e| format!("sub-agent failed: subagent semaphore closed: {e}"))?,
+            };
+            Some(permit)
+        }
         None => None,
     };
 

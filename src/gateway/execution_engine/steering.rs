@@ -84,7 +84,7 @@ pub(super) fn find_steering_target(
 /// skips all of it — the extra intent is silently discarded and the request
 /// returns success having done only half of what was asked.
 ///
-/// Two things are known to ride requests that reach this path:
+/// Three kinds of intent are known to ride requests that reach this path:
 ///
 /// * **Attachments.** The injection path has no media-processor seam, so a file
 ///   would degrade to a text marker the model cannot see (the harness replays
@@ -102,6 +102,25 @@ pub(super) fn find_steering_target(
 ///   stopped holding the running message's ticket (`mark_admitted`): before
 ///   that, a follow-up command parked and ran as a fresh run, which is exactly
 ///   the behaviour deferring restores.
+/// * **Per-request execution directives** — the `RunRequest` fields that shape
+///   HOW the run executes rather than what it says: `sandbox_override` (the
+///   team dispatcher's isolated git worktree), `max_iterations_override` (a
+///   cron job's own Think→Act cap) and `timeout_secs` (heartbeat, team member
+///   runs, `sessions_send`'s wait mode). Every one of them is read inside
+///   `run_loop`, i.e. after the gate, so an inline fold executes the *running*
+///   sibling's sandbox / cap / deadline while reporting success for a request
+///   that asked for different ones — `sessions_send` then reads back the
+///   sibling's earlier reply as if it were the answer. All three producers are
+///   headless dispatchers, never a composer, so deferring them costs no
+///   interactive steering.
+///
+/// `workspace_override` is deliberately NOT on this list even though it is the
+/// fourth such directive: the inbound router stamps it on ordinary channel
+/// turns and the Panel stamps it on every project-room turn, so presence alone
+/// would switch mid-loop steering off for exactly the sessions that use it
+/// most. Its intent cannot be lost by a fold when the sibling already runs in
+/// the same directory, so it is checked *comparatively* against the steer
+/// target in [`try_inject_steering`] — the same shape `model_override` uses.
 ///
 /// Scoped to injection, NOT to [`has_steering_content`], so the `Interrupt`
 /// branch still cancels a sibling for an attachment-only or command-only
@@ -111,6 +130,9 @@ fn carries_more_than_text(request: &RunRequest) -> bool {
         || request
             .metadata
             .contains_key(crate::gateway::inbound_router::SLASH_COMMAND_MODE_KEY)
+        || request.sandbox_override.is_some()
+        || request.max_iterations_override.is_some()
+        || request.timeout_secs.is_some()
 }
 
 /// Whether `request` carries actual user steering content (non-blank text or at
@@ -421,10 +443,16 @@ pub(super) async fn try_inject_steering(
         return false;
     }
 
-    let target_model = {
+    let (target_model, target_workspace) = {
         let runs = active_runs.read().await;
         match find_steering_target_id(&runs, new_run_id, &request.session_key) {
-            Some(id) => runs.get(&id).and_then(|r| r.request.model_override.clone()),
+            Some(id) => match runs.get(&id) {
+                Some(r) => (
+                    r.request.model_override.clone(),
+                    r.request.workspace_override.clone(),
+                ),
+                None => return false,
+            },
             None => return false,
         }
     };
@@ -435,6 +463,18 @@ pub(super) async fn try_inject_steering(
     // read `opus` while the answer came from `sonnet`, with no banner and no
     // error. Defer instead, so the request gets the model it asked for.
     if request.model_override != target_model {
+        return false;
+    }
+
+    // Same argument, same shape, for the working directory: the sibling's cwd,
+    // project-local skill/AGENTS.md discovery and default shell root were all
+    // resolved from ITS `workspace_override` at run start. Equal values are the
+    // common case (a room stamps the same path on every turn) and lose nothing
+    // in a fold; a DIFFERENT one — a channel turn landing on a session a
+    // project-room turn is still running, or the reverse — would silently
+    // execute in the other directory, which is the same class of lie as the
+    // model pill and one with file-writing consequences.
+    if request.workspace_override != target_workspace {
         return false;
     }
 
@@ -556,6 +596,51 @@ mod tests {
         // The text alone is indistinguishable — only the metadata says it is a
         // command, which is why this cannot be a look-at-the-string check.
         assert!(!carries_more_than_text(&run_request("s1", "/moa on")));
+    }
+
+    /// Every per-request execution directive is resolved inside `run_loop`,
+    /// i.e. AFTER the admission gate — so an inline fold runs the sibling's
+    /// sandbox / iteration cap / deadline and returns `Ok(())` for a request
+    /// that asked for different ones. Each field is asserted on its own: a
+    /// registration that covers three of the four is the failure mode this
+    /// guard exists for.
+    #[test]
+    fn a_per_request_execution_directive_is_deferred_not_folded() {
+        let plain = run_request("s1", "keep going");
+        assert!(!carries_more_than_text(&plain));
+
+        let mut capped = run_request("s1", "keep going");
+        capped.max_iterations_override = Some(12);
+        assert!(
+            carries_more_than_text(&capped),
+            "a cron job's own Think→Act cap is read after the gate"
+        );
+
+        let mut bounded = run_request("s1", "keep going");
+        bounded.timeout_secs = Some(30);
+        assert!(
+            carries_more_than_text(&bounded),
+            "a wait-mode `sessions_send` reads back the sibling's earlier reply \
+             when its own deadline is folded away"
+        );
+
+        let mut isolated = run_request("s1", "keep going");
+        isolated.sandbox_override = Some(std::sync::Arc::new(crate::sandbox::NoopSandbox));
+        assert!(
+            carries_more_than_text(&isolated),
+            "a team member's isolated worktree cannot be applied to a sibling \
+             already running outside it"
+        );
+
+        // The one directive that is NOT presence-checked: a project room stamps
+        // the same path on every turn, so presence alone would disable mid-loop
+        // steering for rooms. Its check is comparative, in `try_inject_steering`.
+        let mut in_project = run_request("s1", "keep going");
+        in_project.workspace_override = Some(std::path::PathBuf::from("/tmp/proj"));
+        assert!(
+            !carries_more_than_text(&in_project),
+            "workspace_override is compared against the steer target, not presence-checked"
+        );
     }
 
     #[test]

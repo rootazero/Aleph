@@ -4,7 +4,8 @@ use super::snapshot::SessionSnapshot;
 use std::collections::HashMap;
 use std::path::PathBuf;
 
-/// Maximum number of session snapshot directories to retain **per agent**.
+/// Maximum number of session snapshot directories to retain **per agent and
+/// partition** — the same two dimensions the read path filters by.
 const MAX_SNAPSHOTS: usize = 10;
 
 /// Writes [`SessionSnapshot`] instances to disk.
@@ -45,24 +46,54 @@ impl SnapshotWriter {
     /// and already carries decisions / files / pending work verbatim, and
     /// deterministic keyword-scraping of that natural language is exactly what
     /// R7/P8 ban (see [`SessionSnapshot`]).
+    ///
+    /// The owning **partition** is derived from the ambient session scope
+    /// through [`super::snapshot_partition`] — the same call the reader makes,
+    /// so the two sides can never spell one partition two ways.
+    ///
+    /// ⚠️ The ambient scope is a `tokio::task_local`, so it does not survive a
+    /// `spawn` / `spawn_blocking` boundary: a producer that hops one owes a
+    /// capture-and-reseed (`scope::current_scope()` before, `with_scope` after)
+    /// or it will stamp the org partition for a session that belonged to a
+    /// user. Use [`Self::write_from_summary_in_partition`] when the partition
+    /// is already in hand and the ambient scope is not.
     pub fn write_from_summary(
         &self,
         session_id: &str,
         summary: &str,
         fallback_agent_id: &str,
     ) -> std::io::Result<PathBuf> {
-        let agent_id = crate::routing::session_key::SessionKey::from_key_string(session_id)
-            .map_or_else(
-                || fallback_agent_id.to_string(),
-                |k| k.agent_id().to_string(),
-            );
+        let agent_id = Self::owning_agent(session_id, fallback_agent_id);
+        let partition = super::snapshot_partition(&agent_id);
+        self.write_from_summary_in_partition(session_id, summary, fallback_agent_id, partition)
+    }
+
+    /// [`Self::write_from_summary`] with the owning partition passed
+    /// explicitly, for producers that resolved the session's scope from a
+    /// durable source (a session row's `owner_user_id`/`scope_id`) rather than
+    /// from the ambient task-local.
+    pub fn write_from_summary_in_partition(
+        &self,
+        session_id: &str,
+        summary: &str,
+        fallback_agent_id: &str,
+        partition: impl Into<String>,
+    ) -> std::io::Result<PathBuf> {
         let snapshot = SessionSnapshot {
             session_id: session_id.to_string(),
-            agent_id,
+            agent_id: Self::owning_agent(session_id, fallback_agent_id),
+            scope_id: Some(partition.into()),
             created_at: chrono::Utc::now(),
             summary: summary.to_string(),
         };
         self.write(&snapshot)
+    }
+
+    /// The base agent id a session key belongs to, or `fallback` for ids that
+    /// do not parse as gateway keys.
+    fn owning_agent(session_id: &str, fallback: &str) -> String {
+        crate::routing::session_key::SessionKey::from_key_string(session_id)
+            .map_or_else(|| fallback.to_string(), |k| k.agent_id().to_string())
     }
 
     /// Write a snapshot to `{base}/{sanitized session_id}/resume.json`.
@@ -112,7 +143,7 @@ impl SnapshotWriter {
     }
 
     /// Remove the oldest snapshot directories beyond [`MAX_SNAPSHOTS`],
-    /// **per owning agent**.
+    /// **per owning agent AND partition**.
     ///
     /// Retention has to be scoped the same way the read path is or it deletes
     /// what nobody else can: `SnapshotReader::load_latest` filters survivors to
@@ -123,13 +154,19 @@ impl SnapshotWriter {
     /// sweep already has to stat; a `resume.json` that will not parse has no
     /// known owner, so it is retained (and evicted) in its own bucket where it
     /// can never push out a real agent's snapshot.
+    ///
+    /// The bucket key is `(agent_id, scope_id)`, not `agent_id` alone, for
+    /// exactly the reason above one level down: the read path now filters
+    /// survivors to one PARTITION too, so bucketing by agent would let one
+    /// user of a shared base agent roll their conversation eleven times and
+    /// delete another user's only snapshot.
     fn cleanup_old_snapshots(&self) {
         let Ok(entries) = std::fs::read_dir(&self.base_dir) else {
             return;
         };
 
-        let mut by_agent: HashMap<Option<String>, Vec<(PathBuf, std::time::SystemTime)>> =
-            HashMap::new();
+        type OwnerKey = Option<(String, Option<String>)>;
+        let mut by_agent: HashMap<OwnerKey, Vec<(PathBuf, std::time::SystemTime)>> = HashMap::new();
         for entry in entries.filter_map(|e| e.ok()) {
             let dir = entry.path();
             if !dir.is_dir() {
@@ -142,7 +179,7 @@ impl SnapshotWriter {
             let owner = std::fs::read_to_string(&resume)
                 .ok()
                 .and_then(|text| serde_json::from_str::<SessionSnapshot>(&text).ok())
-                .map(|snap| snap.agent_id);
+                .map(|snap| (snap.agent_id, snap.scope_id));
             by_agent.entry(owner).or_default().push((dir, modified));
         }
 
@@ -170,6 +207,7 @@ mod tests {
         SessionSnapshot {
             session_id: id.to_string(),
             agent_id: "main".to_string(),
+            scope_id: Some("main".to_string()),
             created_at: Utc::now(),
             summary: format!("Summary for {id}"),
         }
@@ -268,6 +306,79 @@ mod tests {
             .unwrap();
         let restored = reader.load_latest("fallback-agent", "other").unwrap();
         assert_eq!(restored.agent_id, "fallback-agent");
+    }
+
+    /// The write half of the W2 fix: the stamped partition is
+    /// `snapshot_partition`'s output for the ambient scope, not the base agent
+    /// id. Asserted against that function rather than a literal so the two
+    /// sides cannot be "fixed" apart.
+    #[tokio::test]
+    async fn write_from_summary_stamps_the_ambient_partition() {
+        use crate::scope::{with_scope, ScopeAttribution};
+
+        let tmp = tempfile::tempdir().unwrap();
+        let writer = SnapshotWriter::new(tmp.path());
+
+        let path = with_scope(Some(ScopeAttribution::personal("u-alice")), async {
+            writer
+                .write_from_summary("agent:main:alice", "Alice's summary.", "main")
+                .unwrap()
+        })
+        .await;
+
+        let snap: SessionSnapshot =
+            serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        assert_eq!(snap.agent_id, "main");
+        let expected = with_scope(Some(ScopeAttribution::personal("u-alice")), async {
+            crate::memory::session_resume::snapshot_partition("main")
+        })
+        .await;
+        assert_eq!(snap.scope_id.as_deref(), Some(expected.as_str()));
+        assert_ne!(
+            snap.scope_id.as_deref(),
+            Some("main"),
+            "a scoped session must not stamp the shared base partition"
+        );
+    }
+
+    /// Retention buckets by partition, not by base agent — otherwise one user
+    /// of a shared agent rolling their conversation past the cap deletes
+    /// another user's only snapshot, which the reader then cannot report
+    /// because it filters to that user's partition anyway.
+    #[tokio::test]
+    async fn cleanup_retains_per_partition_not_per_base_agent() {
+        use crate::scope::{with_scope, ScopeAttribution};
+
+        let tmp = tempfile::tempdir().unwrap();
+        let writer = SnapshotWriter::new(tmp.path());
+        let reader = crate::memory::session_resume::SnapshotReader::new(tmp.path());
+
+        with_scope(Some(ScopeAttribution::personal("u-quiet")), async {
+            writer
+                .write_from_summary("agent:main:quiet", "Quiet user's only session.", "main")
+                .unwrap();
+        })
+        .await;
+        std::thread::sleep(std::time::Duration::from_millis(15));
+
+        with_scope(Some(ScopeAttribution::personal("u-busy")), async {
+            for i in 0..MAX_SNAPSHOTS + 4 {
+                writer
+                    .write_from_summary(&format!("agent:main:busy-{i:02}"), "Busy.", "main")
+                    .unwrap();
+                std::thread::sleep(std::time::Duration::from_millis(5));
+            }
+        })
+        .await;
+
+        let quiet_survived = with_scope(Some(ScopeAttribution::personal("u-quiet")), async {
+            reader.load_latest("main", "none")
+        })
+        .await;
+        assert!(
+            quiet_survived.is_some(),
+            "a busy user's retention must not delete another user's only snapshot"
+        );
     }
 
     #[test]

@@ -86,7 +86,12 @@ pub async fn phase1_mark_due_jobs<C: Clock>(
             _ => continue,
         }
 
-        // Mark as running.
+        // Mark as running. Take the manual-trigger flag in the same breath:
+        // whoever set it asked for *this* run, and consuming it here is what
+        // keeps `trigger_source` from being a constant (`run_job` can only
+        // express "run now" by pulling `next_run_at_ms` forward, which looks
+        // exactly like the schedule coming due).
+        let manual = std::mem::take(&mut job.state.manual_trigger_pending);
         job.state.running_at_ms = Some(now);
 
         // At-most-once: advance the schedule to the next future occurrence
@@ -107,7 +112,11 @@ pub async fn phase1_mark_due_jobs<C: Clock>(
             delivery: job.delivery_config.clone(),
             session_target: job.session_target.clone(),
             marked_at: now,
-            trigger_source: TriggerSource::Schedule,
+            trigger_source: if manual {
+                TriggerSource::Manual
+            } else {
+                TriggerSource::Schedule
+            },
             owner_user_id: job.owner_user_id.clone(),
             scope_id: job.scope_id.clone(),
         });
@@ -120,52 +129,13 @@ pub async fn phase1_mark_due_jobs<C: Clock>(
     Ok(snapshots)
 }
 
-/// Phase 1 (manual): Mark a specific job for manual execution.
-///
-/// Returns `None` if the job is already running. Like `phase1_mark_due_jobs`,
-/// the schedule is advanced before execution so a crash does not double-run it.
-pub async fn phase1_mark_manual<C: Clock>(
-    store: &Arc<tokio::sync::Mutex<CronStore>>,
-    clock: &C,
-    job_id: &str,
-    default_timeout_ms: i64,
-) -> Result<Option<JobSnapshot>, String> {
-    let now = clock.now_ms();
-    let mut guard = store.lock().await;
-
-    guard.reload_if_changed()?;
-
-    let job = guard
-        .get_job_mut(job_id)
-        .ok_or_else(|| format!("job not found: {job_id}"))?;
-
-    if job.state.running_at_ms.is_some() {
-        return Ok(None); // Already running
-    }
-
-    job.state.running_at_ms = Some(now);
-    advance_next_run(job, clock);
-
-    let snapshot = JobSnapshot {
-        id: job.id.clone(),
-        agent_id: Some(job.agent_id.clone()),
-        source_channel_id: job.source_channel_id.clone(),
-        source_conversation_id: job.source_conversation_id.clone(),
-        prompt: resolve_job_prompt(job, clock),
-        model: None,
-        timeout_ms: Some(job.timeout_ms.unwrap_or(default_timeout_ms)),
-        delivery: job.delivery_config.clone(),
-        session_target: job.session_target.clone(),
-        marked_at: now,
-        trigger_source: TriggerSource::Manual,
-        owner_user_id: job.owner_user_id.clone(),
-        scope_id: job.scope_id.clone(),
-    };
-
-    guard.persist()?;
-
-    Ok(Some(snapshot))
-}
+// `phase1_mark_manual` lived here: it claimed a job, advanced its schedule and
+// handed back a snapshot stamped `TriggerSource::Manual`. Nothing in the
+// process ever called it — `CronService` holds no executor, so a snapshot it
+// produced would have been marked running with no one to run it or to clear
+// the marker. Manual triggers instead flow through the one loop that *does*
+// have an executor: `run_job` sets `JobStateV2::manual_trigger_pending` and
+// `phase1_mark_due_jobs` consumes it. Removed rather than reconnected (R10).
 
 /// Phase 3: Write back execution results after jobs complete.
 ///
@@ -258,13 +228,22 @@ pub async fn phase3_writeback<C: Clock>(
             chain_triggers.push((job_id.clone(), target));
         }
 
-        // One-shot `At` jobs with `delete_after_run` are removed once they
-        // have run. `next_run_at_ms` is left as phase 1 set it (recurring
-        // jobs keep their advanced schedule; `At` jobs are already `None`).
-        if let ScheduleKind::At {
-            delete_after_run: true,
-            ..
-        } = job.schedule_kind
+        // One-shot `At` jobs with `delete_after_run` are removed once their
+        // *appointment* has run. `next_run_at_ms` is left as phase 1 set it
+        // (recurring jobs keep their advanced schedule; a fired `At` job is
+        // already `None`).
+        //
+        // Manual runs are excluded: "run it now to see what it does" must not
+        // consume a reminder that has not come due yet. Previously it did —
+        // the job vanished, its future firing with it, and the only trace was
+        // a history row.
+        if matches!(
+            job.schedule_kind,
+            ScheduleKind::At {
+                delete_after_run: true,
+                ..
+            }
+        ) && matches!(result.trigger_source, TriggerSource::Schedule)
         {
             jobs_to_delete.push(job_id.clone());
         }
@@ -857,54 +836,39 @@ mod tests {
         );
     }
 
+    /// The manual-trigger flag is what makes `trigger_source` mean anything:
+    /// without it every snapshot the timer produces says `Schedule`, and the
+    /// phase-3 gate that reads it is a constant.
     #[tokio::test]
-    async fn phase1_mark_manual_creates_snapshot() {
+    async fn phase1_stamps_manual_trigger_and_clears_the_flag() {
         let (store, _dir) = make_store();
         let clock = FakeClock::new(1_000_000);
-
         {
             let mut guard = store.lock().await;
             let mut job = make_test_job("manual-job");
             job.created_at = 900_000;
             add_job(&mut guard, job, &clock);
+            let j = guard.get_job_mut("manual-job").unwrap();
+            j.state.next_run_at_ms = Some(950_000); // due
+            j.state.manual_trigger_pending = true; // as `run_job` leaves it
             guard.persist().unwrap();
         }
 
-        let snapshot = phase1_mark_manual(&store, &clock, "manual-job", TEST_TIMEOUT_MS)
+        let snapshots = phase1_mark_due_jobs(&store, &clock, TEST_TIMEOUT_MS)
             .await
             .unwrap();
-        assert!(snapshot.is_some());
-        let snap = snapshot.unwrap();
-        assert_eq!(snap.id, "manual-job");
-        assert_eq!(snap.trigger_source, TriggerSource::Manual);
+        assert_eq!(snapshots.len(), 1);
+        assert_eq!(snapshots[0].trigger_source, TriggerSource::Manual);
 
-        // Verify running_at_ms was set
+        // One-shot: the flag must not leak into the next scheduled run.
         let guard = store.lock().await;
-        let job = guard.get_job("manual-job").unwrap();
-        assert_eq!(job.state.running_at_ms, Some(1_000_000));
-    }
-
-    #[tokio::test]
-    async fn phase1_mark_manual_returns_none_if_running() {
-        let (store, _dir) = make_store();
-        let clock = FakeClock::new(1_000_000);
-
-        {
-            let mut guard = store.lock().await;
-            let mut job = make_test_job("busy-job");
-            job.created_at = 900_000;
-            add_job(&mut guard, job, &clock);
-            let j = guard.get_job_mut("busy-job").unwrap();
-            j.state.running_at_ms = Some(990_000);
-            guard.persist().unwrap();
-        }
-
-        let snapshot = phase1_mark_manual(&store, &clock, "busy-job", TEST_TIMEOUT_MS)
-            .await
-            .unwrap();
         assert!(
-            snapshot.is_none(),
-            "should return None for already-running job"
+            !guard
+                .get_job("manual-job")
+                .unwrap()
+                .state
+                .manual_trigger_pending,
+            "the manual flag is consumed by the run it triggered"
         );
     }
 
@@ -1354,13 +1318,58 @@ mod tests {
             job.created_at = 900_000;
             job.timeout_ms = Some(900_000);
             add_job(&mut guard, job, &clock);
+            let j = guard.get_job_mut("manual-override").unwrap();
+            j.state.next_run_at_ms = Some(950_000);
+            j.state.manual_trigger_pending = true;
             guard.persist().unwrap();
         }
 
-        let snapshot = phase1_mark_manual(&store, &clock, "manual-override", TEST_TIMEOUT_MS)
+        let snapshots = phase1_mark_due_jobs(&store, &clock, TEST_TIMEOUT_MS)
             .await
-            .unwrap()
-            .expect("manual snapshot");
-        assert_eq!(snapshot.timeout_ms, Some(900_000));
+            .unwrap();
+        assert_eq!(snapshots.len(), 1);
+        assert_eq!(snapshots[0].trigger_source, TriggerSource::Manual);
+        assert_eq!(snapshots[0].timeout_ms, Some(900_000));
+    }
+
+    /// A `delete_after_run` one-shot run by hand *before* its appointment must
+    /// survive: the manual run is a preview, not the appointment. Before the
+    /// trigger-source gate, phase 3 deleted it and the scheduled firing went
+    /// with it.
+    #[tokio::test]
+    async fn phase3_keeps_one_shot_when_the_run_was_manual() {
+        let (store, _dir) = make_store();
+        let clock = FakeClock::new(1_000_000);
+        {
+            let mut guard = store.lock().await;
+            let mut job = make_test_job("reminder");
+            job.schedule_kind = ScheduleKind::At {
+                at: 2_000_000, // still in the future
+                delete_after_run: true,
+            };
+            add_job(&mut guard, job, &clock);
+            let j = guard.get_job_mut("reminder").unwrap();
+            j.state.running_at_ms = Some(1_000_000);
+            // As phase 1 leaves it: the appointment is still ahead, so
+            // `advance_next_run` kept it.
+            j.state.next_run_at_ms = Some(2_000_000);
+            guard.persist().unwrap();
+        }
+
+        let mut result = make_execution_result(RunStatus::Ok);
+        result.trigger_source = TriggerSource::Manual;
+        phase3_writeback(&store, &clock, &[("reminder".to_string(), result)], false)
+            .await
+            .unwrap();
+
+        let guard = store.lock().await;
+        let job = guard
+            .get_job("reminder")
+            .expect("a manual preview must not consume the appointment");
+        assert_eq!(
+            job.state.next_run_at_ms,
+            Some(2_000_000),
+            "the scheduled firing must still be pending"
+        );
     }
 }

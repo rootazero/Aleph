@@ -361,6 +361,31 @@ impl LoopRegistry {
     /// another tick was claimed meanwhile.
     #[must_use]
     pub fn rearm_after_busy(&self, session_id: &str, now_ms: u64) -> RearmDecision {
+        self.rearm_after_interruption(session_id, now_ms, BUSY_RETRY_DELAY_MS)
+    }
+
+    /// [`rearm_after_busy`](Self::rearm_after_busy) with a caller-chosen delay:
+    /// the same claimed tick, the same two bounds, re-armed `delay_ms` from now
+    /// instead of the fixed busy-collision backoff.
+    ///
+    /// The second caller is the continuation hook's FAILURE arm: a tick whose
+    /// run died on a rate-limit / unreachable provider is parked for as long as
+    /// the provider's own `Retry-After` asks (clamped by the caller) rather
+    /// than stopping the loop for good. Both bounds below therefore matter more
+    /// than they did for a 30 s collision — a multi-hour outage can park the
+    /// same tick many times over, and `fires_out_of_bounds` is what keeps those
+    /// parks from re-arming a tick that would wake past `timeout_minutes`.
+    ///
+    /// The delay is a parameter rather than a second copy of this body because
+    /// the *decision* — is this loop still claimable, and would waking then be
+    /// out of bounds — is one question with one answer; only the wait differs.
+    #[must_use]
+    pub fn rearm_after_interruption(
+        &self,
+        session_id: &str,
+        now_ms: u64,
+        delay_ms: u64,
+    ) -> RearmDecision {
         let mut map = self.lock();
         match map.get(session_id) {
             Some(s) if s.is_active() && s.pending_tick_wake_ms.is_none() => {
@@ -369,7 +394,7 @@ impl LoopRegistry {
                 // retry wake is projected for the same reason `try_claim_tick`
                 // projects its own: re-arming into a wake past the deadline
                 // would run a full turn out of bounds.
-                let wake = now_ms.saturating_add(BUSY_RETRY_DELAY_MS);
+                let wake = now_ms.saturating_add(delay_ms);
                 let out_of_bounds = pursuit::fires_out_of_bounds(s, wake, now_ms);
                 if pursuit::exhausted(s, 0, now_ms) || out_of_bounds {
                     let bound_at = if out_of_bounds { wake } else { now_ms };
@@ -384,7 +409,7 @@ impl LoopRegistry {
                 let rearmed = s.clone().with_pending_tick(Some(wake));
                 map.insert(session_id.to_string(), rearmed);
                 RearmDecision::Retry {
-                    delay_ms: BUSY_RETRY_DELAY_MS,
+                    delay_ms,
                     wake_ms: wake,
                 }
             }

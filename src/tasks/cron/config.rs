@@ -73,7 +73,7 @@ const fn default_true() -> bool {
 }
 
 fn default_db_path() -> String {
-    "~/.aleph/data/tasks.db".to_string()
+    format!("{ALEPH_HOME_PREFIX}data/tasks.db")
 }
 
 const fn default_check_interval() -> u64 {
@@ -122,16 +122,56 @@ impl Default for CronConfig {
     }
 }
 
+/// Prefix that marks a `db_path` as living inside Aleph's own state root
+/// rather than somewhere the user picked. Only this prefix is `ALEPH_HOME`-
+/// aware; a bare `~/` means the operator's real home and stays there.
+const ALEPH_HOME_PREFIX: &str = "~/.aleph/";
+
+/// Expand a configured `db_path`.
+///
+/// `~/.aleph/…` is Aleph's own state root, so it resolves through
+/// [`crate::utils::paths::get_config_dir`] — the single source that honours
+/// `ALEPH_HOME`, and the same one `cron::carryover` already uses for the
+/// sibling `data/cron_carryover/` directory. Expanding it by hand off the real
+/// home (which this did until 2026-08-08) parks the scheduler's whole job
+/// database outside the relocated home: every other subsystem moves, cron does
+/// not, and nothing errors — the operator just boots into an empty scheduler.
+///
+/// `get_config_dir` is a pure lookup and creates nothing; the store's own
+/// `load()` creates the parent directory when it opens the file.
+fn expand_configured_path(raw: &str) -> String {
+    if let Some(rest) = raw.strip_prefix(ALEPH_HOME_PREFIX) {
+        if let Ok(root) = crate::utils::paths::get_config_dir() {
+            return root.join(rest).to_string_lossy().to_string();
+        }
+    }
+    // A user-written `~/` prefix means the real home directory.
+    if let Some(rest) = raw.strip_prefix("~/") {
+        if let Ok(home) = crate::utils::paths::get_home_dir() {
+            return home.join(rest).to_string_lossy().to_string();
+        }
+    }
+    raw.to_string()
+}
+
 impl CronConfig {
-    /// Expand the database path (resolve ~)
+    /// Expand the database path (resolve `~`). See [`expand_configured_path`].
     #[must_use]
     pub fn expand_db_path(&self) -> String {
-        if self.db_path.starts_with("~/") {
-            if let Some(home) = dirs::home_dir() {
-                return home.join(&self.db_path[2..]).to_string_lossy().to_string();
-            }
-        }
-        self.db_path.clone()
+        expand_configured_path(&self.db_path)
+    }
+
+    /// Where this store lived before `ALEPH_HOME` was honoured, if anywhere.
+    ///
+    /// `Some` only for the `~/.aleph/`-rooted default — a user-supplied
+    /// absolute or bare-`~/` path always resolved the same way, so it has
+    /// nothing to migrate. Consumed once at boot by
+    /// [`crate::tasks::cron::store::migrate_legacy_store`].
+    #[must_use]
+    pub fn legacy_db_path(&self) -> Option<std::path::PathBuf> {
+        self.db_path
+            .strip_prefix(ALEPH_HOME_PREFIX)
+            .and_then(crate::utils::paths::legacy_home_aleph_path)
     }
 
     /// Validate configuration
@@ -321,6 +361,16 @@ pub struct JobStateV2 {
     /// Total number of completed runs — feeds the `{{run_count}}` variable.
     #[serde(default)]
     pub run_count: u64,
+    /// Set by `CronService::run_job`, consumed (and cleared) by
+    /// `phase1_mark_due_jobs`, which turns it into `TriggerSource::Manual`.
+    ///
+    /// A manual trigger is expressed by pulling `next_run_at_ms` forward to
+    /// *now*, which by itself is indistinguishable from the schedule coming
+    /// due — so without this flag every run the timer picks up looks scheduled
+    /// and `trigger_source` is a constant. Persisted so a restart between the
+    /// click and the tick does not silently downgrade the run.
+    #[serde(default)]
+    pub manual_trigger_pending: bool,
 }
 
 // ── CronJob ─────────────────────────────────────────────────────────────
@@ -557,6 +607,16 @@ pub struct CronJobView {
     pub id: String,
     pub name: String,
     pub enabled: bool,
+    /// Derived, read-only: the job is switched on but has nothing scheduled,
+    /// so it will never fire again until an operator acts.
+    ///
+    /// `enabled` alone cannot express this. Phase 3 parks a permanently-failed
+    /// job by clearing `next_run_at_ms` and leaves the switch on, so every
+    /// surface that only shows `enabled` shows a healthy-looking job that is
+    /// in fact dead. Not persisted — always recomputed from state, so it can
+    /// never disagree with the two fields it is made of.
+    #[serde(default)]
+    pub parked: bool,
     pub schedule_kind: ScheduleKind,
     pub agent_id: String,
     pub source_channel_id: Option<String>,
@@ -578,6 +638,7 @@ impl From<&CronJob> for CronJobView {
             id: job.id.clone(),
             name: job.name.clone(),
             enabled: job.enabled,
+            parked: job.enabled && job.state.next_run_at_ms.is_none(),
             schedule_kind: job.schedule_kind.clone(),
             agent_id: job.agent_id.clone(),
             source_channel_id: job.source_channel_id.clone(),
@@ -629,6 +690,60 @@ mod tests {
             config.job_timeout_secs, 900,
             "cron wall-clock must outlive the iter cap"
         );
+    }
+
+    /// The whole job database used to hang off `dirs::home_dir()`, so a
+    /// relocated `ALEPH_HOME` left cron reading and writing a directory
+    /// nothing else in the process touches — silently, since with the variable
+    /// unset the two spellings are byte-identical.
+    #[test]
+    fn default_db_path_follows_aleph_home() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let _guard = crate::utils::paths::AlephHomeEnvGuard::acquire_and_set(dir.path());
+
+        let expanded = CronConfig::default().expand_db_path();
+        assert_eq!(
+            std::path::Path::new(&expanded),
+            dir.path().join("data").join("tasks.db"),
+            "the cron store must live inside ALEPH_HOME like every other subsystem"
+        );
+    }
+
+    /// A bare `~/` prefix is a user-chosen location and means the real home,
+    /// not Aleph's state root.
+    #[test]
+    fn bare_tilde_path_is_not_redirected_into_aleph_home() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let _guard = crate::utils::paths::AlephHomeEnvGuard::acquire_and_set(dir.path());
+
+        let config = CronConfig {
+            db_path: "~/elsewhere/tasks.db".to_string(),
+            ..CronConfig::default()
+        };
+        let expanded = config.expand_db_path();
+        assert!(
+            !std::path::Path::new(&expanded).starts_with(dir.path()),
+            "a user-written ~/ path must not be captured by ALEPH_HOME, got {expanded}"
+        );
+        assert!(expanded.ends_with("elsewhere/tasks.db"));
+    }
+
+    /// Only the `~/.aleph/`-rooted default ever moved, so only it has a legacy
+    /// location worth migrating from.
+    #[test]
+    fn legacy_db_path_is_only_offered_for_the_aleph_rooted_default() {
+        assert!(CronConfig::default().legacy_db_path().is_some());
+
+        for custom in ["/var/lib/aleph/tasks.db", "~/elsewhere/tasks.db"] {
+            let config = CronConfig {
+                db_path: custom.to_string(),
+                ..CronConfig::default()
+            };
+            assert!(
+                config.legacy_db_path().is_none(),
+                "{custom} always resolved the same way; there is nothing to migrate"
+            );
+        }
     }
 
     #[test]

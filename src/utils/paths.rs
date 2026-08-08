@@ -184,6 +184,23 @@ pub fn get_config_dir() -> Result<PathBuf> {
     Ok(home_dir.join(".aleph"))
 }
 
+/// Resolve where a `~/.aleph`-rooted path lived *before* `ALEPH_HOME` existed.
+///
+/// Several subsystems used to expand their `"~/.aleph/…"` config strings with
+/// `dirs::home_dir()`, which ignores `ALEPH_HOME`: relocating the Aleph home
+/// silently left their state behind in the real home with no error anywhere.
+/// A boot-time migration has to look at exactly that old location, so the
+/// legacy spelling is resolved *here* — in the module that owns path
+/// resolution and is the one place exempt from the hand-rolled-path guard —
+/// instead of every caller re-deriving it and re-seeding the bug.
+///
+/// `relative` is the part after `~/.aleph/` (e.g. `"data/tasks.db"`).
+/// Returns `None` when no home directory can be determined.
+#[must_use]
+pub fn legacy_home_aleph_path(relative: &str) -> Option<PathBuf> {
+    Some(dirs::home_dir()?.join(".aleph").join(relative))
+}
+
 /// Get the path for the memory database directory (`SQLite`)
 ///
 /// Returns: `<config_dir>/memory/`
@@ -707,24 +724,81 @@ mod tests {
             "src/bin/aleph-server/daemon.rs",
             "expands a user-written `~/` prefix, which means the real home",
         ),
+        (
+            "src/config/agent_resolver/mod.rs",
+            "resolve_user_path expands a user-written `~` prefix (real home); the \
+             file's only `.aleph` goes through get_config_dir()",
+        ),
+        (
+            "src/thinker/project_instructions.rs",
+            "home_dir is the upward-walk boundary (real home); its `.aleph/…` \
+             strings are *project*-relative directory names, not home-rooted",
+        ),
     ];
 
-    /// Guard against the single most repeated wiring bug in this repo: a path
-    /// under `~/.aleph` resolved by hand instead of through [`get_config_dir`].
+    /// Files the file-level guard catches today and that are **not** exempt —
+    /// each really does hand-roll a home-rooted `.aleph` path and really does
+    /// ignore `ALEPH_HOME`. They are grandfathered so tightening the guard from
+    /// line-level to file-level could land without a repo-wide edit.
     ///
-    /// Its whole failure mode is invisibility. With `ALEPH_HOME` unset the two
-    /// resolutions are byte-identical, so a developer machine, CI, and every
-    /// unit test agree — and the divergence only appears on a relocated home,
-    /// where the writer writes one place and the reader reads another and
-    /// *nothing errors*. The 2026-08-05 round found eight live instances at
-    /// once (identity files the prompt could never see, a guides directory
-    /// nobody wrote, a silently empty user-hooks layer, a second answer for
-    /// the agents root).
-    ///
-    /// Source-level on purpose: at runtime the two spellings produce the same
-    /// value under the test environment, so only the text can tell them apart.
-    #[test]
-    fn no_hand_rolled_aleph_home_outside_the_allowlist() {
+    /// **This list may only shrink.** Adding an entry means shipping the bug;
+    /// fix the file instead. A second assertion below fails when an entry stops
+    /// offending, so a fix cannot silently leave a stale exemption behind.
+    const HOME_JOIN_PENDING_FIX: &[(&str, &str)] = &[
+        ("src/acp/manager/persistence.rs", "acp_sessions.json"),
+        ("src/approval/config.rs", "approval-policy.json"),
+        (
+            "src/bin/aleph-server/commands/service/mod.rs",
+            "~/.aleph/logs (the LaunchAgents path beside it is correctly real-home)",
+        ),
+        ("src/builtin_tools/pdf_generate/mod.rs", "output directory"),
+        ("src/builtin_tools/skill_manage.rs", "skills directory"),
+        (
+            "src/builtin_tools/team/create.rs",
+            "agents + workspaces roots",
+        ),
+        (
+            "src/executor/builtin_registry/builder/constructor/collab_session_tools.rs",
+            "note memory directory",
+        ),
+        (
+            "src/executor/builtin_registry/builder/constructor/mod.rs",
+            "note memory directory (two sites)",
+        ),
+        ("src/gateway/agent_env/mod.rs", "agent_envs.db"),
+        (
+            "src/gateway/agent_instance.rs",
+            "default workspace + agent dir",
+        ),
+        ("src/gateway/config.rs", "default agent dir"),
+        ("src/gateway/handlers/daemon_control.rs", "log directory"),
+        ("src/gateway/handlers/hooks_admin.rs", "hooks.json"),
+        (
+            "src/gateway/handlers/markdown_skills.rs",
+            "skills directory",
+        ),
+        ("src/gateway/interfaces/wechat/config.rs", "state root"),
+        ("src/sandbox/config.rs", "workspaces root"),
+        ("src/tools/context.rs", "default workspace"),
+    ];
+
+    /// Split a source file into the lines that are real code — the guard's
+    /// two markers are both discussed by name in comments and doc comments
+    /// throughout the repo, and only code can actually resolve a path.
+    fn code_lines(text: &str) -> impl Iterator<Item = (usize, &str)> + '_ {
+        text.lines().enumerate().filter_map(|(i, line)| {
+            let code = line.trim_start();
+            if code.starts_with("//") || code.starts_with('*') {
+                None
+            } else {
+                Some((i + 1, line))
+            }
+        })
+    }
+
+    /// Every `.rs` file under `src/`, as repo-relative slash-separated paths
+    /// paired with their contents.
+    fn all_sources() -> Vec<(String, String)> {
         fn walk(dir: &std::path::Path, out: &mut Vec<PathBuf>) {
             let Ok(entries) = std::fs::read_dir(dir) else {
                 return;
@@ -744,30 +818,70 @@ mod tests {
         walk(&root, &mut files);
         assert!(files.len() > 100, "walk found suspiciously few sources");
 
+        files
+            .into_iter()
+            .filter_map(|file| {
+                let rel = file
+                    .strip_prefix(env!("CARGO_MANIFEST_DIR"))
+                    .unwrap_or(&file)
+                    .to_string_lossy()
+                    .replace('\\', "/");
+                std::fs::read_to_string(&file).ok().map(|text| (rel, text))
+            })
+            .collect()
+    }
+
+    /// Does this file both reach for the real home *and* name `.aleph`?
+    fn hand_rolls_aleph_home(text: &str) -> bool {
+        let mut home = false;
+        let mut aleph = false;
+        for (_, line) in code_lines(text) {
+            home |= line.contains("dirs::home_dir()");
+            aleph |= line.contains(".aleph");
+        }
+        home && aleph
+    }
+
+    /// Guard against the single most repeated wiring bug in this repo: a path
+    /// under `~/.aleph` resolved by hand instead of through [`get_config_dir`].
+    ///
+    /// Its whole failure mode is invisibility. With `ALEPH_HOME` unset the two
+    /// resolutions are byte-identical, so a developer machine, CI, and every
+    /// unit test agree — and the divergence only appears on a relocated home,
+    /// where the writer writes one place and the reader reads another and
+    /// *nothing errors*. The 2026-08-05 round found eight live instances at
+    /// once (identity files the prompt could never see, a guides directory
+    /// nobody wrote, a silently empty user-hooks layer, a second answer for
+    /// the agents root).
+    ///
+    /// Source-level on purpose: at runtime the two spellings produce the same
+    /// value under the test environment, so only the text can tell them apart.
+    ///
+    /// **File-level, not line-level.** The line-level version only fired when
+    /// one physical line held both markers, so every multi-line spelling walked
+    /// straight past it — `dirs::home_dir()` on one line, `.join(".aleph")` on
+    /// the next — and so did cron's, where the `"~/.aleph/data/tasks.db"`
+    /// default and the `dirs::home_dir()` that expanded its `~` sat fifty lines
+    /// apart in the same file. Widening the window to the file is what makes
+    /// the guard see the shape it was written for; the cost is a handful of
+    /// false positives, and those get an allowlist entry stating why.
+    #[test]
+    fn no_hand_rolled_aleph_home_outside_the_allowlist() {
         let mut offenders: Vec<String> = Vec::new();
-        for file in files {
-            let rel = file
-                .strip_prefix(env!("CARGO_MANIFEST_DIR"))
-                .unwrap_or(&file)
-                .to_string_lossy()
-                .replace('\\', "/");
-            if HOME_JOIN_ALLOWLIST.iter().any(|(f, _)| *f == rel) {
+        for (rel, text) in all_sources() {
+            if HOME_JOIN_ALLOWLIST.iter().any(|(f, _)| *f == rel)
+                || HOME_JOIN_PENDING_FIX.iter().any(|(f, _)| *f == rel)
+            {
                 continue;
             }
-            let Ok(text) = std::fs::read_to_string(&file) else {
+            if !hand_rolls_aleph_home(&text) {
                 continue;
-            };
-            for (i, line) in text.lines().enumerate() {
-                // Comments and doc comments discuss the anti-pattern by name;
-                // only real code counts.
-                let code = line.trim_start();
-                if code.starts_with("//") || code.starts_with("*") {
-                    continue;
-                }
-                if line.contains("dirs::home_dir()") && line.contains(".aleph") {
-                    offenders.push(format!("{rel}:{}: {}", i + 1, line.trim()));
-                }
             }
+            let sites: Vec<String> = code_lines(&text)
+                .filter(|(_, line)| line.contains("dirs::home_dir()") || line.contains(".aleph"))
+                .map(|(n, line)| format!("{rel}:{n}: {}", line.trim()))
+                .collect();
+            offenders.push(sites.join("\n    "));
         }
 
         assert!(
@@ -776,6 +890,53 @@ mod tests {
              utils::paths::get_config_dir(), so they ignore ALEPH_HOME and will read/write \
              a different directory than the rest of the process — with no error:\n  {}",
             offenders.join("\n  ")
+        );
+    }
+
+    /// The guard's predicate itself: it must see the spellings the line-level
+    /// version walked past, which is the whole reason for the widening. The
+    /// second case is cron's, where the two halves sat in different functions.
+    #[test]
+    fn guard_predicate_sees_multi_line_spellings() {
+        let single_line = "let p = dirs::home_dir().unwrap().join(\".aleph\");";
+        let two_lines = "let p = dirs::home_dir()\n    .unwrap()\n    .join(\".aleph\");";
+        let far_apart = "fn default() -> String { \"~/.aleph/data/tasks.db\".into() }\n\
+                         // fifty lines of unrelated code\n\
+                         fn expand(p: &str) -> PathBuf { dirs::home_dir().unwrap().join(p) }";
+        for source in [single_line, two_lines, far_apart] {
+            assert!(
+                hand_rolls_aleph_home(source),
+                "guard missed a hand-rolled path:\n{source}"
+            );
+        }
+
+        // Still text-blind to comments — the repo discusses this bug by name.
+        assert!(!hand_rolls_aleph_home(
+            "// dirs::home_dir().join(\".aleph\") is what NOT to do"
+        ));
+        // And a file that only does one half is not an offender.
+        assert!(!hand_rolls_aleph_home("let h = dirs::home_dir();"));
+        assert!(!hand_rolls_aleph_home("let p = root.join(\".aleph\");"));
+    }
+
+    /// A grandfathered exemption that no longer offends is a lie the next
+    /// reader has to disprove by hand. Fail so the fix deletes its own entry.
+    #[test]
+    fn pending_fix_list_only_shrinks() {
+        let sources = all_sources();
+        let mut stale: Vec<&str> = Vec::new();
+        for (file, _) in HOME_JOIN_PENDING_FIX {
+            match sources.iter().find(|(rel, _)| rel == file) {
+                Some((_, text)) if hand_rolls_aleph_home(text) => {}
+                _ => stale.push(file),
+            }
+        }
+        assert!(
+            stale.is_empty(),
+            "these no longer hand-roll a home-rooted `.aleph` path (fixed, moved, or \
+             deleted) — remove them from HOME_JOIN_PENDING_FIX so the list keeps \
+             meaning what it says:\n  {}",
+            stale.join("\n  ")
         );
     }
 

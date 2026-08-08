@@ -181,15 +181,37 @@ impl Gatherer {
     }
 
     async fn fetch_snapshot(&self, agent_id: &str, session_id: Option<&str>) -> Vec<Candidate> {
-        // `SnapshotReader::load_latest` returns the requesting agent's most
-        // recent snapshot EXCLUDING the named session. Snapshots from all
-        // agents share one directory, so the agent filter keeps agent B's
-        // prompt assembly from injecting agent A's session summary. For our
-        // purposes — giving the LLM context from the previous session — we
-        // pass the current session id as the exclude so the reader hands us
-        // the prior session's snapshot.
+        // The snapshot is partitioned like every other source this function's
+        // siblings gather: notes go through `session_read_ids`, the profile
+        // floor through `profile_floor_id`, and the snapshot through
+        // `session_resume::snapshot_partition` — the SAME derivation the
+        // writer stamped with. `agent_id` alone is the base id, shared by every
+        // user of that agent, so it never separated alice's `/end-summary` from
+        // bob's.
+        //
+        // Unlike notes, this is a single partition and NOT a union with the
+        // base: `session_read_ids`' second member is the org tier, which is
+        // shared by design for extracted facts but would re-open exactly the
+        // leak above for a verbatim session transcript summary.
+        let partition = crate::memory::session_resume::snapshot_partition(agent_id);
+        // A room partition is readable only by the room's roster. This is the
+        // ambient-resolver twin of the gateway's `partition_visible`: memory
+        // assembly runs on the far side of the run's `tokio::spawn`, where
+        // `CALLER_USER` is dead, so the gateway-side predicate would be
+        // constantly true here — i.e. no gate at all.
+        if !crate::gateway::visibility::ambient_partition_visible(&partition) {
+            return Vec::new();
+        }
+        // `load_latest_in_partition` returns the requesting agent's most recent
+        // snapshot in that partition EXCLUDING the named session. For our
+        // purposes — giving the LLM context from the previous session — we pass
+        // the current session id as the exclude so the reader hands us the
+        // prior session's snapshot.
         let exclude = session_id.unwrap_or("");
-        let Some(snap) = self.snapshots.load_latest(agent_id, exclude) else {
+        let Some(snap) = self
+            .snapshots
+            .load_latest_in_partition(agent_id, &partition, exclude)
+        else {
             return Vec::new();
         };
         vec![snapshot_to_candidate(snap)]
@@ -503,6 +525,7 @@ mod tests {
         let snap = SessionSnapshot {
             session_id: "agent:main:prev".into(),
             agent_id: "main".into(),
+            scope_id: Some("main".into()),
             created_at: chrono::Utc::now(),
             summary: summary.into(),
         };

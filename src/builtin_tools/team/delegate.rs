@@ -74,6 +74,11 @@ pub enum DelegateStatus {
     Timeout,
     /// Task execution failed
     Failed,
+    /// The member was already running something, so the delegation never
+    /// started. Reported distinctly from `Failed` on purpose: the work is
+    /// untried, so the caller can simply try again — collapsing it into
+    /// `Failed` tells the model the member attempted and could not do it.
+    Busy,
 }
 
 // =============================================================================
@@ -451,6 +456,21 @@ impl AlephTool for TeamDelegateTool {
                     status: DelegateStatus::Completed,
                     reply: Some(reply),
                     error: None,
+                })
+            }
+            // The task row is left alone (not finished): nothing was attempted,
+            // so a terminal status would be a lie, and leaving it claimable
+            // means the team dispatcher can still pick it up.
+            MemberRunStatus::Busy => {
+                let error = outcome
+                    .error
+                    .unwrap_or_else(|| "Agent busy, attempt deferred".to_string());
+                info!(task_id = %task.id, "team_delegate: member busy; task left claimable");
+                Ok(TeamDelegateOutput {
+                    task_id: task.id,
+                    status: DelegateStatus::Busy,
+                    reply: None,
+                    error: Some(error),
                 })
             }
             MemberRunStatus::Failed => {

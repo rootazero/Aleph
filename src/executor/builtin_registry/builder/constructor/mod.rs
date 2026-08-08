@@ -444,7 +444,22 @@ impl BuiltinToolRegistry {
             .map_err(|e| AlephError::other(format!("goal store open: {e}")))?,
         );
         crate::goal::init_global(goal_store.clone());
-        let goal_tool = crate::builtin_tools::GoalTool::new(goal_store);
+        // Lesson salvage on the delete path. `clear` (and an objective-replacing
+        // `set`) is the LAST moment a goal's accumulated lessons exist anywhere:
+        // promotion to the per-goal note is otherwise a nightly stage, so a user
+        // who clears a goal at noon loses everything that goal learned. The tool
+        // needs the same note tree the nightly stage writes, so it is built from
+        // the same two config inputs — without this the salvage path compiles,
+        // tests green, and is a permanent no-op in production.
+        let goal_tool = crate::builtin_tools::GoalTool::new(goal_store).with_lesson_indexer(
+            match (config.memory_db.as_ref(), config.note_memory_dir.as_ref()) {
+                (Some(db), Some(dir)) => Some(Arc::new(crate::memory::notes::NoteIndexer::new(
+                    dir.clone(),
+                    db.clone(),
+                ))),
+                _ => None,
+            },
+        );
 
         // Loop-graph governance store: explicit topology over the
         // self-improvement loops. Its OWN small DB — deliberately outside

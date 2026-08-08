@@ -31,7 +31,10 @@ pub const fn prompt_for(source: &RawMemorySource) -> Option<&'static str> {
             reason: SessionEndReason::TaskDone,
         } => Some(PROMPT_RETRO),
         // Reflection rows already carry first-person lessons; the lesson-tuned
-        // prompt keeps the ingestor on the feedback/lessons track.
+        // prompt keeps the ingestor classifying into `lesson`/`tool` rather
+        // than generic notes. It does NOT produce `feedback/` notes — those are
+        // written only by the `FeedbackDistill` dream stage from `Correction`
+        // rows, and only they get the always-on feedback floor.
         RawMemorySource::Reflection => Some(PROMPT_LESSON),
         RawMemorySource::SessionCompressed
         | RawMemorySource::Transcript
@@ -41,8 +44,10 @@ pub const fn prompt_for(source: &RawMemorySource) -> Option<&'static str> {
         // not by CompressionService. If one ever reaches this path defensively
         // fall back to the base prompt rather than synthesizing a bogus one.
         RawMemorySource::Correction { .. } => None,
-        // Tool-invocation signals are pure metrics consumed by Dream's
-        // signal collector; the ingest planner never sees them.
+        // Tool-invocation signals are pure telemetry, read only by the
+        // `insights.tools` aggregator (`crate::memory::insights`) — NOT by any
+        // dream stage. `CompressionService` partitions them out of the ingest
+        // batch, so the planner never sees them either.
         RawMemorySource::ToolInvocation { .. } => None,
     }
 }

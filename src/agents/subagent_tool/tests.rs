@@ -88,6 +88,92 @@ fn make_tool() -> SubagentTool {
     )
 }
 
+/// W11 — the tool's ADDRESSING verbs must be session-scoped, not just its
+/// enumeration verbs. Before the chokepoint, a request_id belonging to another
+/// session (learned from an announce echo, a log line, or a paste) could be
+/// read via `check_status` and killed via `cancel`, and `wait`'s
+/// `unknown_request_ids` annotation — the sentence the model is shown — omitted
+/// it, so the tool actively told the model the id was fine.
+#[tokio::test]
+async fn foreign_request_id_is_unreachable_from_another_session() {
+    let tracker = make_tracker();
+    let provider: Arc<dyn AiProvider> = Arc::new(MockAiProvider);
+    let chain = crate::harness::chain_context::ChainContext::new();
+    let tool = SubagentTool::new(
+        provider,
+        chain,
+        make_registry(),
+        tracker.clone(),
+        in_mem_session(),
+        Arc::new(NoopTestToolService),
+    )
+    .with_parent_session_id("s-mine".to_string());
+
+    // A background sub-agent owned by a DIFFERENT session, already finished.
+    tracker.register_with_meta(
+        "theirs".to_string(),
+        CancellationToken::new(),
+        "their task".to_string(),
+        crate::agents::background_tracker::SpawnMeta {
+            root_session: "s-other".to_string(),
+            depth: 1,
+            ..Default::default()
+        },
+    );
+    tracker.mark_completed(
+        "theirs",
+        crate::agents::background_tracker::CompletedOutcome::ok_text("their secret output"),
+    );
+
+    // check_status must not hand over the other session's output.
+    let status = tool
+        .execute(
+            json!({ "action": "check_status", "request_id": "theirs" }),
+            CancellationToken::new(),
+        )
+        .await;
+    match status {
+        ToolResult::Error { error, .. } => assert!(
+            error.contains("No background sub-agent found"),
+            "an out-of-scope id must read exactly like an unknown one, got: {error}"
+        ),
+        ToolResult::Success { output } => {
+            panic!("check_status leaked another session's result: {}", output)
+        }
+    }
+
+    // cancel must not kill the other session's run.
+    let cancelled = tool
+        .execute(
+            json!({ "action": "cancel", "request_id": "theirs" }),
+            CancellationToken::new(),
+        )
+        .await;
+    assert!(
+        matches!(cancelled, ToolResult::Error { .. }),
+        "cancel must refuse an out-of-scope request_id, got {cancelled:?}"
+    );
+
+    // ...and `wait` must NAME it as unknown rather than silently parking on it.
+    let waited = tool
+        .execute(
+            json!({
+                "action": "wait",
+                "request_ids": ["theirs"],
+                "timeout_secs": 1
+            }),
+            CancellationToken::new(),
+        )
+        .await;
+    match waited {
+        ToolResult::Error { error, .. } => assert!(
+            error.contains("theirs"),
+            "wait must name the unreachable id so the model can fix the call, got: {error}"
+        ),
+        other => panic!("wait must not resolve an out-of-scope id, got {other:?}"),
+    }
+}
+
 #[test]
 fn test_parse_args_basic() {
     let action = parse_args(&json!({ "task": "do something" })).unwrap();
@@ -1377,6 +1463,105 @@ async fn background_subagent_reseeds_scope_and_project_root() {
         Some(dir),
         "project root must be re-seeded inside the tokio::spawn boundary"
     );
+}
+
+/// W1 — the SYNC parallel fan-out spawns one `tokio::spawn` per batch row and
+/// must re-seed the same task-locals `spawn_background` does. Before the fix
+/// the sync branch captured nothing, so every batch subagent's memory writes
+/// landed in the unscoped default partition instead of the parent run's room /
+/// personal one — silently, with the batch result looking perfectly normal.
+#[tokio::test]
+async fn sync_batch_subagents_reseed_scope_and_project_root() {
+    use crate::scope::ScopeAttribution;
+    use std::path::PathBuf;
+
+    /// Captures the ambient scope + project root observed at provider-call
+    /// time — i.e. from inside the tasks the sync fan-out spawns.
+    struct ScopeCapturingProvider {
+        observed: Arc<std::sync::Mutex<Vec<(Option<ScopeAttribution>, Option<PathBuf>)>>>,
+    }
+
+    impl AiProvider for ScopeCapturingProvider {
+        fn process<'a>(
+            &'a self,
+            _payload: RequestPayload<'a>,
+        ) -> Pin<Box<dyn Future<Output = crate::error::Result<ProviderResponse>> + Send + 'a>>
+        {
+            let observed = self.observed.clone();
+            Box::pin(async move {
+                observed.lock().unwrap().push((
+                    crate::scope::current_scope(),
+                    crate::projects::current_project_root(),
+                ));
+                Ok(ProviderResponse::text_only("mock response".to_string()))
+            })
+        }
+
+        fn name(&self) -> &str {
+            "scope-capture-batch"
+        }
+
+        fn color(&self) -> &str {
+            "#000000"
+        }
+    }
+
+    let observed: Arc<std::sync::Mutex<Vec<(Option<ScopeAttribution>, Option<PathBuf>)>>> =
+        Arc::new(std::sync::Mutex::new(Vec::new()));
+    let chain = crate::harness::chain_context::ChainContext::new();
+    let tool = SubagentTool::new(
+        Arc::new(ScopeCapturingProvider {
+            observed: observed.clone(),
+        }),
+        chain,
+        make_registry(),
+        make_tracker(),
+        in_mem_session(),
+        Arc::new(NoopTestToolService),
+    );
+
+    let dir = std::env::temp_dir().join("aleph-w1-sync-batch-scope");
+    let attr = ScopeAttribution::personal("u-batch");
+
+    let result = crate::scope::with_scope(
+        Some(attr),
+        crate::projects::with_project_root(Some(dir.clone()), async {
+            tool.execute(
+                json!({
+                    "batch_tasks": [
+                        { "task": "one" },
+                        { "task": "two" }
+                    ],
+                    "run_in_background": false
+                }),
+                CancellationToken::new(),
+            )
+            .await
+        }),
+    )
+    .await;
+    assert!(
+        matches!(result, ToolResult::Success { .. }),
+        "sync batch must succeed, got {result:?}"
+    );
+
+    let seen = observed.lock().unwrap().clone();
+    assert!(
+        !seen.is_empty(),
+        "provider must have been invoked inside the spawned fan-out tasks"
+    );
+    for (scope, root) in seen {
+        assert_eq!(
+            scope.map(|a| a.owner_user_id),
+            Some("u-batch".to_string()),
+            "scope must be re-seeded inside each sync fan-out tokio::spawn"
+        );
+        assert_eq!(
+            root,
+            Some(dir.clone()),
+            "project root must be re-seeded inside each sync fan-out tokio::spawn"
+        );
+    }
 }
 
 /// Async batch path: explicit run_in_background=true returns request_ids

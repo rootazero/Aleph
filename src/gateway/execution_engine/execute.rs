@@ -1340,6 +1340,12 @@ pub(super) fn spawn_continuation_run(
             // post-run steering rescue's Completed-only guard). Any other
             // failure ends the silent stall: block the goal / stop the loop and
             // notify, so unattended work never dies as a stuck `Active`.
+            // Set by whichever arm decided this continuation should fire again
+            // after a wait — a busy-collision re-arm, or a transient-provider
+            // park. Both go through the ONE `spawn_continuation_run` call at
+            // the end of this block, so a second re-arm reason can never grow a
+            // second, subtly different scheduler call.
+            let mut respawn: Option<(u64, ContinuationKind)> = None;
             if matches!(e, ExecutionError::Cancelled) {
                 info!(session = %session_key_str, kind = ?kind,
                     "continuation cancelled by user");
@@ -1379,19 +1385,7 @@ pub(super) fn spawn_continuation_run(
                     }
                 };
                 if let Some(delay_ms) = delay_ms {
-                    spawn_continuation_run(
-                        registry.clone(),
-                        adapter.clone(),
-                        session_key.clone(),
-                        session_key_str.clone(),
-                        prompt.clone(),
-                        retry_policy_meta.clone(),
-                        retry_workspace.clone(),
-                        retry_bus.clone(),
-                        session_manager.clone(),
-                        Some(delay_ms),
-                        next_kind,
-                    );
+                    respawn = Some((delay_ms, next_kind));
                 }
             } else {
                 match kind {
@@ -1406,11 +1400,39 @@ pub(super) fn spawn_continuation_run(
                         .await;
                     }
                     ContinuationKind::Loop { .. } => {
-                        warn!(error = %e, session = %session_key_str,
-                            "loop: tick run failed; stopping loop for user guidance");
-                        stop_loop_on_failure(&session_key_str, &e, origin.as_ref()).await;
+                        match park_loop_on_transient_failure(&session_key_str, &e, origin.as_ref())
+                            .await
+                        {
+                            TransientPark::Rearmed { delay_ms, wake_ms } => {
+                                respawn = Some((delay_ms, ContinuationKind::Loop { wake_ms }));
+                            }
+                            // The park path already ended (or found nothing to
+                            // end) and said so — stopping again here would push
+                            // a second, contradictory notice.
+                            TransientPark::Ended => {}
+                            TransientPark::NotTransient => {
+                                warn!(error = %e, session = %session_key_str,
+                                    "loop: tick run failed; stopping loop for user guidance");
+                                stop_loop_on_failure(&session_key_str, &e, origin.as_ref()).await;
+                            }
+                        }
                     }
                 }
+            }
+            if let Some((delay_ms, next_kind)) = respawn {
+                spawn_continuation_run(
+                    registry.clone(),
+                    adapter.clone(),
+                    session_key.clone(),
+                    session_key_str.clone(),
+                    prompt.clone(),
+                    retry_policy_meta.clone(),
+                    retry_workspace.clone(),
+                    retry_bus.clone(),
+                    session_manager.clone(),
+                    Some(delay_ms),
+                    next_kind,
+                );
             }
         }
     });
@@ -1456,11 +1478,136 @@ pub(super) async fn rearm_loop_after_busy(
     }
 }
 
+/// What [`park_loop_on_transient_failure`] did with a failed tick, so the
+/// caller neither double-notifies nor stops a loop the park path already ended.
+enum TransientPark {
+    /// Same tick re-armed; re-spawn it after `delay_ms` confirming `wake_ms`.
+    Rearmed { delay_ms: u64, wake_ms: u64 },
+    /// Handled and finished here: a cap tripped while the provider was down (the
+    /// registry stopped the loop with its reason and the user was told), or
+    /// there was no claimable loop left to park. Either way the caller must not
+    /// stop it again.
+    Ended,
+    /// Not a transient provider failure — the caller owns the verdict.
+    NotTransient,
+}
+
+/// Default park when a transient tick failure carries no `Retry-After`. Same
+/// value the goal side uses (`goal_continuation::TRANSIENT_PARK_FALLBACK_MS`):
+/// this is one question — "how long is it sane to wait out a provider the whole
+/// fallback chain just failed on" — and the two continuation kinds must not
+/// answer it differently.
+const LOOP_TRANSIENT_PARK_FALLBACK_MS: u64 = 300_000;
+
+/// Ceiling on a single transient park, even when the provider's own
+/// `Retry-After` asks for more. See the goal sibling for the derivation
+/// (`providers::failover::MAX_COOLDOWN`); must stay `>=`
+/// [`LOOP_TRANSIENT_PARK_FALLBACK_MS`].
+const LOOP_TRANSIENT_PARK_MAX_MS: u64 = 600_000;
+
+/// A tick run failed with something that is not a cancellation and not a busy
+/// collision. Route it by what KIND of failure it was, exactly as the goal side
+/// does: [`ExecutionError::receipt_kind`] is already the single source three
+/// user surfaces read, and its own doc records that a rate-limit or network
+/// signature at THIS layer means every provider and model in the chain was
+/// tried — so the failure is genuinely transient and "retry soon" is the right
+/// answer, not `Stopped`.
+///
+/// Stopping was a verdict on a 429: a watch loop the user set for the week died
+/// permanently on one minute of provider trouble, and `loop(action='status')`
+/// reported "Halted by an error" as if the work itself had failed.
+///
+/// The park re-uses [`crate::looping::LoopRegistry::rearm_after_interruption`] —
+/// the same atomic re-arm the busy collision takes, with the provider's own
+/// backoff instead of the fixed 30 s — so a parked tick is bounded by the two
+/// caps that already guard a re-armed tick (`exhausted` and, projected onto the
+/// retry wake, `fires_out_of_bounds`) rather than by a new set of rules.
+///
+/// **New exposure this opens.** Two paths run for the first time here:
+/// * `RearmDecision::Exhausted` is now reachable from a FAILURE, not only from
+///   a busy collision. A loop whose deadline elapsed while its provider was
+///   down now ends as "reached its time limit" — the true cause — instead of
+///   "halted by an error".
+/// * A multi-hour outage can park the SAME tick many times in a row (each park
+///   costs no iteration: the tick was counted at claim). `fires_out_of_bounds`
+///   is therefore load-bearing for the first time — it is what keeps that chain
+///   from re-arming a tick that would wake past `timeout_minutes`. A loop with
+///   NO deadline and no iteration cap left will retry for as long as the
+///   provider stays down, which is the intended reading of an unbounded loop.
+async fn park_loop_on_transient_failure(
+    session_key_str: &str,
+    error: &ExecutionError,
+    origin: Option<&OriginRoute>,
+) -> TransientPark {
+    let kind = error.receipt_kind();
+    if !matches!(
+        kind,
+        crate::gateway::i18n::ReceiptKind::RateLimited
+            | crate::gateway::i18n::ReceiptKind::Unreachable
+    ) {
+        return TransientPark::NotTransient;
+    }
+    let Some(reg) = crate::looping::global() else {
+        return TransientPark::NotTransient;
+    };
+    // The hint rides the flattened provider error chain, the same string the
+    // classifier above read. Bounding it is not a second answer to the goal
+    // side's question — it is literally the same function.
+    let hint = crate::providers::llm_retry::extract_retry_after_str(&format!("{error}"));
+    let delay_ms = crate::goal::pursuit::bound_transient_park_delay_ms(
+        hint,
+        LOOP_TRANSIENT_PARK_FALLBACK_MS,
+        LOOP_TRANSIENT_PARK_MAX_MS,
+    );
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.as_millis() as u64);
+    match reg.rearm_after_interruption(session_key_str, now, delay_ms) {
+        crate::looping::RearmDecision::Retry { delay_ms, wake_ms } => {
+            // Deliberately NOT clearing the welded strategy: a provider outage
+            // did not invalidate the plan.
+            info!(session = %session_key_str, code = kind.code(), delay_ms,
+                "loop: transient provider failure at tick; parked for retry");
+            notify_origin(
+                origin,
+                format!(
+                    "⏸ Timer loop paused on a transient provider failure ({}); \
+                     retrying in ~{}.",
+                    kind.code(),
+                    crate::looping::types::fmt_duration_ms(delay_ms)
+                ),
+            )
+            .await;
+            TransientPark::Rearmed { delay_ms, wake_ms }
+        }
+        crate::looping::RearmDecision::Exhausted { note } => {
+            // The registry already marked the loop Stopped with `note`; mirror
+            // the other authoritative endings' cleanup and tell the user (R5).
+            clear_loop_welded_strategy(session_key_str, "transient-park cap-trip stop");
+            notify_origin(origin, format!("⏹ {note}")).await;
+            info!(session = %session_key_str, note = %note,
+                "loop: cap tripped while parking a transient failure; loop stopped");
+            TransientPark::Ended
+        }
+        crate::looping::RearmDecision::Drop => {
+            // No claimable loop left — stopped by the user, gone, or already
+            // re-claimed. Stopping it again would clobber nothing but the
+            // notice would be a false alarm, so stay silent (the goal side's
+            // `Ok(false)` arm reads the same way).
+            info!(session = %session_key_str,
+                "loop: transient tick failure but the loop is no longer claimable — dropped");
+            TransientPark::Ended
+        }
+    }
+}
+
 /// Loop sibling of [`block_goal_on_failure`]: when a clock-driven loop tick run
-/// fails (non-cancellation), mark the loop `Stopped` and best-effort notify the
-/// origin channel. Without this, a failed tick left the loop a stuck `Active`
-/// in the registry that the continuation hook never re-fired (it only runs on a
-/// run's success path) — a silent stall where `loop(action='status')` lies.
+/// fails (non-cancellation, non-busy, and not one of the transient provider
+/// failures [`park_loop_on_transient_failure`] parks), mark the loop `Stopped`
+/// and best-effort notify the origin channel. Without this, a failed tick left
+/// the loop a stuck `Active` in the registry that the continuation hook never
+/// re-fired (it only runs on a run's success path) — a silent stall where
+/// `loop(action='status')` lies.
 async fn stop_loop_on_failure(
     session_key_str: &str,
     error: &ExecutionError,
@@ -1794,5 +1941,161 @@ mod carry_policy_metadata_tests {
         // … and even a policy map that does carry it loses to the insert-last.
         let cont = continuation_metadata(meta(&[(UNATTENDED_KEY, "false")]));
         assert_eq!(cont.get(UNATTENDED_KEY).map(String::as_str), Some("true"));
+    }
+}
+
+#[cfg(test)]
+mod transient_loop_park_tests {
+    use super::*;
+    use crate::looping::types::{Cadence, LoopState, LoopStatus};
+
+    /// The registry is a process global shared by the whole test binary, so
+    /// every test here keys its own session and never enumerates.
+    fn registry() -> crate::sync_primitives::Arc<crate::looping::LoopRegistry> {
+        crate::looping::global().unwrap_or_else(|| {
+            crate::looping::init_global(crate::sync_primitives::Arc::new(
+                crate::looping::LoopRegistry::default(),
+            ));
+            crate::looping::global().expect("loop registry installed")
+        })
+    }
+
+    fn now_ms() -> u64 {
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |d| d.as_millis() as u64)
+    }
+
+    /// A claimed tick that has already fired: `confirm_fire` clears the pending
+    /// marker before the run executes, which is the state every tick failure
+    /// lands in.
+    fn fired_tick(session: &str) -> LoopState {
+        LoopState::new(
+            session,
+            "watch CI",
+            Cadence::Fixed {
+                interval_ms: 300_000,
+            },
+            now_ms(),
+        )
+        .spent_iteration()
+        .with_pending_tick(None)
+    }
+
+    fn rate_limited() -> ExecutionError {
+        ExecutionError::Failed(
+            "flow: harness: llm error: Rate limit error: Anthropic API rate limited (429); \
+             retry after 60 seconds"
+                .to_string(),
+        )
+    }
+
+    /// Before this arm existed ANY non-cancellation error was a verdict: one
+    /// 429 marked a week-long watch loop `Stopped` forever and pushed "halted
+    /// on an error". The classifier that says otherwise was already in the
+    /// crate — `ExecutionError::receipt_kind`.
+    #[tokio::test]
+    async fn a_rate_limited_tick_parks_the_loop_instead_of_stopping_it() {
+        let reg = registry();
+        let session = "transient-park/rate-limited";
+        reg.put(fired_tick(session));
+
+        let (delay_ms, wake_ms) =
+            match park_loop_on_transient_failure(session, &rate_limited(), None).await {
+                TransientPark::Rearmed { delay_ms, wake_ms } => (delay_ms, wake_ms),
+                _ => panic!("a 429 is transient — the tick must be re-armed, not judged"),
+            };
+        assert_eq!(
+            delay_ms, 60_000,
+            "the provider's own Retry-After decides the wait"
+        );
+
+        let state = reg.get(session).expect("the loop must still be registered");
+        assert_eq!(
+            state.status,
+            LoopStatus::Active,
+            "a transient provider failure pauses a loop, it does not end it"
+        );
+        assert_eq!(
+            state.pending_tick_wake_ms,
+            Some(wake_ms),
+            "the re-armed tick must be pending, or nothing wakes it"
+        );
+        assert!(
+            state.stop_reason.is_none(),
+            "nothing stopped, so nothing may claim a stop reason"
+        );
+        assert_eq!(
+            state.iterations_used, 1,
+            "a park costs no iteration — the tick was already counted at claim"
+        );
+    }
+
+    /// The other half: a genuine failure must still stop the loop. Only the two
+    /// transient buckets get a park.
+    #[tokio::test]
+    async fn a_non_transient_failure_is_left_to_the_caller_to_stop() {
+        let reg = registry();
+        let session = "transient-park/hard-failure";
+        reg.put(fired_tick(session));
+
+        let outcome = park_loop_on_transient_failure(
+            session,
+            &ExecutionError::Failed("tool 'shell' is not registered for this agent".to_string()),
+            None,
+        )
+        .await;
+        assert!(
+            matches!(outcome, TransientPark::NotTransient),
+            "an unclassified failure is a verdict the caller owns"
+        );
+        let state = reg.get(session).expect("still registered");
+        assert_eq!(
+            state.status,
+            LoopStatus::Active,
+            "the park path must not touch a loop it declined to handle"
+        );
+        assert_eq!(state.pending_tick_wake_ms, None, "and must not re-arm it");
+    }
+
+    /// The new exposure surface: `Exhausted` now enters from the FAILURE arm.
+    /// A loop whose wall-clock bound elapsed while the provider was down ends
+    /// with the true cause ("time limit"), and the caller must not then stop it
+    /// a second time with "halted by an error".
+    #[tokio::test]
+    async fn a_park_past_the_wall_clock_bound_ends_with_the_deadline_reason() {
+        let reg = registry();
+        let session = "transient-park/deadline";
+        let now = now_ms();
+        reg.put(fired_tick(session).with_deadline_ms(Some(now + 1_000)));
+
+        let outcome = park_loop_on_transient_failure(session, &rate_limited(), None).await;
+        assert!(
+            matches!(outcome, TransientPark::Ended),
+            "the registry already stopped it; a second stop would contradict the notice"
+        );
+        let state = reg.get(session).expect("still registered");
+        assert_eq!(state.status, LoopStatus::Stopped);
+        let reason = state.stop_reason.unwrap_or_default();
+        assert!(
+            reason.contains("time limit"),
+            "the binding bound is the deadline, not the error: {reason}"
+        );
+    }
+
+    /// A loop the user stopped while the failing tick was in flight must not be
+    /// resurrected by the park — and must not draw a "paused, retrying" notice
+    /// for something that is over.
+    #[tokio::test]
+    async fn a_stopped_loop_is_never_re_armed_by_a_park() {
+        let reg = registry();
+        let session = "transient-park/user-stopped";
+        reg.put(fired_tick(session).with_status(LoopStatus::Stopped));
+
+        let outcome = park_loop_on_transient_failure(session, &rate_limited(), None).await;
+        assert!(matches!(outcome, TransientPark::Ended));
+        let state = reg.get(session).expect("still registered");
+        assert_eq!(state.status, LoopStatus::Stopped);
+        assert_eq!(state.pending_tick_wake_ms, None);
     }
 }

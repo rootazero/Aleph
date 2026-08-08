@@ -359,7 +359,21 @@ async fn execute_heartbeat_tick(
                                                 .await;
                                         }
                                     }
-                                    ("Delivered".into(), ds)
+                                    // Derive the label from what actually
+                                    // happened, not from which branch we are
+                                    // standing in. This arm used to hard-code
+                                    // "Delivered", so a failed send — or a
+                                    // task with no delivery target configured
+                                    // at all — wrote a history row claiming
+                                    // delivery next to a `delivery_status` of
+                                    // NotDelivered/NotRequested, and the L2
+                                    // outcome column was a constant.
+                                    let label = if delivered {
+                                        "Delivered"
+                                    } else {
+                                        "NotDelivered"
+                                    };
+                                    (label.into(), ds)
                                 }
                             }
                         }
@@ -411,6 +425,13 @@ async fn writeback_one(
                 "Delivered" => Some(crate::tasks::cron::config::RunStatus::Ok),
                 "Deduped" => Some(crate::tasks::cron::config::RunStatus::Skipped),
                 "Error" => Some(crate::tasks::cron::config::RunStatus::Error),
+                // Recognised but deliberately unmapped: whether an undelivered
+                // L2 result should count as a task-level failure (and so feed
+                // the backoff ladder and the alert chain) is a policy call that
+                // belongs with the heartbeat alerting work, not with this
+                // label fix. Listed explicitly so it does not masquerade as an
+                // unknown status in the log below.
+                "NotDelivered" => None,
                 unknown => {
                     tracing::warn!(l2_status = %unknown, "unrecognized heartbeat L2 status");
                     None
@@ -550,14 +571,50 @@ mod tests {
         assert!(result.error.is_none());
     }
 
+    /// The L2 asked for delivery and the task has no target configured, so
+    /// nothing reached anyone. The two status columns must agree about that —
+    /// this arm used to report `Delivered` beside `NotRequested`.
     #[tokio::test]
     async fn tick_triggered_delivery_no_config() {
         let task = make_task();
         let ctx = make_ctx("delivery");
         let result = execute_heartbeat_tick(&task, None, &ctx).await;
         assert_eq!(result.l1_status, "Triggered");
-        assert_eq!(result.l2_status.as_deref(), Some("Delivered"));
+        assert_eq!(result.l2_status.as_deref(), Some("NotDelivered"));
         assert_eq!(result.delivery_status.as_deref(), Some("NotRequested"));
+    }
+
+    /// A configured target that always fails must not be recorded as a
+    /// delivery. `l2_status` is derived from the delivery outcome, so the
+    /// history row can never claim `Delivered` alongside `NotDelivered`.
+    #[tokio::test]
+    async fn tick_delivery_failure_is_not_reported_as_delivered() {
+        let mut task = make_task();
+        // The test engine registers no target kinds, so this webhook fails at
+        // dispatch — the URL is never dialled and the test does no network I/O.
+        task.delivery_config = Some(crate::tasks::shared::delivery::DeliveryConfig {
+            mode: crate::tasks::shared::delivery::DeliveryMode::Primary,
+            targets: vec![
+                crate::tasks::shared::delivery::DeliveryTargetConfig::Webhook {
+                    url: "https://127.0.0.1:1/never".to_string(),
+                    method: None,
+                    headers: None,
+                },
+            ],
+            fallback_target: None,
+        });
+
+        let ctx = make_ctx("delivery");
+        let result = execute_heartbeat_tick(&task, None, &ctx).await;
+
+        assert_eq!(result.l1_status, "Triggered");
+        assert_ne!(
+            result.l2_status.as_deref(),
+            Some("Delivered"),
+            "a failed delivery must not be recorded as delivered"
+        );
+        assert_eq!(result.l2_status.as_deref(), Some("NotDelivered"));
+        assert_eq!(result.delivery_status.as_deref(), Some("NotDelivered"));
     }
 
     #[tokio::test]

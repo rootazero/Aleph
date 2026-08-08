@@ -220,6 +220,10 @@ pub fn toggle_job<C: Clock>(store: &mut CronStore, id: &str, clock: &C) -> Resul
         recompute_next_run_full(job, clock);
     } else {
         job.state.next_run_at_ms = None;
+        // Same reason as `CronService::disable_job`: an un-picked-up manual
+        // trigger must not survive the off/on cycle and mislabel a scheduled
+        // run as manual.
+        job.state.manual_trigger_pending = false;
     }
 
     Ok(job.enabled)
@@ -451,6 +455,41 @@ mod tests {
         assert!(
             j.state.next_run_at_ms.is_some(),
             "re-enabled job should have next_run"
+        );
+    }
+
+    /// An un-picked-up manual trigger must not survive an off/on cycle — the
+    /// next run after that is the schedule's, not the operator's.
+    #[test]
+    fn toggling_off_withdraws_a_pending_manual_trigger() {
+        let mut store = make_store();
+        let clock = FakeClock::new(1_000_000);
+
+        let job = make_test_job("togglable");
+        add_job(&mut store, job, &clock);
+        store
+            .get_job_mut("togglable")
+            .unwrap()
+            .state
+            .manual_trigger_pending = true;
+
+        toggle_job(&mut store, "togglable", &clock).unwrap(); // off
+        assert!(
+            !store
+                .get_job("togglable")
+                .unwrap()
+                .state
+                .manual_trigger_pending
+        );
+
+        toggle_job(&mut store, "togglable", &clock).unwrap(); // on again
+        assert!(
+            !store
+                .get_job("togglable")
+                .unwrap()
+                .state
+                .manual_trigger_pending,
+            "re-enabling must not resurrect the withdrawn trigger"
         );
     }
 

@@ -10,7 +10,6 @@ use alephcore::tasks::cron::clock::testing::FakeClock;
 use alephcore::tasks::cron::clock::Clock;
 use alephcore::tasks::cron::config::{CronConfig, CronJob, CronJobView, JobStateV2, ScheduleKind};
 use alephcore::tasks::cron::service::catchup::run_startup_catchup;
-use alephcore::tasks::cron::service::concurrency::phase1_mark_manual;
 use alephcore::tasks::cron::service::ops::{self, CronJobUpdates};
 use alephcore::tasks::cron::service::state::ServiceState;
 use alephcore::tasks::cron::service::timer::{on_timer_tick, JobExecutorFn};
@@ -182,29 +181,31 @@ impl CronTestHarness {
         .expect("catchup failed");
     }
 
-    /// Manually trigger a job.
+    /// Manually trigger a job, exactly the way production does it.
+    ///
+    /// `CronService::run_job` does not execute anything itself — the service
+    /// holds no executor. It pulls `next_run_at_ms` forward to now and raises
+    /// `manual_trigger_pending`; the timer loop is what claims, runs and writes
+    /// the job back, consuming the flag in `phase1_mark_due_jobs` so the
+    /// snapshot carries `TriggerSource::Manual`. This harness mirrors that
+    /// two-step: stamp the state, then run one real tick. Driving a private
+    /// phase-1 entry point instead would test a path the process never takes.
     pub async fn manual_run(&self, id: &str) {
-        let default_timeout_ms = self.state.config.job_timeout_secs.saturating_mul(1000) as i64;
-        let snapshot = phase1_mark_manual(
-            &self.state.store,
-            self.clock.as_ref(),
-            id,
-            default_timeout_ms,
-        )
-        .await
-        .expect("manual_run failed");
-
-        if let Some(snap) = snapshot {
-            let result = (self.executor_fn)(snap.clone()).await;
-            alephcore::tasks::cron::service::concurrency::phase3_writeback(
-                &self.state.store,
-                self.clock.as_ref(),
-                &[(snap.id, result)],
-                self.state.config.notify_on_failure_default,
-            )
-            .await
-            .expect("manual_run writeback failed");
+        {
+            let mut store = self.state.store.lock().await;
+            let job = store
+                .get_job_mut(id)
+                .unwrap_or_else(|| panic!("manual_run: job '{id}' not found"));
+            assert!(job.enabled, "manual_run: job '{id}' is disabled");
+            assert!(
+                job.state.running_at_ms.is_none(),
+                "manual_run: job '{id}' is already running"
+            );
+            job.state.next_run_at_ms = Some(self.clock.now_ms());
+            job.state.manual_trigger_pending = true;
+            store.persist().expect("failed to persist manual trigger");
         }
+        self.tick().await;
     }
 
     // ── Assertions ──────────────────────────────────────────────────

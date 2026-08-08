@@ -291,9 +291,14 @@ impl LoopTool for SubagentTool {
                 }
             }
             SubagentAction::CheckStatus(request_id) => {
+                // W11 — the ADDRESSING face is scoped for the same reason the
+                // enumeration face is: the tracker is process-global, so
+                // without this a request_id learned any other way (announce
+                // echo, log line, paste) read another session's output.
+                let scope = self.parent_session_id.as_deref();
                 // Running? — surface elapsed time + a derived activity
                 // summary alongside the recent progress events.
-                if let Some(meta) = self.background_tracker.running_meta(&request_id) {
+                if let Some(meta) = self.background_tracker.running_meta(&request_id, scope) {
                     let progress = self.background_tracker.progress_snapshot(&request_id, 10);
                     return ToolResult::Success {
                         output: json!({
@@ -308,7 +313,7 @@ impl LoopTool for SubagentTool {
                 }
                 // Completed? — non-destructive read, so the parent may poll
                 // the same request_id again later without it vanishing.
-                match self.background_tracker.result_snapshot(&request_id) {
+                match self.background_tracker.result_snapshot(&request_id, scope) {
                     Some(snap) => {
                         // The parent has now seen the terminal result on-demand;
                         // mark it consumed so the proactive announce does not
@@ -342,6 +347,8 @@ impl LoopTool for SubagentTool {
                 // per-check LLM turn). The delivered result is marked consumed
                 // inside the tracker so the announce won't re-deliver it.
                 let dur = std::time::Duration::from_secs(timeout_secs);
+                // W11 — scoped addressing (see CheckStatus).
+                let scope = self.parent_session_id.as_deref();
 
                 // Single id → the simple wait (nicer elapsed_secs on timeout).
                 if request_ids.len() == 1 {
@@ -349,7 +356,7 @@ impl LoopTool for SubagentTool {
                     let outcome = tokio::select! {
                         biased;
                         () = cancel.cancelled() => return self.wait_cancelled(&request_ids),
-                        outcome = self.background_tracker.wait(request_id, dur) => outcome,
+                        outcome = self.background_tracker.wait(request_id, scope, dur) => outcome,
                     };
                     return match outcome {
                         // Identical shape to check_status so the model reads a
@@ -402,9 +409,9 @@ impl LoopTool for SubagentTool {
                 let outcome = tokio::select! {
                     biased;
                     () = cancel.cancelled() => return self.wait_cancelled(&request_ids),
-                    outcome = self.background_tracker.wait_any(&request_ids, dur) => outcome,
+                    outcome = self.background_tracker.wait_any(&request_ids, scope, dur) => outcome,
                 };
-                let unknown = self.background_tracker.unknown_ids(&request_ids);
+                let unknown = self.background_tracker.unknown_ids(&request_ids, scope);
                 return match outcome {
                     WaitAnyOutcome::Completed {
                         request_id,
@@ -417,7 +424,7 @@ impl LoopTool for SubagentTool {
                     WaitAnyOutcome::TimedOut { still_running } => {
                         let waiting: Vec<Value> = still_running
                             .iter()
-                            .map(|id| match self.background_tracker.running_meta(id) {
+                            .map(|id| match self.background_tracker.running_meta(id, scope) {
                                 Some(meta) => json!({
                                     "request_id": id,
                                     "task": meta.task,
@@ -476,7 +483,11 @@ impl LoopTool for SubagentTool {
                 };
             }
             SubagentAction::Cancel(request_id) => {
-                let hit = self.background_tracker.cancel(&request_id);
+                // W11 — scoped addressing (see CheckStatus). Cancelling
+                // another session's run is the most damaging of the three
+                // by-id verbs, so it goes through the same chokepoint.
+                let scope = self.parent_session_id.as_deref();
+                let hit = self.background_tracker.cancel_in_scope(&request_id, scope);
                 if hit {
                     // The parent has decided this run's outcome: whatever the
                     // child unwinds into is already accounted for. Stamping the
@@ -511,7 +522,7 @@ impl LoopTool for SubagentTool {
                 // so the LLM gets a deterministic answer rather than a
                 // misleading "not found". Non-destructive: a later
                 // check_status still sees the same result.
-                return match self.background_tracker.result_snapshot(&request_id) {
+                return match self.background_tracker.result_snapshot(&request_id, scope) {
                     Some(snap) => {
                         // The parent has now seen the terminal result via this
                         // cancel; mark it consumed so the proactive announce
@@ -725,6 +736,19 @@ impl LoopTool for SubagentTool {
                 // can label each proposal with the model that produced it.
                 let proposer_models_by_idx: Vec<Option<String>> =
                     prepared.iter().map(|(_, _, m, _)| m.clone()).collect();
+                // P1 data isolation — captured BEFORE the spawn boundary.
+                // `tokio::spawn` does NOT inherit task-locals, so without
+                // re-establishing these inside each fan-out task a sync-batch
+                // subagent's `memory.project_scoped` / retrieval / compaction
+                // silently fell back to the unscoped base namespace regardless
+                // of the parent run's room, owner, or project. Mirrors
+                // `spawn::spawn_background`'s capture at its own boundary.
+                //
+                // New exposure surface: sync-batch subagent writes now land in
+                // the room / personal partition for the first time — previously
+                // every one of them wrote to the default partition.
+                let captured_scope = crate::scope::current_scope();
+                let captured_agent = crate::agents::current_agent_id();
                 let mut handles = Vec::with_capacity(prepared.len());
                 for (idx, (agent_def, task, model, timeout)) in prepared.into_iter().enumerate() {
                     let batch_cancel = self.cancel_for_child_with(&cancel);
@@ -757,12 +781,33 @@ impl LoopTool for SubagentTool {
                     };
 
                     let runtime = self.build_runtime(child_chain.clone(), batch_cancel.clone());
+                    let task_scope = captured_scope.clone();
+                    let task_root = project_root.clone();
+                    let task_agent = captured_agent.clone();
                     handles.push(tokio::spawn(async move {
                         let _running_reg = running_reg;
                         let _cancel_guard = CancelGuard::new(batch_cancel.clone());
-                        let outcome = AssertUnwindSafe(runtime.run(runtime_config))
-                            .catch_unwind()
-                            .await;
+                        // Boxed: `AgentRuntime::run`'s state machine is already
+                        // large, and nesting three more task-local combinators
+                        // directly around it inline overflows the (debug-build)
+                        // test-thread stack. Boxing moves that state machine to
+                        // the heap so the wrappers hold a pointer-sized
+                        // `Pin<Box<_>>` instead of embedding it.
+                        let outcome = crate::agents::with_agent_id(
+                            task_agent,
+                            crate::projects::with_project_root(
+                                task_root,
+                                crate::scope::with_scope(
+                                    task_scope,
+                                    Box::pin(async move {
+                                        AssertUnwindSafe(runtime.run(runtime_config))
+                                            .catch_unwind()
+                                            .await
+                                    }),
+                                ),
+                            ),
+                        )
+                        .await;
                         // Terminate this proposal's cancel-bridge watcher.
                         batch_cancel.cancel();
                         (idx, outcome)
@@ -1107,10 +1152,12 @@ impl SubagentTool {
     /// pattern the success path uses so the model sees its typo even on
     /// cancel.
     fn wait_cancelled(&self, request_ids: &[String]) -> ToolResult {
+        // W11 — scoped addressing, same as the wait it reports on.
+        let scope = self.parent_session_id.as_deref();
         let still_running: Vec<Value> = request_ids
             .iter()
             .filter_map(|id| {
-                self.background_tracker.running_meta(id).map(|meta| {
+                self.background_tracker.running_meta(id, scope).map(|meta| {
                     json!({
                         "request_id": id,
                         "task": meta.task,
@@ -1119,7 +1166,7 @@ impl SubagentTool {
                 })
             })
             .collect();
-        let unknown = self.background_tracker.unknown_ids(request_ids);
+        let unknown = self.background_tracker.unknown_ids(request_ids, scope);
         let mut output = json!({
             "status": "wait_interrupted",
             "still_running": still_running,
@@ -1328,5 +1375,54 @@ fn completed_to_json(request_id: &str, ok_status: &str, snap: &CompletedSnapshot
             "summary": summarize_progress(progress),
             "progress": progress,
         }),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    /// How many lines after a `tokio::spawn(` the guard scans for the
+    /// task-local re-establishment.
+    const SPAWN_SCOPE_WINDOW_LINES: usize = 40;
+
+    /// Source-level guard: every `tokio::spawn(` in this file's production
+    /// code must re-establish the run's task-locals inside the spawned
+    /// future.
+    ///
+    /// `tokio::spawn` inherits NO task-locals, so a fan-out task that skips
+    /// this writes memory into the unscoped base namespace instead of the
+    /// run's room / personal partition — silent mis-partitioning with no
+    /// error, no panic, and a green test at the call site. The check is
+    /// source-level because at runtime "came from the captured scope" and
+    /// "happened to be `None` on both sides" are indistinguishable.
+    #[test]
+    fn every_spawn_reestablishes_task_locals() {
+        let src = include_str!("loop_tool.rs");
+        // Production prefix only — this test module is allowed to spawn
+        // freely (its tasks touch no scoped store).
+        let prod = src.split("\n#[cfg(test)]\n").next().unwrap_or(src);
+        let lines: Vec<&str> = prod.lines().collect();
+        let mut checked = 0usize;
+        for (i, line) in lines.iter().enumerate() {
+            if !line.contains("tokio::spawn(") {
+                continue;
+            }
+            checked += 1;
+            let end = (i + SPAWN_SCOPE_WINDOW_LINES).min(lines.len());
+            let window = lines[i..end].join("\n");
+            assert!(
+                window.contains("with_scope"),
+                "loop_tool.rs:{}: `tokio::spawn` must re-establish the run's \
+                 task-locals (with_agent_id / with_project_root / with_scope) \
+                 inside the spawned future — spawned tasks inherit none of them, \
+                 so a subagent's memory writes land in the default partition \
+                 instead of the room / personal one",
+                i + 1
+            );
+        }
+        assert!(
+            checked > 0,
+            "guard found no `tokio::spawn(` in loop_tool.rs production code — \
+             if the sync fan-out moved, move this guard with it"
+        );
     }
 }

@@ -24,7 +24,7 @@ use super::TeamDispatcher;
 use crate::agents::swarm::tasks::retry::is_retry_eligible;
 use crate::agents::swarm::tasks::timeout::effective_timeout_secs;
 use crate::agents::swarm::tasks::{
-    CoordTask, CoordTaskFilter, CoordTaskStatus, CoordTaskUpdate, TaskRunStatus,
+    CoordTask, CoordTaskFilter, CoordTaskStatus, CoordTaskUpdate,
 };
 use crate::sync_primitives::Arc;
 use crate::teams::artifacts::{ArtifactType, NewArtifact, TaskStatus};
@@ -336,10 +336,12 @@ impl TeamDispatcher {
         // Capture run outcome BEFORE we mutate the outer task — this row
         // survives any future retries and is the source of truth for the
         // attempt-by-attempt UI.
-        let (run_status, run_summary, run_error) = match &outcome.status {
-            MemberRunStatus::Completed => (TaskRunStatus::Completed, outcome.reply.clone(), None),
-            MemberRunStatus::Failed => (TaskRunStatus::Failed, None, outcome.error.clone()),
-            MemberRunStatus::Timeout => (TaskRunStatus::Timeout, None, outcome.error.clone()),
+        let run_status = outcome.status.run_status();
+        let (run_summary, run_error) = match &outcome.status {
+            MemberRunStatus::Completed => (outcome.reply.clone(), None),
+            MemberRunStatus::Failed | MemberRunStatus::Timeout | MemberRunStatus::Busy => {
+                (None, outcome.error.clone())
+            }
         };
         if let Err(e) = self
             .coord_store
@@ -426,6 +428,16 @@ impl TeamDispatcher {
                         tracing::info!(task_id = %task_id, "dispatcher: task completed");
                     }
                 }
+            }
+            // Same re-dispatch path as a failure — `fail_or_retry` stamps the
+            // backoff and resets the task to `Pending` — but the run row it
+            // counts was written as `Abandoned` above, so the budget is
+            // untouched. Without that split a team whose members simply collide
+            // burns its whole retry ceiling on attempts that never started.
+            MemberRunStatus::Busy => {
+                let err = outcome.error.unwrap_or_else(|| "agent busy".to_string());
+                self.fail_or_retry(&task, &err).await;
+                tracing::info!(task_id = %task_id, "dispatcher: target agent busy; attempt deferred without spending retry budget");
             }
             MemberRunStatus::Failed | MemberRunStatus::Timeout => {
                 let err = outcome.error.unwrap_or_else(|| "unknown error".to_string());
