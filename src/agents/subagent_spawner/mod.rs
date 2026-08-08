@@ -511,10 +511,6 @@ pub async fn spawn(base: &SpawnerBase, req: SpawnRequest<'_>) -> Result<LoopRunR
             system_prompt: Some(system_prompt),
             system_prompt_parts: None,
             recall_context: None,
-            // Stage 4 (#11): stamp the descended child chain on the inner harness
-            // so its `chain_context()` accessor reports the correct depth/chain_id
-            // instead of falling back to a fresh root.
-            chain_context: child_chain.clone(),
             // Stage 5a (#9): inherit parent guardrails so the subagent enforces
             // the same Input/Output/ToolCall checks as the spawning harness.
             guardrails: base.guardrails.clone(),

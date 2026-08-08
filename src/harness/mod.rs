@@ -23,7 +23,6 @@ mod tests {
     mod act;
     mod agent;
     mod budget;
-    mod chain;
     mod guardrails;
     mod harness_ext;
     mod prompt;
