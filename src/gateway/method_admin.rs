@@ -131,12 +131,19 @@ const ADMIN_PREFIXES: &[&str] = &[
     //
     // Gated whole, with no carve-out, because the family has exactly one
     // client and it is already operator: `interfaces/cli/src/commands/
-    // workspace_cmd.rs` (`aleph workspace list|create|archive`), which reaches
-    // the server over loopback/IPC. The Panel has NONE — `interfaces/webchat/
-    // src/api/workspace.rs`'s own doc records that `workspace.list` was dead
-    // and removed — and `workspace.update`/`workspace.get` have no client
-    // anywhere. A `MEMBER_CARVE_OUTS` entry for the reads would therefore be a
-    // zero-consumer opening (R10 YAGNI), not a preserved capability.
+    // workspace_cmd.rs` (`aleph workspace list|get|create|update|archive`),
+    // which reaches the server over loopback/IPC. The Panel has NONE —
+    // `interfaces/webchat/src/api/workspace.rs`'s own doc records that
+    // `workspace.list` was dead and removed. A `MEMBER_CARVE_OUTS` entry for
+    // the reads would therefore be a zero-consumer opening (R10 YAGNI), not a
+    // preserved capability.
+    //
+    // `get`/`update` had no client at all until 2026-08-08 and were listed here
+    // as such; they were CONNECTed rather than CUT because `update` is the only
+    // edit verb a workspace has — `archive` is a soft delete that keeps the id
+    // taken, so without it a display name mistyped at `create` was permanent.
+    // Both arrived already inside this gate, which is why the ruling above did
+    // not have to be reopened.
     //
     // NOT an owner column: that would build a permission model for per-user
     // workspaces, a capability no surface currently lets a member use. If that
