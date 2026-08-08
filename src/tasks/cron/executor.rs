@@ -584,7 +584,12 @@ async fn deliver_to_channel(
     };
 
     let ch_id = crate::gateway::channel::ChannelId::new(channel_id);
-    let message = OutboundMessage::text(conversation_id.to_string(), text.to_string());
+    // Cron's copy of `execute::notify_origin`'s leg, masked for the same
+    // reason: a cron job is unattended by definition, and its delivery text can
+    // carry provider error material. See that function's doc for the full
+    // three-leg census and for what this does NOT close.
+    let masker = crate::exec::masker::SecretMasker::new();
+    let message = OutboundMessage::text(conversation_id.to_string(), masker.mask(text));
 
     match registry.send(&ch_id, message).await {
         Ok(_) => {
