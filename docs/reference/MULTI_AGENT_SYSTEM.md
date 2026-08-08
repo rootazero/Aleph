@@ -54,6 +54,24 @@ recursion), token budget, and timeout. It returns a result and is destroyed.
 
 **Swarm integration**: Sub-agent events are NOT published to the Event Bus (ephemeral, not a named agent).
 
+### Only spawnable agents may be spawned (2026-08-08)
+
+`agent_type` resolves through **`AgentRegistry::resolve_spawnable()`**, not `resolve()`. The two are not interchangeable and the gap was a real privilege escalation: the prompt-side catalog of delegatable agents filters on `mode == SubAgent`, while `resolve()` does not, so `agent_type="main"` resolved the builtin Primary definition and the child ran with `allowed_tools: ["*"]` — the exact set the sub-agent registry exists to withhold. Verified reproducible before the fix. All **four** spawn faces go through `resolve_spawnable()`: single `run`, a `batch_tasks` row, batch inheritance, and the MoA aggregator. A new spawn face that resolves its own agent type is a new instance of this bug.
+
+### Surviving a daemon restart (2026-08-08)
+
+`BackgroundAgentTracker` is process memory. Background children are additionally mirrored to disk by **`src/agents/background_persistence.rs`**, so a restart no longer erases them:
+
+- `<data_dir>/background_subagents/<slug>/state.json` — the run record, written exactly twice (start, terminal), so the atomic tempfile+fsync+rename cost is bounded.
+- `…/result.txt` — an append-only `<unix_ms>\t<text>` activity trail. `last_activity` is the timestamp of its last line, single-sourced rather than duplicated into `state.json` (a field rewritten on every progress event would cost one fsync per tool call).
+- Boot reconcile writes a **terminal tombstone** for orphans instead of deleting the row — a mechanism that only records "it finished" cannot tell "it never ran" apart from "it ran and the write was lost". Without this, `check_status` on a child that died with the previous daemon returned `retryable: false` and the text `"No background sub-agent found with request_id '…'"`, which is indistinguishable from a typo and throws away whatever the child had produced.
+- **Every byte written here goes through `SecretMasker`, unconditionally.** `result.txt` is the first place a sub-agent's output crosses a process boundary onto disk, and it is re-injected into a fresh parent turn at the next boot (which can fan out to a chat channel). An artifact that outlives the process cannot be gated on the run's attendedness, because the reader is a later process.
+- Persistence is **opt-in**: until `init_and_reconcile` runs, every entry point is a zero-I/O no-op and the tracker behaves exactly as before. The boot orphan announcement is `await`ed after `spawn_subagent_announce` (also now `async`) — a subscriber that is merely *scheduled* is not listening yet.
+
+### Fan-out width (`[execution] max_concurrent_subagents`)
+
+Sub-agents executing concurrently within one agent run, default 4, clamped to `[1, 64]` at the enforcement point (`agents::subagent_tool::clamp_max_concurrent_subagents`). `0` is not "disabled" — it is a semaphore no child can ever acquire, so every fan-out would park until its batch deadline and return a partial result with nothing attempted. The semaphore is **per instance** (per agent run), so a live `[execution]` patch binds on the next run rather than resizing a fan-out already in flight. Raising it also widens the synchronous batch's wave arithmetic: a `rows`-wide batch runs in `ceil(rows / permits)` waves and each child's wall-clock share is divided by that count, so the per-child timeout cap moves with this knob by construction.
+
 ### HarnessDeps inheritance (Stage 5a / Stage A, 2026-05-08)
 
 Subagents inherit the following from their parent via `SpawnerBase`:
@@ -450,6 +468,44 @@ via `[team_broadcast]`). Lifecycle ownership (2026-07-24):
 
 This is the teams peer group chat — distinct from the `src/group_chat/`
 persona roundtable (`[group_chat]` config), a separate system.
+
+### Who is acting in a team tool call (2026-08-08)
+
+Every team / collaboration tool resolves its actor **per call**, through
+`builtin_tools::acting_agent::acting_agent_id(&self.current_agent_id)`, which
+reads the `TURN_CONTEXT` task-local that `ScopedToolService::execute` — the
+single production tool-dispatch chokepoint — scopes around every tool call.
+
+This replaced a constructor argument resolved once when `BuiltinToolRegistry`
+was built. `BuiltinToolConfig::current_agent_id` had **no producer anywhere in
+the tree**, so the `unwrap_or_else(|| "main".to_string())` fallback fired every
+time and the literal `"main"` was welded into ~20 tools for the process
+lifetime. The consequences were silent rather than loud, because the wrong
+identity is a perfectly valid identity:
+
+- `team_member_add` compared `team.leader_id != "main"` no matter which agent
+  was running, so a team led by `researcher` **refused its own leader** and
+  accepted `main`;
+- `workflow_step_review` filed every approval under `main`;
+- `inbox_read` read `main`'s inbox from inside a worker's turn.
+
+The constructor argument survives as a **fallback** for call sites outside a
+turn scope (direct construction in tests, RPC faces, background paths). It is no
+longer the answer. Two properties to preserve when touching this:
+
+- **The empty-string filter is reachable, not defensive padding.** Most keys are
+  built via `SessionKey::main`, which normalizes `""` to `"main"`, but
+  `routing::resolve::build_session_key` fills `agent_id` straight from its
+  `&str` argument with no normalization — and `plan_submit`, `plan_resolve` and
+  `lifecycle_resolve_shutdown` read an empty actor as "unknown, fall back to the
+  team leader". An empty turn identity must not overwrite a good constructor
+  value with nothing.
+- **It returns the BASE agent id** (`main`), not the project/user-scoped
+  composite (`main__u-alice`). Team rosters and task ownership are keyed on the
+  base id — a roster stores `researcher`, never `researcher__u-bob` — so making
+  this scoped would break every leader comparison in the team layer. A caller
+  needing the scoped form composes it explicitly, the way the `remember`
+  dispatch arm does.
 
 ### Member Tool Surface (成员工具面)
 
@@ -917,6 +973,43 @@ coordination-task DAG to completion without leader micro-management.
   process are reclaimed and rescheduled.
 - **Unknown owner** is an explicit failure — the task is marked `Failed` with a
   clear error rather than left silently stuck.
+
+### Outcomes that are not verdicts (2026-08-08)
+
+`MemberRunStatus` has three non-failure outcomes, and the distinction is a
+budget question: `budget_failures_since` counts `Failed` and `Timeout`, not
+`Abandoned`.
+
+| outcome | maps to | why it must not spend a retry |
+|---|---|---|
+| `Busy` | `Abandoned` | the target already had a run; **this attempt never started**, and an attempt that never started is not a failed attempt. Newly reachable since team runs began stamping `busy_input_mode = "queue"` — before that a same-session collision was folded inline and the turn's intent was lost |
+| `Cancelled` | `Abandoned` | an operator `run.cancel`, the session cancel sweep, or a parent tearing its children down. Nothing about the task was judged; the attempt was interrupted |
+| `Completed` / `Failed` / `Timeout` | themselves | actual verdicts |
+
+Classification lives in one free function rather than inline `match` arms in
+`execute_member_task`, so it is testable without standing up a run.
+
+**Crash recovery has a ceiling.** `Abandoned` runs correctly skip the retry
+budget, but `reclaim_orphaned` re-stamps `started_at` on every re-dispatch, so
+`zombie_ttl_secs` could never watch the age accumulate and a task that reliably
+killed its worker was re-dispatched **without any bound at all**. Bounded by
+`MAX_TASK_RECOVERIES` (2 free recoveries, terminal on the third crash), counted
+by `recovery_abandons_since`, which shares the `retry_budget_reset_at` anchor so
+an operator hard-retry re-arms this ceiling exactly as it re-arms the retry
+ladder. It is a constant rather than a `DispatcherConfig` field because the boot
+site builds that struct with an exhaustive literal in the `aleph-server` bin
+crate — see FEATURE_LOCATOR 附录 A #14 before promoting it.
+
+**Cancel is a dispatcher janitor, not a per-tool adapter.** Cancelling a task
+used to write the task row and leave the member run burning for up to 24 h. The
+sweep is mechanical and lives in the dispatcher, so every present *and future*
+cancel surface inherits the effect rather than each tool growing its own
+adapter.
+
+**A paused workflow step stays paused across a restart.** Pause used to count
+in-flight steps instead of persisting them, so a restart quietly un-paused them.
+The pause marker is durable and provably cleared on resume — it has to be,
+because a paused row is invisible to every janitor.
 
 Only tasks created via `task_create` (tagged `managed_by: dispatcher` in
 metadata) are autonomous. `team_delegate` runs a single member synchronously

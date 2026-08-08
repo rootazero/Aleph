@@ -256,6 +256,9 @@
 - **能被精确回答的数字别用常量猜** —— 先问仓库里有没有人已经知道它；换算单位有没有单一源 → §4.9
 - **把一个字段升格成运行时能力之前，先数它有几个写入者** —— 休眠的展示字段（`workspace_path` 曾只是 picker 里的一行字）一旦接上运行时权力（成为 run 的 cwd），它的**每一个**写入者都追溯成了权限授予点；写入者与读取者必须同批过同一道闸，否则「两步都合法、合起来等价」（先注册目录、再进房间聊天）就是绕闸路径 → §5.22
 
+- **在构造期解析的身份，是一个没有生产者也照样"成功"的身份** —— `unwrap_or_else(|| "main")` 之类的兜底把一个**字面量焊进每一个消费者**并持续整个进程寿命，而**错误的身份是完全合法的身份** ⇒ 零报错、零测试红（`researcher` 领导的团队拒绝自己的 leader 并接受 `main`；审批全记在 `main` 名下）。判据两句：① 这个字段**有没有生产者**（grep 赋值点，不是 grep 类型）；② 施动者该由**这次调用**决定还是由**进程启动**决定——是前者就从 `TURN_CONTEXT` 每次取，构造参数只配当 fallback（单一源 `builtin_tools::acting_agent`）→ §4.13
+- **进程内存不是状态：凡"重启后这个 id 还查得到吗"答不上来的表，都欠一个 sidecar** —— 而且**只记录"做完了"的机件分不出"从没跑过"和"跑了但写丢了"**，所以开机对账要写**终态墓碑**而非删行（否则 not-found 同时意味着"你打错了"和"它随上个进程死了"，还顺手扔掉死前的产出）。**推论**：产物一旦跨进程落盘，脱敏就不能再按 run 的 attendedness 决定——读它的是**后来那个进程**，而它可能把内容扇出到聊天通道 → §4.13 §5.1
+
 ### 1. Prompt · 前缀缓存 · 上下文（`src/thinker/` `src/context/`）
 
 > 本仓**唯一一类症状只出现在账单上**的失效：缓存命中按 ~10% 计、缓存写入按 **1.25×** 计，两者都"正常返回"。
@@ -432,7 +435,8 @@
 | `src/config/` `src/diagnostics/` | §5.8 §5.9 §5.10 |
 | `desktop/` | [WINDOWS_RUNTIME.md](docs/reference/WINDOWS_RUNTIME.md) · [LINUX_DESKTOP.md](docs/reference/LINUX_DESKTOP.md) · [DESKTOP_BRIDGE.md](docs/reference/DESKTOP_BRIDGE.md) · §7.1–§7.4 |
 | `interfaces/webchat/` | [DESKTOP_SHELL.md](docs/reference/DESKTOP_SHELL.md) · §4.7 §6.8 |
-| `src/agents/` `src/teams/` | [MULTI_AGENT_SYSTEM.md](docs/reference/MULTI_AGENT_SYSTEM.md) · §4.4 §4.5 |
+| `src/agents/` `src/teams/` | [MULTI_AGENT_SYSTEM.md](docs/reference/MULTI_AGENT_SYSTEM.md) · §4.4 §4.5 §4.13 |
+| `src/tasks/cron/` `src/tasks/heartbeat/` | §4.13（写面对账守卫 · 共用告警判据 · 停摆 job）· `src/tasks/shared/alert.rs` |
 | `src/sandbox/` | [SANDBOX.md](docs/reference/SANDBOX.md) · §3.8 |
 
 > **对照表已做完，别重做**：openclaw（gateway / cluster / hub / model catalog）· codex（权限模型 / Multi-agent V2）· hermes · pi · LangGraph · RouteLLM/LiteLLM/Bifrost · DeepSeek-Reasonix · FluidVoice/WhisperLive · SkillOpt · buzz。逐项结论与"刻意不做清单"都在对应 reference 文档里。
