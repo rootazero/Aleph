@@ -167,8 +167,18 @@
 //!   configured) is NOT covered — `AgentRunManager` has no `SessionStore`
 //!   dependency, and this table must not overstate what's actually enforced.
 //! - `chat.abort`, `chat.history`, `chat.clear`, `chat.rewind` →
-//!   `KeyChecked`, same pattern (`chat.abort`'s `session_key` is optional;
-//!   absent it does nothing session-scoped, present it is checked).
+//!   `KeyChecked`, same pattern. `chat.abort` is the one with two addressed
+//!   identifiers: its `session_key` is optional and checked when present, and
+//!   its **`run_id` is now checked unconditionally**. This entry used to read
+//!   "absent it does nothing session-scoped" — false, and the falsehood was
+//!   load-bearing: omitting the optional key skipped the whole guard block and
+//!   fell through to `cancel_run(&params.run_id)`, which is process-global.
+//! - `agent.status`, `agent.cancel` → **KeyChecked** via
+//!   `handlers::agent::caller_may_address_run`, the run-id twin of
+//!   `session_visible`. Registered late (2026-08-08): `agent.run` and
+//!   `agent.resume` were registered in the P1 sweep and these two were not,
+//!   because that sweep enumerated by PARAMETER SHAPE and these take a
+//!   `run_id`. Enumerate by REACHABILITY.
 //! - `sessions.new` (`handle_new_session_db`) → KeyChecked on the addressed
 //!   (closing) session, before continuation termination or `close_session`.
 //! - `sessions.patch` (`handle_patch_db`) → KeyChecked before any field
@@ -547,6 +557,15 @@ pub const SCOPED_METHODS: &[(&str, Treatment)] = &[
     ("graph.delete_note", Treatment::PartitionChecked),
     // --- Final-review fix round ---
     ("agent.run", Treatment::KeyChecked),
+    // --- Round 2 (2026-08-08): the run-id addressing shape ---
+    // The P1 sweep enumerated by parameter shape and therefore could not see
+    // these two: they take a `run_id`, not a `session_key`. `agent.cancel`
+    // reaches two process-global structures (the execution adapter's token
+    // registry and every busy-queue lane); `agent.status` returns the
+    // addressed run's `session_key`. Both resolve run → session → the one
+    // predicate via `handlers::agent::caller_may_address_run`.
+    ("agent.status", Treatment::KeyChecked),
+    ("agent.cancel", Treatment::KeyChecked),
     ("trace.by_runs", Treatment::KeyChecked),
     ("group_chat.list", Treatment::ListFiltered),
     ("group_chat.continue", Treatment::KeyChecked),
