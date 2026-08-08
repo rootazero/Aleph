@@ -94,8 +94,8 @@ pub(in crate::commands::start) struct AgentHandlersResult {
     pub message_store: Option<Arc<dyn alephcore::teams::messages::MessageStore>>,
     /// `OnceLock` handle shared with the real `ExecutionEngine`. Boot code calls
     /// `.set(orchestrator)` on this after `initialize_orchestrator` returns so
-    /// that `dispatch_via_orchestrator` can resolve the orchestrator from the
-    /// engine's own field rather than an external argument.
+    /// the run loop, steering rescue, and gate paths can resolve the
+    /// orchestrator from the engine's own field rather than an external argument.
     pub orchestrator_cell: Option<
         std::sync::Arc<std::sync::OnceLock<std::sync::Arc<alephcore::orchestrator::Orchestrator>>>,
     >,
