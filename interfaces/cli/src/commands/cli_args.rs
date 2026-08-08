@@ -841,16 +841,22 @@ pub enum WorkspaceAction {
     List,
     /// Create a new workspace
     Create {
-        /// Workspace name
-        name: String,
+        /// Workspace ID — the key `archive` addresses it by (URL-safe slug, e.g. "crypto")
+        id: String,
+        /// Display name (defaults to the ID)
+        #[arg(long)]
+        name: Option<String>,
         /// Optional description
         #[arg(long)]
         description: Option<String>,
+        /// Optional emoji or icon identifier
+        #[arg(long)]
+        icon: Option<String>,
     },
     /// Archive a workspace
     Archive {
-        /// Workspace name to archive
-        name: String,
+        /// Workspace ID to archive (the ID column of `workspace list`)
+        id: String,
     },
 }
 

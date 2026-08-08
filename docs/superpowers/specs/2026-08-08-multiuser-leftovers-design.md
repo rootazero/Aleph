@@ -268,8 +268,7 @@ park 满 120s 后死于 `Timeout`，**结构上无解**。
 
 ## 未做 / 已知缺口
 
-- **CLI `aleph workspace create|archive` 仍然是坏的**（发 `{"name":…}`，handler 要 `id`，
-  恒 `INVALID_PARAMS`）——按上一轮的决定继续存档不修。
+- ~~**CLI `aleph workspace create|archive` 仍然是坏的**~~ —— **已于第三轮修掉**，见下。
 - **本轮零真机验证**：全部是编译 + 单测 + 变异验证。member 端 Panel 的实际观感
   （四态徽标、两个 pill 的说明行、19 个设置页的文案）需要一次两用户真机 QA 才算闭环。
 - **`clarification.pending` 有与 E 同形的 operator 缺口**：它用 `visible_owner_filter()`，
@@ -287,3 +286,77 @@ cargo clippy --all-targets                                       0 errors（4 �
 cargo fmt --all -- --check                                       clean
 ```
 
+---
+
+# 附录 · 第三轮（2026-08-08）—— CLI `workspace` 家族
+
+前两轮把这一项**存档不修**（"混进来会让这轮的 diff 讲两个故事"）。本轮按用户指令修掉。
+
+## 实际有三处坏，不是一处
+
+| # | 症状 | 真因 |
+|---|---|---|
+| 1 | `aleph workspace create` 恒 `INVALID_PARAMS` | CLI 发 `{"name", "description"?}`，handler 要 `{"id", "name", …}` |
+| 2 | `aleph workspace archive` 恒 `INVALID_PARAMS` | CLI 发 `{"name"}`，handler 要 `{"id"}` |
+| 3 | `aleph workspace list` 的 `Status`/`Created` **每行都是 `-`** | 读 `status`/`created`，而 `AgentEnv` 序列化出来的是 `is_archived`/`created_at` |
+
+第 3 条此前无人报告，因为它**不报错**——`.unwrap_or("-")` 把"我问的字段不存在"渲染成
+"这个工作区还没有状态"。它和 1、2 是同一个根因的两种表现。
+
+## 根因：契约写了两遍，而"测试"是把字面量跟自己比
+
+`aleph-cli` 的 `Cargo.toml` 用大写字母写着 **MUST NOT depend on alephcore**（它同时是协议的
+参考实现）。于是 wire 形状被写了两遍：handler 一份 `#[derive(Deserialize)]`，CLI 一份
+`serde_json::json!` 字面量，中间**没有任何东西连着**。而 CLI 那侧仅有的两个测试是：
+
+```rust
+let params = serde_json::json!({ "name": "test-ws" });
+assert_eq!(params["name"], "test-ws");   // 恒真；测的是 serde_json
+```
+
+**一个只读自己刚写下的字面量的断言永远绿**，所以三处坏了多久都没人知道。
+
+## 做法
+
+1. **`shared/protocol/src/workspace.rs`（新）＝ wire 契约单一源**：`WorkspaceCreateParams` /
+   `WorkspaceRef`（`get` 与 `archive` 共用，它们寻址同一个东西）/ `WorkspaceUpdateParams` /
+   `WorkspaceRow` / `WorkspaceList`。两侧共用 ⇒ **重命名是编译错**，这是唯一挡得住
+   "名字看起来对"的守卫。`shared/protocol` 是双方都依赖的那一侧（判据：真源必须在被依赖的一侧），
+   且已有先例（`jsonrpc::ToolCallParams`）。
+2. **handler 删掉三个本地 param struct**，改用协议类型。
+3. **CLI 位置参数改为 `id`**（＝`archive` 唯一能寻址的键），新增 `--name`（缺省＝id，
+   镜像 `AgentEnvStore::create` 的服务端缺省）、`--icon`。位置参数的**调用形式不变**
+   （`aleph workspace create foo`），只有帮助文本和语义变了——此前它没有任何能工作的行为可破坏。
+4. **`list` 表头改成 `ID | Name | Description | Created`**，读真实字段。
+   - `ID` 排第一：另外两个子命令只认它，一张只显示 display name 的表让 `archive` 无处可抄。
+   - **刻意不留 `Status` 列**：`handle_list` 硬编码 `list(false)`（不含已归档），所以那一列
+     结构上恒为 "active" —— 恒真的列等于没列。`WorkspaceRow` 因此**不含 `is_archived`**
+     （一个没有渲染者的展示字段就是断线）。
+   - `--json` 是**原样透传**，不经投影：客户端渲染不了的形状不该阻断原始输出。
+     表格路径则相反——解析失败是要喊出来的错误，不是一表破折号。
+
+## 验证过的、以及故意没做的
+
+- **变异验证**：给 `WorkspaceRow.created_at` 加 `#[serde(rename="created")]`（＝历史 bug 的
+  形状，且能编译），`every_column_the_cli_renders_is_present_in_the_list_response`
+  当场 RED（`missing field 'created'`）。直接改字段名则是**编译错**——比测试更早。
+- **查过但不是 bug**：`handle_create` 硬编码 profile `"default"`，而 `AgentEnvStoreConfig`
+  另有 `default_profile` 字段——同一事实的第三份拷贝。**没改**：`load_profiles` 自己会补种
+  `"default"`（`mod.rs:589`），而 `default_profile` 无任何用户配置入口、全仓恒为 `"default"`，
+  所以三份拷贝今天字节相同、无法分歧。记在这里以免下次重新推理一遍。
+- **`workspace.get` / `workspace.update` 至今没有任何客户端**（Panel 也没有）。本轮**没有**
+  顺手加 CLI 子命令——那是新功能不是修 bug。
+- **归档后无法从 CLI 复看**：`workspace.list` 不接 `include_archived`，所以 `archive` 的确认
+  只能靠"那行从列表里消失"。没加参数（新 wire 面），记为已知缺口。
+- **零真机验证**：本轮全部是编译 + 单测 + 变异验证。真机需要一个在跑的 server 上
+  `aleph workspace create/list/archive` 走一遍。
+- **同一个形状还有第三个实例，本轮只上报不修**：`channels.set_agent` 的参数在 Panel
+  （`interfaces/webchat/src/api/workspace.rs`，手写 `json!({channel_id, agent_id})`）与
+  handler（`SetAgentParams`）之间同样是两份互不相干的声明。**今天字节相同，逐行读过**，
+  所以它不是 bug；但它是同一类漂移风险，且收敛它要把 Panel crate 拖进这次 diff。
+  留作单独讨论。
+
+## 顺手确认（非本轮引入）
+
+`cargo test -p aleph-cli` 有一个**先于本轮**就红的测试：`parse_webhook_and_proxy_preview_surfaces`
+断言 `aleph webhook add` 能解析，实际不能。已用 `git stash` 确认与本轮改动无关，**未修**。

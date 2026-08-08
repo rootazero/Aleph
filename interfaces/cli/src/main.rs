@@ -789,11 +789,25 @@ async fn dispatch_workspace(
     use commands::workspace_cmd;
     match action {
         WorkspaceAction::List => workspace_cmd::list(server_url, config, json).await,
-        WorkspaceAction::Create { name, description } => {
-            workspace_cmd::create(server_url, config, &name, description.as_deref(), json).await
+        WorkspaceAction::Create {
+            id,
+            name,
+            description,
+            icon,
+        } => {
+            workspace_cmd::create(
+                server_url,
+                config,
+                &id,
+                name.as_deref(),
+                description.as_deref(),
+                icon.as_deref(),
+                json,
+            )
+            .await
         }
-        WorkspaceAction::Archive { name } => {
-            workspace_cmd::archive(server_url, config, &name, json).await
+        WorkspaceAction::Archive { id } => {
+            workspace_cmd::archive(server_url, config, &id, json).await
         }
     }
 }

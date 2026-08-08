@@ -4,6 +4,7 @@
 //! Channel agent binding: `channels.set_agent`, agents.bindings.
 //! All handlers delegate to `AgentEnvStore` (SQLite-backed).
 
+use aleph_protocol::workspace::{WorkspaceCreateParams, WorkspaceRef, WorkspaceUpdateParams};
 use serde::Deserialize;
 use serde_json::json;
 
@@ -20,21 +21,6 @@ use crate::sync_primitives::Arc;
 // Create
 // ============================================================================
 
-/// Parameters for workspace.create
-#[derive(Debug, Deserialize)]
-pub struct CreateParams {
-    /// Workspace identifier (URL-safe slug)
-    pub id: String,
-    /// Human-readable display name
-    pub name: String,
-    /// Optional description
-    #[serde(default)]
-    pub description: Option<String>,
-    /// Optional emoji or icon identifier
-    #[serde(default)]
-    pub icon: Option<String>,
-}
-
 /// Create a new workspace
 ///
 /// # Example Request
@@ -42,6 +28,11 @@ pub struct CreateParams {
 /// ```json
 /// {"jsonrpc":"2.0","method":"workspace.create","params":{"id":"crypto","name":"Crypto Trading"},"id":1}
 /// ```
+///
+/// The param type is [`aleph_protocol::workspace::WorkspaceCreateParams`], the
+/// same struct the CLI constructs — see that module for why the shape is not
+/// declared here, and for how this method came to reject its only client on
+/// every call while every test stayed green.
 ///
 /// P1 partition isolation on the WRITE side, with exactly the coverage
 /// boundary [`handle_list`] documents and no more: a workspace id is a
@@ -67,7 +58,7 @@ pub async fn handle_create(
     request: JsonRpcRequest,
     workspace_manager: Arc<AgentEnvStore>,
 ) -> JsonRpcResponse {
-    let params: CreateParams = match parse_params(&request) {
+    let params: WorkspaceCreateParams = match parse_params(&request) {
         Ok(p) => p,
         Err(e) => return e,
     };
@@ -203,13 +194,6 @@ pub async fn handle_list(
 // Get
 // ============================================================================
 
-/// Parameters for workspace.get
-#[derive(Debug, Deserialize)]
-pub struct GetParams {
-    /// Workspace identifier
-    pub id: String,
-}
-
 /// Get a workspace by ID
 ///
 /// # Example Request
@@ -226,7 +210,7 @@ pub async fn handle_get(
     request: JsonRpcRequest,
     workspace_manager: Arc<AgentEnvStore>,
 ) -> JsonRpcResponse {
-    let params: GetParams = match parse_params(&request) {
+    let params: WorkspaceRef = match parse_params(&request) {
         Ok(p) => p,
         Err(e) => return e,
     };
@@ -257,22 +241,6 @@ pub async fn handle_get(
 // Update
 // ============================================================================
 
-/// Parameters for workspace.update
-#[derive(Debug, Deserialize)]
-pub struct UpdateParams {
-    /// Workspace identifier
-    pub id: String,
-    /// New name (optional)
-    #[serde(default)]
-    pub name: Option<String>,
-    /// New description (optional)
-    #[serde(default)]
-    pub description: Option<String>,
-    /// New icon (optional)
-    #[serde(default)]
-    pub icon: Option<String>,
-}
-
 /// Update workspace metadata
 ///
 /// # Example Request
@@ -290,7 +258,7 @@ pub async fn handle_update(
     request: JsonRpcRequest,
     workspace_manager: Arc<AgentEnvStore>,
 ) -> JsonRpcResponse {
-    let params: UpdateParams = match parse_params(&request) {
+    let params: WorkspaceUpdateParams = match parse_params(&request) {
         Ok(p) => p,
         Err(e) => return e,
     };
@@ -352,7 +320,7 @@ pub async fn handle_archive(
     request: JsonRpcRequest,
     workspace_manager: Arc<AgentEnvStore>,
 ) -> JsonRpcResponse {
-    let params: GetParams = match parse_params(&request) {
+    let params: WorkspaceRef = match parse_params(&request) {
         Ok(p) => p,
         Err(e) => return e,
     };
@@ -743,7 +711,7 @@ mod tests {
     #[test]
     fn test_create_params_deserialization() {
         let json = serde_json::json!({"id": "crypto", "name": "Crypto Trading"});
-        let params: CreateParams = serde_json::from_value(json).unwrap();
+        let params: WorkspaceCreateParams = serde_json::from_value(json).unwrap();
         assert_eq!(params.id, "crypto");
         assert_eq!(params.name, "Crypto Trading");
         assert!(params.description.is_none());
@@ -752,7 +720,7 @@ mod tests {
     #[test]
     fn test_create_params_with_optional_fields() {
         let json = serde_json::json!({"id": "novel", "name": "Novel", "description": "My novel project", "icon": "\u{1F4D6}"});
-        let params: CreateParams = serde_json::from_value(json).unwrap();
+        let params: WorkspaceCreateParams = serde_json::from_value(json).unwrap();
         assert_eq!(params.description.as_deref(), Some("My novel project"));
         assert_eq!(params.icon.as_deref(), Some("\u{1F4D6}"));
     }
@@ -760,14 +728,14 @@ mod tests {
     #[test]
     fn test_get_params_deserialization() {
         let json = serde_json::json!({"id": "crypto"});
-        let params: GetParams = serde_json::from_value(json).unwrap();
+        let params: WorkspaceRef = serde_json::from_value(json).unwrap();
         assert_eq!(params.id, "crypto");
     }
 
     #[test]
     fn test_update_params_deserialization() {
         let json = serde_json::json!({"id": "crypto", "name": "Crypto Research"});
-        let params: UpdateParams = serde_json::from_value(json).unwrap();
+        let params: WorkspaceUpdateParams = serde_json::from_value(json).unwrap();
         assert_eq!(params.id, "crypto");
         assert_eq!(params.name.as_deref(), Some("Crypto Research"));
         assert!(params.description.is_none());
@@ -782,11 +750,170 @@ mod tests {
             "description": "Updated description",
             "icon": "\u{1F4B0}"
         });
-        let params: UpdateParams = serde_json::from_value(json).unwrap();
+        let params: WorkspaceUpdateParams = serde_json::from_value(json).unwrap();
         assert_eq!(params.id, "crypto");
         assert_eq!(params.name.as_deref(), Some("Crypto Research"));
         assert_eq!(params.description.as_deref(), Some("Updated description"));
         assert_eq!(params.icon.as_deref(), Some("\u{1F4B0}"));
+    }
+
+    /// The two commands that had never once worked: `aleph workspace create`
+    /// sent `{"name": …}` at a handler that requires `id`, and
+    /// `aleph workspace archive` did the same, so both returned
+    /// `INVALID_PARAMS` on every invocation for as long as they had existed.
+    ///
+    /// This drives the handlers with the very types the CLI now constructs
+    /// (`aleph_protocol::workspace::*`), so the request half of that gap cannot
+    /// reopen without either failing here or failing to compile. The
+    /// assertions are on the STORE, not on the response — a handler that
+    /// answered `ok` while writing nothing would pass a response-only test.
+    ///
+    /// The last block re-asserts the historical shape is still rejected. That
+    /// is what keeps this test honest: without it, a handler loosened to accept
+    /// anything at all would look like a fix.
+    #[tokio::test]
+    async fn the_cli_create_and_archive_shapes_reach_their_handlers() {
+        let temp = tempfile::tempdir().unwrap();
+        let store = Arc::new(
+            AgentEnvStore::new(crate::gateway::agent_env::AgentEnvStoreConfig {
+                db_path: temp.path().join("agent_envs.db"),
+                default_profile: "default".to_string(),
+                archive_after_days: 0,
+            })
+            .expect("agent env store"),
+        );
+        // `load_profiles` seeds "default" itself; this mirrors what
+        // `start/mod.rs` does with an empty `[profiles]` section, which is the
+        // shipped default and therefore the case that has to work.
+        store.load_profiles(std::collections::HashMap::new());
+
+        let created = handle_create(
+            JsonRpcRequest::with_id(
+                "workspace.create",
+                Some(
+                    serde_json::to_value(WorkspaceCreateParams {
+                        id: "crypto".to_string(),
+                        name: "Crypto Trading".to_string(),
+                        description: Some("trading notes".to_string()),
+                        icon: None,
+                    })
+                    .unwrap(),
+                ),
+                json!(1),
+            ),
+            store.clone(),
+        )
+        .await;
+        assert!(
+            created.is_success(),
+            "the CLI's create shape must be accepted: {:?}",
+            created.error
+        );
+        let row = store.get("crypto").await.unwrap().expect("row must exist");
+        assert_eq!(row.name, "Crypto Trading");
+        assert_eq!(row.description.as_deref(), Some("trading notes"));
+
+        let archived = handle_archive(
+            JsonRpcRequest::with_id(
+                "workspace.archive",
+                Some(
+                    serde_json::to_value(WorkspaceRef {
+                        id: "crypto".to_string(),
+                    })
+                    .unwrap(),
+                ),
+                json!(1),
+            ),
+            store.clone(),
+        )
+        .await;
+        assert!(
+            archived.is_success(),
+            "the CLI's archive shape must be accepted: {:?}",
+            archived.error
+        );
+        assert!(
+            store.get("crypto").await.unwrap().is_none(),
+            "archive must actually soft-delete the row"
+        );
+
+        // …and the shape that was broken is still a rejection, not a silently
+        // accepted alias.
+        for (method, params) in [
+            ("workspace.create", json!({ "name": "crypto" })),
+            ("workspace.archive", json!({ "name": "crypto" })),
+        ] {
+            let resp = if method == "workspace.create" {
+                handle_create(
+                    JsonRpcRequest::with_id(method, Some(params), json!(1)),
+                    store.clone(),
+                )
+                .await
+            } else {
+                handle_archive(
+                    JsonRpcRequest::with_id(method, Some(params), json!(1)),
+                    store.clone(),
+                )
+                .await
+            };
+            assert_eq!(
+                resp.error.as_ref().map(|e| e.code),
+                Some(INVALID_PARAMS),
+                "{method} must still require `id`"
+            );
+        }
+    }
+
+    /// Every column `aleph workspace list` prints has to exist in what this
+    /// handler actually emits.
+    ///
+    /// It did not. The table read `status` and `created`; an `AgentEnv`
+    /// serializes `is_archived` and `created_at`. Both columns were rendered
+    /// with `.unwrap_or("-")`, so every row printed dashes and read as "this
+    /// workspace has no status yet" rather than "this client is asking for
+    /// fields that do not exist" — and neither side's tests could see it,
+    /// because neither side ever looked at the other.
+    ///
+    /// The projection is asserted here, on the server, because this is the
+    /// side that owns the field names.
+    #[tokio::test]
+    async fn every_column_the_cli_renders_is_present_in_the_list_response() {
+        use aleph_protocol::workspace::WorkspaceList;
+
+        let temp = tempfile::tempdir().unwrap();
+        let store = Arc::new(
+            AgentEnvStore::new(crate::gateway::agent_env::AgentEnvStoreConfig {
+                db_path: temp.path().join("agent_envs.db"),
+                default_profile: "default".to_string(),
+                archive_after_days: 0,
+            })
+            .expect("agent env store"),
+        );
+        store.load_profiles(std::collections::HashMap::new());
+        store
+            .create("crypto", "default", Some("trading notes"))
+            .await
+            .unwrap();
+
+        let resp = handle_list(
+            JsonRpcRequest::with_id("workspace.list", None, json!(1)),
+            store.clone(),
+        )
+        .await;
+        let list: WorkspaceList = serde_json::from_value(resp.result.expect("result"))
+            .expect("the CLI's list projection must parse the real response");
+
+        let row = list
+            .workspaces
+            .iter()
+            .find(|w| w.id == "crypto")
+            .expect("the created workspace must be listed");
+        assert_eq!(row.name, "crypto", "name defaults to the id server-side");
+        assert_eq!(row.description.as_deref(), Some("trading notes"));
+        assert!(
+            row.created_at.timestamp() > 0,
+            "created_at must be a real timestamp, not a default"
+        );
     }
 
     #[test]
