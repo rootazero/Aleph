@@ -215,6 +215,14 @@
 //! `SessionKey`. `agent.run` is exactly that shape, and it is `chat.send`
 //! with the guard missing:
 //!
+//! - `agent.resume` → **KeyChecked**. Same shape as `agent.run`, and the same
+//!   reason: it names a session and acts on it. `handlers::resume` resolves the
+//!   metadata and runs `visibility::session_visible` before the coordinator is
+//!   consulted at all, so an invisible session cannot be probed for existence —
+//!   it gets the byte-identical `not_found` a missing session gets. Note the
+//!   verb re-triggers a run under the *session's* persisted owner/scope
+//!   (`resume_metadata`), never the caller's, so a visible-session check is the
+//!   whole authorization question here.
 //! - `agent.run` → **KeyChecked**. The real-`ExecutionEngine` production path
 //!   (`server_init.rs::handle_run_with_engine`) now runs session resolution
 //!   through `visibility::existing_session_is_visible` immediately after
@@ -585,6 +593,8 @@ pub const SCOPED_METHODS: &[(&str, Treatment)] = &[
     ("projects.member.remove", Treatment::KeyChecked),
     ("projects.member.list", Treatment::KeyChecked),
     ("projects.room_session", Treatment::KeyChecked),
+    // --- on-demand resume ---
+    ("agent.resume", Treatment::KeyChecked),
 ];
 
 /// Whole families ruled [`Treatment::OrgShared`], as prefixes.

@@ -454,6 +454,12 @@ mod tests {
             "clarification.pending",
             "subagent.tree",
             "agent.run",
+            // Its twin: resuming a session's interrupted run is the same
+            // authorization question as starting one, and the run re-enters
+            // under the SESSION's persisted owner/scope, never the caller's.
+            // `handlers::resume` gates on `session_visible`, so a member can
+            // only name a session it can already see.
+            "agent.resume",
             "trace.by_runs",
             "gateway.metrics.run_concurrency",
             "session.compact",

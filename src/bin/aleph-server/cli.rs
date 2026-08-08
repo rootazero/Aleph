@@ -126,6 +126,22 @@ pub enum Command {
         #[arg(long)]
         json: bool,
     },
+    /// Re-trigger the interrupted run in a session.
+    ///
+    /// The boot scan resumes interrupted runs once, when the daemon starts. A
+    /// run interrupted while the daemon kept running — or one the boot scan
+    /// skipped after a transient store error — has no second trigger; this is
+    /// it. Requires a running server (resuming means re-entering the harness,
+    /// which only the server can do), and works even when
+    /// `[resume] enabled = false`: that switch governs the automatic scan, not
+    /// an explicit request.
+    Resume {
+        /// Session key to resume, e.g. `gui:chat` or `telegram:12345`.
+        session_key: String,
+        /// Emit a machine-readable JSON envelope instead of human output.
+        #[arg(long)]
+        json: bool,
+    },
     /// Manage plugins
     Plugins {
         #[command(subcommand)]
