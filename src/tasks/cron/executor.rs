@@ -661,7 +661,6 @@ mod tests {
             source_channel_id: Some("discord:general".to_string()),
             source_conversation_id: Some("123456".to_string()),
             prompt: "Check the weather".to_string(),
-            model: None,
             timeout_ms: Some(300_000),
             delivery: None,
             session_target: SessionTarget::Isolated,

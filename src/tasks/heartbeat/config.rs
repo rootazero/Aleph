@@ -110,8 +110,6 @@ pub struct HeartbeatTask {
     pub probe: ProbeConfig,
     /// Optional delivery configuration for results
     pub delivery_config: Option<crate::tasks::shared::delivery::DeliveryConfig>,
-    /// Per-task dedup configuration (overrides service defaults)
-    pub dedup: DedupConfig,
     /// Optional weekly time-window gate. When set, the timer skips ticks
     /// outside the window and advances `next_due_ms` to the next window
     /// start (computed in the task's timezone, defaulting to UTC if absent).
@@ -147,7 +145,6 @@ impl HeartbeatTask {
             interval_ms,
             probe,
             delivery_config: None,
-            dedup: DedupConfig::default(),
             active_hours: None,
             state: HeartbeatState::default(),
             created_at: now,
@@ -210,8 +207,6 @@ pub struct HeartbeatState {
     pub last_l2_at_ms: Option<i64>,
     /// Status of the last L2 run
     pub last_l2_status: Option<crate::tasks::cron::config::RunStatus>,
-    /// Hash of the last output used for dedup
-    pub last_output_hash: Option<String>,
     /// Number of consecutive errors without a success
     pub consecutive_errors: u32,
     /// Description of the last error
@@ -229,7 +224,6 @@ pub struct HeartbeatTaskView {
     pub enabled: bool,
     pub interval_ms: u64,
     pub probe: ProbeConfig,
-    pub dedup: DedupConfig,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub active_hours: Option<crate::tasks::shared::active_hours::ActiveHoursSchedule>,
     pub state: HeartbeatState,
@@ -246,7 +240,6 @@ impl From<&HeartbeatTask> for HeartbeatTaskView {
             enabled: task.enabled,
             interval_ms: task.interval_ms,
             probe: task.probe.clone(),
-            dedup: task.dedup.clone(),
             active_hours: task.active_hours.clone(),
             state: task.state.clone(),
             created_at: task.created_at,

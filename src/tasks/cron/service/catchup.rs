@@ -75,6 +75,7 @@ pub async fn run_startup_catchup<C: Clock>(
     clock: &C,
     max_missed: Option<usize>,
     stagger_ms: Option<i64>,
+    default_timeout_ms: i64,
 ) -> Result<CatchupReport, String> {
     let now = clock.now_ms();
     let max_missed = max_missed.unwrap_or(DEFAULT_MAX_MISSED);
@@ -89,7 +90,7 @@ pub async fn run_startup_catchup<C: Clock>(
     // Phase 1: Clear stale running markers
     for job in guard.jobs_mut().iter_mut() {
         if let Some(running_at) = job.state.running_at_ms {
-            let stale_threshold = DEFAULT_STALE_THRESHOLD_MS.max(job.effective_timeout_ms() * 2);
+            let stale_threshold = DEFAULT_STALE_THRESHOLD_MS.max(job.effective_timeout_ms(default_timeout_ms) * 2);
             if now.saturating_sub(running_at) > stale_threshold {
                 job.state.running_at_ms = None;
                 report.stale_markers_cleared += 1;
@@ -186,6 +187,8 @@ mod tests {
     use crate::tasks::shared::clock::testing::FakeClock;
     use tempfile::TempDir;
 
+    const TEST_TIMEOUT_MS: i64 = 300_000;
+
     fn make_test_job(id: &str) -> CronJob {
         let mut job = CronJob::new(
             id.to_string(),
@@ -225,7 +228,7 @@ mod tests {
             guard.persist().unwrap();
         }
 
-        let report = run_startup_catchup(&store, &clock, None, None)
+        let report = run_startup_catchup(&store, &clock, None, None, TEST_TIMEOUT_MS)
             .await
             .unwrap();
 
@@ -260,7 +263,7 @@ mod tests {
         }
 
         let stagger = 10_000_i64;
-        let report = run_startup_catchup(&store, &clock, Some(3), Some(stagger))
+        let report = run_startup_catchup(&store, &clock, Some(3), Some(stagger), TEST_TIMEOUT_MS)
             .await
             .unwrap();
 
@@ -313,7 +316,7 @@ mod tests {
             guard.persist().unwrap();
         }
 
-        let report = run_startup_catchup(&store, &clock, None, None)
+        let report = run_startup_catchup(&store, &clock, None, None, TEST_TIMEOUT_MS)
             .await
             .unwrap();
 
@@ -355,7 +358,7 @@ mod tests {
         }
 
         let max_missed = 3;
-        let report = run_startup_catchup(&store, &clock, Some(max_missed), Some(30_000))
+        let report = run_startup_catchup(&store, &clock, Some(max_missed), Some(30_000), TEST_TIMEOUT_MS)
             .await
             .unwrap();
 
@@ -401,7 +404,7 @@ mod tests {
             guard.persist().unwrap();
         }
 
-        let report = run_startup_catchup(&store, &clock, None, None)
+        let report = run_startup_catchup(&store, &clock, None, None, TEST_TIMEOUT_MS)
             .await
             .unwrap();
 
@@ -428,7 +431,7 @@ mod tests {
             guard.persist().unwrap();
         }
 
-        let report = run_startup_catchup(&store, &clock, None, None)
+        let report = run_startup_catchup(&store, &clock, None, None, TEST_TIMEOUT_MS)
             .await
             .unwrap();
 
@@ -464,7 +467,7 @@ mod tests {
             guard.persist().unwrap();
         }
 
-        let report = run_startup_catchup(&store, &clock, None, None)
+        let report = run_startup_catchup(&store, &clock, None, None, TEST_TIMEOUT_MS)
             .await
             .unwrap();
 

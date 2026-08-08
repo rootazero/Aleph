@@ -102,7 +102,6 @@ pub async fn phase1_mark_due_jobs<C: Clock>(
             source_channel_id: job.source_channel_id.clone(),
             source_conversation_id: job.source_conversation_id.clone(),
             prompt: resolve_job_prompt(job, clock),
-            model: None,
             timeout_ms: Some(job.timeout_ms.unwrap_or(default_timeout_ms)),
             delivery: job.delivery_config.clone(),
             session_target: job.session_target.clone(),
@@ -118,53 +117,6 @@ pub async fn phase1_mark_due_jobs<C: Clock>(
     }
 
     Ok(snapshots)
-}
-
-/// Phase 1 (manual): Mark a specific job for manual execution.
-///
-/// Returns `None` if the job is already running. Like `phase1_mark_due_jobs`,
-/// the schedule is advanced before execution so a crash does not double-run it.
-pub async fn phase1_mark_manual<C: Clock>(
-    store: &Arc<tokio::sync::Mutex<CronStore>>,
-    clock: &C,
-    job_id: &str,
-    default_timeout_ms: i64,
-) -> Result<Option<JobSnapshot>, String> {
-    let now = clock.now_ms();
-    let mut guard = store.lock().await;
-
-    guard.reload_if_changed()?;
-
-    let job = guard
-        .get_job_mut(job_id)
-        .ok_or_else(|| format!("job not found: {job_id}"))?;
-
-    if job.state.running_at_ms.is_some() {
-        return Ok(None); // Already running
-    }
-
-    job.state.running_at_ms = Some(now);
-    advance_next_run(job, clock);
-
-    let snapshot = JobSnapshot {
-        id: job.id.clone(),
-        agent_id: Some(job.agent_id.clone()),
-        source_channel_id: job.source_channel_id.clone(),
-        source_conversation_id: job.source_conversation_id.clone(),
-        prompt: resolve_job_prompt(job, clock),
-        model: None,
-        timeout_ms: Some(job.timeout_ms.unwrap_or(default_timeout_ms)),
-        delivery: job.delivery_config.clone(),
-        session_target: job.session_target.clone(),
-        marked_at: now,
-        trigger_source: TriggerSource::Manual,
-        owner_user_id: job.owner_user_id.clone(),
-        scope_id: job.scope_id.clone(),
-    };
-
-    guard.persist()?;
-
-    Ok(Some(snapshot))
 }
 
 /// Phase 3: Write back execution results after jobs complete.
@@ -857,57 +809,6 @@ mod tests {
         );
     }
 
-    #[tokio::test]
-    async fn phase1_mark_manual_creates_snapshot() {
-        let (store, _dir) = make_store();
-        let clock = FakeClock::new(1_000_000);
-
-        {
-            let mut guard = store.lock().await;
-            let mut job = make_test_job("manual-job");
-            job.created_at = 900_000;
-            add_job(&mut guard, job, &clock);
-            guard.persist().unwrap();
-        }
-
-        let snapshot = phase1_mark_manual(&store, &clock, "manual-job", TEST_TIMEOUT_MS)
-            .await
-            .unwrap();
-        assert!(snapshot.is_some());
-        let snap = snapshot.unwrap();
-        assert_eq!(snap.id, "manual-job");
-        assert_eq!(snap.trigger_source, TriggerSource::Manual);
-
-        // Verify running_at_ms was set
-        let guard = store.lock().await;
-        let job = guard.get_job("manual-job").unwrap();
-        assert_eq!(job.state.running_at_ms, Some(1_000_000));
-    }
-
-    #[tokio::test]
-    async fn phase1_mark_manual_returns_none_if_running() {
-        let (store, _dir) = make_store();
-        let clock = FakeClock::new(1_000_000);
-
-        {
-            let mut guard = store.lock().await;
-            let mut job = make_test_job("busy-job");
-            job.created_at = 900_000;
-            add_job(&mut guard, job, &clock);
-            let j = guard.get_job_mut("busy-job").unwrap();
-            j.state.running_at_ms = Some(990_000);
-            guard.persist().unwrap();
-        }
-
-        let snapshot = phase1_mark_manual(&store, &clock, "busy-job", TEST_TIMEOUT_MS)
-            .await
-            .unwrap();
-        assert!(
-            snapshot.is_none(),
-            "should return None for already-running job"
-        );
-    }
-
     /// C1: phase 1 advances a recurring job's schedule *before* execution,
     /// so a crash before phase 3 does not double-run the same trigger.
     #[tokio::test]
@@ -1341,26 +1242,5 @@ mod tests {
             "sustained transient failure at the floor must alert"
         );
         assert!(alerts[0].message.contains("5 times"));
-    }
-
-    /// D1: per-job override also applies on the manual-trigger path.
-    #[tokio::test]
-    async fn phase1_manual_honours_per_job_timeout_override() {
-        let (store, _dir) = make_store();
-        let clock = FakeClock::new(1_000_000);
-        {
-            let mut guard = store.lock().await;
-            let mut job = make_test_job("manual-override");
-            job.created_at = 900_000;
-            job.timeout_ms = Some(900_000);
-            add_job(&mut guard, job, &clock);
-            guard.persist().unwrap();
-        }
-
-        let snapshot = phase1_mark_manual(&store, &clock, "manual-override", TEST_TIMEOUT_MS)
-            .await
-            .unwrap()
-            .expect("manual snapshot");
-        assert_eq!(snapshot.timeout_ms, Some(900_000));
     }
 }

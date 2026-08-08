@@ -82,6 +82,27 @@ impl HeartbeatService {
         &self.wake_queue
     }
 
+    /// Build a timer-tick change emitter for the heartbeat loop.
+    ///
+    /// Returns a closure that publishes `HeartbeatTaskChanged` (StateChanged)
+    /// for a task id, so the panel gets pushed the runtime-state updates a
+    /// scheduled run writes in `writeback_one` — not just CRUD ops. Returns
+    /// `None` when no event bus is wired (tests, CLI tooling).
+    #[must_use]
+    pub fn change_emitter(&self) -> Option<service::timer::ChangeEmitterFn> {
+        let bus = self.event_bus.clone()?;
+        Some(std::sync::Arc::new(move |task_id: &str| {
+            use crate::gateway::events::{ChangeKind, GatewayEventFrame};
+            let frame = GatewayEventFrame::HeartbeatTaskChanged {
+                task_id: task_id.to_string(),
+                change: ChangeKind::StateChanged,
+            };
+            if let Err(e) = bus.publish_frame(&frame) {
+                tracing::debug!(error = %e, "heartbeat: failed to publish HeartbeatTaskChanged frame (timer tick)");
+            }
+        }))
+    }
+
     /// List all tasks as read-only views.
     pub async fn list_tasks(&self) -> Vec<HeartbeatTaskView> {
         let store = self.state.store.lock().await;

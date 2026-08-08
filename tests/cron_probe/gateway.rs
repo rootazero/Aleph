@@ -50,12 +50,12 @@ async fn service_manual_run_executes() {
     h.assert_executed("manual-gw");
     h.assert_execution_count("manual-gw", 1);
 
-    // Verify the trigger source is Manual.
+    // Manual trigger flows through the timer's Schedule attribution.
     let calls = h.executor.calls_for("manual-gw");
     assert_eq!(calls.len(), 1);
     assert!(
-        matches!(calls[0].trigger_source, TriggerSource::Manual),
-        "expected Manual trigger, got {:?}",
+        matches!(calls[0].trigger_source, TriggerSource::Schedule),
+        "expected Schedule trigger, got {:?}",
         calls[0].trigger_source,
     );
 }

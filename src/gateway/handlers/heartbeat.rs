@@ -41,7 +41,6 @@ fn task_view_to_json(view: &HeartbeatTaskView) -> Value {
             "tool_params": view.probe.tool_params,
             "trigger_condition": view.probe.trigger_condition,
         },
-        "dedup": view.dedup,
         "active_hours": view.active_hours,
         "state": {
             "next_due_ms": view.state.next_due_ms,
@@ -50,7 +49,6 @@ fn task_view_to_json(view: &HeartbeatTaskView) -> Value {
             "last_probe_result": view.state.last_probe_result,
             "last_l2_at_ms": view.state.last_l2_at_ms,
             "last_l2_status": view.state.last_l2_status,
-            "last_output_hash": view.state.last_output_hash,
             "consecutive_errors": view.state.consecutive_errors,
             "last_error": view.state.last_error,
         },

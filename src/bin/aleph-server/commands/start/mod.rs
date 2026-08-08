@@ -2207,6 +2207,7 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
                 );
 
             let cron_config = cron_state.config.clone();
+            let cron_svc_handle = cron_svc.clone();
             tokio::spawn(async move {
                 // Run startup catchup before entering the timer loop
                 match run_startup_catchup(
@@ -2214,6 +2215,7 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
                     cron_state.clock.as_ref(),
                     cron_config.max_missed_jobs_per_restart,
                     cron_config.catchup_stagger_ms,
+                    cron_config.job_timeout_secs.saturating_mul(1000) as i64,
                 )
                 .await
                 {
@@ -2235,7 +2237,20 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
                 // Start timer loop (runs until shutdown). D4: pass the
                 // alert dispatcher so failure alerts produced by phase3
                 // are actually delivered instead of dropped on the floor.
-                run_timer_loop(cron_state, executor_fn, Some(alert_dispatcher_fn)).await;
+                // Also pass the scheduler-tick change emitter so scheduled-run
+                // writebacks push CronJobChanged to the panel (it dropped
+                // polling and relies on push).
+                let change_emitter = {
+                    let guard = cron_svc_handle.lock().await;
+                    guard.change_emitter()
+                };
+                run_timer_loop(
+                    cron_state,
+                    executor_fn,
+                    Some(alert_dispatcher_fn),
+                    change_emitter,
+                )
+                .await;
             });
 
             if !args.daemon {
@@ -2258,9 +2273,13 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
             use alephcore::tasks::heartbeat::probe::DefaultProbeExecutor;
             use alephcore::tasks::heartbeat::service::timer::{run_heartbeat_loop, TickContext};
 
-            let (hb_state, hb_wake) = {
+            let (hb_state, hb_wake, hb_change_emitter) = {
                 let guard = hb_svc.lock().await;
-                (guard.state().clone(), guard.wake_queue().clone())
+                (
+                    guard.state().clone(),
+                    guard.wake_queue().clone(),
+                    guard.change_emitter(),
+                )
             };
 
             // Open a dedicated connection for the DedupEngine (separate from the HeartbeatStore
@@ -2328,6 +2347,7 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
                 delivery: delivery_engine,
                 dedup: dedup_engine,
                 job_timeout_secs: hb_state.config.job_timeout_secs,
+                change_emitter: hb_change_emitter,
             });
 
             tokio::spawn(async move {

@@ -23,6 +23,15 @@ use crate::tasks::shared::delivery::{DeliveryEngine, DeliveryPayload};
 
 // ── TickContext ───────────────────────────────────────────────────────
 
+/// Emitter for `HeartbeatTaskChanged` (state) frames after a timer-tick
+/// writeback.
+///
+/// The webchat panel dropped polling and relies on `heartbeat.task.changed`
+/// push; without this, scheduled runs completing silently leave the panel
+/// stale. Wired at startup from the `HeartbeatService`'s event bus. Takes the
+/// task id.
+pub type ChangeEmitterFn = Arc<dyn Fn(&str) + Send + Sync>;
+
 /// Shared context for each tick execution, holding all external dependencies.
 pub struct TickContext {
     pub probe_executor: Arc<dyn ProbeExecutor>,
@@ -32,6 +41,9 @@ pub struct TickContext {
     /// Per-task execution timeout (seconds) — bounds both the L1 probe and
     /// the L2 agent turn so a hung tool cannot stall a worker forever.
     pub job_timeout_secs: u64,
+    /// Optional change emitter published after each successful writeback so
+    /// the panel refreshes a task's runtime state (H-push).
+    pub change_emitter: Option<ChangeEmitterFn>,
 }
 
 // ── HeartbeatTickResult ──────────────────────────────────────────────
@@ -125,6 +137,11 @@ pub async fn run_heartbeat_loop(
                 };
                 let result = execute_heartbeat_tick(&task, wake_reason.as_deref(), &ctx).await;
                 writeback_one(&state, &task_id, result).await;
+                // Push a `StateChanged` frame so the panel (which dropped
+                // polling) refreshes the task's runtime state after each run.
+                if let Some(emitter) = &ctx.change_emitter {
+                    emitter(&task_id);
+                }
             });
         }
     }
@@ -537,6 +554,7 @@ mod tests {
             delivery: Arc::new(DeliveryEngine::new()),
             dedup: Arc::new(DedupEngine::noop(DedupConfig::default())),
             job_timeout_secs: 120,
+            change_emitter: None,
         })
     }
 

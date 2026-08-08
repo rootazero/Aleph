@@ -171,11 +171,6 @@ impl CronStore {
         history::get_cron_runs(&self.conn, job_id, limit)
     }
 
-    /// Get execution history for all jobs (most recent first).
-    pub fn get_all_runs(&self, limit: usize) -> Result<Vec<CronRunRecord>, String> {
-        history::get_all_cron_runs(&self.conn, limit)
-    }
-
     /// Cleanup old run records beyond retention period.
     pub fn cleanup_old_runs(&self, retention_days: u32, now_ms: i64) -> Result<u64, String> {
         history::cleanup_old_cron_runs(&self.conn, retention_days, now_ms)

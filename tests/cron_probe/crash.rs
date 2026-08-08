@@ -94,7 +94,7 @@ async fn crash_mid_execution_recovers() {
         }
 
         // Run startup catchup — should clear stale marker
-        let report = run_startup_catchup(&store, clock.as_ref(), None, None)
+        let report = run_startup_catchup(&store, clock.as_ref(), None, None, 900_000)
             .await
             .expect("catchup should succeed");
 
@@ -173,7 +173,7 @@ async fn crash_after_phase1_before_phase2() {
         let store = CronStore::load(store_path).expect("reload store");
         let store = Arc::new(tokio::sync::Mutex::new(store));
 
-        let report = run_startup_catchup(&store, clock.as_ref(), None, None)
+        let report = run_startup_catchup(&store, clock.as_ref(), None, None, 900_000)
             .await
             .expect("catchup should succeed");
 

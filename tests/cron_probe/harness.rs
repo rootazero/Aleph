@@ -10,7 +10,6 @@ use alephcore::tasks::cron::clock::testing::FakeClock;
 use alephcore::tasks::cron::clock::Clock;
 use alephcore::tasks::cron::config::{CronConfig, CronJob, CronJobView, JobStateV2, ScheduleKind};
 use alephcore::tasks::cron::service::catchup::run_startup_catchup;
-use alephcore::tasks::cron::service::concurrency::phase1_mark_manual;
 use alephcore::tasks::cron::service::ops::{self, CronJobUpdates};
 use alephcore::tasks::cron::service::state::ServiceState;
 use alephcore::tasks::cron::service::timer::{on_timer_tick, JobExecutorFn};
@@ -158,7 +157,7 @@ impl CronTestHarness {
 
     /// Run a single timer tick (mark due + execute + writeback).
     pub async fn tick(&self) {
-        on_timer_tick(&self.state, &self.executor_fn, None)
+        on_timer_tick(&self.state, &self.executor_fn, None, None)
             .await
             .expect("tick failed");
     }
@@ -177,34 +176,25 @@ impl CronTestHarness {
             self.clock.as_ref(),
             self.state.config.max_missed_jobs_per_restart,
             self.state.config.catchup_stagger_ms,
+            self.state.config.job_timeout_secs.saturating_mul(1000) as i64,
         )
         .await
         .expect("catchup failed");
     }
 
-    /// Manually trigger a job.
+    /// Manually trigger a job — mirrors the production `CronService::run_job`
+    /// path (set `next_run_at_ms = now`, let the timer tick pick it up with a
+    /// Schedule attribution) rather than the removed `phase1_mark_manual`.
     pub async fn manual_run(&self, id: &str) {
-        let default_timeout_ms = self.state.config.job_timeout_secs.saturating_mul(1000) as i64;
-        let snapshot = phase1_mark_manual(
-            &self.state.store,
-            self.clock.as_ref(),
-            id,
-            default_timeout_ms,
-        )
-        .await
-        .expect("manual_run failed");
-
-        if let Some(snap) = snapshot {
-            let result = (self.executor_fn)(snap.clone()).await;
-            alephcore::tasks::cron::service::concurrency::phase3_writeback(
-                &self.state.store,
-                self.clock.as_ref(),
-                &[(snap.id, result)],
-                self.state.config.notify_on_failure_default,
-            )
-            .await
-            .expect("manual_run writeback failed");
+        {
+            let mut store = self.state.store.lock().await;
+            let job = store
+                .get_job_mut(id)
+                .expect("manual_run: job not found");
+            job.state.next_run_at_ms = Some(self.clock.now_ms());
+            store.persist().expect("manual_run: persist failed");
         }
+        self.tick().await;
     }
 
     // ── Assertions ──────────────────────────────────────────────────

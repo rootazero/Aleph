@@ -20,7 +20,6 @@ use std::collections::HashMap;
 pub enum DeliveryStatus {
     Delivered,
     NotDelivered,
-    AlreadySentByAgent,
     NotRequested,
 }
 

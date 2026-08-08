@@ -4,7 +4,7 @@
 //! Write operations (`add_task`, `update_task`, `toggle_task`, `delete_task`)
 //! modify the store and recompute next due times as needed.
 
-use crate::tasks::heartbeat::config::{DedupConfig, HeartbeatTask, HeartbeatTaskView, ProbeConfig};
+use crate::tasks::heartbeat::config::{HeartbeatTask, HeartbeatTaskView, ProbeConfig};
 use crate::tasks::heartbeat::store::HeartbeatStore;
 use crate::tasks::shared::clock::Clock;
 use crate::tasks::shared::delivery::DeliveryConfig;
@@ -67,7 +67,6 @@ pub struct HeartbeatTaskUpdates {
     pub enabled: Option<bool>,
     pub probe: Option<ProbeConfig>,
     pub delivery_config: Option<Option<DeliveryConfig>>,
-    pub dedup: Option<DedupConfig>,
     /// `Some(Some(schedule))` to set, `Some(None)` to clear, `None` to leave alone.
     /// Mirrors the same convention used by `delivery_config`.
     pub active_hours: Option<Option<crate::tasks::shared::active_hours::ActiveHoursSchedule>>,
@@ -119,9 +118,6 @@ pub fn update_task<C: Clock>(
     }
     if let Some(delivery_config) = updates.delivery_config {
         task.delivery_config = delivery_config;
-    }
-    if let Some(dedup) = updates.dedup {
-        task.dedup = dedup;
     }
     if let Some(active_hours) = updates.active_hours {
         task.active_hours = active_hours;

@@ -225,7 +225,7 @@ async fn catchup_staggers_missed() {
     }
 
     // Run catchup with max_missed=3, stagger=5000ms
-    let report = run_startup_catchup(&h.state.store, h.clock.as_ref(), Some(3), Some(5000))
+    let report = run_startup_catchup(&h.state.store, h.clock.as_ref(), Some(3), Some(5000), 900_000)
         .await
         .expect("catchup failed");
 
