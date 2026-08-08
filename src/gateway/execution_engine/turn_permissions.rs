@@ -28,6 +28,34 @@ use super::RunRequest;
 /// safe because the undisableable `[sandbox.command_policy]` floor holds under
 /// every tier.
 ///
+/// ## The non-operator ceiling (2026-08-08)
+///
+/// "An explicit choice REPLACES the fallback and may RAISE it" is true for an
+/// operator and was true for everyone. For a **non-operator** it is now bounded:
+/// the resolved tier is clamped to the operator's own `[policies.exec_tier]`,
+/// so a member may go stricter than the install's posture and never looser.
+///
+/// This closes a hole the paragraph below used to paper over. The P1 hardening
+/// gave a member the `Ask` *default* and wrote that "the clamp below and the
+/// undisableable `[sandbox.command_policy]` floor are what actually bound
+/// member tool execution" — but the clamp below is
+/// [`channel_permission_level_from_role`](crate::gateway::channel_policy::channel_permission_level_from_role),
+/// which maps `"guest"` and `"operator"` and returns `None` for everything
+/// else. It **never fires for `"member"`.** So the sentence named a predicate
+/// that was structurally unreachable for exactly the role it claimed to bound,
+/// and `chat.send { exec_tier: "full" }` — a plain per-request parameter any
+/// member can send — resolved to `Full`, at which the tier gates nothing.
+///
+/// The ceiling is the existing global dial rather than a new
+/// `member_max_exec_tier` knob: `[policies]` is a server-global section, so
+/// setting it to `Full` is already an install-wide statement that this tier
+/// axis gates nothing here. **What that makes harder:** an operator who raises
+/// the global tier for their own convenience raises every member's ceiling with
+/// it, and there is no way to say "Full for me, Auto for everyone else" without
+/// introducing that second knob. That is the trade accepted here — one dial
+/// with one meaning beats two dials nobody has asked to set differently, and
+/// the second knob layers on top of this clamp cleanly if the day comes.
+///
 /// The fallback is normally the global `[policies.exec_tier]`. P1 member
 /// hardening (spec §11): when the caller is NOT an operator and neither rung
 /// above named a tier, the fallback is `Ask` instead — a non-operator never
@@ -37,33 +65,38 @@ use super::RunRequest;
 /// `role == Some("member")` equality test: that spelling put `"guest"` — the
 /// role chat-tier channels default to — on the OPERATOR side of the branch.
 /// It is not exploitable today (the login wall admits guests to no method but
-/// `connect`, and the channel clamp below catches channel callers anyway),
-/// but a gate that reads "member" where it means "not operator" is a wrong
-/// precedent for the next person to copy, and `tools_invoke.rs` already uses
-/// the canonical predicate for the same question. This
-/// is a DEFAULT, not a clamp: an explicit member pick (which lands in
-/// `requested` or `stored`) still wins and may raise above `Ask`, same as any
-/// other caller — the clamp below and the undisableable
-/// `[sandbox.command_policy]` floor are what actually bound member tool
-/// execution, not this default. Operator / absent-role / channel callers are
-/// byte-identical to before (fallback stays `global`).
+/// `connect`), but a gate that reads "member" where it means "not operator" is
+/// a wrong precedent for the next person to copy, and `tools_invoke.rs` already
+/// uses the canonical predicate for the same question. This is a DEFAULT, not a
+/// clamp: an explicit member pick (which lands in `requested` or `stored`) still
+/// wins over `Ask` and may raise above it — up to the ceiling above. Operator /
+/// absent-role callers are byte-identical to before (fallback stays `global`,
+/// and clamping an operator to the global tier is a no-op on their own dial).
 ///
-/// The channel clamp runs AFTER the three rungs, never before: an untrusted
-/// (`Chat`) channel must not run at `Full` with nobody at the keyboard, whichever
-/// rung asked for it. Panel / CLI / cron turns carry no `caller_role` and are not
-/// clamped.
+/// Both clamps run AFTER the three rungs, never before: an untrusted (`Chat`)
+/// channel must not run at `Full` with nobody at the keyboard, and a member must
+/// not exceed the install's posture, whichever rung asked for it. Panel / CLI /
+/// cron turns carry no `caller_role` and are subject to neither.
 pub(super) fn resolve_exec_tier(
     global: ExecTier,
     requested: Option<ExecTier>,
     stored: Option<ExecTier>,
     caller_role: Option<&str>,
 ) -> ExecTier {
-    let fallback = if crate::tools::turn_context::role_is_operator(caller_role) {
-        global
-    } else {
-        ExecTier::Ask
-    };
+    let is_operator = crate::tools::turn_context::role_is_operator(caller_role);
+    let fallback = if is_operator { global } else { ExecTier::Ask };
     let tier = requested.or(stored).unwrap_or(fallback);
+
+    // Ceiling first: a non-operator may never resolve looser than the install's
+    // own posture. `role_is_operator` treats an ABSENT role as trusted
+    // (loopback / CLI / cron), so this touches only connections that carry a
+    // role word and it is not one of the operator spellings.
+    let tier = if is_operator {
+        tier
+    } else {
+        ExecTier::most_restrictive(tier, global)
+    };
+
     match caller_role.and_then(crate::gateway::channel_policy::channel_permission_level_from_role) {
         Some(level) => crate::gateway::channel_policy::clamp_tier_for_channel(level, tier),
         None => tier,
@@ -278,7 +311,7 @@ mod tests {
     }
 
     #[test]
-    fn operator_and_unknown_roles_are_not_clamped() {
+    fn operator_and_absent_roles_are_not_clamped() {
         // Config-tier channel: an operator surface, runs at the resolved tier.
         assert_eq!(
             resolve_exec_tier(ExecTier::Full, None, None, Some("operator")),
@@ -289,13 +322,31 @@ mod tests {
             resolve_exec_tier(ExecTier::Full, None, None, None),
             ExecTier::Full
         );
-        // An unrecognized role is not a channel — no clamp, same as no role.
-        // Asserted with an EXPLICIT tier so this test measures the clamp only:
-        // an unknown role is not an operator, so it would otherwise fall back
-        // to `Ask` (pinned separately below).
+        // An operator may still raise above their own global dial, because the
+        // ceiling is theirs: clamping an operator to their own configuration
+        // would turn a default into a cage.
+        assert_eq!(
+            resolve_exec_tier(ExecTier::Ask, Some(ExecTier::Full), None, Some("operator")),
+            ExecTier::Full
+        );
+        assert_eq!(
+            resolve_exec_tier(ExecTier::Ask, Some(ExecTier::Full), None, None),
+            ExecTier::Full
+        );
+    }
+
+    /// An unrecognized role word is not an operator, so it is ceilinged like a
+    /// member. This flipped on 2026-08-08 and the flip is the point: the old
+    /// pin asserted "an unknown role is not a channel — no clamp, same as no
+    /// role", which put every future role word on the *unbounded* side of the
+    /// branch by default. `None` (no role at all) means local/internal and is
+    /// trusted; a role STRING nobody recognizes means a caller we cannot place,
+    /// and those two must not share an answer.
+    #[test]
+    fn an_unrecognized_role_is_ceilinged_like_any_other_non_operator() {
         assert_eq!(
             resolve_exec_tier(ExecTier::Ask, Some(ExecTier::Full), None, Some("bogus")),
-            ExecTier::Full
+            ExecTier::Ask
         );
     }
 
@@ -355,12 +406,14 @@ mod tests {
 
     /// This is a DEFAULT, not a clamp: an explicit member pick (composer
     /// pill, landing in `requested`) still wins over the `Ask` default and
-    /// may raise above it.
+    /// may raise above it — **up to the install's own posture**.
     #[test]
     fn a_members_explicit_pick_still_wins_over_the_member_default() {
+        // Global `Full` — the operator has said the tier axis gates nothing
+        // here, so the member's pick stands.
         assert_eq!(
-            resolve_exec_tier(ExecTier::Ask, Some(ExecTier::Full), None, Some("member")),
-            ExecTier::Full
+            resolve_exec_tier(ExecTier::Full, Some(ExecTier::Auto), None, Some("member")),
+            ExecTier::Auto
         );
     }
 
@@ -369,8 +422,69 @@ mod tests {
     #[test]
     fn a_members_stored_session_tier_still_wins_over_the_member_default() {
         assert_eq!(
-            resolve_exec_tier(ExecTier::Ask, None, Some(ExecTier::Auto), Some("member")),
+            resolve_exec_tier(ExecTier::Auto, None, Some(ExecTier::Auto), Some("member")),
             ExecTier::Auto
         );
+    }
+
+    // -------------------------------------------------------------------
+    // Round 2 (2026-08-08): the non-operator ceiling.
+    // -------------------------------------------------------------------
+
+    /// The defect these pins close. `chat.send { exec_tier: "full" }` is a
+    /// plain per-request parameter (`handlers/agent.rs`, rejected only if the
+    /// id is unknown), and it landed in `requested`, which outranked
+    /// everything. The clamp the doc named as the thing bounding members —
+    /// `channel_permission_level_from_role` — returns `None` for `"member"`,
+    /// so it never ran. A member could turn the tier off entirely.
+    #[test]
+    fn a_member_cannot_raise_above_the_operators_global_tier() {
+        for global in [ExecTier::Ask, ExecTier::Auto] {
+            assert_eq!(
+                resolve_exec_tier(global, Some(ExecTier::Full), None, Some("member")),
+                global,
+                "a member asking for Full under a global {global:?} must land on \
+                 {global:?} — the tier axis is the operator's to set"
+            );
+            // The stored rung is the same door with a longer hinge: pick Full
+            // once and every later turn reads it back from the session row.
+            assert_eq!(
+                resolve_exec_tier(global, None, Some(ExecTier::Full), Some("member")),
+                global
+            );
+        }
+    }
+
+    /// The ceiling only ever tightens. A member who deliberately picks a
+    /// STRICTER tier than the install's keeps it — arming your own gate is
+    /// never something a ceiling should undo.
+    #[test]
+    fn the_ceiling_never_raises_a_members_own_stricter_choice() {
+        assert_eq!(
+            resolve_exec_tier(ExecTier::Full, Some(ExecTier::Ask), None, Some("member")),
+            ExecTier::Ask
+        );
+        assert_eq!(
+            resolve_exec_tier(ExecTier::Auto, Some(ExecTier::Ask), None, Some("member")),
+            ExecTier::Ask
+        );
+    }
+
+    /// An operator's own resolution is byte-identical to before the ceiling
+    /// existed — including the case where they raise above their global dial.
+    #[test]
+    fn the_ceiling_is_invisible_to_operators_and_to_local_callers() {
+        for role in [Some("operator"), None] {
+            for global in [ExecTier::Ask, ExecTier::Auto, ExecTier::Full] {
+                for pick in [ExecTier::Ask, ExecTier::Auto, ExecTier::Full] {
+                    assert_eq!(
+                        resolve_exec_tier(global, Some(pick), None, role),
+                        pick,
+                        "role {role:?} must resolve its explicit pick unchanged"
+                    );
+                }
+                assert_eq!(resolve_exec_tier(global, None, None, role), global);
+            }
+        }
     }
 }
