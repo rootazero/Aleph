@@ -4,6 +4,7 @@
 //! types the server deserializes. They are not re-declared here on purpose;
 //! see that module for what happened the last time they were.
 
+use chrono::TimeZone;
 use serde_json::Value;
 
 use crate::output;
@@ -17,10 +18,20 @@ use aleph_protocol::workspace::{WorkspaceCreateParams, WorkspaceList, WorkspaceR
 /// nothing to copy.
 const LIST_HEADERS: &[&str] = &["ID", "Name", "Description", "Created"];
 
-/// Render one row. `-` here means the server sent no description, which is a
-/// fact about the workspace — unlike the previous `-`, which meant this CLI was
-/// reading a field the server does not have.
-fn row_cells(workspace: &WorkspaceRow) -> Vec<String> {
+/// Render one row in `tz`. `-` here means the server sent no description, which
+/// is a fact about the workspace — unlike the previous `-`, which meant this CLI
+/// was reading a field the server does not have.
+///
+/// The timezone is a parameter rather than a hardcoded `Local` so the rendering
+/// can be asserted against a fixed offset: a test that converted the expectation
+/// the same way the code does would agree with any offset, including a wrong one.
+/// Callers pass `Local` — `created_at` is UTC on the wire, and a bare UTC clock
+/// in a human-facing column reads as a wrong time, not as another timezone.
+/// `--json` still carries the exact RFC 3339 instant.
+fn row_cells<Tz: TimeZone>(workspace: &WorkspaceRow, tz: &Tz) -> Vec<String>
+where
+    Tz::Offset: std::fmt::Display,
+{
     vec![
         workspace.id.clone(),
         workspace.name.clone(),
@@ -28,7 +39,11 @@ fn row_cells(workspace: &WorkspaceRow) -> Vec<String> {
             .description
             .clone()
             .unwrap_or_else(|| "-".to_string()),
-        workspace.created_at.format("%Y-%m-%d %H:%M").to_string(),
+        workspace
+            .created_at
+            .with_timezone(tz)
+            .format("%Y-%m-%d %H:%M")
+            .to_string(),
     ]
 }
 
@@ -66,7 +81,7 @@ pub async fn list(server_url: &str, config: &CliConfig, json: bool) -> CliResult
         serde_json::from_value::<WorkspaceList>(result.clone())?
             .workspaces
             .iter()
-            .map(row_cells)
+            .map(|workspace| row_cells(workspace, &chrono::Local))
             .collect()
     };
 
@@ -178,13 +193,41 @@ mod tests {
         .expect("a real workspace.list body must parse");
 
         assert_eq!(
-            row_cells(&list.workspaces[0]),
+            row_cells(&list.workspaces[0], &chrono::Utc),
             vec!["crypto", "Crypto Trading", "-", "2026-08-08 09:30"],
         );
         assert_eq!(
             LIST_HEADERS.len(),
-            row_cells(&list.workspaces[0]).len(),
+            row_cells(&list.workspaces[0], &chrono::Utc).len(),
             "a header with no cell (or the reverse) misaligns every row"
+        );
+    }
+
+    /// `created_at` is UTC on the wire. Printed as-is it is simply the wrong
+    /// time for everyone not on UTC — real-machine QA showed `09:17` for a
+    /// workspace created at `17:17` local, which reads as a stale row rather
+    /// than as another timezone.
+    #[test]
+    fn the_created_column_is_the_creation_instant_in_the_readers_zone() {
+        let list: WorkspaceList = serde_json::from_value(serde_json::json!({
+            "workspaces": [{
+                "id": "crypto",
+                "name": "Crypto Trading",
+                "created_at": "2026-08-08T09:30:00Z",
+            }]
+        }))
+        .expect("a workspace.list body must parse");
+
+        let east8 = chrono::FixedOffset::east_opt(8 * 3600).expect("valid offset");
+        assert_eq!(
+            row_cells(&list.workspaces[0], &east8)[3],
+            "2026-08-08 17:30"
+        );
+
+        let west5 = chrono::FixedOffset::west_opt(5 * 3600).expect("valid offset");
+        assert_eq!(
+            row_cells(&list.workspaces[0], &west5)[3],
+            "2026-08-08 04:30"
         );
     }
 }
