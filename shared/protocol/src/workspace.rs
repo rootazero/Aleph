@@ -54,6 +54,26 @@ pub struct WorkspaceCreateParams {
     pub icon: Option<String>,
 }
 
+/// Parameters for `workspace.list`. Optional as a whole — a request with no
+/// params at all is the default view.
+///
+/// `deny_unknown_fields` because the only field here is a request to *widen*
+/// what comes back: a misspelled key would otherwise deserialize to `false`
+/// and answer a narrower question than the caller asked, with no way to tell
+/// that from a genuinely empty result.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct WorkspaceListParams {
+    /// Include archived workspaces in the response.
+    ///
+    /// The store has always taken this flag; the handler hard-coded `false`
+    /// until 2026-08-08, which left an archived workspace unreachable from
+    /// every client — `archive` is a soft delete whose result nothing could
+    /// show.
+    #[serde(default)]
+    pub include_archived: bool,
+}
+
 /// Parameters for `workspace.get` and `workspace.archive`: an id, nothing else.
 ///
 /// One type for two methods on purpose — they address the same thing, and a
@@ -93,6 +113,11 @@ pub struct WorkspaceUpdateParams {
 /// emitted (it has `is_archived` and `created_at`), so every row printed a
 /// column of dashes and looked merely empty.
 ///
+/// `is_archived` earned its place only once [`WorkspaceListParams`] existed:
+/// while the handler hard-coded `list(false)` every row was active by
+/// construction, so a status column could carry exactly one value. It is
+/// rendered in the `--include-archived` view and nowhere else.
+///
 /// Unknown fields are ignored, so the server may add fields freely. A *rename*
 /// of one of these is a breaking change, and deserialization then fails loudly
 /// instead of blanking the column — which is the whole point. The projection is
@@ -110,8 +135,16 @@ pub struct WorkspaceRow {
     #[serde(default)]
     pub description: Option<String>,
 
-    /// Creation timestamp.
+    /// Creation timestamp. UTC on the wire; a human-facing column renders it
+    /// in the reader's zone.
     pub created_at: DateTime<Utc>,
+
+    /// Whether the workspace is archived.
+    ///
+    /// Defaulted rather than required: the default view asks for active rows
+    /// only, and a server that omits the field there is not wrong.
+    #[serde(default)]
+    pub is_archived: bool,
 }
 
 /// Response envelope of `workspace.list`.
@@ -121,7 +154,8 @@ pub struct WorkspaceRow {
 /// server into an empty-looking-but-fine list.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct WorkspaceList {
-    /// The visible workspaces. `workspace.list` never includes archived rows.
+    /// The visible workspaces. Archived rows appear only when the request
+    /// carried `include_archived` — see [`WorkspaceListParams`].
     pub workspaces: Vec<WorkspaceRow>,
 }
 
@@ -149,6 +183,23 @@ mod tests {
         assert!(
             err.is_err(),
             "a missing `workspaces` key must not read as zero workspaces"
+        );
+    }
+
+    #[test]
+    fn a_misspelled_list_flag_is_rejected_rather_than_read_as_false() {
+        // The failure this prevents is silent: `include_arcived` would
+        // deserialize to the default and return the active-only view, which is
+        // indistinguishable from "you have no archived workspaces".
+        assert!(serde_json::from_value::<WorkspaceListParams>(
+            serde_json::json!({ "include_arcived": true })
+        )
+        .is_err());
+        assert!(
+            serde_json::from_value::<WorkspaceListParams>(serde_json::json!({}))
+                .expect("an empty object is the default view")
+                .include_archived
+                .eq(&false)
         );
     }
 
