@@ -838,7 +838,14 @@ pub enum SessionExportFormat {
 #[derive(Subcommand)]
 pub enum WorkspaceAction {
     /// List all workspaces
-    List,
+    List {
+        /// Also show archived workspaces, with a Status column
+        ///
+        /// Archiving is a soft delete, so without this the result of
+        /// `workspace archive` cannot be seen from any client.
+        #[arg(long)]
+        include_archived: bool,
+    },
     /// Create a new workspace
     Create {
         /// Workspace ID — the key `archive` addresses it by (URL-safe slug, e.g. "crypto")

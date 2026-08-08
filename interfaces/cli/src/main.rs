@@ -788,7 +788,9 @@ async fn dispatch_workspace(
 ) -> CliResult<()> {
     use commands::workspace_cmd;
     match action {
-        WorkspaceAction::List => workspace_cmd::list(server_url, config, json).await,
+        WorkspaceAction::List { include_archived } => {
+            workspace_cmd::list(server_url, config, include_archived, json).await
+        }
         WorkspaceAction::Create {
             id,
             name,

@@ -9,7 +9,9 @@ use serde_json::Value;
 
 use crate::output;
 use aleph_client::{AlephClient, CliConfig, CliResult};
-use aleph_protocol::workspace::{WorkspaceCreateParams, WorkspaceList, WorkspaceRef, WorkspaceRow};
+use aleph_protocol::workspace::{
+    WorkspaceCreateParams, WorkspaceList, WorkspaceListParams, WorkspaceRef, WorkspaceRow,
+};
 
 /// Columns of `aleph workspace list`.
 ///
@@ -17,6 +19,23 @@ use aleph_protocol::workspace::{WorkspaceCreateParams, WorkspaceList, WorkspaceR
 /// accept: a list that showed just the display name left `archive` with
 /// nothing to copy.
 const LIST_HEADERS: &[&str] = &["ID", "Name", "Description", "Created"];
+
+/// Columns of `aleph workspace list --include-archived`.
+///
+/// `Status` exists in this view only. In the default view every row is active
+/// by construction, and a column that can hold one value is not information —
+/// the original `Status` column was worse than that, printing a dash per row
+/// because it read a field name the server does not have.
+const LIST_HEADERS_WITH_STATUS: &[&str] = &["ID", "Name", "Description", "Created", "Status"];
+
+/// The headers matching `include_archived`.
+fn headers(include_archived: bool) -> &'static [&'static str] {
+    if include_archived {
+        LIST_HEADERS_WITH_STATUS
+    } else {
+        LIST_HEADERS
+    }
+}
 
 /// Render one row in `tz`. `-` here means the server sent no description, which
 /// is a fact about the workspace — unlike the previous `-`, which meant this CLI
@@ -28,11 +47,11 @@ const LIST_HEADERS: &[&str] = &["ID", "Name", "Description", "Created"];
 /// Callers pass `Local` — `created_at` is UTC on the wire, and a bare UTC clock
 /// in a human-facing column reads as a wrong time, not as another timezone.
 /// `--json` still carries the exact RFC 3339 instant.
-fn row_cells<Tz: TimeZone>(workspace: &WorkspaceRow, tz: &Tz) -> Vec<String>
+fn row_cells<Tz: TimeZone>(workspace: &WorkspaceRow, tz: &Tz, include_archived: bool) -> Vec<String>
 where
     Tz::Offset: std::fmt::Display,
 {
-    vec![
+    let mut cells = vec![
         workspace.id.clone(),
         workspace.name.clone(),
         workspace
@@ -44,7 +63,18 @@ where
             .with_timezone(tz)
             .format("%Y-%m-%d %H:%M")
             .to_string(),
-    ]
+    ];
+    if include_archived {
+        cells.push(
+            if workspace.is_archived {
+                "archived"
+            } else {
+                "active"
+            }
+            .to_string(),
+        );
+    }
+    cells
 }
 
 /// Build the `workspace.create` params.
@@ -66,10 +96,20 @@ fn create_params(
 }
 
 /// List all workspaces
-pub async fn list(server_url: &str, config: &CliConfig, json: bool) -> CliResult<()> {
+pub async fn list(
+    server_url: &str,
+    config: &CliConfig,
+    include_archived: bool,
+    json: bool,
+) -> CliResult<()> {
     let (client, _events) = AlephClient::connect(server_url, config).await?;
 
-    let result: Value = client.call("workspace.list", None::<()>).await?;
+    let result: Value = client
+        .call(
+            "workspace.list",
+            Some(WorkspaceListParams { include_archived }),
+        )
+        .await?;
 
     // `--json` is a raw passthrough and must not be gated on this CLI being
     // able to render the payload; only the table needs the projection, and
@@ -81,11 +121,11 @@ pub async fn list(server_url: &str, config: &CliConfig, json: bool) -> CliResult
         serde_json::from_value::<WorkspaceList>(result.clone())?
             .workspaces
             .iter()
-            .map(|workspace| row_cells(workspace, &chrono::Local))
+            .map(|workspace| row_cells(workspace, &chrono::Local, include_archived))
             .collect()
     };
 
-    output::print_table(LIST_HEADERS, &rows, json, &result);
+    output::print_table(headers(include_archived), &rows, json, &result);
 
     client.close().await?;
     Ok(())
@@ -193,13 +233,61 @@ mod tests {
         .expect("a real workspace.list body must parse");
 
         assert_eq!(
-            row_cells(&list.workspaces[0], &chrono::Utc),
+            row_cells(&list.workspaces[0], &chrono::Utc, false),
             vec!["crypto", "Crypto Trading", "-", "2026-08-08 09:30"],
         );
+    }
+
+    /// Both views, because the table now has two shapes and only one of them
+    /// is exercised by a default `workspace list`.
+    #[test]
+    fn every_header_has_a_cell_in_both_views() {
+        let row = WorkspaceRow {
+            id: "crypto".to_string(),
+            name: "Crypto Trading".to_string(),
+            description: None,
+            created_at: "2026-08-08T09:30:00Z".parse().expect("valid timestamp"),
+            is_archived: false,
+        };
+
+        for include_archived in [false, true] {
+            assert_eq!(
+                headers(include_archived).len(),
+                row_cells(&row, &chrono::Utc, include_archived).len(),
+                "a header with no cell (or the reverse) misaligns every row \
+                 (include_archived = {include_archived})"
+            );
+        }
+    }
+
+    /// The `Status` column exists only where it can say two things. It was
+    /// dropped entirely when `workspace.list` hard-coded `list(false)`, and it
+    /// comes back with `--include-archived` and not before.
+    #[test]
+    fn status_is_shown_only_in_the_view_that_can_contain_archived_rows() {
+        let archived = WorkspaceRow {
+            id: "old".to_string(),
+            name: "old".to_string(),
+            description: None,
+            created_at: "2026-08-08T09:30:00Z".parse().expect("valid timestamp"),
+            is_archived: true,
+        };
+        let active = WorkspaceRow {
+            is_archived: false,
+            ..archived.clone()
+        };
+
+        assert!(!headers(false).contains(&"Status"));
+        assert_eq!(row_cells(&archived, &chrono::Utc, false).len(), 4);
+
+        assert_eq!(headers(true).last(), Some(&"Status"));
         assert_eq!(
-            LIST_HEADERS.len(),
-            row_cells(&list.workspaces[0], &chrono::Utc).len(),
-            "a header with no cell (or the reverse) misaligns every row"
+            row_cells(&archived, &chrono::Utc, true).last().unwrap(),
+            "archived"
+        );
+        assert_eq!(
+            row_cells(&active, &chrono::Utc, true).last().unwrap(),
+            "active"
         );
     }
 
@@ -220,13 +308,13 @@ mod tests {
 
         let east8 = chrono::FixedOffset::east_opt(8 * 3600).expect("valid offset");
         assert_eq!(
-            row_cells(&list.workspaces[0], &east8)[3],
+            row_cells(&list.workspaces[0], &east8, false)[3],
             "2026-08-08 17:30"
         );
 
         let west5 = chrono::FixedOffset::west_opt(5 * 3600).expect("valid offset");
         assert_eq!(
-            row_cells(&list.workspaces[0], &west5)[3],
+            row_cells(&list.workspaces[0], &west5, false)[3],
             "2026-08-08 04:30"
         );
     }
