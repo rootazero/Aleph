@@ -1487,8 +1487,9 @@ after (verified by `single_user_fixture_is_byte_identical_after_upgrade`,
      latched at connect and `restamp_live_connections` changes it silently, so a
      UI gate can never be an enforcement point). What changed is that a client
      which will not gate is now required to **report accurately**:
-     `shared_ui_logic::authz` tells a refusal apart from an empty answer, keyed
-     on the same `ADMIN_REQUIRED_MESSAGE` the server emits.
+     `interfaces/webchat/src/components/admin_refusal.rs` tells a refusal apart
+     from an empty answer, keyed on the same `ADMIN_REQUIRED_MESSAGE` the server
+     emits.
 
 - **Known gaps (deliberate, recorded, not silently dropped):**
   0. **The exec-tier id CATALOG is still operator-only.** A member's composer

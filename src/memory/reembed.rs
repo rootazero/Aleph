@@ -31,8 +31,6 @@ pub struct ReembedProgress {
 pub struct ReembedResult {
     pub facts_updated: usize,
     pub facts_total: usize,
-    pub memories_updated: usize,
-    pub memories_total: usize,
     /// Notes left alone because their stored vector was already computed from
     /// the current version of the note. Reported rather than folded into
     /// `facts_updated`, so "nothing needed doing" is distinguishable from

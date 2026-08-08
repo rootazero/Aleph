@@ -520,9 +520,9 @@ mod tests {
     #[tokio::test]
     async fn attachment_text_preserved() {
         let backend = make_backend();
-        let raw = RawMemory::new("body".to_string(), RawMemorySource::Attachment)
-            .with_agent("agent3")
-            .with_attachment_text("attachment content here");
+        let mut raw = RawMemory::new("body".to_string(), RawMemorySource::Attachment);
+        raw.attachment_text = Some("attachment content here".to_string());
+        let raw = raw.with_agent("agent3");
 
         backend.insert_raw_memory(&raw).await.unwrap();
 

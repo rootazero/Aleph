@@ -53,8 +53,8 @@ use super::evolution::{
 use super::validation::{self, DreamValidationReport};
 use super::{
     compute_raw_metrics, l1_over_corpus, now_timestamp, CycleDecision, DreamContext,
-    DreamCycleOutcome, DreamEvent, DreamPipeline, DreamReport, DreamReportStatus, DreamRunStatus,
-    EventLog, MutationGate, NoteEntry, SignalSnapshot, StrategySelector, DREAM_HISTORY_WINDOW,
+    DreamCycleOutcome, DreamEvent, DreamPipeline, DreamReport, DreamRunStatus, EventLog,
+    MutationGate, NoteEntry, SignalSnapshot, StrategySelector, DREAM_HISTORY_WINDOW,
 };
 
 /// Everything a project sub-cycle borrows from the daemon.
@@ -70,7 +70,6 @@ pub(super) struct ProjectCycleDeps<'a> {
     pub config: &'a ConfigDreamingConfig,
     pub decay_policy: &'a MemoryDecayPolicy,
     pub orientation: &'a Option<Arc<dyn crate::memory::notes::orientation::NoteOrientation>>,
-    pub activity_checker: &'a Arc<dyn Fn() -> bool + Send + Sync>,
 }
 
 /// Run one project namespace's maintenance cycle, governed by that namespace's
@@ -151,8 +150,6 @@ pub(super) async fn run_namespace_cycle(
             ..Default::default()
         },
         pipeline_type: strategy.to_string(),
-        // rust-doctor-disable-next-line excessive-clone
-        activity_checker: deps.activity_checker.clone(),
         strategy,
         // rust-doctor-disable-next-line excessive-clone
         orientation: deps.orientation.clone(),
@@ -243,23 +240,6 @@ pub(super) async fn run_namespace_cycle(
         stages: report.stages_executed.clone(),
         validation_passed: validation_report.overall_ok(),
     };
-    let status = if report.status == DreamReportStatus::Interrupted {
-        DreamRunStatus::Cancelled
-    } else {
-        DreamRunStatus::Success
-    };
-
-    // A cycle that yielded before running a single stage produced nothing to
-    // account for — see `DreamReport::is_vacuous_interruption` for why neither
-    // durable record wants it. The caller reads the same predicate before
-    // writing its audit row.
-    if report.is_vacuous_interruption() {
-        return Ok(DreamCycleOutcome {
-            status,
-            report,
-            decision,
-        });
-    }
 
     let cycle = log.next_cycle().await.unwrap_or(1);
     let event = DreamEvent {
@@ -287,7 +267,7 @@ pub(super) async fn run_namespace_cycle(
     }
 
     Ok(DreamCycleOutcome {
-        status,
+        status: DreamRunStatus::Success,
         report,
         decision,
     })

@@ -130,7 +130,6 @@ mod integration_tests {
             render_style: Default::default(),
             force_fallback: true, // skeleton path — no LLM needed
             fallback_skeleton: Default::default(),
-            assembly_log: Default::default(),
             project_scoped: false,
             retrieval_scoring: Default::default(),
             rerank: Default::default(),

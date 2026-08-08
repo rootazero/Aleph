@@ -22,7 +22,6 @@
 
 use crate::api::cluster::{ClusterApi, EnrollResult, Environment};
 use crate::context::DashboardState;
-use aleph_protocol::jsonrpc::ADMIN_REQUIRED_MESSAGE;
 use leptos::prelude::*;
 use leptos::task::spawn_local;
 
@@ -57,46 +56,46 @@ fn now_unix() -> i64 {
     (js_sys::Date::now() / 1000.0) as i64
 }
 
-/// Copy for a failed fleet read. Pure function — the page renders an error
+/// Copy for a failed fleet call. Pure function — the page renders an error
 /// STATE, it never claims a verdict of its own.
 ///
 /// The admin gate refuses with `AUTH_REQUIRED` + a fixed message, but the
 /// Panel's RPC layer keeps only `error.message` (the code is dropped in
 /// `context.rs`'s response arm), so the message text is the only recognisable
-/// part. It is matched through [`ADMIN_REQUIRED_MESSAGE`] — **the same
-/// `aleph_protocol` constant the server emits**, not a copy of it — so a reword
-/// moves the server and this match in one edit and can no longer strand every
-/// member on the raw English string. Everything else falls through verbatim:
-/// degraded copy beats a wrong claim, and this is never a permission decision.
-fn fleet_error_label(err: &str) -> String {
-    if err.contains(ADMIN_REQUIRED_MESSAGE) {
-        "集群管理需要 operator 权限,当前连接的角色无法读取节点拓扑。".to_string()
-    } else {
-        err.to_string()
-    }
+/// part. Recognition lives in [`crate::components::admin_refusal`] and is
+/// matched through [`ADMIN_REQUIRED_MESSAGE`] — **the same `aleph_protocol`
+/// constant the server emits**, not a copy of it — so a reword moves the server
+/// and every consumer in one edit and can no longer strand a member on the raw
+/// English string. Everything else falls through verbatim: degraded copy beats
+/// a wrong claim, and this is never a permission decision.
+///
+/// # `action` exists because this page has three verbs, not one
+///
+/// The one refusal sentence used to say "…cannot READ the node topology", and
+/// it was rendered for all three of them: the fleet read, `+ Enroll`, and a
+/// row's `注销`. Two of those are writes, and both told the operator their
+/// WRITE had failed to read something. The verdict is shared; the sentence
+/// describing what was refused is not.
+fn fleet_error_label(err: &str, action: &str) -> String {
+    crate::components::admin_refusal::labeled(
+        err,
+        &format!("集群管理需要 operator 权限,当前连接的角色无法{action}。"),
+    )
 }
 
-/// The same refusal on the WRITE face, which needs its own sentence.
-///
-/// Enrolling a node is not reading a topology, and until 2026-08-08 a failed
-/// enroll rendered [`fleet_error_label`]'s copy — telling the user the Panel
-/// could not read something they had not asked it to read. A refusal that
-/// describes the wrong operation is worse than a raw error string: the raw
-/// string is obviously machine text, while a fluent sentence about the wrong
-/// thing gets believed.
-fn enroll_error_label(err: &str) -> String {
-    if err.contains(ADMIN_REQUIRED_MESSAGE) {
-        "登记节点需要 operator 权限,当前连接的角色无法修改集群成员。".to_string()
-    } else {
-        err.to_string()
-    }
-}
+/// The three things this page asks the server to do. Named so the call sites
+/// read as verbs and a fourth one cannot quietly borrow a third one's sentence.
+const ACTION_READ_FLEET: &str = "读取节点拓扑";
+const ACTION_ENROLL: &str = "登记新节点";
+const ACTION_DEREGISTER: &str = "注销节点";
 
 #[component]
 pub fn ClusterSection() -> impl IntoView {
     let state = expect_context::<DashboardState>();
     let nodes = RwSignal::new(Vec::<Environment>::new());
-    let error = RwSignal::new(Option::<String>::None);
+    // (message, what was being attempted) — the fleet READ and a row's
+    // deregister both land here, and one sentence cannot honestly describe both.
+    let error = RwSignal::new(Option::<(String, &'static str)>::None);
     let loading = RwSignal::new(true);
     // node_id currently being deregistered → disables that row's button.
     let removing = RwSignal::new(Option::<String>::None);
@@ -116,7 +115,7 @@ pub fn ClusterSection() -> impl IntoView {
                     nodes.set(list);
                     error.set(None);
                 }
-                Err(e) => error.set(Some(e)),
+                Err(e) => error.set(Some((e, ACTION_READ_FLEET))),
             }
             loading.set(false);
         });
@@ -275,7 +274,7 @@ pub fn ClusterSection() -> impl IntoView {
                                                 spawn_local(async move {
                                                     match ClusterApi::deregister_node(&state, node_id).await {
                                                         Ok(()) => error.set(None),
-                                                        Err(e) => error.set(Some(e)),
+                                                        Err(e) => error.set(Some((e, ACTION_DEREGISTER))),
                                                     }
                                                     removing.set(None);
                                                     load();
@@ -293,9 +292,9 @@ pub fn ClusterSection() -> impl IntoView {
                 {move || {
                     error
                         .get()
-                        .map(|e| {
+                        .map(|(e, action)| {
                             view! {
-                                <p class="text-sm text-error mt-3">{fleet_error_label(&e)}</p>
+                                <p class="text-sm text-error mt-3">{fleet_error_label(&e, action)}</p>
                             }
                         })
                 }}
@@ -352,7 +351,7 @@ pub fn ClusterSection() -> impl IntoView {
                                     .get()
                                     .map(|e| {
                                         view! {
-                                            <p class="text-sm text-error">{enroll_error_label(&e)}</p>
+                                            <p class="text-sm text-error">{fleet_error_label(&e, ACTION_ENROLL)}</p>
                                         }
                                     })
                             }}
@@ -385,7 +384,14 @@ pub fn ClusterSection() -> impl IntoView {
 
 #[cfg(test)]
 mod tests {
-    use super::{fleet_error_label, join_command, last_seen_label, ADMIN_REQUIRED_MESSAGE};
+    use super::{
+        fleet_error_label, join_command, last_seen_label, ACTION_DEREGISTER, ACTION_ENROLL,
+        ACTION_READ_FLEET,
+    };
+    // The production code no longer names this constant — recognition moved to
+    // `components::admin_refusal`. The tests still feed the SERVER's own words
+    // in, which is what keeps them able to fail on a drift.
+    use aleph_protocol::jsonrpc::ADMIN_REQUIRED_MESSAGE;
 
     /// Fed the SERVER's own refusal — `aleph_protocol`'s constant, which
     /// `gateway::server::handler` emits verbatim — not a local transcription of
@@ -394,7 +400,7 @@ mod tests {
     /// the refusal falls through to the raw string and `assert_ne!` fires.
     #[test]
     fn a_refused_fleet_read_renders_as_a_role_explanation() {
-        let label = fleet_error_label(ADMIN_REQUIRED_MESSAGE);
+        let label = fleet_error_label(ADMIN_REQUIRED_MESSAGE, ACTION_READ_FLEET);
         assert!(
             label.contains("operator"),
             "the refusal must be explained, not echoed as a bare protocol \
@@ -407,17 +413,46 @@ mod tests {
         );
     }
 
+    /// One verdict, three verbs. A refused `+ Enroll` and a refused `注销` used
+    /// to be told, in so many words, that the connection "cannot READ the node
+    /// topology" — a sentence about a read, printed under a write.
+    #[test]
+    fn each_refused_action_is_described_as_the_action_it_was() {
+        let read = fleet_error_label(ADMIN_REQUIRED_MESSAGE, ACTION_READ_FLEET);
+        let enroll = fleet_error_label(ADMIN_REQUIRED_MESSAGE, ACTION_ENROLL);
+        let deregister = fleet_error_label(ADMIN_REQUIRED_MESSAGE, ACTION_DEREGISTER);
+
+        assert!(enroll.contains(ACTION_ENROLL), "{enroll}");
+        assert!(deregister.contains(ACTION_DEREGISTER), "{deregister}");
+        for (label, name) in [(&enroll, "enroll"), (&deregister, "deregister")] {
+            assert!(
+                !label.contains(ACTION_READ_FLEET),
+                "a refused {name} must not be described as a failed read: {label}"
+            );
+            assert_ne!(label, &read, "{name} must not reuse the read's sentence");
+        }
+    }
+
     #[test]
     fn every_other_failure_shows_the_servers_own_words() {
         // A transport failure, a store error, a malformed response: none of
         // these are permission verdicts, and inventing copy for them would put
-        // a guess in front of the operator instead of the cause.
+        // a guess in front of the operator instead of the cause. The same holds
+        // for this page's OWN local validation message, which shares the enroll
+        // error slot with the server's replies.
         for raw in [
             "Invalid response: missing environments",
             "WebSocket disconnected",
             "Internal error: failed to read enrolled node devices",
+            "请先填写节点名称",
         ] {
-            assert_eq!(fleet_error_label(raw), raw, "{raw} must pass through");
+            for action in [ACTION_READ_FLEET, ACTION_ENROLL, ACTION_DEREGISTER] {
+                assert_eq!(
+                    fleet_error_label(raw, action),
+                    raw,
+                    "{raw} must pass through"
+                );
+            }
         }
     }
 

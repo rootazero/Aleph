@@ -72,15 +72,21 @@ impl EventScopeGuard {
                 // This table keys on the topic PREFIX, and the approval family
                 // carries two different kinds of frame under one prefix: a
                 // tool-gate approval names the blocked session, a cluster-node
-                // approval names none. A prefix rule can only answer for both
-                // at once, and answering "operator" for both is what made a
-                // member's own approval gate invisible to them — their run then
-                // died at the 120s timeout with `exec_tier: "full"` as the only
-                // way through. The distinction is now drawn where the payload
-                // is visible: `event_visibility::session_identity_of` maps an
-                // empty `session_key` to `OperatorOnly` and a real one to
-                // `BySessionKey`. Do not re-add a rule here — it would
-                // re-close the member half without the fleet half noticing.
+                // approval names none. Role is the wrong question for either: a
+                // member must receive the card for their OWN parked tool call,
+                // because `Auto` — the default tier — parks every non-idempotent
+                // call, and the member is the principal now allowed to release
+                // it (`method_admin`'s `exec.` carve-out). Ownership answers it
+                // instead, one filter further down the same chain:
+                // `event_visibility::session_identity_of` maps an empty
+                // `session_key` to `OperatorOnly` and a real one to
+                // `BySessionKey`/`BySessionKeyOrAdmin`, so a member gets their
+                // own and an operator still gets everyone's — which is what a
+                // rule here used to buy, unchanged. Do not re-add a rule here —
+                // it would re-close the member half without the fleet half
+                // noticing. The BANNER leg (`surface.approval`) keeps its rule
+                // below: it carries no session to scope by and is a
+                // desktop-shell notification, not the decision surface.
                 (
                     "surface.approval".to_string(),
                     vec!["admin".to_string(), "exec.approver".to_string()],
@@ -108,12 +114,28 @@ impl EventScopeGuard {
                 // A device holding the `"*"` wildcard (operator / local daemon) is a
                 // superuser and satisfies every scope rule. Otherwise it needs at
                 // least one of the topic's required permissions.
-                return permissions.iter().any(|p| p == "*" || required.contains(p));
+                return is_superuser_scope(permissions)
+                    || permissions.iter().any(|p| required.contains(p));
             }
         }
         // No rule matched — unguarded, allow for all.
         true
     }
+}
+
+/// Whether a connection's permission set is the superuser scope — the `"*"`
+/// wildcard [`scope_for_role`] hands an operator (and the local daemon).
+///
+/// One derivation, two readers: [`EventScopeGuard::can_receive`]'s wildcard
+/// arm, and the delivery loop's admin input to
+/// [`crate::gateway::event_visibility::EventVisibilityIndex::event_admits`]
+/// (the `BySessionKeyOrAdmin` arm that keeps an operator receiving a member's
+/// approval card now that `approval.*` is scoped by ownership rather than by
+/// role). Two spellings of "is this caller an admin" is exactly the drift the
+/// approval plane cannot afford.
+#[must_use]
+pub fn is_superuser_scope(permissions: &[String]) -> bool {
+    permissions.iter().any(|p| p == "*")
 }
 
 /// The event scope stamped onto a connection holding the resolved wire `role`.
@@ -206,6 +228,24 @@ mod tests {
     fn the_approval_family_is_gated_by_payload_not_by_this_prefix_table() {
         let guard = EventScopeGuard::default_rules();
 
+        // Topic names must be the ones a producer actually publishes —
+        // `events::frame` emits `approval.requested` / `approval.resolved` /
+        // `approval.expired`, which the `"approval."` prefix rule covers. This
+        // test previously asserted against `exec.approval.pending` /
+        // `exec.approval.result`, which no producer emits (the similar-looking
+        // `exec.approval.resolve` and `exec.approvals.pending` are RPC method
+        // names, not event topics). Those strings start with `exec.`, match no
+        // rule, and are therefore unguarded — so the test failed the moment the
+        // lib-test binary could build again. Guarding a fictional topic proves
+        // nothing; assert the real ones.
+        //
+        // 2026-08-08: THIS guard no longer decides the raw `approval.*`
+        // topics — ownership does, one filter further along the same chain
+        // (`event_visibility`'s `BySessionKeyOrAdmin`). A member has to receive
+        // the card for their OWN parked tool call, and role cannot express
+        // "their own". So these three are unguarded HERE by design, and the
+        // assertion that matters moved to
+        // `event_visibility::tests::an_approval_frame_reaches_its_owner_and_every_admin_and_nobody_else`.
         for topic in [
             "approval.requested",
             "approval.resolved",
@@ -231,9 +271,13 @@ mod tests {
              gated NOWHERE, because the prefix rule above is gone"
         );
 
+        // The banner leg is a different frame with a different job: it carries
+        // no session to scope by, so role IS the only question it can answer.
         // The R5 banner keeps its prefix rule: different payload, different
         // audience mechanism, not swept up by proximity.
         assert!(!guard.can_receive("surface.approval", &[]));
+        assert!(!guard.can_receive("surface.approval", &["viewer".to_string()]));
+        assert!(guard.can_receive("surface.approval", &["exec.approver".to_string()]));
         assert!(guard.can_receive("surface.approval", &["admin".to_string()]));
     }
 
@@ -263,6 +307,15 @@ mod tests {
         assert!(g.can_receive("config.changed", &star));
     }
 
+    /// A chat-tier channel is still shut out of the approval plane — but by the
+    /// filter that can actually see WHOSE approval it is.
+    ///
+    /// This test used to assert the exclusion here, and moving the raw topics
+    /// off this guard would have quietly deleted it. It is not deleted: a
+    /// chat-tier connection carries no `caller_user`, so
+    /// `BySessionKeyOrAdmin` resolves nothing for it and denies — the same
+    /// answer, from the filter that also gets a member's own card right.
+    /// Pinned end-to-end in `event_visibility`'s approval test.
     #[test]
     fn chat_tier_excluded_from_the_banner_and_the_admin_families() {
         let g = EventScopeGuard::default_rules();
@@ -270,6 +323,11 @@ mod tests {
         assert!(
             !g.can_receive("surface.approval", &chat),
             "chat tier must NOT see the approval banner"
+        );
+        assert!(
+            !is_superuser_scope(&chat),
+            "chat tier must not satisfy the admin arm that lets an operator \
+             read another user's approval card"
         );
         assert!(!g.can_receive("config.changed", &chat));
         assert!(!g.can_receive("pty.output", &chat));
@@ -344,7 +402,8 @@ mod tests {
             // The R5 approval BANNER (not the three `approval.*` frames — see
             // `the_approval_family_is_gated_by_payload_not_by_this_prefix_table`;
             // those moved to a per-session decision so that a member can answer
-            // the gate blocking their own run).
+            // the gate blocking their own run; this leg carries no session and
+            // stays role-gated).
             "surface.approval",
             "config.changed",
             "pairing.requested",

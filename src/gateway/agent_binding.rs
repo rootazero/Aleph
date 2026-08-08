@@ -193,7 +193,6 @@ mod tests {
         let config = AgentEnvStoreConfig {
             db_path: temp.keep().join("test.db"),
             default_profile: "default".to_string(),
-            archive_after_days: 0,
         };
         Arc::new(AgentEnvStore::new(config).unwrap())
     }

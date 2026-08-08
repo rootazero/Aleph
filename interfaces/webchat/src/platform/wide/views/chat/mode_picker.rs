@@ -35,6 +35,11 @@ pub fn ModePicker() -> impl IntoView {
 
     let open = RwSignal::new(false);
     let modes: RwSignal<Vec<ModePreset>> = RwSignal::new(Vec::new());
+    // The read came back refused. `modes` is empty in that case too, and the
+    // hide-on-empty rule below would silently erase the whole control — the
+    // two causes need telling apart, because only one of them means "this
+    // build has no mode dial".
+    let refused = RwSignal::new(false);
 
     // The global default mode + the selectable ids (same RPC the tier pill
     // uses — the response carries both dials). The global default lands in
@@ -46,11 +51,13 @@ pub fn ModePicker() -> impl IntoView {
         spawn_local(async move {
             match ToolPermissionsApi::get_global(&dashboard).await {
                 Ok(cfg) => {
+                    refused.set(false);
                     chat.global_mode
                         .set(Some(cfg.mode).filter(|m| !m.is_empty()));
                     modes.set(cfg.modes);
                 }
                 Err(e) => {
+                    refused.set(crate::components::admin_refusal::is_admin_refusal(&e));
                     web_sys::console::warn_1(&format!("Failed to load session modes: {e}").into());
                 }
             }
@@ -94,8 +101,10 @@ pub fn ModePicker() -> impl IntoView {
 
     view! {
         // An older core without the mode dial returns no presets — render
-        // nothing rather than an icon-only pill with a blank label.
-        <Show when=move || !modes.get().is_empty()>
+        // nothing rather than an icon-only pill with a blank label. A REFUSED
+        // read is a different fact and keeps the pill: vanishing is the one
+        // outcome the reader cannot tell from "this feature does not exist".
+        <Show when=move || !modes.get().is_empty() || refused.get()>
         <div class="relative">
             <button
                 on:click=move |_| {
@@ -122,7 +131,12 @@ pub fn ModePicker() -> impl IntoView {
                     <rect x="14" y="3" width="7" height="7" rx="1" />
                     <rect x="3" y="14" width="18" height="7" rx="1" />
                 </svg>
-                <span>{move || mode_label(i18n, &effective.get())}</span>
+                // Same dash guard as the tier pill: an unresolved mode must not
+                // render as an empty span inside a control that is still there.
+                <span>{move || {
+                    let id = effective.get();
+                    if id.is_empty() { "—".to_string() } else { mode_label(i18n, &id) }
+                }}</span>
                 // A session override is a deliberate deviation from the global
                 // default — mark it, same as the tier pill's dot.
                 <Show when=move || chat.session_mode.get().is_some()>
@@ -146,6 +160,13 @@ pub fn ModePicker() -> impl IntoView {
                             glass rounded-xl border border-border bg-surface-overlay/85 shadow-xl
                             p-2 space-y-1"
                     on:mouseleave=move |_| open.set(false)>
+
+                    // Why there is nothing to choose from.
+                    <Show when=move || refused.get()>
+                        <div class="px-2.5 py-2 text-[11px] leading-snug text-text-tertiary">
+                            {t!(i18n, settings.admin_refusal.read_modes)}
+                        </div>
+                    </Show>
 
                     // Follow-global row — clears the session override.
                     <button

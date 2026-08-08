@@ -782,8 +782,6 @@ impl<S: NoteStore + Send + Sync + 'static> DefaultCompoundIngestor<S> {
                 severity: target.severity,
                 ..KnowledgeNote::default()
             },
-            source_path: None,
-            fact_provenance: Vec::new(),
             action: NoteWriteAction::Supersede,
             bypass_review: false,
             contradicts_existing: false,

@@ -1934,7 +1934,7 @@ pub(super) async fn process_request(text: &str, middleware_chain: &MiddlewareCha
     // (internal/cron) and `"operator"` pass; `"guest"` never reaches here for
     // non-connect methods (the login wall above refuses it first).
     if crate::gateway::method_admin::method_requires_admin(&request.method)
-        && crate::gateway::caller_identity::current_caller_role().as_deref() == Some("member")
+        && crate::gateway::caller_identity::caller_is_member()
     {
         return serde_json::to_string(&JsonRpcResponse::error(
             request.id.clone(),
@@ -2312,6 +2312,11 @@ mod tests {
         assert!(scope.is_empty(), "a member must not be stamped `*`");
 
         let guard = crate::gateway::event_scope::EventScopeGuard::default_rules();
+        // The raw approval CARDS are no longer this guard's business (they are
+        // owner-scoped per frame since 2026-08-08, so a member gets their own
+        // and no one else's). What a member must still not hold is the
+        // superuser scope, which is what would hand them everybody's.
+        assert!(!crate::gateway::event_scope::is_superuser_scope(&scope));
         assert!(!guard.can_receive("surface.approval", &scope));
         assert!(!guard.can_receive("config.changed", &scope));
         assert!(!guard.can_receive("pairing.requested", &scope));
@@ -3005,12 +3010,26 @@ mod tests {
 
         assert!(
             index
-                .event_admits(topic2, visibility_payload2, Some("alice"), &store, None)
+                .event_admits(
+                    topic2,
+                    visibility_payload2,
+                    Some("alice"),
+                    false,
+                    &store,
+                    None
+                )
                 .await
         );
         assert!(
             !index
-                .event_admits(topic2, visibility_payload2, Some("bob"), &store, None)
+                .event_admits(
+                    topic2,
+                    visibility_payload2,
+                    Some("bob"),
+                    false,
+                    &store,
+                    None
+                )
                 .await
         );
     }
@@ -3062,7 +3081,14 @@ mod tests {
         let index = EventVisibilityIndex::new();
         assert!(
             index
-                .event_admits(topic, visibility_payload, Some("alice"), &store, None)
+                .event_admits(
+                    topic,
+                    visibility_payload,
+                    Some("alice"),
+                    false,
+                    &store,
+                    None
+                )
                 .await,
             "the frame itself stays Global — suppressing it would latch alice's \
              red dot on the seq guard"

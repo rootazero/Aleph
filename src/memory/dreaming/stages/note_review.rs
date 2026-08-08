@@ -397,8 +397,6 @@ mod tests {
                 category: "learning".into(),
                 ..Default::default()
             },
-            source_path: None,
-            fact_provenance: vec![],
             action: NoteWriteAction::Create,
             bypass_review: false,
             contradicts_existing: false,
@@ -422,7 +420,6 @@ mod tests {
             embedder: std::sync::Arc::new(ReviewStubEmbedder),
             report: DreamReport::default(),
             pipeline_type: "consolidate".into(),
-            activity_checker: std::sync::Arc::new(|| false),
             strategy: DreamStrategy::Consolidate,
             orientation: None,
             evolution_budget: crate::memory::dreaming::EditBudget::default(),

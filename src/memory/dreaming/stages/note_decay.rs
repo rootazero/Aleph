@@ -804,7 +804,6 @@ mod tests {
             embedder,
             report: DreamReport::default(),
             pipeline_type: "consolidate".into(),
-            activity_checker: std::sync::Arc::new(|| false),
             strategy: DreamStrategy::Consolidate,
             orientation: None,
             evolution_budget: crate::memory::dreaming::EditBudget::default(),

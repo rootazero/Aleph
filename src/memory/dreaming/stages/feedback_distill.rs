@@ -907,7 +907,6 @@ mod tests {
             embedder: Arc::new(StubEmbedder),
             report: crate::memory::dreaming::DreamReport::default(),
             pipeline_type: "consolidate".into(),
-            activity_checker: Arc::new(|| false),
             strategy: crate::memory::dreaming::DreamStrategy::Consolidate,
             orientation: Some(orientation),
             evolution_budget: crate::memory::dreaming::EditBudget::default(),

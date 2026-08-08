@@ -7,12 +7,13 @@
 
 use leptos::prelude::*;
 use leptos::task::spawn_local;
+use leptos_i18n::I18nContext;
 use std::collections::HashMap;
 
 use crate::api::{McpConfigApi, McpServerConfig, McpServerInfo};
 use crate::components::ui::SecretInput;
 use crate::context::DashboardState;
-use crate::i18n::{t, t_string, use_i18n};
+use crate::i18n::{t, t_string, use_i18n, Locale};
 
 /// One editable environment-variable row with a stable id for keyed iteration.
 #[derive(Clone, Copy)]
@@ -38,6 +39,9 @@ fn is_secret_env_key(key: &str) -> bool {
 
 /// Load MCP servers list from Gateway
 fn load_servers(
+    // Localised copy for a refused load — the caller already holds the
+    // context; `I18nContext` is `Copy`, so it rides along like the signals do.
+    i18n: I18nContext<Locale>,
     state: DashboardState,
     servers: RwSignal<Vec<McpServerInfo>>,
     loading: RwSignal<bool>,
@@ -52,7 +56,11 @@ fn load_servers(
                 loading.set(false);
             }
             Err(e) => {
-                error.set(Some(format!("Failed to load MCP servers: {e}")));
+                error.set(Some(crate::components::admin_refusal::settings_load_error(
+                    i18n,
+                    &e,
+                    |e| format!("Failed to load MCP servers: {e}"),
+                )));
                 loading.set(false);
             }
         }
@@ -73,7 +81,7 @@ pub fn McpView() -> impl IntoView {
     // Load servers when connected
     Effect::new(move || {
         if state.is_connected.get() {
-            load_servers(state, servers, loading, error);
+            load_servers(i18n, state, servers, loading, error);
         } else {
             loading.set(false);
         }
@@ -96,7 +104,7 @@ pub fn McpView() -> impl IntoView {
                         <button
                             class="px-3 py-1.5 bg-surface-sunken text-text-secondary rounded hover:bg-surface-sunken text-sm"
                             on:click=move |_| {
-                                load_servers(state, servers, loading, error);
+                                load_servers(i18n, state, servers, loading, error);
                             }
                         >
                             {t!(i18n, settings.mcp.refresh)}
@@ -283,7 +291,7 @@ fn McpServerCard(
                                         spawn_local(async move {
                                             match McpConfigApi::delete(&state, id).await {
                                                 Ok(_) => {
-                                                    load_servers(state, servers, loading, error);
+                                                    load_servers(i18n, state, servers, loading, error);
                                                 }
                                                 Err(e) => {
                                                     error.set(Some(format!("Failed to delete server: {e}")));
@@ -357,7 +365,11 @@ fn EditMcpServerDialog(
                     }
                 }
                 Err(e) => {
-                    dialog_error.set(Some(format!("Failed to load server: {e}")));
+                    dialog_error.set(Some(crate::components::admin_refusal::settings_load_error(
+                        i18n,
+                        &e,
+                        |e| format!("Failed to load server: {e}"),
+                    )));
                 }
             }
         });
@@ -419,7 +431,7 @@ fn EditMcpServerDialog(
             match result {
                 Ok(_) => {
                     saving.set(false);
-                    load_servers(state, servers, loading, error);
+                    load_servers(i18n, state, servers, loading, error);
                     on_close();
                 }
                 Err(e) => {

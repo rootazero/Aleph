@@ -94,8 +94,8 @@ pub(in crate::commands::start) struct AgentHandlersResult {
     pub message_store: Option<Arc<dyn alephcore::teams::messages::MessageStore>>,
     /// `OnceLock` handle shared with the real `ExecutionEngine`. Boot code calls
     /// `.set(orchestrator)` on this after `initialize_orchestrator` returns so
-    /// that `dispatch_via_orchestrator` can resolve the orchestrator from the
-    /// engine's own field rather than an external argument.
+    /// the run loop, steering rescue, and gate paths can resolve the
+    /// orchestrator from the engine's own field rather than an external argument.
     pub orchestrator_cell: Option<
         std::sync::Arc<std::sync::OnceLock<std::sync::Arc<alephcore::orchestrator::Orchestrator>>>,
     >,
@@ -680,6 +680,7 @@ pub(in crate::commands::start) async fn register_agent_handlers(
                 app_config.memory.assembler_config(),
                 app_config.memory.injection_mode,
                 app_config.memory.curated.into(),
+                app_config.memory.orientation.max_tokens,
             );
             let reflector_assembler = reflector_mcp.assembler();
 
@@ -1037,6 +1038,9 @@ pub(in crate::commands::start) async fn register_agent_handlers(
                 // curated envelope, so this is the call that makes the section
                 // mean anything at all.
                 app_config.memory.curated.into(),
+                // `[memory.orientation] max_tokens` — threaded like curated so
+                // the knob is real at the provider that renders orientation.
+                app_config.memory.orientation.max_tokens,
                 Some(memory_ext_registry.clone()),
                 orientation.clone(),
                 profile_synth.clone(),

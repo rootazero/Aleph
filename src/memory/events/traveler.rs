@@ -20,9 +20,6 @@ use super::projector::EventProjector;
 /// Time-travel service for historical memory state reconstruction.
 ///
 /// Wraps the [`StateDatabase`] event store and provides:
-/// - **`fact_at`** — reconstruct a fact's state at a specific timestamp
-/// - **`fact_timeline`** — get the complete event stream for a fact
-/// - **`events_between`** — get all memory changes within a time range
 /// - **`explain_fact`** — human-readable lifecycle explanation (replaces
 ///   `AuditLogger::explain_fact` for event-sourced facts)
 pub struct MemoryTimeTraveler {
@@ -34,40 +31,6 @@ impl MemoryTimeTraveler {
     #[must_use]
     pub const fn new(db: Arc<StateDatabase>) -> Self {
         Self { db }
-    }
-
-    /// Reconstruct a fact's state at a specific timestamp.
-    ///
-    /// Loads all events for `fact_id` with `timestamp <= at` and folds
-    /// them through the projector. Returns `Ok(None)` if the fact did
-    /// not exist at the given time or was permanently deleted before then.
-    pub async fn fact_at(
-        &self,
-        fact_id: &str,
-        at: i64,
-    ) -> Result<Option<crate::memory::context::MemoryFact>, AlephError> {
-        let events = self.db.get_memory_events_until(fact_id, at).await?;
-        EventProjector::fold_events_to_note(&events)
-    }
-
-    /// Get the complete event timeline for a fact, ordered by sequence.
-    pub async fn fact_timeline(
-        &self,
-        fact_id: &str,
-    ) -> Result<Vec<MemoryEventEnvelope>, AlephError> {
-        self.db.get_memory_events_for_fact(fact_id).await
-    }
-
-    /// Get all memory changes within a time range, across all facts.
-    ///
-    /// Results are ordered by global ID (insertion order) and capped at `limit`.
-    pub async fn events_between(
-        &self,
-        from: i64,
-        to: i64,
-        limit: usize,
-    ) -> Result<Vec<MemoryEventEnvelope>, AlephError> {
-        self.db.get_memory_events_in_range(from, to, limit).await
     }
 
     /// Explain a fact's lifecycle by converting its event stream into
@@ -281,143 +244,6 @@ mod tests {
         );
         env.timestamp = ts;
         env
-    }
-
-    // --- fact_at (time travel) -----------------------------------------------
-
-    #[tokio::test]
-    async fn test_fact_at_before_creation() {
-        let db = make_db();
-        db.append_memory_event(&make_created("fact-tt-1", 1, 1000))
-            .await
-            .unwrap();
-
-        let traveler = MemoryTimeTraveler::new(db);
-        let result = traveler.fact_at("fact-tt-1", 500).await.unwrap();
-        assert!(result.is_none(), "Fact should not exist before creation");
-    }
-
-    #[tokio::test]
-    async fn test_fact_at_after_creation_before_update() {
-        let db = make_db();
-        db.append_memory_event(&make_created("fact-tt-2", 1, 1000))
-            .await
-            .unwrap();
-        db.append_memory_event(&make_content_updated(
-            "fact-tt-2",
-            2,
-            2000,
-            "User prefers Rust and Go",
-        ))
-        .await
-        .unwrap();
-
-        let traveler = MemoryTimeTraveler::new(db);
-
-        // At t=1500 — only the creation event
-        let fact = traveler
-            .fact_at("fact-tt-2", 1500)
-            .await
-            .unwrap()
-            .expect("Fact should exist at t=1500");
-        assert_eq!(fact.content, "User prefers Rust");
-
-        // At t=2500 — both events
-        let fact = traveler
-            .fact_at("fact-tt-2", 2500)
-            .await
-            .unwrap()
-            .expect("Fact should exist at t=2500");
-        assert_eq!(fact.content, "User prefers Rust and Go");
-    }
-
-    #[tokio::test]
-    async fn test_fact_at_nonexistent_fact() {
-        let db = make_db();
-        let traveler = MemoryTimeTraveler::new(db);
-        let result = traveler.fact_at("no-such-fact", 9999).await.unwrap();
-        assert!(result.is_none());
-    }
-
-    // --- fact_timeline -------------------------------------------------------
-
-    #[tokio::test]
-    async fn test_fact_timeline_returns_all_events_in_order() {
-        let db = make_db();
-        db.append_memory_event(&make_created("fact-tl-1", 1, 1000))
-            .await
-            .unwrap();
-        db.append_memory_event(&make_accessed("fact-tl-1", 2, 2000, 1))
-            .await
-            .unwrap();
-        db.append_memory_event(&make_content_updated(
-            "fact-tl-1",
-            3,
-            3000,
-            "Updated content",
-        ))
-        .await
-        .unwrap();
-
-        let traveler = MemoryTimeTraveler::new(db);
-        let timeline = traveler.fact_timeline("fact-tl-1").await.unwrap();
-
-        assert_eq!(timeline.len(), 3);
-        assert_eq!(timeline[0].seq, 1);
-        assert_eq!(timeline[1].seq, 2);
-        assert_eq!(timeline[2].seq, 3);
-        assert_eq!(timeline[0].event.event_type_tag(), "NoteCreated");
-        assert_eq!(timeline[1].event.event_type_tag(), "NoteAccessed");
-        assert_eq!(timeline[2].event.event_type_tag(), "NoteContentUpdated");
-    }
-
-    #[tokio::test]
-    async fn test_fact_timeline_empty_for_unknown_fact() {
-        let db = make_db();
-        let traveler = MemoryTimeTraveler::new(db);
-        let timeline = traveler.fact_timeline("ghost").await.unwrap();
-        assert!(timeline.is_empty());
-    }
-
-    // --- events_between ------------------------------------------------------
-
-    #[tokio::test]
-    async fn test_events_between_filters_by_time_range() {
-        let db = make_db();
-        db.append_memory_event(&make_created("fact-eb-1", 1, 1000))
-            .await
-            .unwrap();
-        db.append_memory_event(&make_created("fact-eb-2", 1, 2000))
-            .await
-            .unwrap();
-        db.append_memory_event(&make_created("fact-eb-3", 1, 3000))
-            .await
-            .unwrap();
-
-        let traveler = MemoryTimeTraveler::new(db);
-
-        // Only the t=2000 event
-        let events = traveler.events_between(1500, 2500, 100).await.unwrap();
-        assert_eq!(events.len(), 1);
-        assert_eq!(events[0].fact_id, "fact-eb-2");
-
-        // All three
-        let events = traveler.events_between(500, 3500, 100).await.unwrap();
-        assert_eq!(events.len(), 3);
-    }
-
-    #[tokio::test]
-    async fn test_events_between_respects_limit() {
-        let db = make_db();
-        for i in 1..=5 {
-            let mut env = make_created(&format!("fact-lim-{i}"), 1, i * 1000);
-            env.timestamp = i * 1000;
-            db.append_memory_event(&env).await.unwrap();
-        }
-
-        let traveler = MemoryTimeTraveler::new(db);
-        let events = traveler.events_between(0, 10000, 2).await.unwrap();
-        assert_eq!(events.len(), 2);
     }
 
     // --- explain_fact --------------------------------------------------------

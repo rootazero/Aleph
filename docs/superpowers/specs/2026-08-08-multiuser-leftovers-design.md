@@ -180,3 +180,183 @@ cargo clippy --all-targets
 
 `cargo check -p aleph-panel` 本轮不涉及 webchat 改动，但若 `interfaces/webchat/`
 有任何改动（哪怕不是本轮改的）仍需跑一次。
+
+---
+
+# 附录 · 第二轮（2026-08-08 下午）—— 四个 UI 层发现 + 一个功能性死路
+
+上一轮 item D 记录了 4 个 UI 层发现但未修。本附录是它们的收尾，外加侦察中撞见的
+第五项（member 无法批准自己的工具调用）。
+
+## 侦察结论：四条里有三条是同一个根因
+
+`Err` 被折成一个**值**，于是 UI 替服务器发明了一个它从未说过的答案：
+
+| 面 | 代码 | `Err` 被读成 |
+|---|---|---|
+| 引导清单 | `Err(_) => ready.set(Some(false))` | 「没配置」← **唯一的假话** |
+| 执行档位 pill | `Err(e) => console::warn` | 「没有可选档位」+ 空标签 |
+| 会话模式 pill | 同上 | 「本版没有这个功能」（pill 整个消失） |
+| ~20 个设置页 | `format!("Failed to load X: {e}")` | 原始英文协议串 |
+
+新判据已进 CLAUDE.md §0：**「被拒」不许读作「没有」**。
+
+侦察还发现两处记录里没有的**同构第二实例**：会话模式 pill 与档位 pill 读同一个 RPC；
+cluster 页的 `注销` 与 `+ Enroll` 两个**写**动词共用了**读**的拒绝文案。
+
+## 决定与实现
+
+### A · 设置树（发现 1）：不藏，只把拒绝说清楚
+
+推翻「隐藏 admin 页」的直觉——2026-08-07 刚刻意删掉 `DashboardState::is_operator()`
+并留了源码级 pin（`cluster.rs::the_cluster_page_holds_no_client_side_role_gate`），理由是
+客户端捕获的角色在 `restamp_live_connections` 之后两个方向都是错的。隐藏＝同一个闸换名字。
+
+- 新 `components/admin_refusal.rs`：`is_admin_refusal` / `labeled` / `settings_load_error`，
+  单一源 `aleph_protocol::jsonrpc::ADMIN_REQUIRED_MESSAGE`（服务端发的那个常量本身）。
+- 19 个设置页的 load 错误改走 `settings_load_error`，**非拒绝一律原样透传**
+  （degraded copy 胜过错误断言）。新增 i18n 组 `settings.admin_refusal`（en/zh）。
+
+### B · 引导清单（发现 2，唯一的假信息）
+
+`Option<bool>` → 四态 `StepStatus{Unknown, Ready, Pending, Restricted}`；
+**只有 `Ok` 有资格产生 `Pending`**。被拒的步骤不再提供 CTA 链接（那是同一句假话的后半），
+计数器另报 `· N restricted` 而不把被拒项算成待办。
+
+### C · 两个 pill（发现 3 + 其同构实例）
+
+根因在服务端：`config.get_tool_permissions` 被 `config.` 整族闸住，而这两个旋钮的
+**写面对 member 一直是开的**（`sessions.patch` / `chat.send` 的 `exec_tier`+`mode`）——
+门开着、菜单锁着。照 `gateway.metrics.run_concurrency` 的既有形状 carve-out，
+非 admin 响应**按移除构造**（掉 `default` + `overrides`，留四个 id 枚举），
+写兄弟 `config.update_tool_permissions` 照旧闸住。UI 侧两个 pill 在被拒时显式说明；
+模式 pill 的 hide-on-empty 规则新增 `|| refused`，因为"消失"是读者唯一分不出
+「没权限」和「本版没这功能」的结局。
+
+### D · cluster 写动词文案（发现 4）
+
+`fleet_error_label(err, action)`，三个动词各自命名（`ACTION_READ_FLEET` /
+`ACTION_ENROLL` / `ACTION_DEREGISTER`）。`注销` 此前把失败塞进**读**用的 `error` 信号，
+故 `error` 改为 `(String, &'static str)`。
+
+### E · member 无法批准自己的工具调用（本轮新增，用户确认纳入）
+
+`exec.` 整族 admin-gated、无 carve-out ⇒ 默认 `Auto` 档下 member 的每个非幂等工具调用
+park 满 120s 后死于 `Timeout`，**结构上无解**。
+
+两半一起修（只修 RPC 半边是哑弹——Panel 的 `pending_approvals` 只由 `approval.*` 事件刷新）：
+
+1. **RPC 面**：`exec.approvals.pending` / `exec.approval.resolve` 进 `MEMBER_CARVE_OUTS`，
+   在 handler 内按记录自带的 `session_key` 作用域化。"不是你的"与"不存在"**同一条臂、同一个 code**。
+2. **事件面**：`EventScopeGuard` 删掉 `approval.` 规则（角色回答不了"他自己的"），
+   `event_visibility` 新增 `SessionIdentity::BySessionKeyOrAdmin` —— member 收自己的，
+   operator 收全部（＝它此前的行为逐位不变）。`surface.approval` 横幅腿保持角色闸。
+
+⚠️ **实施中自我抓到一个缺陷**：RPC 面第一版用 `visible_owner_filter().is_none()` 短路，
+但 **operator 的 `CALLER_USER` 是 `OWNER_USER_ID` 而非 `None`** ⇒ 过滤对 operator 也生效
+⇒ 事件面放行、列表面过滤，而 Panel 每收一帧就按列表面重建 ⇒ **卡片到达后当场消失**。
+改用 `caller_identity::caller_is_member()`（＝ admin 闸自己的谓词），并加
+`an_operator_still_sees_a_members_parked_approval` 钉住；已用真实变异证其 RED。
+
+## 顺手修掉的两个先于本轮存在的问题
+
+1. **Panel 整个单测目标编译不过**（`context.rs` 的 `use super::role_is_operator` 悬空，
+   随 2026-08-07 删 `is_operator()` 留下）。`cargo check` 不编译 `#[cfg(test)]`，所以它
+   静默地让这个 crate 的 732 个测试一天没跑过——本轮新写的 Panel 测试同样一条都不会跑。
+2. **CI fmt 门红**：`src/gateway/event_bus.rs` 一处（非本轮文件）。fmt 挂了同 job 的
+   clippy 永远走不到。
+
+## 未做 / 已知缺口
+
+- ~~**CLI `aleph workspace create|archive` 仍然是坏的**~~ —— **已于第三轮修掉**，见下。
+- **本轮零真机验证**：全部是编译 + 单测 + 变异验证。member 端 Panel 的实际观感
+  （四态徽标、两个 pill 的说明行、19 个设置页的文案）需要一次两用户真机 QA 才算闭环。
+- **`clarification.pending` 有与 E 同形的 operator 缺口**：它用 `visible_owner_filter()`，
+  所以 operator 看不到 member 的待答问题。未改——它没有本轮那个"事件面放行/列表面过滤"
+  的自相矛盾（`clarification` 的帧走 `BySessionKey`，两面一致），所以是产品决定不是 bug。
+
+## 验证
+
+```
+cargo test -p alephcore --lib                                  15604 passed / 0 failed
+cargo test -p alephcore --features test-helpers --test '*' --no-run   0 errors
+cargo test -p aleph-panel                                        732 passed / 0 failed
+cargo check -p aleph-desktop-macos                               0 errors
+cargo clippy --all-targets                                       0 errors（4 条既存 warning，均非本轮文件）
+cargo fmt --all -- --check                                       clean
+```
+
+---
+
+# 附录 · 第三轮（2026-08-08）—— CLI `workspace` 家族
+
+前两轮把这一项**存档不修**（"混进来会让这轮的 diff 讲两个故事"）。本轮按用户指令修掉。
+
+## 实际有三处坏，不是一处
+
+| # | 症状 | 真因 |
+|---|---|---|
+| 1 | `aleph workspace create` 恒 `INVALID_PARAMS` | CLI 发 `{"name", "description"?}`，handler 要 `{"id", "name", …}` |
+| 2 | `aleph workspace archive` 恒 `INVALID_PARAMS` | CLI 发 `{"name"}`，handler 要 `{"id"}` |
+| 3 | `aleph workspace list` 的 `Status`/`Created` **每行都是 `-`** | 读 `status`/`created`，而 `AgentEnv` 序列化出来的是 `is_archived`/`created_at` |
+
+第 3 条此前无人报告，因为它**不报错**——`.unwrap_or("-")` 把"我问的字段不存在"渲染成
+"这个工作区还没有状态"。它和 1、2 是同一个根因的两种表现。
+
+## 根因：契约写了两遍，而"测试"是把字面量跟自己比
+
+`aleph-cli` 的 `Cargo.toml` 用大写字母写着 **MUST NOT depend on alephcore**（它同时是协议的
+参考实现）。于是 wire 形状被写了两遍：handler 一份 `#[derive(Deserialize)]`，CLI 一份
+`serde_json::json!` 字面量，中间**没有任何东西连着**。而 CLI 那侧仅有的两个测试是：
+
+```rust
+let params = serde_json::json!({ "name": "test-ws" });
+assert_eq!(params["name"], "test-ws");   // 恒真；测的是 serde_json
+```
+
+**一个只读自己刚写下的字面量的断言永远绿**，所以三处坏了多久都没人知道。
+
+## 做法
+
+1. **`shared/protocol/src/workspace.rs`（新）＝ wire 契约单一源**：`WorkspaceCreateParams` /
+   `WorkspaceRef`（`get` 与 `archive` 共用，它们寻址同一个东西）/ `WorkspaceUpdateParams` /
+   `WorkspaceRow` / `WorkspaceList`。两侧共用 ⇒ **重命名是编译错**，这是唯一挡得住
+   "名字看起来对"的守卫。`shared/protocol` 是双方都依赖的那一侧（判据：真源必须在被依赖的一侧），
+   且已有先例（`jsonrpc::ToolCallParams`）。
+2. **handler 删掉三个本地 param struct**，改用协议类型。
+3. **CLI 位置参数改为 `id`**（＝`archive` 唯一能寻址的键），新增 `--name`（缺省＝id，
+   镜像 `AgentEnvStore::create` 的服务端缺省）、`--icon`。位置参数的**调用形式不变**
+   （`aleph workspace create foo`），只有帮助文本和语义变了——此前它没有任何能工作的行为可破坏。
+4. **`list` 表头改成 `ID | Name | Description | Created`**，读真实字段。
+   - `ID` 排第一：另外两个子命令只认它，一张只显示 display name 的表让 `archive` 无处可抄。
+   - **刻意不留 `Status` 列**：`handle_list` 硬编码 `list(false)`（不含已归档），所以那一列
+     结构上恒为 "active" —— 恒真的列等于没列。`WorkspaceRow` 因此**不含 `is_archived`**
+     （一个没有渲染者的展示字段就是断线）。
+   - `--json` 是**原样透传**，不经投影：客户端渲染不了的形状不该阻断原始输出。
+     表格路径则相反——解析失败是要喊出来的错误，不是一表破折号。
+
+## 验证过的、以及故意没做的
+
+- **变异验证**：给 `WorkspaceRow.created_at` 加 `#[serde(rename="created")]`（＝历史 bug 的
+  形状，且能编译），`every_column_the_cli_renders_is_present_in_the_list_response`
+  当场 RED（`missing field 'created'`）。直接改字段名则是**编译错**——比测试更早。
+- **查过但不是 bug**：`handle_create` 硬编码 profile `"default"`，而 `AgentEnvStoreConfig`
+  另有 `default_profile` 字段——同一事实的第三份拷贝。**没改**：`load_profiles` 自己会补种
+  `"default"`（`mod.rs:589`），而 `default_profile` 无任何用户配置入口、全仓恒为 `"default"`，
+  所以三份拷贝今天字节相同、无法分歧。记在这里以免下次重新推理一遍。
+- **`workspace.get` / `workspace.update` 至今没有任何客户端**（Panel 也没有）。本轮**没有**
+  顺手加 CLI 子命令——那是新功能不是修 bug。
+- **归档后无法从 CLI 复看**：`workspace.list` 不接 `include_archived`，所以 `archive` 的确认
+  只能靠"那行从列表里消失"。没加参数（新 wire 面），记为已知缺口。
+- **零真机验证**：本轮全部是编译 + 单测 + 变异验证。真机需要一个在跑的 server 上
+  `aleph workspace create/list/archive` 走一遍。
+- **同一个形状还有第三个实例，本轮只上报不修**：`channels.set_agent` 的参数在 Panel
+  （`interfaces/webchat/src/api/workspace.rs`，手写 `json!({channel_id, agent_id})`）与
+  handler（`SetAgentParams`）之间同样是两份互不相干的声明。**今天字节相同，逐行读过**，
+  所以它不是 bug；但它是同一类漂移风险，且收敛它要把 Panel crate 拖进这次 diff。
+  留作单独讨论。
+
+## 顺手确认（非本轮引入）
+
+`cargo test -p aleph-cli` 有一个**先于本轮**就红的测试：`parse_webhook_and_proxy_preview_surfaces`
+断言 `aleph webhook add` 能解析，实际不能。已用 `git stash` 确认与本轮改动无关，**未修**。

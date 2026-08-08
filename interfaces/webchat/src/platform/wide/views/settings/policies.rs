@@ -58,7 +58,11 @@ pub fn PoliciesView() -> impl IntoView {
             let schema = match AgentsApi::tools_schema(&dash).await {
                 Ok(s) => s,
                 Err(e) => {
-                    tp_error.set(Some(format!("Failed to load tool schema: {e}")));
+                    tp_error.set(Some(crate::components::admin_refusal::settings_load_error(
+                        i18n,
+                        &e,
+                        |e| format!("Failed to load tool schema: {e}"),
+                    )));
                     tp_loading.set(false);
                     return;
                 }
@@ -67,7 +71,11 @@ pub fn PoliciesView() -> impl IntoView {
             let perms = match ToolPermissionsApi::get_global(&dash).await {
                 Ok(p) => p,
                 Err(e) => {
-                    tp_error.set(Some(format!("Failed to load permissions: {e}")));
+                    tp_error.set(Some(crate::components::admin_refusal::settings_load_error(
+                        i18n,
+                        &e,
+                        |e| format!("Failed to load permissions: {e}"),
+                    )));
                     tp_loading.set(false);
                     return;
                 }

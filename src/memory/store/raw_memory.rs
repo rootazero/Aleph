@@ -191,12 +191,6 @@ impl RawMemorySource {
     pub fn as_str(&self) -> &'static str {
         self.to_persisted().0
     }
-
-    /// Backwards-compat shim — existing callers that only had a token.
-    #[must_use]
-    pub fn from_str_(s: &str) -> Self {
-        Self::from_persisted(s, None)
-    }
 }
 
 /// A raw memory record — ephemeral data consumed by `CompressionService`.
@@ -241,11 +235,6 @@ impl RawMemory {
 
     pub fn with_path(mut self, path: impl Into<String>) -> Self {
         self.path = Some(path.into());
-        self
-    }
-
-    pub fn with_attachment_text(mut self, text: impl Into<String>) -> Self {
-        self.attachment_text = Some(text.into());
         self
     }
 }

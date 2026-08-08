@@ -100,8 +100,9 @@ pub struct ExecutionEngine<P: ThinkerProviderRegistry + 'static, R: ToolRegistry
     /// and cancel tokens the moment the spawning turn ended.) Completed
     /// entries are TTL-pruned by the tracker itself, bounding growth.
     pub(super) background_tracker: Arc<crate::agents::background_tracker::BackgroundAgentTracker>,
-    /// Orchestrator handle injected after boot assembly. Populated via
-    /// `with_orchestrator` once `initialize_orchestrator` completes.
+    /// Orchestrator handle injected after boot assembly. Populated by boot code
+    /// via `orchestrator_cell()`'s `.set(...)` once `initialize_orchestrator`
+    /// completes.
     pub(super) orchestrator: Arc<std::sync::OnceLock<Arc<crate::orchestrator::Orchestrator>>>,
     /// Continuation deps injected after boot assembly so the post-run hook
     /// can enqueue an autonomous continuation in the SAME session when the

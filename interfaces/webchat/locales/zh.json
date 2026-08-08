@@ -1460,6 +1460,12 @@
       "rpm": "请求/分钟",
       "tpm": "Token/分钟",
       "unlimited": "不限"
+    },
+    "admin_refusal": {
+      "read_config": "该设置页需要 operator 权限,当前连接的角色无法读取服务器全局配置。",
+      "read_setup_state": "需要 operator 权限,当前连接无法读取该项配置,状态未知。",
+      "read_tiers": "需要 operator 权限,当前连接无法读取可选的执行档位。",
+      "read_modes": "需要 operator 权限,当前连接无法读取可选的会话模式。"
     }
   },
   "extensions": {

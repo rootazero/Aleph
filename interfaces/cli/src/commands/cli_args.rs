@@ -844,19 +844,62 @@ pub enum SessionExportFormat {
 #[derive(Subcommand)]
 pub enum WorkspaceAction {
     /// List all workspaces
-    List,
+    List {
+        /// Also show archived workspaces, with a Status column
+        ///
+        /// Archiving is a soft delete, so without this the result of
+        /// `workspace archive` cannot be seen from any client.
+        #[arg(long)]
+        include_archived: bool,
+    },
+    /// Show one workspace in detail
+    ///
+    /// Archived workspaces are shown too — this is addressed by exact ID, and
+    /// the output says so on its Status line. `update` refuses them.
+    Get {
+        /// Workspace ID (the ID column of `workspace list`)
+        id: String,
+    },
     /// Create a new workspace
     Create {
-        /// Workspace name
-        name: String,
+        /// Workspace ID — the key `archive` addresses it by (URL-safe slug, e.g. "crypto")
+        id: String,
+        /// Display name (defaults to the ID)
+        #[arg(long)]
+        name: Option<String>,
         /// Optional description
         #[arg(long)]
         description: Option<String>,
+        /// Optional emoji or icon identifier
+        #[arg(long)]
+        icon: Option<String>,
+    },
+    /// Change a workspace's name, description or icon
+    ///
+    /// Every field is a patch: the ones you omit are left alone, not cleared.
+    /// At least one is required — an update that changes nothing would print
+    /// "updated" and mean it, which is worse than an error.
+    ///
+    /// This is the only way to fix a display name after `create`, and archiving
+    /// is not an escape hatch: it is a soft delete, the ID stays taken, and an
+    /// archived workspace is read-only.
+    Update {
+        /// Workspace ID (the ID column of `workspace list`)
+        id: String,
+        /// New display name
+        #[arg(long)]
+        name: Option<String>,
+        /// New description
+        #[arg(long)]
+        description: Option<String>,
+        /// New emoji or icon identifier
+        #[arg(long)]
+        icon: Option<String>,
     },
     /// Archive a workspace
     Archive {
-        /// Workspace name to archive
-        name: String,
+        /// Workspace ID to archive (the ID column of `workspace list`)
+        id: String,
     },
 }
 

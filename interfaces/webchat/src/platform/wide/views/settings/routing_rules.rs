@@ -33,7 +33,11 @@ pub fn RoutingRulesView() -> impl IntoView {
                 loading.set(false);
             }
             Err(e) => {
-                error.set(Some(format!("Failed to load rules: {e}")));
+                error.set(Some(crate::components::admin_refusal::settings_load_error(
+                    i18n,
+                    &e,
+                    |e| format!("Failed to load rules: {e}"),
+                )));
                 loading.set(false);
             }
         }

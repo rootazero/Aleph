@@ -789,12 +789,46 @@ async fn dispatch_workspace(
 ) -> CliResult<()> {
     use commands::workspace_cmd;
     match action {
-        WorkspaceAction::List => workspace_cmd::list(server_url, config, json).await,
-        WorkspaceAction::Create { name, description } => {
-            workspace_cmd::create(server_url, config, &name, description.as_deref(), json).await
+        WorkspaceAction::List { include_archived } => {
+            workspace_cmd::list(server_url, config, include_archived, json).await
         }
-        WorkspaceAction::Archive { name } => {
-            workspace_cmd::archive(server_url, config, &name, json).await
+        WorkspaceAction::Create {
+            id,
+            name,
+            description,
+            icon,
+        } => {
+            workspace_cmd::create(
+                server_url,
+                config,
+                &id,
+                name.as_deref(),
+                description.as_deref(),
+                icon.as_deref(),
+                json,
+            )
+            .await
+        }
+        WorkspaceAction::Get { id } => workspace_cmd::get(server_url, config, &id, json).await,
+        WorkspaceAction::Update {
+            id,
+            name,
+            description,
+            icon,
+        } => {
+            workspace_cmd::update(
+                server_url,
+                config,
+                &id,
+                name.as_deref(),
+                description.as_deref(),
+                icon.as_deref(),
+                json,
+            )
+            .await
+        }
+        WorkspaceAction::Archive { id } => {
+            workspace_cmd::archive(server_url, config, &id, json).await
         }
     }
 }

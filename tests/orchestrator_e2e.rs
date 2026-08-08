@@ -67,11 +67,3 @@ async fn researcher_child_dispatch() {
     // Task 9 intentionally deferred.
     unimplemented!();
 }
-
-#[tokio::test]
-#[ignore = "Phase 6: requires flow_run ToolService registration (Task 12 deferred adapter)"]
-async fn flow_run_composition_main_to_researcher() {
-    // TODO(Phase 6): depends on AlephTool adapter wiring `flow_run` into
-    // ToolService. Task 12 deferred this adapter to Phase 6.
-    unimplemented!();
-}

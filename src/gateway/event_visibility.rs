@@ -65,15 +65,19 @@
 //! a `session_key`, but this module does NOT additionally owner-scope them:
 //! they are already role-gated by `EventScopeGuard` (filter #1).
 //!
-//! The three `approval.*` frames were on that list until 2026-08-08, justified
-//! by "an exec approval for a MEMBER's session is resolved by an OPERATOR, so a
-//! naive owner-equality check would break the one workflow that exists to let
-//! an admin act on a non-owned session's behalf". That workflow was never
-//! reachable: the resolution RPCs were admin-gated too, so a member's blocked
-//! run had nobody who could both see the card and answer it, and it died at the
-//! 120-second timeout instead. They are now classified by payload — a real
-//! `session_key` means the session decides, an empty one means a cluster node
-//! raised it and only the operator can. `RunningSetChanged` carries a
+//! ⚠️ The raw `approval.*` frames USED to be on that list, on the reasoning
+//! that an exec approval for a MEMBER's session is resolved by an OPERATOR, so
+//! a naive owner-equality check would deny the operator the very card they are
+//! meant to act on. That reasoning was right and is preserved — but it was
+//! leaning on a role gate that had to go: `Auto`, the DEFAULT tier, parks every
+//! non-idempotent tool call, and a member had no principal allowed to release
+//! their own, so every such call died at the approval timeout. Since 2026-08-08
+//! those three topics are [`SessionIdentity::BySessionKeyOrAdmin`] (a real
+//! `session_key`) or [`SessionIdentity::OperatorOnly`] (an empty one — a
+//! cluster node raised it, it has no owner) and the `approval.` rule is gone
+//! from `EventScopeGuard` — the protection moved down one filter rather than
+//! being removed, and the operator's delivery is byte-for-byte what it was.
+//! `RunningSetChanged` carries a
 //! `Vec<String>` spanning every user's in-flight sessions with no single owner
 //! to check against, so pass/fail is the wrong question for it entirely; it
 //! stays `Global` and its ARRAY is narrowed per connection instead — see the
@@ -193,6 +197,25 @@ pub enum SessionIdentity {
     /// producer becomes a broadcast. Distinct from a bare `false` because an
     /// unscoped process must keep working.
     Unattributed,
+    /// The frame names its session, AND an admin receives it regardless of who
+    /// owns that session.
+    ///
+    /// The one asymmetric answer in this enum, and it exists for exactly one
+    /// workflow: an exec approval is a request for a HUMAN decision about
+    /// someone's parked tool call, and an operator answering on a member's
+    /// behalf is the point of the operator role — a plain
+    /// [`Self::BySessionKey`] would deny the operator the very card they are
+    /// meant to act on. The owner half is what makes the topic deliverable to
+    /// members at all (they resolve their own; see
+    /// `handlers::exec_approvals`), so this variant is a WIDENING for members
+    /// and byte-for-byte unchanged for operators, who received these frames
+    /// unconditionally before.
+    ///
+    /// Do not reach for this to make some other frame convenient for admins.
+    /// Every other session-scoped frame answers "may this person read this
+    /// person's work", and the answer to that is not "admins may read
+    /// everything" — P1 deliberately does not grant that.
+    BySessionKeyOrAdmin(String),
     /// Unattributable to any one session — org-level infrastructure, or
     /// already covered by a different gate (see module doc).
     Global,
@@ -338,35 +361,35 @@ pub fn session_identity_of(topic: &str, data: Option<&Value>) -> SessionIdentity
             }
         }
 
-        // --- Approvals: the one family that carries BOTH kinds of frame ---
+        // --- The raw exec-approval frames: owner-scoped, admin-inclusive ---
         //
-        // A tool-gate approval names the session whose run is blocked; a
-        // cluster-node approval arrives over reverse RPC, belongs to no local
-        // run, and is published with `session_key: String::new()`
-        // (`approval/node_requester.rs`). The discriminator is therefore
-        // STRUCTURAL — is there a session key — rather than a list of topics or
-        // a guess about the requester, so a future producer is classified by
-        // what it actually carries instead of by whether someone remembered to
-        // add it to a table.
+        // These were `Global` while `EventScopeGuard` refused them to anyone
+        // but an operator, which made the role gate the whole of their
+        // protection. That gate is gone (2026-08-08): a member has to receive
+        // the card for their OWN parked tool call, because `Auto` — the
+        // DEFAULT tier — parks every non-idempotent call and the member is now
+        // the principal allowed to release it (`exec.` carve-out in
+        // `method_admin`). With the role gate open, `Global` here would have
+        // handed every member every other member's parked commands, so the
+        // classification moved rather than the protection.
         //
-        // Empty key ⇒ fleet ⇒ operator. Non-empty ⇒ the session decides, which
-        // is what lets a member see and answer the gate blocking their own run.
+        // The family carries two kinds of frame under one prefix: a tool-gate
+        // approval names the blocked session; a cluster-node approval arrives
+        // over reverse RPC, belongs to no local run, and is published with
+        // `session_key: String::new()` (`approval/node_requester.rs`). The
+        // discriminator is therefore STRUCTURAL — is there a session key —
+        // rather than a guess about the requester.
         "approval.requested" | "approval.resolved" | "approval.expired" => {
             match str_field(data, "session_key").filter(|k| !k.is_empty()) {
-                Some(k) => SessionIdentity::BySessionKey(k),
+                // A real session: the owner resolves their own, and the admin
+                // arm keeps an operator receiving a member's card as before.
+                Some(k) => SessionIdentity::BySessionKeyOrAdmin(k),
+                // Fleet or malformed: no owner to compare against, so it is
+                // the operator's. Fail closed — `Global` here would make a
+                // malformed payload the widest possible delivery.
                 None => SessionIdentity::OperatorOnly,
             }
         }
-
-        // --- TopicEvent-form frames already role-gated by EventScopeGuard —
-        // see module doc "Deliberately Global" for why these are not ALSO
-        // owner-scoped despite carrying a session_key. ---
-        //
-        // `surface.approval` stays here deliberately: it is the R5 banner, a
-        // different payload reaching a different audience through
-        // `surface::delivery::audience_allows`, and narrowing it is a UX ruling
-        // rather than a wire fix. Recorded as a known gap, not fixed by
-        // proximity to the three above.
         "surface.approval" | "pairing.requested" | "pairing.completed" | "config.changed" => {
             SessionIdentity::Global
         }
@@ -523,10 +546,12 @@ impl EventVisibilityIndex {
         topic: &str,
         data: Option<&Value>,
         caller_user: Option<&str>,
+        caller_is_admin: bool,
         store: &Arc<dyn SessionStore>,
         teams: Option<&Arc<dyn TeamStore>>,
     ) -> bool {
-        self.event_admits_for(topic, data, caller_user, None, store, teams)
+        let caller_role = if caller_is_admin { Some("operator") } else { Some("member") };
+        self.event_admits_for(topic, data, caller_user, caller_role, store, teams)
             .await
     }
 
@@ -543,7 +568,7 @@ impl EventVisibilityIndex {
     /// `caller_role: None` means "no role information", which
     /// [`role_is_operator`](crate::tools::turn_context::role_is_operator) reads
     /// as trusted local/internal — the repo-wide convention, and why the
-    /// role-less shim above is safe for internal callers rather than a hole.
+    /// boolean shim above is safe for internal callers rather than a hole.
     pub async fn event_admits_for(
         &self,
         topic: &str,
@@ -565,6 +590,15 @@ impl EventVisibilityIndex {
             // A scoped caller is denied; an unscoped one (internal, or a
             // single-user box where nothing resolves an identity) is not.
             SessionIdentity::Unattributed => caller_user.is_none(),
+            SessionIdentity::BySessionKeyOrAdmin(session_key) => {
+                if crate::tools::turn_context::role_is_operator(caller_role) {
+                    return true;
+                }
+                let Some(caller) = caller_user else {
+                    return false;
+                };
+                self.session_admits(&session_key, caller, store).await
+            }
             SessionIdentity::BySessionKey(session_key) => {
                 let Some(caller) = caller_user else {
                     return false;
@@ -884,6 +918,7 @@ mod tests {
                     "stream.agent_trace",
                     Some(&trace),
                     Some("alice"),
+                    false,
                     &store,
                     None
                 )
@@ -895,6 +930,7 @@ mod tests {
                     "stream.agent_trace",
                     Some(&trace),
                     Some("bob"),
+                    false,
                     &store,
                     None
                 )
@@ -906,6 +942,7 @@ mod tests {
                     "stream.agent_trace",
                     Some(&trace),
                     Some(OWNER_USER_ID),
+                    false,
                     &store,
                     None
                 )
@@ -951,6 +988,7 @@ mod tests {
                     "stream.agent_trace",
                     Some(&trace),
                     Some("alice"),
+                    false,
                     &store,
                     None
                 )
@@ -974,6 +1012,7 @@ mod tests {
                     "stream.agent_trace",
                     Some(&trace),
                     Some("alice"),
+                    false,
                     &store,
                     None
                 )
@@ -987,6 +1026,7 @@ mod tests {
                     "stream.agent_trace",
                     Some(&trace),
                     Some("bob"),
+                    false,
                     &store,
                     None
                 )
@@ -1011,6 +1051,7 @@ mod tests {
                     "stream.agent_trace",
                     Some(&trace),
                     Some("alice"),
+                    false,
                     &store,
                     None
                 )
@@ -1039,6 +1080,7 @@ mod tests {
                     "session.lifecycle.changed",
                     Some(&data),
                     Some("alice"),
+                    false,
                     &store,
                     None
                 )
@@ -1050,6 +1092,7 @@ mod tests {
                     "session.lifecycle.changed",
                     Some(&data),
                     Some("bob"),
+                    false,
                     &store,
                     None
                 )
@@ -1082,6 +1125,7 @@ mod tests {
                     "run.subagent_tree",
                     Some(&progress),
                     Some("alice"),
+                    false,
                     &store,
                     None
                 )
@@ -1093,6 +1137,7 @@ mod tests {
                     "run.subagent_tree",
                     Some(&progress),
                     Some("bob"),
+                    false,
                     &store,
                     None
                 )
@@ -1115,6 +1160,7 @@ mod tests {
                     "run.subagent_tree",
                     Some(&settled),
                     Some("alice"),
+                    false,
                     &store,
                     None
                 )
@@ -1126,6 +1172,7 @@ mod tests {
                     "run.subagent_tree",
                     Some(&settled),
                     Some("bob"),
+                    false,
                     &store,
                     None
                 )
@@ -1167,6 +1214,7 @@ mod tests {
                     "run.subagent_tree",
                     Some(&spawned),
                     Some("alice"),
+                    false,
                     &store,
                     None
                 )
@@ -1178,6 +1226,7 @@ mod tests {
                     "run.subagent_tree",
                     Some(&spawned),
                     Some("bob"),
+                    false,
                     &store,
                     None
                 )
@@ -1200,13 +1249,124 @@ mod tests {
         });
         assert!(
             index
-                .event_admits("sessions.changed", Some(&data), Some("alice"), &store, None)
+                .event_admits(
+                    "sessions.changed",
+                    Some(&data),
+                    Some("alice"),
+                    false,
+                    &store,
+                    None
+                )
                 .await
         );
         assert!(
             !index
-                .event_admits("sessions.changed", Some(&data), Some("bob"), &store, None)
+                .event_admits(
+                    "sessions.changed",
+                    Some(&data),
+                    Some("bob"),
+                    false,
+                    &store,
+                    None
+                )
                 .await
+        );
+    }
+
+    /// The approval plane's whole ruling in one test, and the home of the
+    /// assertion `event_scope`'s role tests used to make.
+    ///
+    /// Four principals, four different right answers:
+    /// - the session's owner — YES, this is the carve-out's entire purpose
+    ///   (`Auto` is the default tier, so their own non-idempotent tool calls
+    ///   park, and they are now the principal allowed to release them);
+    /// - any admin — YES, unchanged; an operator answering on a member's behalf
+    ///   is what the operator role is for, and a plain owner check would have
+    ///   taken it away;
+    /// - another member — NO; this is what stops the role gate's removal from
+    ///   being a leak;
+    /// - a walled / chat-tier connection carrying no user — NO, and NOT because
+    ///   a permission list said so: it resolves no owner, and unresolvable
+    ///   fails closed.
+    #[tokio::test]
+    async fn an_approval_frame_reaches_its_owner_and_every_admin_and_nobody_else() {
+        let (store, _temp) = test_store();
+        let key = SessionKey::main("conv-approval");
+        stamp_owner(&store, &key, "alice").await;
+        let store: Arc<dyn SessionStore> = Arc::new(store);
+        let index = EventVisibilityIndex::new();
+
+        let data = serde_json::json!({
+            "approval_id": "a1",
+            "session_key": key.to_key_string(),
+            "channel_id": "",
+            "conversation_id": "",
+        });
+
+        for topic in [
+            "approval.requested",
+            "approval.resolved",
+            "approval.expired",
+        ] {
+            assert!(
+                index
+                    .event_admits(topic, Some(&data), Some("alice"), false, &store, None)
+                    .await,
+                "{topic}: the owner must receive the card for their own parked \
+                 tool call — without it the default tier is a dead end"
+            );
+            assert!(
+                index
+                    .event_admits(topic, Some(&data), Some("bob"), true, &store, None)
+                    .await,
+                "{topic}: an admin must still receive a member's card — that is \
+                 the workflow the previous `Global` ruling protected"
+            );
+            assert!(
+                !index
+                    .event_admits(topic, Some(&data), Some("bob"), false, &store, None)
+                    .await,
+                "{topic}: another member must NOT receive alice's card — this is \
+                 what replaces the role gate, not something added on top of it"
+            );
+            assert!(
+                !index
+                    .event_admits(topic, Some(&data), None, false, &store, None)
+                    .await,
+                "{topic}: a walled / chat-tier connection resolves no owner and \
+                 must fail closed"
+            );
+        }
+
+        // A payload with no session at all: admins only, never a broadcast.
+        // `Global` here would make a malformed frame the widest delivery there
+        // is, which is the opposite of what a missing field should buy.
+        let headless = serde_json::json!({ "approval_id": "a2" });
+        assert!(
+            !index
+                .event_admits(
+                    "approval.requested",
+                    Some(&headless),
+                    Some("alice"),
+                    false,
+                    &store,
+                    None
+                )
+                .await,
+            "an unresolvable approval frame must not reach a non-admin"
+        );
+        assert!(
+            index
+                .event_admits(
+                    "approval.requested",
+                    Some(&headless),
+                    None,
+                    true,
+                    &store,
+                    None
+                )
+                .await,
+            "an admin still receives it — they are the fallback resolver"
         );
     }
 
@@ -1219,7 +1379,7 @@ mod tests {
         for caller in [Some("alice"), Some("bob"), None] {
             assert!(
                 index
-                    .event_admits("tools.changed", None, caller, &store, None)
+                    .event_admits("tools.changed", None, caller, false, &store, None)
                     .await,
                 "an unattributable topic must pass for {caller:?}"
             );
@@ -1289,6 +1449,7 @@ mod tests {
                         &topic,
                         Some(&body),
                         Some("u-alice"),
+                        false,
                         &sessions,
                         Some(&teams)
                     )
@@ -1297,7 +1458,14 @@ mod tests {
             );
             assert!(
                 !index
-                    .event_admits(&topic, Some(&body), Some("u-bob"), &sessions, Some(&teams))
+                    .event_admits(
+                        &topic,
+                        Some(&body),
+                        Some("u-bob"),
+                        false,
+                        &sessions,
+                        Some(&teams)
+                    )
                     .await,
                 "{topic}: a second logged-in user must not receive another user's team chat"
             );
@@ -1307,6 +1475,7 @@ mod tests {
                         &topic,
                         Some(&body),
                         Some(OWNER_USER_ID),
+                        false,
                         &sessions,
                         Some(&teams)
                     )
@@ -1315,7 +1484,7 @@ mod tests {
             );
             assert!(
                 !index
-                    .event_admits(&topic, Some(&body), None, &sessions, Some(&teams))
+                    .event_admits(&topic, Some(&body), None, false, &sessions, Some(&teams))
                     .await,
                 "{topic}: a walled connection carries no identity to admit"
             );
@@ -1337,14 +1506,21 @@ mod tests {
         let index = EventVisibilityIndex::new();
         assert!(
             index
-                .event_admits(&topic, None, Some(OWNER_USER_ID), &sessions, Some(&teams))
+                .event_admits(
+                    &topic,
+                    None,
+                    Some(OWNER_USER_ID),
+                    false,
+                    &sessions,
+                    Some(&teams)
+                )
                 .await,
             "an unstamped team belongs to the legacy operator — loopback must still \
              see its own team chat"
         );
         assert!(
             !index
-                .event_admits(&topic, None, Some("u-bob"), &sessions, Some(&teams))
+                .event_admits(&topic, None, Some("u-bob"), false, &sessions, Some(&teams))
                 .await
         );
     }
@@ -1367,6 +1543,7 @@ mod tests {
                         "team.team-never-existed.message",
                         None,
                         caller,
+                        false,
                         &sessions,
                         Some(&teams)
                     )
@@ -1385,12 +1562,26 @@ mod tests {
         let topic = format!("team.{real}.message");
         assert!(
             index
-                .event_admits(&topic, None, Some("u-alice"), &sessions, Some(&teams))
+                .event_admits(
+                    &topic,
+                    None,
+                    Some("u-alice"),
+                    false,
+                    &sessions,
+                    Some(&teams)
+                )
                 .await
         );
         assert!(
             index
-                .event_admits(&topic, None, Some("u-alice"), &sessions, Some(&teams))
+                .event_admits(
+                    &topic,
+                    None,
+                    Some("u-alice"),
+                    false,
+                    &sessions,
+                    Some(&teams)
+                )
                 .await
         );
         assert_eq!(index.cached_team_count().await, 1);
@@ -1407,7 +1598,7 @@ mod tests {
         for caller in [Some("u-alice"), Some(OWNER_USER_ID), None] {
             assert!(
                 !index
-                    .event_admits("team.t1.message", None, caller, &sessions, None)
+                    .event_admits("team.t1.message", None, caller, false, &sessions, None)
                     .await,
                 "with no TeamStore there is no honest answer for {caller:?}"
             );
@@ -1666,8 +1857,9 @@ mod tests {
             let owned = serde_json::json!({ "session_key": "agent:main:s1" });
             assert_eq!(
                 session_identity_of(topic, Some(&owned)),
-                SessionIdentity::BySessionKey("agent:main:s1".to_string()),
-                "{topic} names a session, so that session's roster decides"
+                SessionIdentity::BySessionKeyOrAdmin("agent:main:s1".to_string()),
+                "{topic} names a session, so that session's roster — or an admin \
+                 acting on it — decides"
             );
 
             // `node_requester` publishes exactly this: an approval for a
@@ -1735,25 +1927,20 @@ mod tests {
                 | GatewayEventFrame::ConfigChanged { .. }
                 | GatewayEventFrame::PairingRequested { .. }
                 | GatewayEventFrame::PairingCompleted { .. } => SessionIdentity::Global,
-                // The one family whose answer depends on its PAYLOAD, so the
-                // expectation is written as the same structural test the
-                // classifier applies rather than a constant: a real
-                // `session_key` means the session decides, an empty one means
-                // a cluster node raised it and only the operator can answer.
-                //
-                // This arm used to read "already role-gated by EventScopeGuard;
-                // deliberately not ALSO owner-scoped
-                // (operator-resolves-a-member's-approval workflow)". That
-                // workflow was never reachable: the resolution RPCs were
-                // admin-gated too, so a member's blocked run had nobody at all
-                // who could both see the card and answer it.
+                // Owner-scoped with an admin arm (2026-08-08). No longer
+                // role-gated upstream: a member must receive the card for their
+                // OWN parked tool call, and the admin arm is what preserves the
+                // operator-resolves-a-member's-approval workflow the previous
+                // `Global` ruling was built around. A fleet approval (empty
+                // `session_key`, raised by a cluster node over reverse RPC) has
+                // no owner to compare against and stays operator-only.
                 GatewayEventFrame::ApprovalRequested { session_key, .. }
                 | GatewayEventFrame::ApprovalResolved { session_key, .. }
                 | GatewayEventFrame::ApprovalExpired { session_key, .. } => {
                     if session_key.is_empty() {
                         SessionIdentity::OperatorOnly
                     } else {
-                        SessionIdentity::BySessionKey(session_key.clone())
+                        SessionIdentity::BySessionKeyOrAdmin(session_key.clone())
                     }
                 }
                 GatewayEventFrame::SessionLifecycleChanged { session_key, .. } => {

@@ -486,6 +486,7 @@ fn GuildSection(
     channel_id: &'static str,
 ) -> impl IntoView {
     let state = expect_context::<DashboardState>();
+    let i18n = use_i18n();
 
     // Refresh guilds
     let on_refresh = move |_| {
@@ -572,7 +573,11 @@ fn GuildSection(
                     channels.set(parsed);
                 }
                 Err(e) => {
-                    error.set(Some(format!("Failed to load channels: {e}")));
+                    error.set(Some(crate::components::admin_refusal::settings_load_error(
+                        i18n,
+                        &e,
+                        |e| format!("Failed to load channels: {e}"),
+                    )));
                 }
             }
             loading_channels.set(false);

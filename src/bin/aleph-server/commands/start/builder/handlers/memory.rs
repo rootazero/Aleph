@@ -338,6 +338,10 @@ pub(in crate::commands::start) fn init_memory_context_provider(
     assembler_config: alephcore::AssemblerConfig,
     injection_mode: alephcore::MemoryInjectionMode,
     curated: alephcore::memory::curated::CuratedConfig,
+    // `[memory.orientation] max_tokens` — the token budget one orientation
+    // snapshot may spend. Threaded like `curated` because an unthreaded knob
+    // persisted to `config.toml` and changed nothing (same lesson).
+    orientation_max_tokens: usize,
 ) -> std::sync::Arc<alephcore::thinker::MemoryContextProvider> {
     init_memory_context_provider_with_extensions(
         memory_db,
@@ -346,6 +350,7 @@ pub(in crate::commands::start) fn init_memory_context_provider(
         assembler_config,
         injection_mode,
         curated,
+        orientation_max_tokens,
         None,
         None,
         None,
@@ -370,6 +375,8 @@ pub(in crate::commands::start) fn init_memory_context_provider_with_extensions(
     // decide how the always-on curated envelope renders. See
     // `init_memory_context_provider`'s doc for why this is not defaulted.
     curated: alephcore::memory::curated::CuratedConfig,
+    // `[memory.orientation] max_tokens` — see `init_memory_context_provider`.
+    orientation_max_tokens: usize,
     extensions: Option<std::sync::Arc<alephcore::memory::extensions::MemoryExtensionRegistry>>,
     wiki: Option<std::sync::Arc<dyn alephcore::memory::notes::orientation::NoteOrientation>>,
     profile_synthesizer: Option<
@@ -388,7 +395,10 @@ pub(in crate::commands::start) fn init_memory_context_provider_with_extensions(
     };
     let mcp = mcp
         .with_injection_mode(injection_mode)
-        .with_curated_config(curated);
+        .with_curated_config(curated)
+        .with_orientation_budget(alephcore::memory::notes::orientation::types::TokenBudget {
+            max_tokens: orientation_max_tokens,
+        });
     let mcp = if let Some(ext) = extensions {
         mcp.with_extensions(ext)
     } else {

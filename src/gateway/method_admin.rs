@@ -131,12 +131,19 @@ const ADMIN_PREFIXES: &[&str] = &[
     //
     // Gated whole, with no carve-out, because the family has exactly one
     // client and it is already operator: `interfaces/cli/src/commands/
-    // workspace_cmd.rs` (`aleph workspace list|create|archive`), which reaches
-    // the server over loopback/IPC. The Panel has NONE — `interfaces/webchat/
-    // src/api/workspace.rs`'s own doc records that `workspace.list` was dead
-    // and removed — and `workspace.update`/`workspace.get` have no client
-    // anywhere. A `MEMBER_CARVE_OUTS` entry for the reads would therefore be a
-    // zero-consumer opening (R10 YAGNI), not a preserved capability.
+    // workspace_cmd.rs` (`aleph workspace list|get|create|update|archive`),
+    // which reaches the server over loopback/IPC. The Panel has NONE —
+    // `interfaces/webchat/src/api/workspace.rs`'s own doc records that
+    // `workspace.list` was dead and removed. A `MEMBER_CARVE_OUTS` entry for
+    // the reads would therefore be a zero-consumer opening (R10 YAGNI), not a
+    // preserved capability.
+    //
+    // `get`/`update` had no client at all until 2026-08-08 and were listed here
+    // as such; they were CONNECTed rather than CUT because `update` is the only
+    // edit verb a workspace has — `archive` is a soft delete that keeps the id
+    // taken, so without it a display name mistyped at `create` was permanent.
+    // Both arrived already inside this gate, which is why the ruling above did
+    // not have to be reopened.
     //
     // NOT an owner column: that would build a permission model for per-user
     // workspaces, a capability no surface currently lets a member use. If that
@@ -312,6 +319,38 @@ const MEMBER_CARVE_OUTS: &[&str] = &[
     // `gateway.metrics.subagent_concurrency`) stay gated — narrowing those is
     // a separate, not-yet-made decision.
     "gateway.metrics.run_concurrency",
+    // The enumeration behind the composer's two session pills — the exec-tier
+    // dial and the session-mode dial. Both pills READ this method and WRITE
+    // through `sessions.patch` / `chat.send`'s per-request `exec_tier`+`mode`,
+    // which are member daily surfaces and always have been. Gating only the
+    // read left the door open and the menu locked: a member could set a session
+    // tier over the wire but had no way to learn which tiers exist, so the tier
+    // popover degraded to a lone "follow global" with a blank label and the
+    // mode pill — whose own code hides itself on an empty `modes` — vanished
+    // outright. Session mode is defined as a tool-PRESENTATION partition that
+    // "grants and denies no permission" (CLAUDE.md), so refusing its id list
+    // bought nothing at all.
+    //
+    // Safe because the handler narrows the response for a member
+    // (`config::exec_permissions_value` vs `member_visible_permissions_value`):
+    // the two server-global policy axes Settings → Policies edits — the
+    // per-tool `overrides` map and its `default` — are dropped, leaving four
+    // id enumerations (`exec_tier`/`tiers`/`mode`/`modes`). The write sibling
+    // `config.update_tool_permissions` stays gated with the rest of `config.`;
+    // this carve-out is a read of the dial positions, not a hand on the dial.
+    "config.get_tool_permissions",
+    // A member approving their OWN parked tool call. `exec.` gated the whole
+    // family, which made the default `Auto` tier a dead end for every member:
+    // any non-idempotent tool call parked for the full approval window and then
+    // died as `Timeout`, because the only principal allowed to resolve it was
+    // someone else. Both methods are owner-scoped in the handler against the
+    // approval record's own `session_key` (`handlers/exec_approvals.rs`) — the
+    // pending list is filtered to the caller's sessions and a resolve for a
+    // foreign session is refused with the byte-identical not-found shape. A
+    // member can therefore unblock their own work and still cannot see, let
+    // alone resolve, anyone else's.
+    "exec.approvals.pending",
+    "exec.approval.resolve",
 ];
 
 #[must_use]
@@ -415,10 +454,13 @@ mod tests {
             "wizard.start",
             "diagnostics.run",
             "pty.spawn",
-            // exec configuration stays admin-gated; the two APPROVAL methods
-            // moved to the member-reachable list on 2026-08-08 (see
-            // MEMBER_CARVE_OUTS) and are asserted there instead.
-            "exec.set_policy",
+            // exec approval — BOTH registered methods are carved open (a
+            // member resolving their own parked call; see MEMBER_CARVE_OUTS),
+            // so what is pinned here is the PREFIX, through a name that is
+            // deliberately not registered. The family stays fail-closed, and a
+            // future `exec.*` sibling has to be carved out on purpose rather
+            // than inheriting the two narrow rulings made for these two.
+            "exec.some_future_sibling",
             // direct tool execution (final-review round — C2). `tools.invoke`
             // is carved open below (Task 9, P1 member hardening — the handler
             // now enforces the operator gate itself); the siblings are
@@ -480,6 +522,54 @@ mod tests {
                  gateway.metrics.run_concurrency is carved out"
             );
         }
+    }
+
+    /// The read of the two composer dials is carved open; every other way of
+    /// touching `config.` — above all the WRITE sibling that sets the same two
+    /// dials server-wide — stays gated. Reading a dial position is not a hand
+    /// on the dial.
+    #[test]
+    fn the_tool_permissions_read_is_carved_open_but_its_write_sibling_is_not() {
+        assert!(
+            !method_requires_admin("config.get_tool_permissions"),
+            "config.get_tool_permissions must stay open — it is the id \
+             enumeration behind the composer's tier and mode pills, whose \
+             write face (sessions.patch / chat.send) a member already has"
+        );
+        for sibling in [
+            "config.update_tool_permissions",
+            "config.set_tool_permissions",
+            "config.patch",
+            "config.get",
+            "config.reload",
+        ] {
+            assert!(
+                method_requires_admin(sibling),
+                "{sibling} must stay admin-gated — only the tool-permissions \
+                 READ is carved out"
+            );
+        }
+    }
+
+    /// Both `exec.*` methods are open to a member for the same reason: without
+    /// them the default `Auto` tier is a dead end, because a member's own
+    /// parked tool call had no principal allowed to resolve it and died at the
+    /// approval timeout. Their owner-scoping lives in the handler, so this
+    /// carve-out and that scoping are one decision.
+    #[test]
+    fn a_member_may_resolve_their_own_parked_tool_call() {
+        for m in ["exec.approvals.pending", "exec.approval.resolve"] {
+            assert!(
+                !method_requires_admin(m),
+                "{m} must stay open — it is how a member unblocks their OWN \
+                 tool call; the handler scopes it to their own sessions"
+            );
+        }
+        assert!(
+            method_requires_admin("exec.some_future_sibling"),
+            "the `exec.` prefix must stay fail-closed for methods nobody has \
+             ruled on yet"
+        );
     }
 
     #[test]
@@ -610,7 +700,9 @@ mod tests {
             );
         }
         assert!(
-            !MEMBER_CARVE_OUTS.iter().any(|m| m.starts_with("workspace.")),
+            !MEMBER_CARVE_OUTS
+                .iter()
+                .any(|m| m.starts_with("workspace.")),
             "no workspace.* carve-out may be added without a member consumer to justify it"
         );
     }

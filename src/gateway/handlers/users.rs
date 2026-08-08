@@ -873,8 +873,17 @@ mod tests {
             );
             let guard = crate::gateway::event_scope::EventScopeGuard::default_rules();
             assert!(
+                !crate::gateway::event_scope::is_superuser_scope(&s.permissions),
+                "a demoted admin must no longer satisfy the admin arm that \
+                 delivers OTHER users' approval cards — the raw `approval.*` \
+                 topics are owner-scoped now (`BySessionKeyOrAdmin`), so this \
+                 is the predicate that used to be `can_receive(approval.…)`. \
+                 He keeps his own cards, which is correct: he is still someone \
+                 whose tool calls park."
+            );
+            assert!(
                 !guard.can_receive("surface.approval", &s.permissions),
-                "a demoted admin must no longer be delivered the approval banner"
+                "a demoted admin must no longer be delivered approval banners"
             );
             assert!(
                 !guard.can_receive("pty.output", &s.permissions),

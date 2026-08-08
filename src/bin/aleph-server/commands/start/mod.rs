@@ -2688,10 +2688,10 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
         use alephcore::exec::approval::channel_bridge::ChannelApprovalBridge;
 
         // exec.approval.* RPC handlers — server handlers refcount is 1 here.
-        // `session_store` backs the per-caller filter both methods apply: a
-        // caller sees and answers exactly the approvals raised for sessions
-        // they can already see (fleet approvals, which name no session, stay
-        // operator-only).
+        // `session_store` backs the per-user visibility checks both methods
+        // apply: the family is carved out of the admin gate so a member can
+        // release their OWN parked tool call, and the scoping is what makes
+        // that carve-out safe (see `handlers/exec_approvals.rs`).
         alephcore::gateway::handlers::exec_approvals::register_handlers(
             server.handlers_mut(),
             exec_approval_manager.clone(),

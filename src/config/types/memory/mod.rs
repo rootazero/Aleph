@@ -13,7 +13,7 @@ pub mod retrieval;
 #[cfg(test)]
 mod tests;
 
-pub use assembler::{AssemblerConfig, AssemblyLogConfig, FallbackSkeleton};
+pub use assembler::{AssemblerConfig, FallbackSkeleton};
 pub use defaults::*;
 pub use dreaming::{DreamingConfig, MemoryDecayPolicy};
 pub use embed::{EmbeddingPreset, EmbeddingProviderConfig, EmbeddingSettings};

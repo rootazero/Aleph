@@ -1,10 +1,11 @@
 use leptos::prelude::*;
 use leptos::task::spawn_local;
+use leptos_i18n::I18nContext;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 
 use crate::context::DashboardState;
-use crate::i18n::{t, t_string, use_i18n};
+use crate::i18n::{t, t_string, use_i18n, Locale};
 
 // ---------------------------------------------------------------------------
 // Local types matching the JSON shape from `skills.status` RPC
@@ -115,6 +116,9 @@ fn safe_homepage_link(href: &str, label: impl IntoView) -> AnyView {
 // ---------------------------------------------------------------------------
 
 fn load_skills(
+    // Localised copy for a refused load — the caller already holds the
+    // context; `I18nContext` is `Copy`, so it rides along like the signals do.
+    i18n: I18nContext<Locale>,
     state: DashboardState,
     skills: RwSignal<Vec<SkillStatusEntry>>,
     loading: RwSignal<bool>,
@@ -145,7 +149,11 @@ fn load_skills(
                 }
             }
         }
-        error.set(Some(format!("Failed to load skills: {last_err}")));
+        error.set(Some(crate::components::admin_refusal::settings_load_error(
+            i18n,
+            &last_err,
+            |last_err| format!("Failed to load skills: {last_err}"),
+        )));
         loading.set(false);
     });
 }
@@ -168,7 +176,7 @@ pub fn SkillsView() -> impl IntoView {
 
     Effect::new(move || {
         if state.is_connected.get() {
-            load_skills(state, skills, loading, error);
+            load_skills(i18n, state, skills, loading, error);
         } else {
             loading.set(false);
         }
@@ -209,7 +217,7 @@ pub fn SkillsView() -> impl IntoView {
                     )
                     .await
                 {
-                    Ok(_) => load_skills(state, skills, loading, error),
+                    Ok(_) => load_skills(i18n, state, skills, loading, error),
                     Err(e) => error.set(Some(format!("Failed to toggle skill: {e}"))),
                 }
             });
@@ -230,7 +238,7 @@ pub fn SkillsView() -> impl IntoView {
                     <div class="flex items-center gap-2">
                         <button
                             class="px-3 py-1.5 bg-surface-sunken text-text-secondary rounded hover:bg-surface-sunken text-sm"
-                            on:click=move |_| load_skills(state, skills, loading, error)
+                            on:click=move |_| load_skills(i18n, state, skills, loading, error)
                         >
                             {t!(i18n, skills_page.refresh)}
                         </button>
@@ -298,7 +306,7 @@ pub fn SkillsView() -> impl IntoView {
                     <SkillDetailDialog
                         skill=skill
                         on_close=move || selected_skill_id.set(None)
-                        on_refresh=move || load_skills(state, skills, loading, error)
+                        on_refresh=move || load_skills(i18n, state, skills, loading, error)
                     />
                 }
             })}
@@ -309,7 +317,7 @@ pub fn SkillsView() -> impl IntoView {
                     on_close=move || show_add_dialog.set(false)
                     on_success=move || {
                         show_add_dialog.set(false);
-                        load_skills(state, skills, loading, error);
+                        load_skills(i18n, state, skills, loading, error);
                     }
                 />
             </Show>

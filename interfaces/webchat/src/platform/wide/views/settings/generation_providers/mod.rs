@@ -88,13 +88,19 @@ pub fn GenerationProvidersView() -> impl IntoView {
             .await;
             match providers_res {
                 Ok(list) => set_providers.set(list),
-                Err(e) => set_error_message.set(Some(format!("Failed to load providers: {e}"))),
+                Err(e) => set_error_message.set(Some(
+                    crate::components::admin_refusal::settings_load_error(i18n, &e, |e| {
+                        format!("Failed to load providers: {e}")
+                    }),
+                )),
             }
             match presets_res {
                 Ok(dtos) => set_catalog.set(PresetCatalog::from_dtos(dtos)),
-                Err(e) => {
-                    set_error_message.set(Some(format!("Failed to load preset catalog: {e}")))
-                }
+                Err(e) => set_error_message.set(Some(
+                    crate::components::admin_refusal::settings_load_error(i18n, &e, |e| {
+                        format!("Failed to load preset catalog: {e}")
+                    }),
+                )),
             }
 
             // Auto-select a default card on first load so the detail pane shows content
