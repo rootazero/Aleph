@@ -138,8 +138,29 @@ pub async fn handle_new_session_db(
     let new_routing_key = routing_key.with_next_epoch();
     let new_key_str = new_routing_key.to_key_string();
 
-    // Create the new session
-    match manager.get_or_create(&new_routing_key).await {
+    // Create the new session UNDER the closing session's attribution.
+    //
+    // `stamp_attribution` reads the ambient scope in `get_or_create`'s CREATE
+    // branch, and the gateway dispatch loop has none — so without this the
+    // successor row was written NULL/NULL and adopted by `owner_or_legacy`. For
+    // a personal session that silently transferred it to the operator; for a
+    // ROOM it was worse, because the new row no longer declared itself a room
+    // at all, so the roster had nothing to intervene on and every member lost
+    // the conversation they were in.
+    //
+    // The source attribution is sitting in `meta`, read four statements above
+    // for the visibility gate. `from_persisted` returns `None` for a legacy
+    // (unstamped) source, which reproduces today's behaviour exactly — this
+    // only ever carries an attribution that already existed.
+    //
+    // ⚠️ Load-bearing that this happens at CREATE time: `stamp_attribution`
+    // early-returns on an already-stamped row, so a successor written with the
+    // wrong owner is permanent and no later backfill can see it.
+    let carried = crate::scope::ScopeAttribution::from_persisted(
+        meta.owner_user_id.as_deref(),
+        meta.scope_id.as_deref(),
+    );
+    match crate::scope::with_scope(carried, manager.get_or_create(&new_routing_key)).await {
         Ok(_meta) => JsonRpcResponse::success(
             request.id,
             json!({

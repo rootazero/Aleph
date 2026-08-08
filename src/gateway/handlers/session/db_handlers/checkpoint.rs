@@ -228,9 +228,23 @@ pub async fn handle_branch_checkpoint_db(
         Err(_) => return visibility::not_found_response(request.id), // fail closed (GC 3)
     }
 
-    match manager
-        .branch_from_checkpoint(&key, checkpoint_id, &new_key)
-        .await
+    // Branch UNDER the source session's attribution — same reason as
+    // `sessions.new` (see `create.rs`): the gateway dispatch loop carries no
+    // ambient scope, so the branched row would be written NULL/NULL and
+    // adopted by `owner_or_legacy`, converting a room into a personal session
+    // permanently (`stamp_attribution` early-returns on a stamped row).
+    // `meta` is the source row already read for the visibility gate above;
+    // `from_persisted` yields `None` for a legacy source, reproducing today's
+    // behaviour exactly.
+    let carried = crate::scope::ScopeAttribution::from_persisted(
+        meta.owner_user_id.as_deref(),
+        meta.scope_id.as_deref(),
+    );
+    match crate::scope::with_scope(
+        carried,
+        manager.branch_from_checkpoint(&key, checkpoint_id, &new_key),
+    )
+    .await
     {
         Ok(meta) => JsonRpcResponse::success(
             request.id,
