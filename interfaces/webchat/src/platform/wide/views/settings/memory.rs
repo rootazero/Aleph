@@ -35,7 +35,11 @@ pub fn MemoryView() -> impl IntoView {
                         error.set(None);
                     }
                     Err(e) => {
-                        error.set(Some(format!("Failed to load memory config: {e}")));
+                        error.set(Some(crate::components::admin_refusal::settings_load_error(
+                            i18n,
+                            &e,
+                            |e| format!("Failed to load memory config: {e}"),
+                        )));
                     }
                 }
                 loading.set(false);

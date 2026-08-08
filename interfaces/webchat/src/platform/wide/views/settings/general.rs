@@ -59,7 +59,11 @@ pub fn GeneralView() -> impl IntoView {
                 set_loading.set(false);
             }
             Err(e) => {
-                set_error.set(Some(format!("Failed to load config: {e}")));
+                set_error.set(Some(crate::components::admin_refusal::settings_load_error(
+                    i18n,
+                    &e,
+                    |e| format!("Failed to load config: {e}"),
+                )));
                 set_loading.set(false);
             }
         }

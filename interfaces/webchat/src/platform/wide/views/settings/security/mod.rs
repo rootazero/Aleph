@@ -142,7 +142,11 @@ pub fn SecurityView() -> impl IntoView {
                         config.set(Some(cfg));
                     }
                     Err(e) => {
-                        error.set(Some(format!("Failed to load security config: {e}")));
+                        error.set(Some(crate::components::admin_refusal::settings_load_error(
+                            i18n,
+                            &e,
+                            |e| format!("Failed to load security config: {e}"),
+                        )));
                     }
                 }
 

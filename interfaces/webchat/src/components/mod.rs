@@ -1,5 +1,6 @@
 //! Component modules
 
+pub mod admin_refusal;
 pub mod agents_sidebar;
 pub mod approval_card;
 pub mod artifacts;

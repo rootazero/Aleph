@@ -1,10 +1,11 @@
 use leptos::prelude::*;
 use leptos::task::spawn_local;
+use leptos_i18n::I18nContext;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 
 use crate::context::DashboardState;
-use crate::i18n::{t, t_string, use_i18n};
+use crate::i18n::{t, t_string, use_i18n, Locale};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PluginInfo {
@@ -19,6 +20,9 @@ pub struct PluginInfo {
 
 /// Load plugins list from Gateway
 fn load_plugins(
+    // Localised copy for a refused load — the caller already holds the
+    // context; `I18nContext` is `Copy`, so it rides along like the signals do.
+    i18n: I18nContext<Locale>,
     state: DashboardState,
     plugins: RwSignal<Vec<PluginInfo>>,
     loading: RwSignal<bool>,
@@ -37,7 +41,11 @@ fn load_plugins(
                 loading.set(false);
             }
             Err(e) => {
-                error.set(Some(format!("Failed to load plugins: {e}")));
+                error.set(Some(crate::components::admin_refusal::settings_load_error(
+                    i18n,
+                    &e,
+                    |e| format!("Failed to load plugins: {e}"),
+                )));
                 loading.set(false);
             }
         }
@@ -57,7 +65,7 @@ pub fn PluginsView() -> impl IntoView {
     // Load plugins when connected
     Effect::new(move || {
         if state.is_connected.get() {
-            load_plugins(state, plugins, loading, error);
+            load_plugins(i18n, state, plugins, loading, error);
         } else {
             loading.set(false);
         }
@@ -80,7 +88,7 @@ pub fn PluginsView() -> impl IntoView {
                         <button
                             class="px-3 py-1.5 bg-surface-sunken text-text-secondary rounded hover:bg-surface-sunken text-sm"
                             on:click=move |_| {
-                                load_plugins(state, plugins, loading, error);
+                                load_plugins(i18n, state, plugins, loading, error);
                             }
                         >
                             {t!(i18n, settings.plugins.refresh)}
@@ -234,7 +242,7 @@ fn PluginCard(
                                         spawn_local(async move {
                                             match state.rpc_call("plugins.uninstall", json!({ "name": name })).await {
                                                 Ok(_) => {
-                                                    load_plugins(state, plugins, loading, error);
+                                                    load_plugins(i18n, state, plugins, loading, error);
                                                 }
                                                 Err(e) => {
                                                     error.set(Some(format!("Failed to delete plugin: {e}")));
@@ -325,7 +333,7 @@ fn InstallPluginDialog(
             {
                 Ok(_) => {
                     installing.set(false);
-                    load_plugins(state, plugins, loading, error);
+                    load_plugins(i18n, state, plugins, loading, error);
                     on_close();
                 }
                 Err(e) => {

@@ -180,3 +180,110 @@ cargo clippy --all-targets
 
 `cargo check -p aleph-panel` 本轮不涉及 webchat 改动，但若 `interfaces/webchat/`
 有任何改动（哪怕不是本轮改的）仍需跑一次。
+
+---
+
+# 附录 · 第二轮（2026-08-08 下午）—— 四个 UI 层发现 + 一个功能性死路
+
+上一轮 item D 记录了 4 个 UI 层发现但未修。本附录是它们的收尾，外加侦察中撞见的
+第五项（member 无法批准自己的工具调用）。
+
+## 侦察结论：四条里有三条是同一个根因
+
+`Err` 被折成一个**值**，于是 UI 替服务器发明了一个它从未说过的答案：
+
+| 面 | 代码 | `Err` 被读成 |
+|---|---|---|
+| 引导清单 | `Err(_) => ready.set(Some(false))` | 「没配置」← **唯一的假话** |
+| 执行档位 pill | `Err(e) => console::warn` | 「没有可选档位」+ 空标签 |
+| 会话模式 pill | 同上 | 「本版没有这个功能」（pill 整个消失） |
+| ~20 个设置页 | `format!("Failed to load X: {e}")` | 原始英文协议串 |
+
+新判据已进 CLAUDE.md §0：**「被拒」不许读作「没有」**。
+
+侦察还发现两处记录里没有的**同构第二实例**：会话模式 pill 与档位 pill 读同一个 RPC；
+cluster 页的 `注销` 与 `+ Enroll` 两个**写**动词共用了**读**的拒绝文案。
+
+## 决定与实现
+
+### A · 设置树（发现 1）：不藏，只把拒绝说清楚
+
+推翻「隐藏 admin 页」的直觉——2026-08-07 刚刻意删掉 `DashboardState::is_operator()`
+并留了源码级 pin（`cluster.rs::the_cluster_page_holds_no_client_side_role_gate`），理由是
+客户端捕获的角色在 `restamp_live_connections` 之后两个方向都是错的。隐藏＝同一个闸换名字。
+
+- 新 `components/admin_refusal.rs`：`is_admin_refusal` / `labeled` / `settings_load_error`，
+  单一源 `aleph_protocol::jsonrpc::ADMIN_REQUIRED_MESSAGE`（服务端发的那个常量本身）。
+- 19 个设置页的 load 错误改走 `settings_load_error`，**非拒绝一律原样透传**
+  （degraded copy 胜过错误断言）。新增 i18n 组 `settings.admin_refusal`（en/zh）。
+
+### B · 引导清单（发现 2，唯一的假信息）
+
+`Option<bool>` → 四态 `StepStatus{Unknown, Ready, Pending, Restricted}`；
+**只有 `Ok` 有资格产生 `Pending`**。被拒的步骤不再提供 CTA 链接（那是同一句假话的后半），
+计数器另报 `· N restricted` 而不把被拒项算成待办。
+
+### C · 两个 pill（发现 3 + 其同构实例）
+
+根因在服务端：`config.get_tool_permissions` 被 `config.` 整族闸住，而这两个旋钮的
+**写面对 member 一直是开的**（`sessions.patch` / `chat.send` 的 `exec_tier`+`mode`）——
+门开着、菜单锁着。照 `gateway.metrics.run_concurrency` 的既有形状 carve-out，
+非 admin 响应**按移除构造**（掉 `default` + `overrides`，留四个 id 枚举），
+写兄弟 `config.update_tool_permissions` 照旧闸住。UI 侧两个 pill 在被拒时显式说明；
+模式 pill 的 hide-on-empty 规则新增 `|| refused`，因为"消失"是读者唯一分不出
+「没权限」和「本版没这功能」的结局。
+
+### D · cluster 写动词文案（发现 4）
+
+`fleet_error_label(err, action)`，三个动词各自命名（`ACTION_READ_FLEET` /
+`ACTION_ENROLL` / `ACTION_DEREGISTER`）。`注销` 此前把失败塞进**读**用的 `error` 信号，
+故 `error` 改为 `(String, &'static str)`。
+
+### E · member 无法批准自己的工具调用（本轮新增，用户确认纳入）
+
+`exec.` 整族 admin-gated、无 carve-out ⇒ 默认 `Auto` 档下 member 的每个非幂等工具调用
+park 满 120s 后死于 `Timeout`，**结构上无解**。
+
+两半一起修（只修 RPC 半边是哑弹——Panel 的 `pending_approvals` 只由 `approval.*` 事件刷新）：
+
+1. **RPC 面**：`exec.approvals.pending` / `exec.approval.resolve` 进 `MEMBER_CARVE_OUTS`，
+   在 handler 内按记录自带的 `session_key` 作用域化。"不是你的"与"不存在"**同一条臂、同一个 code**。
+2. **事件面**：`EventScopeGuard` 删掉 `approval.` 规则（角色回答不了"他自己的"），
+   `event_visibility` 新增 `SessionIdentity::BySessionKeyOrAdmin` —— member 收自己的，
+   operator 收全部（＝它此前的行为逐位不变）。`surface.approval` 横幅腿保持角色闸。
+
+⚠️ **实施中自我抓到一个缺陷**：RPC 面第一版用 `visible_owner_filter().is_none()` 短路，
+但 **operator 的 `CALLER_USER` 是 `OWNER_USER_ID` 而非 `None`** ⇒ 过滤对 operator 也生效
+⇒ 事件面放行、列表面过滤，而 Panel 每收一帧就按列表面重建 ⇒ **卡片到达后当场消失**。
+改用 `caller_identity::caller_is_member()`（＝ admin 闸自己的谓词），并加
+`an_operator_still_sees_a_members_parked_approval` 钉住；已用真实变异证其 RED。
+
+## 顺手修掉的两个先于本轮存在的问题
+
+1. **Panel 整个单测目标编译不过**（`context.rs` 的 `use super::role_is_operator` 悬空，
+   随 2026-08-07 删 `is_operator()` 留下）。`cargo check` 不编译 `#[cfg(test)]`，所以它
+   静默地让这个 crate 的 732 个测试一天没跑过——本轮新写的 Panel 测试同样一条都不会跑。
+2. **CI fmt 门红**：`src/gateway/event_bus.rs` 一处（非本轮文件）。fmt 挂了同 job 的
+   clippy 永远走不到。
+
+## 未做 / 已知缺口
+
+- **CLI `aleph workspace create|archive` 仍然是坏的**（发 `{"name":…}`，handler 要 `id`，
+  恒 `INVALID_PARAMS`）——按上一轮的决定继续存档不修。
+- **本轮零真机验证**：全部是编译 + 单测 + 变异验证。member 端 Panel 的实际观感
+  （四态徽标、两个 pill 的说明行、19 个设置页的文案）需要一次两用户真机 QA 才算闭环。
+- **`clarification.pending` 有与 E 同形的 operator 缺口**：它用 `visible_owner_filter()`，
+  所以 operator 看不到 member 的待答问题。未改——它没有本轮那个"事件面放行/列表面过滤"
+  的自相矛盾（`clarification` 的帧走 `BySessionKey`，两面一致），所以是产品决定不是 bug。
+
+## 验证
+
+```
+cargo test -p alephcore --lib                                  15604 passed / 0 failed
+cargo test -p alephcore --features test-helpers --test '*' --no-run   0 errors
+cargo test -p aleph-panel                                        732 passed / 0 failed
+cargo check -p aleph-desktop-macos                               0 errors
+cargo clippy --all-targets                                       0 errors（4 条既存 warning，均非本轮文件）
+cargo fmt --all -- --check                                       clean
+```
+

@@ -61,6 +61,26 @@ pub fn current_caller_role() -> Option<String> {
     CALLER_ROLE.try_with(|r| r.clone()).ok().flatten()
 }
 
+/// Whether this call is subject to the member restriction — the ONE predicate
+/// `method_admin`'s gate is enforced by, exposed so nothing has to re-derive it.
+///
+/// `None` (internal / cron / in-process test) and `"operator"` are both
+/// unrestricted; `"guest"` never reaches a non-`connect` method (the login wall
+/// refuses it first), so the only restricted answer is `"member"`.
+///
+/// # Why this is not [`visible_owner_filter`](crate::gateway::visibility::visible_owner_filter)
+///
+/// That predicate answers "whose ROWS may I see" and is keyed on `CALLER_USER`,
+/// which a second `UserRole::Admin` principal also carries (their own id rather
+/// than `OWNER_USER_ID` — see `resolve_connection_identity`). Using it to decide
+/// whether to withhold server-global CONFIG would strip a second operator of the
+/// very fields their settings pages exist to edit. Role and ownership are
+/// different questions; a surface narrowing on privilege must ask this one.
+#[must_use]
+pub fn caller_is_member() -> bool {
+    current_caller_role().as_deref() == Some("member")
+}
+
 /// Whether the current task originated from a loopback (local-machine)
 /// connection. `false` outside a `CALLER_IS_LOOPBACK` scope.
 #[must_use]

@@ -240,6 +240,8 @@
 - **同一事实的两份表述，只改一份就是静默说谎** —— 代码 vs 工具 `DESCRIPTION`、代码 vs 文档数字、代码 vs 注释；**注释正是说谎的那一方**
 - **真源必须在被依赖的一侧** —— 依赖方向 `linux → shared` ⇒ 真源在 `shared/`；反着放就是把同一个问题回答 N 次
 - **fail-soft 的跳过不是「不存在」的证据** —— `Ok(None)` 给读者防卡死用，拿它当 DELETE / 放行判据就是不可逆损坏；**按状态做的闸，`Err` 必须是拒绝不能是放行**
+- **「被拒」不许读作「没有」** —— 上一条的显示面镜像（同族还有 §8 的「未知不许读作健康」）。一个 `Err` 被折成值（`Some(false)` / 空列表 / 空字符串）之后，UI 就在替服务器**发明一个它从未说过的答案**，而最贵的那种是**自信的假话**：引导清单把 admin 拒绝读成"没配置",于是对着一个配好的 provider 喊 `PENDING Configure a chat provider` 并邀请点进用不了的页。判据一句话：**只有 `Ok` 有资格断言被读的那个东西**；`Err` 的每一种（拒绝 / 断线 / 解析失败）都只能说"我不知道"。单一源 `interfaces/webchat/src/components/admin_refusal.rs`（识别咽喉，非权限判定——Panel 刻意不持有客户端角色谓词，见 `context.rs` 的 `role` 字段注释）
+- **一个动词有 N 个面时，"谁能看"要在每个面用同一个推导** —— 别在 RPC 面写 `visible_owner_filter()`、在事件面写角色臂：**operator 的 `CALLER_USER` 是 `OWNER_USER_ID` 而不是 `None`**，所以 owner-keyed 谓词对 operator 也会生效。两面分歧的症状比"看不见"更怪——事件面放行、列表面过滤，而 Panel 每收一帧就按列表面重建 ⇒ **卡片到达后当场消失**。单一源 `caller_identity::caller_is_member`（＝ admin 闸自己的谓词）↔ `event_scope::is_superuser_scope`
 - **隔离环境的 QA 结构上只测得到「新建的对象」** —— 干净 HOME 里没有存量，于是**迁移前写下的行**（缺列、缺戳、旧单位）整类测不到，而真实部署里那才是多数。补法是把已有行改成迁移前的形态再开机，**不是**让 fixture 造一个"看起来像旧的"状态 → §5.22
 - **拒绝形状做得越好，时序 bug 越像安全行为** —— no-oracle 要求"拒绝"与"不存在"逐字节相同，代价是**异步写盘的行**在写盘前被读到时，给出的也是同一个 not-found。看到它先问「这一步是不是还没落盘」，再问「是不是没权限」 → §5.22
 - **一个身份/谓词有两半，branch 一半等于没 branch** —— 一个动词的两张脸（工具 vs RPC）必须共用判据**也共用推导**（如 `workflow_step_review` ↔ `teams.workflow.approve_step` 共用 `verdict_admissible`）

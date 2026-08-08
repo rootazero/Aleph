@@ -666,10 +666,40 @@ fn exec_permissions_value(cfg: &Config) -> Result<Value, serde_json::Error> {
     }))
 }
 
+/// The same surface with the two server-global policy axes removed: the
+/// per-tool `overrides` map and its `default`. What remains is four id
+/// enumerations — the positions of the two dials, and the ids each dial can
+/// take.
+///
+/// This is the shape a member receives. `config.` is otherwise an admin family,
+/// and this one read is carved out of it (`method_admin::MEMBER_CARVE_OUTS`)
+/// because a member ALREADY sets both dials for their own session, through
+/// `sessions.patch` and `chat.send`'s per-request `exec_tier` / `mode`. The
+/// enumeration is what makes those writes usable; the advanced axes are what
+/// Settings → Policies edits, and editing stays gated (`update_tool_permissions`
+/// is not carved out).
+///
+/// Deliberately built by REMOVAL from [`exec_permissions_value`] rather than by
+/// listing the four keys again: a future field added to the full surface then
+/// has to be ruled on here — it arrives withheld, and a reviewer who wants it
+/// visible has to say so — instead of silently joining a member response nobody
+/// re-examined.
+fn member_visible_permissions_value(cfg: &Config) -> Result<Value, serde_json::Error> {
+    let mut value = exec_permissions_value(cfg)?;
+    if let Some(obj) = value.as_object_mut() {
+        obj.remove("default");
+        obj.remove("overrides");
+    }
+    Ok(value)
+}
+
 /// Handle `config.get_tool_permissions` RPC request
 ///
-/// Returns the execution tier, the built-in tier presets, and the global
-/// per-tool overrides from `config.policies`.
+/// Returns the execution tier, the built-in tier presets, and — for a caller
+/// who may see them — the global per-tool overrides from `config.policies`.
+/// A member gets [`member_visible_permissions_value`] instead; see that
+/// function and the carve-out comment in `method_admin` for why this method is
+/// readable by a member at all.
 pub async fn handle_get_tool_permissions(
     request: JsonRpcRequest,
     config: Arc<RwLock<Config>>,
@@ -677,7 +707,15 @@ pub async fn handle_get_tool_permissions(
     debug!("Handling config.get_tool_permissions");
 
     let cfg = config.read().await;
-    match exec_permissions_value(&cfg) {
+    // Role, not ownership: a second operator principal carries a `CALLER_USER`
+    // of their own and must still receive the full surface their settings pages
+    // edit. `caller_is_member` is the same predicate the admin gate enforces.
+    let serialized = if crate::gateway::caller_identity::caller_is_member() {
+        member_visible_permissions_value(&cfg)
+    } else {
+        exec_permissions_value(&cfg)
+    };
+    match serialized {
         Ok(v) => JsonRpcResponse::success(request.id, v),
         Err(e) => JsonRpcResponse::error(
             request.id,
@@ -1081,5 +1119,110 @@ model = "claude-opus-4-5"
         let error = response.error.unwrap();
         assert_eq!(error.code, INVALID_PARAMS);
         assert!(error.message.contains("empty"));
+    }
+
+    // -- config.get_tool_permissions: the member-visible narrowing --
+
+    /// Drive `handle_get_tool_permissions` under a given connection role.
+    /// `None` is the unrestricted internal caller (cron / in-process).
+    async fn tool_permissions_as(role: Option<&str>) -> Value {
+        use crate::gateway::caller_identity::CALLER_ROLE;
+
+        let config = Arc::new(RwLock::new(Config::default()));
+        let request = JsonRpcRequest {
+            jsonrpc: "2.0".to_string(),
+            method: "config.get_tool_permissions".to_string(),
+            params: None,
+            id: Some(json!(1)),
+        };
+        let response = CALLER_ROLE
+            .scope(
+                role.map(str::to_string),
+                handle_get_tool_permissions(request, config),
+            )
+            .await;
+        response.result.expect("permissions read always succeeds")
+    }
+
+    /// The whole point of the carve-out: the composer's two pills need the id
+    /// enumerations, and a member could always WRITE both dials for their own
+    /// session (`sessions.patch`, `chat.send`'s per-request `exec_tier`/`mode`).
+    #[tokio::test]
+    async fn a_member_receives_both_dials_and_their_selectable_ids() {
+        let value = tool_permissions_as(Some("member")).await;
+
+        for key in ["exec_tier", "tiers", "mode", "modes"] {
+            assert!(
+                value.get(key).is_some(),
+                "a member needs `{key}` — without it the pill that reads it \
+                 degrades to a blank label or hides itself: {value}"
+            );
+        }
+        assert!(
+            !value["tiers"]
+                .as_array()
+                .expect("tiers is an array")
+                .is_empty(),
+            "an empty tier list is what the refusal already produced: {value}"
+        );
+        assert!(
+            !value["modes"]
+                .as_array()
+                .expect("modes is an array")
+                .is_empty(),
+            "the mode pill hides itself on an empty `modes`: {value}"
+        );
+    }
+
+    /// The half that stays withheld. These two are the server-global policy
+    /// axes Settings → Policies edits; the carve-out is a read of the dial
+    /// positions, not a view of the whole policy.
+    #[tokio::test]
+    async fn a_member_does_not_receive_the_server_global_policy_axes() {
+        let value = tool_permissions_as(Some("member")).await;
+
+        assert!(
+            value.get("overrides").is_none(),
+            "the per-tool overrides map is server-global config: {value}"
+        );
+        assert!(
+            value.get("default").is_none(),
+            "the default tool permission is server-global config: {value}"
+        );
+    }
+
+    /// Role, not ownership. A second operator principal carries a `CALLER_USER`
+    /// of their own, so an owner-keyed predicate would have stripped exactly the
+    /// fields their settings page exists to edit.
+    #[tokio::test]
+    async fn an_operator_still_receives_the_whole_surface() {
+        for role in [Some("operator"), None] {
+            let value = tool_permissions_as(role).await;
+            assert!(
+                value.get("overrides").is_some() && value.get("default").is_some(),
+                "role {role:?} is unrestricted and must see the full surface: {value}"
+            );
+        }
+    }
+
+    /// The narrowing is built by removal, so a field added to the full surface
+    /// arrives withheld until someone rules on it. This pins that direction:
+    /// every key a member sees must also be a key the operator sees.
+    #[tokio::test]
+    async fn the_member_surface_is_a_subset_of_the_operator_surface() {
+        let member = tool_permissions_as(Some("member")).await;
+        let operator = tool_permissions_as(Some("operator")).await;
+
+        for key in member
+            .as_object()
+            .expect("member surface is an object")
+            .keys()
+        {
+            assert!(
+                operator.get(key).is_some(),
+                "`{key}` reaches a member but not an operator — the member \
+                 response must be a narrowing, never a second shape"
+            );
+        }
     }
 }

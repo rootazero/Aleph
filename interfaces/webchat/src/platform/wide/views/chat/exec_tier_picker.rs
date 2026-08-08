@@ -46,16 +46,23 @@ pub fn ExecTierPicker() -> impl IntoView {
     let global_tier = RwSignal::new(String::new());
     // Tier id currently armed for the "are you sure" second click (Full only).
     let confirming: RwSignal<Option<String>> = RwSignal::new(None);
+    // The read came back refused for lack of operator privilege. Distinct from
+    // "no tiers exist": an empty list rendered as a popover holding nothing but
+    // a blank-labelled "follow global" row, which reads as a broken control
+    // rather than a withheld one.
+    let refused = RwSignal::new(false);
 
     // The global tier + the selectable ids.
     let load = move || {
         spawn_local(async move {
             match ToolPermissionsApi::get_global(&dashboard).await {
                 Ok(cfg) => {
+                    refused.set(false);
                     global_tier.set(cfg.exec_tier);
                     tiers.set(cfg.tiers);
                 }
                 Err(e) => {
+                    refused.set(crate::components::admin_refusal::is_admin_refusal(&e));
                     web_sys::console::warn_1(&format!("Failed to load exec tiers: {e}").into());
                 }
             }
@@ -149,7 +156,13 @@ pub fn ExecTierPicker() -> impl IntoView {
                     <rect x="3" y="11" width="18" height="11" rx="2" />
                     <path d="M7 11V7a5 5 0 0 1 10 0v4" />
                 </svg>
-                <span>{move || tier_label(i18n, &effective.get())}</span>
+                // An unresolved tier renders as a dash, not as nothing: an
+                // empty span left the pill looking like a control whose label
+                // failed to paint.
+                <span>{move || {
+                    let id = effective.get();
+                    if id.is_empty() { "—".to_string() } else { tier_label(i18n, &id) }
+                }}</span>
                 // A session override is a deliberate deviation from the global
                 // policy — mark it so it can't be mistaken for the default.
                 <Show when=move || chat.session_exec_tier.get().is_some()>
@@ -177,6 +190,16 @@ pub fn ExecTierPicker() -> impl IntoView {
                             glass rounded-xl border border-border bg-surface-overlay/85 shadow-xl
                             p-2 space-y-1"
                     on:mouseleave=move |_| open.set(false)>
+
+                    // Why the list below is empty, when it is empty because the
+                    // server refused rather than because there is nothing to
+                    // show. Without this the popover was a silent degradation:
+                    // one row, no label, no explanation.
+                    <Show when=move || refused.get()>
+                        <div class="px-2.5 py-2 text-[11px] leading-snug text-text-tertiary">
+                            {t!(i18n, settings.admin_refusal.read_tiers)}
+                        </div>
+                    </Show>
 
                     // Follow-global row — clears the session override.
                     <button

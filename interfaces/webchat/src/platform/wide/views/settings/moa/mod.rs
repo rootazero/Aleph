@@ -34,6 +34,9 @@ enum EditorTarget {
 #[must_use]
 pub fn MoaView() -> impl IntoView {
     let state = expect_context::<DashboardState>();
+    // Only consumer so far is the refused-load copy below; this page's own
+    // strings are still hard-coded English.
+    let i18n = crate::i18n::use_i18n();
     // B1 "Use in chat": arm the preset on the chat session's model selector,
     // then navigate to chat. `ChatState` is provided at app root (Copy);
     // `navigate` is stored so per-card callbacks can invoke it.
@@ -67,11 +70,19 @@ pub fn MoaView() -> impl IntoView {
             .await;
             match cfg_res {
                 Ok(cfg) => config.set(cfg),
-                Err(e) => error.set(Some(format!("Failed to load MoA config: {e}"))),
+                Err(e) => error.set(Some(crate::components::admin_refusal::settings_load_error(
+                    i18n,
+                    &e,
+                    |e| format!("Failed to load MoA config: {e}"),
+                ))),
             }
             match cat_res {
                 Ok(list) => catalog.set(list),
-                Err(e) => error.set(Some(format!("Failed to load model catalog: {e}"))),
+                Err(e) => error.set(Some(crate::components::admin_refusal::settings_load_error(
+                    i18n,
+                    &e,
+                    |e| format!("Failed to load model catalog: {e}"),
+                ))),
             }
             loading.set(false);
         });
