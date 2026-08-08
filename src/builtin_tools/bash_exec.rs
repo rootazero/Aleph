@@ -146,64 +146,62 @@ variables, `set -e`, `source`, etc. do NOT carry over to the next call. If you
 need cross-call state, write the state into a file under `working_dir` and
 read it back in the next script, or just put everything into one cmd.
 
-A command you already ran this session is still above in the conversation, and
-an identical re-run comes back with an `advisory` field flagging it. To watch
-for something to change (a build finishing, a file appearing), use BACKGROUND
-MODE's `wait`/`poll` below rather than re-issuing the same command.
-And prefer the purpose-built tools over shelling out: `file_read` to read a
-file, `file_edit` to change one, `search` to find files or text — they beat
-`cat`/`sed`/`grep`/`find` and don't spend a shell turn.
+A command you already ran this session comes back with an `advisory` field
+flagging the repeat; a re-run returns the same result, so prefer BACKGROUND
+MODE's `wait`/`poll` for things that change over time. And reach for the
+purpose-built tools over shelling out: `file_read` / `file_edit` / `search`
+beat `cat`/`sed`/`grep`/`find` and don't spend a shell turn.
 
-`working_dir` (optional) is resolved inside the session workspace; paths
-outside the workspace are denied by the sandbox. If omitted the call lands at
-the workspace root.
+`working_dir` (optional) resolves inside the session workspace; paths
+outside the workspace are denied by the sandbox. If omitted the call lands
+at the workspace root.
 
 `timeout` defaults to 60s. Foreground calls are clamped to ~170s (just under
-the 180s tool budget) so an over-long `timeout` still returns a clean
-`exit_code = 124` with partial output instead of a hard "no result" abort —
-for longer runs use BACKGROUND MODE below.
-On timeout we kill the process, drain stdout/stderr for up to 2s, and return
-`exit_code = 124` (POSIX `timeout(1)` convention) with whatever the script
-printed before the kill preserved in `stdout` and `stderr` — so even a
-runaway script tells you what it accomplished.
+the 180s tool budget) so an over-long `timeout` returns a clean
+`exit_code = 124` (POSIX `timeout(1)` convention) with partial output
+preserved in `stdout` / `stderr` — even a runaway script tells you what it
+accomplished. For longer runs use BACKGROUND MODE below.
 
-ANSI colour codes and stray binary control bytes are stripped from the
-returned `stdout`/`stderr` automatically — no need for `--color=never`
-or piping through `cat`.
+ANSI colour codes and stray binary control bytes are stripped automatically
+(no need for `--color=never` or `cat`); when a stream overflows its cap we
+keep both the head and the tail with a `…[N bytes elided]…` marker between
+them, and the response also carries `stdout_truncated_bytes` /
+`stderr_truncated_bytes` so you know exactly how much was elided. Signal
+deaths surface as `exit_code = 128 + N` with a `stderr` note naming the
+signal — `137` (SIGKILL, usually OOM), `139` (SIGSEGV, a crash), `134`
+(SIGABRT, an assertion/panic abort).
 
-When a stream overflows its cap we keep BOTH the head and the tail (with a
-`…[N bytes elided]…` marker between them), so a long build that fails at the
-end still shows you the final error, not just the opening. If the command is
-killed by a signal it surfaces as `exit_code = 128 + N` with a `stderr` note
-naming the signal — e.g. `137` (SIGKILL, usually an out-of-memory kill),
-`139` (SIGSEGV, a crash), `134` (SIGABRT, an assertion/panic abort).
+Capability escalations (`allow_network`, `allow_subprocess`,
+`extra_writable_paths`) trigger an approval prompt the first time per
+session; subsequent same-or-narrower requests reuse the grant. When you
+escalate, pass `justification` with a one-line reason WHY (e.g. "clone the
+repo over https") — it is shown to the human approver so they can decide.
 
-Capability escalations (`allow_network`, `allow_subprocess`, `extra_writable_paths`)
-trigger an approval prompt the first time per session; subsequent same-or-
-narrower requests reuse the grant. When you escalate, pass `justification` with
-a one-line reason WHY (e.g. "clone the repo over https") — it is shown to the
-human approver so they can decide.
-
-BACKGROUND MODE — for commands that outlive the 180s ceiling (builds, installs,
-long test runs). Set `background: true` and the call returns a `process_id`
-immediately instead of blocking. Background jobs escape the 180s foreground
-ceiling: with no explicit `timeout` they get a generous 1-hour default (pass
-`timeout` to raise or lower it), and you can stop one anytime with
+BACKGROUND MODE — for commands that outlive the 180s ceiling (builds,
+installs, long test runs). Set `background: true` and the call returns a
+`process_id` immediately. Background jobs escape the 180s foreground
+ceiling: with no explicit `timeout` they get a generous 1-hour default
+(pass `timeout` to raise or lower it), and you can stop one anytime with
 `process_action: "kill"`. Manage it with `process_action`:
-- `{"process_action": "poll", "process_id": N}` → status while running, or the
-  full {exit_code, stdout, stderr} once finished (output is captured, not
-  streamed mid-run — poll again until done).
-- `{"process_action": "wait", "process_id": N}` → block until it finishes and
-  return its full output, or a `running` status if it is still going after the
-  wait window (default 60s, set `timeout` to extend up to 170s). Prefer `wait`
-  over a tight `poll` loop — it costs no round-trips while the job runs.
+- `{"process_action": "poll", "process_id": N}` → status while running, or
+  the full {exit_code, stdout, stderr} once finished (output is captured,
+  not streamed mid-run — poll again until done).
+- `{"process_action": "wait", "process_id": N}` → block until it finishes
+  and return its full output, or a `running` status if it is still going
+  after the wait window (default 60s, set `timeout` to extend up to 170s).
+  Prefer `wait` over a tight `poll` loop — it costs no round-trips while
+  the job runs.
 - `{"process_action": "kill", "process_id": N}` → terminate it (SIGKILL).
 - `{"process_action": "list"}` → enumerate this session's background processes.
-Background processes are scoped to your session; you cannot see or kill another
-session's processes, and each session may have at most 8 running at once — if
-you hit that cap, poll/kill an existing one before starting another. Prefer
-foreground (blocking) execution for anything that finishes quickly —
-backgrounding is only worth it past ~the timeout ceiling.
+Background processes are scoped to your session; you cannot see or kill
+another session's processes, and each session may have at most 8 running at
+once — if you hit that cap, poll/kill an existing one before starting
+another. Prefer foreground (blocking) execution for anything that finishes
+quickly — backgrounding is only worth it past ~the timeout ceiling.
+
+The child shell sees `ALEPH_SESSION_ID` (the per-session workspace key) and
+`ALEPH_TOOL_NAME=bash` so scripts can self-identify (e.g. `[[ -n
+"$ALEPH_SESSION_ID" ]] && ...`).
 "#;
 
     type Args = BashExecArgs;
@@ -338,6 +336,28 @@ impl BashExecTool {
 /// sandbox uses for its workspace key so the value is stable for a session.
 fn session_label() -> Option<String> {
     current_session().map(|sid| serde_json::to_string(&sid).unwrap_or_else(|_| format!("{sid:?}")))
+}
+
+/// Abort every still-running background job in the global process registry.
+///
+/// Wired into the daemon's graceful-shutdown path so background bash / build
+/// jobs do not outlive the core when an operator runs `daemon.shutdown`, hits
+/// `Ctrl-C`, or the process receives `SIGTERM`. The registry is the
+/// authoritative reaper — `tokio::process::Child::kill_on_drop` is best-effort
+/// once the runtime itself is tearing down, and the only way to guarantee no
+/// orphaned `cargo build` keeps writing into the workspace after the core has
+/// gone is to ask every tracked task to abort up front. Returns the number of
+/// processes that were signalled (purely informational; logging is fine).
+pub fn kill_all_running_background() -> usize {
+    use crate::builtin_tools::process_registry::process_registry;
+    let n = process_registry().shutdown();
+    if n > 0 {
+        tracing::info!(
+            killed = n,
+            "aborted background bash processes during daemon shutdown"
+        );
+    }
+    n
 }
 
 /// Dispatch a `poll` / `wait` / `kill` / `list` management action against the

@@ -64,27 +64,95 @@ impl UserDirectoryState {
         v
     }
 
-    /// Fetch `users.list` + `users.me` once. Idempotent and safe to call from
-    /// every consumer's mount effect — a second call while the first is still
-    /// in flight, or after the directory is already populated, is a no-op.
+    /// Fetch `users.list` + `users.me`. Idempotent and safe to call from every
+    /// consumer's component body — a second call while the first is still in
+    /// flight, or after the directory is already populated, is a no-op.
+    ///
+    /// **Waits for the socket.** This registers an effect rather than firing
+    /// the fetch inline, and the difference is the whole reason the attribution
+    /// label shipped broken: `MessageList` mounts during app boot, *before*
+    /// `DashboardState.rpc_tx` exists, so an inline fetch got
+    /// `Err("Not connected")` from `rpc_call` before a frame was ever put on
+    /// the wire. Nothing retried it — this state is provided once at the app
+    /// root, so its emptiness outlived every remount — and the two `if let Ok`
+    /// arms below swallowed the error, so there was no console trace either.
+    /// The observable was a room bubble labelled `u-5fd9…` instead of
+    /// `QA Member`, plus the viewer's OWN messages labelled too (`my_user_id`
+    /// stayed `None`, making `author_label`'s self-suppression vacuous). Note
+    /// this was not a race that sometimes lost: boot order made it lose every
+    /// time, which is why it reproduced 100% and still read as "unimplemented".
+    ///
+    /// Re-runs on reconnect for free, and the guard makes every run after a
+    /// successful load a no-op. Requires a reactive owner — all call sites are
+    /// component bodies.
     pub fn ensure_loaded(&self, dash: DashboardState) {
-        if self.loading.get_untracked() || !self.names.with_untracked(HashMap::is_empty) {
-            return;
-        }
-        self.loading.set(true);
         let this = *self;
-        leptos::task::spawn_local(async move {
-            if let Ok(users) = UsersApi::list(&dash).await {
-                let map = users
-                    .into_iter()
-                    .map(|u| (u.user_id, u.display_name))
-                    .collect();
-                this.names.set(map);
+        Effect::new(move |_| {
+            if !should_fetch(
+                dash.is_connected.get(),
+                this.loading.get_untracked(),
+                this.names.with_untracked(HashMap::is_empty),
+            ) {
+                return;
             }
-            if let Ok(Some(me)) = UsersApi::me(&dash).await {
-                this.my_user_id.set(Some(me.user_id));
-            }
-            this.loading.set(false);
+            this.loading.set(true);
+            leptos::task::spawn_local(async move {
+                match UsersApi::list(&dash).await {
+                    Ok(users) => {
+                        let map = users
+                            .into_iter()
+                            .map(|u| (u.user_id, u.display_name))
+                            .collect();
+                        this.names.set(map);
+                    }
+                    // Not fatal — the label falls back to the raw id — but it
+                    // must not be invisible: silence here is what let the
+                    // original defect read as "the feature was never built".
+                    Err(e) => leptos::logging::warn!("user directory: users.list failed: {e}"),
+                }
+                match UsersApi::me(&dash).await {
+                    Ok(Some(me)) => this.my_user_id.set(Some(me.user_id)),
+                    Ok(None) => {}
+                    Err(e) => leptos::logging::warn!("user directory: users.me failed: {e}"),
+                }
+                this.loading.set(false);
+            });
         });
+    }
+}
+
+/// Whether [`UserDirectoryState::ensure_loaded`] should start a fetch.
+///
+/// Extracted as a pure function so the "wait for the socket" half is pinned by
+/// a host test: inside the effect it is three reactive reads whose only
+/// observable is a WS frame that either does or does not appear, which is
+/// precisely the thing that went unnoticed the first time.
+#[must_use]
+pub const fn should_fetch(is_connected: bool, loading: bool, names_empty: bool) -> bool {
+    is_connected && !loading && names_empty
+}
+
+#[cfg(test)]
+mod tests {
+    use super::should_fetch;
+
+    #[test]
+    fn a_disconnected_panel_does_not_burn_its_one_attempt() {
+        assert!(
+            !should_fetch(false, false, true),
+            "firing before the socket exists is the original defect: rpc_call \
+             returns Err(\"Not connected\") without sending, and nothing retries"
+        );
+    }
+
+    #[test]
+    fn fetches_once_the_socket_is_up() {
+        assert!(should_fetch(true, false, true));
+    }
+
+    #[test]
+    fn does_not_stampede_or_refetch() {
+        assert!(!should_fetch(true, true, true), "already in flight");
+        assert!(!should_fetch(true, false, false), "already populated");
     }
 }

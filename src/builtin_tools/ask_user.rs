@@ -206,13 +206,12 @@ impl AskUserTool {
     /// interception. The numbered text menu is always rendered too, so channels
     /// without inline-keyboard support degrade gracefully to a typed reply.
     fn build_request(
-        request_id: &str,
         question: &str,
         choices: &[AskUserChoice],
     ) -> (ClarificationRequest, String, Option<InlineKeyboard>) {
         if choices.is_empty() {
             return (
-                ClarificationRequest::text(request_id, question, None),
+                ClarificationRequest::text(question),
                 format!("❓ {question}\n\nReply with your answer."),
                 None,
             );
@@ -241,7 +240,7 @@ impl AskUserTool {
             }
         }
         (
-            ClarificationRequest::select(request_id, question, options),
+            ClarificationRequest::select(question, options),
             format!("❓ {question}\n\n{menu}\nReply with the number or your answer."),
             Self::build_choice_keyboard(choices),
         )
@@ -334,9 +333,7 @@ impl AlephTool for AskUserTool {
         }
         let session_key = turn.session_key.to_string();
 
-        let request_id = uuid::Uuid::new_v4().to_string();
-        let (request, rendered, keyboard) =
-            Self::build_request(&request_id, question, &args.choices);
+        let (request, rendered, keyboard) = Self::build_request(question, &args.choices);
 
         // Register BEFORE delivery so a reply arriving immediately is not lost.
         let rx = self
@@ -537,14 +534,13 @@ mod tests {
 
     #[test]
     fn build_request_text_vs_select() {
-        let (text_req, text_prompt, text_kb) = AskUserTool::build_request("id-1", "Pick?", &[]);
+        let (text_req, text_prompt, text_kb) = AskUserTool::build_request("Pick?", &[]);
         assert!(text_req.options.is_none());
         assert!(text_prompt.contains("Reply with your answer"));
         // No choices → open-ended → no keyboard (mirrors hermes' open-ended path).
         assert!(text_kb.is_none());
 
         let (select_req, select_prompt, select_kb) = AskUserTool::build_request(
-            "id-2",
             "Pick?",
             &[
                 AskUserChoice::Simple("alpha".to_string()),
@@ -568,7 +564,6 @@ mod tests {
     #[test]
     fn build_request_detailed_choice_renders_and_wires_description() {
         let (req, prompt, _kb) = AskUserTool::build_request(
-            "id-3",
             "Strategy?",
             &[
                 AskUserChoice::Detailed {

@@ -154,6 +154,9 @@ impl RuntimeSecurityGuard {
                 severity,
                 source_ip: None,
                 session_id: context.session_id.clone(),
+                // Guardrail events fire inside a run, not on a gateway
+                // dispatch, so there is no resolved caller to name.
+                actor_user: None,
                 detail,
             };
             log.log(entry);

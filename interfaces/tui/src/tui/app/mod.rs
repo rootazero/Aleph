@@ -121,6 +121,16 @@ pub enum ToolStatus {
     Running,
     Success,
     Failed,
+    /// The run ended without a terminal result ever reaching this row.
+    ///
+    /// Live tool frames ride the deliberately-lossy `agent_trace` mirror
+    /// (bounded mpsc + `try_send`), so a busy run can drop a
+    /// `ToolCallCompleted`. `RunComplete` reconciles against the authoritative
+    /// `summary.tool_summaries`; anything still `Running` after that had no
+    /// authoritative record either. Render it as unknown rather than guessing
+    /// success — a spinner that never stops reads as "still working", which is
+    /// the one thing it definitely is not.
+    Unknown,
 }
 
 /// State of a single tool execution within an assistant message.
@@ -284,6 +294,21 @@ pub struct AppState {
     pub last_run_duration: Option<Duration>,
     pub current_run_uses_agent_trace: bool,
     pub current_run_trace_summary_applied: bool,
+    /// Bytes of the current turn's assistant text already appended by
+    /// `ResponseChunk` deltas.
+    ///
+    /// A streaming turn produces the same text TWICE on the wire: as
+    /// `ResponseChunk` deltas and again, in full, as
+    /// `AgentTrace{TextEmitted{Final}}` (`harness/agent/think.rs` emits the
+    /// latter unconditionally — its `response_was_streamed` guard only
+    /// suppresses a second in-process `on_delta`). The TUI subscribes to no
+    /// topics, so the gateway's `should_receive` gives it both. Appending both
+    /// doubled the answer inside one bubble.
+    ///
+    /// Reset per turn (`TurnStarted`) and per run (`RunAccepted`); the final
+    /// text appends only its un-streamed suffix, so a non-streamed turn (mock
+    /// provider, output guardrail) still lands in full.
+    pub turn_streamed_len: usize,
 
     // -- Settings --
     pub verbose: bool,
@@ -335,6 +360,7 @@ impl AppState {
             run_started_at: None,
             last_run_duration: None,
             current_run_uses_agent_trace: false,
+            turn_streamed_len: 0,
             current_run_trace_summary_applied: false,
 
             verbose: false,

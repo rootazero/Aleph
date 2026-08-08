@@ -5,10 +5,11 @@
 //! rows created outside any dispatch scope (cron, internal, A2A). Those rows
 //! read as owned by the org-era single operator — adoption-by-absence, not a
 //! missing value. [`owner_or_legacy`] is the one place that rule is encoded;
-//! [`effective_owner`] (used by both `SessionStore` backends'
-//! `SessionFilter::owner_visible_to` filter) and [`stamped_owner_visible`]
-//! (used by every non-session P1-stamped record) both call it, so the
-//! fallback can never drift between them.
+//! [`owner_and_scope_visible_to`] (the body behind both `SessionStore`
+//! backends' `SessionFilter::owner_visible_to` filter AND behind the event
+//! bus's per-frame check — see [`crate::gateway::event_visibility`]) and
+//! [`stamped_owner_visible`] (used by every non-session P1-stamped record)
+//! both call it, so the fallback can never drift between them.
 //!
 //! ALL user-visibility decisions for session-scoped RPCs live in this
 //! module. The resolution itself is not re-derived here — it is the P0
@@ -74,6 +75,40 @@ pub fn visible_owner_filter() -> Option<String> {
 /// everything, `None` reads as [`OWNER_USER_ID`] (owner-by-absence), and a
 /// scoped caller sees only their own. Do not re-derive it at a call site —
 /// that is exactly the bypass this module exists to prevent.
+///
+/// # Owner-only is the P2 boundary here, not an unfinished predicate
+///
+/// This predicate and [`ambient_owner_visible`] are **owner-only by design**,
+/// and that is a product boundary rather than a gap: **a project room does not
+/// own its members' background work.** A loop, goal, cron job or group-chat
+/// session created inside a room stays visible to the person who started it,
+/// never to the room's roster. SECURITY.md's P2 section enumerates exactly four
+/// roster-answered questions — session visibility, memory-partition visibility,
+/// event delivery, RPC access — and background work is deliberately not among
+/// them. Ruled 2026-08-07.
+///
+/// The scope fact needed to answer otherwise is already **persisted, and
+/// deliberately unread by these predicates**: `looping::LoopState::scope_id`,
+/// `goal::Goal::scope_id` and `tasks::cron::CronJob::scope_id` all carry
+/// `project:<id>` for a unit started inside a room (loops and goals stamp it in
+/// `with_owner_scope` from `scope::current_scope()` at creation). It
+/// has execution-side readers — `goal_wait::rehydrate_owner_scope` and
+/// `cron::executor` both rebuild the run's scope from it through
+/// `ScopeAttribution::from_persisted` — so it is a live field, not a stub. The
+/// loop's copy currently has NO reader at all; it is carried forward across
+/// state transitions (`looping::mod`) and read by nobody, which is the one most
+/// likely to be mistaken for a broken wire.
+///
+/// None of that is a severed wire, and none of it should be "reconnected" here.
+/// Widening these predicates would make one member's pursuit appear in another
+/// member's list — a change to what a room means, needing a product ruling
+/// first. If one ever arrives, the shape is ONE scope-aware sibling in this
+/// module taking `(owner_user_id, scope_id)` and delegating to the same
+/// [`crate::projects::roster::is_member`] call [`project_visible`] makes —
+/// never a second inlined membership check at the call sites.
+///
+/// Note the direction of failure: owner-only is fail-CLOSED. Someone reading
+/// "the room can't see my loop" as a bug is reading a decision.
 #[must_use]
 pub fn stamped_owner_visible(owner_user_id: Option<&str>) -> bool {
     match visible_owner_filter() {
@@ -134,14 +169,36 @@ pub fn project_visible(project_id: &str) -> bool {
 /// but the room never appears in their session list, with no error anywhere.
 #[must_use]
 pub fn session_visible_to(meta: &SessionMetadata, actor: &str) -> bool {
-    if let Some(crate::scope::ScopeId::Project(p)) = meta
-        .scope_id
-        .as_deref()
-        .and_then(crate::scope::ScopeId::parse)
+    owner_and_scope_visible_to(
+        meta.owner_user_id.as_deref(),
+        meta.scope_id.as_deref(),
+        actor,
+    )
+}
+
+/// [`session_visible_to`]'s rule with its two inputs passed explicitly, for the
+/// one caller that holds those fields without a [`SessionMetadata`] around
+/// them: the event-delivery path
+/// ([`crate::gateway::event_visibility`]), whose per-session cache stores this
+/// pair rather than a whole metadata row.
+///
+/// Widening the signature rather than letting that path re-derive the rule is
+/// the point. Event delivery kept the pre-P2 owner-equality rule for exactly
+/// as long as it had its own copy of it, and nothing failed — a room's live
+/// frames simply never reached anyone but its creator. With the rule in one
+/// body, a third input to the room-vs-personal decision is a compile error at
+/// both call sites instead of a silent divergence.
+#[must_use]
+pub fn owner_and_scope_visible_to(
+    owner_user_id: Option<&str>,
+    scope_id: Option<&str>,
+    actor: &str,
+) -> bool {
+    if let Some(crate::scope::ScopeId::Project(p)) = scope_id.and_then(crate::scope::ScopeId::parse)
     {
         return crate::projects::roster::is_member(&p, actor);
     }
-    effective_owner(meta) == actor
+    owner_or_legacy(owner_user_id) == actor
 }
 
 /// Whether `meta` is visible to the current caller.

@@ -71,6 +71,60 @@ async fn run_loop_seeds_scope_from_request_metadata() {
     );
 }
 
+/// The row must come out stamped even though **nothing in the ambient
+/// task-locals says who this is** — that is the post-`tokio::spawn` condition
+/// every real producer reaches this code in, and the one the whole helper
+/// exists for. Asserting the persisted columns rather than "the helper called
+/// `ensure_session`": with the `with_scope` wrap deleted this still calls
+/// through and still creates a row, and only the two columns go NULL.
+#[tokio::test]
+async fn ensure_session_stamps_the_row_without_an_ambient_scope() {
+    use crate::gateway::session_store::SessionStore;
+
+    let temp = tempdir().unwrap();
+    let sessions: Arc<dyn SessionStore> = Arc::new(
+        crate::gateway::session_manager::SessionManager::new(
+            crate::gateway::session_manager::SessionManagerConfig {
+                db_path: temp.path().join("sessions.db"),
+                ..Default::default()
+            },
+        )
+        .expect("session manager"),
+    );
+    let agent = AgentInstance::new(
+        crate::gateway::agent_instance::AgentInstanceConfig {
+            agent_id: "test-agent".to_string(),
+            workspace: temp.path().join("workspace"),
+            agent_dir: temp.path().join("agents/test-agent"),
+            ..Default::default()
+        },
+        Arc::clone(&sessions),
+    )
+    .expect("agent instance");
+
+    let mut metadata = std::collections::HashMap::new();
+    crate::scope::stamp_metadata(
+        &mut metadata,
+        &crate::scope::ScopeAttribution::personal("u-alice"),
+    );
+    let request = minimal_request(metadata);
+
+    // Deliberately NOT inside `with_scope`.
+    assert!(
+        crate::scope::current_scope().is_none(),
+        "the fixture must reproduce the unscoped post-spawn condition"
+    );
+    ensure_session_under_request_scope(&agent, &request).await;
+
+    let meta = sessions
+        .get_metadata(&request.session_key)
+        .await
+        .expect("metadata read")
+        .expect("row was created");
+    assert_eq!(meta.owner_user_id.as_deref(), Some("u-alice"));
+    assert_eq!(meta.scope_id.as_deref(), Some("personal:u-alice"));
+}
+
 #[tokio::test]
 async fn run_loop_without_keys_runs_unscoped() {
     let request = minimal_request(std::collections::HashMap::new());

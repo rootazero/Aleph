@@ -37,7 +37,7 @@ pub use types::*;
 pub use users::{UserRecord, UserRole, UserStatus, OWNER_USER_ID};
 
 /// Schema version for migrations
-const SCHEMA_VERSION: i32 = 14;
+const SCHEMA_VERSION: i32 = 15;
 
 /// Unified security storage backed by `SQLite`
 pub struct SecurityStore {
@@ -260,6 +260,29 @@ impl SecurityStore {
             drop(conn);
             self.set_schema_version(14)?;
         }
+
+        if version < 15 {
+            info!(
+                from = version,
+                to = 15,
+                "Migrating security schema to v15 (audit actor column)"
+            );
+
+            let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
+            // The version gate alone is NOT enough here, unlike v14's two
+            // ALTERs: a store created from scratch runs every arm in order and
+            // v7 already built the table from `AUDIT_LOG_SCHEMA`, which now
+            // carries `actor_user` — so the ALTER would hit `duplicate column
+            // name` on every FIRST boot. Probe like v6 does.
+            let has_column: bool = conn
+                .prepare("SELECT actor_user FROM security_audit_log LIMIT 0")
+                .is_ok();
+            if !has_column {
+                conn.execute(crate::security::audit::AUDIT_LOG_ADD_ACTOR_SQL, [])?;
+            }
+            drop(conn);
+            self.set_schema_version(15)?;
+        }
         // After all versioned migrations (runs on every open, idempotent):
         self.ensure_bootstrap_owner()?;
 
@@ -284,6 +307,7 @@ impl SecurityStore {
                 entry.severity.to_string(),
                 entry.source_ip.as_deref(),
                 entry.session_id.as_deref(),
+                entry.actor_user.as_deref(),
                 entry.detail.as_str(),
             ],
         )?;

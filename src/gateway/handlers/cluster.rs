@@ -110,7 +110,16 @@ pub async fn handle_cluster_deregister(
     }
 }
 
-/// read: enumerate cluster nodes (thin rendering contract, no credentials). Online
+/// operator-gated read: enumerate cluster nodes (thin rendering contract, no
+/// credentials). The gate is the `environments.` prefix in
+/// [`crate::gateway::method_admin`], not an in-handler check — this response is
+/// the same for every operator, so there is nothing here to scope per caller;
+/// it is simply not a member surface. Until 2026-08-07 the family was absent
+/// from `ADMIN_PREFIXES` (its `cluster.` siblings were gated, this read was
+/// not) and the only thing withholding fleet topology from a member was the
+/// Panel's own `is_operator()` check.
+///
+/// Online
 /// sessions come from `NodeRegistry`; then merged with `security_store` registered
 /// (role=node, not revoked) but currently-offline devices, as `status:"offline"` +
 /// `last_seen_at` (Unix seconds; `null` = enrolled but never connected). Mirrors

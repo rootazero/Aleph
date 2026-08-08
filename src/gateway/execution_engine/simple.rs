@@ -47,10 +47,13 @@ impl SimpleExecutionEngine {
     }
 
     /// Announce a session update on the global event bus. No-op without a bus.
+    /// Same contract as `ExecutionEngine::publish_session_updated` (engine.rs),
+    /// including the required `origin_run_id`.
     fn publish_session_updated(
         &self,
         session_key: &crate::gateway::router::SessionKey,
         origin_channel: Option<&str>,
+        origin_run_id: &str,
     ) {
         if let Some(bus) = &self.event_bus {
             let frame = crate::gateway::events::GatewayEventFrame::SessionUpdated {
@@ -58,6 +61,7 @@ impl SimpleExecutionEngine {
                 origin_channel: origin_channel
                     .filter(|c| !c.is_empty())
                     .map(|c| c.to_string()),
+                origin_run_id: (!origin_run_id.is_empty()).then(|| origin_run_id.to_string()),
             };
             let _ = bus.publish_frame(&frame);
         }
@@ -74,7 +78,9 @@ impl SimpleExecutionEngine {
 
         // Ensure the session row exists before any state transitions; tests and
         // fallback paths may run without the global SessionService initialized.
-        agent.ensure_session(&request.session_key).await;
+        // Scoped for the same reason the full engine scopes it — see
+        // `run_loop::ensure_session_under_request_scope`.
+        super::run_loop::ensure_session_under_request_scope(&agent, &request).await;
 
         // Atomically check Idle and transition to Running to close the TOCTOU
         // window between an is_idle() probe and the later set_state(Running).
@@ -151,6 +157,7 @@ impl SimpleExecutionEngine {
             self.publish_session_updated(
                 &request.session_key,
                 request.metadata.get("channel_id").map(String::as_str),
+                &request.run_id,
             );
         }
 

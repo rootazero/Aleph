@@ -83,7 +83,9 @@ impl Default for BroadcastConfig {
     }
 }
 
+use std::collections::{HashMap, VecDeque};
 use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::OnceLock;
 
 use tokio_util::sync::CancellationToken;
 
@@ -97,7 +99,7 @@ use crate::gateway::event_emitter::{CollectingEventEmitter, EventEmitter};
 use crate::gateway::execution_engine::{ExecutionError, RunRequest};
 use crate::gateway::reply_emitter::extract_final_response;
 use crate::routing::session_key::SessionKey;
-use crate::sync_primitives::Arc;
+use crate::sync_primitives::{Arc, Mutex};
 use crate::teams::messages::{MessageStore, MessageType, NewMessage};
 use crate::teams::types::TeamMemberKind;
 use crate::teams::TeamStore;
@@ -165,6 +167,72 @@ fn newly_waiting_review(pre: &[String], post: &[String]) -> Vec<String> {
         .filter(|id| !pre.contains(id))
         .cloned()
         .collect()
+}
+
+/// Hard capacity for [`FANOUT_TEAMS`]. Same hygiene as the gateway's
+/// visibility caches (`event_visibility.rs`), through the same shared rule
+/// (`utils::fifo_cache::remember`): FIFO eviction past the cap, so a
+/// long-uptime process never grows the index unbounded.
+const MAX_TRACKED_FANOUTS: usize = 4096;
+
+/// `fan-out tree run_id → team_id`, written at the ONE place a tree run id is
+/// minted ([`GroupChatBroadcaster::register_fanout`], which already holds both
+/// halves) and read by `teams.chat.cancel` to answer "whose team does this run
+/// belong to".
+///
+/// Without it that RPC has nothing to gate on and must accept any run id from
+/// any caller — which it did until 2026-08-07, on the recorded reasoning that a
+/// tree run id is an unguessable capability nobody else could hold. That
+/// reasoning made a security property depend on another subsystem's
+/// event-classification table with no compile-time link between the two, and
+/// the link was in fact broken the whole time: `team.<id>.fanout` classified as
+/// `Global` and every connected user received every other user's tree run ids.
+/// The gate now stands on its own.
+///
+/// Entries are NOT removed when a tree settles. `RegisteredFanout` is
+/// destructured by `dispatch_user`, so it cannot carry a `Drop` impl, and a
+/// handle dropped without ever dispatching would leak the removal anyway — a
+/// cap is the honest bound, not a cleanup hook with two escape paths. Lingering
+/// is harmless: the TRACKER, not this map, decides whether a run is still
+/// cancellable, so a settled id yields the same refusal for its owner as for
+/// anyone else. Eviction (only reachable after `MAX_TRACKED_FANOUTS` further
+/// fan-outs within one tree's lifetime) denies even the rightful owner —
+/// fail-closed, the safe direction.
+static FANOUT_TEAMS: OnceLock<Mutex<FanoutTeamIndex>> = OnceLock::new();
+
+#[derive(Default)]
+struct FanoutTeamIndex {
+    order: VecDeque<String>,
+    map: HashMap<String, String>,
+}
+
+impl FanoutTeamIndex {
+    fn record(&mut self, run_id: String, team_id: String, cap: usize) {
+        crate::utils::fifo_cache::remember(&mut self.order, &mut self.map, run_id, team_id, cap);
+    }
+
+    fn team_of(&self, run_id: &str) -> Option<String> {
+        self.map.get(run_id).cloned()
+    }
+}
+
+fn fanout_teams() -> &'static Mutex<FanoutTeamIndex> {
+    FANOUT_TEAMS.get_or_init(|| Mutex::new(FanoutTeamIndex::default()))
+}
+
+/// The team a `teams.chat.send` fan-out tree belongs to, or `None` when this
+/// process never minted that run id (or has since evicted it).
+///
+/// The ownership handle `teams.chat.cancel` gates on. `None` must deny with the
+/// byte-identical refusal an unreachable team produces — a caller who guessed
+/// or passively collected a tree id must not be able to tell "not yours" from
+/// "never existed".
+#[must_use]
+pub fn team_of_fanout_run(run_id: &str) -> Option<String> {
+    fanout_teams()
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .team_of(run_id)
 }
 
 /// Identity + kill switch for ONE user-triggered fan-out tree, cloned down the
@@ -293,7 +361,21 @@ impl GroupChatBroadcaster {
     /// `teams.chat.cancel` fires the stored token via `tracker.cancel(run_id)`
     /// (poisoning new member spawns), then walks `running_children_of(run_id)`
     /// to abort in-flight member runs.
+    ///
+    /// Also records `run_id → team_id` in [`FANOUT_TEAMS`] — the ONLY write to
+    /// that index, and the reason `teams.chat.cancel` can be ownership-gated at
+    /// all. It happens BEFORE the tracker registration so the index is never
+    /// behind the running set: a run id that is cancellable is always
+    /// attributable.
     pub fn register_fanout(tree_run_id: String, team_id: &str) -> RegisteredFanout {
+        fanout_teams()
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .record(
+                tree_run_id.clone(),
+                team_id.to_string(),
+                MAX_TRACKED_FANOUTS,
+            );
         let tree = FanoutTree {
             run_id: Arc::new(tree_run_id.clone()),
             cancel: CancellationToken::new(),
@@ -826,6 +908,55 @@ mod tests {
             super::build_team_planner_objective("做个市场调研", "alice (researcher), bob (writer)");
         assert!(o.contains("做个市场调研"));
         assert!(o.contains("alice (researcher), bob (writer)"));
+    }
+
+    /// The whole point of the index: minting a tree run id must leave behind
+    /// the attribution `teams.chat.cancel` gates on. Drop the `record` call in
+    /// `register_fanout` and this fails — the run becomes unattributable and
+    /// its owner can no longer cancel their own fan-out.
+    #[test]
+    fn register_fanout_attributes_the_minted_run_to_its_team() {
+        let run_id = format!("test-fanout-{}", uuid::Uuid::new_v4());
+        assert_eq!(
+            team_of_fanout_run(&run_id),
+            None,
+            "the index must not know a run id nobody minted"
+        );
+
+        let _handle = GroupChatBroadcaster::register_fanout(run_id.clone(), "team-alpha");
+
+        assert_eq!(
+            team_of_fanout_run(&run_id).as_deref(),
+            Some("team-alpha"),
+            "register_fanout must record run -> team at mint time"
+        );
+    }
+
+    /// An id this process never minted resolves to nothing, which is what makes
+    /// the cancel handler fail closed on a guessed id instead of falling
+    /// through to the tracker.
+    #[test]
+    fn an_unminted_run_id_attributes_to_no_team() {
+        assert_eq!(
+            team_of_fanout_run(&format!("never-minted-{}", uuid::Uuid::new_v4())),
+            None
+        );
+    }
+
+    /// Bounded, FIFO, oldest-out — exercised on a private instance rather than
+    /// the process-global one so it cannot evict a concurrently running test's
+    /// entry (and so the cap can be small enough to actually reach).
+    #[test]
+    fn the_fanout_index_evicts_the_oldest_entry_past_its_cap() {
+        let mut index = FanoutTeamIndex::default();
+        index.record("run-1".into(), "team-1".into(), 2);
+        index.record("run-2".into(), "team-2".into(), 2);
+        index.record("run-3".into(), "team-3".into(), 2);
+
+        assert_eq!(index.team_of("run-1"), None, "oldest evicted first");
+        assert_eq!(index.team_of("run-2").as_deref(), Some("team-2"));
+        assert_eq!(index.team_of("run-3").as_deref(), Some("team-3"));
+        assert_eq!(index.map.len(), 2, "cap is a hard bound, not a hint");
     }
 
     #[test]

@@ -13,7 +13,7 @@ use shared_ui_logic::connection::{
     classify, stage_for_connect_error, ConnectionError, ConnectionFailure, FailureStage,
     OriginLiveness,
 };
-use std::collections::HashMap;
+use std::collections::{BTreeSet, HashMap};
 use std::sync::Arc;
 use std::sync::Mutex;
 
@@ -36,14 +36,6 @@ pub struct GatewayEvent {
 
 // Event handler callback type
 type EventHandler = Arc<dyn Fn(GatewayEvent) + Send + Sync>;
-
-/// Pure predicate for the single-tier Gateway-token model: an authorized
-/// connection reports the `"operator"` role (loopback, or a remote that
-/// presented a valid token) and has full local-equivalent authority. Anything
-/// else is unauthorized (login wall). Extracted for host-side unit testing.
-pub(crate) fn role_is_operator(role: Option<&str>) -> bool {
-    role == Some("operator")
-}
 
 /// localStorage key holding the legacy shared Gateway token. Kept for backward
 /// compatibility with old `?token=` links and manually-entered tokens.
@@ -304,6 +296,23 @@ enum Handshake {
     Failed(ConnectionFailure),
 }
 
+/// Topics every socket carries regardless of which components are mounted:
+/// live config pushes, the alert bell, and approval cards. They have no owning
+/// component to re-subscribe them, so they are seeded on every connect.
+const BASE_TOPICS: [&str; 3] = ["config.**", "alerts.**", "approval.**"];
+
+/// `BASE_TOPICS` ∪ ledger, deduplicated and ordered.
+///
+/// Pure so the "a reconnect must not narrow the socket" rule is testable on the
+/// host without a websocket.
+fn replay_set(ledger: &BTreeSet<String>) -> Vec<String> {
+    let mut all: BTreeSet<String> = ledger.clone();
+    for base in BASE_TOPICS {
+        all.insert(base.to_string());
+    }
+    all.into_iter().collect()
+}
+
 #[derive(Clone, Copy)]
 pub struct DashboardState {
     pub is_connected: RwSignal<bool>,
@@ -322,6 +331,25 @@ pub struct DashboardState {
 
     // Phase 3: Event handling
     event_handlers: StoredValue<Arc<Mutex<Vec<EventHandler>>>>,
+
+    /// Ledger of every topic pattern currently subscribed on behalf of this
+    /// client, maintained by `subscribe_topic` / `unsubscribe_topic` (the two
+    /// sole entry points).
+    ///
+    /// Subscriptions are **per-socket**: a reconnect opens a fresh `conn_id`
+    /// whose gateway-side filter starts empty, and an empty filter means
+    /// "receive everything" (`gateway/handlers/events.rs::should_receive`,
+    /// `None => true`). So the replay after a reconnect does not merely restore
+    /// — whatever it replays *narrows* the socket to exactly that set. Replaying
+    /// a hardcoded list therefore silently kills every topic not on it; that is
+    /// how `stream.*` / `team.*` used to die after the first reconnect while the
+    /// connection indicator stayed green (component subscriptions are
+    /// mount-only, and `ChatView` is never unmounted).
+    ///
+    /// The ledger is the single source for "what is this client subscribed to",
+    /// so a new subscription site can never again forget to register itself for
+    /// replay.
+    subscribed_topics: StoredValue<Arc<Mutex<BTreeSet<String>>>>,
 
     // Channel for stopping the message loop
     disconnect_tx: StoredValue<Option<oneshot::Sender<()>>>,
@@ -349,12 +377,17 @@ pub struct DashboardState {
     /// belong to a background conversation whose `ChatState` isn't mounted.
     pub pending_clarifications: RwSignal<Vec<PendingAskView>>,
 
-    /// Connection role captured from the `connect` response. `Some("operator")`
-    /// once authorized (loopback, or a remote that presented a valid Gateway
-    /// token); `None` before the first successful connect. Read by
-    /// `is_operator()`.
-    pub role: RwSignal<Option<String>>,
-
+    // The `connect` response's `role` is DELIBERATELY not kept (2026-08-07).
+    // It had exactly one reader, `is_operator()`, which had exactly one
+    // consuming view — the cluster settings page — and a client-captured role
+    // cannot be an enforcement point: it is stamped once at handshake, and
+    // `handlers::users::restamp_live_connections` can promote or demote that
+    // same live connection without telling the client, so the cached value is
+    // wrong in both directions after a `users.update`. Authorization is
+    // server-side (`method_admin.rs` for RPCs, `event_scope.rs` for topics);
+    // a surface that a member may not use now learns so from the refusal it
+    // gets back. Do not reintroduce this field to hide admin UI — that is the
+    // same gate under a new name.
     /// True when the `connect` response reported `needs_token` — a remote
     /// connection without a valid Gateway token. Drives the full-screen login
     /// wall (token box). False for loopback / authorized connections.
@@ -574,34 +607,25 @@ impl DashboardState {
             rpc_tx: StoredValue::new(None),
             next_id: StoredValue::new(Arc::new(Mutex::new(1))),
             event_handlers: StoredValue::new(Arc::new(Mutex::new(Vec::new()))),
+            subscribed_topics: StoredValue::new(Arc::new(Mutex::new(BTreeSet::new()))),
             disconnect_tx: StoredValue::new(None),
             alerts: RwSignal::new(HashMap::new()),
             alert_subscription_id: StoredValue::new(None),
             pending_approvals: RwSignal::new(Vec::new()),
             approval_subscription_id: StoredValue::new(None),
             pending_clarifications: RwSignal::new(Vec::new()),
-            role: RwSignal::new(None),
             needs_token: RwSignal::new(false),
             token_was_rejected: RwSignal::new(false),
             connection_failure: RwSignal::new(None),
         }
     }
 
-    /// Reactive predicate: did this connection report the `operator` role?
-    /// Consults the `role` captured from the `connect` response.
-    /// Returns false before the first successful connect. Used by
-    /// operator-only settings surfaces to gate UI up front.
-    #[must_use]
-    pub fn is_operator(&self) -> bool {
-        role_is_operator(self.role.get().as_deref())
-    }
-
-    /// Capture the connection `role` + `needs_token` verdict from a `connect`
-    /// response. Missing fields reset to a safe default (no role / not walled),
-    /// keeping the signals consistent across reconnects.
-    fn capture_role(&self, resp: &Value) {
-        self.role
-            .set(resp.get("role").and_then(|r| r.as_str()).map(String::from));
+    /// Capture the `needs_token` verdict from a `connect` response. A missing
+    /// field resets to the safe default (not walled), keeping the signal
+    /// consistent across reconnects. The response also carries a `role`; it is
+    /// deliberately ignored — see the note above the `needs_token` field for
+    /// why the client keeps no copy of it.
+    fn capture_connect_verdict(&self, resp: &Value) {
         self.needs_token.set(
             resp.get("needs_token")
                 .and_then(serde_json::Value::as_bool)
@@ -714,7 +738,11 @@ impl DashboardState {
         }
     }
 
-    /// Subscribe to a specific event topic on the Gateway
+    /// Subscribe to a specific event topic on the Gateway.
+    ///
+    /// On success the pattern is filed in `subscribed_topics` so the next
+    /// reconnect replays it — see that field's doc for why a missing replay is
+    /// a silent kill rather than a missing restore.
     pub async fn subscribe_topic(&self, pattern: &str) -> Result<(), String> {
         self.rpc_call(
             "events.subscribe",
@@ -723,6 +751,11 @@ impl DashboardState {
             }),
         )
         .await?;
+        self.subscribed_topics.with_value(|set| {
+            set.lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .insert(pattern.to_string());
+        });
         Ok(())
     }
 
@@ -735,7 +768,22 @@ impl DashboardState {
             }),
         )
         .await?;
+        self.subscribed_topics.with_value(|set| {
+            set.lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .remove(pattern);
+        });
         Ok(())
+    }
+
+    /// Every topic pattern this socket must (re-)subscribe to after a connect.
+    fn topics_to_replay(&self) -> Vec<String> {
+        let ledger = self.subscribed_topics.with_value(|set| {
+            set.lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .clone()
+        });
+        replay_set(&ledger)
     }
 
     /// Make an RPC call to the gateway
@@ -813,7 +861,7 @@ impl DashboardState {
             Ok(r) => r,
             Err(e) => return Handshake::Failed(classify(FailureStage::Handshake, Some(&e), false)),
         };
-        self.capture_role(&resp);
+        self.capture_connect_verdict(&resp);
         if resp.get("authorized").and_then(serde_json::Value::as_bool) == Some(true) {
             // A bootstrap exchange returns a fresh device token; store it for
             // subsequent reconnects and clear any legacy token.
@@ -1086,13 +1134,18 @@ impl DashboardState {
                         spawn_local(async move {
                             // Per-socket topic subscriptions must be re-established on
                             // every (re)connect: a reconnect opens a fresh conn_id whose
-                            // gateway filter starts empty, and subscribing config.** alone
-                            // would drop alerts.**/approval.** (bell + approval cards go
-                            // silent after the first reconnect). subscribe_topic is
-                            // idempotent on the gateway, so the one-time client-side
-                            // handlers stay registered.
-                            for topic in ["config.**", "alerts.**", "approval.**"] {
-                                if let Err(e) = state_for_subscribe.subscribe_topic(topic).await {
+                            // gateway filter starts empty. Replay the *ledger*, not a
+                            // literal list — an empty filter receives everything, so
+                            // whatever we replay here is also what we narrow the socket
+                            // down to. A hardcoded list silently kills every topic
+                            // subscribed by a component that has since mounted
+                            // (`stream.*`, `team.*`, `team.*.task.*`, artifacts…), and
+                            // those mount-only subscriptions never re-run because
+                            // `ChatView` is never unmounted. subscribe_topic is idempotent
+                            // on the gateway, so the one-time client-side handlers stay
+                            // registered.
+                            for topic in state_for_subscribe.topics_to_replay() {
+                                if let Err(e) = state_for_subscribe.subscribe_topic(&topic).await {
                                     web_sys::console::error_1(
                                         &format!("Failed to subscribe to {topic} events: {e}")
                                             .into(),
@@ -1493,9 +1546,60 @@ pub fn DashboardContext(children: Children) -> impl IntoView {
 #[cfg(test)]
 mod tests {
     use super::{
-        classify_credential, query_with_bootstrap_ticket, role_is_operator, strip_params,
-        ws_url_for, SubmittedCredential,
+        classify_credential, query_with_bootstrap_ticket, replay_set, role_is_operator,
+        strip_params, ws_url_for, SubmittedCredential, BASE_TOPICS,
     };
+    use std::collections::BTreeSet;
+
+    fn ledger(patterns: &[&str]) -> BTreeSet<String> {
+        patterns.iter().map(|p| (*p).to_string()).collect()
+    }
+
+    /// The reconnect replay is also a *narrowing*: an empty gateway-side filter
+    /// receives every frame, so whatever we replay becomes the whole filter.
+    /// A component-owned topic missing from the replay is therefore killed, not
+    /// merely un-restored — this is what silently stopped `stream.*` after the
+    /// first reconnect while the connection indicator stayed green.
+    #[test]
+    fn a_reconnect_replays_component_topics_not_just_the_base_set() {
+        let replay = replay_set(&ledger(&[
+            "stream.*",
+            "team.*",
+            "team.*.task.*",
+            "config.**",
+        ]));
+        for topic in ["stream.*", "team.*", "team.*.task.*"] {
+            assert!(
+                replay.iter().any(|t| t == topic),
+                "{topic} must survive a reconnect; it has no component to re-subscribe it \
+                 (ChatView is never unmounted)"
+            );
+        }
+    }
+
+    /// The three app-level topics have no owning component, so they must be
+    /// seeded even on the very first connect when the ledger is still empty.
+    #[test]
+    fn the_base_set_is_replayed_even_with_an_empty_ledger() {
+        let replay = replay_set(&BTreeSet::new());
+        for base in BASE_TOPICS {
+            assert!(replay.iter().any(|t| t == base), "{base} must be seeded");
+        }
+    }
+
+    /// Unsubscribing removes the pattern from the ledger, so an unmounted
+    /// component's topic must not be resurrected by the next reconnect.
+    #[test]
+    fn an_unsubscribed_topic_is_not_replayed() {
+        let mut set = ledger(&["stream.*", "voice.transcribe.delta"]);
+        set.remove("voice.transcribe.delta");
+        let replay = replay_set(&set);
+        assert!(replay.iter().any(|t| t == "stream.*"));
+        assert!(
+            !replay.iter().any(|t| t == "voice.transcribe.delta"),
+            "an unsubscribed topic must stay unsubscribed across a reconnect"
+        );
+    }
 
     /// What `scrub_credentials_from_url` actually strips — both credential
     /// params, not just the legacy one.
@@ -1564,26 +1668,6 @@ mod tests {
             query_with_bootstrap_ticket("?bt=aleph-bt-expired&token=aleph-old", "aleph-bt-1"),
             "bt=aleph-bt-1"
         );
-    }
-
-    #[test]
-    fn operator_role_is_operator() {
-        assert!(role_is_operator(Some("operator")));
-    }
-
-    #[test]
-    fn guest_role_is_not_operator() {
-        assert!(!role_is_operator(Some("guest")));
-    }
-
-    #[test]
-    fn missing_role_is_not_operator() {
-        assert!(!role_is_operator(None));
-    }
-
-    #[test]
-    fn unknown_role_is_not_operator() {
-        assert!(!role_is_operator(Some("node")));
     }
 
     #[test]

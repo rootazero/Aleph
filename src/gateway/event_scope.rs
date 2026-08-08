@@ -27,8 +27,24 @@ impl EventScopeGuard {
     /// |--------|-------------------|
     /// | `pairing.` | admin, pairing |
     /// | `guest.` | admin, guest.manager |
-    /// | `config.changed` | admin, config.viewer |
+    /// | `approval.` | admin, exec.approver |
     /// | `surface.approval` | admin, exec.approver |
+    /// | `config.changed` | admin, config.viewer |
+    /// | `node.` | admin |
+    ///
+    /// `node.` is the delivery-side half of the `environments.` RPC gate
+    /// (`method_admin.rs`). `node.connected` / `node.disconnected` carry the
+    /// same node ids and names `environments.list` enumerates, so gating only
+    /// the RPC would leave a member who hand-subscribes `node.**` reading the
+    /// fleet live — the Panel's cluster page does exactly that subscribe. It
+    /// requires `admin` alone: no fine-grained sibling permission is minted
+    /// for it, because nothing would ever grant one ([`scope_for_role`] hands
+    /// out `"*"` or nothing, and inventing a permission name with no producer
+    /// is the zero-consumer abstraction R10 refuses).
+    ///
+    /// Cluster NODES are unaffected: a node connection never subscribes to a
+    /// topic (its whole inbound surface is reverse-RPC over its own outbound
+    /// channel, which does not pass through this guard).
     #[must_use]
     pub fn default_rules() -> Self {
         Self {
@@ -53,6 +69,7 @@ impl EventScopeGuard {
                     "config.changed".to_string(),
                     vec!["admin".to_string(), "config.viewer".to_string()],
                 ),
+                ("node.".to_string(), vec!["admin".to_string()]),
             ],
         }
     }
@@ -98,9 +115,11 @@ impl EventScopeGuard {
 /// connection regardless of permissions. So a member's daily surfaces are
 /// untouched, while the admin-guarded topics stop reaching him: `approval.*`
 /// (exec approval cards, **including the command text being approved**),
-/// `surface.approval`, `config.changed`, `pairing.*` and `guest.*`. Members used
-/// to be stamped `"*"`, which short-circuits every rule — the login wall admits
-/// them, so they were live connections receiving an admin's approval traffic.
+/// `surface.approval`, `config.changed`, `pairing.*`, `guest.*` and `node.*`
+/// (cluster fleet topology — the live half of the admin-gated
+/// `environments.list`). Members used to be stamped `"*"`, which short-circuits
+/// every rule — the login wall admits them, so they were live connections
+/// receiving an admin's approval traffic.
 #[must_use]
 pub fn scope_for_role(role: &str) -> Vec<String> {
     if role == "operator" {
@@ -281,10 +300,124 @@ mod tests {
             "pairing.requested",
             "pairing.approved",
             "guest.joined",
+            // Cluster fleet topology: node ids + names, the live half of the
+            // admin-gated `environments.list`.
+            "node.connected",
+            "node.disconnected",
         ] {
             assert!(
                 !g.can_receive(topic, &member),
                 "a member must NOT receive the admin-guarded topic {topic}"
+            );
+        }
+    }
+
+    /// Scrape the topic literal out of every `TopicEvent::new("…", …)` call in
+    /// `src`, skipping calls whose first argument is a composed expression
+    /// rather than a literal. Only the production half is scanned — the caller
+    /// splits on `#[cfg(test)]` first.
+    fn published_topic_literals(src: &str) -> Vec<String> {
+        let mut out = Vec::new();
+        for seg in src.split("TopicEvent::new(").skip(1) {
+            let Some(open) = seg.find('"') else { continue };
+            if !seg[..open].chars().all(char::is_whitespace) {
+                continue; // composed topic (`&topic`, `format!(…)`) — nothing to scrape
+            }
+            let rest = &seg[open + 1..];
+            let Some(close) = rest.find('"') else {
+                continue;
+            };
+            out.push(rest[..close].to_string());
+        }
+        out
+    }
+
+    /// SOURCE-level pin: every `node.*` topic the center actually publishes
+    /// must be refused to a member.
+    ///
+    /// The fleet events are raw `TopicEvent`s with no `GatewayEventFrame`
+    /// variant behind them, so nothing in this crate breaks if the `node.`
+    /// rule is deleted — the topics simply fall through `can_receive`'s
+    /// default-allow tail and every logged-in member starts receiving live
+    /// cluster topology again, silently. Reading the producer's source text is
+    /// the only thing that is not blind to that, and it is deliberately NOT a
+    /// suffix whitelist: a `node.evicted` added tomorrow is covered by the
+    /// prefix rule and by this scan without anyone editing a list here.
+    #[test]
+    fn every_node_topic_the_center_publishes_is_refused_to_a_member() {
+        // Production half only: handler.rs's own test module publishes topics
+        // that no client ever sees.
+        let production = include_str!("server/handler.rs")
+            .split("#[cfg(test)]")
+            .next()
+            .expect("split always yields at least one segment")
+            .to_string();
+        let topics = published_topic_literals(&production);
+        assert!(
+            !topics.is_empty(),
+            "the scanner matched no `TopicEvent::new(\"…\"` call in \
+             server/handler.rs — the call shape changed and this pin has \
+             quietly become vacuous"
+        );
+
+        let g = EventScopeGuard::default_rules();
+        let member = scope_for_role("member");
+        let operator = scope_for_role("operator");
+        let mut node_topics = 0usize;
+        for topic in &topics {
+            if !topic.starts_with("node.") {
+                continue;
+            }
+            node_topics += 1;
+            assert!(
+                !g.can_receive(topic, &member),
+                "server/handler.rs publishes `{topic}`, which a member can \
+                 still receive — cluster topology is admin-only on both faces"
+            );
+            assert!(
+                g.can_receive(topic, &operator),
+                "an operator must still receive `{topic}` — the Panel's fleet \
+                 list is driven by it"
+            );
+        }
+        assert!(
+            node_topics >= 2,
+            "only {node_topics} `node.*` topic(s) scraped; handler.rs publishes \
+             node.connected and node.disconnected, so the scanner is missing some"
+        );
+    }
+
+    /// The fleet has two faces and they must agree. `environments.list` (RPC)
+    /// and `node.*` (events) enumerate the same node ids and names, so gating
+    /// one and not the other is a hole with a gate standing next to it — which
+    /// is exactly the state this pin was written to end.
+    #[test]
+    fn the_fleet_is_gated_on_both_its_rpc_and_its_event_face() {
+        assert!(
+            crate::gateway::method_admin::method_requires_admin("environments.list"),
+            "the fleet's RPC face must be admin-gated"
+        );
+        let g = EventScopeGuard::default_rules();
+        assert!(
+            !g.can_receive("node.connected", &scope_for_role("member")),
+            "the fleet's event face must be admin-gated too — otherwise the \
+             RPC gate just moves the disclosure onto the event bus"
+        );
+    }
+
+    /// Prefix hygiene, mirroring `method_admin`'s
+    /// `prefix_match_requires_the_trailing_dot`: the guarded prefix is
+    /// `node.`, so a topic that merely starts with those four letters stays
+    /// unguarded. Pinned because widening it would black out an unrelated
+    /// family for every member with no error anywhere.
+    #[test]
+    fn the_node_rule_matches_only_the_dotted_prefix() {
+        let g = EventScopeGuard::default_rules();
+        let member = scope_for_role("member");
+        for topic in ["nodes.listed", "nodeapp.started", "node"] {
+            assert!(
+                g.can_receive(topic, &member),
+                "{topic} matches no rule and must stay unguarded"
             );
         }
     }

@@ -8,7 +8,14 @@
 //! | half | contents | zone | why |
 //! |------|----------|------|-----|
 //! | [`to_stable_lines`](RuntimeContext::to_stable_lines) | OS + arch, shell, host | `EnvironmentLayer` @300, **Stable** (cacheable prefix) | process-invariant — a byte here is written once and read back at 0.1× for the rest of the conversation |
-//! | [`to_dynamic_line`](RuntimeContext::to_dynamic_line) | cwd, repo, git branch, model, local time | `RuntimeContextLayer` @1720, **Dynamic** | cwd varies per *run* (project mode), branch varies mid-session, time varies hourly — any of these in the Stable prefix re-keys the whole conversation's provider cache |
+//! | [`to_environment_context_block`](RuntimeContext::to_environment_context_block) | cwd, repo, git branch, model, local time, optional parent | `RuntimeContextLayer` @1720, **Dynamic** | cwd varies per *run* (project mode), branch varies mid-session, time varies hourly — any of these in the Stable prefix re-keys the whole conversation's provider cache |
+//!
+//! The dynamic half used to ship as `to_dynamic_line`, a pipe-separated
+//! `## Runtime Environment` markdown section. It was replaced by the
+//! codex-aligned XML block in the §2.3 round (2026-08-06) and deleted once
+//! `RuntimeContextLayer` was the sole caller and had stopped calling it — see
+//! [`to_environment_context_block`](RuntimeContext::to_environment_context_block)
+//! for what the tag boundary buys over the line.
 //!
 //! Every fact is stated by exactly one of the two halves. They used to overlap:
 //! `EnvironmentLayer` printed its own `OS` / `Working directory` bullets from
@@ -27,7 +34,7 @@
 //! // agent workspace) — the directory the shell tool will actually execute in.
 //! let ctx = RuntimeContext::collect_in("claude-opus-4-6", Some("/work/proj".as_ref()));
 //! let stable = ctx.to_stable_lines(); // "- **OS**: macos (aarch64)\n- **Shell**: bash\n…"
-//! let live = ctx.to_dynamic_line();   // "## Runtime Environment\ncwd=/work/proj | …"
+//! let live = ctx.to_environment_context_block(None); // "<environment_context><cwd>/work/proj</cwd>…"
 //! ```
 
 use crate::sync_primitives::Mutex;
@@ -176,7 +183,7 @@ impl RuntimeContext {
     /// to the provider prompt cache once and read back cheaply for the rest of
     /// the conversation. Deliberately excludes `working_dir` / `repo_root` /
     /// `current_model` / `current_time`: each of those varies per run or per hour
-    /// and belongs in [`Self::to_dynamic_line`].
+    /// and belongs in [`Self::to_environment_context_block`].
     #[must_use]
     pub fn to_stable_lines(&self) -> String {
         let mut out = String::with_capacity(96);
@@ -186,50 +193,12 @@ impl RuntimeContext {
         out
     }
 
-    /// The **per-run / per-hour** half of the envelope, as the compact
-    /// pipe-separated section `RuntimeContextLayer` injects (Dynamic zone, on the
-    /// far side of the prompt-cache breakpoint where changing bytes cost only
-    /// themselves).
-    ///
-    /// ```text
-    /// ## Runtime Environment
-    /// cwd=/workspace | repo=/workspace | git=main | model=claude-opus-4-6 | time=2026-03-30 14:00 (Asia/Shanghai)
-    /// ```
-    ///
-    /// The `repo=` / `git=` segments are omitted when `repo_root` is `None` or
-    /// the branch cannot be resolved. The `git=` branch is read fresh from
-    /// `.git/HEAD` at render time (a single small file read — no `git`
-    /// subprocess) so a mid-session `checkout` is reflected on the next turn,
-    /// matching what codex's `<environment_context>` and hermes-agent's
-    /// workspace block surface.
-    #[must_use]
-    pub fn to_dynamic_line(&self) -> String {
-        let mut parts = vec![format!("cwd={}", self.working_dir.display())];
-
-        if let Some(ref repo) = self.repo_root {
-            parts.push(format!("repo={}", repo.display()));
-            if let Some(branch) = detect_git_branch(repo) {
-                parts.push(format!("git={branch}"));
-            }
-        }
-
-        parts.push(format!("model={}", self.current_model));
-        // Hour-precision time only — no `time_ms=`. A millisecond epoch here
-        // changed every build, and any byte change in this section invalidates
-        // the provider prompt cache for the entire conversation that follows
-        // it. Tools that need exact time get it injected per-call
-        // (`__current_time_ms`); the model needing exact time can run one.
-        parts.push(format!("time={} ({})", self.current_time, self.timezone));
-
-        format!("## Runtime Environment\n{}", parts.join(" | "))
-    }
-
     /// Codex-aligned `<environment_context>` envelope, in the same XML shape
     /// codex's `FileSystemContext::render()` uses (`<environment_context>
     /// <cwd>…</cwd><git>…</git><model>…</model><time>…</time></environment_context>`).
     ///
-    /// Why an XML block instead of the markdown bullets of
-    /// [`to_dynamic_line`](Self::to_dynamic_line): it gives the model a
+    /// Why an XML block instead of the pipe-separated `## Runtime Environment`
+    /// markdown section this layer shipped until 2026-08-06: it gives the model a
     /// machine-bounded region that downstream tooling and codex-style
     /// `<environment_context>` callers can match on (the same role
     /// `markdown_excerpt.rs::split_wikilinks` plays for note excerpts). It
@@ -265,7 +234,11 @@ impl RuntimeContext {
             push_text_element(&mut out, "git", branch);
         }
         push_text_element(&mut out, "model", &self.current_model);
-        // Hour-precision time only — see `to_dynamic_line` for why no `time_ms`.
+        // Hour-precision time only — no `time_ms`. A millisecond epoch here
+        // changes on every build, and any byte change in this section
+        // invalidates the provider prompt cache for the whole conversation that
+        // follows it. Tools needing exact time get it injected per-call
+        // (`__current_time_ms`); a model needing exact time can run one.
         // We deliberately stay in the same format string ("YYYY-MM-DD HH:00
         // (TZ)") across both halves so the model sees one timestamp, not two
         // formats it has to reconcile.
@@ -529,7 +502,7 @@ mod tests {
     fn the_two_halves_never_state_the_same_fact() {
         let ctx = make_test_ctx(Some(PathBuf::from("/workspace")));
         let stable = ctx.to_stable_lines();
-        let dynamic = ctx.to_dynamic_line();
+        let dynamic = ctx.to_environment_context_block(None);
 
         let facts = [
             ("os", ctx.os.as_str()),
@@ -549,34 +522,8 @@ mod tests {
         }
         // cwd is the one checked by path rather than by value: it must appear only
         // in the Dynamic half, because it varies per run in project mode.
-        assert!(dynamic.contains("cwd=/workspace"), "{dynamic}");
+        assert!(dynamic.contains("<cwd>/workspace</cwd>"), "{dynamic}");
         assert!(!stable.contains("/workspace"), "{stable}");
-    }
-
-    #[test]
-    fn dynamic_half_format() {
-        let ctx = make_test_ctx(Some(PathBuf::from("/workspace")));
-
-        let section = ctx.to_dynamic_line();
-
-        assert!(section.starts_with("## Runtime Environment\n"));
-        assert!(section.contains("cwd=/workspace"));
-        assert!(section.contains("repo=/workspace"));
-        assert!(section.contains("model=claude-opus-4-6"));
-        assert!(section.contains("time=2026-03-30 14:00 (Asia/Shanghai)"));
-        // No sub-hour precision and no epoch ms — the section must stay
-        // byte-stable within the hour so it never re-keys the provider
-        // prompt cache for the conversation that follows it.
-        assert!(!section.contains("time_ms="));
-
-        // Verify pipe-separated format on the data line
-        let lines: Vec<&str> = section.lines().collect();
-        assert_eq!(lines.len(), 2, "should have header + data line");
-        assert_eq!(lines[0], "## Runtime Environment");
-        assert!(
-            lines[1].contains(" | "),
-            "data line should use pipe separators"
-        );
     }
 
     #[test]
@@ -643,37 +590,6 @@ mod tests {
             return;
         }
         assert_eq!(detect_repo_root(dir.path()), None);
-    }
-
-    #[test]
-    fn dynamic_half_omits_repo_segments_without_a_repo() {
-        let ctx = RuntimeContext {
-            os: "linux".to_string(),
-            arch: "x86_64".to_string(),
-            shell: "bash".to_string(),
-            working_dir: PathBuf::from("/home/user"),
-            repo_root: None,
-            current_model: "gpt-4".to_string(),
-            hostname: "server-01".to_string(),
-            current_time: "2026-03-30 02:00".to_string(),
-            timezone: "UTC".to_string(),
-        };
-
-        let section = ctx.to_dynamic_line();
-
-        assert!(section.starts_with("## Runtime Environment\n"));
-        assert!(section.contains("cwd=/home/user"));
-        assert!(
-            !section.contains("repo="),
-            "should NOT contain repo= when repo_root is None"
-        );
-        assert!(section.contains("model=gpt-4"));
-        assert!(section.contains("time="));
-        assert!(!section.contains("time_ms="));
-        assert!(
-            !section.contains("git="),
-            "should NOT contain git= when repo_root is None"
-        );
     }
 
     /// `collect_in` must honour the caller's effective workspace, and must refuse
@@ -834,6 +750,10 @@ mod tests {
         );
         // No `<parent>` element when the caller passes `None`.
         assert!(!block.contains("<parent"), "{block}");
+        // Hour precision only, no epoch ms: this block must stay byte-stable
+        // within the hour or it re-keys the provider prompt cache for the
+        // whole conversation that follows it.
+        assert!(!block.contains("time_ms"), "{block}");
     }
 
     #[test]

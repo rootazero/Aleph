@@ -163,7 +163,8 @@ pub struct TurnEnvelope {
     ///
     /// `Some((parent_kind, parent_id))` for a subagent / team dispatch whose
     /// turn envelope carries a *parent* binding — used by
-    /// `RuntimeContext::to_dynamic_line` to print `parent=<kind>:<id>` so the
+    /// `RuntimeContext::to_environment_context_block` to emit
+    /// `<parent kind="…">id</parent>` so the
     /// model can disambiguate "I am the explore sub-agent of session X" from
     /// "I am the user's main session X". `None` on every primary dispatch —
     /// the printed prompt stays byte-identical for the common path.

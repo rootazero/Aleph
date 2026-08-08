@@ -93,7 +93,26 @@ pub async fn apply_budget_directive(
                     .compact(messages, 0, Some(session_key_str.as_str()))
                     .await
                 {
-                    Ok(_) => {
+                    Ok(result) => {
+                        // `strategy_used` had exactly one reader — the
+                        // watchdog's reset gate — and this, its only production
+                        // call site, threw it away with `Ok(_)`. So the one
+                        // carrier that distinguishes "the LLM summarized this
+                        // window" from "we kept the first line of every
+                        // message" reached no operator surface at all. Say it
+                        // once, here, where the compaction actually happened.
+                        if matches!(
+                            result.strategy_used,
+                            crate::context::compact::compactor::CompactStrategy::DeterministicTruncation
+                        ) {
+                            tracing::warn!(
+                                target: "context_budget",
+                                ?session_id,
+                                "compaction degraded to deterministic truncation — the \
+                                 side-channel summarizer is not producing summaries; \
+                                 check [context_budget] / the aux model on this provider"
+                            );
+                        }
                         if let Some(budget) = budget {
                             budget.lock().await.note_compaction_effect(
                                 messages,

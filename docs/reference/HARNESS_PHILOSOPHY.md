@@ -336,6 +336,15 @@ prune-the-prompt 是 R7（LLM 主权）/ R9（智慧在 Prompt）/ R10（薄 Har
 
 **第三课：尺子量的是它被喂到的东西（2026-07-26 §2.3 轮）**。上面这三把尺共用一个输入构造器 `production_shaped`，而它**没填**四个在生产里**每轮都在**的字段：`runtime_context` / `approval_tier` / `session_mode` / `sandbox_summary`。于是 `RuntimeContextLayer` 整层、`Approval mode:`（206 B）、`Usage mode:`（353 B）、sandbox 三行全在射程之外——**"实测棘轮"实测的是一个不存在的 prompt**，往 `ExecTier::approval_prompt_line` 里加任意长的句子都能一路绿灯。更糟的是 `runtime_context` 被写进了 `CONDITIONALLY_SILENT` 当**借口**（"需要 `RuntimeContext::collect`"），而生产路径 `resolve_prompt_context` 是**无条件**填的。因此立一条规则：**生产恒在的字段必须填进 `production_shaped`（用固定合成值，保持机器无关）；只有真正条件性缺席的才准进白名单。** 修正后 ceiling 由 5,140 抬到 **5,913 B**——这不是新增内容，是同一批一直在发的字节第一次进入视野（三问作答见 `SCAFFOLD_CEILING_BYTES` 的 doc）。同轮还发现第三把尺有一个**结构性盲区**：它比对整句，而同一事实的两种写法（`- **OS**: linux` 与 `os=linux`）永远不是同一"句"，所以 `EnvironmentLayer` / `RuntimeContextLayer` 之间的 OS+cwd 重复它抓不到——补 `no_environment_fact_is_stated_twice`，按**事实的值**判重。层数 **35→36**（`OperatingEnvelopeLayer` @1758，把每轮可变的审批档位/会话模式挪出可缓存前缀；总字节不变，只换缓存分区）。详见 [FEATURE_LOCATOR §2.3](FEATURE_LOCATOR.md#23-context-模式-context-mode--codex-风格)。
 
+**第四课：一个"长跑 harness"的清单，落点全在循环之外（2026-08-07）**。本轮拿 Mastra Code 的《解剖 harness》八项能力（线程持久化 / 实时任务列表 / 中断-排队-转向 / 会停下来等人的工具 / 计划→构建交接 / 审批链 / 子代理 / 崩溃恢复多端）逐条对照 Aleph，20 条缺陷通过对抗式验证。**`src/harness/` 增删 0 行，`budget.rs::CEILING` 不动。**
+
+这不是巧合，是薄 harness 的可证结论。逐条看这些缺陷住在哪：WS 订阅台账在 Panel、崩溃恢复的 emitter 在 gateway、脱敏在 `event_emitter/`、正文去重与工具对账在 TUI、下标寻址在 scratchpad 与 verifier、缓存温度在 `thinker/layers/`、摘要器可观测性在 `context/compact/`。**一个能连续跑数小时的 agent，它的失效面几乎全在"外壳"上——上下文怎么取舍、事件怎么投影、审批怎么裁决、状态怎么被看见** —— 而循环本身只该继续做 Think→Act 调度。如果一份"让 agent 跑得更久"的清单**需要**往笨循环里加行，那基本是把某种认知误当成了脚手架（§5 Q1）。
+
+同轮另有两条与本文档主旨同源的观察：
+
+- **参考实现的"审批链"是六层有序规则**，Aleph 在其中五层更强（三层合并的 deny、按**动作指纹**而非工具名的会话授权、读**声明元数据**而非名字的类别判定）。但它的 `Full` 档有三份关于"什么被闸住"的表述，其中一份**每回合进 prompt**，而三份都说了假话（工具自声明的确认门根本不看档位）。**R9 的代价是双向的**：智慧搬进 prompt 之后，prompt 里那句话就成了必须与代码同步维护的第 N 份拷贝，而它是唯一模型会当真的那份。
+- **参考实现的 fork 子代理**（克隆父线程跑在父 agent 上以保温提示词缓存）**刻意不移植**——Aleph 子代理的专家角色头与工具数组本就与父不同，要做到前缀逐字节相同就得抹掉专家角色本身。真正拿回缓存温度的是删掉那**一行**每 spawn 变化的 `chain_id`（§2.18）。**"参考项目有 X"从来不是理由；"我们这里 X 解决的那个问题是什么形状"才是。**
+
 ---
 
 ## 9. 参考文献

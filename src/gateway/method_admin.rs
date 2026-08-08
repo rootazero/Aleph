@@ -87,21 +87,31 @@
 const ADMIN_PREFIXES: &[&str] = &[
     // --- Gateway trust boundary: tokens, tickets, devices, credentials ---
     "gateway.", // token.{current,rotate}, ticket.create, devices.{list,revoke},
-    // identity.get, metrics.*, credentials, flow.reload — no read-only
-    // member-safe carve-out exists in this family (verified: no
-    // `gateway.status` method is registered anywhere).
+    // identity.get, metrics.*, credentials, flow.reload. One carve-out since
+    // 2026-08-07: `gateway.metrics.run_concurrency`, whose response is now
+    // narrowed to the caller instead of refused (see MEMBER_CARVE_OUTS).
     // --- Principal / fleet / process management ---
     "users.", // principal management (carve-outs: me / list) — not yet
     // registered (lands in Task 5); gated pre-emptively so the gate
     // precedes the surface.
-    "cluster.",  // enroll / deregister — fleet membership.
+    "cluster.", // enroll / deregister — fleet membership.
+    // The READ face of that same fleet (`environments.list`): node ids, names,
+    // tags, command inventories and last-seen times for every machine in the
+    // cluster. Gating `cluster.` alone gated the two WRITES and left the
+    // enumeration open; the Panel compensated with a client-side
+    // `is_operator()` check, which could never have been the enforcement point
+    // — that role is captured once at connect and `restamp_live_connections`
+    // can invalidate it without telling the client. Prefix-gated (not
+    // method-gated) so a future `environments.get`/`.describe` is gated by
+    // default. The delivery-side half is `event_scope.rs`'s `node.` rule:
+    // `node.connected`/`node.disconnected` carry the same ids and names, so
+    // gating only the RPC would leave a member who hand-subscribes `node.**`
+    // reading the fleet live. Neither half implies the other.
     "environments.",
     "services.", // background service lifecycle (start/stop/list/status) —
     // server process control, not caller's-own-data.
     // --- Agent persona management: server-global roster, not per-user ---
-    "agent.",
     "agents.", // create/update/delete/set_default/bindings/files.*/tools_schema/
-    "workspace.",
     // teams — carve-outs: agents.list / agents.get (spec §7: "agent 人格
     // 目录 v1 保持全局、admin 治理"; read-only roster browsing stays open,
     // matching the tool-tier gate's own asymmetry — `agent_create`/
@@ -220,11 +230,8 @@ const ADMIN_PREFIXES: &[&str] = &[
 const MEMBER_CARVE_OUTS: &[&str] = &[
     "users.me",       // a member reading their own principal record.
     "users.list",     // project roster picking needs the member list.
-    "agent.run",
     "agents.list",    // browsing the shared agent-persona roster (read-only).
     "agents.get",     // reading a single persona's detail (read-only).
-    "workspace.list",
-    "workspace.get",
     "heartbeat.list", // matches chat-safe `heartbeat_list` in method_authz.rs.
     "heartbeat.get",  // read-only sibling of heartbeat.list.
     "heartbeat.runs", // read-only run history, sibling of heartbeat.list.
@@ -240,6 +247,20 @@ const MEMBER_CARVE_OUTS: &[&str] = &[
     // session's own) — see `handlers/trace_replay.rs::handle_by_runs`. Its
     // siblings stay gated; this carve-out is as narrow as `tools.invoke`'s.
     "trace.by_runs",
+    // The Panel's cold-load seed for the sidebar running dot, and its usage
+    // gauge. Admin-gating it (inherited from the `gateway.` family) meant both
+    // were silently dead for every member — the RPC fallback that the
+    // `stream.running_set_changed` event's own "members still need their own
+    // red dot" rationale leaned on did not work for the population that
+    // rationale is about. Safe now that the handler drops every identity from
+    // the response for a scoped caller (2026-08-07, `ListFiltered` in
+    // `method_visibility`): the two session-key arrays are narrowed to the
+    // caller and `run_concurrency.per_agent` — which names the agent personas
+    // holding live slots right now — is removed outright. What remains is
+    // slot/queue COUNTERS. Siblings (`gateway.metrics.lanes`,
+    // `gateway.metrics.subagent_concurrency`) stay gated — narrowing those is
+    // a separate, not-yet-made decision.
+    "gateway.metrics.run_concurrency",
 ];
 
 #[must_use]
@@ -273,20 +294,17 @@ mod tests {
             // users. (given — pre-emptive, Task 5 surface)
             "users.create",
             "users.update",
-            // cluster. / services.
+            // cluster. / environments. / services.
             "cluster.enroll",
+            // The fleet's read face. It lived outside `cluster.` all along and
+            // was therefore open to every member until 2026-08-07; the Panel's
+            // client-side `is_operator()` block was the only thing hiding it.
             "environments.list",
             "services.start",
             // agents. (fix round — Finding 1)
-            "agent.list",
-            "agent.status",
-            "agent.cancel",
             "agents.create",
             "agents.update",
             "agents.delete",
-            "workspace.create",
-            "workspace.update",
-            "workspace.archive",
             "agents.set_default",
             // providers. family
             "providers.create",
@@ -374,6 +392,33 @@ mod tests {
         }
     }
 
+    /// The `gateway.` family's one carve-out (2026-08-07). It exists because
+    /// the response is NARROWED for a member rather than refused — the RPC half
+    /// of the `stream.running_set_changed` projection — so the carve-out and
+    /// `handle_gateway_metrics_run_concurrency`'s filtering are one decision:
+    /// if that filtering is ever removed, this line has to go with it.
+    #[test]
+    fn run_concurrency_is_carved_open_but_its_gateway_siblings_stay_gated() {
+        assert!(
+            !method_requires_admin("gateway.metrics.run_concurrency"),
+            "gateway.metrics.run_concurrency must stay open — it is the Panel's \
+             cold-load seed for a member's OWN running dot, and it filters its \
+             session-key arrays to the caller in the handler"
+        );
+        for sibling in [
+            "gateway.metrics.lanes",
+            "gateway.metrics.subagent_concurrency",
+            "gateway.token.rotate",
+            "gateway.devices.list",
+        ] {
+            assert!(
+                method_requires_admin(sibling),
+                "{sibling} must stay admin-gated — only \
+                 gateway.metrics.run_concurrency is carved out"
+            );
+        }
+    }
+
     #[test]
     fn member_daily_methods_stay_open() {
         for m in [
@@ -399,7 +444,6 @@ mod tests {
             "heartbeat.runs",
             "teams.list",
             "workspace.list",
-            "workspace.get",
             "voice.transcribe",
             "fs.read_file",
             "fs.allowed_roots",
@@ -411,6 +455,7 @@ mod tests {
             "subagent.tree",
             "agent.run",
             "trace.by_runs",
+            "gateway.metrics.run_concurrency",
             "session.compact",
             "command.execute",
             "commands.list",

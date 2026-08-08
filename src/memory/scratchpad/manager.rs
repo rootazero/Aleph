@@ -465,11 +465,35 @@ impl ScratchpadManager {
         // any other active `[~]` item to pending.
         let demote_others = status == PlanItemStatus::InProgress;
 
+        // Count and rewrite ONLY inside `## Plan`.
+        //
+        // The read side (`parse_snapshot`) has always scoped itself with
+        // `extract_section(content, PLAN_HEADER)`, but this write side scanned
+        // the whole document, so "item N" had two different answers on any
+        // scratchpad carrying a checkbox outside the plan — and one is reachable
+        // from model output alone: `set_objective` / `append_note` pass model
+        // text straight into `upsert_section`, so a multi-line objective or note
+        // containing a `- [ ]` line shifts every plan index on the write side
+        // while the read side, the tool echo and the Panel all keep the old
+        // numbering. `complete_item(0)` then rewrote the decoy and reported
+        // success while the real step stayed pending.
+        //
+        // `section_span` already declares itself the single source for both
+        // sides; this writer was the one that never joined. A document with no
+        // `## Plan` yields count == 0 and the existing "plan is empty" error.
+        let plan_span = section_span(&content, PLAN_HEADER);
+        let mut offset = 0usize;
+
         for line in content.split_inclusive('\n') {
+            let line_start = offset;
+            offset += line.len();
+            let in_plan = plan_span.is_some_and(|(s, e)| line_start >= s && line_start < e);
             let trimmed = line.trim_start();
             let body = trimmed.trim_end_matches(['\n', '\r']);
-            let is_item =
-                body.starts_with("- [ ]") || body.starts_with("- [~]") || body.starts_with("- [x]");
+            let is_item = in_plan
+                && (body.starts_with("- [ ]")
+                    || body.starts_with("- [~]")
+                    || body.starts_with("- [x]"));
             if is_item && body != "- [ ] ..." {
                 let this = count;
                 count += 1;
@@ -1135,5 +1159,66 @@ mod tests {
 
         let backup = tokio::fs::read_to_string(&backup_path).await.unwrap();
         assert_eq!(backup, "First version");
+    }
+
+    /// "Item N" must mean the same thing to the writer and to the reader.
+    ///
+    /// `parse_snapshot` has always scoped itself to `## Plan`; `set_item_status`
+    /// used to count every checkbox in the document. A checkbox above the plan
+    /// therefore shifted the write side's numbering while the read side, the
+    /// tool echo and the Panel kept theirs. Reachable from model output alone:
+    /// `set_objective` / `append_note` pass model text straight through
+    /// `upsert_section`, so one multi-line objective containing a `- [ ]` line
+    /// is enough.
+    #[tokio::test]
+    async fn item_status_writes_are_scoped_to_the_plan_section() {
+        let temp = tempdir().unwrap();
+        let manager = ScratchpadManager::with_dir(temp.path().to_path_buf(), "sess");
+        manager
+            .write(
+                "## Objective\nShip auth\n- [ ] a checkbox the model typed into its objective\n\n\
+                 ## Plan\n- [ ] real first step\n- [ ] real second step\n\n\
+                 ## Notes\n- [ ] a checkbox in a note\n",
+            )
+            .await
+            .unwrap();
+
+        manager.complete_item(0).await.unwrap();
+
+        let snap = manager.snapshot().await.unwrap();
+        assert_eq!(snap.items.len(), 2, "the reader still sees only the plan");
+        assert_eq!(snap.items[0].text, "real first step");
+        assert_eq!(
+            snap.items[0].status,
+            PlanItemStatus::Done,
+            "complete_item(0) must move the item the reader calls 0, not the \
+             first checkbox in the file"
+        );
+        assert_eq!(snap.items[1].status, PlanItemStatus::Pending);
+
+        let raw = manager.read().await.unwrap();
+        assert!(
+            raw.contains("- [ ] a checkbox the model typed into its objective"),
+            "text outside the plan must be byte-preserved"
+        );
+        assert!(raw.contains("- [ ] a checkbox in a note"));
+    }
+
+    /// The out-of-range error must also be computed on the plan alone,
+    /// otherwise stray checkboxes make an invalid index look valid.
+    #[tokio::test]
+    async fn out_of_range_is_measured_against_the_plan_only() {
+        let temp = tempdir().unwrap();
+        let manager = ScratchpadManager::with_dir(temp.path().to_path_buf(), "sess");
+        manager
+            .write("## Objective\nO\n- [ ] decoy\n\n## Plan\n- [ ] only step\n")
+            .await
+            .unwrap();
+
+        let err = manager.complete_item(1).await.unwrap_err().to_string();
+        assert!(
+            err.contains("1 item(s)"),
+            "the plan has one item, not two: {err}"
+        );
     }
 }

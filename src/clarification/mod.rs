@@ -13,7 +13,6 @@
 //!
 //! // Create a select-type clarification
 //! let request = ClarificationRequest::select(
-//!     "style-choice",
 //!     "What style would you like?",
 //!     vec![
 //!         ClarificationOption::new("professional", "Professional"),
@@ -23,11 +22,7 @@
 //! );
 //!
 //! // Create a text-type clarification
-//! let request = ClarificationRequest::text(
-//!     "target-language",
-//!     "Enter target language:",
-//!     Some("e.g., Spanish, French..."),
-//! );
+//! let request = ClarificationRequest::text("Enter target language:");
 //! ```
 
 pub mod session;
@@ -87,52 +82,52 @@ impl ClarificationOption {
     }
 }
 
-/// Request for user clarification through Halo overlay
+/// Request for user clarification.
+///
+/// # Why there is no `id` here
+///
+/// The registry is keyed by `session_key` — one live question per session —
+/// and all three read paths (`list_pending`, `interpret_reply`, `resolve`)
+/// address it that way. An `id` field existed, was written by every caller
+/// (`ask_user` minted a fresh UUID per call), and was read by **nothing**
+/// outside this module's own unit tests. Removed under P6 rather than left as
+/// "a hook for future id-addressing": the approval twin genuinely is
+/// id-addressed (`ExecApprovalManager::resolve_with_reason(id)`), so if
+/// clarifications ever need it, that shape is there to copy — a dead field is
+/// not a head start, it is a claim that something is wired when it is not.
+///
+/// `default_value` (always `Some("1")` for select, always `None` for text) and
+/// `placeholder` (never passed by either production constructor) went the same
+/// way: write-only. This type is not on any wire — Panel and TUI consume
+/// `PendingClarification` — so nothing outside the crate can observe the change.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ClarificationRequest {
-    /// Unique request ID (for tracking/logging)
-    pub id: String,
     /// Prompt text to display
     pub prompt: String,
     /// Type of clarification
     pub clarification_type: ClarificationType,
     /// Options for select-type (None for text-type)
     pub options: Option<Vec<ClarificationOption>>,
-    /// Default value (1-based index as string for select, text for text-type)
-    pub default_value: Option<String>,
-    /// Placeholder text for text-type input
-    pub placeholder: Option<String>,
 }
 
 impl ClarificationRequest {
     /// Create a select-type clarification request
     #[must_use]
-    pub fn select(id: &str, prompt: &str, options: Vec<ClarificationOption>) -> Self {
-        let has_options = !options.is_empty();
+    pub fn select(prompt: &str, options: Vec<ClarificationOption>) -> Self {
         Self {
-            id: id.to_string(),
             prompt: prompt.to_string(),
             clarification_type: ClarificationType::Select,
             options: Some(options),
-            default_value: if has_options {
-                Some("1".to_string())
-            } else {
-                None
-            },
-            placeholder: None,
         }
     }
 
     /// Create a text-type clarification request
     #[must_use]
-    pub fn text(id: &str, prompt: &str, placeholder: Option<&str>) -> Self {
+    pub fn text(prompt: &str) -> Self {
         Self {
-            id: id.to_string(),
             prompt: prompt.to_string(),
             clarification_type: ClarificationType::Text,
             options: None,
-            default_value: None,
-            placeholder: placeholder.map(|s| s.to_string()),
         }
     }
 }
@@ -202,15 +197,6 @@ impl ClarificationResult {
         }
     }
 
-    /// Check if the result is successful (selected or text input)
-    #[must_use]
-    pub const fn is_success(&self) -> bool {
-        matches!(
-            self.result_type,
-            ClarificationResultType::Selected | ClarificationResultType::TextInput
-        )
-    }
-
     /// Get the value, if any
     #[must_use]
     pub fn get_value(&self) -> Option<&str> {
@@ -243,7 +229,6 @@ mod tests {
     #[test]
     fn test_clarification_request_select() {
         let request = ClarificationRequest::select(
-            "test-id",
             "Choose style:",
             vec![
                 ClarificationOption::new("a", "Option A"),
@@ -251,23 +236,19 @@ mod tests {
             ],
         );
 
-        assert_eq!(request.id, "test-id");
         assert_eq!(request.prompt, "Choose style:");
         assert_eq!(request.clarification_type, ClarificationType::Select);
         assert!(request.options.is_some());
         assert_eq!(request.options.as_ref().unwrap().len(), 2);
-        assert_eq!(request.default_value, Some("1".to_string()));
     }
 
     #[test]
     fn test_clarification_request_text() {
-        let request = ClarificationRequest::text("test-id", "Enter name:", Some("e.g., John Doe"));
+        let request = ClarificationRequest::text("Enter name:");
 
-        assert_eq!(request.id, "test-id");
         assert_eq!(request.prompt, "Enter name:");
         assert_eq!(request.clarification_type, ClarificationType::Text);
         assert!(request.options.is_none());
-        assert_eq!(request.placeholder, Some("e.g., John Doe".to_string()));
     }
 
     #[test]
@@ -277,7 +258,6 @@ mod tests {
         assert_eq!(result.result_type, ClarificationResultType::Selected);
         assert_eq!(result.selected_index, Some(2));
         assert_eq!(result.value, Some("humorous".to_string()));
-        assert!(result.is_success());
     }
 
     #[test]
@@ -287,7 +267,6 @@ mod tests {
         assert_eq!(result.result_type, ClarificationResultType::TextInput);
         assert!(result.selected_index.is_none());
         assert_eq!(result.value, Some("Hello world".to_string()));
-        assert!(result.is_success());
     }
 
     #[test]
@@ -295,7 +274,6 @@ mod tests {
         let result = ClarificationResult::cancelled();
 
         assert_eq!(result.result_type, ClarificationResultType::Cancelled);
-        assert!(!result.is_success());
     }
 
     #[test]
@@ -303,7 +281,6 @@ mod tests {
         let result = ClarificationResult::timeout();
 
         assert_eq!(result.result_type, ClarificationResultType::Timeout);
-        assert!(!result.is_success());
     }
 
     #[test]

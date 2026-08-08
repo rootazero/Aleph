@@ -580,51 +580,54 @@ pub async fn handle_rewind(
     }
 }
 
-async fn check_context_estimate_visibility(
-    request: &JsonRpcRequest,
-    params: &EstimateParams,
-    manager: &dyn SessionStore,
-) -> Result<(), JsonRpcResponse> {
-    let session_key = match SessionKey::from_key_string(&params.session_key) {
-        Some(key) => key,
-        None => {
-            return Err(JsonRpcResponse::error(
-                request.id.clone(),
-                INVALID_PARAMS,
-                "Invalid session_key format",
-            ));
-        }
-    };
-    let meta = match manager.get_metadata(&session_key).await {
-        Ok(Some(meta)) => meta,
-        Ok(None) => return Err(visibility::not_found_response(request.id.clone())),
-        Err(_) => return Err(visibility::not_found_response(request.id.clone())),
-    };
-    if !visibility::session_visible(&meta) {
-        return Err(visibility::not_found_response(request.id.clone()));
-    }
-    Ok(())
-}
-
 /// Handle chat.context_estimate RPC.
 ///
 /// Returns an estimated next-prompt occupancy for sessions that never ran an
 /// LLM turn (so the gauge can show `≈N%`). `null` when core can't resolve the
 /// session/model — the panel then keeps the gauge hidden (graceful, P7).
+///
+/// # P1 visibility (KeyChecked)
+///
+/// This was recorded as "a token-count-only read" and deferred; it is more
+/// than that. `used_tokens` is derived from the addressed session's whole
+/// event log and `window_tokens` from the model that session is PINNED to
+/// (`session_model_handle::get_session_model`), so an ungated caller learns
+/// which model another user runs and roughly how much they have said to it.
+///
+/// The gate is [`visibility::existing_session_is_visible`], not the
+/// addressed-key `session_visible` pattern: a session that does not exist yet
+/// is the ordinary "the composer is open on a fresh conversation" case the
+/// Panel calls this on, and it must keep flowing through to a real estimate
+/// rather than becoming a denial.
+///
+/// A denial reuses this method's OWN `null` — the shape it already returns
+/// when core cannot resolve the key at all — rather than an error code that
+/// would exist only for denials. The residual, stated rather than implied: a
+/// well-formed key that answers `null` tells the caller "not resolvable BY
+/// YOU", which is weaker than the `not_found_response` contract elsewhere in
+/// this file but is the strongest shape available without fabricating an
+/// estimate. It is byte-identical to the malformed-key answer.
 pub async fn handle_context_estimate(
     request: JsonRpcRequest,
     harness: Arc<dyn crate::orchestrator::dispatch::HarnessRunner>,
-    session_store: Arc<dyn SessionStore>,
+    sessions: Arc<dyn SessionStore>,
 ) -> JsonRpcResponse {
     let params: EstimateParams = match parse_params(&request) {
         Ok(p) => p,
         Err(e) => return e,
     };
-    if let Err(response) =
-        check_context_estimate_visibility(&request, &params, session_store.as_ref()).await
-    {
-        return response;
+    let unresolved = |id| JsonRpcResponse::success(id, serde_json::Value::Null);
+
+    // A key core cannot even parse has always answered `null` (the estimator
+    // parses it again and gives up); keep that answer here so the visibility
+    // gate does not become the thing that changes it.
+    let Some(session_key) = SessionKey::from_key_string(&params.session_key) else {
+        return unresolved(request.id);
+    };
+    if !visibility::existing_session_is_visible(sessions.as_ref(), &session_key).await {
+        return unresolved(request.id);
     }
+
     match harness.estimate_context(&params.session_key).await {
         Some(est) => JsonRpcResponse::success(
             request.id,
@@ -633,7 +636,7 @@ pub async fn handle_context_estimate(
                 "window_tokens": est.window_tokens,
             }),
         ),
-        None => JsonRpcResponse::success(request.id, serde_json::Value::Null),
+        None => unresolved(request.id),
     }
 }
 
@@ -1008,31 +1011,6 @@ mod tests {
         }
 
         #[tokio::test]
-        async fn context_estimate_denies_cross_user_session() {
-            let temp = tempfile::tempdir().unwrap();
-            let store = store(&temp);
-            let alice_key = alice_session(&store).await;
-            let req = request(
-                "chat.context_estimate",
-                json!({ "session_key": alice_key.to_key_string() }),
-            );
-            let params = EstimateParams {
-                session_key: alice_key.to_key_string(),
-            };
-
-            let result = CALLER_USER
-                .scope(
-                    Some("u-bob".to_string()),
-                    check_context_estimate_visibility(&req, &params, store.as_ref()),
-                )
-                .await;
-            assert_eq!(
-                result.err().and_then(|response| response.error.map(|e| e.code)),
-                Some(RESOURCE_NOT_FOUND)
-            );
-        }
-
-        #[tokio::test]
         async fn chat_history_denies_cross_user_as_not_found() {
             let temp = tempfile::tempdir().unwrap();
             let store = store(&temp);
@@ -1098,6 +1076,200 @@ mod tests {
             assert_eq!(
                 as_bob.error.as_ref().map(|e| e.code),
                 Some(RESOURCE_NOT_FOUND)
+            );
+        }
+
+        // ── chat.context_estimate ────────────────────────────────────────
+
+        /// A harness whose ONLY job is to prove whether the estimator ran.
+        /// The default `estimate_context` returns `None`, which would make a
+        /// denial and a pass-through indistinguishable — so this one returns
+        /// a value no other code path can produce.
+        struct CountingEstimator(std::sync::Arc<std::sync::atomic::AtomicUsize>);
+
+        const SENTINEL_WINDOW: u32 = 424_242;
+
+        #[async_trait::async_trait]
+        impl crate::orchestrator::dispatch::HarnessRunner for CountingEstimator {
+            #[allow(clippy::too_many_arguments)]
+            async fn run(
+                &self,
+                _s: String,
+                _sp: Arc<crate::orchestrator::flow_spec::FlowSpec>,
+                _i: crate::orchestrator::flow_spec::FlowInput,
+                _sb: Arc<dyn crate::sandbox::Sandbox>,
+                _ev: tokio::sync::broadcast::Sender<crate::orchestrator::dispatch::FlowStreamEvent>,
+                _c: tokio_util::sync::CancellationToken,
+                _tool_service_override: Option<Arc<dyn crate::tools::service::ToolService>>,
+                _trace_sink: Option<Arc<dyn crate::harness::TraceSink>>,
+                _interaction_manifest: Option<crate::thinker::InteractionManifest>,
+                _workspace_override: Option<std::path::PathBuf>,
+                _max_iterations_override: Option<u32>,
+                _transient_context: Option<String>,
+                _think_level: Option<crate::agents::thinking::ThinkLevel>,
+                _envelope: crate::thinker::TurnEnvelope,
+                _turn_model: Option<crate::providers::session_model_handle::SessionModelPref>,
+            ) -> Result<
+                crate::orchestrator::dispatch::FlowOutcome,
+                crate::orchestrator::errors::FlowError,
+            > {
+                unimplemented!("context_estimate tests never dispatch a run")
+            }
+
+            async fn estimate_context(
+                &self,
+                _session_key: &str,
+            ) -> Option<crate::orchestrator::harness_bridge::context_estimate::ContextEstimate>
+            {
+                self.0.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                Some(
+                    crate::orchestrator::harness_bridge::context_estimate::ContextEstimate {
+                        used_tokens: 1_234,
+                        window_tokens: SENTINEL_WINDOW,
+                    },
+                )
+            }
+        }
+
+        fn counting_estimator() -> (
+            Arc<dyn crate::orchestrator::dispatch::HarnessRunner>,
+            std::sync::Arc<std::sync::atomic::AtomicUsize>,
+        ) {
+            let calls = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+            (Arc::new(CountingEstimator(calls.clone())), calls)
+        }
+
+        /// `chat.context_estimate` discloses the addressed session's occupancy
+        /// AND the model it is pinned to (`window_tokens`). The denial must
+        /// stop the estimator from ever running — asserting only on the
+        /// response would still pass if the estimate were computed and then
+        /// thrown away, which is exactly the leak on the timing/cache side.
+        #[tokio::test]
+        async fn context_estimate_denies_a_foreign_session_without_running_the_estimator() {
+            let temp = tempfile::tempdir().unwrap();
+            let store = store(&temp);
+            let alice_key = alice_session(&store).await;
+            let (harness, calls) = counting_estimator();
+
+            let as_bob = CALLER_USER
+                .scope(
+                    Some("u-bob".to_string()),
+                    handle_context_estimate(
+                        request(
+                            "chat.context_estimate",
+                            json!({ "session_key": alice_key.to_key_string() }),
+                        ),
+                        harness.clone(),
+                        store.clone(),
+                    ),
+                )
+                .await;
+            assert!(as_bob.error.is_none(), "the denial is a null, not an error");
+            assert_eq!(as_bob.result, Some(serde_json::Value::Null));
+            assert_eq!(
+                calls.load(std::sync::atomic::Ordering::SeqCst),
+                0,
+                "a denied estimate must not read the foreign session at all"
+            );
+
+            // The owner still gets the real numbers — this is what proves the
+            // gate is a gate and not a blanket disable.
+            let as_alice = CALLER_USER
+                .scope(
+                    Some("u-alice".to_string()),
+                    handle_context_estimate(
+                        request(
+                            "chat.context_estimate",
+                            json!({ "session_key": alice_key.to_key_string() }),
+                        ),
+                        harness.clone(),
+                        store.clone(),
+                    ),
+                )
+                .await;
+            assert_eq!(
+                as_alice
+                    .result
+                    .as_ref()
+                    .and_then(|r| r["window_tokens"].as_u64()),
+                Some(u64::from(SENTINEL_WINDOW)),
+                "the owner must still see her own pinned model's window"
+            );
+            assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 1);
+        }
+
+        /// The half `existing_session_is_visible` exists for: a session that
+        /// has never been created is the ordinary fresh-composer case, not a
+        /// denial. Turning it into one would blank the gauge for every new
+        /// conversation — a regression that looks like the fix working.
+        #[tokio::test]
+        async fn context_estimate_still_answers_for_a_not_yet_created_session() {
+            let temp = tempfile::tempdir().unwrap();
+            let store = store(&temp);
+            let (harness, calls) = counting_estimator();
+
+            let fresh = CALLER_USER
+                .scope(
+                    Some("u-bob".to_string()),
+                    handle_context_estimate(
+                        request(
+                            "chat.context_estimate",
+                            json!({ "session_key": "agent:neverwascreated:main" }),
+                        ),
+                        harness,
+                        store.clone(),
+                    ),
+                )
+                .await;
+            assert_eq!(
+                fresh
+                    .result
+                    .as_ref()
+                    .and_then(|r| r["window_tokens"].as_u64()),
+                Some(u64::from(SENTINEL_WINDOW))
+            );
+            assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 1);
+        }
+
+        /// The denial shape is the one this method already had. A malformed
+        /// key and a foreign key must serialize identically, so `null` cannot
+        /// be read as "that key exists and is not yours".
+        #[tokio::test]
+        async fn a_denied_estimate_is_byte_identical_to_an_unresolvable_key() {
+            let temp = tempfile::tempdir().unwrap();
+            let store = store(&temp);
+            let alice_key = alice_session(&store).await;
+            let (harness, _calls) = counting_estimator();
+
+            let denied = CALLER_USER
+                .scope(
+                    Some("u-bob".to_string()),
+                    handle_context_estimate(
+                        request(
+                            "chat.context_estimate",
+                            json!({ "session_key": alice_key.to_key_string() }),
+                        ),
+                        harness.clone(),
+                        store.clone(),
+                    ),
+                )
+                .await;
+            let unparseable = CALLER_USER
+                .scope(
+                    Some("u-bob".to_string()),
+                    handle_context_estimate(
+                        request(
+                            "chat.context_estimate",
+                            json!({ "session_key": "not a real session key" }),
+                        ),
+                        harness,
+                        store.clone(),
+                    ),
+                )
+                .await;
+            assert_eq!(
+                serde_json::to_string(&denied).unwrap(),
+                serde_json::to_string(&unparseable).unwrap(),
             );
         }
     }

@@ -20,25 +20,50 @@ use alephcore::gateway::GatewayServer;
 /// is present they replay durable traces; otherwise they return
 /// SERVICE_UNAVAILABLE with an environment-specific reason. Extracted verbatim
 /// from the real-execution branch of `agent_init/mod.rs`.
+///
+/// ⚠️ **Ordering**: `trace.list`/`trace.get` capture the server's
+/// `SecurityAuditLog` here so they can record cross-user content reads (human
+/// ruling, 2026-08-07 — see `handlers::trace_replay`'s module doc). That means
+/// this call must stay AFTER `GatewayServer::set_audit_log`, which today it is
+/// (the setter runs in `start/mod.rs` well before `register_agent_handlers`).
+/// Move it earlier and the two handlers keep working while the audit trail
+/// silently disappears — the exact severed-wire shape this repo keeps paying
+/// for. `None` is a legitimate value only in test/probe servers, which is why
+/// this is a comment rather than an assertion.
 pub(super) fn register_trace_handlers(
     server: &mut GatewayServer,
     resilience_db: Option<Arc<alephcore::resilience::StateDatabase>>,
     session_store: Arc<dyn alephcore::gateway::session_store::SessionStore>,
 ) {
+    let audit_log = server.audit_log();
     // Phase-2 always overrides phase-1 to guarantee a deterministic response.
     // When state DB is absent, the override returns SERVICE_UNAVAILABLE with
     // a tighter, environment-specific reason — never the phase-1 generic.
     if let Some(trace_db) = resilience_db {
         let trace_list_db = trace_db.clone();
+        let trace_list_sessions = session_store.clone();
+        let trace_list_audit = audit_log.clone();
         server.handlers_mut().register("trace.list", move |req| {
             let db = trace_list_db.clone();
-            async move { alephcore::gateway::handlers::trace_replay::handle_list(req, db).await }
+            let sessions = trace_list_sessions.clone();
+            let audit = trace_list_audit.clone();
+            async move {
+                alephcore::gateway::handlers::trace_replay::handle_list(req, db, sessions, audit)
+                    .await
+            }
         });
 
         let trace_get_db = trace_db.clone();
+        let trace_get_sessions = session_store.clone();
+        let trace_get_audit = audit_log;
         server.handlers_mut().register("trace.get", move |req| {
             let db = trace_get_db.clone();
-            async move { alephcore::gateway::handlers::trace_replay::handle_get(req, db).await }
+            let sessions = trace_get_sessions.clone();
+            let audit = trace_get_audit.clone();
+            async move {
+                alephcore::gateway::handlers::trace_replay::handle_get(req, db, sessions, audit)
+                    .await
+            }
         });
 
         // `trace.by_runs` is the one member-reachable method in this family
@@ -87,8 +112,10 @@ pub(super) fn register_trace_handlers(
 }
 
 /// Register status/cancel/chat/agent.list/gateway.* handlers shared by both
-/// execution modes, then signal gateway readiness. `session_store` is consumed
-/// (moved into the `chat.clear` handler) exactly as in the original inline body.
+/// execution modes, then signal gateway readiness. `session_store` is cloned
+/// into each handler that needs it; the last consumer is
+/// `gateway.metrics.run_concurrency`, which narrows its session-key arrays to
+/// the caller (see that handler's doc).
 pub(super) fn register_common_handlers(
     server: &mut GatewayServer,
     run_manager: &Option<Arc<AgentRunManager>>,
@@ -133,7 +160,7 @@ pub(super) fn register_common_handlers(
         async move { chat_handlers::handle_clear(req, manager).await }
     });
 
-    let sm_rewind = session_store;
+    let sm_rewind = session_store.clone();
     server.handlers_mut().register("chat.rewind", move |req| {
         let manager = sm_rewind.clone();
         async move { chat_handlers::handle_rewind(req, manager).await }
@@ -227,15 +254,20 @@ pub(super) fn register_common_handlers(
     // AgentRunManager (Task 8, audit 3.4). Reaches the execution engine's
     // `ConcurrencyLimiter` snapshot through the same `Arc<dyn
     // ExecutionAdapter>` indirection `agent.status`/`agent.cancel` already
-    // use — `run_manager` is `Some` in both real and simulated boot modes.
+    // use — `run_manager` is `Some` in both real and simulated boot modes. It
+    // also takes the `SessionStore`: the two session-key arrays it returns are
+    // narrowed to the caller (the RPC half of the `stream.running_set_changed`
+    // projection — see that handler's doc), which needs each key's owner row.
     if let Some(ref rm) = run_manager {
         use alephcore::gateway::handlers::gateway_metrics::handle_gateway_metrics_run_concurrency;
         let rm_concurrency = rm.clone();
+        let concurrency_sessions = session_store.clone();
         server
             .handlers_mut()
             .register("gateway.metrics.run_concurrency", move |req| {
                 let manager = rm_concurrency.clone();
-                async move { handle_gateway_metrics_run_concurrency(req, manager).await }
+                let sessions = concurrency_sessions.clone();
+                async move { handle_gateway_metrics_run_concurrency(req, manager, sessions).await }
             });
         if !daemon {
             println!("  gateway.metrics.run_concurrency: wired");

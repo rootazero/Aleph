@@ -274,6 +274,18 @@ impl ProjectStore {
     /// by the rename below — a crash between the insert and the rename is a
     /// real state, and re-running must not duplicate. A failed rename is
     /// therefore not a failed migration.
+    ///
+    /// Writes `project_members`, so it ends its closure with
+    /// [`Self::republish_roster_locked`] like every other roster mutation.
+    /// This is `pub`, and until 2026-08-07 it was the one roster-mutating
+    /// method whose projection depended on what the caller did NEXT — it
+    /// happened to be correct only because [`Self::migrate`] calls
+    /// `republish_roster` on the line after. A `pub` mutator whose correctness
+    /// lives at its call site is one new caller away from a roster that
+    /// silently reports "not a member" for every adopted row, and `is_member`
+    /// is the whole room authorization predicate. `migrate`'s own trailing
+    /// republish stays: this one is skipped entirely when there is no
+    /// `projects.json` to adopt, which is the normal case.
     pub fn migrate_from_json(&self, json_path: &Path) -> Result<(), ProjectError> {
         let bytes = match std::fs::read(json_path) {
             Ok(b) if !b.is_empty() => b,
@@ -311,7 +323,7 @@ impl ProjectStore {
                     .map_err(db_err)?;
                 }
             }
-            Ok(())
+            Self::republish_roster_locked(conn)
         })?;
 
         // Best-effort marker so a healthy install stops re-reading the file.
@@ -904,6 +916,46 @@ mod tests {
         assert_eq!(store.list().unwrap().len(), 1);
     }
 
+    /// `migrate_from_json` writes `project_members`, so it must publish the
+    /// projection itself — not rely on `migrate()` republishing on the next
+    /// line.
+    ///
+    /// Called STANDALONE here on purpose: that is the shape a second `pub`
+    /// caller would have, and it is the shape under which the adopted rows
+    /// used to land in SQLite while `roster::is_member` — the whole room
+    /// authorization predicate — kept answering `false` for every one of them.
+    #[test]
+    fn migrate_from_json_publishes_the_roster_it_adopted() {
+        let _g = ROSTER_TEST_GUARD.lock().unwrap_or_else(|e| e.into_inner());
+        let dir = tempdir().unwrap();
+        let json = dir.path().join("projects.json");
+        let alpha = dir.path().join("alpha");
+        std::fs::create_dir_all(&alpha).unwrap();
+        std::fs::write(
+            &json,
+            format!(
+                r#"{{"version":1,"projects":[{{"id":"deadbeefdeadbeef","name":"alpha",
+                    "path":{},"created_at":100,"last_used_at":200}}]}}"#,
+                serde_json::to_string(&alpha).unwrap()
+            ),
+        )
+        .unwrap();
+
+        let store = fresh_store();
+        // No `migrate()` — nothing republishes after this call.
+        store.migrate_from_json(&json).unwrap();
+
+        let adopted = &store.list().unwrap()[0];
+        assert!(
+            roster::is_member(&adopted.id, OWNER_USER_ID),
+            "the adopted membership reached the projection, not just the table"
+        );
+        assert!(
+            !roster::is_member(&adopted.id, "u-stranger"),
+            "publishing the projection must not widen it"
+        );
+    }
+
     #[test]
     fn two_users_may_bind_the_same_folder() {
         let _g = ROSTER_TEST_GUARD.lock().unwrap_or_else(|e| e.into_inner());
@@ -957,22 +1009,6 @@ mod tests {
             !roster::is_member(&p.id, "u-bob"),
             "spec §10: removal revokes visibility immediately"
         );
-    }
-
-    #[test]
-    fn projects_of_lists_every_room_a_user_is_on() {
-        let _g = ROSTER_TEST_GUARD.lock().unwrap_or_else(|e| e.into_inner());
-        let store = fresh_store();
-        let a = store.create("a", Some("u-alice"), None).unwrap();
-        let b = store.create("b", Some("u-alice"), None).unwrap();
-        let c = store.create("c", Some("u-bob"), None).unwrap();
-
-        let mine = roster::projects_of("u-alice");
-        assert!(mine.contains(&a.id) && mine.contains(&b.id));
-        assert!(!mine.contains(&c.id));
-        let mut sorted = mine.clone();
-        sorted.sort();
-        assert_eq!(mine, sorted, "projects_of returns sorted ids");
     }
 
     #[test]

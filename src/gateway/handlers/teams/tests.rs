@@ -41,7 +41,7 @@ mod tests {
     /// Every task-facing handler now resolves its team through the ownership
     /// gate, so a team id that exists in no store is (correctly) 404 — these
     /// fixtures predate that and name their teams `"T"` / `"team-x"`.
-    async fn team_store_with(ids: &[&str]) -> Arc<dyn crate::teams::TeamStore> {
+    pub(super) async fn team_store_with(ids: &[&str]) -> Arc<dyn crate::teams::TeamStore> {
         let conn = rusqlite::Connection::open_in_memory().expect("open in-memory db");
         let store = crate::teams::store::SqliteTeamStore::new(conn);
         store.migrate().await.expect("migrate");
@@ -1094,6 +1094,263 @@ mod usage_handler_tests {
         .await;
         assert!(resp.error.is_some());
         assert_eq!(resp.error.as_ref().unwrap().code, RESOURCE_NOT_FOUND);
+    }
+}
+
+/// `teams.chat.cancel`'s ownership gate.
+///
+/// The handler is addressed by a fan-out tree `run_id`, so the interesting
+/// question is not "does the predicate return false" but "does a refused caller
+/// reach the tracker at all". Both tests below assert the EFFECT on the tree:
+/// the recording adapter counts every member run the walk aborts, and the probe
+/// token counts the tree poison. A gate that returned `not_found` *after*
+/// firing the poison would pass a response-shape assertion and still hand any
+/// caller a one-shot kill switch on any fan-out in the process.
+mod chat_cancel_gate_tests {
+    use super::*;
+
+    use async_trait::async_trait;
+    use tokio_util::sync::CancellationToken;
+
+    use crate::agents::background_tracker::{
+        BackgroundAgentTracker, RunningRegistration, SpawnMeta,
+    };
+    use crate::gateway::agent_instance::{AgentInstance, AgentRegistry};
+    use crate::gateway::context::GatewayContext;
+    use crate::gateway::event_emitter::EventEmitter;
+    use crate::gateway::execution_adapter::ExecutionAdapter;
+    use crate::gateway::execution_engine::{ExecutionError, RunRequest, RunStatus};
+    use crate::gateway::inter_agent_policy::AgentToAgentPolicy;
+    use crate::gateway::session_store::sqlite_backend::{
+        SqliteSessionStore, SqliteSessionStoreConfig,
+    };
+    use crate::gateway::session_store::SessionStore;
+    use crate::teams::broadcast::{team_of_fanout_run, GroupChatBroadcaster};
+    // The seeded-team fixture is shared with the sibling suite rather than
+    // re-derived: "a team that is in the store" has one definition here.
+    use super::tests::team_store_with;
+
+    /// Records every `cancel(run_id)` the tree walk issues. The walk is the
+    /// only thing in this handler that reaches the execution engine, so an
+    /// empty log means the caller never got past the gate.
+    #[derive(Default)]
+    struct RecordingCancelAdapter {
+        cancelled: std::sync::Mutex<Vec<String>>,
+    }
+
+    impl RecordingCancelAdapter {
+        fn log(&self) -> Vec<String> {
+            self.cancelled
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .clone()
+        }
+    }
+
+    #[async_trait]
+    impl ExecutionAdapter for RecordingCancelAdapter {
+        async fn execute(
+            &self,
+            _request: RunRequest,
+            _agent: Arc<AgentInstance>,
+            _emitter: Arc<dyn EventEmitter + Send + Sync>,
+        ) -> Result<(), ExecutionError> {
+            Ok(())
+        }
+
+        async fn cancel(&self, run_id: &str) -> Result<(), ExecutionError> {
+            self.cancelled
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .push(run_id.to_string());
+            Ok(())
+        }
+
+        async fn get_status(&self, _run_id: &str) -> Option<RunStatus> {
+            None
+        }
+
+        async fn active_run_count(&self) -> usize {
+            0
+        }
+    }
+
+    fn gateway_context(adapter: Arc<RecordingCancelAdapter>) -> Arc<GatewayContext> {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let session_store: Arc<dyn SessionStore> = Arc::new(
+            SqliteSessionStore::new(SqliteSessionStoreConfig {
+                db_path: temp.path().join("sessions.db"),
+                ..Default::default()
+            })
+            .expect("session store"),
+        );
+        // The tempdir must outlive the store; leaking it is confined to this
+        // test binary and keeps the fixture a one-liner at each call site.
+        std::mem::forget(temp);
+        Arc::new(GatewayContext::new(
+            session_store,
+            Arc::new(AgentRegistry::new()),
+            adapter,
+            Arc::new(AgentToAgentPolicy::permissive()),
+        ))
+    }
+
+    fn cancel_req(run_id: &str) -> JsonRpcRequest {
+        JsonRpcRequest {
+            jsonrpc: "2.0".to_string(),
+            method: "teams.chat.cancel".to_string(),
+            params: Some(json!({ "run_id": run_id })),
+            id: Some(json!(7)),
+        }
+    }
+
+    /// A live fan-out tree plus one running member, wired exactly as
+    /// `teams.chat.send` wires them.
+    ///
+    /// The returned `probe` is the tree's kill switch: re-registering the tree
+    /// id with our own token replaces the one `register_fanout` minted, so
+    /// `tracker.cancel(run_id)` — the poison step — becomes observable without
+    /// adding a test-only accessor to production code. The index entry still
+    /// comes from the real `register_fanout` write.
+    fn live_fanout(
+        team_id: &str,
+    ) -> (
+        String,
+        String,
+        CancellationToken,
+        Vec<RunningRegistration>,
+        crate::teams::broadcast::RegisteredFanout,
+    ) {
+        let run_id = format!("fanout-{}", uuid::Uuid::new_v4());
+        let member_run_id = format!("member-{}", uuid::Uuid::new_v4());
+        let fanout = GroupChatBroadcaster::register_fanout(run_id.clone(), team_id);
+
+        let tracker = BackgroundAgentTracker::global();
+        let probe = CancellationToken::new();
+        let tree_probe = RunningRegistration::register(
+            Arc::clone(&tracker),
+            run_id.clone(),
+            probe.clone(),
+            "probe tree".to_string(),
+            SpawnMeta {
+                parent_id: None,
+                depth: 0,
+                root_session: run_id.clone(),
+                model: None,
+            },
+        );
+        let member = RunningRegistration::register(
+            tracker,
+            member_run_id.clone(),
+            CancellationToken::new(),
+            "probe member".to_string(),
+            SpawnMeta {
+                parent_id: Some(run_id.clone()),
+                depth: 1,
+                root_session: run_id.clone(),
+                model: None,
+            },
+        );
+        (
+            run_id,
+            member_run_id,
+            probe,
+            vec![tree_probe, member],
+            fanout,
+        )
+    }
+
+    /// The owner's own fan-out still cancels end to end — the gate must not
+    /// have broken the feature it protects.
+    #[tokio::test]
+    async fn the_owning_caller_still_cancels_the_tree_and_its_members() {
+        let teams = team_store_with(&["team-owned"]).await;
+        let (run_id, member_run_id, probe, _regs, _fanout) = live_fanout("team-owned");
+        let adapter = Arc::new(RecordingCancelAdapter::default());
+        let ctx = gateway_context(Arc::clone(&adapter));
+
+        let resp = handle_chat_cancel(cancel_req(&run_id), ctx, teams).await;
+
+        assert!(resp.error.is_none(), "unexpected error: {:?}", resp.error);
+        let result = resp.result.expect("result present");
+        assert_eq!(result["cancelled"], json!(true));
+        assert_eq!(result["members_signalled"], json!(1));
+        assert!(probe.is_cancelled(), "the tree poison must have fired");
+        assert_eq!(
+            adapter.log(),
+            vec![member_run_id],
+            "the in-flight member run must have been aborted through the engine"
+        );
+    }
+
+    /// The gate. `team_store_with(&[])` has no row for the team this tree
+    /// belongs to, which is exactly what `ScopedTeamStore` returns for another
+    /// user's team — `Ok(None)`.
+    ///
+    /// Effect asserted on the tree, not on the reply: the poison must NOT have
+    /// fired and the member walk must not have run. Move the gate below
+    /// `tracker.cancel` and the response is still `not_found` while this test
+    /// goes red, which is the whole reason it checks the token.
+    #[tokio::test]
+    async fn a_caller_who_cannot_see_the_team_cannot_touch_its_fanout() {
+        let teams = team_store_with(&[]).await;
+        let (run_id, _member_run_id, probe, _regs, _fanout) = live_fanout("team-foreign");
+        let adapter = Arc::new(RecordingCancelAdapter::default());
+        let ctx = gateway_context(Arc::clone(&adapter));
+
+        assert_eq!(
+            team_of_fanout_run(&run_id).as_deref(),
+            Some("team-foreign"),
+            "fixture sanity: the run IS attributable, the team is just unreachable"
+        );
+
+        let resp = handle_chat_cancel(cancel_req(&run_id), ctx, teams).await;
+
+        let err = resp.error.expect("expected a refusal");
+        assert_eq!(err.code, RESOURCE_NOT_FOUND);
+        assert!(
+            !probe.is_cancelled(),
+            "a refused caller must not poison the tree on their way out"
+        );
+        assert!(
+            adapter.log().is_empty(),
+            "a refused caller must not reach the member walk"
+        );
+    }
+
+    /// No existence oracle: "someone else's tree" and "no such tree" must be
+    /// byte-identical, or the refusal itself enumerates live fan-outs.
+    #[tokio::test]
+    async fn a_foreign_run_id_and_an_unknown_one_refuse_identically() {
+        let (run_id, _member_run_id, _probe, _regs, _fanout) = live_fanout("team-foreign");
+        let unknown = format!("fanout-{}", uuid::Uuid::new_v4());
+
+        let foreign = handle_chat_cancel(
+            cancel_req(&run_id),
+            gateway_context(Arc::new(RecordingCancelAdapter::default())),
+            team_store_with(&[]).await,
+        )
+        .await;
+        let absent = handle_chat_cancel(
+            cancel_req(&unknown),
+            gateway_context(Arc::new(RecordingCancelAdapter::default())),
+            team_store_with(&[]).await,
+        )
+        .await;
+
+        let foreign_bytes =
+            serde_json::to_string(&foreign.error.expect("refusal")).expect("serialize");
+        let absent_bytes =
+            serde_json::to_string(&absent.error.expect("refusal")).expect("serialize");
+        assert_eq!(
+            foreign_bytes.replace(&run_id, "<ID>"),
+            absent_bytes.replace(&unknown, "<ID>"),
+            "the two refusals must differ only in the id the caller supplied"
+        );
+        assert!(
+            !foreign_bytes.contains("team-foreign"),
+            "the refusal must not name a team the caller cannot see"
+        );
     }
 }
 

@@ -251,12 +251,12 @@ flagging it — don't repeat unless you expect the output to have changed.
 `working_dir` (optional) resolves inside the session workspace and defaults
 to its root; anything outside is denied.
 
-`timeout` defaults to 60s; foreground calls are clamped to ~170s (just under
-the 180s tool budget) so an over-long `timeout` returns a clean
-`exit_code = 124` with partial output, not a "no result" abort. On
-timeout the runtime is killed, stdout/stderr are drained for up to 2s,
-and we return `exit_code = 124` (POSIX `timeout(1)` convention) with the
-partial output preserved so you can see what the script accomplished.
+`timeout` defaults to 60s; a foreground run that hits the ~180s per-turn
+ceiling is killed and any output preserved up to that point comes back with
+`exit_code = 124` (POSIX `timeout(1)` convention) so you always see what the
+script managed to print before being reaped. For longer scripts use the
+`process_action` background API rather than raising `timeout` past the
+foreground ceiling.
 
 Output is capped per stream; when a stream overflows we keep BOTH its
 head and its tail (with a `…[N bytes elided]…` marker between them), so a
@@ -272,10 +272,11 @@ If the process is killed by a signal it surfaces as `exit_code = 128 + N`
 a crash), `134` (SIGABRT, an assertion/panic abort).
 
 Capability escalations (`allow_network`, `allow_subprocess`,
-`extra_writable_paths`) require approval the first time per session. When you
-escalate, pass `justification` with a one-line reason WHY (e.g. "fetch crates
-from crates.io for cargo build") — it is shown to the human approver so they
-can decide; calls without an escalation can omit it.
+`extra_writable_paths`) require one-time-per-session approval before they
+take effect. Attach a `justification` string with the WHY behind the
+escalation (one short sentence) so the human approver has the context they
+need; non-escalating calls can omit it. See `bash` for the exact reuse and
+narrowing policy that grants follow across calls.
 
 Examples:
 - Python: {"language": "python", "code": "print('Hello, World!')"}
@@ -390,6 +391,29 @@ Examples:
                 env.insert(name.clone(), value);
             }
         }
+
+        // Inject Aleph session context into the child environment so any
+        // shell / python / node script the model spawns can self-identify.
+        // `ALEPH_SESSION_ID` mirrors the per-session workspace key the
+        // sandbox already targets — same value, surfaced for the script.
+        // `ALEPH_TOOL_NAME` lets a script detect that it is running under
+        // Aleph (vs. a plain interactive shell) and opt into defensive
+        // paths (e.g. `[[ -n "$ALEPH_SESSION_ID" ]] && rm -rf build/`).
+        // Both are sourced from task-locals already on this stack, so there
+        // is no extra IPC cost; values are stable for the call.
+        env.insert(
+            "ALEPH_SESSION_ID".to_string(),
+            serde_json::to_string(&session_id).unwrap_or_else(|_| format!("{session_id:?}")),
+        );
+        env.insert(
+            "ALEPH_TOOL_NAME".to_string(),
+            match args.language {
+                Language::Shell => "bash",
+                Language::Python => "code_exec:python",
+                Language::JavaScript => "code_exec:javascript",
+            }
+            .to_string(),
+        );
 
         let cmd = SandboxCommand {
             session_id,
@@ -1478,6 +1502,73 @@ mod tests {
             justification_seen_by_sandbox(Some("   \n  ".to_string())).await,
             None
         );
+    }
+
+    /// Aleph context vars (ALEPH_SESSION_ID / ALEPH_TOOL_NAME) are injected
+    /// into the child env so a script can self-identify — `bash` actually
+    /// gets the literal string `"bash"` (it is the BashExecTool wrapper),
+    /// not `"code_exec:shell"`, so scripts that test `[[ $ALEPH_TOOL_NAME ==
+    /// bash ]]` work without the model remembering the wrapper detail.
+    /// Session id is the JSON form the sandbox already uses for its
+    /// workspace key — same value, surfaced for the script.
+    async fn env_seen_by_sandbox(
+        session: &crate::session::service::SessionId,
+        language: Language,
+    ) -> (String, String) {
+        let mock = MockSandbox::new(ok_output(""));
+        let sandbox: Arc<dyn Sandbox> = mock.clone();
+        let tool = CodeExecTool::new().with_sandbox(sandbox);
+        SESSION_ID
+            .scope(session.clone(), async {
+                tool.call(CodeExecArgs {
+                    language,
+                    code: "echo hi".to_string(),
+                    working_dir: None,
+                    timeout_seconds: Some(3),
+                    allow_network: false,
+                    allow_subprocess: false,
+                    extra_writable_paths: Vec::new(),
+                    justification: None,
+                })
+                .await
+                .unwrap();
+            })
+            .await;
+        let calls = mock.calls.lock().await;
+        let cmd = &calls[0];
+        (
+            cmd.env.get("ALEPH_SESSION_ID").cloned().unwrap_or_default(),
+            cmd.env.get("ALEPH_TOOL_NAME").cloned().unwrap_or_default(),
+        )
+    }
+
+    #[tokio::test]
+    async fn bash_child_env_carries_aleph_session_and_tool_name() {
+        let session = sid();
+        let expected_id = serde_json::to_string(&session).unwrap();
+        SESSION_ID
+            .scope(session.clone(), async {
+                let (id, name) = env_seen_by_sandbox(&session, Language::Shell).await;
+                assert_eq!(id, expected_id, "session id is the JSON sandbox form");
+                assert_eq!(name, "bash", "shell wraps as bash, not code_exec:shell");
+            })
+            .await;
+    }
+
+    #[tokio::test]
+    async fn non_shell_languages_carry_code_exec_tool_name() {
+        // Python / JS callers go straight through `code_exec` — the
+        // ALEPH_TOOL_NAME matches the language so a python script can tell
+        // itself apart from a bash one.
+        let session = sid();
+        SESSION_ID
+            .scope(session.clone(), async {
+                let (_, name_py) = env_seen_by_sandbox(&session, Language::Python).await;
+                assert_eq!(name_py, "code_exec:python");
+                let (_, name_js) = env_seen_by_sandbox(&session, Language::JavaScript).await;
+                assert_eq!(name_js, "code_exec:javascript");
+            })
+            .await;
     }
 
     #[test]

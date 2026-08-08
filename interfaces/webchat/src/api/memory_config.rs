@@ -33,9 +33,22 @@ pub struct MemoryConfig {
     #[serde(default = "default_bm25_bonus")]
     pub bm25_bonus_weight: f32,
 
-    // Cross-encoder reranking
-    #[serde(default)]
-    pub rerank: RerankConfig,
+    // Reranking is deliberately ABSENT. It is owned by the dedicated
+    // `rerank_config.get`/`rerank_config.update` pair and edited on its own
+    // settings page; nothing on the Memory page ever read this field.
+    //
+    // Carrying it here did not merely waste bytes, it broke the page's save
+    // button outright. The backend spells the field `models: Vec<String>` with
+    // `alias = "model"`; this DTO spelled it `model: String`. `get` therefore
+    // never populated it (the panel fell back to its default), and `update`
+    // sent `model` alongside the stored `models`, so `handle_update`'s recursive
+    // merge produced an object carrying *both* spellings of one aliased field —
+    // and `MemoryConfig` deserialization died on `duplicate field 'models'`.
+    // Every save from the Memory page failed with that error, whichever knob
+    // the operator had touched.
+    //
+    // The lesson is the field's absence, not a rename: a DTO that mirrors a
+    // section it does not own will keep re-acquiring the owner's schema drift.
 
     // Retrieval salience scoring (recency decay / reinforcement / MMR)
     #[serde(default)]
@@ -46,15 +59,18 @@ pub struct MemoryConfig {
     pub reflection: ReflectionConfig,
 
     // Curated envelope budgets (`[memory.curated]`). A different config
-    // section from `reflection`, but the two knobs surfaced here bound the
-    // very block the `reflection.open_loop_*` toggles produce — turning open
-    // loops on while the ceiling that expires them stays invisible shows the
-    // operator half a mechanism.
+    // section from `reflection`, but two of the knobs here bound the very
+    // block the `reflection.open_loop_*` toggles produce — turning open loops
+    // on while the ceiling that expires them stays invisible shows the
+    // operator half a mechanism — so those two render beside those toggles
+    // while the three envelope budgets get their own section.
     //
-    // Only the two open-loop keys are mirrored. `memory_config.get` sends all
-    // five (it serializes the whole backend section) and serde drops the rest
-    // on the way in; `handle_update`'s merge is recursive, so writing back a
-    // partial `curated` object leaves the other three untouched.
+    // All five keys the backend section carries are now mirrored, so a
+    // whole-struct round-trip through this DTO can no longer drop one. That
+    // was previously survivable only because `handle_update`'s merge is
+    // recursive: an absent key kept its stored value instead of resetting.
+    // Keep this struct exhaustive rather than leaning on that — a DTO that
+    // cannot express a field is the shape that silently resets it.
     #[serde(default)]
     pub curated: CuratedSettings,
 
@@ -232,13 +248,27 @@ impl Default for ReflectionConfig {
     }
 }
 
-/// The `[memory.curated]` knobs that bound the `<OpenLoops>` block.
+/// The `[memory.curated]` section — how the curated envelope renders each of
+/// its three blocks.
+///
+/// One field per key on the backend's `CuratedSection`; keep it that way. A
+/// missing field here is not a compile error on either side, it is a knob the
+/// operator can never reach.
 ///
 /// Defaults mirror `CuratedConfig::default()` on the server. They only apply
 /// when `memory_config.get` has not answered yet — every real render reads
 /// what the daemon sent.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CuratedSettings {
+    /// Char budget for `MEMORY.md`, the always-on curated hot zone.
+    #[serde(default = "default_memory_char_limit")]
+    pub memory_char_limit: usize,
+    /// Char budget for the `USER.md` profile block.
+    #[serde(default = "default_user_char_limit")]
+    pub user_char_limit: usize,
+    /// Occupancy ratio at which a block gets the `[NEAR LIMIT]` banner.
+    #[serde(default = "default_legacy_warn_threshold")]
+    pub legacy_warn_threshold: f32,
     /// Char budget for the `<OpenLoops>` block of the curated envelope.
     #[serde(default = "default_open_loops_char_limit")]
     pub open_loops_char_limit: usize,
@@ -248,6 +278,15 @@ pub struct CuratedSettings {
     pub open_loops_max_age_days: u32,
 }
 
+const fn default_memory_char_limit() -> usize {
+    2_200
+}
+const fn default_user_char_limit() -> usize {
+    1_375
+}
+const fn default_legacy_warn_threshold() -> f32 {
+    0.95
+}
 const fn default_open_loops_char_limit() -> usize {
     2_000
 }
@@ -258,6 +297,9 @@ const fn default_open_loops_max_age_days() -> u32 {
 impl Default for CuratedSettings {
     fn default() -> Self {
         Self {
+            memory_char_limit: default_memory_char_limit(),
+            user_char_limit: default_user_char_limit(),
+            legacy_warn_threshold: default_legacy_warn_threshold(),
             open_loops_char_limit: default_open_loops_char_limit(),
             open_loops_max_age_days: default_open_loops_max_age_days(),
         }

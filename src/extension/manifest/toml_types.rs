@@ -569,11 +569,6 @@ pub fn parse_aleph_plugin_toml_content(
         capabilities_v2: Some(toml.capabilities),
         aleph_extensions: None,
         memory_manifest: toml.memory,
-        // P3.5 — TOML schema for `[plugin.activation]` is a follow-up; for
-        // now, hints are only parseable via the JSON adapter (cc_plugin_json).
-        // Defaulting to `None` preserves the "always load" legacy behaviour
-        // for every existing plugin.
-        activation: None,
     })
 }
 

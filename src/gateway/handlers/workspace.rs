@@ -42,6 +42,22 @@ pub struct CreateParams {
 /// ```json
 /// {"jsonrpc":"2.0","method":"workspace.create","params":{"id":"crypto","name":"Crypto Trading"},"id":1}
 /// ```
+///
+/// P1 partition isolation on the WRITE side, with exactly the coverage
+/// boundary [`handle_list`] documents and no more: a workspace id is a
+/// user-chosen name that encodes no owner and `agent_envs` has no owner
+/// column, so an ordinary id (`"crypto"`) passes for every caller. What the
+/// check does buy is the composed-id half — without it a member can create
+/// `main__u-alice`, a row that then shows up in ALICE's filtered
+/// `workspace.list` carrying attacker-supplied `env_vars` /
+/// `system_prompt_override` / `allowed_tools`. Reads were gated first; a
+/// write into a partition you cannot read is the strictly worse half.
+///
+/// The denial reuses this method's own "that id is not available" shape,
+/// produced from the REAL [`crate::gateway::agent_env::AgentEnvError::AlreadyExists`]
+/// value so it stays
+/// byte-identical to a genuine collision instead of hard-coding a copy of the
+/// store's wording.
 pub async fn handle_create(
     request: JsonRpcRequest,
     workspace_manager: Arc<AgentEnvStore>,
@@ -50,6 +66,17 @@ pub async fn handle_create(
         Ok(p) => p,
         Err(e) => return e,
     };
+
+    if !crate::gateway::visibility::partition_visible(&params.id) {
+        return JsonRpcResponse::error(
+            request.id,
+            INTERNAL_ERROR,
+            format!(
+                "Failed to create workspace: {}",
+                crate::gateway::agent_env::AgentEnvError::AlreadyExists(params.id.clone())
+            ),
+        );
+    }
 
     match workspace_manager
         .create(&params.id, "default", params.description.as_deref())
@@ -112,8 +139,18 @@ pub async fn handle_create(
 /// recorded here rather than implied by the presence of a check: a workspace
 /// id is a user-chosen name (`"project-aleph"`), it encodes no owner, and the
 /// `agent_envs` table has no owner column — so an ordinary workspace passes
-/// this predicate for every caller and one member can still read another's
-/// `env_vars`. Closing it needs an owner column plus a migration (the stamp
+/// this predicate for every caller.
+///
+/// **The residual is write, not just read.** The 2026-08-08 real-machine QA
+/// exercised it: a member renamed and then archived a workspace the operator
+/// had just created, both returning `ok`. An earlier wording here named only
+/// "one member can read another's `env_vars`", which understated it by a
+/// whole verb class — `update` and `archive` take the same plain id and clear
+/// the same vacuous predicate. (That QA also produced a *false* pass on the
+/// list side: `handle_list` looked filtered only because the member had
+/// archived the row one call earlier and `list(false)` skips archived.)
+///
+/// Closing it needs an owner column plus a migration (the stamp
 /// `SessionMetadata`/`GroupChatSession`/`LoopState` carry), which is a
 /// schema change and a product decision, not a handler fix. See the P1
 /// final-fix report.
@@ -218,6 +255,12 @@ pub struct UpdateParams {
 /// ```json
 /// {"jsonrpc":"2.0","method":"workspace.update","params":{"id":"crypto","name":"Crypto Research"},"id":1}
 /// ```
+///
+/// P1 partition isolation, same predicate and the SAME coverage boundary
+/// [`handle_create`] and [`handle_list`] spell out — defense in depth against
+/// partition-composed ids, not a closed boundary for ordinary ones. An
+/// invisible id gets this method's OWN "not found" response, byte-identical to
+/// an id that does not exist, and the store is never written for it.
 pub async fn handle_update(
     request: JsonRpcRequest,
     workspace_manager: Arc<AgentEnvStore>,
@@ -226,6 +269,17 @@ pub async fn handle_update(
         Ok(p) => p,
         Err(e) => return e,
     };
+
+    let not_found = || {
+        JsonRpcResponse::error(
+            request.id.clone(),
+            RESOURCE_NOT_FOUND,
+            format!("Workspace '{}' not found", params.id),
+        )
+    };
+    if !crate::gateway::visibility::partition_visible(&params.id) {
+        return not_found();
+    }
 
     match workspace_manager
         .update(
@@ -243,11 +297,7 @@ pub async fn handle_update(
                 "workspace": ws,
             }),
         ),
-        Ok(None) => JsonRpcResponse::error(
-            request.id,
-            RESOURCE_NOT_FOUND,
-            format!("Workspace '{}' not found", params.id),
-        ),
+        Ok(None) => not_found(),
         Err(e) => JsonRpcResponse::error(
             request.id,
             INTERNAL_ERROR,
@@ -267,6 +317,12 @@ pub async fn handle_update(
 /// ```json
 /// {"jsonrpc":"2.0","method":"workspace.archive","params":{"id":"crypto"},"id":1}
 /// ```
+///
+/// P1 partition isolation, same predicate and the SAME coverage boundary
+/// [`handle_create`] and [`handle_list`] spell out. The soft-delete is the
+/// most destructive verb in this file — an invisible id gets this method's
+/// OWN "not found" response, byte-identical to an id that does not exist, and
+/// the row is never archived.
 pub async fn handle_archive(
     request: JsonRpcRequest,
     workspace_manager: Arc<AgentEnvStore>,
@@ -276,13 +332,20 @@ pub async fn handle_archive(
         Err(e) => return e,
     };
 
-    match workspace_manager.archive(&params.id).await {
-        Ok(true) => JsonRpcResponse::success(request.id, json!({ "ok": true })),
-        Ok(false) => JsonRpcResponse::error(
-            request.id,
+    let not_found = || {
+        JsonRpcResponse::error(
+            request.id.clone(),
             RESOURCE_NOT_FOUND,
             format!("Workspace '{}' not found", params.id),
-        ),
+        )
+    };
+    if !crate::gateway::visibility::partition_visible(&params.id) {
+        return not_found();
+    }
+
+    match workspace_manager.archive(&params.id).await {
+        Ok(true) => JsonRpcResponse::success(request.id, json!({ "ok": true })),
+        Ok(false) => not_found(),
         Err(e) => JsonRpcResponse::error(
             request.id,
             INTERNAL_ERROR,
@@ -465,6 +528,180 @@ mod tests {
                 "{id} should reach the store and report a genuine miss"
             );
         }
+    }
+
+    /// The write half of the same defense-in-depth check the reads carry.
+    /// Reads were gated first, which left the strictly worse half open: a
+    /// member could CREATE `main__u-alice`, and that row then appears only in
+    /// ALICE's filtered `workspace.list`, carrying `env_vars` /
+    /// `system_prompt_override` / `allowed_tools` she never wrote.
+    ///
+    /// Each assertion is on the STORE after the call, not on the response —
+    /// a check that returned the right error while the write still landed
+    /// would pass a response-only test.
+    ///
+    /// Same boundary as [`handle_list`]: this does NOT claim ordinary
+    /// workspaces are isolated. The last block proves the opposite on
+    /// purpose, so nobody reads this test as more than it is.
+    #[tokio::test]
+    async fn the_workspace_writes_deny_a_foreign_partition_composed_id() {
+        use crate::gateway::caller_identity::CALLER_USER;
+
+        let temp = tempfile::tempdir().unwrap();
+        let store = Arc::new(
+            AgentEnvStore::new(crate::gateway::agent_env::AgentEnvStoreConfig {
+                db_path: temp.path().join("agent_envs.db"),
+                default_profile: "default".to_string(),
+                archive_after_days: 0,
+            })
+            .expect("agent env store"),
+        );
+        // `handle_create` hard-codes the `"default"` profile; without it every
+        // store write below fails as ProfileNotFound and the denials would
+        // look correct for the wrong reason.
+        store.load_profiles(std::collections::HashMap::from([(
+            "default".to_string(),
+            crate::config::ProfileConfig::default(),
+        )]));
+        let req = |method: &str, params: serde_json::Value| {
+            JsonRpcRequest::with_id(method, Some(params), json!(1))
+        };
+        async fn as_bob<F: std::future::Future<Output = JsonRpcResponse>>(
+            fut: F,
+        ) -> JsonRpcResponse {
+            crate::gateway::caller_identity::CALLER_USER
+                .scope(Some("u-bob".to_string()), fut)
+                .await
+        }
+
+        // --- create: the row must never come into existence -------------
+        let created = as_bob(handle_create(
+            req(
+                "workspace.create",
+                json!({ "id": "main__u-alice", "name": "planted" }),
+            ),
+            store.clone(),
+        ))
+        .await;
+        assert!(created.result.is_none());
+        assert!(
+            store.get("main__u-alice").await.unwrap().is_none(),
+            "a denied create must not insert the row"
+        );
+
+        // Byte-identical to a genuine id collision on the SAME id — the only
+        // "you cannot have this id" answer this method has ever had. Alice
+        // passes the predicate, so hers is the real store error.
+        store
+            .create("main__u-alice", "default", None)
+            .await
+            .unwrap();
+        let collided = CALLER_USER
+            .scope(
+                Some("u-alice".to_string()),
+                handle_create(
+                    req(
+                        "workspace.create",
+                        json!({ "id": "main__u-alice", "name": "planted" }),
+                    ),
+                    store.clone(),
+                ),
+            )
+            .await;
+        assert_eq!(
+            serde_json::to_string(&created).unwrap(),
+            serde_json::to_string(&collided).unwrap(),
+            "the denial must be the collision shape, not a new one"
+        );
+
+        // --- update: alice's real row must keep its name ----------------
+        store
+            .update("main__u-alice", Some("alice's env"), None, None)
+            .await
+            .unwrap();
+        let updated = as_bob(handle_update(
+            req(
+                "workspace.update",
+                json!({ "id": "main__u-alice", "name": "renamed-by-bob" }),
+            ),
+            store.clone(),
+        ))
+        .await;
+        assert_eq!(
+            updated.error.as_ref().map(|e| e.code),
+            Some(RESOURCE_NOT_FOUND)
+        );
+        assert_eq!(
+            store.get("main__u-alice").await.unwrap().unwrap().name,
+            "alice's env",
+            "a denied update must not rewrite the foreign workspace"
+        );
+
+        // --- archive: the row must still be live ------------------------
+        let archived = as_bob(handle_archive(
+            req("workspace.archive", json!({ "id": "main__u-alice" })),
+            store.clone(),
+        ))
+        .await;
+        assert_eq!(
+            archived.error.as_ref().map(|e| e.code),
+            Some(RESOURCE_NOT_FOUND)
+        );
+        assert!(
+            store.get("main__u-alice").await.unwrap().is_some(),
+            "a denied archive must not soft-delete the foreign workspace"
+        );
+        // …and no existence oracle: the refusal must read the same whether
+        // the row is there or not. `main__u-carol` is archived by bob twice —
+        // once while it has never been created, once after it has — so what
+        // varies between the two responses is EXISTENCE and nothing else.
+        //
+        // The id is deliberately held fixed rather than comparing two
+        // different ids: this method's not-found message echoes the id the
+        // caller itself supplied, so two ids would differ on the wire for a
+        // reason that leaks nothing, and the comparison would have to be
+        // weakened to survive it. Two calls that differ in neither id nor
+        // store state would instead compare a call to itself and could not
+        // fail at all.
+        let never_created = as_bob(handle_archive(
+            req("workspace.archive", json!({ "id": "main__u-carol" })),
+            store.clone(),
+        ))
+        .await;
+        store
+            .create("main__u-carol", "default", None)
+            .await
+            .unwrap();
+        let now_exists = as_bob(handle_archive(
+            req("workspace.archive", json!({ "id": "main__u-carol" })),
+            store.clone(),
+        ))
+        .await;
+        assert_eq!(
+            serde_json::to_string(&never_created).unwrap(),
+            serde_json::to_string(&now_exists).unwrap(),
+            "the refusal must not tell bob whether main__u-carol exists"
+        );
+        assert!(
+            store.get("main__u-carol").await.unwrap().is_some(),
+            "…and neither denied archive may soft-delete the row"
+        );
+
+        // --- the boundary, asserted rather than implied ------------------
+        // An ordinary id encodes no owner, so bob passes the predicate for
+        // it. This check is defense in depth against composed ids ONLY;
+        // closing the rest needs an owner column (see `handle_list`).
+        store.create("crypto", "default", None).await.unwrap();
+        let ordinary = as_bob(handle_archive(
+            req("workspace.archive", json!({ "id": "crypto" })),
+            store.clone(),
+        ))
+        .await;
+        assert!(
+            ordinary.error.is_none(),
+            "an ordinary workspace is NOT protected by this check: {:?}",
+            ordinary.error
+        );
     }
 
     #[test]

@@ -1408,19 +1408,20 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
                 // exist. Captures the harness handle so the gauge can show an estimated
                 // occupancy for sessions that never ran an LLM turn. Registered here (not in
                 // register_common_handlers) because that seam has no orchestrator handle.
+                // `session_store` rides along for the P1 visibility gate — the estimate is
+                // derived from the addressed session's event log and pinned model, so it is
+                // caller-dependent data (see the handler's doc).
                 {
                     let harness = orch.harness.clone();
-                    let session_store = session_store.clone();
+                    let estimate_sessions = session_store.clone();
                     server
                         .handlers_mut()
                         .register("chat.context_estimate", move |req| {
                             let harness = harness.clone();
-                            let session_store = session_store.clone();
+                            let sessions = estimate_sessions.clone();
                             async move {
                                 alephcore::gateway::handlers::chat::handle_context_estimate(
-                                    req,
-                                    harness,
-                                    session_store,
+                                    req, harness, sessions,
                                 )
                                 .await
                             }
@@ -1782,7 +1783,29 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
         }
     }
 
-    // Team management (team store created inside register_agent_handlers)
+    // The WS event-delivery loop needs the team handle on ITS OWN condition:
+    // `team.<id>.*` frames carry team chat bodies and are published as raw
+    // `{topic,data}` strings, so `event_visibility` resolves them to a team
+    // OWNER rather than to a session (see that module's doc), and `teams: None`
+    // DENIES every connection, operator included.
+    //
+    // The producer of those frames — the `teams.chat.send` registration driving
+    // `GroupChatBroadcaster` / `publish_team_event`, in
+    // `builder/agent_init/mod.rs` — is gated on `team_store` ALONE, so the
+    // resolver is gated on `team_store` alone too. It must never be widened to
+    // also require `coord_task_store`: that is a different database
+    // (`coord.db` vs `teams.db`) whose failure to open is a supported
+    // warn-and-continue degraded boot, and on that path team chat would keep
+    // publishing frames that every connection silently denies, with no error
+    // and no log line anywhere. Pinned by `event_visibility.rs`'s
+    // `the_team_resolver_gate_is_no_narrower_than_its_frame_producers_gate`.
+    if let Some(ref ts) = agent_result.team_store {
+        server.set_team_store(ts.clone());
+    }
+
+    // Team management (team store created inside register_agent_handlers).
+    // `register_teams_handlers` genuinely needs both stores, so it — unlike the
+    // resolver above — stays under the two-store condition.
     if let (Some(ref ts), Some(ref cs)) = (&agent_result.team_store, &agent_result.coord_task_store)
     {
         register_teams_handlers(
@@ -2471,6 +2494,10 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
             // The resumed run's owner/scope comes off this store's persisted
             // session row — see `ResumeCoordinator::stamp_persisted_scope`.
             let sessions_for_resume = session_store_for_reconcile.clone();
+            // Live frames for the recovered run. Without a bus the resumed run
+            // is visibly running (the run registry broadcasts that) yet emits
+            // nothing and hands out no run_id, so no UI can follow or stop it.
+            let bus_for_resume = event_bus.clone();
             tokio::spawn(async move {
                 let rr = reconciler.reconcile_interrupted().await;
                 tracing::info!(
@@ -2497,6 +2524,7 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
                             exec_adapter,
                             registry,
                             sessions_for_resume,
+                            Some(bus_for_resume),
                         );
                         let report = coordinator.resume_interrupted_runs().await;
                         tracing::info!(

@@ -668,12 +668,18 @@ pub(in crate::commands::start) async fn register_agent_handlers(
             use alephcore::memory::store::sqlite::recall_signals::RecallHit;
 
             // Build a fresh assembler dedicated to the reflector (same config as MCP).
+            // This provider is built for its `assembler()` alone and never
+            // renders the curated envelope, so the section is passed for
+            // uniformity rather than need — but it is passed, because a second
+            // construction site quietly holding different budgets from the
+            // first is exactly how `[memory.curated]` went inert to begin with.
             let reflector_mcp = super::init_memory_context_provider(
                 memory_db,
                 Some(emb),
                 Some(prov.clone()),
                 app_config.memory.assembler_config(),
                 app_config.memory.injection_mode,
+                app_config.memory.curated.into(),
             );
             let reflector_assembler = reflector_mcp.assembler();
 
@@ -1027,6 +1033,10 @@ pub(in crate::commands::start) async fn register_agent_handlers(
                 // `memory.injection_mode` — Tools deployments must not have
                 // orientation/profile/memory auto-injected into prompts.
                 app_config.memory.injection_mode,
+                // `[memory.curated]` — this is the provider that renders the
+                // curated envelope, so this is the call that makes the section
+                // mean anything at all.
+                app_config.memory.curated.into(),
                 Some(memory_ext_registry.clone()),
                 orientation.clone(),
                 profile_synth.clone(),
@@ -1615,6 +1625,11 @@ pub(in crate::commands::start) async fn register_agent_handlers(
                 let chat_team_planner = team_planner_provider.clone();
                 let chat_event_bus = event_bus.clone();
                 let chat_coord_store = coord_store.clone();
+                // teams.chat.cancel resolves its run_id to a team and gates it
+                // through the same ScopedTeamStore teams.chat.send uses, so it
+                // needs its own handle taken before `ts` moves into the send
+                // closure below.
+                let chat_cancel_store = ts.clone();
                 // Map the optional [team_broadcast] TOML onto the runtime config.
                 // Each field falls back to the live BroadcastConfig::default() (no
                 // default duplication / drift). A `0` for any guard would make a
@@ -1685,8 +1700,10 @@ pub(in crate::commands::start) async fn register_agent_handlers(
                     .handlers_mut()
                     .register("teams.chat.cancel", move |req| {
                         let ctx = chat_cancel_ctx.clone();
+                        let store = chat_cancel_store.clone();
                         async move {
-                            alephcore::gateway::handlers::teams::handle_chat_cancel(req, ctx).await
+                            alephcore::gateway::handlers::teams::handle_chat_cancel(req, ctx, store)
+                                .await
                         }
                     });
             }

@@ -58,6 +58,43 @@ where
     .await
 }
 
+/// Create this run's session row **under the run's own attribution**.
+///
+/// `SessionMetadata::stamp_attribution` reads `scope::current_scope()` on the
+/// CREATE branch of `SessionStore::get_or_create`, and that task-local does not
+/// survive `tokio::spawn`. Every producer of a run — the Panel handler
+/// (`handlers::agent`), the channel inbound router, cron, heartbeat, the teams
+/// dispatcher, `sessions_send`, A2A — hands the request to a *spawned* task, so
+/// by the time the engine creates the row the ambient scope is `None` even
+/// though the attribution is sitting right there in `request.metadata`. The row
+/// then persists with `owner_user_id`/`scope_id` NULL and is adopted as
+/// owner-owned, which for a member means their own session is invisible to them
+/// (`sessions.list` empty, `sessions.set_topic` "not found",
+/// `chat.context_estimate` null) and their transcript is attributed to the
+/// operator — including to `handlers::trace`'s cross-user read audit, which
+/// compares against `effective_owner` and therefore never fires for it.
+///
+/// Reading the metadata rather than capturing the caller's task-local is
+/// deliberate and load-bearing: `current_scope()` is **also** `None` in the
+/// gateway dispatch loop (which scopes `CALLER_USER`/`CALLER_ROLE`, not the
+/// attribution), so the resolved attribution exists ONLY in the metadata map.
+/// Using the same accessor [`with_request_scope`] uses is what keeps the row
+/// and the loop from disagreeing about whose turn this is.
+///
+/// One helper rather than the same three lines at both engines' call sites:
+/// `ExecutionEngine::execute` and `SimpleExecutionEngine::execute` each create
+/// the row, and a second copy is a second answer waiting to drift.
+pub(super) async fn ensure_session_under_request_scope(
+    agent: &AgentInstance,
+    request: &RunRequest,
+) {
+    crate::scope::with_scope(
+        crate::scope::scope_from_metadata(&request.metadata),
+        agent.ensure_session(&request.session_key),
+    )
+    .await;
+}
+
 impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionEngine<P, R> {
     /// Run the agent loop (think->act two-step, Claude Code-inspired).
     ///

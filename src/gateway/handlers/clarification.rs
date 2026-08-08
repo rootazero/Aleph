@@ -231,7 +231,6 @@ mod tests {
             .register(
                 "agent:main:main",
                 ClarificationRequest::select(
-                    "ask-1",
                     "Deploy where?",
                     vec![
                         ClarificationOption::new("staging", "staging"),
@@ -261,7 +260,7 @@ mod tests {
         let rx = mgr
             .register(
                 "agent:main:main",
-                ClarificationRequest::text("ask-2", "Which file?", None),
+                ClarificationRequest::text("Which file?"),
                 DEFAULT_CLARIFY_TIMEOUT,
             )
             .await;
@@ -299,7 +298,7 @@ mod tests {
         let rx = mgr
             .register(
                 "agent:main:main",
-                ClarificationRequest::text("ask-3", "Which file?", None),
+                ClarificationRequest::text("Which file?"),
                 DEFAULT_CLARIFY_TIMEOUT,
             )
             .await;
@@ -339,7 +338,7 @@ mod tests {
         let rx = mgr
             .register(
                 "agent:main:main",
-                ClarificationRequest::text("ask-5", "Which file?", None),
+                ClarificationRequest::text("Which file?"),
                 DEFAULT_CLARIFY_TIMEOUT,
             )
             .await;
@@ -378,7 +377,6 @@ mod tests {
             .register(
                 "agent:main:main",
                 ClarificationRequest::select(
-                    "ask-4",
                     "Deploy where?",
                     vec![ClarificationOption::new("staging", "staging")],
                 ),
@@ -409,14 +407,14 @@ mod tests {
         let _alice_rx = mgr
             .register(
                 "agent:main:main",
-                ClarificationRequest::text("ask-alice", "Alice's question?", None),
+                ClarificationRequest::text("Alice's question?"),
                 DEFAULT_CLARIFY_TIMEOUT,
             )
             .await;
         let _bob_rx = mgr
             .register(
                 "agent:main:main:s1",
-                ClarificationRequest::text("ask-bob", "Bob's question?", None),
+                ClarificationRequest::text("Bob's question?"),
                 DEFAULT_CLARIFY_TIMEOUT,
             )
             .await;

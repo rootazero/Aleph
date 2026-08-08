@@ -279,13 +279,56 @@
 //!   (`memory::insights::empty_tool_usage_report`) so it is byte-identical to
 //!   a partition that ran nothing and cannot drift as the report type grows.
 //! - `workspace.list` → **ListFiltered**, `workspace.get` →
-//!   **PartitionChecked**. ⚠️ These two are DEFENSE IN DEPTH ONLY and the
+//!   **PartitionChecked**. ⚠️ These are DEFENSE IN DEPTH ONLY and the
 //!   table would overstate them if read as more: a workspace id is a
 //!   user-chosen name that encodes no owner and `agent_envs` has no owner
 //!   column, so an ordinary workspace passes `partition_visible` for every
 //!   caller and its `env_vars` are still cross-user readable. Closing that
 //!   needs an owner column plus a migration — a schema and product decision,
-//!   not a handler fix. Both handlers' docs say so at the site.
+//!   not a handler fix. Every handler's doc says so at the site.
+//!
+//! ## `workspace.*` writes (2026-08-07)
+//!
+//! The round above gated the two READS and left `workspace.create` /
+//! `workspace.update` / `workspace.archive` untouched, which is the wrong half
+//! to stop at: a write into a partition you cannot read is strictly worse than
+//! a read. All three are now **PartitionChecked** on the same
+//! `visibility::partition_visible(&params.id)` call, under the identical
+//! honesty boundary above — an ordinary `"crypto"` still passes for everyone.
+//! What they buy is the composed-id half: without them a member can create or
+//! archive `main__u-alice`, a row that only ALICE's filtered `workspace.list`
+//! then shows, carrying attacker-supplied `env_vars` /
+//! `system_prompt_override` / `allowed_tools`.
+//!
+//! Each denial reuses that method's OWN existing response rather than a new
+//! shared one — `update`/`archive` already have a "not found", and `create`
+//! has none, so its denial is built from the real
+//! `AgentEnvError::AlreadyExists` value and is byte-identical to a genuine id
+//! collision.
+//!
+//! ## `gateway.metrics.run_concurrency` (2026-08-07)
+//!
+//! The one entry in this table whose method is not a `sessions.*`-shaped data
+//! surface, and the only one registered as the RPC HALF of an event-plane fix.
+//! It returns `running_sessions` — every in-flight session key in the process
+//! — which is byte-for-byte the array `stream.running_set_changed` carries;
+//! `busy_queue.per_session` names sessions the same way. Both are now
+//! **ListFiltered** through the same predicate the event plane's
+//! `EventVisibilityIndex::project_for` applies element-wise, so the two
+//! producers of that set cannot diverge (pinned in `handlers/gateway_metrics.rs`).
+//!
+//! It also moved OUT of the admin gate in the same change
+//! (`method_admin::MEMBER_CARVE_OUTS`): the `gateway.` prefix had it gated, so
+//! the Panel's cold-load seed for the sidebar red dot and its usage gauge were
+//! already dead for every member — filtering it is what makes carving it open
+//! safe, and carving it open is what makes the filtering worth having.
+//!
+//! ⚠️ Read the label narrowly, exactly as with `workspace.*`: the AGGREGATE
+//! counters in the same response (`run_concurrency`'s slot totals and per-agent
+//! breakdown, `busy_queue.total_waiting`) are deliberately NOT filtered. They
+//! are load numbers with no identity in them and they are the gauge's entire
+//! purpose; `ListFiltered` here means "every array that names a session is
+//! filtered", not "every field is per-user".
 //!
 //! ## `teams.*` (tightened 2026-08-06 — was `OrgShared`)
 //!
@@ -306,18 +349,23 @@
 //! reach the ~20 methods that address a team through the `coord_tasks` DAG (a
 //! different database) rather than by `team_id`.
 //!
-//! Three `teams.*` methods are deliberately absent rather than registered:
+//! `teams.chat.cancel` is the one entry that is addressed by something other
+//! than a `team_id` or a `task_id`: its key is the fan-out tree's `run_id`. It
+//! resolves that to a team through `teams::broadcast::team_of_fanout_run` — an
+//! index written at the single point a tree run id is minted — and then calls
+//! the same `gate_team` as its siblings, so it is `KeyChecked` through one
+//! indirection rather than a third derivation of the predicate. It was
+//! deliberately absent until 2026-08-07 on the reasoning that a run id is an
+//! unguessable capability; that reasoning outsourced the property to the event
+//! plane's classification table, which was handing every user every other
+//! user's tree run ids the whole time.
+//!
+//! Two `teams.*` methods are deliberately absent rather than registered:
 //!
 //! - `teams.create` — creates; there is no addressed record to check yet, same
 //!   ruling as `session.create` / `group_chat.start`. The new row is stamped.
 //! - `teams.list_templates` — reads template files off disk; carries no user
 //!   data of any kind.
-//! - `teams.chat.cancel` — addressed by `run_id` against the process-global
-//!   `BackgroundAgentTracker`, with no run → team mapping to gate on. Left open
-//!   on the §4.11 reasoning (an unguessable capability the caller can only have
-//!   received from their own `teams.chat.send`), recorded at the handler. If a
-//!   `teams.*` ENUMERATION face for run ids is ever added, this needs a real
-//!   gate in the same change.
 //!
 //! Like every list in this file it is a curated pin, not a generated one: a
 //! brand-new `teams.*` sibling does not fail a test by being absent. The
@@ -367,10 +415,15 @@
 //! The Simulated-fallback `chat.send` path (see the `chat.send` bullet above)
 //! is a known, deliberate gap. `memory.reembed` is intentionally absent from
 //! the table (whole-store maintenance, no per-user `agent_id` to check — see
-//! the pin test). All are recorded here as the durable home for the follow-up,
-//! same convention as `method_admin.rs`'s notes.
+//! the pin test). Both are recorded here as the durable home for the
+//! follow-up, same convention as `method_admin.rs`'s notes.
 //! (`graph.update_note`/`rename_note`/`delete_note` were in this list until
-//! Task 7 fix round 2 closed them — see that section above.)
+//! Task 7 fix round 2 closed them — see that section above.
+//! `sessions.set_topic` and `chat.context_estimate` were in it until
+//! 2026-08-07; the deferral rested on two mis-descriptions — the first is a
+//! cross-user WRITE that renames the title in the victim's own sidebar, and
+//! the second discloses the addressed session's PINNED MODEL via
+//! `window_tokens`, not just a token count. Both are registered below.)
 //!
 //! ## `OrgShared`
 //!
@@ -425,12 +478,16 @@ pub const SCOPED_METHODS: &[(&str, Treatment)] = &[
     ("chat.abort", Treatment::KeyChecked),
     ("chat.history", Treatment::KeyChecked),
     ("chat.clear", Treatment::KeyChecked),
-    ("chat.context_estimate", Treatment::KeyChecked),
     ("chat.rewind", Treatment::KeyChecked),
     ("sessions.new", Treatment::KeyChecked),
     ("sessions.patch", Treatment::KeyChecked),
     ("sessions.set_project_root", Treatment::KeyChecked),
+    // Cross-user WRITE: the topic is the title the victim's own sidebar
+    // renders. Gated 2026-08-07 with `handle_truncate_db`'s block verbatim.
     ("sessions.set_topic", Treatment::KeyChecked),
+    // Gated 2026-08-07 via `existing_session_is_visible` (a not-yet-created
+    // session is not a denial); denial reuses the handler's own `null`.
+    ("chat.context_estimate", Treatment::KeyChecked),
     ("session.compact", Treatment::KeyChecked),
     ("session.truncate", Treatment::KeyChecked),
     ("sessions.compaction.list", Treatment::KeyChecked),
@@ -470,6 +527,15 @@ pub const SCOPED_METHODS: &[(&str, Treatment)] = &[
     ("insights.tools", Treatment::PartitionChecked),
     ("workspace.list", Treatment::ListFiltered),
     ("workspace.get", Treatment::PartitionChecked),
+    // --- workspace.* writes (see the module doc's own section) ---
+    ("workspace.create", Treatment::PartitionChecked),
+    ("workspace.update", Treatment::PartitionChecked),
+    ("workspace.archive", Treatment::PartitionChecked),
+    // The RPC half of the `stream.running_set_changed` payload projection —
+    // same set, same predicate, opposite transport. See the module doc's own
+    // section for what the label does and does not claim about the aggregate
+    // counters in the same response.
+    ("gateway.metrics.run_concurrency", Treatment::ListFiltered),
     // --- teams.* (see the module doc's `teams.*` section) ---
     ("teams.list", Treatment::ListFiltered),
     ("teams.snapshot.list", Treatment::ListFiltered),
@@ -479,6 +545,9 @@ pub const SCOPED_METHODS: &[(&str, Treatment)] = &[
     ("teams.delete", Treatment::KeyChecked),
     ("teams.usage", Treatment::KeyChecked),
     ("teams.chat.send", Treatment::KeyChecked),
+    // Addressed by the fan-out tree's `run_id`, resolved to its team through
+    // `teams::broadcast::team_of_fanout_run` before the shared `gate_team`.
+    ("teams.chat.cancel", Treatment::KeyChecked),
     ("teams.chat.thread", Treatment::KeyChecked),
     ("teams.chat.history", Treatment::KeyChecked),
     ("teams.list_tasks", Treatment::KeyChecked),
@@ -578,12 +647,10 @@ mod tests {
             "chat.abort",
             "chat.history",
             "chat.clear",
-            "chat.context_estimate",
             "chat.rewind",
             "sessions.new",
             "sessions.patch",
             "sessions.set_project_root",
-            "sessions.set_topic",
             "session.compact",
             "session.truncate",
             "sessions.compaction.list",
@@ -614,12 +681,10 @@ mod tests {
             "chat.abort",
             "chat.history",
             "chat.clear",
-            "chat.context_estimate",
             "chat.rewind",
             "sessions.new",
             "sessions.patch",
             "sessions.set_project_root",
-            "sessions.set_topic",
             "session.compact",
             "session.truncate",
             "sessions.compaction.list",
@@ -634,11 +699,27 @@ mod tests {
     fn unregistered_method_reads_as_none_not_a_default_treatment() {
         // No silent "assume KeyChecked" default — an unlisted method must
         // read as unclassified, not falsely covered. `memory.reembed`
-        // (whole-store, no `agent_id` at all) is a DELIBERATE, documented gap
-        // (see module doc) — not silently dropped, but also not falsely claimed.
-        // (`memory.trace` and `graph.update_note` were examples here until
-        // Task 7 fix rounds 1/2 registered them — see those pin tests.)
+        // (whole-store maintenance, no `agent_id` at all) is a DELIBERATE,
+        // documented gap — not silently dropped, but also not falsely
+        // claimed. (`memory.trace` and `graph.update_note` were examples here
+        // until Task 7 fix rounds 1/2 registered them; `sessions.set_topic`
+        // and `chat.context_estimate` until 2026-08-07 — see those pin
+        // tests.)
         assert_eq!(treatment_of("memory.reembed"), None);
+        // `memory.clear` / `memory.clearFacts` are HARD-ERROR STUBS: both
+        // handlers take `_db` and return `INTERNAL_ERROR` unconditionally
+        // (bulk clearing does not exist in the notes-based memory model), so
+        // they touch no partition and there is nothing to check. They ARE
+        // registered as RPCs, so every `memory.` sweep finds them and every
+        // reviewer re-derives "unregistered — is that a gap?" from scratch.
+        // Pinned with the reason so nobody has to. This assertion fails if
+        // someone registers them; it CANNOT see the handler growing a real
+        // body, which is the premise the ruling rests on — a body makes them
+        // `PartitionChecked` and this pin is the line to delete.
+        for m in ["memory.clear", "memory.clearFacts"] {
+            assert_eq!(treatment_of(m), None, "{m}");
+        }
+        assert_eq!(treatment_of("a.method.nobody.registered"), None);
     }
 
     /// Task 7 fix round 1's own pin.
@@ -733,8 +814,31 @@ mod tests {
     /// Every `OrgShared` entry — exact or family prefix — must carry a
     /// one-line reason. "Shared by design" and "nobody looked" are
     /// indistinguishable without one.
+    ///
+    /// Both sources are empty today, so the loop below iterates zero times and
+    /// on its own this test cannot fail — a guard chaining two empty iterators
+    /// is indistinguishable from a deleted guard. The two assertions in front
+    /// of it state the emptiness itself, which CAN fail: they are what makes
+    /// the ruling "nothing in this table claims 'shared' without a per-method
+    /// audit" a checked fact rather than a comment. Adding a genuinely
+    /// org-shared family is expected to fail here; the fix is to name it in
+    /// the assertion (the same convention as the `deliberately absent` pins),
+    /// at which point the reason loop starts doing the work it was written for.
     #[test]
     fn org_shared_entries_all_carry_reasons() {
+        assert!(
+            !SCOPED_METHODS
+                .iter()
+                .any(|(_, t)| *t == Treatment::OrgShared),
+            "no method in SCOPED_METHODS is OrgShared today; if you added one, \
+             give it a reason in ORG_SHARED_REASONS and name it here"
+        );
+        assert!(
+            ORG_SHARED_PREFIXES.is_empty(),
+            "no family is ruled OrgShared today (teams.* was the last one and \
+             its ruling was overturned 2026-08-06); if you added one, give it a \
+             reason in ORG_SHARED_REASONS and name it here"
+        );
         let exact = SCOPED_METHODS
             .iter()
             .filter(|(_, t)| *t == Treatment::OrgShared)
@@ -771,12 +875,16 @@ mod tests {
         assert_eq!(treatment_of("group_chat.start"), None);
     }
 
-    /// The `teams.*` family, tightened 2026-08-06. Curated pin: a deletion or
-    /// typo in the block above fails here by name.
+    /// The `teams.*` family, tightened 2026-08-06 (`teams.chat.cancel` joined
+    /// it 2026-08-07). Curated pin: a deletion or typo in the block above fails
+    /// here by name.
     ///
-    /// The three deliberate absences are asserted too — an unregistered method
-    /// and a method someone forgot are indistinguishable in `treatment_of`, so
-    /// the ruling has to be written down somewhere that breaks if reversed.
+    /// The two remaining deliberate absences are asserted too — an unregistered
+    /// method and a method someone forgot are indistinguishable in
+    /// `treatment_of`, so the ruling has to be written down somewhere that
+    /// breaks if reversed. `teams.chat.cancel` used to be the third; moving it
+    /// into the enforced loop is what makes this pin fail if the gate is ever
+    /// removed again.
     #[test]
     fn every_teams_method_is_registered_or_deliberately_absent() {
         for m in ["teams.list", "teams.snapshot.list"] {
@@ -795,6 +903,9 @@ mod tests {
             "teams.delete",
             "teams.usage",
             "teams.chat.send",
+            // Keyed by a fan-out `run_id`, not a `team_id` — resolved through
+            // the mint-time index, then gated by the same `gate_team`.
+            "teams.chat.cancel",
             "teams.chat.thread",
             "teams.chat.history",
             "teams.list_tasks",
@@ -823,7 +934,7 @@ mod tests {
         ] {
             assert_eq!(treatment_of(m), Some(Treatment::KeyChecked), "{m}");
         }
-        for m in ["teams.create", "teams.list_templates", "teams.chat.cancel"] {
+        for m in ["teams.create", "teams.list_templates"] {
             assert_eq!(
                 treatment_of(m),
                 None,
@@ -888,6 +999,58 @@ mod tests {
             treatment_of("workspace.list"),
             Some(Treatment::ListFiltered)
         );
+    }
+
+    /// The four RPCs this table spent a round describing as deliberate gaps
+    /// (`sessions.set_topic` / `chat.context_estimate`) or simply never
+    /// enumerating (the three `workspace.*` writes). Pinned by name because
+    /// they have each already been read once and ruled "lower severity" —
+    /// this is the assertion that fails if the gate is dropped again.
+    #[test]
+    fn the_four_formerly_ungated_scoped_rpcs_are_registered() {
+        for m in ["sessions.set_topic", "chat.context_estimate"] {
+            assert_eq!(treatment_of(m), Some(Treatment::KeyChecked), "{m}");
+        }
+        for m in ["workspace.create", "workspace.update", "workspace.archive"] {
+            assert_eq!(treatment_of(m), Some(Treatment::PartitionChecked), "{m}");
+        }
+        // The writes must not be claimed as MORE than their read siblings:
+        // same predicate, same treatment, same documented boundary.
+        assert_eq!(
+            treatment_of("workspace.archive"),
+            treatment_of("workspace.get")
+        );
+    }
+
+    /// `gateway.metrics.run_concurrency` is registered AND carved out of the
+    /// admin gate, and those two facts are one decision: the carve-out is only
+    /// safe because the response is filtered, and the filtering is only worth
+    /// having because a member can now reach it. Its metric siblings did NOT
+    /// move, which is what keeps the carve-out narrow.
+    #[test]
+    fn the_running_set_gauge_is_list_filtered_and_member_reachable() {
+        assert_eq!(
+            treatment_of("gateway.metrics.run_concurrency"),
+            Some(Treatment::ListFiltered)
+        );
+        assert!(
+            !crate::gateway::method_admin::method_requires_admin("gateway.metrics.run_concurrency"),
+            "registering it here is pointless while the admin gate refuses it"
+        );
+        for sibling in [
+            "gateway.metrics.lanes",
+            "gateway.metrics.subagent_concurrency",
+        ] {
+            assert_eq!(
+                treatment_of(sibling),
+                None,
+                "{sibling} names no session and must not be claimed by this table"
+            );
+            assert!(
+                crate::gateway::method_admin::method_requires_admin(sibling),
+                "{sibling} must stay admin-gated"
+            );
+        }
     }
 
     /// `trace.list`/`trace.get` are absent from this table on purpose: they

@@ -499,6 +499,7 @@ mod tests {
         let frame = GatewayEventFrame::SessionUpdated {
             session_key: "test-session".to_string(),
             origin_channel: Some("telegram".to_string()),
+            origin_run_id: Some("run-7".to_string()),
         };
         bus.publish_frame(&frame).unwrap();
 
@@ -507,9 +508,11 @@ mod tests {
             GatewayEventFrame::SessionUpdated {
                 session_key,
                 origin_channel,
+                origin_run_id,
             } => {
                 assert_eq!(session_key, "test-session");
                 assert_eq!(origin_channel.as_deref(), Some("telegram"));
+                assert_eq!(origin_run_id.as_deref(), Some("run-7"));
             }
             _ => panic!("expected SessionUpdated"),
         }

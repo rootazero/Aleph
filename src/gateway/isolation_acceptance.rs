@@ -326,12 +326,25 @@ async fn two_users_cannot_see_each_other_end_to_end() {
                 Some(&alice_trace_frame),
                 Some("u-bob"),
                 &sessions,
+                None,
             )
             .await,
         "bob must not be admitted to alice's simulated run event"
     );
 
     // ══════════════════ Owner: sees the legacy fixture, not alice's ══════════════════
+    //
+    // Scope of the two assertions below, stated because they were read for a
+    // while as a broader claim than they make (human ruling, 2026-08-07): the
+    // operator's IDENTITY buys no exemption from the visibility predicates —
+    // alice's session is not in his list and her frames are not on his socket.
+    // That is not a claim that no route to her content exists. `trace.list` /
+    // `trace.get` are exactly such a route, admin-gated rather than
+    // owner-scoped, and ratified: an operator who cannot read a failing
+    // member's run cannot support it. What that route now also does is record
+    // itself (`AuditEventType::ScopedContentRead` — see
+    // `handlers::trace_replay`), which is what stops these two statements from
+    // contradicting each other.
 
     let owner_list = as_caller(
         OWNER_USER_ID,
@@ -352,7 +365,8 @@ async fn two_users_cannot_see_each_other_end_to_end() {
         !owner_sessions
             .iter()
             .any(|s| s["key"] == alice_key_str.as_str()),
-        "owner is not exempt from alice's ownership boundary: {owner_sessions:?}"
+        "owner is not exempt from alice's ownership boundary on THIS surface — \
+         sessions.list is owner-filtered for him too: {owner_sessions:?}"
     );
 
     assert!(
@@ -362,9 +376,11 @@ async fn two_users_cannot_see_each_other_end_to_end() {
                 Some(&alice_trace_frame),
                 Some(OWNER_USER_ID),
                 &sessions,
+                None,
             )
             .await,
-        "the operator is not exempt from session ownership for live events either"
+        "the operator is not exempt from session ownership for live events either \
+         — the event bus asks the same predicate of him as of anyone"
     );
 
     // ══════════════════════ Alice: sees her own everything ══════════════════════
@@ -418,6 +434,7 @@ async fn two_users_cannot_see_each_other_end_to_end() {
                 Some(&alice_trace_frame),
                 Some("u-alice"),
                 &sessions,
+                None,
             )
             .await,
         "alice must be admitted to her own run event — the guard must not be a false positive"
@@ -562,6 +579,60 @@ async fn two_users_cannot_see_each_others_teams() {
         1,
         "alice's task survived bob's skip attempt"
     );
+
+    // --- ...and bob sees nothing on the EVENT plane either -------------------
+    // The `teams.*` RPC family above was tightened; the `team.<id>.*` event
+    // plane was not, and shipped `Global` — `team.<id>.message` carries a
+    // member agent's deliverable text verbatim, so every connected user
+    // received every other user's team chat. It survived the compile-anchored
+    // `every_frame_variant_is_classified` pin because `publish_team_event`
+    // emits a raw `{topic,data}` string with no `GatewayEventFrame` behind it.
+    //
+    // These calls are deliberately NOT wrapped in `as_caller`: the WS delivery
+    // loop is the socket's own task, outside every dispatch scope, so this is
+    // the shape the resolution actually runs in.
+    let temp = TempDir::new().unwrap();
+    let sessions: Arc<dyn SessionStore> = Arc::new(
+        SessionManager::new(SessionManagerConfig {
+            db_path: temp.path().join("sessions.db"),
+            ..Default::default()
+        })
+        .unwrap(),
+    );
+    let events = EventVisibilityIndex::new();
+    let bubble = json!({
+        "agent_id": "agent-main",
+        "text": "ship it before friday",
+        "final": true,
+    });
+    for suffix in ["message", "activity", "system", "fanout", "task.created"] {
+        let topic = format!("team.{}.{suffix}", team.id);
+        assert!(
+            events
+                .event_admits(
+                    &topic,
+                    Some(&bubble),
+                    Some("u-alice"),
+                    &sessions,
+                    Some(&teams)
+                )
+                .await,
+            "{topic}: alice must still receive her own team's live frames"
+        );
+        assert!(
+            !events
+                .event_admits(
+                    &topic,
+                    Some(&bubble),
+                    Some("u-bob"),
+                    &sessions,
+                    Some(&teams)
+                )
+                .await,
+            "{topic}: bob must not receive the live frames of a team he cannot \
+             even see through `teams.get`"
+        );
+    }
 }
 
 /// Reproduce the task-local nesting a real GATEWAY DISPATCH applies to an RPC
@@ -782,6 +853,153 @@ async fn two_members_share_one_room_memory_and_nobody_elses() {
         .await,
         None,
         "a room has no 'the user' whose profile could be the floor"
+    );
+}
+
+/// Spec §8/§13 (P2 acceptance, the LIVE half): **every member of a room
+/// receives the room's frames**, not only whoever opened the session.
+///
+/// [`two_members_share_one_room_memory_and_nobody_elses`] proves a room is one
+/// memory at rest; this proves it is one conversation in flight. Two different
+/// bodies answer those two questions — `visibility::session_visible_to` on the
+/// RPC path, [`EventVisibilityIndex::event_admits`] on the event bus — and for
+/// one release the second kept the pre-P2 owner-equality rule while the first
+/// learned the roster. That break is invisible from both ends: it fails CLOSED,
+/// so it leaks nothing and logs nothing; the room simply never comes alive for
+/// anyone but its creator — including on a member's OWN turn, because their
+/// run's frames hang off the room's session row, which the creator owns. So the
+/// run seeded below is BOB's.
+///
+/// The last beat is the one that fails if the verdict is ever memoised per
+/// caller: P2 promises removal takes effect at the next predicate evaluation,
+/// and this path has no invalidation hook anyone could call.
+#[tokio::test]
+async fn every_room_member_receives_the_rooms_live_frames() {
+    use crate::projects::ProjectStore;
+
+    let _guard = crate::projects::roster::TEST_GUARD
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+
+    let temp = TempDir::new().unwrap();
+    let sessions: Arc<dyn SessionStore> = Arc::new(
+        SessionManager::new(SessionManagerConfig {
+            db_path: temp.path().join("sessions.db"),
+            ..Default::default()
+        })
+        .unwrap(),
+    );
+
+    let projects = ProjectStore::new(rusqlite::Connection::open_in_memory().unwrap());
+    projects.create_schema().unwrap();
+    let room = projects
+        .create("live room", Some("u-live-alice"), None)
+        .unwrap();
+    projects.add_member(&room.id, "u-live-bob").unwrap();
+
+    let events = EventVisibilityIndex::new();
+    let key = SessionKey::main(unique("live-room-agent"));
+    let key_str = key.to_key_string();
+    let run_id = unique("run-live-bob");
+
+    // Alice opens the room, so hers is the row's `owner_user_id`.
+    as_room_member("u-live-alice", &room.id, sessions.get_or_create(&key))
+        .await
+        .unwrap();
+
+    // The fixture's whole point: bob is NOT this row's owner. If he were, every
+    // assertion below would pass under the owner-equality rule too.
+    let meta = sessions
+        .get_metadata(&key)
+        .await
+        .unwrap()
+        .expect("the room session row exists");
+    assert_eq!(meta.owner_user_id.as_deref(), Some("u-live-alice"));
+    assert_eq!(
+        meta.scope_id.as_deref(),
+        Some(format!("project:{}", room.id).as_str()),
+        "the room session must carry the room's scope, or this test proves nothing"
+    );
+
+    // Bob takes a turn in the room.
+    as_room_member(
+        "u-live-bob",
+        &room.id,
+        events.note_frame(
+            "stream.run_accepted",
+            Some(&json!({ "run_id": run_id, "session_key": key_str })),
+        ),
+    )
+    .await;
+
+    let trace = json!({
+        "run_id": run_id,
+        "seq": 1,
+        "event": { "kind": "turn_started", "iteration": 1 },
+    });
+    let updated = json!({ "session_key": key_str, "origin_channel": "gui:chat" });
+
+    // Both classifications must reach the roster: `stream.session_updated`
+    // names the session directly, `stream.agent_trace` only a run id.
+    for (topic, data) in [
+        ("stream.agent_trace", &trace),
+        ("stream.session_updated", &updated),
+    ] {
+        assert!(
+            events
+                .event_admits(topic, Some(data), Some("u-live-bob"), &sessions, None)
+                .await,
+            "{topic}: a room member who did not create the session must receive \
+             the room's frames — including his own turn's"
+        );
+        assert!(
+            events
+                .event_admits(topic, Some(data), Some("u-live-alice"), &sessions, None)
+                .await,
+            "{topic}: the creator must still be admitted — the fix must not be a \
+             blanket allow that happens to include bob"
+        );
+        assert!(
+            !events
+                .event_admits(topic, Some(data), Some("u-live-mallory"), &sessions, None)
+                .await,
+            "{topic}: a logged-in non-member must not receive the room's frames"
+        );
+        assert!(
+            !events
+                .event_admits(topic, Some(data), Some(OWNER_USER_ID), &sessions, None)
+                .await,
+            "{topic}: the operator is not on the roster either — same rule as \
+             `sessions.list` (see two_users_cannot_see_each_other_end_to_end)"
+        );
+    }
+
+    // ── Removal takes effect on the NEXT frame, with nothing to invalidate ──
+    projects.remove_member(&room.id, "u-live-bob").unwrap();
+    assert!(
+        !events
+            .event_admits(
+                "stream.agent_trace",
+                Some(&trace),
+                Some("u-live-bob"),
+                &sessions,
+                None
+            )
+            .await,
+        "an ex-member must stop receiving the room's frames immediately: the \
+         cache holds the row's (owner, scope) facts, never a per-caller verdict"
+    );
+    assert!(
+        events
+            .event_admits(
+                "stream.agent_trace",
+                Some(&trace),
+                Some("u-live-alice"),
+                &sessions,
+                None
+            )
+            .await,
+        "removing bob must not disturb anyone else's delivery"
     );
 }
 

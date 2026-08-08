@@ -23,7 +23,7 @@ use crate::config::types::provider::ProviderConfig;
 use crate::gateway::identity_loader::IdentityFileLoader;
 use crate::thinker::soul_archetypes::SoulArchetype;
 
-mod templates;
+pub(crate) mod templates;
 
 // =============================================================================
 // Constants

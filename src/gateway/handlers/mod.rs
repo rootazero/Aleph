@@ -509,8 +509,7 @@ impl HandlerRegistry {
         // by `SecurityStore::in_memory()`); real wiring at boot uses the SAME
         // Arc as connect auth (see `commands/start/mod.rs`).
         let default_security_store = Arc::new(
-            SecurityStore::in_memory()
-                .expect("in-memory SecurityStore for default registrations"),
+            SecurityStore::in_memory().expect("in-memory SecurityStore for default registrations"),
         );
 
         // Project catalogue — backed by `~/.aleph/data/projects.db`. Every

@@ -292,11 +292,17 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
     /// channel-facing events, so an emitter-side announcement never reaches
     /// the Panel for runs originating from Telegram/Slack/etc.
     /// `origin_channel` is the triggering channel (`metadata["channel_id"]`),
-    /// `None` for Panel-originated runs.
+    /// `"gui:chat"` for a Panel run. `origin_run_id` is the run that caused the
+    /// update — required, not optional, because every caller of this method is
+    /// inside a run and the frame's whole point is that a client can tell ITS
+    /// run from somebody else's (see the field's doc on `SessionUpdated`).
+    /// The one publisher with no run to name lives elsewhere
+    /// (`SessionManager::emit_session_updated`) and passes `None` there.
     pub(super) fn publish_session_updated(
         &self,
         session_key: &crate::gateway::router::SessionKey,
         origin_channel: Option<&str>,
+        origin_run_id: &str,
     ) {
         if let Some(bus) = &self.event_bus {
             let frame = crate::gateway::events::GatewayEventFrame::SessionUpdated {
@@ -304,6 +310,7 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
                 origin_channel: origin_channel
                     .filter(|c| !c.is_empty())
                     .map(|c| c.to_string()),
+                origin_run_id: (!origin_run_id.is_empty()).then(|| origin_run_id.to_string()),
             };
             let _ = bus.publish_frame(&frame);
         }
