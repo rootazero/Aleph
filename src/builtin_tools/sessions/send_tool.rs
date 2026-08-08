@@ -273,6 +273,51 @@ impl SessionsSendTool {
         let target_key_str = target_session_key.to_key_string();
         let target_agent_id = target_session_key.agent_id().to_string();
 
+        // `args.session_key` is MODEL-supplied, and this tool DISPATCHES A RUN
+        // into whatever it names. Its deliberate siblings in this same
+        // directory — `session_compact`, `set_topic`, `set_mode`,
+        // `session_new` — all address the INJECTED `args.__session_key` the
+        // model cannot choose; this one is the exception, and the only check
+        // standing in front of it was `a2a_policy`, whose production default is
+        // permissive (`allow_patterns: ["*"]`). An agent→agent policy is not an
+        // ownership predicate: it answers "may main talk to coder", never
+        // "whose conversation is this".
+        //
+        // A key that resolves to NO row stays allowed — that is
+        // `existing_session_is_visible`'s asymmetry, and a brand-new
+        // conversation is the normal case. Refusal reuses the tool's own
+        // not-found text so a foreign key and an absent key read identically.
+        match context
+            .session_store()
+            .get_metadata(&target_session_key)
+            .await
+        {
+            Ok(Some(meta)) => {
+                // `ambient_owner` is the resolver, NOT `visible_owner_filter`:
+                // the latter reads `CALLER_USER`, dead inside a spawned run,
+                // and a tool call is always inside one. `None` (cron / A2A /
+                // internal) is unrestricted, matching every sibling predicate.
+                let admitted = crate::scope::ambient_owner().is_none_or(|actor| {
+                    crate::gateway::visibility::session_visible_to(&meta, &actor)
+                });
+                if !admitted {
+                    return SessionsSendOutput::error(
+                        run_id,
+                        format!("No session found for key '{target_key_str}'"),
+                    );
+                }
+            }
+            Ok(None) => {}
+            // Fail closed: we could not establish whose session this is, and
+            // this call starts a run inside it.
+            Err(_) => {
+                return SessionsSendOutput::error(
+                    run_id,
+                    format!("No session found for key '{target_key_str}'"),
+                );
+            }
+        }
+
         debug!(
             run_id = %run_id,
             from = %self.current_agent_id,
@@ -321,6 +366,9 @@ impl SessionsSendTool {
         // because tokio task-locals do not cross the `tokio::spawn`
         // boundary used by fire-and-forget below.
         let inherited_workspace = crate::projects::current_project_root();
+        // Same capture-before-spawn rule, same reason, and the sibling that was
+        // missing: a delegated run inherits WHOSE it is, not just where it runs.
+        let inherited_scope = crate::scope::current_scope();
         // `TURN_CONTEXT` is reliably in scope here (ScopedToolService scopes it
         // around every tool dispatch and reading it does not cross a
         // `tokio::spawn` boundary), so the dispatching turn's `caller_role` AND
@@ -338,6 +386,7 @@ impl SessionsSendTool {
             turn.as_ref()
                 .and_then(|t| t.channel_tool_permissions.clone()),
             args.timeout_seconds == 0 || parent_unattended,
+            inherited_scope.as_ref(),
         );
 
         // Tree budget (goal × session_send): when the CALLING session carries an
@@ -615,8 +664,21 @@ fn build_sub_metadata(
     caller_role: Option<String>,
     channel_tool_permissions: Option<String>,
     unattended: bool,
+    scope: Option<&crate::scope::ScopeAttribution>,
 ) -> HashMap<String, String> {
     let mut m = HashMap::new();
+    // The scope pair, which this function's doc claimed parity on and did not
+    // carry. `carry_policy_metadata` forwards FOUR keys — `caller_role`,
+    // `CHANNEL_TOOL_PERMISSIONS_KEY`, `OWNER_META_KEY` and `SCOPE_META_KEY` —
+    // and explains at its own site why the scope pair must be inherited
+    // unchanged. Without it the delegated run was created with no attribution:
+    // `ensure_session_under_request_scope` stamped nothing, the session row was
+    // written NULL/NULL and adopted by `owner_or_legacy`, and the child's
+    // memory writes fell into the base partition while the parent sat on
+    // `main__u-alice`.
+    if let Some(attr) = scope {
+        crate::scope::stamp_metadata(&mut m, attr);
+    }
     if let Some(p) = inherited_workspace {
         m.insert("project_root".to_string(), p.display().to_string());
     }
@@ -843,7 +905,7 @@ mod tests {
     fn sub_metadata_forwards_caller_role() {
         // A guest channel delegating must carry its role forward, or the child
         // run passes the operator gate (role_is_operator(None) = true).
-        let m = build_sub_metadata(None, Some("guest".to_string()), None, false);
+        let m = build_sub_metadata(None, Some("guest".to_string()), None, false, None);
         assert_eq!(m.get("caller_role").map(String::as_str), Some("guest"));
         // Wait-mode under an ATTENDED parent must NOT be stamped unattended: a
         // human is attached to the awaiting parent turn. (The call site passes
@@ -858,7 +920,13 @@ mod tests {
         // that deny layer to the delegate, or it bypasses its own deny by
         // delegating to another session.
         let perms = r#"{"web_fetch":"deny"}"#.to_string();
-        let m = build_sub_metadata(None, Some("guest".to_string()), Some(perms.clone()), false);
+        let m = build_sub_metadata(
+            None,
+            Some("guest".to_string()),
+            Some(perms.clone()),
+            false,
+            None,
+        );
         assert_eq!(
             m.get(crate::gateway::execution_engine::CHANNEL_TOOL_PERMISSIONS_KEY)
                 .map(String::as_str),
@@ -870,14 +938,14 @@ mod tests {
     fn sub_metadata_omits_caller_role_when_absent() {
         // A trusted local/internal run (no role) forwards nothing — the child
         // stays at the same absent-role trust level, not a fabricated "guest".
-        let m = build_sub_metadata(None, None, None, false);
+        let m = build_sub_metadata(None, None, None, false, None);
         assert!(!m.contains_key("caller_role"));
         assert!(!m.contains_key(crate::gateway::execution_engine::CHANNEL_TOOL_PERMISSIONS_KEY));
     }
 
     #[test]
     fn sub_metadata_stamps_unattended_on_fire_and_forget() {
-        let m = build_sub_metadata(None, Some("operator".to_string()), None, true);
+        let m = build_sub_metadata(None, Some("operator".to_string()), None, true, None);
         assert_eq!(
             m.get(crate::gateway::execution_engine::UNATTENDED_KEY)
                 .map(String::as_str),
@@ -895,7 +963,7 @@ mod tests {
     #[test]
     fn sub_metadata_stamps_unattended_for_headless_parent_wait_mode() {
         // fire_and_forget = false, parent_unattended = true → OR = true.
-        let m = build_sub_metadata(None, None, None, true);
+        let m = build_sub_metadata(None, None, None, true, None);
         assert_eq!(
             m.get(crate::gateway::execution_engine::UNATTENDED_KEY)
                 .map(String::as_str),
