@@ -52,11 +52,29 @@ pub struct TaskUpdateOutput {
 #[derive(Clone)]
 pub struct TaskUpdateTool {
     store: Arc<dyn CoordTaskStore>,
+    /// The ownership gate. A coord task is addressed by a bare id and lives in
+    /// a DIFFERENT database from the teams the `ScopedTeamStore` decorator
+    /// wraps, so the decorator structurally cannot see this call — which is why
+    /// six sibling `team_*` tools each call `teams::task_team_reachable` by
+    /// hand, and why this one and `task_wait` were wide open until 2026-08-08:
+    /// they were constructed three lines below `TaskCommentTool`, which already
+    /// took the store, in the same function, with `config.team_store` in scope.
+    team_store: Option<Arc<dyn crate::teams::TeamStore>>,
 }
 
 impl TaskUpdateTool {
     pub fn new(store: Arc<dyn CoordTaskStore>) -> Self {
-        Self { store }
+        Self {
+            store,
+            team_store: None,
+        }
+    }
+
+    /// Wire the ownership gate — see [`crate::teams::task_team_reachable`].
+    #[must_use]
+    pub fn with_team_store(mut self, store: Option<Arc<dyn crate::teams::TeamStore>>) -> Self {
+        self.team_store = store;
+        self
     }
 }
 
@@ -71,6 +89,25 @@ impl AlephTool for TaskUpdateTool {
     type Output = TaskUpdateOutput;
 
     async fn call(&self, args: Self::Args) -> Result<Self::Output> {
+        // Ownership before anything else, including argument validation: a
+        // foreign task id must not be able to tell "that status string is
+        // invalid" apart from "that task is not yours", or the error itself
+        // becomes the oracle. Same ordering `sessions.patch` uses on the RPC
+        // face and for the same reason.
+        let owning_team = self
+            .store
+            .get_task(&args.task_id)
+            .await?
+            .and_then(|t| t.team_id);
+        if !crate::teams::task_team_reachable(self.team_store.as_ref(), owning_team.as_deref())
+            .await
+        {
+            return Err(crate::error::AlephError::other(format!(
+                "no coord_task with id '{}'",
+                args.task_id
+            )));
+        }
+
         let new_status = args
             .status
             .as_deref()
