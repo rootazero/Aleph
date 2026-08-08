@@ -411,6 +411,10 @@ impl WorkingMemoryAssembler for HybridAssembler {
             }
         }
     }
+
+    fn render_style(&self) -> super::render::RenderStyle {
+        self.config.render_style
+    }
 }
 
 fn candidate_to_item(c: &Candidate) -> EnvelopeItem {
@@ -427,12 +431,6 @@ fn candidate_to_item(c: &Candidate) -> EnvelopeItem {
         tokens: 0,
         updated_at: c.updated_at,
         extra: Default::default(),
-    }
-}
-
-impl WorkingMemoryAssembler for HybridAssembler {
-    fn render_style(&self) -> super::render::RenderStyle {
-        self.config.render_style
     }
 }
 

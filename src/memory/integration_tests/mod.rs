@@ -182,8 +182,8 @@ mod event_sourcing {
         assert!(final_fact.is_valid);
         assert_eq!(final_fact.access_count, 1);
 
-        // 7. Time travel -- verify full timeline via traveler
-        let timeline = traveler.fact_timeline(&fact_id).await.unwrap();
+        // 7. The full event timeline is reachable via the event store
+        let timeline = db.get_memory_events_for_fact(&fact_id).await.unwrap();
         assert_eq!(timeline.len(), 5);
 
         // 8. Explain fact

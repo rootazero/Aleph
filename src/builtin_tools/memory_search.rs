@@ -135,7 +135,6 @@ pub struct MemorySearchTool {
     database: MemoryBackend,
     note_retrieval: Arc<NoteFactRetrieval<SqliteMemoryBackend>>,
     comptroller: Arc<ContextComptroller>,
-    _indexer: Arc<TranscriptIndexer>,
     /// Shared default workspace ID, written per-request by the execution engine
     /// (`execute.rs`) from the session's agent id.
     /// Falls back to `DEFAULT_AGENT` ("main") when not set.
