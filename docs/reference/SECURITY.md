@@ -1623,6 +1623,21 @@ attribution, and a bound workspace as the room's default cwd.
   until their next `artifacts.list` re-mints. Pinned as a stated fact by
   `artifact_route.rs::a_removed_members_minted_artifact_url_survives_until_ttl`
   — a red test is how anyone reversing this decision will learn it was one.
+
+  **Confirmed end-to-end on 2026-08-08, through the production mint path.**
+  That test builds its `SessionMetadata` by hand and calls
+  `ArtifactCapabilities::mint` directly, so it never shows that
+  `artifacts.list`'s own `deny_unless_visible` admitted the holder — the gap a
+  real-machine run had to close. It now has: a member chatted in a room, the
+  model called `artifact_publish`, and the member read the capability URL out
+  of their own `artifacts.list` response. Removing them from the roster
+  produced **two different and both-correct answers**: the RPC face shut
+  immediately (`artifacts.list` and `artifacts.read_text` each `-32009`,
+  byte-identical to a session that does not exist) while the already-minted
+  byte URL kept serving — the bearer window above. Fresh minting was
+  impossible, because the only mint site is the `artifacts.list` that just
+  refused. If a SECOND mint site is ever added, that last sentence stops being
+  true and this paragraph has to be re-derived.
 - **`owner_user_id` means CREATOR, not "the one who can see it."** The P1
   vocabulary (`effective_owner`, adoption-by-absence) keeps working for
   personal rows, but for a project row the owner column only decides
