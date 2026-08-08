@@ -28,9 +28,9 @@ use crate::memory::store::{DreamStore, MemoryBackend};
 use crate::providers::AiProvider;
 use crate::routing::DEFAULT_AGENT_ID;
 use crate::sync_primitives::Arc;
-use crate::sync_primitives::{AtomicBool, AtomicI64, Ordering};
+use crate::sync_primitives::{AtomicBool, Ordering};
 use chrono::{Local, NaiveTime, TimeZone};
-use once_cell::sync::{Lazy, OnceCell};
+use once_cell::sync::OnceCell;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
@@ -135,8 +135,6 @@ pub struct DreamContext {
     pub report: DreamReport,
     /// Strategy name driving this cycle ("consolidate", "synthesize", "conserve").
     pub pipeline_type: String,
-    /// Activity checker: returns true if user activity has been detected.
-    pub activity_checker: Arc<dyn Fn() -> bool + Send + Sync>,
     /// Strategy selected for this Dream cycle.
     pub strategy: DreamStrategy,
     /// Optional wiki orientation — used by `IndexRefresherStage`.
@@ -324,14 +322,6 @@ impl DreamPipeline {
             if !stage.should_run(&ctx).await {
                 continue;
             }
-            // Check for user activity before each stage.
-            if (ctx.activity_checker)() {
-                let mut report = ctx.report;
-                report.status = DreamReportStatus::Interrupted;
-                report.interrupted_at_stage = Some(stage.name().to_string());
-                report.stages_executed = executed;
-                return Ok(report);
-            }
             ctx = stage.execute(ctx).await?;
             executed.push(stage.name().to_string());
         }
@@ -355,7 +345,6 @@ impl Default for DreamPipeline {
 
 const DEFAULT_CHECK_INTERVAL_SECONDS: u64 = 60;
 
-static LAST_ACTIVITY_TS: Lazy<AtomicI64> = Lazy::new(|| AtomicI64::new(now_timestamp()));
 static DREAM_DAEMON: OnceCell<Arc<DreamDaemon>> = OnceCell::new();
 
 pub(crate) fn now_timestamp() -> i64 {
@@ -363,21 +352,6 @@ pub(crate) fn now_timestamp() -> i64 {
         .duration_since(UNIX_EPOCH)
         .unwrap_or_else(|_| Duration::from_secs(0))
         .as_secs() as i64
-}
-
-/// Record user activity for `DreamDaemon` idle tracking.
-pub fn record_activity() {
-    LAST_ACTIVITY_TS.store(now_timestamp(), Ordering::Release);
-}
-
-fn last_activity_timestamp() -> i64 {
-    LAST_ACTIVITY_TS.load(Ordering::Acquire)
-}
-
-fn idle_seconds() -> i64 {
-    let now = now_timestamp();
-    let last = last_activity_timestamp();
-    (now - last).max(0)
 }
 
 /// Force-trigger a dream cycle on the globally-registered daemon.
@@ -519,23 +493,22 @@ pub struct DreamStatus {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum DreamRunStatus {
     Success,
-    Cancelled,
 }
 
 impl DreamRunStatus {
     const fn as_str(&self) -> &'static str {
         match self {
             Self::Success => "success",
-            Self::Cancelled => "cancelled",
         }
     }
 }
 
 /// Whether a scheduled cycle must be skipped because one already ran today.
 ///
-/// `cancelled` is the ONLY status that earns a retry: such a run yielded to
-/// fresh user activity before doing its work, so re-running once the user goes
-/// idle again is the intent.
+/// `cancelled` is the one status that earns a retry. It was written by the
+/// pre-idle-cut cycles that yielded to fresh user activity before doing any
+/// work; the guard still honors those persisted rows so an abandoned cycle
+/// gets a second chance once the user goes idle again.
 ///
 /// Every other same-day status — `success`, `timeout`, `error`, or a stale
 /// `running` left behind by a crashed process — means "today's cycle is spent,
@@ -760,7 +733,7 @@ impl DreamDaemon {
         // every subsequent scheduled cycle.
         let result = match tokio::time::timeout(
             Duration::from_secs(u64::from(self.config.max_duration_seconds)),
-            self.run_dream(run_start, run_date, true),
+            self.run_dream(run_start, run_date),
         )
         .await
         {
@@ -894,17 +867,6 @@ impl DreamDaemon {
             return Ok(());
         }
 
-        let idle = idle_seconds();
-        if idle < i64::from(self.config.idle_threshold_seconds) {
-            info!(
-                reason = "idle_below_threshold",
-                idle_seconds = idle,
-                threshold = self.config.idle_threshold_seconds,
-                "DreamDaemon tick: skipped"
-            );
-            return Ok(());
-        }
-
         if self
             .is_running
             .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
@@ -953,7 +915,7 @@ impl DreamDaemon {
             .await?;
 
         // rust-doctor-disable-next-line excessive-clone
-        let run_future = self.run_dream(run_start, run_date.clone(), false);
+        let run_future = self.run_dream(run_start, run_date.clone());
         let run_result = tokio::time::timeout(
             Duration::from_secs(u64::from(self.config.max_duration_seconds)),
             run_future,
@@ -968,12 +930,7 @@ impl DreamDaemon {
                     notes_consolidated = outcome.report.notes_consolidated,
                     synthesis_count = outcome.report.synthesis_count,
                     notes_archived = outcome.report.notes_archived,
-                    "DreamDaemon {}",
-                    if outcome.status == DreamRunStatus::Cancelled {
-                        "cancelled"
-                    } else {
-                        "completed"
-                    }
+                    "DreamDaemon completed"
                 );
 
                 if let Err(e) = self
@@ -1038,7 +995,6 @@ impl DreamDaemon {
         &self,
         run_start: i64,
         _run_date: String,
-        force: bool,
     ) -> Result<DreamCycleOutcome, AlephError> {
         // --- Phase 0: Resolve note memory dir + load the note index ---
         // rust-doctor-disable-next-line excessive-clone
@@ -1119,14 +1075,6 @@ impl DreamDaemon {
                 indexer = indexer.with_embedder(embedder.clone());
                 let notes: Vec<NoteEntry> =
                     note_index.iter().map(NoteEntry::from_index_entry).collect();
-                // Scheduled cycles yield to fresh user activity; forced cycles
-                // (run_now / E2E harness) run to completion.
-                let activity_checker: Arc<dyn Fn() -> bool + Send + Sync> = if force {
-                    Arc::new(|| false)
-                } else {
-                    let threshold = i64::from(self.config.idle_threshold_seconds);
-                    Arc::new(move || idle_seconds() < threshold)
-                };
                 let ctx = DreamContext {
                     notes,
                     note_contents: HashMap::new(),
@@ -1144,8 +1092,6 @@ impl DreamDaemon {
                         ..Default::default()
                     },
                     pipeline_type: strategy.to_string(),
-                    // rust-doctor-disable-next-line excessive-clone
-                    activity_checker: activity_checker.clone(),
                     strategy,
                     // rust-doctor-disable-next-line excessive-clone
                     orientation: self.orientation.clone(),
@@ -1183,17 +1129,14 @@ impl DreamDaemon {
                         config: &self.config,
                         decay_policy: &self.decay_policy,
                         orientation: &self.orientation,
-                        activity_checker: &activity_checker,
                     };
                     for ns in &scoped {
                         match project_cycle::run_namespace_cycle(&deps, ns).await {
                             Ok(outcome) => {
                                 let r = &outcome.report;
-                                let interrupted = r.status == DreamReportStatus::Interrupted;
                                 info!(
                                     agent = %ns,
                                     stages = ?r.stages_executed,
-                                    interrupted,
                                     "project namespace dream complete"
                                 );
                                 // The audit row the operator reads. Its absence
@@ -1203,17 +1146,7 @@ impl DreamDaemon {
                                 // else. Same writer as the base cycle, so the
                                 // two can't drift; the sub-cycle's own clock,
                                 // because it is its own run.
-                                if !r.is_vacuous_interruption() {
-                                    self.persist_run_row(&outcome, ns, r.started_at, r.duration_ms);
-                                }
-                                // The activity checker fired: the user is back.
-                                // Walking the remaining namespaces would only
-                                // produce a burst of cycles that interrupt at
-                                // their first stage — stop, because stopping is
-                                // what yielding means.
-                                if interrupted {
-                                    break;
-                                }
+                                self.persist_run_row(&outcome, ns, r.started_at, r.duration_ms);
                             }
                             Err(e) => warn!(
                                 agent = %ns,
@@ -1226,12 +1159,7 @@ impl DreamDaemon {
 
                 report.finished_at = now_timestamp();
                 report.duration_ms = ((report.finished_at - run_start).max(0) as u64) * 1000;
-                let status = if report.status == DreamReportStatus::Interrupted {
-                    DreamRunStatus::Cancelled
-                } else {
-                    DreamRunStatus::Success
-                };
-                (report, status)
+                (report, DreamRunStatus::Success)
             }
             _ => {
                 // Consolidation needs both an AI provider and an embedder
@@ -1649,8 +1577,8 @@ mod tests {
         ));
     }
 
-    /// `cancelled` is the one status that earns a retry: the cycle yielded to
-    /// fresh user activity and never got to do its work.
+    /// `cancelled` is the one status that earns a retry — a legacy row from a
+    /// pre-idle-cut cycle that yielded to user activity before doing any work.
     #[test]
     fn retries_when_todays_run_was_cancelled_by_user_activity() {
         assert!(!should_skip_scheduled_run(
@@ -2161,7 +2089,7 @@ mod tests {
         let daemon = test_daemon(store, temp.clone());
 
         let outcome = daemon
-            .run_dream(now_timestamp(), "2026-05-21".to_string(), true)
+            .run_dream(now_timestamp(), "2026-05-21".to_string())
             .await
             .expect("run_dream succeeds");
         let report = &outcome.report;
@@ -2251,7 +2179,7 @@ mod tests {
         // conserve rather than starting from a blank gate.
         let daemon = test_daemon(store, temp.clone());
         let outcome = daemon
-            .run_dream(now_timestamp(), "2026-05-21".to_string(), true)
+            .run_dream(now_timestamp(), "2026-05-21".to_string())
             .await
             .expect("run_dream succeeds");
 
@@ -2312,7 +2240,7 @@ mod tests {
             .with_note_memory_dir(temp.clone());
 
         let outcome = daemon
-            .run_dream(now_timestamp(), "2026-05-21".to_string(), true)
+            .run_dream(now_timestamp(), "2026-05-21".to_string())
             .await
             .expect("run_dream succeeds without a provider");
 
@@ -2333,13 +2261,10 @@ mod tests {
         embedder: Arc<dyn EmbeddingProvider>,
         cfg: MemoryConfig,
         orientation: Option<Arc<dyn crate::memory::notes::orientation::NoteOrientation>>,
-        activity: Arc<dyn Fn() -> bool + Send + Sync>,
     }
 
     impl ProjectFixture {
-        /// `user_active` drives the activity checker: `true` makes every stage
-        /// yield, which is how an interrupted cycle is forced deterministically.
-        fn new(tag: &str, user_active: bool) -> Self {
+        fn new(tag: &str) -> Self {
             let dir = std::env::temp_dir().join(format!("aleph_{tag}_{}", uuid::Uuid::new_v4()));
             std::fs::create_dir_all(&dir).unwrap();
             let store = Arc::new(SqliteMemoryBackend::new(&dir).unwrap());
@@ -2350,7 +2275,6 @@ mod tests {
                 embedder: Arc::new(StubEmbedder),
                 cfg: MemoryConfig::default(),
                 orientation: None,
-                activity: Arc::new(move || user_active),
             }
         }
 
@@ -2363,7 +2287,6 @@ mod tests {
                 config: &self.cfg.dreaming,
                 decay_policy: &self.cfg.memory_decay,
                 orientation: &self.orientation,
-                activity_checker: &self.activity,
             }
         }
 
@@ -2384,7 +2307,7 @@ mod tests {
     /// notes it does not own.
     #[tokio::test]
     async fn project_namespace_cycle_writes_only_its_own_event_log() {
-        let fx = ProjectFixture::new("dream_proj_log", false);
+        let fx = ProjectFixture::new("dream_proj_log");
         let ns = format!("{DEFAULT_AGENT_ID}__proj-abc123");
 
         project_cycle::run_namespace_cycle(&fx.deps(), &ns)
@@ -2417,7 +2340,7 @@ mod tests {
     /// that a once-a-day cycle almost always straddles.
     #[tokio::test]
     async fn project_namespace_gate_folds_its_own_history() {
-        let fx = ProjectFixture::new("dream_proj_gate", false);
+        let fx = ProjectFixture::new("dream_proj_gate");
         let ns = format!("{DEFAULT_AGENT_ID}__proj-degraded");
         let log = EventLog::new(fx.dir.join(&ns));
 
@@ -2485,36 +2408,6 @@ mod tests {
         );
     }
 
-    /// A sub-cycle that yielded before running a single stage records nothing.
-    ///
-    /// The gate window is only a few cycles deep. An evening where the user
-    /// stays active would otherwise append one empty event per namespace and
-    /// push real churn history out of range — disarming the detectors exactly
-    /// when the corpus is being touched most.
-    #[tokio::test]
-    async fn an_immediately_interrupted_project_cycle_spends_no_window_slot() {
-        let fx = ProjectFixture::new("dream_proj_intr", true);
-        let ns = format!("{DEFAULT_AGENT_ID}__proj-busy");
-
-        let outcome = project_cycle::run_namespace_cycle(&fx.deps(), &ns)
-            .await
-            .expect("an interrupted sub-cycle is not an error");
-
-        assert_eq!(outcome.report.status, DreamReportStatus::Interrupted);
-        assert!(outcome.report.stages_executed.is_empty(), "nothing ran");
-        assert!(
-            !fx.event_log_path(&ns).exists(),
-            "an empty night must not consume one of the gate's window slots"
-        );
-        // The same predicate the caller reads before writing an audit row: the
-        // two skips have to agree, and a row with no matching event (or the
-        // reverse) is silent.
-        assert!(
-            outcome.report.is_vacuous_interruption(),
-            "the caller decides whether to persist by reading this"
-        );
-    }
-
     /// The sub-cycle hands its decision back, which is what makes a project
     /// corpus's history writable to the audit table at all.
     ///
@@ -2525,7 +2418,7 @@ mod tests {
     /// nothing to write.
     #[tokio::test]
     async fn a_project_sub_cycle_returns_its_decision() {
-        let fx = ProjectFixture::new("dream_proj_decision", false);
+        let fx = ProjectFixture::new("dream_proj_decision");
         let ns = format!("{DEFAULT_AGENT_ID}__proj-decide");
 
         let outcome = project_cycle::run_namespace_cycle(&fx.deps(), &ns)
@@ -2575,7 +2468,7 @@ mod tests {
             .with_note_memory_dir(dir.clone());
 
         daemon
-            .run_dream(now_timestamp(), "2026-08-04".to_string(), true)
+            .run_dream(now_timestamp(), "2026-08-04".to_string())
             .await
             .expect("run_dream succeeds");
 

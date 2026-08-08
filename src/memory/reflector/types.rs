@@ -31,8 +31,6 @@ pub struct ReflectOpts {
     pub namespace: NamespaceScope,
     /// Optional token budget override for assembler.
     pub max_tokens: Option<usize>,
-    /// Optional time filter (unix seconds, inclusive) — reserved for internal callers.
-    pub time_range: Option<(i64, i64)>,
     /// Optional session id — threaded into `recall_signals`.
     pub session_id: Option<String>,
 }
@@ -43,7 +41,6 @@ impl ReflectOpts {
             agent_id: agent_id.into(),
             namespace: NamespaceScope::Owner,
             max_tokens: None,
-            time_range: None,
             session_id: None,
         }
     }
@@ -74,7 +71,6 @@ mod tests {
         assert_eq!(o.agent_id, "a1");
         assert!(matches!(o.namespace, NamespaceScope::Owner));
         assert!(o.max_tokens.is_none());
-        assert!(o.time_range.is_none());
         assert!(o.session_id.is_none());
     }
 }

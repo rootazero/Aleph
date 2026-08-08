@@ -430,6 +430,12 @@ fn candidate_to_item(c: &Candidate) -> EnvelopeItem {
     }
 }
 
+impl WorkingMemoryAssembler for HybridAssembler {
+    fn render_style(&self) -> super::render::RenderStyle {
+        self.config.render_style
+    }
+}
+
 fn hydrate(slots: &mut [EnvelopeSlot]) {
     for slot in slots.iter_mut() {
         let mut used = 0u32;

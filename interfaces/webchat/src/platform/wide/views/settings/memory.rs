@@ -355,24 +355,6 @@ fn DreamingSettings(config: RwSignal<Option<MemoryConfig>>) -> impl IntoView {
                     <label class="font-medium">{t!(i18n, settings.memory.enable_dreaming)}</label>
                 </div>
 
-                <div>
-                    <label class="block text-sm font-medium mb-1">{t!(i18n, settings.memory.idle_threshold_seconds)}</label>
-                    <input
-                        type="number"
-                        prop:value=move || config.get().map(|c| c.dreaming.idle_threshold_seconds).unwrap_or(900)
-                        on:input=move |ev| {
-                            if let Some(mut cfg) = config.get() {
-                                if let Ok(val) = event_target_value(&ev).parse() {
-                                    cfg.dreaming.idle_threshold_seconds = val;
-                                    config.set(Some(cfg));
-                                }
-                            }
-                        }
-                        class="w-full px-3 py-2 border border-border rounded bg-surface-raised"
-                    />
-                    <p class="text-xs text-text-tertiary mt-1">{t!(i18n, settings.memory.idle_threshold_hint)}</p>
-                </div>
-
                 <div class="grid grid-cols-2 gap-4">
                     <div>
                         <label class="block text-sm font-medium mb-1">{t!(i18n, settings.memory.window_start)}</label>

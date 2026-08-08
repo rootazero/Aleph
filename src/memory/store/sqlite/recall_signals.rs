@@ -292,6 +292,11 @@ impl SqliteMemoryBackend {
     /// Delete recall signals older than `retention_days`.
     ///
     /// Returns the number of deleted rows.
+    ///
+    /// TODO: this cleanup is currently never invoked — `recall_signals` grows
+    /// unbounded. Wiring it into a production schedule (dream cycle or flush)
+    /// was deliberately deferred: the table is small today and the right
+    /// retention cadence is a product call, not a wire.
     pub fn cleanup_old_signals(&self, retention_days: u32) -> Result<usize, AlephError> {
         let conn = self
             .conn

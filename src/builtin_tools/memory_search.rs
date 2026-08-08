@@ -19,7 +19,7 @@ use crate::memory::store::raw_memory::RawMemoryStore;
 use crate::memory::store::MemoryBackend;
 use crate::memory::{
     ComptrollerConfig, ContextComptroller, EmbeddingProvider, SqliteMemoryBackend, TokenBudget,
-    TranscriptIndexer, DEFAULT_AGENT,
+    DEFAULT_AGENT,
 };
 use crate::tools::AlephTool;
 
@@ -226,13 +226,10 @@ impl MemorySearchTool {
         let comptroller_config = ComptrollerConfig::default();
         let comptroller = Arc::new(ContextComptroller::new(comptroller_config));
 
-        let indexer = Arc::new(TranscriptIndexer::new(database.clone(), embedder.clone()));
-
         Self {
             database,
             note_retrieval,
             comptroller,
-            _indexer: indexer,
             default_workspace: Arc::new(RwLock::new(DEFAULT_AGENT.to_string())),
             default_session_key: Arc::new(RwLock::new(String::new())),
             smart_recall_config: Arc::new(RwLock::new(std::collections::HashMap::new())),
@@ -655,7 +652,6 @@ impl Clone for MemorySearchTool {
             database: self.database.clone(),
             note_retrieval: self.note_retrieval.clone(),
             comptroller: self.comptroller.clone(),
-            _indexer: self._indexer.clone(),
             default_workspace: self.default_workspace.clone(),
             default_session_key: self.default_session_key.clone(),
             smart_recall_config: self.smart_recall_config.clone(),

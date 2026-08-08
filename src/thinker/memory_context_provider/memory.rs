@@ -1,7 +1,7 @@
 use super::MemoryContextProvider;
 use crate::config::types::memory::MemoryInjectionMode;
 use crate::memory::assembler::context_block::wrap_memory_context;
-use crate::memory::assembler::render::{render_with, RenderStyle};
+use crate::memory::assembler::render::render_with;
 use crate::memory::assembler::AssemblyBudget;
 use crate::providers::message::UnifiedMessage;
 
@@ -112,7 +112,7 @@ impl MemoryContextProvider {
             tracing::warn!("memory extensions on_retrieve pipeline failed: {e}");
         }
 
-        let rendered = render_with(&envelope, RenderStyle::Xml);
+        let rendered = render_with(&envelope, self.assembler.render_style());
         if rendered.trim().is_empty() {
             return Ok(None);
         }
