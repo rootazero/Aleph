@@ -54,6 +54,10 @@ pub fn render_tool_block(
             let dur = format_duration(&tool.duration);
             (format!("{dur} \u{2717}"), DEFAULT_THEME.tool_failed) // ✗
         }
+        ToolStatus::Unknown => {
+            let dur = format_duration(&tool.duration);
+            (format!("{dur} \u{2013}"), DEFAULT_THEME.muted) // –
+        }
     };
 
     let border_style = Style::default().fg(border_color);

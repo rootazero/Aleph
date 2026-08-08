@@ -293,6 +293,31 @@ impl ProcessRegistry {
         }
     }
 
+    /// Abort every running entry the registry still tracks and return the
+    /// count of processes that were signalled. Idempotent: a second call is
+    /// cheap because the registry has already flipped each entry to
+    /// `Killed` / evicted it. Wired by `BashExecTool`'s daemon-shutdown
+    /// hook (`kill_all_running_background`) so background bash / build
+    /// jobs do not outlive the core on `daemon.shutdown` / `SIGTERM` —
+    /// `tokio::process::Child::kill_on_drop` is best-effort when the
+    /// runtime itself is shutting down, so the registry has to be the
+    /// authoritative reaper.
+    pub fn shutdown(&self) -> usize {
+        let mut procs = self.lock();
+        let mut killed = 0usize;
+        for entry in procs.values_mut() {
+            if matches!(entry.state, ProcState::Running) {
+                entry.abort.abort();
+                entry.state = ProcState::Killed;
+                killed += 1;
+            }
+        }
+        if killed > 0 {
+            self.completion.notify_waiters();
+        }
+        killed
+    }
+
     /// Enumerate this caller's processes, newest first.
     pub fn list(&self, caller: Option<&str>) -> Vec<ProcSummary> {
         let procs = self.lock();
@@ -589,5 +614,33 @@ mod tests {
             reg.wait(id, None, Duration::from_secs(5)).await,
             WaitOutcome::Killed
         ));
+    }
+
+    /// `shutdown` is the daemon-shutdown hook: it must abort every running
+    /// entry, leave finished entries alone, and be safely callable twice
+    /// (a graceful shutdown followed by `std::process::exit` re-entry, or
+    /// a panic on the shutdown path). The `AbortHandle::abort` is a
+    /// best-effort signal — the test asserts only the registry-side state,
+    /// not that the detached task has actually reaped its child (covered
+    /// by the platform drivers' `kill_on_drop`).
+    #[tokio::test]
+    async fn shutdown_aborts_running_but_spares_finished() {
+        let reg = ProcessRegistry::new();
+        let running = unwrap_id(reg.register_running("sleep 9", None, live_handle().await));
+        let finished = unwrap_id(reg.register_running("true", None, live_handle().await));
+        reg.complete(finished, dummy_output(0, ""));
+        let n = reg.shutdown();
+        assert_eq!(n, 1, "exactly one running entry aborted");
+        assert!(matches!(reg.poll(running, None), PollOutcome::Killed));
+        assert!(matches!(reg.poll(finished, None), PollOutcome::Done(_)));
+    }
+
+    #[tokio::test]
+    async fn shutdown_is_idempotent() {
+        let reg = ProcessRegistry::new();
+        unwrap_id(reg.register_running("sleep 9", None, live_handle().await));
+        assert_eq!(reg.shutdown(), 1);
+        // Second call: nothing running, no abort, returns 0.
+        assert_eq!(reg.shutdown(), 0);
     }
 }

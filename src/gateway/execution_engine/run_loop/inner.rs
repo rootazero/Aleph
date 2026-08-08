@@ -580,6 +580,29 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
             .map(String::as_str)
             == Some("true");
 
+        // Unattended security tax, emitter leg. `UnattendedRedactingSink` below
+        // covers the TraceSink leg only — persistence, the scratchpad channel
+        // push, the `agent_trace` WS mirror. Everything a run emits as
+        // `ResponseChunk` / `ToolStart` / `ToolEnd` / `RunComplete` leaves down
+        // THIS leg instead, and `OriginFanoutEmitter` hands
+        // `summary.final_response` straight to the bound channel with only
+        // `sanitize_final_response` (a `<think>` stripper, not a masker) in the
+        // way. So the same final text used to be masked on the trace leg and
+        // delivered in the clear to Telegram in the same run.
+        //
+        // Shadowing here, before every downstream use, is the point: wrapping
+        // at one of the two hand-off sites would leave the other unmasked, and
+        // the incoming `emitter` is already `OriginFanoutEmitter`-wrapped, so
+        // this lands OUTSIDE the fanout — masked bytes reach the channel too.
+        // Attended runs keep the original emitter and pay nothing.
+        let emitter: Arc<dyn EventEmitter> = if unattended {
+            Arc::new(crate::gateway::event_emitter::RedactingEmitter::new(
+                emitter,
+            ))
+        } else {
+            emitter
+        };
+
         // Routing context for HITL tools (sandbox escalation,
         // `requires_confirmation`, `ask_user`). Constant across retries.
         // Channel id / conversation id come from the inbound router's metadata;
@@ -943,7 +966,7 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
             let trace_sink: Arc<dyn crate::harness::TraceSink> =
                 Arc::new(super::super::AgentTraceEmitSink::new(
                     trace_sink,
-                    emitter.clone() as Arc<dyn crate::gateway::event_emitter::EventEmitter>,
+                    Arc::clone(&emitter),
                     run_id.to_string(),
                 ));
 
@@ -1359,7 +1382,7 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
             );
 
             let emitter_dyn: Arc<dyn crate::gateway::event_emitter::EventEmitter> =
-                emitter.clone() as Arc<dyn crate::gateway::event_emitter::EventEmitter>;
+                Arc::clone(&emitter);
 
             let dispatch_result = super::super::helpers::run_dispatch_and_drain_classified(
                 orchestrator,

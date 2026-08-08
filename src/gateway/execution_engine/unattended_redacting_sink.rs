@@ -10,7 +10,7 @@
 
 use std::sync::Arc;
 
-use crate::exec::masker::SecretMasker;
+use crate::exec::masker::{mask_json_strings, SecretMasker};
 use crate::harness::trace::LoopTraceEvent;
 use crate::harness::TraceSink;
 
@@ -32,41 +32,6 @@ impl UnattendedRedactingSink {
             inner,
             masker: SecretMasker::new(),
         }
-    }
-}
-
-/// Mask every string leaf of a JSON value in place; `true` when anything
-/// changed. Depth-first over arrays/objects — tool inputs and outputs are
-/// small structured payloads, and this runs only inside unattended runs.
-fn mask_json_strings(masker: &SecretMasker, value: &mut serde_json::Value) -> bool {
-    match value {
-        serde_json::Value::String(s) => {
-            let masked = masker.mask(s);
-            if masked == *s {
-                false
-            } else {
-                *s = masked;
-                true
-            }
-        }
-        // Plain loops on purpose: `.any(..)` (clippy's suggestion for the
-        // former fold) short-circuits on the first masked item and would
-        // leave every later secret unmasked. Masking must visit ALL items.
-        serde_json::Value::Array(items) => {
-            let mut changed = false;
-            for item in items.iter_mut() {
-                changed |= mask_json_strings(masker, item);
-            }
-            changed
-        }
-        serde_json::Value::Object(map) => {
-            let mut changed = false;
-            for item in map.values_mut() {
-                changed |= mask_json_strings(masker, item);
-            }
-            changed
-        }
-        _ => false,
     }
 }
 

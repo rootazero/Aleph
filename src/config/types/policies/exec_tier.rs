@@ -104,7 +104,20 @@ pub enum ExecTier {
     /// irreversible operations now stop for a human.
     #[default]
     Auto,
-    /// Nothing is asked. The command-policy hardline floor still applies.
+    /// The tier itself asks nothing. **Two floors survive it**, and neither is
+    /// reachable by any configuration:
+    ///
+    /// 1. the `[sandbox.command_policy]` hardline, and
+    /// 2. a tool's own `requires_confirmation` declaration
+    ///    (`CONFIRMATION_REQUIRED_TOOLS` + MCP `destructiveHint`), which
+    ///    `ScopedToolService::check_confirmation_gate` reads independently of
+    ///    the tier — so `vault_store`, `agent_delete`, `team_disband` and
+    ///    friends still raise a card here, and in an unattended run still
+    ///    fail closed.
+    ///
+    /// "Full" therefore means "the tier gates nothing", not "nothing is
+    /// gated". Both the variant doc and
+    /// [`ExecTier::approval_prompt_line`] used to claim the latter.
     Full,
 }
 
@@ -207,11 +220,13 @@ impl ExecTier {
                  writes, disbanding a team) pause for the user's confirmation."
             }
             Self::Full => {
-                "Approval mode: full — no tool call is gated; nothing pauses for \
-                 confirmation. You are the last line of defense: double-check destructive or \
-                 irreversible actions yourself before running them. (The command-policy \
-                 hardline floor — fork bombs, `rm -rf /`, device wipes — still blocks under \
-                 every mode.)"
+                "Approval mode: full — the tier gates nothing. You are the last line of \
+                 defense: double-check destructive or irreversible actions yourself before \
+                 running them. Two floors still apply under every mode: the command-policy \
+                 hardline (fork bombs, `rm -rf /`, device wipes), and the handful of tools \
+                 that declare their own confirmation gate (credential writes, deleting an \
+                 agent, disbanding a team, installing a skill) — those still pause for the \
+                 user."
             }
         }
     }

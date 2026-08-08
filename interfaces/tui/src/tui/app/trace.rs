@@ -93,6 +93,81 @@ impl AppState {
         }
     }
 
+    /// End-of-stream reconciliation against the run's authoritative terminal
+    /// record.
+    ///
+    /// The live tool rows are built from `agent_trace`, which the protocol
+    /// itself documents as a *deliberately lossy* mirror (bounded mpsc +
+    /// `try_send`, drop when full) — and says, in the same doc, that
+    /// `RunSummary.tool_summaries` exists precisely so consumers can reconcile
+    /// against it at `run_complete`. The TUI is the second consumer of that
+    /// mirror and had never been wired to the invariant, so one dropped frame
+    /// on a tool-heavy run left a row spinning ⟳ forever with no repair path.
+    ///
+    /// Rows absent from the live stream are reconstructed, not skipped: the
+    /// dropped frame may have been the *start*.
+    pub(super) fn reconcile_tools_from_summary(
+        &mut self,
+        summaries: &[aleph_protocol::events::ToolSummaryItem],
+        errors: &[aleph_protocol::events::ToolErrorItem],
+    ) {
+        if summaries.is_empty() {
+            return;
+        }
+        self.ensure_assistant_message();
+        for item in summaries {
+            let error_text = errors
+                .iter()
+                .find(|e| e.tool_id == item.tool_id)
+                .map(|e| e.error.clone());
+            let status = if item.success {
+                ToolStatus::Success
+            } else {
+                ToolStatus::Failed
+            };
+            let duration = Some(Duration::from_millis(item.duration_ms));
+            if let Some(tool) = self.find_tool_mut(&item.tool_id) {
+                tool.status = status;
+                tool.duration = duration;
+                tool.progress = None;
+                if tool.error.is_none() {
+                    tool.error = error_text;
+                }
+                continue;
+            }
+            if let ChatMessage::Assistant { tools, .. } = self.current_assistant_mut() {
+                tools.push(ToolExecution {
+                    id: item.tool_id.clone(),
+                    name: item.tool_name.clone(),
+                    params: String::new(),
+                    status,
+                    duration,
+                    progress: None,
+                    error: error_text,
+                });
+            }
+        }
+    }
+
+    /// Move every row still `Running` at run end to `Unknown`.
+    ///
+    /// Reached both after [`Self::reconcile_tools_from_summary`] (a row the
+    /// authoritative record does not mention either) and on `RunError`, which
+    /// carries no summary at all. Never guesses `Success`: the run is over, so
+    /// "still running" is the one thing the row cannot be.
+    pub(super) fn settle_orphan_tools(&mut self) {
+        for msg in &mut self.messages {
+            if let ChatMessage::Assistant { tools, .. } = msg {
+                for tool in tools.iter_mut() {
+                    if tool.status == ToolStatus::Running {
+                        tool.status = ToolStatus::Unknown;
+                        tool.progress = None;
+                    }
+                }
+            }
+        }
+    }
+
     pub(super) fn mark_current_assistant_complete(&mut self) {
         if let Some(ChatMessage::Assistant { is_streaming, .. }) = self
             .messages
@@ -125,7 +200,17 @@ impl AppState {
             // a trace/debug panel, not the primary chat content.
             AgentTraceEvent::TextEmitted { stream, text, .. } => match stream {
                 AgentTraceTextKind::Intermediate => self.append_reasoning_entry(text.clone()),
-                AgentTraceTextKind::Final => self.append_assistant_content(text),
+                // Append only what streaming has NOT already delivered for this
+                // turn. `text` is the turn's full text and the `ResponseChunk`
+                // deltas are its prefix, so on a streamed turn this is empty and
+                // on a non-streamed turn it is the whole thing. `.get()` (never
+                // `&text[..]`) keeps this UTF-8 safe if the counter is ever out
+                // of step: an out-of-range or non-boundary index yields None and
+                // we append nothing rather than panicking mid-render.
+                AgentTraceTextKind::Final => {
+                    let fresh = text.get(self.turn_streamed_len..).unwrap_or("");
+                    self.append_assistant_content(fresh);
+                }
             },
             // ToolSummary carries an agent-authored summary sentence — use it
             // verbatim instead of the "Tool summary: " decorated form.
@@ -172,6 +257,12 @@ impl AppState {
     }
 
     pub(super) fn apply_agent_trace_event(&mut self, event: &AgentTraceEvent) -> Action {
+        // New turn ⇒ a new `TextEmitted{Final}` payload is coming, so the
+        // streamed-prefix watermark restarts. Must run before the debug entry
+        // below, which is where the previous turn's final text was appended.
+        if matches!(event, AgentTraceEvent::TurnStarted { .. }) {
+            self.turn_streamed_len = 0;
+        }
         let presentation = Self::default_trace_presentation(event);
         if let Some(presentation) = &presentation {
             self.append_trace_debug_entry(event, presentation);

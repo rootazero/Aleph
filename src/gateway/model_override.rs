@@ -14,12 +14,32 @@
 //! request through the fallback chain. The raw variant lets the resolver
 //! pick a provider via its existing model-name heuristics.
 //!
-//! ### Sticky vs per-turn
+//! ### Sticky vs per-turn — and what "sticky" does NOT mean
 //!
-//! Both variants are **per-turn** overrides. The panel persists the user's
-//! latest pick to the session row (out-of-scope for this module); when a
-//! send arrives without an explicit override, the gateway falls back to the
-//! sticky session preference and finally to the agent's configured default.
+//! Both variants are **per-turn** overrides.
+//!
+//! ⚠️ This doc used to add "the panel persists the user's latest pick to the
+//! session row (out-of-scope for this module)". **No such persistence exists.**
+//! `sessions.model` records which model last *served* a run
+//! (`handlers/agent/helpers.rs`, from the run outcome) — it is not the user's
+//! choice and nothing reads it back during resolution. What resolution actually
+//! consults, in order, is: this per-turn override → the sticky value in
+//! `providers::session_model_handle` (a **process-global `OnceLock<RwLock<
+//! HashMap>>`**, written only by the `select_model` tool) → the agent default.
+//!
+//! So the model is the one session dial that does **not** survive a restart.
+//! `exec_tier` and `session_mode` both persist in
+//! `SessionMetadata.identity_meta.custom` and are restored through `SessionInfo`
+//! into the Panel pills; the model picker is a Leptos signal that resets on
+//! reload (`chat/state.rs` says so itself), and the server-side sticky map dies
+//! with the process. Picking `openai/gpt-5.6`, sending three messages and
+//! reloading silently reverts to the agent default.
+//!
+//! Making it persist means giving it the same carrier the other two dials use —
+//! a `turn_model.rs` twin of `turn_mode.rs` resolving request > session > global
+//! with stamp-on-carry, which would also retire that process-global map (P6).
+//! Not done here; this note exists so the next reader is not misled by a
+//! documented chain that was never built.
 
 use serde::{Deserialize, Serialize};
 

@@ -8,6 +8,7 @@ use tracing::{info, warn};
 use crate::config::agent_resolver::{initialize_agent_dir, initialize_agent_identity};
 use crate::config::types::agents_def::AgentDefinition;
 use crate::error::{AlephError, Result};
+use crate::thinker::identity_profile::AgentIdentityProfile;
 
 use super::{AgentManager, AgentPatch};
 
@@ -155,23 +156,13 @@ impl AgentManager {
 
     /// Try to read the agent's display name from workspace files.
     ///
-    /// Checks IDENTITY.md for `**Name:** value` first, then falls back to
-    /// the directory name.
+    /// Delegates to [`AgentIdentityProfile`], the single `IDENTITY.md` parser.
+    /// A bespoke `**Name:**` scan used to live here; it could not strip the
+    /// `_(edit to taste)_` asides the creation template writes and had no
+    /// placeholder guard, so a template value could be reconciled into config
+    /// as if the user had chosen it.
     fn read_agent_name_from_workspace(&self, ws_path: &std::path::Path) -> Option<String> {
-        // Try IDENTITY.md: look for "**Name:** <value>" pattern
-        let identity_path = ws_path.join("IDENTITY.md");
-        if let Ok(content) = fs::read_to_string(identity_path) {
-            for line in content.lines() {
-                let trimmed = line.trim().trim_start_matches("- ");
-                if let Some(rest) = trimmed.strip_prefix("**Name:**") {
-                    let name = rest.trim();
-                    if !name.is_empty() {
-                        return Some(name.to_string());
-                    }
-                }
-            }
-        }
-        None
+        AgentIdentityProfile::from_agent_dir(ws_path).name
     }
 
     /// Append an agent definition to the config file without creating workspace

@@ -1247,7 +1247,7 @@ impl InboundMessageRouter {
                 continue;
             }
             // Interpret number / label / free-text exactly like `ask_user`.
-            let request = meta.build_request(&task.id);
+            let request = meta.build_request();
             let result = crate::clarification::session::interpret_reply(&request, reply);
             let answer = result.value.unwrap_or_default();
             if let Err(e) = store
@@ -1377,7 +1377,6 @@ mod tests {
         let session_key = SessionKey::ephemeral("clarify-cb-test");
         let clarification = Arc::new(ClarificationManager::new());
         let request = ClarificationRequest::select(
-            "ask-cb",
             "Pick:",
             vec![
                 ClarificationOption::new("alpha", "Alpha"),
@@ -1486,7 +1485,7 @@ mod tests {
         let _rx = clarification
             .register(
                 session_key.to_string(),
-                ClarificationRequest::text("ask-malformed", "Pick one:", None),
+                ClarificationRequest::text("Pick one:"),
                 Duration::from_secs(60),
             )
             .await;
@@ -1563,7 +1562,7 @@ mod tests {
         let _rx = clarification
             .register(
                 session_key.to_string(),
-                ClarificationRequest::text("ask-slash", "Which file?", None),
+                ClarificationRequest::text("Which file?"),
                 Duration::from_secs(60),
             )
             .await;

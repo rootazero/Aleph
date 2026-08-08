@@ -2494,6 +2494,10 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
             // The resumed run's owner/scope comes off this store's persisted
             // session row — see `ResumeCoordinator::stamp_persisted_scope`.
             let sessions_for_resume = session_store_for_reconcile.clone();
+            // Live frames for the recovered run. Without a bus the resumed run
+            // is visibly running (the run registry broadcasts that) yet emits
+            // nothing and hands out no run_id, so no UI can follow or stop it.
+            let bus_for_resume = event_bus.clone();
             tokio::spawn(async move {
                 let rr = reconciler.reconcile_interrupted().await;
                 tracing::info!(
@@ -2520,6 +2524,7 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
                             exec_adapter,
                             registry,
                             sessions_for_resume,
+                            Some(bus_for_resume),
                         );
                         let report = coordinator.resume_interrupted_runs().await;
                         tracing::info!(

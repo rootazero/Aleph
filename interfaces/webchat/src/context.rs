@@ -13,7 +13,7 @@ use shared_ui_logic::connection::{
     classify, stage_for_connect_error, ConnectionError, ConnectionFailure, FailureStage,
     OriginLiveness,
 };
-use std::collections::HashMap;
+use std::collections::{BTreeSet, HashMap};
 use std::sync::Arc;
 use std::sync::Mutex;
 
@@ -296,6 +296,23 @@ enum Handshake {
     Failed(ConnectionFailure),
 }
 
+/// Topics every socket carries regardless of which components are mounted:
+/// live config pushes, the alert bell, and approval cards. They have no owning
+/// component to re-subscribe them, so they are seeded on every connect.
+const BASE_TOPICS: [&str; 3] = ["config.**", "alerts.**", "approval.**"];
+
+/// `BASE_TOPICS` ∪ ledger, deduplicated and ordered.
+///
+/// Pure so the "a reconnect must not narrow the socket" rule is testable on the
+/// host without a websocket.
+fn replay_set(ledger: &BTreeSet<String>) -> Vec<String> {
+    let mut all: BTreeSet<String> = ledger.clone();
+    for base in BASE_TOPICS {
+        all.insert(base.to_string());
+    }
+    all.into_iter().collect()
+}
+
 #[derive(Clone, Copy)]
 pub struct DashboardState {
     pub is_connected: RwSignal<bool>,
@@ -314,6 +331,25 @@ pub struct DashboardState {
 
     // Phase 3: Event handling
     event_handlers: StoredValue<Arc<Mutex<Vec<EventHandler>>>>,
+
+    /// Ledger of every topic pattern currently subscribed on behalf of this
+    /// client, maintained by `subscribe_topic` / `unsubscribe_topic` (the two
+    /// sole entry points).
+    ///
+    /// Subscriptions are **per-socket**: a reconnect opens a fresh `conn_id`
+    /// whose gateway-side filter starts empty, and an empty filter means
+    /// "receive everything" (`gateway/handlers/events.rs::should_receive`,
+    /// `None => true`). So the replay after a reconnect does not merely restore
+    /// — whatever it replays *narrows* the socket to exactly that set. Replaying
+    /// a hardcoded list therefore silently kills every topic not on it; that is
+    /// how `stream.*` / `team.*` used to die after the first reconnect while the
+    /// connection indicator stayed green (component subscriptions are
+    /// mount-only, and `ChatView` is never unmounted).
+    ///
+    /// The ledger is the single source for "what is this client subscribed to",
+    /// so a new subscription site can never again forget to register itself for
+    /// replay.
+    subscribed_topics: StoredValue<Arc<Mutex<BTreeSet<String>>>>,
 
     // Channel for stopping the message loop
     disconnect_tx: StoredValue<Option<oneshot::Sender<()>>>,
@@ -571,6 +607,7 @@ impl DashboardState {
             rpc_tx: StoredValue::new(None),
             next_id: StoredValue::new(Arc::new(Mutex::new(1))),
             event_handlers: StoredValue::new(Arc::new(Mutex::new(Vec::new()))),
+            subscribed_topics: StoredValue::new(Arc::new(Mutex::new(BTreeSet::new()))),
             disconnect_tx: StoredValue::new(None),
             alerts: RwSignal::new(HashMap::new()),
             alert_subscription_id: StoredValue::new(None),
@@ -701,7 +738,11 @@ impl DashboardState {
         }
     }
 
-    /// Subscribe to a specific event topic on the Gateway
+    /// Subscribe to a specific event topic on the Gateway.
+    ///
+    /// On success the pattern is filed in `subscribed_topics` so the next
+    /// reconnect replays it — see that field's doc for why a missing replay is
+    /// a silent kill rather than a missing restore.
     pub async fn subscribe_topic(&self, pattern: &str) -> Result<(), String> {
         self.rpc_call(
             "events.subscribe",
@@ -710,6 +751,11 @@ impl DashboardState {
             }),
         )
         .await?;
+        self.subscribed_topics.with_value(|set| {
+            set.lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .insert(pattern.to_string());
+        });
         Ok(())
     }
 
@@ -722,7 +768,22 @@ impl DashboardState {
             }),
         )
         .await?;
+        self.subscribed_topics.with_value(|set| {
+            set.lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .remove(pattern);
+        });
         Ok(())
+    }
+
+    /// Every topic pattern this socket must (re-)subscribe to after a connect.
+    fn topics_to_replay(&self) -> Vec<String> {
+        let ledger = self.subscribed_topics.with_value(|set| {
+            set.lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .clone()
+        });
+        replay_set(&ledger)
     }
 
     /// Make an RPC call to the gateway
@@ -1073,13 +1134,18 @@ impl DashboardState {
                         spawn_local(async move {
                             // Per-socket topic subscriptions must be re-established on
                             // every (re)connect: a reconnect opens a fresh conn_id whose
-                            // gateway filter starts empty, and subscribing config.** alone
-                            // would drop alerts.**/approval.** (bell + approval cards go
-                            // silent after the first reconnect). subscribe_topic is
-                            // idempotent on the gateway, so the one-time client-side
-                            // handlers stay registered.
-                            for topic in ["config.**", "alerts.**", "approval.**"] {
-                                if let Err(e) = state_for_subscribe.subscribe_topic(topic).await {
+                            // gateway filter starts empty. Replay the *ledger*, not a
+                            // literal list — an empty filter receives everything, so
+                            // whatever we replay here is also what we narrow the socket
+                            // down to. A hardcoded list silently kills every topic
+                            // subscribed by a component that has since mounted
+                            // (`stream.*`, `team.*`, `team.*.task.*`, artifacts…), and
+                            // those mount-only subscriptions never re-run because
+                            // `ChatView` is never unmounted. subscribe_topic is idempotent
+                            // on the gateway, so the one-time client-side handlers stay
+                            // registered.
+                            for topic in state_for_subscribe.topics_to_replay() {
+                                if let Err(e) = state_for_subscribe.subscribe_topic(&topic).await {
                                     web_sys::console::error_1(
                                         &format!("Failed to subscribe to {topic} events: {e}")
                                             .into(),
@@ -1480,9 +1546,60 @@ pub fn DashboardContext(children: Children) -> impl IntoView {
 #[cfg(test)]
 mod tests {
     use super::{
-        classify_credential, query_with_bootstrap_ticket, strip_params, ws_url_for,
-        SubmittedCredential,
+        classify_credential, query_with_bootstrap_ticket, replay_set, role_is_operator,
+        strip_params, ws_url_for, SubmittedCredential, BASE_TOPICS,
     };
+    use std::collections::BTreeSet;
+
+    fn ledger(patterns: &[&str]) -> BTreeSet<String> {
+        patterns.iter().map(|p| (*p).to_string()).collect()
+    }
+
+    /// The reconnect replay is also a *narrowing*: an empty gateway-side filter
+    /// receives every frame, so whatever we replay becomes the whole filter.
+    /// A component-owned topic missing from the replay is therefore killed, not
+    /// merely un-restored — this is what silently stopped `stream.*` after the
+    /// first reconnect while the connection indicator stayed green.
+    #[test]
+    fn a_reconnect_replays_component_topics_not_just_the_base_set() {
+        let replay = replay_set(&ledger(&[
+            "stream.*",
+            "team.*",
+            "team.*.task.*",
+            "config.**",
+        ]));
+        for topic in ["stream.*", "team.*", "team.*.task.*"] {
+            assert!(
+                replay.iter().any(|t| t == topic),
+                "{topic} must survive a reconnect; it has no component to re-subscribe it \
+                 (ChatView is never unmounted)"
+            );
+        }
+    }
+
+    /// The three app-level topics have no owning component, so they must be
+    /// seeded even on the very first connect when the ledger is still empty.
+    #[test]
+    fn the_base_set_is_replayed_even_with_an_empty_ledger() {
+        let replay = replay_set(&BTreeSet::new());
+        for base in BASE_TOPICS {
+            assert!(replay.iter().any(|t| t == base), "{base} must be seeded");
+        }
+    }
+
+    /// Unsubscribing removes the pattern from the ledger, so an unmounted
+    /// component's topic must not be resurrected by the next reconnect.
+    #[test]
+    fn an_unsubscribed_topic_is_not_replayed() {
+        let mut set = ledger(&["stream.*", "voice.transcribe.delta"]);
+        set.remove("voice.transcribe.delta");
+        let replay = replay_set(&set);
+        assert!(replay.iter().any(|t| t == "stream.*"));
+        assert!(
+            !replay.iter().any(|t| t == "voice.transcribe.delta"),
+            "an unsubscribed topic must stay unsubscribed across a reconnect"
+        );
+    }
 
     /// What `scrub_credentials_from_url` actually strips — both credential
     /// params, not just the legacy one.

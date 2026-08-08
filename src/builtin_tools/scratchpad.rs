@@ -140,15 +140,31 @@ impl PlanItemArg {
 ///
 /// Explicit statuses win; a bare-text item inherits the status of the item
 /// with the same (trimmed) text in `current`, else starts `pending`.
+///
+/// **Each existing item may be claimed at most once.** Repeated step texts are
+/// ordinary in a long run ("Run tests" appearing three times), and a plain
+/// `find` handed every one of them the *first* match's status. Re-sending
+/// `["Run tests" [x], "Fix bug" [ ], "Run tests" [ ]]` as bare text therefore
+/// promoted the third — never executed — step to `[x]`. That direction does not
+/// self-correct: it satisfies `is_objective_complete`, so `ScratchpadGoalVerifier`
+/// stops guarding and the run reports done with work outstanding. (The reverse
+/// failure — a re-worded step falling back to `pending` — is self-correcting:
+/// the model sees the demoted glyph in the very next echo.) Claiming positionally
+/// makes N same-text items map one-to-one in order.
 fn resolve_plan_items(args: &[PlanItemArg], current: &[PlanItem]) -> Vec<PlanItem> {
+    let mut claimed = vec![false; current.len()];
     args.iter()
         .map(|arg| {
             let text = arg.text().trim().to_string();
             let status = arg.explicit_status().unwrap_or_else(|| {
                 current
                     .iter()
-                    .find(|existing| existing.text == text)
-                    .map_or(PlanItemStatus::Pending, |existing| existing.status)
+                    .enumerate()
+                    .find(|(i, existing)| !claimed[*i] && existing.text == text)
+                    .map_or(PlanItemStatus::Pending, |(i, existing)| {
+                        claimed[i] = true;
+                        existing.status
+                    })
             });
             PlanItem { text, status }
         })
@@ -310,10 +326,11 @@ impl AlephTool for ScratchpadTool {
          items=[...] — a plan with no objective is not re-surfaced to you next \
          turn and does not hold the session open. \
          set_plan replaces the whole list: send every step each time. A step \
-         given as plain text keeps whatever status it already had, so adding or \
-         re-wording steps mid-run never resets your progress; send \
-         {text, status} to set a status explicitly. Exactly one step may be \
-         in_progress. \
+         resent with the SAME text keeps the status it already had, so inserting \
+         or reordering steps mid-run does not reset your progress. Re-wording a \
+         step makes it a new step (it starts pending), so when you change a \
+         step's wording send {text, status} to carry its status over. Exactly \
+         one step may be in_progress. \
          action='start_item' / 'complete_item' (0-based item_index) move a \
          single step and echo the updated list back to you. The scratchpad \
          persists across sessions. While an objective is set and plan items \
@@ -778,6 +795,74 @@ mod tests {
         let id = derive_default_project_id("..\\evil");
         assert!(
             !id.contains("..") && !id.contains('/') && !id.contains('\\') && !id.starts_with('.')
+        );
+    }
+
+    /// N steps with the same text must inherit one-to-one, in order.
+    ///
+    /// A plain `find` gave every repetition the FIRST match's status, so
+    /// re-sending `["Run tests" [x], "Fix bug" [ ], "Run tests" [ ]]` as bare
+    /// text promoted the third — never executed — step to `[x]`. That direction
+    /// does not self-correct: an all-done plan satisfies `is_objective_complete`,
+    /// so `ScratchpadGoalVerifier` stops guarding and the run reports success
+    /// with work outstanding. Repeated step texts are ordinary in a long run.
+    #[test]
+    fn duplicate_texts_inherit_positionally_not_all_from_the_first() {
+        let current = vec![
+            PlanItem {
+                text: "Run tests".into(),
+                status: PlanItemStatus::Done,
+            },
+            PlanItem {
+                text: "Fix bug".into(),
+                status: PlanItemStatus::Pending,
+            },
+            PlanItem {
+                text: "Run tests".into(),
+                status: PlanItemStatus::Pending,
+            },
+        ];
+        let args = vec![
+            PlanItemArg::Text("Run tests".into()),
+            PlanItemArg::Text("Fix bug".into()),
+            PlanItemArg::Text("Run tests".into()),
+        ];
+
+        let resolved = resolve_plan_items(&args, &current);
+        assert_eq!(resolved[0].status, PlanItemStatus::Done);
+        assert_eq!(resolved[1].status, PlanItemStatus::Pending);
+        assert_eq!(
+            resolved[2].status,
+            PlanItemStatus::Pending,
+            "a second 'Run tests' must not inherit the first one's [x] — that \
+             marks a never-executed step done and silently satisfies the stop \
+             guard"
+        );
+    }
+
+    /// Re-wording is a new step (pending). The tool DESCRIPTION must say so —
+    /// it used to promise "re-wording steps mid-run never resets your progress",
+    /// actively steering the model into the one action that loses status.
+    #[test]
+    fn a_reworded_step_starts_pending_and_the_description_says_so() {
+        let current = vec![PlanItem {
+            text: "Write migration".into(),
+            status: PlanItemStatus::InProgress,
+        }];
+        let args = vec![PlanItemArg::Text("Write migration (v2 schema)".into())];
+
+        let resolved = resolve_plan_items(&args, &current);
+        assert_eq!(resolved[0].status, PlanItemStatus::Pending);
+
+        let desc = ScratchpadTool::DESCRIPTION;
+        assert!(
+            !desc.contains("re-wording steps mid-run never resets"),
+            "the DESCRIPTION still promises behaviour the code does not have"
+        );
+        assert!(
+            desc.contains("Re-wording a step makes it a new step"),
+            "the DESCRIPTION must tell the model to send {{text, status}} when \
+             it rewords a step"
         );
     }
 }

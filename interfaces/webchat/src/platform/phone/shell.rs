@@ -154,6 +154,20 @@ mod tests {
         src.split("#[cfg").next().unwrap_or(src)
     }
 
+    /// `ios.css` with LF line endings.
+    ///
+    /// The needles below span a line break (`".phone-topbar {\n  position:"`,
+    /// `"\n}"`). A checkout with `core.autocrlf=true` — the Windows default —
+    /// hands `include_str!` a CRLF file, so those needles miss and the
+    /// `.expect` panics. That panic is not a contained failure here: the panic
+    /// handler is wasm-bindgen's, which aborts on a non-wasm target, so ONE
+    /// line-ending mismatch takes down the whole `aleph-panel --lib` binary and
+    /// no panel test can run on Windows at all. Normalize once; never search
+    /// raw `IOS_CSS` for anything containing a newline.
+    fn ios_css() -> String {
+        IOS_CSS.replace("\r\n", "\n")
+    }
+
     /// The top bar's layout must be a class, and the class must exist.
     ///
     /// Both halves, because either one alone is silently useless: a class with
@@ -198,7 +212,8 @@ mod tests {
     /// missing leaves height on the floor of a ~390 px-tall viewport.
     #[test]
     fn landscape_compresses_the_shell_chrome() {
-        let (_, landscape) = IOS_CSS
+        let css = ios_css();
+        let (_, landscape) = css
             .split_once("@media (orientation: landscape) and (max-height: 500px) {")
             .expect("the landscape block is gone");
         let block = landscape.split("\n}").next().unwrap_or("");
@@ -220,10 +235,11 @@ mod tests {
     /// shows it. Cheap to pin, invisible to lose.
     #[test]
     fn the_base_top_bar_rule_precedes_the_landscape_override() {
-        let base = IOS_CSS
+        let css = ios_css();
+        let base = css
             .find(".phone-topbar {\n  position: relative;")
             .expect("the base .phone-topbar rule is gone");
-        let media = IOS_CSS
+        let media = css
             .find("@media (orientation: landscape) and (max-height: 500px) {")
             .expect("the landscape block is gone");
         assert!(

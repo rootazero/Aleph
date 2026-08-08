@@ -10,6 +10,33 @@
 //! Root chains (`depth == 0`) intentionally emit nothing — the root agent
 //! is the default assumption and noise here would just bloat every prompt
 //! a top-level conversation produces.
+//!
+//! # Why there is no chain id in here
+//!
+//! The section used to end with ``- Chain id: `ch-…` (use this when reporting
+//! back to the parent).`` Both of R9's rules reject it:
+//!
+//! 1. It is not a runtime fact the model can act on — it asks the model to
+//!    perform an action the system gives it no interface for. `chain_id` has
+//!    exactly two consumers in the whole repo (`agents::runtime` uses it as a
+//!    transcript filename and to rebuild `parent_chain`); **no tool schema
+//!    accepts one**, and a subagent's structured output has no such field. It
+//!    does not even identify the child: `ChainContext::child` copies the
+//!    parent's id verbatim.
+//! 2. No single tool owns the sentence, so there is nothing to move it to.
+//!
+//! Deleting it was not about the ~45 bytes. A subagent is built through
+//! `AssemblyPath::Basic`, which produces one unsplit system string, and the
+//! Anthropic adapter puts its lone cache breakpoint over that whole block. A
+//! fresh `chain_id` per parent run therefore re-keyed the entire prefix, so
+//! every spawn re-paid `tools` (~82 KB of builtin descriptions alone) plus the
+//! full system prompt at the 1.25× cache-creation rate with `cache_read`
+//! pinned at zero, and OpenAI's `derive_prompt_cache_key` landed each spawn in
+//! a different backend bucket. It was the only per-spawn-varying byte on that
+//! path, so removing it is what makes repeated spawns of the same role share a
+//! warm prefix. The symptom was visible only on the bill.
+//!
+//! `prompt_contract::basic_path_prefix_is_stable_across_spawns` pins this.
 
 use crate::thinker::prompt_layer::{AssemblyPath, LayerInput, LayerStability, PromptLayer};
 use crate::thinker::prompt_mode::PromptMode;
@@ -65,10 +92,12 @@ impl PromptLayer for ChainContextLayer {
             "- You are running as a **sub-agent at depth {}** of an active delegation chain.\n",
             chain.depth
         ));
-        output.push_str(&format!(
-            "- Chain id: `{}` (use this when reporting back to the parent).\n",
-            chain.chain_id
-        ));
+        // NO chain id here. It told the model to "use this when reporting back
+        // to the parent" while no tool schema anywhere accepts a chain id, so
+        // the instruction was unexecutable — and it was also the ONLY
+        // per-spawn-varying byte on the whole Basic path, i.e. the single
+        // string that made every subagent request a cache miss. See the module
+        // doc.
         if remaining == 0 {
             output.push_str(
                 "- **Depth budget exhausted** — you cannot spawn further child agents. \
@@ -147,9 +176,43 @@ mod tests {
 
         assert!(out.contains("## Delegation Chain"));
         assert!(out.contains("depth 1"));
-        assert!(out.contains(&child.chain_id));
         // Default max_depth is 5; depth=1 should leave 4 remaining.
         assert!(out.contains("up to **4 more**"));
+    }
+
+    /// The rendered section must contain nothing that varies between two spawns
+    /// with the same shape.
+    ///
+    /// This layer is the only one on `AssemblyPath::Basic` that ever held a
+    /// per-spawn value, and Basic produces one unsplit system block under a
+    /// single cache breakpoint — so one varying byte here costs the whole
+    /// tools+system prefix, every spawn, with no error and no failing test.
+    /// Asserts byte equality rather than "does not contain the id" so a future
+    /// timestamp/uuid/counter is caught too.
+    #[test]
+    fn the_section_is_byte_identical_across_two_chains() {
+        let layer = ChainContextLayer;
+        let config = PromptConfig::default();
+        let a = ChainContext::new().child().unwrap();
+        let b = ChainContext::new().child().unwrap();
+        assert_ne!(a.chain_id, b.chain_id, "the two chains must really differ");
+
+        let mut out_a = String::new();
+        layer.inject(
+            &mut out_a,
+            &LayerInput::basic(&config, &[]).with_chain_context(&a),
+        );
+        let mut out_b = String::new();
+        layer.inject(
+            &mut out_b,
+            &LayerInput::basic(&config, &[]).with_chain_context(&b),
+        );
+
+        assert_eq!(
+            out_a, out_b,
+            "a per-spawn byte in this layer silently re-keys every subagent's \
+             prompt cache; the symptom shows up only on the bill"
+        );
     }
 
     #[test]
