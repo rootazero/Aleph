@@ -31,7 +31,7 @@ use commands::cli_args::{
     DaemonAction, GatewayAction, HeartbeatAction, HooksAction, IdentityAction, LogsAction,
     MarketplaceAction, McpAction, MemoryAction, PluginAction, ProvidersAction, ProxyAction,
     SandboxAction, SecretAction, ServicesAction, SessionAction, SkillsAction, ToolsAction,
-    TraceAction, WebhookAction, WorkspaceAction,
+    TraceAction, UsersAction, WebhookAction, WorkspaceAction,
 };
 
 /// Aleph CLI - Personal AI Assistant Client
@@ -169,6 +169,7 @@ async fn dispatch(
         Commands::Workspace { action } => {
             dispatch_workspace(server_url, config, action, json).await
         }
+        Commands::Users { action } => dispatch_users(server_url, config, action, json).await,
         Commands::Gateway { action } => dispatch_gateway(server_url, config, action, json).await,
         Commands::Logs { action } => dispatch_logs(server_url, config, action, json).await,
         Commands::Trace { action } => dispatch_trace(server_url, config, action, json).await,
@@ -794,6 +795,38 @@ async fn dispatch_workspace(
         }
         WorkspaceAction::Archive { name } => {
             workspace_cmd::archive(server_url, config, &name, json).await
+        }
+    }
+}
+
+async fn dispatch_users(
+    server_url: &str,
+    config: &CliConfig,
+    action: UsersAction,
+    json: bool,
+) -> CliResult<()> {
+    use commands::users_cmd;
+    match action {
+        UsersAction::List => users_cmd::list(server_url, config, json).await,
+        UsersAction::Create { display_name, role } => {
+            users_cmd::create(server_url, config, &display_name, role.as_deref(), json).await
+        }
+        UsersAction::Update {
+            user_id,
+            display_name,
+            role,
+            status,
+        } => {
+            users_cmd::update(
+                server_url,
+                config,
+                &user_id,
+                display_name.as_deref(),
+                role.as_deref(),
+                status.as_deref(),
+                json,
+            )
+            .await
         }
     }
 }

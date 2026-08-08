@@ -152,6 +152,12 @@ pub enum Commands {
         action: WorkspaceAction,
     },
 
+    /// User management — add people to this core and manage their roles
+    Users {
+        #[command(subcommand)]
+        action: UsersAction,
+    },
+
     /// Log management
     Logs {
         #[command(subcommand)]
@@ -851,6 +857,34 @@ pub enum WorkspaceAction {
     Archive {
         /// Workspace name to archive
         name: String,
+    },
+}
+
+#[derive(Subcommand)]
+pub enum UsersAction {
+    /// List every principal this core knows
+    List,
+    /// Create a principal (the server generates their id)
+    Create {
+        /// Display name — what the roster picker and message bylines show
+        display_name: String,
+        /// `member` (default) or `admin`
+        #[arg(long)]
+        role: Option<String>,
+    },
+    /// Rename a principal, change their role, or deactivate them
+    Update {
+        /// The `u-…` id from `aleph users list`
+        user_id: String,
+        /// New display name
+        #[arg(long = "name")]
+        display_name: Option<String>,
+        /// `member` or `admin` — applied to live connections without a reconnect
+        #[arg(long)]
+        role: Option<String>,
+        /// `active` or `deactivated` — deactivating revokes every device they hold
+        #[arg(long)]
+        status: Option<String>,
     },
 }
 
