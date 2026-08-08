@@ -1585,7 +1585,13 @@ async fn handle_connection(
                             // event filter (P1, spec §5.4). All four read the same
                             // ConnectionState under one lock — extend the tuple, don't
                             // take the lock twice.
-                            let (wall_ok, scope_allowed, channel_kind, event_caller_user) = {
+                            let (
+                                wall_ok,
+                                scope_allowed,
+                                channel_kind,
+                                event_caller_user,
+                                event_caller_role,
+                            ) = {
                                 let conns = ctx.connections.read().await;
                                 match conns.get(&conn_id) {
                                     Some(s) => (
@@ -1603,8 +1609,14 @@ async fn handle_connection(
                                         ctx.event_scope_guard.can_receive(topic, &s.permissions),
                                         s.channel_kind,
                                         s.caller_user.clone(),
+                                        // The 5th term reads the role too: a
+                                        // fleet-scoped frame has no owner to
+                                        // compare against, and the topic-prefix
+                                        // term above cannot tell it apart from
+                                        // its session-scoped siblings.
+                                        s.caller_role.clone(),
                                     ),
-                                    None => (false, false, None, None),
+                                    None => (false, false, None, None, String::new()),
                                 }
                             };
 
@@ -1639,10 +1651,11 @@ async fn handle_connection(
                                 && match ctx.session_store.as_ref() {
                                     Some(store) => {
                                         ctx.event_visibility
-                                            .event_admits(
+                                            .event_admits_for(
                                                 topic,
                                                 visibility_payload,
                                                 event_caller_user.as_deref(),
+                                                Some(event_caller_role.as_str()),
                                                 store,
                                                 ctx.team_store.as_ref(),
                                             )

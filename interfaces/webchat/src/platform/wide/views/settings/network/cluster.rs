@@ -76,6 +76,22 @@ fn fleet_error_label(err: &str) -> String {
     }
 }
 
+/// The same refusal on the WRITE face, which needs its own sentence.
+///
+/// Enrolling a node is not reading a topology, and until 2026-08-08 a failed
+/// enroll rendered [`fleet_error_label`]'s copy — telling the user the Panel
+/// could not read something they had not asked it to read. A refusal that
+/// describes the wrong operation is worse than a raw error string: the raw
+/// string is obviously machine text, while a fluent sentence about the wrong
+/// thing gets believed.
+fn enroll_error_label(err: &str) -> String {
+    if err.contains(ADMIN_REQUIRED_MESSAGE) {
+        "登记节点需要 operator 权限,当前连接的角色无法修改集群成员。".to_string()
+    } else {
+        err.to_string()
+    }
+}
+
 #[component]
 pub fn ClusterSection() -> impl IntoView {
     let state = expect_context::<DashboardState>();
@@ -336,7 +352,7 @@ pub fn ClusterSection() -> impl IntoView {
                                     .get()
                                     .map(|e| {
                                         view! {
-                                            <p class="text-sm text-error">{fleet_error_label(&e)}</p>
+                                            <p class="text-sm text-error">{enroll_error_label(&e)}</p>
                                         }
                                     })
                             }}

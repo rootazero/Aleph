@@ -53,6 +53,7 @@ use crate::context::DashboardState;
 use crate::i18n::{t, use_i18n};
 use leptos::prelude::*;
 use leptos_router::components::A;
+use shared_ui_logic::authz::Readable;
 
 /// Single step in the Quick Setup checklist.
 #[derive(Clone)]
@@ -69,44 +70,49 @@ pub fn Settings() -> impl IntoView {
     let i18n = use_i18n();
     let state = expect_context::<DashboardState>();
 
-    // Live status — None = not yet queried, Some(true) = done, Some(false) = pending.
-    let providers_ready = RwSignal::new(None::<bool>);
-    let generation_ready = RwSignal::new(None::<bool>);
-    let memory_ready = RwSignal::new(None::<bool>);
-    let moa_ready = RwSignal::new(None::<bool>);
+    // Live status. Three states, not two: a row that can only say "ready" or
+    // "pending" has no way to say "not yours to configure", so it says
+    // "pending" — which is how a member on a fully-configured server was told
+    // `PENDING Configure a chat provider` and invited into a page they cannot
+    // use. Every one of these families is admin-gated, so for a member the
+    // refusal IS the answer.
+    let providers_ready = RwSignal::new(Readable::<bool>::Unknown);
+    let generation_ready = RwSignal::new(Readable::<bool>::Unknown);
+    let memory_ready = RwSignal::new(Readable::<bool>::Unknown);
+    let moa_ready = RwSignal::new(Readable::<bool>::Unknown);
 
     Effect::new(move || {
         if !state.is_connected.get() {
-            providers_ready.set(None);
-            generation_ready.set(None);
-            memory_ready.set(None);
-            moa_ready.set(None);
+            providers_ready.set(Readable::Unknown);
+            generation_ready.set(Readable::Unknown);
+            memory_ready.set(Readable::Unknown);
+            moa_ready.set(Readable::Unknown);
             return;
         }
         leptos::task::spawn_local(async move {
             // Step 1 — at least one chat provider configured.
-            match ProvidersApi::list(&state).await {
-                Ok(list) => providers_ready.set(Some(!list.is_empty())),
-                Err(_) => providers_ready.set(Some(false)),
-            }
+            providers_ready.set(Readable::from_result(
+                ProvidersApi::list(&state).await.map(|l| !l.is_empty()),
+            ));
 
             // Step 2 — at least one generation provider configured.
-            match crate::api::generation_providers::GenerationProvidersApi::list(&state).await {
-                Ok(list) => generation_ready.set(Some(!list.is_empty())),
-                Err(_) => generation_ready.set(Some(false)),
-            }
+            generation_ready.set(Readable::from_result(
+                crate::api::generation_providers::GenerationProvidersApi::list(&state)
+                    .await
+                    .map(|l| !l.is_empty()),
+            ));
 
             // Step 3 — memory backend online (any stat row returns).
-            match MemoryApi::stats(&state, "main").await {
-                Ok(_) => memory_ready.set(Some(true)),
-                Err(_) => memory_ready.set(Some(false)),
-            }
+            memory_ready.set(Readable::from_result(
+                MemoryApi::stats(&state, "main").await.map(|_| true),
+            ));
 
             // Step 4 — at least one MoA preset configured (optional).
-            match crate::api::moa::MoaApi::list_presets(&state).await {
-                Ok(cfg) => moa_ready.set(Some(!cfg.presets.is_empty())),
-                Err(_) => moa_ready.set(Some(false)),
-            }
+            moa_ready.set(Readable::from_result(
+                crate::api::moa::MoaApi::list_presets(&state)
+                    .await
+                    .map(|cfg| !cfg.presets.is_empty()),
+            ));
         });
     });
 
@@ -156,14 +162,20 @@ pub fn Settings() -> impl IntoView {
                         {t!(i18n, settings.quick_start.title)}
                     </h2>
                     {move || {
-                        let done = [providers_ready.get(), generation_ready.get(), memory_ready.get(), moa_ready.get()]
-                            .iter()
-                            .filter(|s| **s == Some(true))
-                            .count();
-                        let total = 4usize;
+                        let statuses = [providers_ready.get(), generation_ready.get(), memory_ready.get(), moa_ready.get()];
+                        // A restricted row is not an unfinished one. Counting it
+                        // toward a denominator the reader cannot move is the
+                        // numeric form of the same lie the badge used to tell.
+                        let restricted = statuses.iter().filter(|s| s.is_restricted()).count();
+                        let done = statuses.iter().filter(|s| s.known() == Some(&true)).count();
+                        let total = statuses.len() - restricted;
                         view! {
                             <span class="text-xs font-mono text-text-tertiary">
-                                {format!("{done}/{total} ready")}
+                                {if restricted == statuses.len() {
+                                    "operator only".to_string()
+                                } else {
+                                    format!("{done}/{total} ready")
+                                }}
                             </span>
                         }
                     }}
@@ -239,11 +251,14 @@ pub fn Settings() -> impl IntoView {
 }
 
 #[component]
-fn SetupRow(step: SetupStep, status: Option<bool>) -> impl IntoView {
+fn SetupRow(step: SetupStep, status: Readable<bool>) -> impl IntoView {
     let (badge_class, badge_label) = match status {
-        Some(true) => ("bg-success/15 text-success", "Ready"),
-        Some(false) => ("bg-warning/15 text-warning", "Pending"),
-        None => ("bg-surface-sunken text-text-tertiary", "—"),
+        Readable::Known(true) => ("bg-success/15 text-success", "Ready"),
+        Readable::Known(false) => ("bg-warning/15 text-warning", "Pending"),
+        // The state that did not exist before 2026-08-08, and whose absence
+        // made this row assert a falsehood to every non-operator.
+        Readable::Restricted => ("bg-surface-sunken text-text-tertiary", "Operator"),
+        Readable::Unknown => ("bg-surface-sunken text-text-tertiary", "—"),
     };
     view! {
         <div class="flex items-center justify-between gap-4 p-5 bg-surface-raised border border-border rounded-xl hover:border-border-strong transition-colors">

@@ -229,15 +229,30 @@ const ADMIN_PREFIXES: &[&str] = &[
     // decision, and fail-closed-for-privilege is still this list's default
     // for anything not individually carved out. ---
     "tools.",
-    // --- Exec-tier approval resolution: a member resolving these is a
-    // privilege escalation over the approval gate itself. The delivery-side
-    // half is `event_scope.rs`: `approval.*` / `surface.approval` are guarded
-    // prefixes there, and a member no longer holds the `"*"` wildcard that
-    // short-circuits every rule (`event_scope::scope_for_role` — the wildcard
-    // is operator-only). Note the two halves are independent: that guard filters
-    // *delivery* of the cards, this list refuses the *resolution* RPCs, and
-    // neither implies the other. No carve-outs — ---
-    "exec.", // exec.approval.resolve, exec.approvals.pending.
+    // --- Exec configuration. The two APPROVAL methods are carved out below
+    // (2026-08-08); everything else in the family stays operator-only, so a
+    // future `exec.*` sibling is gated by default. ---
+    //
+    // The old comment here read: "a member resolving these is a privilege
+    // escalation over the approval gate itself", with "No carve-outs". Both
+    // halves of that were closed — this list refused the resolution RPCs and
+    // `event_scope.rs` refused delivery of the cards — and the note observed
+    // approvingly that "neither implies the other". Closing both is what made
+    // the gate structurally unusable for the person it gates: a member's run
+    // blocked on a confirmation they could neither see nor give, waited out the
+    // 120-second timeout, and the documented way to get work done was to send
+    // `exec_tier: "full"`. The safest tier was unusable and the least safe one
+    // was not — a permission system that pushes its users toward the wide
+    // setting has inverted its own purpose.
+    //
+    // What made a member resolving an approval an escalation was the ABSENCE of
+    // a predicate, not the verb. The handlers now filter by
+    // `visibility::session_visible_to`: a caller sees and answers exactly the
+    // approvals raised for sessions they can already see, which is strictly
+    // less than the run they are already permitted to start. Fleet approvals
+    // (empty `session_key`, raised by a cluster node over reverse RPC) remain
+    // operator-only on both faces.
+    "exec.", // exec.approval.resolve, exec.approvals.pending, exec config.
     // --- Persisted agent-trace replay (final-review round — C2). A trace is
     // a full transcript (prompts, tool inputs, tool outputs) keyed only by
     // `run_id`, with no owner recorded anywhere in the trace store, so this
@@ -273,6 +288,16 @@ const MEMBER_CARVE_OUTS: &[&str] = &[
     // session's own) — see `handlers/trace_replay.rs::handle_by_runs`. Its
     // siblings stay gated; this carve-out is as narrow as `tools.invoke`'s.
     "trace.by_runs",
+    // The approval gate's two faces, carved out 2026-08-08 so that the gate
+    // works for the person it gates. Both are filtered in
+    // `handlers/exec_approvals.rs` by the same visibility predicate the rest of
+    // the perimeter uses, and both are registered in `method_visibility`
+    // (ListFiltered / KeyChecked). This is the round's only carve-out that
+    // hands a member a WRITE verb, which is why the refusal shape is
+    // load-bearing: a foreign approval id gets the message a stale id already
+    // produces, so a refusal cannot be used to enumerate.
+    "exec.approvals.pending",
+    "exec.approval.resolve",
     // The Panel's cold-load seed for the sidebar running dot, and its usage
     // gauge. Admin-gating it (inherited from the `gateway.` family) meant both
     // were silently dead for every member — the RPC fallback that the
@@ -390,9 +415,10 @@ mod tests {
             "wizard.start",
             "diagnostics.run",
             "pty.spawn",
-            // exec approval (fix round — Finding 3)
-            "exec.approval.resolve",
-            "exec.approvals.pending",
+            // exec configuration stays admin-gated; the two APPROVAL methods
+            // moved to the member-reachable list on 2026-08-08 (see
+            // MEMBER_CARVE_OUTS) and are asserted there instead.
+            "exec.set_policy",
             // direct tool execution (final-review round — C2). `tools.invoke`
             // is carved open below (Task 9, P1 member hardening — the handler
             // now enforces the operator gate itself); the siblings are
@@ -474,6 +500,14 @@ mod tests {
             // siblings (`tools.catalog` etc., pinned in the admin table
             // above) are unaffected.
             "tools.invoke",
+            // The approval gate's two faces (2026-08-08). A member's own run
+            // blocks on a confirmation; if they cannot see it and cannot answer
+            // it, the run dies at the 120s timeout and the only way through is
+            // the widest tier — so leaving these closed did not restrict the
+            // member, it pushed them past the gate entirely. Filtered per
+            // caller in the handler, fleet approvals still operator-only.
+            "exec.approvals.pending",
+            "exec.approval.resolve",
             "agents.list",
             "agents.get",
             "heartbeat.list",

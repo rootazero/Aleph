@@ -27,7 +27,6 @@ impl EventScopeGuard {
     /// |--------|-------------------|
     /// | `pairing.` | admin, pairing |
     /// | `guest.` | admin, guest.manager |
-    /// | `approval.` | admin, exec.approver |
     /// | `surface.approval` | admin, exec.approver |
     /// | `config.changed` | admin, config.viewer |
     /// | `node.` | admin |
@@ -69,10 +68,19 @@ impl EventScopeGuard {
                     "guest.".to_string(),
                     vec!["admin".to_string(), "guest.manager".to_string()],
                 ),
-                (
-                    "approval.".to_string(),
-                    vec!["admin".to_string(), "exec.approver".to_string()],
-                ),
+                // `approval.` deliberately has NO rule here since 2026-08-08.
+                // This table keys on the topic PREFIX, and the approval family
+                // carries two different kinds of frame under one prefix: a
+                // tool-gate approval names the blocked session, a cluster-node
+                // approval names none. A prefix rule can only answer for both
+                // at once, and answering "operator" for both is what made a
+                // member's own approval gate invisible to them — their run then
+                // died at the 120s timeout with `exec_tier: "full"` as the only
+                // way through. The distinction is now drawn where the payload
+                // is visible: `event_visibility::session_identity_of` maps an
+                // empty `session_key` to `OperatorOnly` and a real one to
+                // `BySessionKey`. Do not re-add a rule here — it would
+                // re-close the member half without the fleet half noticing.
                 (
                     "surface.approval".to_string(),
                     vec!["admin".to_string(), "exec.approver".to_string()],
@@ -126,13 +134,20 @@ impl EventScopeGuard {
 /// [`default_rules`](EventScopeGuard::default_rules) are guarded, and every
 /// other topic — chat, session, `agent.run.*`, streaming deltas — passes for any
 /// connection regardless of permissions. So a member's daily surfaces are
-/// untouched, while the admin-guarded topics stop reaching him: `approval.*`
-/// (exec approval cards, **including the command text being approved**),
-/// `surface.approval`, `config.changed`, `pairing.*`, `guest.*` and `node.*`
-/// (cluster fleet topology — the live half of the admin-gated
-/// `environments.list`). Members used to be stamped `"*"`, which short-circuits
-/// every rule — the login wall admits them, so they were live connections
-/// receiving an admin's approval traffic.
+/// untouched, while the admin-guarded topics stop reaching him:
+/// `surface.approval` (the R5 banner), `config.changed`, `pairing.*`, `guest.*`,
+/// `node.*` (cluster fleet topology — the live half of the admin-gated
+/// `environments.list`) and `pty.*` (the operator's raw terminal bytes — the
+/// live half of the admin-gated `pty.` family). Members used to be stamped
+/// `"*"`, which short-circuits every rule — the login wall admits them, so they
+/// were live connections receiving an admin's approval traffic.
+///
+/// The three `approval.*` frames were on that list until 2026-08-08 and are
+/// deliberately no longer: they are gated per PAYLOAD in
+/// [`event_visibility`](crate::gateway::event_visibility), because the family
+/// carries both session-scoped and fleet-scoped frames under one prefix and a
+/// prefix table can only answer for both at once. Answering "operator" for both
+/// is what left a member unable to see the gate blocking their own run.
 #[must_use]
 pub fn scope_for_role(role: &str) -> Vec<String> {
     if role == "operator" {
@@ -174,31 +189,52 @@ mod tests {
         assert!(guard.can_receive("pairing.approved", &["pairing".to_string()]));
     }
 
+    /// The approval family's gate MOVED on 2026-08-08; it was not removed.
+    ///
+    /// This table keys on the topic prefix, and the family carries two kinds of
+    /// frame under one prefix — a tool-gate approval that names the blocked
+    /// session, and a cluster-node approval that names none. A prefix rule can
+    /// only answer for both at once, and answering "operator" for both is what
+    /// made a member's own gate invisible to them.
+    ///
+    /// So the assertion here is the inverse of what it used to be — this guard
+    /// no longer decides approvals — **and it is paired with the assertion that
+    /// somebody else now does**, so "moved" cannot silently decay into
+    /// "deleted". The real decision is pinned in `event_visibility.rs`
+    /// (`an_approval_is_scoped_by_its_session_and_fleet_approvals_are_operator_only`).
     #[test]
-    fn test_approval_events_require_permission() {
+    fn the_approval_family_is_gated_by_payload_not_by_this_prefix_table() {
         let guard = EventScopeGuard::default_rules();
 
-        // Topic names must be the ones a producer actually publishes —
-        // `events::frame` emits `approval.requested` / `approval.resolved` /
-        // `approval.expired`, which the `"approval."` prefix rule covers. This
-        // test previously asserted against `exec.approval.pending` /
-        // `exec.approval.result`, which no producer emits (the similar-looking
-        // `exec.approval.resolve` and `exec.approvals.pending` are RPC method
-        // names, not event topics). Those strings start with `exec.`, match no
-        // rule, and are therefore unguarded — so the test failed the moment the
-        // lib-test binary could build again. Guarding a fictional topic proves
-        // nothing; assert the real ones.
-        assert!(!guard.can_receive("approval.requested", &[]));
+        for topic in [
+            "approval.requested",
+            "approval.resolved",
+            "approval.expired",
+        ] {
+            assert!(
+                guard.can_receive(topic, &[]),
+                "{topic} must pass THIS term — the per-session decision it \
+                 needs is made where the payload is visible"
+            );
+        }
 
-        // Irrelevant permission — denied.
-        assert!(!guard.can_receive("approval.requested", &["viewer".to_string()]));
+        // …and the term that does decide is really wired: a fleet approval
+        // (empty session key) is operator-only, a session approval is not.
+        use crate::gateway::event_visibility::{session_identity_of, SessionIdentity};
+        assert_eq!(
+            session_identity_of(
+                "approval.requested",
+                Some(&serde_json::json!({"session_key": ""}))
+            ),
+            SessionIdentity::OperatorOnly,
+            "the gate moved to event_visibility — if this fails, approvals are \
+             gated NOWHERE, because the prefix rule above is gone"
+        );
 
-        // "exec.approver" — allowed.
-        assert!(guard.can_receive("approval.requested", &["exec.approver".to_string()]));
-
-        // "admin" — allowed.
-        assert!(guard.can_receive("approval.resolved", &["admin".to_string()]));
-        assert!(guard.can_receive("approval.expired", &["admin".to_string()]));
+        // The R5 banner keeps its prefix rule: different payload, different
+        // audience mechanism, not swept up by proximity.
+        assert!(!guard.can_receive("surface.approval", &[]));
+        assert!(guard.can_receive("surface.approval", &["admin".to_string()]));
     }
 
     #[test]
@@ -228,14 +264,15 @@ mod tests {
     }
 
     #[test]
-    fn chat_tier_excluded_from_approval_events() {
+    fn chat_tier_excluded_from_the_banner_and_the_admin_families() {
         let g = EventScopeGuard::default_rules();
         let chat = vec!["chat".to_string(), "read".to_string()];
         assert!(
-            !g.can_receive("approval.requested", &chat),
-            "chat tier must NOT see approval requests"
+            !g.can_receive("surface.approval", &chat),
+            "chat tier must NOT see the approval banner"
         );
-        assert!(!g.can_receive("approval.resolved", &chat));
+        assert!(!g.can_receive("config.changed", &chat));
+        assert!(!g.can_receive("pty.output", &chat));
         assert!(
             g.can_receive("agent.run.started", &chat),
             "unguarded topics still flow"
@@ -304,10 +341,10 @@ mod tests {
         assert!(member.is_empty(), "a member holds no event scopes");
 
         for topic in [
-            // Exec approval cards carry the command text being approved.
-            "approval.requested",
-            "approval.resolved",
-            "approval.expired",
+            // The R5 approval BANNER (not the three `approval.*` frames — see
+            // `the_approval_family_is_gated_by_payload_not_by_this_prefix_table`;
+            // those moved to a per-session decision so that a member can answer
+            // the gate blocking their own run).
             "surface.approval",
             "config.changed",
             "pairing.requested",
@@ -317,6 +354,10 @@ mod tests {
             // admin-gated `environments.list`.
             "node.connected",
             "node.disconnected",
+            // The operator's raw terminal bytes, the live half of the
+            // admin-gated `pty.*` RPC family.
+            "pty.output",
+            "pty.exit",
         ] {
             assert!(
                 !g.can_receive(topic, &member),

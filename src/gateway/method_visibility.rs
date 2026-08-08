@@ -566,6 +566,14 @@ pub const SCOPED_METHODS: &[(&str, Treatment)] = &[
     // predicate via `handlers::agent::caller_may_address_run`.
     ("agent.status", Treatment::KeyChecked),
     ("agent.cancel", Treatment::KeyChecked),
+    // The approval gate's two faces, member-reachable since 2026-08-08 and
+    // filtered by `visibility::session_visible` on each record's own
+    // `session_key`. A record with an EMPTY key is a fleet approval (raised by
+    // a cluster node over reverse RPC, owned by no session) and stays
+    // operator-only — the delivery-side twin of that rule is
+    // `SessionIdentity::OperatorOnly`.
+    ("exec.approvals.pending", Treatment::ListFiltered),
+    ("exec.approval.resolve", Treatment::KeyChecked),
     ("trace.by_runs", Treatment::KeyChecked),
     ("group_chat.list", Treatment::ListFiltered),
     ("group_chat.continue", Treatment::KeyChecked),

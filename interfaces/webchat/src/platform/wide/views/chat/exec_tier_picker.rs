@@ -12,9 +12,20 @@
 //! 3. Selecting a tier writes `SessionIdentityMeta.custom["exec_tier"]` through
 //!    the existing `sessions.patch` RPC — the same carrier as
 //!    `custom["project_root"]`. A session tier REPLACES the global tier for that
-//!    session (it can escalate as well as lower it) and takes effect on the next
-//!    tool call.
+//!    session and takes effect on the next tool call. It may escalate as well
+//!    as lower it **for an operator**; a non-operator's resolved tier is
+//!    clamped to the global one (`turn_permissions::resolve_exec_tier`), so a
+//!    member can only ever arm the gate further, never disarm it.
 //! 4. "Follow global" clears the override.
+//!
+//! Step 2's fetch is admin-gated, which for a member means REFUSED. That is a
+//! state this component renders (see `restricted`) rather than a warning it
+//! logs: an empty option list is indistinguishable from "this product has one
+//! choice", and saying nothing at all is how the member's only visible control
+//! over their own approval gate quietly disappeared. **Known gap:** the tier id
+//! CATALOG is still operator-only, so a member cannot pick a stricter tier from
+//! this pill even though the server would honour it — closing that needs a
+//! member-reachable catalog read, which is a wire change, not a copy fix.
 //!
 //! The trap: a brand-new conversation has no `session_key` yet, so there is
 //! nothing to patch — and the FIRST turn is the one the user armed the gate
@@ -33,6 +44,7 @@ use crate::components::exec_tier_labels::{tier_desc, tier_label, FULL_TIER};
 use crate::context::DashboardState;
 use crate::i18n::{t, t_string, use_i18n};
 use crate::views::chat::state::ChatState;
+use shared_ui_logic::authz::is_admin_required;
 
 #[component]
 #[must_use]
@@ -44,19 +56,36 @@ pub fn ExecTierPicker() -> impl IntoView {
     let open = RwSignal::new(false);
     let tiers: RwSignal<Vec<TierPreset>> = RwSignal::new(Vec::new());
     let global_tier = RwSignal::new(String::new());
+    // The server refused the catalog because this caller is not an operator —
+    // distinct from "the fetch has not happened yet", which is what an empty
+    // `tiers` used to mean for both.
+    let restricted = RwSignal::new(false);
     // Tier id currently armed for the "are you sure" second click (Full only).
     let confirming: RwSignal<Option<String>> = RwSignal::new(None);
 
     // The global tier + the selectable ids.
+    //
+    // `config.get_tool_permissions` is admin-gated, so for a member this call
+    // is REFUSED — and until 2026-08-08 the refusal was swallowed into a
+    // `console.warn`, leaving `tiers` empty and the popover showing a single
+    // "follow global" entry. The dial did not become unavailable, only
+    // invisible: the write paths (`sessions.patch` and `chat.send`'s
+    // `exec_tier`) are member-open, so the member kept the capability and lost
+    // the control. Now the refusal is a state the popover can render.
     let load = move || {
         spawn_local(async move {
             match ToolPermissionsApi::get_global(&dashboard).await {
                 Ok(cfg) => {
                     global_tier.set(cfg.exec_tier);
                     tiers.set(cfg.tiers);
+                    restricted.set(false);
                 }
                 Err(e) => {
-                    web_sys::console::warn_1(&format!("Failed to load exec tiers: {e}").into());
+                    if is_admin_required(&e) {
+                        restricted.set(true);
+                    } else {
+                        web_sys::console::warn_1(&format!("Failed to load exec tiers: {e}").into());
+                    }
                 }
             }
         });
@@ -198,6 +227,17 @@ pub fn ExecTierPicker() -> impl IntoView {
                             {move || tier_label(i18n, &global_tier.get())}
                         </span>
                     </button>
+
+                    // The refusal, said out loud. Before this the popover
+                    // simply rendered the row above and nothing else, which
+                    // reads as "there is only one choice" — a claim about the
+                    // product rather than about this caller's permissions.
+                    <Show when=move || restricted.get()>
+                        <p class="px-2.5 py-2 text-[11px] leading-relaxed text-text-tertiary">
+                            "执行档位由 operator 配置,当前角色读取不到可选档位清单。"
+                            "本会话跟随全局档位,且不会超过它。"
+                        </p>
+                    </Show>
 
                     <For
                         each=move || tiers.get()
