@@ -846,6 +846,14 @@ pub enum WorkspaceAction {
         #[arg(long)]
         include_archived: bool,
     },
+    /// Show one workspace in detail
+    ///
+    /// Archived workspaces are shown too — this is addressed by exact ID, and
+    /// the output says so on its Status line. `update` refuses them.
+    Get {
+        /// Workspace ID (the ID column of `workspace list`)
+        id: String,
+    },
     /// Create a new workspace
     Create {
         /// Workspace ID — the key `archive` addresses it by (URL-safe slug, e.g. "crypto")
@@ -857,6 +865,28 @@ pub enum WorkspaceAction {
         #[arg(long)]
         description: Option<String>,
         /// Optional emoji or icon identifier
+        #[arg(long)]
+        icon: Option<String>,
+    },
+    /// Change a workspace's name, description or icon
+    ///
+    /// Every field is a patch: the ones you omit are left alone, not cleared.
+    /// At least one is required — an update that changes nothing would print
+    /// "updated" and mean it, which is worse than an error.
+    ///
+    /// This is the only way to fix a display name after `create`, and archiving
+    /// is not an escape hatch: it is a soft delete, the ID stays taken, and an
+    /// archived workspace is read-only.
+    Update {
+        /// Workspace ID (the ID column of `workspace list`)
+        id: String,
+        /// New display name
+        #[arg(long)]
+        name: Option<String>,
+        /// New description
+        #[arg(long)]
+        description: Option<String>,
+        /// New emoji or icon identifier
         #[arg(long)]
         icon: Option<String>,
     },

@@ -8,9 +8,10 @@ use chrono::TimeZone;
 use serde_json::Value;
 
 use crate::output;
-use aleph_client::{AlephClient, CliConfig, CliResult};
+use aleph_client::{AlephClient, CliConfig, CliError, CliResult};
 use aleph_protocol::workspace::{
-    WorkspaceCreateParams, WorkspaceList, WorkspaceListParams, WorkspaceRef, WorkspaceRow,
+    WorkspaceCreateParams, WorkspaceDetail, WorkspaceEnvelope, WorkspaceList, WorkspaceListParams,
+    WorkspaceRef, WorkspaceRow, WorkspaceUpdateParams,
 };
 
 /// Columns of `aleph workspace list`.
@@ -75,6 +76,75 @@ where
         );
     }
     cells
+}
+
+/// Render one workspace as the labelled lines `aleph workspace get|update`
+/// prints.
+///
+/// This is the renderer [`WorkspaceDetail`]'s doc points at: every field of
+/// that struct appears below exactly once, which is the property that keeps a
+/// field from being added to the wire and then quietly displayed nowhere.
+///
+/// Timestamps take `tz` for the same reason [`row_cells`] does — a test that
+/// converted its expectation the way the code does would agree with a wrong
+/// offset as readily as a right one.
+fn detail_pairs<Tz: TimeZone>(workspace: &WorkspaceDetail, tz: &Tz) -> Vec<(&'static str, String)>
+where
+    Tz::Offset: std::fmt::Display,
+{
+    let stamp = |at: &chrono::DateTime<chrono::Utc>| {
+        at.with_timezone(tz).format("%Y-%m-%d %H:%M").to_string()
+    };
+    let or_dash = |value: &Option<String>| value.clone().unwrap_or_else(|| "-".to_string());
+
+    vec![
+        ("ID", workspace.id.clone()),
+        ("Name", workspace.name.clone()),
+        ("Description", or_dash(&workspace.description)),
+        ("Icon", or_dash(&workspace.icon)),
+        ("Profile", workspace.profile.clone()),
+        ("Created", stamp(&workspace.created_at)),
+        ("Last active", stamp(&workspace.last_active_at)),
+        (
+            "Status",
+            if workspace.is_archived {
+                "archived"
+            } else {
+                "active"
+            }
+            .to_string(),
+        ),
+    ]
+}
+
+/// Build the `workspace.update` params, refusing a patch that patches nothing.
+///
+/// A `workspace.update` carrying only an id is accepted by the server and
+/// changes nothing, so without this the CLI would report success for a command
+/// that did not happen — indistinguishable, to the person who mistyped
+/// `--nmae`, from a change that silently failed to stick. The check is here
+/// rather than in the handler because clap is where the omission is visible as
+/// an omission; the server cannot tell "no fields" from "a patch that happens
+/// to be empty".
+fn update_params(
+    id: &str,
+    name: Option<&str>,
+    description: Option<&str>,
+    icon: Option<&str>,
+) -> CliResult<WorkspaceUpdateParams> {
+    if name.is_none() && description.is_none() && icon.is_none() {
+        return Err(CliError::Other(format!(
+            "nothing to update for workspace '{id}': pass at least one of \
+             --name, --description, --icon"
+        )));
+    }
+
+    Ok(WorkspaceUpdateParams {
+        id: id.to_string(),
+        name: name.map(str::to_string),
+        description: description.map(str::to_string),
+        icon: icon.map(str::to_string),
+    })
 }
 
 /// Build the `workspace.create` params.
@@ -153,6 +223,69 @@ pub async fn create(
     }
 
     client.close().await?;
+    Ok(())
+}
+
+/// Show one workspace in detail.
+///
+/// Reaches archived workspaces too — the server answers this by exact id and
+/// reports `is_archived`, so the Status line says which it is. That is the
+/// half of "readable, not writable" this command owns; [`update`] owns the
+/// other.
+pub async fn get(server_url: &str, config: &CliConfig, id: &str, json: bool) -> CliResult<()> {
+    let (client, _events) = AlephClient::connect(server_url, config).await?;
+
+    let params = WorkspaceRef { id: id.to_string() };
+    let result: Value = client.call("workspace.get", Some(params)).await?;
+
+    render_detail(&result, json)?;
+
+    client.close().await?;
+    Ok(())
+}
+
+/// Change a workspace's name, description or icon.
+///
+/// Omitted fields are left alone rather than cleared (the server COALESCEs).
+/// An archived workspace is refused — `get` can still show it, but there is no
+/// unarchive verb, so the archive is where writes stop.
+pub async fn update(
+    server_url: &str,
+    config: &CliConfig,
+    id: &str,
+    name: Option<&str>,
+    description: Option<&str>,
+    icon: Option<&str>,
+    json: bool,
+) -> CliResult<()> {
+    // Before connecting: an empty patch is a mistake at the command line, and
+    // there is nothing for a round trip to add.
+    let params = update_params(id, name, description, icon)?;
+
+    let (client, _events) = AlephClient::connect(server_url, config).await?;
+    let result: Value = client.call("workspace.update", Some(params)).await?;
+
+    render_detail(&result, json)?;
+
+    client.close().await?;
+    Ok(())
+}
+
+/// Print a `workspace.get`/`workspace.update` envelope.
+///
+/// `--json` is a raw passthrough and must not be gated on this CLI being able
+/// to project the payload — same rule [`list`] follows, and the same reason: a
+/// shape the table cannot read is worth surfacing as an error rather than as a
+/// screen of dashes.
+fn render_detail(result: &Value, json: bool) -> CliResult<()> {
+    let pairs = if json {
+        Vec::new()
+    } else {
+        let envelope: WorkspaceEnvelope = serde_json::from_value(result.clone())?;
+        detail_pairs(&envelope.workspace, &chrono::Local)
+    };
+
+    output::print_detail(&pairs, json, result);
     Ok(())
 }
 
@@ -288,6 +421,130 @@ mod tests {
         assert_eq!(
             row_cells(&active, &chrono::Utc, true).last().unwrap(),
             "active"
+        );
+    }
+
+    /// The detail view's counterpart to
+    /// [`a_row_renders_every_column_from_a_real_response_body`]: driven by a
+    /// real `workspace.get` envelope, not by a `WorkspaceDetail` built next to
+    /// the assertion, so a field the server does not actually send shows up
+    /// here as a parse failure instead of as a plausible-looking line.
+    #[test]
+    fn a_detail_renders_every_field_from_a_real_response_body() {
+        let envelope: WorkspaceEnvelope = serde_json::from_value(serde_json::json!({
+            "workspace": {
+                "id": "crypto",
+                "profile": "trading",
+                "name": "Crypto Trading",
+                "description": "trading notes",
+                "icon": "\u{1F4B0}",
+                "created_at": "2026-08-08T09:30:00Z",
+                "last_active_at": "2026-08-08T11:45:00Z",
+                "cache_state": { "type": "none" },
+                "env_vars": {},
+                "allowed_tools": [],
+                "is_archived": false,
+            }
+        }))
+        .expect("a real workspace.get body must parse");
+
+        assert_eq!(
+            detail_pairs(&envelope.workspace, &chrono::Utc),
+            vec![
+                ("ID", "crypto".to_string()),
+                ("Name", "Crypto Trading".to_string()),
+                ("Description", "trading notes".to_string()),
+                ("Icon", "\u{1F4B0}".to_string()),
+                ("Profile", "trading".to_string()),
+                ("Created", "2026-08-08 09:30".to_string()),
+                ("Last active", "2026-08-08 11:45".to_string()),
+                ("Status", "active".to_string()),
+            ]
+        );
+    }
+
+    /// `workspace get` is the one view that can be about an archived
+    /// workspace, so its Status line has to be able to say both things — the
+    /// list's column earns its place only under `--include-archived`, this one
+    /// always.
+    #[test]
+    fn the_detail_status_line_says_which_state_the_workspace_is_in() {
+        let active = WorkspaceDetail {
+            id: "crypto".to_string(),
+            name: "Crypto Trading".to_string(),
+            description: None,
+            icon: None,
+            profile: "default".to_string(),
+            created_at: "2026-08-08T09:30:00Z".parse().expect("valid timestamp"),
+            last_active_at: "2026-08-08T09:30:00Z".parse().expect("valid timestamp"),
+            is_archived: false,
+        };
+        let archived = WorkspaceDetail {
+            is_archived: true,
+            ..active.clone()
+        };
+
+        let status = |ws| {
+            detail_pairs(&ws, &chrono::Utc)
+                .into_iter()
+                .find(|(label, _)| *label == "Status")
+                .expect("a detail view always has a Status line")
+                .1
+        };
+        assert_eq!(status(active), "active");
+        assert_eq!(status(archived), "archived");
+    }
+
+    /// An update carrying only an id is accepted by the server and changes
+    /// nothing, so it would print "updated" truthfully and mean nothing. The
+    /// person who typed `--nmae` cannot tell that from a change that failed to
+    /// stick, which is why this is refused rather than sent.
+    #[test]
+    fn an_update_that_would_change_nothing_is_refused_before_the_round_trip() {
+        let err = update_params("crypto", None, None, None)
+            .expect_err("an empty patch must not reach the server");
+        let message = err.to_string();
+        assert!(message.contains("crypto"), "unexpected: {message}");
+        assert!(message.contains("--name"), "unexpected: {message}");
+
+        // Any single field is enough — this is a "not nothing" check, not an
+        // "all three" one.
+        for (name, description, icon) in [
+            (Some("New name"), None, None),
+            (None, Some("notes"), None),
+            (None, None, Some("\u{1F4B0}")),
+        ] {
+            assert!(
+                update_params("crypto", name, description, icon).is_ok(),
+                "a one-field patch must be accepted"
+            );
+        }
+    }
+
+    /// Every field but `id` is a patch: the ones the caller omitted must be
+    /// ABSENT on the wire, not sent as `null`. The server COALESCEs what it
+    /// receives, so this is the difference between "leave it alone" and a
+    /// client that has to be trusted to send the current value back.
+    #[test]
+    fn an_update_sends_only_the_fields_it_was_given() {
+        let wire = serde_json::to_value(
+            update_params("crypto", Some("Crypto Research"), None, None)
+                .expect("a one-field patch is valid"),
+        )
+        .unwrap();
+        assert_eq!(
+            wire,
+            serde_json::json!({ "id": "crypto", "name": "Crypto Research" })
+        );
+
+        let wire = serde_json::to_value(
+            update_params("crypto", None, Some("notes"), Some("\u{1F4B0}"))
+                .expect("a two-field patch is valid"),
+        )
+        .unwrap();
+        assert_eq!(
+            wire,
+            serde_json::json!({ "id": "crypto", "description": "notes", "icon": "\u{1F4B0}" })
         );
     }
 

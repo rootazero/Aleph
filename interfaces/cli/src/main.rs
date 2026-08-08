@@ -808,6 +808,24 @@ async fn dispatch_workspace(
             )
             .await
         }
+        WorkspaceAction::Get { id } => workspace_cmd::get(server_url, config, &id, json).await,
+        WorkspaceAction::Update {
+            id,
+            name,
+            description,
+            icon,
+        } => {
+            workspace_cmd::update(
+                server_url,
+                config,
+                &id,
+                name.as_deref(),
+                description.as_deref(),
+                icon.as_deref(),
+                json,
+            )
+            .await
+        }
         WorkspaceAction::Archive { id } => {
             workspace_cmd::archive(server_url, config, &id, json).await
         }
