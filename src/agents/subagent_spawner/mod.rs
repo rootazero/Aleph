@@ -154,6 +154,22 @@ pub struct SpawnRequest<'a> {
     /// which callers skip as the identity partition — keeps the child prompt
     /// byte-identical.
     pub session_mode: Option<crate::config::types::policies::SessionMode>,
+    /// The caller's stable handle for this child, when it has one. Becomes the
+    /// child's ephemeral session id (see [`ephemeral_for`]), which is what makes
+    /// the durable `SubagentSpawned` / `SubagentReturned` pair addressable by
+    /// the id the caller already holds.
+    ///
+    /// Set by the background `subagent` tool, whose `request_id` is the only
+    /// handle the model ever sees. `None` for foreground / synchronous spawns:
+    /// they deliver their result inline and have no id to correlate on, so the
+    /// child key stays a bare nonce.
+    ///
+    /// **Do not** try to recover this correlation positionally from the parent
+    /// log instead. A single turn can spawn several background children, so
+    /// their `SubagentSpawned` events share a `turn_id` and cannot be told
+    /// apart — the same parallel-batch ambiguity that broke the session-log
+    /// scan `scoped::dispatch` replaced with an ambient call identity.
+    pub request_id: Option<&'a str>,
 }
 
 /// Build a child ephemeral session, run the harness, and synthesize the
@@ -275,7 +291,7 @@ pub async fn spawn(base: &SpawnerBase, req: SpawnRequest<'_>) -> Result<LoopRunR
 
     let run_body = async {
         // 2. Unique ephemeral session key for this sub-agent.
-        let child_id = ephemeral_for(&req.agent_def.id);
+        let child_id = ephemeral_for(&req.agent_def.id, req.request_id);
 
         // 3. Attach the child session and seed the initial Turn + UserMessage.
         //    Any failure here surfaces immediately — the harness never runs.
@@ -374,7 +390,7 @@ pub async fn spawn(base: &SpawnerBase, req: SpawnRequest<'_>) -> Result<LoopRunR
         let child_key = child_id.clone();
         let flow_name = req.agent_def.id.clone();
         if let Some(ref parent_str) = base.parent_session_id {
-            if let Ok(parent_id) = serde_json::from_str::<SessionId>(parent_str) {
+            if let Some(parent_id) = parent_session_id_of(parent_str) {
                 let _ = base
                     .session
                     .emit_event(
@@ -629,7 +645,7 @@ pub async fn spawn(base: &SpawnerBase, req: SpawnRequest<'_>) -> Result<LoopRunR
                 // Emit SubagentReturned to the parent session.
                 let summary = result.final_text.clone().unwrap_or_default();
                 if let Some(ref parent_str) = base.parent_session_id {
-                    if let Ok(parent_id) = serde_json::from_str::<SessionId>(parent_str) {
+                    if let Some(parent_id) = parent_session_id_of(parent_str) {
                         let _ = base
                             .session
                             .emit_event(
@@ -782,12 +798,61 @@ async fn extract_run_result(
 }
 
 /// Generate a unique ephemeral `SessionKey` for this sub-agent spawn.
-fn ephemeral_for(agent_id: &str) -> SessionKey {
-    let nonce = uuid::Uuid::new_v4();
+/// Mint the child's ephemeral session key.
+///
+/// Two shapes, and the difference is load-bearing:
+///
+/// * `Some(request_id)` — a **background** child, whose `request_id` is the
+///   only handle the model gets back and therefore outlives the call. The key
+///   becomes `sub-bg-<request_id>`, which makes the durable
+///   `SubagentSpawned { child_id }` / `SubagentReturned { child_id, summary }`
+///   pair in the parent's log addressable by that id after a restart. This is a
+///   contract, not a formatting choice — see
+///   [`crate::agents::subagent_tool::recovery`], and
+///   `child_key_roundtrips_through_the_request_id` is the test that goes red
+///   first if the shape changes.
+/// * `None` — a foreground / batch / MoA-aggregator child, which delivers its
+///   result inside the tool call that spawned it. Keeps the historical
+///   `sub-<nonce>` shape.
+///
+/// **The two prefixes must stay distinct.** Every spawn writes the same durable
+/// events regardless of shape, so if uncorrelated children also carried the
+/// background prefix, `recovery::enumerate` would read each one's random nonce
+/// as an unrecoverable `request_id` and `subagent list` would fill up with every
+/// foreground sub-agent the session ever ran — a directory lying in the opposite
+/// direction from the one this recovery path exists to fix.
+fn ephemeral_for(agent_id: &str, request_id: Option<&str>) -> SessionKey {
+    let ephemeral_id = match request_id {
+        Some(rid) => format!("{SUBAGENT_BG_CHILD_PREFIX}{rid}"),
+        None => format!("{ANON_CHILD_PREFIX}{}", uuid::Uuid::new_v4()),
+    };
     SessionKey::Ephemeral {
         agent_id: agent_id.to_string(),
-        ephemeral_id: format!("sub-{nonce}"),
+        ephemeral_id,
     }
+}
+
+/// Prefix for a **background** child's session key, whose suffix is the
+/// caller's `request_id`. Single source shared by the minting side
+/// ([`ephemeral_for`]) and the recovery side
+/// ([`crate::agents::subagent_tool::recovery`]); two literals would be two
+/// answers to one question.
+pub const SUBAGENT_BG_CHILD_PREFIX: &str = "sub-bg-";
+
+/// Prefix for a child with no caller-side handle. Its suffix is a bare nonce
+/// and addresses nothing.
+const ANON_CHILD_PREFIX: &str = "sub-";
+
+/// Interpret a `parent_session_id` string as the session the `SubagentSpawned` /
+/// `SubagentReturned` events for its children are written to.
+///
+/// This is the *emitter's* reading, kept here beside the two `emit_event` calls
+/// that use it so the recovery reader cannot drift into a second one. A reader
+/// that disagreed about which session holds the events would find an empty log
+/// and report "unknown" forever — a silent failure with no error path.
+#[must_use]
+pub fn parent_session_id_of(raw: &str) -> Option<SessionId> {
+    serde_json::from_str::<SessionId>(raw).ok()
 }
 
 /// Build a child's context-management triple — budget, LLM compactor, cheap-pass

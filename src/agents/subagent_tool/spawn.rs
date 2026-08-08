@@ -156,6 +156,9 @@ impl SubagentTool {
 
         let tracker = self.background_tracker.clone();
         let rid = request_id.clone();
+        // Separate clone: `rid` is consumed by the delegation-ctx capture below,
+        // and this one has to survive into the `AgentRuntimeConfig` literal.
+        let rid_for_child = request_id.clone();
         // Phase 1 — Settled emit captures (moved into the run task).
         let root_session_for_done = root_session;
         let tree_agent_id_for_done = tree_agent_id;
@@ -179,6 +182,13 @@ impl SubagentTool {
                 context_summary,
                 model,
                 timeout_secs,
+                // The one path where the id outlives the call: `request_id` is
+                // the only handle the model gets back, and the tracker holding
+                // it is process-memory. Threading it here makes it the child's
+                // ephemeral session id, so the durable `SubagentSpawned` /
+                // `SubagentReturned` pair in the parent log stays addressable
+                // by that same id after a restart (see `subagent_tool::recovery`).
+                request_id: Some(rid_for_child),
             };
             // Boxed: `AgentRuntime::run`'s state machine is already large, and
             // nesting three more task-local combinators directly around it
