@@ -243,6 +243,10 @@
 - **隔离环境的 QA 结构上只测得到「新建的对象」** —— 干净 HOME 里没有存量，于是**迁移前写下的行**（缺列、缺戳、旧单位）整类测不到，而真实部署里那才是多数。补法是把已有行改成迁移前的形态再开机，**不是**让 fixture 造一个"看起来像旧的"状态 → §5.22
 - **拒绝形状做得越好，时序 bug 越像安全行为** —— no-oracle 要求"拒绝"与"不存在"逐字节相同，代价是**异步写盘的行**在写盘前被读到时，给出的也是同一个 not-found。看到它先问「这一步是不是还没落盘」，再问「是不是没权限」 → §5.22
 - **一个身份/谓词有两半，branch 一半等于没 branch** —— 一个动词的两张脸（工具 vs RPC）必须共用判据**也共用推导**（如 `workflow_step_review` ↔ `teams.workflow.approve_step` 共用 `verdict_admissible`）
+- **先数这个能力有几张脸，再决定谓词放哪** —— 「两张脸」只是最常见的数目，不是上限。2026-08-08 一轮里同一个问法抓到四种不同的漏面：**一条连接有两个方向**（登录墙只挂在请求臂，事件臂四项判据无一是身份 ⇒ 未认证 socket 收得到 operator 的 shell）· **一个谓词有两种取 actor 的方式**（`CALLER_USER` 在 spawn 出的 run 里是死的 ⇒ 工具面照文档接现成谓词会拿到静默恒真）· **一个前缀下装着两类帧**（按 topic 前缀键控的表只能一次答完两者）· **一个能力有服务端和客户端两半**。→ §5.22 round 2
+- **没有客户端的能力不算已交付，服务端那半再完整也不算** —— `users.create`/`users.update` 完整实现、注册两遍、admin-gated、pin 齐备、接了吊销管线，**全仓零调用者**：三期多用户机件因此在出厂形态下整体不可达。提交一个 RPC 家族前先问**谁调它**，答案必须指得出一个 shipped surface（同族：§5.21「一个"展示用"字段在提交前必须能指出渲染它的那一行代码」）
+- **把人挡在门外不等于约束了他，可能只是把他推过了门** —— 审批面对 member 两面全关 ⇒ 他的 run 死在 120s 超时，而文档记录的解法是把档位拉到 `full`：最不安全的档位成了唯一能用的档位。**一个把用户往宽设置上推的权限系统已经反转了自己的目的。** 加闸时问「被闸住的人接下来会干什么」，不只问「这道闸拦住了什么」→ §5.22 round 2 ③
+- **一个 fail-closed 的答案被当成值消费，就会反转成许可** —— 装饰器对外人返回的 `Ok(None)` 被 `.ok().flatten()` 折进 `leader: Option<_>`，再读成「没有 leader ⇒ 谁都能审」。闸要跑在折叠**之前**：`Ok(None)`（拒绝）一旦和「这东西本来就没有」合流，两者永远分不开。凡 `.ok().flatten()` / `unwrap_or_default()` 落在**装饰器**返回值上都要问：这个默认值和那个拒绝长得一样吗 → §5.22 round 2 ⑤
 - **第二个构造点默认继承不到第一个的任何档位** —— 加档位时 grep 它的 `::new(` 有几个调用点；**反向也要判断**，不是每个 builder 都该补齐，理由写进构造函数 doc → §2.19
 - **「先认领、后执行」的调度，界限要在执行时刻成立** —— 只在入队处判等于没判（`loop timeout_minutes` 曾在上限之后多跑 119 分钟）。**推论（适用于任何长跑单元）**：凡「先认领、后执行」的调度，界限要在**执行时刻**成立；只在入队处判等于没判。**2026-08-05 已在 goal 的 wait-barrier 上复发一次**——同一个形状，第二个子系统：那里绕过 claim 的 boot rearm 路径连一道界都没有，所以「谁绕过了认领，谁就得自己带界」是这条纪律的第二半。→ §4.1/§4.2
 - **「先记录意图、再做不可逆动作」：只记录"做完了"的机件，分不出"没做"和"做了但没记上"** —— 跨越不可逆边界**之前**盖持久戳，新进程拿到状态那一刻按"结果未知"退休 → §5.6
@@ -326,7 +330,8 @@
 - **团队群聊投影前必须先按当前 `chat.team_id` 作用域** —— 订阅是 `team.*` 通配，否则后台团队的气泡挤进任意会话 → §4.5
 - **新增 `read_*` 一类只读 RPC 记得进 `gateway/lane.rs::override_for`** —— 后缀启发式不认它就落 Mutate 车道被幂等键守卫拒掉 → §6.8
 - **「谁拥有」回答不了「谁能看」** —— 共享房间的 `owner_user_id` 记的是**创建者**，只裁 owner-only 动词；可见性判据是名册（`projects::roster::is_member`，经 `visibility::project_visible` / `session_visible_to` 到达）。凡给一张表加了共享语义，`owner` 列的含义要重新问一遍——拿它答 can-see 就是 P2 修掉的那类 bug 复发 → §5.22
-- **谓词改了、下推的过滤器没改，症状是「能进去但列表里没有」** —— 寻址面的 `visibility::session_visible`（task-local）与列表面的 `visibility::session_visible_to`（显式 actor，两个 backend 的 `SessionFilter::owner_visible_to` 都经它）是同一个判据的两张脸，必须同批改；grep 内存谓词找齐所有下推点，只改一半的那半是静默的。⚠️ **刻意没有 `SessionFilter::visible_scope_ids`**：房间可见性不下推成 SQL 列表，而是由两个 backend 共用的内存谓词裁决——想加 SQL 下推请先读 `session_visible_to` 的 doc → §5.22
+- **每个可见性谓词都欠一个显式 actor 孪生，因为工具面取不到 task-local** —— `visible_owner_filter()` 读 `CALLER_USER`，而它在 spawn 出的 run 里恒 `None`，**每一次工具调用都在里面**：照文档接现成谓词的工具作者拿到的是**静默恒真**。孪生是 `session_visible_to` / `partition_visible_to` / `project_visible_to`，工具一律传 `scope::ambient_owner()`。新工具碰 per-user/per-room 数据时先问「这个谓词的 actor 从哪来」→ §5.22 round 2 ⑤
+- **谓词改了、下推的过滤器没改，症状是「能进去但列表里没有」** —— 寻址面的 `visibility::session_visible`（task-local）与列表面的 `visibility::session_visible_to`（显式 actor，两个 backend 的 `SessionFilter::owner_visible_to` 都经它）是同一个判据的两张脸，必须同批改；grep 内存谓词找齐所有下推点，只改一半的那半是静默的。⚠️ **`..Default::default()` 会把这个字段留成 `None` = 全体 owner**：`session_list` 工具就是这么漏的，而 RPC 孪生一直设着它。⚠️ **刻意没有 `SessionFilter::visible_scope_ids`**：房间可见性不下推成 SQL 列表，而是由两个 backend 共用的内存谓词裁决——想加 SQL 下推请先读 `session_visible_to` 的 doc → §5.22
 - **投影必须由真源在自己的写锁里发布** —— `projects::roster` 是 `project_members` 的进程内投影，发布点在 store 的写锁**内**（变更 + 快照 + 发布同一个 `with_conn` 闭包，`republish_roster_locked`）。「写完再发」的两次取锁不是原子的：并发写会按提交的**反序**发布，输的那次把已删成员复活到下一次名册写入为止，而 `is_member` 是房间授权的**全部**判据 ⇒ fail-open。第二个写入者就是第二个真源，CLI 要改名册必须走 IPC 而不是直开数据库 → §5.22
 - **多设备共享的事实不能住在 `localStorage`** —— 判据是**这个值对第二台设备还成立吗**；「房间用哪个会话」曾按 `project_id` 存在每个浏览器里，于是第二个成员进房什么也没找到、开了自己的会话，两人共享记忆分区与工作目录却**永不同框**（任何界面、任何刷新都看不见对方）。真源是 `projects.current_session_key` + `projects.room_session` 的原子认领 → §5.22
 

@@ -208,8 +208,33 @@ global**.
   `sessions.patch` validates the value against `ExecTier::from_id`, exactly as
   `chat.send` does.
 - **global** — `[policies] exec_tier` in config, read live per turn (no restart).
-- A **non-operator** caller (a chat-tier channel) is clamped after resolution: it
-  can tighten the tier but never raise it.
+- A **non-operator** caller is clamped after resolution — twice, and the two
+  clamps cover different callers:
+  - **the channel clamp** (`clamp_tier_for_channel`) — a chat-tier channel
+    cannot run at `Full`. It keys on `caller_role`, mapping only `"guest"` and
+    `"operator"`.
+  - **the non-operator ceiling** (2026-08-08) — a caller whose role is not an
+    operator spelling resolves to at most the global `[policies] exec_tier`.
+    Strictly tighter is always allowed; looser never is.
+
+  The ceiling exists because the channel clamp **never fired for `"member"`** —
+  it returns `None` for every role it does not map — while this document and
+  `resolve_exec_tier`'s own doc both named it as the thing bounding member tool
+  execution. `chat.send { exec_tier: "full" }` is a plain per-request parameter
+  any member can send, and it landed in the rung that outranks everything, so a
+  member could turn the tier off entirely.
+
+  It reuses the existing global dial rather than adding `member_max_exec_tier`:
+  `[policies]` is a server-global section, so setting it to `Full` is already an
+  install-wide statement that this axis gates nothing here. **Cost, stated:** an
+  operator who raises the global tier for their own convenience raises every
+  member's ceiling with it. "Full for me, Auto for everyone else" needs that
+  second knob, which layers on top of this clamp cleanly.
+
+  An unrecognized role string is ceilinged like a member. `None` (no role at
+  all — loopback, CLI, cron) means local/internal and is trusted; a role STRING
+  nobody recognizes means a caller we cannot place, and the two must not share
+  an answer.
 
 ### The three bypasses that were closed (do not re-open them)
 
@@ -1422,7 +1447,74 @@ after (verified by `single_user_fixture_is_byte_identical_after_upgrade`,
   top. This has been re-triaged as an isolation gap more than once; it is not
   one. Widening it is a feature decision about the legacy project-directory
   namespace and needs a persisted project root on the session-close path first.
+- **Round 2 (2026-08-08) — the faces that had no predicate on them.** The full
+  per-item record is FEATURE_LOCATOR §5.22; what belongs here is the shape and
+  the three rulings a future change must not undo.
+
+  The organising question was **"which face was never asked?"**, because P0–P2
+  got the predicates right and installed them somewhere not every path crosses:
+
+  - the login wall was on the request arm only — a connection has two
+    directions, and the event-forward arm had four terms, none of them
+    authentication. Combined with `pty.output` classifying as `Global`, an
+    unauthenticated LAN socket received the operator's raw shell bytes while
+    `"pty."` had been in `ADMIN_PREFIXES` all along;
+  - `partition_visible` had only the task-local way of naming an actor, which is
+    dead inside a spawned run — so every tool reaching for it would have got a
+    silent always-true. It now has an explicit-actor twin
+    (`partition_visible_to` / `project_visible_to`), like
+    `session_visible` / `session_visible_to`;
+  - `users.create` / `users.update` had only a server half. **No shipped surface
+    could create a second person**, which made every predicate P0–P2 built
+    unreachable in practice. Closed by `aleph users` + `pair --user`.
+
+  Three rulings to preserve:
+
+  1. **The approval gate is member-reachable, on purpose.** Closing both its
+     faces did not restrict members — it pushed them past the gate: a blocked
+     run died at the 120s timeout and the recorded workaround was
+     `exec_tier: "full"`. `exec.approvals.pending` / `exec.approval.resolve` are
+     carved out and filtered by `session_visible`; a fleet approval (empty
+     `session_key`, raised by a cluster node) stays operator-only on both faces.
+     Re-closing them without also removing the member's ability to start a
+     gated run recreates the inversion.
+  2. **`approval.` has no `EventScopeGuard` prefix rule, and must not get one
+     back.** That table keys on the topic prefix and the family carries two
+     kinds of frame; the decision moved to `event_visibility`, where the payload
+     is visible. Re-adding a prefix rule re-closes the member half without the
+     fleet half noticing.
+  3. **The Panel does not gate on role.** §5.22 ⑥'s ruling stands (a role is
+     latched at connect and `restamp_live_connections` changes it silently, so a
+     UI gate can never be an enforcement point). What changed is that a client
+     which will not gate is now required to **report accurately**:
+     `shared_ui_logic::authz` tells a refusal apart from an empty answer, keyed
+     on the same `ADMIN_REQUIRED_MESSAGE` the server emits.
+
 - **Known gaps (deliberate, recorded, not silently dropped):**
+  0. **The exec-tier id CATALOG is still operator-only.** A member's composer
+     pill therefore cannot offer a stricter tier even though the server would
+     now honour it; the pill says so rather than silently showing one option.
+     Closing it needs a member-reachable catalog read — a wire change.
+  0b. **`surface.approval` (the R5 banner) is still `Global`.** Its three
+     `approval.*` siblings are now per-session; this one is a different payload
+     reaching a different audience through `audience_allows`, and narrowing it
+     is a UX ruling rather than a wire fix.
+  0c. **Legacy room attribution is not backfilled.** It is now known to be
+     *exactly* derivable — `ProjectStore::claim_session_key` is the sole writer
+     of `projects.current_session_key` and writes only `WHERE
+     current_session_key IS NULL`, so a legacy room's session key is DECLARED in
+     a second table rather than guessed (predicate: a project row whose
+     `current_session_key` names a session row with `owner_user_id IS NULL AND
+     scope_id IS NULL`). This **overturns the earlier record** that rooms were
+     unrecoverable; personal sessions genuinely are. Deferred because it is a
+     migration that GRANTS visibility and needs a new `SessionStore` trait
+     method on both backends (`SessionPatch` cannot write those columns). The
+     bleeding is stopped: `sessions.new` and `sessions.compaction.branch` no
+     longer create NEW unstamped rows.
+  0d. **Secret masking covers three legs but only the vendor-pattern class.**
+     `SecretMasker::new()` is a fixed vendor list and `add_pattern` has zero
+     production callers, so an operator's own non-vendor-shaped credential
+     rides through all three legs unchanged.
   1. `chat.send`'s Simulated-execution fallback path (used only when no LLM
      provider is configured — `AgentRunManager::start_run`, which has no
      `SessionStore` dependency) is not covered by the real-provider path's
