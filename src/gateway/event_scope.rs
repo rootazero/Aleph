@@ -31,6 +31,18 @@ impl EventScopeGuard {
     /// | `surface.approval` | admin, exec.approver |
     /// | `config.changed` | admin, config.viewer |
     /// | `node.` | admin |
+    /// | `pty.` | admin |
+    ///
+    /// `pty.` is the delivery-side half of the `pty.` RPC gate, added for the
+    /// same reason `node.` was and one round later. `pty.output` carries the
+    /// base64 of every byte the child process writes to the operator's terminal
+    /// and `pty.exit` its status; the RPC face has been in
+    /// [`ADMIN_PREFIXES`](crate::gateway::method_admin) all along, with the
+    /// written reason that a PTY is a raw shell mediated by neither the command
+    /// policy nor the exec tier. Gating only the RPC left the bytes themselves
+    /// on an unguarded topic — `session_identity_of` has no `pty.*` arm either,
+    /// so the frames fell to `_ => Global` and reached every connection.
+    /// Requires `admin` alone, for the same reason `node.` does.
     ///
     /// `node.` is the delivery-side half of the `environments.` RPC gate
     /// (`method_admin.rs`). `node.connected` / `node.disconnected` carry the
@@ -70,6 +82,7 @@ impl EventScopeGuard {
                     vec!["admin".to_string(), "config.viewer".to_string()],
                 ),
                 ("node.".to_string(), vec!["admin".to_string()]),
+                ("pty.".to_string(), vec!["admin".to_string()]),
             ],
         }
     }
@@ -403,6 +416,32 @@ mod tests {
             "the fleet's event face must be admin-gated too — otherwise the \
              RPC gate just moves the disclosure onto the event bus"
         );
+    }
+
+    /// The twin of the fleet pin, for the surface with the highest-value
+    /// payload in the repo: a PTY is a raw shell, mediated by neither the
+    /// command policy nor the exec tier — which is the reason `method_admin`
+    /// itself gives for gating `pty.`. `pty.output` is the base64 of every byte
+    /// that shell writes. Gating one face and not the other does not reduce the
+    /// disclosure, it relocates it onto the event bus, and the event bus is the
+    /// quieter of the two (a withheld frame raises no error, an unwanted one
+    /// raises no alarm).
+    #[test]
+    fn the_terminal_is_gated_on_both_its_rpc_and_its_event_face() {
+        assert!(
+            crate::gateway::method_admin::method_requires_admin("pty.spawn"),
+            "the terminal's RPC face must be admin-gated"
+        );
+        let g = EventScopeGuard::default_rules();
+        for topic in ["pty.output", "pty.exit"] {
+            assert!(
+                !g.can_receive(topic, &scope_for_role("member")),
+                "{topic} carries the operator's raw shell bytes and must be \
+                 admin-gated on the event face too"
+            );
+        }
+        // The operator still receives — the half that fails silently.
+        assert!(g.can_receive("pty.output", &scope_for_role("operator")));
     }
 
     /// Prefix hygiene, mirroring `method_admin`'s

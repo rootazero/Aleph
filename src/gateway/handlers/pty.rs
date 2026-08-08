@@ -8,8 +8,21 @@
 //! `pty.output` / `pty.exit` topics (subscribe via `events.subscribe` with
 //! pattern `pty.*`).
 //!
-//! Under the LAN-trust model every connection is the implicit owner/operator,
-//! so the `pty.*` surface is open to all connections.
+//! ## Operator-only, on BOTH faces
+//!
+//! A PTY is a raw shell: the command policy does not see it and the exec tier
+//! does not gate it. `"pty."` is therefore in
+//! [`ADMIN_PREFIXES`](crate::gateway::method_admin), and — since 2026-08-08 —
+//! also in [`EventScopeGuard::default_rules`](crate::gateway::event_scope::EventScopeGuard::default_rules).
+//!
+//! The second half was missing for a whole multi-user arc, and this paragraph
+//! is why the omission survived: it used to read *"under the LAN-trust model
+//! every connection is the implicit owner/operator, so the `pty.*` surface is
+//! open to all connections."* That was true when it was written and became
+//! false the day roles landed, but it went on describing the subscribe face
+//! accurately — because nobody had changed the subscribe face. **A sentence
+//! about who may reach a surface has a copy on every face that surface has;
+//! closing one face and leaving the sentence is how the other face stays open.**
 
 use base64::{engine::general_purpose::STANDARD as BASE64, Engine};
 use serde::Deserialize;
