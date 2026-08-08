@@ -234,7 +234,7 @@ async fn update_provider_inner(
         timestamp,
     });
 
-    if let Err(e) = event_bus.publish_json(&event) {
+    if let Err(e) = event_bus.publish_gateway_event(&event) {
         error!(error = %e, "Failed to broadcast event");
     }
 
@@ -369,7 +369,7 @@ async fn create_provider_inner(
         timestamp,
     });
 
-    if let Err(e) = event_bus.publish_json(&event) {
+    if let Err(e) = event_bus.publish_gateway_event(&event) {
         error!(error = %e, "Failed to broadcast event");
     }
 
@@ -489,7 +489,7 @@ async fn delete_provider_inner(
         timestamp,
     });
 
-    if let Err(e) = event_bus.publish_json(&event) {
+    if let Err(e) = event_bus.publish_gateway_event(&event) {
         error!(error = %e, "Failed to broadcast event");
     }
 
@@ -975,7 +975,7 @@ async fn set_default_provider_inner(
         timestamp,
     });
 
-    if let Err(e) = event_bus.publish_json(&event) {
+    if let Err(e) = event_bus.publish_gateway_event(&event) {
         error!(error = %e, "Failed to broadcast event");
     }
 

@@ -396,9 +396,22 @@ pub async fn spawn(base: &SpawnerBase, req: SpawnRequest<'_>) -> Result<LoopRunR
         //    The descended `child_chain` is passed in so `ChainContextLayer`
         //    can tell the spawned agent it is nested and how much delegation
         //    budget remains.
-        let mut builder = PromptBuilder::new(PromptConfig::default())
-            .with_agent(req.agent_def.clone())
-            .with_chain_context(child_chain.clone());
+        let resolved_model: Option<String> = req
+            .model
+            .map(str::to_string)
+            .or_else(|| req.agent_def.model_hint.clone());
+        let token_budget = base
+            .context_budget_config
+            .as_ref()
+            .map_or_else(crate::thinker::prompt_budget::TokenBudget::default, |cfg| {
+                crate::thinker::prompt_budget::TokenBudget::from_context_window(cfg.token_budget)
+            });
+        let mut builder = PromptBuilder::new(PromptConfig {
+            token_budget,
+            ..PromptConfig::default()
+        })
+        .with_agent(req.agent_def.clone())
+        .with_chain_context(child_chain.clone());
         if let Some(strategy) = req.strategy {
             builder = builder.with_strategy(strategy.to_string());
         }
@@ -408,10 +421,6 @@ pub async fn spawn(base: &SpawnerBase, req: SpawnRequest<'_>) -> Result<LoopRunR
         let system_prompt = builder.build_system_prompt(&[]);
 
         // 5. Resolve the model override: explicit > model_hint > native.
-        let resolved_model: Option<String> = req
-            .model
-            .map(str::to_string)
-            .or_else(|| req.agent_def.model_hint.clone());
         let llm: Arc<dyn AiProvider> = match resolved_model {
             Some(m) => Arc::new(crate::providers::ModelOverrideProvider::new(
                 base.provider.clone(),

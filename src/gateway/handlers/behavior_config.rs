@@ -107,7 +107,7 @@ pub async fn handle_update(
         value: serde_json::to_value(&dto).unwrap_or(Value::Null),
         timestamp: chrono::Utc::now().timestamp_millis(),
     });
-    let _ = event_bus.publish_json(&event);
+    let _ = event_bus.publish_gateway_event(&event);
 
     JsonRpcResponse::success(request.id, serde_json::json!({ "success": true }))
 }

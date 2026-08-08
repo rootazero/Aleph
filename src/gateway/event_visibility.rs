@@ -274,10 +274,12 @@ pub fn session_identity_of(topic: &str, data: Option<&Value>) -> SessionIdentity
 
         // --- TopicEvent-form frames genuinely session-scoped and NOT
         // covered by any other filter today ---
-        "session.lifecycle.changed" => match str_field(data, "session_key") {
-            Some(k) => SessionIdentity::BySessionKey(k),
-            None => SessionIdentity::Global,
-        },
+        "session.lifecycle.changed" | "sessions.changed" => {
+            match str_field(data, "session_key") {
+                Some(k) => SessionIdentity::BySessionKey(k),
+                None => SessionIdentity::Global,
+            }
+        }
 
         // --- TopicEvent-form frames already role-gated by EventScopeGuard —
         // see module doc "Deliberately Global" for why these are not ALSO
@@ -1058,6 +1060,31 @@ mod tests {
                     &store,
                     None
                 )
+                .await
+        );
+    }
+
+    #[tokio::test]
+    async fn sessions_changed_topic_is_owner_scoped() {
+        let (store, _temp) = test_store();
+        let key = SessionKey::main("conv-sessions-changed");
+        stamp_owner(&store, &key, "alice").await;
+        let store: Arc<dyn SessionStore> = Arc::new(store);
+        let index = EventVisibilityIndex::new();
+
+        let data = serde_json::json!({
+            "session_key": key.to_key_string(),
+            "label": "alice-secret",
+            "channel": "telegram",
+        });
+        assert!(
+            index
+                .event_admits("sessions.changed", Some(&data), Some("alice"), &store)
+                .await
+        );
+        assert!(
+            !index
+                .event_admits("sessions.changed", Some(&data), Some("bob"), &store)
                 .await
         );
     }
