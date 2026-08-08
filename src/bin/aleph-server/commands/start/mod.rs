@@ -1410,13 +1410,17 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
                 // register_common_handlers) because that seam has no orchestrator handle.
                 {
                     let harness = orch.harness.clone();
+                    let session_store = session_store.clone();
                     server
                         .handlers_mut()
                         .register("chat.context_estimate", move |req| {
                             let harness = harness.clone();
+                            let session_store = session_store.clone();
                             async move {
                                 alephcore::gateway::handlers::chat::handle_context_estimate(
-                                    req, harness,
+                                    req,
+                                    harness,
+                                    session_store,
                                 )
                                 .await
                             }

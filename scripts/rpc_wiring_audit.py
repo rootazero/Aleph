@@ -94,7 +94,10 @@ CLASSIFIER_PATTERNS = [re.compile(r'"([a-z][a-zA-Z0-9_.]*)"')]
 
 # CLIENT: Panel rpc_call sites. DOTALL so a method split onto the next line
 # after `rpc_call(` is still captured.
-CLIENT_PATTERNS = [re.compile(r'rpc_call\(\s*"([^"]+)"', re.DOTALL)]
+CLIENT_PATTERNS = [
+    re.compile(r'rpc_call\(\s*"([^"]+)"', re.DOTALL),
+    re.compile(r'\.call(?:::<.*?>)?\(\s*"([^"]+)"', re.DOTALL),
+]
 
 # Methods served OUTSIDE the .register/register_handler! path — protocol-level
 # special-cases dispatched directly in server/handler.rs. Not severed.
@@ -143,7 +146,10 @@ def main() -> int:
         if METHOD_RE.match(m)
     }
 
-    client_raw = scan(rs_files("interfaces/webchat"), CLIENT_PATTERNS)
+    client_raw = scan(
+        rs_files("interfaces/webchat", "interfaces/cli", "interfaces/tui", "shared/client"),
+        CLIENT_PATTERNS,
+    )
     client = set(client_raw)
 
     client_severed = sorted(client - handled)

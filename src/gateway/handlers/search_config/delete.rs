@@ -84,7 +84,7 @@ pub async fn handle_delete_backend(
         value: serde_json::json!({ "deleted_backend": params.name }),
         timestamp: chrono::Utc::now().timestamp_millis(),
     });
-    let _ = event_bus.publish_json(&event);
+    let _ = event_bus.publish_gateway_event(&event);
 
     JsonRpcResponse::success(request.id, serde_json::json!({ "success": true }))
 }

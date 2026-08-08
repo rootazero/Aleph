@@ -364,15 +364,11 @@
 //! fixed — flagged here exactly as `method_admin.rs` flags its own
 //! follow-ups)
 //!
-//! `sessions.set_topic` and `chat.context_estimate` take a caller-supplied
-//! `session_key` with no ownership check today; deferred deliberately (lower
-//! severity — a title-rename side effect and a token-count-only read,
-//! respectively — and reviewed as out of this round's scope). The
-//! Simulated-fallback `chat.send` path (see the `chat.send` bullet above) is
-//! also a known, deliberate gap. `memory.reembed` is intentionally absent
-//! from the table (whole-store maintenance, no per-user `agent_id` to check
-//! — see the pin test). All are recorded here as the durable home for the
-//! follow-up, same convention as `method_admin.rs`'s notes.
+//! The Simulated-fallback `chat.send` path (see the `chat.send` bullet above)
+//! is a known, deliberate gap. `memory.reembed` is intentionally absent from
+//! the table (whole-store maintenance, no per-user `agent_id` to check — see
+//! the pin test). All are recorded here as the durable home for the follow-up,
+//! same convention as `method_admin.rs`'s notes.
 //! (`graph.update_note`/`rename_note`/`delete_note` were in this list until
 //! Task 7 fix round 2 closed them — see that section above.)
 //!
@@ -429,10 +425,12 @@ pub const SCOPED_METHODS: &[(&str, Treatment)] = &[
     ("chat.abort", Treatment::KeyChecked),
     ("chat.history", Treatment::KeyChecked),
     ("chat.clear", Treatment::KeyChecked),
+    ("chat.context_estimate", Treatment::KeyChecked),
     ("chat.rewind", Treatment::KeyChecked),
     ("sessions.new", Treatment::KeyChecked),
     ("sessions.patch", Treatment::KeyChecked),
     ("sessions.set_project_root", Treatment::KeyChecked),
+    ("sessions.set_topic", Treatment::KeyChecked),
     ("session.compact", Treatment::KeyChecked),
     ("session.truncate", Treatment::KeyChecked),
     ("sessions.compaction.list", Treatment::KeyChecked),
@@ -580,10 +578,12 @@ mod tests {
             "chat.abort",
             "chat.history",
             "chat.clear",
+            "chat.context_estimate",
             "chat.rewind",
             "sessions.new",
             "sessions.patch",
             "sessions.set_project_root",
+            "sessions.set_topic",
             "session.compact",
             "session.truncate",
             "sessions.compaction.list",
@@ -614,10 +614,12 @@ mod tests {
             "chat.abort",
             "chat.history",
             "chat.clear",
+            "chat.context_estimate",
             "chat.rewind",
             "sessions.new",
             "sessions.patch",
             "sessions.set_project_root",
+            "sessions.set_topic",
             "session.compact",
             "session.truncate",
             "sessions.compaction.list",
@@ -631,14 +633,11 @@ mod tests {
     #[test]
     fn unregistered_method_reads_as_none_not_a_default_treatment() {
         // No silent "assume KeyChecked" default — an unlisted method must
-        // read as unclassified, not falsely covered. `sessions.set_topic`,
-        // `chat.context_estimate`, and `memory.reembed` (whole-store, no
-        // `agent_id` at all) are DELIBERATE, documented gaps (see module
-        // doc) — not silently dropped, but also not falsely claimed.
+        // read as unclassified, not falsely covered. `memory.reembed`
+        // (whole-store, no `agent_id` at all) is a DELIBERATE, documented gap
+        // (see module doc) — not silently dropped, but also not falsely claimed.
         // (`memory.trace` and `graph.update_note` were examples here until
         // Task 7 fix rounds 1/2 registered them — see those pin tests.)
-        assert_eq!(treatment_of("sessions.set_topic"), None);
-        assert_eq!(treatment_of("chat.context_estimate"), None);
         assert_eq!(treatment_of("memory.reembed"), None);
     }
 

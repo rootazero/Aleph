@@ -244,7 +244,7 @@ pub async fn handle_create(
                 value: json!({ "action": "created", "id": params.id }),
                 timestamp: chrono::Utc::now().timestamp_millis(),
             });
-            let _ = event_bus.publish_json(&event);
+            let _ = event_bus.publish_gateway_event(&event);
 
             JsonRpcResponse::success(request.id, json!({ "success": true, "id": params.id }))
         }
@@ -278,7 +278,7 @@ pub async fn handle_update(
                 value: json!({ "action": "updated", "id": params.id }),
                 timestamp: chrono::Utc::now().timestamp_millis(),
             });
-            let _ = event_bus.publish_json(&event);
+            let _ = event_bus.publish_gateway_event(&event);
 
             JsonRpcResponse::success(request.id, json!({ "success": true }))
         }
@@ -334,7 +334,7 @@ pub async fn handle_delete(
                 value: json!({ "action": "deleted", "id": params.id }),
                 timestamp: chrono::Utc::now().timestamp_millis(),
             });
-            let _ = event_bus.publish_json(&event);
+            let _ = event_bus.publish_gateway_event(&event);
 
             JsonRpcResponse::success(request.id, json!({ "success": true }))
         }
@@ -368,7 +368,7 @@ pub async fn handle_set_default(
                 value: json!({ "action": "default_changed", "id": params.id }),
                 timestamp: chrono::Utc::now().timestamp_millis(),
             });
-            let _ = event_bus.publish_json(&event);
+            let _ = event_bus.publish_gateway_event(&event);
 
             JsonRpcResponse::success(request.id, json!({ "success": true }))
         }

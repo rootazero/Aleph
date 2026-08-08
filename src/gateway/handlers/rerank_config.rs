@@ -140,7 +140,7 @@ pub async fn handle_update(
         value: json!({ "action": "updated" }),
         timestamp: chrono::Utc::now().timestamp_millis(),
     });
-    let _ = event_bus.publish_json(&event);
+    let _ = event_bus.publish_gateway_event(&event);
 
     info!("Rerank config updated via RPC");
     JsonRpcResponse::success(request.id, json!({ "success": true }))

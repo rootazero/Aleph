@@ -670,6 +670,15 @@ pub async fn handle_set_topic_db(
         }
     };
 
+    let meta = match manager.get_metadata(&session_key).await {
+        Ok(Some(m)) => m,
+        Ok(None) => return visibility::not_found_response(request.id),
+        Err(_) => return visibility::not_found_response(request.id),
+    };
+    if !visibility::session_visible(&meta) {
+        return visibility::not_found_response(request.id);
+    }
+
     match manager.set_topic(&session_key, topic).await {
         Ok(()) => JsonRpcResponse::success(
             request.id,
@@ -1156,6 +1165,38 @@ mod tests {
                 after.label.as_deref(),
                 Some("hacked-by-bob"),
                 "a denied patch must not write the foreign session's label"
+            );
+        }
+
+        #[tokio::test]
+        async fn sessions_set_topic_denies_cross_user_and_leaves_topic_intact() {
+            let temp = tempdir().unwrap();
+            let store = store(&temp);
+            let alice_key = alice_session(&store).await;
+            store.set_topic(&alice_key, "alice-topic").await.unwrap();
+
+            let req = JsonRpcRequest {
+                jsonrpc: "2.0".into(),
+                method: "sessions.set_topic".into(),
+                params: Some(json!({
+                    "session_key": alice_key.to_key_string(),
+                    "topic": "hacked-by-bob",
+                })),
+                id: Some(json!(1)),
+            };
+            let as_bob = CALLER_USER
+                .scope(
+                    Some("u-bob".to_string()),
+                    handle_set_topic_db(req, store.clone()),
+                )
+                .await;
+            assert_eq!(
+                as_bob.error.as_ref().map(|e| e.code),
+                Some(RESOURCE_NOT_FOUND)
+            );
+            assert_eq!(
+                store.get_metadata(&alice_key).await.unwrap().unwrap().topic.as_deref(),
+                Some("alice-topic")
             );
         }
 

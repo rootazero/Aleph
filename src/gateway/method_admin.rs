@@ -95,10 +95,13 @@ const ADMIN_PREFIXES: &[&str] = &[
     // registered (lands in Task 5); gated pre-emptively so the gate
     // precedes the surface.
     "cluster.",  // enroll / deregister — fleet membership.
+    "environments.",
     "services.", // background service lifecycle (start/stop/list/status) —
     // server process control, not caller's-own-data.
     // --- Agent persona management: server-global roster, not per-user ---
+    "agent.",
     "agents.", // create/update/delete/set_default/bindings/files.*/tools_schema/
+    "workspace.",
     // teams — carve-outs: agents.list / agents.get (spec §7: "agent 人格
     // 目录 v1 保持全局、admin 治理"; read-only roster browsing stays open,
     // matching the tool-tier gate's own asymmetry — `agent_create`/
@@ -217,8 +220,11 @@ const ADMIN_PREFIXES: &[&str] = &[
 const MEMBER_CARVE_OUTS: &[&str] = &[
     "users.me",       // a member reading their own principal record.
     "users.list",     // project roster picking needs the member list.
+    "agent.run",
     "agents.list",    // browsing the shared agent-persona roster (read-only).
     "agents.get",     // reading a single persona's detail (read-only).
+    "workspace.list",
+    "workspace.get",
     "heartbeat.list", // matches chat-safe `heartbeat_list` in method_authz.rs.
     "heartbeat.get",  // read-only sibling of heartbeat.list.
     "heartbeat.runs", // read-only run history, sibling of heartbeat.list.
@@ -269,11 +275,18 @@ mod tests {
             "users.update",
             // cluster. / services.
             "cluster.enroll",
+            "environments.list",
             "services.start",
             // agents. (fix round — Finding 1)
+            "agent.list",
+            "agent.status",
+            "agent.cancel",
             "agents.create",
             "agents.update",
             "agents.delete",
+            "workspace.create",
+            "workspace.update",
+            "workspace.archive",
             "agents.set_default",
             // providers. family
             "providers.create",
@@ -386,6 +399,7 @@ mod tests {
             "heartbeat.runs",
             "teams.list",
             "workspace.list",
+            "workspace.get",
             "voice.transcribe",
             "fs.read_file",
             "fs.allowed_roots",

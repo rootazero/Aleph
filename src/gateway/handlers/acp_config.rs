@@ -135,7 +135,7 @@ fn broadcast_acp_changed(event_bus: &GatewayEventBus, action: &str) {
         value: json!({ "action": action }),
         timestamp: chrono::Utc::now().timestamp_millis(),
     });
-    let _ = event_bus.publish_json(&event);
+    let _ = event_bus.publish_gateway_event(&event);
 }
 
 // =============================================================================

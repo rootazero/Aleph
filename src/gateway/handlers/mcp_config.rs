@@ -225,7 +225,7 @@ fn publish_mcp_change(event_bus: &GatewayEventBus, action: &str, server: &str) {
         value: json!({ "action": action, "server": server }),
         timestamp,
     });
-    if let Err(e) = event_bus.publish_json(&event) {
+    if let Err(e) = event_bus.publish_gateway_event(&event) {
         error!(error = %e, "Failed to broadcast MCP config event");
     }
 }

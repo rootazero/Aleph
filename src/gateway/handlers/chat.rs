@@ -580,6 +580,32 @@ pub async fn handle_rewind(
     }
 }
 
+async fn check_context_estimate_visibility(
+    request: &JsonRpcRequest,
+    params: &EstimateParams,
+    manager: &dyn SessionStore,
+) -> Result<(), JsonRpcResponse> {
+    let session_key = match SessionKey::from_key_string(&params.session_key) {
+        Some(key) => key,
+        None => {
+            return Err(JsonRpcResponse::error(
+                request.id.clone(),
+                INVALID_PARAMS,
+                "Invalid session_key format",
+            ));
+        }
+    };
+    let meta = match manager.get_metadata(&session_key).await {
+        Ok(Some(meta)) => meta,
+        Ok(None) => return Err(visibility::not_found_response(request.id.clone())),
+        Err(_) => return Err(visibility::not_found_response(request.id.clone())),
+    };
+    if !visibility::session_visible(&meta) {
+        return Err(visibility::not_found_response(request.id.clone()));
+    }
+    Ok(())
+}
+
 /// Handle chat.context_estimate RPC.
 ///
 /// Returns an estimated next-prompt occupancy for sessions that never ran an
@@ -588,11 +614,17 @@ pub async fn handle_rewind(
 pub async fn handle_context_estimate(
     request: JsonRpcRequest,
     harness: Arc<dyn crate::orchestrator::dispatch::HarnessRunner>,
+    session_store: Arc<dyn SessionStore>,
 ) -> JsonRpcResponse {
     let params: EstimateParams = match parse_params(&request) {
         Ok(p) => p,
         Err(e) => return e,
     };
+    if let Err(response) =
+        check_context_estimate_visibility(&request, &params, session_store.as_ref()).await
+    {
+        return response;
+    }
     match harness.estimate_context(&params.session_key).await {
         Some(est) => JsonRpcResponse::success(
             request.id,
@@ -973,6 +1005,31 @@ mod tests {
             // so that fallthrough branch is provably reachable and provably
             // safe, not just assumed.
             assert!(SessionKey::from_key_string("not a real session key").is_none());
+        }
+
+        #[tokio::test]
+        async fn context_estimate_denies_cross_user_session() {
+            let temp = tempfile::tempdir().unwrap();
+            let store = store(&temp);
+            let alice_key = alice_session(&store).await;
+            let req = request(
+                "chat.context_estimate",
+                json!({ "session_key": alice_key.to_key_string() }),
+            );
+            let params = EstimateParams {
+                session_key: alice_key.to_key_string(),
+            };
+
+            let result = CALLER_USER
+                .scope(
+                    Some("u-bob".to_string()),
+                    check_context_estimate_visibility(&req, &params, store.as_ref()),
+                )
+                .await;
+            assert_eq!(
+                result.err().and_then(|response| response.error.map(|e| e.code)),
+                Some(RESOURCE_NOT_FOUND)
+            );
         }
 
         #[tokio::test]

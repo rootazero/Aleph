@@ -58,8 +58,7 @@ pub struct RuntimeInstallProgressEvent {
 }
 
 /// Gateway Event types
-#[derive(Debug, Clone, Serialize)]
-#[serde(tag = "type")]
+#[derive(Debug, Clone)]
 pub enum GatewayEvent {
     ConfigChanged(ConfigChangedEvent),
 }
@@ -425,6 +424,18 @@ impl GatewayEventBus {
     pub fn publish_json<T: serde::Serialize>(&self, event: &T) -> Result<usize, serde_json::Error> {
         let json = serde_json::to_string(event)?;
         Ok(self.publish(json))
+    }
+
+    pub fn publish_gateway_event(
+        &self,
+        event: &GatewayEvent,
+    ) -> Result<usize, serde_json::Error> {
+        match event {
+            GatewayEvent::ConfigChanged(event) => self.publish_frame(&GatewayEventFrame::ConfigChanged {
+                section: event.section.clone(),
+                value: event.value.clone(),
+            }),
+        }
     }
 
     /// Subscribe to receive raw string events (backward compatibility).
