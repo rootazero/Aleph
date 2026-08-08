@@ -286,33 +286,56 @@
 //!   denial is produced by the REAL aggregator over zero rows
 //!   (`memory::insights::empty_tool_usage_report`) so it is byte-identical to
 //!   a partition that ran nothing and cannot drift as the report type grows.
-//! - `workspace.list` → **ListFiltered**, `workspace.get` →
-//!   **PartitionChecked**. ⚠️ These are DEFENSE IN DEPTH ONLY and the
-//!   table would overstate them if read as more: a workspace id is a
-//!   user-chosen name that encodes no owner and `agent_envs` has no owner
-//!   column, so an ordinary workspace passes `partition_visible` for every
-//!   caller and its `env_vars` are still cross-user readable. Closing that
-//!   needs an owner column plus a migration — a schema and product decision,
-//!   not a handler fix. Every handler's doc says so at the site.
+//! - `workspace.*` was listed here (`list` → ListFiltered, `get` and the three
+//!   writes → PartitionChecked) from 2026-08-07 until 2026-08-08, when the
+//!   family became admin-gated and left the table. See the section below —
+//!   its absence is deliberate and pinned, not an oversight.
 //!
-//! ## `workspace.*` writes (2026-08-07)
+//! ## `workspace.*` — the residual, where it was closed, and why it left
+//!   this table
 //!
-//! The round above gated the two READS and left `workspace.create` /
-//! `workspace.update` / `workspace.archive` untouched, which is the wrong half
-//! to stop at: a write into a partition you cannot read is strictly worse than
-//! a read. All three are now **PartitionChecked** on the same
-//! `visibility::partition_visible(&params.id)` call, under the identical
-//! honesty boundary above — an ordinary `"crypto"` still passes for everyone.
-//! What they buy is the composed-id half: without them a member can create or
-//! archive `main__u-alice`, a row that only ALICE's filtered `workspace.list`
-//! then shows, carrying attacker-supplied `env_vars` /
-//! `system_prompt_override` / `allowed_tools`.
+//! **2026-08-07.** The reads were registered first, then the three writes
+//! (`create` / `update` / `archive`) on the same
+//! `visibility::partition_visible(&params.id)` call — a write into a partition
+//! you cannot read is the strictly worse half to leave open. Each denial
+//! reuses that method's OWN existing response rather than a new shared one:
+//! `update`/`archive` already have a "not found", and `create` has none, so
+//! its denial is built from the real `AgentEnvError::AlreadyExists` value and
+//! is byte-identical to a genuine id collision.
 //!
-//! Each denial reuses that method's OWN existing response rather than a new
-//! shared one — `update`/`archive` already have a "not found", and `create`
-//! has none, so its denial is built from the real
-//! `AgentEnvError::AlreadyExists` value and is byte-identical to a genuine id
-//! collision.
+//! **What that could never reach**, and this doc said so at the time: an
+//! ordinary id like `"crypto"` passes for everyone, so a member could rename
+//! and archive the operator's workspace. The 2026-08-08 real-machine QA
+//! exercised exactly that — both calls returned `ok`. The wording then was
+//! that closing it needed an owner column plus a migration, "a schema and
+//! product decision, not a handler fix".
+//!
+//! **2026-08-08: it was closed without either**, at
+//! [`crate::gateway::method_admin`] instead. `workspace.` joined
+//! `ADMIN_PREFIXES` whole, with no carve-out, on the finding that the family
+//! has exactly one client and it is already operator (`aleph workspace
+//! list|create|archive`, over loopback); the Panel has none. So the reachable
+//! caller set for every method in this family is now operator-only, and the
+//! member half of the residual is gone — not narrowed.
+//!
+//! **And so the five entries left this table**, joining `trace.list` /
+//! `trace.get` / `agents.teams` as deliberate absences. This table's contract
+//! — stated by `every_scoped_method_stays_open_to_members_in_method_admin` —
+//! is that everything it claims is a surface a MEMBER reaches and it filters
+//! per user; a method cannot be both operator-only and member-filtered, and a
+//! stale claim here is worse than no claim. The absence is pinned in BOTH
+//! directions by `the_admin_gated_workspace_family_is_deliberately_absent`
+//! (`treatment_of == None` AND `method_requires_admin == true`), so reopening
+//! the family to members fails that test by name and forces the entries back.
+//!
+//! ⚠️ **Leaving this table is not the same as the handlers dropping the
+//! check.** They still call `partition_visible`, and it is not dead code: a
+//! second `UserRole::Admin` principal connects with `CALLER_USER = Some(their
+//! own id)` rather than `OWNER_USER_ID`
+//! (`handlers::connect::resolve_connection_identity`), so `main__u-alice` is
+//! still refused to an operator who is not alice. What was withdrawn is this
+//! table's MEMBER-facing claim, not the predicate. The handler docs carry that
+//! nuance now, because this table deliberately no longer does.
 //!
 //! ## `gateway.metrics.run_concurrency` (2026-08-07)
 //!
@@ -331,7 +354,8 @@
 //! already dead for every member — filtering it is what makes carving it open
 //! safe, and carving it open is what makes the filtering worth having.
 //!
-//! ⚠️ Read the label narrowly, exactly as with `workspace.*`: the AGGREGATE
+//! ⚠️ Read the label narrowly — the habit `workspace.*` was the standing
+//! example of until it left this table: the AGGREGATE
 //! counters in the same response (`run_concurrency`'s slot totals and per-agent
 //! breakdown, `busy_queue.total_waiting`) are deliberately NOT filtered. They
 //! are load numbers with no identity in them and they are the gauge's entire
@@ -533,12 +557,13 @@ pub const SCOPED_METHODS: &[(&str, Treatment)] = &[
     ("memory.list_corrections", Treatment::PartitionChecked),
     ("dreaming.list_insights", Treatment::PartitionChecked),
     ("insights.tools", Treatment::PartitionChecked),
-    ("workspace.list", Treatment::ListFiltered),
-    ("workspace.get", Treatment::PartitionChecked),
-    // --- workspace.* writes (see the module doc's own section) ---
-    ("workspace.create", Treatment::PartitionChecked),
-    ("workspace.update", Treatment::PartitionChecked),
-    ("workspace.archive", Treatment::PartitionChecked),
+    // `workspace.*` was here (list/get 2026-08-07, the three writes the same
+    // day) and left on 2026-08-08 when the family became admin-gated — the
+    // same ruling `trace.list`/`trace.get` and `agents.teams` carry, and for
+    // the same reason this table's own cross-check spells out. Deliberate
+    // absence, pinned by `the_admin_gated_workspace_family_is_deliberately_absent`.
+    // See the module doc's `workspace.*` section for why the handlers keep
+    // calling `partition_visible` anyway.
     // The RPC half of the `stream.running_set_changed` payload projection —
     // same set, same predicate, opposite transport. See the module doc's own
     // section for what the label does and does not claim about the aggregate
@@ -991,9 +1016,10 @@ mod tests {
         }
     }
 
-    /// Final-review I6: the five same-shape siblings Task 7's sweep stopped
-    /// short of. `workspace.*` is registered as defense in depth only — see
-    /// the module doc and both handlers.
+    /// Final-review I6: the same-shape siblings Task 7's sweep stopped short
+    /// of. `workspace.get`/`workspace.list` were the fifth and sixth until
+    /// 2026-08-08 — see
+    /// [`the_admin_gated_workspace_family_is_deliberately_absent`].
     #[test]
     fn final_review_agent_id_siblings_are_registered() {
         for m in [
@@ -1001,35 +1027,58 @@ mod tests {
             "memory.list_corrections",
             "dreaming.list_insights",
             "insights.tools",
-            "workspace.get",
         ] {
             assert_eq!(treatment_of(m), Some(Treatment::PartitionChecked), "{m}");
         }
-        assert_eq!(
-            treatment_of("workspace.list"),
-            Some(Treatment::ListFiltered)
-        );
     }
 
-    /// The four RPCs this table spent a round describing as deliberate gaps
-    /// (`sessions.set_topic` / `chat.context_estimate`) or simply never
-    /// enumerating (the three `workspace.*` writes). Pinned by name because
-    /// they have each already been read once and ruled "lower severity" —
-    /// this is the assertion that fails if the gate is dropped again.
+    /// The two RPCs this table spent a round describing as deliberate gaps.
+    /// Pinned by name because they have each already been read once and ruled
+    /// "lower severity" — this is the assertion that fails if the gate is
+    /// dropped again. (The three `workspace.*` writes were pinned here too
+    /// until 2026-08-08; they moved to the deliberate-absence pin below.)
     #[test]
-    fn the_four_formerly_ungated_scoped_rpcs_are_registered() {
+    fn the_formerly_ungated_scoped_rpcs_are_registered() {
         for m in ["sessions.set_topic", "chat.context_estimate"] {
             assert_eq!(treatment_of(m), Some(Treatment::KeyChecked), "{m}");
         }
-        for m in ["workspace.create", "workspace.update", "workspace.archive"] {
-            assert_eq!(treatment_of(m), Some(Treatment::PartitionChecked), "{m}");
+    }
+
+    /// The whole `workspace.` family is absent from this table on purpose,
+    /// the same ruling `trace.list`/`trace.get` and `agents.teams` carry: it
+    /// is admin-gated, and this table's contract — spelled out by
+    /// [`every_scoped_method_stays_open_to_members_in_method_admin`] — is
+    /// about surfaces a MEMBER reaches and this one filters per user.
+    ///
+    /// Both halves are asserted, and that is what makes this a two-way pin
+    /// rather than a note: absence alone is indistinguishable from an
+    /// oversight, so the admin-gate half is what says *why* it is absent. If
+    /// anyone reopens the family to members, this test fails by name and the
+    /// entries have to come back — which is the outcome we want, because the
+    /// handlers do still filter.
+    ///
+    /// **The handlers keep calling `partition_visible` and that is not dead
+    /// code.** A second `UserRole::Admin` principal connects with
+    /// `CALLER_USER = Some(their own id)`, not `OWNER_USER_ID`
+    /// (`handlers::connect::resolve_connection_identity`), so a
+    /// partition-composed id belonging to someone else is still refused to an
+    /// operator who is not that someone. What this table stopped claiming is
+    /// the MEMBER-facing filtering, which the admin gate now answers instead.
+    #[test]
+    fn the_admin_gated_workspace_family_is_deliberately_absent() {
+        for m in [
+            "workspace.create",
+            "workspace.list",
+            "workspace.get",
+            "workspace.update",
+            "workspace.archive",
+        ] {
+            assert_eq!(treatment_of(m), None, "{m}");
+            assert!(
+                crate::gateway::method_admin::method_requires_admin(m),
+                "{m} is absent from SCOPED_METHODS only because it is admin-gated"
+            );
         }
-        // The writes must not be claimed as MORE than their read siblings:
-        // same predicate, same treatment, same documented boundary.
-        assert_eq!(
-            treatment_of("workspace.archive"),
-            treatment_of("workspace.get")
-        );
     }
 
     /// `gateway.metrics.run_concurrency` is registered AND carved out of the

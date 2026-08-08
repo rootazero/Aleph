@@ -117,6 +117,32 @@ const ADMIN_PREFIXES: &[&str] = &[
     // matching the tool-tier gate's own asymmetry — `agent_create`/
     // `agent_delete`/`agent_switch` are OPERATOR_TOOLS in method_authz.rs
     // while `agent_list` is explicitly chat-safe there).
+    // The SECOND face of the same `AgentEnvStore` (2026-08-08). `agents.*` was
+    // gated on the reasoning above while `workspace.*` — create/list/get/
+    // update/archive over the very same `agent_envs` table — stayed open to
+    // members, which is the "one verb, two faces, only one of them gated"
+    // shape. The 2026-08-08 real-machine QA exercised the write half: a member
+    // renamed and then archived a workspace the operator had just created,
+    // both returning `ok`. `visibility::partition_visible` cannot close that —
+    // a workspace id is a user-chosen name (`"crypto"`) encoding no owner and
+    // `agent_envs` has no owner column, so an ordinary id passes for every
+    // caller (see `handlers/workspace.rs`, which still calls it as defense in
+    // depth against partition-COMPOSED ids and says so at each site).
+    //
+    // Gated whole, with no carve-out, because the family has exactly one
+    // client and it is already operator: `interfaces/cli/src/commands/
+    // workspace_cmd.rs` (`aleph workspace list|create|archive`), which reaches
+    // the server over loopback/IPC. The Panel has NONE — `interfaces/webchat/
+    // src/api/workspace.rs`'s own doc records that `workspace.list` was dead
+    // and removed — and `workspace.update`/`workspace.get` have no client
+    // anywhere. A `MEMBER_CARVE_OUTS` entry for the reads would therefore be a
+    // zero-consumer opening (R10 YAGNI), not a preserved capability.
+    //
+    // NOT an owner column: that would build a permission model for per-user
+    // workspaces, a capability no surface currently lets a member use. If that
+    // product ever lands, the column layers on top of this gate rather than
+    // replacing it.
+    "workspace.",
     // --- Provider & channel configuration (shared, server-global) ---
     "providers.",            // LLM provider CRUD + credentials.
     "embedding_providers.",  // sibling of providers. — embedding backend CRUD.
@@ -306,6 +332,17 @@ mod tests {
             "agents.update",
             "agents.delete",
             "agents.set_default",
+            // workspace. — the second face of the same `AgentEnvStore`
+            // (2026-08-08). All five are listed, not one representative:
+            // `update`/`archive` are the two the real-machine QA actually
+            // exercised as a member, and `list` moved out of
+            // `member_daily_methods_stay_open` in the same change, so a
+            // regression that reopens any one of them should fail by name.
+            "workspace.create",
+            "workspace.list",
+            "workspace.get",
+            "workspace.update",
+            "workspace.archive",
             // providers. family
             "providers.create",
             "embedding_providers.add",
@@ -443,7 +480,11 @@ mod tests {
             "heartbeat.get",
             "heartbeat.runs",
             "teams.list",
-            "workspace.list",
+            // `workspace.list` was here until 2026-08-08. It moved into the
+            // admin table above with the rest of its family — it had no member
+            // consumer to keep open (the Panel's `workspace.list` call was
+            // removed long ago), so leaving the read half open would have been
+            // a zero-consumer hole next to a closed write half.
             "voice.transcribe",
             "fs.read_file",
             "fs.allowed_roots",
@@ -490,6 +531,54 @@ mod tests {
                 "{sibling} must stay admin-gated — only tools.invoke is carved out"
             );
         }
+    }
+
+    /// The 2026-08-08 real-machine QA, written down as a test.
+    ///
+    /// A member connected over the LAN renamed a workspace the operator had
+    /// just created (`workspace.update`) and then archived it
+    /// (`workspace.archive`); both returned `ok`. Neither call is refusable by
+    /// `visibility::partition_visible` — the id was an ordinary name with no
+    /// owner encoded in it — so the refusal has to come from this gate.
+    ///
+    /// Named after the ACTIONS rather than the family so a future reopening
+    /// fails with the QA finding in the test name.
+    #[test]
+    fn a_member_cannot_rename_or_archive_the_operators_workspace() {
+        for m in ["workspace.update", "workspace.archive"] {
+            assert!(
+                method_requires_admin(m),
+                "{m} must be admin-gated — a member reached it in the 2026-08-08 QA"
+            );
+        }
+    }
+
+    /// The whole `workspace.` family is gated, with NO carve-out — unlike
+    /// `agents.`, whose read half (`list`/`get`) is member-visible.
+    ///
+    /// The asymmetry is deliberate and worth pinning: `agents.list`/`.get`
+    /// have live member consumers (the Panel's persona roster), while every
+    /// `workspace.*` read had none — so carving the reads open here would
+    /// reopen `env_vars` / `system_prompt_override` / `allowed_tools` to every
+    /// caller in exchange for nothing.
+    #[test]
+    fn the_workspace_family_has_no_member_carve_out() {
+        for m in [
+            "workspace.create",
+            "workspace.list",
+            "workspace.get",
+            "workspace.update",
+            "workspace.archive",
+        ] {
+            assert!(
+                method_requires_admin(m),
+                "{m} must be admin-gated — the family is gated whole"
+            );
+        }
+        assert!(
+            !MEMBER_CARVE_OUTS.iter().any(|m| m.starts_with("workspace.")),
+            "no workspace.* carve-out may be added without a member consumer to justify it"
+        );
     }
 
     /// Prefix false-positive safety: a method whose name merely SHARES a

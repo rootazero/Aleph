@@ -46,12 +46,17 @@ pub struct CreateParams {
 /// P1 partition isolation on the WRITE side, with exactly the coverage
 /// boundary [`handle_list`] documents and no more: a workspace id is a
 /// user-chosen name that encodes no owner and `agent_envs` has no owner
-/// column, so an ordinary id (`"crypto"`) passes for every caller. What the
-/// check does buy is the composed-id half — without it a member can create
-/// `main__u-alice`, a row that then shows up in ALICE's filtered
-/// `workspace.list` carrying attacker-supplied `env_vars` /
+/// column, so an ordinary id (`"crypto"`) passes for every caller who reaches
+/// this handler. What the check does buy is the composed-id half — without it
+/// a caller can create `main__u-alice`, a row that then shows up in ALICE's
+/// filtered `workspace.list` carrying attacker-supplied `env_vars` /
 /// `system_prompt_override` / `allowed_tools`. Reads were gated first; a
 /// write into a partition you cannot read is the strictly worse half.
+///
+/// Since 2026-08-08 the reachable caller set is operator-only — the whole
+/// `workspace.` family is admin-gated ([`handle_list`]'s doc has the finding
+/// that made that the right fix rather than an owner column). The predicate
+/// stays because it is not vacuous for an operator either.
 ///
 /// The denial reuses this method's own "that id is not available" shape,
 /// produced from the REAL [`crate::gateway::agent_env::AgentEnvError::AlreadyExists`]
@@ -135,25 +140,45 @@ pub async fn handle_create(
 /// `memory.*`/`graph.*` family uses, so an id composed with the partition
 /// grammar (`<base>__u-alice`) is invisible to everyone else.
 ///
-/// That is defense in depth, NOT a closed boundary, and the distinction is
-/// recorded here rather than implied by the presence of a check: a workspace
-/// id is a user-chosen name (`"project-aleph"`), it encodes no owner, and the
-/// `agent_envs` table has no owner column — so an ordinary workspace passes
-/// this predicate for every caller.
+/// That is defense in depth, NOT a closed boundary on its own, and the
+/// distinction is recorded here rather than implied by the presence of a
+/// check: a workspace id is a user-chosen name (`"project-aleph"`), it
+/// encodes no owner, and the `agent_envs` table has no owner column — so an
+/// ordinary workspace passes this predicate for every caller who reaches this
+/// handler.
 ///
-/// **The residual is write, not just read.** The 2026-08-08 real-machine QA
-/// exercised it: a member renamed and then archived a workspace the operator
-/// had just created, both returning `ok`. An earlier wording here named only
-/// "one member can read another's `env_vars`", which understated it by a
-/// whole verb class — `update` and `archive` take the same plain id and clear
-/// the same vacuous predicate. (That QA also produced a *false* pass on the
-/// list side: `handle_list` looked filtered only because the member had
-/// archived the row one call earlier and `list(false)` skips archived.)
+/// # The residual was write, and it is closed at the admin gate
 ///
-/// Closing it needs an owner column plus a migration (the stamp
-/// `SessionMetadata`/`GroupChatSession`/`LoopState` carry), which is a
-/// schema change and a product decision, not a handler fix. See the P1
-/// final-fix report.
+/// The 2026-08-08 real-machine QA exercised the write half: a member renamed
+/// and then archived a workspace the operator had just created, both
+/// returning `ok`. An earlier wording here named only "one member can read
+/// another's `env_vars`", which understated it by a whole verb class —
+/// `update` and `archive` take the same plain id and clear the same predicate.
+/// (That QA also produced a *false* pass on the list side: this handler looked
+/// filtered only because the member had archived the row one call earlier and
+/// `list(false)` skips archived.)
+///
+/// That wording also said closing it needed an owner column plus a migration,
+/// "a schema change and a product decision, not a handler fix". It needed
+/// neither. The whole `workspace.` family joined
+/// [`crate::gateway::method_admin`]'s `ADMIN_PREFIXES` on 2026-08-08, with no
+/// carve-out, because the family has exactly one client and it is already
+/// operator (`aleph workspace list|create|archive`, over loopback); the Panel
+/// has none, and `update`/`get` have no client anywhere. A member no longer
+/// reaches any method in this file.
+///
+/// **The predicate below still earns its place, and this file is now the only
+/// place that says so.** The family left
+/// `method_visibility::SCOPED_METHODS` in the same change — that table's
+/// contract is per-user filtering on surfaces a MEMBER reaches, so a claim
+/// there would have gone stale — but leaving the table is not the handlers
+/// dropping the check. A second `UserRole::Admin` principal connects with
+/// `CALLER_USER = Some(their own id)` rather than `OWNER_USER_ID`
+/// (`handlers::connect::resolve_connection_identity` returns the linked
+/// user's id for any admin that is not the zero-config loopback owner), so
+/// `partition_visible` still refuses `main__u-alice` to an operator who is
+/// not alice. Two gates, two questions — "may this role call it" and "may
+/// this caller address that partition" — and neither implies the other.
 pub async fn handle_list(
     request: JsonRpcRequest,
     workspace_manager: Arc<AgentEnvStore>,
@@ -470,8 +495,16 @@ mod tests {
     ///
     /// What this test deliberately does NOT claim: that ordinary workspaces
     /// are isolated. `"crypto"` carries no owner, so it passes the predicate
-    /// for everyone — see [`handle_list`]'s doc for why closing that needs a
-    /// schema change.
+    /// for everyone who reaches this handler — that half is answered by the
+    /// admin gate instead (see [`handle_list`]'s doc).
+    ///
+    /// The scoped id below is written as a member's for readability, but this
+    /// calls the handler directly and so proves nothing about who may dispatch
+    /// to it: since 2026-08-08 a member cannot — `workspace.` is admin-gated,
+    /// pinned in [`crate::gateway::method_admin`]'s own tests. The predicate
+    /// under test binds operators too: a second `UserRole::Admin` principal
+    /// carries its OWN `CALLER_USER`, not `OWNER_USER_ID`, so this is the
+    /// surviving case rather than a hypothetical one.
     #[tokio::test]
     async fn get_denies_a_foreign_partition_composed_id_as_not_found() {
         use crate::gateway::caller_identity::CALLER_USER;
@@ -532,9 +565,12 @@ mod tests {
 
     /// The write half of the same defense-in-depth check the reads carry.
     /// Reads were gated first, which left the strictly worse half open: a
-    /// member could CREATE `main__u-alice`, and that row then appears only in
+    /// caller could CREATE `main__u-alice`, and that row then appears only in
     /// ALICE's filtered `workspace.list`, carrying `env_vars` /
-    /// `system_prompt_override` / `allowed_tools` she never wrote.
+    /// `system_prompt_override` / `allowed_tools` she never wrote. (When this
+    /// was written that caller could be a member; since 2026-08-08 the family
+    /// is admin-gated and the surviving case is one operator addressing
+    /// another user's partition.)
     ///
     /// Each assertion is on the STORE after the call, not on the response —
     /// a check that returned the right error while the write still landed

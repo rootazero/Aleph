@@ -641,7 +641,7 @@ pub fn broadcast_config_changed(
         timestamp,
     });
 
-    event_bus.publish_json(&event).map(|_| ())
+    event_bus.publish_gateway_event(&event).map(|_| ())
 }
 
 // ============================================================================
@@ -801,7 +801,7 @@ pub async fn handle_update_tool_permissions(
         value: json!({"updated": true}),
         timestamp: chrono::Utc::now().timestamp_millis(),
     });
-    let _ = event_bus.publish_json(&event);
+    let _ = event_bus.publish_gateway_event(&event);
 
     JsonRpcResponse::success(request.id, updated)
 }
@@ -1024,6 +1024,7 @@ model = "claude-opus-4-5"
 
         let (patcher, _temp_dir) = create_test_patcher();
         let event_bus = Arc::new(GatewayEventBus::new());
+        let mut events = event_bus.subscribe();
         let store = Arc::new(SecurityStore::in_memory().unwrap());
         let vault = Arc::new(SharedTokenManager::new(
             store,
@@ -1044,6 +1045,9 @@ model = "claude-opus-4-5"
 
         assert!(response.error.is_none(), "error: {:?}", response.error);
         assert!(response.result.is_some());
+        let event: serde_json::Value = serde_json::from_str(&events.try_recv().unwrap()).unwrap();
+        assert_eq!(event["topic"], "config.changed");
+        assert_eq!(event["data"]["type"], "config_changed");
         let result = response.result.unwrap();
         assert_eq!(result["success"], true);
     }

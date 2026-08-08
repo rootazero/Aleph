@@ -1364,9 +1364,35 @@ after (verified by `single_user_fixture_is_byte_identical_after_upgrade`,
   exercised that residual and it is a WRITE, not only a read**: a member
   renamed and then archived a workspace the operator had just created, both
   returning `ok`. Earlier wording here and in the handler named only
-  "read another's `env_vars`", understating it by a verb class. Closing it
-  needs an owner column and a migration — a schema change and a product
-  decision, tracked as an open gap rather than fixed in a handler.
+  "read another's `env_vars`", understating it by a verb class.
+  **Closed 2026-08-08 — at the admin gate, not with an owner column.** The
+  wording immediately above used to say closing it needed a schema change and
+  a product decision; re-scouting the family found it needed neither. The
+  `workspace.` family has exactly one client and that client is already
+  operator (`aleph workspace list|create|archive`, over loopback); the Panel
+  has none — `interfaces/webchat/src/api/workspace.rs` records that its
+  `workspace.list` call was removed long ago — and `workspace.update` /
+  `workspace.get` have no client anywhere. Nor was the read half worth what it
+  looked like: `env_vars`, `system_prompt_override` and `allowed_tools` have
+  no writer on `agent_envs` at all, so cross-user "reads" returned empty
+  columns; the write half was the whole of the real residual. So the family
+  joined `method_admin::ADMIN_PREFIXES` **whole, with no carve-out** — a
+  `MEMBER_CARVE_OUTS` entry for the reads would have been a zero-consumer
+  opening. An owner column would have built a permission model for per-user
+  workspaces, which no surface currently lets a member use; it can layer on
+  top of this gate if that product ever lands.
+  Two consequences worth stating, because each is the kind of thing that
+  drifts: **(1)** the five methods **left `method_visibility::SCOPED_METHODS`**
+  in the same change — that table's contract is per-user filtering on surfaces
+  a *member* reaches, so keeping a claim there would have gone stale, and the
+  same ruling already applies to `trace.list`/`trace.get`/`agents.teams`. The
+  absence is pinned in both directions (`treatment_of == None` **and**
+  `method_requires_admin == true`), so reopening the family to members fails a
+  test by name and forces the entries back. **(2)** the handlers **keep**
+  calling `partition_visible` and it is not dead code: a second
+  `UserRole::Admin` principal connects with `CALLER_USER = Some(their own
+  id)`, not `OWNER_USER_ID`, so `main__u-alice` is still refused to an
+  operator who is not alice.
 - **Session `owner_user_id` / `scope_id` were never stamped on any run path
   until 2026-08-08, and the P1/P2 predicates that read them were therefore
   inert.** `SessionMetadata::stamp_attribution` reads `scope::current_scope()`
@@ -1597,6 +1623,21 @@ attribution, and a bound workspace as the room's default cwd.
   until their next `artifacts.list` re-mints. Pinned as a stated fact by
   `artifact_route.rs::a_removed_members_minted_artifact_url_survives_until_ttl`
   — a red test is how anyone reversing this decision will learn it was one.
+
+  **Confirmed end-to-end on 2026-08-08, through the production mint path.**
+  That test builds its `SessionMetadata` by hand and calls
+  `ArtifactCapabilities::mint` directly, so it never shows that
+  `artifacts.list`'s own `deny_unless_visible` admitted the holder — the gap a
+  real-machine run had to close. It now has: a member chatted in a room, the
+  model called `artifact_publish`, and the member read the capability URL out
+  of their own `artifacts.list` response. Removing them from the roster
+  produced **two different and both-correct answers**: the RPC face shut
+  immediately (`artifacts.list` and `artifacts.read_text` each `-32009`,
+  byte-identical to a session that does not exist) while the already-minted
+  byte URL kept serving — the bearer window above. Fresh minting was
+  impossible, because the only mint site is the `artifacts.list` that just
+  refused. If a SECOND mint site is ever added, that last sentence stops being
+  true and this paragraph has to be re-derived.
 - **`owner_user_id` means CREATOR, not "the one who can see it."** The P1
   vocabulary (`effective_owner`, adoption-by-absence) keeps working for
   personal rows, but for a project row the owner column only decides

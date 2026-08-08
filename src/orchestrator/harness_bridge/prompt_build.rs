@@ -221,6 +221,7 @@ impl AgentHarnessRunner {
         workspace: Option<&std::path::Path>,
         routing_text: Option<String>,
         has_session_summaries: bool,
+        prompt_token_budget: Option<u64>,
         envelope: &crate::thinker::TurnEnvelope,
     ) -> Option<(
         String,
@@ -335,12 +336,15 @@ impl AgentHarnessRunner {
         // Identity-file caps scale with the model window (feature 1.3), same
         // window source as the prompt budget below; no `[context_budget]`
         // configured → ::default() (legacy 20k/100k, byte-identical).
-        let identity_cfg = self.context_budget_config.as_ref().map_or_else(
+        let prompt_token_budget = prompt_token_budget.or_else(|| {
+            self.context_budget_config
+                .as_ref()
+                .map(|cfg| cfg.token_budget)
+        });
+        let identity_cfg = prompt_token_budget.map_or_else(
             crate::thinker::identity_files::IdentityFilesConfig::default,
-            |cfg| {
-                crate::thinker::identity_files::IdentityFilesConfig::for_context_window(
-                    cfg.token_budget,
-                )
+            |budget| {
+                crate::thinker::identity_files::IdentityFilesConfig::for_context_window(budget)
             },
         );
         let identity_files = crate::discovery::aleph_agents_dir().ok().map(|agents_dir| {
@@ -505,12 +509,10 @@ impl AgentHarnessRunner {
         // window the history side uses (feature 2.2), so large-window models
         // stop being capped at the fixed 80k default. No `[context_budget]`
         // configured → legacy fixed default (byte-identical).
-        let token_budget = self
-            .context_budget_config
-            .as_ref()
-            .map_or_else(crate::thinker::prompt_budget::TokenBudget::default, |cfg| {
-                crate::thinker::prompt_budget::TokenBudget::from_context_window(cfg.token_budget)
-            });
+        let token_budget = prompt_token_budget.map_or_else(
+            crate::thinker::prompt_budget::TokenBudget::default,
+            crate::thinker::prompt_budget::TokenBudget::from_context_window,
+        );
         // Tool-scoped skills (`PromptScope::Tool`) are filtered inside
         // `SkillInstructionsLayer` against the active tool names. The cached
         // prompt is assembled with an empty `tools` slice (native tool_use

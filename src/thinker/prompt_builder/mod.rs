@@ -340,7 +340,11 @@ impl PromptBuilder {
             prompt.push_str(mode.subagent_prompt_line());
             prompt.push_str("\n\n");
         }
-        prompt
+        crate::thinker::prompt_budget::fit_dynamic_suffix_with_content(
+            "",
+            prompt,
+            &self.config.token_budget,
+        )
     }
 
     /// Access the underlying config (for reading).

@@ -179,7 +179,7 @@ pub async fn handle_create(
         timestamp,
     });
 
-    if let Err(e) = event_bus.publish_json(&event) {
+    if let Err(e) = event_bus.publish_gateway_event(&event) {
         error!(error = %e, "Failed to broadcast event");
     }
 
@@ -261,7 +261,7 @@ pub async fn handle_update(
         timestamp,
     });
 
-    if let Err(e) = event_bus.publish_json(&event) {
+    if let Err(e) = event_bus.publish_gateway_event(&event) {
         error!(error = %e, "Failed to broadcast event");
     }
 
@@ -346,7 +346,7 @@ pub async fn handle_delete(
         timestamp,
     });
 
-    if let Err(e) = event_bus.publish_json(&event) {
+    if let Err(e) = event_bus.publish_gateway_event(&event) {
         error!(error = %e, "Failed to broadcast event");
     }
 
@@ -412,7 +412,7 @@ pub async fn handle_move(
         timestamp,
     });
 
-    if let Err(e) = event_bus.publish_json(&event) {
+    if let Err(e) = event_bus.publish_gateway_event(&event) {
         error!(error = %e, "Failed to broadcast event");
     }
 

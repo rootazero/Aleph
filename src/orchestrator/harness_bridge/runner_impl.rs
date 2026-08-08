@@ -411,6 +411,20 @@ impl HarnessRunner for AgentHarnessRunner {
             self.primary_context_window,
             &gauge_model,
         );
+        let refined_context_budget = self.context_budget_config.as_ref().map(|base| {
+            self.context_budget_refiner.as_ref().map_or_else(
+                || base.clone(),
+                |refiner| {
+                    refiner.refine_for_serving_model(
+                        base,
+                        &gauge_model,
+                        &cost_provider,
+                        self.primary_context_window,
+                    )
+                },
+            )
+        });
+        let prompt_token_budget = refined_context_budget.as_ref().map(|cfg| cfg.token_budget);
 
         // Run-start recall (ONCE, pre-loop) → fenced String for the builder;
         // also backfills routing_attribution.task_emb for the observer (symmetry).
@@ -440,6 +454,7 @@ impl HarnessRunner for AgentHarnessRunner {
                 workspace_override.as_deref(),
                 routing_text,
                 has_session_summaries,
+                prompt_token_budget,
                 &envelope,
             )
             .await
@@ -496,19 +511,7 @@ impl HarnessRunner for AgentHarnessRunner {
                 // everything below (budget, compactor tail, preflight
                 // preventive band) reads the same refined value, keeping the
                 // three consumers consistent by construction.
-                let refined;
-                let cfg = match self.context_budget_refiner.as_ref() {
-                    Some(refiner) => {
-                        refined = refiner.refine_for_serving_model(
-                            cfg,
-                            &gauge_model,
-                            &cost_provider,
-                            self.primary_context_window,
-                        );
-                        &refined
-                    }
-                    None => cfg,
-                };
+                let cfg = refined_context_budget.as_ref().unwrap_or(cfg);
                 let mut budget_inner = ContextBudget::new(cfg);
                 // Seed ONLY the tokenizer-calibration factor from the previous
                 // run on the same model (see CALIBRATION_CARRYOVER below): the
@@ -691,7 +694,6 @@ impl HarnessRunner for AgentHarnessRunner {
             system_prompt,
             system_prompt_parts,
             recall_context,
-            chain_context: crate::harness::chain_context::ChainContext::default(),
             // rust-doctor-disable-next-line excessive-clone
             guardrails: self.guardrails.clone(),
             // H1: the Think→Act loop is always capped. Per-flow override wins;
@@ -1108,6 +1110,7 @@ impl HarnessRunner for AgentHarnessRunner {
                     // Static overhead estimate: no real history, so no session
                     // summaries — keeps the cached estimate stable.
                     false,
+                    None,
                     // Empty envelope on the estimate path: an approval / usage-mode
                     // line or a run-specific cwd here would pollute the cached
                     // per-(agent, model) overhead with another run's facts.

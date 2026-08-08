@@ -41,6 +41,22 @@ use commands::{
 };
 use slash::ParsedInput;
 
+fn model_name_from_provider_list(result: &Value) -> String {
+    result
+        .get("providers")
+        .and_then(Value::as_array)
+        .and_then(|providers| {
+            providers
+                .iter()
+                .find(|provider| provider.get("is_default").and_then(Value::as_bool) == Some(true))
+                .or_else(|| providers.first())
+        })
+        .and_then(|provider| provider.get("model").and_then(Value::as_str))
+        .filter(|model| !model.is_empty())
+        .unwrap_or("unknown")
+        .to_string()
+}
+
 /// Entry point: run the TUI application.
 ///
 /// Sets up the terminal, spawns the event collector, and runs the main loop
@@ -78,45 +94,8 @@ pub async fn run(
     }));
 
     // 3. Fetch model name from gateway, then create AppState and TextArea
-    let model_name = match client.call::<_, Value>("models.list", None::<()>).await {
-        Ok(result) => {
-            // Try array format: [{"name": "..."}, ...] or ["model-name", ...]
-            result
-                .as_array()
-                .and_then(|arr| arr.first())
-                .and_then(|first| {
-                    first
-                        .as_str()
-                        .map(std::string::ToString::to_string)
-                        .or_else(|| {
-                            first
-                                .get("name")
-                                .or_else(|| first.get("id"))
-                                .and_then(|v| v.as_str())
-                                .map(std::string::ToString::to_string)
-                        })
-                })
-                // Also try object format: {"models": [...]}
-                .or_else(|| {
-                    result
-                        .get("models")
-                        .and_then(|v| v.as_array())
-                        .and_then(|arr| arr.first())
-                        .and_then(|first| {
-                            first
-                                .as_str()
-                                .map(std::string::ToString::to_string)
-                                .or_else(|| {
-                                    first
-                                        .get("name")
-                                        .or_else(|| first.get("id"))
-                                        .and_then(|v| v.as_str())
-                                        .map(std::string::ToString::to_string)
-                                })
-                        })
-                })
-                .unwrap_or_else(|| "unknown".to_string())
-        }
+    let model_name = match client.call::<_, Value>("providers.list", None::<()>).await {
+        Ok(result) => model_name_from_provider_list(&result),
         Err(_) => "unknown".to_string(),
     };
 
@@ -382,4 +361,21 @@ async fn main_loop(
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::model_name_from_provider_list;
+
+    #[test]
+    fn model_name_uses_default_provider_from_list() {
+        let result = serde_json::json!({
+            "providers": [
+                {"model": "fallback-model", "is_default": false},
+                {"model": "default-model", "is_default": true}
+            ]
+        });
+
+        assert_eq!(model_name_from_provider_list(&result), "default-model");
+    }
 }
