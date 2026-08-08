@@ -61,8 +61,8 @@ impl PromptBuilder {
         // stable/dynamic boundary — stays valid; only the per-request dynamic
         // suffix is head/tail trimmed, with a model-visible truncation notice
         // appended. A no-op (byte-identical) for normal prompts under budget.
-        let dynamic = crate::thinker::prompt_budget::fit_dynamic_suffix(
-            stable.chars().count(),
+        let dynamic = crate::thinker::prompt_budget::fit_dynamic_suffix_with_content(
+            &stable,
             dynamic,
             &self.config.token_budget,
         );
@@ -122,6 +122,16 @@ mod tests {
 
     fn total_len(parts: &[SystemPromptPart]) -> usize {
         parts.iter().map(|p| p.content.len()).sum()
+    }
+
+    #[test]
+    fn basic_path_honors_prompt_budget() {
+        let mut config = PromptConfig::default();
+        config.token_budget.max_total_chars = 256;
+        config.token_budget.truncation_warning =
+            crate::thinker::prompt_budget::TruncationWarning::Off;
+        let prompt = PromptBuilder::new(config).build_system_prompt(&[]);
+        assert!(prompt.chars().count() <= 256);
     }
 
     #[test]

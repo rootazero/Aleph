@@ -49,6 +49,7 @@ pub struct TokenBudget {
     pub max_total_chars: usize,
     /// Warning mode for truncation events.
     pub truncation_warning: TruncationWarning,
+    pub max_total_tokens: Option<usize>,
 }
 
 impl Default for TokenBudget {
@@ -56,6 +57,7 @@ impl Default for TokenBudget {
         Self {
             max_total_chars: DEFAULT_PROMPT_CHARS,
             truncation_warning: TruncationWarning::default(),
+            max_total_tokens: None,
         }
     }
 }
@@ -79,9 +81,24 @@ impl TokenBudget {
                 DEFAULT_PROMPT_CHARS,
                 MAX_PROMPT_CHARS,
             ),
+            max_total_tokens: Some(window_token_budget(
+                window_tokens,
+                PROMPT_WINDOW_FRACTION,
+                DEFAULT_PROMPT_TOKENS,
+                MAX_PROMPT_TOKENS,
+            )),
             ..Self::default()
         }
     }
+}
+
+const DEFAULT_PROMPT_TOKENS: usize = 20_000;
+const MAX_PROMPT_TOKENS: usize = 120_000;
+
+fn window_token_budget(window_tokens: u64, fraction: f64, floor: usize, ceil: usize) -> usize {
+    const MAX_PRECISE_F64: u64 = 1u64 << 53;
+    let capped = window_tokens.min(MAX_PRECISE_F64);
+    ((capped as f64 * fraction) as usize).clamp(floor, ceil)
 }
 
 /// Warning mode for truncation events.
@@ -223,18 +240,78 @@ pub fn render_truncation_notice(mode: TruncationWarning, saved_chars: usize) -> 
 /// once, not thrice.
 #[must_use]
 pub fn fit_dynamic_suffix(stable_len: usize, dynamic: String, budget: &TokenBudget) -> String {
-    if stable_len + dynamic.chars().count() <= budget.max_total_chars {
-        return dynamic;
+    fit_dynamic_suffix_impl(None, stable_len, dynamic, budget)
+}
+
+#[must_use]
+pub(crate) fn fit_dynamic_suffix_with_content(
+    stable: &str,
+    dynamic: String,
+    budget: &TokenBudget,
+) -> String {
+    fit_dynamic_suffix_impl(Some(stable), stable.chars().count(), dynamic, budget)
+}
+
+fn fit_dynamic_suffix_impl(
+    stable: Option<&str>,
+    stable_len: usize,
+    dynamic: String,
+    budget: &TokenBudget,
+) -> String {
+    let original_chars = dynamic.chars().count();
+    let char_limit = budget.max_total_chars.saturating_sub(stable_len);
+    let notice_reserve = usize::from(budget.truncation_warning != TruncationWarning::Off) * 400;
+    let mut upper = original_chars;
+    if char_limit < original_chars {
+        upper = char_limit.saturating_sub(notice_reserve);
     }
-    // Reserve headroom for the notice so the final string stays near budget.
-    const NOTICE_RESERVE: usize = 400;
-    let avail = budget
-        .max_total_chars
-        .saturating_sub(stable_len)
-        .saturating_sub(NOTICE_RESERVE);
-    let before = dynamic.chars().count();
-    let trimmed = truncate_with_head_tail(&dynamic, avail, 0.6, 0.3);
-    let saved = before.saturating_sub(trimmed.chars().count());
+
+    let mut trimmed = if upper < original_chars {
+        truncate_with_head_tail(&dynamic, upper, 0.6, 0.3)
+    } else {
+        dynamic.clone()
+    };
+
+    let token_cap = budget.max_total_tokens;
+    if let (Some(stable), Some(token_cap)) = (stable, token_cap) {
+        let mut combined = String::with_capacity(stable.len() + trimmed.len());
+        combined.push_str(stable);
+        combined.push_str(&trimmed);
+        let already_fits =
+            crate::context::budget::pressure::estimate_tokens_smart(&combined) <= token_cap;
+        if !already_fits {
+            upper = upper.min(trimmed.chars().count());
+            let mut low = 0usize;
+            let mut high = upper.saturating_add(1);
+            while low + 1 < high {
+                let middle = low + (high - low) / 2;
+                let candidate = truncate_with_head_tail(&dynamic, middle, 0.6, 0.3);
+                let saved = original_chars.saturating_sub(candidate.chars().count());
+                let notice = render_truncation_notice(budget.truncation_warning, saved);
+                let mut candidate_prompt = String::with_capacity(
+                    stable.len() + candidate.len() + notice.as_ref().map_or(0, String::len),
+                );
+                candidate_prompt.push_str(stable);
+                candidate_prompt.push_str(&candidate);
+                if let Some(notice) = notice {
+                    candidate_prompt.push_str(&notice);
+                }
+                if crate::context::budget::pressure::estimate_tokens_smart(&candidate_prompt)
+                    <= token_cap
+                {
+                    low = middle;
+                } else {
+                    high = middle;
+                }
+            }
+            trimmed = truncate_with_head_tail(&dynamic, low, 0.6, 0.3);
+        }
+    }
+
+    let saved = original_chars.saturating_sub(trimmed.chars().count());
+    if saved == 0 {
+        return trimmed;
+    }
     match render_truncation_notice(budget.truncation_warning, saved) {
         Some(notice) => format!("{trimmed}{notice}"),
         None => trimmed,
@@ -291,6 +368,46 @@ mod tests {
         assert_eq!(
             TokenBudget::from_context_window(10_000_000).max_total_chars,
             MAX_PROMPT_CHARS
+        );
+    }
+
+    #[test]
+    fn window_budget_sets_content_aware_token_ceiling() {
+        assert_eq!(
+            TokenBudget::from_context_window(200_000).max_total_tokens,
+            Some(20_000)
+        );
+        assert_eq!(
+            TokenBudget::from_context_window(1_000_000).max_total_tokens,
+            Some(100_000)
+        );
+    }
+
+    #[test]
+    fn content_aware_fit_trims_dense_dynamic_text() {
+        let mut budget = TokenBudget::default();
+        budget.max_total_chars = 10_000;
+        budget.max_total_tokens = Some(100);
+        budget.truncation_warning = TruncationWarning::Off;
+        let stable = "stable prefix";
+        let dynamic = "中文内容".repeat(1_000);
+        let output = fit_dynamic_suffix_with_content(stable, dynamic, &budget);
+        let prompt = format!("{stable}{output}");
+        assert!(
+            crate::context::budget::pressure::estimate_tokens_smart(&prompt) <= 100,
+            "dense prompt exceeded token ceiling: {}",
+            crate::context::budget::pressure::estimate_tokens_smart(&prompt)
+        );
+    }
+
+    #[test]
+    fn content_aware_fit_keeps_default_budget_byte_stable() {
+        let budget = TokenBudget::default();
+        let stable = "stable prefix";
+        let dynamic = "ordinary dynamic context".to_string();
+        assert_eq!(
+            fit_dynamic_suffix_with_content(stable, dynamic.clone(), &budget),
+            dynamic
         );
     }
 
@@ -457,6 +574,7 @@ mod tests {
         let budget = TokenBudget {
             max_total_chars: 1500,
             truncation_warning: TruncationWarning::Off,
+            ..TokenBudget::default()
         };
         let out = fit_dynamic_suffix(200, "D".repeat(40_000), &budget);
         assert!(out.len() < 40_000, "still trims to protect the budget");
