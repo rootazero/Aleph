@@ -4,7 +4,9 @@
 //! Channel agent binding: `channels.set_agent`, agents.bindings.
 //! All handlers delegate to `AgentEnvStore` (SQLite-backed).
 
-use aleph_protocol::workspace::{WorkspaceCreateParams, WorkspaceRef, WorkspaceUpdateParams};
+use aleph_protocol::workspace::{
+    WorkspaceCreateParams, WorkspaceListParams, WorkspaceRef, WorkspaceUpdateParams,
+};
 use serde::Deserialize;
 use serde_json::json;
 
@@ -147,7 +149,7 @@ pub async fn handle_create(
 /// `update` and `archive` take the same plain id and clear the same predicate.
 /// (That QA also produced a *false* pass on the list side: this handler looked
 /// filtered only because the member had archived the row one call earlier and
-/// `list(false)` skips archived.)
+/// the then-hard-coded `list(false)` skips archived.)
 ///
 /// That wording also said closing it needed an owner column plus a migration,
 /// "a schema change and a product decision, not a handler fix". It needed
@@ -170,11 +172,33 @@ pub async fn handle_create(
 /// `partition_visible` still refuses `main__u-alice` to an operator who is
 /// not alice. Two gates, two questions — "may this role call it" and "may
 /// this caller address that partition" — and neither implies the other.
+///
+/// # `include_archived`
+///
+/// Params are optional as a whole (no params = the active-only view), so this
+/// cannot use [`parse_params`], which treats absent params as an error. Params
+/// that are *present and unreadable* are still an error: silently defaulting
+/// them would answer a narrower question than the caller asked and look like an
+/// empty result.
 pub async fn handle_list(
     request: JsonRpcRequest,
     workspace_manager: Arc<AgentEnvStore>,
 ) -> JsonRpcResponse {
-    match workspace_manager.list(false).await {
+    let include_archived = match &request.params {
+        None => false,
+        Some(params) => match serde_json::from_value::<WorkspaceListParams>(params.clone()) {
+            Ok(parsed) => parsed.include_archived,
+            Err(e) => {
+                return JsonRpcResponse::error(
+                    request.id,
+                    INVALID_PARAMS,
+                    format!("Invalid params: {e}"),
+                );
+            }
+        },
+    };
+
+    match workspace_manager.list(include_archived).await {
         Ok(workspaces) => {
             let visible: Vec<_> = workspaces
                 .into_iter()
@@ -482,7 +506,6 @@ mod tests {
             AgentEnvStore::new(crate::gateway::agent_env::AgentEnvStoreConfig {
                 db_path: temp.path().join("agent_envs.db"),
                 default_profile: "default".to_string(),
-                archive_after_days: 0,
             })
             .expect("agent env store"),
         );
@@ -556,7 +579,6 @@ mod tests {
             AgentEnvStore::new(crate::gateway::agent_env::AgentEnvStoreConfig {
                 db_path: temp.path().join("agent_envs.db"),
                 default_profile: "default".to_string(),
-                archive_after_days: 0,
             })
             .expect("agent env store"),
         );
@@ -778,7 +800,6 @@ mod tests {
             AgentEnvStore::new(crate::gateway::agent_env::AgentEnvStoreConfig {
                 db_path: temp.path().join("agent_envs.db"),
                 default_profile: "default".to_string(),
-                archive_after_days: 0,
             })
             .expect("agent env store"),
         );
@@ -885,7 +906,6 @@ mod tests {
             AgentEnvStore::new(crate::gateway::agent_env::AgentEnvStoreConfig {
                 db_path: temp.path().join("agent_envs.db"),
                 default_profile: "default".to_string(),
-                archive_after_days: 0,
             })
             .expect("agent env store"),
         );
@@ -914,6 +934,82 @@ mod tests {
             row.created_at.timestamp() > 0,
             "created_at must be a real timestamp, not a default"
         );
+    }
+
+    /// `include_archived` has to reach the store, and a params object this
+    /// handler cannot read has to be an error rather than the default view.
+    ///
+    /// The second half is the one worth a test: `archive` is a soft delete, so
+    /// "no archived workspaces" and "I ignored your flag" render identically —
+    /// an empty table. A silently-defaulted flag would be indistinguishable
+    /// from a correct answer at exactly the moment it mattered.
+    #[tokio::test]
+    async fn archived_rows_come_back_only_when_the_request_asks_for_them() {
+        use aleph_protocol::workspace::WorkspaceList;
+
+        let temp = tempfile::tempdir().unwrap();
+        let store = Arc::new(
+            AgentEnvStore::new(crate::gateway::agent_env::AgentEnvStoreConfig {
+                db_path: temp.path().join("agent_envs.db"),
+                default_profile: "default".to_string(),
+            })
+            .expect("agent env store"),
+        );
+        store.load_profiles(std::collections::HashMap::new());
+        store.create("retired", "default", None).await.unwrap();
+        assert!(store.archive("retired").await.unwrap());
+
+        let ids = |resp: JsonRpcResponse| -> Vec<String> {
+            serde_json::from_value::<WorkspaceList>(resp.result.expect("result"))
+                .expect("the CLI's projection must parse the real response")
+                .workspaces
+                .into_iter()
+                .map(|w| w.id)
+                .collect()
+        };
+
+        // No params at all is the default view — the shape every caller sent
+        // before this parameter existed.
+        let default_view = ids(handle_list(
+            JsonRpcRequest::with_id("workspace.list", None, json!(1)),
+            store.clone(),
+        )
+        .await);
+        assert!(!default_view.contains(&"retired".to_string()));
+
+        let asked = handle_list(
+            JsonRpcRequest::with_id(
+                "workspace.list",
+                Some(json!({ "include_archived": true })),
+                json!(2),
+            ),
+            store.clone(),
+        )
+        .await;
+        let listed: WorkspaceList =
+            serde_json::from_value(asked.result.expect("result")).expect("projection");
+        let retired = listed
+            .workspaces
+            .iter()
+            .find(|w| w.id == "retired")
+            .expect("the archived workspace must be reachable when asked for");
+        assert!(
+            retired.is_archived,
+            "the Status column has to be able to say `archived`"
+        );
+
+        // A misspelled flag is refused, not quietly answered with the narrower
+        // view (`deny_unknown_fields` on the params type).
+        let typo = handle_list(
+            JsonRpcRequest::with_id(
+                "workspace.list",
+                Some(json!({ "include_arcived": true })),
+                json!(3),
+            ),
+            store,
+        )
+        .await;
+        assert_eq!(typo.error.map(|e| e.code), Some(INVALID_PARAMS));
     }
 
     #[test]
@@ -945,7 +1041,6 @@ mod tests {
         let config = AgentEnvStoreConfig {
             db_path: temp.keep().join("test.db"),
             default_profile: "default".to_string(),
-            archive_after_days: 0,
         };
         Arc::new(AgentEnvStore::new(config).unwrap())
     }

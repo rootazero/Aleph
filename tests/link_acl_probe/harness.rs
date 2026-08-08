@@ -145,7 +145,6 @@ impl LinkAclHarness {
         let ws_config = AgentEnvStoreConfig {
             db_path: temp_dir.path().join("agent_envs.db"),
             default_profile: "default".to_string(),
-            archive_after_days: 0,
         };
         let workspace_manager =
             Arc::new(AgentEnvStore::new(ws_config).expect("Failed to create AgentEnvStore"));

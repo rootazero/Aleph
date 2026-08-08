@@ -349,39 +349,6 @@ impl AgentEnvStore {
     }
 
     // =========================================================================
-    // Maintenance
-    // =========================================================================
-
-    /// Archive inactive agent environments
-    pub async fn archive_inactive(&self) -> Result<usize, AgentEnvError> {
-        if self.config.archive_after_days == 0 {
-            return Ok(0);
-        }
-
-        let threshold =
-            Utc::now().timestamp() - (i64::from(self.config.archive_after_days) * 24 * 60 * 60);
-
-        let conn = self
-            .conn
-            .lock()
-            .map_err(|e| AgentEnvError::Database(format!("Lock error: {e}")))?;
-
-        let affected = conn
-            .execute(
-                "UPDATE agent_envs SET archived = 1
-                 WHERE last_active_at < ? AND id != 'global' AND archived = 0",
-                params![threshold],
-            )
-            .map_err(|e| AgentEnvError::Database(e.to_string()))?;
-
-        if affected > 0 {
-            info!("Archived {} inactive agent environments", affected);
-        }
-
-        Ok(affected)
-    }
-
-    // =========================================================================
     // Internal Helpers
     // =========================================================================
 

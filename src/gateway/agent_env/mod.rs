@@ -458,14 +458,21 @@ impl ActiveAgentEnv {
 // =============================================================================
 
 /// Configuration for `AgentEnvStore`
+///
+/// There used to be a third field, `archive_after_days: 30`, read only by an
+/// `archive_inactive()` that nothing in the repository called. It read as a
+/// live retention policy and was not one — no scheduler, no RPC, no config
+/// key, no default other than the literal. Both were removed on 2026-08-08
+/// rather than wired up: turning them on would have started hiding workspaces
+/// a month after anyone last touched them, which is a product decision nobody
+/// has made, and R10 says an abstraction with zero consumers is withdrawn
+/// rather than kept warm for a hypothetical one.
 #[derive(Debug, Clone)]
 pub struct AgentEnvStoreConfig {
     /// Database path for agent environment storage
     pub db_path: PathBuf,
     /// Default profile for new agent environments
     pub default_profile: String,
-    /// Auto-archive agent environments after N days of inactivity (0 = never)
-    pub archive_after_days: u32,
 }
 
 impl Default for AgentEnvStoreConfig {
@@ -475,7 +482,6 @@ impl Default for AgentEnvStoreConfig {
                 .unwrap_or_else(|| PathBuf::from("/tmp"))
                 .join(".aleph/data/agent_envs.db"),
             default_profile: "default".to_string(),
-            archive_after_days: 30,
         }
     }
 }
@@ -532,7 +538,6 @@ impl AgentEnvStore {
                 archived INTEGER DEFAULT 0,
                 name TEXT NOT NULL DEFAULT '',
                 icon TEXT,
-                is_archived INTEGER DEFAULT 0,
                 decay_rate REAL,
                 permanent_fact_types TEXT,
                 default_model TEXT,
@@ -558,7 +563,6 @@ impl AgentEnvStore {
         let migrations = [
             "ALTER TABLE agent_envs ADD COLUMN name TEXT NOT NULL DEFAULT ''",
             "ALTER TABLE agent_envs ADD COLUMN icon TEXT",
-            "ALTER TABLE agent_envs ADD COLUMN is_archived INTEGER DEFAULT 0",
             "ALTER TABLE agent_envs ADD COLUMN decay_rate REAL",
             "ALTER TABLE agent_envs ADD COLUMN permanent_fact_types TEXT",
             "ALTER TABLE agent_envs ADD COLUMN default_model TEXT",
@@ -568,6 +572,23 @@ impl AgentEnvStore {
         for sql in &migrations {
             let _ = conn.execute(sql, []); // ignore "duplicate column" errors
         }
+
+        // Drop a column that every database created before 2026-08-08 carries:
+        // `is_archived`, added by a migration that no statement ever read or
+        // wrote. The archived flag lives in `archived`, and it always has —
+        // `AgentEnv::is_archived` (the struct field, and the wire field) is
+        // filled from `archived` by `row_to_agent_env`.
+        //
+        // Two names for one fact in one table is not merely untidy here: the
+        // dead one carried the name every reader would reach for, so
+        // `WHERE is_archived = 0` would have compiled, run, and returned
+        // archived rows as if they were active. Dropping it turns that mistake
+        // into "no such column" — the failure mode of a missing column is loud,
+        // the failure mode of a stale one is not.
+        //
+        // Ignoring the error covers both the already-dropped case and a SQLite
+        // too old for DROP COLUMN (3.35+; the bundled build is far newer).
+        let _ = conn.execute("ALTER TABLE agent_envs DROP COLUMN is_archived", []);
 
         // Ensure global agent environment exists
         let now = Utc::now().timestamp();
@@ -680,8 +701,85 @@ mod tests {
         AgentEnvStoreConfig {
             db_path: path,
             default_profile: "default".to_string(),
-            archive_after_days: 30,
         }
+    }
+
+    /// The dead `is_archived` column is dropped from a database that already
+    /// has it, and the archived flag survives the drop.
+    ///
+    /// Built by hand into the pre-migration shape rather than by opening a
+    /// store first: a fresh database in a temp dir only ever exercises rows
+    /// this version created, and the rows that carry a retired column are by
+    /// definition the ones an earlier version wrote. That asymmetry is how a
+    /// migration ships "verified" and does nothing on every real install.
+    #[tokio::test]
+    async fn a_database_carrying_the_retired_is_archived_column_loses_it() {
+        let temp = tempdir().unwrap();
+        let path = temp.path().join("legacy.db");
+
+        {
+            let conn = Connection::open(&path).unwrap();
+            conn.execute_batch(
+                // The original table plus the one migration that introduced the
+                // retired column. Everything else this version needs is added
+                // by the ADD COLUMN list, which is the point: the drop has to
+                // survive alongside the adds, in that order.
+                "CREATE TABLE agent_envs (
+                     id TEXT PRIMARY KEY,
+                     profile TEXT NOT NULL,
+                     created_at INTEGER NOT NULL,
+                     last_active_at INTEGER NOT NULL,
+                     cache_state TEXT,
+                     env_vars TEXT,
+                     description TEXT,
+                     archived INTEGER DEFAULT 0,
+                     is_archived INTEGER DEFAULT 0
+                 );
+                 INSERT INTO agent_envs (id, profile, created_at, last_active_at, archived)
+                 VALUES ('retired', 'default', 0, 0, 1),
+                        ('live', 'default', 0, 0, 0);",
+            )
+            .unwrap();
+        }
+
+        let store = AgentEnvStore::new(test_config(path)).unwrap();
+
+        let columns: Vec<String> = {
+            let conn = store.conn.lock().unwrap_or_else(|e| e.into_inner());
+            let mut stmt = conn
+                .prepare("SELECT name FROM pragma_table_info('agent_envs')")
+                .unwrap();
+            let names = stmt
+                .query_map([], |row| row.get::<_, String>(0))
+                .unwrap()
+                .collect::<rusqlite::Result<Vec<_>>>()
+                .unwrap();
+            names
+        };
+        assert!(
+            !columns.iter().any(|c| c == "is_archived"),
+            "the retired column survived the migration: {columns:?}"
+        );
+        assert!(
+            columns.iter().any(|c| c == "archived"),
+            "the live column must be the one that stays: {columns:?}"
+        );
+
+        // The flag itself is untouched: `list(false)` still hides the archived
+        // row and `list(true)` still finds it.
+        let active: Vec<String> = store
+            .list(false)
+            .await
+            .unwrap()
+            .into_iter()
+            .map(|w| w.id)
+            .collect();
+        assert!(active.contains(&"live".to_string()));
+        assert!(!active.contains(&"retired".to_string()));
+
+        let all = store.list(true).await.unwrap();
+        let retired = all.iter().find(|w| w.id == "retired").expect("still there");
+        assert!(retired.is_archived, "the archived flag must survive a drop");
     }
 
     #[tokio::test]

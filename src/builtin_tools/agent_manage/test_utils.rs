@@ -28,7 +28,6 @@ pub fn workspace_mgr() -> (Arc<AgentEnvStore>, TempDir) {
     let config = AgentEnvStoreConfig {
         db_path: temp.path().join("test.db"),
         default_profile: "default".to_string(),
-        archive_after_days: 0,
     };
     let store = Arc::new(AgentEnvStore::new(config).expect("agent env store"));
     (store, temp)
