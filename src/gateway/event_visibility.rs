@@ -1079,12 +1079,12 @@ mod tests {
         });
         assert!(
             index
-                .event_admits("sessions.changed", Some(&data), Some("alice"), &store)
+                .event_admits("sessions.changed", Some(&data), Some("alice"), &store, None)
                 .await
         );
         assert!(
             !index
-                .event_admits("sessions.changed", Some(&data), Some("bob"), &store)
+                .event_admits("sessions.changed", Some(&data), Some("bob"), &store, None)
                 .await
         );
     }
