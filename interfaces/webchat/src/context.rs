@@ -1546,8 +1546,8 @@ pub fn DashboardContext(children: Children) -> impl IntoView {
 #[cfg(test)]
 mod tests {
     use super::{
-        classify_credential, query_with_bootstrap_ticket, replay_set, role_is_operator,
-        strip_params, ws_url_for, SubmittedCredential, BASE_TOPICS,
+        classify_credential, query_with_bootstrap_ticket, replay_set, strip_params, ws_url_for,
+        SubmittedCredential, BASE_TOPICS,
     };
     use std::collections::BTreeSet;
 

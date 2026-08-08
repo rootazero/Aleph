@@ -378,8 +378,20 @@ mod tests {
              caller starts a run this Panel then fails to recognise as its own. \
              Callers: {callers:?}"
         );
+        // Compare on path components, not on a "/"-joined suffix: `Display` for
+        // a `Path` emits the platform separator, so a hardcoded `api/chat.rs`
+        // never matches on Windows and this pin fails for the one reason it is
+        // not about.
+        let tail: Vec<_> = std::path::Path::new(&callers[0])
+            .components()
+            .rev()
+            .take(2)
+            .collect();
         assert!(
-            callers[0].ends_with("api/chat.rs"),
+            tail.iter()
+                .rev()
+                .map(|c| c.as_os_str())
+                .eq(["api", "chat.rs"]),
             "the one caller moved out of api/chat.rs: {}",
             callers[0]
         );

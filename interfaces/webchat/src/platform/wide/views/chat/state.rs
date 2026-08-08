@@ -1886,7 +1886,7 @@ mod step_tests {
                 .iter()
                 .map(|(t, s)| PlanItemView {
                     text: (*t).into(),
-                    status: s.clone(),
+                    status: *s,
                 })
                 .collect(),
             complete,
@@ -2098,7 +2098,7 @@ mod step_tests {
         let archived = chat.messages.with_untracked(|m| {
             m.iter()
                 .filter_map(|x| x.plan_archive.clone())
-                .last()
+                .next_back()
                 .expect("an archive capsule")
         });
         assert_eq!(
