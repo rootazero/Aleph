@@ -1546,8 +1546,17 @@ pub fn DashboardContext(children: Children) -> impl IntoView {
 #[cfg(test)]
 mod tests {
     use super::{
-        classify_credential, query_with_bootstrap_ticket, replay_set, role_is_operator,
-        strip_params, ws_url_for, SubmittedCredential, BASE_TOPICS,
+        // `role_is_operator` was removed with the cached `role` field (see the
+        // 2026-08-07 note above); nothing in this module used it and only the
+        // test tree still named it, so `cargo check -p aleph-panel` stayed
+        // green while `cargo test` could not build (判据清单 §10).
+        classify_credential,
+        query_with_bootstrap_ticket,
+        replay_set,
+        strip_params,
+        ws_url_for,
+        SubmittedCredential,
+        BASE_TOPICS,
     };
     use std::collections::BTreeSet;
 

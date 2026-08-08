@@ -325,14 +325,25 @@ impl ToolRegistry for BuiltinToolRegistry {
                 })?;
                 tool.call_json(arguments).await
             }),
-            "flag_user_correction" => Box::pin(async move {
-                let tool = self.flag_user_correction_tool.as_ref().ok_or_else(|| {
-                    AlephError::tool(
-                        "flag_user_correction not available: no memory backend configured",
-                    )
-                })?;
-                tool.call_json(arguments).await
-            }),
+            // Corrections are filed per agent and read back per agent, so the
+            // identity has to be the one executing this turn — not the one the
+            // registry was built with at boot. Resolved from the same
+            // task-local `recall_context` uses, which is live here because tool
+            // dispatch runs inside the scoped tool-execution task.
+            "flag_user_correction" => {
+                let agent_id = crate::tools::turn_context::current_agent_id()
+                    .unwrap_or_else(|| self.caller_agent_id("main"));
+                Box::pin(async move {
+                    let db = self.flag_user_correction_db.as_ref().ok_or_else(|| {
+                        AlephError::tool(
+                            "flag_user_correction not available: no memory backend configured",
+                        )
+                    })?;
+                    Self::build_flag_user_correction(db, agent_id)
+                        .call_json(arguments)
+                        .await
+                })
+            }
 
             // Governance audit reality probe — read-only counts (recent user
             // corrections + dreaming activity) straight from the memory backend,

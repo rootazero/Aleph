@@ -316,6 +316,21 @@ pub fn merge_metadata_patch(
 /// a stale-but-inert stamp behind).
 pub const PAUSED_FROM_KEY: &str = "paused_from";
 
+/// [`PAUSED_FROM_KEY`] value meaning "the user paused this step while its run
+/// was still in flight".
+///
+/// A pause cannot stop a running member run, so `workflow(action='pause')`
+/// records the *intent* here and leaves the status `InProgress` — writing
+/// `Paused` over a live run would make the finalize fence discard the work.
+/// The stamp is what stops `reclaim_orphaned` from silently re-dispatching the
+/// step after a restart (it parks it `Paused` instead); resume clears it.
+///
+/// A single source because writer (`builtin_tools::workflow_tool`) and reader
+/// (`teams::dispatcher::schedule::reclaim`) live in different subsystems and a
+/// typo on either side fails **silently** — the pause is just quietly undone,
+/// which is the exact bug the stamp exists to fix.
+pub const PAUSED_FROM_IN_PROGRESS: &str = "in_progress";
+
 /// Read the pause-origin stamp, if present. Tolerant: missing / non-string
 /// reads as `None` (legacy rows paused before the stamp existed restore to
 /// the Pending default).
@@ -379,6 +394,22 @@ impl TaskRunStatus {
         }
     }
 }
+
+/// The `error` text stamped on a run row closed by the **run-row janitor**
+/// (`CoordTaskStore::abandon_orphaned_runs`) because its worker vanished.
+///
+/// [`TaskRunStatus::Abandoned`] alone cannot answer "did this task crash?":
+/// the dispatcher also files a deliberately-deferred attempt (the target agent
+/// was busy, so nothing was tried) under the same status, precisely so it does
+/// NOT consume the retry budget. Both readings are wanted, so the two
+/// populations are told
+/// apart by *who closed the row*, and this constant is the single source both
+/// the writer (`store::runs::abandon_orphaned_runs`) and the reader
+/// (`retry::recovery_abandons_since`) share — a second copy of the sentence
+/// would drift and the drift is silent (a miscounted crash-recovery budget
+/// neither errors nor logs).
+pub const RUN_ABANDONED_BY_JANITOR_ERROR: &str =
+    "interrupted: run never finished (process restart or lost worker)";
 
 /// Reviewer category for a step-level approval decision (Phase C).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]

@@ -1,9 +1,17 @@
-//! Per-project-namespace dream sub-cycle.
+//! Per-corpus dream sub-cycle.
 //!
-//! When `memory.project_scoped` is on, `note_manage` writes project-local notes
-//! under `{base}__proj-*` namespaces. Those namespaces get the note-maintenance
-//! subset of the pipeline ([`retain_project_stages`]) so their notes are linted,
+//! Every note corpus that is not the base agent's — a non-default agent, a
+//! personal scope (`{base}__u-*`), a room scope (`{base}__p-*`), a
+//! project-directory namespace (`{base}__proj-*`) — gets the note-maintenance
+//! subset of the pipeline ([`retain_project_stages`]) so its notes are linted,
 //! consolidated and synthesised like the base agent's.
+//!
+//! Note that only `proj-*` is gated by `memory.project_scoped`: personal and
+//! room partitions are produced by session scope, which does not consult that
+//! flag, and a non-default agent is just a directory. Enumerating corpora is
+//! therefore [`list_note_corpora`]'s job, never a config read.
+//!
+//! [`list_note_corpora`]: crate::memory::project_scope::list_note_corpora
 //!
 //! # Why a namespace governs itself
 //!
@@ -73,7 +81,67 @@ pub(super) struct ProjectCycleDeps<'a> {
     pub activity_checker: &'a Arc<dyn Fn() -> bool + Send + Sync>,
 }
 
-/// Run one project namespace's maintenance cycle, governed by that namespace's
+/// Outcome of asking a corpus to dream.
+///
+/// The fan-out runs over **every** corpus on disk, so most nights most corpora
+/// have nothing to maintain. Telling "ran and produced nothing" apart from
+/// "never started, spent no tokens" is what lets the caller's nightly budget
+/// count only the cycles that actually cost something.
+pub(super) enum NamespaceCycle {
+    /// No note in this corpus has changed since its last cycle (or it holds no
+    /// notes at all). Not one stage started, so not one LLM call was made — the
+    /// night's per-corpus budget is untouched.
+    Idle,
+    /// The corpus ran the maintenance subset. Carries the same
+    /// [`DreamCycleOutcome`] the base cycle produces, decision included.
+    Ran(Box<DreamCycleOutcome>),
+}
+
+/// Whether a corpus has anything for the maintenance subset to chew on.
+///
+/// Three independent inputs, because the subset has three independent sources
+/// of work and gating on any subset of them strands the rest:
+///
+/// * **note content.** `note_lint` / `note_consolidate` / `note_synthesis` /
+///   `skill_distill` are pure functions of the notes, so a corpus whose notes
+///   have not moved since its own last cycle would re-derive byte-identical
+///   verdicts at full LLM price. `since` is the *start* of that corpus's last
+///   dream cycle, deliberately not its end: notes the cycle itself wrote carry
+///   an `updated_at` from the middle of the run, so measuring from the end
+///   would exclude exactly the writes that mean a capped stage still has
+///   backlog. Measuring from the start admits the corpus for one more night
+///   after any write, and then — if that night changes nothing — stops. A
+///   corpus that has never dreamed passes `0` and is always admitted.
+/// * **the review queue.** `notes_review_queue` rows are enqueued by the ingest
+///   governance gate for candidates that were deliberately *not* written as
+///   notes. They therefore move no `updated_at`, and a content-only gate would
+///   leave them pending forever — the queue's only consumer is `note_review`,
+///   which only runs inside this cycle.
+/// * **undistilled corrections.** `flag_user_correction` writes raw-memory rows
+///   keyed on the *turn's* agent, and `feedback_distill` is the only reader.
+///   Those rows touch no note and enqueue no review, so the two gates above are
+///   both blind to them — a corpus whose only new work is a batch of
+///   corrections would sit at `Idle` forever while the tool told the user the
+///   nightly cycle would distill them. The answer comes from
+///   [`has_undistilled_corrections`], i.e. the stage's own watermark read, so
+///   the gate cannot disagree with the stage it is gating.
+///
+/// Deliberately **not** a config knob: this is not a policy about how eager
+/// maintenance should be, it is the observation that re-judging unchanged bytes
+/// cannot produce a different answer.
+///
+/// [`has_undistilled_corrections`]: crate::memory::dreaming::stages::feedback_distill::has_undistilled_corrections
+#[must_use]
+pub(super) fn corpus_needs_maintenance(
+    index: &[crate::memory::notes::store::NoteIndexEntry],
+    since: i64,
+    pending_reviews: usize,
+    has_corrections: bool,
+) -> bool {
+    has_corrections || pending_reviews > 0 || index.iter().any(|n| n.updated_at >= since)
+}
+
+/// Run one corpus's maintenance cycle, governed by that corpus's
 /// own history.
 ///
 /// Mirrors the base cycle's phases (rehydrate → gate → select → run → validate →
@@ -81,15 +149,16 @@ pub(super) struct ProjectCycleDeps<'a> {
 /// caller treats a failure as non-fatal: one bad namespace must never abort the
 /// night.
 ///
-/// Returns the same [`DreamCycleOutcome`] the base cycle produces, decision
-/// included. The decision used to be computed here and dropped on the floor,
-/// which is why a project corpus's history was legible to the model (it reads
-/// the namespace's own event log) and to nobody else: the audit row the Panel
-/// reads is written by the caller, and the caller had nothing to write.
+/// Returns [`NamespaceCycle::Ran`] with the same [`DreamCycleOutcome`] the base
+/// cycle produces, decision included. The decision used to be computed here and
+/// dropped on the floor, which is why a project corpus's history was legible to
+/// the model (it reads the namespace's own event log) and to nobody else: the
+/// audit row the Panel reads is written by the caller, and the caller had
+/// nothing to write.
 pub(super) async fn run_namespace_cycle(
     deps: &ProjectCycleDeps<'_>,
     agent_id: &str,
-) -> Result<DreamCycleOutcome, AlephError> {
+) -> Result<NamespaceCycle, AlephError> {
     let started_at = now_timestamp();
     let log = EventLog::new(deps.memory_dir.join(agent_id));
 
@@ -111,6 +180,48 @@ pub(super) async fn run_namespace_cycle(
         warn!(agent = %agent_id, error = %e, "failed to list notes for project namespace, proceeding with empty index");
         Vec::new()
     });
+    // --- Budget gate: an unchanged corpus is not worth an LLM call ---
+    // Placed after the two reads it needs and before anything that can dispatch
+    // a prompt, so a quiet corpus costs exactly one log read and one index read.
+    // The fan-out covers every corpus on disk, so without this the nightly bill
+    // would scale with the number of partitions rather than with activity.
+    let last_cycle_started_at = history.last().map_or(0, |ev| ev.report.started_at);
+    // `i64::MAX` rather than the review stage's dwell bound on purpose: a
+    // not-yet-ripe row still means work is coming, and admitting a corpus one
+    // night early is cheap next to stranding its queue. A read failure admits
+    // too — this gate may only ever *save* a call, never withhold one on a
+    // guess.
+    let pending_reviews = deps
+        .database
+        .list_pending_review(agent_id, i64::MAX)
+        .await
+        .map_or(usize::MAX, |rows| rows.len());
+    // Third leg: corrections filed against THIS agent that `feedback_distill`
+    // has not consumed. Read through the stage's own predicate so gate and
+    // stage share one watermark.
+    let has_corrections =
+        crate::memory::dreaming::stages::feedback_distill::has_undistilled_corrections(
+            deps.database,
+            agent_id,
+            deps.config.feedback_lookback,
+        )
+        .await;
+    if !corpus_needs_maintenance(
+        &index,
+        last_cycle_started_at,
+        pending_reviews,
+        has_corrections,
+    ) {
+        tracing::debug!(
+            agent = %agent_id,
+            notes = index.len(),
+            last_cycle_started_at,
+            "corpus unchanged since its last dream cycle, its review queue is \
+             empty and it has no undistilled corrections; skipping"
+        );
+        return Ok(NamespaceCycle::Idle);
+    }
+
     let raw_metrics = compute_raw_metrics(
         &index,
         deps.database.as_ref(),
@@ -254,11 +365,11 @@ pub(super) async fn run_namespace_cycle(
     // durable record wants it. The caller reads the same predicate before
     // writing its audit row.
     if report.is_vacuous_interruption() {
-        return Ok(DreamCycleOutcome {
+        return Ok(NamespaceCycle::Ran(Box::new(DreamCycleOutcome {
             status,
             report,
             decision,
-        });
+        })));
     }
 
     let cycle = log.next_cycle().await.unwrap_or(1);
@@ -286,9 +397,9 @@ pub(super) async fn run_namespace_cycle(
         );
     }
 
-    Ok(DreamCycleOutcome {
+    Ok(NamespaceCycle::Ran(Box::new(DreamCycleOutcome {
         status,
         report,
         decision,
-    })
+    })))
 }

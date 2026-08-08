@@ -23,7 +23,6 @@ fn build_groups() -> std::collections::HashMap<String, GroupMeta> {
     define_groups! {
         "general" => { label: "General", order: 10, icon: "gear" },
         "providers" => { label: "AI Providers", order: 20, icon: "cloud" },
-        "agents" => { label: "Agents", order: 30, icon: "robot" },
         "channels" => { label: "Channels", order: 40, icon: "chat" },
         "tools" => { label: "Tools", order: 50, icon: "wrench" },
         "memory" => { label: "Memory", order: 60, icon: "brain" },
@@ -263,13 +262,6 @@ fn build_field_hints() -> std::collections::HashMap<String, FieldHint> {
             help: "Environment variables for the server",
             group: "tools",
             advanced: true,
-        },
-
-        // === Agent ===
-        "agent.require_confirmation" => {
-            label: "Require Confirmation",
-            help: "Require user confirmation for actions",
-            group: "agents",
         },
 
         // === Channels ===

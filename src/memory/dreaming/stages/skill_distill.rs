@@ -246,13 +246,11 @@ impl DreamStage for SkillDistillStage {
             }
         }
 
-        ctx.report
-            .extra
-            .insert("skill_distill_count".into(), applied.to_string());
-        // This cycle's flow count lives in `extra["skill_distill_count"]`.
-        // MutationGate's `distill_produced`/`distill_recalled` are set later
-        // from the mature skill-note cohort (see compute_raw_metrics), not from
-        // fresh produce — a just-written note can't have been recalled yet.
+        // This cycle's flow is recorded per action in `report.distill_actions`,
+        // the durable provenance the audit surfaces read. MutationGate's
+        // `distill_produced`/`distill_recalled` are set later from the mature
+        // skill-note cohort (see compute_raw_metrics), not from fresh produce —
+        // a just-written note can't have been recalled yet.
         tracing::info!(applied, "SkillDistill completed");
         Ok(ctx)
     }
@@ -359,6 +357,21 @@ const fn clamp_action(mut a: DistillAction) -> DistillAction {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Skill notes this stage actually wrote, read back out of the durable
+    /// per-action provenance rather than a side count that no production reader
+    /// consumes.
+    fn applied_skills(report: &crate::memory::dreaming::DreamReport) -> usize {
+        report
+            .distill_actions
+            .iter()
+            .filter(|r| {
+                r.stage == "skill_distill"
+                    && r.outcome == DistillOutcome::Applied
+                    && r.action_kind != "skip"
+            })
+            .count()
+    }
 
     #[test]
     fn stage_name() {
@@ -573,11 +586,8 @@ mod tests {
             .unwrap();
 
         assert_eq!(
-            ctx.report
-                .extra
-                .get("skill_distill_count")
-                .map(String::as_str),
-            Some("0"),
+            applied_skills(&ctx.report),
+            0,
             "a skip writes no note, so it must not be counted as a distilled skill"
         );
         // The audit trail still records the decision.
@@ -606,11 +616,8 @@ mod tests {
             .unwrap();
 
         assert_eq!(
-            ctx.report
-                .extra
-                .get("skill_distill_count")
-                .map(String::as_str),
-            Some("1"),
+            applied_skills(&ctx.report),
+            1,
             "the new skill is the only write in the batch"
         );
     }

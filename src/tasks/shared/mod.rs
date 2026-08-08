@@ -4,6 +4,7 @@
 //! and any future task types.
 
 pub mod active_hours;
+pub mod alert;
 pub mod clock;
 pub mod delivery;
 pub mod reaper;

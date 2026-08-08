@@ -33,6 +33,29 @@ pub use acp_bridge::{AcpMemberRef, ACP_MEMBER_PREFIX};
 pub use runner::{execute_member_task, MemberDispatchTarget, MemberRunOutcome, MemberRunStatus};
 pub use schedule::{is_dispatcher_managed, MANAGED_BY_DISPATCHER, MANAGED_BY_KEY};
 
+/// How many times a task may be recovered from a **crash** (its worker
+/// vanished mid-run and `reclaim_orphaned` looped it back to `Pending`)
+/// before the dispatcher gives up and fails it terminally.
+///
+/// Distinct from [`DispatcherConfig::default_max_retries`], which bounds
+/// *clean* attempt failures. A crash orphan deliberately spends no retry
+/// budget, and `reclaim_orphaned` re-stamps `started_at` on every
+/// re-dispatch — so `zombie_ttl_secs` can never see the age accumulate and a
+/// task that reliably kills its worker was re-dispatched without any bound at
+/// all. Counted by
+/// [`recovery_abandons_since`](crate::agents::swarm::tasks::retry::recovery_abandons_since),
+/// which shares the `retry_budget_reset_at` anchor, so an operator hard-retry
+/// re-arms this ceiling exactly as it re-arms the retry ladder.
+///
+/// `2` mirrors the reference implementation's `MAX_RECOVERIES`: two free
+/// recoveries, terminal on the third crash. `0` fails the first crash orphan.
+///
+/// Deliberately a constant rather than a [`DispatcherConfig`] field: the boot
+/// site builds that struct with an exhaustive literal in the `aleph-server`
+/// bin crate, so a new field cannot be added from here without editing it.
+/// See the parked follow-up in the round report.
+pub const MAX_TASK_RECOVERIES: u32 = 2;
+
 /// Tunables for the dispatcher loop.
 #[derive(Debug, Clone)]
 pub struct DispatcherConfig {

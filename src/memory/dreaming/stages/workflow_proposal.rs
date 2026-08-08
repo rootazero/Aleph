@@ -90,7 +90,7 @@ impl DreamStage for WorkflowProposalStage {
         "workflow_proposal"
     }
 
-    async fn execute(&self, mut ctx: DreamContext) -> Result<DreamContext, AlephError> {
+    async fn execute(&self, ctx: DreamContext) -> Result<DreamContext, AlephError> {
         let dirs = default_skill_dirs();
         if dirs.is_empty() {
             tracing::debug!("WorkflowProposal: no skill dirs; nothing to mine");
@@ -147,15 +147,6 @@ impl DreamStage for WorkflowProposalStage {
                 }
             }
         }
-
-        ctx.report.extra.insert(
-            "workflow_proposals_drafted".to_string(),
-            drafted.to_string(),
-        );
-        ctx.report.extra.insert(
-            "workflow_proposals_skipped_covered".to_string(),
-            skipped_covered.to_string(),
-        );
 
         tracing::info!(drafted, skipped_covered, "WorkflowProposal: stage complete");
         Ok(ctx)

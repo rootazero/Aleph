@@ -3,11 +3,13 @@
 //! Security-enforced constants that are not user-configurable.
 //! Previously in engine/constants.rs, retained here for backward compatibility.
 
-// Hardcoded agent configuration constants (security-enforced, not user-configurable)
-/// Whether to require user confirmation before execution (always true for safety)
-pub const REQUIRE_CONFIRMATION: bool = true;
-/// Maximum number of tasks to run in parallel
-pub const MAX_PARALLELISM: usize = 4;
+// `REQUIRE_CONFIRMATION` / `MAX_PARALLELISM` used to live here. Their only
+// readers were the `default_*` fns behind `[agent] require_confirmation` /
+// `max_parallelism`, two keys that self-declared "legacy, ignored" and were
+// retired in the same pass. Execution approval is decided by the exec tier in
+// `src/tools/scoped/` (which reads each tool's declared metadata, not a global
+// bool) and sub-agent fan-out is bounded by the spawn semaphore — neither ever
+// consulted these.
 
 // Security boundary constants for file operations and code execution
 /// Maximum file size for file operations (100MB)

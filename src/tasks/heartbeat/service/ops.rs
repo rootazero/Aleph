@@ -71,6 +71,8 @@ pub struct HeartbeatTaskUpdates {
     /// `Some(Some(schedule))` to set, `Some(None)` to clear, `None` to leave alone.
     /// Mirrors the same convention used by `delivery_config`.
     pub active_hours: Option<Option<crate::tasks::shared::active_hours::ActiveHoursSchedule>>,
+    /// Failure alerting, same tri-state convention as `delivery_config`.
+    pub failure_alert: Option<Option<crate::tasks::shared::alert::FailureAlertConfig>>,
 }
 
 /// Add a new task to the store. Sets state defaults and computes next due time.
@@ -125,6 +127,9 @@ pub fn update_task<C: Clock>(
     }
     if let Some(active_hours) = updates.active_hours {
         task.active_hours = active_hours;
+    }
+    if let Some(failure_alert) = updates.failure_alert {
+        task.failure_alert = failure_alert;
     }
 
     task.updated_at = clock.now_ms();

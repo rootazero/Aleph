@@ -106,7 +106,7 @@ pub use transcript_indexer::{
 };
 // SQLite store types (Phase 3)
 pub use store::sqlite::SqliteMemoryBackend;
-pub use store::types::{MemoryFilter, ScoredFact, SearchFilter};
+pub use store::types::ScoredFact;
 pub use store::MemoryBackend;
 // Workspace types are now canonical in gateway::agent_env; re-export for backward compatibility
 pub use crate::gateway::agent_env::{AgentEnv, AgentEnvContext, AgentEnvFilter, DEFAULT_AGENT};

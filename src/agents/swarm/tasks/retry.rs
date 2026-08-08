@@ -129,6 +129,41 @@ pub fn budget_failures_since(runs: &[super::CoordTaskRun], reset_at: Option<u64>
         .count() as u32
 }
 
+/// Count the **crash recoveries** a task has already been granted: run rows
+/// the run-row janitor closed as `Abandoned` because their worker vanished,
+/// started **at or after** the manual-reset anchor (`reset_at`, absent →
+/// count all).
+///
+/// The twin of [`budget_failures_since`] — same signature, same anchor, same
+/// inclusive boundary — for the *other* unbounded loop. A crash orphan
+/// deliberately spends no retry budget (it is not the task's fault), and
+/// `reclaim_orphaned` re-stamps `started_at` on every re-dispatch, so the
+/// zombie net is structurally blind to it: a task whose worker dies in the
+/// same place every time is re-dispatched forever, with nothing counting.
+/// This is the counter that bounds it; the dispatcher gives up at
+/// [`MAX_TASK_RECOVERIES`](crate::teams::dispatcher::MAX_TASK_RECOVERIES).
+///
+/// **Not every `Abandoned` row is a crash.** The dispatcher also files a
+/// deferred attempt (the target agent was busy, so nothing was tried) as
+/// `Abandoned` so it stays out of the retry budget — and that population will
+/// grow, not shrink. Those are told apart by the janitor's own
+/// sentinel error text ([`RUN_ABANDONED_BY_JANITOR_ERROR`]) — counting them
+/// as crashes would let a team that merely collides on a busy member kill its
+/// own tasks.
+///
+/// Pure and total, exercised directly in tests without a live dispatcher.
+///
+/// [`RUN_ABANDONED_BY_JANITOR_ERROR`]: super::RUN_ABANDONED_BY_JANITOR_ERROR
+#[must_use]
+pub fn recovery_abandons_since(runs: &[super::CoordTaskRun], reset_at: Option<u64>) -> u32 {
+    let anchor = reset_at.unwrap_or(0);
+    runs.iter()
+        .filter(|r| matches!(r.status, super::TaskRunStatus::Abandoned))
+        .filter(|r| r.error.as_deref() == Some(super::RUN_ABANDONED_BY_JANITOR_ERROR))
+        .filter(|r| r.started_at >= anchor)
+        .count() as u32
+}
+
 /// What the dispatcher should do with a task whose attempt just failed.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RetryDecision {
@@ -513,6 +548,56 @@ mod tests {
             read_retry_budget_reset_at(&json!({ RETRY_BUDGET_RESET_AT_METADATA_KEY: "soon" })),
             None
         );
+    }
+
+    /// Only the janitor's own crash closes count as recoveries. The dispatcher
+    /// files a deferred attempt (target agent busy) under the SAME
+    /// `Abandoned` status precisely so it spends no retry budget — counting
+    /// those as crashes would let a team that merely collides on a busy member
+    /// kill its own tasks at the recovery ceiling.
+    #[test]
+    fn recoveries_count_only_janitor_closed_abandons() {
+        use crate::agents::swarm::tasks::{TaskRunStatus::*, RUN_ABANDONED_BY_JANITOR_ERROR};
+
+        let crashed = |at: u64| {
+            let mut r = run(Abandoned, at);
+            r.error = Some(RUN_ABANDONED_BY_JANITOR_ERROR.to_string());
+            r
+        };
+        let deferred = |at: u64| {
+            let mut r = run(Abandoned, at);
+            r.error = Some("Agent busy, attempt deferred: Agent is busy: x".to_string());
+            r
+        };
+
+        let runs = vec![
+            crashed(10),
+            deferred(20),
+            run(Failed, 30),
+            crashed(40),
+            run(Completed, 50),
+        ];
+        assert_eq!(recovery_abandons_since(&runs, None), 2);
+        // A clean failure is the OTHER counter's business, and vice versa.
+        assert_eq!(budget_failures_since(&runs, None), 1);
+        // An abandoned row with no error text at all is not a proven crash.
+        assert_eq!(recovery_abandons_since(&[run(Abandoned, 1)], None), 0);
+    }
+
+    /// The recovery ceiling shares the manual-retry anchor with the retry
+    /// ladder: an operator hard-retry re-arms both, inclusively.
+    #[test]
+    fn recoveries_respect_the_manual_retry_anchor() {
+        use crate::agents::swarm::tasks::{TaskRunStatus::*, RUN_ABANDONED_BY_JANITOR_ERROR};
+        let crashed = |at: u64| {
+            let mut r = run(Abandoned, at);
+            r.error = Some(RUN_ABANDONED_BY_JANITOR_ERROR.to_string());
+            r
+        };
+        let runs = vec![crashed(10), crashed(20), crashed(150)];
+        assert_eq!(recovery_abandons_since(&runs, Some(100)), 1);
+        assert_eq!(recovery_abandons_since(&runs, Some(150)), 1); // inclusive
+        assert_eq!(recovery_abandons_since(&runs, Some(151)), 0);
     }
 
     #[test]

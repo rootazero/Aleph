@@ -286,6 +286,47 @@ pub(super) fn parse_interval_to_ms(s: &str) -> Option<u64> {
     }
 }
 
+/// Build the `failure_alert` payload from the form fields.
+///
+/// The keys emitted here (`after` / `cooldown_ms` / `target.kind` / `url` /
+/// `channel` / `chat_id`) are the backend's own — the server is the single
+/// source for this shape. The previous form invented `after_n` / `cooldown` /
+/// `kind` / `channel`, which shared *zero* field names with what the handler
+/// parses, so the editor reported success and stored nothing.
+///
+/// Returns `None` when the target is not filled in, which the handler reads as
+/// "leave the existing config alone".
+pub(super) fn build_failure_alert_json(
+    target_kind: &str,
+    endpoint: &str,
+    chat_id: &str,
+    after: &str,
+    cooldown_ms: &str,
+) -> Option<serde_json::Value> {
+    let endpoint = endpoint.trim();
+    if endpoint.is_empty() {
+        return None;
+    }
+    let target = match target_kind {
+        "Webhook" => serde_json::json!({ "kind": "Webhook", "url": endpoint }),
+        _ => {
+            let chat_id = chat_id.trim();
+            if chat_id.is_empty() {
+                // A Gateway target without a conversation cannot be delivered;
+                // emitting it anyway would be rejected by the server, so treat
+                // a half-filled form as "not configured".
+                return None;
+            }
+            serde_json::json!({ "kind": "Gateway", "channel": endpoint, "chat_id": chat_id })
+        }
+    };
+    Some(serde_json::json!({
+        "after": after.trim().parse::<u32>().unwrap_or(2),
+        "cooldown_ms": cooldown_ms.trim().parse::<i64>().unwrap_or(3_600_000),
+        "target": target,
+    }))
+}
+
 /// Returns the id to render as a "(deleted)" placeholder option when the job's
 /// currently-bound agent is no longer in the available list. `None` when the
 /// current id is empty or still present.
@@ -332,5 +373,43 @@ mod tests {
     fn stale_option_some_when_current_deleted() {
         let list = vec![agent("main")];
         assert_eq!(stale_agent_option("gone", &list), Some("gone".to_string()));
+    }
+
+    /// The payload must use the server's field names. Asserting on the exact
+    /// keys is the point: the previous form's keys parsed cleanly as JSON and
+    /// were discarded wholesale by the handler.
+    #[test]
+    fn webhook_alert_uses_backend_field_names() {
+        let v = build_failure_alert_json("Webhook", "https://example.com/hook", "", "3", "60000")
+            .expect("a filled-in webhook target must produce a payload");
+        assert_eq!(v["after"], 3);
+        assert_eq!(v["cooldown_ms"], 60000);
+        assert_eq!(v["target"]["kind"], "Webhook");
+        assert_eq!(v["target"]["url"], "https://example.com/hook");
+        assert!(v.get("after_n").is_none(), "legacy key must be gone");
+        assert!(v.get("channel").is_none(), "legacy key must be gone");
+    }
+
+    #[test]
+    fn gateway_alert_carries_channel_and_chat_id() {
+        let v = build_failure_alert_json("Gateway", "telegram", "12345", "2", "3600000").unwrap();
+        assert_eq!(v["target"]["kind"], "Gateway");
+        assert_eq!(v["target"]["channel"], "telegram");
+        assert_eq!(v["target"]["chat_id"], "12345");
+    }
+
+    /// A Gateway target with no conversation cannot be delivered anywhere, so
+    /// a half-filled form must not masquerade as a configured alert.
+    #[test]
+    fn incomplete_target_yields_no_payload() {
+        assert!(build_failure_alert_json("Gateway", "telegram", "  ", "2", "3600000").is_none());
+        assert!(build_failure_alert_json("Webhook", "   ", "", "2", "3600000").is_none());
+    }
+
+    #[test]
+    fn unparseable_numbers_fall_back_to_the_backend_defaults() {
+        let v = build_failure_alert_json("Webhook", "https://x", "", "", "abc").unwrap();
+        assert_eq!(v["after"], 2);
+        assert_eq!(v["cooldown_ms"], 3_600_000);
     }
 }

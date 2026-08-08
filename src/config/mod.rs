@@ -22,7 +22,6 @@ mod methods;
 mod migration;
 pub mod patcher;
 pub mod presets_override;
-pub mod prompts_override;
 pub mod reload_impact;
 mod save;
 pub mod schema;

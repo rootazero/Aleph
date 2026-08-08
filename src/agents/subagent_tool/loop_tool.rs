@@ -19,7 +19,11 @@ use tokio_util::sync::CancellationToken;
 
 use super::parse::parse_args;
 use super::spawn::CancelGuard;
-use super::types::{BatchTask, SubagentAction, LIST_RESULT_PREVIEW_CHARS, MAX_LISTED_COMPLETED};
+use super::types::{
+    wave_aware_child_timeout_cap, wave_count, BatchTask, SubagentAction, BATCH_ABORT_DRAIN_SECS,
+    BATCH_CANCEL_GRACE_SECS, BATCH_FANOUT_SLACK_SECS, LIST_RESULT_PREVIEW_CHARS,
+    MAX_LISTED_COMPLETED,
+};
 use super::SubagentTool;
 
 #[async_trait]
@@ -112,7 +116,7 @@ impl LoopTool for SubagentTool {
                 },
                 "timeout_secs": {
                     "type": "integer",
-                    "description": "For 'run': maximum seconds the sub-agent may run (default 120). For 'wait': the bounded blocking window in seconds (default 120, capped at 600) — on elapse you get 'still_running' and may wait again.",
+                    "description": "For 'run': maximum seconds the sub-agent may run (default 120); in a parallel batch it is an upper bound that is divided across the batch's concurrency waves (and the synthesis round), so a wide batch of long tasks gets a shorter per-row budget rather than overrunning the whole call. For 'wait': the bounded blocking window in seconds (default 120, capped at 600) — on elapse you get 'still_running' and may wait again.",
                     "default": 120
                 },
                 "run_in_background": {
@@ -652,11 +656,14 @@ impl LoopTool for SubagentTool {
                     Vec::with_capacity(batch.len());
                 for (idx, batch_task) in batch.iter().enumerate() {
                     let agent_def = if let Some(ref agent_type) = batch_task.agent_type {
-                        match self.agent_registry.resolve(agent_type, project_root_ref) {
+                        match self
+                            .agent_registry
+                            .resolve_spawnable(agent_type, project_root_ref)
+                        {
                             Some(def) => def,
                             None => {
                                 let available =
-                                    self.agent_registry.available_agent_ids().join(", ");
+                                    self.agent_registry.spawnable_agent_ids().join(", ");
                                 return ToolResult::Error {
                                     error: format!(
                                         "batch task {idx}: Unknown agent_type '{agent_type}'. Available agents: {available}"
@@ -666,11 +673,14 @@ impl LoopTool for SubagentTool {
                             }
                         }
                     } else if let Some(ref agent_type) = args.agent_type {
-                        match self.agent_registry.resolve(agent_type, project_root_ref) {
+                        match self
+                            .agent_registry
+                            .resolve_spawnable(agent_type, project_root_ref)
+                        {
                             Some(def) => def,
                             None => {
                                 let available =
-                                    self.agent_registry.available_agent_ids().join(", ");
+                                    self.agent_registry.spawnable_agent_ids().join(", ");
                                 return ToolResult::Error {
                                     error: format!(
                                         "batch task {idx}: Unknown agent_type '{agent_type}'. Available agents: {available}"
@@ -736,8 +746,33 @@ impl LoopTool for SubagentTool {
                 // can label each proposal with the model that produced it.
                 let proposer_models_by_idx: Vec<Option<String>> =
                     prepared.iter().map(|(_, _, m, _)| m.clone()).collect();
+
+                // W19 ① — the clamp `parse` applied is per-child and assumes one
+                // child per call. This batch runs in `ceil(rows / permits)`
+                // waves plus (when synthesizing) one serial reduce round, so
+                // re-clamp every row to the share that actually fits the tool
+                // budget. Without it a five-row batch of full-length children is
+                // arithmetically guaranteed to overrun and be thrown away whole.
+                let agg_rounds = usize::from(args.synthesize);
+                let permits = self.subagent_semaphore.available_permits();
+                let child_cap_secs =
+                    wave_aware_child_timeout_cap(prepared.len(), permits, agg_rounds);
+                let waves = u64::try_from(wave_count(prepared.len(), permits)).unwrap_or(u64::MAX);
+                for row in &mut prepared {
+                    row.3 = row.3.min(child_cap_secs);
+                }
+                // Backstop for children that never get to arm their own clock:
+                // the permit wait inside the spawner happens BEFORE its
+                // `tokio::time::timeout`, so a queued child is invisible to
+                // every per-child deadline in the system.
+                let fanout_deadline = tokio::time::Instant::now()
+                    + std::time::Duration::from_secs(
+                        child_cap_secs
+                            .saturating_mul(waves)
+                            .saturating_add(BATCH_FANOUT_SLACK_SECS),
+                    );
                 // P1 data isolation — captured BEFORE the spawn boundary.
-                // `tokio::spawn` does NOT inherit task-locals, so without
+                // A spawned task inherits NO task-locals, so without
                 // re-establishing these inside each fan-out task a sync-batch
                 // subagent's `memory.project_scoped` / retrieval / compaction
                 // silently fell back to the unscoped base namespace regardless
@@ -749,7 +784,20 @@ impl LoopTool for SubagentTool {
                 // every one of them wrote to the default partition.
                 let captured_scope = crate::scope::current_scope();
                 let captured_agent = crate::agents::current_agent_id();
-                let mut handles = Vec::with_capacity(prepared.len());
+                // W19 ③ — a `JoinSet`, not a `Vec<JoinHandle>`: dropping a
+                // `JoinHandle` DETACHES its task, so the pre-W19 timeout path
+                // left every unfinished child running — burning tokens with
+                // nobody left to read the result. Dropping / shutting down a
+                // `JoinSet` aborts instead.
+                let mut join_set: tokio::task::JoinSet<(usize, BatchOutcome)> =
+                    tokio::task::JoinSet::new();
+                // Task id → batch index, so a `JoinError` (abort / panic that
+                // escaped `catch_unwind`) still lands in the right row.
+                let mut id_to_idx: std::collections::HashMap<tokio::task::Id, usize> =
+                    std::collections::HashMap::with_capacity(prepared.len());
+                // Cooperative stop signal per row, kept so the deadline path can
+                // ask a child to unwind cleanly before resorting to abort.
+                let mut child_cancels: Vec<CancellationToken> = Vec::with_capacity(prepared.len());
                 for (idx, (agent_def, task, model, timeout)) in prepared.into_iter().enumerate() {
                     let batch_cancel = self.cancel_for_child_with(&cancel);
                     // W12 — running-only registration so the gateway can reach
@@ -784,7 +832,8 @@ impl LoopTool for SubagentTool {
                     let task_scope = captured_scope.clone();
                     let task_root = project_root.clone();
                     let task_agent = captured_agent.clone();
-                    handles.push(tokio::spawn(async move {
+                    child_cancels.push(batch_cancel.clone());
+                    let spawned = join_set.spawn(async move {
                         let _running_reg = running_reg;
                         let _cancel_guard = CancelGuard::new(batch_cancel.clone());
                         // Boxed: `AgentRuntime::run`'s state machine is already
@@ -811,52 +860,105 @@ impl LoopTool for SubagentTool {
                         // Terminate this proposal's cancel-bridge watcher.
                         batch_cancel.cancel();
                         (idx, outcome)
-                    }));
+                    });
+                    id_to_idx.insert(spawned.id(), idx);
                 }
 
-                let mut results: Vec<Value> = Vec::with_capacity(handles.len());
+                let row_count = child_cancels.len();
+                // Indexed slots, not push order: `JoinSet` yields in COMPLETION
+                // order while `results[i].index == i` is part of this tool's
+                // contract (and the row a partial return leaves empty has to be
+                // identifiable).
+                let mut slots: Vec<Option<Value>> = vec![None; row_count];
                 // Successful proposals (index, model, text) folded by the MoA
                 // aggregator when `synthesize` is set.
                 let mut proposals: Vec<(usize, Option<String>, String)> = Vec::new();
-                for (batch_idx, h) in handles.into_iter().enumerate() {
-                    let item = match h.await {
-                        Ok((idx, Ok(Ok(r)))) => {
-                            let text = r.final_text.unwrap_or_else(|| "(no output)".to_string());
-                            proposals.push((
-                                idx,
-                                proposer_models_by_idx.get(idx).cloned().flatten(),
-                                text.clone(),
-                            ));
+
+                // W19 ② — bounded join. A2 (compact errors into context): when
+                // the share elapses the parent gets the results that DID land
+                // plus the indices that did not, and decides what to re-issue.
+                // Returning `ToolError::Timeout` here threw away every finished
+                // child — twenty minutes of work discarded because one row hung.
+                let all_joined = drain_batch_until(
+                    &mut join_set,
+                    fanout_deadline,
+                    &id_to_idx,
+                    &proposer_models_by_idx,
+                    &mut slots,
+                    &mut proposals,
+                )
+                .await;
+                // Snapshotted at the deadline, NOT recomputed at the end: a
+                // child the grace window below stops still did not finish
+                // within its share, and it lands a real `failed: … cancelled`
+                // row. Recomputing from the slots afterwards would report that
+                // row as a normal failure and the batch as complete.
+                let mut incomplete: Vec<usize> = Vec::new();
+                if !all_joined {
+                    incomplete = slots
+                        .iter()
+                        .enumerate()
+                        .filter_map(|(idx, slot)| slot.is_none().then_some(idx))
+                        .collect();
+                    // Cooperative first: a child that unwinds on its own token
+                    // runs its worktree cleanup and MCP-scope shutdown instead
+                    // of leaving both to their Drop safety nets.
+                    for token in &child_cancels {
+                        token.cancel();
+                    }
+                    let grace = tokio::time::Instant::now()
+                        + std::time::Duration::from_secs(BATCH_CANCEL_GRACE_SECS);
+                    let drained = drain_batch_until(
+                        &mut join_set,
+                        grace,
+                        &id_to_idx,
+                        &proposer_models_by_idx,
+                        &mut slots,
+                        &mut proposals,
+                    )
+                    .await;
+                    if !drained {
+                        // Abort, then WAIT for the aborts to land — `shutdown`
+                        // is what makes "no detached children" observable at
+                        // the moment this tool returns. Bounded because a task
+                        // that refuses to yield must not hold the call open;
+                        // the `JoinSet` drop aborts whatever is left.
+                        let _ = tokio::time::timeout(
+                            std::time::Duration::from_secs(BATCH_ABORT_DRAIN_SECS),
+                            join_set.shutdown(),
+                        )
+                        .await;
+                    }
+                    tracing::warn!(
+                        rows = row_count,
+                        finished = slots.iter().filter(|s| s.is_some()).count(),
+                        "subagent: batch wall-clock share elapsed; returning partial results"
+                    );
+                }
+                // Nothing below this line may outlive the fan-out: the MoA
+                // reduce can run for another round, and a `JoinSet` still in
+                // scope is a `JoinSet` still holding tasks.
+                drop(join_set);
+                proposals.sort_by_key(|(idx, _, _)| *idx);
+
+                let results: Vec<Value> = slots
+                    .into_iter()
+                    .enumerate()
+                    .map(|(idx, slot)| {
+                        slot.unwrap_or_else(|| {
                             json!({
                                 "index": idx,
-                                "status": "completed",
-                                "result": text,
-                                "iterations": r.iterations,
-                                "tool_calls_made": r.tool_calls_made,
-                                "total_tokens": r.total_tokens,
-                                // R8 honesty: a capped proposal is a partial
-                                // result, not a clean completion.
-                                "hit_iteration_limit": r.hit_limit,
+                                "status": "unfinished",
+                                "error": format!(
+                                    "Sub-agent did not finish inside this batch's wall-clock \
+                                     share ({child_cap_secs}s per child); it was cancelled and \
+                                     its task aborted, so no partial output survives. Re-issue \
+                                     this row on its own if you still need it."
+                                ),
                             })
-                        }
-                        Ok((idx, Ok(Err(e)))) => json!({
-                            "index": idx,
-                            "status": "failed",
-                            "error": e,
-                        }),
-                        Ok((idx, Err(_panic))) => json!({
-                            "index": idx,
-                            "status": "panicked",
-                            "error": "sub-agent panicked",
-                        }),
-                        Err(join_err) => json!({
-                            "index": batch_idx,
-                            "status": "join_error",
-                            "error": format!("Failed to join task {}: {}", batch_idx, join_err),
-                        }),
-                    };
-                    results.push(item);
-                }
+                        })
+                    })
+                    .collect();
 
                 // Mixture-of-Agents reduce: fold the proposals into one answer
                 // via a single aggregator sub-agent. The synthesis is performed
@@ -866,11 +968,14 @@ impl LoopTool for SubagentTool {
                 // to fold, so the raw batch is returned untouched.
                 if args.synthesize && !proposals.is_empty() {
                     let aggregator_def = if let Some(ref agent_type) = args.agent_type {
-                        match self.agent_registry.resolve(agent_type, project_root_ref) {
+                        match self
+                            .agent_registry
+                            .resolve_spawnable(agent_type, project_root_ref)
+                        {
                             Some(def) => def,
                             None => {
                                 let available =
-                                    self.agent_registry.available_agent_ids().join(", ");
+                                    self.agent_registry.spawnable_agent_ids().join(", ");
                                 return ToolResult::Error {
                                     error: format!(
                                         "aggregator: Unknown agent_type '{agent_type}'. Available agents: {available}"
@@ -918,7 +1023,9 @@ impl LoopTool for SubagentTool {
                         task: synthesis_prompt,
                         context_summary: args.context_summary.clone(),
                         model: args.aggregator_model.clone().or_else(|| args.model.clone()),
-                        timeout_secs: args.timeout_secs,
+                        // W19 ① — the reduce is the `+1` serial round the share
+                        // was divided by; it gets one round, same as a proposer.
+                        timeout_secs: args.timeout_secs.min(child_cap_secs),
                     };
                     let agg_cancel = self.cancel_for_child_with(&cancel);
                     let _agg_cancel_guard = CancelGuard::new(agg_cancel.clone());
@@ -944,23 +1051,29 @@ impl LoopTool for SubagentTool {
                     agg_cancel.cancel();
                     return match agg_outcome {
                         Ok(r) => ToolResult::Success {
-                            output: json!({
-                                "status": "moa_completed",
-                                "synthesis": r.final_text.unwrap_or_else(|| "(no output)".to_string()),
-                                "hit_iteration_limit": r.hit_limit,
-                                "proposer_count": proposer_count,
-                                "results": results,
-                            }),
+                            output: annotate_incomplete(
+                                json!({
+                                    "status": "moa_completed",
+                                    "synthesis": r.final_text.unwrap_or_else(|| "(no output)".to_string()),
+                                    "hit_iteration_limit": r.hit_limit,
+                                    "proposer_count": proposer_count,
+                                    "results": results,
+                                }),
+                                &incomplete,
+                            ),
                         },
                         // Synthesis failed — never discard the proposals; return
                         // them so the parent can fold them itself.
                         Err(e) => ToolResult::Success {
-                            output: json!({
-                                "status": "moa_synthesis_failed",
-                                "error": e,
-                                "proposer_count": proposer_count,
-                                "results": results,
-                            }),
+                            output: annotate_incomplete(
+                                json!({
+                                    "status": "moa_synthesis_failed",
+                                    "error": e,
+                                    "proposer_count": proposer_count,
+                                    "results": results,
+                                }),
+                                &incomplete,
+                            ),
                         },
                     };
                 }
@@ -971,21 +1084,34 @@ impl LoopTool for SubagentTool {
                 // fact failed and the aggregator was skipped.
                 if args.synthesize {
                     return ToolResult::Success {
-                        output: json!({
-                            "status": "moa_no_proposals",
-                            "count": results.len(),
-                            "results": results,
-                            "note": "Synthesis was requested but no proposer returned a result, so the aggregator never ran. The per-proposal errors are in 'results'.",
-                        }),
+                        output: annotate_incomplete(
+                            json!({
+                                "status": "moa_no_proposals",
+                                "count": results.len(),
+                                "results": results,
+                                "note": "Synthesis was requested but no proposer returned a result, so the aggregator never ran. The per-proposal errors are in 'results'.",
+                            }),
+                            &incomplete,
+                        ),
                     };
                 }
 
+                // R8 honesty: a batch that ran out of wall clock is not a
+                // completed batch, and the model must not read it as one.
+                let batch_status = if incomplete.is_empty() {
+                    "batch_completed"
+                } else {
+                    "batch_partial"
+                };
                 return ToolResult::Success {
-                    output: json!({
-                        "status": "batch_completed",
-                        "count": results.len(),
-                        "results": results,
-                    }),
+                    output: annotate_incomplete(
+                        json!({
+                            "status": batch_status,
+                            "count": results.len(),
+                            "results": results,
+                        }),
+                        &incomplete,
+                    ),
                 };
             }
         }
@@ -1002,10 +1128,13 @@ impl LoopTool for SubagentTool {
         let project_root = crate::projects::current_project_root();
         let project_root_ref = project_root.as_deref();
         let agent_def = if let Some(ref agent_type) = args.agent_type {
-            match self.agent_registry.resolve(agent_type, project_root_ref) {
+            match self
+                .agent_registry
+                .resolve_spawnable(agent_type, project_root_ref)
+            {
                 Some(def) => def,
                 None => {
-                    let available = self.agent_registry.available_agent_ids().join(", ");
+                    let available = self.agent_registry.spawnable_agent_ids().join(", ");
                     return ToolResult::Error {
                         error: format!(
                             "Unknown agent_type '{agent_type}'. Available agents: {available}"
@@ -1200,6 +1329,145 @@ fn annotate_unknown(output: &mut Value, unknown: &[String]) {
     }
 }
 
+/// What one sync-batch fan-out task returns: the child run's own
+/// `Result`, wrapped in the `catch_unwind` `Result` that isolates a panic.
+type BatchOutcome =
+    Result<Result<crate::agents::runtime::LoopRunResult, String>, Box<dyn std::any::Any + Send>>;
+
+/// Tell the parent which batch rows never produced anything.
+///
+/// A partial return that only omits rows is indistinguishable from a batch that
+/// was smaller than the model asked for, so the indices are stated explicitly
+/// alongside the per-row `unfinished` entries. No-op when everything landed, so
+/// the all-complete case stays byte-identical.
+fn annotate_incomplete(mut output: Value, incomplete: &[usize]) -> Value {
+    if incomplete.is_empty() {
+        return output;
+    }
+    if let Some(obj) = output.as_object_mut() {
+        obj.insert("incomplete_indices".to_string(), json!(incomplete));
+        obj.insert(
+            "incomplete_note".to_string(),
+            json!(
+                "The batch ran out of its wall-clock share before these rows finished. \
+                 They were cancelled and their tasks aborted — nothing is still running \
+                 in the background, and there is no request_id to poll. Everything that \
+                 DID finish is in 'results'; re-issue only the unfinished rows, ideally \
+                 split smaller."
+            ),
+        );
+    }
+    output
+}
+
+/// Join sync-batch fan-out tasks into `slots` (and `proposals`) until either the
+/// set empties or `until` elapses.
+///
+/// Returns `true` when every task was joined. `false` means the deadline won and
+/// the caller owns the still-running remainder — `JoinSet` makes that an
+/// explicit decision instead of the silent detach a dropped `JoinHandle` gives.
+async fn drain_batch_until(
+    join_set: &mut tokio::task::JoinSet<(usize, BatchOutcome)>,
+    until: tokio::time::Instant,
+    id_to_idx: &std::collections::HashMap<tokio::task::Id, usize>,
+    proposer_models_by_idx: &[Option<String>],
+    slots: &mut [Option<Value>],
+    proposals: &mut Vec<(usize, Option<String>, String)>,
+) -> bool {
+    loop {
+        // `join_next_with_id` is cancel-safe, so a lost `timeout` race cannot
+        // drop a completed child's result on the floor.
+        match tokio::time::timeout_at(until, join_set.join_next_with_id()).await {
+            Ok(None) => return true,
+            Ok(Some(joined)) => {
+                record_batch_row(joined, id_to_idx, proposer_models_by_idx, slots, proposals);
+            }
+            Err(_elapsed) => return false,
+        }
+    }
+}
+
+/// Fold one joined fan-out task into its indexed slot.
+fn record_batch_row(
+    joined: Result<(tokio::task::Id, (usize, BatchOutcome)), tokio::task::JoinError>,
+    id_to_idx: &std::collections::HashMap<tokio::task::Id, usize>,
+    proposer_models_by_idx: &[Option<String>],
+    slots: &mut [Option<Value>],
+    proposals: &mut Vec<(usize, Option<String>, String)>,
+) {
+    let (idx, row) = match joined {
+        Ok((_, (idx, Ok(Ok(r))))) => {
+            let text = r.final_text.unwrap_or_else(|| "(no output)".to_string());
+            proposals.push((
+                idx,
+                proposer_models_by_idx.get(idx).cloned().flatten(),
+                text.clone(),
+            ));
+            (
+                idx,
+                json!({
+                    "index": idx,
+                    "status": "completed",
+                    "result": text,
+                    "iterations": r.iterations,
+                    "tool_calls_made": r.tool_calls_made,
+                    "total_tokens": r.total_tokens,
+                    // R8 honesty: a capped proposal is a partial
+                    // result, not a clean completion.
+                    "hit_iteration_limit": r.hit_limit,
+                }),
+            )
+        }
+        Ok((_, (idx, Ok(Err(e))))) => (
+            idx,
+            json!({
+                "index": idx,
+                "status": "failed",
+                "error": e,
+            }),
+        ),
+        Ok((_, (idx, Err(_panic)))) => (
+            idx,
+            json!({
+                "index": idx,
+                "status": "panicked",
+                "error": "sub-agent panicked",
+            }),
+        ),
+        // The task itself died (abort, or a panic that escaped the inner
+        // `catch_unwind`). Its id is the only thing left that says WHICH row
+        // this was — hence `id_to_idx`.
+        Err(join_err) => {
+            let Some(&idx) = id_to_idx.get(&join_err.id()) else {
+                tracing::warn!(error = %join_err, "subagent: unattributable batch join error");
+                return;
+            };
+            // An aborted task is the batch deadline's own doing. Reporting that
+            // as a "join error" would read to the model like an internal fault
+            // worth retrying differently, when the only true statement is that
+            // the row ran out of wall clock.
+            let row = if join_err.is_cancelled() {
+                json!({
+                    "index": idx,
+                    "status": "unfinished",
+                    "error": "Sub-agent was aborted when the batch ran out of its \
+                              wall-clock share; no partial output survives.",
+                })
+            } else {
+                json!({
+                    "index": idx,
+                    "status": "join_error",
+                    "error": format!("Failed to join task {idx}: {join_err}"),
+                })
+            };
+            (idx, row)
+        }
+    };
+    if let Some(slot) = slots.get_mut(idx) {
+        *slot = Some(row);
+    }
+}
+
 /// Derive a compact activity summary from a running sub-agent's progress
 /// window. `steps` is the highest iteration index observed (monotonic, so
 /// it stays accurate even though the window is FIFO-capped at 50); the
@@ -1384,11 +1652,20 @@ mod tests {
     /// task-local re-establishment.
     const SPAWN_SCOPE_WINDOW_LINES: usize = 40;
 
-    /// Source-level guard: every `tokio::spawn(` in this file's production
+    /// Every shape that starts a task in this file's production code.
+    ///
+    /// W19 moved the sync fan-out from `tokio::spawn` to `JoinSet::spawn` (a
+    /// dropped `JoinHandle` detaches; a dropped `JoinSet` aborts) — the guard
+    /// below scans for spawn shapes by literal, so the new one had to be
+    /// registered here or the guard would have gone quietly blind on the exact
+    /// call site it exists for.
+    const SPAWN_SHAPES: &[&str] = &["tokio::spawn(", "join_set.spawn("];
+
+    /// Source-level guard: every task spawn in this file's production
     /// code must re-establish the run's task-locals inside the spawned
     /// future.
     ///
-    /// `tokio::spawn` inherits NO task-locals, so a fan-out task that skips
+    /// A spawned task inherits NO task-locals, so a fan-out task that skips
     /// this writes memory into the unscoped base namespace instead of the
     /// run's room / personal partition — silent mis-partitioning with no
     /// error, no panic, and a green test at the call site. The check is
@@ -1403,7 +1680,7 @@ mod tests {
         let lines: Vec<&str> = prod.lines().collect();
         let mut checked = 0usize;
         for (i, line) in lines.iter().enumerate() {
-            if !line.contains("tokio::spawn(") {
+            if !SPAWN_SHAPES.iter().any(|shape| line.contains(shape)) {
                 continue;
             }
             checked += 1;
@@ -1411,7 +1688,7 @@ mod tests {
             let window = lines[i..end].join("\n");
             assert!(
                 window.contains("with_scope"),
-                "loop_tool.rs:{}: `tokio::spawn` must re-establish the run's \
+                "loop_tool.rs:{}: a spawned task must re-establish the run's \
                  task-locals (with_agent_id / with_project_root / with_scope) \
                  inside the spawned future — spawned tasks inherit none of them, \
                  so a subagent's memory writes land in the default partition \
@@ -1421,8 +1698,17 @@ mod tests {
         }
         assert!(
             checked > 0,
-            "guard found no `tokio::spawn(` in loop_tool.rs production code — \
+            "guard found no spawn site in loop_tool.rs production code — \
              if the sync fan-out moved, move this guard with it"
+        );
+        // The fan-out is the site this guard exists for. Renaming the JoinSet
+        // binding would make the literal above match nothing while the guard
+        // still reported green off some other spawn.
+        assert!(
+            prod.contains("join_set.spawn("),
+            "the sync fan-out's spawn shape is no longer `join_set.spawn(` — \
+             update SPAWN_SHAPES (and this assertion) to the new shape rather \
+             than letting the scan go blind"
         );
     }
 }

@@ -4,20 +4,37 @@
 //! - `CoworkConfigToml`: Main configuration for the Agent engine
 //! - `FileOpsConfigToml`: File operations executor configuration
 //! - `CodeExecConfigToml`: Code execution executor configuration
+//!
+//! # Retired: `[agent.subagents]`, `require_confirmation`, `max_parallelism`
+//!
+//! This section once carried a spawn allowlist (`subagents.allow_agents`), a
+//! session cleanup policy, a spawn timeout, a parallelism cap and a
+//! confirmation switch. None of them had an implementation: they were
+//! validated at boot, published into the Panel schema, and then read by
+//! nobody — a decorative surface that looks like control. `max_parallelism =
+//! 0` could even *block boot* over a value that was self-declared "legacy,
+//! ignored".
+//!
+//! Sub-agent capability boundaries are owned by three real layers:
+//! `AgentDefinition.subagents` (`config/types/agents_def.rs::SubagentPolicy`,
+//! consumed by `config/agent_resolver`), `AgentDef.allowed_tools` +
+//! `AllowlistToolService`, and the exec tier gate in `src/tools/scoped/`. A
+//! fourth config only manufactures a second source of truth.
+//!
+//! Config deserialization does not `deny_unknown_fields`, so an existing
+//! `config.toml` still carrying these keys keeps parsing — with the same
+//! (zero) effect it always had. Before adding any of them back, wire the
+//! enforcement point in the same commit.
 
 mod code_exec;
 mod file_ops;
-mod subagents;
 
 // Re-export all public types
 pub use code_exec::CodeExecConfigToml;
 pub use file_ops::FileOpsConfigToml;
-pub use subagents::SubagentsConfigToml;
 
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
-
-use crate::tool_metadata::{MAX_PARALLELISM, REQUIRE_CONFIRMATION};
 
 // =============================================================================
 // CoworkConfigToml
@@ -26,27 +43,14 @@ use crate::tool_metadata::{MAX_PARALLELISM, REQUIRE_CONFIRMATION};
 /// Agent task orchestration configuration
 ///
 /// Configures the Agent engine for multi-task orchestration.
-/// This includes task decomposition, parallel execution, and confirmation settings.
 ///
 /// # Example TOML
 /// ```toml
 /// [agent]
 /// planner_provider = "claude"
 /// ```
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
 pub struct CoworkConfigToml {
-    /// Require user confirmation before executing task graphs
-    /// (Legacy field, ignored - confirmation is always required)
-    #[serde(default = "default_require_confirmation", skip_serializing)]
-    #[schemars(skip)]
-    pub require_confirmation: bool,
-
-    /// Maximum number of tasks to run in parallel
-    /// (Legacy field, ignored - uses hardcoded value for stability)
-    #[serde(default = "default_max_parallelism", skip_serializing)]
-    #[schemars(skip)]
-    pub max_parallelism: usize,
-
     /// AI provider to use for task planning (LLM decomposition)
     /// If not specified, uses the default provider from [general]
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -59,41 +63,6 @@ pub struct CoworkConfigToml {
     /// Code execution configuration
     #[serde(default)]
     pub code_exec: CodeExecConfigToml,
-
-    /// Sub-agent orchestration configuration
-    ///
-    /// Controls which agents can be spawned and default spawn settings.
-    #[serde(default)]
-    pub subagents: SubagentsConfigToml,
-}
-
-// =============================================================================
-// Default Functions
-// =============================================================================
-
-pub const fn default_require_confirmation() -> bool {
-    REQUIRE_CONFIRMATION
-}
-
-pub const fn default_max_parallelism() -> usize {
-    MAX_PARALLELISM
-}
-
-// =============================================================================
-// Default Implementation
-// =============================================================================
-
-impl Default for CoworkConfigToml {
-    fn default() -> Self {
-        Self {
-            require_confirmation: default_require_confirmation(),
-            max_parallelism: default_max_parallelism(),
-            planner_provider: None,
-            file_ops: FileOpsConfigToml::default(),
-            code_exec: CodeExecConfigToml::default(),
-            subagents: SubagentsConfigToml::default(),
-        }
-    }
 }
 
 // =============================================================================
@@ -103,25 +72,11 @@ impl Default for CoworkConfigToml {
 impl CoworkConfigToml {
     /// Validate the configuration
     pub fn validate(&self) -> Result<(), String> {
-        // Validate max_parallelism
-        if self.max_parallelism == 0 {
-            return Err("agent.max_parallelism must be greater than 0".to_string());
-        }
-        if self.max_parallelism > 32 {
-            tracing::warn!(
-                max_parallelism = self.max_parallelism,
-                "agent.max_parallelism is very high (>32), this may cause resource issues"
-            );
-        }
-
         // Validate file_ops configuration
         self.file_ops.validate()?;
 
         // Validate code_exec configuration
         self.code_exec.validate()?;
-
-        // Validate subagents configuration
-        self.subagents.validate()?;
 
         Ok(())
     }
@@ -138,23 +93,13 @@ mod tests {
     #[test]
     fn test_default_config() {
         let config = CoworkConfigToml::default();
-        // Legacy fields still have defaults for TOML compatibility
-        assert!(config.require_confirmation);
-        assert_eq!(config.max_parallelism, 4);
         assert!(config.planner_provider.is_none());
     }
 
     #[test]
     fn test_validation() {
-        let mut config = CoworkConfigToml::default();
-
-        // Valid config should pass
+        let config = CoworkConfigToml::default();
         assert!(config.validate().is_ok());
-
-        // Invalid max_parallelism
-        config.max_parallelism = 0;
-        assert!(config.validate().is_err());
-        config.max_parallelism = 4;
     }
 
     #[test]
@@ -162,5 +107,28 @@ mod tests {
         let config = CoworkConfigToml::default();
         assert!(config.file_ops.enabled);
         assert!(config.file_ops.require_confirmation_for_write);
+    }
+
+    /// Retired keys must not become a hard parse failure for existing
+    /// `config.toml` files. `Config` does not `deny_unknown_fields`, and this
+    /// test pins that: turning it on later would flip "inert key" into
+    /// "server will not start", which is strictly worse than the bug that
+    /// motivated the removal.
+    #[test]
+    fn retired_keys_still_parse_and_are_ignored() {
+        let toml_str = r#"
+require_confirmation = false
+max_parallelism = 0
+planner_provider = "claude"
+
+[subagents]
+allow_agents = ["translator"]
+default_cleanup = "persistent"
+default_timeout_seconds = 0
+"#;
+        let config: CoworkConfigToml = toml::from_str(toml_str).unwrap();
+        assert_eq!(config.planner_provider.as_deref(), Some("claude"));
+        // `max_parallelism = 0` used to abort boot here.
+        assert!(config.validate().is_ok());
     }
 }

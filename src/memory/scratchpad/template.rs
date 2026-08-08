@@ -1,6 +1,13 @@
 // core/src/memory/scratchpad/template.rs
 
 //! Scratchpad Markdown templates
+//!
+//! There is no user-facing template override. `~/.aleph/prompts.toml` and its
+//! `PromptsOverride` loader were removed on 2026-08-08: the only accessor left
+//! (`get_template`) had zero call sites, because `ScratchpadManager::initialize`
+//! builds its scratchpad from [`generate_scratchpad`]. Restoring an override
+//! means wiring it into that constructor in the same commit — a config surface
+//! that parses cleanly and changes nothing is worse than no surface at all.
 
 /// Default scratchpad template for new sessions
 pub const DEFAULT_TEMPLATE: &str = r#"# Current Task
@@ -21,12 +28,6 @@ pub const DEFAULT_TEMPLATE: &str = r#"# Current Task
 _Last updated: _
 _Session: _
 "#;
-
-/// Get the scratchpad template, checking override first
-#[must_use]
-pub fn get_template(overrides: &crate::config::prompts_override::PromptsOverride) -> &str {
-    overrides.scratchpad_template().unwrap_or(DEFAULT_TEMPLATE)
-}
 
 /// Generate a scratchpad with populated metadata
 #[must_use]

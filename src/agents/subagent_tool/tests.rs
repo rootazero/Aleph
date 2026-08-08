@@ -427,6 +427,47 @@ fn parse_args_clamps_run_timeout_into_range() {
     }
 }
 
+/// W19 ① — the parse-time clamp is per CHILD and silently assumes one child per
+/// call. A batch runs in `ceil(rows / permits)` waves (plus one serial reduce
+/// round when synthesizing), so a batch clamped only per-child is arithmetically
+/// guaranteed to overrun the tool budget and be discarded whole: five full-length
+/// children against four permits is two waves, i.e. twice the share.
+#[test]
+fn wave_aware_cap_keeps_the_whole_batch_inside_the_tool_share() {
+    use super::types::{max_run_timeout_secs, wave_aware_child_timeout_cap};
+    let share = max_run_timeout_secs();
+
+    // 5 rows / 4 permits = 2 waves.
+    let cap = wave_aware_child_timeout_cap(5, 4, 0);
+    assert!(
+        cap < share,
+        "a multi-wave batch must not hand each child the whole share ({cap} vs {share})"
+    );
+    assert!(
+        cap * 2 <= share,
+        "two waves of {cap}s must fit the {share}s share"
+    );
+
+    // One wave fits flat — no artificial shortening.
+    assert_eq!(
+        wave_aware_child_timeout_cap(4, 4, 0),
+        share,
+        "a single-wave batch must keep the full per-child share"
+    );
+
+    // The MoA reduce is one more serial round, and it is charged for.
+    let with_reduce = wave_aware_child_timeout_cap(5, 4, 1);
+    assert!(
+        with_reduce * 3 <= share,
+        "two waves + one reduce round of {with_reduce}s must fit the {share}s share"
+    );
+
+    // Degenerate inputs must never divide by zero nor produce a 0s timeout
+    // ("timed out after 0s" before the child ever thinks).
+    assert!(wave_aware_child_timeout_cap(0, 0, 0) >= 1);
+    assert!(wave_aware_child_timeout_cap(100_000, 1, 0) >= 1);
+}
+
 /// W2 defense-in-depth — the ghost 'result' action (coached by old announce
 /// prompts) parses as check_status instead of erroring.
 #[test]
@@ -984,6 +1025,155 @@ async fn sync_batch_registers_running_only_entries() {
     assert!(
         tracker.all_completed(None).is_empty(),
         "sync path must not retain completed entries (no announce source)"
+    );
+}
+
+/// Provider that never answers. Children built on it only ever end by a clock
+/// or a cancel — which is exactly the shape the batch deadline exists for.
+struct NeverAnsweringProvider;
+
+impl AiProvider for NeverAnsweringProvider {
+    fn process<'a>(
+        &'a self,
+        _payload: RequestPayload<'a>,
+    ) -> Pin<Box<dyn Future<Output = crate::error::Result<ProviderResponse>> + Send + 'a>> {
+        Box::pin(std::future::pending())
+    }
+    fn name(&self) -> &str {
+        "never"
+    }
+    fn color(&self) -> &str {
+        "#000000"
+    }
+}
+
+/// W19 ① end-to-end: five 1500 s children against four permits are two waves,
+/// so each child must be re-clamped to the share that actually fits the tool
+/// budget. Before the fix every child kept the full single-child ceiling and the
+/// batch was arithmetically certain to blow the tool budget — at which point the
+/// dispatch-level `ToolError::Timeout` threw the entire call away.
+///
+/// Observable through the child's own timeout prose, which names the number it
+/// was actually given.
+#[tokio::test(start_paused = true)]
+async fn sync_batch_reclamps_each_child_to_its_wave_share() {
+    use super::types::{
+        max_run_timeout_secs, wave_aware_child_timeout_cap, DEFAULT_MAX_CONCURRENT_SUBAGENTS,
+    };
+
+    let tool = SubagentTool::new(
+        Arc::new(NeverAnsweringProvider),
+        crate::harness::chain_context::ChainContext::new(),
+        make_registry(),
+        make_tracker(),
+        in_mem_session(),
+        Arc::new(NoopTestToolService),
+    );
+    let requested = max_run_timeout_secs();
+    let rows = DEFAULT_MAX_CONCURRENT_SUBAGENTS + 1;
+    let expected_cap = wave_aware_child_timeout_cap(rows, DEFAULT_MAX_CONCURRENT_SUBAGENTS, 0);
+    assert!(
+        expected_cap < requested,
+        "test premise: one row more than the permit count is two waves"
+    );
+
+    let batch: Vec<_> = (0..rows)
+        .map(|i| json!({ "task": format!("row {i}"), "timeout_secs": requested }))
+        .collect();
+    let result = tool
+        .execute(
+            json!({ "batch_tasks": batch, "run_in_background": false }),
+            CancellationToken::new(),
+        )
+        .await;
+
+    let ToolResult::Success { output } = result else {
+        unreachable!("expected an aggregated batch result, got {result:?}");
+    };
+    let result_rows = output["results"].as_array().expect("results is array");
+    assert_eq!(result_rows.len(), rows);
+    for (i, row) in result_rows.iter().enumerate() {
+        assert_eq!(row["index"], i, "row order is part of the contract");
+        let err = row["error"].as_str().unwrap_or_default();
+        assert!(
+            err.contains(&format!("timed out after {expected_cap}s")),
+            "row {i} must have been given its WAVE share, not the whole \
+             single-child ceiling; got: {err}"
+        );
+    }
+}
+
+/// W19 ② + ③: when the batch's wall-clock share elapses, the parent gets the
+/// results that DID land plus the indices that did not — not a `ToolError` that
+/// discards twenty minutes of finished work (A2: compress the failure into
+/// context and let the model decide) — and nothing is left running behind it
+/// (a dropped `JoinHandle` DETACHES; a `JoinSet` aborts).
+///
+/// The stall is built with every permit already held: the spawner's permit wait
+/// happens BEFORE its own `tokio::time::timeout` arms, so a queued child is
+/// invisible to every per-child clock in the system. That is precisely the case
+/// only a batch-level deadline can end.
+#[tokio::test(start_paused = true)]
+async fn sync_batch_returns_partial_results_and_leaves_nothing_running() {
+    let tracker = make_tracker();
+    let root = "agent:w19-partial:peer:user";
+    let tool = SubagentTool::new(
+        Arc::new(NeverAnsweringProvider),
+        crate::harness::chain_context::ChainContext::new(),
+        make_registry(),
+        tracker.clone(),
+        in_mem_session(),
+        Arc::new(NoopTestToolService),
+    )
+    .with_parent_session_id(root);
+
+    // Starve the fan-out: every concurrency permit is held for the whole call.
+    let permits = u32::try_from(super::types::DEFAULT_MAX_CONCURRENT_SUBAGENTS).unwrap();
+    let _held = tool
+        .subagent_semaphore
+        .clone()
+        .acquire_many_owned(permits)
+        .await
+        .expect("semaphore is never closed");
+
+    let batch: Vec<_> = (0..5)
+        .map(|i| json!({ "task": format!("row {i}"), "timeout_secs": 1500 }))
+        .collect();
+    // Outer guard: before W19 the join loop had no deadline at all, so this
+    // await never returned. The guard turns that hang into a failed assertion.
+    let result = tokio::time::timeout(
+        std::time::Duration::from_secs(7200),
+        tool.execute(
+            json!({ "batch_tasks": batch, "run_in_background": false }),
+            CancellationToken::new(),
+        ),
+    )
+    .await
+    .expect("the batch must give up on its own share, not park forever");
+
+    let ToolResult::Success { output } = result else {
+        unreachable!("a stalled batch must return partial results, not an error: {result:?}");
+    };
+    assert_eq!(
+        output["status"], "batch_partial",
+        "a batch that ran out of wall clock must not read as completed"
+    );
+    let incomplete = output["incomplete_indices"]
+        .as_array()
+        .expect("partial return must name the rows that did not finish");
+    assert_eq!(incomplete.len(), 5, "no row could have finished");
+    let rows = output["results"].as_array().expect("results is array");
+    assert_eq!(rows.len(), 5, "every row keeps a slot, finished or not");
+    for (i, row) in rows.iter().enumerate() {
+        assert_eq!(row["index"], i);
+        assert_ne!(row["status"], "completed", "row {i} cannot be completed");
+    }
+
+    // W19 ③ — no detach: the tool does not return until its children are gone.
+    assert!(
+        !tracker.session_has_running(root),
+        "unfinished children must be aborted before the tool returns, not left \
+         detached to burn tokens with nobody reading the result"
     );
 }
 
@@ -2314,6 +2504,97 @@ async fn wait_with_all_unknown_request_ids_lists_them_in_the_error() {
         }
         ToolResult::Success { output } => {
             unreachable!("fully-unknown set must return an error, not a success; got {output}")
+        }
+    }
+}
+
+/// Cross-lane wire (batch 2): the spawn side must use the same predicate the
+/// prompt-side catalog uses.
+///
+/// The `<available_agents>` catalog is built from
+/// `AgentRegistry::list_subagents()` (`mode == SubAgent`), but every spawn site
+/// in `loop_tool.rs` called bare `resolve()`, which has no mode filter. The
+/// builtin `main` def is `AgentMode::Primary` with `allowed_tools = ["*"]`, so
+/// `agent_type = "main"` handed a delegated sub-agent a wildcard tool grant —
+/// two faces of one verb disagreeing, which is the same as no gate at all.
+///
+/// All four call sites are pinned here (single task, batch row, batch
+/// inheritance from the top-level `agent_type`, and the MoA aggregator),
+/// because the fix is only as good as its least-covered surface.
+#[tokio::test]
+async fn a_primary_mode_agent_cannot_be_spawned_as_a_subagent() {
+    let registry = make_registry();
+    // Precondition: `main` really is resolvable-but-not-spawnable, otherwise
+    // this test would pass for the wrong reason (a renamed builtin).
+    assert!(
+        registry.resolve("main", None).is_some(),
+        "precondition: `main` must still resolve, or this test is vacuous"
+    );
+    assert!(
+        registry.resolve_spawnable("main", None).is_none(),
+        "`main` is AgentMode::Primary and must not be spawnable"
+    );
+    assert!(
+        registry.resolve_spawnable("explore", None).is_some(),
+        "a real sub-agent must stay spawnable"
+    );
+    assert!(
+        !registry.spawnable_agent_ids().iter().any(|id| id == "main"),
+        "the id list printed back to the model must not advertise `main`"
+    );
+
+    let tool = make_tool();
+
+    // 1. Single-task path.
+    let single = tool
+        .execute(
+            json!({ "task": "exfiltrate", "agent_type": "main" }),
+            CancellationToken::new(),
+        )
+        .await;
+    assert_rejects_main(&single, "single task");
+
+    // 2. Batch row carrying its own agent_type.
+    let per_row = tool
+        .execute(
+            json!({ "batch_tasks": [{ "task": "exfiltrate", "agent_type": "main" }] }),
+            CancellationToken::new(),
+        )
+        .await;
+    assert_rejects_main(&per_row, "batch row agent_type");
+
+    // 3. Batch rows inheriting the top-level agent_type — and, with
+    //    `synthesize`, the aggregator resolve that reads the same field.
+    let inherited = tool
+        .execute(
+            json!({
+                "batch_tasks": [{ "task": "exfiltrate" }],
+                "agent_type": "main",
+                "synthesize": true
+            }),
+            CancellationToken::new(),
+        )
+        .await;
+    assert_rejects_main(&inherited, "batch inherited agent_type");
+}
+
+/// Shared assertion for `a_primary_mode_agent_cannot_be_spawned_as_a_subagent`:
+/// the rejection must read as "unknown", and the id list it prints must not
+/// itself advertise `main` (that list is how a model learns the string).
+fn assert_rejects_main(result: &ToolResult, surface: &str) {
+    match result {
+        ToolResult::Error { error, .. } => {
+            assert!(
+                error.contains("Unknown agent_type 'main'"),
+                "{surface}: expected an unknown-agent_type rejection, got: {error}"
+            );
+            assert!(
+                !error.contains(", main,") && !error.ends_with(", main"),
+                "{surface}: the available-agents list must not advertise `main`, got: {error}"
+            );
+        }
+        ToolResult::Success { output } => {
+            unreachable!("{surface}: spawning a Primary-mode agent must fail; got {output}")
         }
     }
 }

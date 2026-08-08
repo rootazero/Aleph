@@ -28,6 +28,23 @@ fn extract_str(request: &JsonRpcRequest, key: &str) -> Option<String> {
     }
 }
 
+/// Parse the `failure_alert` parameter into the tri-state update convention.
+///
+/// Absent → `None` (leave alone); explicit `null` → `Some(None)` (clear);
+/// object → `Some(Some(cfg))`. Field names are the shared contract
+/// (`after` / `cooldown_ms` / `target`) — same shape cron accepts.
+fn parse_failure_alert(
+    params: &serde_json::Map<String, Value>,
+) -> Result<Option<Option<crate::tasks::shared::alert::FailureAlertConfig>>, String> {
+    match params.get("failure_alert") {
+        None => Ok(None),
+        Some(Value::Null) => Ok(Some(None)),
+        Some(v) => serde_json::from_value(v.clone())
+            .map(|cfg| Some(Some(cfg)))
+            .map_err(|e| format!("Invalid failure_alert: {e}")),
+    }
+}
+
 /// Serialize a `HeartbeatTaskView` to JSON
 fn task_view_to_json(view: &HeartbeatTaskView) -> Value {
     json!({
@@ -43,6 +60,7 @@ fn task_view_to_json(view: &HeartbeatTaskView) -> Value {
         },
         "dedup": view.dedup,
         "active_hours": view.active_hours,
+        "failure_alert": view.failure_alert,
         "state": {
             "next_due_ms": view.state.next_due_ms,
             "running_at_ms": view.state.running_at_ms,
@@ -245,6 +263,15 @@ pub async fn handle_create(
         task.active_hours = serde_json::from_value(val.clone()).ok().flatten();
     }
 
+    // Optional: failure_alert. Rejected rather than ignored on a parse error —
+    // a monitor whose alerting silently did not take is the exact failure this
+    // field exists to prevent.
+    match parse_failure_alert(params) {
+        Ok(Some(alert)) => task.failure_alert = alert,
+        Ok(None) => {}
+        Err(e) => return JsonRpcResponse::error(request.id, INVALID_PARAMS, e),
+    }
+
     let clock = SystemClock;
     let service = service.lock().await;
     let task_id = match service.add_task(task, &clock).await {
@@ -323,6 +350,10 @@ pub async fn handle_update(
     }
     if let Some(val) = params.get("active_hours") {
         updates.active_hours = serde_json::from_value(val.clone()).ok();
+    }
+    match parse_failure_alert(params) {
+        Ok(alert) => updates.failure_alert = alert,
+        Err(e) => return JsonRpcResponse::error(request.id, INVALID_PARAMS, e),
     }
 
     let clock = SystemClock;

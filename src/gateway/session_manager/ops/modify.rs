@@ -153,6 +153,16 @@ impl SessionManager {
         )
         .map_err(|e| SessionManagerError::DatabaseError(e.to_string()))?;
 
+        // The scratchpad binding table is process-global and mirrored
+        // write-through to disk on every scratchpad tool call, but nothing
+        // ever pruned it: a binding left by an epoch that has since been
+        // superseded can never be addressed again, yet is rewritten forever.
+        // Closing epoch N is the moment epochs < N are known to be dead.
+        crate::builtin_tools::scratchpad_registry::clear_superseded_epochs(
+            &key.base_key_pattern(),
+            key.epoch(),
+        );
+
         Ok(())
     }
 

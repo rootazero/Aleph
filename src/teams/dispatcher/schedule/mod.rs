@@ -11,7 +11,8 @@ mod select;
 mod settle;
 
 pub use select::{
-    is_dispatcher_managed, is_zombie, select_schedulable, MANAGED_BY_DISPATCHER, MANAGED_BY_KEY,
+    is_dispatcher_managed, is_zombie, orphan_reset_status, select_schedulable,
+    MANAGED_BY_DISPATCHER, MANAGED_BY_KEY,
 };
 
 use std::collections::HashMap;
@@ -72,6 +73,12 @@ impl TeamDispatcher {
         //     runs table, not task status — the only pass that can see
         //     cancel-then-crash orphans on already-terminal tasks).
         self.abandon_orphaned_runs().await;
+
+        // 2g. Stop the member runs of tasks that went terminal mid-flight.
+        //     `cancel` on either tool face can only write the task row; this
+        //     is the single place that can reach the live run behind it, so
+        //     every present and future cancel surface inherits the effect.
+        self.cancel_runs_of_terminal_tasks().await;
 
         // 3. List schedulable pending tasks. `derive_status` already excludes
         //    tasks with unsatisfied dependencies (those report as Blocked).
@@ -439,6 +446,10 @@ impl TeamDispatcher {
                 self.fail_or_retry(&task, &err).await;
                 tracing::info!(task_id = %task_id, "dispatcher: target agent busy; attempt deferred without spending retry budget");
             }
+            // A run the cancel sweep stopped arrives here as `Failed` (see the
+            // TODO on `MemberRunStatus`). It is harmless in the dominant path:
+            // `finalize_disposition` already reported KeepForeignState for the
+            // terminal row, so this arm does not run at all.
             MemberRunStatus::Failed | MemberRunStatus::Timeout => {
                 let err = outcome.error.unwrap_or_else(|| "unknown error".to_string());
                 // Bounded automatic retry: a transient attempt failure is

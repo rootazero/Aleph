@@ -41,8 +41,9 @@ pub enum TeamTaskControlArgs {
     Skip { task_id: String },
     /// Cancel a not-yet-finished task. Unlike `skip`, Cancelled does NOT
     /// satisfy downstream dependencies — dependents become unsatisfiable.
-    /// An `in_progress` task's running attempt finishes on its own but cannot
-    /// resurrect the task. Idempotent on already-cancelled tasks; rejects
+    /// An `in_progress` task's running attempt is stopped by the dispatcher on
+    /// its next tick — it does not run on to the timeout. Idempotent on
+    /// already-cancelled tasks; rejects
     /// completed / failed / skipped (already settled — use retry instead).
     Cancel { task_id: String },
 }
@@ -107,8 +108,8 @@ impl AlephTool for TeamTaskControlTool {
     const DESCRIPTION: &'static str = "Admin-context task control. Pause/resume to gate dispatch; \
          hard-retry to re-queue a terminal task without going through review; \
          skip to mark a task as not required (satisfies dependents); cancel \
-         to abort it (dependents become unsatisfiable; an in-progress run \
-         finishes but cannot resurrect the task). Distinct from \
+         to abort it (dependents become unsatisfiable; an in-progress run is \
+         stopped too). Distinct from \
          `workflow_step_review` which is reviewer-context (requires a \
          finished run).";
 
@@ -314,9 +315,15 @@ impl AlephTool for TeamTaskControlTool {
                         )));
                     }
                     // Pending / Blocked / Unsatisfiable / InProgress /
-                    // WaitingReview / Paused are all cancellable. An
-                    // in-progress member run finishes on its own; the
-                    // dispatcher's finalize guard keeps the task cancelled.
+                    // WaitingReview / Paused are all cancellable. The terminal
+                    // write is all this tool does; stopping the live member run
+                    // behind an in-progress task is the dispatcher's cancel
+                    // sweep (`cancel_runs_of_terminal_tasks`), which the status
+                    // write wakes via the task-transition event subscription.
+                    // Deliberately not an ExecutionAdapter injected here: this
+                    // is the second cancel face, and each new one would have to
+                    // remember. The finalize guard still keeps the task
+                    // cancelled whichever way the run ends.
                     _ => {}
                 }
                 self.coord_store

@@ -17,15 +17,15 @@ impl DreamStage for IndexRefresherStage {
         true
     }
 
-    async fn execute(&self, mut ctx: DreamContext) -> Result<DreamContext, AlephError> {
+    async fn execute(&self, ctx: DreamContext) -> Result<DreamContext, AlephError> {
         if let Some(w) = ctx.orientation.as_ref() {
             let stats = w.rebuild_index(&ctx.agent_id).await?;
-            ctx.report
-                .extra
-                .insert("notes_indexed".into(), stats.notes_indexed.to_string());
-            ctx.report
-                .extra
-                .insert("wiki_bytes".into(), stats.bytes_written.to_string());
+            tracing::info!(
+                agent = %ctx.agent_id,
+                notes_indexed = stats.notes_indexed,
+                wiki_bytes = stats.bytes_written,
+                "IndexRefresher rebuilt index.md"
+            );
             w.rotate_log_if_needed(&ctx.agent_id).await?;
         }
         Ok(ctx)

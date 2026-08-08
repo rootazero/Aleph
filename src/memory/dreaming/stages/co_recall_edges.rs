@@ -49,7 +49,7 @@ impl DreamStage for CoRecallEdgesStage {
         ctx.notes.len() >= 2
     }
 
-    async fn execute(&self, mut ctx: DreamContext) -> Result<DreamContext, AlephError> {
+    async fn execute(&self, ctx: DreamContext) -> Result<DreamContext, AlephError> {
         let pairs = match ctx.database.co_recall_pairs(
             &ctx.agent_id,
             MIN_CO_HITS,
@@ -80,9 +80,6 @@ impl DreamStage for CoRecallEdgesStage {
             .replace_co_recall_links(&ctx.agent_id, &edges)
             .await?;
 
-        ctx.report
-            .extra
-            .insert("co_recall_edges".into(), edge_count.to_string());
         tracing::info!(agent = %ctx.agent_id, edges = edge_count, "co-recall edges materialized");
         Ok(ctx)
     }

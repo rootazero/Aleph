@@ -215,7 +215,7 @@ impl ScratchpadManager {
     /// Falls back to a temp-style path for testing.
     #[must_use]
     pub fn new(project_id: &str, session_id: &str) -> Self {
-        let project_dir = crate::config::agent_resolver::default_workspace_root().join(project_id);
+        let project_dir = Self::plan_dir_for(project_id);
 
         Self {
             project_dir,
@@ -242,6 +242,19 @@ impl ScratchpadManager {
             session_id: session_id.to_string(),
             config,
         }
+    }
+
+    /// The directory a `project_id`'s scratchpad files live in.
+    ///
+    /// The single place that mapping is answered. Call sites that need to
+    /// touch a project's files by id (session teardown) must ask here rather
+    /// than re-deriving the path: under `~/.aleph`, whatever writes a path and
+    /// whatever reads it have to be the same function, or the two spellings
+    /// agree on every developer machine and diverge exactly where `ALEPH_HOME`
+    /// is set.
+    #[must_use]
+    pub fn plan_dir_for(project_id: &str) -> PathBuf {
+        crate::config::agent_resolver::default_workspace_root().join(project_id)
     }
 
     /// Get the project directory path
@@ -334,6 +347,30 @@ impl ScratchpadManager {
         }
 
         crate::utils::atomic_write::atomic_write_file(&self.scratchpad_path(), content).await
+    }
+
+    /// Delete this project's scratchpad file and its backup sidecar.
+    ///
+    /// The plan is working memory OF one conversation, so when that
+    /// conversation is deleted the plan must go with it — the session key is
+    /// stable, so a session re-created under the same key would otherwise
+    /// inherit the deleted one's execution list. Idempotent: a missing file is
+    /// success, not an error.
+    pub async fn purge(&self) -> Result<(), AlephError> {
+        let path = self.scratchpad_path();
+        for target in [path.with_extension("md.bak"), path] {
+            match fs::remove_file(&target).await {
+                Ok(()) => {}
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+                Err(e) => {
+                    return Err(AlephError::other(format!(
+                        "Failed to purge scratchpad {}: {e}",
+                        target.display()
+                    )));
+                }
+            }
+        }
+        Ok(())
     }
 
     /// Initialize scratchpad with default template

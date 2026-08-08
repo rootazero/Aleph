@@ -1146,24 +1146,10 @@ impl BuiltinToolRegistry {
             }),
             heartbeat_report_tool: crate::builtin_tools::heartbeat_manage::HeartbeatReportTool,
             // Phase 3 Task 19 — flag_user_correction tool (R9: everything is a tool).
-            // Constructed inline because it only needs a memory backend, no separate
-            // service. The cast to Arc<dyn RawMemoryStore> is zero-cost (vtable lookup).
-            flag_user_correction_tool: config.memory_db.as_ref().map(|db| {
-                crate::builtin_tools::FlagUserCorrectionTool::new(
-                    db.clone()
-                        as crate::sync_primitives::Arc<
-                            dyn crate::memory::store::raw_memory::RawMemoryStore,
-                        >,
-                    // Corrections must be namespaced to the active agent so
-                    // FeedbackDistill (which reads per-agent) can find them.
-                    // Previously hardcoded "default" — broke multi-agent recall.
-                    current_agent_id.clone(),
-                )
-                // Same backend `remember` audits to and `memory_trace` reads
-                // back, so "why isn't that in memory?" covers rung 2 of the
-                // destination ladder and not just rung 1.
-                .with_decision_log(Some(db.clone()))
-            }),
+            // Only the backend handle is stored: the tool itself is built per
+            // call, in the dispatch arm, because its agent id must be the one
+            // executing the turn. See `build_flag_user_correction`.
+            flag_user_correction_db: config.memory_db.clone(),
             browser_open_tool,
             browser_click_tool,
             browser_type_tool,
@@ -1296,6 +1282,34 @@ impl BuiltinToolRegistry {
             memory_trace_db: config.memory_db.clone(),
             tools,
         })
+    }
+
+    /// The single construction point for `flag_user_correction`.
+    ///
+    /// Built per call rather than once at boot because `agent_id` is not a
+    /// boot-time fact. Corrections are namespaced per agent — `FeedbackDistill`
+    /// reads one agent's corpus at a time — and the registry is constructed
+    /// once, in `agent_init`, where no turn context exists yet. The identity
+    /// baked in there is therefore always the base agent, so every correction
+    /// a non-base agent recorded landed in a corpus that agent's distillation
+    /// never reads. (`BuiltinToolConfig::current_agent_id`, the field that was
+    /// meant to carry it, has no producer anywhere in the tree.)
+    pub(crate) fn build_flag_user_correction(
+        db: &crate::memory::store::MemoryBackend,
+        agent_id: String,
+    ) -> crate::builtin_tools::FlagUserCorrectionTool {
+        // The cast to Arc<dyn RawMemoryStore> is zero-cost (vtable lookup).
+        crate::builtin_tools::FlagUserCorrectionTool::new(
+            db.clone()
+                as crate::sync_primitives::Arc<
+                    dyn crate::memory::store::raw_memory::RawMemoryStore,
+                >,
+            agent_id,
+        )
+        // Same backend `remember` audits to and `memory_trace` reads back, so
+        // "why isn't that in memory?" covers rung 2 of the destination ladder
+        // and not just rung 1.
+        .with_decision_log(Some(db.clone()))
     }
 }
 

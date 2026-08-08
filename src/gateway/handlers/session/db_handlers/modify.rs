@@ -315,6 +315,16 @@ async fn handle_delete_db_inner(
                     // conversation, and the assembler feeds the newest one into
                     // the next session's prompt.
                     purge_session_snapshot(&session_key.to_key_string()).await;
+                    // …and the scratchpad plan file, for the same reason. Done
+                    // HERE rather than only inside `SessionManager` so it holds
+                    // for every backend: the file backend never goes through
+                    // the manager. The purge is idempotent, so the manager's own
+                    // call (which covers deletes that never reach this handler)
+                    // costs nothing when both run.
+                    crate::builtin_tools::scratchpad_registry::purge_session_scratchpad(
+                        &session_key.to_key_string(),
+                    )
+                    .await;
                     // SessionEnd — the session has been removed; extension
                     // observers witness the teardown.
                     fire_session_end_hook(&session_key).await;

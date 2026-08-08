@@ -102,6 +102,15 @@ pub enum MemberRunStatus {
     /// gate now returns `AgentBusy` for a collision instead of folding the
     /// message inline into the sibling run.
     Busy,
+    // TODO(cancel-budget): a `Cancelled` variant belongs here, mapping to
+    // `TaskRunStatus::Abandoned` exactly as `Busy` does — a run the cancel
+    // sweep stopped is not a verdict on the work and must not spend a retry.
+    // It is not added yet only because `builtin_tools::team::delegate` matches
+    // this enum exhaustively and lives outside this change's scope; see the
+    // round report. Until then a cancelled run records as `Failed`, which is
+    // inert in the dominant path (the task is already terminal, so
+    // `fail_or_retry` returns without retrying) but does consume budget for a
+    // cancellation that leaves the row live.
 }
 
 impl MemberRunStatus {

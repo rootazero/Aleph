@@ -322,9 +322,6 @@ impl AlephTool for ScratchpadTool {
          objective, lay out a plan as an execution list, then work the list one \
          step at a time. Use it for work with 3+ non-trivial steps; skip it for \
          a single-step answer. \
-         Arm both at once with action='set_plan', value='<the objective>', \
-         items=[...] — a plan with no objective is not re-surfaced to you next \
-         turn and does not hold the session open. \
          set_plan replaces the whole list: send every step each time. A step \
          resent with the SAME text keeps the status it already had, so inserting \
          or reordering steps mid-run does not reset your progress. Re-wording a \
@@ -336,8 +333,7 @@ impl AlephTool for ScratchpadTool {
          persists across sessions. While an objective is set and plan items \
          remain unfinished, the goal-loop keeps this session running so you work \
          through them step by step — call action='clear' once the objective is \
-         fully achieved. The project_id is optional — omit it to use the current \
-         chat's scratchpad.";
+         fully achieved.";
 
     type Args = ScratchpadArgs;
     type Output = ScratchpadOutput;
@@ -379,7 +375,12 @@ impl AlephTool for ScratchpadTool {
             }
         }
 
-        let manager = ScratchpadManager::new(&project_id, "tool");
+        // The `_Session:` line the manager stamps into the file is the plan's
+        // only record of who owns it. Passing a literal made every plan on
+        // disk claim the same fictional owner ("tool"), so a plan file could
+        // not name the conversation it belongs to. The live session key is
+        // already resolved above — hand it the real one.
+        let manager = ScratchpadManager::new(&project_id, &session_key);
 
         match args.action {
             ScratchpadAction::Initialize => {
@@ -593,6 +594,33 @@ mod tests {
             }],
         };
         assert!(plan_snapshot_dto(&snap).complete);
+    }
+
+    /// The `_Session:` line is the plan file's only record of who owns it, and
+    /// every writer used to stamp the same literal — so no plan on disk could
+    /// name the conversation it belonged to.
+    #[tokio::test]
+    async fn plan_file_records_the_owning_session_key() {
+        let _home = crate::utils::paths::IsolatedAlephHome::new();
+        let tool = ScratchpadTool::new().with_session_key_handle(Some(Arc::new(RwLock::new(
+            "agent:main:main:s7".to_string(),
+        ))));
+        let out = tool
+            .call(ScratchpadArgs {
+                project_id: Some("owner-probe".to_string()),
+                action: ScratchpadAction::Initialize,
+                value: Some("Ship auth".to_string()),
+                items: None,
+                item_index: None,
+            })
+            .await
+            .unwrap();
+        let content = out.content.expect("initialize returns content");
+        assert!(
+            content.contains("_Session: agent:main:main:s7_"),
+            "plan file must name its owning session, got:\n{content}"
+        );
+        assert!(!content.contains("_Session: tool_"));
     }
 
     #[test]

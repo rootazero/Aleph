@@ -107,9 +107,7 @@ pub async fn phase1_mark_due_jobs<C: Clock>(
             source_channel_id: job.source_channel_id.clone(),
             source_conversation_id: job.source_conversation_id.clone(),
             prompt: resolve_job_prompt(job, clock),
-            model: None,
             timeout_ms: Some(job.timeout_ms.unwrap_or(default_timeout_ms)),
-            delivery: job.delivery_config.clone(),
             session_target: job.session_target.clone(),
             marked_at: now,
             trigger_source: if manual {

@@ -557,7 +557,12 @@ impl<S: NoteStore> NoteIndexer<S> {
     /// `[[wikilink]]` that dangled only because of scan order never got retried,
     /// and vector drift was never even counted. Those corpora are not exotic:
     /// `project_scope::list_note_corpora` is the same enumeration the dream
-    /// daemon already fans its nightly maintenance over.
+    /// daemon fans its nightly maintenance over (`dreaming::maintenance_corpora`,
+    /// which is this list minus the base agent — the base runs the full pipeline
+    /// itself). One enumeration, two passes, so neither can cover a different set
+    /// than the other. This sentence was a lie until 2026-08-08: the daemon
+    /// enumerated only `{base}__…` siblings, and only behind a config flag that
+    /// is off by default.
     ///
     /// `always_include` (the default agent) is unioned in and is the **only**
     /// corpus that gets scaffolded: a fresh install still gets its category

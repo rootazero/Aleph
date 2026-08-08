@@ -1,27 +1,36 @@
 use crate::tasks::cron::config::{CronJob, FailureAlertConfig};
+use crate::tasks::shared::alert::FailureStreak;
+
+/// Render the noun phrase that opens a cron failure alert.
+///
+/// Shared with the permanent-failure message built by `phase3_writeback`, so
+/// both variants of the alert name the job the same way.
+#[must_use]
+pub fn alert_subject(job: &CronJob) -> String {
+    format!("Cron job '{}' ({})", job.name, job.id)
+}
 
 /// Check if a failure alert should be sent. Returns alert message if conditions met.
+///
+/// Thin adapter over [`crate::tasks::shared::alert::should_send_alert`] — the
+/// gate itself is shared with heartbeat; only the projection from `CronJob`
+/// lives here.
 #[must_use]
 pub fn should_send_alert(
     job: &CronJob,
     alert_config: &FailureAlertConfig,
     now_ms: i64,
 ) -> Option<String> {
-    if job.state.consecutive_errors < alert_config.after {
-        return None;
-    }
-    if let Some(last_alert) = job.state.last_failure_alert_at_ms {
-        if now_ms.saturating_sub(last_alert) < alert_config.cooldown_ms {
-            return None; // Cooldown
-        }
-    }
-    Some(format!(
-        "Cron job '{}' ({}) failed {} times consecutively. Last error: {}",
-        job.name,
-        job.id,
-        job.state.consecutive_errors,
-        job.state.last_error.as_deref().unwrap_or("unknown")
-    ))
+    crate::tasks::shared::alert::should_send_alert(
+        &alert_subject(job),
+        FailureStreak {
+            consecutive_errors: job.state.consecutive_errors,
+            last_alert_at_ms: job.state.last_failure_alert_at_ms,
+            last_error: job.state.last_error.as_deref(),
+        },
+        alert_config,
+        now_ms,
+    )
 }
 
 #[cfg(test)]

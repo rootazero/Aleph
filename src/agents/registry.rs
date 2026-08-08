@@ -122,6 +122,49 @@ impl AgentRegistry {
         ids
     }
 
+    /// The subset of [`Self::available_agent_ids`] that is legal to *spawn*.
+    ///
+    /// Primary-mode definitions are excluded for the same reason
+    /// [`Self::resolve_spawnable`] rejects them: `main` carries
+    /// `allowed_tools = ["*"]`. Printing them in the "Unknown agent_type"
+    /// error is how a model discovers the string `main` in the first place,
+    /// so the disclosure surface has to agree with the gate.
+    pub fn spawnable_agent_ids(&self) -> Vec<String> {
+        let mut ids: Vec<String> = self.list_subagents().into_iter().map(|a| a.id).collect();
+        ids.extend(plugin_subagents().iter().map(|a| a.id.clone()));
+        ids.sort();
+        ids.dedup();
+        ids
+    }
+
+    /// Resolve an id that is legal to *spawn* as a sub-agent.
+    ///
+    /// [`Self::resolve`] answers "does this selector name an agent"; this
+    /// answers "may a delegation run under it". They are the two faces of one
+    /// verb and must share a predicate — branching only one of them is the
+    /// same as not branching at all (判据清单 §0).
+    ///
+    /// The prompt-side catalog of delegatable agents is built from
+    /// [`Self::list_subagents`] (`orchestrator::harness_bridge::prompt_build`),
+    /// which filters `mode == SubAgent`. The spawn side used bare `resolve`,
+    /// so `agent_type = "main"` resolved the builtin Primary def — a wildcard
+    /// tool grant (`allowed_tools = ["*"]`) reachable from any sub-agent
+    /// delegation. The disk loader already refuses `mode: Primary` in user
+    /// frontmatter and plugin defs are always built as `SubAgent`, so the
+    /// builtin `main` is the only definition this filter can reject.
+    ///
+    /// Callers surface the miss through their existing
+    /// "Unknown agent_type '{x}'. Available agents: …" arm — pair it with
+    /// [`Self::spawnable_agent_ids`], not `available_agent_ids`.
+    pub fn resolve_spawnable(
+        &self,
+        id: &str,
+        project_root: Option<&std::path::Path>,
+    ) -> Option<AgentDef> {
+        self.resolve(id, project_root)
+            .filter(|d| d.mode == AgentMode::SubAgent)
+    }
+
     /// List all sub-agents (excluding primary, sorted by id)
     pub fn list_subagents(&self) -> Vec<AgentDef> {
         let agents = self.agents.read().unwrap_or_else(|e| {

@@ -1,6 +1,9 @@
 //! Right pane — job form editor, actions, and per-job run history.
 
-use super::helpers::{build_schedule_kind_json, extract_schedule_from_kind, stale_agent_option};
+use super::helpers::{
+    build_failure_alert_json, build_schedule_kind_json, extract_schedule_from_kind,
+    stale_agent_option,
+};
 use super::run_history::RunHistory;
 use crate::api::agents::{AgentSummary, AgentsApi};
 use crate::api::cron::{CreateCronJob, CronApi, CronJobInfo, JobRunInfo, UpdateCronJob};
@@ -38,11 +41,18 @@ pub(super) fn JobEditor(
     let form_anchor_ms = RwSignal::new(String::new());
     let form_stagger_ms = RwSignal::new(String::new());
     let form_session_target = RwSignal::new(String::new());
-    // Failure alert sub-fields
+    // Failure alert sub-fields. Field names mirror the backend
+    // `FailureAlertConfig` exactly (`after` / `cooldown_ms` / `target`) — the
+    // previous form invented `after_n` / `cooldown` / `kind` / `channel`,
+    // which overlapped the server contract in zero field names, so every
+    // "save" reported success and stored nothing.
     let form_alert_after = RwSignal::new(String::from("2"));
-    let form_alert_cooldown = RwSignal::new(String::from("1h"));
-    let form_alert_kind = RwSignal::new(String::from("announce"));
-    let form_alert_channel = RwSignal::new(String::new());
+    let form_alert_cooldown_ms = RwSignal::new(String::from("3600000"));
+    let form_alert_target_kind = RwSignal::new(String::from("Gateway"));
+    // Webhook URL, or the Gateway channel id, depending on target kind.
+    let form_alert_endpoint = RwSignal::new(String::new());
+    // Gateway targets additionally need the conversation to deliver into.
+    let form_alert_chat_id = RwSignal::new(String::new());
     let form_alert_expanded = RwSignal::new(false);
     let form_channel = RwSignal::new(Option::<String>::None);
 
@@ -85,9 +95,10 @@ pub(super) fn JobEditor(
                 form_stagger_ms.set(String::new());
                 form_session_target.set(String::new());
                 form_alert_after.set("2".to_string());
-                form_alert_cooldown.set("1h".to_string());
-                form_alert_kind.set("announce".to_string());
-                form_alert_channel.set(String::new());
+                form_alert_cooldown_ms.set("3600000".to_string());
+                form_alert_target_kind.set("Gateway".to_string());
+                form_alert_endpoint.set(String::new());
+                form_alert_chat_id.set(String::new());
                 form_alert_expanded.set(false);
                 form_channel.set(None);
                 runs.set(Vec::new());
@@ -121,42 +132,54 @@ pub(super) fn JobEditor(
                     );
                     form_session_target.set(job.session_target.clone().unwrap_or_default());
 
-                    // Populate failure alert from JSON
+                    // Populate failure alert from JSON, reading the backend's
+                    // own field names.
                     if let Some(ref alert) = job.failure_alert {
                         form_alert_after.set(
                             alert
-                                .get("after_n")
+                                .get("after")
                                 .and_then(serde_json::Value::as_u64)
-                                .map(|v| v.to_string())
-                                .unwrap_or_else(|| "2".to_string()),
+                                .map_or_else(|| "2".to_string(), |v| v.to_string()),
                         );
-                        form_alert_cooldown.set(
+                        form_alert_cooldown_ms.set(
                             alert
-                                .get("cooldown")
-                                .and_then(|v| v.as_str())
-                                .unwrap_or("1h")
-                                .to_string(),
+                                .get("cooldown_ms")
+                                .and_then(serde_json::Value::as_i64)
+                                .map_or_else(|| "3600000".to_string(), |v| v.to_string()),
                         );
-                        form_alert_kind.set(
-                            alert
-                                .get("kind")
-                                .and_then(|v| v.as_str())
-                                .unwrap_or("announce")
-                                .to_string(),
-                        );
-                        form_alert_channel.set(
-                            alert
-                                .get("channel")
+                        let target = alert.get("target");
+                        let kind = target
+                            .and_then(|t| t.get("kind"))
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("Gateway")
+                            .to_string();
+                        let endpoint = target
+                            .and_then(|t| {
+                                if kind == "Webhook" {
+                                    t.get("url")
+                                } else {
+                                    t.get("channel")
+                                }
+                            })
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("")
+                            .to_string();
+                        form_alert_chat_id.set(
+                            target
+                                .and_then(|t| t.get("chat_id"))
                                 .and_then(|v| v.as_str())
                                 .unwrap_or("")
                                 .to_string(),
                         );
+                        form_alert_target_kind.set(kind);
+                        form_alert_endpoint.set(endpoint);
                         form_alert_expanded.set(true);
                     } else {
                         form_alert_after.set("2".to_string());
-                        form_alert_cooldown.set("1h".to_string());
-                        form_alert_kind.set("announce".to_string());
-                        form_alert_channel.set(String::new());
+                        form_alert_cooldown_ms.set("3600000".to_string());
+                        form_alert_target_kind.set("Gateway".to_string());
+                        form_alert_endpoint.set(String::new());
+                        form_alert_chat_id.set(String::new());
                         form_alert_expanded.set(false);
                     }
 
@@ -234,20 +257,16 @@ pub(super) fn JobEditor(
             }
         };
 
-        // Build failure_alert JSON if channel is specified
-        let failure_alert = {
-            let ch = form_alert_channel.get();
-            if ch.trim().is_empty() {
-                None
-            } else {
-                Some(serde_json::json!({
-                    "after_n": form_alert_after.get().parse::<u32>().unwrap_or(2),
-                    "cooldown": form_alert_cooldown.get(),
-                    "kind": form_alert_kind.get(),
-                    "channel": ch,
-                }))
-            }
-        };
+        // Build failure_alert JSON. Field names are the backend's
+        // `FailureAlertConfig` / `DeliveryTargetConfig` spellings — the server
+        // is the single source, so there is nothing to translate on either end.
+        let failure_alert = build_failure_alert_json(
+            &form_alert_target_kind.get(),
+            &form_alert_endpoint.get(),
+            &form_alert_chat_id.get(),
+            &form_alert_after.get(),
+            &form_alert_cooldown_ms.get(),
+        );
 
         if is_new() {
             let create = CreateCronJob {
@@ -719,11 +738,11 @@ pub(super) fn JobEditor(
                                                                 {t!(i18n, cron.alert_cooldown)}
                                                             </label>
                                                             <input
-                                                                type="text"
-                                                                prop:value=move || form_alert_cooldown.get()
-                                                                on:input=move |ev| form_alert_cooldown.set(event_target_value(&ev))
+                                                                type="number"
+                                                                prop:value=move || form_alert_cooldown_ms.get()
+                                                                on:input=move |ev| form_alert_cooldown_ms.set(event_target_value(&ev))
                                                                 class="w-full px-3 py-1.5 bg-surface-sunken border border-border rounded-lg text-text-primary text-sm focus:outline-none focus:border-primary"
-                                                                placeholder="1h"
+                                                                placeholder="3600000"
                                                             />
                                                         </div>
                                                     </div>
@@ -733,12 +752,12 @@ pub(super) fn JobEditor(
                                                                 {t!(i18n, cron.alert_to)}
                                                             </label>
                                                             <select
-                                                                prop:value=move || form_alert_kind.get()
-                                                                on:change=move |ev| form_alert_kind.set(event_target_value(&ev))
+                                                                prop:value=move || form_alert_target_kind.get()
+                                                                on:change=move |ev| form_alert_target_kind.set(event_target_value(&ev))
                                                                 class="w-full px-3 py-1.5 bg-surface-sunken border border-border rounded-lg text-text-primary text-sm focus:outline-none focus:border-primary"
                                                             >
-                                                                <option value="announce">{t!(i18n, cron.alert_announce)}</option>
-                                                                <option value="webhook">{t!(i18n, cron.alert_webhook)}</option>
+                                                                <option value="Gateway">{t!(i18n, cron.alert_announce)}</option>
+                                                                <option value="Webhook">{t!(i18n, cron.alert_webhook)}</option>
                                                             </select>
                                                         </div>
                                                         <div>
@@ -747,13 +766,35 @@ pub(super) fn JobEditor(
                                                             </label>
                                                             <input
                                                                 type="text"
-                                                                prop:value=move || form_alert_channel.get()
-                                                                on:input=move |ev| form_alert_channel.set(event_target_value(&ev))
+                                                                prop:value=move || form_alert_endpoint.get()
+                                                                on:input=move |ev| form_alert_endpoint.set(event_target_value(&ev))
                                                                 class="w-full px-3 py-1.5 bg-surface-sunken border border-border rounded-lg text-text-primary text-sm focus:outline-none focus:border-primary"
                                                                 placeholder=move || t_string!(i18n, cron.alert_channel_placeholder).to_string()
                                                             />
                                                         </div>
                                                     </div>
+                                                    // Gateway targets need a conversation to deliver
+                                                    // into; a channel alone cannot be addressed.
+                                                    {move || {
+                                                        if form_alert_target_kind.get() == "Webhook" {
+                                                            view! { <div></div> }.into_any()
+                                                        } else {
+                                                            view! {
+                                                                <div>
+                                                                    <label class="block text-xs font-medium text-text-secondary mb-1">
+                                                                        "Chat ID"
+                                                                    </label>
+                                                                    <input
+                                                                        type="text"
+                                                                        prop:value=move || form_alert_chat_id.get()
+                                                                        on:input=move |ev| form_alert_chat_id.set(event_target_value(&ev))
+                                                                        class="w-full px-3 py-1.5 bg-surface-sunken border border-border rounded-lg text-text-primary text-sm focus:outline-none focus:border-primary"
+                                                                        placeholder="123456789"
+                                                                    />
+                                                                </div>
+                                                            }.into_any()
+                                                        }
+                                                    }}
                                                 </div>
                                             }.into_any()
                                         } else {

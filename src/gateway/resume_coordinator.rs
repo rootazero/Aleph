@@ -38,6 +38,57 @@ pub struct ResumeReport {
     pub abandoned: usize,
     /// Sessions skipped (clean — newest marker is `RunFinished`).
     pub skipped: usize,
+    /// Interrupted sessions handed back to the scheduler that owns them
+    /// (team dispatcher / cron / heartbeat) instead of being resumed here.
+    /// Their dangling marker is closed on the way out — see
+    /// [`has_own_scheduler`].
+    pub delegated: usize,
+}
+
+/// `task_type` of a cron-triggered run's session key.
+///
+/// Pinned to its producer by the source-level guard
+/// `tests::the_delegated_task_types_match_their_producers`: the cron executor
+/// builds its key from a literal and
+/// exports no constant, so the only honest alternative to re-declaring it here
+/// is a guard that reads that file. A silent drift here is a resume that
+/// double-drives a cron job.
+const CRON_TASK_TYPE: &str = "cron";
+
+/// `task_type` of a heartbeat-triggered run's session key. Same provenance and
+/// same guard as [`CRON_TASK_TYPE`].
+const HEARTBEAT_TASK_TYPE: &str = "heartbeat";
+
+/// True when `key` belongs to a unit that runs its **own** crash recovery.
+///
+/// The boot resume and these schedulers are two recovery projections of the
+/// same state, and running both feeds one unit from two sources: the team
+/// dispatcher's `reclaim_orphaned` + `abandon_orphaned_runs` already reclaim
+/// every interrupted member run (and now bound how often they may), while cron
+/// and heartbeat each decide at boot, by their own carryover rules, whether a
+/// missed tick should be made up at all. A generic re-trigger on top of that is
+/// not a safety net — it is a second, uncoordinated driver, and the two
+/// disagree about *whether the run should happen again* rather than about how.
+///
+/// So those sessions are handed back, and (this is the part that is easy to
+/// forget) their dangling `RunStarted` marker is closed on the way out. Left
+/// open it would classify as `Interrupted` on every subsequent boot forever:
+/// the scan would keep growing, and each pass would keep re-deciding the same
+/// thing.
+///
+/// Team membership is asked of the teams subsystem itself
+/// ([`crate::teams::run_mode::is_team_session`]) rather than re-derived — it
+/// already owns "which sessions are team runs" and covers both team task types.
+#[must_use]
+pub fn has_own_scheduler(key: &SessionId) -> bool {
+    if crate::teams::run_mode::is_team_session(key) {
+        return true;
+    }
+    matches!(
+        key,
+        SessionId::Task { task_type, .. }
+            if task_type == CRON_TASK_TYPE || task_type == HEARTBEAT_TASK_TYPE
+    )
 }
 
 /// Classification of one session's run-marker tail.
@@ -231,6 +282,18 @@ impl ResumeCoordinator {
                 ScanVerdict::Clean => {
                     report.skipped += 1;
                 }
+                // Not ours to resume: the team dispatcher / cron / heartbeat
+                // each recover their own interrupted work, and a second driver
+                // on top of that is a duplicate run, not a safety net. Close
+                // the dangling marker so the next boot does not re-decide this.
+                ScanVerdict::Interrupted { .. } if has_own_scheduler(&session_id) => {
+                    tracing::info!(
+                        session = ?session_id,
+                        "resume: session has its own scheduler; handing recovery back to it"
+                    );
+                    self.close_delegated_marker(&session_id).await;
+                    report.delegated += 1;
+                }
                 ScanVerdict::Interrupted { trailing_starts } => {
                     let project_root = latest_project_root(&markers);
                     self.handle_interrupted(
@@ -250,9 +313,40 @@ impl ResumeCoordinator {
             resumed = report.resumed,
             abandoned = report.abandoned,
             skipped = report.skipped,
+            delegated = report.delegated,
             "resume scan complete"
         );
         report
+    }
+
+    /// Close the dangling run marker of a session this coordinator declined,
+    /// so the scan does not re-classify it as interrupted on every later boot.
+    ///
+    /// Only the marker. Deliberately none of [`Self::abandon`]'s other three
+    /// steps: this is not an abandonment. The owning scheduler decides whether
+    /// the work is redone, so blocking the session's goal or telling the user
+    /// "could not be resumed" would both be false — and the goal block in
+    /// particular would be a wrong permanent verdict on a unit that is about
+    /// to recover normally.
+    async fn close_delegated_marker(&self, session_id: &SessionId) {
+        let ev = SessionEvent::RunFinished {
+            run_id: format!("delegated-{}", uuid::Uuid::new_v4()),
+            outcome: RunOutcome::Abandoned,
+            at: now_ms(),
+        };
+        match self.next_seq(session_id).await {
+            Ok(seq) => {
+                if let Err(e) = self.event_store.append(session_id, seq, &ev, now_ms()).await {
+                    tracing::warn!(session = ?session_id, error = %e, "resume: delegated marker close failed");
+                }
+            }
+            // Same rule as `abandon`: never fabricate seq 1 on a read error —
+            // it would overwrite the session's genuine first event. Skipping
+            // costs one redundant re-classification on the next boot.
+            Err(e) => {
+                tracing::warn!(session = ?session_id, error = %e, "resume: delegated marker seq allocation failed; leaving it open");
+            }
+        }
     }
 
     /// Handle one interrupted candidate: recency filter, cap check,
@@ -823,6 +917,76 @@ mod tests {
             assert!(crate::scope::scope_from_metadata(&meta).is_none());
             assert_eq!(meta.get("resume").map(String::as_str), Some("true"));
             assert!(!meta.contains_key("project_root"));
+        }
+    }
+
+    /// The units that recover themselves must be excluded, and everything a
+    /// human talks to must not be. Asserted through the predicate the scan
+    /// loop actually calls, and (for teams) through the constructor the
+    /// dispatcher actually uses.
+    #[test]
+    fn sessions_with_their_own_scheduler_are_not_resumed_here() {
+        use crate::routing::session_key::DmScope;
+
+        for key in [
+            SessionId::task("main", CRON_TASK_TYPE, "daily-summary"),
+            SessionId::task("main", HEARTBEAT_TASK_TYPE, "hb-1"),
+            SessionId::task(
+                "worker",
+                crate::teams::run_mode::TEAM_TASK_TASK_TYPE,
+                "task-1",
+            ),
+            SessionId::task(
+                "worker",
+                crate::teams::run_mode::TEAM_CHAT_TASK_TYPE,
+                "squad",
+            ),
+        ] {
+            assert!(
+                has_own_scheduler(&key),
+                "{} owns its recovery and must not be double-driven",
+                key.to_key_string()
+            );
+        }
+
+        for key in [
+            SessionId::main("alice"),
+            SessionId::dm("alice", "telegram", "u1", DmScope::PerPeer),
+            SessionId::task("main", "a2a", "job-1"),
+            SessionId::task("main", "webhook", "hook-1"),
+        ] {
+            assert!(
+                !has_own_scheduler(&key),
+                "{} has no other recovery path — excluding it loses the run",
+                key.to_key_string()
+            );
+        }
+    }
+
+    /// `CRON_TASK_TYPE` / `HEARTBEAT_TASK_TYPE` are re-declared here because
+    /// their producers export no constant. A re-declaration that drifts is
+    /// silent (the exclusion simply stops matching and the double-drive
+    /// returns), so pin them to the producers' source. Source-level on
+    /// purpose: at runtime a key built from a drifted literal is
+    /// indistinguishable from a correct one.
+    #[test]
+    fn the_delegated_task_types_match_their_producers() {
+        for (path, task_type) in [
+            ("src/tasks/cron/executor.rs", CRON_TASK_TYPE),
+            ("src/tasks/heartbeat/executor.rs", HEARTBEAT_TASK_TYPE),
+        ] {
+            let src = std::fs::read_to_string(
+                std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(path),
+            )
+            .unwrap_or_else(|e| panic!("{path} must be readable: {e}"));
+            // The producer shape is `SessionKey::task(agent, "<type>", id)`,
+            // so the literal always sits between two commas.
+            assert!(
+                src.contains(&format!(", \"{task_type}\", ")),
+                "{path} no longer builds its session key with \"{task_type}\" — \
+                 `has_own_scheduler` has drifted from the producer and the boot \
+                 resume is double-driving that scheduler again"
+            );
         }
     }
 

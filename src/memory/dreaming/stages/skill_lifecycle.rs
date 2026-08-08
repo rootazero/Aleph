@@ -10,9 +10,12 @@
 //! reasoning.
 //!
 //! The harder `Stale → Archived` and consolidation decisions are
-//! deliberately deferred to a future LLM-driven stage — this stage
-//! simply collects stale skill IDs into the `DreamReport.extra` map so
-//! the curator stage has a candidate list when it lands.
+//! deliberately deferred to a future LLM-driven stage. The stale set this
+//! stage observes is logged, not stashed: it used to be written into a
+//! `#[serde(skip)]` `DreamReport.extra` bag "for the curator stage when it
+//! lands", which no code has ever read — a channel kept open for a consumer
+//! that does not exist. The list a curator would need is re-derivable from
+//! `UsageStore` at the moment it runs, which is the only moment it is true.
 //!
 //! ## Invariants
 //!
@@ -54,7 +57,7 @@ impl DreamStage for SkillLifecycleStage {
         "skill_lifecycle"
     }
 
-    async fn execute(&self, mut ctx: DreamContext) -> Result<DreamContext, AlephError> {
+    async fn execute(&self, ctx: DreamContext) -> Result<DreamContext, AlephError> {
         let dirs = default_skill_dirs();
         if dirs.is_empty() {
             tracing::debug!("SkillLifecycle: no skill dirs registered; nothing to age");
@@ -103,31 +106,11 @@ impl DreamStage for SkillLifecycleStage {
             }
         }
 
-        ctx.report.extra.insert(
-            "skill_lifecycle_active_to_stale".to_string(),
-            transitioned.to_string(),
-        );
-        ctx.report.extra.insert(
-            "skill_lifecycle_pinned_skipped".to_string(),
-            pinned_skipped.to_string(),
-        );
-        ctx.report.extra.insert(
-            "skill_lifecycle_already_stale".to_string(),
-            already_stale.to_string(),
-        );
-        // Comma-joined candidate list for a future LLM-driven curator
-        // stage. Empty string when no candidates — kept as a stable key
-        // so consumers can rely on its presence.
-        ctx.report.extra.insert(
-            "skill_lifecycle_archive_candidates".to_string(),
-            archive_candidates.join(","),
-        );
-
         tracing::info!(
             transitioned,
             pinned_skipped,
             already_stale,
-            archive_candidate_count = archive_candidates.len(),
+            archive_candidates = %archive_candidates.join(","),
             "SkillLifecycle completed"
         );
         Ok(ctx)

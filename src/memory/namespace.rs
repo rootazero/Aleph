@@ -1,38 +1,42 @@
-//! Namespace-scoped memory access control
+//! The `namespace` column tag written on memory rows.
 //!
-//! Provides type-safe namespace isolation for multi-user memory data.
-//! Enforces data isolation at compile-time using `NamespaceScope` enum.
+//! # This is NOT the isolation layer — do not build one here
+//!
+//! This module used to claim it "enforces type-safe data isolation for
+//! multi-user scenarios at compile time". It never did. The `Guest`/`Shared`
+//! variants had zero production construction points (every caller in the tree
+//! builds [`NamespaceScope::Owner`]), and the SQL predicate they fed —
+//! `to_sql_filter` — returned the literal `"1=1"` for `Owner`, i.e. a
+//! tautology, on the one path that was actually reachable. A reader trusting
+//! that doc comment would have built the next feature on top of an isolation
+//! layer that isolates nothing.
+//!
+//! The real sources of truth are elsewhere, and a new isolation dimension
+//! belongs in one of them, not here:
+//!
+//! - **Per-project memory partitioning** → `crate::memory::project_scope`.
+//!   Composes the active project into the existing `agent_id` partition key
+//!   (`scoped_agent_id`, `GLOBAL_NS`, the two always-on floors).
+//! - **Who may see a session / room** → `crate::gateway::visibility`
+//!   (`session_visible` / `session_visible_to` / `project_visible`), whose
+//!   membership predicate is `crate::projects::roster::is_member`.
+//!
+//! What survives here is the one thing that was ever real: the string tag
+//! written into the `namespace` column (see [`NamespaceScope::to_namespace_value`],
+//! consumed by `memory::reflector::recall_signals`).
 
-/// Namespace scope for memory access control
+/// Namespace tag for memory rows.
 ///
-/// Enforces type-safe data isolation for multi-user scenarios.
-/// Maps to the `namespace` column in memory tables.
+/// Single-variant by design — see the module docs. This is a column value, not
+/// an access-control decision. Adding a variant does not create isolation;
+/// isolation lives in `memory::project_scope` and `gateway::visibility`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum NamespaceScope {
-    /// Owner namespace - no filtering (accesses all owner data)
+    /// Owner namespace — the only namespace Aleph writes.
     Owner,
-    /// Guest namespace - scoped to specific guest ID
-    Guest(String),
-    /// Shared namespace - accessible to all authenticated users
-    Shared,
 }
 
 impl NamespaceScope {
-    /// Converts namespace scope to SQL WHERE clause filter
-    ///
-    /// Returns (`filter_clause`, `bind_params`)
-    #[must_use]
-    pub fn to_sql_filter(&self) -> (String, Vec<String>) {
-        match self {
-            Self::Owner => ("1=1".to_string(), vec![]),
-            Self::Guest(guest_id) => (
-                "namespace = ?".to_string(),
-                vec![format!("guest:{}", guest_id)],
-            ),
-            Self::Shared => ("namespace = ?".to_string(), vec!["shared".to_string()]),
-        }
-    }
-
     /// Converts namespace scope to database column value
     ///
     /// Used for INSERT/UPDATE operations
@@ -40,8 +44,6 @@ impl NamespaceScope {
     pub fn to_namespace_value(&self) -> String {
         match self {
             Self::Owner => "owner".to_string(),
-            Self::Guest(guest_id) => format!("guest:{guest_id}"),
-            Self::Shared => "shared".to_string(),
         }
     }
 }
@@ -51,36 +53,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_owner_scope_no_filter() {
-        let scope = NamespaceScope::Owner;
-        let (filter, params) = scope.to_sql_filter();
-        assert_eq!(filter, "1=1");
-        assert!(params.is_empty());
-    }
-
-    #[test]
-    fn test_guest_scope_filters_correctly() {
-        let scope = NamespaceScope::Guest("abc-123".to_string());
-        let (filter, params) = scope.to_sql_filter();
-        assert_eq!(filter, "namespace = ?");
-        assert_eq!(params, vec!["guest:abc-123"]);
-    }
-
-    #[test]
-    fn test_shared_scope_filters_correctly() {
-        let scope = NamespaceScope::Shared;
-        let (filter, params) = scope.to_sql_filter();
-        assert_eq!(filter, "namespace = ?");
-        assert_eq!(params, vec!["shared"]);
-    }
-
-    #[test]
     fn test_namespace_value_conversion() {
         assert_eq!(NamespaceScope::Owner.to_namespace_value(), "owner");
-        assert_eq!(
-            NamespaceScope::Guest("xyz".to_string()).to_namespace_value(),
-            "guest:xyz"
-        );
-        assert_eq!(NamespaceScope::Shared.to_namespace_value(), "shared");
     }
 }

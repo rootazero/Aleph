@@ -10,6 +10,7 @@ use tokio::sync::Semaphore;
 use tokio::time::{sleep, Duration};
 use tracing::{debug, error, info};
 
+use crate::tasks::cron::config::RunStatus;
 use crate::tasks::heartbeat::config::HeartbeatTask;
 use crate::tasks::heartbeat::dedup::{DedupEngine, DedupVerdict};
 use crate::tasks::heartbeat::executor::{
@@ -124,7 +125,7 @@ pub async fn run_heartbeat_loop(
                     }
                 };
                 let result = execute_heartbeat_tick(&task, wake_reason.as_deref(), &ctx).await;
-                writeback_one(&state, &task_id, result).await;
+                writeback_one(&state, &task_id, result, &ctx).await;
             });
         }
     }
@@ -397,6 +398,75 @@ async fn execute_heartbeat_tick(
 
 // ── Writeback ────────────────────────────────────────────────────────
 
+/// Map an L2 outcome label to a run status.
+///
+/// `NotDelivered` splits on *why*: a task with no delivery target configured
+/// asked for nothing and got nothing (`NotRequested` → Ok), whereas a
+/// configured target that refused the payload is a real failure of the
+/// monitoring path and must feed the backoff ladder and the alert gate. This
+/// arm was deliberately left unmapped when the label was introduced; it is the
+/// decision that chain was waiting on.
+fn l2_run_status(l2_status: &str, delivery_status: Option<&str>) -> Option<RunStatus> {
+    match l2_status {
+        "Silent" | "Delivered" => Some(RunStatus::Ok),
+        "Deduped" => Some(RunStatus::Skipped),
+        "Error" => Some(RunStatus::Error),
+        "NotDelivered" => {
+            if delivery_status == Some("NotRequested") {
+                Some(RunStatus::Ok)
+            } else {
+                Some(RunStatus::Error)
+            }
+        }
+        unknown => {
+            tracing::warn!(l2_status = %unknown, "unrecognized heartbeat L2 status");
+            None
+        }
+    }
+}
+
+/// Resolve the alert config for a failing task.
+///
+/// Explicit config wins. Otherwise, when `notify_on_failure_default` is on and
+/// the task has somewhere to deliver to, synthesize the same shape cron uses
+/// (after=1, cooldown=1h) pointed at the task's own primary target.
+fn resolve_alert_config(
+    task: &HeartbeatTask,
+    notify_default: bool,
+) -> Option<crate::tasks::shared::alert::FailureAlertConfig> {
+    if let Some(cfg) = task.failure_alert.clone() {
+        return Some(cfg);
+    }
+    if !notify_default {
+        return None;
+    }
+    let target = task.delivery_config.as_ref()?.targets.first()?.clone();
+    Some(crate::tasks::shared::alert::FailureAlertConfig {
+        after: 1,
+        cooldown_ms: 3_600_000,
+        target,
+    })
+}
+
+/// Prepend an alert whose own delivery failed onto the next one that is due.
+///
+/// This is the "report it later" half of the alert-target coupling fallback:
+/// the alert channel and the failing channel are frequently the same object,
+/// so a send failure must not simply discard the news.
+fn merge_parked_alert(parked: Option<String>, fresh: String) -> String {
+    match parked {
+        Some(parked) => format!("{parked}\n(previously undelivered)\n{fresh}"),
+        None => fresh,
+    }
+}
+
+/// An alert decided inside the store lock, delivered after it is released.
+struct PendingHeartbeatAlert {
+    task_name: String,
+    message: String,
+    target: crate::tasks::shared::delivery::DeliveryTargetConfig,
+}
+
 /// Write a single task's tick result back to the store.
 ///
 /// Called from each task's own detached future, so writebacks for different
@@ -405,9 +475,11 @@ async fn writeback_one(
     state: &HeartbeatServiceState,
     task_id: &str,
     tick_result: HeartbeatTickResult,
+    ctx: &TickContext,
 ) {
     let mut store = state.store.lock().await;
     let now_ms = state.clock.now_ms();
+    let mut pending_alert: Option<PendingHeartbeatAlert> = None;
 
     if let Some(task) = store.get_task_mut(task_id) {
         task.state.running_at_ms = None;
@@ -417,33 +489,58 @@ async fn writeback_one(
             task.state.last_probe_result = Some(pr.clone());
         }
 
-        // Update L2 status
-        if let Some(ref l2_status) = tick_result.l2_status {
+        // Update L2 status. Keep *this tick's* verdict in a local: reading it
+        // back off `task.state` would fold in a stale status from an earlier
+        // tick whenever this tick produced no L2 phase at all.
+        let this_l2_status = tick_result
+            .l2_status
+            .as_deref()
+            .and_then(|s| l2_run_status(s, tick_result.delivery_status.as_deref()));
+        if tick_result.l2_status.is_some() {
             task.state.last_l2_at_ms = Some(now_ms);
-            task.state.last_l2_status = match l2_status.as_str() {
-                "Silent" => Some(crate::tasks::cron::config::RunStatus::Ok),
-                "Delivered" => Some(crate::tasks::cron::config::RunStatus::Ok),
-                "Deduped" => Some(crate::tasks::cron::config::RunStatus::Skipped),
-                "Error" => Some(crate::tasks::cron::config::RunStatus::Error),
-                // Recognised but deliberately unmapped: whether an undelivered
-                // L2 result should count as a task-level failure (and so feed
-                // the backoff ladder and the alert chain) is a policy call that
-                // belongs with the heartbeat alerting work, not with this
-                // label fix. Listed explicitly so it does not masquerade as an
-                // unknown status in the log below.
-                "NotDelivered" => None,
-                unknown => {
-                    tracing::warn!(l2_status = %unknown, "unrecognized heartbeat L2 status");
-                    None
-                }
-            };
+            task.state.last_l2_status = this_l2_status;
         }
 
-        let had_error =
-            tick_result.error.is_some() || tick_result.l2_status.as_deref() == Some("Error");
+        let had_error = tick_result.error.is_some() || this_l2_status == Some(RunStatus::Error);
         if had_error {
             task.state.consecutive_errors = task.state.consecutive_errors.saturating_add(1);
-            task.state.last_error = tick_result.error.clone();
+            task.state.last_error = tick_result.error.clone().or_else(|| {
+                tick_result
+                    .delivery_status
+                    .clone()
+                    .map(|d| format!("L2 result was not delivered ({d})"))
+            });
+
+            // Failure alerting. Without this the whole monitoring subsystem
+            // could fail indefinitely with `consecutive_errors` doing nothing
+            // but lengthening the backoff — nobody is told. Same gate cron
+            // uses (`tasks::shared::alert`), fed from heartbeat state.
+            if let Some(alert_cfg) =
+                resolve_alert_config(task, state.config.notify_on_failure_default)
+            {
+                let subject = format!("Heartbeat '{}' ({})", task.name, task.id);
+                let fresh = crate::tasks::shared::alert::should_send_alert(
+                    &subject,
+                    crate::tasks::shared::alert::FailureStreak {
+                        consecutive_errors: task.state.consecutive_errors,
+                        last_alert_at_ms: task.state.last_failure_alert_at_ms,
+                        last_error: task.state.last_error.as_deref(),
+                    },
+                    &alert_cfg,
+                    now_ms,
+                );
+                if let Some(message) = fresh {
+                    // Carry any earlier alert whose own delivery failed, so
+                    // the first send that gets through reports the backlog too.
+                    let message = merge_parked_alert(task.state.undelivered_alert.take(), message);
+                    task.state.last_failure_alert_at_ms = Some(now_ms);
+                    pending_alert = Some(PendingHeartbeatAlert {
+                        task_name: task.name.clone(),
+                        message,
+                        target: alert_cfg.target,
+                    });
+                }
+            }
         } else {
             task.state.consecutive_errors = 0;
             task.state.last_error = None;
@@ -481,6 +578,68 @@ async fn writeback_one(
 
     if let Err(e) = store.persist() {
         error!(error = %e, "heartbeat writeback persist error");
+    }
+    drop(store);
+
+    // Delivery happens outside the store lock: the alert target is often a
+    // network channel and holding the mutex across it would serialize every
+    // other task's writeback behind a timing-out webhook.
+    if let Some(alert) = pending_alert {
+        deliver_alert(state, task_id, alert, ctx).await;
+    }
+}
+
+/// Deliver a failure alert, parking it for a later retry if the send fails.
+///
+/// The fallback matters here in a way it does not for cron: cron alerts to the
+/// *source* channel of the job, whereas a heartbeat's default alert target is
+/// the very delivery channel whose failure triggered the alert. So a broken
+/// channel would otherwise swallow the news of its own breakage. Two levels of
+/// fallback: the failure is always logged at `error!` (visible to anyone
+/// reading the daemon log, which does not depend on the channel), and the
+/// message is parked in `undelivered_alert` to ride along with the next alert
+/// that does get through.
+async fn deliver_alert(
+    state: &HeartbeatServiceState,
+    task_id: &str,
+    alert: PendingHeartbeatAlert,
+    ctx: &TickContext,
+) {
+    let payload = DeliveryPayload {
+        source_type: "heartbeat".into(),
+        task_name: alert.task_name.clone(),
+        agent_id: String::new(),
+        output: format!("⚠️ {}: {}", alert.task_name, alert.message),
+        channel_id: None,
+        metadata: serde_json::json!({ "task_id": task_id, "kind": "failure_alert" }),
+    };
+    let config = crate::tasks::shared::delivery::DeliveryConfig {
+        mode: crate::tasks::shared::delivery::DeliveryMode::Primary,
+        targets: vec![alert.target],
+        fallback_target: None,
+    };
+    let outcomes = ctx.delivery.deliver(&payload, &config).await;
+    if outcomes.iter().any(|o| o.success) {
+        return;
+    }
+
+    error!(
+        task_id,
+        ?outcomes,
+        "heartbeat failure alert could not be delivered; parking it for the next successful alert"
+    );
+    let mut store = state.store.lock().await;
+    if let Some(task) = store.get_task_mut(task_id) {
+        task.state.undelivered_alert = Some(alert.message);
+        // The cooldown stamp set by the caller is deliberately *kept*. It is
+        // what rate-limits alert attempts, and with the message parked above
+        // nothing is lost by waiting: the next eligible alert carries this one
+        // along. Clearing it here would instead have a permanently-down target
+        // re-attempt delivery on every single tick.
+        store.mark_dirty();
+    }
+    if let Err(e) = store.persist() {
+        error!(error = %e, "heartbeat: failed to persist undelivered alert");
     }
 }
 
@@ -662,5 +821,92 @@ mod tests {
         let result = execute_heartbeat_tick(&task, Some("user requested"), &ctx).await;
         assert_eq!(result.l1_status, "Triggered");
         assert_eq!(result.l2_status.as_deref(), Some("Silent"));
+    }
+
+    /// A configured target that refused the payload is a monitoring failure —
+    /// it must feed the backoff ladder and the alert gate. A task with no
+    /// target asked for nothing, so it stays Ok. This arm was left unmapped
+    /// (`None`) when the label was introduced.
+    #[test]
+    fn not_delivered_splits_on_whether_delivery_was_requested() {
+        assert_eq!(
+            l2_run_status("NotDelivered", Some("NotRequested")),
+            Some(RunStatus::Ok),
+            "no target configured means nothing was asked for"
+        );
+        assert_eq!(
+            l2_run_status("NotDelivered", Some("NotDelivered")),
+            Some(RunStatus::Error),
+            "a configured target that refused the payload is a real failure"
+        );
+        assert_eq!(l2_run_status("Silent", None), Some(RunStatus::Ok));
+        assert_eq!(l2_run_status("Deduped", None), Some(RunStatus::Skipped));
+        assert_eq!(l2_run_status("Error", None), Some(RunStatus::Error));
+        assert_eq!(l2_run_status("Martian", None), None);
+    }
+
+    fn webhook_target() -> crate::tasks::shared::delivery::DeliveryTargetConfig {
+        crate::tasks::shared::delivery::DeliveryTargetConfig::Webhook {
+            url: "https://127.0.0.1:1/never".to_string(),
+            method: None,
+            headers: None,
+        }
+    }
+
+    /// The default fallback mirrors cron's: a task with somewhere to deliver
+    /// gets an after=1 alert pointed at that same place, so a monitor that
+    /// broke is not silent.
+    #[test]
+    fn default_alert_is_synthesized_from_the_delivery_target() {
+        let mut task = make_task();
+        assert!(
+            resolve_alert_config(&task, true).is_none(),
+            "no delivery target means there is nowhere to alert"
+        );
+
+        task.delivery_config = Some(crate::tasks::shared::delivery::DeliveryConfig {
+            mode: crate::tasks::shared::delivery::DeliveryMode::Primary,
+            targets: vec![webhook_target()],
+            fallback_target: None,
+        });
+        let cfg = resolve_alert_config(&task, true).expect("default alert must be synthesized");
+        assert_eq!(cfg.after, 1);
+        assert_eq!(cfg.cooldown_ms, 3_600_000);
+
+        assert!(
+            resolve_alert_config(&task, false).is_none(),
+            "notify_on_failure_default=false must not synthesize"
+        );
+    }
+
+    /// A failed alert send must not lose the news — the target is often the
+    /// same channel whose failure is being reported, so this is the normal
+    /// case, not the edge case.
+    #[test]
+    fn a_parked_alert_rides_along_with_the_next_one() {
+        assert_eq!(merge_parked_alert(None, "second".into()), "second");
+        let merged = merge_parked_alert(Some("first".into()), "second".into());
+        assert!(merged.starts_with("first"));
+        assert!(merged.ends_with("second"));
+        assert!(merged.contains("previously undelivered"));
+    }
+
+    /// An explicit config always wins over the synthesized default.
+    #[test]
+    fn explicit_alert_config_wins() {
+        let mut task = make_task();
+        task.delivery_config = Some(crate::tasks::shared::delivery::DeliveryConfig {
+            mode: crate::tasks::shared::delivery::DeliveryMode::Primary,
+            targets: vec![webhook_target()],
+            fallback_target: None,
+        });
+        task.failure_alert = Some(crate::tasks::shared::alert::FailureAlertConfig {
+            after: 7,
+            cooldown_ms: 42,
+            target: webhook_target(),
+        });
+        let cfg = resolve_alert_config(&task, true).unwrap();
+        assert_eq!(cfg.after, 7);
+        assert_eq!(cfg.cooldown_ms, 42);
     }
 }

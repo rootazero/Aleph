@@ -313,31 +313,6 @@ impl TriggerSource {
     }
 }
 
-// ── FailureAlertConfig ──────────────────────────────────────────────────
-
-const fn default_alert_after() -> u32 {
-    2
-}
-
-const fn default_alert_cooldown() -> i64 {
-    3_600_000 // 1 hour in ms
-}
-
-/// Configuration for alerting on repeated job failures
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
-pub struct FailureAlertConfig {
-    /// Alert after this many consecutive failures
-    #[serde(default = "default_alert_after")]
-    pub after: u32,
-
-    /// Cooldown between alerts in milliseconds
-    #[serde(default = "default_alert_cooldown")]
-    pub cooldown_ms: i64,
-
-    /// Where to send the alert
-    pub target: DeliveryTargetConfig,
-}
-
 // ── JobStateV2 ──────────────────────────────────────────────────────────
 
 /// Runtime state for a cron job (persisted alongside the job definition)
@@ -402,10 +377,14 @@ pub struct CronJob {
     #[serde(default = "default_true")]
     pub enabled: bool,
 
-    /// Optional timezone (defaults to local)
-    #[serde(default)]
-    pub timezone: Option<String>,
-
+    // A `timezone` field lived here until 2026-08-08. It had three writers
+    // (RPC create, RPC update, the store round-trip) and **zero** readers in
+    // the scheduler: `compute_next_run_for_job` only ever consults
+    // `ScheduleKind::Cron { tz }`. Worse, the Panel editor rebuilt
+    // `schedule_kind` without a `tz`, so editing any job silently discarded
+    // the timezone `cron_manage` had written into the schedule. The single
+    // source is `ScheduleKind::Cron { tz }`; `CronJobView::timezone` is
+    // derived from it for display.
     /// Tags for organization
     #[serde(default)]
     pub tags: Vec<String>,
@@ -433,10 +412,12 @@ pub struct CronJob {
     #[serde(default)]
     pub next_job_id_on_failure: Option<String>,
 
-    /// Delivery configuration for job results
-    #[serde(default)]
-    pub delivery_config: Option<DeliveryConfig>,
-
+    // A `delivery_config` field lived here until 2026-08-08. Nothing ever
+    // wrote it (no RPC, no tool, no CLI accepted it) and the one place that
+    // read it — `phase1_mark_due_jobs` → `JobSnapshot::delivery` — carried it
+    // to the executor's door and dropped it: `execute_cron_job` routes results
+    // through `source_channel_id` / `source_conversation_id` instead. The
+    // whole chain was inert, so it is gone rather than reconnected.
     /// Failure alerting configuration
     #[serde(default)]
     pub failure_alert: Option<FailureAlertConfig>,
@@ -498,7 +479,6 @@ impl CronJob {
             source_conversation_id: None,
             prompt: prompt.into(),
             enabled: true,
-            timezone: None,
             tags: Vec::new(),
             created_at: now,
             updated_at: now,
@@ -506,7 +486,6 @@ impl CronJob {
             session_target: SessionTarget::default(),
             next_job_id_on_success: None,
             next_job_id_on_failure: None,
-            delivery_config: None,
             failure_alert: None,
             prompt_template: None,
             context_vars: None,
@@ -514,6 +493,19 @@ impl CronJob {
             state: JobStateV2::default(),
             owner_user_id: None,
             scope_id: None,
+        }
+    }
+
+    /// The timezone this job's schedule is evaluated in, if any.
+    ///
+    /// Reads the single source (`ScheduleKind::Cron { tz }`) — the same field
+    /// `compute_next_run_for_job` passes to `compute_next_cron`. Interval and
+    /// one-shot schedules are absolute, so they have no timezone.
+    #[must_use]
+    pub fn schedule_timezone(&self) -> Option<&str> {
+        match &self.schedule_kind {
+            ScheduleKind::Cron { tz, .. } => tz.as_deref(),
+            ScheduleKind::Every { .. } | ScheduleKind::At { .. } => None,
         }
     }
 
@@ -562,9 +554,12 @@ pub struct JobSnapshot {
     pub source_conversation_id: Option<String>,
     /// Template-rendered prompt
     pub prompt: String,
-    pub model: Option<String>,
+    // `model` and `delivery` lived here until 2026-08-08. Every construction
+    // site wrote `model: None` (there was no `CronJob` field it could come
+    // from) while the executor hard-wired `model_override: None`, and
+    // `delivery` was the terminus of the inert `CronJob::delivery_config`
+    // chain. Both were removed rather than given a source.
     pub timeout_ms: Option<i64>,
-    pub delivery: Option<DeliveryConfig>,
     pub session_target: SessionTarget,
     pub marked_at: i64,
     pub trigger_source: TriggerSource,
@@ -621,11 +616,15 @@ pub struct CronJobView {
     pub agent_id: String,
     pub source_channel_id: Option<String>,
     pub prompt: String,
+    /// Derived, read-only: the timezone the schedule is evaluated in.
+    ///
+    /// Not persisted — projected from `ScheduleKind::Cron { tz }` (the single
+    /// source) so it can never disagree with what the scheduler actually uses.
+    /// `None` for interval / one-shot schedules, which have no timezone.
     pub timezone: Option<String>,
     pub tags: Vec<String>,
     pub session_target: SessionTarget,
     pub state: JobStateV2,
-    pub delivery_config: Option<DeliveryConfig>,
     pub failure_alert: Option<FailureAlertConfig>,
     pub timeout_ms: Option<i64>,
     pub created_at: i64,
@@ -643,11 +642,10 @@ impl From<&CronJob> for CronJobView {
             agent_id: job.agent_id.clone(),
             source_channel_id: job.source_channel_id.clone(),
             prompt: job.prompt.clone(),
-            timezone: job.timezone.clone(),
+            timezone: job.schedule_timezone().map(str::to_string),
             tags: job.tags.clone(),
             session_target: job.session_target.clone(),
             state: job.state.clone(),
-            delivery_config: job.delivery_config.clone(),
             failure_alert: job.failure_alert.clone(),
             timeout_ms: job.timeout_ms,
             created_at: job.created_at,
@@ -659,6 +657,7 @@ impl From<&CronJob> for CronJobView {
 // ── Delivery types ──────────────────────────────────────────────────────
 // Re-exported from shared::delivery to avoid breaking existing consumers.
 
+pub use crate::tasks::shared::alert::FailureAlertConfig;
 pub use crate::tasks::shared::delivery::{
     DeliveryConfig, DeliveryMode, DeliveryOutcome, DeliveryStatus, DeliveryTargetConfig,
 };
@@ -938,6 +937,61 @@ mod tests {
         let json = serde_json::to_string(&config).unwrap();
         let parsed: DeliveryConfig = serde_json::from_str(&json).unwrap();
         assert_eq!(parsed.targets.len(), 1);
+    }
+
+    /// A job persisted BEFORE `timezone` / `delivery_config` were retired must
+    /// still load. Unlike a config file, this is durable user data with no
+    /// migration step, so "the field is gone" has to mean "silently ignored",
+    /// never "this job fails to deserialize and disappears from the list".
+    ///
+    /// Also pins the reason no migration was needed: the scheduler
+    /// (`compute_next_run_for_job`) has only ever read `ScheduleKind::Cron
+    /// { tz }`. The retired top-level `timezone` was write-only, so a stored
+    /// job's firing time is byte-identical before and after the cut — and
+    /// `schedule_timezone()` reports the value that actually governs it.
+    #[test]
+    fn a_job_persisted_with_the_retired_keys_still_loads() {
+        // Start from a real job so every *surviving* required field is present
+        // exactly as the store writes it, then graft on only the retired keys.
+        // Hand-listing the whole struct would make this test rot the next time
+        // a field is added, and it would then rot silently green.
+        let live = CronJob::new(
+            "nightly",
+            "main",
+            "summarise",
+            ScheduleKind::Cron {
+                expr: "0 0 3 * * *".into(),
+                tz: Some("Asia/Shanghai".into()),
+                stagger_ms: None,
+            },
+        );
+        let mut stored = serde_json::to_value(&live).unwrap();
+        let obj = stored.as_object_mut().unwrap();
+        // Retired 2026-08-08 — present in every job written before then.
+        obj.insert("timezone".into(), serde_json::json!("America/New_York"));
+        obj.insert(
+            "delivery_config".into(),
+            serde_json::json!({
+                "mode": "primary",
+                "targets": [{ "type": "webhook", "url": "https://x.example" }]
+            }),
+        );
+
+        let job: CronJob =
+            serde_json::from_value(stored).expect("a pre-cut job must still deserialize");
+        assert_eq!(job.id, live.id);
+        assert!(job.enabled);
+        // The schedule's tz is the single source, and it is what survived —
+        // NOT the stale top-level key that never reached the scheduler.
+        assert_eq!(job.schedule_timezone(), Some("Asia/Shanghai"));
+        assert!(
+            crate::tasks::cron::service::ops::compute_next_run_for_job(
+                &job,
+                chrono::Utc::now().timestamp_millis(),
+            )
+            .is_some(),
+            "a legacy job must still schedule after the cut"
+        );
     }
 
     #[test]

@@ -39,6 +39,34 @@ pub(super) fn completion_status(task: &CoordTask) -> CoordTaskStatus {
     }
 }
 
+/// Where an orphaned (crash-left) `InProgress` task should be put back.
+///
+/// `Pending` — re-dispatch — for everything, **except** a step the user paused
+/// while it was still running. `workflow(action='pause')` cannot stop a live
+/// member run, so it records the intent as
+/// [`PAUSED_FROM_IN_PROGRESS`](crate::agents::swarm::tasks::PAUSED_FROM_IN_PROGRESS)
+/// and leaves the status alone; without this branch the next boot's orphan
+/// reclaim reset that row to `Pending` and the dispatcher re-ran the very step
+/// the user had paused — silently, with the workflow still reporting itself
+/// paused.
+///
+/// Parking it `Paused` hands the row to `workflow(action='resume')`, which is
+/// also the only thing that returns it to janitor visibility: `Paused` is
+/// invisible to both `reclaim_zombies` and `abandon_orphaned_runs` (both are
+/// `InProgress`-scoped), so the stamp MUST be cleared on resume or the step
+/// loses its watchdog permanently. Both resume faces clear it in the same
+/// write that restores the status.
+///
+/// Pure, like every other decision in this module — exercisable without a live
+/// dispatcher.
+#[must_use]
+pub fn orphan_reset_status(task: &CoordTask) -> CoordTaskStatus {
+    match crate::agents::swarm::tasks::paused_from(&task.metadata) {
+        Some(crate::agents::swarm::tasks::PAUSED_FROM_IN_PROGRESS) => CoordTaskStatus::Paused,
+        _ => CoordTaskStatus::Pending,
+    }
+}
+
 /// Pure predicate: should `task` be reaped as a zombie given the current
 /// running set, wall-clock, and TTL? Extracted from [`TeamDispatcher::reclaim_zombies`]
 /// so the decision logic can be exercised without spinning up a full
@@ -326,6 +354,47 @@ mod tests {
         );
         gated.metadata = with_lead_review_required(gated.metadata, true);
         assert_eq!(completion_status(&gated), CoordTaskStatus::WaitingReview);
+    }
+
+    /// A pause that landed while the step was running must survive the crash
+    /// it could not stop. Before this branch the orphan reclaim reset the row
+    /// to Pending and the dispatcher re-ran the paused step on the next tick —
+    /// no error, no log, and `workflow status` still said "paused".
+    #[test]
+    fn an_orphan_paused_mid_run_parks_instead_of_redispatching() {
+        use crate::agents::swarm::tasks::{
+            merge_metadata_patch, PAUSED_FROM_IN_PROGRESS, PAUSED_FROM_KEY,
+        };
+
+        let plain = task(
+            "t1",
+            CoordTaskStatus::InProgress,
+            Some("a"),
+            true,
+            Priority::Normal,
+            1,
+        );
+        assert_eq!(orphan_reset_status(&plain), CoordTaskStatus::Pending);
+
+        let mut paused_mid_run = plain.clone();
+        paused_mid_run.metadata = merge_metadata_patch(
+            &paused_mid_run.metadata,
+            serde_json::json!({ PAUSED_FROM_KEY: PAUSED_FROM_IN_PROGRESS }),
+        );
+        assert_eq!(
+            orphan_reset_status(&paused_mid_run),
+            CoordTaskStatus::Paused,
+            "the user's pause must not be undone by a restart"
+        );
+
+        // A review-origin stamp is a different pause (the row was already
+        // parked); it never reaches this path, and must not park an orphan.
+        let mut review_stamped = plain;
+        review_stamped.metadata = merge_metadata_patch(
+            &review_stamped.metadata,
+            serde_json::json!({ PAUSED_FROM_KEY: "waiting_review" }),
+        );
+        assert_eq!(orphan_reset_status(&review_stamped), CoordTaskStatus::Pending);
     }
 
     #[test]

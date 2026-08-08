@@ -66,8 +66,9 @@ pub enum WorkflowArgs {
     },
     /// Cancel the remaining steps of a workflow run: every not-yet-finished
     /// task (pending / blocked / paused / `waiting_review` / `in_progress`) is
-    /// marked Cancelled. An in-progress step's member run finishes on its own
-    /// but cannot resurrect the task; finished steps keep their results.
+    /// marked Cancelled, and an in-progress step's member run is stopped
+    /// within a tick — it does not keep burning tokens to the timeout.
+    /// Finished steps keep their results.
     Cancel {
         /// Name of the workflow template the run was started from.
         name: String,
@@ -82,8 +83,9 @@ pub enum WorkflowArgs {
     /// stops advancing the DAG (a review-parked step remembers its origin
     /// and resumes back into `waiting_review`; verdicts still land while
     /// paused). A step already executing finishes on its own (its result is
-    /// kept); steps already settled are untouched. Undo with
-    /// `action='resume'`.
+    /// kept), but the pause is recorded against it, so a daemon restart while
+    /// it runs parks that step Paused instead of restarting it. Steps already
+    /// settled are untouched. Undo with `action='resume'`.
     Pause {
         /// Name of the workflow template the run was started from.
         name: String,
@@ -912,8 +914,8 @@ impl AlephTool for WorkflowTool {
                 );
                 if in_flight > 0 {
                     message.push_str(&format!(
-                        "; {in_flight} in-flight member run(s) will finish on their own but \
-                         cannot resurrect their cancelled task(s)"
+                        "; {in_flight} in-flight member run(s) are being stopped (the dispatcher \
+                         cancels the live run of a task that went terminal on its next tick)"
                     ));
                 }
                 Ok(WorkflowToolOutput {
@@ -1007,7 +1009,36 @@ impl AlephTool for WorkflowTool {
                                 .await?;
                             paused.push(task.id.clone());
                         }
-                        CoordTaskStatus::InProgress => in_flight += 1,
+                        // Running right now. The status is deliberately NOT
+                        // touched — writing `Paused` over a live run makes the
+                        // dispatcher's finalize fence keep the "foreign" state
+                        // and throw the finished work away. Record the pause
+                        // INTENT instead: `paused_from = "in_progress"` is
+                        // durable, so if the daemon dies mid-run the orphan
+                        // reclaim parks the step `Paused` rather than resetting
+                        // it to `Pending` — which is how a pause used to be
+                        // silently undone by a restart. If the run instead
+                        // finishes normally, the stamp is inert (it is only ever
+                        // read while a task is Paused, or by the orphan reclaim).
+                        CoordTaskStatus::InProgress => {
+                            in_flight += 1;
+                            let stamped = crate::agents::swarm::tasks::merge_metadata_patch(
+                                &live.metadata,
+                                serde_json::json!({
+                                    crate::agents::swarm::tasks::PAUSED_FROM_KEY:
+                                        crate::agents::swarm::tasks::PAUSED_FROM_IN_PROGRESS,
+                                }),
+                            );
+                            self.coord_store
+                                .update_task(
+                                    &task.id,
+                                    CoordTaskUpdate {
+                                        metadata: Some(stamped),
+                                        ..Default::default()
+                                    },
+                                )
+                                .await?;
+                        }
                         _ => {}
                     }
                 }
@@ -1018,7 +1049,8 @@ impl AlephTool for WorkflowTool {
                 if in_flight > 0 {
                     message.push_str(&format!(
                         "; {in_flight} in-flight member run(s) will finish on their own — their \
-                         downstream steps are paused"
+                         downstream steps are paused, and a restart mid-run parks them paused \
+                         instead of restarting them"
                     ));
                 }
                 message.push_str(" (resume with action='resume')");
@@ -1811,6 +1843,102 @@ mod tests {
             crate::agents::swarm::tasks::paused_from(&root.metadata),
             None,
             "stamp cleared on restore"
+        );
+    }
+
+    /// W15b: pausing a run whose step is mid-flight used to be pure
+    /// bookkeeping — the step was counted as "in flight" and nothing was
+    /// written, so a daemon restart put it back to Pending via
+    /// `reclaim_orphaned` and the dispatcher re-ran the step the user had
+    /// paused. Silent: no error, and `workflow status` still said paused.
+    ///
+    /// The whole chain is asserted, including the part that is easy to leave
+    /// out: a task parked `Paused` is invisible to BOTH janitors
+    /// (`reclaim_zombies` / `abandon_orphaned_runs` are InProgress-scoped), so
+    /// the stamp has to provably disappear on resume or this step loses its
+    /// watchdog forever.
+    #[tokio::test]
+    async fn a_pause_during_a_live_step_survives_the_restart_and_is_cleared_by_resume() {
+        use crate::agents::swarm::tasks::{paused_from, PAUSED_FROM_IN_PROGRESS};
+        use crate::teams::dispatcher::schedule::orphan_reset_status;
+
+        let store = setup_store().await;
+        let t = tool(store, None);
+        let (run_id, ids) = materialize_run(&t, &linear_def(), "team-9").await;
+
+        // The root step is executing; the pause cannot stop it.
+        t.coord_store
+            .update_task(
+                &ids[0],
+                crate::agents::swarm::tasks::CoordTaskUpdate {
+                    status: Some(CoordTaskStatus::InProgress),
+                    ..Default::default()
+                },
+            )
+            .await
+            .unwrap();
+
+        t.call(WorkflowArgs::Pause {
+            name: "pipeline".into(),
+            team_id: "team-9".into(),
+            run_id: Some(run_id.clone()),
+        })
+        .await
+        .expect("pause with a live step");
+
+        let root = t.coord_store.get_task(&ids[0]).await.unwrap().unwrap();
+        assert_eq!(
+            root.status,
+            CoordTaskStatus::InProgress,
+            "the live run's status must not be clobbered — the finalize fence \
+             would throw its finished work away"
+        );
+        assert_eq!(
+            paused_from(&root.metadata),
+            Some(PAUSED_FROM_IN_PROGRESS),
+            "the pause intent must be durable, not just counted in the message"
+        );
+
+        // Daemon dies mid-run; the next boot's orphan reclaim decides where the
+        // row goes. Asserted through the dispatcher's own decision function.
+        assert_eq!(
+            orphan_reset_status(&root),
+            CoordTaskStatus::Paused,
+            "a restart must not resurrect a paused step"
+        );
+        t.coord_store
+            .update_task(
+                &ids[0],
+                crate::agents::swarm::tasks::CoordTaskUpdate {
+                    status: Some(CoordTaskStatus::Paused),
+                    ..Default::default()
+                },
+            )
+            .await
+            .unwrap();
+
+        // Resume: back to Pending AND the stamp gone. Without the clear, this
+        // row could be parked Paused again by any later crash while no janitor
+        // can see it.
+        t.call(WorkflowArgs::Resume {
+            name: "pipeline".into(),
+            team_id: "team-9".into(),
+            run_id: Some(run_id),
+        })
+        .await
+        .expect("resume");
+        let root = t.coord_store.get_task(&ids[0]).await.unwrap().unwrap();
+        assert_eq!(root.status, CoordTaskStatus::Pending);
+        assert_eq!(
+            paused_from(&root.metadata),
+            None,
+            "resume must clear the stamp — it is the only thing that returns \
+             this row to janitor visibility"
+        );
+        assert_eq!(
+            orphan_reset_status(&root),
+            CoordTaskStatus::Pending,
+            "and the reclaim decision must follow the cleared stamp"
         );
     }
 

@@ -164,3 +164,104 @@ async fn feedback_loop_end_to_end() {
     assert_eq!(listed.len(), 1);
     assert_eq!(listed[0].path, "feedback/no-jsdoc");
 }
+
+/// The same walk, on a corpus whose id is **not** `DEFAULT_AGENT_ID`.
+///
+/// Everything above runs under `"main"`, which makes the whole file structurally
+/// blind to the class of bug where a partition key is hard-coded instead of
+/// threaded: a corpus id built from a base agent constant, a maintenance pass
+/// that enumerates only `main`'s siblings, a store call that quietly falls back
+/// to the default agent. All of those pass every assertion above and lose every
+/// note here. `agent_id` is the partition key for raw memory, for the note index
+/// and for the on-disk tree, so this exercises all three under one non-default
+/// id — including the composed form (`{base}__u-…`) that session scope produces,
+/// which is the shape that actually exists on a multi-user install.
+#[tokio::test]
+async fn feedback_loop_end_to_end_for_a_non_default_agent() {
+    let agent_id = "main__u-alice";
+    assert_ne!(
+        agent_id, DEFAULT_AGENT_ID,
+        "this test is worthless if it drifts back onto the default agent"
+    );
+
+    let dir = tempdir().unwrap();
+    let db_path = dir.path().join("memory.db");
+    let backend = Arc::new(SqliteMemoryBackend::new(&db_path).unwrap());
+    let store: Arc<dyn RawMemoryStore> = backend.clone();
+    let indexer = NoteIndexer::new(dir.path().join("note"), backend.clone());
+
+    let tool = FlagUserCorrectionTool::new(store.clone(), agent_id.to_string());
+    tool.call(FlagUserCorrectionArgs {
+        content: "user said no emoji in commits".into(),
+        severity: Severity::High,
+        suggested_rule: Some("never put emoji in commit messages".into()),
+    })
+    .await
+    .expect("tool should succeed");
+
+    // The correction must land in *this* agent's partition...
+    let corrections =
+        RawMemoryStore::get_raw_by_path_prefix(&*backend, "aleph://correction/", agent_id, 50)
+            .await
+            .unwrap();
+    assert_eq!(corrections.len(), 1);
+
+    // ...and nowhere else. A partition key that silently degrades to the
+    // default agent would satisfy every assertion above this line.
+    let leaked = RawMemoryStore::get_raw_by_path_prefix(
+        &*backend,
+        "aleph://correction/",
+        DEFAULT_AGENT_ID,
+        50,
+    )
+    .await
+    .unwrap();
+    assert!(
+        leaked.is_empty(),
+        "a non-default agent's correction must not appear under the default agent"
+    );
+
+    let staged_response = serde_json::json!({
+        "actions": [{
+            "type": "new",
+            "title": "no-emoji-commits",
+            "rule": "Never put emoji in commit messages",
+            "confidence": 0.9,
+            "severity": "high",
+            "source_facts": [corrections[0].id.clone()],
+        }]
+    })
+    .to_string();
+    let action = parse_distill_response(&staged_response)
+        .into_iter()
+        .next()
+        .expect("one action");
+
+    indexer
+        .apply_distill_action(agent_id, "feedback", &action)
+        .await
+        .expect("apply_distill_action ok");
+
+    // The on-disk tree is partitioned by agent id too — `note/{agent_id}/…`.
+    let note_path = dir
+        .path()
+        .join("note")
+        .join(agent_id)
+        .join("feedback")
+        .join("no-emoji-commits.md");
+    assert!(
+        note_path.exists(),
+        "the note must be written under the non-default agent's own corpus"
+    );
+
+    let listed = NoteStore::list_notes(&*backend, agent_id).await.unwrap();
+    assert_eq!(listed.len(), 1);
+    assert_eq!(listed[0].path, "feedback/no-emoji-commits");
+    assert!(
+        NoteStore::list_notes(&*backend, DEFAULT_AGENT_ID)
+            .await
+            .unwrap()
+            .is_empty(),
+        "the default agent's index must be untouched"
+    );
+}

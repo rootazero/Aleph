@@ -129,6 +129,92 @@ pub fn clear(session_key: &str) {
     persist(&snapshot);
 }
 
+/// Delete the plan file a deleted session owned, and drop its binding.
+///
+/// The sibling of `purge_session_snapshot` on the session-delete path: the
+/// resume snapshot is a summary OF the conversation, and the scratchpad is its
+/// working memory. Both are keyed by the *stable* session key, so leaving the
+/// plan behind means a session re-created under the same key silently inherits
+/// the deleted conversation's execution list — and the goal-loop keeps vetoing
+/// stop until the new session finishes someone else's plan.
+///
+/// A `project_id` can be named explicitly by the model and shared across
+/// conversations, so the file is only removed once no other live binding points
+/// at it. Best-effort: a failed unlink is logged, never propagated — session
+/// deletion must not fail because a markdown file could not be removed.
+///
+/// `ScratchpadManager` owns the `project_id → directory` mapping; this call
+/// site must not re-derive the path.
+pub async fn purge_session_scratchpad(session_key: &str) {
+    if session_key.is_empty() {
+        return;
+    }
+    // Take the binding and answer "does anyone else still own this plan?"
+    // under one lock — two lock acquisitions would let a concurrent
+    // `set_active` slip between the removal and the check.
+    let (project_id, still_shared, snapshot) = {
+        let mut map = active_lock();
+        let Some(project_id) = map.remove(session_key) else {
+            return;
+        };
+        let still_shared = map.values().any(|p| *p == project_id);
+        let snapshot = map.clone();
+        (project_id, still_shared, snapshot)
+    };
+    persist(&snapshot);
+    if still_shared {
+        return;
+    }
+    if let Err(e) = crate::memory::scratchpad::ScratchpadManager::new(&project_id, session_key)
+        .purge()
+        .await
+    {
+        tracing::warn!(error = %e, session_key, project_id, "failed to purge session scratchpad");
+    }
+}
+
+/// Drop bindings belonging to superseded epochs of `base_key`.
+///
+/// Session keys carry an epoch suffix (`…:s2`); once a newer epoch exists the
+/// older key can never be addressed again, so its binding is dead weight that
+/// is nonetheless rewritten to disk on every single scratchpad tool call. The
+/// table is process-global and mirrored write-through, so without a pruning
+/// point it only ever grows — one entry per conversation the user ever started.
+pub fn clear_superseded_epochs(base_key: &str, current_epoch: u32) {
+    if base_key.is_empty() || current_epoch == 0 {
+        return;
+    }
+    let snapshot = {
+        let mut map = active_lock();
+        let before = map.len();
+        map.retain(|key, _| !is_superseded_epoch(key, base_key, current_epoch));
+        if map.len() == before {
+            return;
+        }
+        map.clone()
+    };
+    persist(&snapshot);
+}
+
+/// Does `key` name an epoch of `base_key` older than `current_epoch`?
+///
+/// Only exact epoch spellings count: a key that merely starts with `base_key`
+/// (a different chat whose name is a prefix extension) is left alone.
+fn is_superseded_epoch(key: &str, base_key: &str, current_epoch: u32) -> bool {
+    let Some(rest) = key.strip_prefix(base_key) else {
+        return false;
+    };
+    let epoch = if rest.is_empty() {
+        0
+    } else {
+        match rest.strip_prefix(":s").and_then(|n| n.parse::<u32>().ok()) {
+            Some(n) => n,
+            None => return false,
+        }
+    };
+    epoch < current_epoch
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -155,6 +241,72 @@ mod tests {
         set_active("sess-latest", "proj-2");
         assert_eq!(active("sess-latest"), Some("proj-2".to_string()));
         clear("sess-latest");
+    }
+
+    #[test]
+    fn superseded_epochs_are_pruned_but_the_current_one_survives() {
+        let base = "agent:prune:main";
+        set_active(base, "proj-e0");
+        set_active("agent:prune:main:s1", "proj-e1");
+        set_active("agent:prune:main:s2", "proj-e2");
+        // A different chat whose key merely starts with the base must not be
+        // swept up by the prefix match.
+        set_active("agent:prune:main-notes", "proj-other");
+
+        clear_superseded_epochs(base, 2);
+
+        assert_eq!(active(base), None, "epoch 0 is dead once epoch 2 closed");
+        assert_eq!(active("agent:prune:main:s1"), None);
+        assert_eq!(
+            active("agent:prune:main:s2"),
+            Some("proj-e2".to_string()),
+            "the closing epoch may still resume under the same key"
+        );
+        assert_eq!(
+            active("agent:prune:main-notes"),
+            Some("proj-other".to_string()),
+            "a prefix-sharing key belongs to a different conversation"
+        );
+        clear("agent:prune:main:s2");
+        clear("agent:prune:main-notes");
+    }
+
+    #[tokio::test]
+    async fn purge_drops_the_binding_and_the_plan_file() {
+        let _home = crate::utils::paths::IsolatedAlephHome::new();
+        let manager =
+            crate::memory::scratchpad::ScratchpadManager::new("proj-purge", "sess-purge-owner");
+        manager.initialize(Some("Ship it")).await.unwrap();
+        assert!(manager.exists());
+        set_active("sess-purge-owner", "proj-purge");
+
+        purge_session_scratchpad("sess-purge-owner").await;
+
+        assert_eq!(active("sess-purge-owner"), None);
+        assert!(
+            !manager.exists(),
+            "the deleted conversation's plan must not outlive it"
+        );
+    }
+
+    #[tokio::test]
+    async fn purge_spares_a_plan_another_session_still_owns() {
+        let _home = crate::utils::paths::IsolatedAlephHome::new();
+        let manager =
+            crate::memory::scratchpad::ScratchpadManager::new("proj-shared", "sess-shared-a");
+        manager.initialize(Some("Shared objective")).await.unwrap();
+        set_active("sess-shared-a", "proj-shared");
+        set_active("sess-shared-b", "proj-shared");
+
+        purge_session_scratchpad("sess-shared-a").await;
+
+        assert_eq!(active("sess-shared-a"), None);
+        assert_eq!(active("sess-shared-b"), Some("proj-shared".to_string()));
+        assert!(
+            manager.exists(),
+            "an explicitly named project is shareable; the surviving session still owns it"
+        );
+        clear("sess-shared-b");
     }
 
     #[test]

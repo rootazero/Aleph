@@ -436,6 +436,56 @@ mod review_tests {
         assert_eq!(closed, 1);
     }
 
+    /// The crash-recovery ceiling is only real if the rows the janitor writes
+    /// are the rows the counter reads. Asserted end to end (write → read back →
+    /// count), not against the sentinel literal: a drift between the two sides
+    /// is silent — the budget simply reads 0 forever and the unbounded
+    /// re-dispatch loop comes back.
+    #[tokio::test]
+    async fn janitor_closed_rows_are_the_rows_the_recovery_budget_counts() {
+        use crate::agents::swarm::tasks::retry::recovery_abandons_since;
+
+        let store = make_store().await;
+        let task = store
+            .create_task(NewCoordTask {
+                team_id: Some("t1".into()),
+                subject: "crashy".into(),
+                description: String::new(),
+                owner: Some("worker".into()),
+                priority: Priority::Normal,
+                blocked_by: Vec::new(),
+                metadata: serde_json::json!({}),
+            })
+            .await
+            .unwrap();
+
+        // Two crashes: a run row left open, closed by the boot sweep.
+        for _ in 0..2 {
+            let _ = store.start_task_run(&task.id, "worker").await.unwrap();
+            store.abandon_orphaned_runs(&[]).await.unwrap();
+        }
+        // ...and one attempt the dispatcher itself deferred (agent busy). It
+        // lands under the same status on purpose, and must NOT read as a crash.
+        let busy = store.start_task_run(&task.id, "worker").await.unwrap();
+        store
+            .finish_task_run(
+                &busy,
+                TaskRunStatus::Abandoned,
+                None,
+                Some("Agent busy, attempt deferred: Agent is busy: worker".into()),
+            )
+            .await
+            .unwrap();
+
+        let runs = store.list_task_runs(&task.id).await.unwrap();
+        assert_eq!(runs.len(), 3);
+        assert_eq!(
+            recovery_abandons_since(&runs, None),
+            2,
+            "two crashes counted, the busy deferral not"
+        );
+    }
+
     #[tokio::test]
     async fn skipped_satisfies_dependency_at_query_time() {
         let store = make_store().await;

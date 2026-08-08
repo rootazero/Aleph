@@ -33,6 +33,18 @@ pub struct HeartbeatConfig {
     /// Deduplication configuration
     #[serde(default)]
     pub dedup: DedupConfig,
+
+    /// When `true`, a task with no explicit `failure_alert` but with a
+    /// `delivery_config` gets a default alert (after=1, cooldown=1h, first
+    /// delivery target) so a monitor that has broken does not fail silently.
+    /// Mirrors `CronConfig::notify_on_failure_default`.
+    ///
+    /// Note the coupling this fallback carries: the alert target is the same
+    /// object whose failure is being reported. See
+    /// `heartbeat::service::timer` for the log-and-carry fallback that keeps a
+    /// dead channel from swallowing the news of its own death.
+    #[serde(default = "default_true")]
+    pub notify_on_failure_default: bool,
 }
 
 const fn default_true() -> bool {
@@ -64,6 +76,7 @@ impl Default for HeartbeatConfig {
             job_timeout_secs: default_job_timeout(),
             history_retention_days: default_history_retention(),
             dedup: DedupConfig::default(),
+            notify_on_failure_default: default_true(),
         }
     }
 }
@@ -110,6 +123,11 @@ pub struct HeartbeatTask {
     pub probe: ProbeConfig,
     /// Optional delivery configuration for results
     pub delivery_config: Option<crate::tasks::shared::delivery::DeliveryConfig>,
+    /// Optional failure alerting. Uses the same shared gate as cron
+    /// (`tasks::shared::alert`); `HeartbeatConfig::notify_on_failure_default`
+    /// synthesizes one from `delivery_config` when this is absent.
+    #[serde(default)]
+    pub failure_alert: Option<crate::tasks::shared::alert::FailureAlertConfig>,
     /// Per-task dedup configuration (overrides service defaults)
     pub dedup: DedupConfig,
     /// Optional weekly time-window gate. When set, the timer skips ticks
@@ -147,6 +165,7 @@ impl HeartbeatTask {
             interval_ms,
             probe,
             delivery_config: None,
+            failure_alert: None,
             dedup: DedupConfig::default(),
             active_hours: None,
             state: HeartbeatState::default(),
@@ -216,6 +235,19 @@ pub struct HeartbeatState {
     pub consecutive_errors: u32,
     /// Description of the last error
     pub last_error: Option<String>,
+    /// When the last failure alert was *sent* (Unix ms) — the cooldown anchor
+    /// for `tasks::shared::alert::should_send_alert`.
+    #[serde(default)]
+    pub last_failure_alert_at_ms: Option<i64>,
+    /// An alert whose own delivery failed.
+    ///
+    /// The alert target is frequently the same channel whose failure is being
+    /// reported, so "alert the dead channel that it is dead" is the normal
+    /// case, not the edge case. Rather than drop the news, it is parked here
+    /// and prepended to the next alert that does get through. Cleared on the
+    /// first successful send.
+    #[serde(default)]
+    pub undelivered_alert: Option<String>,
 }
 
 // ── HeartbeatTaskView ────────────────────────────────────────────────────────
@@ -232,6 +264,8 @@ pub struct HeartbeatTaskView {
     pub dedup: DedupConfig,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub active_hours: Option<crate::tasks::shared::active_hours::ActiveHoursSchedule>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub failure_alert: Option<crate::tasks::shared::alert::FailureAlertConfig>,
     pub state: HeartbeatState,
     pub created_at: i64,
     pub updated_at: i64,
@@ -248,6 +282,7 @@ impl From<&HeartbeatTask> for HeartbeatTaskView {
             probe: task.probe.clone(),
             dedup: task.dedup.clone(),
             active_hours: task.active_hours.clone(),
+            failure_alert: task.failure_alert.clone(),
             state: task.state.clone(),
             created_at: task.created_at,
             updated_at: task.updated_at,

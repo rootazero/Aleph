@@ -58,6 +58,60 @@ pub(super) fn max_run_timeout_secs() -> u64 {
         .unwrap_or(FALLBACK_MAX_RUN_TIMEOUT_SECS)
 }
 
+/// Slack added on top of the computed fan-out wall clock before the sync batch
+/// gives up and returns partial results.
+///
+/// The per-child `tokio::time::timeout` inside the spawner must stay the thing
+/// that fires for a child that is actually *running* — that error names the
+/// child and is actionable. The batch deadline is a backstop for a child that
+/// never starts (its permit wait happens BEFORE its own timeout arms, so a
+/// queued child is invisible to every per-child clock). Without this slack the
+/// last wave's own timer and the batch deadline expire in the same instant and
+/// which one wins is a scheduling race. Comes out of
+/// [`RUN_TIMEOUT_HEADROOM_SECS`], which is an order of magnitude larger.
+pub(super) const BATCH_FANOUT_SLACK_SECS: u64 = 30;
+
+/// Grace window after the batch deadline in which still-running children are
+/// asked to stop COOPERATIVELY (their cancel token) before the tasks are
+/// aborted outright. A cooperative unwind runs the child's worktree cleanup and
+/// MCP-scope shutdown; an abort leaves both to their Drop safety nets.
+pub(super) const BATCH_CANCEL_GRACE_SECS: u64 = 2;
+
+/// Upper bound on how long the abort drain may take. Dropping the `JoinSet`
+/// aborts whatever is left anyway, so this only stops a child that refuses to
+/// yield from holding the tool call open.
+pub(super) const BATCH_ABORT_DRAIN_SECS: u64 = 5;
+
+/// Wave-aware ceiling on ONE child's wall clock inside a synchronous batch.
+///
+/// The clamp in `parse` bounds a child by [`max_run_timeout_secs`], which
+/// assumes **one child per call**. A batch of `rows` against `permits`
+/// concurrency slots does not run flat: it runs in `ceil(rows / permits)`
+/// WAVES, and an MoA reduce adds one more serial round after them. So the call's
+/// real wall clock is `per_child × (waves + agg_rounds)`, and clamping each
+/// child to the whole share guarantees the tool budget fires first and the
+/// entire batch is discarded — five 1500 s children against four permits is two
+/// waves, i.e. 3000 s of work inside a 1500 s share.
+///
+/// `permits` is read from the live semaphore rather than assumed, so permits
+/// already held by this run's background children (which really do narrow this
+/// batch's concurrency) shorten the per-child share instead of being wished
+/// away.
+pub(super) fn wave_aware_child_timeout_cap(rows: usize, permits: usize, agg_rounds: usize) -> u64 {
+    let rounds = u64::try_from(wave_count(rows, permits).saturating_add(agg_rounds))
+        .unwrap_or(u64::MAX)
+        .max(1);
+    (max_run_timeout_secs() / rounds).max(1)
+}
+
+/// How many serial waves a `rows`-wide fan-out takes through `permits`
+/// concurrency slots. Single source: the per-child clamp divides the share by
+/// it and the batch deadline multiplies it back out, so the two must agree by
+/// construction rather than by two matching expressions.
+pub(super) fn wave_count(rows: usize, permits: usize) -> usize {
+    rows.max(1).div_ceil(permits.max(1))
+}
+
 /// Every top-level argument key the tool accepts.
 ///
 /// This is the parser's half of the tool contract; the schema in `loop_tool.rs`

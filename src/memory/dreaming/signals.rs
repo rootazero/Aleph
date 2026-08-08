@@ -6,10 +6,18 @@
 use serde::{Deserialize, Serialize};
 
 /// Signal type classification.
+///
+/// A `Quality` variant used to sit here, carrying a single `correction_rate`
+/// signal derived from `RawMetrics::correction_count / session_count`. Both
+/// counters had exactly one producer — `..Default::default()` — so the rate was
+/// structurally 0.0 on every cycle, and no consumer ever read the signal by name
+/// (`StrategySelector` and the evolution gate both address signals through
+/// `SignalSnapshot::score(name)` and neither key existed). Filling the counters
+/// with real numbers would have changed no output byte, which is the definition
+/// of a dead island: deleted rather than reconnected.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum SignalType {
-    Quality,
     Recall,
     Health,
     SkillUsage,
@@ -51,8 +59,6 @@ pub struct RawMetrics {
     /// How many of `mature_skill_total` have at least one recall hit — the
     /// numerator of the wasted-distillation ratio.
     pub mature_skill_recalled: u32,
-    pub correction_count: u32,
-    pub session_count: u32,
 }
 
 impl SignalSnapshot {
@@ -124,19 +130,6 @@ impl SignalSnapshot {
             name: "skill_recall_rate".into(),
             score: skill_recall_rate,
             source: "recall_signals".into(),
-        });
-
-        // Quality signals
-        let correction_rate = if m.session_count > 0 {
-            (f64::from(m.correction_count) / f64::from(m.session_count)).clamp(0.0, 1.0)
-        } else {
-            0.0
-        };
-        signals.push(DreamSignal {
-            signal_type: SignalType::Quality,
-            name: "correction_rate".into(),
-            score: correction_rate,
-            source: "session_metadata".into(),
         });
 
         Self {

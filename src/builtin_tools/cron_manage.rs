@@ -11,7 +11,9 @@ use serde::{Deserialize, Serialize};
 use tracing::info;
 
 use crate::error::Result;
-use crate::tasks::cron::{CronJob, CronJobView, ScheduleKind, SharedCronService};
+use crate::tasks::cron::{
+    CronJob, CronJobView, FailureAlertConfig, ScheduleKind, SharedCronService,
+};
 use crate::tools::AlephTool;
 
 // =============================================================================
@@ -180,6 +182,20 @@ pub struct CronManageArgs {
     #[serde(default)]
     pub enabled: Option<bool>,
 
+    /// Failure alerting for this task. Set on `create`, replaced on `update`.
+    ///
+    /// Without it a job that keeps failing is only visible to someone who
+    /// opens the task history. `target` picks where the alert goes — a
+    /// `Webhook` URL, a `Gateway` channel + chat, or `Memory`.
+    #[serde(default)]
+    pub failure_alert: Option<FailureAlertConfig>,
+
+    /// `update` only: pass `true` to remove an existing `failure_alert`.
+    /// (`failure_alert: null` is indistinguishable from "not mentioned" in a
+    /// JSON tool call, so clearing needs its own flag.)
+    #[serde(default)]
+    pub clear_failure_alert: Option<bool>,
+
     // ── Internal (injected by dispatcher, not LLM-visible) ────────
     /// Source channel ID — injected by the tool dispatcher from session context.
     /// Used to set `source_channel_id` on created jobs so results are delivered
@@ -286,6 +302,7 @@ impl AlephTool for CronManageTool {
                 let schedule_kind: ScheduleKind = schedule.into();
 
                 let mut job = CronJob::new(&name, &agent_id, &prompt, schedule_kind);
+                job.failure_alert = args.failure_alert;
                 // Prefer runtime channel from dispatcher (injected via __channel),
                 // fall back to static channel set at construction time.
                 job.source_channel_id = args.__channel.or_else(|| self.source_channel_id.clone());
@@ -436,6 +453,15 @@ impl AlephTool for CronManageTool {
                     validate_schedule(schedule)?;
                 }
 
+                // Tri-state: an explicit `clear_failure_alert` wins, then a new
+                // config, else leave the existing one alone. A tool call
+                // cannot express `null`-means-clear, hence the separate flag.
+                let failure_alert = if args.clear_failure_alert == Some(true) {
+                    Some(None)
+                } else {
+                    args.failure_alert.map(Some)
+                };
+
                 let updates = crate::tasks::cron::service::ops::CronJobUpdates {
                     name: args.name,
                     agent_id: args.agent_id,
@@ -443,8 +469,9 @@ impl AlephTool for CronManageTool {
                     enabled: args.enabled,
                     schedule_kind: args.schedule.map(ScheduleKind::from),
                     tags: None,
-                    timezone: None,
+                    session_target: None,
                     timeout_ms: None,
+                    failure_alert,
                 };
 
                 service.update_job(&id, updates).await.map_err(|e| {

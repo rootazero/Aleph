@@ -4,7 +4,9 @@
 //! Write operations (`add_job`, `update_job`, `toggle_job`, `delete_job`)
 //! modify the store and recompute next run times as needed.
 
-use crate::tasks::cron::config::{CronJob, CronJobView, ErrorReason, ScheduleKind};
+use crate::tasks::cron::config::{
+    CronJob, CronJobView, ErrorReason, FailureAlertConfig, ScheduleKind, SessionTarget,
+};
 use crate::tasks::cron::stagger::compute_staggered_next;
 use crate::tasks::cron::store::CronStore;
 use crate::tasks::shared::clock::Clock;
@@ -121,6 +123,37 @@ pub fn recompute_next_run_maintenance<C: Clock>(job: &mut CronJob, clock: &C) {
     job.state.next_run_at_ms = compute_next_run_for_job(job, now);
 }
 
+// ── Schedule validation ──────────────────────────────────────────────
+
+/// Reject a schedule the scheduler cannot act on, at the write boundary.
+///
+/// `compute_next_run_for_job` collapses both a malformed cron expression and
+/// an unknown timezone to `None`, which the maintenance recompute then reads
+/// as "nothing due" — the job is accepted, reported as created, and silently
+/// never fires. Since `timezone` became a real scheduler input (it used to be
+/// a display-only `CronJob` field), an operator-typed string reaches the
+/// parser for the first time, so the failure arm has to be an error the
+/// caller sees rather than a silent park.
+pub fn validate_schedule_kind(kind: &ScheduleKind) -> Result<(), String> {
+    match kind {
+        ScheduleKind::Cron { expr, tz, .. } => crate::tasks::shared::schedule::compute_next_cron(
+            expr,
+            tz.as_deref(),
+            chrono::Utc::now(),
+        )
+        .map(|_| ()),
+        ScheduleKind::Every { every_ms, .. } => {
+            if *every_ms < 1000 {
+                return Err(format!(
+                    "interval too short: every_ms={every_ms} is below the 1000ms minimum"
+                ));
+            }
+            Ok(())
+        }
+        ScheduleKind::At { .. } => Ok(()),
+    }
+}
+
 // ── Read operations (ZERO side effects) ──────────────────────────────
 
 /// List all jobs as read-only views. No side effects.
@@ -150,6 +183,11 @@ pub fn add_job<C: Clock>(store: &mut CronStore, mut job: CronJob, clock: &C) -> 
 }
 
 /// Partial update fields for a cron job.
+///
+/// Every field here must have a reader in `gateway::handlers::cron::real` —
+/// `real.rs::tests::every_panel_dto_field_is_read_by_a_handler` is the guard.
+/// A write-only field is indistinguishable from a working one at the call
+/// site: the RPC returns success and the setting evaporates.
 #[derive(Debug, Default)]
 pub struct CronJobUpdates {
     pub name: Option<String>,
@@ -158,11 +196,15 @@ pub struct CronJobUpdates {
     pub enabled: Option<bool>,
     pub schedule_kind: Option<ScheduleKind>,
     pub tags: Option<Vec<String>>,
-    pub timezone: Option<String>,
+    pub session_target: Option<SessionTarget>,
     /// Per-job timeout override. Outer `Some` indicates an explicit action:
     /// inner `Some(ms)` sets the override; inner `None` clears it. Outer
     /// `None` means leave the field unchanged.
     pub timeout_ms: Option<Option<i64>>,
+    /// Failure-alert config. Same tri-state convention as `timeout_ms`:
+    /// outer `Some(Some(cfg))` installs, outer `Some(None)` clears, outer
+    /// `None` leaves it alone.
+    pub failure_alert: Option<Option<FailureAlertConfig>>,
 }
 
 /// Apply partial updates to an existing job. Recomputes next run time.
@@ -194,11 +236,14 @@ pub fn update_job<C: Clock>(
     if let Some(tags) = updates.tags {
         job.tags = tags;
     }
-    if let Some(timezone) = updates.timezone {
-        job.timezone = Some(timezone);
+    if let Some(session_target) = updates.session_target {
+        job.session_target = session_target;
     }
     if let Some(timeout_action) = updates.timeout_ms {
         job.timeout_ms = timeout_action;
+    }
+    if let Some(alert_action) = updates.failure_alert {
+        job.failure_alert = alert_action;
     }
 
     job.updated_at = clock.now_ms();
@@ -599,5 +644,154 @@ mod tests {
             job.state.next_run_at_ms.is_none(),
             "maintenance should not fill next_run for disabled jobs"
         );
+    }
+
+    /// A partial update must be partial. Nothing guarded this before, which is
+    /// how a Panel save that only touched the name could quietly clear the
+    /// failure-alert config or the session target.
+    #[test]
+    fn update_touching_one_field_preserves_the_others() {
+        let mut store = make_store();
+        let clock = FakeClock::new(1_000_000);
+
+        let mut job = make_test_job("partial");
+        job.session_target = SessionTarget::Main;
+        job.timeout_ms = Some(600_000);
+        job.tags = vec!["ops".to_string()];
+        job.failure_alert = Some(FailureAlertConfig {
+            after: 3,
+            cooldown_ms: 60_000,
+            target: crate::tasks::shared::delivery::DeliveryTargetConfig::Webhook {
+                url: "https://example.com/alert".to_string(),
+                method: None,
+                headers: None,
+            },
+        });
+        add_job(&mut store, job, &clock);
+
+        update_job(
+            &mut store,
+            "partial",
+            CronJobUpdates {
+                name: Some("Renamed".to_string()),
+                ..Default::default()
+            },
+            &clock,
+        )
+        .unwrap();
+
+        let after = store.get_job("partial").unwrap();
+        assert_eq!(after.name, "Renamed");
+        assert_eq!(after.session_target, SessionTarget::Main);
+        assert_eq!(after.timeout_ms, Some(600_000));
+        assert_eq!(after.tags, vec!["ops".to_string()]);
+        let alert = after
+            .failure_alert
+            .as_ref()
+            .expect("failure_alert must survive an unrelated update");
+        assert_eq!(alert.after, 3);
+        assert_eq!(alert.cooldown_ms, 60_000);
+    }
+
+    /// The tri-state on `failure_alert` mirrors `timeout_ms`: set / clear /
+    /// leave alone.
+    #[test]
+    fn update_job_failure_alert_action() {
+        let mut store = make_store();
+        let clock = FakeClock::new(1_000_000);
+        add_job(&mut store, make_test_job("alerts"), &clock);
+
+        let cfg = FailureAlertConfig {
+            after: 2,
+            cooldown_ms: 1000,
+            target: crate::tasks::shared::delivery::DeliveryTargetConfig::Webhook {
+                url: "https://example.com".to_string(),
+                method: None,
+                headers: None,
+            },
+        };
+        update_job(
+            &mut store,
+            "alerts",
+            CronJobUpdates {
+                failure_alert: Some(Some(cfg)),
+                ..Default::default()
+            },
+            &clock,
+        )
+        .unwrap();
+        assert!(store.get_job("alerts").unwrap().failure_alert.is_some());
+
+        // Outer None = no-op.
+        update_job(
+            &mut store,
+            "alerts",
+            CronJobUpdates {
+                name: Some("still here".to_string()),
+                ..Default::default()
+            },
+            &clock,
+        )
+        .unwrap();
+        assert!(store.get_job("alerts").unwrap().failure_alert.is_some());
+
+        // Outer Some(None) = clear.
+        update_job(
+            &mut store,
+            "alerts",
+            CronJobUpdates {
+                failure_alert: Some(None),
+                ..Default::default()
+            },
+            &clock,
+        )
+        .unwrap();
+        assert!(store.get_job("alerts").unwrap().failure_alert.is_none());
+    }
+
+    /// The timezone the scheduler honours lives in `ScheduleKind::Cron`, and
+    /// the view projects that same value — there is no second copy to drift.
+    #[test]
+    fn view_timezone_is_projected_from_the_schedule() {
+        let job = CronJob::new(
+            "tz",
+            "agent",
+            "prompt",
+            ScheduleKind::Cron {
+                expr: "0 0 9 * * *".to_string(),
+                tz: Some("Asia/Shanghai".to_string()),
+                stagger_ms: None,
+            },
+        );
+        assert_eq!(job.schedule_timezone(), Some("Asia/Shanghai"));
+        assert_eq!(
+            CronJobView::from(&job).timezone.as_deref(),
+            Some("Asia/Shanghai")
+        );
+
+        let interval = make_test_job("every");
+        assert_eq!(interval.schedule_timezone(), None);
+    }
+
+    #[test]
+    fn validate_schedule_kind_rejects_bad_expr_and_zone() {
+        assert!(validate_schedule_kind(&ScheduleKind::Cron {
+            expr: "not a cron".to_string(),
+            tz: None,
+            stagger_ms: None,
+        })
+        .is_err());
+        assert!(validate_schedule_kind(&ScheduleKind::Cron {
+            expr: "0 0 9 * * *".to_string(),
+            tz: Some("Nowhere/Nothing".to_string()),
+            stagger_ms: None,
+        })
+        .is_err());
+        assert!(validate_schedule_kind(&ScheduleKind::Cron {
+            expr: "0 0 9 * * *".to_string(),
+            tz: Some("Asia/Shanghai".to_string()),
+            stagger_ms: None,
+        })
+        .is_ok());
     }
 }

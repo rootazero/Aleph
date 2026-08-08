@@ -31,7 +31,7 @@ impl DreamStage for MentionWeaveStage {
         ctx.notes.len() >= 2
     }
 
-    async fn execute(&self, mut ctx: DreamContext) -> Result<DreamContext, AlephError> {
+    async fn execute(&self, ctx: DreamContext) -> Result<DreamContext, AlephError> {
         // rust-doctor-disable-next-line excessive-clone
         let store = ctx.indexer.store().clone();
         // rust-doctor-disable-next-line excessive-clone
@@ -80,9 +80,6 @@ impl DreamStage for MentionWeaveStage {
         let edge_count = edges.len();
         store.replace_mention_links(&agent_id, &edges).await?;
 
-        ctx.report
-            .extra
-            .insert("mention_edges".into(), edge_count.to_string());
         tracing::info!(agent = %agent_id, edges = edge_count, "mention edges materialized");
         Ok(ctx)
     }
@@ -315,16 +312,20 @@ mod tests {
             }
         }
 
-        assert_eq!(
-            out.report.extra.get("mention_edges").map(String::as_str),
-            Some("1"),
-            "expected exactly one mention edge, got: {:?}",
-            out.report.extra
-        );
+        // The materialised edges themselves are the assertion — the stage used
+        // to also stash a count in a write-only `report.extra` bag, which could
+        // agree with the store or not and no production reader would ever know.
         let rows = store
             .get_outgoing_link_rows("b/diary", &out.agent_id)
             .await
             .unwrap();
+        assert_eq!(
+            rows.iter()
+                .filter(|r| r.relation.as_deref() == Some("mention"))
+                .count(),
+            1,
+            "expected exactly one mention edge, got: {rows:?}"
+        );
         let m = rows
             .iter()
             .find(|r| r.to_note == "a/rust-notes")

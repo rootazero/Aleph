@@ -61,11 +61,15 @@ pub(super) async fn abandon_orphaned_runs(
     // worker died with a previous daemon incarnation, or finish_task_run's
     // UPDATE was lost). Task status is deliberately NOT consulted — that is
     // what lets cancel-then-crash orphans (terminal task, stuck row) close.
+    // The stamped `error` is bound from the shared
+    // `RUN_ABANDONED_BY_JANITOR_ERROR` constant, not inlined: it is the ONLY
+    // thing that tells a crash-closed row apart from a deliberately-deferred
+    // one (a busy-target attempt is `abandoned` too), and the crash-recovery
+    // budget counts on that distinction.
     let placeholders = vec!["?"; live_task_ids.len()].join(", ");
     let sql = format!(
         "UPDATE coord_task_runs \
-         SET status = 'abandoned', ended_at = ?1, \
-             error = 'interrupted: run never finished (process restart or lost worker)' \
+         SET status = 'abandoned', ended_at = ?1, error = ?2 \
          WHERE status = 'running'{}",
         if live_task_ids.is_empty() {
             String::new()
@@ -73,7 +77,8 @@ pub(super) async fn abandon_orphaned_runs(
             format!(" AND task_id NOT IN ({placeholders})")
         }
     );
-    let mut params: Vec<&dyn rusqlite::ToSql> = vec![&now];
+    let janitor_error = crate::agents::swarm::tasks::RUN_ABANDONED_BY_JANITOR_ERROR;
+    let mut params: Vec<&dyn rusqlite::ToSql> = vec![&now, &janitor_error];
     for id in live_task_ids {
         params.push(id);
     }

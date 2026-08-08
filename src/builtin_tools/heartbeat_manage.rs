@@ -18,6 +18,7 @@ use crate::tasks::heartbeat::{
     SharedHeartbeatService,
 };
 use crate::tasks::shared::active_hours::ActiveHoursSchedule;
+use crate::tasks::shared::alert::FailureAlertConfig;
 use crate::tasks::shared::clock::SystemClock;
 use crate::tools::AlephTool;
 
@@ -121,6 +122,11 @@ pub struct HeartbeatCreateArgs {
     /// Optional parameters to pass to the probe tool
     #[serde(default)]
     pub probe_tool_params: Option<serde_json::Value>,
+    /// Alert when this monitor itself keeps failing (probe error, L2 error, or
+    /// a delivery its configured target refused). Without it the failure only
+    /// lengthens the retry backoff and nobody is told.
+    #[serde(default)]
+    pub failure_alert: Option<FailureAlertConfig>,
 }
 
 /// Output from `heartbeat_create`
@@ -177,7 +183,8 @@ impl AlephTool for HeartbeatCreateTool {
         };
 
         let agent_id = args.agent_id.unwrap_or_else(|| "main".to_string());
-        let task = HeartbeatTask::new(args.name.clone(), agent_id, args.interval_ms, probe);
+        let mut task = HeartbeatTask::new(args.name.clone(), agent_id, args.interval_ms, probe);
+        task.failure_alert = args.failure_alert;
 
         let clock = SystemClock;
         let id = {
@@ -221,6 +228,13 @@ pub struct HeartbeatUpdateArgs {
     /// Active hours schedule to restrict task execution windows (optional)
     #[serde(default)]
     pub active_hours: Option<ActiveHoursSchedule>,
+    /// Replace the failure alerting for this monitor (optional)
+    #[serde(default)]
+    pub failure_alert: Option<FailureAlertConfig>,
+    /// Pass `true` to remove an existing `failure_alert`. (A JSON tool call
+    /// cannot distinguish `null` from "not mentioned", hence the flag.)
+    #[serde(default)]
+    pub clear_failure_alert: Option<bool>,
 }
 
 /// Output from `heartbeat_update`
@@ -263,12 +277,19 @@ impl AlephTool for HeartbeatUpdateTool {
             }
         }
 
+        let failure_alert = if args.clear_failure_alert == Some(true) {
+            Some(None)
+        } else {
+            args.failure_alert.map(Some)
+        };
+
         let updates = HeartbeatTaskUpdates {
             name: args.name,
             agent_id: args.agent_id,
             interval_ms: args.interval_ms,
             enabled: args.enabled,
             active_hours: args.active_hours.map(Some),
+            failure_alert,
             ..Default::default()
         };
 

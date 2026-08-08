@@ -130,10 +130,13 @@ pub struct BuiltinToolRegistry {
     pub(crate) memory_explore_tool: Option<crate::builtin_tools::MemoryExploreTool>,
     /// Memory timeline tool instance (optional - requires `StateDatabase`)
     pub(crate) memory_timeline_tool: Option<crate::builtin_tools::MemoryTimelineTool>,
-    /// Phase 3 self-evolution path α — records user-correction signals into
-    /// `raw_memory` under <aleph://correction/{id>}. Optional because it requires
-    /// a memory backend (Arc<dyn RawMemoryStore>).
-    pub(crate) flag_user_correction_tool: Option<crate::builtin_tools::FlagUserCorrectionTool>,
+    /// Phase 3 self-evolution path α — backend for `flag_user_correction`,
+    /// which records user-correction signals into `raw_memory` under
+    /// <aleph://correction/{id>}. The handle rather than a constructed tool:
+    /// the tool's agent id must be resolved per call (see
+    /// `BuiltinToolRegistry::build_flag_user_correction`). `None` disables the
+    /// tool — it requires a memory backend.
+    pub(crate) flag_user_correction_db: Option<crate::memory::store::MemoryBackend>,
     /// Shared workspace handle for memory tools — written by `ExecutionEngine` after workspace resolution
     pub(crate) memory_workspace_handle: Option<Arc<RwLock<String>>>,
     /// Gateway context for sessions tools (session.list, session.send).

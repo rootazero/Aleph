@@ -572,12 +572,6 @@ impl Config {
             }
         }
 
-        debug!(
-            require_confirmation = self.agent.require_confirmation,
-            max_parallelism = self.agent.max_parallelism,
-            "Agent config validated"
-        );
-
         info!(
             providers_count = self.providers.len(),
             rules_count = self.rules.len(),

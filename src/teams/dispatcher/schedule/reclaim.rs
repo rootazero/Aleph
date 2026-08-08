@@ -6,11 +6,13 @@ use std::collections::{HashMap, HashSet};
 use crate::agents::swarm::tasks::acceptance::{
     read_stale_review_warned_at, with_stale_review_warned_at,
 };
+use crate::agents::swarm::tasks::retry::{read_retry_budget_reset_at, recovery_abandons_since};
 use crate::agents::swarm::tasks::{CoordTaskFilter, CoordTaskStatus, CoordTaskUpdate};
 use crate::sync_primitives::Arc;
 
-use super::select::{is_dispatcher_managed, is_stale_review, is_zombie};
+use super::select::{is_dispatcher_managed, is_stale_review, is_zombie, orphan_reset_status};
 use super::TeamDispatcher;
+use crate::teams::dispatcher::MAX_TASK_RECOVERIES;
 
 impl TeamDispatcher {
     /// Force-fail tasks that have been `InProgress` for longer than
@@ -81,6 +83,25 @@ impl TeamDispatcher {
     /// Pairs with [`Self::reclaim_zombies`] — that one runs first and catches
     /// the subset that has been `InProgress` past `zombie_ttl_secs` (those go
     /// straight to `Failed` instead of bouncing back to `Pending`).
+    ///
+    /// Two things this pass is NOT allowed to do silently:
+    ///
+    /// * **Recover forever.** A crash orphan spends no retry budget (correct —
+    ///   it is not the task's fault) and the reset re-stamps `started_at`, so
+    ///   `zombie_ttl_secs` never sees the age accumulate. A task that reliably
+    ///   kills its worker was therefore re-dispatched without any bound.
+    ///   [`MAX_TASK_RECOVERIES`](crate::teams::dispatcher::MAX_TASK_RECOVERIES)
+    ///   is that bound; past it the task is failed terminally **with the
+    ///   reason spelled out**, because this is the first path from which
+    ///   [`fail_task`](Self::fail_task) is reachable at boot — the settle sweep
+    ///   will push that text to the launching user as the run's terminal
+    ///   summary, and an unattributed `Failed` there is worse than none.
+    /// * **Undo a pause.** `workflow(action='pause')` cannot stop an in-flight
+    ///   step, so it records the *intent* on the row
+    ///   (`paused_from = "in_progress"`) and leaves the status alone. A blind
+    ///   reset to `Pending` here would re-dispatch a step the user paused —
+    ///   silently, on the next boot. Such a task parks `Paused` instead; the
+    ///   stamp rides along and `workflow(action='resume')` clears it.
     pub(super) async fn reclaim_orphaned(self: &Arc<Self>) {
         let in_progress = match self
             .coord_store
@@ -106,11 +127,65 @@ impl TeamDispatcher {
                 continue; // this process is actively running it
             }
             tracing::info!(task_id = %task.id, "dispatcher: reclaiming orphaned task");
+
+            // Crash-recovery budget. Read BEFORE the lock release / status
+            // write so the decision is made against the same row snapshot the
+            // reclaim acts on. An unreadable run log recovers (this pass is a
+            // safety net, not a judge — degrading to "give up" would turn a
+            // transient store hiccup into a dead workflow); the bound simply
+            // does not apply for that tick.
+            let recoveries = match self.coord_store.list_task_runs(&task.id).await {
+                Ok(runs) => recovery_abandons_since(
+                    &runs,
+                    read_retry_budget_reset_at(&task.metadata),
+                ),
+                Err(e) => {
+                    tracing::warn!(task_id = %task.id, error = %e,
+                        "dispatcher: run history unreadable; recovering without counting");
+                    0
+                }
+            };
+            if recoveries >= MAX_TASK_RECOVERIES {
+                tracing::warn!(
+                    task_id = %task.id,
+                    recoveries,
+                    max_recoveries = MAX_TASK_RECOVERIES,
+                    "dispatcher: task worker died repeatedly; abandoning instead of re-dispatching"
+                );
+                if let Some(holder) = &task.locked_by {
+                    if let Err(e) = self.coord_store.release_lock(&task.id, holder).await {
+                        tracing::warn!(task_id = %task.id, error = %e, "dispatcher: release_lock failed during recovery-budget fail");
+                    }
+                }
+                // Attributed on purpose: this string becomes the step's
+                // `result`, which the settle sweep renders into the terminal
+                // summary pushed to the launching user.
+                self.fail_task(
+                    &task,
+                    &format!(
+                        "abandoned after {recoveries} crash recovery attempt(s) \
+                         (limit {MAX_TASK_RECOVERIES}): the worker running this step \
+                         died before finishing, every time"
+                    ),
+                )
+                .await;
+                continue;
+            }
+
             if let Some(holder) = &task.locked_by {
                 if let Err(e) = self.coord_store.release_lock(&task.id, holder).await {
                     tracing::warn!(task_id = %task.id, error = %e, "dispatcher: release_lock failed during orphan reclaim");
                 }
             }
+            // A pause that landed while this step was in flight recorded its
+            // intent and nothing else (the run could not be stopped). Honour
+            // it now: park the step instead of re-dispatching it. The stamp
+            // stays on the row — `workflow(action='resume')` restores Pending
+            // and clears it in one write, which is the ONLY thing that returns
+            // this row to janitor visibility (`Paused` is invisible to
+            // `reclaim_zombies` and `abandon_orphaned_runs`, both InProgress-
+            // scoped).
+            let restore = orphan_reset_status(&task);
             // Surface a failed reset: a silent drop would loop this orphan
             // invisibly (it stays InProgress and is retried every tick with
             // zero log), contradicting the warn-on-error discipline every
@@ -121,14 +196,14 @@ impl TeamDispatcher {
                 .update_task(
                     &task.id,
                     CoordTaskUpdate {
-                        status: Some(CoordTaskStatus::Pending),
+                        status: Some(restore),
                         ..Default::default()
                     },
                 )
                 .await
             {
-                tracing::warn!(task_id = %task.id, error = %e,
-                    "dispatcher: reclaim_orphaned reset-to-pending failed");
+                tracing::warn!(task_id = %task.id, error = %e, status = %restore,
+                    "dispatcher: reclaim_orphaned status reset failed");
             }
         }
     }
@@ -245,6 +320,76 @@ impl TeamDispatcher {
             }
             Err(e) => {
                 tracing::warn!(error = %e, "dispatcher: abandon_orphaned_runs failed");
+            }
+        }
+    }
+
+    /// Stop the member runs of tasks that went terminal while still running.
+    ///
+    /// `workflow(action='cancel')` and `team_task_control(action='cancel')`
+    /// write `Cancelled` on the task row — and that is all they could do: the
+    /// run is a live agent loop owned by the execution engine, which neither
+    /// tool holds. So a cancelled step kept burning tokens (and tool calls) for
+    /// up to `task_timeout_secs`, on some deployments 24 hours, while the panel
+    /// showed it cancelled.
+    ///
+    /// Deliberately a **janitor here**, not an `ExecutionAdapter` injected into
+    /// the two cancel tools. There are already two cancel faces and the panel
+    /// RPCs make more; wiring each one to the engine means the third and fourth
+    /// silently miss it. The dispatcher is the one place that knows which runs
+    /// are actually in flight (`self.running`), so it is the one place the
+    /// answer can be complete. Mechanical throughout (R10): "the task is
+    /// terminal but its run is live" is a structural fact, not a judgement.
+    ///
+    /// Fail-soft on a store error: a run is only stopped on a **positive**
+    /// reading of a terminal status, never on an unreadable one. A benign race
+    /// exists at the tail of a healthy run (status written Completed, entry not
+    /// yet evicted from `self.running`) — by then the engine run has already
+    /// deregistered, so `cancel_session` finds nothing and returns `Ok(None)`.
+    pub(super) async fn cancel_runs_of_terminal_tasks(self: &Arc<Self>) {
+        let running: Vec<(String, String)> = self
+            .running
+            .lock()
+            .await
+            .iter()
+            .map(|(id, owner)| (id.clone(), owner.clone()))
+            .collect();
+
+        for (task_id, owner) in running {
+            // `is_terminal`, not `is_settled`: an `Unsatisfiable` row is a
+            // dependency corpse, and a task that is actually running cannot be
+            // one — widening the predicate here would only add a way to be
+            // wrong.
+            let terminal = match self.coord_store.get_task(&task_id).await {
+                Ok(Some(t)) => t.status.is_terminal(),
+                // The row is gone entirely — nothing this run can still land on.
+                Ok(None) => true,
+                Err(e) => {
+                    tracing::warn!(task_id = %task_id, error = %e, "dispatcher: cancel sweep get_task failed; leaving the run alone");
+                    continue;
+                }
+            };
+            if !terminal {
+                continue;
+            }
+            let session_key = crate::routing::session_key::SessionKey::task(
+                &owner,
+                crate::teams::run_mode::TEAM_TASK_TASK_TYPE,
+                &task_id,
+            );
+            match self
+                .context
+                .execution_adapter()
+                .cancel_session(&session_key)
+                .await
+            {
+                Ok(Some(run_id)) => {
+                    tracing::info!(task_id = %task_id, run_id = %run_id, "dispatcher: task went terminal mid-run; cancelled its member run");
+                }
+                Ok(None) => {}
+                Err(e) => {
+                    tracing::warn!(task_id = %task_id, error = %e, "dispatcher: could not cancel the member run of a terminal task");
+                }
             }
         }
     }

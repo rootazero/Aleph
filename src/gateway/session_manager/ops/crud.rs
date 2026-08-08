@@ -433,29 +433,42 @@ impl SessionManager {
     /// Delete a session entirely
     pub async fn delete_session(&self, key: &SessionKey) -> Result<bool, SessionManagerError> {
         let key_str = key.to_key_string();
-        let conn = self
-            .conn
-            .lock()
-            .map_err(|e| SessionManagerError::DatabaseError(format!("Lock error: {e}")))?;
+        // Scoped so the connection guard is released before the `.await`
+        // below — holding a std `MutexGuard` across a suspension point makes
+        // the future `!Send`.
+        let deleted = {
+            let conn = self
+                .conn
+                .lock()
+                .map_err(|e| SessionManagerError::DatabaseError(format!("Lock error: {e}")))?;
 
-        // Sync FTS5: remove entries before deleting messages
-        conn.execute(
-            "DELETE FROM messages_fts WHERE rowid IN (SELECT id FROM messages WHERE session_key = ?)",
-            params![&key_str],
-        )
-        .ok();
+            // Sync FTS5: remove entries before deleting messages
+            conn.execute(
+                "DELETE FROM messages_fts WHERE rowid IN (SELECT id FROM messages WHERE session_key = ?)",
+                params![&key_str],
+            )
+            .ok();
 
-        // Delete messages first
-        conn.execute(
-            "DELETE FROM messages WHERE session_key = ?",
-            params![&key_str],
-        )
-        .ok();
+            // Delete messages first
+            conn.execute(
+                "DELETE FROM messages WHERE session_key = ?",
+                params![&key_str],
+            )
+            .ok();
 
-        // Delete session
-        let deleted = conn
-            .execute("DELETE FROM sessions WHERE key = ?", params![&key_str])
-            .map_err(|e| SessionManagerError::DatabaseError(e.to_string()))?;
+            // Delete session
+            conn.execute("DELETE FROM sessions WHERE key = ?", params![&key_str])
+                .map_err(|e| SessionManagerError::DatabaseError(e.to_string()))?
+        };
+
+        // The transcript is gone; the working memory it produced must go with
+        // it. The scratchpad plan file sits beside the resume snapshot the
+        // delete handler already purges: both are keyed by the *stable*
+        // session key, so a session re-created under that key would otherwise
+        // inherit the deleted conversation's execution list — and the
+        // goal-loop would keep vetoing stop until the new session worked
+        // through someone else's plan.
+        crate::builtin_tools::scratchpad_registry::purge_session_scratchpad(&key_str).await;
 
         debug!("Deleted session: {}", key_str);
 

@@ -69,6 +69,41 @@ const DREAM_HISTORY_WINDOW: usize =
         StrategySelector::HISTORY_WINDOW
     };
 
+/// Ceiling on how many non-base corpora may run a maintenance sub-cycle in one
+/// night.
+///
+/// The base agent is never counted — it always dreams. This bounds the *fan-out*
+/// axis, which is the one the nightly bill now grows along: one corpus exists
+/// per user partition, per room partition, per project directory and per
+/// non-default agent, and each admitted corpus costs one maintenance pipeline
+/// (whose own per-stage caps — `skill_distill_max_per_cycle`,
+/// `feedback_distill_max_per_cycle`, `synthesis_max_insights`,
+/// `drift_max_pairs_per_run` — already bound the calls *within* a corpus).
+///
+/// Deliberately conservative: unmaintained corpora are not lost, they wait for
+/// the next window, and a corpus that skipped because nothing changed spends
+/// none of this budget. Corpora are visited in enumeration order; the skip gate
+/// (`project_cycle::corpus_needs_maintenance`) is what keeps that order from
+/// starving the tail, because a corpus already maintained is skipped for free on
+/// the next night and lets the queue drain.
+const MAX_CORPUS_CYCLES_PER_NIGHT: usize = 8;
+
+/// Every note corpus that the nightly fan-out should offer a maintenance cycle:
+/// all corpora on disk except `base`, which ran the full pipeline itself.
+///
+/// One function so "which corpora get maintained" has exactly one answer, and it
+/// is derived from [`list_note_corpora`] — the single source for "which corpora
+/// exist" — rather than from a config flag that only ever described one of the
+/// four ways a corpus comes into being.
+///
+/// [`list_note_corpora`]: crate::memory::project_scope::list_note_corpora
+fn maintenance_corpora(memory_dir: &Path, base: &str) -> Vec<String> {
+    crate::memory::project_scope::list_note_corpora(memory_dir)
+        .into_iter()
+        .filter(|id| id != base)
+        .collect()
+}
+
 /// Everything one completed dream cycle produced: the counters, the run status,
 /// and the decision that led to them.
 ///
@@ -291,15 +326,24 @@ impl DreamPipeline {
 
     /// Stages that operate on global, cross-project state and therefore run
     /// only for the base agent — never per project namespace:
-    /// - `feedback_distill`: the user-feedback floor is always-on and global
-    ///   (a project must not fork the floor — see `project_scope`).
     /// - `skill_lifecycle`: ages skills in the global usage store.
     /// - `daily_digest`: writes a single global daily insight.
     /// - `workflow_proposal`: mines the global skill co-occurrence rings and
     ///   writes to the single global `workflows/proposals/` dir.
+    ///
+    /// `feedback_distill` used to be on this list and is deliberately NOT any
+    /// more. Every read and write it performs is already keyed on
+    /// `ctx.agent_id` — the correction rows, the `feedback_distill` watermark,
+    /// the `feedback/` notes it writes and the index refresh — so "global" was
+    /// only ever true by accident: corrections were filed under whatever agent
+    /// the tool registry was built with at boot, which was always the base
+    /// agent. Once `flag_user_correction` began filing under the *turn's*
+    /// agent, keeping the stage base-only meant a correction given to any
+    /// non-default agent had no consumer at all: written, surfaced back to the
+    /// user as "distilled by the nightly dream cycle", and then never read.
+    /// The corpus fan-out is the consumer, so the stage has to be in it.
     const GLOBAL_ONLY_STAGES: &'static [&'static str] = &[
         "corpus_narrative",
-        "feedback_distill",
         "skill_lifecycle",
         "daily_digest",
         "workflow_proposal",
@@ -614,12 +658,6 @@ pub struct DreamDaemon {
     /// absolute best survives a restart instead of resetting to 0 (which would
     /// let a worse-than-historical cycle masquerade as a new best).
     best_health: crate::sync_primitives::Mutex<f64>,
-    /// Whether per-project memory namespacing is enabled (mirrors
-    /// `MemoryConfig.project_scoped`). When on, the daemon additionally fans
-    /// the note-maintenance stages over each `{base}__proj-*` namespace so
-    /// project-local notes written by `note_manage` are linted, consolidated
-    /// and synthesised too. Default-off → no fan-out → unchanged behaviour.
-    project_scoped: bool,
 }
 
 impl DreamDaemon {
@@ -650,7 +688,6 @@ impl DreamDaemon {
             note_memory_dir: None,
             orientation: None,
             best_health: crate::sync_primitives::Mutex::new(best_health),
-            project_scoped: config.project_scoped,
         })
     }
 
@@ -1153,74 +1190,94 @@ impl DreamDaemon {
                 };
                 let mut report = pipeline.run(ctx).await?;
 
-                // Per-namespace maintenance (gated). The base agent ran the
-                // full pipeline above; scoped namespaces created under
-                // `{base}__proj-*` (legacy project-directory feature) AND
-                // `{base}__u-*` (P1 personal scope) get the note-maintenance
-                // subset so their notes are linted/consolidated/synthesised
-                // too (`list_scoped_agent_ids` scans every sibling suffix
-                // family — see project_scope.rs). The global-only stages
+                // Per-corpus maintenance. The base agent ran the full pipeline
+                // above; **every other corpus on disk** gets the
+                // note-maintenance subset so its notes are
+                // linted/consolidated/synthesised too. The global-only stages
                 // (feedback floor, skill lifecycle, daily digest) are
-                // excluded — those stay cross-namespace.
+                // excluded — those stay cross-corpus.
                 //
-                // Each namespace governs *itself*: it folds its own event log
-                // into its own gate, personality and best-health checkpoint, and
+                // The enumeration is `list_note_corpora`, the single source for
+                // "which corpora exist", minus the base agent. It used to be
+                // `list_scoped_agent_ids(.., DEFAULT_AGENT_ID)` behind an
+                // `if self.project_scoped` gate, and both halves were wrong in
+                // the same direction: `__u-*` / `__p-*` partitions are produced
+                // by *session scope*, which never consults `project_scoped`, and
+                // a non-default agent is not a sibling of `main` at all. With
+                // the flag at its default (false) that meant every personal
+                // partition, every room partition and every non-default agent's
+                // notes went unmaintained from the day they were created — no
+                // error, no empty result, just a branch that was never taken.
+                //
+                // Each corpus governs *itself*: it folds its own event log into
+                // its own gate, personality and best-health checkpoint, and
                 // appends its own event — it does not inherit this cycle's
                 // strategy and its churn never joins the base agent's history.
                 // See `project_cycle` for why joining them would be worse than
-                // the drop it replaces. Per-namespace failures are logged, never
+                // the drop it replaces. Per-corpus failures are logged, never
                 // aborting the base cycle.
-                if self.project_scoped {
-                    let scoped = crate::memory::project_scope::list_scoped_agent_ids(
-                        &memory_dir,
-                        DEFAULT_AGENT_ID,
-                    );
-                    let deps = project_cycle::ProjectCycleDeps {
-                        memory_dir: &memory_dir,
-                        database: &self.database,
-                        provider: &provider,
-                        embedder: &embedder,
-                        config: &self.config,
-                        decay_policy: &self.decay_policy,
-                        orientation: &self.orientation,
-                        activity_checker: &activity_checker,
-                    };
-                    for ns in &scoped {
-                        match project_cycle::run_namespace_cycle(&deps, ns).await {
-                            Ok(outcome) => {
-                                let r = &outcome.report;
-                                let interrupted = r.status == DreamReportStatus::Interrupted;
-                                info!(
-                                    agent = %ns,
-                                    stages = ?r.stages_executed,
-                                    interrupted,
-                                    "project namespace dream complete"
-                                );
-                                // The audit row the operator reads. Its absence
-                                // is why a project corpus's nightly history was
-                                // legible to the model — which reads that
-                                // namespace's own event log — and to no one
-                                // else. Same writer as the base cycle, so the
-                                // two can't drift; the sub-cycle's own clock,
-                                // because it is its own run.
-                                if !r.is_vacuous_interruption() {
-                                    self.persist_run_row(&outcome, ns, r.started_at, r.duration_ms);
-                                }
-                                // The activity checker fired: the user is back.
-                                // Walking the remaining namespaces would only
-                                // produce a burst of cycles that interrupt at
-                                // their first stage — stop, because stopping is
-                                // what yielding means.
-                                if interrupted {
-                                    break;
-                                }
-                            }
-                            Err(e) => warn!(
+                let corpora = maintenance_corpora(&memory_dir, DEFAULT_AGENT_ID);
+                let deps = project_cycle::ProjectCycleDeps {
+                    memory_dir: &memory_dir,
+                    database: &self.database,
+                    provider: &provider,
+                    embedder: &embedder,
+                    config: &self.config,
+                    decay_policy: &self.decay_policy,
+                    orientation: &self.orientation,
+                    activity_checker: &activity_checker,
+                };
+                // Nightly budget. The fan-out's cost scales with the number of
+                // corpora, which scales with users, rooms and agents — an axis
+                // nothing else in this file bounds. Corpora that skip (unchanged
+                // since their last cycle) cost no LLM call and so do not spend
+                // budget; only cycles that actually ran do.
+                let mut spent = 0usize;
+                for ns in &corpora {
+                    if spent >= MAX_CORPUS_CYCLES_PER_NIGHT {
+                        warn!(
+                            budget = MAX_CORPUS_CYCLES_PER_NIGHT,
+                            remaining = corpora.len() - spent,
+                            "nightly per-corpus dream budget exhausted; \
+                             remaining corpora wait for the next window"
+                        );
+                        break;
+                    }
+                    match project_cycle::run_namespace_cycle(&deps, ns).await {
+                        Ok(project_cycle::NamespaceCycle::Idle) => {}
+                        Ok(project_cycle::NamespaceCycle::Ran(outcome)) => {
+                            spent += 1;
+                            let r = &outcome.report;
+                            let interrupted = r.status == DreamReportStatus::Interrupted;
+                            info!(
                                 agent = %ns,
-                                error = %e,
-                                "project namespace dream failed"
-                            ),
+                                stages = ?r.stages_executed,
+                                interrupted,
+                                "corpus dream complete"
+                            );
+                            // The audit row the operator reads. Its absence is
+                            // why a non-base corpus's nightly history was
+                            // legible to the model — which reads that corpus's
+                            // own event log — and to no one else. Same writer as
+                            // the base cycle, so the two can't drift; the
+                            // sub-cycle's own clock, because it is its own run.
+                            if !r.is_vacuous_interruption() {
+                                self.persist_run_row(&outcome, ns, r.started_at, r.duration_ms);
+                            }
+                            // The activity checker fired: the user is back.
+                            // Walking the remaining corpora would only produce a
+                            // burst of cycles that interrupt at their first
+                            // stage — stop, because stopping is what yielding
+                            // means.
+                            if interrupted {
+                                break;
+                            }
                         }
+                        Err(e) => warn!(
+                            agent = %ns,
+                            error = %e,
+                            "corpus dream failed"
+                        ),
                     }
                 }
 
@@ -1568,7 +1625,6 @@ async fn compute_raw_metrics(
         duplication_rate,
         contradiction_rate,
         staleness_rate,
-        ..Default::default()
     }
 }
 
@@ -1841,14 +1897,16 @@ mod tests {
         let project = DreamPipeline::from_strategy(DreamStrategy::Synthesize, &cfg, &decay)
             .retain_project_stages();
         let names: Vec<&str> = project.stages.iter().map(|s| s.name()).collect();
-        // The three global-only stages must be gone...
+        // The global-only stages must be gone...
         for global in DreamPipeline::GLOBAL_ONLY_STAGES {
             assert!(
                 !names.contains(global),
                 "{global} must not run per project namespace"
             );
         }
-        // ...and the note-maintenance subset must remain, in order.
+        // ...and the per-corpus subset must remain, in order. `feedback_distill`
+        // belongs here: corrections are filed per agent by
+        // `flag_user_correction`, and this fan-out is their only consumer.
         assert_eq!(
             names,
             vec![
@@ -1857,6 +1915,7 @@ mod tests {
                 "note_consolidate",
                 "note_synthesis",
                 "skill_distill",
+                "feedback_distill",
             ]
         );
     }
@@ -2370,6 +2429,48 @@ mod tests {
         fn event_log_path(&self, agent_id: &str) -> PathBuf {
             self.dir.join(agent_id).join("dream_events.jsonl")
         }
+
+        /// Give a corpus one note so the nightly budget gate admits it.
+        async fn seed_note(&self, agent_id: &str) {
+            seed_corpus_note(&self.dir, &self.store, agent_id).await;
+        }
+    }
+
+    /// Write one note into `agent_id`'s corpus.
+    ///
+    /// Every sub-cycle test needs this now: a corpus with no notes and no
+    /// pending reviews has nothing for the maintenance subset to do, so the
+    /// budget gate skips it before a single stage starts. Tests about what a
+    /// cycle *records* therefore have to start from a corpus that has something
+    /// to maintain — which is also the only shape that exists in production.
+    async fn seed_corpus_note(dir: &Path, store: &Arc<SqliteMemoryBackend>, agent_id: &str) {
+        // rust-doctor-disable-next-line excessive-clone
+        NoteIndexer::new(dir.to_path_buf(), store.clone())
+            .write_note(
+                agent_id,
+                "reference",
+                &crate::memory::notes::KnowledgeNote {
+                    title: "seed".into(),
+                    category: "reference".into(),
+                    body: Some("seed body".into()),
+                    content_hash: "seed-hash".into(),
+                    ..Default::default()
+                },
+            )
+            .await
+            .expect("seed note written");
+    }
+
+    /// Unwrap a sub-cycle that must have run. `Idle` here means the test forgot
+    /// to seed the corpus, which is worth saying out loud rather than silently
+    /// asserting against a default report.
+    fn ran(cycle: project_cycle::NamespaceCycle) -> DreamCycleOutcome {
+        match cycle {
+            project_cycle::NamespaceCycle::Ran(outcome) => *outcome,
+            project_cycle::NamespaceCycle::Idle => {
+                panic!("the corpus was seeded, so the sub-cycle must have run")
+            }
+        }
     }
 
     /// A project namespace's cycle lands in **its own** event log, and never in
@@ -2386,6 +2487,7 @@ mod tests {
     async fn project_namespace_cycle_writes_only_its_own_event_log() {
         let fx = ProjectFixture::new("dream_proj_log", false);
         let ns = format!("{DEFAULT_AGENT_ID}__proj-abc123");
+        fx.seed_note(&ns).await;
 
         project_cycle::run_namespace_cycle(&fx.deps(), &ns)
             .await
@@ -2419,6 +2521,7 @@ mod tests {
     async fn project_namespace_gate_folds_its_own_history() {
         let fx = ProjectFixture::new("dream_proj_gate", false);
         let ns = format!("{DEFAULT_AGENT_ID}__proj-degraded");
+        fx.seed_note(&ns).await;
         let log = EventLog::new(fx.dir.join(&ns));
 
         // A prior cycle that degraded this namespace's memory health.
@@ -2495,10 +2598,11 @@ mod tests {
     async fn an_immediately_interrupted_project_cycle_spends_no_window_slot() {
         let fx = ProjectFixture::new("dream_proj_intr", true);
         let ns = format!("{DEFAULT_AGENT_ID}__proj-busy");
+        fx.seed_note(&ns).await;
 
-        let outcome = project_cycle::run_namespace_cycle(&fx.deps(), &ns)
+        let outcome = ran(project_cycle::run_namespace_cycle(&fx.deps(), &ns)
             .await
-            .expect("an interrupted sub-cycle is not an error");
+            .expect("an interrupted sub-cycle is not an error"));
 
         assert_eq!(outcome.report.status, DreamReportStatus::Interrupted);
         assert!(outcome.report.stages_executed.is_empty(), "nothing ran");
@@ -2527,10 +2631,11 @@ mod tests {
     async fn a_project_sub_cycle_returns_its_decision() {
         let fx = ProjectFixture::new("dream_proj_decision", false);
         let ns = format!("{DEFAULT_AGENT_ID}__proj-decide");
+        fx.seed_note(&ns).await;
 
-        let outcome = project_cycle::run_namespace_cycle(&fx.deps(), &ns)
+        let outcome = ran(project_cycle::run_namespace_cycle(&fx.deps(), &ns)
             .await
-            .expect("project sub-cycle succeeds");
+            .expect("project sub-cycle succeeds"));
 
         assert_eq!(outcome.status, DreamRunStatus::Success);
         assert_eq!(
@@ -2560,14 +2665,15 @@ mod tests {
     async fn a_project_sub_cycle_lands_in_the_audit_table_under_its_namespace() {
         let dir = std::env::temp_dir().join(format!("aleph_dream_row_{}", uuid::Uuid::new_v4()));
         let ns = format!("{DEFAULT_AGENT_ID}__proj-audited");
-        // `list_scoped_agent_ids` discovers namespaces by directory listing.
+        // `list_note_corpora` discovers corpora by directory listing.
         std::fs::create_dir_all(dir.join(&ns)).unwrap();
         let store = Arc::new(SqliteMemoryBackend::new(&dir).unwrap());
+        seed_corpus_note(&dir, &store, &ns).await;
 
-        let cfg = MemoryConfig {
-            project_scoped: true,
-            ..MemoryConfig::default()
-        };
+        // `project_scoped` is left at its default (false) on purpose: the
+        // fan-out must not be gated on it. Personal and room partitions are
+        // produced by session scope, which never reads that flag.
+        let cfg = MemoryConfig::default();
         let daemon = DreamDaemon::from_config(store.clone(), &cfg)
             .unwrap()
             .with_provider(Arc::new(MockProvider::new("")))
@@ -2601,5 +2707,180 @@ mod tests {
             .recent_dream_reports(Some(DEFAULT_AGENT_ID), 10)
             .expect("audit table is queryable")
             .is_empty());
+    }
+
+    // -----------------------------------------------------------------------
+    // The nightly fan-out's enumeration and budget
+    // -----------------------------------------------------------------------
+
+    /// The fan-out covers **every** corpus family, under the default config.
+    ///
+    /// It used to enumerate `list_scoped_agent_ids(.., "main")` behind an
+    /// `if self.project_scoped` gate. Both halves were wrong in the same
+    /// direction and the combination was total: `project_scoped` defaults to
+    /// false, while `__u-*` (personal) and `__p-*` (room) partitions are
+    /// produced by session scope, which never consults that flag, and a
+    /// non-default agent is not a sibling of `main` at all. So on a default
+    /// install every one of these corpora went unmaintained from the day it was
+    /// created — silently, because an untaken branch reports nothing.
+    #[tokio::test]
+    async fn every_corpus_family_is_maintained_under_the_default_config() {
+        let dir = std::env::temp_dir().join(format!("aleph_dream_fam_{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let store = Arc::new(SqliteMemoryBackend::new(&dir).unwrap());
+
+        let personal = format!("{DEFAULT_AGENT_ID}__u-alice");
+        let room = format!("{DEFAULT_AGENT_ID}__p-room7");
+        let other_agent = "researcher".to_string();
+        for ns in [&personal, &room, &other_agent] {
+            seed_corpus_note(&dir, &store, ns).await;
+        }
+
+        let daemon = DreamDaemon::from_config(store.clone(), &MemoryConfig::default())
+            .unwrap()
+            .with_provider(Arc::new(MockProvider::new("")))
+            .with_embedder(Arc::new(StubEmbedder))
+            .with_note_memory_dir(dir.clone());
+
+        daemon
+            .run_dream(now_timestamp(), "2026-08-08".to_string(), true)
+            .await
+            .expect("run_dream succeeds");
+
+        for ns in [&personal, &room, &other_agent] {
+            let rows = store
+                .recent_dream_reports(Some(ns), 10)
+                .expect("audit table is queryable");
+            assert_eq!(rows.len(), 1, "{ns} must have been maintained");
+        }
+    }
+
+    /// `maintenance_corpora` is the enumeration, and it excludes exactly one
+    /// thing: the base agent, which ran the full pipeline itself.
+    #[test]
+    fn maintenance_corpora_lists_every_corpus_except_the_base() {
+        let dir = std::env::temp_dir().join(format!("aleph_dream_enum_{}", uuid::Uuid::new_v4()));
+        for name in [
+            DEFAULT_AGENT_ID,
+            "main__u-alice",
+            "main__p-room7",
+            "main__proj-abc",
+            "researcher",
+            ".obsidian",
+        ] {
+            std::fs::create_dir_all(dir.join(name)).unwrap();
+        }
+
+        assert_eq!(
+            maintenance_corpora(&dir, DEFAULT_AGENT_ID),
+            vec![
+                "main__p-room7".to_string(),
+                "main__proj-abc".to_string(),
+                "main__u-alice".to_string(),
+                "researcher".to_string(),
+            ],
+            "dot-directories are not corpora and the base agent is already done"
+        );
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// A corpus nothing has touched since its own last cycle is skipped before
+    /// a single stage — and therefore before a single token — is spent.
+    #[test]
+    fn an_unchanged_corpus_is_skipped_before_any_llm_call() {
+        let note = |updated_at: i64| NoteIndexEntry {
+            path: "reference/x".into(),
+            filename: "x".into(),
+            agent_id: "main__u-alice".into(),
+            category: "reference".into(),
+            tags: vec![],
+            link_count: 0,
+            created_at: 100,
+            updated_at,
+            content_hash: "h".into(),
+        };
+
+        // Nothing on disk at all.
+        assert!(!project_cycle::corpus_needs_maintenance(
+            &[],
+            1_000,
+            0,
+            false
+        ));
+        // Notes, none touched since the last cycle started.
+        assert!(!project_cycle::corpus_needs_maintenance(
+            &[note(500), note(999)],
+            1_000,
+            0,
+            false
+        ));
+        // One note written during the last cycle: a capped stage may still have
+        // backlog behind it, so the corpus gets one more night.
+        assert!(project_cycle::corpus_needs_maintenance(
+            &[note(500), note(1_000)],
+            1_000,
+            0,
+            false
+        ));
+        // Never dreamed.
+        assert!(project_cycle::corpus_needs_maintenance(
+            &[note(500)],
+            0,
+            0,
+            false
+        ));
+        // A pending review moves no `updated_at`, and `note_review` is the
+        // queue's only consumer — a content-only gate would strand it forever.
+        assert!(project_cycle::corpus_needs_maintenance(
+            &[],
+            1_000,
+            1,
+            false
+        ));
+        // An undistilled correction moves no `updated_at` and enqueues no
+        // review either. `feedback_distill` is its only consumer and it runs
+        // inside this cycle, so a gate blind to it strands every correction
+        // filed against a non-base agent.
+        assert!(project_cycle::corpus_needs_maintenance(&[], 1_000, 0, true));
+    }
+
+    /// The fan-out's cost scales with the number of corpora, so it is bounded.
+    #[tokio::test]
+    async fn the_nightly_fan_out_stops_at_its_budget() {
+        let dir = std::env::temp_dir().join(format!("aleph_dream_budget_{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let store = Arc::new(SqliteMemoryBackend::new(&dir).unwrap());
+
+        let corpora: Vec<String> = (0..MAX_CORPUS_CYCLES_PER_NIGHT + 3)
+            .map(|i| format!("{DEFAULT_AGENT_ID}__u-user{i:02}"))
+            .collect();
+        for ns in &corpora {
+            seed_corpus_note(&dir, &store, ns).await;
+        }
+
+        let daemon = DreamDaemon::from_config(store.clone(), &MemoryConfig::default())
+            .unwrap()
+            .with_provider(Arc::new(MockProvider::new("")))
+            .with_embedder(Arc::new(StubEmbedder))
+            .with_note_memory_dir(dir.clone());
+
+        daemon
+            .run_dream(now_timestamp(), "2026-08-08".to_string(), true)
+            .await
+            .expect("run_dream succeeds");
+
+        let maintained = corpora
+            .iter()
+            .filter(|ns| {
+                !store
+                    .recent_dream_reports(Some(ns), 10)
+                    .expect("audit table is queryable")
+                    .is_empty()
+            })
+            .count();
+        assert_eq!(
+            maintained, MAX_CORPUS_CYCLES_PER_NIGHT,
+            "the night's budget is a ceiling, not a suggestion"
+        );
     }
 }
