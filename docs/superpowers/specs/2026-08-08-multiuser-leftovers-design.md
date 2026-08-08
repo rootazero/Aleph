@@ -55,8 +55,16 @@ member 身份可以 `workspace.update` 改掉 operator 刚建的 workspace 的�
 3. 新回归测试，直接以 QA 抓到的动作命名：member 被拒 `workspace.update` / `workspace.archive`。
 4. `src/gateway/method_visibility.rs` 模块 doc：现文写着"closing that needs an owner column
    plus a migration — a schema and product decision"，**本轮之后这句话是假的**，必须改写。
-   `PartitionChecked` / `ListFiltered` 的登记**保留**（operator 自己也能造合成 id；且
-   pin 测试要求登记），但 doc 要说清现在的闸在哪一层。
+   ⚠️ **实施时修正了这一条**：原计划写"登记保留"，但该文件自带 cross-check
+   `every_scoped_method_stays_open_to_members_in_method_admin` 断言"这张表声明的每个方法
+   都不得是 admin-gated"——保留登记会让它红。仓里已有同一裁决的先例
+   （`trace.list` / `trace.get` / `agents.teams` 因 admin-gate 刻意不登记）。故五个
+   `workspace.*` **移出 `SCOPED_METHODS`**，改为照先例加"刻意缺席"pin，
+   **两半都断言**（`treatment_of == None` 且 `method_requires_admin == true`），
+   于是重新对 member 开放会按名字红掉并逼着把登记加回来。
+   handler 里的 `partition_visible` **保留**——第二个 `UserRole::Admin` 主体的
+   `CALLER_USER` 是他自己的 id 而非 `OWNER_USER_ID`，谓词对他仍生效；该 nuance
+   由 handler doc 承载，因为那张表已刻意不再承载它。
 5. `src/gateway/handlers/workspace.rs` 三处 handler doc：把"a member renamed and then
    archived a workspace the operator had just created"改成记录残留已在 admin 闸关闭，
    同时保留 `partition_visible` **单独**能买到什么的诚实边界。

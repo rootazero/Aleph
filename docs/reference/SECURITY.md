@@ -1364,9 +1364,35 @@ after (verified by `single_user_fixture_is_byte_identical_after_upgrade`,
   exercised that residual and it is a WRITE, not only a read**: a member
   renamed and then archived a workspace the operator had just created, both
   returning `ok`. Earlier wording here and in the handler named only
-  "read another's `env_vars`", understating it by a verb class. Closing it
-  needs an owner column and a migration — a schema change and a product
-  decision, tracked as an open gap rather than fixed in a handler.
+  "read another's `env_vars`", understating it by a verb class.
+  **Closed 2026-08-08 — at the admin gate, not with an owner column.** The
+  wording immediately above used to say closing it needed a schema change and
+  a product decision; re-scouting the family found it needed neither. The
+  `workspace.` family has exactly one client and that client is already
+  operator (`aleph workspace list|create|archive`, over loopback); the Panel
+  has none — `interfaces/webchat/src/api/workspace.rs` records that its
+  `workspace.list` call was removed long ago — and `workspace.update` /
+  `workspace.get` have no client anywhere. Nor was the read half worth what it
+  looked like: `env_vars`, `system_prompt_override` and `allowed_tools` have
+  no writer on `agent_envs` at all, so cross-user "reads" returned empty
+  columns; the write half was the whole of the real residual. So the family
+  joined `method_admin::ADMIN_PREFIXES` **whole, with no carve-out** — a
+  `MEMBER_CARVE_OUTS` entry for the reads would have been a zero-consumer
+  opening. An owner column would have built a permission model for per-user
+  workspaces, which no surface currently lets a member use; it can layer on
+  top of this gate if that product ever lands.
+  Two consequences worth stating, because each is the kind of thing that
+  drifts: **(1)** the five methods **left `method_visibility::SCOPED_METHODS`**
+  in the same change — that table's contract is per-user filtering on surfaces
+  a *member* reaches, so keeping a claim there would have gone stale, and the
+  same ruling already applies to `trace.list`/`trace.get`/`agents.teams`. The
+  absence is pinned in both directions (`treatment_of == None` **and**
+  `method_requires_admin == true`), so reopening the family to members fails a
+  test by name and forces the entries back. **(2)** the handlers **keep**
+  calling `partition_visible` and it is not dead code: a second
+  `UserRole::Admin` principal connects with `CALLER_USER = Some(their own
+  id)`, not `OWNER_USER_ID`, so `main__u-alice` is still refused to an
+  operator who is not alice.
 - **Session `owner_user_id` / `scope_id` were never stamped on any run path
   until 2026-08-08, and the P1/P2 predicates that read them were therefore
   inert.** `SessionMetadata::stamp_attribution` reads `scope::current_scope()`
