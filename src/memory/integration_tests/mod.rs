@@ -12,7 +12,7 @@
 #[allow(clippy::module_inception)]
 mod integration_tests {
     use crate::memory::{
-        context_comptroller::{ComptrollerConfig, RetentionMode},
+        context_comptroller::ComptrollerConfig,
         ripple::RippleConfig,
     };
 
@@ -23,7 +23,6 @@ mod integration_tests {
             similarity_threshold: 0.95,
             token_budget: 1000,
             fold_threshold: 0.2,
-            retention_mode: RetentionMode::Hybrid,
         };
 
         assert_eq!(config.similarity_threshold, 0.95);
@@ -44,19 +43,6 @@ mod integration_tests {
         assert_eq!(config.max_facts_per_hop, 5);
         assert_eq!(config.similarity_threshold, 0.7);
         println!("RippleConfig created: {:?}", config);
-    }
-
-    #[tokio::test]
-    async fn test_retention_modes() {
-        // Test that all retention modes are available
-        let modes = vec![
-            RetentionMode::PreferTranscript,
-            RetentionMode::PreferFact,
-            RetentionMode::Hybrid,
-        ];
-
-        assert_eq!(modes.len(), 3, "Should have 3 retention modes");
-        println!("Available retention modes: {:?}", modes);
     }
 
     #[tokio::test]
@@ -196,8 +182,8 @@ mod event_sourcing {
         assert!(final_fact.is_valid);
         assert_eq!(final_fact.access_count, 1);
 
-        // 7. Time travel -- verify full timeline via traveler
-        let timeline = traveler.fact_timeline(&fact_id).await.unwrap();
+        // 7. The full event timeline is reachable via the event store
+        let timeline = db.get_memory_events_for_fact(&fact_id).await.unwrap();
         assert_eq!(timeline.len(), 5);
 
         // 8. Explain fact

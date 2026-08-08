@@ -7,7 +7,6 @@ use async_trait::async_trait;
 use rusqlite::params;
 
 use crate::error::AlephError;
-use crate::memory::context::CompressionSession;
 use crate::memory::dreaming::{DailyInsight, DreamStatus};
 use crate::memory::store::{CompressionStore, DreamStore};
 
@@ -159,65 +158,6 @@ impl CompressionStore for SqliteMemoryBackend {
             params![timestamp.to_string()],
         )
         .map_err(|e| AlephError::config(format!("Failed to set compression timestamp: {e}")))?;
-        Ok(())
-    }
-
-    async fn get_last_compression_timestamp(&self) -> Result<Option<i64>, AlephError> {
-        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
-        let mut stmt = conn
-            .prepare("SELECT value FROM compression_metadata WHERE key = 'last_timestamp'")
-            .map_err(|e| {
-                AlephError::config(format!(
-                    "Failed to prepare compression timestamp query: {e}"
-                ))
-            })?;
-
-        let result = stmt.query_row(params![], |row| {
-            let value: String = row.get(0)?;
-            Ok(value)
-        });
-
-        match result {
-            Ok(value) => {
-                let ts = value.parse::<i64>().map_err(|e| {
-                    AlephError::config(format!("Failed to parse compression timestamp: {e}"))
-                })?;
-                Ok(Some(ts))
-            }
-            Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
-            Err(e) => Err(AlephError::config(format!(
-                "Failed to get compression timestamp: {e}"
-            ))),
-        }
-    }
-
-    async fn record_compression_session(
-        &self,
-        session: &CompressionSession,
-    ) -> Result<(), AlephError> {
-        let json = serde_json::to_string(session).map_err(|e| {
-            AlephError::config(format!("Failed to serialize compression session: {e}"))
-        })?;
-
-        let key = format!("session_{}", session.id);
-        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
-        conn.execute(
-            "INSERT INTO compression_metadata (key, value)
-             VALUES (?1, ?2)
-             ON CONFLICT(key) DO UPDATE SET value = excluded.value",
-            params![key, json],
-        )
-        .map_err(|e| AlephError::config(format!("Failed to record compression session: {e}")))?;
-
-        tracing::info!(
-            session_id = %session.id,
-            memories = session.source_memory_ids.len(),
-            facts = session.extracted_fact_ids.len(),
-            provider = %session.provider_used,
-            duration_ms = session.duration_ms,
-            "Compression session persisted"
-        );
-
         Ok(())
     }
 }

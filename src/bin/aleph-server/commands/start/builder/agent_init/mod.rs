@@ -680,6 +680,7 @@ pub(in crate::commands::start) async fn register_agent_handlers(
                 app_config.memory.assembler_config(),
                 app_config.memory.injection_mode,
                 app_config.memory.curated.into(),
+                app_config.memory.orientation.max_tokens,
             );
             let reflector_assembler = reflector_mcp.assembler();
 
@@ -1037,6 +1038,9 @@ pub(in crate::commands::start) async fn register_agent_handlers(
                 // curated envelope, so this is the call that makes the section
                 // mean anything at all.
                 app_config.memory.curated.into(),
+                // `[memory.orientation] max_tokens` — threaded like curated so
+                // the knob is real at the provider that renders orientation.
+                app_config.memory.orientation.max_tokens,
                 Some(memory_ext_registry.clone()),
                 orientation.clone(),
                 profile_synth.clone(),

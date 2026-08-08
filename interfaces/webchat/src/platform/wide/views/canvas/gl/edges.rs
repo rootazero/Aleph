@@ -256,6 +256,21 @@ impl EdgeRenderer {
     }
 }
 
+/// # Safety
+///
+/// Uses `js_sys::Float32Array::view` on `data`. The view is consumed by the
+/// WebGL buffer upload before this function returns, so `data` must remain
+/// valid and un-moved for the duration of the call.
+fn bind_upload(gl: &Gl, buf: &WebGlBuffer, data: &[f32]) {
+    gl.bind_buffer(Gl::ARRAY_BUFFER, Some(buf));
+    unsafe {
+        // SAFETY: `view` is consumed immediately by `buffer_data_with_array_buffer_view`
+        // before any allocation that could move `data` occurs.
+        let view = js_sys::Float32Array::view(data);
+        gl.buffer_data_with_array_buffer_view(Gl::ARRAY_BUFFER, &view, Gl::DYNAMIC_DRAW);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -299,20 +314,5 @@ mod tests {
         // Surprising (7) is intentionally >1.0 so the bloom bright-pass picks
         // it up even at full brightness multiplier.
         assert!(edge_kind_color(7).unwrap()[0] > 1.0);
-    }
-}
-
-/// # Safety
-///
-/// Uses `js_sys::Float32Array::view` on `data`. The view is consumed by the
-/// WebGL buffer upload before this function returns, so `data` must remain
-/// valid and un-moved for the duration of the call.
-fn bind_upload(gl: &Gl, buf: &WebGlBuffer, data: &[f32]) {
-    gl.bind_buffer(Gl::ARRAY_BUFFER, Some(buf));
-    unsafe {
-        // SAFETY: `view` is consumed immediately by `buffer_data_with_array_buffer_view`
-        // before any allocation that could move `data` occurs.
-        let view = js_sys::Float32Array::view(data);
-        gl.buffer_data_with_array_buffer_view(Gl::ARRAY_BUFFER, &view, Gl::DYNAMIC_DRAW);
     }
 }

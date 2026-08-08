@@ -42,7 +42,6 @@ mod manager_ops;
 
 use crate::config::ProfileConfig;
 use crate::memory::namespace::NamespaceScope;
-use crate::memory::store::types::SearchFilter;
 use crate::routing::SessionKey;
 
 /// Default agent identifier
@@ -124,16 +123,6 @@ impl AgentEnvContext {
             agent_id: DEFAULT_AGENT.to_string(),
             namespace: NamespaceScope::Owner,
         }
-    }
-
-    /// Build a `SearchFilter` pre-populated with this agent context
-    /// and namespace, restricted to valid facts only.
-    #[must_use]
-    pub fn to_search_filter(&self) -> SearchFilter {
-        SearchFilter::new()
-            .with_namespace(self.namespace.clone())
-            .with_agent_filter(AgentEnvFilter::Single(self.agent_id.clone()))
-            .with_valid_only()
     }
 
     /// Return a reference to the agent identifier.
@@ -1014,15 +1003,5 @@ mod tests {
     fn test_agent_env_context_custom() {
         let ctx = AgentEnvContext::new("crypto", NamespaceScope::Owner);
         assert_eq!(ctx.agent_id(), "crypto");
-    }
-
-    #[test]
-    fn test_agent_env_context_to_search_filter() {
-        let ctx = AgentEnvContext::new("crypto", NamespaceScope::Owner);
-        let filter = ctx.to_search_filter();
-        let sql = filter.to_lance_filter().unwrap();
-        assert!(sql.contains("agent = 'crypto'"));
-        assert!(sql.contains("is_valid = true"));
-        assert!(sql.contains("namespace = 'owner'"));
     }
 }

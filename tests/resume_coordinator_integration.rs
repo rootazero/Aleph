@@ -289,13 +289,246 @@ async fn interrupted_run_is_repaired_and_retriggered() {
         .collect();
     assert_eq!(synthetic_errors.len(), 1);
     assert_eq!(synthetic_errors[0].0, "dangling-1");
-    assert_eq!(synthetic_errors[0].1, "interrupted by server restart");
+    // The repair reports an unknown outcome, not a failure: `sleep 999` may
+    // have run, and a text that reads as "it failed" invites the model to run
+    // it again. It must also name the tool so the model knows what to check.
+    let repair = &synthetic_errors[0].1;
+    assert!(
+        repair.contains("OUTCOME UNKNOWN"),
+        "expected an unknown-outcome repair, got: {repair}"
+    );
+    assert!(
+        repair.contains("bash_exec"),
+        "repair must name the dispatched tool, got: {repair}"
+    );
 
     // `execute` was called exactly once, carrying the resume signal.
     let calls = calls.lock().await;
     assert_eq!(calls.len(), 1);
     assert_eq!(calls[0].0, sid.to_key_string());
     assert_eq!(calls[0].1.get("resume").map(String::as_str), Some("true"));
+}
+
+/// The on-demand face does the same work as the boot scan, on one session.
+#[tokio::test]
+async fn on_demand_resume_repairs_and_retriggers_the_named_session() {
+    let store = store();
+    let target = SessionKey::main("main");
+    let bystander = SessionKey::main("other");
+    seed_interrupted_run(&store, &target).await;
+    seed_interrupted_run(&store, &bystander).await;
+
+    let adapter = Arc::new(RecordingAdapter::new());
+    let calls = adapter.calls.clone();
+    let registry = registry_with_agent(target.agent_id()).await;
+
+    let coordinator = ResumeCoordinator::new(
+        store.clone(),
+        ResumeConfig::default(),
+        adapter as Arc<dyn ExecutionAdapter>,
+        registry,
+        sessions(),
+        None,
+    );
+    let report = coordinator
+        .resume_session(&target)
+        .await
+        .expect("resume ok");
+
+    assert_eq!(report.scanned, 1, "only the named session is scanned");
+    assert_eq!(report.resumed, 1);
+
+    // Named-session scope: the equally-interrupted bystander is untouched. A
+    // per-session verb that quietly resumed the whole database would be a very
+    // expensive surprise on a machine with hundreds of sessions.
+    let calls = calls.lock().await;
+    assert_eq!(calls.len(), 1);
+    assert_eq!(calls[0].0, target.to_key_string());
+    assert_eq!(calls[0].1.get("resume").map(String::as_str), Some("true"));
+
+    // Same derivation as boot: the boundary repair ran here too.
+    let all = store.load_all_events(&target).await.unwrap();
+    assert!(
+        all.iter().any(|r| matches!(
+            &r.event,
+            SessionEvent::ToolError { error, .. } if error.contains("OUTCOME UNKNOWN")
+        )),
+        "on-demand resume must repair the crash boundary, not just re-trigger"
+    );
+    let bystander_events = store.load_all_events(&bystander).await.unwrap();
+    assert!(
+        !bystander_events
+            .iter()
+            .any(|r| matches!(&r.event, SessionEvent::ToolError { .. })),
+        "the bystander session must not be repaired by a resume aimed elsewhere"
+    );
+}
+
+/// Two resumes of one session must never both repair its crash boundary.
+///
+/// `repair_boundary` is a read-then-append, so two winners append the same
+/// synthetic `ToolError` twice and the session ends up with one `call_id`
+/// answered by two `tool_result`s — which the provider rejects on every
+/// subsequent turn. The boot scan never exposed this (sequential loop); the
+/// on-demand face does, including against the boot scan itself.
+///
+/// The assertion is the invariant, not the lock: **exactly one** repair event,
+/// whichever way the two futures interleave. If they serialize instead of
+/// racing, the second one's `compute_boundary_repairs` sees the first repair
+/// and produces nothing — so this holds either way, with no sleep and no
+/// ordering assumption.
+#[tokio::test]
+async fn concurrent_resumes_of_one_session_repair_the_boundary_once() {
+    let store = store();
+    let sid = SessionKey::main("main");
+    seed_interrupted_run(&store, &sid).await;
+
+    let adapter = Arc::new(RecordingAdapter::new());
+    let registry = registry_with_agent(sid.agent_id()).await;
+    let coordinator = Arc::new(ResumeCoordinator::new(
+        store.clone(),
+        ResumeConfig::default(),
+        adapter as Arc<dyn ExecutionAdapter>,
+        registry,
+        sessions(),
+        None,
+    ));
+
+    let (a, b) = tokio::join!(
+        {
+            let c = coordinator.clone();
+            let sid = sid.clone();
+            async move { c.resume_session(&sid).await.expect("resume ok") }
+        },
+        {
+            let c = coordinator.clone();
+            let sid = sid.clone();
+            async move { c.resume_session(&sid).await.expect("resume ok") }
+        }
+    );
+
+    let repairs = store
+        .load_all_events(&sid)
+        .await
+        .unwrap()
+        .iter()
+        .filter(|r| matches!(&r.event, SessionEvent::ToolError { .. }))
+        .count();
+    assert_eq!(
+        repairs, 1,
+        "the crash boundary must be repaired exactly once, got {repairs} \
+         (reports: {a:?} / {b:?})"
+    );
+}
+
+/// A clean session answers "nothing to resume" rather than erroring or
+/// re-running its last completed turn.
+#[tokio::test]
+async fn on_demand_resume_of_a_finished_session_is_a_no_op() {
+    let store = store();
+    let sid = SessionKey::main("main");
+    let at = now_ms();
+    for (i, ev) in [
+        SessionEvent::RunStarted {
+            run_id: "run-1".into(),
+            at,
+            project_root: None,
+        },
+        SessionEvent::RunFinished {
+            run_id: "run-1".into(),
+            outcome: RunOutcome::Completed,
+            at: at + 1,
+        },
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        store
+            .append(&sid, (i as u64) + 1, &ev, now_ms())
+            .await
+            .unwrap();
+    }
+
+    let adapter = Arc::new(RecordingAdapter::new());
+    let calls = adapter.calls.clone();
+    let registry = registry_with_agent(sid.agent_id()).await;
+    let coordinator = ResumeCoordinator::new(
+        store.clone(),
+        ResumeConfig::default(),
+        adapter as Arc<dyn ExecutionAdapter>,
+        registry,
+        sessions(),
+        None,
+    );
+
+    let report = coordinator.resume_session(&sid).await.expect("resume ok");
+    assert_eq!(report.scanned, 1);
+    assert_eq!(report.skipped, 1);
+    assert_eq!(report.resumed, 0);
+    assert!(
+        calls.lock().await.is_empty(),
+        "must not re-run a finished run"
+    );
+}
+
+/// A session with no run markers at all is an answer, not an error — and it is
+/// distinguishable from "already finished" by `scanned == 0`.
+#[tokio::test]
+async fn on_demand_resume_of_an_unknown_session_reports_no_runs() {
+    let store = store();
+    let adapter = Arc::new(RecordingAdapter::new());
+    let calls = adapter.calls.clone();
+    let sid = SessionKey::main("never-ran");
+    let registry = registry_with_agent(sid.agent_id()).await;
+    let coordinator = ResumeCoordinator::new(
+        store.clone(),
+        ResumeConfig::default(),
+        adapter as Arc<dyn ExecutionAdapter>,
+        registry,
+        sessions(),
+        None,
+    );
+
+    let report = coordinator.resume_session(&sid).await.expect("resume ok");
+    assert_eq!(report, Default::default(), "zero report, not an error");
+    assert!(calls.lock().await.is_empty());
+}
+
+/// `[resume] enabled = false` switches off the *automatic* scan. An explicit
+/// request is a decision the operator has already made, and silently ignoring
+/// it is the kind of no-op that reads as a broken feature.
+#[tokio::test]
+async fn on_demand_resume_works_when_the_boot_scan_is_disabled() {
+    let store = store();
+    let sid = SessionKey::main("main");
+    seed_interrupted_run(&store, &sid).await;
+
+    let adapter = Arc::new(RecordingAdapter::new());
+    let calls = adapter.calls.clone();
+    let registry = registry_with_agent(sid.agent_id()).await;
+    let coordinator = ResumeCoordinator::new(
+        store.clone(),
+        ResumeConfig {
+            enabled: false,
+            ..ResumeConfig::default()
+        },
+        adapter as Arc<dyn ExecutionAdapter>,
+        registry,
+        sessions(),
+        None,
+    );
+
+    // The scan stays off...
+    assert_eq!(
+        coordinator.resume_interrupted_runs().await,
+        Default::default()
+    );
+    assert!(calls.lock().await.is_empty());
+
+    // ...and the explicit verb still works.
+    let report = coordinator.resume_session(&sid).await.expect("resume ok");
+    assert_eq!(report.resumed, 1);
+    assert_eq!(calls.lock().await.len(), 1);
 }
 
 #[tokio::test]

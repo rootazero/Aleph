@@ -7,7 +7,6 @@
 use crate::context::budget::preflight::PreflightPipeline;
 use crate::context::budget::ContextBudget;
 use crate::context::compact::compactor::ContextCompactor;
-use crate::harness::chain_context::ChainContext;
 use crate::harness::trace_sink::TraceSink;
 use crate::providers::AiProvider;
 use crate::session::service::SessionService;
@@ -84,11 +83,6 @@ pub struct HarnessDeps {
     /// message tail a changed recall costs only itself (codex initial-context
     /// / hermes frozen-prompt parity). `None` → no extra message.
     pub recall_context: Option<String>,
-    /// Position of this harness instance in the subagent call chain.
-    /// Stage 4 seam (#11). Defaults to a fresh root chain (depth=0). The
-    /// subagent spawner overrides this with `parent.chain.child()` so each
-    /// nested harness reports its own depth via `AgentHarness::chain_context()`.
-    pub chain_context: ChainContext,
     /// Stage 5a seam (#9). Optional registry consulted at three callsites
     /// in `AgentHarness::run_turn_internal`: turn entry (input), model
     /// output emit (output), and tool dispatch (tool-call, Stage 5b).

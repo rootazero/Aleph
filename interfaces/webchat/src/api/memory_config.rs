@@ -550,8 +550,6 @@ pub struct CorrectionDto {
 pub struct DreamingConfig {
     #[serde(default = "default_dreaming_enabled")]
     pub enabled: bool,
-    #[serde(default = "default_dreaming_idle_threshold")]
-    pub idle_threshold_seconds: u32,
     #[serde(default = "default_dreaming_window_start")]
     pub window_start_local: String,
     #[serde(default = "default_dreaming_window_end")]
@@ -560,17 +558,10 @@ pub struct DreamingConfig {
     pub max_duration_seconds: u32,
     #[serde(default = "default_drift_max_pairs_per_run")]
     pub drift_max_pairs_per_run: usize,
-    #[serde(default = "default_synthesis_min_cluster_size")]
-    pub synthesis_min_cluster_size: usize,
-    #[serde(default = "default_synthesis_max_insights")]
-    pub synthesis_max_insights: usize,
 }
 
 const fn default_dreaming_enabled() -> bool {
     true
-}
-const fn default_dreaming_idle_threshold() -> u32 {
-    900
 }
 fn default_dreaming_window_start() -> String {
     "02:00".to_string()
@@ -583,12 +574,6 @@ const fn default_dreaming_max_duration() -> u32 {
 }
 const fn default_drift_max_pairs_per_run() -> usize {
     20
-}
-const fn default_synthesis_min_cluster_size() -> usize {
-    3
-}
-const fn default_synthesis_max_insights() -> usize {
-    10
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]

@@ -1477,6 +1477,7 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
         let admin_state = alephcore::gateway::admin_api::AdminApiState {
             shared_token: auth_bundle.auth_ctx.shared_token_mgr.clone(),
             agent_manager: agent_manager.clone(),
+            session_store: session_store.clone(),
         };
         server.set_admin_router(alephcore::gateway::admin_api::router(admin_state));
     }
@@ -2508,8 +2509,28 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
                     skipped_legacy = rr.skipped_legacy,
                     "ProjectionReconciler boot scan finished"
                 );
-                if resume_cfg.enabled {
-                    if let (Some(exec_adapter), Some(registry)) = resume_collaborators {
+                if let (Some(exec_adapter), Some(registry)) = resume_collaborators {
+                    let auto_scan = resume_cfg.enabled;
+                    let coordinator =
+                        std::sync::Arc::new(alephcore::gateway::ResumeCoordinator::new(
+                            event_store,
+                            resume_cfg,
+                            exec_adapter,
+                            registry,
+                            sessions_for_resume,
+                            Some(bus_for_resume),
+                        ));
+                    // Published unconditionally, on purpose. `[resume] enabled`
+                    // governs the automatic scan below; `agent.resume` /
+                    // `aleph-server resume` are explicit operator requests and
+                    // must stay reachable when auto-resume is off — that is the
+                    // deployment that needs the manual verb most. Registering
+                    // inside the `auto_scan` branch would be a handle installed
+                    // under a narrower condition than its consumers, whose only
+                    // symptom is a rejection that reads like a missing feature.
+                    alephcore::gateway::set_global_resume_coordinator(coordinator.clone());
+
+                    if auto_scan {
                         // This scan is spawned before `initialize_inbound_router`
                         // publishes the channel-config snapshot; park until it is
                         // ready so `stamp_origin_identity` sees the per-channel deny
@@ -2518,14 +2539,6 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
                             std::time::Duration::from_secs(30),
                         )
                         .await;
-                        let coordinator = alephcore::gateway::ResumeCoordinator::new(
-                            event_store,
-                            resume_cfg,
-                            exec_adapter,
-                            registry,
-                            sessions_for_resume,
-                            Some(bus_for_resume),
-                        );
                         let report = coordinator.resume_interrupted_runs().await;
                         tracing::info!(
                             scanned = report.scanned,
@@ -2534,9 +2547,12 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
                             skipped = report.skipped,
                             "ResumeCoordinator boot scan finished"
                         );
+                    } else {
+                        tracing::debug!(
+                            "Resume coordinator: auto-scan disabled ([resume] enabled = false); \
+                             on-demand resume still available"
+                        );
                     }
-                } else {
-                    tracing::debug!("Resume coordinator: disabled ([resume] enabled = false)");
                 }
             });
             if !args.daemon {

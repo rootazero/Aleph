@@ -12,7 +12,6 @@ pub mod keyword_linker;
 pub mod links;
 mod note;
 pub mod orientation;
-pub mod retrieval;
 pub mod search_result;
 pub mod store;
 pub mod watcher;
@@ -28,11 +27,8 @@ pub use note::{
     is_structural_strong, sanitize_note_path, sanitize_title, tags_mark_permanent, FactProvenance,
     KnowledgeNote, ProvenanceOrigin, Relation, Severity, STRUCTURAL_STRONG,
 };
-pub use retrieval::{NoteContent, NoteRetrieval};
 pub use search_result::NoteSearchResult;
-pub use wikilink::{
-    extract_wikilinks, extract_wikilinks_with_alias, remove_wikilink, rewrite_wikilinks,
-};
+pub use wikilink::{extract_wikilinks, extract_wikilinks_with_alias, rewrite_wikilinks};
 
 pub mod ingest;
 pub mod profile;

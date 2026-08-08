@@ -548,7 +548,6 @@ mod tests {
             embedder: Arc::new(StubEmbedder),
             report: crate::memory::dreaming::DreamReport::default(),
             pipeline_type: "synthesize".into(),
-            activity_checker: Arc::new(|| false),
             strategy: crate::memory::dreaming::DreamStrategy::Synthesize,
             orientation: None,
             evolution_budget: crate::memory::dreaming::EditBudget::default(),

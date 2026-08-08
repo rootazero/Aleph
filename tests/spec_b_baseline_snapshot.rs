@@ -89,7 +89,6 @@ fn force_fallback_cfg() -> AssemblerConfig {
         // regardless of pool size — fully deterministic, no LLM calls.
         force_fallback: true,
         fallback_skeleton: Default::default(),
-        assembly_log: Default::default(),
         project_scoped: false,
         retrieval_scoring: Default::default(),
         rerank: Default::default(),

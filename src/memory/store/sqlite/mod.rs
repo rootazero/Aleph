@@ -7,7 +7,6 @@
 pub mod schema;
 pub mod vec;
 
-pub mod assembly_logs;
 pub mod dream_kv;
 pub mod dream_reports;
 pub mod embedding_meta;

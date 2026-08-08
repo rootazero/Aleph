@@ -52,6 +52,15 @@ pub struct AgentRuntimeConfig {
     pub model: Option<String>,
     /// Timeout in seconds for the entire run.
     pub timeout_secs: u64,
+    /// The caller's stable handle for this child, forwarded to
+    /// [`crate::agents::subagent_spawner::SpawnRequest::request_id`] so the
+    /// child's session key — and therefore the durable `SubagentSpawned` /
+    /// `SubagentReturned` pair — is addressable by it after a restart.
+    ///
+    /// `Some` only for the background `subagent` spawn, the one path whose id
+    /// outlives the call. Foreground and batch spawns return inline and leave
+    /// this `None`.
+    pub request_id: Option<String>,
 }
 
 // =============================================================================
@@ -565,6 +574,7 @@ impl AgentRuntime {
             isolation: config.agent_def.isolation.clone(),
             strategy: self.strategy.as_deref(),
             session_mode: self.session_mode,
+            request_id: config.request_id.as_deref(),
         };
         spawn(&base, req).await
     }
@@ -915,7 +925,9 @@ mod tests {
 
     #[test]
     fn agent_runtime_config_construction() {
+        #[allow(clippy::needless_update)]
         let config = AgentRuntimeConfig {
+            request_id: None,
             agent_def: make_agent_def(),
             task: "Do something".to_string(),
             context_summary: Some("Parent context".to_string()),

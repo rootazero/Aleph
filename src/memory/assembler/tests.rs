@@ -2,7 +2,7 @@
 //! (gather → rerank → hydrate) with stubbed LLM reranker and real
 //! SqliteMemoryBackend pointed at an in-memory DB.
 
-use crate::config::types::memory::{AssemblerConfig, AssemblyLogConfig, FallbackSkeleton};
+use crate::config::types::memory::{AssemblerConfig, FallbackSkeleton};
 use crate::error::AlephError;
 use crate::memory::assembler::hybrid::LlmReranker;
 use crate::memory::assembler::{
@@ -99,7 +99,6 @@ fn default_cfg() -> AssemblerConfig {
         render_style: Default::default(),
         force_fallback: false,
         fallback_skeleton: FallbackSkeleton::default(),
-        assembly_log: AssemblyLogConfig::default(),
         project_scoped: false,
         retrieval_scoring: Default::default(),
         rerank: Default::default(),

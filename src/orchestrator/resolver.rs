@@ -6,7 +6,7 @@ use std::collections::HashMap;
 use crate::orchestrator::errors::FlowError;
 use crate::orchestrator::flow_spec::{AgentId, FlowId, SessionStrategy};
 
-/// Hardcoded maximum depth for `flow_run` recursion. See design §7.
+/// Hardcoded maximum depth for recursive dispatch. See design §7.
 pub const MAX_FLOW_DEPTH: u8 = 4;
 
 /// Canonical generic-agent flow id. Any registered agent that has no explicit
@@ -16,7 +16,7 @@ pub const MAX_FLOW_DEPTH: u8 = 4;
 pub const DEFAULT_AGENT_FLOW_ID: &str = "default-agent";
 
 /// Allows `depth ∈ [0, MAX_FLOW_DEPTH]`; rejects strictly greater.
-/// Called at every dispatch + `flow_run` invocation (see design §7).
+/// Called at every dispatch (see design §7).
 pub const fn depth_guard(depth: u8) -> Result<(), FlowError> {
     if depth > MAX_FLOW_DEPTH {
         Err(FlowError::RecursionLimit {

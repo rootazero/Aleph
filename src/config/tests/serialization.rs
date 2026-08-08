@@ -37,7 +37,6 @@ fn test_memory_config_deserialization() {
         },
         "dreaming": {
             "enabled": false,
-            "idle_threshold_seconds": 120,
             "window_start_local": "01:00",
             "window_end_local": "03:00",
             "max_duration_seconds": 300

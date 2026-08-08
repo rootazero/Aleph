@@ -258,26 +258,6 @@ CREATE INDEX IF NOT EXISTS idx_archive_age
     ON notes_review_archive(archived_at);
 "#;
 
-pub const ASSEMBLY_LOGS_DDL: &str = r#"
-CREATE TABLE IF NOT EXISTS assembly_logs (
-    id                 TEXT PRIMARY KEY,
-    agent_id           TEXT NOT NULL,
-    session_id         TEXT,
-    query_hash         TEXT NOT NULL,
-    strategy           TEXT NOT NULL,
-    used_fallback      INTEGER NOT NULL DEFAULT 0,
-    fallback_reason    TEXT,
-    candidates_count   INTEGER NOT NULL,
-    selected_item_ids  TEXT NOT NULL,
-    total_tokens       INTEGER NOT NULL,
-    rerank_latency_ms  INTEGER,
-    total_latency_ms   INTEGER NOT NULL,
-    created_at         INTEGER NOT NULL
-);
-CREATE INDEX IF NOT EXISTS idx_assembly_logs_agent_created
-    ON assembly_logs(agent_id, created_at);
-"#;
-
 pub const MEMORY_WRITE_DECISIONS_DDL: &str = r#"
 CREATE TABLE IF NOT EXISTS memory_write_decisions (
     id          TEXT PRIMARY KEY,

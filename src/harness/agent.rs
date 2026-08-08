@@ -391,14 +391,6 @@ impl AgentHarness {
         }
     }
 
-    /// Read-only accessor for this harness's position in the subagent chain.
-    /// Returns the root context for top-level agents (the `HarnessDeps`
-    /// default). The subagent spawner overrides this with the descended
-    /// chain when assembling a child harness. Stage 4 seam (#11).
-    pub const fn chain_context(&self) -> &crate::harness::chain_context::ChainContext {
-        &self.deps.chain_context
-    }
-
     /// Max times a `Done` turn may be overridden because a steering message
     /// landed during the run's final turn (Pi `getFollowUpMessages` parity).
     /// Bounds a pathological appender that keeps writing user messages so the

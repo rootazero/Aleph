@@ -9,7 +9,6 @@ pub(crate) mod feedback_floor;
 pub(crate) mod gather;
 pub mod hybrid;
 pub mod hydration;
-pub mod log_store;
 pub(crate) mod profile;
 pub mod render;
 pub(crate) mod rerank;
@@ -19,7 +18,6 @@ mod tests;
 
 pub use feedback_floor::FeedbackFloorLoader;
 pub use hybrid::{AiProviderReranker, HybridAssembler, LlmReranker};
-pub use log_store::AssemblyLogWriter;
 pub use profile::UserProfileLoader;
 
 pub use context_block::{wrap_memory_context, MEMORY_CONTEXT_CLOSE, MEMORY_CONTEXT_OPEN};
@@ -54,4 +52,11 @@ pub trait WorkingMemoryAssembler: Send + Sync {
         budget: AssemblyBudget,
         filter: FactSourceFilter,
     ) -> Result<MemoryEnvelope, AlephError>;
+
+    /// Render style to use when serializing the assembled envelope for the
+    /// model. Defaults to XML; the production `HybridAssembler` honours the
+    /// `[memory.assembler] render_style` config knob.
+    fn render_style(&self) -> RenderStyle {
+        RenderStyle::Xml
+    }
 }

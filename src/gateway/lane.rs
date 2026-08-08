@@ -129,6 +129,14 @@ impl Lane {
             // "what is running right now" — the one call you want when things
             // are stuck.
             "tools.in_flight" => Some(Self::Query),
+            // agent.resume re-triggers an interrupted run — it starts agent
+            // execution exactly like agent.run, it just supplies the input from
+            // the session log instead of the request. The `.resume` suffix
+            // matches no heuristic token, so without this line it defaults to
+            // Mutate and a burst of resumes would compete on the generic
+            // mutation lane instead of being throttled against the run
+            // concurrency budget the Execute lane exists to hold.
+            "agent.resume" => Some(Self::Execute),
             // skills.remove is package management, not a data delete →
             // System lane. memory.delete / sessions.delete / session.truncate
             // are data ops that fall through to default Mutate.

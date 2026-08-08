@@ -1,4 +1,3 @@
-use super::types::RetentionMode;
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -11,10 +10,6 @@ pub struct ComptrollerConfig {
 
     /// Fold threshold - remaining % to trigger compression (default: 0.2)
     pub fold_threshold: f32,
-
-    /// Retention mode
-    #[serde(skip)]
-    pub retention_mode: RetentionMode,
 }
 
 impl Default for ComptrollerConfig {
@@ -23,7 +18,6 @@ impl Default for ComptrollerConfig {
             similarity_threshold: 0.95,
             token_budget: 100000,
             fold_threshold: 0.2,
-            retention_mode: RetentionMode::PreferTranscript,
         }
     }
 }

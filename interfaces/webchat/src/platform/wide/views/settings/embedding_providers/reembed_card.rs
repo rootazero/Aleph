@@ -65,14 +65,6 @@ pub(super) fn ReembedMigrationCard() -> impl IntoView {
                                 .get("facts_total")
                                 .and_then(serde_json::Value::as_u64)
                                 .unwrap_or(0);
-                            let memories_updated = data
-                                .get("memories_updated")
-                                .and_then(serde_json::Value::as_u64)
-                                .unwrap_or(0);
-                            let memories_total = data
-                                .get("memories_total")
-                                .and_then(serde_json::Value::as_u64)
-                                .unwrap_or(0);
                             let error_list: Vec<String> = data
                                 .get("errors")
                                 .and_then(|v| v.as_array())
@@ -88,11 +80,9 @@ pub(super) fn ReembedMigrationCard() -> impl IntoView {
                             set_result_errors.set(error_list.into_iter().take(5).collect());
 
                             let msg = format!(
-                                "Facts: {}/{} migrated, Memories: {}/{} migrated{}",
+                                "Facts: {}/{} migrated{}",
                                 facts_updated,
                                 facts_total,
-                                memories_updated,
-                                memories_total,
                                 if errors > 0 {
                                     format!(", {errors} errors")
                                 } else {

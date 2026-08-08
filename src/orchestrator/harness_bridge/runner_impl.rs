@@ -694,7 +694,6 @@ impl HarnessRunner for AgentHarnessRunner {
             system_prompt,
             system_prompt_parts,
             recall_context,
-            chain_context: crate::harness::chain_context::ChainContext::default(),
             // rust-doctor-disable-next-line excessive-clone
             guardrails: self.guardrails.clone(),
             // H1: the Think→Act loop is always capped. Per-flow override wins;

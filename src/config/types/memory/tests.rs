@@ -51,8 +51,6 @@ mod tests {
     fn dreaming_config_defaults_include_new_fields() {
         let config = DreamingConfig::default();
         assert_eq!(config.drift_max_pairs_per_run, 20);
-        assert_eq!(config.synthesis_min_cluster_size, 3);
-        assert_eq!(config.synthesis_max_insights, 10);
         assert_eq!(config.skill_distill_max_per_cycle, 3);
     }
 
@@ -63,7 +61,6 @@ mod tests {
         "#;
         let config: DreamingConfig = toml::from_str(toml_src).expect("parse");
         assert_eq!(config.skill_distill_max_per_cycle, 7);
-        assert_eq!(config.synthesis_max_insights, 10);
     }
 
     #[test]
@@ -73,7 +70,6 @@ mod tests {
         assert_eq!(c.rerank_timeout_ms, 800);
         assert!(!c.force_fallback);
         assert_eq!(c.fallback_skeleton.relevant_notes_tokens, 5000);
-        assert!(!c.assembly_log.enabled);
         // Hot-surfacing + time-decay ranking are active by default ("automatic bubbling");
         // MMR and the external reranker stay opt-in.
         assert!(c.retrieval_scoring.is_active());

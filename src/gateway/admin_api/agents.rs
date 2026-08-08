@@ -88,6 +88,7 @@ mod tests {
         let state = AdminApiState {
             shared_token: shared,
             agent_manager: mgr.clone(),
+            session_store: crate::gateway::admin_api::test_session_store(dir.path()),
         };
         let app = Router::new().nest("/agents", router()).with_state(state);
         (app, dir, mgr)
