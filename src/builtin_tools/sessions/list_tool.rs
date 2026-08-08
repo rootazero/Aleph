@@ -204,9 +204,27 @@ impl AlephTool for SessionsListTool {
             "Listing sessions"
         );
 
-        // 1. Query sessions from session store with filter
+        // 1. Query sessions from session store with filter.
+        //
+        // `owner_visible_to` is the ONE field that makes this a per-caller
+        // question rather than a process-wide one, and both `SessionStore`
+        // backends route it through `visibility::session_visible_to` — so room
+        // membership comes free and there is no second predicate here to drift.
+        // Leaving it `None` (the `Default`) means "every owner", which is what
+        // this tool did until 2026-08-08: the RPC twin
+        // (`handlers::session::db_handlers::query`) has always set it, and this
+        // was the only other production reader of the field.
+        //
+        // The resolver is [`scope::ambient_owner`], NOT
+        // `visibility::visible_owner_filter()`. The latter reads only
+        // `CALLER_USER`, a task-local that is dead inside a spawned run — every
+        // tool call happens inside one, so a predicate built on it would be
+        // fail-open exactly here and nowhere else, which is the worst place for
+        // a predicate to be wrong: silently, on the tool face, while the RPC
+        // face's tests stay green.
         let filter = crate::gateway::session_store::types::SessionFilter {
             active_minutes: args.active_minutes,
+            owner_visible_to: crate::scope::ambient_owner(),
             ..Default::default()
         };
         let all_sessions = self
@@ -482,6 +500,64 @@ mod tests {
         let result = AlephTool::call(&tool, args).await.unwrap();
         assert_eq!(result.count, 2);
         assert_eq!(result.sessions[0].agent_id, "main");
+    }
+
+    /// The tool face must answer the same per-caller question the RPC face
+    /// answers. Before 2026-08-08 it did not: `SessionFilter` was built with
+    /// `..Default::default()`, leaving `owner_visible_to: None` — "every
+    /// owner" — so a member's model could enumerate the operator's session
+    /// keys, agent ids, topics and (with `message_limit`) up to 20 messages
+    /// from each.
+    ///
+    /// The scope is established with `with_scope`, not by setting `CALLER_USER`
+    /// — that is the production shape. A tool always runs inside a spawned run,
+    /// where `CALLER_USER` is dead and the run-seeded `ScopeAttribution` is the
+    /// only surviving carrier.
+    #[tokio::test]
+    async fn list_shows_only_the_calling_users_sessions() {
+        let temp = tempdir().unwrap();
+        let context = create_test_context(temp.path().to_path_buf());
+        let session_manager = context.session_store();
+
+        let mine = crate::gateway::router::SessionKey::main("alice-conv");
+        let theirs = crate::gateway::router::SessionKey::main("bob-conv");
+        crate::scope::with_scope(
+            Some(crate::scope::ScopeAttribution::personal("u-alice")),
+            session_manager.get_or_create(&mine),
+        )
+        .await
+        .unwrap();
+        crate::scope::with_scope(
+            Some(crate::scope::ScopeAttribution::personal("u-bob")),
+            session_manager.get_or_create(&theirs),
+        )
+        .await
+        .unwrap();
+
+        let tool = SessionsListTool::new(context, "main");
+        let args = SessionsListArgs {
+            kinds: None,
+            limit: Some(50),
+            active_minutes: None,
+            message_limit: None,
+        };
+
+        let result = crate::scope::with_scope(
+            Some(crate::scope::ScopeAttribution::personal("u-alice")),
+            AlephTool::call(&tool, args),
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(
+            result.count, 1,
+            "alice must see exactly her own session, not bob's"
+        );
+        let keys: Vec<&str> = result.sessions.iter().map(|s| s.key.as_str()).collect();
+        assert!(
+            keys.iter().all(|k| !k.contains("bob-conv")),
+            "bob's session key leaked into alice's listing: {keys:?}"
+        );
     }
 
     #[tokio::test]
