@@ -11,10 +11,7 @@
 #[cfg(test)]
 #[allow(clippy::module_inception)]
 mod integration_tests {
-    use crate::memory::{
-        context_comptroller::ComptrollerConfig,
-        ripple::RippleConfig,
-    };
+    use crate::memory::{context_comptroller::ComptrollerConfig, ripple::RippleConfig};
 
     #[tokio::test]
     async fn test_comptroller_config() {

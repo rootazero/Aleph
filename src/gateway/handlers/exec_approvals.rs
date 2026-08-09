@@ -362,10 +362,11 @@ mod tests {
         create_session(&sess, "agent:main:main", Some("u-alice")).await;
         let id = park_approval(&manager, "agent:main:main");
 
-        let response = as_member("u-alice",
-                handle_approval_resolve(resolve_request(&id), manager, sess),
-            )
-            .await;
+        let response = as_member(
+            "u-alice",
+            handle_approval_resolve(resolve_request(&id), manager, sess),
+        )
+        .await;
 
         assert!(
             response.is_success(),
@@ -383,18 +384,20 @@ mod tests {
         create_session(&sess, "agent:main:main:s1", Some("u-bob")).await;
         let bobs = park_approval(&manager, "agent:main:main:s1");
 
-        let foreign = as_member("u-alice",
-                handle_approval_resolve(resolve_request(&bobs), manager.clone(), sess.clone()),
-            )
-            .await;
-        let unknown = as_member("u-alice",
-                handle_approval_resolve(
-                    resolve_request("never-issued"),
-                    manager.clone(),
-                    sess.clone(),
-                ),
-            )
-            .await;
+        let foreign = as_member(
+            "u-alice",
+            handle_approval_resolve(resolve_request(&bobs), manager.clone(), sess.clone()),
+        )
+        .await;
+        let unknown = as_member(
+            "u-alice",
+            handle_approval_resolve(
+                resolve_request("never-issued"),
+                manager.clone(),
+                sess.clone(),
+            ),
+        )
+        .await;
 
         assert!(foreign.is_error(), "alice must not resolve bob's approval");
         let (fe, ue) = (
@@ -432,14 +435,15 @@ mod tests {
         // A card whose session row was never written — unresolvable, so hidden.
         let orphan = park_approval(&manager, "agent:main:main:ghost");
 
-        let response = as_member("u-alice",
-                handle_approvals_pending(
-                    JsonRpcRequest::with_id("exec.approvals.pending", None, json!(1)),
-                    manager.clone(),
-                    sess.clone(),
-                ),
-            )
-            .await;
+        let response = as_member(
+            "u-alice",
+            handle_approvals_pending(
+                JsonRpcRequest::with_id("exec.approvals.pending", None, json!(1)),
+                manager.clone(),
+                sess.clone(),
+            ),
+        )
+        .await;
 
         let ids = pending_ids(&response);
         assert!(

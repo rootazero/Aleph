@@ -435,7 +435,11 @@ impl ResumeCoordinator {
         };
         match self.next_seq(session_id).await {
             Ok(seq) => {
-                if let Err(e) = self.event_store.append(session_id, seq, &ev, now_ms()).await {
+                if let Err(e) = self
+                    .event_store
+                    .append(session_id, seq, &ev, now_ms())
+                    .await
+                {
                     tracing::warn!(session = ?session_id, error = %e, "resume: delegated marker close failed");
                 }
             }

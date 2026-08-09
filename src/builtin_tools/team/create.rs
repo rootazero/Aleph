@@ -168,7 +168,6 @@ impl TeamCreateTool {
         }
     }
 
-
     /// Look up a built-in role prompt template by name.
     fn builtin_role_prompt(role: &str) -> Option<&'static str> {
         const LEADER_PROMPT: &str = include_str!("../../agents/prompts/team_leader.md");

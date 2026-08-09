@@ -13,11 +13,11 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use tracing::{debug, warn};
 
-use crate::builtin_tools::acting_agent::acting_agent_id;
 use crate::agents::swarm::tasks::acceptance::require_grounding;
 use crate::agents::swarm::tasks::{
     CoordTaskStatus, CoordTaskStore, CoordTaskUpdate, ReviewVerdict, ReviewerKind,
 };
+use crate::builtin_tools::acting_agent::acting_agent_id;
 use crate::error::{AlephError, Result};
 use crate::sync_primitives::Arc;
 use crate::teams::TeamStore;

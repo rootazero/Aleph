@@ -550,7 +550,11 @@ impl EventVisibilityIndex {
         store: &Arc<dyn SessionStore>,
         teams: Option<&Arc<dyn TeamStore>>,
     ) -> bool {
-        let caller_role = if caller_is_admin { Some("operator") } else { Some("member") };
+        let caller_role = if caller_is_admin {
+            Some("operator")
+        } else {
+            Some("member")
+        };
         self.event_admits_for(topic, data, caller_user, caller_role, store, teams)
             .await
     }

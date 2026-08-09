@@ -9,8 +9,8 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use tracing::debug;
 
-use crate::builtin_tools::acting_agent::acting_agent_id;
 use crate::agents::swarm::tasks::CoordTaskStore;
+use crate::builtin_tools::acting_agent::acting_agent_id;
 use crate::error::Result;
 use crate::sync_primitives::Arc;
 use crate::tools::AlephTool;

@@ -89,8 +89,13 @@ pub async fn run_timer_loop<C: Clock>(
         }
         let _guard = RunningGuard { state: &state };
 
-        if let Err(e) = on_timer_tick(&state, &executor, alert_dispatcher.as_ref(), change_emitter.as_ref())
-            .await
+        if let Err(e) = on_timer_tick(
+            &state,
+            &executor,
+            alert_dispatcher.as_ref(),
+            change_emitter.as_ref(),
+        )
+        .await
         {
             error!(error = %e, "cron timer tick failed");
         }

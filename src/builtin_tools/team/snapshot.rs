@@ -11,8 +11,8 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use tracing::info;
 
-use crate::builtin_tools::acting_agent::acting_agent_id;
 use crate::agents::swarm::tasks::CoordTaskStore;
+use crate::builtin_tools::acting_agent::acting_agent_id;
 use crate::error::{AlephError, Result};
 use crate::sync_primitives::Arc;
 use crate::teams::snapshots::{
@@ -113,7 +113,6 @@ impl TeamSnapshotTool {
             current_agent_id: current_agent_id.into(),
         }
     }
-
 }
 
 #[async_trait]
