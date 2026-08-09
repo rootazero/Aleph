@@ -384,20 +384,6 @@ impl BubblewrapDriver {
         Ok(())
     }
 
-    #[cfg(test)]
-    pub(crate) fn build_args_for_test(
-        &self,
-        policy: &crate::sandbox::policy::SandboxPolicy,
-        cwd: &std::path::Path,
-    ) -> Result<Vec<String>, SandboxError> {
-        // Test entry-point: feeds policy + cwd into the same path the
-        // driver uses, so unit tests can assert on the generated
-        // argument vector without depending on a real bubblewrap.
-        let mut args = Vec::new();
-        self.add_fs_args(&mut args, &policy.filesystem, cwd)?;
-        Ok(args)
-    }
-
     fn apply_no_new_privs(&self, cmd: &mut Command) {
         if self.options.no_new_privs {
             debug!("Applying PR_SET_NO_NEW_PRIVS via pre-exec");
