@@ -114,6 +114,7 @@ pub mod extensions;
 pub mod skills;
 pub mod subagent;
 pub mod system_info;
+pub mod task_error;
 pub mod teams;
 pub mod tools_cancel;
 pub mod tools_invoke;

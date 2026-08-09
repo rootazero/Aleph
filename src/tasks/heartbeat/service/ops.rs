@@ -8,6 +8,7 @@ use crate::tasks::heartbeat::config::{HeartbeatTask, HeartbeatTaskView, ProbeCon
 use crate::tasks::heartbeat::store::HeartbeatStore;
 use crate::tasks::shared::clock::Clock;
 use crate::tasks::shared::delivery::DeliveryConfig;
+use crate::tasks::shared::error::TaskError;
 use crate::tasks::shared::retry_hint::classify;
 use crate::tasks::shared::schedule::compute_backoff_ms_for;
 
@@ -111,10 +112,10 @@ pub fn update_task<C: Clock>(
     id: &str,
     updates: HeartbeatTaskUpdates,
     clock: &C,
-) -> Result<(), String> {
+) -> Result<(), TaskError> {
     let task = store
         .get_task_mut(id)
-        .ok_or_else(|| format!("task not found: {id}"))?;
+        .ok_or_else(|| TaskError::not_found("task", id))?;
 
     if let Some(name) = updates.name {
         task.name = name;
@@ -152,10 +153,10 @@ pub fn toggle_task<C: Clock>(
     store: &mut HeartbeatStore,
     id: &str,
     clock: &C,
-) -> Result<bool, String> {
+) -> Result<bool, TaskError> {
     let task = store
         .get_task_mut(id)
-        .ok_or_else(|| format!("task not found: {id}"))?;
+        .ok_or_else(|| TaskError::not_found("task", id))?;
 
     task.enabled = !task.enabled;
     task.updated_at = clock.now_ms();
@@ -170,10 +171,10 @@ pub fn toggle_task<C: Clock>(
 }
 
 /// Delete a task by ID.
-pub fn delete_task(store: &mut HeartbeatStore, id: &str) -> Result<(), String> {
+pub fn delete_task(store: &mut HeartbeatStore, id: &str) -> Result<(), TaskError> {
     store
         .remove_task(id)
-        .ok_or_else(|| format!("task not found: {id}"))?;
+        .ok_or_else(|| TaskError::not_found("task", id))?;
     Ok(())
 }
 

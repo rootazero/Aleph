@@ -236,7 +236,7 @@ impl AlephTool for HeartbeatCreateTool {
             service
                 .add_task(task, &clock)
                 .await
-                .map_err(crate::error::AlephError::tool)?
+                .map_err(|e| crate::error::AlephError::tool(e.to_string()))?
         };
 
         info!(task_id = %id, name = %args.name, "Heartbeat task created via tool");

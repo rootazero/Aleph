@@ -20,6 +20,7 @@ use crate::tasks::heartbeat::service::ops;
 use crate::tasks::heartbeat::service::HeartbeatServiceState;
 use crate::tasks::heartbeat::store::HeartbeatStore;
 use crate::tasks::shared::clock::Clock;
+pub use crate::tasks::shared::error::TaskError;
 
 /// Shared handle to the `HeartbeatService`.
 pub type SharedHeartbeatService = Arc<Mutex<HeartbeatService>>;
@@ -120,11 +121,11 @@ impl HeartbeatService {
         &self,
         task: HeartbeatTask,
         clock: &C,
-    ) -> Result<String, String> {
+    ) -> Result<String, TaskError> {
         let id = {
             let mut store = self.state.store.lock().await;
             let id = ops::add_task(&mut store, task, clock);
-            store.persist()?;
+            store.persist().map_err(TaskError::internal)?;
             id
         };
         self.emit_change(&id, crate::gateway::events::ChangeKind::Created);
@@ -137,33 +138,33 @@ impl HeartbeatService {
         id: &str,
         updates: ops::HeartbeatTaskUpdates,
         clock: &C,
-    ) -> Result<(), String> {
+    ) -> Result<(), TaskError> {
         {
             let mut store = self.state.store.lock().await;
             ops::update_task(&mut store, id, updates, clock)?;
-            store.persist()?;
+            store.persist().map_err(TaskError::internal)?;
         }
         self.emit_change(id, crate::gateway::events::ChangeKind::Updated);
         Ok(())
     }
 
     /// Delete a task by ID.
-    pub async fn delete_task(&self, id: &str) -> Result<(), String> {
+    pub async fn delete_task(&self, id: &str) -> Result<(), TaskError> {
         {
             let mut store = self.state.store.lock().await;
             ops::delete_task(&mut store, id)?;
-            store.persist()?;
+            store.persist().map_err(TaskError::internal)?;
         }
         self.emit_change(id, crate::gateway::events::ChangeKind::Deleted);
         Ok(())
     }
 
     /// Toggle a task's enabled state. Returns the new enabled state.
-    pub async fn toggle_task<C: Clock>(&self, id: &str, clock: &C) -> Result<bool, String> {
+    pub async fn toggle_task<C: Clock>(&self, id: &str, clock: &C) -> Result<bool, TaskError> {
         let enabled = {
             let mut store = self.state.store.lock().await;
             let enabled = ops::toggle_task(&mut store, id, clock)?;
-            store.persist()?;
+            store.persist().map_err(TaskError::internal)?;
             enabled
         };
         self.emit_change(id, crate::gateway::events::ChangeKind::Updated);
@@ -178,10 +179,12 @@ impl HeartbeatService {
     /// Delete heartbeat run history older than `history_retention_days`
     /// (from this service's `HeartbeatConfig`). Called periodically by the
     /// shared task reaper daemon ([[reaper]]). Returns rows deleted.
-    pub async fn reap_history(&self) -> Result<usize, String> {
+    pub async fn reap_history(&self) -> Result<usize, TaskError> {
         let retention = self.state.config.history_retention_days;
         let store = self.state.store.lock().await;
-        store.cleanup_old_runs(retention)
+        store
+            .cleanup_old_runs(retention)
+            .map_err(TaskError::internal)
     }
 }
 

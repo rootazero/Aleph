@@ -7,6 +7,7 @@ pub mod active_hours;
 pub mod alert;
 pub mod clock;
 pub mod delivery;
+pub mod error;
 pub mod reaper;
 pub mod retry_hint;
 pub mod schedule;

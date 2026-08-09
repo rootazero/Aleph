@@ -10,6 +10,7 @@ use crate::tasks::cron::config::{
 use crate::tasks::cron::stagger::compute_staggered_next;
 use crate::tasks::cron::store::CronStore;
 use crate::tasks::shared::clock::Clock;
+use crate::tasks::shared::error::TaskError;
 use crate::tasks::shared::schedule::{
     apply_min_gap, compute_next_cron, compute_next_every, resolve_anchor,
 };
@@ -241,10 +242,10 @@ pub fn update_job<C: Clock>(
     id: &str,
     updates: CronJobUpdates,
     clock: &C,
-) -> Result<(), String> {
+) -> Result<(), TaskError> {
     let job = store
         .get_job_mut(id)
-        .ok_or_else(|| format!("job not found: {id}"))?;
+        .ok_or_else(|| TaskError::not_found("job", id))?;
 
     if let Some(name) = updates.name {
         job.name = name;
@@ -284,10 +285,10 @@ pub fn update_job<C: Clock>(
 
 /// Toggle a job's enabled state. Recomputes next run if enabling.
 /// Returns the new enabled state.
-pub fn toggle_job<C: Clock>(store: &mut CronStore, id: &str, clock: &C) -> Result<bool, String> {
+pub fn toggle_job<C: Clock>(store: &mut CronStore, id: &str, clock: &C) -> Result<bool, TaskError> {
     let job = store
         .get_job_mut(id)
-        .ok_or_else(|| format!("job not found: {id}"))?;
+        .ok_or_else(|| TaskError::not_found("job", id))?;
 
     job.enabled = !job.enabled;
     job.updated_at = clock.now_ms();
@@ -306,10 +307,10 @@ pub fn toggle_job<C: Clock>(store: &mut CronStore, id: &str, clock: &C) -> Resul
 }
 
 /// Delete a job by ID.
-pub fn delete_job(store: &mut CronStore, id: &str) -> Result<(), String> {
+pub fn delete_job(store: &mut CronStore, id: &str) -> Result<(), TaskError> {
     store
         .remove_job(id)
-        .ok_or_else(|| format!("job not found: {id}"))?;
+        .ok_or_else(|| TaskError::not_found("job", id))?;
     Ok(())
 }
 
