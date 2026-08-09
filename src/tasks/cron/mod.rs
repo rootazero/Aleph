@@ -305,6 +305,23 @@ impl CronService {
         }))
     }
 
+    /// The most recent runs of one job, newest first.
+    ///
+    /// The store has held this history all along and the `cron.runs` RPC reads
+    /// it, but nothing on the model-facing side did — so `cron_manage` could
+    /// create, delete and manually trigger a job while being unable to answer
+    /// "why does this keep failing?". That question is the one an operator
+    /// actually asks, and R8 says the model should be able to answer it in
+    /// conversation rather than sending someone to the Panel.
+    pub async fn job_runs(
+        &self,
+        job_id: &str,
+        limit: usize,
+    ) -> Result<Vec<crate::tasks::cron::history::CronRunRecord>, String> {
+        let store = self.state.store.lock().await;
+        store.get_runs(job_id, limit)
+    }
+
     /// Request a graceful shutdown of the timer loop.
     ///
     /// `ServiceState::request_shutdown` and the loop's `is_shutdown()` check

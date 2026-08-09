@@ -359,6 +359,26 @@ pub fn session_identity_of(topic: &str, data: Option<&Value>) -> SessionIdentity
             _ => SessionIdentity::Unattributed,
         },
 
+        // Host telemetry: `host.presence.update` carries the machine's
+        // `hostname`, its OS `username` and whether a human is sitting at it;
+        // `host.mic_level.update` says whether the room is making noise. Both
+        // are raw-string `TopicEvent` producers, so `every_frame_variant_is_
+        // classified` is structurally blind to them, and neither had an arm —
+        // they fell to `_ => Global` and `EventScopeGuard` has no `host.` rule
+        // either, so every authenticated member and every filterless client
+        // received them. `PresenceConfig`'s own doc names this risk and offers
+        // only `default_enabled() == false` as mitigation, which is no gate at
+        // all for the operator who follows the doc and turns it on.
+        //
+        // `OperatorOnly`, not a session key: the host belongs to whoever runs
+        // the daemon, not to any conversation — there is nothing to attribute
+        // it to. Structural prefix match rather than a two-topic whitelist,
+        // because a whitelist only covers the world as it was on the day it was
+        // written and the next `host.*` reporter would land back on the
+        // broadcast path. Owed a SOURCE-level pin —
+        // `host_topics_are_classified_at_their_producers`.
+        t if t.starts_with("host.") => SessionIdentity::OperatorOnly,
+
         // --- TopicEvent-form frames genuinely session-scoped and NOT
         // covered by any other filter today ---
         "session.lifecycle.changed" | "sessions.changed" => {
@@ -1789,6 +1809,47 @@ mod tests {
                 session_identity_of(topic, None),
                 SessionIdentity::Unattributed,
                 "`{topic}` without an owner stamp must fail closed"
+            );
+        }
+    }
+
+    /// SOURCE-level pin for the two host-telemetry reporters, owed for exactly
+    /// the same reason as the voice one: both publish raw
+    /// `TopicEvent::new(TOPIC_CONST, …)` strings with no `GatewayEventFrame`
+    /// variant, so the exhaustive-match pin cannot see them — which is how a
+    /// payload carrying the host's `hostname`, its OS `username` and whether a
+    /// human is at the keyboard sat on `_ => Global`, reaching every
+    /// authenticated member.
+    ///
+    /// Reads the topic literal out of each producer's own source, so renaming
+    /// one side fails here rather than silently returning it to broadcast.
+    #[test]
+    fn host_topics_are_classified_at_their_producers() {
+        const PRODUCERS: [(&str, &str); 2] = [
+            (
+                "src/tasks/presence/snapshot.rs",
+                include_str!("../tasks/presence/snapshot.rs"),
+            ),
+            (
+                "src/tasks/mic_level/snapshot.rs",
+                include_str!("../tasks/mic_level/snapshot.rs"),
+            ),
+        ];
+
+        for (path, src) in PRODUCERS {
+            let production = src.split("#[cfg(test)]").next().unwrap_or(src);
+            let topic = production
+                .split("_TOPIC: &str = \"")
+                .nth(1)
+                .and_then(|rest| rest.find('"').map(|end| &rest[..end]))
+                .unwrap_or_else(|| {
+                    panic!("{path} declares no `*_TOPIC` literal — this pin has gone vacuous")
+                });
+            assert_eq!(
+                session_identity_of(topic, None),
+                SessionIdentity::OperatorOnly,
+                "`{topic}` ({path}) is host telemetry: it belongs to whoever runs \
+                 the daemon, not to every connected member"
             );
         }
     }
