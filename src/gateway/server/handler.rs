@@ -494,6 +494,28 @@ fn event_wire_form(
 /// Anything else — `"guest"`, an unrecognized role string, or absent
 /// connection state — may only send `connect` to authorize (fail closed).
 ///
+/// ## The wall has TWO consumers, and it had one for too long
+///
+/// A connection has two directions, and until 2026-08-08 this predicate was
+/// evaluated on only one of them. The request arm consults it before dispatch;
+/// the *event-forward* arm's verdict was `scope_allowed && audience_allows &&
+/// should_receive && event_admits` — four terms, none of them authentication.
+/// Every one of them passes for a connection that has never authorized:
+/// `ConnectionState` is inserted into `ctx.connections` the moment the socket is
+/// accepted (`permissions: []`, `caller_user: None`, `caller_role: "guest"`),
+/// `can_receive` allows any topic no rule names, `should_receive` returns `true`
+/// when the connection registered no filter at all, and `event_admits` short-
+/// circuits on `SessionIdentity::Global` *before* it reads `caller_user`. A bare
+/// remote WebSocket that sent nothing therefore received every `Global` frame —
+/// including `pty.output`, whose RPC face has been in `ADMIN_PREFIXES` all along.
+///
+/// So: **an authorization predicate belongs on every direction a connection
+/// carries data, not on the one where the caller asks a question.** The event
+/// arm now evaluates this same function on the same `caller_role` field, which
+/// also means `restamp_live_connections` closes both planes at once — a
+/// deactivated user's socket stops receiving in the same instant it stops being
+/// served.
+///
 /// Pure so the wall's own logic is host-testable. The
 /// `resolve_stamped_identity` tests below cover *what role gets stamped*; the
 /// class of bug this function exists to prevent lives in the *predicate* — a
@@ -1558,30 +1580,43 @@ async fn handle_connection(
                         let (should_forward, projected_payload) = if let Some(event_obj) = parsed.as_ref() {
                             let (topic, event_data) = extract_topic_and_data(event_obj);
 
-                            // Permission-based scope guard check + surface audience +
-                            // caller identity for the owner-scoped event filter (P1,
-                            // spec §5.4). All three read the same ConnectionState
-                            // under one lock — extend the tuple, don't take the lock
-                            // twice.
-                            let (scope_allowed, channel_kind, event_caller_user, event_caller_is_admin) = {
+                            // The login wall + permission-based scope guard check +
+                            // surface audience + caller identity for the owner-scoped
+                            // event filter (P1, spec §5.4). All four read the same
+                            // ConnectionState under one lock — extend the tuple, don't
+                            // take the lock twice.
+                            let (
+                                wall_ok,
+                                scope_allowed,
+                                channel_kind,
+                                event_caller_user,
+                                event_caller_role,
+                            ) = {
                                 let conns = ctx.connections.read().await;
                                 match conns.get(&conn_id) {
                                     Some(s) => (
+                                        // 0th term: the login wall, the same predicate
+                                        // and the same `caller_role` field the request
+                                        // arm evaluates at the top of the dispatch loop
+                                        // — so a live demotion through
+                                        // `restamp_live_connections` closes the event
+                                        // plane in the same instant it closes the RPC
+                                        // plane. The method argument is `""`: there is
+                                        // no `connect` exemption to grant here, because
+                                        // an event is never the frame that authorizes a
+                                        // connection.
+                                        wall_admits(Some(s.caller_role.as_str()), ""),
                                         ctx.event_scope_guard.can_receive(topic, &s.permissions),
                                         s.channel_kind,
                                         s.caller_user.clone(),
-                                        // Same permission set filter #1 reads,
-                                        // through the one predicate that
-                                        // decides what a superuser scope is —
-                                        // `approval.*` now asks ownership
-                                        // instead of role, and the admin arm
-                                        // is what keeps an operator receiving
-                                        // a member's card as before.
-                                        crate::gateway::event_scope::is_superuser_scope(
-                                            &s.permissions,
-                                        ),
+                                        // The 5th term reads the role too: a
+                                        // fleet-scoped frame has no owner to
+                                        // compare against, and the topic-prefix
+                                        // term above cannot tell it apart from
+                                        // its session-scoped siblings.
+                                        s.caller_role.clone(),
                                     ),
-                                    None => (false, None, None, false),
+                                    None => (false, false, None, None, String::new()),
                                 }
                             };
 
@@ -1606,7 +1641,8 @@ async fn handle_connection(
                                 .note_frame(topic, visibility_payload)
                                 .await;
 
-                            let admits = scope_allowed
+                            let admits = wall_ok
+                                && scope_allowed
                                 && crate::gateway::surface::delivery::audience_allows(
                                     event_data,
                                     channel_kind,
@@ -1615,11 +1651,11 @@ async fn handle_connection(
                                 && match ctx.session_store.as_ref() {
                                     Some(store) => {
                                         ctx.event_visibility
-                                            .event_admits(
+                                            .event_admits_for(
                                                 topic,
                                                 visibility_payload,
                                                 event_caller_user.as_deref(),
-                                                event_caller_is_admin,
+                                                Some(event_caller_role.as_str()),
                                                 store,
                                                 ctx.team_store.as_ref(),
                                             )
@@ -2284,6 +2320,11 @@ mod tests {
         assert!(!guard.can_receive("surface.approval", &scope));
         assert!(!guard.can_receive("config.changed", &scope));
         assert!(!guard.can_receive("pairing.requested", &scope));
+        assert!(!guard.can_receive("pty.output", &scope));
+        // `approval.requested` deliberately passes THIS table since 2026-08-08
+        // — a member must be able to answer the gate blocking their own run.
+        // The per-session decision is made in `event_visibility`, pinned there.
+        assert!(guard.can_receive("approval.requested", &scope));
         // ...while his daily surfaces are untouched (default-allow guard).
         assert!(guard.can_receive("agent.run.started", &scope));
         assert!(guard.can_receive("chat.message", &scope));
@@ -2374,6 +2415,41 @@ mod tests {
         );
         assert!(wall_admits(Some("member"), "sessions.list"));
         assert!(wall_admits(Some("member"), "connect"));
+    }
+
+    /// The event arm evaluates the wall with `method: ""` — there is no
+    /// `connect` exemption to grant on a frame nobody asked for. Both halves
+    /// matter and the POSITIVE one is load-bearing: gating the delivery plane
+    /// fails *silently* (a withheld frame produces no error to any client), so
+    /// a wrong role assumption would dark a real surface with no symptom. The
+    /// two authorized roles must still receive.
+    #[test]
+    fn the_event_arm_wall_refuses_a_guest_and_still_serves_both_authorized_roles() {
+        // The state a socket carries before it has sent anything at all:
+        // `ConnectionState::new` stamps `caller_role: "guest"`.
+        assert!(
+            !wall_admits(Some("guest"), ""),
+            "an unauthorized socket must receive no event frame; `pty.output` \
+             is Global-classified and carries the operator's raw shell bytes"
+        );
+        // …and the same is true for a role word nobody stamps.
+        assert!(!wall_admits(Some("bogus"), ""));
+        assert!(!wall_admits(None, ""));
+
+        // The half that would go silently dark if the predicate were wrong.
+        // A cluster node resolves through `resolve_connection_identity`'s
+        // unbound-device arm to `("u-owner", "operator")`, so nodes are on
+        // this side of the wall too.
+        assert!(
+            wall_admits(Some("operator"), ""),
+            "operator connections — Panel, CLI and cluster nodes alike — must \
+             still receive events"
+        );
+        assert!(
+            wall_admits(Some("member"), ""),
+            "a member's own stream.* frames must still arrive; this wall is \
+             the GUEST wall, and the per-user filter is event_visibility's job"
+        );
     }
 
     #[test]

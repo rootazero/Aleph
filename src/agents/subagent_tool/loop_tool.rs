@@ -874,11 +874,22 @@ impl LoopTool for SubagentTool {
                     };
 
                     let runtime = self.build_runtime(child_chain.clone(), batch_cancel.clone());
+                    // Captured BEFORE the spawn: task-locals do not cross the
+                    // boundary. Without this every parallel proposal leg read
+                    // and wrote the unscoped base memory partition while the
+                    // parent run sat on `main__u-alice` / `main__p-room`, and
+                    // filed its notes under no agent — silently, with the leg
+                    // returning a perfectly good answer either way.
+                    let carried = super::spawn::CarriedAttribution::capture();
                     handles.push(tokio::spawn(async move {
                         let _running_reg = running_reg;
                         let _cancel_guard = CancelGuard::new(batch_cancel.clone());
-                        let outcome = AssertUnwindSafe(runtime.run(runtime_config))
-                            .catch_unwind()
+                        let outcome = carried
+                            .reestablish(async move {
+                                AssertUnwindSafe(runtime.run(runtime_config))
+                                    .catch_unwind()
+                                    .await
+                            })
                             .await;
                         // Terminate this proposal's cancel-bridge watcher.
                         batch_cancel.cancel();

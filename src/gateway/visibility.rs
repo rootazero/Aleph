@@ -147,10 +147,7 @@ pub fn ambient_owner_visible(owner_user_id: Option<&str>) -> bool {
 /// this module, so cron / A2A / in-process callers are unchanged.
 #[must_use]
 pub fn project_visible(project_id: &str) -> bool {
-    match visible_owner_filter() {
-        None => true,
-        Some(caller) => crate::projects::roster::is_member(project_id, &caller),
-    }
+    project_visible_to(project_id, visible_owner_filter().as_deref())
 }
 
 /// Whether `meta` is visible to `actor` — the EXPLICIT-actor form of
@@ -270,6 +267,28 @@ pub async fn existing_session_is_visible(store: &dyn SessionStore, key: &Session
 /// positive-match arm for them.
 #[must_use]
 pub fn partition_visible(partition_id: &str) -> bool {
+    partition_visible_to(partition_id, visible_owner_filter().as_deref())
+}
+
+/// [`partition_visible`] with the actor supplied explicitly — the twin of
+/// [`session_visible_to`], and needed for the same reason one level down.
+///
+/// `partition_visible` resolves its actor through [`visible_owner_filter`],
+/// which reads only `CALLER_USER`. That task-local is **dead inside a spawned
+/// run** (`scope/mod.rs` says so in as many words), and every tool call happens
+/// inside one — so a tool author reaching for the obvious predicate would get a
+/// silent always-true. The gateway gates ~20 caller-supplied partition ids with
+/// it; the tool face gated none, and `memory_search`'s `workspace` /
+/// `workspaces` / `cross_workspace` arguments are model-supplied and reach
+/// every partition on disk.
+///
+/// Tools must therefore pass [`crate::scope::ambient_owner`], which reads the
+/// gateway identity first and falls back to the run-seeded `ScopeAttribution`.
+///
+/// `None` = unrestricted (internal / cron / A2A), matching every other
+/// predicate in this module.
+#[must_use]
+pub fn partition_visible_to(partition_id: &str, actor: Option<&str>) -> bool {
     let Some((_base, suffix)) = partition_id.split_once(crate::memory::project_scope::NS_SEP)
     else {
         return true;
@@ -282,11 +301,21 @@ pub fn partition_visible(partition_id: &str) -> bool {
     // not start with `"p-"`, so the two families cannot collide (pinned by
     // `projects::store::tests::the_project_id_family_cannot_collide_with_the_legacy_directory_family`).
     if suffix.starts_with("p-") {
-        return project_visible(suffix);
+        return project_visible_to(suffix, actor);
     }
-    match visible_owner_filter() {
+    match actor {
         None => true,
         Some(caller) => suffix == caller,
+    }
+}
+
+/// [`project_visible`] with the actor supplied explicitly. Same split, same
+/// reason — see [`partition_visible_to`].
+#[must_use]
+pub fn project_visible_to(project_id: &str, actor: Option<&str>) -> bool {
+    match actor {
+        None => true,
+        Some(caller) => crate::projects::roster::is_member(project_id, caller),
     }
 }
 
@@ -646,6 +675,46 @@ mod tests {
     /// The full partition matrix pinned by the Task 7 brief: (suffix family,
     /// caller) → expected. Each case scopes `CALLER_USER` around the read so
     /// task-local state never leaks between cases.
+    /// The twin exists because `CALLER_USER` is dead inside a spawned run, and
+    /// every tool call happens inside one — so a tool reaching for
+    /// `partition_visible` would get a silent always-true. This asserts the two
+    /// forms agree when the task-local IS set, and that the explicit form keeps
+    /// working when it is not (the case that matters).
+    #[tokio::test]
+    async fn the_explicit_actor_twin_answers_where_the_task_local_is_dead() {
+        // No task-local anywhere — a spawned run. The task-local form cannot
+        // tell alice's partition from bob's; the explicit form can.
+        assert!(
+            partition_visible("main__u-bob"),
+            "the task-local form is unrestricted with no CALLER_USER — this is \
+             the fail-open a tool would have inherited"
+        );
+        assert!(!partition_visible_to("main__u-bob", Some("u-alice")));
+        assert!(partition_visible_to("main__u-alice", Some("u-alice")));
+
+        // `None` actor stays unrestricted, matching every sibling predicate
+        // (cron / A2A / internal).
+        assert!(partition_visible_to("main__u-bob", None));
+
+        // Org and legacy-project families are unaffected by the actor.
+        for id in ["main", "main__proj-deadbeef"] {
+            assert!(partition_visible_to(id, Some("u-alice")));
+            assert!(partition_visible_to(id, Some("u-bob")));
+        }
+
+        // And the two forms agree when the task-local IS the actor.
+        for id in ["main", "main__proj-x", "main__u-alice", "main__u-bob"] {
+            let via_task_local = CALLER_USER
+                .scope(Some("u-alice".to_string()), async { partition_visible(id) })
+                .await;
+            assert_eq!(
+                via_task_local,
+                partition_visible_to(id, Some("u-alice")),
+                "the two forms must not drift for {id}"
+            );
+        }
+    }
+
     #[tokio::test]
     async fn partition_visible_matrix() {
         // No suffix at all: org layer, shared by design — visible to everyone,

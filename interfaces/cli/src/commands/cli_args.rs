@@ -152,6 +152,12 @@ pub enum Commands {
         action: WorkspaceAction,
     },
 
+    /// User management — add people to this core and manage their roles
+    Users {
+        #[command(subcommand)]
+        action: UsersAction,
+    },
+
     /// Log management
     Logs {
         #[command(subcommand)]
@@ -846,6 +852,14 @@ pub enum WorkspaceAction {
         #[arg(long)]
         include_archived: bool,
     },
+    /// Show one workspace in detail
+    ///
+    /// Archived workspaces are shown too — this is addressed by exact ID, and
+    /// the output says so on its Status line. `update` refuses them.
+    Get {
+        /// Workspace ID (the ID column of `workspace list`)
+        id: String,
+    },
     /// Create a new workspace
     Create {
         /// Workspace ID — the key `archive` addresses it by (URL-safe slug, e.g. "crypto")
@@ -860,10 +874,60 @@ pub enum WorkspaceAction {
         #[arg(long)]
         icon: Option<String>,
     },
+    /// Change a workspace's name, description or icon
+    ///
+    /// Every field is a patch: the ones you omit are left alone, not cleared.
+    /// At least one is required — an update that changes nothing would print
+    /// "updated" and mean it, which is worse than an error.
+    ///
+    /// This is the only way to fix a display name after `create`, and archiving
+    /// is not an escape hatch: it is a soft delete, the ID stays taken, and an
+    /// archived workspace is read-only.
+    Update {
+        /// Workspace ID (the ID column of `workspace list`)
+        id: String,
+        /// New display name
+        #[arg(long)]
+        name: Option<String>,
+        /// New description
+        #[arg(long)]
+        description: Option<String>,
+        /// New emoji or icon identifier
+        #[arg(long)]
+        icon: Option<String>,
+    },
     /// Archive a workspace
     Archive {
         /// Workspace ID to archive (the ID column of `workspace list`)
         id: String,
+    },
+}
+
+#[derive(Subcommand)]
+pub enum UsersAction {
+    /// List every principal this core knows
+    List,
+    /// Create a principal (the server generates their id)
+    Create {
+        /// Display name — what the roster picker and message bylines show
+        display_name: String,
+        /// `member` (default) or `admin`
+        #[arg(long)]
+        role: Option<String>,
+    },
+    /// Rename a principal, change their role, or deactivate them
+    Update {
+        /// The `u-…` id from `aleph users list`
+        user_id: String,
+        /// New display name
+        #[arg(long = "name")]
+        display_name: Option<String>,
+        /// `member` or `admin` — applied to live connections without a reconnect
+        #[arg(long)]
+        role: Option<String>,
+        /// `active` or `deactivated` — deactivating revokes every device they hold
+        #[arg(long)]
+        status: Option<String>,
     },
 }
 

@@ -116,9 +116,18 @@ fn target_status(decision: ReviewDecision) -> CoordTaskStatus {
     }
 }
 
-/// Soft leader-only guard. `leader` is the resolved team leader (None when the
-/// task carries no team / the team can't be read — then we can't verify, so we
-/// allow and lean on prompt-gating). Pure / host-testable.
+/// Soft leader-only guard. `leader` is the resolved team leader.
+///
+/// `None` may ONLY mean "this task carries no team". It must never reach here
+/// meaning "the team could not be read", which is what `ScopedTeamStore`
+/// returns — `Ok(None)` — for a team the caller does not own. Consuming that
+/// fail-closed answer as `leader == None` inverted it into a permission: any
+/// caller could flip any other user's coord task to Completed/ReQueued, unblock
+/// its dependents and write feedback into it.
+///
+/// The ownership question is therefore answered BEFORE this predicate, by
+/// `teams::task_team_reachable`, which distinguishes the two cases the way this
+/// function cannot. Pure / host-testable.
 #[must_use]
 fn is_authorized(caller: &str, leader: Option<&str>) -> bool {
     leader.is_none_or(|l| l == caller)
@@ -180,6 +189,22 @@ impl AlephTool for TaskReviewTool {
                 message: "no coord_task with that id — nothing to review".into(),
             });
         };
+        // Ownership first, and with the predicate built for it. The
+        // `ScopedTeamStore` decorator answers a foreign team with `Ok(None)`,
+        // which is indistinguishable from "no team" once it has been folded
+        // into `leader` below — so the distinction has to be drawn here, while
+        // both answers are still separable. Refusal reuses the not-found output
+        // above verbatim: a task belonging to someone else and a task that does
+        // not exist must read identically.
+        if !crate::teams::task_team_reachable(Some(&self.team_store), task.team_id.as_deref()).await
+        {
+            return Ok(TaskReviewOutput {
+                task_id: args.task_id,
+                status: "not_found".into(),
+                newly_unblocked: Vec::new(),
+                message: "no coord_task with that id — nothing to review".into(),
+            });
+        }
         let leader = match task.team_id.as_deref() {
             Some(team_id) => self
                 .team_store

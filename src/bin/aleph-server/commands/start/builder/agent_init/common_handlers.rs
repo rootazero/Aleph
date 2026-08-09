@@ -126,16 +126,23 @@ pub(super) fn register_common_handlers(
 ) {
     // Register status/cancel (work for both real and simulated modes)
     if let Some(ref rm) = run_manager {
+        // Both take `session_store`: a bare `run_id` is a caller-supplied
+        // identifier like any other, so it resolves run → session → the one
+        // visibility predicate before either handler acts on it.
         let rm_status = rm.clone();
+        let sm_status = session_store.clone();
         server.handlers_mut().register("agent.status", move |req| {
             let manager = rm_status.clone();
-            async move { handle_agent_status(req, manager).await }
+            let store = sm_status.clone();
+            async move { handle_agent_status(req, manager, store).await }
         });
 
         let rm_cancel = rm.clone();
+        let sm_cancel = session_store.clone();
         server.handlers_mut().register("agent.cancel", move |req| {
             let manager = rm_cancel.clone();
-            async move { handle_agent_cancel(req, manager).await }
+            let store = sm_cancel.clone();
+            async move { handle_agent_cancel(req, manager, store).await }
         });
 
         // Register chat handlers (abort, history, clear work for both real and simulated)

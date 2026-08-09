@@ -12,9 +12,20 @@
 //! 3. Selecting a tier writes `SessionIdentityMeta.custom["exec_tier"]` through
 //!    the existing `sessions.patch` RPC — the same carrier as
 //!    `custom["project_root"]`. A session tier REPLACES the global tier for that
-//!    session (it can escalate as well as lower it) and takes effect on the next
-//!    tool call.
+//!    session and takes effect on the next tool call. It may escalate as well
+//!    as lower it **for an operator**; a non-operator's resolved tier is
+//!    clamped to the global one (`turn_permissions::resolve_exec_tier`), so a
+//!    member can only ever arm the gate further, never disarm it.
 //! 4. "Follow global" clears the override.
+//!
+//! Step 2's fetch is admin-gated, which for a member means REFUSED. That is a
+//! state this component renders (see `refused`) rather than a warning it
+//! logs: an empty option list is indistinguishable from "this product has one
+//! choice", and saying nothing at all is how the member's only visible control
+//! over their own approval gate quietly disappeared. **Known gap:** the tier id
+//! CATALOG is still operator-only, so a member cannot pick a stricter tier from
+//! this pill even though the server would honour it — closing that needs a
+//! member-reachable catalog read, which is a wire change, not a copy fix.
 //!
 //! The trap: a brand-new conversation has no `session_key` yet, so there is
 //! nothing to patch — and the FIRST turn is the one the user armed the gate
@@ -53,6 +64,14 @@ pub fn ExecTierPicker() -> impl IntoView {
     let refused = RwSignal::new(false);
 
     // The global tier + the selectable ids.
+    //
+    // `config.get_tool_permissions` is admin-gated, so for a member this call
+    // is REFUSED — and until 2026-08-08 the refusal was swallowed into a
+    // `console.warn`, leaving `tiers` empty and the popover showing a single
+    // "follow global" entry. The dial did not become unavailable, only
+    // invisible: the write paths (`sessions.patch` and `chat.send`'s
+    // `exec_tier`) are member-open, so the member kept the capability and lost
+    // the control. Now the refusal is a state the popover can render.
     let load = move || {
         spawn_local(async move {
             match ToolPermissionsApi::get_global(&dashboard).await {

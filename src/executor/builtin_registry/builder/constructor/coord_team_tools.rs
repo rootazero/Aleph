@@ -72,8 +72,21 @@ impl BuiltinToolRegistry {
                 // TaskUpdateTool and TaskWaitTool derive purely from the coord
                 // store; the store's own GlobalBus broadcast is what wakes
                 // `task_wait`, so neither tool needs an event bus injected.
-                let update = Some(TaskUpdateTool::new(Arc::clone(store)));
-                let wait = Some(TaskWaitTool::new(Arc::clone(store)));
+                //
+                // Both DO need the team store, for the same reason
+                // `TaskCommentTool` three lines above does: a coord task is
+                // addressed by a bare id and lives in a different database from
+                // the teams the `ScopedTeamStore` decorator wraps, so the
+                // decorator cannot see either call. The omission was accidental
+                // rather than reasoned — `config.team_store` was already in
+                // scope here, and six sibling tools were already passing it.
+                let update = Some(
+                    TaskUpdateTool::new(Arc::clone(store))
+                        .with_team_store(config.team_store.clone()),
+                );
+                let wait = Some(
+                    TaskWaitTool::new(Arc::clone(store)).with_team_store(config.team_store.clone()),
+                );
 
                 // Register parameter schemas for task tools
                 {

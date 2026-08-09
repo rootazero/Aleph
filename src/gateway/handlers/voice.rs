@@ -480,6 +480,13 @@ pub async fn handle_stream_audio(
             "PCM frame exceeds the 64KB streaming limit",
         );
     }
+    // Whose stream is this? Injecting PCM into someone else's transcription
+    // puts words in their mouth — the deltas they and their surfaces read come
+    // back carrying it. An unknown id keeps the existing silent no-op, so a
+    // refusal is indistinguishable from a stream that just stopped.
+    if !registry.caller_may_use(&params.stream_id).await {
+        return JsonRpcResponse::success(request.id, serde_json::json!({}));
+    }
     if let Some(tx) = registry.audio_sender(&params.stream_id).await {
         // `try_send`, never `send().await`: this is realtime audio. A backend
         // that stops draining (wedged ASR server, TCP backpressure) would
@@ -514,7 +521,11 @@ pub async fn handle_stream_stop(
         Ok(p) => p,
         Err(e) => return e,
     };
-    registry.remove(&params.stream_id).await;
+    // Same ownership question, same silent shape: `stop` on a foreign stream
+    // cuts off someone else's dictation mid-sentence.
+    if registry.caller_may_use(&params.stream_id).await {
+        registry.remove(&params.stream_id).await;
+    }
     JsonRpcResponse::success(request.id, serde_json::json!({}))
 }
 

@@ -865,8 +865,8 @@ mod tests {
                 "a demoted admin's live session must lose operator authority immediately"
             );
             // The event scope must narrow in the same breath, or the demoted
-            // admin keeps receiving exec approval cards (and the command text
-            // inside them) on the tab he already has open.
+            // admin keeps receiving admin-guarded traffic on the tab he
+            // already has open.
             assert!(
                 s.permissions.is_empty(),
                 "a demoted admin's live session must lose the `*` event scope"
@@ -885,6 +885,14 @@ mod tests {
                 !guard.can_receive("surface.approval", &s.permissions),
                 "a demoted admin must no longer be delivered approval banners"
             );
+            assert!(
+                !guard.can_receive("pty.output", &s.permissions),
+                "a demoted admin must no longer be delivered the operator's shell"
+            );
+            // The three `approval.*` FRAMES moved off this table on 2026-08-08
+            // (see `event_scope`'s own pin): they are gated per payload, so the
+            // demotion that matters for them is the one below, on the
+            // `caller_user` this connection now carries.
             assert!(
                 !guard.can_receive("config.changed", &s.permissions),
                 "a demoted admin must no longer be delivered config.changed"

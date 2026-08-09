@@ -61,9 +61,9 @@
 //!
 //! ## Deliberately `Global`, not owner-scoped
 //!
-//! `surface.approval`, `pairing.*`, `config.changed` all carry (or could
-//! carry) a `session_key`, but this module does NOT additionally owner-scope
-//! them: they are already role-gated by `EventScopeGuard` (filter #1).
+//! `surface.approval`, `pairing.*` and `config.changed` carry (or could carry)
+//! a `session_key`, but this module does NOT additionally owner-scope them:
+//! they are already role-gated by `EventScopeGuard` (filter #1).
 //!
 //! ⚠️ The raw `approval.*` frames USED to be on that list, on the reasoning
 //! that an exec approval for a MEMBER's session is resolved by an OPERATOR, so
@@ -72,10 +72,12 @@
 //! leaning on a role gate that had to go: `Auto`, the DEFAULT tier, parks every
 //! non-idempotent tool call, and a member had no principal allowed to release
 //! their own, so every such call died at the approval timeout. Since 2026-08-08
-//! those three topics are [`SessionIdentity::BySessionKeyOrAdmin`] and the
-//! `approval.` rule is gone from `EventScopeGuard` — the protection moved down
-//! one filter rather than being removed, and the operator's delivery is
-//! byte-for-byte what it was. `RunningSetChanged` carries a
+//! those three topics are [`SessionIdentity::BySessionKeyOrAdmin`] (a real
+//! `session_key`) or [`SessionIdentity::OperatorOnly`] (an empty one — a
+//! cluster node raised it, it has no owner) and the `approval.` rule is gone
+//! from `EventScopeGuard` — the protection moved down one filter rather than
+//! being removed, and the operator's delivery is byte-for-byte what it was.
+//! `RunningSetChanged` carries a
 //! `Vec<String>` spanning every user's in-flight sessions with no single owner
 //! to check against, so pass/fail is the wrong question for it entirely; it
 //! stays `Global` and its ARRAY is narrowed per connection instead — see the
@@ -165,6 +167,36 @@ pub enum SessionIdentity {
     /// team's events span its members' many runs and sessions). Resolved to the
     /// team's owner through the `TeamStore` — see the module doc.
     ByTeamId(String),
+    /// Attributable to no session and reserved to operators — a fleet-level
+    /// fact with no owner to compare against.
+    ///
+    /// The delivery plane could not express this before 2026-08-08. Role was a
+    /// property of the SECOND filter term only ([`crate::gateway::event_scope`]),
+    /// which keys on the topic PREFIX — so a family carrying both per-session
+    /// frames and fleet-level ones had to be all-or-nothing, and `approval.`
+    /// was gated whole for that reason alone. The consequence was the inversion
+    /// this variant exists to end: the approval bell and the resolve verb were
+    /// both operator-only, so a member's own run blocked on a gate they could
+    /// not see, died at the 120-second timeout, and the only way to get work
+    /// done was `exec_tier: "full"` — the least safe tier being the only one
+    /// that worked.
+    ///
+    /// Use it when a frame has no owner to resolve, not when resolving is
+    /// merely inconvenient: `Global` remains the answer for facts everybody may
+    /// have.
+    OperatorOnly,
+    /// Attributable to a USER directly, with no session in between — a live
+    /// speech-to-text stream belongs to whoever is speaking, and is not a
+    /// conversation yet.
+    ByUserId(String),
+    /// A frame that SHOULD carry an attribution and does not. Denied to every
+    /// scoped caller, admitted to an unscoped one (internal / single-user).
+    ///
+    /// Distinct from [`Self::Global`] on purpose: `Global` means "everyone may
+    /// have this", and folding an unstamped frame into it is how a missing
+    /// producer becomes a broadcast. Distinct from a bare `false` because an
+    /// unscoped process must keep working.
+    Unattributed,
     /// The frame names its session, AND an admin receives it regardless of who
     /// owns that session.
     ///
@@ -299,6 +331,27 @@ pub fn session_identity_of(topic: &str, data: Option<&Value>) -> SessionIdentity
             None => SessionIdentity::Global,
         },
 
+        // Live speech-to-text. `delta` is the TEXT OF WHAT THE SPEAKER SAID,
+        // published incrementally, and this topic had no arm at all — so it
+        // fell to `_ => Global` and every connection received it. The frame
+        // names no session (a streaming transcription is not a conversation
+        // yet), so it is attributed by the owner stamped at `StreamRegistry`'s
+        // single mint point and carried in the payload.
+        //
+        // Deliberately fails CLOSED on an absent stamp for a scoped caller:
+        // `ByUserId` with `None` denies, which is the right direction here
+        // (this answers "may I be told what someone said", not "may I address
+        // this key" — the `existing_session_is_visible` asymmetry runs the
+        // other way and does not apply).
+        //
+        // ⚠️ Raw-string producer: `every_frame_variant_is_classified` is
+        // structurally blind to it, so this arm owes the SOURCE-level pin
+        // `the_voice_delta_topic_is_classified_at_its_producer`.
+        "voice.transcribe.delta" => match str_field(data, "owner_user_id") {
+            Some(owner) if !owner.is_empty() => SessionIdentity::ByUserId(owner),
+            _ => SessionIdentity::Unattributed,
+        },
+
         // --- TopicEvent-form frames genuinely session-scoped and NOT
         // covered by any other filter today ---
         "session.lifecycle.changed" | "sessions.changed" => {
@@ -319,19 +372,24 @@ pub fn session_identity_of(topic: &str, data: Option<&Value>) -> SessionIdentity
         // `method_admin`). With the role gate open, `Global` here would have
         // handed every member every other member's parked commands, so the
         // classification moved rather than the protection.
+        //
+        // The family carries two kinds of frame under one prefix: a tool-gate
+        // approval names the blocked session; a cluster-node approval arrives
+        // over reverse RPC, belongs to no local run, and is published with
+        // `session_key: String::new()` (`approval/node_requester.rs`). The
+        // discriminator is therefore STRUCTURAL — is there a session key —
+        // rather than a guess about the requester.
         "approval.requested" | "approval.resolved" | "approval.expired" => {
-            match str_field(data, "session_key") {
+            match str_field(data, "session_key").filter(|k| !k.is_empty()) {
+                // A real session: the owner resolves their own, and the admin
+                // arm keeps an operator receiving a member's card as before.
                 Some(k) => SessionIdentity::BySessionKeyOrAdmin(k),
-                // Fail closed: an approval frame with no resolvable session is
-                // delivered to admins only, never broadcast. `Global` here
-                // would make a malformed payload the widest possible delivery.
-                None => SessionIdentity::BySessionKeyOrAdmin(String::new()),
+                // Fleet or malformed: no owner to compare against, so it is
+                // the operator's. Fail closed — `Global` here would make a
+                // malformed payload the widest possible delivery.
+                None => SessionIdentity::OperatorOnly,
             }
         }
-
-        // --- TopicEvent-form frames still role-gated by EventScopeGuard —
-        // see module doc "Deliberately Global" for why these are not ALSO
-        // owner-scoped despite carrying a session_key. ---
         "surface.approval" | "pairing.requested" | "pairing.completed" | "config.changed" => {
             SessionIdentity::Global
         }
@@ -492,10 +550,48 @@ impl EventVisibilityIndex {
         store: &Arc<dyn SessionStore>,
         teams: Option<&Arc<dyn TeamStore>>,
     ) -> bool {
+        let caller_role = if caller_is_admin { Some("operator") } else { Some("member") };
+        self.event_admits_for(topic, data, caller_user, caller_role, store, teams)
+            .await
+    }
+
+    /// [`Self::event_admits`] with the caller's ROLE supplied explicitly — the
+    /// exact twin of `visibility::session_visible` / `session_visible_to`, and
+    /// for the same reason: one body, two ways of naming the actor.
+    ///
+    /// The role is read here rather than at the [`EventScopeGuard`] term
+    /// because that term keys on the topic PREFIX and this decision depends on
+    /// the PAYLOAD (see [`SessionIdentity::OperatorOnly`]). Production always
+    /// calls this one — the delivery loop already holds the connection's
+    /// `caller_role` under the same lock it reads `caller_user` from.
+    ///
+    /// `caller_role: None` means "no role information", which
+    /// [`role_is_operator`](crate::tools::turn_context::role_is_operator) reads
+    /// as trusted local/internal — the repo-wide convention, and why the
+    /// boolean shim above is safe for internal callers rather than a hole.
+    pub async fn event_admits_for(
+        &self,
+        topic: &str,
+        data: Option<&Value>,
+        caller_user: Option<&str>,
+        caller_role: Option<&str>,
+        store: &Arc<dyn SessionStore>,
+        teams: Option<&Arc<dyn TeamStore>>,
+    ) -> bool {
         match session_identity_of(topic, data) {
             SessionIdentity::Global => true,
+            SessionIdentity::OperatorOnly => {
+                crate::tools::turn_context::role_is_operator(caller_role)
+            }
+            // Direct owner compare — the same shape `team_admits` uses once it
+            // has resolved a team's owner, with no store round-trip because the
+            // producer already stamped the answer into the payload.
+            SessionIdentity::ByUserId(owner) => caller_user == Some(owner.as_str()),
+            // A scoped caller is denied; an unscoped one (internal, or a
+            // single-user box where nothing resolves an identity) is not.
+            SessionIdentity::Unattributed => caller_user.is_none(),
             SessionIdentity::BySessionKeyOrAdmin(session_key) => {
-                if caller_is_admin {
+                if crate::tools::turn_context::role_is_operator(caller_role) {
                     return true;
                 }
                 let Some(caller) = caller_user else {
@@ -1634,6 +1730,50 @@ mod tests {
     /// whole topic with `format!` and has no suffix argument to scrape, so it
     /// is asserted directly below — and covered anyway by the classifier being
     /// structural rather than a suffix list.
+    /// SOURCE-level pin for the voice relay, owed for the same reason the team
+    /// one is: `voice.transcribe.delta` is published as a raw
+    /// `TopicEvent::new("…")` string with no `GatewayEventFrame` variant, so
+    /// `every_frame_variant_is_classified` is structurally blind to it — which
+    /// is exactly how it sat on `_ => Global`, broadcasting the text of what
+    /// one user said to every connection, for as long as nobody looked.
+    ///
+    /// Reads the producer's own source so that renaming the topic on one side
+    /// fails here rather than silently re-broadcasting.
+    #[test]
+    fn the_voice_delta_topic_is_classified_at_its_producer() {
+        const RELAY: &str = include_str!("voice/streaming/relay.rs");
+        let production = RELAY.split("#[cfg(test)]").next().unwrap_or(RELAY);
+
+        let topics: Vec<&str> = production
+            .match_indices("TopicEvent::new(\"")
+            .filter_map(|(i, _)| {
+                let rest = &production[i + "TopicEvent::new(\"".len()..];
+                rest.find('"').map(|end| &rest[..end])
+            })
+            .collect();
+
+        assert!(
+            !topics.is_empty(),
+            "relay.rs publishes no TopicEvent — the scanner stopped matching \
+             the call shape, so this pin has quietly become vacuous"
+        );
+        for topic in topics {
+            let owned = serde_json::json!({ "owner_user_id": "u-alice" });
+            assert_eq!(
+                session_identity_of(topic, Some(&owned)),
+                SessionIdentity::ByUserId("u-alice".to_string()),
+                "`{topic}` carries live speech and must reach its speaker only"
+            );
+            // No stamp ⇒ denied to anyone scoped, NOT broadcast. `Global` here
+            // would be the original bug with an arm in front of it.
+            assert_eq!(
+                session_identity_of(topic, None),
+                SessionIdentity::Unattributed,
+                "`{topic}` without an owner stamp must fail closed"
+            );
+        }
+    }
+
     #[test]
     fn no_published_team_topic_suffix_classifies_as_global() {
         const PRODUCERS: [(&str, &str, &str); 3] = [
@@ -1700,6 +1840,54 @@ mod tests {
     /// must decide (and justify, per this module's doc) its
     /// `SessionIdentity`, rather than a new variant silently defaulting to
     /// `Global` through `session_identity_of`'s string catch-all.
+    /// The approval family's two shapes, pinned on the classifier directly.
+    ///
+    /// The discriminator is deliberately STRUCTURAL — "is there a session key"
+    /// — and not a topic list: a suffix whitelist only covers the world as of
+    /// the day it was written, which is how `team.*` stayed on the broadcast
+    /// path for a whole arc. A fourth `approval.*` topic added tomorrow gets
+    /// the right answer for free.
+    #[test]
+    fn an_approval_is_scoped_by_its_session_and_fleet_approvals_are_operator_only() {
+        for topic in [
+            "approval.requested",
+            "approval.resolved",
+            "approval.expired",
+        ] {
+            let owned = serde_json::json!({ "session_key": "agent:main:s1" });
+            assert_eq!(
+                session_identity_of(topic, Some(&owned)),
+                SessionIdentity::BySessionKeyOrAdmin("agent:main:s1".to_string()),
+                "{topic} names a session, so that session's roster — or an admin \
+                 acting on it — decides"
+            );
+
+            // `node_requester` publishes exactly this: an approval for a
+            // command a cluster node wants to run, owned by no local session.
+            let fleet = serde_json::json!({ "session_key": "" });
+            assert_eq!(
+                session_identity_of(topic, Some(&fleet)),
+                SessionIdentity::OperatorOnly,
+                "{topic} with an empty session_key is a FLEET approval — there \
+                 is no owner to compare against, so it is the operator's"
+            );
+
+            // A malformed frame carrying no key at all is treated as fleet,
+            // i.e. the narrower answer. Fail closed toward fewer recipients.
+            assert_eq!(
+                session_identity_of(topic, None),
+                SessionIdentity::OperatorOnly
+            );
+        }
+
+        // The R5 banner is a different payload with a different audience
+        // mechanism and is deliberately NOT swept up by proximity.
+        assert_eq!(
+            session_identity_of("surface.approval", None),
+            SessionIdentity::Global
+        );
+    }
+
     #[test]
     fn every_frame_variant_is_classified() {
         fn expected(frame: &GatewayEventFrame) -> SessionIdentity {
@@ -1743,11 +1931,17 @@ mod tests {
                 // role-gated upstream: a member must receive the card for their
                 // OWN parked tool call, and the admin arm is what preserves the
                 // operator-resolves-a-member's-approval workflow the previous
-                // `Global` ruling was built around.
+                // `Global` ruling was built around. A fleet approval (empty
+                // `session_key`, raised by a cluster node over reverse RPC) has
+                // no owner to compare against and stays operator-only.
                 GatewayEventFrame::ApprovalRequested { session_key, .. }
                 | GatewayEventFrame::ApprovalResolved { session_key, .. }
                 | GatewayEventFrame::ApprovalExpired { session_key, .. } => {
-                    SessionIdentity::BySessionKeyOrAdmin(session_key.clone())
+                    if session_key.is_empty() {
+                        SessionIdentity::OperatorOnly
+                    } else {
+                        SessionIdentity::BySessionKeyOrAdmin(session_key.clone())
+                    }
                 }
                 GatewayEventFrame::SessionLifecycleChanged { session_key, .. } => {
                     SessionIdentity::BySessionKey(session_key.clone())

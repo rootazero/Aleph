@@ -143,6 +143,35 @@ impl ExecTier {
         }
     }
 
+    /// How permissive this tier is: `Ask` (0) < `Auto` (1) < `Full` (2).
+    ///
+    /// Deliberately a method rather than a derived `Ord`. `ExecTier` is
+    /// `Serialize`/`Deserialize`/`JsonSchema`, and a derived `Ord` would make
+    /// `a < b` compile everywhere with a meaning ("declaration order") that
+    /// happens to coincide today and carries no promise to keep coinciding.
+    /// The one comparison anybody needs is [`Self::most_restrictive`].
+    #[must_use]
+    const fn permissiveness(self) -> u8 {
+        match self {
+            Self::Ask => 0,
+            Self::Auto => 1,
+            Self::Full => 2,
+        }
+    }
+
+    /// The stricter of two tiers — the composition rule for a ceiling.
+    ///
+    /// Same shape as [`restrictive_min`] one level up: composing permissions
+    /// may only ever tighten, so a ceiling cannot accidentally grant.
+    #[must_use]
+    pub const fn most_restrictive(a: Self, b: Self) -> Self {
+        if a.permissiveness() <= b.permissiveness() {
+            a
+        } else {
+            b
+        }
+    }
+
     /// This tier's verdict on a tool with these declared facts.
     ///
     /// `None` = the tier has nothing to say; the caller falls back to the

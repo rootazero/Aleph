@@ -47,11 +47,24 @@ pub struct TaskWaitOutput {
 #[derive(Clone)]
 pub struct TaskWaitTool {
     store: Arc<dyn CoordTaskStore>,
+    /// The ownership gate — see [`TaskUpdateTool::team_store`] for why a coord
+    /// task needs one that the `ScopedTeamStore` decorator cannot supply.
+    team_store: Option<Arc<dyn crate::teams::TeamStore>>,
 }
 
 impl TaskWaitTool {
     pub fn new(store: Arc<dyn CoordTaskStore>) -> Self {
-        Self { store }
+        Self {
+            store,
+            team_store: None,
+        }
+    }
+
+    /// Wire the ownership gate — see [`crate::teams::task_team_reachable`].
+    #[must_use]
+    pub fn with_team_store(mut self, store: Option<Arc<dyn crate::teams::TeamStore>>) -> Self {
+        self.team_store = store;
+        self
     }
 }
 
@@ -134,27 +147,48 @@ fn build_summary(tasks: &[CoordTask], timed_out: bool) -> TaskWaitOutput {
     }
 }
 
-/// Fetch the relevant tasks based on wait args.
+/// Fetch the relevant tasks based on wait args, keeping only those whose team
+/// this caller can reach.
+///
+/// Both argument shapes funnel through here, which is why the gate lives here
+/// rather than at the two call sites: `task_ids` addresses coord tasks by bare
+/// id, and `team_id` is a caller-supplied filter the store applies without
+/// asking whose team it is. Either way the tool reported another user's task
+/// statuses, ids and summaries.
+///
+/// A **retain**, not an error: this is a list surface, and dropping what the
+/// caller may not see is what `ListFiltered` means everywhere else in the
+/// perimeter. The consequence is honest — waiting on a foreign id behaves
+/// exactly like waiting on an id that does not exist.
 async fn fetch_tasks(
     store: &dyn CoordTaskStore,
+    teams: Option<&Arc<dyn crate::teams::TeamStore>>,
     task_ids: &Option<Vec<String>>,
     team_id: &Option<String>,
 ) -> Result<Vec<CoordTask>> {
-    if let Some(ids) = task_ids {
+    let candidates = if let Some(ids) = task_ids {
         let mut tasks = Vec::new();
         for id in ids {
             if let Some(task) = store.get_task(id).await? {
                 tasks.push(task);
             }
         }
-        Ok(tasks)
+        tasks
     } else {
         let filter = CoordTaskFilter {
             team_id: team_id.clone(),
             ..Default::default()
         };
-        store.list_tasks(filter).await
+        store.list_tasks(filter).await?
+    };
+
+    let mut visible = Vec::with_capacity(candidates.len());
+    for task in candidates {
+        if crate::teams::task_team_reachable(teams, task.team_id.as_deref()).await {
+            visible.push(task);
+        }
     }
+    Ok(visible)
 }
 
 #[async_trait]
@@ -190,7 +224,13 @@ impl AlephTool for TaskWaitTool {
 
         loop {
             // Check current state
-            let tasks = fetch_tasks(self.store.as_ref(), &args.task_ids, &args.team_id).await?;
+            let tasks = fetch_tasks(
+                self.store.as_ref(),
+                self.team_store.as_ref(),
+                &args.task_ids,
+                &args.team_id,
+            )
+            .await?;
             let missing = missing_ids(&args.task_ids, &tasks);
 
             if tasks.is_empty() && missing.is_empty() {
@@ -244,6 +284,7 @@ impl AlephTool for TaskWaitTool {
                             debug!("Task wait: event channel closed, breaking out");
                             let tasks = fetch_tasks(
                                 self.store.as_ref(),
+                                self.team_store.as_ref(),
                                 &args.task_ids,
                                 &args.team_id,
                             ).await?;
@@ -254,7 +295,13 @@ impl AlephTool for TaskWaitTool {
                 }
             };
             if timed_out {
-                let tasks = fetch_tasks(self.store.as_ref(), &args.task_ids, &args.team_id).await?;
+                let tasks = fetch_tasks(
+                    self.store.as_ref(),
+                    self.team_store.as_ref(),
+                    &args.task_ids,
+                    &args.team_id,
+                )
+                .await?;
                 return Ok(build_summary(&tasks, true));
             }
             // A task event (or a lag) landed — loop to re-check the store.

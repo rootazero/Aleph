@@ -188,6 +188,13 @@ pub enum Command {
         /// Ticket lifetime in seconds (default 300, clamped to 60..=86400).
         #[arg(long, value_name = "SECONDS")]
         ttl: Option<u64>,
+        /// Bind the ticket to a principal from `aleph users list` (`u-…`).
+        ///
+        /// Omit it to pair your own device: an unbound ticket resolves to the
+        /// owner. Pass it to invite someone else — that is what makes the
+        /// redeeming device a distinct subject for every isolation predicate.
+        #[arg(long = "user", value_name = "USER_ID")]
+        user: Option<String>,
     },
     /// Print the shared Gateway token — the recovery / manual-entry credential.
     ///

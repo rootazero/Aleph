@@ -587,12 +587,11 @@ pub struct DreamDaemon {
     /// absolute best survives a restart instead of resetting to 0 (which would
     /// let a worse-than-historical cycle masquerade as a new best).
     best_health: crate::sync_primitives::Mutex<f64>,
-    /// Whether per-project memory namespacing is enabled (mirrors
-    /// `MemoryConfig.project_scoped`). When on, the daemon additionally fans
-    /// the note-maintenance stages over each `{base}__proj-*` namespace so
-    /// project-local notes written by `note_manage` are linted, consolidated
-    /// and synthesised too. Default-off → no fan-out → unchanged behaviour.
-    project_scoped: bool,
+    // `project_scoped` was mirrored here until 2026-08-08 to gate the
+    // per-namespace fan-out. It gated the wrong axis (see the fan-out site),
+    // and once the gate was removed the field had zero readers — withdrawn
+    // rather than left as a knob nothing consults. The config option itself
+    // still governs what it actually governs, in `project_scope.rs`.
 }
 
 impl DreamDaemon {
@@ -623,7 +622,6 @@ impl DreamDaemon {
             note_memory_dir: None,
             orientation: None,
             best_health: crate::sync_primitives::Mutex::new(best_health),
-            project_scoped: config.project_scoped,
         })
     }
 
@@ -1099,15 +1097,37 @@ impl DreamDaemon {
                 };
                 let mut report = pipeline.run(ctx).await?;
 
-                // Per-namespace maintenance (gated). The base agent ran the
-                // full pipeline above; scoped namespaces created under
-                // `{base}__proj-*` (legacy project-directory feature) AND
-                // `{base}__u-*` (P1 personal scope) get the note-maintenance
-                // subset so their notes are linted/consolidated/synthesised
-                // too (`list_scoped_agent_ids` scans every sibling suffix
-                // family — see project_scope.rs). The global-only stages
-                // (feedback floor, skill lifecycle, daily digest) are
-                // excluded — those stay cross-namespace.
+                // Per-namespace maintenance. The base agent ran the full
+                // pipeline above; scoped namespaces under `{base}__proj-*`
+                // (legacy project directories), `{base}__u-*` (P1 personal
+                // scope) and `{base}__p-*` (P2 project rooms) get the
+                // note-maintenance subset so their notes are
+                // linted/consolidated/synthesised too. The global-only stages
+                // (feedback floor, skill lifecycle, daily digest) stay
+                // cross-namespace and are excluded.
+                //
+                // **Ungated since 2026-08-08, and the gate was on the wrong
+                // axis.** This ran only `if self.project_scoped`, a config flag
+                // that defaults to `false` — but `u-*` and `p-*` partitions are
+                // not created by that flag at all. `project_scope.rs` states
+                // the rule as its own single source: session scoping reads the
+                // ambient task-local and is *never* gated by that config flag.
+                // So on a stock multi-user install `main__u-alice`,
+                // `main__u-bob` and `main__p-room` all existed and none of them
+                // ever received decay, consolidation, wikilink repair or
+                // synthesis — only `main` did. Third occurrence of §0's
+                // 同构分区有 N 个，维护默认只覆盖第一个.
+                //
+                // Dropping the flag rather than splitting it is safe because
+                // `list_scoped_agent_ids` is a SENSOR: it returns empty when
+                // nothing is on disk (and has its own test that it never
+                // creates the directory it measures), so a single-user box
+                // stays a byte-identical no-op and the flag bought nothing
+                // here.
+                //
+                // ⚠️ Known limit, stated rather than widened: the fan-out still
+                // only covers siblings of `DEFAULT_AGENT_ID`, so a non-default
+                // agent's scoped partitions remain unmaintained.
                 //
                 // Each namespace governs *itself*: it folds its own event log
                 // into its own gate, personality and best-health checkpoint, and
@@ -1116,11 +1136,21 @@ impl DreamDaemon {
                 // See `project_cycle` for why joining them would be worse than
                 // the drop it replaces. Per-namespace failures are logged, never
                 // aborting the base cycle.
-                if self.project_scoped {
+                {
                     let scoped = crate::memory::project_scope::list_scoped_agent_ids(
                         &memory_dir,
                         DEFAULT_AGENT_ID,
                     );
+                    if !scoped.is_empty() {
+                        // Logged on every cycle, not just the first: this is
+                        // the one line that tells an operator how many LLM
+                        // maintenance passes tonight's dream will cost, and it
+                        // scales with member count.
+                        info!(
+                            namespaces = scoped.len(),
+                            "dream: running per-namespace maintenance"
+                        );
+                    }
                     let deps = project_cycle::ProjectCycleDeps {
                         memory_dir: &memory_dir,
                         database: &self.database,

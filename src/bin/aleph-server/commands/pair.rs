@@ -21,14 +21,29 @@ use std::error::Error;
 use std::path::PathBuf;
 use std::sync::Arc;
 
-/// Handle `aleph-server pair [--ttl SECONDS]`.
+/// Handle `aleph-server pair [--ttl SECONDS] [--user u-…]`.
 ///
 /// Prints the ticket, its expiry, and every URL the core is reachable on with
 /// the ticket already attached — paste one into a phone browser, or paste the
 /// bare ticket into the Panel's authorize box.
+///
+/// `--user` is the second half of the invite flow whose first half is
+/// `aleph users create`. Without it the ticket is **unbound**: the device that
+/// redeems it resolves through `resolve_connection_identity`'s
+/// unbound-device arm to `(OWNER_USER_ID, "operator")`, which is the correct
+/// zero-config behaviour for pairing your own phone and the wrong one for
+/// handing a colleague access. With it, `set_device_user_if_unbound` binds the
+/// redeeming device to that principal, and every P0/P1/P2 predicate downstream
+/// — session visibility, memory partition, roster membership, event delivery —
+/// finally has a second subject to distinguish.
+///
+/// The parameter has been sitting in `create_bootstrap_ticket`'s signature
+/// since P0 with `None` hard-coded at this one call site, which is why the
+/// multi-user arc had no reachable way to admit a second person.
 pub fn handle_pair(
     config: Option<PathBuf>,
     ttl_seconds: Option<u64>,
+    user_id: Option<String>,
 ) -> Result<(), Box<dyn Error>> {
     use alephcore::utils::paths;
 
@@ -37,15 +52,35 @@ pub fn handle_pair(
     let store = Arc::new(
         SecurityStore::open(&db_path).map_err(|e| format!("open {}: {e}", db_path.display()))?,
     );
-    let mgr = DeviceTokenManager::new(store);
+    let mgr = DeviceTokenManager::new(Arc::clone(&store));
 
     // Same clamp as the RPC path so both entry points cannot disagree about
     // what "5 minutes" means.
     let ttl_ms = ttl_seconds.map(|s| s.clamp(60, 86_400) as i64 * 1000);
-    // Headless/CLI pairing is admin-only and has no notion of "which user" —
-    // the ticket is unbound, so the paired device defaults to the owner.
+
+    // Refuse a `--user` that names nobody, here rather than at redemption.
+    // A ticket bound to a dangling id is not a harmless typo: the device that
+    // redeems it resolves through the dangling-user arm to `("guest")` and hits
+    // the login wall on every frame — an invitation that looks minted, prints a
+    // URL, and silently cannot work. Fail where the operator is still looking.
+    if let Some(ref uid) = user_id {
+        match store.get_user(uid) {
+            Ok(Some(_)) => {}
+            Ok(None) => {
+                return Err(format!(
+                    "no such user: {uid}\n\nRun `aleph users list` to see who exists, \
+                     or `aleph users create <name>` to add someone."
+                )
+                .into())
+            }
+            Err(e) => return Err(format!("look up {uid}: {e}").into()),
+        }
+    }
+
+    // An unbound ticket (`--user` omitted) is the zero-config path: the paired
+    // device defaults to the owner, which is what pairing your own phone means.
     let ticket = mgr
-        .create_bootstrap_ticket(ttl_ms, None)
+        .create_bootstrap_ticket(ttl_ms, user_id.as_deref())
         .map_err(|e| format!("mint pairing ticket: {e}"))?;
 
     // Opportunistic hygiene, same as the RPC chokepoints.
@@ -56,7 +91,16 @@ pub fn handle_pair(
     let urls = pairing_urls(&hosts, cfg.gateway.port, cfg.gateway.tls.enabled, &ticket);
     let minutes = ttl_ms.unwrap_or(5 * 60 * 1000) / 60_000;
 
-    println!("Pairing ticket (single use, expires in {minutes} min):\n");
+    // Say who this ticket is for. An unbound ticket and a bound one look
+    // identical on the wire and grant very different authority — printing the
+    // binding is the only place the operator can see which one they just made.
+    match user_id.as_deref() {
+        Some(uid) => println!("Pairing ticket for {uid} (single use, expires in {minutes} min):\n"),
+        None => println!(
+            "Pairing ticket, UNBOUND — whoever redeems it becomes the owner \
+             (single use, expires in {minutes} min):\n"
+        ),
+    }
     println!("  {ticket}\n");
     if urls.is_empty() {
         println!(

@@ -53,12 +53,30 @@ pub fn team_visible(owner_user_id: Option<&str>) -> bool {
 /// Whether the team owning a coord task admits the current execution context —
 /// the tool-side twin of `gateway::handlers::teams::visibility::gate_task`.
 ///
-/// Six `team_*` tools address a task by id and resolve it in `coord_tasks`
-/// alone, so the [`ScopedTeamStore`] decorator never sees them; they call this
-/// after fetching the task and refuse with their own "task not found" error.
-/// The gateway's twenty task-addressed RPCs are the same shape, and the same
-/// rule: a task with no team at all reads as an unstamped record (the legacy
+/// **Nine** tools address a task by id and resolve it in `coord_tasks` alone,
+/// so the [`ScopedTeamStore`] decorator never sees them; they call this after
+/// fetching the task and refuse with their own "task not found" error. The
+/// gateway's twenty task-addressed RPCs are the same shape, and the same rule:
+/// a task with no team at all reads as an unstamped record (the legacy
 /// owner's), never as public.
+///
+/// The count was six until 2026-08-08, and the three that were missing say
+/// something about how this kind of gap survives:
+///
+/// - `task_review` DID resolve the team — and then fed the answer to
+///   `is_authorized(caller, leader)`, where the decorator's fail-closed
+///   `Ok(None)` became `leader == None` became "no leader, so anyone may
+///   review". **A fail-closed answer consumed as a value inverts into a
+///   permission**; the gate has to run before the fold, not inside it.
+/// - `task_update` and `task_wait` had no gate at all, and were constructed
+///   three lines below `TaskCommentTool` — which already took the store — in
+///   the same function, with `config.team_store` in scope. Nothing prevented
+///   it; nobody was asked.
+///
+/// A new tool that reaches a coord task by id owes this call. On a LIST
+/// surface it is a retain (`task_wait`, `task_list`); on an addressed one it is
+/// a refusal shaped exactly like "no such task" (`task_update`,
+/// `task_review`).
 ///
 /// `store == None` means no team database is wired in this deployment, so no
 /// coord task can belong to a team. That is unrestricted by construction, NOT

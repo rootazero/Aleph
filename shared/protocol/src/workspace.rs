@@ -147,6 +147,75 @@ pub struct WorkspaceRow {
     pub is_archived: bool,
 }
 
+/// The detail projection of one workspace — what `workspace.get` and
+/// `workspace.update` return and `aleph workspace get|update` renders.
+///
+/// A **second** projection of the server's `AgentEnv` next to [`WorkspaceRow`],
+/// on purpose. They answer different questions, and a detail view carrying
+/// exactly the list's columns would not have earned the round trip: `profile`,
+/// `icon` and `last_active_at` are the reason to ask about one workspace by id.
+/// The cost of a second projection is one more reconciliation assertion on the
+/// server, not a second place to drift — both are pinned there, against the
+/// real `AgentEnv`, in the module that owns the field names.
+///
+/// Every field below is rendered by a line of `workspace_cmd::detail_pairs`. A
+/// field here with no renderer is exactly the defect this module exists to
+/// prevent — see [`WorkspaceRow`] for the version of it that shipped and
+/// printed a column of dashes for months.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct WorkspaceDetail {
+    /// Workspace identifier.
+    pub id: String,
+
+    /// Display name.
+    pub name: String,
+
+    /// Description, `None` when the workspace has none.
+    #[serde(default)]
+    pub description: Option<String>,
+
+    /// Emoji or icon identifier.
+    ///
+    /// Defaulted because the server omits the key entirely when there is none
+    /// (`AgentEnv::icon` carries `skip_serializing_if`), so a required field
+    /// here would fail to parse every icon-less workspace — which is all of
+    /// them until someone passes `--icon`.
+    #[serde(default)]
+    pub icon: Option<String>,
+
+    /// Profile the workspace inherits its defaults from.
+    pub profile: String,
+
+    /// Creation timestamp. UTC on the wire; rendered in the reader's zone.
+    pub created_at: DateTime<Utc>,
+
+    /// Last activity timestamp. UTC on the wire, same as `created_at`.
+    ///
+    /// Note this is also bumped by a metadata edit, not only by conversation —
+    /// `AgentEnvStore::update` writes it.
+    pub last_active_at: DateTime<Utc>,
+
+    /// Whether the workspace is archived.
+    ///
+    /// Always rendered here, unlike the list's conditional `Status` column: a
+    /// detail view is reached by exact id and can therefore be about an
+    /// archived workspace at any time, so the field can always say two things.
+    #[serde(default)]
+    pub is_archived: bool,
+}
+
+/// Response envelope of `workspace.get` and `workspace.update`.
+///
+/// One type for both because both wrap the same thing under the same key.
+/// `update` additionally sends `"ok": true`, which is deliberately not modelled:
+/// a JSON-RPC result IS the success signal, and a client branching on the flag
+/// would be asking the same question twice and could disagree with itself.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct WorkspaceEnvelope {
+    /// The workspace that was fetched or just updated.
+    pub workspace: WorkspaceDetail,
+}
+
 /// Response envelope of `workspace.list`.
 ///
 /// `workspaces` has no serde default on purpose: a response that omits the key
@@ -201,6 +270,30 @@ mod tests {
                 .include_archived
                 .eq(&false)
         );
+    }
+
+    /// An icon-less workspace is the common case, and the server omits the key
+    /// rather than sending `null`. A required `icon` would therefore have
+    /// failed to parse essentially every real response — the kind of break that
+    /// shows up only once a client exists.
+    #[test]
+    fn a_detail_parses_a_workspace_that_has_no_icon() {
+        let envelope: WorkspaceEnvelope = serde_json::from_value(serde_json::json!({
+            "workspace": {
+                "id": "crypto",
+                "profile": "default",
+                "name": "Crypto Trading",
+                "description": null,
+                "created_at": "2026-08-08T09:30:00Z",
+                "last_active_at": "2026-08-08T09:30:00Z",
+                "cache_state": { "type": "none" },
+                "env_vars": {},
+                "is_archived": false,
+            }
+        }))
+        .expect("an icon-less workspace must parse");
+        assert!(envelope.workspace.icon.is_none());
+        assert_eq!(envelope.workspace.profile, "default");
     }
 
     #[test]

@@ -913,14 +913,61 @@ struct RunIdParams {
     run_id: String,
 }
 
+/// May this caller address `run_id`?
+///
+/// The third addressing shape. `visibility::session_visible` answers "may I
+/// touch this session key" and `teams::gate_task` answers "may I touch this
+/// task id"; a bare `run_id` was the one caller-supplied identifier in the
+/// gateway with no predicate at all. It is not a weaker capability than a
+/// session key — `AgentRunManager::cancel_run` reaches into two process-global
+/// structures (the execution adapter's cancellation token registry and every
+/// busy-queue lane), so a run id is a cross-user *kill* verb, and
+/// `handle_status` hands back `session_key`, which is exactly the fact §5.22 ⑤
+/// spent a round projecting out of `stream.running_set_changed`.
+///
+/// Resolution is run → session key → metadata → the ONE visibility predicate.
+/// It deliberately does not shape its own refusal: each caller returns the
+/// response it already returned for an unknown run id, byte-for-byte, so this
+/// gate opens no existence oracle of its own.
+///
+/// A run the manager has no record of resolves to `None` — the caller then
+/// answers as it always has for an unknown id.
+pub(crate) async fn caller_may_address_run(
+    run_id: &str,
+    run_manager: &AgentRunManager,
+    session_store: &dyn crate::gateway::session_store::SessionStore,
+) -> bool {
+    let Some(state) = run_manager.get_run_status(run_id).await else {
+        // Unknown run: nothing to protect, and the caller's existing
+        // "not found" answer is the correct one either way.
+        return true;
+    };
+    match session_store.get_metadata(&state.session_key).await {
+        Ok(Some(meta)) => crate::gateway::visibility::session_visible(&meta),
+        // No row yet: a run is accepted before `ensure_session` writes its row,
+        // so this is the ordinary first-turn window, not a foreign session.
+        Ok(None) => true,
+        // Fail closed: we could not establish whose run this is.
+        Err(_) => false,
+    }
+}
+
 pub async fn handle_status(
     request: JsonRpcRequest,
     run_manager: Arc<AgentRunManager>,
+    session_store: Arc<dyn crate::gateway::session_store::SessionStore>,
 ) -> JsonRpcResponse {
     let params: RunIdParams = match parse_params(&request) {
         Ok(p) => p,
         Err(e) => return e,
     };
+
+    if !caller_may_address_run(&params.run_id, &run_manager, session_store.as_ref()).await {
+        // The same response an unknown run id gets — a foreign run and a
+        // missing one must be indistinguishable, or this handler stays the
+        // session-key oracle it was.
+        return JsonRpcResponse::error(request.id, INVALID_PARAMS, "Run not found");
+    }
 
     match run_manager.get_run_status(&params.run_id).await {
         Some(state) => {
@@ -948,11 +995,25 @@ pub async fn handle_status(
 pub async fn handle_cancel(
     request: JsonRpcRequest,
     run_manager: Arc<AgentRunManager>,
+    session_store: Arc<dyn crate::gateway::session_store::SessionStore>,
 ) -> JsonRpcResponse {
     let params: RunIdParams = match parse_params(&request) {
         Ok(p) => p,
         Err(e) => return e,
     };
+
+    if !caller_may_address_run(&params.run_id, &run_manager, session_store.as_ref()).await {
+        // `cancelled: false` is what an unknown run id already produces, so a
+        // refusal reads as "that run isn't cancellable", never as "that run is
+        // someone else's".
+        return JsonRpcResponse::success(
+            request.id,
+            json!({
+                "run_id": params.run_id,
+                "cancelled": false,
+            }),
+        );
+    }
 
     let cancelled = run_manager.cancel_run(&params.run_id).await;
     JsonRpcResponse::success(
