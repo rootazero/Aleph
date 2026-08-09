@@ -1820,6 +1820,17 @@ mod tests {
     /// call site it exists for.
     const SPAWN_SHAPES: &[&str] = &["tokio::spawn(", "join_set.spawn("];
 
+    /// The task-locals a spawned leg must re-establish — **all** of them.
+    ///
+    /// This list used to exist only in the assertion *message* while the
+    /// predicate tested `with_scope` alone. A leg that re-established the scope
+    /// but dropped the agent id and the project root therefore passed the guard
+    /// that exists to catch exactly that, and the two carry different halves of
+    /// the partition: `with_scope` picks the room/personal namespace while
+    /// `with_agent_id` + `with_project_root` pick the corpus and the cwd within
+    /// it. Message and predicate are one list now.
+    const REQUIRED_TASK_LOCALS: &[&str] = &["with_agent_id", "with_project_root", "with_scope"];
+
     /// Source-level guard: every task spawn in this file's production
     /// code must re-establish the run's task-locals inside the spawned
     /// future.
@@ -1855,15 +1866,28 @@ mod tests {
             checked += 1;
             let end = (i + SPAWN_SCOPE_WINDOW_LINES).min(lines.len());
             let window = lines[i..end].join("\n");
-            assert!(
-                window.contains("with_scope"),
-                "loop_tool.rs:{}: a spawned task must re-establish the run's \
-                 task-locals (with_agent_id / with_project_root / with_scope) \
-                 inside the spawned future — spawned tasks inherit none of them, \
-                 so a subagent's memory writes land in the default partition \
-                 instead of the room / personal one",
-                i + 1
-            );
+            for &task_local in REQUIRED_TASK_LOCALS {
+                assert!(
+                    window.contains(task_local),
+                    "loop_tool.rs:{}: a spawned task must re-establish ALL of the \
+                     run's task-locals ({}) inside the spawned future — this one \
+                     is missing `{}`. Spawned tasks inherit none of them, so a \
+                     subagent's memory writes land in the default partition \
+                     instead of the room / personal one.\n\
+                     \n\
+                     If this leg deliberately uses the OTHER compliant shape — \
+                     capture the value before the spawn and pass it in explicitly, \
+                     as `session_manager/ops/emit.rs` and \
+                     `execution_engine/run_loop/inner.rs` do — then teach this \
+                     guard that shape rather than deleting it. A repo-wide sweep \
+                     (2026-08-09) found those two and no actual violations, so a \
+                     red here is far more likely to be a real regression than a \
+                     false alarm.",
+                    i + 1,
+                    REQUIRED_TASK_LOCALS.join(" / "),
+                    task_local
+                );
+            }
         }
         assert!(
             checked > 0,
