@@ -205,6 +205,24 @@ pub(crate) fn resume_metadata(
     }) {
         crate::scope::stamp_metadata(&mut metadata, &attr);
     }
+    // The originating connection's role, same key and same source as
+    // `handlers::agent::build_run_request`.
+    //
+    // `agent.resume` is member-open and KeyChecked, and `sessions.patch` lets a
+    // member write `exec_tier` onto their OWN session — round 2 left that write
+    // open precisely because the ceiling at resolution was supposed to bound
+    // it. But the ceiling reads this key, and
+    // `turn_context::role_is_operator(None)` is `true` ("absent role =
+    // local/internal"), so a resumed run skipped both the clamp
+    // (`ExecTier::most_restrictive(tier, global)`) and the operator-tool gate.
+    // `stamp_origin_identity` below only reaches the writer of this key for
+    // CHANNEL-origin sessions; a Panel session takes its early-return branch.
+    //
+    // Boot resume and the `/v1/admin` route have no caller scope, so this
+    // writes nothing there and their behaviour is byte-identical.
+    if let Some(role) = crate::gateway::caller_identity::current_caller_role() {
+        metadata.insert("caller_role".to_string(), role);
+    }
     metadata
 }
 

@@ -142,6 +142,29 @@ fn member_run_metadata(
     metadata.insert("chain_depth".to_string(), chain_depth.to_string());
     metadata.insert("platform".to_string(), "webchat".to_string());
     crate::teams::run_mode::stamp(&mut metadata);
+    // The initiating principal, carried across the two `tokio::spawn`s between
+    // `teams.chat.send` and here (`scope::CarriedAttribution` at both).
+    //
+    // Re-establishing the task-local is not enough on its own: `run_loop`
+    // rebuilds the run's scope from `request.metadata` and NOTHING else, and
+    // `ensure_session_under_request_scope` stamps the session row from the same
+    // map. Without this line every member run's row is written NULL/NULL and
+    // adopted by `owner_or_legacy` as the operator's — a member's team chat
+    // about their own business filed under someone else's name. `None` (no
+    // ambient scope: the background dispatcher, tests) writes nothing, which is
+    // byte-identical to the previous behaviour.
+    if let Some(attr) = crate::scope::current_scope() {
+        crate::scope::stamp_metadata(&mut metadata, &attr);
+    }
+    // Same carrier, opposite failure direction. An absent `caller_role` is read
+    // as "local/internal, trusted" (`turn_context::role_is_operator(None)` is
+    // `true`), so a member's team run skipped the exec-tier ceiling round 2
+    // installed AND the operator-tool gate — `teams.chat.send` is member-open,
+    // so this was the cheapest way to run `cron_manage` as an operator.
+    // Mirrors `handlers::agent::build_run_request` exactly.
+    if let Some(role) = crate::gateway::caller_identity::current_caller_role() {
+        metadata.insert("caller_role".to_string(), role);
+    }
     metadata
 }
 
@@ -565,7 +588,12 @@ impl GroupChatBroadcaster {
                 let team_name = team.name.clone();
                 let protocol = team.protocol.clone();
                 let user_request = content.clone();
-                handles.push(tokio::spawn(this.run_member(
+                // Second spawn boundary on this path — the outer one is
+                // `teams.chat.send`'s. A task-local restored by the outer
+                // carrier is lost again here, and `member_run_metadata` (which
+                // stamps the run's attribution) is evaluated INSIDE this task.
+                let carried = crate::scope::CarriedAttribution::capture();
+                handles.push(tokio::spawn(carried.reestablish(this.run_member(
                     team_id_spawn,
                     agent_id,
                     role,
@@ -577,7 +605,7 @@ impl GroupChatBroadcaster {
                     chain_depth,
                     budget.clone(),
                     tree.clone(),
-                )));
+                ))));
             }
             for h in handles {
                 // JoinError only surfaces when a member task panics or is cancelled.
