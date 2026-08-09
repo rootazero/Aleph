@@ -19,6 +19,12 @@
 
 | 层 | 你的口语关键词 | 规范名 (EN) | 主锚点 | 状态 |
 |----|----------------|-------------|--------|------|
+| Loop | 定时任务不准时 / 一个慢任务把调度器冻住 / cron 说 running 其实没跑 / 少了好几次触发 | Cron Scheduler Non-Blocking Tick | `src/tasks/cron/service/timer.rs`（detached spawn + 跨 tick 信号量）+ `state.rs::last_tick_at_ms` | ✅ (§4.13c, 2026-08-09) |
+| Loop | 定时任务失败了没人告诉我 / 简报突然不发了 / 一次 429 就被吵醒 | Delivery-Failure Is A Failed Run | `src/tasks/shared/delivery.rs::DeliveryStatus::delivery_failed`（cron ↔ heartbeat 共用） | ✅ (§4.13c, 2026-08-09) |
+| Loop | 心跳从来没通知过我 / heartbeat 说成功但没消息 / 监控白跑 | Heartbeat Delivery Wiring | `src/builtin_tools/heartbeat_manage.rs`（`delivery`）+ `registry/inherent.rs::inject_delivery_route` | ✅ (§4.13c, 2026-08-09) |
+| Loop | 子代理跑完了又查不到 / 先能查后查不到重启又能查 / 后台孩子活过重启但没人告诉我 | Sidecar Addressability & `announced` | `src/agents/background_persistence.rs` + `subagent_tool/recovery.rs::resolve_forgotten` | ✅ (§4.13c, 2026-08-09) |
+| Loop | task_wait 超时把进度全丢了 / 成员超时后从头重做 / resume 完还被当成暂停 | Long-Run Interruption Fidelity | `src/tools/budget.rs`（`task_wait` 行）· `teams/dispatcher/runner.rs` · `builtin_tools/workflow_tool.rs`（resume 清戳） | ✅ (§4.13c, 2026-08-09) |
+| Memory | 纠正记了但从不生效 / 说过的规矩老是重犯 / 常开地板是空的 | Feedback Floor Partition Union | `src/memory/assembler/feedback_floor.rs::load_many` + `gather.rs`（`session_read_ids`） | ✅ (§4.13c, 2026-08-09) |
 | Prompt | 系统提示词 / 提示词通用简洁精准 / 信息密度 | System Prompt Pipeline | `src/thinker/prompt_pipeline.rs` + `layers/` | ✅ |
 | Prompt | 提示词精简 / 砍系统提示词 / 层没进 prompt / 重复注入 / 骨架多大 | Prompt Contract Guards | `src/thinker/prompt_contract.rs`（reachability + 字节棘轮 + 重复句）+ `aleph-server prompt-size` | ✅ (§1.1, 2026-07-26) |
 | Prompt | prompt 预算 / token 控制 / prompt 大小 | Prompt Budget | `src/thinker/prompt_budget.rs` | ✅ |
@@ -1307,6 +1313,56 @@
 
 ---
 
+### 4.13c 五维自主性加固 round-2 (Autonomy Hardening round-2 · 2026-08-09，四批)
+
+- **口语关键词**：定时任务不准时、一个慢任务把调度器冻住、cron 说 running 其实没跑、子代理跑完了又查不到、后台孩子活过重启但没人告诉我、纠正记了但从不生效、心跳从来没通知过我、`task_wait` 超时把进度全丢了、成员超时后从头重做、暂停完 resume 了还是被当成暂停、并行子代理越跑越多、主机名被广播给所有人
+- **代码锚点**：`src/tasks/cron/service/{timer,catchup,state}.rs`、`src/tasks/shared/delivery.rs::DeliveryStatus::{delivery_failed,label,from_label}`、`src/agents/background_persistence.rs`（`announced` / `list_for_scope` / `addressable`）、`src/agents/subagent_tool/recovery.rs::resolve_forgotten`、`src/memory/assembler/feedback_floor.rs::load_many`、`src/builtin_tools/heartbeat_manage.rs`（`delivery` / `clear_delivery`）、`src/executor/builtin_registry/registry/inherent.rs::inject_delivery_route`、`src/agents/subagent_tool/types.rs::subagent_semaphore_for`、`src/gateway/event_visibility.rs`（`host.` 臂）
+- **职责**：以 KiroCrew 为参考实现的第二轮五维对照审计。round-1（§4.13b）修的是"写了但从未生效"，本轮抓到的**全部集中在同一族形状的下一层**：一件事有两个持久化答案而每张脸只读其中一个；一个哨兵的唯一写者是用户可能永远不跑的那条路径；一个自称能检测某故障的账本在**量纲**上根本测不到它。
+- **状态**：✅ 四批全部落地并验证（15689 lib tests / 集成目标全编译 / cron_probe 44/44 / aleph-panel check / clippy `--all-targets` 零警告 / fmt clean）。四条修复经**变异验证**（把旧写法放回即红）。
+
+  **Batch 1（`6b2ef3f32`）— 调度器与跨进程可寻址性**
+  - **一个慢 job 冻住整个调度器（最高危，且完全静默）**——`on_timer_tick` 在同一个 future 里 await worker pool 与全部 main handle，而 `run_timer_loop` 的再入闸把这期间**每一次**唤醒都跳过。默认 `job_timeout_secs = 900`，所以一个 15 分钟的任务让 phase1 十五分钟一次都不扫；`advance_next_run` 只算严格晚于 now 的下一次，那些触发**就此丢失**，零报错零计数。改成 heartbeat 早已验证的形状（detached spawn + 跨 tick 共享信号量、permit 在 spawn 出的 future **内部**取）。**再入闸整个删掉而不是保留**：phase1 本来就跳过带 `running_at_ms` 的 job、phase3 每次先 `force_reload`，两趟重叠的 tick 在 job 粒度上早就安全——留着它就是第二个真源。`run_worker_pool` 随之退休。
+  - **开机清陈旧标记的 2 小时门槛在它唯一的求值点上恒假**——`run_startup_catchup` 只在 boot 跑，而 singleton 由 flock 保证，所以此刻**每一个** running 标记都是孤儿。代价是真的：phase1 无条件跳过带标记的 job，且 phase1 在派发**之前**就推进了 `next_run_at_ms`，所以 `parked` 也是 false——job 看起来完全健康，只是两小时不跑。`default_timeout_ms` 参数随之零读者、一并删。
+  - **catchup 的 Phase 1.5 用 `recompute_next_run_full` 绕过永久停摆守卫** ⇒ 每次重启等价于替操作者按了一次 enable：停摆 job 重新排期、再跑、再永久失败、再发一条 bypass 冷却的告警、再停摆。改走 `recompute_next_run_maintenance`（该语义的唯一源，自带 `enabled` 判断与守卫）。
+  - **`cron.status` 的 `running` 是字面量 `true`**——而 timer loop 的启动是**有条件的**（无 execution adapter 即跳过，daemon 模式下连那行 stdout 都没有），全套 `cron.*` handler 照常注册。现由 `ServiceState::last_tick_at_ms` 派生（单写者单读者），并把该戳一并回给客户端。
+  - **`request_shutdown` 在 cron 侧零生产调用者**且 `CronService` 不暴露它 ⇒ 循环的退出臂不可达，进程拆依赖时它还在派发 job。
+  - **投递失败被记成成功的一次运行**——`consecutive_errors` 归零、无告警、无退避、不重试；一个每天推简报的 job 在通道挂掉后**静默地永远停止送达**。判据收敛成两个调度器共用的 `DeliveryStatus::delivery_failed`（真源落在被依赖的一侧），cron 同时成为零生产者变体 `NotRequested` 的**唯一正确生产者**（"没人要消息"从此不再和"消息丢了"同形）。
+  - **执行器 `Err` 臂的内联投递绕开整个告警闸**——没有 `after`、没有 `cooldown_ms`、没有 `TRANSIENT_ALERT_FLOOR`（那个常量的 doc 自称"这是什么让 8am 的一次 429 blip 不触发告警"，而这条路在第 1 次就吵醒用户），与 phase3 的 D4 默认告警**双发**，且是第四个绕开 `ExecutionError::user_receipt` 的面。删除；超时与失败自此走同一条经门的腿。
+  - **sidecar 的尾部截断方向写反**（CRITICAL）——`.rev().find(len - i <= TAIL)` 返回的是**最后一个字符**的下标，应取满足谓词的**最小**下标。任何超过 8 KiB 的 trail（即任何真实负载）都被交成"省略号 + 一个字"，而这正是 W24 sidecar 存在的全部理由。短 trail 从不进这个分支，所以本机永远测不出来。
+  - **`record_settled` 把刚写下的墓碑移出索引**，理由写着"live tracker 会替它回答（直到它自己的 TTL）"——而 TTL 到期后没有任何人把记录还回来，`lookup` 也不回落磁盘。于是正常完成的孩子**先能查、一小时后查不到、重启后又能查**（boot 会把终态记录读回索引）。
+  - **`phase` 答"做完了吗"，没有人答"有人知道吗"**——墓碑先于 announce 写下，而 announce 在父忙时重试 0/30/120s；daemon 死在这两分半里，boot 只对账 `Running`，于是 spawn 时对模型许下的"完成会通知你"被静默作废，结果还躺在盘上。新增 `announced`（`serde(default)` ⇒ 存量记录读作未投递，fail-safe 方向），戳在**两个已有咽喉**（announce 成功臂、tracker `mark_consumed`），boot 现在也交回 `Settled && !announced`，且措辞与 `Abandoned` 分开（"它跑完了，只是你没被告知"）。
+  - **两套跨重启恢复真源，五张脸各读其一**——`check_status`/单 id `wait` 只问 sidecar，`cancel`/`list`/多 id `wait` 只问事件日志。症状是**自相矛盾**：`list` 把某 id 渲染成 `completed_recovered` 带结果预览，紧接着 `check_status` 同一个 id 说"不存在"；而多 id `wait` 的 `unknown_note` 写死"they will never complete — drop them"，对着 sidecar 正握着 partial_result 的孩子说。收敛成 `recovery::resolve_forgotten`，优先级明写在一处（日志 `Completed` 的真实终稿 > sidecar 的 phase+trail > 日志 `Interrupted`）。⚠️ **两个源覆盖面不同**：`SubagentSpawned` 在 spawner 取到信号量**之后**才发，所以还排在队里就随 daemon 消失的孩子在日志里一条记录都没有，而 sidecar 的 `record_start` 在 `tokio::spawn` 之前就写了。
+  - **sidecar 的作用域谓词对空 `root_session` 是 fail-open**，而它自称镜像的 tracker `addressable` 是严格相等——一个 addressing 规则的两半不能对退化情形有分歧。
+
+  **Batch 2（`98363f3e9`）— 两个学习/监控闭环的空转**
+  - **常开 feedback 地板读 base 分区、蒸馏器写会话分区，出厂形态下这条腿恒空**（CRITICAL）——每个纠正都过 `caller_memory_partition`，而零配置 loopback Panel 会话就是 `Personal(u-owner)`，所以出厂默认写进 `main__u-owner/feedback/`，地板却扫 `main/feedback/`。**静默**是因为这些规则在查询词法命中时照常出现——唯一坏掉的是地板存在的**全部理由**：当前回合文本对不上、而这正是用户最可能重犯那个错的时候。现读 `session_read_ids`（就是同一个函数里 `fetch_notes` 已经在调的那个推导），base ∪ 本分区，合并后**再**排序与截断。`project_scope` 的"Floors 分床"不变量同批改（同一事实的两份表述）。
+  - **`SCAN_CAP` 在按 severity 排序之前按 readdir 序截断** ⇒ 语料超过 64 条后，哪 6 条进常开区由目录遍历序决定；现按 mtime 取最新 64（与既有的"最新优先"平手规则同一维度）。
+  - **heartbeat 的 `delivery_config` 全仓零写入者**（CRITICAL）——工具 create 臂不设、update 臂用 `..Default::default()` 跳过、两个 RPC handler 一个字不提。而那个字段 gate 住**整条通知路径**：探针触发、L2 agent 花掉一次完整 LLM 回合、模型判定"要通知用户"，然后消息蒸发，运行史记一行成功。`resolve_alert_config` 的默认失败目标从同一字段合成，所以**失败告警的默认通道也是死的**；`heartbeat_report` 全程返回 `acknowledged: true`。补齐两个面的写入者，并把 `cron_manage` 的 `__channel`/`__conversation_id` dispatcher 注入收进单一源 `inject_delivery_route` 后接给 `heartbeat_create`——"在 Telegram 里说一句每小时看一下 CI"出厂即能收到。
+  - **补了一条方向相反的守卫**：`every_update_field_has_a_production_writer`（源码级 census，断言 `HeartbeatTaskUpdates` 每个字段都有非测试写入者）。cron 那条 `every_panel_dto_field_is_read_by_a_handler` 问的是"DTO 字段有没有 handler **读**"，对这个故障结构性失明——这就是它没抓到的原因。⚠️ 该 bug 的单测全绿，因为测试**自己手工填了** `task.delivery_config`。
+  - **`NoteConsolidate` 是唯一既不限对数、又不认 provider 耗尽的循环型 stage**——大类目走全 O(n²) 标题叉积、每对一次 LLM 调用，正是 `NoteDrift` 的 doc 记下的"一夜一万次 provider 调用"那个形状，而 `feedback/` + `lesson/` 恰恰是这条学习轴不断往里加东西的类目。烧光配额会让后续所有 stage（含两个 distill）静默早返回，表现为"做梦跑了但什么也没学到"。补 `[memory.dreaming] consolidate_max_pairs_per_run` 与 `is_provider_exhausted` 早返回（照抄 note_drift / note_weave，不发明第三种形状）。
+
+  **Batch 3（`619e818c4`）— 长跑轴：在中断的那一刻把已做的工作扔掉**
+  - **`task_wait` 不在 `BUILTIN_TOOL_BUDGETS_MS` 里** ⇒ 落 300s 默认预算，而它自己的默认等待也是 300s——**一次掷硬币**；任何大于 300 的 `timeout_seconds` 必然由 harness 先到期，把 `build_summary` 已经算出的 completed/failed/pending 三张表整份丢掉，交给模型一个不带任何进度的工具错误。两侧各自都对、各自都有测试，没有任何测试把两个钟放进同一个断言。现补预算行 + 工具自钳 + 与 `ask_user_budget_outlives_the_clarification_timeout` 同形的守卫。
+  - **成员 run 超时/失败丢掉本次已产出的输出，而下一次的 recovery prompt 逐字命令它"接着做、不要从头开始"**——那条 per-task 会话是持久的、消息已落盘，成功臂用的 `fetch_last_reply` 一行就能取回。一个 10 分钟的深研究步骤因此每次重试都从零开始，直到烧完 `max_retries` 变 `FailedFinal`。现 Failed/Timeout 两列都写（error 说它没完成、summary 说它做到哪），handoff 两者都渲染而不是 error 赢者通吃；Busy/Cancelled 保持空（那两个是**没开始过**的尝试，给它们安上别人的产出是另一种谎）。`task.result` 仍只在 Completed 写，所以部分产出不会被误当交付物。
+  - **`workflow(resume)` 不清除它本该取消的那个暂停意图**——`pause` 对在飞步骤只盖 `paused_from="in_progress"` 不动状态，而 resume 循环的 `status != Paused` 短路**在它唯一的写入者之前**。于是唯一一个写给非 Paused 行的戳，就是没有任何人清除的那个；它是持久的，孤儿 reclaim 此后永远读它——该任务将来**每一次**崩溃都被 park 成 `Paused`（对两个 janitor 都不可见），而 resume 早已报告成功。reclaim 自己的 doc 写着"戳会随行并由 `workflow(action='resume')` 清除"，这次让那句话成真。既有测试**先把行手工改成 Paused** 才 resume，所以只覆盖了崩溃后那条路。
+  - **子代理并发上限的生命周期比它约束的对象短**——信号量是 `SubagentTool` 的实例字段而该工具**每请求重建**，后台孩子是刻意活过 run 的 detached task。第 N 轮的 4 个孩子握着 S_N 的 permit，第 N+1 轮拿到全新的 S_{N+1} 又是满额 4 个；一个每轮扇出 4 个后台孩子的会话可以有几十个同时打 provider，而 operator 配的是 4——**而这个旋钮存在的理由正是"紧限流后面的部署没法收窄"**。现按顶层会话共享（`Weak` 持有，最后一个 permit 与最后一个工具实例都消失后条目自然可回收，`OwnedSemaphorePermit` 会把自己那份 `Arc` 撑住，正是"在飞的孩子"那种情形）；无会话的调用者（CLI / 测试 / 直接构造）仍拿私有信号量，进程全局状态不进单测。这是 `BackgroundAgentTracker` 早就做过的同一个生命周期纠正，**症状相反**：那里丢的是结果，这里丢的是约束。
+
+  **Batch 4（`9bb3c9e60`）— 泄漏、够不到的机件、与代码相反的文档**
+  - **`host.presence.update` / `host.mic_level.update` 是裸字符串 topic，落 `_ => Global` 且 `EventScopeGuard` 无 `host.` 规则**——载荷含宿主机 `hostname`、OS `username` 与"人在不在电脑前"，两道闸全开。`PresenceConfig` 的 doc **自己写明了这个风险**，而唯一缓解只是 `default_enabled() == false`——对照着那份 doc 把它打开的操作者没有第二道闸。现判 `OperatorOnly`（主机属于跑 daemon 的那个人，没有会话可归属），按 `host.` **前缀**而非两条 topic 白名单（白名单只覆盖立法当天的世界），并补源码级 pin `host_topics_are_classified_at_their_producers`。
+  - **`cron_manage` 能建能删能手动跑，唯独答不了"这个任务为什么一直失败"**——运行史自子系统上线就存着、`cron.runs` RPC 也读它，但没有任何模型面读过；诊断一个失败 job 的唯一办法是**再跑一次看看**，而那会改变被诊断的对象。新增 `CronService::job_runs` + `action='runs'`。**目录字节棘轮上是净减**：动作语义写进 `CronAction::Runs` 变体（它的同类都在那儿），`DESCRIPTION` 那一句路由提示由删掉开头那句动作枚举支付——那正是 schema 已经说过的话，即三问里第 3 问点名的近似重复（82,462 → 82,400 B）。
+  - **一个可写的 schedule 有两个已经漂移的校验器**——`validate_schedule_kind` 的 `At` 臂是空的，于是过期 one-shot 被工具拒绝、被 `cron.update` 接受并报成功，而它永远不可能触发（`compute_next_run_for_job` 对它返回 `None`，job 当场停摆）。工具改成共享校验器的薄适配器，缺的那道检查补进共享侧。
+  - **确定性错峰实现完好但每个生产构造点都写死 `stagger_ms: None`** ⇒ 同一表达式的所有 job 永远挤在同一趟 tick。经 `ScheduleInput::Cron` 暴露。
+  - **文档与代码相反两处**：`Config.desktop` 的 doc 说缺省 section 复现"presence on @30s"，而代码、它的默认值和它自己下面那条测试都说关闭；`FEATURE_LOCATOR.md` 结尾误提交了一段 `</content></invoke>` 工具调用残片，且有**两个 `### 4.13`** 而 CLAUDE.md 路由表对七个子系统都写"§4.13"（现拆 4.13a / 4.13b）。
+
+- **已知残余 / 待决策（本轮刻意只报不改）**：
+  - **`src/tasks/presence/` 与 `src/tasks/mic_level/` 全仓零消费者**——Panel 不订阅、不渲染，文档也没写谁读。按 R10 的 YAGNI 撤回模式默认应当 **CUT**（连同 `DesktopDaemonConfig` 的两个字段与 boot 接线），泄漏面随之消失。本轮只做了"无论删不删都正确"的那一半（fail-closed 分类），删两个完整子系统属于产品决策。
+  - **cron 任务链（`next_job_id_on_success` / `on_failure`，含环检测与 phase3 派发臂）全仓只有 `#[cfg(test)]` 写入者**——消费者完整、生产者为零。CUT 还是给 `cron_manage` 加写面，同样是产品决策。
+  - **`gateway.metrics.subagent_concurrency` 的 WASM 镜像零调用者**——服务端那半不是死的（admin-gated 只读诊断 RPC，脚本与运维可达），死的是 `interfaces/webchat/src/api/system.rs` 里那两个镜像类型。按"一个展示用字段在提交前必须能指出渲染它的那一行代码"应当 CUT 客户端那半。
+  - **`MAX_TASK_RECOVERIES` 仍是常量**（同 §4.13b 的理由，未变）。
+- **打磨话术**：「round-2 分四批：**batch 1 调度器与可寻址性、batch 2 两个空转的闭环、batch 3 长跑轴、batch 4 泄漏与文档**。round-1 修的是"写了但从未生效"，round-2 是它的下一层——**同一个真源有两份持久投影而每张脸只读一份**（子代理恢复 5 张脸）、**哨兵的唯一写者是用户可能永远不跑的路径**（heartbeat `delivery_config`、embedding 签名）、**账本的量纲测不到它自称检测的故障**（`stale_vector_paths` 对维度失明）。三条最容易复发的形状：(1) **两个子系统是孪生时，一边修好的判据要主动搬到另一边**——cron 与 heartbeat 在"慢任务阻塞循环""投递失败算不算失败""告警投递失败要不要寄存"上曾有三个分歧，每一个都是 heartbeat 对、cron 错；(2) **上限/信号量/注册表的生命周期必须不短于它约束的对象**——`SubagentTool` 每请求重建而后台孩子活过 run，于是那个上限每轮重发一次额度；(3) **一句关于"谁能看"的话，要在这个能力的每一张脸上用同一个推导**——`host.` 前缀判据写成结构式而不是两条 topic 的白名单，正是因为下一个 `host.*` reporter 不会记得回来改白名单。**改 cron 调度节奏只改 `run_timer_loop`/`on_timer_tick` 一处**，别把 await-the-batch 写回去；**改"投递失败算不算失败"只改 `DeliveryStatus::delivery_failed`**，两个调度器共用它。」
+
+---
+
 ## 5. 横切关注点
 
 ### 5.1 安全原语 (Security Primitives)
@@ -2121,6 +2177,9 @@
 
 | 13 | Feishu / MS Teams 通道 | ❌ **在生产里根本不存在（2026-07-26 查证，本轮只报不修）** | 两者都不是"没注册工厂"——它们**压根没有 `ChannelFactory`**：全仓 17 个 `impl ChannelFactory` 里没有它们。`MsTeamsChannel::new` 只出现在自己的测试里；`FeishuChannel` **一次也没被构造过**（连自己模块里都没有）。半连线尤其误导：`inbound_router/executor.rs:545` 会解析 `[channels.feishu]` 去建 `FeishuEventEmitter`（连 `typing_indicator` 旋钮都读了），于是配置看着"有人用"，实际没有任何通道去收发。第 12 条修的 10 个只是**忘了登记**，这两个是**没有可登记的东西** | **要它们能用得先写 factory + 注册**（各 ~10 行，照 `SlackChannelFactory` 抄），但那是新功能不是连线：先确认真有人要 Feishu / Teams，否则按 YAGNI 应该反过来——连同 msteams 那份**零消费者**的 `GraphClient::list_messages` 一起撤回 |
 
+| 15 | `src/tasks/presence/` + `src/tasks/mic_level/` | ⚠️ **零消费者，待决策（2026-08-09，§4.13c）** | 两个 reporter 各自完整（配置、间隔、快照、单测），但 `host.presence.update` / `host.mic_level.update` 在全仓——含 `interfaces/`、`shared/`、`docs/`——**只在自己的定义处出现**：没有订阅者、没有渲染、没有文档说谁读。载荷含宿主机 `hostname` / OS `username` / 是否有人在电脑前 | **本轮只做了泄漏那一半**：两个 topic 现判 `OperatorOnly`（此前落 `_ => Global`，两道闸全开），带源码级 pin。**CUT 是默认答案**（R10 YAGNI）：删两个模块 + `DesktopDaemonConfig` 两字段 + `start/mod.rs` 接线。删两个完整子系统属于产品决策，故只报不做 |
+| 16 | cron 任务链 `next_job_id_on_success` / `on_failure` | ⚠️ **只有测试写入者（2026-08-09，§4.13c）** | 消费面完整：`chain::detect_cycle` 环检测 + `phase3_writeback` 的派发臂 + `trigger_chain_job`。生产写入者**全仓为零**——`cron_manage` / `cron.*` RPC / Panel 都不暴露这两个字段，唯一赋值点在 `chain.rs` 自己的 `#[cfg(test)]` 模块 | **二选一**：CONNECT（给 `cron_manage` create/update 加两个字段，~20 行，环检测已就位）或 CUT（删 `chain.rs` + phase3 的 chain 段）。先确认真有人要"A 成功后跑 B" |
+| 17 | `gateway.metrics.subagent_concurrency` 的 WASM 镜像 | ⚠️ **客户端零调用者（2026-08-09，§4.13c）** | 服务端那半**不是**死的：admin-gated 只读诊断 RPC，脚本与运维可达。死的是 `interfaces/webchat/src/api/system.rs::SystemApi::subagent_concurrency` 与两个镜像 struct——全 `interfaces/` 零调用点（对照组 `run_concurrency` 有三个）。`pub` 项不触发 `dead_code` | 按"一个展示用字段在提交前必须能指出渲染它的那一行代码"应 **CUT 客户端那半**，服务端保留为运维面并在 §4.11 round-9 改写成「有 RPC，无 Panel 消费者」 |
 | 14 | 崩溃恢复上限 `MAX_TASK_RECOVERIES` 不可配 | ⚠️ **刻意 parked（2026-08-08，§4.13）** | 上限本身已经存在且生效（此前完全没有：`Abandoned` 正确地不花重试预算，但 `started_at` 每次重派都刷新 ⇒ 僵尸网永远看不到一个反复崩溃的任务）。缺的只是**可配**：它是 `teams/dispatcher/mod.rs` 的常量而非 `DispatcherConfig` 字段，因为 boot 站点用**穷举字面量**构造该 struct、且那个站点在 `aleph-server` bin crate 里——从库侧加字段编译不过 | **要升格必须同批改 bin 侧构造点**（`DispatcherConfig` 的字面量补一行）。在此之前别在库侧单方面加字段：`cargo check -p alephcore` 看不见 bin crate，会在 `cargo check` 绿的情况下把 bin 构建打断 |
 
 ## 附录 B. 高频"混称"对照（说清楚指哪个）
