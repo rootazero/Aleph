@@ -152,16 +152,6 @@ impl TemplateRegistry {
     pub fn list(&self) -> impl Iterator<Item = &TeamTemplate> {
         self.entries.values()
     }
-
-    #[must_use]
-    pub fn len(&self) -> usize {
-        self.entries.len()
-    }
-
-    #[must_use]
-    pub fn is_empty(&self) -> bool {
-        self.entries.is_empty()
-    }
 }
 
 #[cfg(test)]
@@ -172,7 +162,7 @@ mod tests {
     fn discovers_all_builtins() {
         let r = TemplateRegistry::discover(std::path::Path::new("/nonexistent-dir-xyz"));
         // 4 built-ins must always be discoverable.
-        assert_eq!(r.len(), 4);
+        assert_eq!(r.names().count(), 4);
         assert!(r.get("software-dev").is_some());
         assert!(r.get("research-paper").is_some());
         assert!(r.get("code-review").is_some());
@@ -208,7 +198,7 @@ id = "worker"
 
         let r = TemplateRegistry::discover(tmp.path());
         // Builtins still load.
-        assert_eq!(r.len(), 4);
+        assert_eq!(r.names().count(), 4);
         // Broken file is silently dropped.
         assert!(r.get("broken").is_none());
     }

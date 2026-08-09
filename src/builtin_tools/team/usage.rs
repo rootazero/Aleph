@@ -105,7 +105,6 @@ impl TeamUsageTool {
             current_agent_id: current_agent_id.into(),
         }
     }
-
 }
 
 #[async_trait]

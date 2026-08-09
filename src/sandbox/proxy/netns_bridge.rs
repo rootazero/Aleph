@@ -204,16 +204,6 @@ pub struct HostBridgeHandle {
     task: tokio::task::JoinHandle<()>,
 }
 
-impl HostBridgeHandle {
-    /// The socket directory bind-mounted into the sandbox. Exposed so the
-    /// driver can `--bind` it (read-write — `connect()` needs write perms on
-    /// the socket inode).
-    #[must_use]
-    pub fn socket_dir(&self) -> &Path {
-        &self.socket_dir
-    }
-}
-
 impl Drop for HostBridgeHandle {
     fn drop(&mut self) {
         self.task.abort();

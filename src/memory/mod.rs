@@ -64,8 +64,12 @@ pub use context::{
     compute_parent_path, CognitiveLayer, CompressionResult, FactSource, FactSpecificity,
     MemoryCategory, MemoryFact, MemoryLayer, NoteType, TemporalScope,
 };
-pub use context_comptroller::{ArbitratedContext, ComptrollerConfig, ContextComptroller, TokenBudget};
-pub use dreaming::{ensure_dream_daemon, ensure_dream_daemon_with_orientation, DailyInsight, DreamStatus};
+pub use context_comptroller::{
+    ArbitratedContext, ComptrollerConfig, ContextComptroller, TokenBudget,
+};
+pub use dreaming::{
+    ensure_dream_daemon, ensure_dream_daemon_with_orientation, DailyInsight, DreamStatus,
+};
 pub use embedding_manager::EmbeddingManager;
 pub use embedding_provider::{
     create_provider as create_embedding_provider, truncate_and_normalize, EmbeddingProvider,

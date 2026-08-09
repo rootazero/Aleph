@@ -157,16 +157,10 @@ impl Aggregator {
         })
     }
 
-    /// Direct passthrough for code paths that shouldn't be aggregated.
-    #[must_use]
-    pub fn router(&self) -> &MessageRouter {
-        &self.inner
-    }
-
     /// Opt-in batched send. Returns immediately; errors during the actual
     /// flush are logged but not surfaced (the caller has no thread to receive
-    /// them by the time the window closes). For synchronous semantics, use
-    /// `self.router().send(...)` directly.
+    /// them by the time the window closes). For synchronous semantics, call
+    /// the router directly via the `MessageRouter` held by the caller.
     pub async fn send_batched(self: &Arc<Self>, req: SendRequest) {
         if !self.config.enabled || !is_batchable(&req.msg_type) {
             // Hot-path: bypass entirely so the disabled overhead is one bool

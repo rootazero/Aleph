@@ -163,7 +163,7 @@ pub const fn default_raw_fragments_tokens() -> u32 {
 /// Token budget for the `Feedback` slot — user-taught rules/corrections.
 /// Small on purpose: these notes are short imperative rules, not prose.
 pub const fn default_feedback_tokens() -> u32 {
-     500
+    500
 }
 
 pub const fn default_rrf_k() -> u32 {

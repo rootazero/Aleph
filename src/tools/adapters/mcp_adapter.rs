@@ -624,11 +624,8 @@ mod tests {
         let out = fence_mcp_result(json!({ "content": [ nested ] }), &mcp_source());
 
         let mut cursor = &out["content"][0];
-        loop {
-            match cursor.get("wrap") {
-                Some(next) => cursor = next,
-                None => break,
-            }
+        while let Some(next) = cursor.get("wrap") {
+            cursor = next;
         }
         let text = cursor["text"].as_str().expect("the leaf survives");
         assert_eq!(

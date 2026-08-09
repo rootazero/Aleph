@@ -40,12 +40,6 @@ impl ProxyHandle {
         format!("http://{}", self.addr)
     }
 
-    /// Convenience for env var values: `socks5://127.0.0.1:<port>`.
-    #[must_use]
-    pub fn socks5_url(&self) -> String {
-        format!("socks5://{}", self.addr)
-    }
-
     /// Trigger shutdown explicitly. Drop also triggers it; this is for
     /// deterministic teardown in tests.
     pub fn shutdown(&self) {

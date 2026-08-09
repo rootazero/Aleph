@@ -269,8 +269,10 @@ mod tests {
     #[tokio::test]
     async fn the_final_response_a_channel_receives_is_masked() {
         let (inner, outer) = wrapped();
-        let mut summary = crate::gateway::event_emitter::types::RunSummary::default();
-        summary.final_response = Some(format!("the key is {KEY}"));
+        let summary = crate::gateway::event_emitter::types::RunSummary {
+            final_response: Some(format!("the key is {KEY}")),
+            ..Default::default()
+        };
         outer
             .emit(StreamEvent::RunComplete {
                 run_id: "r".into(),

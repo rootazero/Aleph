@@ -39,10 +39,6 @@ impl SecurityKernelHook {
 
 #[async_trait]
 impl SandboxBeforeHook for SecurityKernelHook {
-    fn name(&self) -> &'static str {
-        "security_kernel"
-    }
-
     async fn before(&self, ctx: SandboxHookContext<'_>) -> SandboxHookResult {
         let command = Self::command_line(&ctx);
         match self.kernel.assess_custom(&command) {

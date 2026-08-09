@@ -1122,7 +1122,7 @@ mod tests {
 
         match &caps[0] {
             CapabilityDeclaration::McpServer(m) => {
-                assert_eq!(m.is_stdio(), true, "expected stdio transport");
+                assert!(m.is_stdio(), "expected stdio transport");
                 let (command, args, env) = m
                     .stdio_command()
                     .expect("stdio accessor must succeed on a stdio entry");

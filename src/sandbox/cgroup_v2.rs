@@ -9,7 +9,7 @@
 //!
 //! Cross-platform parts (parsing `/proc/self/cgroup`, formatting limit
 //! file contents) compile on macOS so unit tests run on dev boxes; the
-//! kernel-touching `try_create` / `attach_current_pid` / `Drop` body is
+//! kernel-touching `try_create` / `Drop` body is
 //! `#[cfg(target_os = "linux")]`-gated.
 //!
 //! Per spec § 1, this is intentionally cgroups-v2-only. v1 hierarchies
@@ -78,14 +78,15 @@ pub const fn memory_max_bytes(mb: u64) -> u64 {
 }
 
 /// RAII handle to a per-execution cgroup v2 sub-cgroup. The directory
-/// is created in `try_create`, the child PID is written by
-/// `attach_current_pid` (from `pre_exec` in the bwrap spawn), and the
-/// directory is `rmdir`-ed on `Drop` after the child has been reaped.
+/// is created in `try_create`, the child PID is written by the bwrap
+/// driver's `write_current_pid_to_path` helper (from `pre_exec` in the
+/// bwrap spawn), and the directory is `rmdir`-ed on `Drop` after the
+/// child has been reaped.
 ///
 /// `path` is the absolute filesystem path to the cgroup directory
 /// (e.g. `/sys/fs/cgroup/user.slice/.../aleph-sandbox-12345`). The
-/// caller never needs to manipulate it directly — the three methods
-/// cover the full lifecycle.
+/// caller never needs to manipulate it directly — the lifecycle methods
+/// cover the full span.
 #[derive(Debug)]
 #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
 pub struct CgroupV2Scope {
@@ -94,14 +95,6 @@ pub struct CgroupV2Scope {
 
 #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
 impl CgroupV2Scope {
-    /// Absolute path to the cgroup directory. Exposed so `pre_exec`
-    /// callbacks can clone-capture `path().join("cgroup.procs")` without
-    /// sharing the whole scope (which would risk a fork+exec Drop leak).
-    #[allow(dead_code)]
-    pub fn path(&self) -> &std::path::Path {
-        &self.path
-    }
-
     /// Convenience: `<path>/cgroup.procs`.
     pub fn procs_path(&self) -> PathBuf {
         self.path.join("cgroup.procs")
@@ -309,12 +302,6 @@ impl CgroupV2Scope {
         let _ = unsafe { libc::close(fd) };
         Ok(())
     }
-
-    /// Write the current process's PID into `<scope>/cgroup.procs`.
-    #[allow(dead_code)]
-    pub fn attach_current_pid(&self) -> std::io::Result<()> {
-        Self::write_current_pid_to_path(&self.path.join("cgroup.procs"))
-    }
 }
 
 #[cfg(target_os = "linux")]
@@ -347,10 +334,6 @@ impl Drop for CgroupV2Scope {
 impl CgroupV2Scope {
     pub const fn try_create(_limits: CgroupV2Limits) -> Option<Self> {
         None
-    }
-
-    pub const fn attach_current_pid(&self) -> std::io::Result<()> {
-        Ok(())
     }
 }
 

@@ -78,18 +78,6 @@ impl AllowList {
     pub const fn is_empty(&self) -> bool {
         self.exact.is_empty() && self.wildcard_suffix.is_empty()
     }
-
-    /// Patterns for diagnostics.
-    #[must_use]
-    pub fn patterns_for_diagnostics(&self) -> Vec<String> {
-        let mut out: Vec<String> = self.exact.iter().map(|p| p.to_string()).collect();
-        out.extend(
-            self.wildcard_suffix
-                .iter()
-                .map(|p| format!("*.{}", p.as_ref())),
-        );
-        out
-    }
 }
 
 #[cfg(test)]
@@ -149,7 +137,6 @@ mod tests {
     fn whitespace_and_empty_patterns_ignored() {
         let al = AllowList::new(["  ", "", "example.com"]);
         assert!(al.permits("example.com"));
-        assert_eq!(al.patterns_for_diagnostics(), vec!["example.com"]);
     }
 
     #[test]

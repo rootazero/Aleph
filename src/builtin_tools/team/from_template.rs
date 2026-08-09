@@ -9,8 +9,8 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use tracing::info;
 
-use crate::builtin_tools::acting_agent::acting_agent_id;
 use crate::agents::swarm::tasks::CoordTaskStore;
+use crate::builtin_tools::acting_agent::acting_agent_id;
 use crate::config::agent_manager::AgentManager;
 use crate::error::{AlephError, Result};
 use crate::gateway::agent_instance::AgentRegistry;
@@ -112,7 +112,6 @@ impl TeamFromTemplateTool {
             current_agent_id: current_agent_id.into(),
         }
     }
-
 }
 
 #[async_trait]

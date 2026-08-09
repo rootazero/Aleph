@@ -89,7 +89,7 @@ impl Default for FallbackSkeleton {
             relevant_notes_tokens: super::defaults::default_relevant_notes_tokens(),
             raw_fragments_tokens: super::defaults::default_raw_fragments_tokens(),
             feedback_tokens: super::defaults::default_feedback_tokens(),
-                        nudges_tokens: 0,
+            nudges_tokens: 0,
         }
     }
 }
