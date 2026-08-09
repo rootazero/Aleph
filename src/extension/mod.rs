@@ -93,18 +93,10 @@ struct CacheState {
 }
 
 /// Extension system configuration
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct ExtensionConfig {
     /// Discovery configuration
     pub discovery: DiscoveryConfig,
-}
-
-impl Default for ExtensionConfig {
-    fn default() -> Self {
-        Self {
-            discovery: DiscoveryConfig::default(),
-        }
-    }
 }
 
 /// Extension Manager - main entry point for the extension system

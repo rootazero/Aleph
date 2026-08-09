@@ -416,7 +416,7 @@ pub struct HookConfig {
 /// - [`McpServerConfig::Remote`] — an HTTP/SSE endpoint that speaks MCP's
 ///   Streamable HTTP / SSE wire format. Lets a plugin connect to a hosted MCP
 ///   server without spawning a child process.
-
+///
 /// OAuth configuration for a remote MCP server.
 ///
 /// Relocated from the removed `extension::config` island — the only remaining
