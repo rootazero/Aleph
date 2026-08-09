@@ -20,6 +20,8 @@
 mod commands;
 pub(crate) mod output;
 
+use std::process::ExitCode;
+
 use clap::Parser;
 use tracing::info;
 use tracing_subscriber::{fmt, prelude::*, EnvFilter};
@@ -59,8 +61,26 @@ pub(crate) struct Cli {
     command: Option<Commands>,
 }
 
+/// Entry point.
+///
+/// Returns [`ExitCode`] rather than `CliResult<()>` on purpose. The blanket
+/// `Termination` impl for `Result` renders the error with **`Debug`**, so
+/// returning one here printed `Error: Rpc { code: -32009, message: "..." }` and
+/// every `#[error(...)]` string on [`aleph_client::CliError`] — all of them
+/// written for a human — was dead text the CLI could not reach. The exit code
+/// is unchanged: `Termination` for `Result` also exits 1.
 #[tokio::main]
-async fn main() -> CliResult<()> {
+async fn main() -> ExitCode {
+    match run().await {
+        Ok(()) => ExitCode::SUCCESS,
+        Err(e) => {
+            eprintln!("Error: {e}");
+            ExitCode::FAILURE
+        }
+    }
+}
+
+async fn run() -> CliResult<()> {
     let cli = Cli::parse();
 
     let default_filter = if cli.verbose { "debug" } else { "info" };
@@ -1232,15 +1252,37 @@ mod tests {
         // parses; handler rejects
     }
 
+    /// Both surfaces are **read-only previews**: `WebhookAction` has only
+    /// `List`, `ProxyAction` only `Show`, and `dispatch_webhook` /
+    /// `dispatch_proxy` match exactly those.
+    ///
+    /// This asserted that `webhook add|remove` and `proxy set|clear` parsed,
+    /// from the very commit that introduced it (`a8afcc57c`) — and neither
+    /// variant has ever existed, so it has been red since the day it was
+    /// written. Same shape as the `workspace create|archive` contract split:
+    /// a test naming a surface it never actually reached.
+    ///
+    /// Asserting their **absence** keeps what the original assertions were
+    /// really recording (someone intended to build these) while telling the
+    /// truth about what shipped, and it turns red the day a variant is added —
+    /// which is precisely when the dispatch arm and this test need to move
+    /// together.
     #[test]
     fn parse_webhook_and_proxy_preview_surfaces() {
-        // Webhook
         assert!(Cli::try_parse_from(["aleph", "webhook", "list"]).is_ok());
-        assert!(Cli::try_parse_from(["aleph", "webhook", "add"]).is_ok());
-        assert!(Cli::try_parse_from(["aleph", "webhook", "remove"]).is_ok());
-        // Proxy
         assert!(Cli::try_parse_from(["aleph", "proxy", "show"]).is_ok());
-        assert!(Cli::try_parse_from(["aleph", "proxy", "set"]).is_ok());
-        assert!(Cli::try_parse_from(["aleph", "proxy", "clear"]).is_ok());
+
+        for absent in [
+            ["aleph", "webhook", "add"],
+            ["aleph", "webhook", "remove"],
+            ["aleph", "proxy", "set"],
+            ["aleph", "proxy", "clear"],
+        ] {
+            assert!(
+                Cli::try_parse_from(absent).is_err(),
+                "{absent:?} parses now — add the dispatch arm and move this case \
+                 up to the `is_ok` block in the same change"
+            );
+        }
     }
 }
