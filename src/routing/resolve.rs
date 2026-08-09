@@ -150,7 +150,8 @@ pub fn resolve_route(
             } else {
                 trimmed.to_string()
             };
-            let (session_key, _) = session_keys_for(&agent_id, &channel, input.peer.as_ref(), session_cfg);
+            let (session_key, _) =
+                session_keys_for(&agent_id, &channel, input.peer.as_ref(), session_cfg);
             ResolvedRoute {
                 agent_id,
                 channel,

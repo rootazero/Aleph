@@ -281,9 +281,7 @@ impl InboundMessageRouter {
                 match self.config.dm_scope {
                     DmScope::Main => crate::routing::session_key::DmScope::Main,
                     DmScope::PerPeer => crate::routing::session_key::DmScope::PerPeer,
-                    DmScope::PerChannelPeer => {
-                        crate::routing::session_key::DmScope::PerChannelPeer
-                    }
+                    DmScope::PerChannelPeer => crate::routing::session_key::DmScope::PerChannelPeer,
                 },
             )
         }
