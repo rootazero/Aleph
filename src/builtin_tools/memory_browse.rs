@@ -71,6 +71,10 @@ pub struct MemoryBrowseOutput {
 pub struct MemoryBrowseTool {
     memory_dir: PathBuf,
     agent_id: String,
+    /// Mirror of `MemoryConfig.project_scoped`, exactly as `MemorySearchTool`
+    /// carries it — the partition this tool BROWSES has to be composed the same
+    /// way the note writers compose the one they write to.
+    project_scoped: bool,
 }
 
 impl MemoryBrowseTool {
@@ -79,16 +83,35 @@ impl MemoryBrowseTool {
         Self {
             memory_dir,
             agent_id,
+            project_scoped: false,
         }
     }
 
-    /// Per-run agent id: prefer the turn's task-local (set by the dispatch
-    /// chokepoint), fall back to the construction-time field on non-scoped
-    /// paths (direct calls, tests). Mirrors `MemorySearchTool::call_impl` — a
-    /// process-wide single tool instance is shared across agents, so the
-    /// construction-time `agent_id` is only a fallback, not the truth per run.
+    /// Mirror `MemoryConfig.project_scoped` (same convention, same name as
+    /// `MemorySearchTool::with_project_scoping`).
+    #[must_use]
+    pub const fn with_project_scoping(mut self, enabled: bool) -> Self {
+        self.project_scoped = enabled;
+        self
+    }
+
+    /// Per-run memory PARTITION: prefer the turn's task-local persona (set by
+    /// the dispatch chokepoint), fall back to the construction-time field on
+    /// non-scoped paths (direct calls, tests), then compose the session's scope
+    /// in — because that is what the writer did.
+    ///
+    /// Without the composition this tool answered "No entries at /" for a note
+    /// the same session had just written, on a stock single-user box: a
+    /// loopback Panel session is `Personal("u-owner")`, so `note_manage` writes
+    /// `note/main__u-owner/...` while this read `note/main/`.
     fn active_agent_id(&self) -> String {
-        crate::tools::turn_context::current_agent_id().unwrap_or_else(|| self.agent_id.clone())
+        let base =
+            crate::tools::turn_context::current_agent_id().unwrap_or_else(|| self.agent_id.clone());
+        crate::memory::project_scope::session_write_id(
+            &base,
+            self.project_scoped,
+            crate::projects::current_project_root().as_deref(),
+        )
     }
 
     pub(crate) async fn handle_list(&self, category: Option<&str>) -> Result<MemoryBrowseOutput> {

@@ -37,6 +37,10 @@ pub fn ProjectMenu() -> impl IntoView {
     let i18n = use_i18n();
     let dashboard = expect_context::<DashboardState>();
     let chat = expect_context::<ChatState>();
+    // Entering a project from the recents list binds this conversation to that
+    // room's shared session, which is a tab operation — same one the projects
+    // page performs, through the same function.
+    let session_map = expect_context::<crate::state::sessions::SessionMap>();
     // Entering / leaving / switching a project clears the chat session
     // (see `ChatState::set_active_project`), so the workspace pane's
     // tool-detail view and captured payloads must be evicted alongside it.
@@ -227,17 +231,18 @@ pub fn ProjectMenu() -> impl IntoView {
                                             let proj = proj_for_click.clone();
                                             let dash = dash_for_click;
                                             let id = proj.id.clone();
-                                            spawn_local(async move {
-                                                let _ = ProjectsApi::touch(&dash, &id).await;
-                                            });
-                                            chat.set_active_project(
-                                                proj.workspace_path.clone(),
-                                                Some(proj.name),
-                                            );
-                                            if let Some(ws) = workspace {
-                                                ws.reset();
-                                            }
+                                            let name = proj.name.clone();
+                                            let locale = i18n.get_locale_untracked();
                                             menu_open.set(false);
+                                            spawn_local(async move {
+                                                // Best-effort reordering, as in the sidebar.
+                                                let _ = ProjectsApi::touch(&dash, &id).await;
+                                                crate::components::project_page::enter_project_room(
+                                                    dash, chat, session_map, workspace, &id, name,
+                                                    locale,
+                                                )
+                                                .await;
+                                            });
                                         }
                                     >
                                         <span class="text-sm text-text-primary truncate">{label}</span>

@@ -41,16 +41,22 @@ pub struct ToolPermissionsResponse {
     /// Selectable modes, in display order.
     #[serde(default)]
     pub modes: Vec<ModePreset>,
-    /// Global default permission level. **Absent for a member** — the server's
-    /// `member_visible_permissions_value` withholds this axis and `overrides`
-    /// below, so both must decode to a default rather than fail the whole
-    /// response. Without this attribute a member's Panel failed the decode
-    /// outright, which took out BOTH pills sharing this DTO (the tier pill
-    /// rendered "—", the mode pill vanished) and, because the failure surfaced
-    /// as a serde error rather than an admin refusal, the "why is this empty"
-    /// copy `is_admin_refusal` exists to show never fired (2026-08-09
-    /// real-machine QA). Pinned by
-    /// `handlers::config::every_key_withheld_from_a_member_is_optional_in_the_panel_decoder`.
+    /// Server-global default tool permission — one of the two advanced axes
+    /// Settings → Policies edits.
+    ///
+    /// **Defaulted because the server deliberately omits it for a member.**
+    /// `config::member_visible_permissions_value` narrows the response BY
+    /// REMOVAL (`obj.remove("default"); obj.remove("overrides")`) and pins that
+    /// removal with its own test. Without `#[serde(default)]` this decoder —
+    /// the only one, by design — failed the whole payload with
+    /// "missing field `default`" for every member, so the carve-out that was
+    /// supposed to hand members the tier and mode ids shipped 100% inert: the
+    /// mode pill vanished and the tier popover degraded to a single blank row.
+    ///
+    /// Worse, the error is not refusal-shaped, so `is_admin_refusal` was false
+    /// too and the surface could not even say what had happened. Two halves of
+    /// the same round cancelled each other, and both test suites stayed green
+    /// because each side only ever read its own literal.
     #[serde(default)]
     pub default: String,
     #[serde(default)]
@@ -152,5 +158,53 @@ mod tests {
         assert_eq!(cfg.mode, "work");
         assert_eq!(cfg.modes.len(), 3);
         assert_eq!(cfg.modes[2].id, "code");
+    }
+
+    /// The member shape, built from the shared contract rather than from a
+    /// literal typed here.
+    ///
+    /// A hand-written literal is what let this break: the server narrowed by
+    /// removing `default` and `overrides`, this DTO required `default`, and
+    /// every member's fetch failed the whole decode with "missing field
+    /// `default`". Both test suites were green — each read only its own copy of
+    /// the shape. Building the object from
+    /// `aleph_protocol::tool_permissions::MEMBER_VISIBLE_KEYS` means the server
+    /// dropping a key from that list, or a new required field appearing here,
+    /// fails this test by name.
+    ///
+    /// Note what a decode failure costs: it is not "one field is missing", it
+    /// is the whole payload — the tier popover degrades to a single blank row
+    /// and the mode pill hides itself, with no console trace, because a serde
+    /// message is not refusal-shaped either.
+    #[test]
+    fn the_member_shape_from_the_shared_contract_decodes() {
+        use aleph_protocol::tool_permissions::{MEMBER_VISIBLE_KEYS, OPERATOR_ONLY_KEYS};
+
+        let mut obj = serde_json::Map::new();
+        for key in MEMBER_VISIBLE_KEYS {
+            // Shape per key: the two dials are ids, the two enumerations are
+            // arrays of `{id}`.
+            let value = match *key {
+                "tiers" | "modes" => json!([{ "id": "ask" }]),
+                _ => json!("auto"),
+            };
+            obj.insert((*key).to_string(), value);
+        }
+        for key in OPERATOR_ONLY_KEYS {
+            assert!(
+                !obj.contains_key(*key),
+                "{key} must not be in the member shape — the contract says it is withheld"
+            );
+        }
+
+        let cfg: ToolPermissionsResponse = serde_json::from_value(Value::Object(obj)).expect(
+            "the member shape must decode — a missing withheld key fails the WHOLE payload",
+        );
+        assert_eq!(cfg.exec_tier, "auto");
+        assert_eq!(cfg.tiers.len(), 1);
+        assert_eq!(cfg.modes.len(), 1);
+        // The withheld axes land on their defaults rather than killing the decode.
+        assert_eq!(cfg.default, "");
+        assert!(cfg.overrides.is_empty());
     }
 }

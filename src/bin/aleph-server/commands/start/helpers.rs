@@ -12,6 +12,41 @@ use crate::daemon::{expand_path, remove_pid_file};
 use alephcore::gateway::session_store::SessionStore;
 use alephcore::gateway::{GatewayConfig as FullGatewayConfig, SessionManager};
 
+/// Compile the operator's `[[security.mask_patterns]]` into the process-wide
+/// redaction set, before any run can produce output.
+///
+/// Sits next to `PiiEngine::init` because it is the same shape: config reaching
+/// a process global exactly once, so that the seven `SecretMasker::new()` sites
+/// downstream inherit it without any of them being aware.
+///
+/// A pattern that fails to compile is logged at `error`, not dropped quietly —
+/// the symptom of a silently-rejected redaction pattern is a secret printed in
+/// the clear, which looks identical to "the operator never configured one".
+pub(super) fn install_mask_patterns(config: &alephcore::Config) {
+    let security = &config.security;
+    if security.mask_patterns.is_empty() {
+        return;
+    }
+    let (installed, rejected) = alephcore::exec::masker::install_operator_patterns(
+        security
+            .mask_patterns
+            .iter()
+            .map(|p| (p.pattern.as_str(), p.replacement.as_str())),
+    );
+    for (pattern, err) in &rejected {
+        tracing::error!(
+            %pattern,
+            error = %err,
+            "security.mask_patterns: invalid regex — this credential shape will NOT be redacted"
+        );
+    }
+    tracing::info!(
+        installed,
+        rejected = rejected.len(),
+        "installed operator secret-mask patterns"
+    );
+}
+
 /// Validate that the resolved bind address (config host/port after CLI
 /// overrides) is available, or return an error if not. Callers pass the same
 /// `final_bind`/`final_port` the server will bind, so the probe matches reality.

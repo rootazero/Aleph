@@ -21,6 +21,16 @@ use crate::context::DashboardState;
 #[derive(Clone, Copy)]
 pub struct UserDirectoryState {
     names: RwSignal<HashMap<String, String>>,
+    /// Ids whose `status` is not `"active"`.
+    ///
+    /// `users.list` has always carried `status` and this projection threw it
+    /// away, so every picker fed from here offered deactivated principals by
+    /// name — and the server then refused the resulting write with a message
+    /// about a user the operator had just been shown. A picker that offers a
+    /// choice the server will refuse is worse than one that hides it: the
+    /// refusal reads as a bug in the feature rather than as the state of the
+    /// principal.
+    inactive: RwSignal<std::collections::HashSet<String>>,
     /// The viewer's own `user_id`, from `users.me`. `None` covers both "not
     /// fetched yet" and "no caller identity" (unrestricted/loopback callers
     /// with no P1 user attached) — both correctly suppress the "is this my
@@ -40,6 +50,7 @@ impl UserDirectoryState {
     pub fn new() -> Self {
         Self {
             names: RwSignal::new(HashMap::new()),
+            inactive: RwSignal::new(std::collections::HashSet::new()),
             my_user_id: RwSignal::new(None),
             loading: RwSignal::new(false),
         }
@@ -56,12 +67,39 @@ impl UserDirectoryState {
     }
 
     /// Reactive read of every known `(user_id, display_name)` pair, sorted by
-    /// display name — the shape a roster picker wants directly.
+    /// display name.
+    ///
+    /// Includes deactivated principals, because a display surface still has to
+    /// name them (an old room roster row, a historical bubble). A PICKER wants
+    /// [`Self::selectable`] instead.
     #[must_use]
     pub fn all(&self) -> Vec<(String, String)> {
         let mut v: Vec<(String, String)> = self.names.get().into_iter().collect();
         v.sort_by(|a, b| a.1.cmp(&b.1));
         v
+    }
+
+    /// [`Self::all`] minus deactivated principals — the shape a picker wants.
+    ///
+    /// The distinction is the whole point of carrying `status`: naming someone
+    /// who exists is always right, OFFERING someone the server will refuse is
+    /// not. `users.update {status:"deactivated"}` revokes their devices and
+    /// freezes their background work; adding them to a room, or binding a
+    /// channel sender to them, is a write the server declines.
+    #[must_use]
+    pub fn selectable(&self) -> Vec<(String, String)> {
+        let inactive = self.inactive.get();
+        self.all()
+            .into_iter()
+            .filter(|(id, _)| !inactive.contains(id))
+            .collect()
+    }
+
+    /// Whether `user_id` is known to be deactivated. `false` for an unknown id
+    /// — the directory cannot claim a status it never read.
+    #[must_use]
+    pub fn is_deactivated(&self, user_id: &str) -> bool {
+        self.inactive.with(|s| s.contains(user_id))
     }
 
     /// Fetch `users.list` + `users.me`. Idempotent and safe to call from every
@@ -99,11 +137,17 @@ impl UserDirectoryState {
             leptos::task::spawn_local(async move {
                 match UsersApi::list(&dash).await {
                     Ok(users) => {
+                        let inactive: std::collections::HashSet<String> = users
+                            .iter()
+                            .filter(|u| u.status != "active")
+                            .map(|u| u.user_id.clone())
+                            .collect();
                         let map = users
                             .into_iter()
                             .map(|u| (u.user_id, u.display_name))
                             .collect();
                         this.names.set(map);
+                        this.inactive.set(inactive);
                     }
                     // Not fatal — the label falls back to the raw id — but it
                     // must not be invisible: silence here is what let the

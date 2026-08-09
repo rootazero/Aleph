@@ -20,6 +20,14 @@ use crate::tools::AlephTool;
 // Args
 // =============================================================================
 
+/// Runs returned by `action='runs'` when the caller does not say.
+const DEFAULT_RUNS_LIMIT: usize = 10;
+
+/// Ceiling on `action='runs'`. Each record carries an error string and an
+/// output summary, so an unbounded read would put a job's whole history into
+/// the turn's context to answer "why did it fail".
+const MAX_RUNS_LIMIT: usize = 50;
+
 /// Action to perform on the cron system
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
@@ -42,6 +50,9 @@ pub enum CronAction {
     Run,
     /// Modify an existing task's fields (name, prompt, schedule, agent, enabled)
     Update,
+    /// Read a task's recent run history — when it ran, whether it succeeded,
+    /// the error text and whether the failure was transient or permanent.
+    Runs,
 }
 
 /// Schedule definition for creating a cron job.
@@ -78,6 +89,13 @@ pub enum ScheduleInput {
         /// Optional timezone (e.g. "Asia/Shanghai"), defaults to local
         #[serde(default)]
         timezone: Option<String>,
+        /// Optional jitter window in milliseconds. Jobs sharing one expression
+        /// otherwise all become due on the same tick; a stagger spreads them
+        /// deterministically (by job id) across `[0, stagger_ms)` so ten
+        /// hourly reports do not hit the provider at the same instant. Omit
+        /// for exact-time firing.
+        #[serde(default)]
+        stagger_ms: Option<i64>,
     },
 }
 
@@ -87,44 +105,21 @@ const fn default_true() -> bool {
 
 /// Validate a schedule input before it is converted to a `ScheduleKind`.
 ///
-/// Rejects one-shot tasks scheduled in the past and sub-second intervals
-/// (which would fire on every timer tick and serve no real use case).
+/// Rejects one-shot tasks scheduled in the past, sub-second intervals (which
+/// would fire on every timer tick and serve no real use case), and malformed
+/// cron expressions or timezones — each of which is otherwise accepted,
+/// persisted, reported as created, and then silently never fires because
+/// `compute_next_run_for_job` collapses the failure to `None`.
+///
+/// A thin adapter over `ops::validate_schedule_kind`, which is what the
+/// `cron.create` / `cron.update` RPCs call. This used to be a second,
+/// independent implementation, and the two had already drifted: the RPC side's
+/// `At` arm was empty, so an expired one-shot was rejected here and accepted
+/// there. One writable schedule, one validator.
 fn validate_schedule(schedule: &ScheduleInput) -> Result<()> {
-    match schedule {
-        ScheduleInput::At { at_ms, .. } => {
-            let now_ms = chrono::Utc::now().timestamp_millis();
-            if *at_ms <= now_ms {
-                let at_human = chrono::DateTime::from_timestamp_millis(*at_ms).map_or_else(
-                    || format!("{at_ms}ms"),
-                    |dt| dt.format("%Y-%m-%d %H:%M:%S UTC").to_string(),
-                );
-                return Err(crate::error::AlephError::tool(format!(
-                    "Cannot schedule a one-shot task in the past. at_ms={at_ms} resolves to \
-                     {at_human}, but current time is {now_ms}ms. Provide a future timestamp."
-                )));
-            }
-        }
-        ScheduleInput::Every { every_ms } => {
-            if *every_ms < 1000 {
-                return Err(crate::error::AlephError::tool(format!(
-                    "Interval too short: every_ms={every_ms} is below the 1000ms minimum."
-                )));
-            }
-        }
-        ScheduleInput::Cron { expr, timezone } => {
-            // Validate the expression (and timezone) up front. Without this, a
-            // malformed expr is accepted, persisted, and reported as created —
-            // but compute_next_run_for_job collapses the parse error to None,
-            // so the job has no next_run and silently never fires.
-            crate::tasks::shared::schedule::compute_next_cron(
-                expr,
-                timezone.as_deref(),
-                chrono::Utc::now(),
-            )
-            .map_err(|e| crate::error::AlephError::tool(format!("Invalid cron schedule: {e}")))?;
-        }
-    }
-    Ok(())
+    let kind: ScheduleKind = schedule.clone().into();
+    crate::tasks::cron::service::ops::validate_schedule_kind(&kind)
+        .map_err(crate::error::AlephError::tool)
 }
 
 impl From<ScheduleInput> for ScheduleKind {
@@ -141,10 +136,18 @@ impl From<ScheduleInput> for ScheduleKind {
                 every_ms,
                 anchor_ms: None,
             },
-            ScheduleInput::Cron { expr, timezone } => Self::Cron {
+            ScheduleInput::Cron {
+                expr,
+                timezone,
+                stagger_ms,
+            } => Self::Cron {
                 expr,
                 tz: timezone,
-                stagger_ms: None,
+                // The deterministic stagger machinery in `cron::stagger` and its
+                // reader in `compute_next_run_for_job` were both complete, but
+                // every production construction site wrote `None` here — so the
+                // feature existed and could not be reached from any surface.
+                stagger_ms,
             },
         }
     }
@@ -181,6 +184,10 @@ pub struct CronManageArgs {
     /// New enabled state — only used by the `update` action.
     #[serde(default)]
     pub enabled: Option<bool>,
+
+    /// `runs` only: how many recent runs to return (default 10, max 50).
+    #[serde(default)]
+    pub runs_limit: Option<usize>,
 
     /// Failure alerting for this task. Set on `create`, replaced on `update`.
     ///
@@ -235,6 +242,9 @@ pub struct CronManageOutput {
     /// Single job detail (for get action)
     #[serde(skip_serializing_if = "Option::is_none")]
     pub job: Option<CronJobView>,
+    /// Recent run history (for the `runs` action), newest first.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub runs: Option<Vec<crate::tasks::cron::history::CronRunRecord>>,
 }
 
 // =============================================================================
@@ -270,11 +280,11 @@ impl CronManageTool {
 impl AlephTool for CronManageTool {
     const NAME: &'static str = "cron_manage";
     const DESCRIPTION: &'static str =
-        "Manage scheduled tasks (cron jobs). Create, list, update, delete, enable, disable, \
-         or manually trigger recurring or one-shot tasks. Use this when the user wants \
+        "Manage scheduled tasks (cron jobs). Use this when the user wants \
          to schedule something for a specific time or interval — e.g., 'remind me tomorrow at 9am', \
          'check the server every hour', 'send a report every Monday at 10am'. \
          Also use action='run' to manually trigger a job immediately (e.g., 'run the daily report now'). \
+         action='runs' reads a job's history instead of re-running it to find out. \
          For one-shot 'at' scheduling, compute at_ms from current system time (check __current_time_ms). \
          Tip: 1h = 3600000ms, 1d = 86400000ms. Asia/Shanghai = UTC+8.";
 
@@ -326,6 +336,7 @@ impl AlephTool for CronManageTool {
                     job_id: Some(id),
                     jobs: None,
                     job: None,
+                    runs: None,
                 })
             }
 
@@ -340,6 +351,7 @@ impl AlephTool for CronManageTool {
                     job_id: None,
                     jobs: Some(jobs),
                     job: None,
+                    runs: None,
                 })
             }
 
@@ -356,6 +368,45 @@ impl AlephTool for CronManageTool {
                     job_id: Some(id),
                     jobs: None,
                     job: Some(job),
+                    runs: None,
+                })
+            }
+
+            // "Why does this keep failing?" — the store has kept this history
+            // since the subsystem shipped and the `cron.runs` RPC reads it, but
+            // no model-facing surface did. Without it the only way to diagnose a
+            // failing job in conversation was to re-run it and watch, which
+            // changes the thing being diagnosed.
+            CronAction::Runs => {
+                let id = args.job_id.ok_or_else(|| {
+                    crate::error::AlephError::tool("cron_manage runs: 'job_id' is required")
+                })?;
+                let limit = args
+                    .runs_limit
+                    .unwrap_or(DEFAULT_RUNS_LIMIT)
+                    .clamp(1, MAX_RUNS_LIMIT);
+                let runs = service.job_runs(&id, limit).await.map_err(|e| {
+                    crate::error::AlephError::tool(format!("Failed to read cron run history: {e}"))
+                })?;
+
+                let failures = runs
+                    .iter()
+                    .filter(|r| r.status == "Error" || r.status == "Timeout")
+                    .count();
+                let message = if runs.is_empty() {
+                    format!("任务 '{id}' 还没有运行记录")
+                } else {
+                    format!(
+                        "任务 '{id}' 最近 {} 次运行，其中 {failures} 次失败",
+                        runs.len()
+                    )
+                };
+                Ok(CronManageOutput {
+                    message,
+                    job_id: Some(id),
+                    jobs: None,
+                    job: None,
+                    runs: Some(runs),
                 })
             }
 
@@ -374,6 +425,7 @@ impl AlephTool for CronManageTool {
                     job_id: Some(id),
                     jobs: None,
                     job: None,
+                    runs: None,
                 })
             }
 
@@ -390,6 +442,7 @@ impl AlephTool for CronManageTool {
                     job_id: Some(id),
                     jobs: None,
                     job: None,
+                    runs: None,
                 })
             }
 
@@ -406,6 +459,7 @@ impl AlephTool for CronManageTool {
                     job_id: Some(id),
                     jobs: None,
                     job: None,
+                    runs: None,
                 })
             }
 
@@ -423,6 +477,7 @@ impl AlephTool for CronManageTool {
                     job_id: Some(id),
                     jobs: None,
                     job: None,
+                    runs: None,
                 })
             }
 
@@ -441,6 +496,7 @@ impl AlephTool for CronManageTool {
                     job_id: Some(id),
                     jobs: None,
                     job: None,
+                    runs: None,
                 })
             }
 
@@ -485,6 +541,7 @@ impl AlephTool for CronManageTool {
                     job_id: Some(id),
                     jobs: None,
                     job: None,
+                    runs: None,
                 })
             }
         }

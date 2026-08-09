@@ -63,8 +63,15 @@ impl BuiltinToolRegistry {
                 };
                 use crate::builtin_tools::team::TaskCommentTool;
 
-                let create = TaskCreateTool::new(Arc::clone(store), config.dispatch_signal.clone());
-                let list = TaskListTool::new(Arc::clone(store));
+                let create = TaskCreateTool::new(Arc::clone(store), config.dispatch_signal.clone())
+                    .with_team_store(config.team_store.clone());
+                // The LIST surface owes the same gate the addressed siblings
+                // below owe, as a retain rather than a refusal — `teams/scoped.rs`'s
+                // census names `task_list` by name. Without it, `task_list {}`
+                // returned every coord task in the process: another principal's
+                // team ids, task ids, owners and task SUBJECTS.
+                let list =
+                    TaskListTool::new(Arc::clone(store)).with_team_store(config.team_store.clone());
                 // task_comment is unconditional once the coord store exists —
                 // it doesn't depend on the agent message bus.
                 let comment = TaskCommentTool::new(

@@ -305,6 +305,53 @@ impl CronService {
         }))
     }
 
+    /// The most recent runs of one job, newest first.
+    ///
+    /// The store has held this history all along and the `cron.runs` RPC reads
+    /// it, but nothing on the model-facing side did — so `cron_manage` could
+    /// create, delete and manually trigger a job while being unable to answer
+    /// "why does this keep failing?". That question is the one an operator
+    /// actually asks, and R8 says the model should be able to answer it in
+    /// conversation rather than sending someone to the Panel.
+    pub async fn job_runs(
+        &self,
+        job_id: &str,
+        limit: usize,
+    ) -> Result<Vec<crate::tasks::cron::history::CronRunRecord>, String> {
+        let store = self.state.store.lock().await;
+        store.get_runs(job_id, limit)
+    }
+
+    /// Request a graceful shutdown of the timer loop.
+    ///
+    /// `ServiceState::request_shutdown` and the loop's `is_shutdown()` check
+    /// both existed, but nothing on `CronService` exposed the setter and the
+    /// daemon's shutdown path only called heartbeat's — so the cron loop's exit
+    /// arm was unreachable and it kept ticking (and dispatching jobs) while the
+    /// rest of the process tore its dependencies down.
+    pub fn request_shutdown(&self) {
+        self.state.request_shutdown();
+    }
+
+    /// Wall-clock ms of the scheduler's last completed due-scan, or `0` when it
+    /// has never scanned — the only honest answer to "is the scheduler alive?".
+    ///
+    /// See [`ServiceState::last_tick_at_ms`]: the timer loop's startup is
+    /// conditional on an execution adapter being wired, while every `cron.*`
+    /// handler is registered regardless.
+    #[must_use]
+    pub fn last_tick_at_ms(&self) -> i64 {
+        self.state.last_tick_at_ms()
+    }
+
+    /// How often the timer loop wakes, after the same clamp the loop applies.
+    /// Paired with [`Self::last_tick_at_ms`] so a caller can decide liveness
+    /// without hard-coding the interval.
+    #[must_use]
+    pub fn check_interval_secs(&self) -> u64 {
+        self.state.config.check_interval_secs.clamp(1, 60)
+    }
+
     /// Delete cron run history older than `history_retention_days`
     /// (from this service's `CronConfig`). Used by the shared task reaper
     /// daemon ([[reaper]]) so the cron history table does not grow without

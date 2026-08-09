@@ -53,6 +53,13 @@ pub(crate) struct Cli {
     #[arg(short, long)]
     config: Option<String>,
 
+    /// PEM certificate to trust for a `wss://` server, in addition to the
+    /// system roots. Needed when the gateway serves its own self-signed
+    /// certificate — point this at its `~/.aleph/data/tls/cert.pem`. On a
+    /// loopback URL that file is found automatically and this is unnecessary.
+    #[arg(long, value_name = "PATH")]
+    ca_cert: Option<String>,
+
     /// Output in JSON format (applies to all subcommands)
     #[arg(long, global = true)]
     json: bool,
@@ -96,7 +103,14 @@ async fn run() -> CliResult<()> {
             .init();
     }
 
-    let config = CliConfig::load(cli.config.as_deref())?;
+    let mut config = CliConfig::load(cli.config.as_deref())?;
+    // Flag beats file: `--ca-cert` is how you reach a server whose certificate
+    // your config does not yet name, which is precisely the situation where
+    // editing the config first is not an option.
+    if cli.ca_cert.is_some() {
+        config.ca_cert = cli.ca_cert.clone();
+    }
+    let config = config;
     let server_url = cli.server.clone();
     let json = cli.json;
 

@@ -865,8 +865,15 @@ impl GatewayServer {
         });
     }
 
-    /// Refuse to boot if the gateway would serve plaintext to the network.
-    /// Loopback / TLS / trusted-proxy / explicit-opt-out all pass.
+    /// Refuse to boot if the gateway would serve plaintext to the network, and
+    /// — for the binds that *do* pass — say so once, out loud.
+    ///
+    /// Two independent verdicts, deliberately evaluated in this order:
+    /// [`insecure_exposure_refused`] answers *"are the bytes readable"*,
+    /// [`network_exposure_warning`] answers *"who can open the socket at all"*.
+    /// A TLS-enabled LAN bind clears the first and still earns the second —
+    /// encryption is not reachability, and the operator handing out a credential
+    /// is handing out full operator authority.
     fn check_network_exposure(&self) -> Result<(), GatewayError> {
         if let Some(msg) = insecure_exposure_refused(
             self.addr.ip().is_loopback(),
@@ -875,6 +882,14 @@ impl GatewayServer {
             self.config.allow_insecure_remote,
         ) {
             return Err(GatewayError::ConnectionError(msg));
+        }
+        if let Some(msg) = network_exposure_warning(
+            &self.addr,
+            self.config.tls_enabled,
+            self.config.trusted_proxy_enabled,
+            self.config.allow_insecure_remote,
+        ) {
+            warn!("{msg}");
         }
         Ok(())
     }
@@ -1041,6 +1056,51 @@ fn insecure_exposure_refused(
          [gateway] allow_insecure_remote = true."
             .to_string(),
     )
+}
+
+/// Boot-time advisory: `Some(line)` when the socket is reachable from beyond
+/// this machine. Loopback returns `None` — that is the zero-config desktop
+/// install and it has nothing to announce.
+///
+/// This is the line [`SECURITY.md`'s "Network boundary = reachability"] section
+/// promises and, until now, did not exist. It is deliberately **not** folded
+/// into [`insecure_exposure_refused`]: that function answers *"are the bytes
+/// readable"* and lets a TLS'd LAN bind through, while the fact worth saying to
+/// an operator is *"anything that can route to this box can now open the
+/// socket"*. Encryption does not shrink the audience.
+///
+/// The transport clause is a fourth arm rather than three: the combination that
+/// reaches neither TLS, nor a trusted proxy, nor an explicit opt-in is exactly
+/// the one the boot gate above refuses, so it never reaches a running server —
+/// returning `None` there keeps the refusal message the only thing printed.
+///
+/// [`SECURITY.md`'s "Network boundary = reachability"]: ../../../docs/reference/SECURITY.md
+fn network_exposure_warning(
+    addr: &SocketAddr,
+    tls_enabled: bool,
+    trusted_proxy_enabled: bool,
+    allow_insecure_remote: bool,
+) -> Option<String> {
+    if addr.ip().is_loopback() {
+        return None;
+    }
+    let transport = if tls_enabled {
+        "encrypted by native TLS"
+    } else if trusted_proxy_enabled {
+        "encrypted by the trusted reverse proxy"
+    } else if allow_insecure_remote {
+        "PLAINTEXT — allow_insecure_remote = true"
+    } else {
+        return None;
+    };
+    Some(format!(
+        "gateway is bound to {addr}, which is reachable from the network ({transport}). \
+         Remote connections are walled until they present a device token, a bootstrap \
+         ticket, or the shared gateway token — but any credential that passes grants \
+         FULL operator authority (PTY and shell included). Share it only over a trusted \
+         channel and rotate it with `gateway.token.rotate` if it may have leaked. \
+         Bind [gateway] host = \"127.0.0.1\" to close this."
+    ))
 }
 
 /// Gateway server errors
@@ -1217,6 +1277,41 @@ mod tests {
         assert!(super::insecure_exposure_refused(false, false, true, false).is_none());
         // Non-loopback plaintext but explicitly allowed ⇒ allowed.
         assert!(super::insecure_exposure_refused(false, false, false, true).is_none());
+    }
+
+    /// The warning is about REACHABILITY, so the encrypted tiers must still
+    /// produce one — the whole point is that clearing the boot gate is not the
+    /// same as being unexposed. A test that only checked the plaintext arm
+    /// would pass against a version that warns exactly where the server refuses
+    /// to start, i.e. nowhere a running server can be observed.
+    #[test]
+    fn a_non_loopback_bind_warns_on_every_tier_that_actually_boots() {
+        let loopback: std::net::SocketAddr = "127.0.0.1:18790".parse().unwrap();
+        let lan: std::net::SocketAddr = "0.0.0.0:18790".parse().unwrap();
+
+        // Zero-config desktop install has nothing to announce.
+        assert!(super::network_exposure_warning(&loopback, false, false, false).is_none());
+        assert!(super::network_exposure_warning(&loopback, true, false, false).is_none());
+
+        for (tls, proxy, allow, clause) in [
+            (true, false, false, "native TLS"),
+            (false, true, false, "trusted reverse proxy"),
+            (false, false, true, "PLAINTEXT"),
+        ] {
+            let msg = super::network_exposure_warning(&lan, tls, proxy, allow)
+                .expect("a non-loopback bind that boots must warn");
+            assert!(
+                msg.contains(clause),
+                "the transport tier must be named in the line: {msg}"
+            );
+            assert!(
+                msg.contains("0.0.0.0:18790"),
+                "the operator needs the address that is exposed: {msg}"
+            );
+        }
+
+        // The combination the boot gate refuses prints the refusal, not this.
+        assert!(super::network_exposure_warning(&lan, false, false, false).is_none());
     }
 
     #[tokio::test]

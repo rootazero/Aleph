@@ -162,9 +162,16 @@ pub async fn handle_chat_send(
     );
     let team_id = params.team_id.clone();
     let message = params.message.clone();
-    tokio::spawn(async move {
+    // `teams.` is member-reachable, and this spawn happens inside a gateway
+    // dispatch where the caller's scope IS live — so a bare `tokio::spawn`
+    // throws away a real attribution. Everything downstream then ran with
+    // `current_scope() == None`: member session rows written NULL/NULL (adopted
+    // by the operator), and every memory write filed into the BASE partition
+    // that `session_read_ids` unions into every other principal's turn.
+    let carried = crate::scope::CarriedAttribution::capture();
+    tokio::spawn(carried.reestablish(async move {
         broadcaster.dispatch_user(team_id, message, fanout).await;
-    });
+    }));
 
     JsonRpcResponse::success(request.id, serde_json::json!({ "run_id": run_id }))
 }

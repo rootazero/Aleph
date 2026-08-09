@@ -254,8 +254,10 @@ pub struct Config {
     #[serde(default)]
     pub projects: crate::config::types::ProjectsConfig,
     /// Desktop daemon-consumer settings (FEATURE_LOCATOR §7.6) — presence
-    /// broadcaster + mic-level meter. Absent section reproduces the historical
-    /// hardcoded behavior (presence on @30s, mic-level off).
+    /// broadcaster + mic-level meter. **Both default to off.** This doc used to
+    /// say "presence on @30s"; the code, its own default, and its test have
+    /// always said `false`, and `PresenceConfig`'s doc explains why (the
+    /// snapshot carries the host's name and the OS username).
     #[serde(default)]
     pub desktop: crate::config::types::desktop::DesktopDaemonConfig,
     /// Presets override loaded from ~/.aleph/presets.toml

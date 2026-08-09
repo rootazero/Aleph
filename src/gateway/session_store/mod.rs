@@ -119,6 +119,37 @@ pub trait SessionStore: Send + Sync {
         let _ = (key, from_seq);
         Err(SessionStoreError::Unsupported)
     }
+    /// Stamp `owner_user_id` / `scope_id` onto a session row that has **both**
+    /// columns unset. Returns whether a row was actually written.
+    ///
+    /// This is the one write that is allowed to touch columns the spec calls
+    /// immutable, and it is narrow on purpose: the `IS NULL AND IS NULL`
+    /// predicate is part of the statement, not the caller's job, so this can
+    /// never re-scope a session somebody already owns no matter who calls it.
+    /// `SessionPatch` deliberately cannot express these columns, which is why
+    /// this exists as its own verb rather than a flag on an existing one.
+    ///
+    /// Its only caller is the legacy-room backfill
+    /// (`projects::attribution_backfill`): a room created before P1 has a
+    /// `scope_id` of `NULL`, which reads as "org-era personal session", so
+    /// `project_visible` never fires and the room's own conversation is
+    /// invisible to every member of its roster. `owner_user_id` alone is
+    /// already handled by adoption-by-absence — `scope_id` is the column with
+    /// no default that means the right thing.
+    ///
+    /// Default is `Unsupported` rather than `Ok(false)`: a store that cannot do
+    /// this has not "found nothing to backfill", and the migration counts the
+    /// two outcomes separately.
+    async fn backfill_attribution(
+        &self,
+        key: &SessionKey,
+        owner_user_id: &str,
+        scope_id: &str,
+    ) -> Result<bool, SessionStoreError> {
+        let _ = (key, owner_user_id, scope_id);
+        Err(SessionStoreError::Unsupported)
+    }
+
     async fn list_checkpoints(
         &self,
         key: &SessionKey,

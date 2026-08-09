@@ -154,6 +154,7 @@ dependencies = [
  "anyhow",
  "dirs 6.0.0",
  "futures-util",
+ "native-tls",
  "serde",
  "serde_json",
  "thiserror 2.0.18",

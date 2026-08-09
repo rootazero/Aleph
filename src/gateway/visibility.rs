@@ -346,8 +346,14 @@ pub fn ambient_partition_visible(partition_id: &str) -> bool {
 /// `workspaces` / `cross_workspace` arguments are model-supplied and reach
 /// every partition on disk.
 ///
-/// Tools must therefore pass [`crate::scope::ambient_owner`], which reads the
-/// gateway identity first and falls back to the run-seeded `ScopeAttribution`.
+/// Tools must therefore pass [`ambient_actor`]. Note the resolver is
+/// `ambient_actor`, **not** [`crate::scope::ambient_owner`]: the latter falls
+/// back to the run-seeded `ScopeAttribution`, whose `owner_user_id` inside a
+/// project room names the room's CREATOR identically for every member. A tool
+/// handed that value asks "may the room's creator read this", which admits the
+/// creator's PERSONAL partitions to every member of the room and filters out
+/// the member's own. `ambient_actor` prefers the turn's speaker in a room and
+/// is byte-identical to `ambient_owner` everywhere else.
 ///
 /// `None` = unrestricted (internal / cron / A2A), matching every other
 /// predicate in this module.
@@ -936,5 +942,165 @@ mod tests {
         // ...but an unrestricted caller still sees it (zero-change guarantee
         // for internal/cron callers, matching every other predicate here).
         assert!(partition_visible("main__p-somewhere"));
+    }
+
+    // -- the actor census ---------------------------------------------------
+
+    /// Every file that resolves an actor through [`crate::scope::ambient_owner`]
+    /// directly, with the reason it is allowed to.
+    ///
+    /// The two questions this module answers look identical at a call site and
+    /// are not:
+    ///
+    /// - **"who owns this row"** — stamping `owner_user_id` on something being
+    ///   created, or reading it back to compare against a stored owner.
+    ///   `ambient_owner` is right, and inside a room it deliberately names the
+    ///   room (that is what makes members share one partition).
+    /// - **"who is asking"** — every visibility predicate. `ambient_owner` is
+    ///   WRONG here: in a project room it resolves to the room's CREATOR for
+    ///   every member, so the predicate answers about the wrong human — the
+    ///   creator's personal data is admitted to every member and the member's
+    ///   own is filtered out. The resolver is [`ambient_actor`].
+    ///
+    /// Four predicates acquired that defect independently before 2026-08-09,
+    /// each by grepping for precedent and finding a sentence that said
+    /// `ambient_owner` was the speaker. A new entry here is not automatically
+    /// wrong — it just has to say which of the two questions it is answering.
+    const AMBIENT_OWNER_CENSUS: &[(&str, &str)] = &[
+        (
+            "src/scope/mod.rs",
+            "defines it, and defines `ambient_room_author` next to it",
+        ),
+        (
+            "src/gateway/visibility.rs",
+            "`ambient_owner_visible` (owner-keyed background work) and `ambient_actor`'s fallback arm",
+        ),
+        (
+            "src/projects/store.rs",
+            "who-owns: stamps / matches the directory-catalogue row's owner",
+        ),
+        (
+            "src/gateway/handlers/projects.rs",
+            "who-owns: stamps a new project row; runs in gateway dispatch where CALLER_USER is live",
+        ),
+        (
+            "src/teams/store.rs",
+            "who-owns: stamps a new team's owner_user_id",
+        ),
+        (
+            "src/gateway/voice/streaming/relay.rs",
+            "who-owns: mints and matches a voice stream's owner; runs in gateway dispatch where CALLER_USER is live",
+        ),
+        (
+            "src/gateway/execution_engine/run_loop/inner.rs",
+            "who-owns: directory-catalogue registration for this run's owner (room turns short-circuit above it)",
+        ),
+    ];
+
+    /// Walk `src/` and return `(repo-relative path, contents)` for every `.rs`
+    /// file, mirroring `utils::paths`'s source-level guard.
+    fn all_sources() -> Vec<(String, String)> {
+        fn walk(dir: &std::path::Path, out: &mut Vec<std::path::PathBuf>) {
+            let Ok(entries) = std::fs::read_dir(dir) else {
+                return;
+            };
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if path.is_dir() {
+                    walk(&path, out);
+                } else if path.extension().is_some_and(|e| e == "rs") {
+                    out.push(path);
+                }
+            }
+        }
+
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+        let mut files = Vec::new();
+        walk(&root, &mut files);
+        assert!(files.len() > 100, "walk found suspiciously few sources");
+        files
+            .into_iter()
+            .filter_map(|file| {
+                let rel = file
+                    .strip_prefix(env!("CARGO_MANIFEST_DIR"))
+                    .unwrap_or(&file)
+                    .to_string_lossy()
+                    .replace('\\', "/");
+                std::fs::read_to_string(&file).ok().map(|text| (rel, text))
+            })
+            .collect()
+    }
+
+    /// Source-level, because the distinction is not visible at runtime: a
+    /// predicate handed the room's creator answers a perfectly well-formed
+    /// question about the wrong person, and returns `true`/`false` exactly as
+    /// confidently as the right one would.
+    #[test]
+    fn every_ambient_owner_call_site_is_in_the_census() {
+        let mut offenders: Vec<String> = Vec::new();
+        for (rel, text) in all_sources() {
+            if AMBIENT_OWNER_CENSUS.iter().any(|(f, _)| *f == rel) {
+                continue;
+            }
+            let sites: Vec<String> = text
+                .lines()
+                .enumerate()
+                .filter(|(_, line)| {
+                    let code = line.trim_start();
+                    !code.starts_with("//") && !code.starts_with('*')
+                })
+                .filter(|(_, line)| line.contains("ambient_owner()"))
+                .map(|(i, line)| format!("{rel}:{}: {}", i + 1, line.trim()))
+                .collect();
+            if !sites.is_empty() {
+                offenders.push(sites.join("\n    "));
+            }
+        }
+
+        assert!(
+            offenders.is_empty(),
+            "these resolve an actor through `scope::ambient_owner()` without being in \
+             AMBIENT_OWNER_CENSUS. If the question is \"who is asking\" (any visibility \
+             predicate), the resolver must be `visibility::ambient_actor()` — inside a \
+             project room `ambient_owner()` names the room's CREATOR for every member. \
+             If the question is \"who owns this row\", add the file to the census with \
+             that reason:\n  {}",
+            offenders.join("\n  ")
+        );
+    }
+
+    /// The census is only worth having if it cannot rot into a list of files
+    /// that no longer mention the thing.
+    #[test]
+    fn the_census_names_no_file_that_stopped_using_it() {
+        let sources: std::collections::HashMap<String, String> =
+            all_sources().into_iter().collect();
+        for (file, reason) in AMBIENT_OWNER_CENSUS {
+            let text = sources
+                .get(*file)
+                .unwrap_or_else(|| panic!("census names a file that does not exist: {file}"));
+            assert!(
+                text.contains("ambient_owner()"),
+                "census entry is stale — {file} no longer calls ambient_owner() ({reason})"
+            );
+        }
+    }
+
+    /// The behavioural half of the fix: outside a room the two resolvers are
+    /// the same answer, so switching a predicate from one to the other is a
+    /// no-op for every personal / org / cron caller.
+    #[tokio::test]
+    async fn ambient_actor_equals_ambient_owner_outside_a_room() {
+        let personal = crate::scope::ScopeAttribution::personal("u-alice");
+        let same = crate::scope::with_scope(Some(personal), async {
+            (crate::scope::ambient_owner(), ambient_actor())
+        })
+        .await;
+        assert_eq!(same.0, same.1, "outside a room the resolvers must agree");
+        assert_eq!(same.1.as_deref(), Some("u-alice"));
+
+        // And with no scope at all, both are the unrestricted `None`.
+        assert_eq!(crate::scope::ambient_owner(), None);
+        assert_eq!(ambient_actor(), None);
     }
 }

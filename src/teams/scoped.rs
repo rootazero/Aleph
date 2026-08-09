@@ -76,7 +76,13 @@ pub fn team_visible(owner_user_id: Option<&str>) -> bool {
 /// A new tool that reaches a coord task by id owes this call. On a LIST
 /// surface it is a retain (`task_wait`, `task_list`); on an addressed one it is
 /// a refusal shaped exactly like "no such task" (`task_update`,
-/// `task_review`).
+/// `task_review`); on a CREATION surface that names a team it is the same
+/// refusal before the write (`task_create`).
+///
+/// ⚠️ Naming the tools in prose is how `task_list` stayed open for a round
+/// after this paragraph named it. The census is now
+/// `tests::every_coord_task_tool_answers_the_ownership_question`, which reads
+/// the source and fails by name.
 ///
 /// `store == None` means no team database is wired in this deployment, so no
 /// coord task can belong to a team. That is unrestricted by construction, NOT
@@ -370,5 +376,104 @@ mod tests {
                 .unwrap()
                 .is_some()
         );
+    }
+
+    // -- the coord-task census ---------------------------------------------
+
+    /// Tools that hold a `CoordTaskStore` and are NOT expected to call
+    /// [`task_team_reachable`], with the reason each is exempt.
+    ///
+    /// Everything else holding that store reaches a coord task by a bare id in
+    /// a database the `ScopedTeamStore` decorator cannot see, and therefore
+    /// owes the call. Prose said so for a full round while `task_list` — named
+    /// in that prose — returned every principal's task board.
+    const COORD_STORE_EXEMPTIONS: &[(&str, &str)] = &[
+        (
+            "src/builtin_tools/team/delegate.rs",
+            "addresses the team through Arc<dyn TeamStore>, i.e. the decorator itself",
+        ),
+        (
+            "src/builtin_tools/team/from_template.rs",
+            "same: resolves via the decorated TeamStore before touching coord tasks",
+        ),
+        (
+            "src/builtin_tools/team/snapshot.rs",
+            "same: passes self.team_store into the resolution it performs",
+        ),
+        (
+            "src/builtin_tools/team/status.rs",
+            "same: reads the team through the decorated store first",
+        ),
+        (
+            "src/builtin_tools/workflow_tool.rs",
+            "holds an Option<Arc<dyn TeamStore>> and gates through it directly",
+        ),
+    ];
+
+    /// Source-level: the decorator is structurally blind to these call sites,
+    /// so the only thing that can notice a missing gate is a census that reads
+    /// the files.
+    #[test]
+    fn every_coord_task_tool_answers_the_ownership_question() {
+        fn walk(dir: &std::path::Path, out: &mut Vec<std::path::PathBuf>) {
+            let Ok(entries) = std::fs::read_dir(dir) else {
+                return;
+            };
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if path.is_dir() {
+                    walk(&path, out);
+                } else if path.extension().is_some_and(|e| e == "rs") {
+                    out.push(path);
+                }
+            }
+        }
+
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/builtin_tools");
+        let mut files = Vec::new();
+        walk(&root, &mut files);
+        assert!(files.len() > 20, "walk found suspiciously few tool sources");
+
+        let mut offenders = Vec::new();
+        for file in files {
+            let rel = file
+                .strip_prefix(env!("CARGO_MANIFEST_DIR"))
+                .unwrap_or(&file)
+                .to_string_lossy()
+                .replace('\\', "/");
+            let Ok(text) = std::fs::read_to_string(&file) else {
+                continue;
+            };
+            if !text.contains("Arc<dyn CoordTaskStore>") {
+                continue;
+            }
+            if text.contains("task_team_reachable") {
+                continue;
+            }
+            if COORD_STORE_EXEMPTIONS.iter().any(|(f, _)| *f == rel) {
+                continue;
+            }
+            offenders.push(rel);
+        }
+
+        assert!(
+            offenders.is_empty(),
+            "these hold a CoordTaskStore, reach tasks by a bare id in a database the \
+             ScopedTeamStore decorator cannot see, and never ask whose team it is. Add the \
+             `task_team_reachable` call (retain on a list surface, not-found-shaped refusal on an \
+             addressed or creating one) or name the file in COORD_STORE_EXEMPTIONS with the \
+             reason it resolves through the decorated TeamStore instead:\n  {offenders:?}"
+        );
+
+        // A census that lists things which stopped existing stops being read.
+        for (file, reason) in COORD_STORE_EXEMPTIONS {
+            let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(file);
+            let text = std::fs::read_to_string(&path)
+                .unwrap_or_else(|_| panic!("exemption names a missing file: {file}"));
+            assert!(
+                text.contains("Arc<dyn CoordTaskStore>"),
+                "exemption is stale — {file} no longer holds a CoordTaskStore ({reason})"
+            );
+        }
     }
 }

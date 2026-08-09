@@ -139,10 +139,22 @@ async fn build_recovery_section(coord_store: &Arc<dyn CoordTaskStore>, task: &Co
     // is being re-run.
     out.push_str("\n### Previous attempts\n");
     for run in runs.iter().rev().take(MAX_RECOVERY_RUNS) {
-        let detail = match (&run.error, &run.summary) {
-            (Some(err), _) if !err.is_empty() => truncate_utf8(err, MAX_SECTION_BYTES),
-            (_, Some(sum)) if !sum.is_empty() => truncate_utf8(sum, MAX_SECTION_BYTES),
-            _ => match run.status {
+        let err = run.error.as_deref().filter(|e| !e.is_empty());
+        let sum = run.summary.as_deref().filter(|s| !s.is_empty());
+        let detail = match (err, sum) {
+            // Both: an attempt that stopped early AND left work behind. The
+            // error alone used to win, which made the "resume, do not restart"
+            // instruction above unfollowable — the member was told to continue
+            // from work it was never shown. Budget is split so one long partial
+            // cannot crowd the reason out.
+            (Some(err), Some(sum)) => format!(
+                "{}\n  partial output (incomplete):\n  {}",
+                truncate_utf8(err, MAX_SECTION_BYTES / 4),
+                truncate_utf8(sum, MAX_SECTION_BYTES * 3 / 4).replace('\n', "\n  ")
+            ),
+            (Some(err), None) => truncate_utf8(err, MAX_SECTION_BYTES),
+            (None, Some(sum)) => truncate_utf8(sum, MAX_SECTION_BYTES),
+            (None, None) => match run.status {
                 // A run still marked Running here never reached `finish_task_run`
                 // — the process died mid-task and was reclaimed. Abandoned is
                 // the same fate after the run-row janitor closed it (it

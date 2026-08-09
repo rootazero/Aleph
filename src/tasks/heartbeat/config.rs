@@ -263,6 +263,11 @@ pub struct HeartbeatTaskView {
     pub active_hours: Option<crate::tasks::shared::active_hours::ActiveHoursSchedule>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub failure_alert: Option<crate::tasks::shared::alert::FailureAlertConfig>,
+    /// Where findings are delivered. Surfaced because it is the switch that
+    /// decides whether this monitor can report anything at all — a task with
+    /// `None` here runs its probe, spends an L2 turn, and drops the result.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub delivery_config: Option<crate::tasks::shared::delivery::DeliveryConfig>,
     pub state: HeartbeatState,
     pub created_at: i64,
     pub updated_at: i64,
@@ -279,6 +284,7 @@ impl From<&HeartbeatTask> for HeartbeatTaskView {
             probe: task.probe.clone(),
             active_hours: task.active_hours.clone(),
             failure_alert: task.failure_alert.clone(),
+            delivery_config: task.delivery_config.clone(),
             state: task.state.clone(),
             created_at: task.created_at,
             updated_at: task.updated_at,

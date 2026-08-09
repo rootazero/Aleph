@@ -428,6 +428,17 @@ impl SessionStore for SessionManager {
             .map_err(map_err)
     }
 
+    async fn backfill_attribution(
+        &self,
+        key: &SessionKey,
+        owner_user_id: &str,
+        scope_id: &str,
+    ) -> Result<bool, SessionStoreError> {
+        self.backfill_attribution(key, owner_user_id, scope_id)
+            .await
+            .map_err(map_err)
+    }
+
     async fn set_source_channel(
         &self,
         key: &SessionKey,

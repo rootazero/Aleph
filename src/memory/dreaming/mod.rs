@@ -244,7 +244,9 @@ impl DreamPipeline {
             DreamStrategy::Consolidate => vec![
                 Box::new(stages::NoteLintStage),
                 Box::new(stages::NoteReviewStage::default()),
-                Box::new(stages::NoteConsolidateStage),
+                Box::new(stages::NoteConsolidateStage {
+                    max_pairs: dreaming_cfg.consolidate_max_pairs_per_run,
+                }),
                 // Distill user-correction signals on the FREQUENT consolidate
                 // path (not just the rarer synthesize path), so a freshly
                 // flagged correction becomes a recallable feedback rule within
@@ -301,7 +303,9 @@ impl DreamPipeline {
             DreamStrategy::Synthesize => vec![
                 Box::new(stages::NoteLintStage),
                 Box::new(stages::NoteReviewStage::default()),
-                Box::new(stages::NoteConsolidateStage),
+                Box::new(stages::NoteConsolidateStage {
+                    max_pairs: dreaming_cfg.consolidate_max_pairs_per_run,
+                }),
                 Box::new(stages::NoteSynthesisStage),
                 Box::new(stages::SkillDistillStage {
                     max_per_cycle: dreaming_cfg.skill_distill_max_per_cycle,
@@ -362,9 +366,14 @@ impl DreamPipeline {
     /// The corpus fan-out is the consumer, so the stage has to be in it.
     ///
     /// `tool_failure_distill` is NOT on this list either, and the reason is
-    /// the same one, checked rather than assumed: `RawMemoryToolSink` bakes the
-    /// *turn's* `agent_id` into every `ToolInvocation` row, so failures are
-    /// already partitioned per corpus. Every read and write the stage performs
+    /// the same one. ⚠️ **The check behind it stopped one composition short
+    /// until 2026-08-09**: `RawMemoryToolSink` baked the turn's *persona* into
+    /// every `ToolInvocation` row, not the turn's *partition*, so rows for a
+    /// scoped run landed in the base corpus and this stage's fourth gate leg
+    /// (`has_undistilled_tool_failures`, keyed on `ctx.agent_id`) could never be
+    /// true for a `__u-*` / `__p-*` corpus. Both sink construction sites now
+    /// compose through `project_scope::session_write_id`, so failures really
+    /// are partitioned per corpus. Every read and write the stage performs
     /// — the rows, its watermark, the `lesson/` notes, the index refresh — is
     /// keyed on `ctx.agent_id`. Running it base-only would mean a sub-agent
     /// that keeps failing at the same tool never learns anything, while the

@@ -150,7 +150,27 @@ pub fn validate_schedule_kind(kind: &ScheduleKind) -> Result<(), String> {
             }
             Ok(())
         }
-        ScheduleKind::At { .. } => Ok(()),
+        // A one-shot whose moment has already passed can never fire:
+        // `compute_next_run_for_job` returns `None` for it, so the job is
+        // accepted, reported as created/updated, and parks immediately with
+        // nothing to show for it. `cron_manage` rejected this at its own
+        // boundary while this — the shared validator both `cron.create` and
+        // `cron.update` call — had an empty arm, so the same input got two
+        // answers depending on which face the caller used.
+        ScheduleKind::At { at, .. } => {
+            let now_ms = chrono::Utc::now().timestamp_millis();
+            if *at <= now_ms {
+                let at_human = chrono::DateTime::from_timestamp_millis(*at).map_or_else(
+                    || format!("{at}ms"),
+                    |dt| dt.format("%Y-%m-%d %H:%M:%S UTC").to_string(),
+                );
+                return Err(format!(
+                    "Cannot schedule a one-shot task in the past. at={at} resolves to \
+                     {at_human}, but current time is {now_ms}ms. Provide a future timestamp."
+                ));
+            }
+            Ok(())
+        }
     }
 }
 
@@ -791,6 +811,29 @@ mod tests {
             expr: "0 0 9 * * *".to_string(),
             tz: Some("Asia/Shanghai".to_string()),
             stagger_ms: None,
+        })
+        .is_ok());
+    }
+
+    /// A one-shot in the past can never fire — `compute_next_run_for_job`
+    /// returns `None` for it, so the job is accepted, reported as
+    /// created/updated, and parks immediately with no run and no explanation.
+    /// This arm was empty while `cron_manage` rejected the same input at its
+    /// own boundary: one writable schedule, two answers.
+    #[test]
+    fn validate_schedule_kind_rejects_a_one_shot_whose_moment_has_passed() {
+        let now = chrono::Utc::now().timestamp_millis();
+        assert!(
+            validate_schedule_kind(&ScheduleKind::At {
+                at: now - 60_000,
+                delete_after_run: false,
+            })
+            .is_err(),
+            "a past one-shot is unschedulable and must be refused at the write boundary"
+        );
+        assert!(validate_schedule_kind(&ScheduleKind::At {
+            at: now + 3_600_000,
+            delete_after_run: false,
         })
         .is_ok());
     }

@@ -335,7 +335,13 @@ impl LoopTool for SubagentTool {
                         };
                     }
                     None => {
-                        return unknown_request_id(&request_id, scope);
+                        let recovered = self
+                            .resolve_forgotten(std::slice::from_ref(&request_id), scope)
+                            .await;
+                        return match recovered.get(&request_id) {
+                            Some(found) => recovery::to_result(&request_id, found),
+                            None => unknown_request_id(&request_id),
+                        };
                     }
                 }
             }
@@ -392,7 +398,15 @@ impl LoopTool for SubagentTool {
                                 }),
                             }
                         }
-                        WaitOutcome::NotFound => unknown_request_id(request_id, scope),
+                        WaitOutcome::NotFound => {
+                            let recovered = self
+                                .resolve_forgotten(std::slice::from_ref(request_id), scope)
+                                .await;
+                            match recovered.get(request_id) {
+                                Some(found) => recovery::to_result(request_id, found),
+                                None => unknown_request_id(request_id),
+                            }
+                        }
                     };
                 }
 
@@ -412,7 +426,7 @@ impl LoopTool for SubagentTool {
                 // finished-and-forgotten or interrupted-by-restart, and telling
                 // the model to "drop them from your next wait" would be a lie
                 // that costs it the result.
-                let recovered = self.recover_from_log(&unknown).await;
+                let recovered = self.resolve_forgotten(&unknown, scope).await;
                 return match outcome {
                     WaitAnyOutcome::Completed {
                         request_id,
@@ -563,7 +577,7 @@ impl LoopTool for SubagentTool {
                         // its cancel was a no-op because there was nothing left
                         // to cancel.
                         match self
-                            .recover_from_log(std::slice::from_ref(&request_id))
+                            .resolve_forgotten(std::slice::from_ref(&request_id), scope)
                             .await
                             .remove(&request_id)
                         {
@@ -623,7 +637,7 @@ impl LoopTool for SubagentTool {
                 // finished sub-agent's output would grow the directory without
                 // bound. Newest last from the log, so the tail is the cap —
                 // matching `completed`'s newest-first intent.
-                let recovered_all = self.list_from_log(&known).await;
+                let recovered_all = self.list_from_log(&known, scope).await;
                 let recovered_total = recovered_all.len();
                 let from_log: Vec<Value> = recovered_all
                     .iter()
@@ -1385,7 +1399,7 @@ impl SubagentTool {
             })
             .collect();
         let unknown = self.background_tracker.unknown_ids(request_ids, scope);
-        let recovered = self.recover_from_log(&unknown).await;
+        let recovered = self.resolve_forgotten(&unknown, scope).await;
         let mut output = json!({
             "status": "wait_interrupted",
             "still_running": still_running,
@@ -1714,41 +1728,22 @@ fn completed_row_json(request_id: &str, snap: &CompletedSnapshot) -> Value {
     }
 }
 
-/// W24 — the answer for a `request_id` the live tracker has never heard of.
+/// The answer for a `request_id` that **nothing** can account for: not the live
+/// tracker, not the parent's durable event log, not the cross-process sidecar.
 ///
-/// Before consulting the sidecar this was unconditionally
-/// `Error{retryable:false, "No background sub-agent found …"}`, which conflates
-/// two entirely different situations and is wrong about the interesting one: a
-/// daemon restart is not a failure *of this call*, and the child may well have
-/// produced something before its process vanished (§3 — "cancellation is not a
-/// verdict"; a disappeared process is the same shape). If the cross-process
-/// sidecar knows the id, report the interruption as a **success** carrying
-/// whatever the child had done, so the model can re-delegate from evidence
-/// rather than from a dead end.
+/// This is the last arm of `recovery::resolve_forgotten`, and it is the only
+/// place this error is still produced. Every caller must go through that
+/// resolver first — a restart is not a failure *of this call*, and answering
+/// "no such sub-agent" for a child whose output is sitting in a durable store
+/// is how a model is talked into redoing finished work.
 ///
-/// The genuinely-unknown id keeps the old error verbatim.
-fn unknown_request_id(request_id: &str, scope: Option<&str>) -> ToolResult {
-    match crate::agents::background_persistence::lookup(request_id, scope) {
-        Some(found) => ToolResult::Success {
-            output: json!({
-                "status": found.record.phase.status_label(),
-                "request_id": request_id,
-                "task": found.record.task,
-                "agent": found.record.agent,
-                "started_ms": found.record.started_ms,
-                "last_activity_ms": found.last_activity_ms,
-                "partial_result": found.partial_result,
-                "outcome": found.record.outcome,
-                "note": "This sub-agent belonged to a previous daemon process, so its live \
-                         state is gone. Anything above is what it managed to record before \
-                         the process ended — it is NOT a failure of the task. Re-delegate \
-                         whatever is still needed.",
-            }),
-        },
-        None => ToolResult::Error {
-            error: format!("No background sub-agent found with request_id '{request_id}'"),
-            retryable: false,
-        },
+/// An out-of-scope id lands here too, byte-identical to a typo: `addressable`
+/// on both durable sources refuses it, and the existence of another session's
+/// run is not disclosed.
+fn unknown_request_id(request_id: &str) -> ToolResult {
+    ToolResult::Error {
+        error: format!("No background sub-agent found with request_id '{request_id}'"),
+        retryable: false,
     }
 }
 
@@ -1820,6 +1815,17 @@ mod tests {
     /// call site it exists for.
     const SPAWN_SHAPES: &[&str] = &["tokio::spawn(", "join_set.spawn("];
 
+    /// The task-locals a spawned leg must re-establish — **all** of them.
+    ///
+    /// This list used to exist only in the assertion *message* while the
+    /// predicate tested `with_scope` alone. A leg that re-established the scope
+    /// but dropped the agent id and the project root therefore passed the guard
+    /// that exists to catch exactly that, and the two carry different halves of
+    /// the partition: `with_scope` picks the room/personal namespace while
+    /// `with_agent_id` + `with_project_root` pick the corpus and the cwd within
+    /// it. Message and predicate are one list now.
+    const REQUIRED_TASK_LOCALS: &[&str] = &["with_agent_id", "with_project_root", "with_scope"];
+
     /// Source-level guard: every task spawn in this file's production
     /// code must re-establish the run's task-locals inside the spawned
     /// future.
@@ -1835,7 +1841,17 @@ mod tests {
         let src = include_str!("loop_tool.rs");
         // Production prefix only — this test module is allowed to spawn
         // freely (its tasks touch no scoped store).
-        let prod = src.split("\n#[cfg(test)]\n").next().unwrap_or(src);
+        //
+        // The separator is deliberately UNANCHORED. It used to be
+        // `"\n#[cfg(test)]\n"`, which matches nothing on a CRLF checkout (the
+        // bytes are `\r\n#[cfg(test)]\r\n`), so `prod` silently became the
+        // WHOLE file — including this module, whose own assertion strings
+        // contain `join_set.spawn(`. The guard then failed on itself, on
+        // Windows only, while staying green in CI. The quieter half is worse:
+        // with the test module inside `prod`, the `checked > 0` assertion below
+        // is satisfied by these string literals, so deleting the real fan-out
+        // would not have tripped the very check that exists to notice that.
+        let prod = src.split("#[cfg(test)]").next().unwrap_or(src);
         let lines: Vec<&str> = prod.lines().collect();
         let mut checked = 0usize;
         for (i, line) in lines.iter().enumerate() {
@@ -1845,15 +1861,28 @@ mod tests {
             checked += 1;
             let end = (i + SPAWN_SCOPE_WINDOW_LINES).min(lines.len());
             let window = lines[i..end].join("\n");
-            assert!(
-                window.contains("with_scope"),
-                "loop_tool.rs:{}: a spawned task must re-establish the run's \
-                 task-locals (with_agent_id / with_project_root / with_scope) \
-                 inside the spawned future — spawned tasks inherit none of them, \
-                 so a subagent's memory writes land in the default partition \
-                 instead of the room / personal one",
-                i + 1
-            );
+            for &task_local in REQUIRED_TASK_LOCALS {
+                assert!(
+                    window.contains(task_local),
+                    "loop_tool.rs:{}: a spawned task must re-establish ALL of the \
+                     run's task-locals ({}) inside the spawned future — this one \
+                     is missing `{}`. Spawned tasks inherit none of them, so a \
+                     subagent's memory writes land in the default partition \
+                     instead of the room / personal one.\n\
+                     \n\
+                     If this leg deliberately uses the OTHER compliant shape — \
+                     capture the value before the spawn and pass it in explicitly, \
+                     as `session_manager/ops/emit.rs` and \
+                     `execution_engine/run_loop/inner.rs` do — then teach this \
+                     guard that shape rather than deleting it. A repo-wide sweep \
+                     (2026-08-09) found those two and no actual violations, so a \
+                     red here is far more likely to be a real regression than a \
+                     false alarm.",
+                    i + 1,
+                    REQUIRED_TASK_LOCALS.join(" / "),
+                    task_local
+                );
+            }
         }
         assert!(
             checked > 0,

@@ -19,9 +19,11 @@
 //! [`roster`] is a read-optimised projection of the membership table, NOT a
 //! second source of truth — read its module doc before touching it.
 
+pub mod attribution_backfill;
 pub mod roster;
 mod run_context;
 mod store;
 
+pub use attribution_backfill::{backfill_legacy_room_attribution, BackfillReport};
 pub use run_context::{current as current_project_root, with_project_root};
 pub use store::{Project, ProjectError, ProjectStatus, ProjectStore};

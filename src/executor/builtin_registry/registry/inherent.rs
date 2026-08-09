@@ -91,6 +91,85 @@ impl BuiltinToolRegistry {
             )
     }
 
+    /// The memory PARTITION this tool call reads and writes — the composed
+    /// answer, not the bare persona.
+    ///
+    /// [`Self::caller_agent_id`] returns `session_key.agent_id()`, i.e. `"main"`.
+    /// That is the persona, and it is **not** where this run's memory lives:
+    /// every producer composes it with the session's scope through
+    /// [`crate::memory::project_scope::session_write_id`], so a scoped run
+    /// writes to `main__u-alice` / `main__p-room`. A reader that skips the
+    /// composition looks in `main` and finds nothing — with no error, and with
+    /// every test green, because a test that builds the tool with a base id and
+    /// asserts against that same base id never crosses the seam.
+    ///
+    /// This is NOT a multi-user-only concern: a zero-config loopback Panel
+    /// session resolves to `(Some(OWNER_USER_ID), "operator")`, so the stock
+    /// single-user partition is already `main__u-owner`.
+    ///
+    /// Both task-locals it depends on are live at tool dispatch (the turn
+    /// context and the project root), because dispatch runs inside the scoped
+    /// tool-execution task.
+    /// Stamp `__channel` / `__conversation_id` onto a tool call so a task it
+    /// creates knows where to deliver its results.
+    ///
+    /// Single source for the two schedulers. `cron_manage` had this inline;
+    /// `heartbeat_create` did not, which is why every heartbeat task shipped
+    /// with `delivery_config: None` and silently dropped the finding its L2
+    /// turn had just spent a full LLM call producing.
+    ///
+    /// Prefers the race-free per-turn context: `session_context_handle` is
+    /// process-global and rewritten at every run start, so a concurrent run of
+    /// another agent can swap it mid-turn and the created task would deliver
+    /// into the WRONG conversation. The mirror is the fallback only outside a
+    /// scoped turn (non-gateway paths, tests).
+    pub(super) fn inject_delivery_route(&self, args: &mut serde_json::Value) {
+        let (channel, conversation_id) = match crate::tools::turn_context::current_turn_context() {
+            Some(t) => (Some(t.channel_id.clone()), Some(t.conversation_id.clone())),
+            None => self
+                .session_context_handle
+                .as_ref()
+                .and_then(|h| h.try_read().ok())
+                .map(|ctx| (Some(ctx.channel.clone()), Some(ctx.conversation_id.clone())))
+                .unwrap_or((None, None)),
+        };
+        let Some(obj) = args.as_object_mut() else {
+            return;
+        };
+        if let Some(channel) = channel {
+            obj.insert("__channel".into(), serde_json::Value::String(channel));
+        }
+        if let Some(conversation_id) = conversation_id {
+            obj.insert(
+                "__conversation_id".into(),
+                serde_json::Value::String(conversation_id),
+            );
+        }
+    }
+
+    pub(super) fn caller_memory_partition(&self, fallback: &str) -> String {
+        crate::memory::project_scope::session_write_id(
+            &self.caller_agent_id(fallback),
+            self.memory_project_scoped,
+            crate::projects::current_project_root().as_deref(),
+        )
+    }
+
+    /// [`Self::caller_memory_partition`] for the ONE reader whose question has
+    /// no answer in a shared room: the single human's profile.
+    ///
+    /// `None` inside a project room — a room has more than one person in it, so
+    /// "there is no such thing here" is the honest answer rather than handing
+    /// back the room's merged profile. That is precisely why
+    /// [`crate::memory::project_scope::profile_floor_id`] returns an `Option`.
+    pub(super) fn caller_profile_partition(&self, fallback: &str) -> Option<String> {
+        crate::memory::project_scope::profile_floor_id(
+            &self.caller_agent_id(fallback),
+            self.memory_project_scoped,
+            crate::projects::current_project_root().as_deref(),
+        )
+    }
+
     /// Get a handle to the `GatewayContext` `OnceCell` for deferred injection.
     ///
     /// Used by `agent_init` to inject `GatewayContext` after `ExecutionEngine` creation.

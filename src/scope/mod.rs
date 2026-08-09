@@ -31,7 +31,10 @@
 
 use std::collections::HashMap;
 
+pub mod carried;
 pub mod directory;
+
+pub use carried::CarriedAttribution;
 
 /// A scope identifier representing the visibility boundary for an agent or resource.
 #[derive(Debug, Clone, PartialEq, Eq)]

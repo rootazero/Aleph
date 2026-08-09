@@ -71,14 +71,24 @@ pub fn notification_for(frame: &GatewayEventFrame) -> Option<SurfaceNotification
 /// Returns `None` for everything else, INCLUDING `SurfaceApproval` itself.
 /// LOOP-SAFETY: `DesktopSurface::deliver` publishes `SurfaceApproval` back onto
 /// the same bus this router subscribes to; it MUST fall through to `None` here
-/// or we re-deliver our own output and amplify infinitely. The operator-only
-/// gate is applied later, at the forward-filter (`event_scope` +
+/// or we re-deliver our own output and amplify infinitely. The ownership gate is
+/// applied later, at the forward-filter (`event_visibility` +
 /// `audience_allows`), not here.
+///
+/// `session_key` is carried through verbatim — including the empty string a
+/// cluster-node approval arrives with. It is the banner's only routing
+/// information: dropping it here is what used to force the frame to be
+/// `Global` + role-gated downstream, i.e. delivered to operators only.
 #[must_use]
 pub fn approval_for(frame: &GatewayEventFrame) -> Option<SurfaceApproval> {
     match frame {
-        GatewayEventFrame::ApprovalRequested { approval_id, .. } => Some(SurfaceApproval {
+        GatewayEventFrame::ApprovalRequested {
+            approval_id,
+            session_key,
+            ..
+        } => Some(SurfaceApproval {
             approval_id: approval_id.clone(),
+            session_key: session_key.clone(),
             title: "Aleph needs your approval".to_string(),
             body: "A tool call is waiting for you.".to_string(),
         }),
@@ -198,12 +208,46 @@ mod tests {
         assert_eq!(a.body, "A tool call is waiting for you.");
     }
 
+    /// The banner's routing information. Dropping it here is what pinned the
+    /// frame to `Global` downstream, so it is asserted at the point of copy —
+    /// including the fleet case, where the empty string is the answer and must
+    /// not be turned into anything else.
+    #[test]
+    fn approval_for_carries_the_session_key_through() {
+        let owned = GatewayEventFrame::ApprovalRequested {
+            approval_id: "a1".to_string(),
+            session_key: "agent:main:s1".to_string(),
+            channel_id: String::new(),
+            conversation_id: String::new(),
+            tool_call_id: None,
+        };
+        assert_eq!(
+            approval_for(&owned).expect("surfaced").session_key,
+            "agent:main:s1"
+        );
+
+        let fleet = GatewayEventFrame::ApprovalRequested {
+            approval_id: "a2".to_string(),
+            session_key: String::new(),
+            channel_id: String::new(),
+            conversation_id: String::new(),
+            tool_call_id: None,
+        };
+        assert_eq!(
+            approval_for(&fleet).expect("surfaced").session_key,
+            "",
+            "a cluster-node approval has no session and must stay that way — \
+             the empty string is what makes it operator-only downstream"
+        );
+    }
+
     #[test]
     fn approval_for_ignores_its_own_surface_frame() {
         // LOOP-SAFETY: SurfaceApproval is this router's own output.
         let f = GatewayEventFrame::SurfaceApproval {
             audience: vec!["desktop".to_string()],
             approval_id: "a1".to_string(),
+            session_key: "agent:main:s1".to_string(),
             title: "x".to_string(),
             body: "y".to_string(),
         };

@@ -91,9 +91,10 @@ const ADMIN_PREFIXES: &[&str] = &[
     // 2026-08-07: `gateway.metrics.run_concurrency`, whose response is now
     // narrowed to the caller instead of refused (see MEMBER_CARVE_OUTS).
     // --- Principal / fleet / process management ---
-    "users.", // principal management (carve-outs: me / list) — not yet
-    // registered (lands in Task 5); gated pre-emptively so the gate
-    // precedes the surface.
+    "users.", // principal management (carve-outs: me / list). Registered since
+    // P0 Task 5 — `users.me/list/create/update` in `start/mod.rs`; the
+    // "not yet registered, gated pre-emptively" note this comment carried
+    // until 2026-08-09 described the day it was written, not the code.
     "cluster.", // enroll / deregister — fleet membership.
     // The READ face of that same fleet (`environments.list`): node ids, names,
     // tags, command inventories and last-seen times for every machine in the
@@ -171,7 +172,7 @@ const ADMIN_PREFIXES: &[&str] = &[
     "channels.",             // channel config (set_agent, list, status).
     "channel.",              // singular: per-channel create/delete/start/stop/send/
     // pairing_data/health, plus the `channel.pairing.*` sub-family
-    // (approve/approved/revoke — who may DM the bot at all).
+    // (list/approve/reject/approved/revoke — who may DM the bot at all).
     "discord.", // bot integration credentials/config (validate_token, list_guilds, …).
     // --- Server configuration surfaces (Settings page, one family per section) ---
     "config.",  // schema/get/patch/reload/validate/path/*_tool_permissions.
@@ -317,6 +318,21 @@ const MEMBER_CARVE_OUTS: &[&str] = &[
     // hands a member a WRITE verb, which is why the refusal shape is
     // load-bearing: a foreign approval id gets the message a stale id already
     // produces, so a refusal cannot be used to enumerate.
+    //
+    // The reason this matters at all: `exec.` gated the whole family, which
+    // made the default `Auto` tier a dead end for every member — any
+    // non-idempotent tool call parked for the full approval window and then
+    // died as `Timeout`, because the only principal allowed to resolve it was
+    // someone else. Putting a member at a door they can neither see nor answer
+    // does not constrain them; the documented workaround was `exec_tier:
+    // "full"`, i.e. the least safe setting became the only usable one.
+    //
+    // ⚠️ These two literals appeared TWICE in this table until 2026-08-09,
+    // with two justifications written by two rounds. A duplicate in a curated
+    // security table is not merely untidy: `contains` answers the same either
+    // way, so removing one copy looks like it changed nothing, and the next
+    // reader cannot tell which comment is the live ruling. One entry, one
+    // reason.
     "exec.approvals.pending",
     "exec.approval.resolve",
     // The Panel's cold-load seed for the sidebar running dot, and its usage
@@ -353,18 +369,6 @@ const MEMBER_CARVE_OUTS: &[&str] = &[
     // `config.update_tool_permissions` stays gated with the rest of `config.`;
     // this carve-out is a read of the dial positions, not a hand on the dial.
     "config.get_tool_permissions",
-    // A member approving their OWN parked tool call. `exec.` gated the whole
-    // family, which made the default `Auto` tier a dead end for every member:
-    // any non-idempotent tool call parked for the full approval window and then
-    // died as `Timeout`, because the only principal allowed to resolve it was
-    // someone else. Both methods are owner-scoped in the handler against the
-    // approval record's own `session_key` (`handlers/exec_approvals.rs`) — the
-    // pending list is filtered to the caller's sessions and a resolve for a
-    // foreign session is refused with the byte-identical not-found shape. A
-    // member can therefore unblock their own work and still cannot see, let
-    // alone resolve, anyone else's.
-    "exec.approvals.pending",
-    "exec.approval.resolve",
 ];
 
 #[must_use]
@@ -378,6 +382,36 @@ pub fn method_requires_admin(method: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A curated security table must not say the same thing twice.
+    ///
+    /// `MEMBER_CARVE_OUTS` carried `exec.approvals.pending` and
+    /// `exec.approval.resolve` twice, each with its own justification comment
+    /// written by a different round. `contains` answers identically either way,
+    /// so nothing failed and nothing could — but a reader auditing the table
+    /// cannot tell which comment is the live ruling, and deleting one copy
+    /// looks like a no-op change to the reviewer too. Same for
+    /// `ADMIN_PREFIXES`, where a duplicated prefix would hide a second,
+    /// possibly contradictory, rationale.
+    #[test]
+    fn the_curated_tables_list_nothing_twice() {
+        for (name, table) in [
+            ("MEMBER_CARVE_OUTS", MEMBER_CARVE_OUTS),
+            ("ADMIN_PREFIXES", ADMIN_PREFIXES),
+        ] {
+            let mut seen = std::collections::HashSet::new();
+            let dupes: Vec<&str> = table
+                .iter()
+                .filter(|entry| !seen.insert(**entry))
+                .copied()
+                .collect();
+            assert!(
+                dupes.is_empty(),
+                "{name} lists {dupes:?} more than once — each entry carries a justification \
+                 comment, and two of them for one entry means one is unreviewed"
+            );
+        }
+    }
 
     /// Tripwire subset — mirrors method_authz::MUST_STAY_GATED's philosophy:
     /// a curated pin, not a second source of truth. This table intentionally
@@ -434,6 +468,14 @@ mod tests {
             "channels.set_agent",
             "channel.create",
             "channel.pairing.revoke",
+            // Registered 2026-08-09, having been advertised by the startup
+            // banner since they were written without ever reaching the
+            // dispatcher. `list` is named here rather than left to the
+            // `channel.` prefix because it is an enumeration face: it returns
+            // every pending sender id across every channel, so reopening it to
+            // members should fail by name.
+            "channel.pairing.list",
+            "channel.pairing.reject",
             "discord.validate_token",
             // config. + settings-page *_config. families + secrets. + logs.
             "config.patch",

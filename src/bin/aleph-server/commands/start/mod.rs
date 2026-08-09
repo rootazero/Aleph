@@ -44,8 +44,8 @@ mod helpers;
 use helpers::{
     build_http_provider, build_sqlite_session_service, format_socket_addr,
     initialize_extension_manager, initialize_session_store, initialize_tracing,
-    load_gateway_config, print_boot_marker, print_startup_banner, setup_graceful_shutdown,
-    validate_bind_address,
+    install_mask_patterns, load_gateway_config, print_boot_marker, print_startup_banner,
+    setup_graceful_shutdown, validate_bind_address,
 };
 
 mod runtime_warmup;
@@ -186,6 +186,11 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
 
     // Load app config early so we can pick the session store backend
     let mut loaded_app_config = load_app_config()?;
+
+    // Seed the process-wide redaction set before anything can produce output.
+    // Same shape as `PiiEngine::init` above; it lives here rather than beside
+    // it only because `[security]` is on the app config, not the gateway one.
+    install_mask_patterns(&loaded_app_config);
 
     // Plugins are now installed via marketplace: `aleph plugin marketplace update && aleph plugin install <name>`
 
@@ -1673,6 +1678,28 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
         }
         tracing::warn!(error = %e, "project store migration failed; rooms will be unavailable");
     }
+    // Rooms created before P1 carry no `scope_id`, which reads as "org-era
+    // personal session" — so the room's own conversation was invisible to every
+    // member of its roster. Runs after `migrate()` (the roster projection has
+    // to exist) and before any handler is reachable, so no request observes the
+    // half-migrated state. Idempotent; a second boot reports every row as
+    // already stamped and says nothing.
+    let backfill = alephcore::projects::backfill_legacy_room_attribution(
+        &project_store,
+        session_store.as_ref(),
+    )
+    .await;
+    if !backfill.is_quiet() {
+        tracing::info!(
+            scanned = backfill.scanned,
+            stamped = backfill.stamped,
+            already = backfill.already_stamped,
+            unparseable = backfill.unparseable,
+            failed = backfill.failed,
+            "legacy room attribution backfill"
+        );
+    }
+
     register_projects_handlers(
         &mut server,
         &project_store,
@@ -2243,7 +2270,6 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
                     cron_state.clock.as_ref(),
                     cron_config.max_missed_jobs_per_restart,
                     cron_config.catchup_stagger_ms,
-                    cron_config.job_timeout_secs.saturating_mul(1000) as i64,
                 )
                 .await
                 {
@@ -2669,12 +2695,55 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
     {
         use alephcore::gateway::handlers::pairing as pairing_handlers;
 
+        /// The advertised `channel.pairing.*` surface, printed by the startup
+        /// banner and cross-checked against the live registry below.
+        ///
+        /// It is one list rather than two because the two drifted: `list` and
+        /// `reject` were advertised here (and in the webhook design doc) while
+        /// never being registered, so the dispatcher answered
+        /// `METHOD_NOT_FOUND` to anyone who followed the banner. `list` is not
+        /// a convenience — the pairing code is delivered to the *stranger*
+        /// (`inbound_router::permission::send_pairing_request`), so enumerating
+        /// pending requests is the operator's only in-product way to learn one.
+        const CHANNEL_PAIRING_METHODS: [(&str, &str); 5] = [
+            (
+                "channel.pairing.list",
+                "List pending channel pairing requests",
+            ),
+            ("channel.pairing.approve", "Approve a channel sender"),
+            ("channel.pairing.reject", "Reject a pending pairing request"),
+            ("channel.pairing.approved", "List approved channel senders"),
+            ("channel.pairing.revoke", "Revoke a channel sender"),
+        ];
+
         let store = channel_pairing_store.clone();
+        server
+            .handlers_mut()
+            .register("channel.pairing.list", move |req| {
+                let store = store.clone();
+                async move { pairing_handlers::handle_list(req, store).await }
+            });
+
+        let store = channel_pairing_store.clone();
+        server
+            .handlers_mut()
+            .register("channel.pairing.reject", move |req| {
+                let store = store.clone();
+                async move { pairing_handlers::handle_reject(req, store).await }
+            });
+
+        let store = channel_pairing_store.clone();
+        // The users store rides along so an approval can name the Aleph
+        // principal this sender speaks as — the channel half of P0's identity
+        // link, whose consumer (`inbound_router::executor`) has been live since
+        // P1 with nothing producing for it.
+        let approve_users = auth_bundle.security_store.clone();
         server
             .handlers_mut()
             .register("channel.pairing.approve", move |req| {
                 let store = store.clone();
-                async move { pairing_handlers::handle_approve(req, store).await }
+                let users = approve_users.clone();
+                async move { pairing_handlers::handle_approve(req, store, users).await }
             });
 
         let store = channel_pairing_store.clone();
@@ -2693,13 +2762,29 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
                 async move { pairing_handlers::handle_revoke(req, store).await }
             });
 
+        // Falsifiable: the banner claims these methods answer, so ask the
+        // registry rather than restating the claim. The check runs even under
+        // `--daemon`, where nothing is printed and a wiring bug would otherwise
+        // be visible only as a caller's `METHOD_NOT_FOUND`.
         if !args.daemon {
             println!("Channel pairing methods:");
-            println!("  - channel.pairing.list     : List pending channel pairing requests");
-            println!("  - channel.pairing.approve  : Approve a channel sender");
-            println!("  - channel.pairing.reject   : Reject a channel sender");
-            println!("  - channel.pairing.approved : List approved channel senders");
-            println!("  - channel.pairing.revoke   : Revoke a channel sender");
+        }
+        for (method, description) in CHANNEL_PAIRING_METHODS {
+            let registered = server.handlers_mut().has_method(method);
+            if !registered {
+                tracing::error!(
+                    "advertised RPC `{method}` is not registered - callers get METHOD_NOT_FOUND"
+                );
+            }
+            if !args.daemon {
+                if registered {
+                    println!("  - {method:<25}: {description}");
+                } else {
+                    println!("  - {method:<25}: UNREGISTERED (wiring bug)");
+                }
+            }
+        }
+        if !args.daemon {
             println!();
         }
     }
@@ -3098,6 +3183,16 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
     // orphaning them — mirroring the memory/channel monitor shutdowns above.
     if let Some(ref hb_svc) = heartbeat_service {
         let svc = hb_svc.lock().await;
+        svc.request_shutdown();
+    }
+
+    // Cron's timer loop has always had an `is_shutdown()` exit arm, but nothing
+    // ever set the flag: `ServiceState::request_shutdown` had no caller on the
+    // cron side and `CronService` did not expose it. The loop therefore kept
+    // waking and dispatching jobs while the delivery engine, providers and
+    // stores around it were being torn down.
+    if let Some(ref cron_svc) = cron_service {
+        let svc = cron_svc.lock().await;
         svc.request_shutdown();
     }
 

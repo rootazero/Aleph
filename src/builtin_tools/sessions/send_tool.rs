@@ -293,11 +293,15 @@ impl SessionsSendTool {
             .await
         {
             Ok(Some(meta)) => {
-                // `ambient_owner` is the resolver, NOT `visible_owner_filter`:
-                // the latter reads `CALLER_USER`, dead inside a spawned run,
-                // and a tool call is always inside one. `None` (cron / A2A /
-                // internal) is unrestricted, matching every sibling predicate.
-                let admitted = crate::scope::ambient_owner().is_none_or(|actor| {
+                // `ambient_actor` is the resolver, NOT `visible_owner_filter`
+                // (reads `CALLER_USER`, dead inside a spawned run, and a tool
+                // call is always inside one) and NOT `ambient_owner` (answers
+                // with the run's scope owner, which in a project room is the
+                // room's CREATOR for every member — so a member's turn inside
+                // someone else's room could dispatch a run into that person's
+                // PERSONAL session). `None` (cron / A2A / internal) is
+                // unrestricted, matching every sibling predicate.
+                let admitted = crate::gateway::visibility::ambient_actor().is_none_or(|actor| {
                     crate::gateway::visibility::session_visible_to(&meta, &actor)
                 });
                 if !admitted {
@@ -610,7 +614,21 @@ pub fn claim_session_key(raw: &str) -> Option<String> {
     Some(session_key_to_gateway(&parsed).to_key_string())
 }
 
-/// Convert `routing::SessionKey` to `gateway::router::SessionKey`
+/// Convert `routing::SessionKey` to `gateway::router::SessionKey`.
+///
+/// KNOWN DRIFT (tracked, not fixed — Panel send seam, separate task): the
+/// `DirectMessage` / `Group` arms collapse to the legacy `peer` form
+/// (`SessionKey::peer` = `dm(agent, "", peer, PerPeer)` → renders
+/// `agent:{a}:peer:{pid}`), discarding the channel + `dm_scope` the inbound
+/// path now stores under (`agent:{a}:{channel}:dm:{pid}` for PerChannelPeer,
+/// `agent:{a}:dm:{pid}` for PerPeer). The seam therefore executes AND claims
+/// on a key no inbound conversation ever writes — the claim key is consistent
+/// with where this seam executes (both collapsed), but inconsistent with the
+/// storage key of the DM/group conversation it targets: a delegated send
+/// spawns a seam-private `peer:` thread instead of continuing the visible
+/// conversation. Group collapses identically. Fix direction: preserve the
+/// dm/group form (the collapse was written for the pre-alignment
+/// `peer:dm-{sender}` key shape and outlived it).
 fn session_key_to_gateway(key: &crate::routing::session_key::SessionKey) -> SessionKey {
     match key {
         crate::routing::session_key::SessionKey::Main { agent_id, .. } => {

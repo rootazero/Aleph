@@ -2316,8 +2316,14 @@ mod tests {
         // owner-scoped per frame since 2026-08-08, so a member gets their own
         // and no one else's). What a member must still not hold is the
         // superuser scope, which is what would hand them everybody's.
+        // ...and that same predicate is now what decides the R5 BANNER too: it
+        // left this table on 2026-08-09 once it began carrying the session key
+        // it is derived from, so `can_receive("surface.approval", …)` no longer
+        // answers anything. `is_superuser_scope` above IS the admin arm of the
+        // banner's owner check — the assertion did not go away, it merged into
+        // the line before this comment.
         assert!(!crate::gateway::event_scope::is_superuser_scope(&scope));
-        assert!(!guard.can_receive("surface.approval", &scope));
+        assert!(guard.can_receive("surface.approval", &scope));
         assert!(!guard.can_receive("config.changed", &scope));
         assert!(!guard.can_receive("pairing.requested", &scope));
         assert!(!guard.can_receive("pty.output", &scope));

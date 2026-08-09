@@ -210,21 +210,29 @@ impl AlephTool for SessionsListTool {
         // question rather than a process-wide one, and both `SessionStore`
         // backends route it through `visibility::session_visible_to` — so room
         // membership comes free and there is no second predicate here to drift.
+        // "Comes free" is about the PREDICATE, not the actor: the value handed
+        // to it still has to name the right human (see the resolver note
+        // below), and until 2026-08-09 it named the room's creator.
         // Leaving it `None` (the `Default`) means "every owner", which is what
         // this tool did until 2026-08-08: the RPC twin
         // (`handlers::session::db_handlers::query`) has always set it, and this
         // was the only other production reader of the field.
         //
-        // The resolver is [`scope::ambient_owner`], NOT
-        // `visibility::visible_owner_filter()`. The latter reads only
-        // `CALLER_USER`, a task-local that is dead inside a spawned run — every
-        // tool call happens inside one, so a predicate built on it would be
-        // fail-open exactly here and nowhere else, which is the worst place for
-        // a predicate to be wrong: silently, on the tool face, while the RPC
-        // face's tests stay green.
+        // The resolver is [`visibility::ambient_actor`], NOT
+        // `visibility::visible_owner_filter()` and NOT `scope::ambient_owner`.
+        // `visible_owner_filter` reads only `CALLER_USER`, a task-local that is
+        // dead inside a spawned run — every tool call happens inside one, so a
+        // predicate built on it would be fail-open exactly here and nowhere
+        // else, which is the worst place for a predicate to be wrong:
+        // silently, on the tool face, while the RPC face's tests stay green.
+        // `ambient_owner` fixes that but answers with the RUN's scope owner,
+        // which inside a project room is the room's CREATOR for every member —
+        // so a member listing from inside someone else's room would be handed
+        // that person's PERSONAL sessions. `ambient_actor` prefers the turn's
+        // speaker in a room and is byte-identical outside one.
         let filter = crate::gateway::session_store::types::SessionFilter {
             active_minutes: args.active_minutes,
-            owner_visible_to: crate::scope::ambient_owner(),
+            owner_visible_to: crate::gateway::visibility::ambient_actor(),
             ..Default::default()
         };
         let all_sessions = self

@@ -73,7 +73,9 @@ pub enum Commands {
     /// Show server information
     Info,
 
-    /// Connect to the server (LAN-trust: no credentials)
+    /// Open a connection and report the role the server grants. A loopback
+    /// server auto-authorizes as operator; a remote one walls the connection
+    /// until it is shown a credential, which this CLI cannot yet present.
     Connect {
         /// Device name for this client
         #[arg(short, long, default_value = "aleph-cli")]
@@ -239,9 +241,11 @@ pub enum Commands {
         action: ProxyAction,
     },
 
-    /// Open the Aleph Panel in the system browser. LAN-trust: the gateway
-    /// serves the Panel with no authentication, so this just derives the
-    /// Panel URL from the configured endpoint and launches the browser.
+    /// Open the Aleph Panel in the system browser. The static Panel assets are
+    /// served unauthenticated (the login wall is on the WebSocket, not the HTTP
+    /// root), so this just derives the Panel URL from the configured endpoint
+    /// and launches the browser — a remote Panel will ask for a credential
+    /// itself once it connects.
     Open,
 
     /// Watch live agent activity across all sessions as a timestamped feed

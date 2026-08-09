@@ -59,6 +59,19 @@ impl Gatherer {
             self.project_scoped,
             crate::projects::current_project_root().as_deref(),
         );
+        // Every partition this session may read — the SAME derivation
+        // `fetch_notes` uses below. Handing the feedback floor the bare persona
+        // made it scan a directory no writer ever targets:
+        // `flag_user_correction` writes through `caller_memory_partition`, and
+        // even a zero-config loopback Panel session is `Personal(u-owner)`, so
+        // the factory-default corrections land in `main__u-owner/feedback/`.
+        // Base stays in this set, so org-wide standing rules still reach
+        // everyone.
+        let feedback_floor_ids = crate::memory::project_scope::session_read_ids(
+            &input.agent_id,
+            self.project_scoped,
+            crate::projects::current_project_root().as_deref(),
+        );
         let (notes, snapshot, raws, profile, feedback_floor, daily_insight) = tokio::join!(
             self.fetch_notes(&input.query, &input.agent_id, input.pool_limit),
             self.fetch_snapshot(&input.agent_id, input.session_id.as_deref()),
@@ -69,7 +82,7 @@ impl Gatherer {
                     None => None,
                 }
             },
-            self.feedback_floor.load(&input.agent_id),
+            self.feedback_floor.load_many(&feedback_floor_ids),
             self.fetch_daily_insight(),
         );
 
@@ -557,11 +570,16 @@ mod tests {
     }
 
     /// P1 "Floors 分床": the user-profile floor must follow the session's
-    /// personal scope while the feedback floor stays org-wide (base id)
-    /// regardless. Effect assertion via real tempdir-backed loaders, not a
-    /// mock — both loaders join `agent_id` straight into their own path, so
-    /// the right content landing in the pool IS the proof of which id each
-    /// loader was actually asked for.
+    /// personal scope, while the feedback floor is not *narrowed* to it — it
+    /// reads base ∪ this session's partition. Effect assertion via real
+    /// tempdir-backed loaders, not a mock — both loaders join `agent_id`
+    /// straight into their own path, so the right content landing in the pool
+    /// IS the proof of which id each loader was actually asked for.
+    ///
+    /// Both halves are asserted deliberately. Checking only the base rule is
+    /// what let the floor ship empty: it proved the reader looks at `main/`,
+    /// and never crossed the seam to where `flag_user_correction` actually
+    /// writes.
     #[tokio::test]
     async fn user_floor_is_scoped_feedback_floor_is_not() {
         use crate::scope::{with_scope, ScopeAttribution};
@@ -575,13 +593,24 @@ mod tests {
         std::fs::create_dir_all(&scoped_profile_dir).unwrap();
         std::fs::write(scoped_profile_dir.join("profile.md"), "alice profile body").unwrap();
 
-        // Base feedback rule — must still surface even though the session is
-        // personal-scoped; the feedback floor is never scoped.
+        // Base feedback rule — an org-wide standing rule must still surface
+        // even though the session is personal-scoped.
         let feedback_dir = memory_dir.join("main").join("feedback");
         std::fs::create_dir_all(&feedback_dir).unwrap();
         std::fs::write(
             feedback_dir.join("rule.md"),
             "---\ncategory: feedback\nseverity: high\nconfidence: 0.9\n---\n\n- Always do X\n",
+        )
+        .unwrap();
+
+        // …and a correction written where `flag_user_correction` actually puts
+        // one for this session. Reading only the base id makes this invisible,
+        // which was the shipped behaviour.
+        let scoped_feedback_dir = memory_dir.join("main__u-alice").join("feedback");
+        std::fs::create_dir_all(&scoped_feedback_dir).unwrap();
+        std::fs::write(
+            scoped_feedback_dir.join("mine.md"),
+            "---\ncategory: feedback\nseverity: critical\nconfidence: 0.9\n---\n\n- Never do Y\n",
         )
         .unwrap();
 
@@ -622,11 +651,20 @@ mod tests {
             .expect("profile floor must load under personal scope");
         assert_eq!(profile_hit.full_content, "alice profile body");
 
-        let feedback_hit = pool
+        let feedback: Vec<&str> = pool
             .iter()
-            .find(|c| c.slot_hint == SlotKind::Feedback)
-            .expect("feedback floor must still load — it is org-wide, not scoped");
-        assert!(feedback_hit.full_content.contains("Always do X"));
+            .filter(|c| c.slot_hint == SlotKind::Feedback)
+            .map(|c| c.full_content.as_str())
+            .collect();
+        assert!(
+            feedback.iter().any(|c| c.contains("Always do X")),
+            "an org-wide standing rule must still reach a personal session: {feedback:?}"
+        );
+        assert!(
+            feedback.iter().any(|c| c.contains("Never do Y")),
+            "a correction written to this session's own partition must reach \
+             the always-on floor — that is where every writer puts it: {feedback:?}"
+        );
     }
 
     #[test]

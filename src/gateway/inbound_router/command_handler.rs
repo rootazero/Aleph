@@ -324,7 +324,31 @@ impl InboundMessageRouter {
 
         let new_key = old_key.with_epoch(current_epoch + 1);
         if let Some(ref sm) = self.session_store {
-            if let Err(e) = sm.get_or_create(&new_key).await {
+            // The successor inherits the source row's attribution, exactly as
+            // the RPC face (`sessions.new`) does — this is the THIRD face of
+            // "roll this conversation to the next epoch" and the only one that
+            // did not carry it.
+            //
+            // The router's principal resolution lives in
+            // `executor::execute_for_context_inner`, which this path never
+            // enters (`/new` is dispatched before it), so `current_scope()` is
+            // `None` here and the successor was written NULL/NULL and adopted
+            // by `owner_or_legacy` as the operator's. Permanent, because
+            // `get_or_create`'s existing-row branch never re-stamps: the
+            // member's next message finds the row already there.
+            //
+            // `from_persisted` returns `None` for a legacy (unstamped) source,
+            // which reproduces today's behaviour byte for byte.
+            let carried = match sm.get_metadata(&old_key_resolved).await {
+                Ok(Some(meta)) => crate::scope::ScopeAttribution::from_persisted(
+                    meta.owner_user_id.as_deref(),
+                    meta.scope_id.as_deref(),
+                ),
+                // No source row (first `/new` in a conversation) or an
+                // unreadable one: nothing to carry, same as before.
+                _ => None,
+            };
+            if let Err(e) = crate::scope::with_scope(carried, sm.get_or_create(&new_key)).await {
                 warn!("[Router] Failed to create new session: {}", e);
             }
         }

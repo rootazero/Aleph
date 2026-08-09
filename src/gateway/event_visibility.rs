@@ -63,9 +63,9 @@
 //!
 //! ## Deliberately `Global`, not owner-scoped
 //!
-//! `surface.approval`, `pairing.*` and `config.changed` carry (or could carry)
-//! a `session_key`, but this module does NOT additionally owner-scope them:
-//! they are already role-gated by `EventScopeGuard` (filter #1).
+//! `pairing.*` and `config.changed` carry (or could carry) a `session_key`, but
+//! this module does NOT additionally owner-scope them: they are already
+//! role-gated by `EventScopeGuard` (filter #1).
 //!
 //! ⚠️ The raw `approval.*` frames USED to be on that list, on the reasoning
 //! that an exec approval for a MEMBER's session is resolved by an OPERATOR, so
@@ -79,6 +79,11 @@
 //! cluster node raised it, it has no owner) and the `approval.` rule is gone
 //! from `EventScopeGuard` — the protection moved down one filter rather than
 //! being removed, and the operator's delivery is byte-for-byte what it was.
+//! `surface.approval` — the R5 banner derived from `approval.requested` —
+//! joined them once `r5_router::approval_for` stopped dropping the session key
+//! on the way through. It was the last frame in the family still `Global`, and
+//! the symptom was the same shape one rung out: a member received the decision
+//! card and never the interrupt whose entire job is to fetch them to it.
 //! `RunningSetChanged` carries a
 //! `Vec<String>` spanning every user's in-flight sessions with no single owner
 //! to check against, so pass/fail is the wrong question for it entirely; it
@@ -354,6 +359,26 @@ pub fn session_identity_of(topic: &str, data: Option<&Value>) -> SessionIdentity
             _ => SessionIdentity::Unattributed,
         },
 
+        // Host telemetry: `host.presence.update` carries the machine's
+        // `hostname`, its OS `username` and whether a human is sitting at it;
+        // `host.mic_level.update` says whether the room is making noise. Both
+        // are raw-string `TopicEvent` producers, so `every_frame_variant_is_
+        // classified` is structurally blind to them, and neither had an arm —
+        // they fell to `_ => Global` and `EventScopeGuard` has no `host.` rule
+        // either, so every authenticated member and every filterless client
+        // received them. `PresenceConfig`'s own doc names this risk and offers
+        // only `default_enabled() == false` as mitigation, which is no gate at
+        // all for the operator who follows the doc and turns it on.
+        //
+        // `OperatorOnly`, not a session key: the host belongs to whoever runs
+        // the daemon, not to any conversation — there is nothing to attribute
+        // it to. Structural prefix match rather than a two-topic whitelist,
+        // because a whitelist only covers the world as it was on the day it was
+        // written and the next `host.*` reporter would land back on the
+        // broadcast path. Owed a SOURCE-level pin —
+        // `host_topics_are_classified_at_their_producers`.
+        t if t.starts_with("host.") => SessionIdentity::OperatorOnly,
+
         // --- TopicEvent-form frames genuinely session-scoped and NOT
         // covered by any other filter today ---
         "session.lifecycle.changed" | "sessions.changed" => {
@@ -381,7 +406,14 @@ pub fn session_identity_of(topic: &str, data: Option<&Value>) -> SessionIdentity
         // `session_key: String::new()` (`approval/node_requester.rs`). The
         // discriminator is therefore STRUCTURAL — is there a session key —
         // rather than a guess about the requester.
-        "approval.requested" | "approval.resolved" | "approval.expired" => {
+        //
+        // `surface.approval` is the fourth member of the family, not a
+        // different question: it is the R5 BANNER leg derived from
+        // `approval.requested` and now carries the same `session_key`. It was
+        // the last one still `Global` + role-gated, which delivered it to
+        // operators only — so a member whose own call was parked got the card
+        // and no interrupt. Same discriminator, same two answers.
+        "approval.requested" | "approval.resolved" | "approval.expired" | "surface.approval" => {
             match str_field(data, "session_key").filter(|k| !k.is_empty()) {
                 // A real session: the owner resolves their own, and the admin
                 // arm keeps an operator receiving a member's card as before.
@@ -392,9 +424,7 @@ pub fn session_identity_of(topic: &str, data: Option<&Value>) -> SessionIdentity
                 None => SessionIdentity::OperatorOnly,
             }
         }
-        "surface.approval" | "pairing.requested" | "pairing.completed" | "config.changed" => {
-            SessionIdentity::Global
-        }
+        "pairing.requested" | "pairing.completed" | "config.changed" => SessionIdentity::Global,
 
         // --- TopicEvent-form frames with no session concept at all ---
         "channel.message"
@@ -1790,6 +1820,47 @@ mod tests {
         }
     }
 
+    /// SOURCE-level pin for the two host-telemetry reporters, owed for exactly
+    /// the same reason as the voice one: both publish raw
+    /// `TopicEvent::new(TOPIC_CONST, …)` strings with no `GatewayEventFrame`
+    /// variant, so the exhaustive-match pin cannot see them — which is how a
+    /// payload carrying the host's `hostname`, its OS `username` and whether a
+    /// human is at the keyboard sat on `_ => Global`, reaching every
+    /// authenticated member.
+    ///
+    /// Reads the topic literal out of each producer's own source, so renaming
+    /// one side fails here rather than silently returning it to broadcast.
+    #[test]
+    fn host_topics_are_classified_at_their_producers() {
+        const PRODUCERS: [(&str, &str); 2] = [
+            (
+                "src/tasks/presence/snapshot.rs",
+                include_str!("../tasks/presence/snapshot.rs"),
+            ),
+            (
+                "src/tasks/mic_level/snapshot.rs",
+                include_str!("../tasks/mic_level/snapshot.rs"),
+            ),
+        ];
+
+        for (path, src) in PRODUCERS {
+            let production = src.split("#[cfg(test)]").next().unwrap_or(src);
+            let topic = production
+                .split("_TOPIC: &str = \"")
+                .nth(1)
+                .and_then(|rest| rest.find('"').map(|end| &rest[..end]))
+                .unwrap_or_else(|| {
+                    panic!("{path} declares no `*_TOPIC` literal — this pin has gone vacuous")
+                });
+            assert_eq!(
+                session_identity_of(topic, None),
+                SessionIdentity::OperatorOnly,
+                "`{topic}` ({path}) is host telemetry: it belongs to whoever runs \
+                 the daemon, not to every connected member"
+            );
+        }
+    }
+
     #[test]
     fn no_published_team_topic_suffix_classifies_as_global() {
         const PRODUCERS: [(&str, &str, &str); 3] = [
@@ -1869,6 +1940,11 @@ mod tests {
             "approval.requested",
             "approval.resolved",
             "approval.expired",
+            // The R5 banner. It is the same question — "whose approval is
+            // this" — and used to be answered `Global` + role-gated purely
+            // because the frame had dropped the session key on its way through
+            // `r5_router::approval_for`.
+            "surface.approval",
         ] {
             let owned = serde_json::json!({ "session_key": "agent:main:s1" });
             assert_eq!(
@@ -1895,13 +1971,6 @@ mod tests {
                 SessionIdentity::OperatorOnly
             );
         }
-
-        // The R5 banner is a different payload with a different audience
-        // mechanism and is deliberately NOT swept up by proximity.
-        assert_eq!(
-            session_identity_of("surface.approval", None),
-            SessionIdentity::Global
-        );
     }
 
     #[test]
@@ -1952,7 +2021,10 @@ mod tests {
                 // no owner to compare against and stays operator-only.
                 GatewayEventFrame::ApprovalRequested { session_key, .. }
                 | GatewayEventFrame::ApprovalResolved { session_key, .. }
-                | GatewayEventFrame::ApprovalExpired { session_key, .. } => {
+                | GatewayEventFrame::ApprovalExpired { session_key, .. }
+                // The banner leg joined the family once it started carrying the
+                // session key it is derived from.
+                | GatewayEventFrame::SurfaceApproval { session_key, .. } => {
                     if session_key.is_empty() {
                         SessionIdentity::OperatorOnly
                     } else {
@@ -1972,8 +2044,7 @@ mod tests {
                 | GatewayEventFrame::CronJobChanged { .. }
                 | GatewayEventFrame::HeartbeatTaskChanged { .. }
                 | GatewayEventFrame::TeamChanged { .. }
-                | GatewayEventFrame::SurfaceNotify { .. }
-                | GatewayEventFrame::SurfaceApproval { .. } => SessionIdentity::Global,
+                | GatewayEventFrame::SurfaceNotify { .. } => SessionIdentity::Global,
             }
         }
 
@@ -2182,6 +2253,7 @@ mod tests {
             GatewayEventFrame::SurfaceApproval {
                 audience: vec!["desktop".into()],
                 approval_id: "a1".into(),
+                session_key: "agent:main:s1".into(),
                 title: "t".into(),
                 body: "b".into(),
             },

@@ -601,8 +601,10 @@ impl BuiltinToolRegistry {
                     |p| p.join(".aleph").join("memory").join("note"),
                 )
             });
-            let browse_tool = MemoryBrowseTool::new(note_memory_dir, "default".to_string());
-            let explore_tool = MemoryExploreTool::new(db.clone(), Arc::clone(embedder));
+            let browse_tool = MemoryBrowseTool::new(note_memory_dir, "default".to_string())
+                .with_project_scoping(config.memory_project_scoped);
+            let explore_tool = MemoryExploreTool::new(db.clone(), Arc::clone(embedder))
+                .with_project_scoping(config.memory_project_scoped);
             info!("Created memory_search, memory_browse, and memory_explore tools");
             (
                 Some(search_tool),
@@ -623,7 +625,8 @@ impl BuiltinToolRegistry {
                     |p| p.join(".aleph").join("memory").join("note"),
                 )
             });
-            let browse_tool = MemoryBrowseTool::new(note_memory_dir, "default".to_string());
+            let browse_tool = MemoryBrowseTool::new(note_memory_dir, "default".to_string())
+                .with_project_scoping(config.memory_project_scoped);
             info!("Created memory_browse tool (no embedder for memory_search)");
             (None, Some(browse_tool), None, None, None)
         } else {

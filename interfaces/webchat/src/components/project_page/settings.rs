@@ -168,8 +168,14 @@ fn RosterSection(
                 <div class="mb-2 rounded-md border border-border bg-surface-sunken max-h-40 overflow-y-auto">
                     {move || {
                         let members = members.get_value();
+                        // `selectable`, not `all`: a deactivated principal is
+                        // still a name this directory must be able to render
+                        // (an existing roster row, a historical bubble), but
+                        // offering them here produces a write the server
+                        // declines — and that refusal reads as a broken roster
+                        // rather than as the state of that person.
                         let list: Vec<(String, String)> = dir
-                            .all()
+                            .selectable()
                             .into_iter()
                             .filter(|(uid, _)| !members.contains(uid))
                             .collect();

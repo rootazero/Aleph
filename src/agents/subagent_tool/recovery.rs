@@ -59,6 +59,16 @@ pub(crate) enum Recovered {
     /// The child was spawned and never returned — the process died while it was
     /// running. Its partial transcript lives in `child_session`.
     Interrupted { child_session: String, flow: String },
+    /// Known only to the cross-process sidecar
+    /// ([`crate::agents::background_persistence`]).
+    ///
+    /// The two durable sources do not cover the same set. `SubagentSpawned` is
+    /// emitted *after* the spawner takes its concurrency permit, so a child
+    /// that was still queued behind `max_concurrent_subagents` when the daemon
+    /// died has no event-log record at all — while the sidecar's `record_start`
+    /// ran before the task was even spawned. The sidecar also carries the
+    /// activity trail and the settled outcome, neither of which the log has.
+    Sidecar(Box<crate::agents::background_persistence::RecoveredRun>),
 }
 
 /// True when `child_id` is the child session minted for `request_id`.
@@ -225,6 +235,29 @@ pub(crate) fn to_json(request_id: &str, recovered: &Recovered) -> Value {
                      transcript is at child_session; read that before deciding whether to \
                      spawn the task again.",
         }),
+        Recovered::Sidecar(run) => {
+            use crate::agents::background_persistence::RunPhase;
+            let settled = run.record.phase == RunPhase::Settled;
+            json!({
+                "status": run.record.phase.status_label(),
+                "request_id": request_id,
+                "task": run.record.task,
+                "agent": run.record.agent,
+                "started_ms": run.record.started_ms,
+                "last_activity_ms": run.last_activity_ms,
+                "partial_result": run.partial_result,
+                "outcome": run.record.outcome,
+                "note": if settled {
+                    "This sub-agent FINISHED in a previous daemon process. What it recorded \
+                     before that process ended is above — the work is done, do NOT re-run it."
+                } else {
+                    "This sub-agent belonged to a previous daemon process, so its live state \
+                     is gone. Anything above is what it managed to record before the process \
+                     ended — it is NOT a failure of the task. Re-delegate whatever is still \
+                     needed."
+                },
+            })
+        }
     }
 }
 
@@ -270,6 +303,24 @@ pub(crate) fn to_list_row(request_id: &str, recovered: &Recovered) -> Value {
             "agent": flow,
             "child_session": child_session,
         }),
+        Recovered::Sidecar(run) => {
+            let text = &run.partial_result;
+            let head: String = text.chars().take(LIST_RESULT_PREVIEW_CHARS).collect();
+            let preview = if head.chars().count() < text.chars().count() {
+                format!("{head}…")
+            } else {
+                head
+            };
+            json!({
+                "status": run.record.phase.status_label(),
+                "request_id": request_id,
+                "task": run.record.task,
+                "agent": run.record.agent,
+                "result_preview": preview,
+                "result_chars": text.chars().count(),
+                "last_activity_ms": run.last_activity_ms,
+            })
+        }
     }
 }
 
@@ -310,6 +361,43 @@ impl super::SubagentTool {
         out
     }
 
+    /// **The** answer to "the tracker has never heard of this id — what does
+    /// anything durable know?".
+    ///
+    /// There are two durable sources and they do not cover the same set, so
+    /// consulting one of them is consulting half the evidence. Before this
+    /// existed, four faces of the same tool each picked one: `check_status` and
+    /// single-id `wait` asked only the sidecar; multi-id `wait`, `cancel` and
+    /// `list` asked only the event log. The visible symptom was self-
+    /// contradiction — `list` rendering an id as `completed_recovered` with a
+    /// result preview while `check_status` on that same id answered "No
+    /// background sub-agent found" — plus a hard-coded note telling the model
+    /// those ids "will never complete; drop them", said about children whose
+    /// output the sidecar was holding.
+    ///
+    /// Precedence, in one place:
+    /// 1. the event log's `Completed` — it carries the child's *actual* final
+    ///    text, which the sidecar's activity trail only approximates;
+    /// 2. the sidecar — phase, outcome and the masked progress trail, and the
+    ///    only source that knows about a child that died still queued;
+    /// 3. the event log's `Interrupted` — a pointer at the child transcript.
+    pub(super) async fn resolve_forgotten(
+        &self,
+        ids: &[String],
+        scope: Option<&str>,
+    ) -> HashMap<String, Recovered> {
+        let mut out = self.recover_from_log(ids).await;
+        for id in ids {
+            if matches!(out.get(id), Some(Recovered::Completed { .. })) {
+                continue;
+            }
+            if let Some(run) = crate::agents::background_persistence::lookup(id, scope) {
+                out.insert(id.clone(), Recovered::Sidecar(Box::new(run)));
+            }
+        }
+        out
+    }
+
     /// The durable half of the `list` directory: every sub-agent this session's
     /// log knows about that the live tracker does not.
     ///
@@ -321,17 +409,35 @@ impl super::SubagentTool {
     /// Costs one read per `list` call. `list` is an on-demand directory, not a
     /// hot path, and a directory that is cheap and wrong is not the trade worth
     /// making.
-    pub(super) async fn list_from_log(&self, known: &[String]) -> Vec<(String, Recovered)> {
-        let Some(parent_id) = parent_session(self.parent_session_id.as_deref()) else {
-            return Vec::new();
+    pub(super) async fn list_from_log(
+        &self,
+        known: &[String],
+        scope: Option<&str>,
+    ) -> Vec<(String, Recovered)> {
+        let mut out = match parent_session(self.parent_session_id.as_deref()) {
+            Some(parent_id) => match self.session.get_events(&parent_id, None, None).await {
+                Ok(events) => enumerate(&events, known),
+                Err(error) => {
+                    tracing::debug!(%error, "subagent list: parent event log unreadable");
+                    Vec::new()
+                }
+            },
+            // No owning session (CLI / direct construction) — no log to read,
+            // which is not an error and must not skip the sidecar half below.
+            None => Vec::new(),
         };
-        match self.session.get_events(&parent_id, None, None).await {
-            Ok(events) => enumerate(&events, known),
-            Err(error) => {
-                tracing::debug!(%error, "subagent list: parent event log unreadable");
-                Vec::new()
-            }
+        // The sidecar's half of the directory: children the log cannot see
+        // because they never got as far as `SubagentSpawned`. Same precedence
+        // as `resolve_forgotten` — the log wins where both know an id.
+        let mut seen: Vec<String> = known.to_vec();
+        seen.extend(out.iter().map(|(id, _)| id.clone()));
+        for run in crate::agents::background_persistence::list_for_scope(scope, &seen) {
+            out.push((
+                run.record.request_id.clone(),
+                Recovered::Sidecar(Box::new(run)),
+            ));
         }
+        out
     }
 }
 
