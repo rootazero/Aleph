@@ -68,8 +68,11 @@ pub struct MatchRule {
     pub guild_id: Option<String>,
     /// Slack team ID
     pub team_id: Option<String>,
-    /// Workspace to auto-route to when this binding matches.
-    /// When set, the execution engine uses this workspace instead of the user's active workspace.
+    /// Workspace to auto-route to when this binding matches. When set, the
+    /// execution engine uses this workspace instead of the user's active
+    /// workspace. Must be an **absolute directory path**; a relative path or
+    /// missing dir is ignored (falls back to the channel/agent default) with
+    /// a startup warning.
     pub workspace: Option<String>,
 }
 
@@ -119,6 +122,15 @@ pub fn binding_problems(bindings: &[RouteBinding]) -> Vec<String> {
             if peer.id.trim().is_empty() {
                 out.push(format!(
                     "{who}: match.peer.id is empty — this binding can never match"
+                ));
+            }
+        }
+        if let Some(acct) = r.account_id.as_deref().map(str::trim) {
+            if !acct.is_empty() && acct != "*" && acct != "default" {
+                out.push(format!(
+                    "{who}: match.account_id = \"{acct}\" is not fed by any channel — \
+                     the gateway always resolves account_id as \"default\" (multi-account \
+                     not yet wired inbound); this binding can never match real traffic"
                 ));
             }
         }
@@ -219,5 +231,41 @@ mod tests {
         "#;
         let cfg: SessionConfig = toml::from_str(toml_str).unwrap();
         assert_eq!(cfg.identity_links.len(), 2);
+    }
+
+    #[test]
+    fn binding_problems_flags_unwired_account_id() {
+        let bindings = vec![RouteBinding {
+            agent_id: "main".to_string(),
+            match_rule: MatchRule {
+                channel: Some("telegram".to_string()),
+                account_id: Some("botA".to_string()),
+                ..Default::default()
+            },
+        }];
+        let problems = binding_problems(&bindings);
+        assert!(
+            problems
+                .iter()
+                .any(|p| p.contains("account_id") && p.contains("never match")),
+            "a specific account_id that no channel feeds must be flagged; got {problems:?}"
+        );
+
+        // "default" / "*" / omitted are the only values that can match inbound.
+        for acct in [Some("default"), Some("*"), None] {
+            let bindings = vec![RouteBinding {
+                agent_id: "main".to_string(),
+                match_rule: MatchRule {
+                    channel: Some("telegram".to_string()),
+                    account_id: acct.map(str::to_string),
+                    ..Default::default()
+                },
+            }];
+            let problems = binding_problems(&bindings);
+            assert!(
+                !problems.iter().any(|p| p.contains("account_id")),
+                "account_id={acct:?} must not be flagged; got {problems:?}"
+            );
+        }
     }
 }

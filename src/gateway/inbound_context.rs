@@ -78,6 +78,13 @@ pub struct InboundContext {
     /// was speech, so only it justifies inviting transcription-artifact repair
     /// in the prompt (`VoiceModeLayer`).
     pub transcribed_input: bool,
+
+    /// Workspace pinned by the route binding that matched this message
+    /// (`MatchRule.workspace`). `None` → the channel `default_workspace`
+    /// (Layer-1 lock) or the agent default applies. Only set on the
+    /// configured-bindings routing path; all other constructors default to
+    /// `None` and keep the channel/agent workspace behavior.
+    pub workspace: Option<std::path::PathBuf>,
 }
 
 impl InboundContext {
@@ -94,6 +101,7 @@ impl InboundContext {
             sender_normalized,
             voice_reply_hint: false,
             transcribed_input: false,
+            workspace: None,
         }
     }
 
@@ -129,6 +137,13 @@ impl InboundContext {
     #[must_use]
     pub const fn with_transcribed_input(mut self, transcribed: bool) -> Self {
         self.transcribed_input = transcribed;
+        self
+    }
+
+    /// Set the workspace pinned by the matched route binding.
+    #[must_use]
+    pub fn with_workspace(mut self, workspace: Option<std::path::PathBuf>) -> Self {
+        self.workspace = workspace;
         self
     }
 }

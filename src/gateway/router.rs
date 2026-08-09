@@ -2,10 +2,16 @@
 //!
 //! Routes incoming requests to the appropriate agent based on session key,
 //! channel, or peer information.
+//!
+//! The binding-matching tier delegates to [`crate::routing::resolve_route`] —
+//! the SAME routing grammar the inbound message path uses — so the JSON-RPC
+//! seam (`agent.run` / `chat.send`) and the inbound path can no longer
+//! disagree on the same `[[bindings]]`. The seam's load-bearing behaviors
+//! (caller-supplied session key carry-through, explicit agent override, epoch
+//! bump) are orthogonal and stay here.
 
 use crate::routing::config::RouteBinding;
 use crate::sync_primitives::Arc;
-use serde::{Deserialize, Serialize};
 use tokio::sync::RwLock;
 use tracing::warn;
 
@@ -15,15 +21,6 @@ use super::session_store::SessionStore;
 pub use crate::routing::SessionKey;
 pub use crate::routing::{DmScope, PeerKind};
 
-/// Routing binding configuration
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct RoutingBinding {
-    /// Pattern to match (e.g., "gui:window1", "cli:*", "telegram:*")
-    pub pattern: String,
-    /// Target agent ID
-    pub agent_id: String,
-}
-
 /// Agent router for directing requests to appropriate agents
 ///
 /// Routes requests based on:
@@ -31,8 +28,10 @@ pub struct RoutingBinding {
 /// 2. Peer/channel matching
 /// 3. Default agent fallback
 pub struct AgentRouter {
-    /// Routing bindings (pattern -> `agent_id`)
-    bindings: Arc<RwLock<Vec<RoutingBinding>>>,
+    /// Original config `[[bindings]]` table, consumed by `resolve_route`.
+    bindings: Arc<RwLock<Vec<RouteBinding>>>,
+    /// Session config fed to `resolve_route` (DM scope for key shaping).
+    session_config: crate::routing::SessionConfig,
     /// Default agent ID
     default_agent: String,
     /// Available agent IDs
@@ -47,6 +46,7 @@ impl AgentRouter {
     pub fn new() -> Self {
         Self {
             bindings: Arc::new(RwLock::new(Vec::new())),
+            session_config: crate::routing::SessionConfig::default(),
             default_agent: "main".to_string(),
             agents: Arc::new(RwLock::new(vec!["main".to_string()])),
             session_store: None,
@@ -58,6 +58,7 @@ impl AgentRouter {
         let default = default_agent.into();
         Self {
             bindings: Arc::new(RwLock::new(Vec::new())),
+            session_config: crate::routing::SessionConfig::default(),
             default_agent: default.clone(),
             agents: Arc::new(RwLock::new(vec![default])),
             session_store: None,
@@ -70,7 +71,9 @@ impl AgentRouter {
     }
 
     /// Create router from config-driven `RouteBinding` list.
-    /// Extracts unique agent IDs and converts to internal `RoutingBinding` format.
+    /// Extracts unique agent IDs and keeps the original binding table for
+    /// `resolve_route` — no lossy pattern flattening (the old conversion
+    /// silently dropped peer/guild/team/account/workspace scoping).
     pub fn from_bindings(bindings: Vec<RouteBinding>, default_agent: impl Into<String>) -> Self {
         let default = default_agent.into();
 
@@ -82,40 +85,23 @@ impl AgentRouter {
         }
         let agent_ids: Vec<String> = agent_ids.into_iter().collect();
 
-        // Convert to internal format: use "channel:*" or "channel:team_id" patterns
-        let internal_bindings: Vec<RoutingBinding> = bindings
-            .iter()
-            .filter_map(|b| {
-                let channel = b.match_rule.channel.as_deref()?;
-                let pattern = if channel == "*" {
-                    "*".to_string()
-                } else if let Some(ref team_id) = b.match_rule.team_id {
-                    format!("{channel}:team:{team_id}")
-                } else if let Some(ref guild_id) = b.match_rule.guild_id {
-                    format!("{channel}:guild:{guild_id}")
-                } else {
-                    format!("{channel}:*")
-                };
-                Some(RoutingBinding {
-                    pattern,
-                    agent_id: b.agent_id.clone(),
-                })
-            })
-            .collect();
-
         Self {
-            bindings: Arc::new(RwLock::new(internal_bindings)),
+            bindings: Arc::new(RwLock::new(bindings)),
+            session_config: crate::routing::SessionConfig::default(),
             default_agent: default,
             agents: Arc::new(RwLock::new(agent_ids)),
             session_store: None,
         }
     }
 
-    /// Add a routing binding
-    pub async fn add_binding(&self, pattern: impl Into<String>, agent_id: impl Into<String>) {
-        let binding = RoutingBinding {
-            pattern: pattern.into(),
+    /// Add a channel routing binding
+    pub async fn add_binding(&self, channel: impl Into<String>, agent_id: impl Into<String>) {
+        let binding = RouteBinding {
             agent_id: agent_id.into(),
+            match_rule: crate::routing::MatchRule {
+                channel: Some(channel.into()),
+                ..Default::default()
+            },
         };
         self.bindings.write().await.push(binding);
     }
@@ -166,7 +152,8 @@ impl AgentRouter {
                 None => SessionKey::main(aid),
             }
         } else {
-            // 3. Try to match channel/peer against bindings
+            // 3. Try to match channel/peer against bindings (via the same
+            //    grammar the inbound path uses)
             let resolved_agent = self.resolve_agent(channel, peer_id).await;
 
             // 4. Create appropriate session key
@@ -190,30 +177,21 @@ impl AgentRouter {
         base_key
     }
 
-    /// Resolve agent ID from channel/peer
-    async fn resolve_agent(&self, channel: Option<&str>, _peer_id: Option<&str>) -> String {
+    /// Resolve agent ID from channel/peer through `resolve_route`.
+    async fn resolve_agent(&self, channel: Option<&str>, peer_id: Option<&str>) -> String {
         let bindings = self.bindings.read().await;
-
-        // Try exact match first
-        if let Some(ch) = channel {
-            for binding in bindings.iter() {
-                if binding.pattern == ch {
-                    return binding.agent_id.clone();
-                }
-            }
-
-            // Try wildcard match
-            let channel_prefix = ch.split(':').next().unwrap_or("");
-            let wildcard = format!("{channel_prefix}:*");
-            for binding in bindings.iter() {
-                if binding.pattern == wildcard {
-                    return binding.agent_id.clone();
-                }
-            }
-        }
-
-        // Fall back to default
-        self.default_agent.clone()
+        let input = crate::routing::RouteInput {
+            channel: channel.unwrap_or_default().to_string(),
+            account_id: None,
+            peer: peer_id.map(|id| crate::routing::RoutePeer {
+                kind: crate::routing::RoutePeerKind::Dm,
+                id: id.to_string(),
+            }),
+            guild_id: None,
+            team_id: None,
+        };
+        crate::routing::resolve_route(&bindings, &self.session_config, &self.default_agent, &input)
+            .agent_id
     }
 
     /// Get the default agent ID
@@ -291,9 +269,12 @@ mod tests {
     async fn test_router_binding() {
         let router = AgentRouter::new();
         router.register_agent("work").await;
-        router.add_binding("cli:*", "work").await;
+        // Channel bindings are matched by `resolve_route` (exact channel), the
+        // same grammar the inbound path uses — not the legacy `channel:*`
+        // prefix-wildcard pattern strings.
+        router.add_binding("cli", "work").await;
 
-        let key = router.route(None, Some("cli:term1"), None, None).await;
+        let key = router.route(None, Some("cli"), None, None).await;
         assert_eq!(key.agent_id(), "work");
 
         // GUI should still go to default

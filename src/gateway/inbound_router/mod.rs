@@ -1708,9 +1708,38 @@ mod tests {
             metadata: vec![],
         };
         let key = router.resolve_session_key_with_agent(&msg, "main");
-        // Fallback uses SessionKey::peer(agent, "dm:{sender}") with empty channel →
-        // sanitize_component replaces ':' with '-' → "agent:main:peer:dm-owner".
-        assert_eq!(key.to_key_string(), "agent:main:peer:dm-owner");
+        // Fallback uses SessionKey::dm (matching the bound-route path) →
+        // PerPeer + channel → "agent:main:dm:owner" — the same key the
+        // configured-binding path produces, so history is not split.
+        assert_eq!(key.to_key_string(), "agent:main:dm:owner");
+    }
+
+    /// PerChannelPeer DM fallback also agrees with the bound-route path's
+    /// key shape (`agent:{a}:{channel}:dm:{peer}`) — not the legacy
+    /// `peer:{channel}-dm-{peer}` mangling.
+    #[test]
+    fn dm_per_channel_peer_scope_fallback_agrees_with_bound_route_path() {
+        let router = InboundMessageRouter::new(
+            Arc::new(ChannelRegistry::new()),
+            Arc::new(SqlitePairingStore::in_memory().unwrap()),
+            RoutingConfig::default().with_dm_scope(DmScope::PerChannelPeer),
+        );
+        let msg = InboundMessage {
+            id: MessageId::new("m2b"),
+            channel_id: ChannelId::new("telegram"),
+            conversation_id: ConversationId::new("dm-conv"),
+            sender_id: UserId::new("owner"),
+            sender_name: None,
+            text: "hi".to_string(),
+            attachments: vec![],
+            timestamp: chrono::Utc::now(),
+            reply_to: None,
+            is_group: false,
+            raw: None,
+            metadata: vec![],
+        };
+        let key = router.resolve_session_key_with_agent(&msg, "main");
+        assert_eq!(key.to_key_string(), "agent:main:telegram:dm:owner");
     }
 
     /// Different agents get separate Main sessions, no cross-contamination.

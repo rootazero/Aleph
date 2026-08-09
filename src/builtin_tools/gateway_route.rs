@@ -7,7 +7,7 @@ use crate::error::Result;
 use crate::gateway::agent_env::AgentEnvStore;
 use crate::gateway::agent_instance::AgentRegistry;
 use crate::routing::{
-    resolve_route, ResolvedRoute, RouteInput, RoutePeer, RoutePeerKind, SessionConfig,
+    resolve_route, ResolvedRoute, RouteInput, RoutePeer, RoutePeerKind, SessionConfig, SessionKey,
 };
 use crate::sync_primitives::Arc;
 use crate::tools::AlephTool;
@@ -209,7 +209,7 @@ impl AlephTool for GatewayRouteTool {
         // the overlay changed the agent, the key `resolve_route` computed (for
         // the config agent) addresses a different conversation.
         let (session_key, main_session_key) = if agent_id == resolved.agent_id {
-            (resolved.session_key, resolved.main_session_key)
+            (resolved.session_key, SessionKey::main(&agent_id))
         } else {
             crate::routing::resolve::session_keys_for(
                 &agent_id,
@@ -225,7 +225,13 @@ impl AlephTool for GatewayRouteTool {
             workspace: resolved.workspace,
             details: Some(GatewayRouteDetails {
                 channel: resolved.channel,
-                account_id: resolved.account_id,
+                account_id: args
+                    .account_id
+                    .as_deref()
+                    .map(str::trim)
+                    .filter(|s| !s.is_empty())
+                    .unwrap_or("default")
+                    .to_string(),
                 session_key: session_key.to_key_string(),
                 main_session_key: main_session_key.to_key_string(),
             }),
