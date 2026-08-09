@@ -297,15 +297,22 @@ pub enum GatewayEventFrame {
         source_topic: String,
     },
     /// Core-decided approval banner addressed to one or more delivery surfaces.
-    /// The raw `approval.requested` frame stays operator-gated and drives the
-    /// Panel card; this is the *banner* leg, routed by the R5 router so the
-    /// shell renders it through the same unified path as `SurfaceNotify`. The
-    /// payload is intentionally sparse — approval detail lives in the Panel
-    /// card (via `exec.approvals.pending`); the banner only needs to get
-    /// attention. Gated operator-only by `event_scope` (`surface.approval`).
+    /// The raw `approval.requested` frame drives the Panel card; this is the
+    /// *banner* leg, routed by the R5 router so the shell renders it through the
+    /// same unified path as `SurfaceNotify`. The payload is otherwise
+    /// intentionally sparse — approval detail lives in the Panel card (via
+    /// `exec.approvals.pending`); the banner only needs to get attention.
+    ///
+    /// `session_key` mirrors `ApprovalRequested`'s (empty for a cluster-node
+    /// approval) and exists purely so `event_visibility` can scope the banner
+    /// the same way as its three siblings. Before it existed the frame had
+    /// nothing to be scoped by, so it was `Global` plus a role rule — which
+    /// meant the person whose own tool call was parked got the card but never
+    /// the banner, exactly the audience the R5 interrupt is for.
     SurfaceApproval {
         audience: Vec<String>,
         approval_id: String,
+        session_key: String,
         title: String,
         body: String,
     },
@@ -771,6 +778,7 @@ mod surface_notify_tests {
         let f = GatewayEventFrame::SurfaceApproval {
             audience: vec!["desktop".to_string()],
             approval_id: "a1".to_string(),
+            session_key: "agent:main:s1".to_string(),
             title: "Aleph needs your approval".to_string(),
             body: "A tool call is waiting for you.".to_string(),
         };

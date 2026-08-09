@@ -7,7 +7,8 @@ pub(in crate::commands::start) fn register_core_handlers(
     auth_ctx: &Arc<auth_handlers::AuthContext>,
     transport_policy: auth_handlers::TransportPolicy,
 ) {
-    // LAN-trust connect: minimal no-auth handshake.
+    // The `connect` handshake. It is not credential-free: `resolve_connect_auth`
+    // runs inside it and is what admits or walls a remote connection.
     let connect_ctx = Arc::new(alephcore::gateway::handlers::connect::ConnectContext {
         state_versions: server.state_versions.clone(),
         transport_policy,

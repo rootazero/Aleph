@@ -87,6 +87,7 @@ mod tests {
     fn hook_with(blocked: &[&str], danger: &[&str]) -> SecurityKernelHook {
         let config = ShellSecurityConfig {
             enable_custom_patterns: true,
+            mask_patterns: Vec::new(),
             custom_blocked: blocked
                 .iter()
                 .map(|p| CustomRiskPattern {

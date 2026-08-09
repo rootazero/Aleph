@@ -293,11 +293,15 @@ impl SessionsSendTool {
             .await
         {
             Ok(Some(meta)) => {
-                // `ambient_owner` is the resolver, NOT `visible_owner_filter`:
-                // the latter reads `CALLER_USER`, dead inside a spawned run,
-                // and a tool call is always inside one. `None` (cron / A2A /
-                // internal) is unrestricted, matching every sibling predicate.
-                let admitted = crate::scope::ambient_owner().is_none_or(|actor| {
+                // `ambient_actor` is the resolver, NOT `visible_owner_filter`
+                // (reads `CALLER_USER`, dead inside a spawned run, and a tool
+                // call is always inside one) and NOT `ambient_owner` (answers
+                // with the run's scope owner, which in a project room is the
+                // room's CREATOR for every member — so a member's turn inside
+                // someone else's room could dispatch a run into that person's
+                // PERSONAL session). `None` (cron / A2A / internal) is
+                // unrestricted, matching every sibling predicate.
+                let admitted = crate::gateway::visibility::ambient_actor().is_none_or(|actor| {
                     crate::gateway::visibility::session_visible_to(&meta, &actor)
                 });
                 if !admitted {

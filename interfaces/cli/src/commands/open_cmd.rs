@@ -1,9 +1,10 @@
 //! `aleph open` — open the Panel in the system browser.
 //!
-//! LAN-trust model: the gateway serves the Panel at its HTTP root with no
-//! authentication, so there is no nonce to issue and no token to carry. This
-//! command simply derives the Panel's HTTP URL from the configured WebSocket
-//! endpoint and shells out to the platform browser launcher.
+//! The static Panel assets are served unauthenticated — the login wall lives on
+//! the WebSocket, not the HTTP root — so there is no nonce to issue and no token
+//! to carry here. This command derives the Panel's HTTP URL from the configured
+//! WebSocket endpoint and shells out to the platform browser launcher; the
+//! Panel then presents (or is asked for) its own credential when it connects.
 
 use crate::output::{self, icon, theme};
 use aleph_client::CliResult;

@@ -24,11 +24,19 @@
 //! - `fs.read_file { path }`               → `{ path, content, truncated }`
 //!
 //! All read paths are absolute, canonicalised, and stripped of symlinks
-//! before being handed back to the client.
+//! before being handed back to the client. Every path that leaves this module
+//! — result field or error string — goes through
+//! [`crate::utils::paths::display_string`], because `canonicalize` on Windows
+//! returns the `\\?\` extended-length form and the picker used to render it
+//! verbatim into the UI. The transform is applied **only** on the way out: the
+//! `PathBuf`s that back the `allowed_roots` scope check stay canonical, since
+//! stripping one side of that `starts_with` and not the other would flip an
+//! allow into a deny.
 
 use crate::config::Config;
 use crate::gateway::protocol::{JsonRpcRequest, JsonRpcResponse};
 use crate::sync_primitives::Arc;
+use crate::utils::paths::display_string;
 use serde::Deserialize;
 use serde_json::json;
 use std::path::{Path, PathBuf};
@@ -92,15 +100,21 @@ fn resolve_roots(cfg: &Config) -> Vec<PathBuf> {
 
 /// Check that `candidate` (already canonical) is inside at least one
 /// allowed root. Returns the canonical path on success.
+///
+/// The returned `PathBuf` is the **canonical** form and stays that way — the
+/// `starts_with` above compares it against roots that are canonical too, and
+/// [`display_string`] is only reversible for short drive-letter paths, so
+/// simplifying one side and not the other turns an allow into a deny. Only the
+/// strings that leave this process are rendered.
 fn validate_in_scope(candidate: &Path, roots: &[PathBuf]) -> Result<PathBuf, String> {
     let canon = std::fs::canonicalize(candidate)
-        .map_err(|e| format!("cannot canonicalise '{}': {e}", candidate.display()))?;
+        .map_err(|e| format!("cannot canonicalise '{}': {e}", display_string(candidate)))?;
     if roots.iter().any(|r| canon.starts_with(r)) {
         Ok(canon)
     } else {
         Err(format!(
             "path '{}' is outside the configured projects.allowed_roots",
-            canon.display()
+            display_string(&canon)
         ))
     }
 }
@@ -120,7 +134,7 @@ pub async fn handle_allowed_roots(
             let canon = resolve_root(spec)?;
             Some(json!({
                 "label": spec,                 // original user-facing literal (`~`, `/Volumes/...`)
-                "path": canon.to_string_lossy(),
+                "path": display_string(&canon),
             }))
         })
         .collect();
@@ -132,7 +146,7 @@ pub async fn handle_allowed_roots(
 pub async fn handle_home_dir(request: JsonRpcRequest) -> JsonRpcResponse {
     match dirs::home_dir() {
         Some(home) => {
-            JsonRpcResponse::success(request.id, json!({ "path": home.to_string_lossy() }))
+            JsonRpcResponse::success(request.id, json!({ "path": display_string(&home) }))
         }
         None => JsonRpcResponse::error(request.id, INTERNAL_ERROR, "home directory unavailable"),
     }
@@ -188,7 +202,7 @@ pub async fn handle_list_dir(request: JsonRpcRequest, config: SharedConfig) -> J
             return JsonRpcResponse::error(
                 request.id,
                 NOT_FOUND,
-                format!("not found: {}", canon.display()),
+                format!("not found: {}", display_string(&canon)),
             );
         }
         Err(e) => {
@@ -224,7 +238,7 @@ pub async fn handle_list_dir(request: JsonRpcRequest, config: SharedConfig) -> J
         let full = entry.path();
         entries.push(json!({
             "name": name,
-            "path": full.to_string_lossy(),
+            "path": display_string(&full),
             "is_dir": is_dir,
         }));
         if entries.len() >= LIST_DIR_CAP {
@@ -249,12 +263,12 @@ pub async fn handle_list_dir(request: JsonRpcRequest, config: SharedConfig) -> J
                 .ok()
                 .filter(|c| roots.iter().any(|r| c.starts_with(r)))
         })
-        .map(|p| p.to_string_lossy().into_owned());
+        .map(|p| display_string(&p));
 
     JsonRpcResponse::success(
         request.id,
         json!({
-            "path": canon.to_string_lossy(),
+            "path": display_string(&canon),
             "parent": parent,
             "entries": entries,
         }),
@@ -325,7 +339,7 @@ pub async fn handle_create_dir(request: JsonRpcRequest, config: SharedConfig) ->
         return JsonRpcResponse::error(
             request.id,
             INVALID_PARAMS,
-            format!("already exists: {}", target.display()),
+            format!("already exists: {}", display_string(&target)),
         );
     }
     if let Err(e) = tokio::fs::create_dir_all(&target).await {
@@ -334,7 +348,7 @@ pub async fn handle_create_dir(request: JsonRpcRequest, config: SharedConfig) ->
     // canonicalise so the returned path matches list_dir's output style
     // (the new dir definitely exists now, so canonicalize won't fail).
     let canon = std::fs::canonicalize(&target).unwrap_or(target);
-    JsonRpcResponse::success(request.id, json!({ "path": canon.to_string_lossy() }))
+    JsonRpcResponse::success(request.id, json!({ "path": display_string(&canon) }))
 }
 
 // ─── fs.read_file ────────────────────────────────────────────────────────────
@@ -385,7 +399,7 @@ pub async fn handle_read_file(request: JsonRpcRequest, config: SharedConfig) -> 
             return JsonRpcResponse::error(
                 request.id,
                 NOT_FOUND,
-                format!("not found: {}", canon.display()),
+                format!("not found: {}", display_string(&canon)),
             );
         }
         Err(e) => {
@@ -412,7 +426,7 @@ pub async fn handle_read_file(request: JsonRpcRequest, config: SharedConfig) -> 
     JsonRpcResponse::success(
         request.id,
         json!({
-            "path": canon.to_string_lossy(),
+            "path": display_string(&canon),
             "content": content,
             "truncated": truncated,
         }),

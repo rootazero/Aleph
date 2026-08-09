@@ -27,7 +27,7 @@ struct SessionListResponse {
 pub async fn list(server_url: &str, config: &CliConfig, json: bool) -> CliResult<()> {
     let (client, _events) = AlephClient::connect(server_url, config).await?;
 
-    // Handshake (LAN-trust: no credentials)
+    // The `connect` handshake happens inside `AlephClient::connect`.
 
     if json {
         let result: serde_json::Value = client.call("sessions.list", None::<()>).await?;
@@ -71,7 +71,7 @@ pub async fn create(
 ) -> CliResult<()> {
     let (client, _events) = AlephClient::connect(server_url, config).await?;
 
-    // Handshake (LAN-trust: no credentials)
+    // The `connect` handshake happens inside `AlephClient::connect`.
 
     #[derive(Serialize)]
     struct CreateParams {
@@ -104,7 +104,7 @@ pub async fn create(
 pub async fn delete(server_url: &str, key: &str, config: &CliConfig, json: bool) -> CliResult<()> {
     let (client, _events) = AlephClient::connect(server_url, config).await?;
 
-    // Handshake (LAN-trust: no credentials)
+    // The `connect` handshake happens inside `AlephClient::connect`.
 
     #[derive(Serialize)]
     struct DeleteParams {

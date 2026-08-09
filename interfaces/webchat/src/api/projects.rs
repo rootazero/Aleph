@@ -61,29 +61,18 @@ impl ProjectsApi {
         serde_json::from_value(project).map_err(|e| e.to_string())
     }
 
-    /// Create a fresh empty directory under `parent` and register it.
-    /// The directory must not already exist — the daemon rejects clashes
-    /// so the user is never silently merged into someone else's folder.
-    pub async fn create_blank(
-        state: &DashboardState,
-        parent: &str,
-        name: &str,
-    ) -> Result<ProjectInfo, String> {
-        let params = serde_json::json!({ "parent": parent, "name": name });
-        let result = state.rpc_call("projects.create_blank", params).await?;
-        let project = result
-            .get("project")
-            .cloned()
-            .ok_or_else(|| "missing project in response".to_string())?;
-        serde_json::from_value(project).map_err(|e| e.to_string())
-    }
-
-    /// Drop a project from the catalogue. The on-disk folder is untouched.
-    pub async fn remove(state: &DashboardState, id: &str) -> Result<(), String> {
-        let params = serde_json::json!({ "id": id });
-        state.rpc_call("projects.remove", params).await?;
-        Ok(())
-    }
+    // `create_blank` and `remove` bindings lived here with zero callers.
+    //
+    // The Panel's three doors are `create` (a new unbound room), `add`
+    // (register an existing folder) and `archive` (the non-destructive
+    // forget) — nothing ever reached for either of these, and R10 says a
+    // zero-consumer binding is withdrawn rather than kept for a future that
+    // has to re-decide anyway. `projects.remove` in particular is now refused
+    // outright for a room with a conversation (`ProjectStore::remove`), so a
+    // client binding for it would have been a button that only ever errors.
+    //
+    // The server verbs still exist; if a "delete this catalogue entry" affordance
+    // is ever designed, add the binding then, next to the UI that calls it.
 
     /// Bump `last_used_at` for a project (called when the user re-selects).
     pub async fn touch(state: &DashboardState, id: &str) -> Result<(), String> {

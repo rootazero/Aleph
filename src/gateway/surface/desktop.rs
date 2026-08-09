@@ -39,6 +39,7 @@ impl DeliverySurface for DesktopSurface {
             OutboundInteraction::ApprovalRequest(a) => GatewayEventFrame::SurfaceApproval {
                 audience: vec![SurfaceKind::Desktop.as_str().to_string()],
                 approval_id: a.approval_id,
+                session_key: a.session_key,
                 title: a.title,
                 body: a.body,
             },
@@ -97,6 +98,7 @@ mod tests {
         surface
             .deliver(OutboundInteraction::ApprovalRequest(SurfaceApproval {
                 approval_id: "a1".to_string(),
+                session_key: "agent:main:s1".to_string(),
                 title: "Aleph needs your approval".to_string(),
                 body: "A tool call is waiting for you.".to_string(),
             }))
@@ -106,11 +108,17 @@ mod tests {
             GatewayEventFrame::SurfaceApproval {
                 audience,
                 approval_id,
+                session_key,
                 title,
                 body,
             } => {
                 assert_eq!(audience, vec!["desktop".to_string()]);
                 assert_eq!(approval_id, "a1");
+                assert_eq!(
+                    session_key, "agent:main:s1",
+                    "the surface must carry the session through — it is the only \
+                     thing the forward-filter can scope the banner by"
+                );
                 assert_eq!(title, "Aleph needs your approval");
                 assert_eq!(body, "A tool call is waiting for you.");
             }

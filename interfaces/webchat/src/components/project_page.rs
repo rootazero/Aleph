@@ -251,6 +251,66 @@ fn PlaceholderTab() -> impl IntoView {
 /// activates it as the current conversation, then renders the same
 /// `MessageList` + `InputArea` the single-agent `ChatView` uses — see this
 /// module's doc for why `ChatView` itself is not mounted a second time.
+/// Bind the current conversation to a project room: resolve the room's shared
+/// session, activate (or open) its tab, and mark the conversation as belonging
+/// to that room.
+///
+/// Public because there are **two** ways into a room and they must agree. This
+/// page's effect is one; the composer's 「进入项目工作」 pill is the other, and
+/// its recents list is the registry of rooms. That pill used to call
+/// `ChatState::set_active_project` with the room's folder instead, which sends
+/// the path as a per-turn `project_root` — a config-tier capability. For an
+/// operator that merely opened a private conversation inside a shared room's
+/// directory; for a member it was refused outright, so every entry in a list
+/// built from the rooms they belong to was a dead button. Entering by
+/// `project_id` is the tier-2 path: the directory was chosen for them by the
+/// owner, and using it is not choosing it.
+///
+/// Callers own their own re-entrancy guard — this function has no latch, and
+/// two concurrent calls would open two conversations for one room.
+pub async fn enter_project_room(
+    dash: DashboardState,
+    chat: ChatState,
+    session_map: SessionMap,
+    workspace: Option<WorkspaceState>,
+    project_id: &str,
+    project_name: String,
+    locale: crate::i18n::Locale,
+) {
+    let agent_id = match chat.agent_id.get_untracked() {
+        Some(a) => a,
+        None => AgentsApi::list(&dash)
+            .await
+            .map(|r| r.default_id)
+            .unwrap_or_default(),
+    };
+    // The room's canonical session, shared with every other member. `agent_id`
+    // is only this Panel's proposal — a room somebody already opened answers
+    // with the key it has.
+    let Ok(key) = ProjectsApi::room_session(&dash, project_id, &agent_id).await else {
+        // A room we cannot resolve a session for is one we cannot chat in.
+        // Leave the current conversation alone rather than activating an empty
+        // tab that sends nowhere.
+        return;
+    };
+    let conv = session_map
+        .conv_for_session_key(&key)
+        .unwrap_or_else(|| session_map.open_conversation(&agent_id, project_name));
+    session_map.activate(chat, conv);
+    chat.clear_team_context();
+    chat.room_project_id.set(Some(project_id.to_string()));
+    chat.session_key.set(Some(key.clone()));
+    // Mirror `ChatSidebar::on_select_session`: only hydrate when there is
+    // nothing live to preserve — a conversation already open (background
+    // `ChatState`) is at least as fresh as `chat.history`.
+    if chat.messages.with_untracked(Vec::is_empty) {
+        spawn_local(hydrate_session_history(dash, chat, workspace, key, locale));
+    }
+    if let Some(ws) = workspace {
+        ws.reset();
+    }
+}
+
 #[component]
 fn RoomChat(project: ProjectInfo) -> impl IntoView {
     let dash = expect_context::<DashboardState>();
@@ -298,41 +358,17 @@ fn RoomChat(project: ProjectInfo) -> impl IntoView {
             let project_name = project_name.clone();
             let locale = i18n.get_locale_untracked();
             spawn_local(async move {
-                let agent_id = match chat.agent_id.get_untracked() {
-                    Some(a) => a,
-                    None => AgentsApi::list(&dash)
-                        .await
-                        .map(|r| r.default_id)
-                        .unwrap_or_default(),
-                };
-                // The room's canonical session, shared with every other
-                // member. `agent_id` is only this Panel's proposal — a room
-                // somebody already opened answers with the key it has.
-                let key = ProjectsApi::room_session(&dash, &project_id, &agent_id).await;
+                enter_project_room(
+                    dash,
+                    chat,
+                    session_map,
+                    workspace,
+                    &project_id,
+                    project_name,
+                    locale,
+                )
+                .await;
                 opening.set_value(false);
-                let Ok(key) = key else {
-                    // A room we cannot resolve a session for is one we cannot
-                    // chat in. Leave the current conversation alone rather
-                    // than activating an empty tab that sends nowhere.
-                    return;
-                };
-                let conv = session_map
-                    .conv_for_session_key(&key)
-                    .unwrap_or_else(|| session_map.open_conversation(&agent_id, project_name));
-                session_map.activate(chat, conv);
-                chat.clear_team_context();
-                chat.room_project_id.set(Some(project_id));
-                chat.session_key.set(Some(key.clone()));
-                // Mirror `ChatSidebar::on_select_session`: only hydrate when
-                // there is nothing live to preserve — a conversation already
-                // open (background `ChatState`) is at least as fresh as
-                // `chat.history`.
-                if chat.messages.with_untracked(Vec::is_empty) {
-                    spawn_local(hydrate_session_history(dash, chat, workspace, key, locale));
-                }
-                if let Some(ws) = workspace {
-                    ws.reset();
-                }
             });
         }
     });

@@ -44,8 +44,8 @@ mod helpers;
 use helpers::{
     build_http_provider, build_sqlite_session_service, format_socket_addr,
     initialize_extension_manager, initialize_session_store, initialize_tracing,
-    load_gateway_config, print_boot_marker, print_startup_banner, setup_graceful_shutdown,
-    validate_bind_address,
+    install_mask_patterns, load_gateway_config, print_boot_marker, print_startup_banner,
+    setup_graceful_shutdown, validate_bind_address,
 };
 
 mod runtime_warmup;
@@ -186,6 +186,11 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
 
     // Load app config early so we can pick the session store backend
     let mut loaded_app_config = load_app_config()?;
+
+    // Seed the process-wide redaction set before anything can produce output.
+    // Same shape as `PiiEngine::init` above; it lives here rather than beside
+    // it only because `[security]` is on the app config, not the gateway one.
+    install_mask_patterns(&loaded_app_config);
 
     // Plugins are now installed via marketplace: `aleph plugin marketplace update && aleph plugin install <name>`
 
@@ -1668,6 +1673,28 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
         }
         tracing::warn!(error = %e, "project store migration failed; rooms will be unavailable");
     }
+    // Rooms created before P1 carry no `scope_id`, which reads as "org-era
+    // personal session" — so the room's own conversation was invisible to every
+    // member of its roster. Runs after `migrate()` (the roster projection has
+    // to exist) and before any handler is reachable, so no request observes the
+    // half-migrated state. Idempotent; a second boot reports every row as
+    // already stamped and says nothing.
+    let backfill = alephcore::projects::backfill_legacy_room_attribution(
+        &project_store,
+        session_store.as_ref(),
+    )
+    .await;
+    if !backfill.is_quiet() {
+        tracing::info!(
+            scanned = backfill.scanned,
+            stamped = backfill.stamped,
+            already = backfill.already_stamped,
+            unparseable = backfill.unparseable,
+            failed = backfill.failed,
+            "legacy room attribution backfill"
+        );
+    }
+
     register_projects_handlers(
         &mut server,
         &project_store,
@@ -2665,11 +2692,17 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
         use alephcore::gateway::handlers::pairing as pairing_handlers;
 
         let store = channel_pairing_store.clone();
+        // The users store rides along so an approval can name the Aleph
+        // principal this sender speaks as — the channel half of P0's identity
+        // link, whose consumer (`inbound_router::executor`) has been live since
+        // P1 with nothing producing for it.
+        let approve_users = auth_bundle.security_store.clone();
         server
             .handlers_mut()
             .register("channel.pairing.approve", move |req| {
                 let store = store.clone();
-                async move { pairing_handlers::handle_approve(req, store).await }
+                let users = approve_users.clone();
+                async move { pairing_handlers::handle_approve(req, store, users).await }
             });
 
         let store = channel_pairing_store.clone();

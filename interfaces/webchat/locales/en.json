@@ -2014,7 +2014,9 @@
     "toast_delete_failed": "Failed to delete instance: ",
     "pairing_enter_code": "Please enter a pairing code.",
     "pairing_approved": "Sender approved successfully.",
-    "pairing_approve_failed": "Failed to approve: "
+    "pairing_approve_failed": "Failed to approve: ",
+    "pairing_speaks_as": "Speaks as",
+    "pairing_speaks_as_owner": "Owner (default)"
   },
   "execution_settings": {
     "title": "Execution",

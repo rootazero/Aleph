@@ -91,6 +91,16 @@ pub struct TaskCreateTool {
     store: Arc<dyn CoordTaskStore>,
     /// Shared wake handle for the dispatcher loop (None outside the server).
     dispatch_signal: Option<Arc<tokio::sync::Notify>>,
+    /// The ownership gate — see [`crate::teams::task_team_reachable`].
+    ///
+    /// `teams/scoped.rs`'s census splits coord-task surfaces into LIST (retain)
+    /// and ADDRESSED (refuse). This is a third shape it did not name: a
+    /// CREATION surface that addresses a team by a caller-supplied id. Without
+    /// the gate, `task_create { team_id: "<someone else's team>" }` writes a
+    /// row onto that person's task board — the dispatcher then picks it up and
+    /// runs it under their team. Worse than the read this census was written
+    /// for, and invisible for the same reason: the write succeeds.
+    team_store: Option<Arc<dyn crate::teams::TeamStore>>,
 }
 
 impl TaskCreateTool {
@@ -101,7 +111,15 @@ impl TaskCreateTool {
         Self {
             store,
             dispatch_signal,
+            team_store: None,
         }
+    }
+
+    /// Wire the ownership gate — see [`crate::teams::task_team_reachable`].
+    #[must_use]
+    pub fn with_team_store(mut self, store: Option<Arc<dyn crate::teams::TeamStore>>) -> Self {
+        self.team_store = store;
+        self
     }
 }
 
@@ -170,6 +188,19 @@ impl AlephTool for TaskCreateTool {
             ),
             args.timeout_seconds,
         ));
+
+        // Addressed write: refuse, and shape the refusal exactly like a team
+        // that does not exist — the same not-found the `ScopedTeamStore`
+        // decorator produces for a foreign id, so this opens no existence
+        // oracle the rest of the surface does not already close.
+        if !crate::teams::task_team_reachable(self.team_store.as_ref(), args.team_id.as_deref())
+            .await
+        {
+            let named = args.team_id.as_deref().unwrap_or("<none>");
+            return Err(crate::error::AlephError::tool(format!(
+                "Team '{named}' not found"
+            )));
+        }
 
         let new_task = NewCoordTask {
             team_id: args.team_id,

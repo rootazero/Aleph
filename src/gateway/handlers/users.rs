@@ -881,9 +881,15 @@ mod tests {
                  He keeps his own cards, which is correct: he is still someone \
                  whose tool calls park."
             );
+            // The R5 BANNER joined them on 2026-08-09 — it carries a
+            // `session_key` now, so the demotion that matters for it is the
+            // `is_superuser_scope` assertion above, not a prefix lookup. Pinned
+            // as a positive here so that "this guard is silent about the
+            // banner" is a stated fact rather than a deletion nobody notices.
             assert!(
-                !guard.can_receive("surface.approval", &s.permissions),
-                "a demoted admin must no longer be delivered approval banners"
+                guard.can_receive("surface.approval", &s.permissions),
+                "the prefix table must be silent about the banner — the owner \
+                 check is what demotes him, and it is asserted above"
             );
             assert!(
                 !guard.can_receive("pty.output", &s.permissions),

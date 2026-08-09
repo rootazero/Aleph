@@ -332,11 +332,25 @@ impl MemorySearchTool {
         // (`main`, `main__u-alice`, `main__p-room`, …), and a named
         // `workspace: "main__u-alice"` was accepted verbatim.
         //
-        // The actor is `scope::ambient_owner()`, NOT `visible_owner_filter()`:
-        // the latter reads `CALLER_USER`, dead inside a spawned run, so it
-        // would be silently always-true for every tool call. `None` (cron /
-        // A2A / tests) stays unrestricted, matching every sibling predicate.
-        let actor = crate::scope::ambient_owner();
+        // The actor is `visibility::ambient_actor()`, NOT
+        // `visible_owner_filter()` and NOT `scope::ambient_owner()`. Both of
+        // the rejected resolvers are wrong in the same direction but for
+        // different reasons, and each is wrong on exactly one surface:
+        //
+        // - `visible_owner_filter()` reads `CALLER_USER`, dead inside a
+        //   spawned run, so it is silently always-true for every tool call.
+        // - `ambient_owner()` falls back to the run's scope owner, and in a
+        //   project ROOM that names the room's CREATOR — identically for
+        //   every member. Bob searching from inside Alice's room would resolve
+        //   to `u-alice` and get `main__u-alice` (her PERSONAL corpus) admitted
+        //   while his own `main__u-bob` was filtered out.
+        //
+        // `ambient_actor()` prefers this turn's speaker inside a room and is
+        // byte-identical to `ambient_owner()` everywhere else
+        // (`scope::room_author` returns `None` unless the scope is
+        // `Project(_)`). `None` (cron / A2A / tests) stays unrestricted,
+        // matching every sibling predicate.
+        let actor = crate::gateway::visibility::ambient_actor();
         let admits =
             |id: &str| crate::gateway::visibility::partition_visible_to(id, actor.as_deref());
 

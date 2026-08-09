@@ -602,7 +602,24 @@ pub async fn spawn(base: &SpawnerBase, req: SpawnRequest<'_>) -> Result<LoopRunR
             tool_signal_sink: match base.raw_memory_writer.clone() {
                 Some(store) => Arc::new(crate::memory::tool_signal_sink::RawMemoryToolSink::new(
                     store,
-                    req.agent_def.id.clone(),
+                    // The sub-role's id is the BASE; the partition it files
+                    // into still has to carry the session's scope, exactly as
+                    // `harness_bridge::runner_impl` does for the parent —
+                    // otherwise a member's sub-agent tool failures pool into
+                    // the org partition every principal can read.
+                    //
+                    // `project_scoped: false` here is deliberate and not a
+                    // second dial: this crate has no `MemoryConfig` handle, and
+                    // the flag only reaches `session_write_id`'s NO-session-
+                    // scope arm — so passing `false` is byte-identical to
+                    // today's uncomposed id for every unscoped run, and correct
+                    // for every scoped one. We are inside the parent run's
+                    // task-local nest here, so `current_scope()` is live.
+                    crate::memory::project_scope::session_write_id(
+                        &req.agent_def.id,
+                        false,
+                        crate::projects::current_project_root().as_deref(),
+                    ),
                     child_id.to_key_string(),
                 ))
                     as Arc<dyn crate::memory::tool_signal_sink::ToolSignalSink>,

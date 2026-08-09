@@ -11,6 +11,10 @@ description = "Aleph Gateway client library — WebSocket JSON-RPC 2.0"
 aleph-protocol = { path = "../protocol" }
 tokio = { version = "1.35", features = ["rt-multi-thread", "sync", "time", "macros"] }
 tokio-tungstenite = { version = "0.26", features = ["native-tls"] }
+# Direct dependency only so a `wss://` connection can be handed a pinned root
+# (the server's own self-signed certificate). Already in the tree transitively
+# via tokio-tungstenite's `native-tls` feature — this adds no build.
+native-tls = "0.2"
 futures-util = "0.3"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"

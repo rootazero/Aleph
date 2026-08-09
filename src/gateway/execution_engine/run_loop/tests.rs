@@ -263,3 +263,174 @@ fn unknown_capabilities_fail_open() {
     assert!(model_supports_vision("", Some("some-unlisted-model")));
     assert!(model_supports_vision("", None));
 }
+
+// -- the run-producer census -------------------------------------------------
+
+/// Every production site that builds a [`RunRequest`], and what it does about
+/// the run's attribution.
+///
+/// `ensure_session_under_request_scope` and `with_request_scope` can only read
+/// what a producer wrote into `request.metadata`. Both are one helper each, so
+/// they look like a chokepoint — but the thing that decides whether a member's
+/// session row carries their name is spread across these files, and a producer
+/// that writes neither key makes both helpers silent no-ops while every test
+/// stays green.
+///
+/// That is not hypothetical: the teams fan-out shipped for a full round writing
+/// `team_id` / `chain_depth` / `platform` / run-mode and nothing else, while
+/// this module's own doc comment listed "the teams dispatcher" among the
+/// producers whose attribution "is sitting right there in `request.metadata`".
+///
+/// The classifications:
+/// - `stamps` — resolves a principal and calls `scope::stamp_metadata`.
+/// - `inherits` — clones a source request's metadata (continuation, steering
+///   rescue), so it carries whatever that request carried.
+/// - `unattributed` — deliberately has no Aleph principal to name. Each of
+///   these is a decision, and each is a place a future feature could acquire
+///   one.
+const RUN_REQUEST_PRODUCERS: &[(&str, &str, &str)] = &[
+    (
+        "src/gateway/handlers/agent.rs",
+        "stamps",
+        "the Panel/RPC path; resolve_attribution + caller_role, the shape every other producer mirrors",
+    ),
+    (
+        "src/gateway/inbound_router/executor.rs",
+        "stamps",
+        "channel inbound; principal from pairing_store::sender_user",
+    ),
+    (
+        "src/gateway/resume_coordinator.rs",
+        "stamps",
+        "from the persisted session row's columns; caller_role added 2026-08-09",
+    ),
+    (
+        "src/teams/broadcast/mod.rs",
+        "stamps",
+        "from the ambient scope carried across two spawns; both keys added 2026-08-09",
+    ),
+    (
+        "src/builtin_tools/sessions/send_tool.rs",
+        "stamps",
+        "agent-to-agent dispatch; carries the initiating run's pair",
+    ),
+    (
+        "src/tasks/cron/executor.rs",
+        "stamps",
+        "rehydrated from CronJob.scope_id; unattended, so no caller_role by design",
+    ),
+    (
+        "src/gateway/execution_engine/execute.rs",
+        "inherits",
+        "continuation runs carry the source run's metadata forward",
+    ),
+    (
+        "src/gateway/execution_engine/steering.rs",
+        "inherits",
+        "orphan-burst rescue clones the interrupted request's metadata",
+    ),
+    (
+        "src/teams/dispatcher/runner.rs",
+        "unattributed",
+        "background task dispatcher with no live caller; a team carries an owner but no scope column, see SECURITY.md P2 open items",
+    ),
+    (
+        "src/tasks/heartbeat/executor.rs",
+        "unattributed",
+        "admin-gated org-level engine; carries no owner_user_id at all",
+    ),
+    (
+        "src/gateway/subagent_announce.rs",
+        "unattributed",
+        "announcement run derived from a completed child, not from a caller",
+    ),
+    (
+        "src/gateway/openai_api/completions/agent.rs",
+        "unattributed",
+        "the /v1 compat surface authenticates a bearer operator, not an Aleph principal",
+    ),
+    (
+        "src/a2a/adapter/server/bridge.rs",
+        "unattributed",
+        "an A2A peer is a remote agent, not a user in this install's users table",
+    ),
+];
+
+/// Source-level: a new producer must classify itself, because the failure it
+/// would otherwise cause is invisible — the run works, answers, and files
+/// itself under the operator.
+#[test]
+fn scope_stamping_producers_are_all_accounted_for() {
+    fn walk(dir: &std::path::Path, out: &mut Vec<std::path::PathBuf>) {
+        let Ok(entries) = std::fs::read_dir(dir) else {
+            return;
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                walk(&path, out);
+            } else if path.extension().is_some_and(|e| e == "rs") {
+                out.push(path);
+            }
+        }
+    }
+
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+    let mut files = Vec::new();
+    walk(&root, &mut files);
+    assert!(files.len() > 100, "walk found suspiciously few sources");
+
+    let mut found: Vec<String> = Vec::new();
+    for file in files {
+        let rel = file
+            .strip_prefix(env!("CARGO_MANIFEST_DIR"))
+            .unwrap_or(&file)
+            .to_string_lossy()
+            .replace('\\', "/");
+        // Test-only files build requests freely; they are not producers.
+        // The struct definition and its Debug impl are not constructions.
+        if rel.ends_with("/tests.rs") || rel.ends_with("src/gateway/execution_engine/mod.rs") {
+            continue;
+        }
+        let Ok(text) = std::fs::read_to_string(&file) else {
+            continue;
+        };
+        // Count a file as a producer only when the construction appears before
+        // its own test module — `execution_adapter.rs` builds one only inside
+        // its tests. Split on the module opener, not on a bare `#[cfg(test)]`:
+        // that attribute also sits on test-only helpers in the middle of a
+        // production file (`steering.rs`'s `find_steering_target`), and
+        // truncating there hides real producers below it.
+        let head = text
+            .split("#[cfg(test)]\nmod tests")
+            .next()
+            .unwrap_or_default();
+        if head.contains("RunRequest {") {
+            found.push(rel);
+        }
+    }
+    found.sort();
+
+    let mut known: Vec<String> = RUN_REQUEST_PRODUCERS
+        .iter()
+        .map(|(f, _, _)| (*f).to_string())
+        .collect();
+    known.sort();
+
+    let missing: Vec<&String> = found.iter().filter(|f| !known.contains(f)).collect();
+    let stale: Vec<&String> = known.iter().filter(|f| !found.contains(f)).collect();
+
+    assert!(
+        missing.is_empty(),
+        "these build a RunRequest and are not in RUN_REQUEST_PRODUCERS. A producer that writes \
+         neither `scope::stamp_metadata`'s keys nor `caller_role` makes \
+         `ensure_session_under_request_scope` and the exec-tier ceiling silent no-ops for every \
+         run it starts — the run works, answers, and files itself under the operator. Classify \
+         it as stamps / inherits / unattributed:\n  {missing:?}"
+    );
+    assert!(
+        stale.is_empty(),
+        "RUN_REQUEST_PRODUCERS names files that no longer build a RunRequest — a census that \
+         lists things that stopped existing stops being read:\n  {stale:?}"
+    );
+}

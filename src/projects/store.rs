@@ -121,6 +121,17 @@ pub enum ProjectError {
     AlreadyExists(PathBuf),
     #[error("invalid project name: {0}")]
     InvalidName(String),
+    /// The verb is well-formed and the project exists, but applying it here
+    /// would destroy something the caller cannot see — currently only
+    /// [`ProjectStore::remove`] on a room that has a conversation.
+    ///
+    /// Deliberately NOT `NotFound`: the caller already knows this project
+    /// exists (they named it and they are its owner), so there is no existence
+    /// to leak, and an honest refusal that names the alternative is what makes
+    /// the boundary actionable. Same split as `handlers/projects.rs`'s
+    /// `gate_project` (not-found) vs `require_owner` (forbidden).
+    #[error("{0}")]
+    Invalid(String),
 }
 
 fn db_err(e: impl std::fmt::Display) -> ProjectError {
@@ -495,8 +506,55 @@ impl ProjectStore {
 
     /// Forget a project. The on-disk folder is left untouched — removal means
     /// "forget about this project", never "delete files".
+    ///
+    /// # Refuses to forget a ROOM that has a conversation
+    ///
+    /// This verb predates P2 and its semantics are the directory catalogue's:
+    /// drop a folder from the recents list. A project ROOM is a different
+    /// object wearing the same row — it has a roster, a `p-*` memory
+    /// partition, artifacts, and a claimed session — and for a room the roster
+    /// is not merely metadata, it is the ENTIRE visibility predicate
+    /// (`visibility::owner_and_scope_visible_to` asks
+    /// `roster::is_member(project, actor)` and nothing else).
+    ///
+    /// So deleting the row and its `project_members` in one write does not
+    /// "forget" the room: it makes the room's transcript unreachable by every
+    /// principal alive, including the operator and the person who created it.
+    /// Not deleted — permanently invisible, with the rows still on disk and no
+    /// predicate that can ever return true for them again. The `main__p-<id>`
+    /// partition keeps being enumerated and maintained nightly by
+    /// `list_scoped_agent_ids`, which reads the filesystem and has no idea the
+    /// room is gone.
+    ///
+    /// [`Self::archive`] is the verb that means "forget" for a room: it flips
+    /// `status` and keeps the roster, so members stop seeing it in the picker
+    /// and the conversation stays reachable. A room is therefore refused here
+    /// and pointed at it.
+    ///
+    /// A catalogue entry — no claimed session — removes exactly as it always
+    /// did, which is every pre-P2 caller.
     pub fn remove(&self, id: &str) -> Result<(), ProjectError> {
         self.with_conn(|conn| {
+            let claimed: Option<Option<String>> = conn
+                .query_row(
+                    "SELECT current_session_key FROM projects WHERE id = ?1",
+                    [id],
+                    |r| r.get::<_, Option<String>>(0),
+                )
+                .optional()
+                .map_err(db_err)?;
+            match claimed {
+                None => return Err(ProjectError::NotFound(id.to_string())),
+                Some(Some(_)) => {
+                    return Err(ProjectError::Invalid(format!(
+                        "project '{id}' is a room with a conversation: removing it would leave \
+                         that conversation unreachable to everyone, including you, because a \
+                         room's visibility IS its roster. Archive it instead."
+                    )));
+                }
+                Some(None) => {}
+            }
+
             let changed = conn
                 .execute("DELETE FROM projects WHERE id = ?1", [id])
                 .map_err(db_err)?;
@@ -1023,6 +1081,55 @@ mod tests {
             store.remove(&p.id).unwrap_err(),
             ProjectError::NotFound(_)
         ));
+    }
+
+    /// A room whose conversation exists cannot be "forgotten", because for a
+    /// room the roster is the whole visibility predicate: dropping it makes the
+    /// transcript unreachable to every principal alive rather than deleting it.
+    #[test]
+    fn a_room_with_a_conversation_is_refused_and_pointed_at_archive() {
+        let _g = ROSTER_TEST_GUARD.lock().unwrap_or_else(|e| e.into_inner());
+        let store = fresh_store();
+        let p = store.create("room", Some("u-alice"), None).unwrap();
+        store.add_member(&p.id, "u-bob").unwrap();
+        store.claim_session_key(&p.id, "agent:main:room:1").unwrap();
+
+        let err = store.remove(&p.id).unwrap_err();
+        assert!(
+            matches!(err, ProjectError::Invalid(ref m) if m.contains("Archive it instead")),
+            "the refusal must name the verb that does work: {err}"
+        );
+
+        // Nothing half-applied: the room, its roster and its session pointer
+        // are all still there.
+        assert!(store.get(&p.id).unwrap().is_some());
+        assert!(roster::is_member(&p.id, "u-bob"));
+        assert_eq!(
+            store
+                .claim_session_key(&p.id, "agent:main:room:2")
+                .unwrap()
+                .as_str(),
+            "agent:main:room:1"
+        );
+
+        // Archiving is the verb that works, and it keeps the roster — which is
+        // what keeps the conversation reachable.
+        store.archive(&p.id).unwrap();
+        assert!(roster::is_member(&p.id, "u-bob"));
+    }
+
+    /// The pre-P2 catalogue entry — a folder in the recents list, no
+    /// conversation — is unaffected, which is every caller this verb had
+    /// before rooms existed.
+    #[test]
+    fn a_catalogue_entry_without_a_conversation_still_removes() {
+        let _g = ROSTER_TEST_GUARD.lock().unwrap_or_else(|e| e.into_inner());
+        let store = fresh_store();
+        let p = store
+            .create("just-a-folder", Some("u-alice"), None)
+            .unwrap();
+        store.remove(&p.id).unwrap();
+        assert!(store.get(&p.id).unwrap().is_none());
     }
 
     #[test]

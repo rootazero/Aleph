@@ -27,9 +27,18 @@ pub struct SurfaceNotification {
 /// payload is intentionally sparse — detail lives in the Panel card; the
 /// banner only carries `approval_id` (for diagnostics/correlation) + static
 /// title/body.
+///
+/// `session_key` is the one non-sparse field, and it is not for rendering: it
+/// is what lets the forward-filter answer *whose* banner this is. Without it
+/// the frame could only be role-gated, which is why the banner was the last of
+/// the four approval frames still broadcast to operators alone — a member whose
+/// own tool call is parked got the card and no banner. It mirrors
+/// `ApprovalRequested::session_key` exactly, including the empty string a
+/// cluster-node approval carries.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SurfaceApproval {
     pub approval_id: String,
+    pub session_key: String,
     pub title: String,
     pub body: String,
 }

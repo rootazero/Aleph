@@ -19,6 +19,22 @@ pub struct CliConfig {
     /// Default session key
     pub default_session: Option<String>,
 
+    /// PEM certificate to trust for `wss://` connections, in addition to the
+    /// system roots.
+    ///
+    /// A gateway with `[gateway.tls] enabled = true` and no `cert_path` serves
+    /// a self-signed certificate, which no system root can vouch for — so the
+    /// CLI could not reach a TLS-enabled server at all, including its own, on
+    /// loopback. Pointing this at the server's `data/tls/cert.pem` pins exactly
+    /// that certificate.
+    ///
+    /// Deliberately a pin and not an "insecure" switch: the failure mode this
+    /// closes is "cannot connect to my own server", and answering it by turning
+    /// verification off would also turn it off for the remote case, which is
+    /// the one the whole TLS tier exists for.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ca_cert: Option<String>,
+
     /// Client manifest settings
     #[serde(default)]
     pub manifest: ManifestConfig,
@@ -57,6 +73,7 @@ impl Default for CliConfig {
             server: default_server(),
             device_name: default_device_name(),
             default_session: None,
+            ca_cert: None,
             manifest: ManifestConfig::default(),
         }
     }

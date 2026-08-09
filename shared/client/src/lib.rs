@@ -8,6 +8,7 @@ mod connection;
 mod error;
 mod gateway_client;
 pub mod output;
+mod tls;
 
 pub use config::{CliConfig, ManifestConfig};
 pub use connection::AlephClient;

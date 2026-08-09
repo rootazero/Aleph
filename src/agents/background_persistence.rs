@@ -82,9 +82,11 @@ const PARTIAL_RESULT_TAIL_BYTES: usize = 8 * 1024;
 /// bounded at 200 chars upstream, but a terminal `final_text` is not.
 const MAX_LINE_CHARS: usize = 4_000;
 
-/// Shared masker. `SecretMasker::new()` carries no custom patterns, so the
-/// regex set behind it is the process-wide `LazyLock` in `exec::masker` — this
-/// static exists only to avoid re-constructing the (empty) wrapper per line.
+/// Shared masker. `SecretMasker` is a zero-sized handle — both the vendor floor
+/// and the operator's `[[security.mask_patterns]]` live in process-wide statics
+/// inside `exec::masker` — so this exists only to avoid re-constructing the
+/// empty wrapper per line, and it inherits configured patterns without knowing
+/// they exist.
 static MASKER: LazyLock<SecretMasker> = LazyLock::new(SecretMasker::new);
 
 /// Root directory for the sidecar. `None` = persistence disabled (every entry

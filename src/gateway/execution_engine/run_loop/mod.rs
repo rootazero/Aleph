@@ -65,8 +65,16 @@ where
 /// survive `tokio::spawn`. Every producer of a run — the Panel handler
 /// (`handlers::agent`), the channel inbound router, cron, heartbeat, the teams
 /// dispatcher, `sessions_send`, A2A — hands the request to a *spawned* task, so
-/// by the time the engine creates the row the ambient scope is `None` even
-/// though the attribution is sitting right there in `request.metadata`. The row
+/// by the time the engine creates the row the ambient scope is `None`.
+///
+/// ⚠️ **"the attribution is sitting right there in `request.metadata`" is a
+/// claim about each producer, not a property of this helper.** This helper can
+/// only read what a producer wrote, and until 2026-08-09 the teams fan-out
+/// wrote neither key — `member_run_metadata` inserted `team_id` / `chain_depth`
+/// / `platform` / run-mode and stopped — so for every member run this helper
+/// was a no-op while a reader of this sentence would believe it was covered.
+/// The census that matters is `scope_stamping_producers_are_all_accounted_for`
+/// in this module's tests, not this paragraph. The row
 /// then persists with `owner_user_id`/`scope_id` NULL and is adopted as
 /// owner-owned, which for a member means their own session is invisible to them
 /// (`sessions.list` empty, `sessions.set_topic` "not found",

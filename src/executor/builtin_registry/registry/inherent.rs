@@ -91,6 +91,48 @@ impl BuiltinToolRegistry {
             )
     }
 
+    /// The memory PARTITION this tool call reads and writes — the composed
+    /// answer, not the bare persona.
+    ///
+    /// [`Self::caller_agent_id`] returns `session_key.agent_id()`, i.e. `"main"`.
+    /// That is the persona, and it is **not** where this run's memory lives:
+    /// every producer composes it with the session's scope through
+    /// [`crate::memory::project_scope::session_write_id`], so a scoped run
+    /// writes to `main__u-alice` / `main__p-room`. A reader that skips the
+    /// composition looks in `main` and finds nothing — with no error, and with
+    /// every test green, because a test that builds the tool with a base id and
+    /// asserts against that same base id never crosses the seam.
+    ///
+    /// This is NOT a multi-user-only concern: a zero-config loopback Panel
+    /// session resolves to `(Some(OWNER_USER_ID), "operator")`, so the stock
+    /// single-user partition is already `main__u-owner`.
+    ///
+    /// Both task-locals it depends on are live at tool dispatch (the turn
+    /// context and the project root), because dispatch runs inside the scoped
+    /// tool-execution task.
+    pub(super) fn caller_memory_partition(&self, fallback: &str) -> String {
+        crate::memory::project_scope::session_write_id(
+            &self.caller_agent_id(fallback),
+            self.memory_project_scoped,
+            crate::projects::current_project_root().as_deref(),
+        )
+    }
+
+    /// [`Self::caller_memory_partition`] for the ONE reader whose question has
+    /// no answer in a shared room: the single human's profile.
+    ///
+    /// `None` inside a project room — a room has more than one person in it, so
+    /// "there is no such thing here" is the honest answer rather than handing
+    /// back the room's merged profile. That is precisely why
+    /// [`crate::memory::project_scope::profile_floor_id`] returns an `Option`.
+    pub(super) fn caller_profile_partition(&self, fallback: &str) -> Option<String> {
+        crate::memory::project_scope::profile_floor_id(
+            &self.caller_agent_id(fallback),
+            self.memory_project_scoped,
+            crate::projects::current_project_root().as_deref(),
+        )
+    }
+
     /// Get a handle to the `GatewayContext` `OnceCell` for deferred injection.
     ///
     /// Used by `agent_init` to inject `GatewayContext` after `ExecutionEngine` creation.

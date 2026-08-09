@@ -693,6 +693,20 @@ fn ChannelPairingSection(channel_id: StoredValue<String>) -> impl IntoView {
     let pairing_error = RwSignal::new(Option::<String>::None);
     let pairing_success = RwSignal::new(Option::<String>::None);
 
+    // Which Aleph principal this sender will speak as. Empty = the owner,
+    // which is the single-user default and what every approval did before this
+    // control existed.
+    //
+    // This is the CHANNEL half of P0's identity link. Its consumer
+    // (`inbound_router::executor` → `ScopeAttribution::personal`) has been live
+    // since P1 with nothing producing for it, so a member's Telegram turns were
+    // filed under the operator: their sessions in the operator's list, their
+    // messages in the operator's memory partition, and the operator's curated
+    // MEMORY.md injected into their prompts.
+    let pairing_user_id = RwSignal::new(String::new());
+    let dir = expect_context::<crate::state::user_directory::UserDirectoryState>();
+    dir.ensure_loaded(state);
+
     // Approved senders list
     let approved_senders: RwSignal<Vec<ApprovedSenderInfo>> = RwSignal::new(Vec::new());
     let refresh_approved = RwSignal::new(0u32);
@@ -742,14 +756,16 @@ fn ChannelPairingSection(channel_id: StoredValue<String>) -> impl IntoView {
         pairing_success.set(None);
 
         let ch_id = channel_id.get_value();
+        let bind_to = pairing_user_id.get();
         spawn_local(async move {
-            match state
-                .rpc_call(
-                    "channel.pairing.approve",
-                    json!({ "channel": ch_id, "code": code }),
-                )
-                .await
-            {
+            // Omit the key entirely when unset — the server's `COALESCE` writes
+            // the owner, which is exactly the single-user behaviour, and an
+            // explicit `null` and an absent key must not diverge here.
+            let mut params = json!({ "channel": ch_id, "code": code });
+            if !bind_to.is_empty() {
+                params["user_id"] = json!(bind_to);
+            }
+            match state.rpc_call("channel.pairing.approve", params).await {
                 Ok(_) => {
                     pairing_success.set(Some(
                         t_string!(i18n, channel_config.pairing_approved).to_string(),
@@ -797,6 +813,30 @@ fn ChannelPairingSection(channel_id: StoredValue<String>) -> impl IntoView {
                         {move || if approving.get() { t_string!(i18n, channel_config.approving).to_string() } else { t_string!(i18n, channel_config.approve).to_string() }}
                     </button>
                 </div>
+
+                // Which principal this sender speaks as. Rendered only when a
+                // second person exists — on a single-user install the control
+                // has exactly one option and would be pure noise.
+                {move || {
+                    let people = dir.selectable();
+                    (people.len() > 1).then(|| view! {
+                        <div class="flex items-center gap-2">
+                            <label class="text-sm text-text-secondary whitespace-nowrap">
+                                {t!(i18n, channel_config.pairing_speaks_as)}
+                            </label>
+                            <select
+                                class="flex-1 px-3 py-2 text-sm bg-surface border border-border rounded-lg focus:outline-none focus:border-primary text-text-primary"
+                                prop:value=move || pairing_user_id.get()
+                                on:change=move |ev| pairing_user_id.set(event_target_value(&ev))
+                            >
+                                <option value="">{t!(i18n, channel_config.pairing_speaks_as_owner)}</option>
+                                {people.into_iter().map(|(uid, name)| view! {
+                                    <option value=uid.clone()>{name}</option>
+                                }).collect_view()}
+                            </select>
+                        </div>
+                    })
+                }}
 
                 // Error / Success
                 {move || pairing_error.get().map(|e| view! {

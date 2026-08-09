@@ -26,6 +26,35 @@ pub struct CustomRiskPattern {
 }
 
 // =============================================================================
+// CustomMaskPattern
+// =============================================================================
+
+/// An operator-defined regex whose matches are redacted from anything a run
+/// echoes back to a human.
+///
+/// The built-in list (`exec::secret_patterns`) recognises *vendor-shaped*
+/// credentials — `sk-…`, `AKIA…`, `ghp_…`, PEM blocks. A credential that does
+/// not look like any vendor's (an internal service token, a customer id, a
+/// staging password) rode through every redaction leg unchanged, because the
+/// only way to add a pattern was a method with no production caller. This is
+/// that method's caller.
+///
+/// Additive only: the vendor floor cannot be disabled from config.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct CustomMaskPattern {
+    /// Regex matched against every string leaf on its way to a human.
+    pub pattern: String,
+    /// What the match is replaced with. Defaults to the same marker the
+    /// built-in patterns use, so a bare `pattern = "…"` entry is meaningful.
+    #[serde(default = "default_mask_replacement")]
+    pub replacement: String,
+}
+
+fn default_mask_replacement() -> String {
+    "***REDACTED***".to_string()
+}
+
+// =============================================================================
 // ShellSecurityConfig
 // =============================================================================
 
@@ -68,6 +97,23 @@ pub struct ShellSecurityConfig {
     /// Custom danger patterns (additive to built-ins)
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub custom_danger: Vec<CustomRiskPattern>,
+
+    /// Operator-defined secret shapes to redact, additive to the built-in
+    /// vendor list. Deliberately **not** behind `enable_custom_patterns`: that
+    /// flag guards an advisory layer that can *block a command*, so it is
+    /// opt-in; redacting more is never the risky direction.
+    ///
+    /// ```toml
+    /// [[security.mask_patterns]]
+    /// pattern = "ACME-[A-Z0-9]{24}"
+    /// replacement = "ACME-***"
+    /// ```
+    ///
+    /// `[security]` is not a live-reload section, so a change here takes effect
+    /// on restart — which is what `ReloadImpact::classify` already tells the
+    /// operator.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub mask_patterns: Vec<CustomMaskPattern>,
 }
 
 const fn default_false() -> bool {

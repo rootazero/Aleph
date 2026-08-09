@@ -1835,7 +1835,17 @@ mod tests {
         let src = include_str!("loop_tool.rs");
         // Production prefix only — this test module is allowed to spawn
         // freely (its tasks touch no scoped store).
-        let prod = src.split("\n#[cfg(test)]\n").next().unwrap_or(src);
+        //
+        // The separator is deliberately UNANCHORED. It used to be
+        // `"\n#[cfg(test)]\n"`, which matches nothing on a CRLF checkout (the
+        // bytes are `\r\n#[cfg(test)]\r\n`), so `prod` silently became the
+        // WHOLE file — including this module, whose own assertion strings
+        // contain `join_set.spawn(`. The guard then failed on itself, on
+        // Windows only, while staying green in CI. The quieter half is worse:
+        // with the test module inside `prod`, the `checked > 0` assertion below
+        // is satisfied by these string literals, so deleting the real fan-out
+        // would not have tripped the very check that exists to notice that.
+        let prod = src.split("#[cfg(test)]").next().unwrap_or(src);
         let lines: Vec<&str> = prod.lines().collect();
         let mut checked = 0usize;
         for (i, line) in lines.iter().enumerate() {

@@ -922,6 +922,46 @@ mod tests {
         }
     }
 
+    /// The positive twin of the test above, and the thing "gap 0" actually
+    /// turned out to need.
+    ///
+    /// `MEMBER_WITHHELD_KEYS` is defined by removal, which is the right default
+    /// — a new field arrives withheld and somebody has to rule on it. The cost
+    /// is that the four fields a member's composer pills exist to read are
+    /// protected by nothing but that list staying short. Adding `"tiers"` to it
+    /// would compile, pass every test in this file, and reproduce the exact
+    /// symptom the carve-out was made to fix: a tier popover with one blank
+    /// option and a mode pill that hides itself on an empty `modes`.
+    #[test]
+    fn a_member_still_receives_both_dials_and_both_catalogues() {
+        let cfg = Config::default();
+        let value = member_visible_permissions_value(&cfg).expect("member view serializes");
+        let obj = value.as_object().expect("an object");
+
+        for key in ["exec_tier", "tiers", "mode", "modes"] {
+            assert!(
+                obj.contains_key(key),
+                "`{key}` must survive the member narrowing — the pills READ these \
+                 and WRITE through sessions.patch / chat.send, so withholding the \
+                 enumeration locks a menu the server would still honour"
+            );
+        }
+        assert!(
+            !obj["tiers"]
+                .as_array()
+                .expect("tiers is an array")
+                .is_empty(),
+            "an empty catalogue is indistinguishable from a product with one tier"
+        );
+        assert!(
+            !obj["modes"]
+                .as_array()
+                .expect("modes is an array")
+                .is_empty(),
+            "the mode pill hides itself on an empty list — it would simply vanish"
+        );
+    }
+
     async fn create_test_watcher() -> (Arc<ConfigWatcher>, NamedTempFile) {
         let mut temp_file = NamedTempFile::new().unwrap();
         writeln!(
@@ -1221,7 +1261,7 @@ model = "claude-opus-4-5"
     async fn a_member_receives_both_dials_and_their_selectable_ids() {
         let value = tool_permissions_as(Some("member")).await;
 
-        for key in ["exec_tier", "tiers", "mode", "modes"] {
+        for key in aleph_protocol::tool_permissions::MEMBER_VISIBLE_KEYS {
             assert!(
                 value.get(key).is_some(),
                 "a member needs `{key}` — without it the pill that reads it \
@@ -1251,14 +1291,58 @@ model = "claude-opus-4-5"
     async fn a_member_does_not_receive_the_server_global_policy_axes() {
         let value = tool_permissions_as(Some("member")).await;
 
-        assert!(
-            value.get("overrides").is_none(),
-            "the per-tool overrides map is server-global config: {value}"
+        for key in aleph_protocol::tool_permissions::OPERATOR_ONLY_KEYS {
+            assert!(
+                value.get(*key).is_none(),
+                "`{key}` is server-global config and must stay withheld: {value}"
+            );
+        }
+    }
+
+    /// The cross-crate half of the contract.
+    ///
+    /// The member shape is defined by what is ABSENT, and absence is exactly
+    /// what a hand-written client DTO fails to decode — which is how the whole
+    /// carve-out shipped inert for a round while both this file's tests and the
+    /// Panel's stayed green, each reading only its own literal. The key set now
+    /// lives in `aleph_protocol`, the crate both sides depend on, and this
+    /// asserts the server emits exactly it. Its twin lives in
+    /// `interfaces/webchat/src/api/tool_permissions.rs`.
+    #[tokio::test]
+    async fn the_emitted_key_sets_are_exactly_the_declared_wire_contract() {
+        use aleph_protocol::tool_permissions::{all_keys, MEMBER_VISIBLE_KEYS};
+
+        let member: Vec<String> = tool_permissions_as(Some("member"))
+            .await
+            .as_object()
+            .expect("object response")
+            .keys()
+            .cloned()
+            .collect();
+        let mut member_sorted = member.clone();
+        member_sorted.sort();
+        let mut declared: Vec<String> = MEMBER_VISIBLE_KEYS.iter().map(|k| (*k).into()).collect();
+        declared.sort();
+        assert_eq!(
+            member_sorted, declared,
+            "the member response no longer matches aleph_protocol::tool_permissions::\
+             MEMBER_VISIBLE_KEYS. Update the contract AND check the Panel DTO tolerates the \
+             change — a key the client requires and the server withholds fails the entire \
+             decode, not just that field."
         );
-        assert!(
-            value.get("default").is_none(),
-            "the default tool permission is server-global config: {value}"
-        );
+
+        let operator: Vec<String> = tool_permissions_as(Some("operator"))
+            .await
+            .as_object()
+            .expect("object response")
+            .keys()
+            .cloned()
+            .collect();
+        let mut operator_sorted = operator;
+        operator_sorted.sort();
+        let mut all: Vec<String> = all_keys().into_iter().map(String::from).collect();
+        all.sort();
+        assert_eq!(operator_sorted, all);
     }
 
     /// Role, not ownership. A second operator principal carries a `CALLER_USER`

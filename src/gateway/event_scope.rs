@@ -27,7 +27,6 @@ impl EventScopeGuard {
     /// |--------|-------------------|
     /// | `pairing.` | admin, pairing |
     /// | `guest.` | admin, guest.manager |
-    /// | `surface.approval` | admin, exec.approver |
     /// | `config.changed` | admin, config.viewer |
     /// | `node.` | admin |
     /// | `pty.` | admin |
@@ -60,14 +59,36 @@ impl EventScopeGuard {
     pub fn default_rules() -> Self {
         Self {
             rules: vec![
-                (
-                    "pairing.".to_string(),
-                    vec!["admin".to_string(), "pairing".to_string()],
-                ),
-                (
-                    "guest.".to_string(),
-                    vec!["admin".to_string(), "guest.manager".to_string()],
-                ),
+                // ⚠️ Every required-permission vector below is `["admin"]`, and
+                // that is not a coincidence to be tidied later — it is the
+                // whole model. [`scope_for_role`] is the ONLY producer of a
+                // connection's permission vector and it hands out `["*"]` or
+                // `[]`, so `is_superuser_scope` decides every verdict here and
+                // the `permissions.iter().any(...)` clause below is unreachable
+                // in production.
+                //
+                // Until 2026-08-09 five of these rules named fine-grained
+                // siblings — `pairing`, `guest.manager`, `exec.approver`,
+                // `config.viewer` — that nothing could ever grant, alongside
+                // `"admin"`, which `scope_for_role` also never mints. The
+                // ruling written for `node.` above ("inventing a permission
+                // name with no producer is the zero-consumer abstraction R10
+                // refuses") applied to all of them; it just had not been
+                // finished. The names are gone.
+                //
+                // What they cost was not runtime: it was a reader concluding
+                // that Aleph has per-user permission state and designing a
+                // narrow grant against `exec.approver`. It does not. The
+                // `users` table is `(user_id, display_name, role, status,
+                // created_at)` — the role enum plus the project roster is the
+                // entire authorization model, and the per-resource grant table
+                // is a recorded non-goal (see FEATURE_LOCATOR §5.22).
+                //
+                // `"admin"` stays as the marker of INTENT — "this prefix is
+                // operator-only" — and is pinned as the only admissible name by
+                // `no_rule_names_a_permission_nothing_can_grant`.
+                ("pairing.".to_string(), vec!["admin".to_string()]),
+                ("guest.".to_string(), vec!["admin".to_string()]),
                 // `approval.` deliberately has NO rule here since 2026-08-08.
                 // This table keys on the topic PREFIX, and the approval family
                 // carries two different kinds of frame under one prefix: a
@@ -84,17 +105,17 @@ impl EventScopeGuard {
                 // own and an operator still gets everyone's — which is what a
                 // rule here used to buy, unchanged. Do not re-add a rule here —
                 // it would re-close the member half without the fleet half
-                // noticing. The BANNER leg (`surface.approval`) keeps its rule
-                // below: it carries no session to scope by and is a
-                // desktop-shell notification, not the decision surface.
-                (
-                    "surface.approval".to_string(),
-                    vec!["admin".to_string(), "exec.approver".to_string()],
-                ),
-                (
-                    "config.changed".to_string(),
-                    vec!["admin".to_string(), "config.viewer".to_string()],
-                ),
+                // noticing.
+                //
+                // `surface.approval` has no rule here either, since the banner
+                // started carrying the session key it is derived from. It used
+                // to be the exception on the grounds that it "carries no
+                // session to scope by" — which was true, and was a property of
+                // `r5_router::approval_for` dropping the field, not of the
+                // banner. The consequence was the K shape one level up: the
+                // person whose own call is parked received the decision card
+                // and never the interrupt that exists to fetch them to it.
+                ("config.changed".to_string(), vec!["admin".to_string()]),
                 ("node.".to_string(), vec!["admin".to_string()]),
                 ("pty.".to_string(), vec!["admin".to_string()]),
             ],
@@ -157,7 +178,7 @@ pub fn is_superuser_scope(permissions: &[String]) -> bool {
 /// other topic — chat, session, `agent.run.*`, streaming deltas — passes for any
 /// connection regardless of permissions. So a member's daily surfaces are
 /// untouched, while the admin-guarded topics stop reaching him:
-/// `surface.approval` (the R5 banner), `config.changed`, `pairing.*`, `guest.*`,
+/// `config.changed`, `pairing.*`, `guest.*`,
 /// `node.*` (cluster fleet topology — the live half of the admin-gated
 /// `environments.list`) and `pty.*` (the operator's raw terminal bytes — the
 /// live half of the admin-gated `pty.` family). Members used to be stamped
@@ -170,6 +191,10 @@ pub fn is_superuser_scope(permissions: &[String]) -> bool {
 /// carries both session-scoped and fleet-scoped frames under one prefix and a
 /// prefix table can only answer for both at once. Answering "operator" for both
 /// is what left a member unable to see the gate blocking their own run.
+/// `surface.approval` — the R5 banner leg — followed them off this table once
+/// it started carrying the session key it is derived from; it is the same
+/// question about the same approval, and leaving it here would have kept the
+/// interrupt away from precisely the person expected to answer it.
 #[must_use]
 pub fn scope_for_role(role: &str) -> Vec<String> {
     if role == "operator" {
@@ -182,6 +207,7 @@ pub fn scope_for_role(role: &str) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::gateway::event_visibility::{session_identity_of, SessionIdentity};
 
     #[test]
     fn test_unguarded_event_allowed_for_all() {
@@ -204,11 +230,38 @@ mod tests {
         // Irrelevant permission — denied.
         assert!(!guard.can_receive("pairing.requested", &["viewer".to_string()]));
 
-        // "admin" — allowed.
+        // "admin" — allowed. It is the rule's marker of intent; the value a
+        // real connection carries is `"*"` (see `scope_for_role`).
         assert!(guard.can_receive("pairing.requested", &["admin".to_string()]));
 
-        // "pairing" — allowed.
-        assert!(guard.can_receive("pairing.approved", &["pairing".to_string()]));
+        // The operator's actual permission vector.
+        assert!(guard.can_receive("pairing.approved", &["*".to_string()]));
+
+        // …and the fine-grained sibling this rule used to name is gone: nothing
+        // could ever mint it, and leaving it here invited a narrow grant to be
+        // designed against a permission system that does not exist.
+        assert!(!guard.can_receive("pairing.approved", &["pairing".to_string()]));
+    }
+
+    /// Aleph has no per-user permission state: `users` is `(user_id,
+    /// display_name, role, status, created_at)`, and [`scope_for_role`] — the
+    /// only producer of a connection's permission vector — returns `["*"]` or
+    /// `[]`. A rule naming anything else describes a grant system that does not
+    /// exist, and the cost is a reader designing against it.
+    #[test]
+    fn no_rule_names_a_permission_nothing_can_grant() {
+        let guard = EventScopeGuard::default_rules();
+        for (prefix, required) in &guard.rules {
+            for name in required {
+                assert_eq!(
+                    name, "admin",
+                    "rule `{prefix}` requires `{name}`, which no producer can ever mint. \
+                     `scope_for_role` hands out `\"*\"` or nothing; `\"admin\"` is the \
+                     marker of intent. If a real grant axis is ever added, add its \
+                     producer FIRST and then widen this test."
+                );
+            }
+        }
     }
 
     /// The approval family's gate MOVED on 2026-08-08; it was not removed.
@@ -260,7 +313,6 @@ mod tests {
 
         // …and the term that does decide is really wired: a fleet approval
         // (empty session key) is operator-only, a session approval is not.
-        use crate::gateway::event_visibility::{session_identity_of, SessionIdentity};
         assert_eq!(
             session_identity_of(
                 "approval.requested",
@@ -271,14 +323,23 @@ mod tests {
              gated NOWHERE, because the prefix rule above is gone"
         );
 
-        // The banner leg is a different frame with a different job: it carries
-        // no session to scope by, so role IS the only question it can answer.
-        // The R5 banner keeps its prefix rule: different payload, different
-        // audience mechanism, not swept up by proximity.
-        assert!(!guard.can_receive("surface.approval", &[]));
-        assert!(!guard.can_receive("surface.approval", &["viewer".to_string()]));
-        assert!(guard.can_receive("surface.approval", &["exec.approver".to_string()]));
-        assert!(guard.can_receive("surface.approval", &["admin".to_string()]));
+        // The banner leg followed the other three off this table once it began
+        // carrying a session key. Same assertion, same file, opposite sign:
+        // this guard must be silent about it, and `event_visibility` must not.
+        assert!(
+            guard.can_receive("surface.approval", &[]),
+            "the prefix rule must be GONE — a member holds no admin permission \
+             and would never see the banner for their own parked call"
+        );
+        assert_eq!(
+            session_identity_of(
+                "surface.approval",
+                Some(&serde_json::json!({"session_key": "agent:main:s1"}))
+            ),
+            SessionIdentity::BySessionKeyOrAdmin("agent:main:s1".to_string()),
+            "…and the ownership gate must have picked it up — if this fails, \
+             the banner is gated NOWHERE"
+        );
     }
 
     #[test]
@@ -321,10 +382,6 @@ mod tests {
         let g = EventScopeGuard::default_rules();
         let chat = vec!["chat".to_string(), "read".to_string()];
         assert!(
-            !g.can_receive("surface.approval", &chat),
-            "chat tier must NOT see the approval banner"
-        );
-        assert!(
             !is_superuser_scope(&chat),
             "chat tier must not satisfy the admin arm that lets an operator \
              read another user's approval card"
@@ -337,23 +394,26 @@ mod tests {
         );
     }
 
+    /// Rewritten, not deleted: the banner is still shut out of a chat-tier
+    /// connection, but by the filter that can see WHOSE banner it is.
     #[test]
-    fn surface_approval_is_operator_gated() {
+    fn surface_approval_is_scoped_by_owner_not_by_role() {
         let g = EventScopeGuard::default_rules();
-
-        // chat / guest tier and no-perms must NOT receive approval banners.
         let chat = vec!["chat".to_string(), "read".to_string()];
-        assert!(
-            !g.can_receive("surface.approval", &chat),
-            "chat tier must NOT see surface.approval banners"
-        );
-        assert!(!g.can_receive("surface.approval", &[]));
-        assert!(!g.can_receive("surface.approval", &["viewer".to_string()]));
 
-        // operator [*] / exec.approver / admin must.
-        assert!(g.can_receive("surface.approval", &["*".to_string()]));
-        assert!(g.can_receive("surface.approval", &["exec.approver".to_string()]));
-        assert!(g.can_receive("surface.approval", &["admin".to_string()]));
+        // A chat-tier connection carries no `caller_user`, so
+        // `BySessionKeyOrAdmin` resolves nothing for it, and it does not
+        // satisfy the admin arm either — the same exclusion, one filter down.
+        assert!(
+            !is_superuser_scope(&chat),
+            "chat tier must not satisfy the admin arm of the banner's owner check"
+        );
+        assert_eq!(
+            session_identity_of("surface.approval", Some(&serde_json::json!({}))),
+            SessionIdentity::OperatorOnly,
+            "a banner with no session key is a FLEET approval and stays the \
+             operator's — fail closed, exactly as its three siblings do"
+        );
 
         // surface.notify stays unguarded (R5 to any desktop, not approval).
         assert!(
@@ -398,13 +458,24 @@ mod tests {
         let member = scope_for_role("member");
         assert!(member.is_empty(), "a member holds no event scopes");
 
+        // The R5 approval BANNER followed the three `approval.*` frames off
+        // this table (2026-08-09) once it started carrying the session key it
+        // is derived from — "this leg carries no session" was a property of
+        // `r5_router::approval_for` dropping the field, not of the banner. The
+        // protection did not disappear, it moved: asserted here so removing
+        // the topic above cannot silently mean removing the guarantee.
+        assert_eq!(
+            session_identity_of(
+                "surface.approval",
+                Some(&serde_json::json!({"session_key": "agent:main:s1"}))
+            ),
+            SessionIdentity::BySessionKeyOrAdmin("agent:main:s1".to_string()),
+            "the banner must be owner-scoped now — a member gets their own and \
+             no one else's, and `member` holds no scope satisfying the admin arm"
+        );
+        assert!(!is_superuser_scope(&member));
+
         for topic in [
-            // The R5 approval BANNER (not the three `approval.*` frames — see
-            // `the_approval_family_is_gated_by_payload_not_by_this_prefix_table`;
-            // those moved to a per-session decision so that a member can answer
-            // the gate blocking their own run; this leg carries no session and
-            // stays role-gated).
-            "surface.approval",
             "config.changed",
             "pairing.requested",
             "pairing.approved",
