@@ -2665,11 +2665,17 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
         use alephcore::gateway::handlers::pairing as pairing_handlers;
 
         let store = channel_pairing_store.clone();
+        // The users store rides along so an approval can name the Aleph
+        // principal this sender speaks as — the channel half of P0's identity
+        // link, whose consumer (`inbound_router::executor`) has been live since
+        // P1 with nothing producing for it.
+        let approve_users = auth_bundle.security_store.clone();
         server
             .handlers_mut()
             .register("channel.pairing.approve", move |req| {
                 let store = store.clone();
-                async move { pairing_handlers::handle_approve(req, store).await }
+                let users = approve_users.clone();
+                async move { pairing_handlers::handle_approve(req, store, users).await }
             });
 
         let store = channel_pairing_store.clone();

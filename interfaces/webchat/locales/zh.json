@@ -2014,7 +2014,9 @@
     "toast_delete_failed": "删除实例失败：",
     "pairing_enter_code": "请输入配对码。",
     "pairing_approved": "发送者批准成功。",
-    "pairing_approve_failed": "批准失败："
+    "pairing_approve_failed": "批准失败：",
+    "pairing_speaks_as": "以谁的身份",
+    "pairing_speaks_as_owner": "机主（默认）"
   },
   "execution_settings": {
     "title": "执行",
