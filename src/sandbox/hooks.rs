@@ -84,7 +84,7 @@ mod tests {
     #[async_trait]
     impl SandboxBeforeHook for TestBeforeHook {
         async fn before(&self, _: SandboxHookContext<'_>) -> SandboxHookResult {
-            if self.1 {
+            if self.0 {
                 SandboxHookResult::Allow
             } else {
                 SandboxHookResult::Deny {
