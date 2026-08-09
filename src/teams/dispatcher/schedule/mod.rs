@@ -344,10 +344,19 @@ impl TeamDispatcher {
         let run_status = outcome.status.run_status();
         let (run_summary, run_error) = match &outcome.status {
             MemberRunStatus::Completed => (outcome.reply.clone(), None),
-            MemberRunStatus::Failed
-            | MemberRunStatus::Timeout
-            | MemberRunStatus::Busy
-            | MemberRunStatus::Cancelled => (None, outcome.error.clone()),
+            // A failed or timed-out attempt still carries whatever the member
+            // produced before it stopped, and the NEXT attempt's recovery
+            // section instructs it verbatim to resume rather than restart —
+            // an instruction that was previously issued alongside nothing but
+            // "timeout: Timed out after N seconds". Both columns are written:
+            // the error says it did not finish, the summary says how far it
+            // got. `task.result` is still only written on Completed, so a
+            // partial can never be mistaken for a deliverable.
+            MemberRunStatus::Failed | MemberRunStatus::Timeout => {
+                (outcome.reply.clone(), outcome.error.clone())
+            }
+            // Attempts that never started have nothing of their own to report.
+            MemberRunStatus::Busy | MemberRunStatus::Cancelled => (None, outcome.error.clone()),
         };
         if let Err(e) = self
             .coord_store

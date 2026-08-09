@@ -382,7 +382,15 @@ pub async fn execute_member_task(
             let status = classify_execution_error(&e);
             MemberRunOutcome {
                 status,
-                reply: None,
+                // Busy and Cancelled are attempts that never started; there is
+                // nothing of this attempt's to salvage and pretending otherwise
+                // would attribute a previous attempt's text to this one. The
+                // genuine failures keep whatever the member managed to say —
+                // see the Timeout arm.
+                reply: match status {
+                    MemberRunStatus::Busy | MemberRunStatus::Cancelled => None,
+                    _ => fetch_last_reply(&target_agent, &session_key).await,
+                },
                 error: Some(match status {
                     MemberRunStatus::Busy => format!("Agent busy, attempt deferred: {e}"),
                     MemberRunStatus::Cancelled => {
@@ -394,15 +402,28 @@ pub async fn execute_member_task(
         }
         Ok(Err(join_err)) => MemberRunOutcome {
             status: MemberRunStatus::Failed,
-            reply: None,
+            reply: fetch_last_reply(&target_agent, &session_key).await,
             error: Some(format!("Task panicked: {join_err}")),
         },
         Err(_) => {
             // Timeout — abort the spawned task to free resources.
             abort_handle.abort();
+            // Keep what it produced. The per-task session is durable and the
+            // messages are already written, so the same one-line read the
+            // success arm uses works here too — and the NEXT attempt's
+            // `build_recovery_section` tells the member verbatim to "resume
+            // from where they left off; reuse work already done and do not
+            // restart from scratch" while listing only "timeout: Timed out
+            // after N seconds". A ten-minute research step therefore restarted
+            // from zero on every retry until it burned `max_retries`.
+            //
+            // `error` is deliberately left alone rather than merged: "it did
+            // not finish" and "here is what it had" are different facts, and
+            // `run_task` only writes `task.result` on Completed, so a partial
+            // cannot be mistaken for a deliverable.
             MemberRunOutcome {
                 status: MemberRunStatus::Timeout,
-                reply: None,
+                reply: fetch_last_reply(&target_agent, &session_key).await,
                 error: Some(format!("Timed out after {timeout_secs} seconds")),
             }
         }

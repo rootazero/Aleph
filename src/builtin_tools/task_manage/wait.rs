@@ -15,6 +15,15 @@ use crate::tools::AlephTool;
 // Args / Output
 // =============================================================================
 
+/// Default wait window when the model does not name one.
+const DEFAULT_WAIT_SECS: u64 = 300;
+
+/// Hard ceiling for a wait window. Must stay strictly below this tool's entry
+/// in [`crate::tools::budget::BUILTIN_TOOL_BUDGETS_MS`] (630s) so the tool's own
+/// clock is always the one that fires — see the clamp site for why an overrun
+/// on the harness side is strictly worse than a `timed_out: true` report.
+pub(crate) const MAX_WAIT_SECS: u64 = 600;
+
 /// Arguments for waiting on coordination tasks.
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
 pub struct TaskWaitArgs {
@@ -24,7 +33,10 @@ pub struct TaskWaitArgs {
     /// Wait for all tasks in this team
     #[serde(default)]
     pub team_id: Option<String>,
-    /// Timeout in seconds (default: 300)
+    /// Timeout in seconds (default: 300, maximum: 600). Values above the
+    /// maximum are clamped — the tool's own clock must stay strictly faster
+    /// than the harness budget so a timeout returns the progress tables rather
+    /// than an opaque overrun.
     #[serde(default)]
     pub timeout_seconds: Option<u64>,
 }
@@ -211,7 +223,17 @@ impl AlephTool for TaskWaitTool {
             ));
         }
 
-        let timeout = args.timeout_seconds.unwrap_or(300);
+        // Clamp under the harness budget (`tools::budget`'s `task_wait` row,
+        // 630s). Unclamped, any `timeout_seconds` above the default budget was
+        // guaranteed to be preempted by `scoped::dispatch`'s wall clock, which
+        // discards the completed / failed / pending tables this tool has
+        // already computed and hands the model a bare `ToolError::Timeout`
+        // instead. A partial answer with a `timed_out` flag is the whole point
+        // of the surface.
+        let timeout = args
+            .timeout_seconds
+            .unwrap_or(DEFAULT_WAIT_SECS)
+            .clamp(1, MAX_WAIT_SECS);
         let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(timeout);
 
         // Wake on the GlobalBus, where the CoordTask store actually broadcasts

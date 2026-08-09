@@ -25,6 +25,8 @@ pub struct CronTestHarness {
     pub store_path: PathBuf,
     _temp_dir: TempDir,
     executor_fn: JobExecutorFn,
+    /// Cross-tick concurrency semaphore, exactly as `run_timer_loop` owns one.
+    semaphore: Arc<tokio::sync::Semaphore>,
 }
 
 impl CronTestHarness {
@@ -45,6 +47,7 @@ impl CronTestHarness {
 
         let executor = MockExecutor::new();
         let executor_fn = executor.into_executor_fn();
+        let permits = state.config.max_concurrent_agents.unwrap_or(2).max(1);
 
         Self {
             state,
@@ -53,6 +56,7 @@ impl CronTestHarness {
             store_path,
             _temp_dir: temp_dir,
             executor_fn,
+            semaphore: Arc::new(tokio::sync::Semaphore::new(permits)),
         }
     }
 
@@ -155,17 +159,48 @@ impl CronTestHarness {
 
     // ── Execution ───────────────────────────────────────────────────
 
-    /// Run a single timer tick (mark due + execute + writeback).
+    /// Run a single timer tick and wait for the jobs it dispatched to settle.
+    ///
+    /// `on_timer_tick` marks the due jobs and returns as soon as each has been
+    /// spawned — that is the point of the 2026-08-09 restructure, since awaiting
+    /// them inside the tick froze the whole scheduler behind the slowest job.
+    /// A probe harness still wants a settled world to assert against, so the
+    /// wait lives here: poll until no job carries a `running_at_ms` marker,
+    /// which `phase3_writeback` clears for every terminal outcome including a
+    /// panicking executor.
     pub async fn tick(&self) {
-        on_timer_tick(&self.state, &self.executor_fn, None, None)
+        self.tick_without_settling().await;
+        self.await_quiescent().await;
+    }
+
+    /// Dispatch a tick and return immediately, exactly as `run_timer_loop`
+    /// does. For probes that deliberately leave a job marked running — where
+    /// waiting for quiescence would wait forever by construction.
+    pub async fn tick_without_settling(&self) {
+        on_timer_tick(&self.state, &self.executor_fn, &self.semaphore, None, None)
             .await
             .expect("tick failed");
     }
 
-    /// Run N timer ticks.
-    pub async fn tick_n(&self, n: usize) {
-        for _ in 0..n {
-            self.tick().await;
+    /// Block until no job is marked running, or panic after a generous bound.
+    ///
+    /// The bound is real time, not fake-clock time: the mock executor returns
+    /// immediately, so anything approaching it means a dispatched job never
+    /// wrote back — which is a defect, not slowness.
+    pub async fn await_quiescent(&self) {
+        let deadline = tokio::time::Instant::now() + tokio::time::Duration::from_secs(10);
+        loop {
+            {
+                let guard = self.state.store.lock().await;
+                if guard.jobs().iter().all(|j| j.state.running_at_ms.is_none()) {
+                    return;
+                }
+            }
+            assert!(
+                tokio::time::Instant::now() < deadline,
+                "a dispatched cron job never cleared its running marker"
+            );
+            tokio::time::sleep(tokio::time::Duration::from_millis(5)).await;
         }
     }
 
@@ -176,7 +211,6 @@ impl CronTestHarness {
             self.clock.as_ref(),
             self.state.config.max_missed_jobs_per_restart,
             self.state.config.catchup_stagger_ms,
-            self.state.config.job_timeout_secs.saturating_mul(1000) as i64,
         )
         .await
         .expect("catchup failed");
@@ -255,20 +289,6 @@ impl CronTestHarness {
             job.state.consecutive_errors, expected,
             "expected job '{id}' consecutive_errors={expected}, got {}",
             job.state.consecutive_errors
-        );
-    }
-
-    /// Assert a job's next_run_at_ms is after the given timestamp.
-    pub async fn assert_next_run_after(&self, id: &str, ms: i64) {
-        let store = self.state.store.lock().await;
-        let job = store.get_job(id).expect(&format!("job '{id}' not found"));
-        let next = job
-            .state
-            .next_run_at_ms
-            .expect(&format!("job '{id}' has no next_run_at_ms"));
-        assert!(
-            next > ms,
-            "expected job '{id}' next_run_at_ms > {ms}, got {next}"
         );
     }
 

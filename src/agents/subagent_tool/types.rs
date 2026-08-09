@@ -23,11 +23,66 @@ pub const MAX_CONCURRENT_SUBAGENTS_CEILING: usize = 64;
 /// A process global rather than a constructor argument because `SubagentTool`
 /// is constructed from several places (the gateway run loop, tool-scope tests,
 /// embedding code) and a builder that only one of them calls is how a knob ends
-/// up configurable in exactly one code path. The semaphore itself is still
-/// per-instance (per agent run), so a live `[execution]` patch binds on the
-/// next run rather than resizing a fan-out that is already in flight.
+/// up configurable in exactly one code path. A live `[execution]` patch binds
+/// on the next session's first fan-out rather than resizing one already in
+/// flight.
 static MAX_CONCURRENT_SUBAGENTS: std::sync::atomic::AtomicUsize =
     std::sync::atomic::AtomicUsize::new(DEFAULT_MAX_CONCURRENT_SUBAGENTS);
+
+/// One semaphore per top-level session, shared across that session's runs.
+///
+/// The cap has to outlive the thing it caps. `SubagentTool` is rebuilt per
+/// request (`run_loop/inner.rs` says so in as many words), and background
+/// sub-agents are detached tasks that deliberately outlive the run that spawned
+/// them — so a per-instance semaphore meant turn N's four children held permits
+/// from one semaphore while turn N+1 got a brand-new one with four more. A
+/// session fanning out four background children per turn could have dozens
+/// hitting the provider at once while the operator had configured four, and the
+/// knob's stated reason for existing is "a deployment behind a tight rate limit
+/// had no way to narrow it".
+///
+/// `Weak`, not `Arc`: the entry disappears once the last live permit and the
+/// last tool instance are gone (an `OwnedSemaphorePermit` holds its `Arc`, so
+/// an in-flight background child keeps its own session's semaphore alive), and
+/// the next fan-out builds a fresh one at the current configured size. Nothing
+/// to evict, no TTL, no growth in an idle process.
+///
+/// This is the same lifetime correction `BackgroundAgentTracker` already
+/// carries — that one is engine-lifetime because "a per-request tracker
+/// silently dropped every result once the spawning run returned". Same
+/// mismatch, opposite symptom: there results were lost, here the constraint is.
+static SESSION_SEMAPHORES: std::sync::LazyLock<
+    crate::sync_primitives::Mutex<
+        std::collections::HashMap<String, std::sync::Weak<tokio::sync::Semaphore>>,
+    >,
+> = std::sync::LazyLock::new(|| {
+    crate::sync_primitives::Mutex::new(std::collections::HashMap::new())
+});
+
+/// The concurrency semaphore a `SubagentTool` should use.
+///
+/// `None` — a caller with no owning session (CLI, direct construction, tests) —
+/// gets a private semaphore, which is byte-for-byte the previous behaviour and
+/// keeps process-global state out of unit tests.
+#[must_use]
+pub fn subagent_semaphore_for(session_key: Option<&str>) -> std::sync::Arc<tokio::sync::Semaphore> {
+    let permits = max_concurrent_subagents();
+    let Some(key) = session_key.filter(|k| !k.is_empty()) else {
+        return std::sync::Arc::new(tokio::sync::Semaphore::new(permits));
+    };
+    let mut map = SESSION_SEMAPHORES
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    if let Some(existing) = map.get(key).and_then(std::sync::Weak::upgrade) {
+        return existing;
+    }
+    // Opportunistic prune while we already hold the lock: every dead entry is a
+    // session whose children have all finished.
+    map.retain(|_, weak| weak.strong_count() > 0);
+    let fresh = std::sync::Arc::new(tokio::sync::Semaphore::new(permits));
+    map.insert(key.to_string(), std::sync::Arc::downgrade(&fresh));
+    fresh
+}
 
 /// Clamp an operator-supplied cap into `[MIN, CEILING]`.
 #[must_use]
@@ -310,5 +365,87 @@ mod concurrency_tests {
         );
         set_max_concurrent_subagents(restore);
         assert_eq!(max_concurrent_subagents(), restore);
+    }
+
+    /// The cap has to survive the tool instance that reads it.
+    ///
+    /// `SubagentTool` is rebuilt per request while background children are
+    /// detached and outlive their run, so a per-instance semaphore let turn N+1
+    /// hand out a second full allocation on top of turn N's still-held permits.
+    /// Two lookups for one session must be the same object; two sessions must
+    /// not share one.
+    #[test]
+    fn one_session_shares_one_semaphore_across_its_runs() {
+        let a1 = subagent_semaphore_for(Some("agent:main:peer:alice"));
+        let a2 = subagent_semaphore_for(Some("agent:main:peer:alice"));
+        assert!(
+            std::sync::Arc::ptr_eq(&a1, &a2),
+            "a session's second run must share the first run's cap"
+        );
+
+        let b = subagent_semaphore_for(Some("agent:main:peer:bob"));
+        assert!(
+            !std::sync::Arc::ptr_eq(&a1, &b),
+            "separate sessions keep separate caps"
+        );
+
+        // Taking a permit on one is visible to the other — the actual property,
+        // not just pointer identity.
+        let before = a2.available_permits();
+        let _permit = a1.try_acquire().expect("a permit is available");
+        assert_eq!(a2.available_permits(), before - 1);
+    }
+
+    /// No session (CLI, tests, direct construction) keeps its own semaphore, so
+    /// none of this touches process-global state on those paths.
+    #[test]
+    fn an_unowned_tool_gets_a_private_semaphore() {
+        let a = subagent_semaphore_for(None);
+        let b = subagent_semaphore_for(None);
+        assert!(!std::sync::Arc::ptr_eq(&a, &b));
+        // An empty key is "no session", not a session named "".
+        let c = subagent_semaphore_for(Some(""));
+        let d = subagent_semaphore_for(Some(""));
+        assert!(!std::sync::Arc::ptr_eq(&c, &d));
+    }
+
+    /// The whole point, stated as permits rather than pointers: a background
+    /// child still holding a permit must count against the NEXT run's cap, and
+    /// once every child and tool is gone the entry is collectable so the next
+    /// fan-out reads the current configured size.
+    ///
+    /// `serial` because it reads the shared cap global.
+    #[test]
+    #[serial_test::serial(subagent_concurrency_cap)]
+    fn a_live_child_still_counts_against_the_next_runs_cap() {
+        let cap = max_concurrent_subagents();
+        let key = "agent:main:peer:ephemeral";
+
+        // Turn N: one background child takes a permit, then the tool instance
+        // that built the semaphore is dropped at end of request.
+        let child_permit = {
+            let sem = subagent_semaphore_for(Some(key));
+            sem.clone()
+                .try_acquire_owned()
+                .expect("a permit is available")
+        };
+
+        // Turn N+1 — the bug was that this handed out a brand-new allocation.
+        let next_turn = subagent_semaphore_for(Some(key));
+        assert_eq!(
+            next_turn.available_permits(),
+            cap - 1,
+            "a still-running background child must consume the next run's budget"
+        );
+
+        drop(child_permit);
+        drop(next_turn);
+
+        let after = subagent_semaphore_for(Some(key));
+        assert_eq!(
+            after.available_permits(),
+            cap,
+            "once the session is idle its cap is whole again"
+        );
     }
 }

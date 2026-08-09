@@ -225,42 +225,58 @@ async fn multiple_jobs_concurrent() {
     );
 }
 
-// ── 5. reentrant_tick_skipped ───────────────────────────────────────
+// ── 5. an in-flight job is not dispatched twice ─────────────────────
 
-/// The is_running flag mechanism in run_timer_loop prevents re-entrant ticks.
-/// on_timer_tick itself does NOT check is_running — only run_timer_loop does.
-/// This test verifies the flag mechanism at the state level.
+/// Overlapping ticks must not double-dispatch a job.
+///
+/// This used to be asserted against `ServiceState::is_running`, a whole-tick
+/// re-entrancy flag — and the test's own comment admitted `on_timer_tick` never
+/// consulted it, so it exercised a setter and a getter and nothing else. That
+/// flag is gone: holding it across the whole batch froze the due-scan for as
+/// long as the slowest job ran (`job_timeout_secs`, default 900s) and lost
+/// every firing in between.
+///
+/// The invariant that actually protects re-entrancy is per job and always was:
+/// `phase1_mark_due_jobs` stamps `running_at_ms` under the store lock and skips
+/// any job already carrying one.
 #[tokio::test]
-async fn reentrant_tick_skipped() {
+async fn a_job_already_in_flight_is_not_dispatched_again() {
     let h = CronTestHarness::new();
-
-    // Verify initial state
-    assert!(!h.state.is_running(), "should start as not running");
-
-    // Set running flag (simulating a tick in progress)
-    h.state.set_running(true);
-    assert!(
-        h.state.is_running(),
-        "should be running after set_running(true)"
-    );
-
-    // NOTE: on_timer_tick does NOT check is_running — only run_timer_loop does.
-    // So we test the flag mechanism itself: set_running(true) prevents
-    // run_timer_loop from calling on_timer_tick.
-
-    // Clear flag
-    h.state.set_running(false);
-    assert!(
-        !h.state.is_running(),
-        "should be cleared after set_running(false)"
-    );
-
-    // Now a normal tick should work
     let interval = 60_000;
-    h.add_every_job("reentrant-1", interval).await;
+    h.add_every_job("in-flight", interval).await;
+
+    // Stamp the marker phase1 would set for a live run, without letting a
+    // writeback clear it.
+    {
+        let mut guard = h.state.store.lock().await;
+        let job = guard.get_job_mut("in-flight").expect("job present");
+        job.state.running_at_ms = Some(h.now());
+        guard.persist().expect("persist");
+    }
+
+    h.advance(interval);
+    // Not `tick()`: the marker above is artificial and nothing will clear it,
+    // so waiting for quiescence would wait forever by construction.
+    h.tick_without_settling().await;
+    assert_eq!(
+        h.executor.call_count("in-flight"),
+        0,
+        "a job carrying a running marker must be skipped, not re-dispatched"
+    );
+
+    // Clear it the way phase3 does; the next tick picks the job up normally.
+    {
+        let mut guard = h.state.store.lock().await;
+        guard
+            .get_job_mut("in-flight")
+            .expect("job present")
+            .state
+            .running_at_ms = None;
+        guard.persist().expect("persist");
+    }
     h.advance(interval);
     h.tick().await;
-    h.assert_executed("reentrant-1");
+    h.assert_executed("in-flight");
 }
 
 // ── 6. concurrent_add_during_tick ───────────────────────────────────

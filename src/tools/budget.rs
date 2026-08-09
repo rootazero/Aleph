@@ -84,6 +84,17 @@ pub const BUILTIN_TOOL_BUDGETS_MS: &[(&str, u64)] = &[
     // every child, so the parent-side wall clock legitimately runs long. This
     // is a backstop against a child that never returns, not a latency target.
     ("subagent", 1_800_000),
+    // Blocks on OTHER RUNS finishing, not on I/O — the only wait face for a
+    // workflow run or a team task DAG. Same reasoning as `ask_user`: the
+    // budget must sit ABOVE the tool's own ceiling
+    // (`task_manage::wait::MAX_WAIT_SECS`, 600s) so what fires is the tool's
+    // timeout, which returns the completed/failed/pending tables it has
+    // already computed. It used to be absent here, so it resolved to the 300s
+    // default — exactly its own default wait, i.e. a coin flip — and any
+    // longer wait the model asked for was guaranteed to be preempted by the
+    // harness, throwing that progress away and reporting only an opaque
+    // overrun.
+    ("task_wait", 630_000),
 ];
 
 /// Returns the configured wall-clock budget for a builtin tool, or
@@ -149,13 +160,13 @@ mod tests {
 
     #[test]
     fn table_size_matches_expected_count() {
-        // Locked at 19 entries (12 fast + 3 slow + 2 exec + ask_user +
-        // subagent; the 2026-07 phantom sweep removed the never-registered
-        // `list_tools` / `search_tools` rows and renamed stale `skill_reader`
-        // to `skill_read`). Bumping this requires updating the table AND
-        // adjusting this constant in the same commit — the assertion is a
-        // code-review signal, not a value check.
-        assert_eq!(BUILTIN_TOOL_BUDGETS_MS.len(), 19);
+        // Locked at 20 entries (12 fast + 3 slow + 2 exec + ask_user +
+        // subagent + task_wait; the 2026-07 phantom sweep removed the
+        // never-registered `list_tools` / `search_tools` rows and renamed stale
+        // `skill_reader` to `skill_read`). Bumping this requires updating the
+        // table AND adjusting this constant in the same commit — the assertion
+        // is a code-review signal, not a value check.
+        assert_eq!(BUILTIN_TOOL_BUDGETS_MS.len(), 20);
     }
 
     #[test]
@@ -177,6 +188,25 @@ mod tests {
         assert!(
             budget > clarify_ms,
             "ask_user budget {budget}ms must exceed the {clarify_ms}ms clarification timeout"
+        );
+    }
+
+    /// Same rule, second tool that blocks on something other than I/O.
+    ///
+    /// `task_wait` used to be absent from the table, so it resolved to the 300s
+    /// default while its own default wait was also 300s — a coin flip — and any
+    /// longer wait the model asked for was certain to be killed by the harness,
+    /// discarding the completed/failed/pending tables it had already built. No
+    /// test could see it, because each clock was correct on its own; only
+    /// putting them in one assertion catches it.
+    #[test]
+    fn task_wait_budget_outlives_its_own_clamped_ceiling() {
+        let ceiling_ms = crate::builtin_tools::task_manage::wait::MAX_WAIT_SECS * 1_000;
+        let budget = builtin_tool_budget_ms("task_wait").expect("task_wait is budgeted");
+        assert!(
+            budget > ceiling_ms,
+            "task_wait budget {budget}ms must exceed its own {ceiling_ms}ms ceiling, \
+             or the harness clock preempts the tool's and the progress report is lost"
         );
     }
 
