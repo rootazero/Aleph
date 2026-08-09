@@ -1072,6 +1072,31 @@ sees byte-identical behavior before and after.
     a channel sender (`PairingStore::approve`) can bind the same way;
     `sender_user(channel, sender_id)` resolves it with the same
     bound-is-sticky / unbound-defaults-to-owner semantics.
+
+    ⚠️ **This half had no producer until 2026-08-09.** The column, the SQL's
+    `COALESCE`, and the consumer (`inbound_router::executor` stamps
+    `ScopeAttribution::personal` from `sender_user` on every inbound turn) all
+    shipped with P0/P1 — while `handlers::pairing::handle_approve` passed
+    `None`, with a comment saying P1 would thread a real id through. P1 landed
+    and did not. Every approved sender on every channel therefore resolved to
+    the owner: a member's Telegram turns were stamped `personal:u-owner`, so
+    their session rows were filed under the operator, their messages ingested
+    into `main__u-owner`, and the OWNER's curated `MEMORY.md` / `USER.md`
+    injected into their prompts.
+
+    `channel.pairing.approve` now takes an optional `user_id`, **validated
+    against the users table before the approval commits** (a binding to a
+    dangling id gives the sender an identity nobody can grant, revoke or list,
+    and surfaces much later as "the wrong person's memory" — same reason
+    `pair --user` validates), and echoes it in the response so the approving
+    surface can say who this sender now is. Omitted still means the owner.
+    Client: the Panel's channel settings, which renders the picker only when a
+    second principal exists.
+
+    **Still unbound by design:** `DmPolicy::Allowlist` / `allow_from` senders
+    never enter `approved_senders` at all, so they stay owner-scoped. If
+    per-user allowlist entries are ever wanted, that is a second producer, not
+    a widening of this one.
 - **Resolved per connection**, not just per credential:
   `handlers/connect.rs::resolve_connection_identity` turns an authorized
   connection into `(Option<user_id>, role)` — loopback and any
@@ -1193,6 +1218,47 @@ after (verified by `single_user_fixture_is_byte_identical_after_upgrade`,
   `CALLER_ROLE` — and, like those, does NOT cross a `tokio::spawn` boundary:
   any run-work spawn must re-seed it explicitly (see the
   `src/gateway/CLAUDE.md` landmine below).
+
+  **Two facts about that re-seeding, both learned the expensive way:**
+
+  1. **Re-establishing the task-local is only half.** `run_loop` rebuilds the
+     run's scope from `request.metadata` and nothing else, and
+     `ensure_session_under_request_scope` stamps the session row from the same
+     map — so a spawn that restores the task-local and does not also
+     `scope::stamp_metadata` still writes a NULL/NULL row. The team fan-out did
+     neither for a full round.
+  2. **The carrier is one type, not a three-line ritual.**
+     `scope::CarriedAttribution` (`src/scope/carried.rs`) captures scope +
+     project root + agent id + `caller_role` before a spawn and re-establishes
+     all four inside it. It lives in `src/scope/` because `agents` and `teams`
+     both depend on `scope` and not on each other. `caller_role` joined it
+     because it fails in the same place with the OPPOSITE direction: the other
+     three are fail-quiet (work lands in the wrong partition), while
+     `turn_context::role_is_operator(None)` is `true` by design, so a lost role
+     is fail-OPEN — the run skips both the exec-tier ceiling and the
+     operator-tool gate. Census:
+     `run_loop::tests::scope_stamping_producers_are_all_accounted_for`.
+
+  **Which actor a predicate is handed is a separate question from which
+  predicate it is.** `scope::ambient_owner()` answers "who owns this row"; in a
+  project room it names the room's CREATOR, identically for every member —
+  exactly the mechanism that makes members share one memory partition. A
+  predicate asking "who is ASKING" must use `visibility::ambient_actor()` (the
+  turn's speaker in a room, byte-identical to `ambient_owner` everywhere else).
+  Four tool-face predicates acquired the wrong one independently, because three
+  places in the repo stated the relationship backwards. Pinned by
+  `visibility::AMBIENT_OWNER_CENSUS`: a new `ambient_owner()` call site must
+  declare which of the two questions it answers.
+
+  **A writer's composition is a contract on its readers.** Every memory/note
+  writer composes the session scope into the partition id through
+  `project_scope::session_write_id`, so a scoped run writes `main__u-alice` /
+  `main__p-room`. Nine readers did not compose and silently read the empty base
+  partition — never a multi-user-only defect, because a zero-config loopback
+  Panel session is already `Personal(u-owner)`. The tool face's single answer is
+  `BuiltinToolRegistry::caller_memory_partition`, with
+  `caller_profile_partition` as the twin that must REFUSE inside a room (a room
+  holds more than one human, so there is no single profile to return).
 - **Visibility chokepoint** (`src/gateway/visibility.rs`). `effective_owner`
   is the ONE place "who owns this row" is decided: a session's own
   `owner_user_id`, or `OWNER_USER_ID` for a legacy/pre-P1 row with none
@@ -1685,6 +1751,42 @@ attribution, and a bound workspace as the room's default cwd.
   `visibility.rs::removing_a_member_revokes_visibility_immediately`.
   Anything needing finer sharing than "in the room / not in the room" is a
   different feature, not a variation of this one.
+
+  **Corollary, and it is not obvious: deleting the roster does not delete the
+  room, it hides it from everyone.** Because membership is the entire
+  predicate, dropping `project_members` leaves every session scoped to that
+  project unreachable by every principal alive — the operator and the room's
+  creator included. Not deleted: the rows stay on disk, and the `main__p-<id>`
+  memory partition keeps being enumerated and nightly-maintained by
+  `list_scoped_agent_ids`, which reads the filesystem and cannot know the room
+  is gone. `ProjectStore::remove` did exactly this (its semantics predate P2 —
+  "drop a folder from the recents list"), so since 2026-08-09 it **refuses a
+  project that has a claimed session** and points the caller at
+  [`archive`](#), which keeps the roster and therefore keeps the conversation
+  reachable. A pre-P2 catalogue entry — no claimed session — removes exactly as
+  before. The refusal is `INVALID_PARAMS`, not not-found: the caller owns the
+  project and named it, so there is no existence to leak, and a refusal that
+  names the working verb is the only kind that is actionable.
+
+  **The comparison that produced this** (2026-08-09, vs rowboat's
+  `DeleteProjectUseCase`): rowboat answers "who can still reach this after the
+  row is gone" with an explicit cascade over ten repositories — api keys, data
+  sources, Qdrant vectors, conversations, jobs, two kinds of job rule, members,
+  the project. Aleph adopts the QUESTION and rejects the shape: a cascade would
+  become a second source of truth for what a room contains, which is precisely
+  what one-roster-answers-everything exists to avoid. Making the verb
+  unavailable for rooms answers the same question with no second source.
+
+- **There is no per-user permission state, anywhere.** The `users` table is
+  `(user_id, display_name, role, status, created_at)` and nothing else; the
+  role enum plus the project roster is the complete authorization model.
+  `EventScopeGuard`'s rules named four fine-grained permissions (`pairing`,
+  `guest.manager`, `exec.approver`, `config.viewer`) that no producer could
+  ever mint — `scope_for_role` returns `["*"]` or `[]` — which cost nothing at
+  runtime and a great deal to any reader who concluded a grant system existed
+  and designed a narrow permission against it. Removed 2026-08-09; pinned by
+  `event_scope::tests::no_rule_names_a_permission_nothing_can_grant`. Adding a
+  real grant axis means adding its **producer first**.
 
   **Those four questions are the whole list, and BACKGROUND WORK is
   deliberately not one of them** (human ruling, 2026-08-07). A loop, goal, cron
