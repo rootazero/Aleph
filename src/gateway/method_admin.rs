@@ -158,7 +158,7 @@ const ADMIN_PREFIXES: &[&str] = &[
     "channels.",             // channel config (set_agent, list, status).
     "channel.",              // singular: per-channel create/delete/start/stop/send/
     // pairing_data/health, plus the `channel.pairing.*` sub-family
-    // (approve/approved/revoke — who may DM the bot at all).
+    // (list/approve/reject/approved/revoke — who may DM the bot at all).
     "discord.", // bot integration credentials/config (validate_token, list_guilds, …).
     // --- Server configuration surfaces (Settings page, one family per section) ---
     "config.",  // schema/get/patch/reload/validate/path/*_tool_permissions.
@@ -449,6 +449,14 @@ mod tests {
             "channels.set_agent",
             "channel.create",
             "channel.pairing.revoke",
+            // Registered 2026-08-09, having been advertised by the startup
+            // banner since they were written without ever reaching the
+            // dispatcher. `list` is named here rather than left to the
+            // `channel.` prefix because it is an enumeration face: it returns
+            // every pending sender id across every channel, so reopening it to
+            // members should fail by name.
+            "channel.pairing.list",
+            "channel.pairing.reject",
             "discord.validate_token",
             // config. + settings-page *_config. families + secrets. + logs.
             "config.patch",

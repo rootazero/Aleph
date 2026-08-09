@@ -2690,6 +2690,43 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
     {
         use alephcore::gateway::handlers::pairing as pairing_handlers;
 
+        /// The advertised `channel.pairing.*` surface, printed by the startup
+        /// banner and cross-checked against the live registry below.
+        ///
+        /// It is one list rather than two because the two drifted: `list` and
+        /// `reject` were advertised here (and in the webhook design doc) while
+        /// never being registered, so the dispatcher answered
+        /// `METHOD_NOT_FOUND` to anyone who followed the banner. `list` is not
+        /// a convenience — the pairing code is delivered to the *stranger*
+        /// (`inbound_router::permission::send_pairing_request`), so enumerating
+        /// pending requests is the operator's only in-product way to learn one.
+        const CHANNEL_PAIRING_METHODS: [(&str, &str); 5] = [
+            (
+                "channel.pairing.list",
+                "List pending channel pairing requests",
+            ),
+            ("channel.pairing.approve", "Approve a channel sender"),
+            ("channel.pairing.reject", "Reject a pending pairing request"),
+            ("channel.pairing.approved", "List approved channel senders"),
+            ("channel.pairing.revoke", "Revoke a channel sender"),
+        ];
+
+        let store = channel_pairing_store.clone();
+        server
+            .handlers_mut()
+            .register("channel.pairing.list", move |req| {
+                let store = store.clone();
+                async move { pairing_handlers::handle_list(req, store).await }
+            });
+
+        let store = channel_pairing_store.clone();
+        server
+            .handlers_mut()
+            .register("channel.pairing.reject", move |req| {
+                let store = store.clone();
+                async move { pairing_handlers::handle_reject(req, store).await }
+            });
+
         let store = channel_pairing_store.clone();
         // The users store rides along so an approval can name the Aleph
         // principal this sender speaks as — the channel half of P0's identity
@@ -2720,13 +2757,29 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
                 async move { pairing_handlers::handle_revoke(req, store).await }
             });
 
+        // Falsifiable: the banner claims these methods answer, so ask the
+        // registry rather than restating the claim. The check runs even under
+        // `--daemon`, where nothing is printed and a wiring bug would otherwise
+        // be visible only as a caller's `METHOD_NOT_FOUND`.
         if !args.daemon {
             println!("Channel pairing methods:");
-            println!("  - channel.pairing.list     : List pending channel pairing requests");
-            println!("  - channel.pairing.approve  : Approve a channel sender");
-            println!("  - channel.pairing.reject   : Reject a channel sender");
-            println!("  - channel.pairing.approved : List approved channel senders");
-            println!("  - channel.pairing.revoke   : Revoke a channel sender");
+        }
+        for (method, description) in CHANNEL_PAIRING_METHODS {
+            let registered = server.handlers_mut().has_method(method);
+            if !registered {
+                tracing::error!(
+                    "advertised RPC `{method}` is not registered - callers get METHOD_NOT_FOUND"
+                );
+            }
+            if !args.daemon {
+                if registered {
+                    println!("  - {method:<25}: {description}");
+                } else {
+                    println!("  - {method:<25}: UNREGISTERED (wiring bug)");
+                }
+            }
+        }
+        if !args.daemon {
             println!();
         }
     }
