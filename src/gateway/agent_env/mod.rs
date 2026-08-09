@@ -932,6 +932,33 @@ mod tests {
         assert!(global.unwrap().is_global());
     }
 
+    /// `global` is not archivable, so it is not unarchivable either.
+    ///
+    /// Asserted as a PAIR because the second half looks gratuitous alone —
+    /// `global` can never be archived, so unarchiving it is a no-op — and a
+    /// reader who reasons that far deletes the guard, leaving the two write
+    /// verbs on this table disagreeing about which rows they may touch. The
+    /// guard is not there to prevent an outcome; it is there so `unarchive`
+    /// answers the same question `archive` and `update` do.
+    #[tokio::test]
+    async fn the_global_agent_env_is_neither_archivable_nor_unarchivable() {
+        let temp = tempdir().unwrap();
+        let manager = AgentEnvStore::new(test_config(temp.path().join("test.db"))).unwrap();
+
+        assert!(matches!(
+            manager.archive("global").await,
+            Err(AgentEnvError::CannotModifyGlobal)
+        ));
+        assert!(matches!(
+            manager.unarchive("global").await,
+            Err(AgentEnvError::CannotModifyGlobal)
+        ));
+        assert!(
+            manager.get("global").await.unwrap().is_some(),
+            "…and neither refusal may have touched the row on its way out"
+        );
+    }
+
     #[tokio::test]
     async fn test_channel_active_agent() {
         let temp = tempdir().unwrap();

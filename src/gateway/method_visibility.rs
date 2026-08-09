@@ -1099,6 +1099,7 @@ mod tests {
             "workspace.get",
             "workspace.update",
             "workspace.archive",
+            "workspace.unarchive",
         ] {
             assert_eq!(treatment_of(m), None, "{m}");
             assert!(

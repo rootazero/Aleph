@@ -6,7 +6,7 @@ use leptos::task::spawn_local;
 use std::collections::HashMap;
 
 use crate::api::agents::AgentsApi;
-use crate::api::WorkspaceApi;
+use crate::api::AgentBindingApi;
 use crate::context::DashboardState;
 use crate::i18n::{t, t_string, use_i18n};
 
@@ -52,7 +52,7 @@ pub fn AgentBindingSelector(
             }
 
             // Fetch bindings via typed API
-            if let Ok(map) = WorkspaceApi::agent_bindings(&dash).await {
+            if let Ok(map) = AgentBindingApi::agent_bindings(&dash).await {
                 // Find which agent is bound to this channel
                 let current = map
                     .iter()
@@ -78,7 +78,7 @@ pub fn AgentBindingSelector(
         };
 
         spawn_local(async move {
-            match WorkspaceApi::set_channel_agent(&dash, &ch_id, agent_id_opt.as_deref()).await {
+            match AgentBindingApi::set_channel_agent(&dash, &ch_id, agent_id_opt.as_deref()).await {
                 Ok(_) => {
                     selected.set(value.clone());
                     // Update local bindings cache: this channel moves from its

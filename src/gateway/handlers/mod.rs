@@ -486,6 +486,14 @@ impl HandlerRegistry {
                 "workspace.archive requires AgentEnvStore - wire Gateway runtime first".to_string(),
             )
         });
+        registry.register("workspace.unarchive", |req| async move {
+            JsonRpcResponse::error(
+                req.id,
+                INTERNAL_ERROR,
+                "workspace.unarchive requires AgentEnvStore - wire Gateway runtime first"
+                    .to_string(),
+            )
+        });
         registry.register("channels.set_agent", |req| async move {
             JsonRpcResponse::error(
                 req.id,
@@ -1216,8 +1224,43 @@ mod tests {
         assert!(registry.has_method("workspace.get"));
         assert!(registry.has_method("workspace.update"));
         assert!(registry.has_method("workspace.archive"));
+        assert!(registry.has_method("workspace.unarchive"));
         assert!(registry.has_method("channels.set_agent"));
         assert!(registry.has_method("agents.bindings"));
+    }
+
+    /// Every `workspace.` method this registry knows about is admin-gated.
+    ///
+    /// Derived from `registry.methods()` rather than written out, because a
+    /// literal list is the enumeration mistake one level up: it covers the
+    /// family as it stood the day it was typed, and a method added later slips
+    /// past it by being absent. There are already three hand-copied copies of
+    /// this family across `method_admin.rs` and `method_visibility.rs`, and
+    /// `workspace.unarchive` had to be added to each of them by hand.
+    ///
+    /// The gate is by prefix (`ADMIN_PREFIXES` carries `"workspace."`), so this
+    /// cannot fail as things stand. What it pins is that carving one of them
+    /// out becomes a visible act — deleting an assertion — rather than a silent
+    /// gap between a new method and a table nobody remembered to update.
+    #[test]
+    fn every_registered_workspace_method_is_admin_gated() {
+        let registry = HandlerRegistry::new();
+        let family: Vec<String> = registry
+            .methods()
+            .into_iter()
+            .filter(|m| m.starts_with("workspace."))
+            .collect();
+        assert!(
+            !family.is_empty(),
+            "the workspace family must be registered here — an empty filter \
+             would make the loop below vacuous"
+        );
+        for method in family {
+            assert!(
+                crate::gateway::method_admin::method_requires_admin(&method),
+                "{method} is reachable by a member"
+            );
+        }
     }
 
     #[test]

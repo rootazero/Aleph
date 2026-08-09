@@ -1122,7 +1122,8 @@ sees byte-identical behavior before and after.
   | `cron.*`, `heartbeat.*` (carve-outs `.list`/`.get`/`.runs`) | **admin** | Scheduled automation — mirrors `method_authz.rs`'s existing tool-tier ruling, so the RPC surface isn't a lower-privilege bypass of it |
   | `daemon.*`, `wizard.*`, `diagnostics.*`, `pty.*`, `exec.*` | **admin** | Fleet lifecycle, raw interactive shell, exec-approval gate resolution |
   | `tools.*` | **admin** | `tools.invoke` dispatches straight off the raw `ToolRegistry`, so none of the loop's gates run there — including the per-tool operator gate (`method_authz.rs`'s `OPERATOR_TOOLS`: `cron_manage`, `hooks_manage`, `agent_identity`, …), which its own hard floor does not cover. An RPC surface must not be a lower-privilege bypass of an existing tool-tier decision, and via `cron_manage` a member could schedule a run that executes as trusted-internal. The family is gated whole (E2E-oriented surface by its own module doc); a member-safe read carve-out is a P1 call |
-  | `connect`, `chat.*`, `sessions.*`, `memory.*`, `projects.*`, `artifacts.*`, `fs.*`, `teams.*`, `workspace.*`, `voice.*`, `graph.*` | **open** | Member daily / caller's-own-data surfaces; per-user *visibility* filtering is P1's job, not this gate's |
+  | `workspace.*` | **admin** | The second face of the same `agent_envs` table `agents.*` writes. Gated whole on 2026-08-08 after a real-machine QA in which a member renamed and archived a workspace the operator had created; `partition_visible` cannot close that, because a workspace id encodes no owner. Both clients are operator surfaces — the CLI, and (since 2026-08-09) the Panel's `/settings/workspaces`, which reports this refusal rather than rendering an empty roster. **This row said "open" until 2026-08-09**: the family moved into `ADMIN_PREFIXES` a day earlier and the summary table was not moved with it, so this document described a member carve-out that the code had already withdrawn |
+  | `connect`, `chat.*`, `sessions.*`, `memory.*`, `projects.*`, `artifacts.*`, `fs.*`, `teams.*`, `voice.*`, `graph.*` | **open** | Member daily / caller's-own-data surfaces; per-user *visibility* filtering is P1's job, not this gate's |
   | `users.me`, `users.list`, `agents.list`, `agents.get`, `heartbeat.list`/`.get`/`.runs` | **open** | Member-safe reads, carved out of otherwise-admin families |
 
   Enforced at **one chokepoint** inside `process_request`
@@ -1397,7 +1398,16 @@ after (verified by `single_user_fixture_is_byte_identical_after_upgrade`,
   operator (`aleph workspace list|create|archive`, over loopback); the Panel
   has none — `interfaces/webchat/src/api/workspace.rs` records that its
   `workspace.list` call was removed long ago — and `workspace.update` /
-  `workspace.get` have no client anywhere. Nor was the read half worth what it
+  `workspace.get` have no client anywhere.
+  *(Client census as of 2026-08-08. Since 2026-08-09 there are two clients:
+  `get`/`update` gained CLI subcommands, and the Panel gained
+  `/settings/workspaces`. **The ruling is unchanged** — what carries it is that
+  no client is a member surface, not that there is only one. That page renders
+  for anybody, calls, and reports this gate's refusal through
+  `components::admin_refusal` instead of showing a member an empty roster. The
+  file named above is now `api/agent_binding.rs`; `api/workspace.rs` is the
+  real family.)*
+  Nor was the read half worth what it
   looked like: `env_vars`, `system_prompt_override` and `allowed_tools` have
   no writer on `agent_envs` at all, so cross-user "reads" returned empty
   columns; the write half was the whole of the real residual. So the family

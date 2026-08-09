@@ -39,6 +39,7 @@ pub enum SettingsTab {
     RoutingRules,
     Security,
     Execution,
+    Workspaces,
 
     // Network
     Network,
@@ -69,6 +70,7 @@ impl SettingsTab {
             Self::RoutingRules => "/settings/routing",
             Self::Security => "/settings/security",
             Self::Execution => "/settings/execution",
+            Self::Workspaces => "/settings/workspaces",
             Self::Network => "/settings/network",
         }
     }
@@ -97,6 +99,7 @@ impl SettingsTab {
             Self::RoutingRules => t_string!(i18n, settings.tabs.routing_rules).to_string(),
             Self::Security => t_string!(i18n, settings.tabs.security).to_string(),
             Self::Execution => t_string!(i18n, settings.tabs.execution).to_string(),
+            Self::Workspaces => t_string!(i18n, settings.tabs.workspaces).to_string(),
             Self::Network => t_string!(i18n, settings.tabs.network).to_string(),
         }
     }
@@ -115,6 +118,9 @@ impl SettingsTab {
             }
             Self::Providers => {
                 r#"<path d="M12 2L2 7l10 5 10-5-10-5z"/><path d="M2 17l10 5 10-5"/><path d="M2 12l10 5 10-5"/>"#
+            }
+            Self::Workspaces => {
+                r#"<rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/>"#
             }
             Self::EmbeddingProviders => {
                 r#"<circle cx="12" cy="12" r="2"/><circle cx="6" cy="6" r="2"/><circle cx="18" cy="6" r="2"/><circle cx="6" cy="18" r="2"/><circle cx="18" cy="18" r="2"/><line x1="12" y1="10" x2="12" y2="14"/><line x1="7.5" y1="7.5" x2="10.5" y2="10.5"/><line x1="13.5" y1="10.5" x2="16.5" y2="7.5"/><line x1="7.5" y1="16.5" x2="10.5" y2="13.5"/><line x1="13.5" y1="13.5" x2="16.5" y2="16.5"/>"#
@@ -232,6 +238,7 @@ pub const SETTINGS_GROUPS: &[SettingsGroup] = &[
             SettingsTab::Policies,
             SettingsTab::Security,
             SettingsTab::Execution,
+            SettingsTab::Workspaces,
         ],
     },
     SettingsGroup {
@@ -250,6 +257,30 @@ mod tests {
             .iter()
             .flat_map(|g| g.tabs.iter().map(|t| t.path()))
             .collect()
+    }
+
+    /// Every tab the sidebar offers has a route arm in `app.rs`.
+    ///
+    /// Source-level on purpose. Calling `desktop_settings_body` would need a
+    /// reactive runtime, and the defect this catches is not a rendering bug:
+    /// a path with no arm falls through to the catch-all, so the sidebar entry
+    /// navigates, the URL changes, and the page silently is not the one it
+    /// named. Nothing fails — which is why adding a tab and forgetting the
+    /// route is a mistake that ships.
+    ///
+    /// Matching on the quoted literal rather than the bare path so
+    /// `/settings/channels` is not satisfied by the `starts_with(
+    /// "/settings/channels/")` arm that serves its sub-pages.
+    #[test]
+    fn every_sidebar_tab_has_a_route_arm() {
+        let app = include_str!("../app.rs");
+        for path in all_tab_paths() {
+            assert!(
+                app.contains(&format!("\"{path}\"")),
+                "{path} is offered by SETTINGS_GROUPS but has no arm in app.rs \
+                 — clicking it would land on the catch-all view"
+            );
+        }
     }
 
     #[test]

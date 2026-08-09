@@ -16,6 +16,7 @@ pub mod cluster;
 
 // Split submodules
 pub mod acp;
+pub mod agent_binding;
 pub mod artifacts;
 pub mod browser;
 pub mod clarification;
@@ -49,6 +50,7 @@ pub mod workspace;
 
 // Re-export all public types for backward compatibility (crate::api::Foo)
 pub use acp::*;
+pub use agent_binding::*;
 pub use browser::*;
 pub use clarification::*;
 pub use config::*;

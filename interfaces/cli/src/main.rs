@@ -850,6 +850,9 @@ async fn dispatch_workspace(
         WorkspaceAction::Archive { id } => {
             workspace_cmd::archive(server_url, config, &id, json).await
         }
+        WorkspaceAction::Unarchive { id } => {
+            workspace_cmd::unarchive(server_url, config, &id, json).await
+        }
     }
 }
 

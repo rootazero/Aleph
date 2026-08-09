@@ -44,6 +44,12 @@ pub(in crate::commands::start) fn register_workspace_handlers(
         workspace_handlers::handle_archive,
         workspace_manager
     );
+    register_handler!(
+        server,
+        "workspace.unarchive",
+        workspace_handlers::handle_unarchive,
+        workspace_manager
+    );
     // Hand-wired (not the `register_handler!` macro) because the handler takes
     // an `Option<Arc<AgentRegistry>>` — the macro only threads required `Arc`s.
     {
@@ -81,6 +87,7 @@ pub(in crate::commands::start) fn register_workspace_handlers(
         println!("  - workspace.get       : Get workspace by ID");
         println!("  - workspace.update    : Update workspace metadata");
         println!("  - workspace.archive   : Archive (soft-delete) a workspace");
+        println!("  - workspace.unarchive : Restore an archived workspace");
         println!("  - channels.set_agent  : Bind or unbind an agent to a channel");
         println!("  - agents.bindings     : Get all agent->channel bindings");
         println!();

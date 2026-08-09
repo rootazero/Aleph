@@ -129,21 +129,35 @@ const ADMIN_PREFIXES: &[&str] = &[
     // caller (see `handlers/workspace.rs`, which still calls it as defense in
     // depth against partition-COMPOSED ids and says so at each site).
     //
-    // Gated whole, with no carve-out, because the family has exactly one
-    // client and it is already operator: `interfaces/cli/src/commands/
-    // workspace_cmd.rs` (`aleph workspace list|get|create|update|archive`),
-    // which reaches the server over loopback/IPC. The Panel has NONE —
-    // `interfaces/webchat/src/api/workspace.rs`'s own doc records that
-    // `workspace.list` was dead and removed. A `MEMBER_CARVE_OUTS` entry for
-    // the reads would therefore be a zero-consumer opening (R10 YAGNI), not a
-    // preserved capability.
+    // Gated whole, with no carve-out, because every client of this family is
+    // already an operator surface. There are two: `interfaces/cli/src/commands/
+    // workspace_cmd.rs` (`aleph workspace list|get|create|update|archive|
+    // unarchive`), reaching the server over loopback/IPC, and — since
+    // 2026-08-09 — the Panel's `/settings/workspaces` page. A
+    // `MEMBER_CARVE_OUTS` entry for the reads would therefore be a
+    // zero-consumer opening (R10 YAGNI), not a preserved capability.
+    //
+    // This used to read "The Panel has NONE", citing
+    // `interfaces/webchat/src/api/workspace.rs`'s own doc that `workspace.list`
+    // was dead and removed. True when written, false now. The ruling stands
+    // because what carries it was never the client COUNT but whether any of
+    // them is a member surface — and that page is not one. It renders for
+    // anybody, calls, and reports this gate's refusal through
+    // `components::admin_refusal` rather than showing a member an empty list;
+    // the Panel deliberately holds no client-side role predicate to hide itself
+    // with (see that module's doc for why pre-emptive hiding is the same gate
+    // under a new name).
     //
     // `get`/`update` had no client at all until 2026-08-08 and were listed here
     // as such; they were CONNECTed rather than CUT because `update` is the only
-    // edit verb a workspace has — `archive` is a soft delete that keeps the id
-    // taken, so without it a display name mistyped at `create` was permanent.
-    // Both arrived already inside this gate, which is why the ruling above did
-    // not have to be reopened.
+    // metadata edit a workspace has. `archive` is a soft delete that keeps the
+    // id taken — and that half did NOT change when `unarchive` landed
+    // (2026-08-09). A workspace id is also the directory name under
+    // `~/.aleph/agents/<id>/`, which holds that workspace's notes vault and
+    // memory partition, so a `create` that reclaimed an archived id would hand
+    // a brand-new workspace the previous one's memory. Both arrived already
+    // inside this gate, which is why the ruling above did not have to be
+    // reopened.
     //
     // NOT an owner column: that would build a permission model for per-user
     // workspaces, a capability no surface currently lets a member use. If that
@@ -397,16 +411,21 @@ mod tests {
             "agents.delete",
             "agents.set_default",
             // workspace. — the second face of the same `AgentEnvStore`
-            // (2026-08-08). All five are listed, not one representative:
+            // (2026-08-08). All six are listed, not one representative:
             // `update`/`archive` are the two the real-machine QA actually
             // exercised as a member, and `list` moved out of
             // `member_daily_methods_stay_open` in the same change, so a
             // regression that reopens any one of them should fail by name.
+            // The non-enumerating twin of this list — every `workspace.` method
+            // the handler registry knows about — is
+            // `handlers::tests::every_registered_workspace_method_is_admin_gated`,
+            // which is what actually catches a method added after today.
             "workspace.create",
             "workspace.list",
             "workspace.get",
             "workspace.update",
             "workspace.archive",
+            "workspace.unarchive",
             // providers. family
             "providers.create",
             "embedding_providers.add",
@@ -669,7 +688,14 @@ mod tests {
     /// fails with the QA finding in the test name.
     #[test]
     fn a_member_cannot_rename_or_archive_the_operators_workspace() {
-        for m in ["workspace.update", "workspace.archive"] {
+        for m in [
+            "workspace.update",
+            "workspace.archive",
+            // Not exercised by that QA because it did not exist yet, but it is
+            // the same verb class — a member who could reach it would be
+            // resurrecting a workspace the operator retired.
+            "workspace.unarchive",
+        ] {
             assert!(
                 method_requires_admin(m),
                 "{m} must be admin-gated — a member reached it in the 2026-08-08 QA"
@@ -682,8 +708,14 @@ mod tests {
     ///
     /// The asymmetry is deliberate and worth pinning: `agents.list`/`.get`
     /// have live member consumers (the Panel's persona roster), while every
-    /// `workspace.*` read has none — the CLI is the only client and it runs as
-    /// operator. Carving the reads open buys nothing.
+    /// `workspace.*` read has none. That used to be the same sentence as "the
+    /// CLI is the only client"; since 2026-08-09 there are two clients — the
+    /// CLI and the Panel's `/settings/workspaces` page — and the sentence
+    /// survives because BOTH are operator surfaces. A member opening that page
+    /// gets this refusal and the page says so out loud
+    /// (`components::admin_refusal`); it does not render an empty list, which
+    /// is the failure that module exists to prevent. Carving the reads open
+    /// still buys nothing.
     ///
     /// The original wording added that carving them open would "reopen
     /// `env_vars` / `system_prompt_override` / `allowed_tools` to every
@@ -704,6 +736,7 @@ mod tests {
             "workspace.get",
             "workspace.update",
             "workspace.archive",
+            "workspace.unarchive",
         ] {
             assert!(
                 method_requires_admin(m),

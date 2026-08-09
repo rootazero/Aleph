@@ -16,7 +16,7 @@ use super::super::protocol::{
     RESOURCE_NOT_FOUND,
 };
 use super::parse_params;
-use crate::gateway::agent_env::{AgentEnv, AgentEnvStore};
+use crate::gateway::agent_env::{AgentEnv, AgentEnvError, AgentEnvStore};
 use crate::gateway::agent_instance::AgentRegistry;
 use crate::gateway::event_bus::GatewayEventBus;
 use crate::sync_primitives::Arc;
@@ -81,6 +81,22 @@ fn row_of(ws: &AgentEnv) -> WorkspaceRow {
 // Create
 // ============================================================================
 
+/// The one wording `workspace.create` has for "that id is not available".
+///
+/// A function rather than the same `format!` at two call sites, because the two
+/// sites are required to agree **byte for byte**: [`handle_create`] refuses a
+/// partition-invisible id with this shape so the refusal is indistinguishable
+/// from a genuine collision, and two literals that merely look alike are one
+/// reword away from becoming an existence oracle. Built from the real
+/// [`AgentEnvError::AlreadyExists`] value for the same reason — the store's
+/// wording is not copied here, it is produced.
+fn id_taken(id: &str) -> String {
+    format!(
+        "Failed to create workspace: {}",
+        AgentEnvError::AlreadyExists(id.to_string())
+    )
+}
+
 /// Create a new workspace
 ///
 /// # Example Request
@@ -118,11 +134,19 @@ fn row_of(ws: &AgentEnv) -> WorkspaceRow {
 /// that made that the right fix rather than an owner column). The predicate
 /// stays because it is not vacuous for an operator either.
 ///
-/// The denial reuses this method's own "that id is not available" shape,
-/// produced from the REAL [`crate::gateway::agent_env::AgentEnvError::AlreadyExists`]
-/// value so it stays
+/// The denial reuses this method's own "that id is not available" shape
+/// ([`id_taken`]), produced from the REAL
+/// [`crate::gateway::agent_env::AgentEnvError::AlreadyExists`] value so it stays
 /// byte-identical to a genuine collision instead of hard-coding a copy of the
 /// store's wording.
+///
+/// Since 2026-08-09 a genuine collision has a second form: when the id is held
+/// by an **archived** workspace the message names [`handle_unarchive`], because
+/// "already exists" is true but unactionable and sends the operator off to pick
+/// a different id. The partition denial is unaffected — it returns above,
+/// without reading the store, so it always carries the plain shape and cannot
+/// become an existence oracle. `create_names_unarchive_when_the_id_is_held_by_
+/// an_archived_workspace` asserts both halves.
 pub async fn handle_create(
     request: JsonRpcRequest,
     workspace_manager: Arc<AgentEnvStore>,
@@ -133,14 +157,7 @@ pub async fn handle_create(
     };
 
     if !crate::gateway::visibility::partition_visible(&params.id) {
-        return JsonRpcResponse::error(
-            request.id,
-            INTERNAL_ERROR,
-            format!(
-                "Failed to create workspace: {}",
-                crate::gateway::agent_env::AgentEnvError::AlreadyExists(params.id.clone())
-            ),
-        );
+        return JsonRpcResponse::error(request.id, INTERNAL_ERROR, id_taken(&params.id));
     }
 
     match workspace_manager
@@ -148,21 +165,45 @@ pub async fn handle_create(
         .await
     {
         Ok(mut ws) => {
-            // Apply name and icon which create() doesn't accept directly
+            // `AgentEnvStore::create` takes neither name nor icon, so they are
+            // a second write.
             ws.name = params.name;
             ws.icon = params.icon.clone();
-
-            // Persist name/icon via update
-            if let Err(e) = workspace_manager
+            let persisted = workspace_manager
                 .update(&params.id, Some(&ws.name), None, params.icon.as_deref())
-                .await
-            {
-                tracing::warn!(
-                    workspace = %params.id,
-                    error = %e,
-                    "workspace.create: failed to persist name/icon after create"
-                );
-            }
+                .await;
+
+            // Answer with the row that is ON DISK, not the one just asked for.
+            //
+            // Until 2026-08-09 this returned the locally-mutated `ws`, which
+            // made the response a **statement of intent** wearing the shape of
+            // an observation: the write above only `warn!`s on failure, so a
+            // workspace whose name never persisted was reported back carrying
+            // that name, and the caller learned otherwise on their next `get`.
+            // That is the same "said ok, wrote nothing" shape `handle_update`
+            // and `AgentEnvStore::update` were fixed for a day earlier.
+            //
+            // It also silently answered a different question about time.
+            // `create` builds `created_at` from `Utc::now()` while the store
+            // persists `timestamp()` — whole seconds — so the response carried
+            // sub-second precision that no later read would ever reproduce.
+            //
+            // A failed read-back falls back to the constructed value: the row
+            // does exist (the INSERT succeeded), and refusing the whole call
+            // would be a worse lie than an imprecise success.
+            let ws = match (persisted, workspace_manager.get(&params.id).await) {
+                (Ok(_), Ok(Some(stored))) => stored,
+                (persisted, read_back) => {
+                    tracing::warn!(
+                        workspace = %params.id,
+                        persist_error = ?persisted.err(),
+                        read_back = ?read_back.map(|r| r.is_some()),
+                        "workspace.create: could not confirm the stored row; \
+                         answering with the requested values"
+                    );
+                    ws
+                }
+            };
 
             JsonRpcResponse::success(
                 request.id,
@@ -171,6 +212,38 @@ pub async fn handle_create(
                     "workspace": detail_of(&ws),
                 }),
             )
+        }
+        // Which collision is it? Both are "that id is not available", but only
+        // one of them has a way out, and `unarchive` is not guessable from the
+        // words "already exists" — an operator who archived this workspace
+        // yesterday would read the bare collision as "someone else has the
+        // name" and pick a different id, stranding the row they meant to reuse.
+        //
+        // The probe only ever upgrades a refusal that is ALREADY TRUE into a
+        // more specific one — the same shape [`handle_update`] uses — so a
+        // probe that cannot answer falls back to what it was refining rather
+        // than inventing something.
+        //
+        // Not an existence oracle: a partition-invisible id returns from the
+        // check above and never reaches the store, so it always gets the plain
+        // shape; and for an id the caller CAN see, `workspace.get` reports
+        // `is_archived` outright.
+        Err(AgentEnvError::AlreadyExists(taken)) => {
+            let archived = matches!(
+                workspace_manager.get_including_archived(&taken).await,
+                Ok(Some(ws)) if ws.is_archived
+            );
+            let message = if archived {
+                format!(
+                    "{} — it is archived, not gone. Restore it with \
+                     `workspace.unarchive`; an archived workspace keeps its id, \
+                     and its memory and notes are still on disk under that id.",
+                    id_taken(&taken)
+                )
+            } else {
+                id_taken(&taken)
+            };
+            JsonRpcResponse::error(request.id, INTERNAL_ERROR, message)
         }
         Err(e) => JsonRpcResponse::error(
             request.id,
@@ -476,6 +549,10 @@ pub async fn handle_update(
 /// most destructive verb in this file — an invisible id gets this method's
 /// OWN "not found" response, byte-identical to an id that does not exist, and
 /// the row is never archived.
+///
+/// Reversible since 2026-08-09: see [`handle_unarchive`]. What has NOT changed
+/// is that the id stays taken — `workspace.create` still refuses it (with a
+/// refusal that now names the way back).
 pub async fn handle_archive(
     request: JsonRpcRequest,
     workspace_manager: Arc<AgentEnvStore>,
@@ -503,6 +580,86 @@ pub async fn handle_archive(
             request.id,
             INTERNAL_ERROR,
             format!("Failed to archive workspace: {e}"),
+        ),
+    }
+}
+
+// ============================================================================
+// Unarchive
+// ============================================================================
+
+/// Restore an archived workspace — the inverse of [`handle_archive`].
+///
+/// # Example Request
+///
+/// ```json
+/// {"jsonrpc":"2.0","method":"workspace.unarchive","params":{"id":"crypto"},"id":1}
+/// ```
+///
+/// Takes [`WorkspaceRef`], the same param type as `get` and `archive`: it
+/// addresses the same thing, and a third struct would be a third place to
+/// drift.
+///
+/// # Why archive stopped being terminal
+///
+/// It was terminal by omission dressed as design. "Readable, not writable" is a
+/// sound rule for an archived row, but with no way back a single mistyped
+/// `workspace.archive` was permanent — and it is permanent in the expensive
+/// direction, because the id stays taken (`AgentEnvStore::create` is a plain
+/// INSERT against a primary key) so the operator cannot even start over under
+/// the same name. See [`crate::gateway::agent_env::AgentEnvStore::unarchive`]
+/// for why the id staying taken is the right half to keep.
+///
+/// # This one returns the workspace, unlike `archive`
+///
+/// Deliberate asymmetry, recorded here so it is not "fixed" into symmetry
+/// later. `archive`'s result is that the row left the default view — there is
+/// nothing useful left to show. This one's result IS a row, and a caller that
+/// has to re-read it with a follow-up `get` is racing anything else holding the
+/// store. The envelope is `update`'s, so a client already parsing that shape
+/// parses this one.
+///
+/// P1 partition isolation, same predicate and the same coverage boundary the
+/// rest of the family documents: an invisible id gets this method's OWN "not
+/// found" response, byte-identical to an id that does not exist, and the flag
+/// is never flipped.
+pub async fn handle_unarchive(
+    request: JsonRpcRequest,
+    workspace_manager: Arc<AgentEnvStore>,
+) -> JsonRpcResponse {
+    let params: WorkspaceRef = match parse_params(&request) {
+        Ok(p) => p,
+        Err(e) => return e,
+    };
+
+    let not_found = || {
+        JsonRpcResponse::error(
+            request.id.clone(),
+            RESOURCE_NOT_FOUND,
+            format!("Workspace '{}' not found", params.id),
+        )
+    };
+    if !crate::gateway::visibility::partition_visible(&params.id) {
+        return not_found();
+    }
+
+    match workspace_manager.unarchive(&params.id).await {
+        Ok(Some(ws)) => JsonRpcResponse::success(
+            request.id,
+            json!({
+                "ok": true,
+                "workspace": detail_of(&ws),
+            }),
+        ),
+        // Unambiguous, unlike `handle_update`'s `None`: the store's UPDATE
+        // carries no `archived` predicate, so this is "no such row" and nothing
+        // else. No follow-up probe — there is nothing to disambiguate, and a
+        // probe that cannot change the answer reads like one that can.
+        Ok(None) => not_found(),
+        Err(e) => JsonRpcResponse::error(
+            request.id,
+            INTERNAL_ERROR,
+            format!("Failed to unarchive workspace: {e}"),
         ),
     }
 }
@@ -1171,8 +1328,14 @@ mod tests {
     /// Failure here means someone went back to serializing the store type
     /// directly. Re-point the handler at `detail_of` / `row_of`; do not widen
     /// this assertion.
+    ///
+    /// Named `the_read_responses_…` until 2026-08-09, when `unarchive` joined
+    /// it: that one is a write whose response carries the same projection, and
+    /// a name that excluded it would have argued for leaving it uncovered.
+    /// `aleph_protocol::workspace`'s module doc points here by name — if this
+    /// is renamed again, that pointer moves in the same edit.
     #[tokio::test]
-    async fn the_read_responses_carry_the_contract_and_nothing_else() {
+    async fn the_workspace_responses_carry_the_contract_and_nothing_else() {
         use aleph_protocol::workspace::{WorkspaceEnvelope, WorkspaceList};
         use std::collections::BTreeSet;
 
@@ -1241,6 +1404,36 @@ mod tests {
             emitted,
             keys_of(&parsed.workspaces[0]),
             "workspace.list rows must emit the WorkspaceRow key set and nothing else"
+        );
+
+        // --- unarchive: a write, same projection, same rule ----------------
+        // It arrived after the `detail_of` refactor and so has never been able
+        // to serialize the store type — which is exactly why it is pinned
+        // here rather than trusted: the next projection to be added will also
+        // arrive correct, and this is the assertion that keeps it that way.
+        assert!(store.archive("crypto").await.unwrap());
+        let restored = handle_unarchive(
+            JsonRpcRequest::with_id(
+                "workspace.unarchive",
+                Some(json!({ "id": "crypto" })),
+                json!(3),
+            ),
+            store.clone(),
+        )
+        .await;
+        let restored = restored.result.expect("result");
+        let emitted: BTreeSet<String> = restored["workspace"]
+            .as_object()
+            .expect("workspace is an object")
+            .keys()
+            .cloned()
+            .collect();
+        let parsed: WorkspaceEnvelope =
+            serde_json::from_value(restored.clone()).expect("the contract must parse it");
+        assert_eq!(
+            emitted,
+            keys_of(&parsed.workspace),
+            "workspace.unarchive must emit the WorkspaceDetail key set and nothing else"
         );
 
         // The four dormant fields, named. The set assertions above already
@@ -1442,6 +1635,370 @@ mod tests {
         )
         .await;
         assert_eq!(typo.error.map(|e| e.code), Some(INVALID_PARAMS));
+    }
+
+    /// The round trip that makes `archive` reversible.
+    ///
+    /// [`an_archived_workspace_is_readable_but_not_writable`] pins the terminal
+    /// half; this pins the way out. The assertion that matters is the LAST one:
+    /// after `unarchive`, an `update` must land **in the store**. A handler that
+    /// reported a restored workspace while the row stayed archived would pass
+    /// every response-only check here, and the symptom in production would be a
+    /// rename that silently does nothing — `AgentEnvStore::update` filters
+    /// `archived = 0` — which is the exact shape the 2026-08-08 round was spent
+    /// removing.
+    #[tokio::test]
+    async fn an_archived_workspace_can_be_restored_and_edited_again() {
+        use aleph_protocol::workspace::WorkspaceEnvelope;
+
+        let temp = tempfile::tempdir().unwrap();
+        let store = Arc::new(
+            AgentEnvStore::new(crate::gateway::agent_env::AgentEnvStoreConfig {
+                db_path: temp.path().join("agent_envs.db"),
+                default_profile: "default".to_string(),
+            })
+            .expect("agent env store"),
+        );
+        store.load_profiles(std::collections::HashMap::new());
+        store.create("retired", "default", None).await.unwrap();
+        store
+            .update("retired", Some("Retired Project"), None, None)
+            .await
+            .unwrap();
+        assert!(store.archive("retired").await.unwrap());
+
+        let unarchive = |id: &str, rpc_id: i32| {
+            handle_unarchive(
+                JsonRpcRequest::with_id(
+                    "workspace.unarchive",
+                    Some(json!({ "id": id })),
+                    json!(rpc_id),
+                ),
+                store.clone(),
+            )
+        };
+
+        // --- the refusal that stood before this verb existed ---------------
+        let refused = handle_update(
+            JsonRpcRequest::with_id(
+                "workspace.update",
+                Some(json!({ "id": "retired", "name": "renamed-while-archived" })),
+                json!(1),
+            ),
+            store.clone(),
+        )
+        .await;
+        assert_eq!(
+            refused.error.as_ref().map(|e| e.code),
+            Some(PERMISSION_DENIED),
+            "the archived row must still refuse edits — unarchive is the way \
+             back, not a looser update"
+        );
+
+        // --- restore, and read the restored row out of the response --------
+        let restored = unarchive("retired", 2).await;
+        let envelope: WorkspaceEnvelope = serde_json::from_value(
+            restored
+                .result
+                .expect("unarchive must return the restored workspace"),
+        )
+        .expect("the same projection `get`/`update` use must parse it");
+        assert!(
+            !envelope.workspace.is_archived,
+            "the response must show the state it just produced"
+        );
+        assert_eq!(
+            envelope.workspace.name, "Retired Project",
+            "unarchive restores the row, it does not reset it"
+        );
+
+        // --- and the store agrees ------------------------------------------
+        assert!(
+            store
+                .get("retired")
+                .await
+                .unwrap()
+                .is_some_and(|ws| !ws.is_archived),
+            "`get` filters archived rows, so reaching one through it IS the \
+             proof the flag came off"
+        );
+
+        // --- THE assertion: writable again ---------------------------------
+        let applied = handle_update(
+            JsonRpcRequest::with_id(
+                "workspace.update",
+                Some(json!({ "id": "retired", "name": "Back In Service" })),
+                json!(3),
+            ),
+            store.clone(),
+        )
+        .await;
+        assert!(applied.is_success(), "{:?}", applied.error);
+        assert_eq!(
+            store.get("retired").await.unwrap().unwrap().name,
+            "Back In Service",
+            "the edit has to reach the row — a response that says `ok` while \
+             the write is filtered away is the bug this verb exists to end"
+        );
+
+        // --- idempotent, and honest about a missing id ---------------------
+        assert!(
+            unarchive("retired", 4).await.is_success(),
+            "unarchiving a live row promises `this workspace is active`, and \
+             that postcondition already holds"
+        );
+        assert_eq!(
+            unarchive("never-existed", 5)
+                .await
+                .error
+                .as_ref()
+                .map(|e| e.code),
+            Some(RESOURCE_NOT_FOUND),
+        );
+    }
+
+    /// `workspace.create` answers with the row that is on disk.
+    ///
+    /// It used to answer with a locally-mutated copy of what the caller asked
+    /// for — a statement of intent wearing the shape of an observation. Two
+    /// things were wrong with that, and the second is what made it visible:
+    ///
+    /// 1. `create` cannot set name or icon, so those are a **second** write,
+    ///    and that write only `warn!`s on failure. A workspace whose name never
+    ///    persisted was reported back carrying that name.
+    /// 2. `create` built `created_at` from `Utc::now()` while the store
+    ///    persists whole seconds, so the response carried a precision no later
+    ///    read could reproduce — the create response and every subsequent `get`
+    ///    disagreed about when the workspace was created. That is what a
+    ///    2026-08-09 real-machine QA saw on the wire.
+    ///
+    /// Asserting **full struct equality** against `handle_get` rather than
+    /// field-by-field: the property is "these are the same row", and a field
+    /// list is the enumeration mistake — it would have missed `created_at`
+    /// exactly the way every reader of this code missed it.
+    #[tokio::test]
+    async fn create_answers_with_the_stored_row_not_the_requested_one() {
+        use aleph_protocol::workspace::WorkspaceEnvelope;
+
+        let temp = tempfile::tempdir().unwrap();
+        let store = Arc::new(
+            AgentEnvStore::new(crate::gateway::agent_env::AgentEnvStoreConfig {
+                db_path: temp.path().join("agent_envs.db"),
+                default_profile: "default".to_string(),
+            })
+            .expect("agent env store"),
+        );
+        store.load_profiles(std::collections::HashMap::new());
+
+        let unwrap = |resp: JsonRpcResponse| -> WorkspaceDetail {
+            serde_json::from_value::<WorkspaceEnvelope>(resp.result.expect("result"))
+                .expect("projection")
+                .workspace
+        };
+
+        let created = unwrap(
+            handle_create(
+                JsonRpcRequest::with_id(
+                    "workspace.create",
+                    Some(json!({
+                        "id": "crypto",
+                        "name": "Crypto Trading",
+                        "description": "trading notes",
+                        "icon": "\u{1F4B0}",
+                    })),
+                    json!(1),
+                ),
+                store.clone(),
+            )
+            .await,
+        );
+        let fetched = unwrap(
+            handle_get(
+                JsonRpcRequest::with_id("workspace.get", Some(json!({ "id": "crypto" })), json!(2)),
+                store.clone(),
+            )
+            .await,
+        );
+
+        assert_eq!(
+            created, fetched,
+            "the create response must BE the stored row, not a description of \
+             the request that produced it"
+        );
+        // Not a false positive: the values asked for did reach the store, so
+        // this is not two identical wrongs agreeing with each other.
+        assert_eq!(created.name, "Crypto Trading");
+        assert_eq!(created.icon.as_deref(), Some("\u{1F4B0}"));
+        assert_eq!(created.description.as_deref(), Some("trading notes"));
+    }
+
+    /// The partition half, and the half that has to be asserted on the STORE:
+    /// a refused unarchive must not flip the flag.
+    ///
+    /// Same shape as the `archive` case in
+    /// [`the_workspace_writes_deny_a_foreign_partition_composed_id`] — the id
+    /// is held fixed and the STORE STATE is what varies between the two calls,
+    /// so what the comparison isolates is existence and nothing else.
+    #[tokio::test]
+    async fn a_denied_unarchive_neither_restores_the_row_nor_reveals_it() {
+        use crate::gateway::caller_identity::CALLER_USER;
+
+        let temp = tempfile::tempdir().unwrap();
+        let store = Arc::new(
+            AgentEnvStore::new(crate::gateway::agent_env::AgentEnvStoreConfig {
+                db_path: temp.path().join("agent_envs.db"),
+                default_profile: "default".to_string(),
+            })
+            .expect("agent env store"),
+        );
+        store.load_profiles(std::collections::HashMap::new());
+
+        let as_bob = |rpc_id: i32| {
+            CALLER_USER.scope(
+                Some("u-bob".to_string()),
+                handle_unarchive(
+                    JsonRpcRequest::with_id(
+                        "workspace.unarchive",
+                        Some(json!({ "id": "main__u-alice" })),
+                        json!(rpc_id),
+                    ),
+                    store.clone(),
+                ),
+            )
+        };
+
+        let never_created = as_bob(1).await;
+        store
+            .create("main__u-alice", "default", None)
+            .await
+            .unwrap();
+        assert!(store.archive("main__u-alice").await.unwrap());
+        let now_exists = as_bob(1).await;
+
+        assert_eq!(
+            serde_json::to_string(&never_created).unwrap(),
+            serde_json::to_string(&now_exists).unwrap(),
+            "the refusal must not tell bob whether alice's workspace exists"
+        );
+        assert_eq!(
+            now_exists.error.as_ref().map(|e| e.code),
+            Some(RESOURCE_NOT_FOUND)
+        );
+        assert!(
+            store
+                .get_including_archived("main__u-alice")
+                .await
+                .unwrap()
+                .expect("the row is still there")
+                .is_archived,
+            "a denied unarchive must not resurrect the foreign workspace — \
+             this assertion is the test; the response above is only half of it"
+        );
+    }
+
+    /// `create` against an archived id names the way back.
+    ///
+    /// Without this the operator who archived `crypto` yesterday reads
+    /// "already exists" as "someone else has that name", picks `crypto-2`, and
+    /// strands the row they meant to reuse — along with the notes and memory
+    /// still on disk under the old id. The system knows which collision it is;
+    /// this makes it say so.
+    ///
+    /// The other two assertions are the guard rail. A LIVE collision and the
+    /// partition-invisible refusal must stay **byte-identical to each other**,
+    /// because that identity is what stops `create` from being an existence
+    /// oracle. Widening the archived branch to fire on live rows — the obvious
+    /// way to get this wrong — breaks the second assertion.
+    #[tokio::test]
+    async fn create_names_unarchive_when_the_id_is_held_by_an_archived_workspace() {
+        use crate::gateway::caller_identity::CALLER_USER;
+
+        let temp = tempfile::tempdir().unwrap();
+        let store = Arc::new(
+            AgentEnvStore::new(crate::gateway::agent_env::AgentEnvStoreConfig {
+                db_path: temp.path().join("agent_envs.db"),
+                default_profile: "default".to_string(),
+            })
+            .expect("agent env store"),
+        );
+        store.load_profiles(std::collections::HashMap::new());
+        let create = |id: &str| {
+            handle_create(
+                JsonRpcRequest::with_id(
+                    "workspace.create",
+                    Some(json!({ "id": id, "name": id })),
+                    json!(1),
+                ),
+                store.clone(),
+            )
+        };
+        let message = |resp: &JsonRpcResponse| {
+            resp.error
+                .as_ref()
+                .map(|e| e.message.clone())
+                .expect("a collision is an error")
+        };
+
+        // --- archived: the refusal has to be actionable --------------------
+        store.create("retired", "default", None).await.unwrap();
+        assert!(store.archive("retired").await.unwrap());
+        let archived_collision = message(&create("retired").await);
+        assert!(
+            archived_collision.contains("unarchive"),
+            "the refusal must name the verb that undoes this: {archived_collision}"
+        );
+        assert!(
+            archived_collision.contains("archived"),
+            "…and say why the id is unavailable: {archived_collision}"
+        );
+
+        // --- live: unchanged, and the partition refusal still matches it ---
+        store.create("live", "default", None).await.unwrap();
+        let live_collision = message(&create("live").await);
+        assert!(
+            !live_collision.contains("unarchive"),
+            "a live workspace has no way back to offer: {live_collision}"
+        );
+
+        let denied = CALLER_USER
+            .scope(
+                Some("u-bob".to_string()),
+                handle_create(
+                    JsonRpcRequest::with_id(
+                        "workspace.create",
+                        Some(json!({ "id": "live", "name": "planted" })),
+                        json!(1),
+                    ),
+                    store.clone(),
+                ),
+            )
+            .await;
+        // `live` is not partition-composed, so bob passes the predicate and
+        // gets the genuine collision. The invisible case is the one that must
+        // match it — same id, so the message is comparable.
+        let invisible = CALLER_USER
+            .scope(
+                Some("u-bob".to_string()),
+                handle_create(
+                    JsonRpcRequest::with_id(
+                        "workspace.create",
+                        Some(json!({ "id": "main__u-alice", "name": "planted" })),
+                        json!(1),
+                    ),
+                    store.clone(),
+                ),
+            )
+            .await;
+        assert_eq!(
+            message(&denied),
+            live_collision,
+            "an ordinary collision must read the same for every caller"
+        );
+        assert_eq!(
+            message(&invisible),
+            id_taken("main__u-alice"),
+            "the partition refusal is the collision shape, produced not copied"
+        );
     }
 
     #[test]
