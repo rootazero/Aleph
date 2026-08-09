@@ -4,8 +4,6 @@
 //! All capabilities are `Option`-wrapped: `None` means the capability
 //! is not granted (default-deny).
 
-use std::collections::HashMap;
-
 use serde::{Deserialize, Serialize};
 
 /// Top-level capability declaration for a WASM plugin.
@@ -15,7 +13,6 @@ use serde::{Deserialize, Serialize};
 pub struct WasmCapabilities {
     pub workspace: Option<WorkspaceCapability>,
     pub http: Option<HttpCapability>,
-    pub tool_invoke: Option<ToolInvokeCapability>,
     pub secrets: Option<SecretsCapability>,
 }
 
@@ -165,19 +162,6 @@ pub struct RateLimit {
     pub requests_per_hour: u32,
 }
 
-/// Grants the ability to invoke other Aleph tools.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ToolInvokeCapability {
-    #[serde(default)]
-    pub aliases: HashMap<String, String>,
-    #[serde(default = "default_max_per_execution")]
-    pub max_per_execution: u32,
-}
-
-const fn default_max_per_execution() -> u32 {
-    20
-}
-
 /// Grants access to named secrets matching specific patterns.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SecretsCapability {
@@ -216,7 +200,6 @@ mod tests {
         let caps = WasmCapabilities::default();
         assert!(caps.workspace.is_none());
         assert!(caps.http.is_none());
-        assert!(caps.tool_invoke.is_none());
         assert!(caps.secrets.is_none());
     }
 

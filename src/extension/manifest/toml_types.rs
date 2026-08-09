@@ -14,7 +14,7 @@ use crate::extension::manifest::types::{AuthorInfo, ConfigUiHint, PluginManifest
 use crate::extension::manifest::{sanitize_plugin_id, validate_plugin_id};
 use crate::extension::runtime::wasm::{
     CredentialBinding, CredentialInject, EndpointPattern, HttpCapability, RateLimit,
-    SecretsCapability, ToolInvokeCapability, WasmCapabilities, WorkspaceCapability,
+    SecretsCapability, WasmCapabilities, WorkspaceCapability,
 };
 use crate::extension::types::PluginKind;
 use crate::memory::extensions::manifest::MemoryManifestSection;
@@ -258,8 +258,6 @@ pub struct CapabilitiesSection {
     #[serde(default)]
     pub http: Option<WasmHttpToml>,
     #[serde(default)]
-    pub tool_invoke: Option<WasmToolInvokeToml>,
-    #[serde(default)]
     pub secrets: Option<WasmSecretsToml>,
 }
 
@@ -349,18 +347,6 @@ pub struct WasmRateLimitToml {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct WasmToolInvokeToml {
-    #[serde(default)]
-    pub aliases: HashMap<String, String>,
-    #[serde(default = "default_toml_max_per_execution")]
-    pub max_per_execution: u32,
-}
-
-const fn default_toml_max_per_execution() -> u32 {
-    20
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WasmSecretsToml {
     #[serde(default)]
     pub allowed_patterns: Vec<String>,
@@ -373,11 +359,7 @@ pub struct WasmSecretsToml {
 /// Convert TOML capabilities section to runtime `WasmCapabilities`
 #[must_use]
 pub fn convert_wasm_capabilities(caps: &CapabilitiesSection) -> Option<WasmCapabilities> {
-    if caps.workspace.is_none()
-        && caps.http.is_none()
-        && caps.tool_invoke.is_none()
-        && caps.secrets.is_none()
-    {
+    if caps.workspace.is_none() && caps.http.is_none() && caps.secrets.is_none() {
         return None;
     }
 
@@ -411,10 +393,6 @@ pub fn convert_wasm_capabilities(caps: &CapabilitiesSection) -> Option<WasmCapab
             timeout_secs: h.timeout_secs,
             max_request_bytes: h.max_request_bytes,
             max_response_bytes: h.max_response_bytes,
-        }),
-        tool_invoke: caps.tool_invoke.as_ref().map(|t| ToolInvokeCapability {
-            aliases: t.aliases.clone(),
-            max_per_execution: t.max_per_execution,
         }),
         secrets: caps.secrets.as_ref().map(|s| SecretsCapability {
             allowed_patterns: s.allowed_patterns.clone(),

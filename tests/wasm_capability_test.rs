@@ -31,7 +31,6 @@ mod tests {
                 max_request_bytes: 1_048_576,
                 max_response_bytes: 10_485_760,
             }),
-            tool_invoke: None,
             secrets: None,
         };
 
@@ -50,10 +49,7 @@ mod tests {
         // 4. Workspace read — denied (traversal)
         assert!(kernel.check_workspace_read("data/../secrets/key").is_err());
 
-        // 5. Tool invoke — denied (not declared)
-        assert!(kernel.resolve_tool_alias("anything").is_err());
-
-        // 6. Log — works (always allowed)
+        // 5. Log — works (always allowed)
         assert!(kernel.log("info", "test message").is_ok());
 
         // 7. Clock — works (always allowed)
@@ -64,7 +60,6 @@ mod tests {
     fn test_resource_limits_enforcement() {
         let limits = WasmResourceLimits {
             max_http_calls: 3,
-            max_tool_invokes: 2,
             max_log_entries: 5,
             ..Default::default()
         };
@@ -80,11 +75,6 @@ mod tests {
         assert!(kernel.check_http_limit().is_ok());
         assert!(kernel.check_http_limit().is_ok());
         assert!(kernel.check_http_limit().is_err()); // 4th call exceeds limit
-
-        // Tool invoke limits
-        assert!(kernel.check_tool_invoke_limit().is_ok());
-        assert!(kernel.check_tool_invoke_limit().is_ok());
-        assert!(kernel.check_tool_invoke_limit().is_err()); // 3rd call exceeds limit
 
         // Log limits
         for i in 0..5 {
@@ -121,7 +111,6 @@ mod tests {
         // Everything should be denied
         assert!(kernel.check_workspace_read("anything").is_err());
         assert!(!kernel.check_secret_pattern("anything"));
-        assert!(kernel.resolve_tool_alias("anything").is_err());
 
         // But log and clock always work (no capability needed)
         assert!(kernel.log("info", "still works").is_ok());

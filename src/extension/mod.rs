@@ -23,8 +23,6 @@
 //!                       (unified hooks)
 //! ```
 
-pub mod config;
-pub mod discovery;
 pub mod hooks;
 mod loader;
 pub mod marketplace;
@@ -61,15 +59,11 @@ pub use service_manager::ServiceManager;
 pub use template::SkillTemplate;
 pub use types::*;
 
-// Re-export config types
-pub use config::{AlephConfig, ConfigManager};
-
 // Re-export marketplace types
 pub use marketplace::types::{MarketplaceConfig, MarketplaceSourceType};
 
 // Re-export new plugin system types (Phase 1)
 pub use capability::{CapabilityDeclaration, CapabilitySource, SourceFormat, Tier};
-pub use discovery::{discover_all, DiscoveryConfig as PluginDiscoveryConfig, PluginCandidate};
 pub use manifest::PluginManifest;
 pub use registrar::CapabilityApi;
 pub use registry::{HookRegistration, PluginRegistry, ToolRegistration};
@@ -84,7 +78,6 @@ use hooks::{HookExecutor, ShellHookConsent};
 use manifest::adapter::AdapterRegistry;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use std::time::Instant;
 use tokio::sync::{Mutex, RwLock};
 use watcher::{ExtensionChangeEvent, ExtensionChangeType, ExtensionWatcher, InternalWriteTracker};
 
@@ -97,8 +90,6 @@ use watcher::{ExtensionChangeEvent, ExtensionChangeType, ExtensionWatcher, Inter
 struct CacheState {
     /// Whether components have been loaded
     loaded: bool,
-    /// When components were loaded (for potential expiration)
-    loaded_at: Option<Instant>,
 }
 
 /// Extension system configuration
@@ -106,16 +97,12 @@ struct CacheState {
 pub struct ExtensionConfig {
     /// Discovery configuration
     pub discovery: DiscoveryConfig,
-
-    /// Whether to auto-load extensions on startup
-    pub auto_load: bool,
 }
 
 impl Default for ExtensionConfig {
     fn default() -> Self {
         Self {
             discovery: DiscoveryConfig::default(),
-            auto_load: true,
         }
     }
 }
@@ -124,9 +111,6 @@ impl Default for ExtensionConfig {
 pub struct ExtensionManager {
     /// Discovery manager
     discovery: DiscoveryManager,
-
-    /// Config manager (aleph.jsonc)
-    config_manager: ConfigManager,
 
     /// Hook executor
     hook_executor: Arc<RwLock<HookExecutor>>,
@@ -264,7 +248,6 @@ impl ExtensionManager {
     /// Create a new extension manager
     pub async fn new(config: ExtensionConfig) -> ExtensionResult<Self> {
         let discovery = DiscoveryManager::new(config.discovery.clone())?;
-        let config_manager = ConfigManager::new(&discovery).await?;
         let hook_executor = Arc::new(RwLock::new(
             HookExecutor::empty().with_consent(ShellHookConsent::shared()),
         ));
@@ -276,7 +259,6 @@ impl ExtensionManager {
 
         Ok(Self {
             discovery,
-            config_manager,
             hook_executor,
             cache_state,
             plugin_loader,
@@ -634,7 +616,6 @@ impl ExtensionManager {
 
         let mut cache = self.cache_state.write().await;
         cache.loaded = true;
-        cache.loaded_at = Some(Instant::now());
 
         tracing::info!(
             "Extension loading complete: {} skills, {} agents, {} plugins, {} hooks",
@@ -686,7 +667,6 @@ impl ExtensionManager {
         {
             let mut state = self.cache_state.write().await;
             state.loaded = false;
-            state.loaded_at = None;
         }
 
         // Reset hook executor (registry.clear() is called inside load_all)

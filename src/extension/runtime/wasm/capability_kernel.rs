@@ -51,7 +51,6 @@ pub struct WasmCapabilityKernel {
     limits: WasmResourceLimits,
     log_count: AtomicU32,
     http_call_count: AtomicU32,
-    tool_invoke_count: AtomicU32,
     /// Monotonic millis timestamps of recent HTTP calls, for sliding-window
     /// rate limiting. Pruned to the last hour on each `check_rate_limit`.
     http_timestamps: Mutex<Vec<u64>>,
@@ -77,7 +76,6 @@ impl WasmCapabilityKernel {
             limits,
             log_count: AtomicU32::new(0),
             http_call_count: AtomicU32::new(0),
-            tool_invoke_count: AtomicU32::new(0),
             http_timestamps: Mutex::new(Vec::new()),
             secret_resolver: Arc::new(DenyAllSecretResolver),
         }
@@ -258,29 +256,6 @@ impl WasmCapabilityKernel {
     #[must_use]
     pub fn http_config(&self) -> Option<&HttpCapability> {
         self.capabilities.http.as_ref()
-    }
-
-    pub fn check_tool_invoke_limit(&self) -> Result<(), CapabilityError> {
-        let prev = self.tool_invoke_count.fetch_add(1, Ordering::SeqCst);
-        if prev >= self.limits.max_tool_invokes {
-            self.tool_invoke_count.fetch_sub(1, Ordering::SeqCst);
-            return Err(CapabilityError::ResourceExhausted(
-                "tool invoke limit exceeded".to_string(),
-            ));
-        }
-        Ok(())
-    }
-
-    pub fn resolve_tool_alias(&self, alias: &str) -> Result<String, CapabilityError> {
-        let ti = self
-            .capabilities
-            .tool_invoke
-            .as_ref()
-            .ok_or_else(|| CapabilityError::NotDeclared("tool_invoke".to_string()))?;
-        ti.aliases
-            .get(alias)
-            .cloned()
-            .ok_or_else(|| CapabilityError::NotAllowed(format!("unknown tool alias: {alias}")))
     }
 
     pub fn plugin_id(&self) -> &str {

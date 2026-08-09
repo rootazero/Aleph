@@ -214,7 +214,6 @@ pub fn parse_cc_plugin_toml_content(
                 || aleph.capabilities.dynamic_hooks
                 || aleph.capabilities.workspace.is_some()
                 || aleph.capabilities.http.is_some()
-                || aleph.capabilities.tool_invoke.is_some()
                 || aleph.capabilities.secrets.is_some()
             {
                 Some(aleph.capabilities)

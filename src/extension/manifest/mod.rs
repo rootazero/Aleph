@@ -66,15 +66,9 @@ pub use config_validation::{
     UiHintReport,
 };
 
-// Re-export legacy types for backward compatibility with loader
-pub use self::legacy::{
-    parse_plugin_manifest, LegacyPluginManifest, PluginAuthor, PluginRepository,
-};
-
 use crate::extension::error::{ExtensionError, ExtensionResult};
 use crate::extension::types::PluginKind;
-use serde::{Deserialize, Serialize};
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 // =============================================================================
 // Plugin ID Utilities
@@ -143,77 +137,6 @@ pub fn validate_plugin_id(id: &str) -> Result<(), String> {
 pub fn validate_plugin_name(name: &str) -> ExtensionResult<()> {
     validate_plugin_id(name).map_err(|reason| ExtensionError::invalid_plugin_name(name, reason))
 }
-
-// =============================================================================
-// Legacy Plugin Manifest Types
-// =============================================================================
-
-/// Module containing legacy plugin manifest types for .claude-plugin/plugin.json format
-pub mod legacy {
-    use super::{Deserialize, ExtensionError, ExtensionResult, Path, PathBuf, Serialize};
-
-    #[derive(Debug, Clone, Serialize, Deserialize)]
-    pub struct LegacyPluginManifest {
-        pub name: String,
-        #[serde(default)]
-        pub version: Option<String>,
-        #[serde(default)]
-        pub description: Option<String>,
-        #[serde(default)]
-        pub author: Option<PluginAuthor>,
-        #[serde(default)]
-        pub homepage: Option<String>,
-        #[serde(default)]
-        pub repository: Option<PluginRepository>,
-        #[serde(default)]
-        pub license: Option<String>,
-        #[serde(default)]
-        pub keywords: Option<Vec<String>>,
-        #[serde(default)]
-        pub commands: Option<PathBuf>,
-        #[serde(default)]
-        pub skills: Option<PathBuf>,
-        #[serde(default)]
-        pub agents: Option<PathBuf>,
-        #[serde(default)]
-        pub hooks: Option<PathBuf>,
-        #[serde(rename = "mcpServers", default)]
-        pub mcp_servers: Option<PathBuf>,
-    }
-
-    #[derive(Debug, Clone, Serialize, Deserialize)]
-    pub struct PluginAuthor {
-        pub name: String,
-        #[serde(default)]
-        pub email: Option<String>,
-        #[serde(default)]
-        pub url: Option<String>,
-    }
-
-    #[derive(Debug, Clone, Serialize, Deserialize)]
-    #[serde(untagged)]
-    pub enum PluginRepository {
-        Url(String),
-        Detailed {
-            #[serde(rename = "type", default)]
-            repo_type: Option<String>,
-            url: String,
-        },
-    }
-
-    pub async fn parse_plugin_manifest(path: &Path) -> ExtensionResult<LegacyPluginManifest> {
-        let content = tokio::fs::read_to_string(path).await?;
-        let manifest: LegacyPluginManifest = serde_json::from_str(&content).map_err(|e| {
-            ExtensionError::invalid_manifest(path, format!("JSON parse error: {e}"))
-        })?;
-        if manifest.name.is_empty() {
-            return Err(ExtensionError::missing_field(path, "name"));
-        }
-        Ok(manifest)
-    }
-}
-
-pub use legacy::LegacyPluginManifest as PluginManifestLegacy;
 
 // =============================================================================
 // Manifest File Names

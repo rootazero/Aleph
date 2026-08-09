@@ -416,7 +416,24 @@ pub struct HookConfig {
 /// - [`McpServerConfig::Remote`] — an HTTP/SSE endpoint that speaks MCP's
 ///   Streamable HTTP / SSE wire format. Lets a plugin connect to a hosted MCP
 ///   server without spawning a child process.
+
+/// OAuth configuration for a remote MCP server.
 ///
+/// Relocated from the removed `extension::config` island — the only remaining
+/// consumer is `McpServerConfig::Remote.oauth`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct OAuthConfig {
+    /// Client ID
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub client_id: Option<String>,
+    /// Client secret
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub client_secret: Option<String>,
+    /// Scopes
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub scope: Option<String>,
+}
+
 /// The `#[serde(tag = "type")]` shape means manifests / configs declare the
 /// transport explicitly: `{ "type": "stdio", "command": [...] }` or
 /// `{ "type": "remote", "url": "https://mcp.example.com/api" }`. A bare
@@ -447,7 +464,7 @@ pub enum McpServerConfig {
         headers: HashMap<String, String>,
         /// OAuth credentials for the remote server
         #[serde(default, skip_serializing_if = "Option::is_none")]
-        oauth: Option<crate::extension::config::OAuthConfig>,
+        oauth: Option<OAuthConfig>,
         /// Per-request timeout in milliseconds
         #[serde(default, skip_serializing_if = "Option::is_none")]
         timeout_ms: Option<u64>,

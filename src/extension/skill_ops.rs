@@ -1,11 +1,8 @@
 //! Skill, command, and agent query/execution operations for `ExtensionManager`
 
-use std::collections::HashMap;
-
-use crate::extension::config;
 use crate::extension::error::{ExtensionError, ExtensionResult};
 use crate::extension::types::{
-    ExtensionAgent, ExtensionCommand, ExtensionSkill, McpServerConfig, SkillToolResult, SkillType,
+    ExtensionAgent, ExtensionCommand, ExtensionSkill, SkillToolResult, SkillType,
 };
 
 use super::ExtensionManager;
@@ -162,73 +159,6 @@ impl ExtensionManager {
         self.hook_executor.read().await.clone()
     }
 
-    // ── Configuration Access ──────────────────────────────────────────────────
-
-    /// Get all MCP server configurations from config
-    ///
-    /// Both local stdio and remote HTTP/SSE transports are returned in their
-    /// unified [`McpServerConfig`] shape — `PluginLoader::load_mcp_plugin`
-    /// dispatches on the variant when starting the server. A disabled
-    /// server (`enabled = false`) is dropped here so it never reaches the
-    /// loader.
-    pub async fn get_mcp_servers(&self) -> HashMap<String, McpServerConfig> {
-        let mut servers = HashMap::new();
-
-        if let Some(mcp) = self.config_manager.get_mcp_servers() {
-            for (name, cfg) in mcp {
-                match cfg {
-                    config::McpConfig::Local {
-                        command,
-                        environment,
-                        enabled,
-                        ..
-                    } => {
-                        if !enabled {
-                            continue;
-                        }
-                        let cmd = command.first().cloned().unwrap_or_default();
-                        let args = command.get(1..).unwrap_or(&[]).to_vec();
-                        servers.insert(
-                            name.clone(),
-                            McpServerConfig::Stdio {
-                                command: cmd,
-                                args,
-                                env: environment.clone(),
-                            },
-                        );
-                    }
-                    config::McpConfig::Remote {
-                        url,
-                        enabled,
-                        headers,
-                        oauth,
-                        timeout,
-                    } => {
-                        if !enabled {
-                            continue;
-                        }
-                        servers.insert(
-                            name.clone(),
-                            McpServerConfig::Remote {
-                                url: url.clone(),
-                                headers: headers.clone(),
-                                oauth: oauth.clone(),
-                                timeout_ms: *timeout,
-                            },
-                        );
-                    }
-                }
-            }
-        }
-
-        servers
-    }
-
-    /// Get the merged configuration
-    pub fn get_config(&self) -> &super::AlephConfig {
-        self.config_manager.get_config()
-    }
-
     /// Get the discovery manager
     pub const fn discovery(&self) -> &crate::discovery::DiscoveryManager {
         &self.discovery
@@ -237,31 +167,6 @@ impl ExtensionManager {
     /// Get the Aleph home directory
     pub fn aleph_home(&self) -> ExtensionResult<std::path::PathBuf> {
         Ok(self.discovery.aleph_home()?)
-    }
-
-    /// Get the default model from configuration
-    pub fn get_default_model(&self) -> Option<&str> {
-        self.config_manager.get_config().model.as_deref()
-    }
-
-    /// Get the small/fast model from configuration
-    pub fn get_small_model(&self) -> Option<&str> {
-        self.config_manager.get_config().small_model.as_deref()
-    }
-
-    /// Get the default agent from configuration
-    pub fn get_default_agent(&self) -> Option<&str> {
-        self.config_manager.get_config().default_agent.as_deref()
-    }
-
-    /// Get all custom instructions
-    pub fn get_instructions(&self) -> Vec<&str> {
-        self.config_manager
-            .get_config()
-            .instructions
-            .as_ref()
-            .map(|v| v.iter().map(|s| s.as_str()).collect())
-            .unwrap_or_default()
     }
 
     /// Get the Skill System v2 instance.
