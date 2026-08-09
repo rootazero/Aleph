@@ -157,7 +157,38 @@ where
             .persist_run_task_started(&run_id, &request, &agent)
             .await;
 
-        // Emit run accepted event
+        // Log lifecycle event: agent started
+        info!(
+            event_type = "agent.lifecycle.started",
+            agent_id = %agent.id(),
+            run_id = %run_id,
+            "Agent execution started"
+        );
+
+        // Ensure session exists in memory + SQLite before adding messages.
+        // Scoped: the CREATE branch stamps `owner_user_id`/`scope_id` from the
+        // ambient scope, which no producer still has by here (they all spawn).
+        // See `run_loop::ensure_session_under_request_scope`.
+        super::run_loop::ensure_session_under_request_scope(&agent, &request).await;
+
+        // Emit run accepted event — AFTER the row above exists, and this order
+        // is load-bearing rather than tidy. `RunAccepted` classifies as
+        // `SessionIdentity::BySessionKey`, so the delivery filter resolves it
+        // by reading that row; emitted before the CREATE it lost the race and
+        // was denied (correctly, and the denial is deliberately not cached —
+        // `event_visibility.rs::an_absent_session_row_is_transient_not_a_cached_denial`).
+        // But this is also the ONE frame carrying `{run_id, session_key}`: it
+        // seeds `EventVisibilityIndex`'s run→session index, and the Panel binds
+        // run→conversation on it alone (`chat/events.rs::resolve_target` drops
+        // any other frame whose run id it cannot look up). Losing it therefore
+        // did not cost one frame — it silently voided the ENTIRE first turn of
+        // every new conversation on every client, operator included: chunks and
+        // traces arrived and were dropped unrendered, and the reply only
+        // appeared after a reload re-read the transcript (2026-08-09
+        // real-machine QA). Re-emitting later cannot repair it either; the
+        // Panel starts an assistant bubble on this frame, so a duplicate leaves
+        // an empty one behind. Same reasoning as the republish below — one row,
+        // two things that could not resolve without it.
         if let Err(e) = emitter
             .emit(StreamEvent::RunAccepted {
                 run_id: run_id.clone(),
@@ -173,20 +204,6 @@ where
                 "failed to emit RunAccepted stream event"
             );
         }
-
-        // Log lifecycle event: agent started
-        info!(
-            event_type = "agent.lifecycle.started",
-            agent_id = %agent.id(),
-            run_id = %run_id,
-            "Agent execution started"
-        );
-
-        // Ensure session exists in memory + SQLite before adding messages.
-        // Scoped: the CREATE branch stamps `owner_user_id`/`scope_id` from the
-        // ambient scope, which no producer still has by here (they all spawn).
-        // See `run_loop::ensure_session_under_request_scope`.
-        super::run_loop::ensure_session_under_request_scope(&agent, &request).await;
 
         // The claim broadcast inside `admit_run` above went out BEFORE that row
         // existed, so the per-connection projection

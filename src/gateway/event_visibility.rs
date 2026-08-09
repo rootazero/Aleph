@@ -19,10 +19,12 @@
 //! `run_id`. [`EventVisibilityIndex`] caches that pairing (seeded by
 //! [`EventVisibilityIndex::note_frame`], called unconditionally in the
 //! delivery loop before filtering) so every later same-run frame resolves to
-//! a session key with no extra store round-trip, and evicts the pairing when
-//! the run ends (`RunComplete`/`RunError`) — mirroring the capacity-capped,
-//! insertion-order-evicting hygiene `streaming/relay.rs`'s `StreamRegistry`
-//! already established for a similar per-run cache.
+//! a session key with no extra store round-trip. The pairing is retired by
+//! capacity alone — the capacity-capped, insertion-order-evicting hygiene
+//! `streaming/relay.rs`'s `StreamRegistry` already established for a similar
+//! per-run cache — and explicitly NOT when the run ends, because
+//! `RunComplete`/`RunError` are themselves resolved through it; see
+//! [`EventVisibilityIndex::note_frame`] for what an end-of-run eviction cost.
 //!
 //! Session-visibility lookups (`session_key` → may this caller see it) go
 //! through a second bounded cache. What that cache holds is the session row's
@@ -506,29 +508,38 @@ impl EventVisibilityIndex {
         Self::default()
     }
 
-    /// Seed or evict the run→session cache from a delivered frame. Called
+    /// Seed the run→session cache from a delivered frame. Called
     /// UNCONDITIONALLY (before filtering) on every connection's delivery
     /// loop, so the shared index stays warm regardless of which connection
-    /// happens to process a given `RunAccepted`/`RunComplete`/`RunError`
-    /// first — first writer wins, and re-seeding an already-known run_id is
-    /// harmless (same session_key every time for a given run).
+    /// happens to process a given `RunAccepted` first — first writer wins,
+    /// and re-seeding an already-known run_id is harmless (same session_key
+    /// every time for a given run).
+    ///
+    /// ⚠️ There is deliberately NO eviction arm for `RunComplete`/`RunError`,
+    /// and re-adding one is not hygiene — it is a total outage of both frames.
+    /// Being called before the filter is what makes seeding work; it is also
+    /// what made evicting here fatal. The delivery loop calls this and THEN
+    /// asks [`Self::event_admits_for`], and those two topics classify as
+    /// [`SessionIdentity::ByRunId`] — so each terminal frame erased the seed
+    /// its own authorization check was about to need and fail-closed denied
+    /// itself. To EVERY connection, the run's owner included: the loop is per
+    /// connection but this index is process-shared, so whichever one arrived
+    /// first evicted on behalf of all the others. Nothing observable survived
+    /// a run's end — no `run_complete`, therefore no cost/token summary, no
+    /// `settle_run`, and a composer stuck "busy" until reload (2026-08-09
+    /// real-machine QA). A finished run's entry costs one slot in a cache
+    /// that is FIFO-capped at [`MAX_TRACKED_RUNS`] on its own, and run ids
+    /// are never reused, so ageing out is the whole lifecycle it needs.
     pub async fn note_frame(&self, topic: &str, data: Option<&Value>) {
-        match topic {
-            "stream.run_accepted" => {
-                let (Some(run_id), Some(session_key)) =
-                    (str_field(data, "run_id"), str_field(data, "session_key"))
-                else {
-                    return;
-                };
-                self.insert_run(run_id, session_key).await;
-            }
-            "stream.run_complete" | "stream.run_error" => {
-                if let Some(run_id) = str_field(data, "run_id") {
-                    self.evict_run(&run_id).await;
-                }
-            }
-            _ => {}
+        if topic != "stream.run_accepted" {
+            return;
         }
+        let (Some(run_id), Some(session_key)) =
+            (str_field(data, "run_id"), str_field(data, "session_key"))
+        else {
+            return;
+        };
+        self.insert_run(run_id, session_key).await;
     }
 
     /// Whether `caller_user` may receive an event classified by `topic`/`data`.
@@ -691,12 +702,6 @@ impl EventVisibilityIndex {
         let mut inner = self.runs.write().await;
         let RunIndex { order, map } = &mut *inner;
         remember(order, map, run_id, session_key, MAX_TRACKED_RUNS);
-    }
-
-    async fn evict_run(&self, run_id: &str) {
-        let mut inner = self.runs.write().await;
-        inner.map.remove(run_id);
-        inner.order.retain(|r| r != run_id);
     }
 
     async fn session_key_for_run(&self, run_id: &str) -> Option<String> {
@@ -2173,8 +2178,58 @@ mod tests {
         }
     }
 
+    /// The 2026-08-09 real-machine QA's F1, as a regression: `run_complete`
+    /// and `run_error` never reached ANY client, because `note_frame` evicted
+    /// the run→session seed and the delivery loop then asked
+    /// `event_admits_for` — which resolves those two topics THROUGH that seed.
+    ///
+    /// The calls below are in the production order (`handler.rs`'s delivery
+    /// loop: note, then filter). Re-adding the eviction arm turns this red.
     #[tokio::test]
-    async fn index_is_bounded_and_evicts_on_run_completion() {
+    async fn terminal_frames_survive_their_own_note_frame() {
+        let (store, _temp) = test_store();
+        let key = SessionKey::main("conv-terminal");
+        stamp_owner(&store, &key, "alice").await;
+        let store: Arc<dyn SessionStore> = Arc::new(store);
+
+        let index = EventVisibilityIndex::new();
+        index
+            .note_frame(
+                "stream.run_accepted",
+                Some(&serde_json::json!({
+                    "run_id": "r-term",
+                    "session_key": key.to_key_string(),
+                    "accepted_at": "t",
+                })),
+            )
+            .await;
+
+        for topic in ["stream.run_complete", "stream.run_error"] {
+            let frame = serde_json::json!({
+                "run_id": "r-term",
+                "seq": 2,
+                "summary": {},
+                "total_duration_ms": 1,
+                "error": "boom",
+            });
+            index.note_frame(topic, Some(&frame)).await;
+            assert!(
+                index
+                    .event_admits(topic, Some(&frame), Some("alice"), false, &store, None)
+                    .await,
+                "{topic} must still reach the run's owner after note_frame ran"
+            );
+            assert!(
+                !index
+                    .event_admits(topic, Some(&frame), Some("bob"), false, &store, None)
+                    .await,
+                "{topic} must not reach a stranger"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn the_run_index_stays_capacity_bounded() {
         let index = EventVisibilityIndex::new();
 
         let accepted = serde_json::json!({
@@ -2188,21 +2243,6 @@ mod tests {
         assert_eq!(
             index.session_key_for_run("r1").await,
             Some("agent:main:main".to_string())
-        );
-
-        let complete = serde_json::json!({
-            "run_id": "r1",
-            "seq": 1,
-            "summary": {},
-            "total_duration_ms": 1,
-        });
-        index
-            .note_frame("stream.run_complete", Some(&complete))
-            .await;
-        assert_eq!(
-            index.session_key_for_run("r1").await,
-            None,
-            "RunComplete must evict the run→session seed"
         );
 
         for i in 0..(MAX_TRACKED_RUNS + 10) {

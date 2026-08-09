@@ -687,11 +687,28 @@ fn exec_permissions_value(cfg: &Config) -> Result<Value, serde_json::Error> {
 fn member_visible_permissions_value(cfg: &Config) -> Result<Value, serde_json::Error> {
     let mut value = exec_permissions_value(cfg)?;
     if let Some(obj) = value.as_object_mut() {
-        obj.remove("default");
-        obj.remove("overrides");
+        for key in MEMBER_WITHHELD_KEYS {
+            obj.remove(key);
+        }
     }
     Ok(value)
 }
+
+/// The keys [`member_visible_permissions_value`] strips — named once so the
+/// removal and the guard that checks the OTHER half of this contract cannot
+/// drift apart.
+///
+/// The other half lives in a different crate: `aleph-panel`'s
+/// `api::tool_permissions::ToolPermissionsResponse` is the sole decoder of this
+/// response, and a field withheld here is a field that must be optional there.
+/// It was not, and the result is the shape this repo's own criteria warn about
+/// — the two halves of a wire contract in two crates, with tests on each side
+/// that pass because neither one crosses. `default` had no `#[serde(default)]`
+/// while every neighbour did, so a member's Panel failed the whole decode and
+/// lost both dials it was carved out of the admin family to give them.
+/// `every_key_withheld_from_a_member_is_optional_in_the_panel_decoder` is the
+/// crossing test.
+const MEMBER_WITHHELD_KEYS: [&str; 2] = ["default", "overrides"];
 
 /// Handle `config.get_tool_permissions` RPC request
 ///
@@ -851,6 +868,59 @@ mod tests {
     use std::io::Write;
     use std::time::Duration;
     use tempfile::NamedTempFile;
+
+    /// The crossing test for a wire contract whose two halves live in two
+    /// crates. `aleph-panel` cannot depend on `alephcore`, so the only place
+    /// this can be checked is here, against the Panel's SOURCE — a runtime
+    /// check would need the very decoder it is checking.
+    ///
+    /// Withholding a key from a member and leaving it required in the sole
+    /// decoder does not degrade that key; it fails the whole response, taking
+    /// every field beside it. Both composer pills read this one DTO, so the
+    /// blast radius of `default` alone was both of them.
+    #[test]
+    fn every_key_withheld_from_a_member_is_optional_in_the_panel_decoder() {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("interfaces/webchat/src/api/tool_permissions.rs");
+        let src = std::fs::read_to_string(&path)
+            .unwrap_or_else(|e| panic!("cannot read the Panel decoder at {}: {e}", path.display()));
+
+        let body = src
+            .split_once("pub struct ToolPermissionsResponse {")
+            .expect("the Panel decoder must still declare ToolPermissionsResponse")
+            .1
+            .split_once("\n}")
+            .expect("ToolPermissionsResponse must be a closed struct body")
+            .0;
+
+        for key in MEMBER_WITHHELD_KEYS {
+            let mut defaulted = false;
+            let mut found = false;
+            for line in body.lines().map(str::trim) {
+                if line.starts_with("#[serde(") && line.contains("default") {
+                    defaulted = true;
+                } else if let Some(decl) = line.strip_prefix("pub ") {
+                    if decl.starts_with(&format!("{key}:")) {
+                        found = true;
+                        break;
+                    }
+                    // A different field consumed whatever annotation preceded it.
+                    defaulted = false;
+                }
+            }
+            assert!(
+                found,
+                "`{key}` is withheld from members but the Panel decoder no longer declares it — \
+                 either the withholding list or the DTO moved without the other"
+            );
+            assert!(
+                defaulted,
+                "`{key}` is stripped from a member's `config.get_tool_permissions` response, so \
+                 the Panel decoder must mark it `#[serde(default)]` — without it a member decodes \
+                 nothing at all, losing every sibling field too"
+            );
+        }
+    }
 
     async fn create_test_watcher() -> (Arc<ConfigWatcher>, NamedTempFile) {
         let mut temp_file = NamedTempFile::new().unwrap();

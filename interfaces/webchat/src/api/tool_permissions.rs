@@ -41,6 +41,17 @@ pub struct ToolPermissionsResponse {
     /// Selectable modes, in display order.
     #[serde(default)]
     pub modes: Vec<ModePreset>,
+    /// Global default permission level. **Absent for a member** — the server's
+    /// `member_visible_permissions_value` withholds this axis and `overrides`
+    /// below, so both must decode to a default rather than fail the whole
+    /// response. Without this attribute a member's Panel failed the decode
+    /// outright, which took out BOTH pills sharing this DTO (the tier pill
+    /// rendered "—", the mode pill vanished) and, because the failure surfaced
+    /// as a serde error rather than an admin refusal, the "why is this empty"
+    /// copy `is_admin_refusal` exists to show never fired (2026-08-09
+    /// real-machine QA). Pinned by
+    /// `handlers::config::every_key_withheld_from_a_member_is_optional_in_the_panel_decoder`.
+    #[serde(default)]
     pub default: String,
     #[serde(default)]
     pub overrides: HashMap<String, String>,

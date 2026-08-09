@@ -14,7 +14,11 @@ use crate::views::teams::components::board_columns::column_label;
 
 /// Shared open-state for the team task drawer (set by the strip, read by the
 /// drawer). Provided by `ChatView` (view.rs) — a common ancestor of both the
-/// strip and the drawer — so `expect_context` resolves in both subtrees.
+/// strip and the drawer.
+///
+/// ⚠️ `ChatView` is the only provider, but it is NOT the only mounter of the
+/// composer that hosts the strip. See [`TeamTaskStrip`] for why the strip must
+/// therefore read it optionally and the drawer may not.
 #[derive(Clone, Copy)]
 pub struct TaskDrawerOpen(pub RwSignal<bool>);
 
@@ -23,9 +27,25 @@ pub struct TaskDrawerOpen(pub RwSignal<bool>);
 pub fn TeamTaskStrip() -> impl IntoView {
     let chat = expect_context::<ChatState>();
     let i18n = use_i18n();
-    // Open-state lives in ChatView's context (Step 4) so the sibling
-    // TeamTaskDrawer reads the same signal. The strip only sets it.
-    let TaskDrawerOpen(drawer_open) = expect_context::<TaskDrawerOpen>();
+    // `use_context`, not `expect_context`: the composer this strip lives in is
+    // mounted by TWO surfaces, and only one of them — `ChatView` — also
+    // provides `TaskDrawerOpen` and mounts the `TeamTaskDrawer` it drives. The
+    // project-room surface (`components::project_page::RoomChat`) deliberately
+    // does not mount `ChatView` a second time, so `expect_context` panicked the
+    // whole Panel the instant anyone opened a room — operator and member alike
+    // (2026-08-09 real-machine QA).
+    //
+    // A component's context requirement is evaluated at SETUP, which is what
+    // made a widget that is invisible in rooms fatal in them: `RoomChat` calls
+    // `clear_team_context`, so the `<Show>` below would have hidden this strip
+    // there anyway — it just never got to run.
+    //
+    // Rendering nothing beats provisioning a local signal here: without the
+    // drawer on this surface, a pill that opens nothing is a dead button, and
+    // a second signal would guarantee the two halves could never agree.
+    let Some(TaskDrawerOpen(drawer_open)) = use_context::<TaskDrawerOpen>() else {
+        return ().into_any();
+    };
 
     view! {
         <Show when=move || {
@@ -64,6 +84,7 @@ pub fn TeamTaskStrip() -> impl IntoView {
             </button>
         </Show>
     }
+    .into_any()
 }
 
 #[component]
@@ -71,6 +92,11 @@ pub fn TeamTaskStrip() -> impl IntoView {
 pub fn TeamTaskDrawer() -> impl IntoView {
     let chat = expect_context::<ChatState>();
     let i18n = use_i18n();
+    // `expect_context` is correct HERE and the asymmetry with the strip above
+    // is the point: the drawer's only mount site is inside the very component
+    // that provides this context (`ChatView`), so an absence is a real wiring
+    // error and should stay loud. Add a second mount site and this line has to
+    // be reconsidered along with it.
     let TaskDrawerOpen(open) = expect_context::<TaskDrawerOpen>();
 
     view! {
