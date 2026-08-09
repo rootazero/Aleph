@@ -14,18 +14,14 @@ pub mod recall;
 pub mod resolve;
 pub mod session_key;
 
-pub use experience_store::{RoutingExperienceStore, RoutingOutcome};
-pub use observer::{outcome_from_session_completed, OutcomeObserver};
-pub use recall::{
-    provider_availability_from_config, ProviderAvailability, ProviderStatus, RoutingRecall,
-};
+pub use experience_store::RoutingExperienceStore;
+pub use observer::OutcomeObserver;
+pub use recall::{provider_availability_from_config, RoutingRecall};
 
-pub use config::{MatchRule, PeerMatchConfig, RouteBinding, SessionConfig};
-pub use overlay::{overlay_route, OverlaidRoute, OverlaySource, RuntimeOverlay};
-pub use resolve::{resolve_route, MatchedBy, ResolvedRoute, RouteInput, RoutePeer, RoutePeerKind};
-pub use session_key::{
-    normalize_agent_id, DmScope, PeerKind, SessionKey, DEFAULT_AGENT_ID, DEFAULT_MAIN_KEY,
-};
+pub use config::{MatchRule, RouteBinding, SessionConfig};
+pub use overlay::{overlay_route, OverlaySource, RuntimeOverlay};
+pub use resolve::{resolve_route, ResolvedRoute, RouteInput, RoutePeer, RoutePeerKind};
+pub use session_key::{normalize_agent_id, DmScope, PeerKind, SessionKey, DEFAULT_AGENT_ID};
 
 /// Per-run handle correlating run-start recall (writes `task_emb`) with the
 /// completion observer (reads it). One per run; lives in the gateway run loop,

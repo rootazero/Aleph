@@ -614,7 +614,21 @@ pub fn claim_session_key(raw: &str) -> Option<String> {
     Some(session_key_to_gateway(&parsed).to_key_string())
 }
 
-/// Convert `routing::SessionKey` to `gateway::router::SessionKey`
+/// Convert `routing::SessionKey` to `gateway::router::SessionKey`.
+///
+/// KNOWN DRIFT (tracked, not fixed — Panel send seam, separate task): the
+/// `DirectMessage` / `Group` arms collapse to the legacy `peer` form
+/// (`SessionKey::peer` = `dm(agent, "", peer, PerPeer)` → renders
+/// `agent:{a}:peer:{pid}`), discarding the channel + `dm_scope` the inbound
+/// path now stores under (`agent:{a}:{channel}:dm:{pid}` for PerChannelPeer,
+/// `agent:{a}:dm:{pid}` for PerPeer). The seam therefore executes AND claims
+/// on a key no inbound conversation ever writes — the claim key is consistent
+/// with where this seam executes (both collapsed), but inconsistent with the
+/// storage key of the DM/group conversation it targets: a delegated send
+/// spawns a seam-private `peer:` thread instead of continuing the visible
+/// conversation. Group collapses identically. Fix direction: preserve the
+/// dm/group form (the collapse was written for the pre-alignment
+/// `peer:dm-{sender}` key shape and outlived it).
 fn session_key_to_gateway(key: &crate::routing::session_key::SessionKey) -> SessionKey {
     match key {
         crate::routing::session_key::SessionKey::Main { agent_id, .. } => {

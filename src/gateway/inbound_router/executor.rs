@@ -371,11 +371,13 @@ impl InboundMessageRouter {
         };
         crate::gateway::voice::voice_mode::set(&ctx.session_key.to_key_string(), voice_state);
 
-        // Channel-routed messages run in the channel's configured workspace
-        // (Layer-1 lock): a Chat-tier channel pins its `default_workspace`; a
-        // Config-tier channel that sets none falls back to the agent default.
+        // Channel-routed messages run in a workspace resolved by precedence:
+        // a route binding's `MatchRule.workspace` (most-specific routing rule)
+        // wins; otherwise the channel's Layer-1 `default_workspace` lock; a
+        // Config-tier channel that sets neither falls back to the agent default.
         // Project-mode override (free workdir choice) enters via the desktop
         // Panel's `chat.send` and is gated there on Config tier.
+        let effective_workspace = ctx.workspace.clone().or(channel_workspace);
         let request = RunRequest {
             run_id: run_id.clone(),
             input: ctx.message.text.clone(),
@@ -385,7 +387,7 @@ impl InboundMessageRouter {
             attachments: ctx.message.attachments.clone(),
             pending_media: pending_media.clone(),
             sandbox_override: None,
-            workspace_override: channel_workspace,
+            workspace_override: effective_workspace,
             max_iterations_override: None,
             model_override,
         };

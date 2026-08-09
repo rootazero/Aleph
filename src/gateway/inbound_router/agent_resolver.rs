@@ -221,8 +221,30 @@ impl InboundMessageRouter {
             msg.sender_id.as_str().to_string()
         };
 
+        // A binding's `MatchRule.workspace` pins the run's workspace (most
+        // specific routing rule) — but only when it is an absolute, existing
+        // directory, mirroring `ChannelConfig::resolved_default_workspace`.
+        // A relative path or missing dir falls back to the channel default /
+        // agent default rather than handing the engine a dir it cannot chdir
+        // into.
+        let binding_workspace = resolved_route
+            .and_then(|r| r.workspace.as_deref())
+            .map(std::path::PathBuf::from)
+            .filter(|p| p.is_absolute() && p.is_dir())
+            .or_else(|| {
+                if let Some(w) = resolved_route.and_then(|r| r.workspace.as_deref()) {
+                    tracing::warn!(
+                        workspace = w,
+                        "route binding workspace is not an existing absolute directory; \
+                         falling back to channel/agent default workspace"
+                    );
+                }
+                None
+            });
+
         InboundContext::new(msg.clone(), reply_route, session_key)
             .with_sender_normalized(sender_normalized)
+            .with_workspace(binding_workspace)
     }
 
     /// Resolve `SessionKey` for a message with pre-resolved agent ID
@@ -246,17 +268,24 @@ impl InboundMessageRouter {
                 msg.conversation_id.as_str(),
             )
         } else {
-            // DM -> based on dm_scope
-            match self.config.dm_scope {
-                DmScope::Main => SessionKey::main(agent_id),
-                DmScope::PerPeer => {
-                    SessionKey::peer(agent_id, format!("dm:{}", msg.sender_id.as_str()))
-                }
-                DmScope::PerChannelPeer => SessionKey::peer(
-                    agent_id,
-                    format!("{}:dm:{}", channel, msg.sender_id.as_str()),
-                ),
-            }
+            // DM -> use the same constructor as the bound-route path
+            // (`SessionKey::dm`), so the zero-config fallback key agrees with
+            // `resolve_route`'s key for the same conversation. The previous
+            // `SessionKey::peer(agent, "dm:{sender}")` idiom sanitized the
+            // `dm:` prefix into the peer id, yielding `peer:dm-{sender}` and
+            // splitting history between the two routing paths.
+            SessionKey::dm(
+                agent_id,
+                channel,
+                msg.sender_id.as_str(),
+                match self.config.dm_scope {
+                    DmScope::Main => crate::routing::session_key::DmScope::Main,
+                    DmScope::PerPeer => crate::routing::session_key::DmScope::PerPeer,
+                    DmScope::PerChannelPeer => {
+                        crate::routing::session_key::DmScope::PerChannelPeer
+                    }
+                },
+            )
         }
     }
 }

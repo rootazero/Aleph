@@ -38,9 +38,7 @@ pub enum RoutePeerKind {
 pub struct ResolvedRoute {
     pub agent_id: String,
     pub channel: String,
-    pub account_id: String,
     pub session_key: SessionKey,
-    pub main_session_key: SessionKey,
     pub matched_by: MatchedBy,
     /// Workspace from route binding (if set). When present, the execution engine
     /// uses this workspace instead of the user's active workspace.
@@ -152,14 +150,11 @@ pub fn resolve_route(
             } else {
                 trimmed.to_string()
             };
-            let (session_key, main_session_key) =
-                session_keys_for(&agent_id, &channel, input.peer.as_ref(), session_cfg);
+            let (session_key, _) = session_keys_for(&agent_id, &channel, input.peer.as_ref(), session_cfg);
             ResolvedRoute {
                 agent_id,
                 channel,
-                account_id: account_id.to_string(),
                 session_key,
-                main_session_key,
                 matched_by,
                 workspace,
             }
