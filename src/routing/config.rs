@@ -30,7 +30,12 @@ pub struct SessionConfig {
     /// Note: this only takes effect on the configured-bindings routing path
     /// (`resolve_route` / `[[bindings]]`). The zero-config fallback
     /// (`resolve_session_key_with_agent`) does not consult it — a deployment
-    /// relying on identity links must configure bindings.
+    /// relying on identity links must configure bindings. Wiring it into the
+    /// fallback is a separate task: boot (`start/builder/subsystems.rs`)
+    /// threads only `dm_scope` into the gateway `RoutingConfig` that drives
+    /// the fallback; `identity_links` needs a matching field + consultation
+    /// there (`resolve_session_key_with_agent` → `SessionKey::dm`), mirroring
+    /// what `resolve_route`/`build_session_key` already does.
     #[serde(
         default,
         deserialize_with = "deserialize_identity_links_with_validation"
