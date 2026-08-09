@@ -81,15 +81,6 @@ impl AcpMemberRef {
             _ => None,
         }
     }
-
-    /// Render back to the canonical `acp:<harness>[/<session>]` form.
-    #[must_use]
-    pub fn render(&self) -> String {
-        match self.session_name.as_deref() {
-            None | Some("") => format!("{ACP_MEMBER_PREFIX}{}", self.harness_id),
-            Some(name) => format!("{ACP_MEMBER_PREFIX}{}/{}", self.harness_id, name),
-        }
-    }
 }
 
 // Note: task execution for ACP members lives in
@@ -108,7 +99,6 @@ mod tests {
         let r = AcpMemberRef::parse("acp:claude-code").unwrap();
         assert_eq!(r.harness_id, "claude-code");
         assert_eq!(r.session_name, None);
-        assert_eq!(r.render(), "acp:claude-code");
     }
 
     #[test]
@@ -116,7 +106,6 @@ mod tests {
         let r = AcpMemberRef::parse("acp:codex/backend").unwrap();
         assert_eq!(r.harness_id, "codex");
         assert_eq!(r.session_name.as_deref(), Some("backend"));
-        assert_eq!(r.render(), "acp:codex/backend");
     }
 
     #[test]
@@ -158,13 +147,5 @@ mod tests {
         let r = AcpMemberRef::parse("acp:codex/name:v2").unwrap();
         assert_eq!(r.harness_id, "codex");
         assert_eq!(r.session_name.as_deref(), Some("name:v2"));
-    }
-
-    #[test]
-    fn render_round_trips() {
-        for id in &["acp:claude-code", "acp:codex/backend", "acp:gemini/x"] {
-            let parsed = AcpMemberRef::parse(id).unwrap();
-            assert_eq!(parsed.render(), *id);
-        }
     }
 }
