@@ -26,6 +26,11 @@ pub struct SessionConfig {
     pub dm_scope: DmScope,
 
     /// Cross-channel identity links: `canonical_name` -> [channel:id, ...]
+    ///
+    /// Note: this only takes effect on the configured-bindings routing path
+    /// (`resolve_route` / `[[bindings]]`). The zero-config fallback
+    /// (`resolve_session_key_with_agent`) does not consult it — a deployment
+    /// relying on identity links must configure bindings.
     #[serde(
         default,
         deserialize_with = "deserialize_identity_links_with_validation"

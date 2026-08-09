@@ -429,11 +429,16 @@ impl HarnessRunner for AgentHarnessRunner {
         // Run-start recall (ONCE, pre-loop) → fenced String for the builder;
         // also backfills routing_attribution.task_emb for the observer (symmetry).
         let routing_text: Option<String> = if let Some(recall) = self.routing_recall.as_ref() {
-            recall
+            match recall
                 .build_routing_experience_message(&user_query, &spec.agent, &routing_attribution)
                 .await
-                .ok()
-                .flatten()
+            {
+                Ok(text) => text,
+                Err(e) => {
+                    tracing::warn!(error = %e, "run-start routing recall failed; recall skipped");
+                    None
+                }
+            }
         } else {
             None
         };
