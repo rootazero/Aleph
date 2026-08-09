@@ -2,7 +2,7 @@
 //!
 //! Holds the shared store, clock, config, and lifecycle flags.
 
-use crate::sync_primitives::{Arc, AtomicBool, Ordering};
+use crate::sync_primitives::{Arc, AtomicBool, AtomicI64, Ordering};
 use crate::tasks::cron::config::CronConfig;
 use crate::tasks::cron::store::CronStore;
 use crate::tasks::shared::clock::Clock;
@@ -15,7 +15,7 @@ pub struct ServiceState<C: Clock> {
     pub store: Arc<tokio::sync::Mutex<CronStore>>,
     pub clock: Arc<C>,
     pub config: CronConfig,
-    is_running: AtomicBool,
+    last_tick_at_ms: AtomicI64,
     shutdown: AtomicBool,
 }
 
@@ -30,31 +30,31 @@ impl<C: Clock> ServiceState<C> {
             store,
             clock,
             config,
-            is_running: AtomicBool::new(false),
+            last_tick_at_ms: AtomicI64::new(0),
             shutdown: AtomicBool::new(false),
         }
     }
 
-    /// Whether the service is currently running.
-    pub fn is_running(&self) -> bool {
-        self.is_running.load(Ordering::SeqCst)
-    }
-
-    /// Set the running state.
-    pub fn set_running(&self, running: bool) {
-        self.is_running.store(running, Ordering::SeqCst);
-    }
-
-    /// Atomically claim the running slot: returns `true` if this caller flipped
-    /// the flag from `false` to `true`, `false` if a tick was already running.
+    /// Wall-clock ms of the scheduler's last completed due-scan, or `0` when it
+    /// has never scanned.
     ///
-    /// This replaces a separate `is_running()` check + `set_running(true)`,
-    /// which has a load→store TOCTOU window where two concurrent callers could
-    /// both observe `false` and both proceed.
-    pub fn try_begin_running(&self) -> bool {
-        self.is_running
-            .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
-            .is_ok()
+    /// This is the **only** evidence that the timer loop is alive. It exists
+    /// because `cron.status` used to answer `running: true` unconditionally
+    /// while the loop's startup is conditional (no execution adapter ⇒ every
+    /// `cron.*` handler is still registered but nothing is ever scheduled). A
+    /// constant `true` decides nothing, and the lie is only visible to the
+    /// operator on the other side.
+    ///
+    /// Written by `run_timer_loop` after each scan; read by the `cron.status`
+    /// handler. One writer, one reader — not an abstraction held open for a
+    /// future consumer.
+    pub fn last_tick_at_ms(&self) -> i64 {
+        self.last_tick_at_ms.load(Ordering::Relaxed)
+    }
+
+    /// Record that a due-scan just completed. See [`Self::last_tick_at_ms`].
+    pub fn mark_tick(&self, now_ms: i64) {
+        self.last_tick_at_ms.store(now_ms, Ordering::Relaxed);
     }
 
     /// Whether a shutdown has been requested.
@@ -89,17 +89,19 @@ mod tests {
     #[test]
     fn initial_state() {
         let state = make_state();
-        assert!(!state.is_running());
+        assert_eq!(
+            state.last_tick_at_ms(),
+            0,
+            "a service that has never scanned must not look alive"
+        );
         assert!(!state.is_shutdown());
     }
 
     #[test]
-    fn set_running_flag() {
+    fn mark_tick_records_the_scan_time() {
         let state = make_state();
-        state.set_running(true);
-        assert!(state.is_running());
-        state.set_running(false);
-        assert!(!state.is_running());
+        state.mark_tick(1_700_000_000_000);
+        assert_eq!(state.last_tick_at_ms(), 1_700_000_000_000);
     }
 
     #[test]

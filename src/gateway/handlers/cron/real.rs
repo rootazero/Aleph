@@ -469,10 +469,27 @@ pub async fn handle_status(request: JsonRpcRequest, cron: SharedCronService) -> 
     match service.list_jobs().await {
         Ok(jobs) => {
             let enabled_count = jobs.iter().filter(|j| j.enabled).count();
+            // `running` used to be the literal `true`. The timer loop's startup
+            // is conditional (no execution adapter ⇒ "Cron timer loop: skipped"
+            // on stdout, and in daemon mode not even that) while every `cron.*`
+            // handler is registered either way — so an operator whose jobs
+            // silently never fire was told the scheduler was up, by the one
+            // surface that exists to answer that question. Derive it from the
+            // scan the loop actually performs: alive means it scanned within
+            // three intervals, which tolerates one missed wake-up without
+            // reporting a healthy scheduler as dead.
+            let last_tick_at_ms = service.last_tick_at_ms();
+            let liveness_window_ms = (service.check_interval_secs() as i64) * 1000 * 3;
+            let now_ms = chrono::Utc::now().timestamp_millis();
+            let running =
+                last_tick_at_ms != 0 && now_ms.saturating_sub(last_tick_at_ms) < liveness_window_ms;
             JsonRpcResponse::success(
                 request.id,
                 json!({
-                    "running": true,
+                    "running": running,
+                    // Reported alongside so a client can say "last scan 4m ago"
+                    // rather than only "false"; `null` = never scanned.
+                    "last_tick_at_ms": (last_tick_at_ms != 0).then_some(last_tick_at_ms),
                     "job_count": jobs.len(),
                     "enabled_count": enabled_count,
                 }),

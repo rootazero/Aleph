@@ -20,6 +20,7 @@ use crate::tasks::heartbeat::history::HeartbeatRunRecord;
 use crate::tasks::heartbeat::probe::{execute_probe, ProbeExecutor};
 use crate::tasks::heartbeat::service::state::HeartbeatServiceState;
 use crate::tasks::heartbeat::wake::{WakeQueue, WakeRequest};
+use crate::tasks::shared::delivery::DeliveryStatus;
 use crate::tasks::shared::delivery::{DeliveryEngine, DeliveryPayload};
 
 // ── TickContext ───────────────────────────────────────────────────────
@@ -361,10 +362,17 @@ async fn execute_heartbeat_tick(
                                         };
                                         let outcomes = ctx.delivery.deliver(&payload, config).await;
                                         let ok = outcomes.iter().any(|o| o.success);
-                                        let label = if ok { "Delivered" } else { "NotDelivered" };
-                                        (ok, Some(label.to_string()))
+                                        let status = if ok {
+                                            DeliveryStatus::Delivered
+                                        } else {
+                                            DeliveryStatus::NotDelivered
+                                        };
+                                        (ok, Some(status.label().to_string()))
                                     } else {
-                                        (false, Some("NotRequested".to_string()))
+                                        (
+                                            false,
+                                            Some(DeliveryStatus::NotRequested.label().to_string()),
+                                        )
                                     };
                                     // H8: only record the dedup entry once delivery
                                     // actually succeeded — a failed delivery must
@@ -420,20 +428,28 @@ async fn execute_heartbeat_tick(
 /// `NotDelivered` splits on *why*: a task with no delivery target configured
 /// asked for nothing and got nothing (`NotRequested` → Ok), whereas a
 /// configured target that refused the payload is a real failure of the
-/// monitoring path and must feed the backoff ladder and the alert gate. This
-/// arm was deliberately left unmapped when the label was introduced; it is the
-/// decision that chain was waiting on.
+/// monitoring path and must feed the backoff ladder and the alert gate.
+///
+/// The split itself is `DeliveryStatus::delivery_failed` — shared with cron,
+/// which used to answer the opposite way (a refused delivery counted as a
+/// successful run). Two schedulers, one question, one answer.
 fn l2_run_status(l2_status: &str, delivery_status: Option<&str>) -> Option<RunStatus> {
     match l2_status {
         "Silent" | "Delivered" => Some(RunStatus::Ok),
         "Deduped" => Some(RunStatus::Skipped),
         "Error" => Some(RunStatus::Error),
         "NotDelivered" => {
-            if delivery_status == Some("NotRequested") {
-                Some(RunStatus::Ok)
+            // An unparseable label is treated as a genuine non-delivery: it can
+            // only come from a producer that stopped using `label()`, and
+            // guessing "fine" there is how this class of bug hides.
+            let failed = delivery_status
+                .and_then(DeliveryStatus::from_label)
+                .is_none_or(DeliveryStatus::delivery_failed);
+            Some(if failed {
+                RunStatus::Error
             } else {
-                Some(RunStatus::Error)
-            }
+                RunStatus::Ok
+            })
         }
         unknown => {
             tracing::warn!(l2_status = %unknown, "unrecognized heartbeat L2 status");

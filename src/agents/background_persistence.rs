@@ -95,13 +95,24 @@ static MASKER: LazyLock<SecretMasker> = LazyLock::new(SecretMasker::new);
 static STORE_DIR: LazyLock<Mutex<Option<PathBuf>>> = LazyLock::new(|| Mutex::new(None));
 
 /// Records visible to [`lookup`]: everything loaded from disk at boot, plus
-/// every run started in this process that has not reached a terminal state.
+/// every run started in this process — terminal ones included, for as long as
+/// their tombstone survives on disk.
 ///
-/// A run that settles in *this* process is dropped from the index because the
-/// live tracker answers for it (non-destructively, until its own TTL); leaving
-/// a duplicate here would give two different answers for one id depending on
-/// which side was consulted first. Its tombstone stays on disk for the
-/// retention window, so the *next* boot still loads it.
+/// Settled runs used to be *removed* here, on the theory that "the live tracker
+/// answers for it (non-destructively, until its own TTL)". The second half of
+/// that sentence was the bug: when the TTL expires — or when
+/// `MAX_COMPLETED_RESULTS` evicts the entry — nobody hands the record back, and
+/// `lookup` never falls through to disk. So a background sub-agent that
+/// finished normally became addressable, then un-addressable an hour later,
+/// then addressable again after a restart (boot reloads terminal records right
+/// back into this map), with the middle window answering the exact
+/// `"No background sub-agent found"` this module exists to eliminate.
+///
+/// There is no "two answers" hazard in the real call order: `lookup` is only
+/// reached from the tool's not-found branches, i.e. after the tracker has
+/// already said it does not know the id. Bound: the same
+/// `RECORD_RETENTION_MS` sweep that bounds the on-disk tombstones, applied at
+/// boot — not a second, shorter budget invented here.
 static INDEX: LazyLock<Mutex<HashMap<String, PersistedRun>>> =
     LazyLock::new(|| Mutex::new(HashMap::new()));
 
@@ -134,7 +145,7 @@ impl RunPhase {
 }
 
 /// One background sub-agent as recorded on disk.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PersistedRun {
     pub request_id: String,
     /// Owning top-level session key, used to scope [`lookup`] exactly the way
@@ -159,6 +170,23 @@ pub struct PersistedRun {
     /// moves; resolve it with [`Self::partial_result_path`].
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub partial_result_file: Option<String>,
+    /// Whether the parent was ever told this run finished.
+    ///
+    /// `phase` answers "did it finish"; this answers "does anyone know". They
+    /// are different questions and the gap between them is a real window:
+    /// `spawn` writes the tombstone, *then* announces, and `announce_one`
+    /// retries at 0/30/120s when the parent session is busy. A daemon that dies
+    /// inside those two and a half minutes leaves a `Settled` record that the
+    /// boot reconcile skips (it only looks at `Running`), so the completion
+    /// promised to the model at spawn time — "its completion will be announced
+    /// to you" — is silently withdrawn while the result sits on disk.
+    ///
+    /// `#[serde(default)]` makes every pre-existing record read as *not*
+    /// announced, which is the fail-safe direction: at worst the parent is told
+    /// once more about something it already saw, and the announce path is
+    /// already deduplicated by `is_consumed`.
+    #[serde(default)]
+    pub announced: bool,
 }
 
 impl PersistedRun {
@@ -171,7 +199,7 @@ impl PersistedRun {
 }
 
 /// A run recovered by the boot reconcile, with whatever it managed to produce.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RecoveredRun {
     pub record: PersistedRun,
     /// Tail of the (already-masked) activity trail. Empty when the child never
@@ -195,6 +223,15 @@ pub struct RecoveredRun {
 /// empty. Each orphan gets a terminal `Abandoned` state written over it (never
 /// deleted): a record that only ever says "finished" cannot distinguish "never
 /// ran" from "ran and the write was lost".
+///
+/// **Two kinds of run are recovered, not one.** `Running` is the orphan case
+/// above. `Settled && !announced` is the run that *finished* and whose
+/// completion notice died with the process somewhere in `announce_one`'s
+/// 0/30/120s retry ladder: nothing is wrong with its result, but the parent was
+/// promised an announcement at spawn time and never got one. Reconciling only
+/// `Running` left that promise silently withdrawn with the answer sitting on
+/// disk. The two are distinguishable downstream by `record.phase`, so the
+/// notification can say the honest thing in each case.
 ///
 /// Idempotent. Returns an empty vec when the directory cannot be created —
 /// persistence stays off rather than failing boot (P7).
@@ -235,6 +272,25 @@ pub fn init_and_reconcile(dir: PathBuf) -> Vec<RecoveredRun> {
             });
             index.insert(tombstone.request_id.clone(), tombstone);
         } else {
+            // Finished, but the parent was never told: hand the result over now
+            // rather than leaving it addressable-only-if-asked. Mark it
+            // announced as part of the same pass so a second restart before the
+            // parent turn lands does not repeat it forever.
+            if record.phase == RunPhase::Settled && !record.announced {
+                let trail = read_trail(&dir, &record);
+                let delivered = PersistedRun {
+                    announced: true,
+                    ..record.clone()
+                };
+                write_state(&dir, &delivered);
+                recovered.push(RecoveredRun {
+                    last_activity_ms: trail.last_ms.unwrap_or(delivered.started_ms),
+                    partial_result: trail.text,
+                    record: delivered.clone(),
+                });
+                index.insert(delivered.request_id.clone(), delivered);
+                continue;
+            }
             index.insert(record.request_id.clone(), record);
         }
     }
@@ -284,6 +340,14 @@ pub async fn init_and_announce_orphans(dir: PathBuf) -> usize {
         let agent_id = crate::routing::session_key::SessionKey::from_key_string(&session)
             .map_or_else(|| "primary".to_string(), |k| k.agent_id().to_string());
         let summary = summarize_orphans(&runs);
+        // `error` describes the *interruption*, so it must count only the runs
+        // that were actually interrupted. A batch where every child finished
+        // and merely went unannounced is not a failure, and saying it is would
+        // push the model to redo completed work.
+        let interrupted = runs
+            .iter()
+            .filter(|r| r.record.phase != RunPhase::Settled)
+            .count();
         let event = crate::event::SubAgentCompletionEvent {
             agent_id: agent_id.clone(),
             child_session_id: runs
@@ -291,11 +355,12 @@ pub async fn init_and_announce_orphans(dir: PathBuf) -> usize {
                 .map(|r| r.record.request_id.clone())
                 .unwrap_or_default(),
             summary,
-            success: false,
-            error: Some(format!(
-                "{} background sub-agent(s) were interrupted by a daemon restart",
-                runs.len()
-            )),
+            success: interrupted == 0,
+            error: (interrupted > 0).then(|| {
+                format!(
+                    "{interrupted} background sub-agent(s) were interrupted by a daemon restart"
+                )
+            }),
             // Deliberately `None`: the announce path's dedup asks the live
             // tracker whether this request_id was already consumed, and the
             // tracker has never heard of a pre-restart id. Supplying one would
@@ -315,25 +380,55 @@ pub async fn init_and_announce_orphans(dir: PathBuf) -> usize {
 
 /// One human/model-readable block describing every orphan of one session.
 fn summarize_orphans(runs: &[RecoveredRun]) -> String {
-    let mut out = format!(
-        "{} background sub-agent(s) were still running when the daemon last stopped. \
-         They did not fail — their process disappeared. Partial progress below; \
-         re-delegate anything still needed.\n",
-        runs.len()
-    );
-    for run in runs {
-        out.push_str(&format!(
-            "\n- request_id: {}\n  task: {}\n  agent: {}\n",
-            run.record.request_id, run.record.task, run.record.agent
-        ));
-        if !run.partial_result.is_empty() {
-            out.push_str("  partial_result:\n");
-            for line in run.partial_result.lines() {
-                out.push_str("    ");
-                out.push_str(line);
-                out.push('\n');
+    // Two populations with genuinely different meanings, so two paragraphs.
+    // Telling the model a finished run "did not fail — its process
+    // disappeared" would invite it to re-delegate work whose answer is printed
+    // directly underneath.
+    let (finished, interrupted): (Vec<&RecoveredRun>, Vec<&RecoveredRun>) = runs
+        .iter()
+        .partition(|r| r.record.phase == RunPhase::Settled);
+
+    let render = |out: &mut String, group: &[&RecoveredRun]| {
+        for run in group {
+            out.push_str(&format!(
+                "\n- request_id: {}\n  task: {}\n  agent: {}\n",
+                run.record.request_id, run.record.task, run.record.agent
+            ));
+            if let Some(outcome) = run.record.outcome.as_ref() {
+                out.push_str(&format!("  outcome: {outcome}\n"));
+            }
+            if !run.partial_result.is_empty() {
+                out.push_str("  result:\n");
+                for line in run.partial_result.lines() {
+                    out.push_str("    ");
+                    out.push_str(line);
+                    out.push('\n');
+                }
             }
         }
+    };
+
+    let mut out = String::new();
+    if !interrupted.is_empty() {
+        out.push_str(&format!(
+            "{} background sub-agent(s) were still running when the daemon last stopped. \
+             They did not fail — their process disappeared. Partial progress below; \
+             re-delegate anything still needed.\n",
+            interrupted.len()
+        ));
+        render(&mut out, &interrupted);
+    }
+    if !finished.is_empty() {
+        if !out.is_empty() {
+            out.push('\n');
+        }
+        out.push_str(&format!(
+            "{} background sub-agent(s) FINISHED before the daemon stopped, but the \
+             completion notice never reached you. Their results are below — this work \
+             is done, do not repeat it.\n",
+            finished.len()
+        ));
+        render(&mut out, &finished);
     }
     out
 }
@@ -366,6 +461,7 @@ pub fn record_start(request_id: &str, root_session: &str, task: &str, agent: &st
         ended_ms: None,
         outcome: None,
         partial_result_file: Some(RESULT_FILE.to_string()),
+        announced: false,
     };
     write_state(&dir, &record);
     index_lock().insert(record.request_id.clone(), record);
@@ -384,20 +480,47 @@ pub fn record_activity(request_id: &str, text: &str) {
     append_trail(&dir, request_id, text);
 }
 
-/// Record a terminal outcome. The tombstone stays on disk (retention window)
-/// but leaves the in-memory index, because the live tracker now answers for
-/// this id.
+/// Record a terminal outcome. The tombstone stays on disk for the retention
+/// window **and** stays in the index, so this id keeps answering for exactly as
+/// long as its record exists — see [`INDEX`].
 pub fn record_settled(request_id: &str, outcome: &str, final_text: &str) {
     let Some(dir) = store_dir() else { return };
-    let Some(mut record) = index_lock().remove(request_id) else {
-        return;
-    };
     if !final_text.trim().is_empty() {
         append_trail(&dir, request_id, final_text);
     }
-    record.phase = RunPhase::Settled;
-    record.ended_ms = Some(now_ms());
-    record.outcome = Some(outcome.to_string());
+    let record = {
+        let mut index = index_lock();
+        let Some(record) = index.get_mut(request_id) else {
+            return;
+        };
+        record.phase = RunPhase::Settled;
+        record.ended_ms = Some(now_ms());
+        record.outcome = Some(outcome.to_string());
+        record.clone()
+    };
+    write_state(&dir, &record);
+}
+
+/// Mark that the parent has been told about this run's completion.
+///
+/// Called from the two chokepoints that already own that fact: the announce
+/// path's success arm, and the tracker's `mark_consumed` (the shared "the
+/// parent accounted for this" gate behind `check_status` / `wait` / `cancel`).
+/// Without it, `phase == Settled` cannot distinguish "delivered" from "the
+/// notification died with the process" — see [`PersistedRun::announced`].
+pub fn record_announced(request_id: &str) {
+    let Some(dir) = store_dir() else { return };
+    let record = {
+        let mut index = index_lock();
+        let Some(record) = index.get_mut(request_id) else {
+            return;
+        };
+        if record.announced {
+            return; // already durable; do not pay a write per poll
+        }
+        record.announced = true;
+        record.clone()
+    };
     write_state(&dir, &record);
 }
 
@@ -414,10 +537,8 @@ pub fn record_settled(request_id: &str, outcome: &str, final_text: &str) {
 pub fn lookup(request_id: &str, scope: Option<&str>) -> Option<RecoveredRun> {
     let dir = store_dir()?;
     let record = index_lock().get(request_id).cloned()?;
-    if let Some(scope) = scope {
-        if !record.root_session.is_empty() && record.root_session != scope {
-            return None;
-        }
+    if !addressable(&record, scope) {
+        return None;
     }
     let trail = read_trail(&dir, &record);
     Some(RecoveredRun {
@@ -425,6 +546,57 @@ pub fn lookup(request_id: &str, scope: Option<&str>) -> Option<RecoveredRun> {
         partial_result: trail.text,
         record,
     })
+}
+
+/// May a caller owning `scope` see this record?
+///
+/// Strict equality, mirroring `BackgroundAgentTracker::addressable` — which is
+/// what this predicate's doc always claimed to do. It did not: an empty
+/// `root_session` short-circuited the comparison and made the record visible to
+/// **every** scope, so a run started without a session key (any spawn path that
+/// could not resolve one) was readable from any other session in a multi-user
+/// or project-room install. The two halves of one addressing rule cannot
+/// disagree about the degenerate case; the fail-closed direction is the only
+/// one where being wrong is merely inconvenient.
+fn addressable(record: &PersistedRun, scope: Option<&str>) -> bool {
+    scope.is_none_or(|want| record.root_session == want)
+}
+
+/// Every record this scope may see, minus the ids the caller already knows
+/// about.
+///
+/// The `list` face of the same question `lookup` answers by id. Without it the
+/// directory reads only the event log, which — because `SubagentSpawned` is
+/// emitted *after* the spawner takes its concurrency permit — cannot see a
+/// child that died while still queued, even though the sidecar recorded its
+/// start before the task was spawned. Scoped by the same [`addressable`]
+/// predicate as `lookup`: an enumeration face that answered more broadly than
+/// the by-id face would be a way to discover ids it then refuses to read.
+#[must_use]
+pub fn list_for_scope(scope: Option<&str>, exclude: &[String]) -> Vec<RecoveredRun> {
+    let Some(dir) = store_dir() else {
+        return Vec::new();
+    };
+    let records: Vec<PersistedRun> = index_lock()
+        .values()
+        .filter(|r| addressable(r, scope) && !exclude.iter().any(|id| id == &r.request_id))
+        .cloned()
+        .collect();
+    let mut out: Vec<RecoveredRun> = records
+        .into_iter()
+        .map(|record| {
+            let trail = read_trail(&dir, &record);
+            RecoveredRun {
+                last_activity_ms: trail.last_ms.unwrap_or(record.started_ms),
+                partial_result: trail.text,
+                record,
+            }
+        })
+        .collect();
+    // Oldest first, so a caller that keeps the tail keeps the most recent —
+    // the same ordering `list`'s live half uses.
+    out.sort_by_key(|r| r.last_activity_ms);
+    out
 }
 
 // ============================================================================
@@ -554,11 +726,23 @@ fn read_trail(dir: &Path, record: &PersistedRun) -> Trail {
         .collect::<Vec<_>>()
         .join("\n");
     let text = if rendered.len() > PARTIAL_RESULT_TAIL_BYTES {
+        // Walking backwards, the predicate `len - i <= TAIL` holds for every
+        // index in the tail and fails below it, so the boundary we want is the
+        // SMALLEST satisfying index — `take_while(..).last()`.
+        //
+        // This used to be `.find(..)`, which returns the *first* match in
+        // iteration order: the start of the very last character, where
+        // `len - i` is 1..=4. Every trail over 8 KiB was therefore rendered as
+        // an ellipsis plus one character, silently discarding exactly the work
+        // this sidecar exists to hand back after a restart. Short trails never
+        // enter this branch at all, which is why no test and no local run ever
+        // saw it.
         let start = rendered
             .char_indices()
             .rev()
             .map(|(i, _)| i)
-            .find(|i| rendered.len() - i <= PARTIAL_RESULT_TAIL_BYTES)
+            .take_while(|i| rendered.len() - i <= PARTIAL_RESULT_TAIL_BYTES)
+            .last()
             .unwrap_or(0);
         format!("…{}", &rendered[start..])
     } else {
@@ -734,6 +918,8 @@ mod tests {
 
     /// A run that settles normally leaves a terminal record, not a `Running`
     /// one — otherwise the next boot would tombstone something that finished.
+    /// It IS handed back once (the parent was never told), but as `Settled`,
+    /// never rewritten to `Abandoned`.
     #[test]
     fn a_settled_run_is_not_tombstoned_by_the_next_boot() {
         let _g = gate();
@@ -745,14 +931,117 @@ mod tests {
         disable_for_test();
 
         let recovered = init_and_reconcile(tmp.path().to_path_buf());
-        assert!(
-            !recovered.iter().any(|r| r.record.request_id == "req-done"),
-            "a settled run is not an orphan: {recovered:?}"
+        let row = recovered
+            .iter()
+            .find(|r| r.record.request_id == "req-done")
+            .expect("a finished-but-unannounced run is handed back exactly once");
+        assert_eq!(
+            row.record.phase,
+            RunPhase::Settled,
+            "recovering it must not rewrite the verdict to Abandoned"
         );
         let looked_up = lookup("req-done", None).expect("terminal record is retained");
         assert_eq!(looked_up.record.phase, RunPhase::Settled);
         assert_eq!(looked_up.record.outcome.as_deref(), Some("completed"));
         assert!(looked_up.partial_result.contains("the answer is 42"));
+        disable_for_test();
+    }
+
+    /// The window this closes: `record_settled` writes the tombstone, then the
+    /// announce runs — and retries for up to two and a half minutes when the
+    /// parent is busy. A daemon that dies in between leaves a finished run
+    /// nobody will ever mention again. Reconciling only `Running` (the shape
+    /// before this) makes the first assertion fail.
+    #[test]
+    fn a_finished_run_whose_announce_never_landed_is_recovered_once_and_only_once() {
+        let _g = gate();
+        let tmp = tempfile::tempdir().unwrap();
+        enable_for_test(tmp.path().to_path_buf());
+        record_start("req-silent", "agent:a:peer:user", "t", "default");
+        record_settled("req-silent", "completed", "done, nobody heard");
+        disable_for_test();
+
+        let first = init_and_reconcile(tmp.path().to_path_buf());
+        assert!(
+            first.iter().any(|r| r.record.request_id == "req-silent"),
+            "a finished run whose completion notice died must be handed back"
+        );
+        disable_for_test();
+
+        // Second boot: it is now stamped announced, so it must stay quiet.
+        let second = init_and_reconcile(tmp.path().to_path_buf());
+        assert!(
+            !second.iter().any(|r| r.record.request_id == "req-silent"),
+            "recovering it stamps `announced`; a later boot must not repeat it"
+        );
+        disable_for_test();
+    }
+
+    /// A run the parent already acknowledged is not re-announced after a
+    /// restart. `record_announced` is the stamp; without a producer on both
+    /// chokepoints this record would look identical to one nobody ever saw.
+    #[test]
+    fn an_announced_run_is_not_handed_back_at_the_next_boot() {
+        let _g = gate();
+        let tmp = tempfile::tempdir().unwrap();
+        enable_for_test(tmp.path().to_path_buf());
+        record_start("req-seen", "agent:a:peer:user", "t", "default");
+        record_settled("req-seen", "completed", "the answer is 42");
+        record_announced("req-seen");
+        disable_for_test();
+
+        let recovered = init_and_reconcile(tmp.path().to_path_buf());
+        assert!(
+            !recovered.iter().any(|r| r.record.request_id == "req-seen"),
+            "an acknowledged run is not an orphan: {recovered:?}"
+        );
+        disable_for_test();
+    }
+
+    /// `record_settled` used to drop the record from the index, so this lookup
+    /// answered `None` the moment the live tracker's hour-long TTL expired —
+    /// while the tombstone sat on disk for seven days.
+    #[test]
+    fn a_settled_run_stays_addressable_in_the_same_process() {
+        let _g = gate();
+        let tmp = tempfile::tempdir().unwrap();
+        enable_for_test(tmp.path().to_path_buf());
+
+        record_start("req-live", "agent:a:peer:user", "t", "default");
+        record_settled("req-live", "completed", "still reachable");
+        let found = lookup("req-live", Some("agent:a:peer:user"))
+            .expect("a run that just settled must still answer for its own id");
+        assert_eq!(found.record.phase, RunPhase::Settled);
+        assert!(found.partial_result.contains("still reachable"));
+        disable_for_test();
+    }
+
+    /// The tail slice kept the LAST CHARACTER instead of the last 8 KiB: the
+    /// predicate holds for every index in the tail, and `.find()` returns the
+    /// first one it meets walking backwards. Short trails never reach this
+    /// branch, which is why only a large one catches it.
+    #[test]
+    fn a_trail_larger_than_the_tail_budget_keeps_the_tail_not_one_character() {
+        let _g = gate();
+        let tmp = tempfile::tempdir().unwrap();
+        enable_for_test(tmp.path().to_path_buf());
+
+        record_start("req-big", "agent:a:peer:user", "t", "default");
+        for i in 0..400 {
+            record_activity("req-big", &format!("progress line {i} {}", "x".repeat(60)));
+        }
+        record_activity("req-big", "FINAL MARKER");
+
+        let found = lookup("req-big", None).expect("record present");
+        assert!(
+            found.partial_result.len() > PARTIAL_RESULT_TAIL_BYTES / 2,
+            "expected roughly a tail's worth of trail, got {} bytes",
+            found.partial_result.len()
+        );
+        assert!(
+            found.partial_result.contains("FINAL MARKER"),
+            "the tail must end with the most recent activity"
+        );
         disable_for_test();
     }
 

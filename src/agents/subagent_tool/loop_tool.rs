@@ -335,7 +335,13 @@ impl LoopTool for SubagentTool {
                         };
                     }
                     None => {
-                        return unknown_request_id(&request_id, scope);
+                        let recovered = self
+                            .resolve_forgotten(std::slice::from_ref(&request_id), scope)
+                            .await;
+                        return match recovered.get(&request_id) {
+                            Some(found) => recovery::to_result(&request_id, found),
+                            None => unknown_request_id(&request_id),
+                        };
                     }
                 }
             }
@@ -392,7 +398,15 @@ impl LoopTool for SubagentTool {
                                 }),
                             }
                         }
-                        WaitOutcome::NotFound => unknown_request_id(request_id, scope),
+                        WaitOutcome::NotFound => {
+                            let recovered = self
+                                .resolve_forgotten(std::slice::from_ref(request_id), scope)
+                                .await;
+                            match recovered.get(request_id) {
+                                Some(found) => recovery::to_result(request_id, found),
+                                None => unknown_request_id(request_id),
+                            }
+                        }
                     };
                 }
 
@@ -412,7 +426,7 @@ impl LoopTool for SubagentTool {
                 // finished-and-forgotten or interrupted-by-restart, and telling
                 // the model to "drop them from your next wait" would be a lie
                 // that costs it the result.
-                let recovered = self.recover_from_log(&unknown).await;
+                let recovered = self.resolve_forgotten(&unknown, scope).await;
                 return match outcome {
                     WaitAnyOutcome::Completed {
                         request_id,
@@ -563,7 +577,7 @@ impl LoopTool for SubagentTool {
                         // its cancel was a no-op because there was nothing left
                         // to cancel.
                         match self
-                            .recover_from_log(std::slice::from_ref(&request_id))
+                            .resolve_forgotten(std::slice::from_ref(&request_id), scope)
                             .await
                             .remove(&request_id)
                         {
@@ -623,7 +637,7 @@ impl LoopTool for SubagentTool {
                 // finished sub-agent's output would grow the directory without
                 // bound. Newest last from the log, so the tail is the cap —
                 // matching `completed`'s newest-first intent.
-                let recovered_all = self.list_from_log(&known).await;
+                let recovered_all = self.list_from_log(&known, scope).await;
                 let recovered_total = recovered_all.len();
                 let from_log: Vec<Value> = recovered_all
                     .iter()
@@ -1385,7 +1399,7 @@ impl SubagentTool {
             })
             .collect();
         let unknown = self.background_tracker.unknown_ids(request_ids, scope);
-        let recovered = self.recover_from_log(&unknown).await;
+        let recovered = self.resolve_forgotten(&unknown, scope).await;
         let mut output = json!({
             "status": "wait_interrupted",
             "still_running": still_running,
@@ -1714,41 +1728,22 @@ fn completed_row_json(request_id: &str, snap: &CompletedSnapshot) -> Value {
     }
 }
 
-/// W24 — the answer for a `request_id` the live tracker has never heard of.
+/// The answer for a `request_id` that **nothing** can account for: not the live
+/// tracker, not the parent's durable event log, not the cross-process sidecar.
 ///
-/// Before consulting the sidecar this was unconditionally
-/// `Error{retryable:false, "No background sub-agent found …"}`, which conflates
-/// two entirely different situations and is wrong about the interesting one: a
-/// daemon restart is not a failure *of this call*, and the child may well have
-/// produced something before its process vanished (§3 — "cancellation is not a
-/// verdict"; a disappeared process is the same shape). If the cross-process
-/// sidecar knows the id, report the interruption as a **success** carrying
-/// whatever the child had done, so the model can re-delegate from evidence
-/// rather than from a dead end.
+/// This is the last arm of `recovery::resolve_forgotten`, and it is the only
+/// place this error is still produced. Every caller must go through that
+/// resolver first — a restart is not a failure *of this call*, and answering
+/// "no such sub-agent" for a child whose output is sitting in a durable store
+/// is how a model is talked into redoing finished work.
 ///
-/// The genuinely-unknown id keeps the old error verbatim.
-fn unknown_request_id(request_id: &str, scope: Option<&str>) -> ToolResult {
-    match crate::agents::background_persistence::lookup(request_id, scope) {
-        Some(found) => ToolResult::Success {
-            output: json!({
-                "status": found.record.phase.status_label(),
-                "request_id": request_id,
-                "task": found.record.task,
-                "agent": found.record.agent,
-                "started_ms": found.record.started_ms,
-                "last_activity_ms": found.last_activity_ms,
-                "partial_result": found.partial_result,
-                "outcome": found.record.outcome,
-                "note": "This sub-agent belonged to a previous daemon process, so its live \
-                         state is gone. Anything above is what it managed to record before \
-                         the process ended — it is NOT a failure of the task. Re-delegate \
-                         whatever is still needed.",
-            }),
-        },
-        None => ToolResult::Error {
-            error: format!("No background sub-agent found with request_id '{request_id}'"),
-            retryable: false,
-        },
+/// An out-of-scope id lands here too, byte-identical to a typo: `addressable`
+/// on both durable sources refuses it, and the existence of another session's
+/// run is not disclosed.
+fn unknown_request_id(request_id: &str) -> ToolResult {
+    ToolResult::Error {
+        error: format!("No background sub-agent found with request_id '{request_id}'"),
+        retryable: false,
     }
 }
 

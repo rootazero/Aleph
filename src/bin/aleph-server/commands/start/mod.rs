@@ -2265,7 +2265,6 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
                     cron_state.clock.as_ref(),
                     cron_config.max_missed_jobs_per_restart,
                     cron_config.catchup_stagger_ms,
-                    cron_config.job_timeout_secs.saturating_mul(1000) as i64,
                 )
                 .await
                 {
@@ -3126,6 +3125,16 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
     // orphaning them — mirroring the memory/channel monitor shutdowns above.
     if let Some(ref hb_svc) = heartbeat_service {
         let svc = hb_svc.lock().await;
+        svc.request_shutdown();
+    }
+
+    // Cron's timer loop has always had an `is_shutdown()` exit arm, but nothing
+    // ever set the flag: `ServiceState::request_shutdown` had no caller on the
+    // cron side and `CronService` did not expose it. The loop therefore kept
+    // waking and dispatching jobs while the delivery engine, providers and
+    // stores around it were being torn down.
+    if let Some(ref cron_svc) = cron_service {
+        let svc = cron_svc.lock().await;
         svc.request_shutdown();
     }
 
