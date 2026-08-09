@@ -120,9 +120,16 @@ pub struct WorkspaceUpdateParams {
 ///
 /// Unknown fields are ignored, so the server may add fields freely. A *rename*
 /// of one of these is a breaking change, and deserialization then fails loudly
-/// instead of blanking the column — which is the whole point. The projection is
-/// pinned against the real `AgentEnv` by a test on the server side, where the
-/// source of truth lives.
+/// instead of blanking the column — which is the whole point.
+///
+/// Since 2026-08-09 the server **builds its response from this type** rather
+/// than serializing `AgentEnv` and letting the client ignore the difference.
+/// That matters because tolerance and enforcement point opposite ways: a test
+/// that parses a real response proves the response is a *superset* of this
+/// type, never that it equals it, and four `AgentEnv` fields with no writer and
+/// no reader rode the wire for months inside exactly that gap. Both directions
+/// are now pinned on the server side, where the field names are owned —
+/// `handlers::workspace::the_read_responses_carry_the_contract_and_nothing_else`.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct WorkspaceRow {
     /// Workspace identifier — the key `workspace.archive` takes.
@@ -176,10 +183,15 @@ pub struct WorkspaceDetail {
 
     /// Emoji or icon identifier.
     ///
-    /// Defaulted because the server omits the key entirely when there is none
-    /// (`AgentEnv::icon` carries `skip_serializing_if`), so a required field
-    /// here would fail to parse every icon-less workspace — which is all of
-    /// them until someone passes `--icon`.
+    /// Defaulted because the server omitted the key entirely when there was
+    /// none — it serialized `AgentEnv`, whose `icon` carries
+    /// `skip_serializing_if` — so a required field here failed to parse every
+    /// icon-less workspace, which is all of them until someone passes
+    /// `--icon`. Since 2026-08-09 the server builds the response from *this*
+    /// type and sends an explicit `null`, so the default is no longer load
+    /// bearing for the current server. It stays for the two readers that still
+    /// need it: an older server, and the guarantee that adding
+    /// `skip_serializing_if` here later is not a breaking change.
     #[serde(default)]
     pub icon: Option<String>,
 
@@ -272,10 +284,15 @@ mod tests {
         );
     }
 
-    /// An icon-less workspace is the common case, and the server omits the key
-    /// rather than sending `null`. A required `icon` would therefore have
-    /// failed to parse essentially every real response — the kind of break that
-    /// shows up only once a client exists.
+    /// An icon-less workspace is the common case. Until 2026-08-09 the server
+    /// omitted the key entirely (it serialized its store type, whose `icon`
+    /// carries `skip_serializing_if`); it now projects through
+    /// [`WorkspaceDetail`] and sends an explicit `null`. A required `icon`
+    /// would have failed to parse essentially every real response under the
+    /// first shape — the kind of break that shows up only once a client exists
+    /// — so the field stays optional-and-defaulted and this test keeps the
+    /// **omitted** case, which is the one no longer produced and therefore the
+    /// one nothing else would catch if it regressed.
     #[test]
     fn a_detail_parses_a_workspace_that_has_no_icon() {
         let envelope: WorkspaceEnvelope = serde_json::from_value(serde_json::json!({

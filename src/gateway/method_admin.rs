@@ -682,9 +682,20 @@ mod tests {
     ///
     /// The asymmetry is deliberate and worth pinning: `agents.list`/`.get`
     /// have live member consumers (the Panel's persona roster), while every
-    /// `workspace.*` read had none — so carving the reads open here would
-    /// reopen `env_vars` / `system_prompt_override` / `allowed_tools` to every
-    /// caller in exchange for nothing.
+    /// `workspace.*` read has none — the CLI is the only client and it runs as
+    /// operator. Carving the reads open buys nothing.
+    ///
+    /// The original wording added that carving them open would "reopen
+    /// `env_vars` / `system_prompt_override` / `allowed_tools` to every
+    /// caller". That justification is retired as of 2026-08-09: those fields
+    /// have no writer anywhere in the repo, so they were always empty, and they
+    /// are no longer on the wire at all
+    /// (`handlers::workspace::detail_of`). The gate is kept on the reason that
+    /// survives inspection — a workspace is a **global** resource with no
+    /// owner column, so every caller who reaches these methods can rename or
+    /// archive a workspace any other user created. That is an argument about
+    /// the write half, and since the reads have no consumer to protect there
+    /// is nothing to trade against gating the family whole.
     #[test]
     fn the_workspace_family_has_no_member_carve_out() {
         for m in [

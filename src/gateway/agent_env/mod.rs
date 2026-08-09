@@ -8,11 +8,21 @@
 //!
 //! ```text
 //! Profile (Static Template)     AgentEnv (Runtime Instance)
-//! ├── model binding        →    ├── session_key
-//! ├── tool whitelist       →    ├── cache_state
-//! ├── system_prompt        →    └── env_vars
-//! └── temperature
+//! ├── model binding             ├── profile ─────┐
+//! ├── tool whitelist            ├── session_key  │ resolved through
+//! ├── system_prompt             ├── cache_state  │ the named profile
+//! └── temperature               └── name/icon/description
 //! ```
+//!
+//! The arrows run one way and only one: an `AgentEnv` **names** a profile and
+//! everything configurable is read from that profile. The env row itself holds
+//! identity, cache state and display metadata — nothing that overrides the
+//! profile. It briefly looked otherwise: `env_vars`, `default_model`,
+//! `system_prompt_override` and `allowed_tools` were columns here (and, until
+//! the read paths were projected onto the wire contract, visible in
+//! `workspace.get --json`) with no statement anywhere writing them and no field
+//! on [`ActiveAgentEnv`] to carry them into a run. Dropped 2026-08-09; see the
+//! DROP COLUMN block in `AgentEnvStore::init_schema`.
 //!
 //! # Example
 //!
@@ -154,10 +164,6 @@ pub struct AgentEnv {
     /// Provider-side context caching state
     pub cache_state: CacheState,
 
-    /// Environment variables specific to this agent
-    #[serde(default)]
-    pub env_vars: HashMap<String, String>,
-
     /// Optional description
     pub description: Option<String>,
 
@@ -180,18 +186,6 @@ pub struct AgentEnv {
     /// Fact types that should never decay for this agent (stored as JSON array of strings)
     #[serde(default)]
     pub permanent_fact_types: Vec<String>,
-
-    /// Default model override (e.g., "claude-sonnet-4-20250514")
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub default_model: Option<String>,
-
-    /// System prompt override
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub system_prompt_override: Option<String>,
-
-    /// Allowlist of tool names available (empty = all tools)
-    #[serde(default)]
-    pub allowed_tools: Vec<String>,
 }
 
 impl AgentEnv {
@@ -206,16 +200,12 @@ impl AgentEnv {
             created_at: now,
             last_active_at: now,
             cache_state: CacheState::None,
-            env_vars: HashMap::new(),
             description: None,
             name: id,
             icon: None,
             is_archived: false,
             decay_rate: None,
             permanent_fact_types: Vec::new(),
-            default_model: None,
-            system_prompt_override: None,
-            allowed_tools: Vec::new(),
         }
     }
 
@@ -522,16 +512,12 @@ impl AgentEnvStore {
                 created_at INTEGER NOT NULL,
                 last_active_at INTEGER NOT NULL,
                 cache_state TEXT,
-                env_vars TEXT,
                 description TEXT,
                 archived INTEGER DEFAULT 0,
                 name TEXT NOT NULL DEFAULT '',
                 icon TEXT,
                 decay_rate REAL,
-                permanent_fact_types TEXT,
-                default_model TEXT,
-                system_prompt_override TEXT,
-                allowed_tools TEXT
+                permanent_fact_types TEXT
             );
 
             CREATE TABLE IF NOT EXISTS channel_active_agent (
@@ -554,9 +540,6 @@ impl AgentEnvStore {
             "ALTER TABLE agent_envs ADD COLUMN icon TEXT",
             "ALTER TABLE agent_envs ADD COLUMN decay_rate REAL",
             "ALTER TABLE agent_envs ADD COLUMN permanent_fact_types TEXT",
-            "ALTER TABLE agent_envs ADD COLUMN default_model TEXT",
-            "ALTER TABLE agent_envs ADD COLUMN system_prompt_override TEXT",
-            "ALTER TABLE agent_envs ADD COLUMN allowed_tools TEXT",
         ];
         for sql in &migrations {
             let _ = conn.execute(sql, []); // ignore "duplicate column" errors
@@ -578,6 +561,36 @@ impl AgentEnvStore {
         // Ignoring the error covers both the already-dropped case and a SQLite
         // too old for DROP COLUMN (3.35+; the bundled build is far newer).
         let _ = conn.execute("ALTER TABLE agent_envs DROP COLUMN is_archived", []);
+
+        // Four more of the same kind, dropped 2026-08-09. `env_vars` came with
+        // the original table and the other three arrived as ADD COLUMN
+        // migrations, but no statement has ever written any of them: the INSERT
+        // lists six columns, and the three UPDATEs touch name/description/icon,
+        // last_active_at, cache_state and archived. Verified across the whole
+        // history, not just the current tree — there is no version of Aleph
+        // whose database holds a value here, so this destroys nothing.
+        //
+        // They were not merely unused, they were *reachable-looking*:
+        // `workspace.get --json` published all four until the read paths began
+        // projecting through the wire contract, so an operator could read
+        // `default_model` on a workspace and reasonably conclude it was a
+        // setting. Nothing would ever have applied it — `ActiveAgentEnv`, the
+        // struct that carries an env into the execution pipeline, has no field
+        // for any of them and never did. R10: a channel with zero consumers is
+        // cut, not connected.
+        //
+        // If workspace-scoped model/prompt/tools is ever actually built, these
+        // come back as ADD COLUMN in this same list — which is the cheap half.
+        // Re-adding a column is a migration; un-teaching an operator that a
+        // setting exists is not.
+        for column in [
+            "env_vars",
+            "default_model",
+            "system_prompt_override",
+            "allowed_tools",
+        ] {
+            let _ = conn.execute(&format!("ALTER TABLE agent_envs DROP COLUMN {column}"), []);
+        }
 
         // Ensure global agent environment exists
         let now = Utc::now().timestamp();
@@ -769,6 +782,104 @@ mod tests {
         let all = store.list(true).await.unwrap();
         let retired = all.iter().find(|w| w.id == "retired").expect("still there");
         assert!(retired.is_archived, "the archived flag must survive a drop");
+    }
+
+    /// The four dormant columns go the same way, and every surviving field
+    /// still lands on the right value.
+    ///
+    /// Built into the full pre-migration shape by hand, for the reason
+    /// [`a_database_carrying_the_retired_is_archived_column_loses_it`] gives:
+    /// only an older version's rows can carry a retired column, so a test that
+    /// opens a fresh store first cannot see the migration at all.
+    ///
+    /// The second half is the load-bearing one. `row_to_agent_env` reads by
+    /// **index**, so removing four columns from `ENV_COLUMNS` silently shifts
+    /// six of the remaining reads — and every shifted read still compiles and
+    /// still returns a value of the right type. Planting a distinct value in
+    /// each surviving column is what turns that into a failure. `description`
+    /// and `name` are adjacent to the removed `env_vars` and are the pair that
+    /// would swap first.
+    #[tokio::test]
+    async fn a_database_carrying_the_dormant_columns_loses_them_without_shifting_the_rest() {
+        let temp = tempdir().unwrap();
+        let path = temp.path().join("legacy-full.db");
+
+        {
+            let conn = Connection::open(&path).unwrap();
+            conn.execute_batch(
+                // Every column this table ever had, in the order it had them,
+                // with the four dead ones carrying values no reader should
+                // ever have been able to see.
+                "CREATE TABLE agent_envs (
+                     id TEXT PRIMARY KEY,
+                     profile TEXT NOT NULL,
+                     created_at INTEGER NOT NULL,
+                     last_active_at INTEGER NOT NULL,
+                     cache_state TEXT,
+                     env_vars TEXT,
+                     description TEXT,
+                     archived INTEGER DEFAULT 0,
+                     name TEXT NOT NULL DEFAULT '',
+                     icon TEXT,
+                     decay_rate REAL,
+                     permanent_fact_types TEXT,
+                     default_model TEXT,
+                     system_prompt_override TEXT,
+                     allowed_tools TEXT
+                 );
+                 INSERT INTO agent_envs
+                     (id, profile, created_at, last_active_at, env_vars,
+                      description, archived, name, icon, decay_rate,
+                      permanent_fact_types, default_model,
+                      system_prompt_override, allowed_tools)
+                 VALUES
+                     ('crypto', 'default', 111, 222, '{\"SECRET\":\"x\"}',
+                      'the description', 0, 'The Name', '@',
+                      0.25, '[\"pinned\"]', 'some-model',
+                      'you are a pirate', '[\"file_read\"]');",
+            )
+            .unwrap();
+        }
+
+        let store = AgentEnvStore::new(test_config(path)).unwrap();
+
+        let columns: Vec<String> = {
+            let conn = store.conn.lock().unwrap_or_else(|e| e.into_inner());
+            let mut stmt = conn
+                .prepare("SELECT name FROM pragma_table_info('agent_envs')")
+                .unwrap();
+            stmt.query_map([], |row| row.get::<_, String>(0))
+                .unwrap()
+                .collect::<rusqlite::Result<Vec<_>>>()
+                .unwrap()
+        };
+        for dead in [
+            "env_vars",
+            "default_model",
+            "system_prompt_override",
+            "allowed_tools",
+        ] {
+            assert!(
+                !columns.iter().any(|c| c == dead),
+                "`{dead}` survived the migration: {columns:?}"
+            );
+        }
+
+        let env = store
+            .get("crypto")
+            .await
+            .unwrap()
+            .expect("the row survives the column drop");
+        assert_eq!(env.id, "crypto");
+        assert_eq!(env.profile, "default");
+        assert_eq!(env.created_at.timestamp(), 111);
+        assert_eq!(env.last_active_at.timestamp(), 222);
+        assert_eq!(env.description.as_deref(), Some("the description"));
+        assert_eq!(env.name, "The Name");
+        assert_eq!(env.icon.as_deref(), Some("@"));
+        assert!(!env.is_archived);
+        assert_eq!(env.decay_rate, Some(0.25));
+        assert_eq!(env.permanent_fact_types, vec!["pinned".to_string()]);
     }
 
     #[tokio::test]

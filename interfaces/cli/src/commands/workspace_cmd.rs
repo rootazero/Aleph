@@ -429,6 +429,17 @@ mod tests {
     /// real `workspace.get` envelope, not by a `WorkspaceDetail` built next to
     /// the assertion, so a field the server does not actually send shows up
     /// here as a parse failure instead of as a plausible-looking line.
+    ///
+    /// The body carried `cache_state` / `env_vars` / `allowed_tools` until
+    /// 2026-08-09, because the server serialized its whole store type and this
+    /// fixture was copied from what it really sent. It no longer sends them —
+    /// they had no writer and the run pipeline never read them — so keeping
+    /// them here would make a test that advertises "a real response body"
+    /// the last place that lie survived. Unknown-field tolerance is a real and
+    /// separate property of this projection (the server may add fields freely),
+    /// and it is asserted where the type lives —
+    /// `aleph_protocol::workspace`'s `a_row_ignores_fields_it_does_not_render`
+    /// — not smuggled into this one's fixture.
     #[test]
     fn a_detail_renders_every_field_from_a_real_response_body() {
         let envelope: WorkspaceEnvelope = serde_json::from_value(serde_json::json!({
@@ -440,9 +451,6 @@ mod tests {
                 "icon": "\u{1F4B0}",
                 "created_at": "2026-08-08T09:30:00Z",
                 "last_active_at": "2026-08-08T11:45:00Z",
-                "cache_state": { "type": "none" },
-                "env_vars": {},
-                "allowed_tools": [],
                 "is_archived": false,
             }
         }))
