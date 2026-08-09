@@ -73,44 +73,11 @@ pub trait MediaCapability: Send + Sync {
         ))
     }
 
-    /// Poll the default microphone for its current EMA-smoothed RMS level.
-    ///
-    /// Returns [`MicMeterSample`] which carries the level (when the underlying
-    /// session is running) and a textual reason when it can't be started
-    /// (missing permission, no input device, etc.). Designed for use by a
-    /// long-running polling daemon (`tasks::mic_level`) — the implementation is
-    /// expected to keep an audio tap warm across calls, not to spin one up per
-    /// poll.
-    ///
-    /// Default impl returns `NotImplemented` for non-macOS platforms.
-    async fn mic_level(&self) -> Result<MicMeterSample> {
-        Err(crate::DesktopError::NotImplemented(
-            "mic_level not available on this platform".into(),
-        ))
-    }
-}
-
-/// One mic-meter sample as seen by the core (mirror of `MicMeterResult` on
-/// the wire — kept separate so the trait does not leak `aleph_protocol` types
-/// into platforms that never speak the bridge).
-#[derive(Debug, Clone, PartialEq)]
-pub struct MicMeterSample {
-    /// EMA-smoothed RMS level, range 0.0..=1.0. `None` if the meter session
-    /// could not start.
-    pub level: Option<f32>,
-    /// `true` iff the meter session is currently running.
-    pub active: bool,
-    /// Human-readable reason the session is not active, when `active` is
-    /// false (e.g. "permission denied", "no input device").
-    pub reason: Option<String>,
-}
-
-impl MicMeterSample {
-    pub fn inactive(reason: impl Into<String>) -> Self {
-        Self {
-            level: None,
-            active: false,
-            reason: Some(reason.into()),
-        }
-    }
+    // `mic_level()` and its `MicMeterSample` were removed on 2026-08-09 along
+    // with their only caller, the `tasks::mic_level` reporter. The macOS limb
+    // behind it kept a long-lived `AVAudioEngine` tap warm in the helper — a
+    // capability with a running cost and no consumer, which is the shape R10
+    // says to retract rather than keep warm for a future one. Audio capture is
+    // unaffected: `record_audio` / `record_audio_start` / `record_audio_stop`
+    // are the live paths.
 }

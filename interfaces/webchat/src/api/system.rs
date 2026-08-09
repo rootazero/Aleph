@@ -54,29 +54,17 @@ impl SystemApi {
         serde_json::from_value(result).map_err(|e| format!("Failed to parse run concurrency: {e}"))
     }
 
-    /// Round-8 (§4.11) — `gateway.metrics.subagent_concurrency` — live
-    /// background-sub-agent occupancy. Mirrors `run_concurrency` for the
-    /// `BackgroundAgentTracker` so a panel can render the §4.11 gauge with
-    /// the same widget that renders §4.10. Pass `scope = Some(session_key)`
-    /// to limit the view to one session.
-    pub async fn subagent_concurrency(
-        state: &DashboardState,
-        scope: Option<&str>,
-    ) -> Result<SubagentConcurrencyMetrics, String> {
-        let params = match scope {
-            Some(s) => Value::Object(
-                [("scope".to_string(), Value::String(s.to_string()))]
-                    .into_iter()
-                    .collect(),
-            ),
-            None => Value::Null,
-        };
-        let result = state
-            .rpc_call("gateway.metrics.subagent_concurrency", params)
-            .await?;
-        serde_json::from_value(result)
-            .map_err(|e| format!("Failed to parse subagent concurrency: {e}"))
-    }
+    // A `subagent_concurrency()` mirror of `gateway.metrics.subagent_concurrency`
+    // lived here, with its two payload structs, from Round-8 (§4.11) until
+    // 2026-08-09. Nothing in `interfaces/` ever called it — no view, no widget,
+    // no polling tick — and a `pub` item in this crate never trips `dead_code`,
+    // so it read as shipped. The server half is NOT dead and stays: it is an
+    // admin-gated read-only diagnostic RPC that scripts and operators reach
+    // directly. Cut rather than left in place because a display-only mirror
+    // that cannot name the line of code rendering it is scaffolding, and the
+    // day a panel wants this gauge, writing the four-line call is cheaper than
+    // having carried a stale one (`run_concurrency` above is the live shape to
+    // copy — it has three call sites).
 }
 
 /// Combined payload of `gateway.metrics.run_concurrency`.
@@ -146,43 +134,8 @@ pub struct LaneOccupancy {
     pub shared_available: usize,
 }
 
-/// Round-8 (§4.11) — mirror of the `subagent_concurrency` RPC payload. The
-/// `consumed_total / completed_total` ratio is the dedup-hygiene gauge: a
-/// high `completed_total` paired with a low `consumed_total` means the
-/// parent is ignoring its background results. Mirrors the
-/// `{"subagent_concurrency": {...}}` envelope the handler emits.
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
-pub struct SubagentConcurrencyMetrics {
-    #[serde(default)]
-    pub subagent_concurrency: SubagentConcurrency,
-}
-
-/// Inner sub-agent snapshot — the per-process live occupancy for §4.11.
-/// Same shape as `RunConcurrency::per_agent` rows so a panel widget renders
-/// both gauges with one row template.
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
-pub struct SubagentConcurrency {
-    #[serde(default)]
-    pub running_total: usize,
-    #[serde(default)]
-    pub running_per_session: Vec<SessionSubagentCount>,
-    /// Running entries that are *presence-only* (sync fan-out seams, MoA
-    /// aggregators, team-chat members). Excluded from the `subagent` tool's
-    /// enumeration faces by design, but they DO count against the parent's
-    /// Interrupt-demote budget.
-    #[serde(default)]
-    pub presence_only_total: usize,
-    #[serde(default)]
-    pub completed_total: usize,
-    #[serde(default)]
-    pub consumed_total: usize,
-}
-
-/// One session's live sub-agent count, in the same shape as
-/// `RunConcurrency::per_agent` so the panel widget renders both gauges with
-/// the same row template.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct SessionSubagentCount {
-    pub session: String,
-    pub count: usize,
-}
+// `SubagentConcurrencyMetrics` / `SubagentConcurrency` / `SessionSubagentCount`
+// were the payload mirrors for the cut `SystemApi::subagent_concurrency` above.
+// The wire shape they described still exists server-side — see
+// `gateway/handlers/gateway_metrics.rs` and `agents/background_tracker.rs::
+// subagent_snapshot`, which are the authoritative definitions.

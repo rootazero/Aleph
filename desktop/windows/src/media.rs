@@ -27,7 +27,7 @@ use aleph_desktop::media_types::{
     AudioDeviceInfo, AudioRecordConfig, AudioRecordResult, CameraClipConfig, CameraClipResult,
     CameraSnapConfig, CameraSnapResult,
 };
-use aleph_desktop::traits::media::{MediaCapability, MicMeterSample};
+use aleph_desktop::traits::media::MediaCapability;
 use aleph_desktop::{DesktopError, Result};
 use async_trait::async_trait;
 use base64::{engine::general_purpose, Engine as _};
@@ -469,15 +469,6 @@ impl MediaCapability for WindowsMedia {
             duration_secs: config.duration_secs,
             format: "m4a".to_string(),
         })
-    }
-
-    async fn mic_level(&self) -> Result<MicMeterSample> {
-        // No warm-tap meter on Windows here; report inactive (Ok, not Err) so
-        // the opt-in mic-level reporter stays quiet. Use `record_audio` for
-        // actual capture.
-        Ok(MicMeterSample::inactive(
-            "mic level metering is not implemented on Windows; use record_audio",
-        ))
     }
 }
 

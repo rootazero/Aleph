@@ -52,7 +52,7 @@ mod runtime_warmup;
 use runtime_warmup::runtime_startup_warmup;
 
 mod bootstrap_factories;
-use bootstrap_factories::{build_desktop_platform, build_task_delivery_engine};
+use bootstrap_factories::build_task_delivery_engine;
 
 // ── (subsystem initializer helpers extracted to start/helpers.rs) ────────────
 
@@ -851,7 +851,9 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
             }
             Err(e) => {
                 if !args.daemon {
-                    eprintln!("Warning: Failed to initialize workspace manager: {e}. channels.set_agent/agents.bindings disabled.");
+                    eprintln!(
+                        "Warning: Failed to initialize workspace manager: {e}. channels.set_agent/agents.bindings disabled."
+                    );
                 }
                 None
             }
@@ -970,7 +972,9 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
                         }
                         Err(e) => {
                             if !args.daemon {
-                                eprintln!("Warning: Failed to initialize heartbeat service: {e}. Heartbeat disabled.");
+                                eprintln!(
+                                    "Warning: Failed to initialize heartbeat service: {e}. Heartbeat disabled."
+                                );
                             }
                             None
                         }
@@ -2343,7 +2347,9 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
                     Ok(dir) => Some(dir),
                     Err(e) => {
                         if !args.daemon {
-                            eprintln!("Warning: Failed to resolve data directory for heartbeat DB ({e}), dedup disabled.");
+                            eprintln!(
+                                "Warning: Failed to resolve data directory for heartbeat DB ({e}), dedup disabled."
+                            );
                         }
                         tracing::warn!(error = %e, "Failed to resolve data directory; DedupEngine disabled");
                         None
@@ -2368,7 +2374,9 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
                             }
                             Err(e) => {
                                 if !args.daemon {
-                                    eprintln!("Warning: DedupEngine could not open heartbeat DB ({e}), dedup disabled.");
+                                    eprintln!(
+                                        "Warning: DedupEngine could not open heartbeat DB ({e}), dedup disabled."
+                                    );
                                 }
                                 Arc::new(DedupEngine::noop(hb_state.config.dedup.clone()))
                             }
@@ -2472,80 +2480,10 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
         }
     }
 
-    // Spawn the desktop daemon-consumer reporters (FEATURE_LOCATOR §7.6).
-    // Both read their policy from `[desktop]` in config.toml — previously they
-    // ran on hardcoded `::default()` settings, so the presence cadence could
-    // not be tuned and the opt-in mic-level meter had no config path to enable
-    // it at all. The "brain" (cadence / publish format) lives in
-    // `alephcore::tasks::{presence,mic_level}`; the "limb" (idle probe,
-    // system_info, mic tap) stays behind the capability traits in the
-    // platform-specific `desktop/*` crates.
-    {
-        let desktop_cfg = {
-            let guard = app_config.read().await;
-            guard.desktop.clone()
-        };
-        // Build the per-OS platform at most once and share the Arc across both
-        // reporters — only when at least one is enabled, so a fully-disabled
-        // `[desktop]` never touches the platform layer (no Swift helper spawn).
-        let platform = (desktop_cfg.presence.enabled || desktop_cfg.mic_level.enabled)
-            .then(build_desktop_platform);
-
-        // Presence — periodic broadcast of (hostname / username / idle) on the
-        // Gateway event bus. No-op when the platform has no SystemCapability
-        // (headless CI, etc.).
-        if desktop_cfg.presence.enabled {
-            let platform = platform
-                .clone()
-                .unwrap_or_else(|| panic!("platform must be built when presence is enabled"));
-            if platform.system().is_some() {
-                let reporter = alephcore::tasks::presence::PresenceReporter::new(
-                    platform,
-                    event_bus.as_ref().clone(),
-                    desktop_cfg.presence,
-                );
-                // Detached background task: the JoinHandle is intentionally
-                // dropped (dropping it does not cancel the spawned task).
-                #[allow(clippy::let_underscore_future)]
-                let _ = reporter.spawn();
-                if !args.daemon {
-                    println!("Presence reporter: started");
-                }
-            } else if !args.daemon {
-                println!("Presence reporter: skipped (no SystemCapability on this platform)");
-            }
-        } else if !args.daemon {
-            println!("Presence reporter: disabled");
-        }
-
-        // Mic-level — opt-in (default OFF, since the live meter keeps the OS
-        // "mic in use" indicator on continuously). When enabled, polls
-        // `MediaCapability::mic_level()` and publishes a categorical
-        // (Active/Quiet/Unavailable) snapshot on the Gateway event bus.
-        if desktop_cfg.mic_level.enabled {
-            let platform = platform
-                .clone()
-                .unwrap_or_else(|| panic!("platform must be built when mic_level is enabled"));
-            if platform.media().is_some() {
-                let reporter = alephcore::tasks::mic_level::MicLevelReporter::new(
-                    platform,
-                    event_bus.as_ref().clone(),
-                    desktop_cfg.mic_level,
-                );
-                // Detached background task: the JoinHandle is intentionally
-                // dropped (dropping it does not cancel the spawned task).
-                #[allow(clippy::let_underscore_future)]
-                let _ = reporter.spawn();
-                if !args.daemon {
-                    println!("Mic-level reporter: started");
-                }
-            } else if !args.daemon {
-                println!("Mic-level reporter: skipped (no MediaCapability on this platform)");
-            }
-        } else if !args.daemon {
-            println!("Mic-level reporter: disabled (opt-in)");
-        }
-    }
+    // The two desktop daemon-consumer reporters (presence broadcaster,
+    // mic-level meter) were spawned here until 2026-08-09. Both are gone —
+    // see `alephcore::tasks` for why — which also removes the only boot path
+    // that built the per-OS desktop platform eagerly at start-up.
 
     // Boot-scan: ProjectionReconciler (display back-fill) THEN ResumeCoordinator
     // (agent re-execution), in one ordered detached task so back-filled old
@@ -2997,7 +2935,9 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
     // Inject ChannelRegistry into BuiltinToolRegistry (deferred — channels created after tools)
     if let Some(ref cell) = agent_result.channel_registry_cell {
         if cell.set(channel_registry.clone()).is_err() {
-            tracing::warn!("Failed to inject ChannelRegistry into BuiltinToolRegistry: cell already initialized");
+            tracing::warn!(
+                "Failed to inject ChannelRegistry into BuiltinToolRegistry: cell already initialized"
+            );
         } else {
             tracing::info!(
                 "ChannelRegistry injected into BuiltinToolRegistry for channel_pairing tool"
@@ -3008,7 +2948,9 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
     // Inject ClarificationManager into BuiltinToolRegistry (deferred) — enables `ask_user` (HITL P4).
     if let Some(ref cell) = agent_result.clarification_manager_cell {
         if cell.set(clarification_manager.clone()).is_err() {
-            tracing::warn!("Failed to inject ClarificationManager into BuiltinToolRegistry: cell already initialized");
+            tracing::warn!(
+                "Failed to inject ClarificationManager into BuiltinToolRegistry: cell already initialized"
+            );
         } else {
             tracing::info!(
                 "ClarificationManager injected into BuiltinToolRegistry for ask_user tool"

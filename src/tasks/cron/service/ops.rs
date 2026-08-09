@@ -5,7 +5,7 @@
 //! modify the store and recompute next run times as needed.
 
 use crate::tasks::cron::config::{
-    CronJob, CronJobView, ErrorReason, FailureAlertConfig, ScheduleKind, SessionTarget,
+    CronJob, CronJobView, ErrorReason, FailureAlertConfig, JobChain, ScheduleKind, SessionTarget,
 };
 use crate::tasks::cron::stagger::compute_staggered_next;
 use crate::tasks::cron::store::CronStore;
@@ -225,6 +225,14 @@ pub struct CronJobUpdates {
     /// outer `Some(Some(cfg))` installs, outer `Some(None)` clears, outer
     /// `None` leaves it alone.
     pub failure_alert: Option<Option<FailureAlertConfig>>,
+    /// Chain successors. Same tri-state convention again: outer `Some(Some)`
+    /// REPLACES both links, outer `Some(None)` clears them, outer `None`
+    /// leaves them alone.
+    ///
+    /// `CronService::update_job` runs `chain::validate` before calling this —
+    /// applying an unvalidated chain here would let the RPC and the tool
+    /// diverge on what a legal chain is.
+    pub chain: Option<Option<JobChain>>,
 }
 
 /// Apply partial updates to an existing job. Recomputes next run time.
@@ -264,6 +272,9 @@ pub fn update_job<C: Clock>(
     }
     if let Some(alert_action) = updates.failure_alert {
         job.failure_alert = alert_action;
+    }
+    if let Some(chain_action) = updates.chain {
+        job.set_chain(chain_action);
     }
 
     job.updated_at = clock.now_ms();

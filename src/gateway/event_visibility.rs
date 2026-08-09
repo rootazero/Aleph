@@ -359,24 +359,29 @@ pub fn session_identity_of(topic: &str, data: Option<&Value>) -> SessionIdentity
             _ => SessionIdentity::Unattributed,
         },
 
-        // Host telemetry: `host.presence.update` carries the machine's
-        // `hostname`, its OS `username` and whether a human is sitting at it;
-        // `host.mic_level.update` says whether the room is making noise. Both
-        // are raw-string `TopicEvent` producers, so `every_frame_variant_is_
-        // classified` is structurally blind to them, and neither had an arm —
-        // they fell to `_ => Global` and `EventScopeGuard` has no `host.` rule
-        // either, so every authenticated member and every filterless client
-        // received them. `PresenceConfig`'s own doc names this risk and offers
-        // only `default_enabled() == false` as mitigation, which is no gate at
-        // all for the operator who follows the doc and turns it on.
+        // Host telemetry. The two producers this arm was written for —
+        // `host.presence.update` (the machine's `hostname`, its OS `username`
+        // and whether a human is sitting at it) and `host.mic_level.update`
+        // (whether the room is making noise) — were deleted on 2026-08-09 for
+        // having no subscriber. **The arm deliberately outlives them.**
+        //
+        // It is not plumbing waiting for a consumer; it is the default this
+        // classifier applies to a whole namespace. Without it `host.*` falls to
+        // `_ => Global`, and `EventScopeGuard` has no `host.` rule either, so
+        // the next small host reporter someone writes reaches every
+        // authenticated member and every filterless client on its first tick —
+        // which is exactly what happened the first time, and what
+        // `PresenceConfig`'s `default_enabled() == false` failed to prevent for
+        // any operator who followed the doc and turned it on. Deleting a
+        // fail-closed default because its first users are gone re-arms the
+        // trap; a match arm costs one line and misleads no one, so R10's
+        // retract-the-unused clause does not reach it.
         //
         // `OperatorOnly`, not a session key: the host belongs to whoever runs
         // the daemon, not to any conversation — there is nothing to attribute
-        // it to. Structural prefix match rather than a two-topic whitelist,
-        // because a whitelist only covers the world as it was on the day it was
-        // written and the next `host.*` reporter would land back on the
-        // broadcast path. Owed a SOURCE-level pin —
-        // `host_topics_are_classified_at_their_producers`.
+        // it to. Structural prefix match rather than a topic whitelist, because
+        // a whitelist only covers the world as it was on the day it was
+        // written. Pinned by `the_host_namespace_stays_operator_only`.
         t if t.starts_with("host.") => SessionIdentity::OperatorOnly,
 
         // --- TopicEvent-form frames genuinely session-scoped and NOT
@@ -1820,45 +1825,44 @@ mod tests {
         }
     }
 
-    /// SOURCE-level pin for the two host-telemetry reporters, owed for exactly
-    /// the same reason as the voice one: both publish raw
-    /// `TopicEvent::new(TOPIC_CONST, …)` strings with no `GatewayEventFrame`
-    /// variant, so the exhaustive-match pin cannot see them — which is how a
-    /// payload carrying the host's `hostname`, its OS `username` and whether a
-    /// human is at the keyboard sat on `_ => Global`, reaching every
-    /// authenticated member.
+    /// The `host.` namespace stays operator-only even with zero producers.
     ///
-    /// Reads the topic literal out of each producer's own source, so renaming
-    /// one side fails here rather than silently returning it to broadcast.
+    /// This test used to read the topic literal out of each of the two host
+    /// reporters' own source. Those reporters are gone (2026-08-09), and the
+    /// naive follow-up is to delete their classification with them — which
+    /// puts `host.*` back on `_ => Global` and hands the next host reporter
+    /// the original bug on its first tick. So the pin changed shape rather
+    /// than being retired: it no longer names a producer, it asserts the
+    /// **policy** that survives them.
+    ///
+    /// The unregistered names below matter more than any real topic would:
+    /// they are what an author who has never read this file will invent.
     #[test]
-    fn host_topics_are_classified_at_their_producers() {
-        const PRODUCERS: [(&str, &str); 2] = [
-            (
-                "src/tasks/presence/snapshot.rs",
-                include_str!("../tasks/presence/snapshot.rs"),
-            ),
-            (
-                "src/tasks/mic_level/snapshot.rs",
-                include_str!("../tasks/mic_level/snapshot.rs"),
-            ),
-        ];
-
-        for (path, src) in PRODUCERS {
-            let production = src.split("#[cfg(test)]").next().unwrap_or(src);
-            let topic = production
-                .split("_TOPIC: &str = \"")
-                .nth(1)
-                .and_then(|rest| rest.find('"').map(|end| &rest[..end]))
-                .unwrap_or_else(|| {
-                    panic!("{path} declares no `*_TOPIC` literal — this pin has gone vacuous")
-                });
+    fn the_host_namespace_stays_operator_only() {
+        for topic in [
+            "host.presence.update",
+            "host.mic_level.update",
+            "host.battery.update",
+            "host.anything.someone.adds.later",
+        ] {
             assert_eq!(
                 session_identity_of(topic, None),
                 SessionIdentity::OperatorOnly,
-                "`{topic}` ({path}) is host telemetry: it belongs to whoever runs \
-                 the daemon, not to every connected member"
+                "`{topic}` is host telemetry: it belongs to whoever runs the \
+                 daemon, not to every connected member. If this failed because \
+                 the `host.` arm was cleaned up as unused, read its doc — the \
+                 arm is the default, not plumbing for a deleted feature."
             );
         }
+
+        // The prefix must be a prefix, not a substring: a topic that merely
+        // contains "host." elsewhere is a different question and must not be
+        // silently narrowed to operators.
+        assert_ne!(
+            session_identity_of("session.host.changed", None),
+            SessionIdentity::OperatorOnly,
+            "the host rule is anchored at the start of the topic"
+        );
     }
 
     #[test]

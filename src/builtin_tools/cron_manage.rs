@@ -12,7 +12,7 @@ use tracing::info;
 
 use crate::error::Result;
 use crate::tasks::cron::{
-    CronJob, CronJobView, FailureAlertConfig, ScheduleKind, SharedCronService,
+    CronJob, CronJobView, FailureAlertConfig, JobChain, ScheduleKind, SharedCronService,
 };
 use crate::tools::AlephTool;
 
@@ -203,6 +203,21 @@ pub struct CronManageArgs {
     #[serde(default)]
     pub clear_failure_alert: Option<bool>,
 
+    /// Run another job as soon as this one finishes. Set on `create`,
+    /// replaced wholesale on `update`.
+    ///
+    /// `on_failure` is the reason this exists: when a job times out or its
+    /// provider dies there is no agent turn running to react, so a recovery
+    /// job has to be arranged in advance. The target must already exist and
+    /// must not chain back to this job.
+    #[serde(default)]
+    pub chain: Option<JobChain>,
+
+    /// `update` only: pass `true` to remove both chain links. Same reason
+    /// `clear_failure_alert` exists — a JSON tool call cannot say `null`.
+    #[serde(default)]
+    pub clear_chain: Option<bool>,
+
     // ── Internal (injected by dispatcher, not LLM-visible) ────────
     /// Source channel ID — injected by the tool dispatcher from session context.
     /// Used to set `source_channel_id` on created jobs so results are delivered
@@ -279,8 +294,7 @@ impl CronManageTool {
 #[async_trait]
 impl AlephTool for CronManageTool {
     const NAME: &'static str = "cron_manage";
-    const DESCRIPTION: &'static str =
-        "Manage scheduled tasks (cron jobs). Use this when the user wants \
+    const DESCRIPTION: &'static str = "Manage scheduled tasks (cron jobs). Use this when the user wants \
          to schedule something for a specific time or interval — e.g., 'remind me tomorrow at 9am', \
          'check the server every hour', 'send a report every Monday at 10am'. \
          Also use action='run' to manually trigger a job immediately (e.g., 'run the daily report now'). \
@@ -313,6 +327,9 @@ impl AlephTool for CronManageTool {
 
                 let mut job = CronJob::new(&name, &agent_id, &prompt, schedule_kind);
                 job.failure_alert = args.failure_alert;
+                // Validated inside `service.add_job` (missing target / cycle /
+                // self-link) — the same check the `cron.create` RPC gets.
+                job.set_chain(args.chain);
                 // Prefer runtime channel from dispatcher (injected via __channel),
                 // fall back to static channel set at construction time.
                 job.source_channel_id = args.__channel.or_else(|| self.source_channel_id.clone());
@@ -518,6 +535,15 @@ impl AlephTool for CronManageTool {
                     args.failure_alert.map(Some)
                 };
 
+                // Same tri-state as above. An explicit clear wins over a
+                // simultaneously-supplied chain, so "clear it" is never
+                // ambiguous.
+                let chain = if args.clear_chain == Some(true) {
+                    Some(None)
+                } else {
+                    args.chain.map(Some)
+                };
+
                 let updates = crate::tasks::cron::service::ops::CronJobUpdates {
                     name: args.name,
                     agent_id: args.agent_id,
@@ -528,6 +554,7 @@ impl AlephTool for CronManageTool {
                     session_target: None,
                     timeout_ms: None,
                     failure_alert,
+                    chain,
                 };
 
                 service.update_job(&id, updates).await.map_err(|e| {
