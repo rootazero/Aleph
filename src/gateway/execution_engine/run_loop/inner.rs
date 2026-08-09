@@ -93,10 +93,18 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
         // A project-room run takes the short branch below instead: since P2
         // Task 7 the room's own `workspace_path` IS the override, so the
         // catalogue row already exists and is addressed by id. Letting it fall
-        // into the path lookup would ask an owner-keyed index about the
-        // SPEAKER (`ambient_owner()` is whoever typed, not the room's owner),
-        // miss, and auto-register a duplicate personal row for the shared
-        // folder in every member's recents.
+        // into the path lookup would ask an owner-keyed index a question it
+        // cannot answer for a shared folder, miss, and auto-register a
+        // duplicate personal row for it in every member's recents.
+        //
+        // ⚠️ The parenthetical this comment used to carry — "`ambient_owner()`
+        // is whoever typed, not the room's owner" — was exactly inverted, and
+        // the branch stayed correct only by accident. `ambient_owner()` is the
+        // run's scope owner, i.e. the room's CREATOR, identically for every
+        // member; the resolver that answers with the person who typed is
+        // `visibility::ambient_actor()`. Four separate tool-face predicates
+        // acquired the same defect by grepping for precedent and landing on a
+        // sentence like the old one.
         //
         // Unbound rooms take this branch too, which is new and deliberate: a
         // room with no folder still belongs in the sidebar's recency order,
