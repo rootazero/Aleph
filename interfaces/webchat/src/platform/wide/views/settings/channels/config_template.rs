@@ -683,6 +683,23 @@ fn render_field(
 // ---------------------------------------------------------------------------
 
 /// Inline section for approving channel pairing codes and listing approved senders.
+///
+/// # Why the pending list is here and not only in the CLI
+///
+/// `inbound_router::permission::send_pairing_request` delivers the pairing code
+/// to the **stranger**, never to the operator. So until this list existed, the
+/// code input above it asked the operator to type something no in-product
+/// surface could tell them: `channel.pairing.list` answered only to
+/// `aleph-server gateway call`, and the Panel — the surface an operator
+/// actually administers channels from — had no entry for it at all.
+///
+/// # There is no live signal, so the refresh is explicit
+///
+/// A pending request is created when a stranger DMs the bot. That path emits no
+/// gateway event (it logs and replies to the sender), so nothing can push this
+/// list. A refresh button that the operator drives is honest about that; a
+/// silent poll would not be, and inventing a topic here would mean classifying
+/// it in `event_visibility` — a security decision, not a UI one.
 #[component]
 fn ChannelPairingSection(channel_id: StoredValue<String>) -> impl IntoView {
     let state = expect_context::<DashboardState>();
@@ -709,48 +726,112 @@ fn ChannelPairingSection(channel_id: StoredValue<String>) -> impl IntoView {
 
     // Approved senders list
     let approved_senders: RwSignal<Vec<ApprovedSenderInfo>> = RwSignal::new(Vec::new());
+    let approved_error = RwSignal::new(Option::<String>::None);
     let refresh_approved = RwSignal::new(0u32);
+
+    // Pending pairing requests — the only in-product way to learn a code.
+    let pending_requests: RwSignal<Vec<PendingRequestInfo>> = RwSignal::new(Vec::new());
+    let pending_error = RwSignal::new(Option::<String>::None);
+    let refresh_pending = RwSignal::new(0u32);
 
     // Load approved senders
     Effect::new(move |_| {
         let _ = refresh_approved.get();
         let ch_id = channel_id.get_value();
         spawn_local(async move {
-            if let Ok(val) = state
+            match state
                 .rpc_call("channel.pairing.approved", json!({ "channel": ch_id }))
                 .await
             {
-                if let Some(arr) = val.get("senders").and_then(|v| v.as_array()) {
-                    let senders: Vec<ApprovedSenderInfo> = arr
-                        .iter()
-                        .map(|v| ApprovedSenderInfo {
-                            sender_id: v
-                                .get("sender_id")
-                                .and_then(|s| s.as_str())
-                                .unwrap_or("")
-                                .to_string(),
-                            approved_at: v
-                                .get("approved_at")
-                                .and_then(|s| s.as_str())
-                                .unwrap_or("")
-                                .to_string(),
-                        })
-                        .collect();
-                    approved_senders.set(senders);
+                Ok(val) => {
+                    approved_error.set(None);
+                    if let Some(arr) = val.get("senders").and_then(|v| v.as_array()) {
+                        let senders: Vec<ApprovedSenderInfo> = arr
+                            .iter()
+                            .map(|v| ApprovedSenderInfo {
+                                sender_id: v
+                                    .get("sender_id")
+                                    .and_then(|s| s.as_str())
+                                    .unwrap_or("")
+                                    .to_string(),
+                                approved_at: v
+                                    .get("approved_at")
+                                    .and_then(|s| s.as_str())
+                                    .unwrap_or("")
+                                    .to_string(),
+                            })
+                            .collect();
+                        approved_senders.set(senders);
+                    }
+                }
+                // A refused read is not an empty list. This arm used to be
+                // `if let Ok(...)`, which rendered "No approved senders" — a
+                // confident claim about a channel that may well have several —
+                // to anyone the admin gate turned away.
+                Err(e) => {
+                    approved_error.set(Some(
+                        crate::components::admin_refusal::settings_load_error(i18n, &e, |e| {
+                            format!(
+                                "{}{e}",
+                                t_string!(i18n, channel_config.pairing_approved_load_failed)
+                            )
+                        }),
+                    ));
                 }
             }
         });
     });
 
-    // Approve handler
-    let on_approve = move || {
-        let code = pairing_code_input.get().trim().to_uppercase();
-        if code.is_empty() {
-            pairing_error.set(Some(
-                t_string!(i18n, channel_config.pairing_enter_code).to_string(),
-            ));
-            return;
-        }
+    // Load pending requests
+    Effect::new(move |_| {
+        let _ = refresh_pending.get();
+        let ch_id = channel_id.get_value();
+        spawn_local(async move {
+            // Scoped to this channel: `handle_list` treats `channel` as an
+            // optional filter, and omitting it returns every pending sender on
+            // every channel — which is not what a per-channel page is asking.
+            match state
+                .rpc_call("channel.pairing.list", json!({ "channel": ch_id }))
+                .await
+            {
+                Ok(val) => {
+                    pending_error.set(None);
+                    let list: Vec<PendingRequestInfo> = val
+                        .get("requests")
+                        .and_then(|v| v.as_array())
+                        .map(|arr| {
+                            arr.iter()
+                                .map(|v| {
+                                    let field = |k: &str| {
+                                        v.get(k).and_then(|s| s.as_str()).unwrap_or("").to_string()
+                                    };
+                                    PendingRequestInfo {
+                                        code: field("code"),
+                                        sender_id: field("sender_id"),
+                                        created_at: field("created_at"),
+                                    }
+                                })
+                                .collect()
+                        })
+                        .unwrap_or_default();
+                    pending_requests.set(list);
+                }
+                Err(e) => {
+                    pending_error.set(Some(crate::components::admin_refusal::settings_load_error(
+                        i18n,
+                        &e,
+                        |e| format!("{}{e}", t_string!(i18n, channel_config.pairing_list_failed)),
+                    )));
+                }
+            }
+        });
+    });
+
+    // Approve by code. Shared by the manual input and by every pending row, so
+    // the "speaks as" binding applies identically however the approval was
+    // reached — a row-only path that silently bound to the owner would be the
+    // same defect `handle_approve`'s hard-coded `None` already was once.
+    let approve_code = move |code: String| {
         approving.set(true);
         pairing_error.set(None);
         pairing_success.set(None);
@@ -772,6 +853,7 @@ fn ChannelPairingSection(channel_id: StoredValue<String>) -> impl IntoView {
                     ));
                     pairing_code_input.set(String::new());
                     refresh_approved.update(|n| *n += 1);
+                    refresh_pending.update(|n| *n += 1);
                 }
                 Err(e) => {
                     pairing_error.set(Some(format!(
@@ -785,8 +867,111 @@ fn ChannelPairingSection(channel_id: StoredValue<String>) -> impl IntoView {
         });
     };
 
+    // Reject clears one pending request. Deliberately unconfirmed: the sender
+    // can DM again and `PairingStore::upsert` mints a fresh code, so this is
+    // recoverable in a way `revoke` below is not.
+    let reject_code = move |code: String| {
+        pairing_error.set(None);
+        pairing_success.set(None);
+        let ch_id = channel_id.get_value();
+        spawn_local(async move {
+            match state
+                .rpc_call(
+                    "channel.pairing.reject",
+                    json!({ "channel": ch_id, "code": code }),
+                )
+                .await
+            {
+                Ok(_) => refresh_pending.update(|n| *n += 1),
+                Err(e) => {
+                    pairing_error.set(Some(format!(
+                        "{}{}",
+                        t_string!(i18n, channel_config.pairing_reject_failed),
+                        e
+                    )));
+                }
+            }
+        });
+    };
+
+    // Approve handler
+    let on_approve = move || {
+        let code = pairing_code_input.get().trim().to_uppercase();
+        if code.is_empty() {
+            pairing_error.set(Some(
+                t_string!(i18n, channel_config.pairing_enter_code).to_string(),
+            ));
+            return;
+        }
+        approve_code(code);
+    };
+
     view! {
         <SettingsSection title=t_string!(i18n, channel_config.pairing_title).to_string() description=None>
+            // Pending requests — first, because this is the discovery path:
+            // the code was sent to the sender, not to whoever is reading this.
+            <div class="space-y-2 mb-5">
+                <div class="flex items-center justify-between">
+                    <span class="text-xs text-text-tertiary font-medium uppercase tracking-wider">
+                        {t!(i18n, channel_config.pending_requests)}
+                    </span>
+                    <button
+                        on:click=move |_| refresh_pending.update(|n| *n += 1)
+                        class="text-xs text-text-secondary hover:text-text-primary transition-colors"
+                    >
+                        {t!(i18n, channel_config.refresh)}
+                    </button>
+                </div>
+                {move || {
+                    // Three states, not two: a failed read must never be
+                    // rendered as "nothing is pending".
+                    if let Some(err) = pending_error.get() {
+                        view! { <div class="text-sm text-danger">{err}</div> }.into_any()
+                    } else if pending_requests.get().is_empty() {
+                        view! {
+                            <div class="text-sm text-text-tertiary">
+                                {t!(i18n, channel_config.no_pending_requests)}
+                            </div>
+                        }.into_any()
+                    } else {
+                        view! {
+                            <div class="space-y-1">
+                                {pending_requests.get().into_iter().map(|p| {
+                                    let code_for_approve = p.code.clone();
+                                    let code_for_reject = p.code.clone();
+                                    view! {
+                                        <div class="flex items-center justify-between gap-3 px-3 py-2 bg-surface-raised border border-border rounded-lg">
+                                            <div class="min-w-0">
+                                                <div class="flex items-center gap-2">
+                                                    <span class="text-sm font-mono tracking-widest text-text-primary">{p.code}</span>
+                                                    <span class="text-sm font-mono text-text-secondary truncate">{p.sender_id}</span>
+                                                </div>
+                                                <div class="text-xs text-text-tertiary">{p.created_at}</div>
+                                            </div>
+                                            <div class="flex items-center gap-3 flex-shrink-0">
+                                                <button
+                                                    on:click=move |_| approve_code(code_for_approve.clone())
+                                                    disabled=move || approving.get()
+                                                    class="text-xs text-primary hover:text-primary-hover disabled:opacity-50 transition-colors"
+                                                >
+                                                    {t!(i18n, channel_config.approve)}
+                                                </button>
+                                                <button
+                                                    on:click=move |_| reject_code(code_for_reject.clone())
+                                                    class="text-xs text-danger hover:text-danger-hover transition-colors"
+                                                >
+                                                    {t!(i18n, channel_config.reject)}
+                                                </button>
+                                            </div>
+                                        </div>
+                                    }
+                                }).collect_view()}
+                            </div>
+                        }.into_any()
+                    }
+                }}
+            </div>
+
             // Approve pairing code input
             <div class="space-y-3">
                 <p class="text-sm text-text-secondary">
@@ -850,7 +1035,9 @@ fn ChannelPairingSection(channel_id: StoredValue<String>) -> impl IntoView {
             // Approved senders list
             {move || {
                 let senders = approved_senders.get();
-                if senders.is_empty() {
+                if let Some(err) = approved_error.get() {
+                    view! { <div class="text-sm text-danger mt-3">{err}</div> }.into_any()
+                } else if senders.is_empty() {
                     view! {
                         <div class="text-sm text-text-tertiary mt-3">
                             {t!(i18n, channel_config.no_approved_senders)}
@@ -904,4 +1091,16 @@ struct ApprovedSenderInfo {
     sender_id: String,
     #[allow(dead_code)]
     approved_at: String,
+}
+
+/// One row of `channel.pairing.list`.
+///
+/// `code` is the field that makes this list worth rendering: it is generated
+/// server-side and delivered only to the sender, so the operator has no other
+/// in-product source for it.
+#[derive(Debug, Clone)]
+struct PendingRequestInfo {
+    code: String,
+    sender_id: String,
+    created_at: String,
 }

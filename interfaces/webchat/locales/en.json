@@ -2045,7 +2045,14 @@
     "pairing_approved": "Sender approved successfully.",
     "pairing_approve_failed": "Failed to approve: ",
     "pairing_speaks_as": "Speaks as",
-    "pairing_speaks_as_owner": "Owner (default)"
+    "pairing_speaks_as_owner": "Owner (default)",
+    "pending_requests": "Pending Requests",
+    "no_pending_requests": "No pending requests.",
+    "refresh": "Refresh",
+    "reject": "Reject",
+    "pairing_list_failed": "Failed to load pending requests: ",
+    "pairing_reject_failed": "Failed to reject: ",
+    "pairing_approved_load_failed": "Failed to load approved senders: "
   },
   "execution_settings": {
     "title": "Execution",

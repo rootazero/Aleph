@@ -2045,7 +2045,14 @@
     "pairing_approved": "发送者批准成功。",
     "pairing_approve_failed": "批准失败：",
     "pairing_speaks_as": "以谁的身份",
-    "pairing_speaks_as_owner": "机主（默认）"
+    "pairing_speaks_as_owner": "机主（默认）",
+    "pending_requests": "待批配对请求",
+    "no_pending_requests": "暂无待批请求。",
+    "refresh": "刷新",
+    "reject": "拒绝",
+    "pairing_list_failed": "加载待批请求失败：",
+    "pairing_reject_failed": "拒绝失败：",
+    "pairing_approved_load_failed": "加载已批准发送者失败："
   },
   "execution_settings": {
     "title": "执行",
