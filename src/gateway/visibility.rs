@@ -1073,7 +1073,8 @@ mod tests {
     /// that no longer mention the thing.
     #[test]
     fn the_census_names_no_file_that_stopped_using_it() {
-        let sources: std::collections::HashMap<String, String> = all_sources().into_iter().collect();
+        let sources: std::collections::HashMap<String, String> =
+            all_sources().into_iter().collect();
         for (file, reason) in AMBIENT_OWNER_CENSUS {
             let text = sources
                 .get(*file)

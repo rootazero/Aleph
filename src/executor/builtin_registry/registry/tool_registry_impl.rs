@@ -325,14 +325,25 @@ impl ToolRegistry for BuiltinToolRegistry {
                 })?;
                 tool.call_json(arguments).await
             }),
-            // Corrections are filed per agent and read back per agent, so the
-            // identity has to be the one executing this turn — not the one the
-            // registry was built with at boot. Resolved from the same
-            // task-local `recall_context` uses, which is live here because tool
-            // dispatch runs inside the scoped tool-execution task.
+            // Corrections are filed per PARTITION and read back per partition,
+            // so the identity has to be this turn's composed one — not the bare
+            // persona, and not the one the registry was built with at boot.
+            //
+            // Reading the persona filed every user's verbatim correction into
+            // the ORG partition (`main`), where `memory.list_corrections` —
+            // member-open, Panel-rendered, and defaulting to `main` — handed it
+            // to everyone: `partition_visible("main")` has no suffix to split,
+            // so the predicate that was installed to stop exactly this is
+            // structurally incapable of firing on that id. The night's
+            // `feedback_distill` then promoted it into an always-on standing
+            // directive in every user's prompt.
+            //
+            // The READ side staying org-wide is a deliberate ruling
+            // (`project_scope`'s feedback-floor note); the fix is the writer, so
+            // that org-wide standing rules come from the org tier rather than
+            // from whoever typed last.
             "flag_user_correction" => {
-                let agent_id = crate::tools::turn_context::current_agent_id()
-                    .unwrap_or_else(|| self.caller_agent_id("main"));
+                let agent_id = self.caller_memory_partition("main");
                 Box::pin(async move {
                     let db = self.flag_user_correction_db.as_ref().ok_or_else(|| {
                         AlephError::tool(
@@ -1340,8 +1351,11 @@ impl ToolRegistry for BuiltinToolRegistry {
 
             // Wiki orientation tools (Spec 5)
             "note_orient" => {
-                // Inject the caller's agent_id from session context.
-                let agent_id = self.caller_agent_id("default");
+                // The caller's memory PARTITION, not the bare persona — the
+                // note writers compose the session scope in, so a reader that
+                // does not compose reads an empty `main` (see
+                // `caller_memory_partition`).
+                let agent_id = self.caller_memory_partition("default");
                 if let Some(ref tool) = self.note_orient_tool {
                     let tool = tool.clone();
                     Box::pin(async move {
@@ -1363,7 +1377,7 @@ impl ToolRegistry for BuiltinToolRegistry {
             }
 
             "note_schema" => {
-                let agent_id = self.caller_agent_id("default");
+                let agent_id = self.caller_memory_partition("default");
                 if let Some(ref tool) = self.note_schema_tool {
                     let tool = tool.clone();
                     Box::pin(async move {
@@ -1386,7 +1400,21 @@ impl ToolRegistry for BuiltinToolRegistry {
 
             // User profile tool (Spec 7 Task 9)
             "user_profile" => {
-                let agent_id = self.caller_agent_id("default");
+                // The one memory reader that must NOT fall back to the room's
+                // partition: a room holds more than one human, so there is no
+                // single profile to answer with. `profile_floor_id` returns
+                // `None` there on purpose (`project_scope`'s doc), and the
+                // honest answer is "no such thing here" rather than the room's
+                // merged USER.md.
+                let Some(agent_id) = self.caller_profile_partition("default") else {
+                    return Box::pin(async move {
+                        Err(AlephError::tool(
+                            "user_profile is not available inside a project room: a room has more \
+                             than one person in it, so there is no single profile to read. Ask in \
+                             a personal session.",
+                        ))
+                    });
+                };
                 if let Some(ref tool) = self.user_profile_tool {
                     let tool = tool.clone();
                     Box::pin(async move {
@@ -1475,16 +1503,10 @@ impl ToolRegistry for BuiltinToolRegistry {
                         .map(|ctx| ctx.session_key_str.clone())
                 });
                 // Resolve the same (optionally project-scoped) agent id the
-                // compaction pipeline writes raw chunks under. Both task-locals
-                // (turn context + project root) are live here because tool
-                // dispatch runs inside the scoped tool-execution task.
-                let base_agent = crate::tools::turn_context::current_agent_id()
-                    .unwrap_or_else(|| self.caller_agent_id("default"));
-                let agent_id = crate::memory::project_scope::session_write_id(
-                    &base_agent,
-                    self.memory_project_scoped,
-                    crate::projects::current_project_root().as_deref(),
-                );
+                // compaction pipeline writes raw chunks under. This arm was the
+                // only one in this file that composed; it now shares the one
+                // resolver with the six that did not.
+                let agent_id = self.caller_memory_partition("default");
                 Box::pin(async move {
                     let db = self.recall_context_db.as_ref().ok_or_else(|| {
                         AlephError::tool(
@@ -1515,7 +1537,13 @@ impl ToolRegistry for BuiltinToolRegistry {
             // Evidence-chain walk: profile section / note / raw id
             // → source notes → raw memories → original transcript text.
             "memory_trace" => {
-                let agent_id = self.caller_agent_id("default");
+                // `memory_trace`'s own DESCRIPTION promises one row per
+                // `remember` / `flag_user_correction` write ATTEMPT, and tells
+                // the model to answer "why didn't you remember that?" from
+                // these rows rather than from recollection. Those rows are
+                // written under the composed partition; reading the bare
+                // persona answered "there are none" for every scoped run.
+                let agent_id = self.caller_memory_partition("default");
                 Box::pin(async move {
                     let db = self.memory_trace_db.as_ref().ok_or_else(|| {
                         AlephError::tool("memory_trace not available: no memory backend configured")
@@ -1543,7 +1571,7 @@ impl ToolRegistry for BuiltinToolRegistry {
             // Read-only knowledge-graph interrogation: schema / neighbors /
             // community / related over the note graph.
             "note_graph_query" => {
-                let agent_id = self.caller_agent_id("default");
+                let agent_id = self.caller_memory_partition("default");
                 Box::pin(async move {
                     let db = self.memory_trace_db.as_ref().ok_or_else(|| {
                         AlephError::tool(
@@ -1793,5 +1821,114 @@ mod channel_tool_dispatch_tests {
                 "{name} should report the missing injection, got: {msg}"
             );
         }
+    }
+
+    // -- read/write partition symmetry --------------------------------------
+
+    /// Every dispatch arm that hands a memory/note tool an agent id must hand
+    /// it the COMPOSED partition, because that is what the writers wrote to.
+    ///
+    /// Source-level, because the failure is silent in both directions: a reader
+    /// pointed at the bare persona finds an empty directory and reports it as
+    /// an empty directory, and a writer pointed at the bare persona pools every
+    /// principal's rows into the one partition they can all read. No test that
+    /// constructs a tool with a base id and asserts against that same base id
+    /// can cross this seam.
+    const MEMORY_ARMS_THAT_MUST_COMPOSE: &[&str] = &[
+        "note_orient",
+        "note_schema",
+        "user_profile",
+        "recall_context",
+        "memory_trace",
+        "note_graph_query",
+        "flag_user_correction",
+    ];
+
+    #[test]
+    fn every_memory_dispatch_arm_composes_the_partition() {
+        let source = include_str!("tool_registry_impl.rs");
+        let lines: Vec<&str> = source.lines().collect();
+        let mut offenders = Vec::new();
+
+        for name in MEMORY_ARMS_THAT_MUST_COMPOSE {
+            let needle = format!("\"{name}\" =>");
+            let Some(arm) = lines
+                .iter()
+                .position(|l| l.trim_start().starts_with(&needle))
+            else {
+                offenders.push(format!("{name}: no dispatch arm found at all"));
+                continue;
+            };
+            // The resolution always happens in the arm's opening statements,
+            // before the `Box::pin`; 20 lines is generous room for the comment
+            // that explains why.
+            let window = lines[arm..(arm + 20).min(lines.len())].join("\n");
+            if !window.contains("caller_memory_partition")
+                && !window.contains("caller_profile_partition")
+            {
+                offenders.push(format!(
+                    "{name} (line {}): resolves an agent id without composing the session scope",
+                    arm + 1
+                ));
+            }
+        }
+
+        assert!(
+            offenders.is_empty(),
+            "these memory/note dispatch arms read or write the bare persona (`main`) while their \
+             counterparties use the composed partition (`main__u-alice` / `main__p-room`) — a \
+             stock loopback Panel session is already `Personal(u-owner)`, so this is not a \
+             multi-user-only defect. Resolve through \
+             `BuiltinToolRegistry::caller_memory_partition` (or \
+             `caller_profile_partition` for the one reader that must refuse inside a room):\n  {}",
+            offenders.join("\n  ")
+        );
+    }
+
+    /// The helper itself: a scoped run resolves to its own partition, an
+    /// unscoped one is byte-identical to the bare persona, and the profile
+    /// twin refuses inside a room rather than answering with the room's.
+    #[tokio::test]
+    async fn caller_memory_partition_composes_the_ambient_scope() {
+        let _home = crate::utils::paths::IsolatedAlephHome::new();
+        let registry = BuiltinToolRegistry::new().await.unwrap();
+
+        // No scope at all (cron / tests / direct calls): unchanged.
+        assert_eq!(registry.caller_memory_partition("main"), "main");
+        assert_eq!(
+            registry.caller_profile_partition("main").as_deref(),
+            Some("main")
+        );
+
+        // A personal session writes and reads its own partition.
+        let personal = crate::scope::ScopeAttribution::personal("u-alice");
+        let (partition, profile) = crate::scope::with_scope(Some(personal), async {
+            (
+                registry.caller_memory_partition("main"),
+                registry.caller_profile_partition("main"),
+            )
+        })
+        .await;
+        assert_eq!(partition, "main__u-alice");
+        assert_eq!(profile.as_deref(), Some("main__u-alice"));
+
+        // A room shares one partition — and has no single profile to read.
+        let room = crate::scope::ScopeAttribution {
+            owner_user_id: "u-alice".to_string(),
+            scope: crate::scope::ScopeId::Project("p-room".to_string()),
+        };
+        let (partition, profile) = crate::scope::with_scope(Some(room), async {
+            (
+                registry.caller_memory_partition("main"),
+                registry.caller_profile_partition("main"),
+            )
+        })
+        .await;
+        assert_eq!(partition, "main__p-room");
+        assert_eq!(
+            profile, None,
+            "a room holds more than one human, so `user_profile` must refuse rather than \
+             answer with the room's merged profile"
+        );
     }
 }

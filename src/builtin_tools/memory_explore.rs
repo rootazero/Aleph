@@ -83,6 +83,9 @@ pub struct MemoryExploreTool {
     database: MemoryBackend,
     embedder: Arc<dyn EmbeddingProvider>,
     agent_id: String,
+    /// Mirror of `MemoryConfig.project_scoped`, as `MemorySearchTool` carries
+    /// it — this tool must walk the partition its writers wrote to.
+    project_scoped: bool,
 }
 
 impl MemoryExploreTool {
@@ -92,7 +95,16 @@ impl MemoryExploreTool {
             database,
             embedder,
             agent_id: DEFAULT_AGENT_ID.to_string(),
+            project_scoped: false,
         }
+    }
+
+    /// Mirror `MemoryConfig.project_scoped` (same convention and name as
+    /// `MemorySearchTool::with_project_scoping`).
+    #[must_use]
+    pub const fn with_project_scoping(mut self, enabled: bool) -> Self {
+        self.project_scoped = enabled;
+        self
     }
 
     /// Create a new `MemoryExploreTool` with an explicit agent ID
@@ -105,6 +117,7 @@ impl MemoryExploreTool {
             database,
             embedder,
             agent_id: agent_id.into(),
+            project_scoped: false,
         }
     }
 
@@ -119,13 +132,18 @@ impl MemoryExploreTool {
         let args_summary = format!("知识探索: {}", &args.query);
         notify_tool_start(Self::NAME, &args_summary);
 
-        // Per-run agent id: prefer the turn's task-local (set by the dispatch
-        // chokepoint), fall back to the construction-time field on non-scoped
-        // paths (direct calls, tests). Mirrors `MemorySearchTool::call_impl` — the
-        // tool instance is process-wide and shared across agents, so the field is
-        // only a fallback, not the truth per run.
-        let agent_id =
+        // Per-run memory PARTITION: prefer the turn's task-local persona (set by
+        // the dispatch chokepoint), fall back to the construction-time field on
+        // non-scoped paths (direct calls, tests), then compose the session's
+        // scope in — the writers compose, so a reader that does not walks an
+        // empty graph and reports it as an empty graph.
+        let base =
             crate::tools::turn_context::current_agent_id().unwrap_or_else(|| self.agent_id.clone());
+        let agent_id = crate::memory::project_scope::session_write_id(
+            &base,
+            self.project_scoped,
+            crate::projects::current_project_root().as_deref(),
+        );
 
         // Clamp parameters
         let max_hops = args.max_hops.min(4);
@@ -271,6 +289,7 @@ impl Clone for MemoryExploreTool {
             database: self.database.clone(),
             embedder: self.embedder.clone(),
             agent_id: self.agent_id.clone(),
+            project_scoped: self.project_scoped,
         }
     }
 }

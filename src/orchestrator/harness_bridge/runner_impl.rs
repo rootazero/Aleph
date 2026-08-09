@@ -744,11 +744,25 @@ impl HarnessRunner for AgentHarnessRunner {
             // rust-doctor-disable-next-line excessive-clone
             tool_signal_sink: match self.memory_backend.clone() {
                 Some(store) => {
+                    // The composed PARTITION, not the bare persona — the same
+                    // resolution `with_summary_reuse` performs ~170 lines above
+                    // in this function. `raw_memories` rows are read back
+                    // per-partition (`insights.tools` is gated by
+                    // `partition_visible`, and the dream cycle's
+                    // `has_undistilled_tool_failures` leg is keyed on the
+                    // corpus), so filing under `main` both pooled every
+                    // principal's tool failures into the one partition they can
+                    // all see AND left every `__u-*` / `__p-*` corpus with no
+                    // rows for the stage that exists to distil them.
+                    let sink_agent_id = crate::memory::project_scope::session_write_id(
+                        &spec.agent,
+                        self.memory_project_scoped,
+                        crate::projects::current_project_root().as_deref(),
+                    );
                     std::sync::Arc::new(crate::memory::tool_signal_sink::RawMemoryToolSink::new(
                         store
                             as std::sync::Arc<dyn crate::memory::store::raw_memory::RawMemoryStore>,
-                        // rust-doctor-disable-next-line excessive-clone
-                        spec.agent.clone(),
+                        sink_agent_id,
                         session_id.to_key_string(),
                     ))
                         as std::sync::Arc<dyn crate::memory::tool_signal_sink::ToolSignalSink>
