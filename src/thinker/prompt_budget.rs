@@ -385,10 +385,11 @@ mod tests {
 
     #[test]
     fn content_aware_fit_trims_dense_dynamic_text() {
-        let mut budget = TokenBudget::default();
-        budget.max_total_chars = 10_000;
-        budget.max_total_tokens = Some(100);
-        budget.truncation_warning = TruncationWarning::Off;
+        let budget = TokenBudget {
+            max_total_chars: 10_000,
+            max_total_tokens: Some(100),
+            truncation_warning: TruncationWarning::Off,
+        };
         let stable = "stable prefix";
         let dynamic = "中文内容".repeat(1_000);
         let output = fit_dynamic_suffix_with_content(stable, dynamic, &budget);

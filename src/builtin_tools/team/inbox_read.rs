@@ -103,10 +103,7 @@ impl AlephTool for InboxReadTool {
 
         // count_only: return unread counts without message content
         if args.count_only {
-            let unread = self
-                .inbox
-                .peek_count(&self.actor(), &args.team_id)
-                .await?;
+            let unread = self.inbox.peek_count(&self.actor(), &args.team_id).await?;
             let total = (unread.to + unread.cc) as usize;
             return Ok(InboxReadOutput {
                 messages: vec![],
@@ -124,11 +121,7 @@ impl AlephTool for InboxReadTool {
             }
             _ if args.peek => {
                 self.inbox
-                    .peek(
-                        &self.actor(),
-                        &args.team_id,
-                        args.msg_type.as_ref(),
-                    )
+                    .peek(&self.actor(), &args.team_id, args.msg_type.as_ref())
                     .await?
             }
             _ => {

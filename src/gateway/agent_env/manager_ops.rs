@@ -2,7 +2,6 @@
 
 use chrono::{DateTime, Utc};
 use rusqlite::params;
-use std::collections::HashMap;
 use tracing::{debug, info};
 
 use super::{AgentEnv, AgentEnvError, AgentEnvStore, CacheState};
@@ -16,9 +15,8 @@ use super::{AgentEnv, AgentEnvError, AgentEnvStore, CacheState};
 /// deserializes as plausible garbage rather than as an error. There were three
 /// hand-copied copies of this list before `get_including_archived` would have
 /// made a fourth.
-const ENV_COLUMNS: &str = "id, profile, created_at, last_active_at, cache_state, env_vars, \
-                           description, name, icon, archived, decay_rate, permanent_fact_types, \
-                           default_model, system_prompt_override, allowed_tools";
+const ENV_COLUMNS: &str = "id, profile, created_at, last_active_at, cache_state, \
+                           description, name, icon, archived, decay_rate, permanent_fact_types";
 
 impl AgentEnvStore {
     // =========================================================================
@@ -44,16 +42,12 @@ impl AgentEnvStore {
             created_at: now,
             last_active_at: now,
             cache_state: CacheState::None,
-            env_vars: HashMap::new(),
             description: description.map(String::from),
             name: id.to_string(),
             icon: None,
             is_archived: false,
             decay_rate: None,
             permanent_fact_types: Vec::new(),
-            default_model: None,
-            system_prompt_override: None,
-            allowed_tools: Vec::new(),
         };
 
         let conn = self
@@ -419,12 +413,10 @@ impl AgentEnvStore {
     /// Parse an agent environment row from `SQLite`
     fn row_to_agent_env(row: &rusqlite::Row) -> rusqlite::Result<AgentEnv> {
         let cache_state_json: Option<String> = row.get(4)?;
-        let env_vars_json: Option<String> = row.get(5)?;
-        let permanent_fact_types_json: Option<String> = row.get(11)?;
-        let allowed_tools_json: Option<String> = row.get(14)?;
+        let permanent_fact_types_json: Option<String> = row.get(10)?;
         let ws_id: String = row.get(0)?;
         let name: String = row
-            .get::<_, Option<String>>(7)?
+            .get::<_, Option<String>>(6)?
             .unwrap_or_else(|| ws_id.clone());
 
         Ok(AgentEnv {
@@ -436,20 +428,12 @@ impl AgentEnvStore {
             cache_state: cache_state_json
                 .and_then(|j| serde_json::from_str(&j).ok())
                 .unwrap_or_default(),
-            env_vars: env_vars_json
-                .and_then(|j| serde_json::from_str(&j).ok())
-                .unwrap_or_default(),
-            description: row.get(6)?,
+            description: row.get(5)?,
             name,
-            icon: row.get(8)?,
-            is_archived: row.get::<_, i32>(9).unwrap_or(0) != 0,
-            decay_rate: row.get(10)?,
+            icon: row.get(7)?,
+            is_archived: row.get::<_, i32>(8).unwrap_or(0) != 0,
+            decay_rate: row.get(9)?,
             permanent_fact_types: permanent_fact_types_json
-                .and_then(|j| serde_json::from_str(&j).ok())
-                .unwrap_or_default(),
-            default_model: row.get(12)?,
-            system_prompt_override: row.get(13)?,
-            allowed_tools: allowed_tools_json
                 .and_then(|j| serde_json::from_str(&j).ok())
                 .unwrap_or_default(),
         })

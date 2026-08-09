@@ -5,7 +5,8 @@
 //! All handlers delegate to `AgentEnvStore` (SQLite-backed).
 
 use aleph_protocol::workspace::{
-    WorkspaceCreateParams, WorkspaceListParams, WorkspaceRef, WorkspaceUpdateParams,
+    WorkspaceCreateParams, WorkspaceDetail, WorkspaceListParams, WorkspaceRef, WorkspaceRow,
+    WorkspaceUpdateParams,
 };
 use serde::Deserialize;
 use serde_json::json;
@@ -15,10 +16,66 @@ use super::super::protocol::{
     RESOURCE_NOT_FOUND,
 };
 use super::parse_params;
-use crate::gateway::agent_env::AgentEnvStore;
+use crate::gateway::agent_env::{AgentEnv, AgentEnvStore};
 use crate::gateway::agent_instance::AgentRegistry;
 use crate::gateway::event_bus::GatewayEventBus;
 use crate::sync_primitives::Arc;
+
+// ============================================================================
+// Projection
+// ============================================================================
+
+/// Project the stored [`AgentEnv`] onto the detail shape this family promises.
+///
+/// Every read here used to serialize the whole `AgentEnv`, which put four
+/// fields on the wire that Aleph never reads back: `env_vars`,
+/// `allowed_tools`, `system_prompt_override` and `default_model`.
+/// [`crate::gateway::agent_env::ActiveAgentEnv`] — the struct that actually
+/// flows through the execution pipeline — carries `agent_id`, `profile`,
+/// `memory_filter` and `agent_env_path`, and drops all four at the resolution
+/// boundary. There was no writer for them either — none in any version, not
+/// just this one — so what shipped was a permanently-empty configuration
+/// surface that looked settable: the failure mode is a caller who sets
+/// `default_model` on a workspace and gets silence. Per R10 a channel with zero
+/// consumers is CUT, not connected. The four were dropped from `AgentEnv` and
+/// from the `agent_envs` table on the same day this projection landed, so today
+/// they are not reachable from here even by accident; this function's job is
+/// now the general one, of being the single place that decides what a client
+/// sees.
+///
+/// Projecting also makes the contract enforceable in the direction that
+/// matters. `aleph-cli` cannot depend on `alephcore`, so the only guard for
+/// this wire is the shared type plus assertions on this side; parsing proves
+/// the response is a *superset* of the contract, never that it is equal to it.
+/// Building the response FROM the contract type closes that gap by
+/// construction — a new `AgentEnv` field cannot leak onto the wire by being
+/// added, only by being added here on purpose.
+fn detail_of(ws: &AgentEnv) -> WorkspaceDetail {
+    WorkspaceDetail {
+        id: ws.id.clone(),
+        name: ws.name.clone(),
+        description: ws.description.clone(),
+        icon: ws.icon.clone(),
+        profile: ws.profile.clone(),
+        created_at: ws.created_at,
+        last_active_at: ws.last_active_at,
+        is_archived: ws.is_archived,
+    }
+}
+
+/// The list twin of [`detail_of`], onto the narrower row shape.
+///
+/// Deliberately not `detail_of(..)` minus fields: the two projections answer
+/// different questions and [`WorkspaceRow`] documents why it is a second one.
+fn row_of(ws: &AgentEnv) -> WorkspaceRow {
+    WorkspaceRow {
+        id: ws.id.clone(),
+        name: ws.name.clone(),
+        description: ws.description.clone(),
+        created_at: ws.created_at,
+        is_archived: ws.is_archived,
+    }
+}
 
 // ============================================================================
 // Create
@@ -42,10 +99,19 @@ use crate::sync_primitives::Arc;
 /// user-chosen name that encodes no owner and `agent_envs` has no owner
 /// column, so an ordinary id (`"crypto"`) passes for every caller who reaches
 /// this handler. What the check does buy is the composed-id half — without it
-/// a caller can create `main__u-alice`, a row that then shows up in ALICE's
-/// filtered `workspace.list` carrying attacker-supplied `env_vars` /
-/// `system_prompt_override` / `allowed_tools`. Reads were gated first; a
-/// write into a partition you cannot read is the strictly worse half.
+/// a caller can plant `main__u-alice`, a row that then shows up in ALICE's
+/// filtered `workspace.list` under a name and description he chose. Reads were
+/// gated first; a write into a partition you cannot read is the strictly worse
+/// half.
+///
+/// An earlier wording here said the planted row carried "attacker-supplied
+/// `env_vars` / `system_prompt_override` / `allowed_tools`". That was never
+/// true in two separate ways: this method accepts none of those three, and as
+/// of 2026-08-09 they are not on the wire at all (see [`detail_of`] for why
+/// they have no writer and no reader). The predicate is kept on the honest
+/// justification — a row planted in someone else's namespace is bad on its own
+/// terms — because a guard resting on a false premise is one refactor away
+/// from being deleted as vacuous.
 ///
 /// Since 2026-08-08 the reachable caller set is operator-only — the whole
 /// `workspace.` family is admin-gated ([`handle_list`]'s doc has the finding
@@ -102,7 +168,7 @@ pub async fn handle_create(
                 request.id,
                 json!({
                     "ok": true,
-                    "workspace": ws,
+                    "workspace": detail_of(&ws),
                 }),
             )
         }
@@ -128,11 +194,16 @@ pub async fn handle_create(
 ///
 /// # P1 partition isolation — and what it does NOT cover
 ///
-/// A workspace serializes as an [`AgentEnv`], which carries `env_vars`,
-/// `system_prompt_override` and `allowed_tools`. Each row is filtered by
-/// `visibility::partition_visible` on its id, the same predicate the
-/// `memory.*`/`graph.*` family uses, so an id composed with the partition
-/// grammar (`<base>__u-alice`) is invisible to everyone else.
+/// Each row is filtered by `visibility::partition_visible` on its id, the same
+/// predicate the `memory.*`/`graph.*` family uses, so an id composed with the
+/// partition grammar (`<base>__u-alice`) is invisible to everyone else.
+///
+/// This used to open by noting that a row "serializes as an [`AgentEnv`], which
+/// carries `env_vars`, `system_prompt_override` and `allowed_tools`" — i.e. the
+/// leak this filter prevents was about those fields. It no longer serializes as
+/// one ([`row_of`]), and those fields turned out to have no writer in the first
+/// place. The filter stands on what a row still exposes: its id, name and
+/// description.
 ///
 /// That is defense in depth, NOT a closed boundary on its own, and the
 /// distinction is recorded here rather than implied by the presence of a
@@ -146,7 +217,9 @@ pub async fn handle_create(
 /// The 2026-08-08 real-machine QA exercised the write half: a member renamed
 /// and then archived a workspace the operator had just created, both
 /// returning `ok`. An earlier wording here named only "one member can read
-/// another's `env_vars`", which understated it by a whole verb class —
+/// another's `env_vars`", which was wrong twice over: that field has no writer
+/// and is no longer sent, and naming a read understated the finding by a whole
+/// verb class —
 /// `update` and `archive` take the same plain id and clear the same predicate.
 /// (That QA also produced a *false* pass on the list side: this handler looked
 /// filtered only because the member had archived the row one call earlier and
@@ -203,9 +276,10 @@ pub async fn handle_list(
 
     match workspace_manager.list(include_archived).await {
         Ok(workspaces) => {
-            let visible: Vec<_> = workspaces
-                .into_iter()
+            let visible: Vec<WorkspaceRow> = workspaces
+                .iter()
                 .filter(|w| crate::gateway::visibility::partition_visible(&w.id))
+                .map(row_of)
                 .collect();
             JsonRpcResponse::success(request.id, json!({ "workspaces": visible }))
         }
@@ -267,7 +341,9 @@ pub async fn handle_get(
     }
 
     match workspace_manager.get_including_archived(&params.id).await {
-        Ok(Some(ws)) => JsonRpcResponse::success(request.id, json!({ "workspace": ws })),
+        Ok(Some(ws)) => {
+            JsonRpcResponse::success(request.id, json!({ "workspace": detail_of(&ws) }))
+        }
         Ok(None) => not_found(),
         Err(e) => JsonRpcResponse::error(
             request.id,
@@ -350,7 +426,7 @@ pub async fn handle_update(
             request.id.clone(),
             json!({
                 "ok": true,
-                "workspace": ws,
+                "workspace": detail_of(&ws),
             }),
         ),
         // Which `None` is it? An archived row is visible to this caller, so
@@ -617,11 +693,13 @@ mod tests {
     /// The write half of the same defense-in-depth check the reads carry.
     /// Reads were gated first, which left the strictly worse half open: a
     /// caller could CREATE `main__u-alice`, and that row then appears only in
-    /// ALICE's filtered `workspace.list`, carrying `env_vars` /
-    /// `system_prompt_override` / `allowed_tools` she never wrote. (When this
-    /// was written that caller could be a member; since 2026-08-08 the family
-    /// is admin-gated and the surviving case is one operator addressing
-    /// another user's partition.)
+    /// ALICE's filtered `workspace.list` under a name and description she never
+    /// wrote. (When this was written that caller could be a member; since
+    /// 2026-08-08 the family is admin-gated and the surviving case is one
+    /// operator addressing another user's partition. The original wording said
+    /// the planted row carried `env_vars` / `system_prompt_override` /
+    /// `allowed_tools` — see [`handle_create`]'s doc for why that was never the
+    /// case.)
     ///
     /// Each assertion is on the STORE after the call, not on the response —
     /// a check that returned the right error while the write still landed
@@ -1070,6 +1148,118 @@ mod tests {
             Some("trading notes"),
             "an omitted field is a patch that leaves the value alone, not a clear"
         );
+    }
+
+    /// The converse of the two tests above, and the half that was missing.
+    ///
+    /// Both of those parse the response into the CLI's projection and check the
+    /// fields are there. Parsing proves the response is a **superset** of the
+    /// contract — serde ignores unknown keys, which is exactly the property
+    /// that let four fields ride the wire unnoticed. `env_vars`,
+    /// `allowed_tools`, `system_prompt_override` and `default_model` have no
+    /// writer anywhere and no reader in the execution pipeline
+    /// ([`crate::gateway::agent_env::ActiveAgentEnv`] drops them), so
+    /// `workspace get --json` was publishing a configuration surface that
+    /// nothing in Aleph would ever act on.
+    ///
+    /// So this asserts **equality** of the key sets, in both directions. The
+    /// expected set is derived by round-tripping through the contract type
+    /// rather than written out as a literal: a literal list is the same
+    /// enumeration mistake one level up, green on the day it is written and
+    /// silent about every field added after it.
+    ///
+    /// Failure here means someone went back to serializing the store type
+    /// directly. Re-point the handler at `detail_of` / `row_of`; do not widen
+    /// this assertion.
+    #[tokio::test]
+    async fn the_read_responses_carry_the_contract_and_nothing_else() {
+        use aleph_protocol::workspace::{WorkspaceEnvelope, WorkspaceList};
+        use std::collections::BTreeSet;
+
+        /// Keys a `Serialize` value emits, as a set.
+        fn keys_of<T: serde::Serialize>(v: &T) -> BTreeSet<String> {
+            serde_json::to_value(v)
+                .expect("contract types serialize")
+                .as_object()
+                .expect("both projections are objects")
+                .keys()
+                .cloned()
+                .collect()
+        }
+
+        let temp = tempfile::tempdir().unwrap();
+        let store = Arc::new(
+            AgentEnvStore::new(crate::gateway::agent_env::AgentEnvStoreConfig {
+                db_path: temp.path().join("agent_envs.db"),
+                default_profile: "default".to_string(),
+            })
+            .expect("agent env store"),
+        );
+        store.load_profiles(std::collections::HashMap::new());
+        store
+            .create("crypto", "default", Some("trading notes"))
+            .await
+            .unwrap();
+
+        // --- get: the detail projection, exactly ------------------------
+        let got = handle_get(
+            JsonRpcRequest::with_id("workspace.get", Some(json!({ "id": "crypto" })), json!(1)),
+            store.clone(),
+        )
+        .await;
+        let got = got.result.expect("result");
+        let emitted: BTreeSet<String> = got["workspace"]
+            .as_object()
+            .expect("workspace is an object")
+            .keys()
+            .cloned()
+            .collect();
+        let parsed: WorkspaceEnvelope =
+            serde_json::from_value(got.clone()).expect("the contract must parse it");
+        assert_eq!(
+            emitted,
+            keys_of(&parsed.workspace),
+            "workspace.get must emit the WorkspaceDetail key set and nothing else"
+        );
+
+        // --- list: the row projection, exactly --------------------------
+        let listed = handle_list(
+            JsonRpcRequest::with_id("workspace.list", None, json!(2)),
+            store.clone(),
+        )
+        .await;
+        let listed = listed.result.expect("result");
+        let emitted: BTreeSet<String> = listed["workspaces"][0]
+            .as_object()
+            .expect("each row is an object")
+            .keys()
+            .cloned()
+            .collect();
+        let parsed: WorkspaceList =
+            serde_json::from_value(listed.clone()).expect("the contract must parse it");
+        assert_eq!(
+            emitted,
+            keys_of(&parsed.workspaces[0]),
+            "workspace.list rows must emit the WorkspaceRow key set and nothing else"
+        );
+
+        // The four dormant fields, named. The set assertions above already
+        // cover them, and since 2026-08-09 they are not even fields of
+        // `AgentEnv` any more — this loop is belt-and-braces, kept because
+        // `assert_eq!` on a set prints a diff and not a history, and because
+        // the names are what a future reader will search for when someone
+        // proposes adding one of them back.
+        for dead in [
+            "env_vars",
+            "allowed_tools",
+            "system_prompt_override",
+            "default_model",
+        ] {
+            assert!(
+                got["workspace"].get(dead).is_none(),
+                "`{dead}` has no writer and no reader — it must not be on the wire"
+            );
+        }
     }
 
     /// Archived workspaces are **readable, not writable** — the ruling the
