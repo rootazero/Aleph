@@ -792,6 +792,11 @@ fn project_error_response(id: Option<serde_json::Value>, err: ProjectError) -> J
         | ProjectError::NotDirectory(_)
         | ProjectError::InvalidName(_) => (INVALID_PARAMS, err.to_string()),
         ProjectError::AlreadyExists(_) => (INVALID_PARAMS, err.to_string()),
+        // Not `RESOURCE_NOT_FOUND`: the caller named a project they own and
+        // can see, so there is no existence to leak — and a refusal that names
+        // the alternative (`archive`) is the only thing that makes the
+        // boundary actionable.
+        ProjectError::Invalid(_) => (INVALID_PARAMS, err.to_string()),
         _ => (INTERNAL_ERROR, err.to_string()),
     };
     JsonRpcResponse::error(id, code, msg)
