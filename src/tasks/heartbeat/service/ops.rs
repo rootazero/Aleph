@@ -59,6 +59,19 @@ pub fn get_task(store: &HeartbeatStore, id: &str) -> Option<HeartbeatTaskView> {
 // ── Write operations ─────────────────────────────────────────────────
 
 /// Partial update fields for a heartbeat task.
+///
+/// Every field here needs a **producer on a shipped surface** — see
+/// `every_update_field_has_a_production_writer`. `delivery_config` sat in this
+/// struct with no writer anywhere in the repo: the tool's update arm skipped it
+/// via `..Default::default()`, its create arm never touched it, and neither RPC
+/// handler mentioned it. The field it feeds is what gates the entire notify
+/// path, so every heartbeat task ever created ran its probe, spent a full L2
+/// turn deciding to alert the user, and then dropped the message while
+/// recording the run as a success.
+///
+/// Cron has the mirror-image guard (`every_panel_dto_field_is_read_by_a_handler`
+/// — does anything *read* this DTO field). That one is structurally blind to
+/// this failure, which is why it did not catch it.
 #[derive(Debug, Default)]
 pub struct HeartbeatTaskUpdates {
     pub name: Option<String>,
@@ -171,6 +184,58 @@ mod tests {
     use super::*;
     use crate::tasks::heartbeat::config::{ProbeConfig, TriggerCondition};
     use crate::tasks::shared::clock::testing::FakeClock;
+
+    /// Source-level census: every field of [`HeartbeatTaskUpdates`] must be
+    /// assigned by at least one non-test surface.
+    ///
+    /// `delivery_config` lived here for the whole life of the subsystem with no
+    /// writer, which is a shape no runtime test can see: the struct built fine,
+    /// `apply_updates` handled the field correctly, and the notify path's
+    /// `else` arm was exercised by unit tests that had assigned
+    /// `task.delivery_config` **by hand**. Only reading the surfaces answers
+    /// "who writes this in production".
+    ///
+    /// A field with a legitimate reason to be write-free must say so here, in
+    /// this list, with the reason — not by being quietly absent.
+    #[test]
+    fn every_update_field_has_a_production_writer() {
+        let struct_src = include_str!("ops.rs");
+        let surfaces = [
+            include_str!("../../../builtin_tools/heartbeat_manage.rs"),
+            include_str!("../../../gateway/handlers/heartbeat.rs"),
+        ];
+
+        // Field names, read out of the struct body rather than repeated here —
+        // a hand-written list is the same enumeration bug one level up.
+        let body = struct_src
+            .split("pub struct HeartbeatTaskUpdates {")
+            .nth(1)
+            .and_then(|s| s.split("\n}").next())
+            .expect("HeartbeatTaskUpdates body");
+        let fields: Vec<&str> = body
+            .lines()
+            .filter_map(|l| l.trim().strip_prefix("pub "))
+            .filter_map(|l| l.split(':').next())
+            .collect();
+        assert!(
+            fields.len() >= 7,
+            "field scrape looks wrong, got {fields:?}"
+        );
+
+        for field in fields {
+            let assigned = surfaces.iter().any(|src| {
+                src.contains(&format!("{field},"))
+                    || src.contains(&format!("{field}:"))
+                    || src.contains(&format!("updates.{field} ="))
+            });
+            assert!(
+                assigned,
+                "HeartbeatTaskUpdates::{field} has no production writer — a field \
+                 nothing sets is a setting the user cannot reach, and it fails \
+                 silently because the struct still builds"
+            );
+        }
+    }
 
     fn make_test_task(id: &str) -> HeartbeatTask {
         let mut task = HeartbeatTask::new(

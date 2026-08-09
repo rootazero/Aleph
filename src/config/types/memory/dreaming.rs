@@ -15,6 +15,10 @@ pub struct DreamingConfig {
     pub max_duration_seconds: u32,
     #[serde(default = "super::defaults::default_drift_max_pairs_per_run")]
     pub drift_max_pairs_per_run: usize,
+    /// Ceiling on `NoteConsolidate` pairs judged per corpus per night. See
+    /// [`super::defaults::default_consolidate_max_pairs_per_run`].
+    #[serde(default = "super::defaults::default_consolidate_max_pairs_per_run")]
+    pub consolidate_max_pairs_per_run: usize,
     #[serde(default = "super::defaults::default_skill_distill_max_per_cycle")]
     pub skill_distill_max_per_cycle: usize,
     /// Days of inactivity before a skill is mechanically aged from
@@ -59,6 +63,7 @@ impl Default for DreamingConfig {
             idle_threshold_seconds: super::defaults::default_dreaming_idle_threshold_seconds(),
             max_duration_seconds: super::defaults::default_dreaming_max_duration_seconds(),
             drift_max_pairs_per_run: super::defaults::default_drift_max_pairs_per_run(),
+            consolidate_max_pairs_per_run: super::defaults::default_consolidate_max_pairs_per_run(),
             skill_distill_max_per_cycle: super::defaults::default_skill_distill_max_per_cycle(),
             skill_stale_after_days: super::defaults::default_skill_stale_after_days(),
             feedback_distill_max_per_cycle: super::defaults::default_feedback_distill_max_per_cycle(

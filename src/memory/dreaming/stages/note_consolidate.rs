@@ -29,7 +29,29 @@ use super::DreamStage;
 // Stage struct
 // ---------------------------------------------------------------------------
 
-pub struct NoteConsolidateStage;
+pub struct NoteConsolidateStage {
+    /// Ceiling on LLM-judged pairs per run.
+    ///
+    /// This stage was the only looping LLM stage in the subsystem with neither
+    /// a pair budget nor a provider-exhaustion arm — and its candidate
+    /// generation for a large category is a full O(n²) title cross-product,
+    /// one LLM call per returned pair. `NoteDrift` carries the same field for
+    /// the same reason, recorded in its own doc: uncapped, this shape is what
+    /// produced ten thousand provider calls in a single night. Burning the
+    /// night's quota here also silently starves every later stage —
+    /// `feedback_distill` and `tool_failure_distill` included — so the visible
+    /// symptom is "dreaming ran but nothing was learned".
+    pub max_pairs: usize,
+}
+
+impl Default for NoteConsolidateStage {
+    fn default() -> Self {
+        Self {
+            max_pairs: crate::config::types::memory::DreamingConfig::default()
+                .consolidate_max_pairs_per_run,
+        }
+    }
+}
 
 // ---------------------------------------------------------------------------
 // DreamStage impl
@@ -47,6 +69,8 @@ impl DreamStage for NoteConsolidateStage {
 
     async fn execute(&self, mut ctx: DreamContext) -> Result<DreamContext, AlephError> {
         let mut consolidated = 0u32;
+        let mut pairs_checked = 0usize;
+        let mut budget_exhausted = false;
 
         // Group notes by category — snapshot to avoid borrowing ctx inside the loop.
         let mut by_category: HashMap<String, Vec<usize>> = HashMap::new();
@@ -82,12 +106,22 @@ impl DreamStage for NoteConsolidateStage {
 
             // Process each candidate pair
             for (idx_a, idx_b) in pairs {
+                if pairs_checked >= self.max_pairs {
+                    budget_exhausted = true;
+                    break;
+                }
+                pairs_checked += 1;
                 let result = consolidate_pair(&mut ctx, idx_a, idx_b).await;
                 match result {
                     Ok(true) => {
                         consolidated += 1;
                     }
                     Ok(false) => {} // COEXIST — no action
+                    // An exhausted provider (429/403) is a deliberate cycle
+                    // abort, not a pair that happened to fail: every later
+                    // stage would fail identically and the daemon must not keep
+                    // hammering. Same arm as note_weave / note_drift.
+                    Err(e) if super::is_provider_exhausted(&e) => return Err(e),
                     Err(e) => {
                         tracing::warn!(
                             note_a = ctx.notes[idx_a].path,
@@ -98,9 +132,19 @@ impl DreamStage for NoteConsolidateStage {
                     }
                 }
             }
+            if budget_exhausted {
+                break;
+            }
         }
 
         ctx.report.notes_consolidated = consolidated;
+        if budget_exhausted {
+            tracing::info!(
+                max_pairs = self.max_pairs,
+                consolidated,
+                "NoteConsolidate: pair budget exhausted; remaining candidates deferred to the next cycle"
+            );
+        }
         tracing::info!(consolidated, "NoteConsolidate completed");
         Ok(ctx)
     }
@@ -597,7 +641,7 @@ mod tests {
 
     #[test]
     fn should_run_false_with_single_note() {
-        let stage = NoteConsolidateStage;
+        let stage = NoteConsolidateStage::default();
         let notes = [make_note("reference/rust", "reference")];
         // Predicate: notes.len() >= 2
         assert!(
@@ -609,7 +653,7 @@ mod tests {
 
     #[test]
     fn should_run_true_with_multiple_notes() {
-        let stage = NoteConsolidateStage;
+        let stage = NoteConsolidateStage::default();
         let notes = [
             make_note("reference/rust", "reference"),
             make_note("reference/rust-ownership", "reference"),
@@ -688,6 +732,6 @@ mod tests {
 
     #[test]
     fn stage_name() {
-        assert_eq!(NoteConsolidateStage.name(), "note_consolidate");
+        assert_eq!(NoteConsolidateStage::default().name(), "note_consolidate");
     }
 }

@@ -28,21 +28,39 @@ fn extract_str(request: &JsonRpcRequest, key: &str) -> Option<String> {
     }
 }
 
-/// Parse the `failure_alert` parameter into the tri-state update convention.
+/// Read an optional-and-clearable parameter in the tri-state update
+/// convention: absent → `None` (leave alone); explicit `null` → `Some(None)`
+/// (clear); value → `Some(Some(cfg))`.
 ///
-/// Absent → `None` (leave alone); explicit `null` → `Some(None)` (clear);
-/// object → `Some(Some(cfg))`. Field names are the shared contract
-/// (`after` / `cooldown_ms` / `target`) — same shape cron accepts.
-fn parse_failure_alert(
+/// A parse error is rejected rather than ignored — a monitor whose alerting or
+/// delivery silently did not take is the exact failure these fields exist to
+/// prevent.
+fn parse_tristate<T: serde::de::DeserializeOwned>(
     params: &serde_json::Map<String, Value>,
-) -> Result<Option<Option<crate::tasks::shared::alert::FailureAlertConfig>>, String> {
-    match params.get("failure_alert") {
+    key: &str,
+) -> Result<Option<Option<T>>, String> {
+    match params.get(key) {
         None => Ok(None),
         Some(Value::Null) => Ok(Some(None)),
         Some(v) => serde_json::from_value(v.clone())
             .map(|cfg| Some(Some(cfg)))
-            .map_err(|e| format!("Invalid failure_alert: {e}")),
+            .map_err(|e| format!("Invalid {key}: {e}")),
     }
+}
+
+fn parse_failure_alert(
+    params: &serde_json::Map<String, Value>,
+) -> Result<Option<Option<crate::tasks::shared::alert::FailureAlertConfig>>, String> {
+    parse_tristate(params, "failure_alert")
+}
+
+/// Where this monitor's findings go. Nothing wrote `delivery_config` anywhere
+/// in the repo until 2026-08-09, so every task ever created ran its L2 turn and
+/// then dropped the finding while recording the run as a success.
+fn parse_delivery(
+    params: &serde_json::Map<String, Value>,
+) -> Result<Option<Option<crate::tasks::shared::delivery::DeliveryConfig>>, String> {
+    parse_tristate(params, "delivery")
 }
 
 /// Serialize a `HeartbeatTaskView` to JSON
@@ -60,6 +78,7 @@ fn task_view_to_json(view: &HeartbeatTaskView) -> Value {
         },
         "active_hours": view.active_hours,
         "failure_alert": view.failure_alert,
+        "delivery": view.delivery_config,
         "state": {
             "next_due_ms": view.state.next_due_ms,
             "running_at_ms": view.state.running_at_ms,
@@ -270,6 +289,14 @@ pub async fn handle_create(
         Err(e) => return JsonRpcResponse::error(request.id, INVALID_PARAMS, e),
     }
 
+    // Optional: delivery. Without it the monitor has nowhere to report to and
+    // `resolve_alert_config`'s default failure target is dead too.
+    match parse_delivery(params) {
+        Ok(Some(delivery)) => task.delivery_config = delivery,
+        Ok(None) => {}
+        Err(e) => return JsonRpcResponse::error(request.id, INVALID_PARAMS, e),
+    }
+
     let clock = SystemClock;
     let service = service.lock().await;
     let task_id = match service.add_task(task, &clock).await {
@@ -351,6 +378,10 @@ pub async fn handle_update(
     }
     match parse_failure_alert(params) {
         Ok(alert) => updates.failure_alert = alert,
+        Err(e) => return JsonRpcResponse::error(request.id, INVALID_PARAMS, e),
+    }
+    match parse_delivery(params) {
+        Ok(delivery) => updates.delivery_config = delivery,
         Err(e) => return JsonRpcResponse::error(request.id, INVALID_PARAMS, e),
     }
 

@@ -717,37 +717,7 @@ impl ToolRegistry for BuiltinToolRegistry {
                             serde_json::Value::Number(chrono::Utc::now().timestamp_millis().into()),
                         );
                     }
-                    // Prefer the race-free per-turn context for delivery routing;
-                    // the process-global session_context_handle is rewritten at
-                    // every run start, so a concurrent run of another agent can
-                    // swap it mid-turn and the created job would deliver into the
-                    // WRONG conversation. Fall back to the mirror only outside a
-                    // scoped turn (non-gateway paths, tests).
-                    let (channel, conversation_id) =
-                        match crate::tools::turn_context::current_turn_context() {
-                            Some(t) => {
-                                (Some(t.channel_id.clone()), Some(t.conversation_id.clone()))
-                            }
-                            None => self
-                                .session_context_handle
-                                .as_ref()
-                                .and_then(|h| h.try_read().ok())
-                                .map(|ctx| {
-                                    (Some(ctx.channel.clone()), Some(ctx.conversation_id.clone()))
-                                })
-                                .unwrap_or((None, None)),
-                        };
-                    if let Some(obj) = args.as_object_mut() {
-                        if let Some(channel) = channel {
-                            obj.insert("__channel".into(), serde_json::Value::String(channel));
-                        }
-                        if let Some(conversation_id) = conversation_id {
-                            obj.insert(
-                                "__conversation_id".into(),
-                                serde_json::Value::String(conversation_id),
-                            );
-                        }
-                    }
+                    self.inject_delivery_route(&mut args);
                     args
                 };
                 Box::pin(async move {
@@ -767,14 +737,24 @@ impl ToolRegistry for BuiltinToolRegistry {
                 })?;
                 tool.call_json(arguments).await
             }),
-            "heartbeat_create" => Box::pin(async move {
-                let tool = self.heartbeat_create_tool.as_ref().ok_or_else(|| {
-                    AlephError::tool(
-                        "heartbeat_create not available: heartbeat service not configured",
-                    )
-                })?;
-                tool.call_json(arguments).await
-            }),
+            // Same delivery-route injection as `cron_manage`: a heartbeat with
+            // no `delivery_config` runs its L2 turn and then drops the finding,
+            // which is every heartbeat ever created before this was wired.
+            "heartbeat_create" => {
+                let arguments = {
+                    let mut args = arguments;
+                    self.inject_delivery_route(&mut args);
+                    args
+                };
+                Box::pin(async move {
+                    let tool = self.heartbeat_create_tool.as_ref().ok_or_else(|| {
+                        AlephError::tool(
+                            "heartbeat_create not available: heartbeat service not configured",
+                        )
+                    })?;
+                    tool.call_json(arguments).await
+                })
+            }
             "heartbeat_update" => Box::pin(async move {
                 let tool = self.heartbeat_update_tool.as_ref().ok_or_else(|| {
                     AlephError::tool(

@@ -75,7 +75,7 @@ impl DeliveryStatus {
 }
 
 /// Configuration for delivering task results
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct DeliveryConfig {
     pub mode: DeliveryMode,
     pub targets: Vec<DeliveryTargetConfig>,
@@ -84,7 +84,7 @@ pub struct DeliveryConfig {
 }
 
 /// Delivery mode
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub enum DeliveryMode {
     None,
     Primary,
