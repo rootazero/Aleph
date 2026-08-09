@@ -48,23 +48,84 @@ impl FeedbackFloorLoader {
     /// Never errors: a missing directory or an unreadable/unparseable file
     /// simply yields fewer entries.
     pub async fn load(&self, agent_id: &str) -> Vec<FeedbackFloorEntry> {
+        self.load_many(std::slice::from_ref(&agent_id.to_string()))
+            .await
+    }
+
+    /// The floor across every partition this session may read.
+    ///
+    /// The writer and the reader used to disagree about where feedback lives.
+    /// `flag_user_correction` writes through `caller_memory_partition`, and a
+    /// zero-config loopback Panel session resolves to `Personal(u-owner)` — so
+    /// the factory-default write lands in `main__u-owner/feedback/`, while this
+    /// loader was handed the bare persona (`main`) and scanned a directory that
+    /// never receives anything. The always-on floor was therefore empty in the
+    /// out-of-the-box install, and silently so: those rules still appeared when
+    /// retrieval happened to match them lexically, so the only thing missing
+    /// was the case the floor exists for — the turn whose text does *not*
+    /// mention the mistake the user is about to repeat.
+    ///
+    /// Callers pass `project_scope::session_read_ids`, the same derivation
+    /// `Gatherer::fetch_notes` uses, so org-wide base rules keep reaching
+    /// everyone (base is always in that set) and a session additionally sees
+    /// its own.
+    ///
+    /// Ranking and [`FLOOR_CAP`] are applied **once, after merging**: capping
+    /// per partition would hand a session with two partitions twice the floor,
+    /// and would let a partition with three Critical rules crowd out another's.
+    pub async fn load_many(&self, agent_ids: &[String]) -> Vec<FeedbackFloorEntry> {
+        let mut out: Vec<FeedbackFloorEntry> = Vec::new();
+        for agent_id in agent_ids {
+            out.extend(self.load_partition(agent_id).await);
+        }
+        // Critical before High (Severity derives Ord in ascending declaration
+        // order), then freshest first.
+        out.sort_by(|a, b| {
+            b.severity
+                .cmp(&a.severity)
+                .then(b.updated_at.cmp(&a.updated_at))
+        });
+        // Two partitions can hold the same relative path (`feedback/no-force-push`
+        // written once org-wide and once personally); the newer one already sorts
+        // first, so keeping the first occurrence keeps the fresher rule.
+        let mut seen = std::collections::HashSet::new();
+        out.retain(|e| seen.insert(e.path.clone()));
+        out.truncate(FLOOR_CAP);
+        out
+    }
+
+    /// Scan one partition's `feedback/` directory. `SCAN_CAP` bounds the I/O.
+    async fn load_partition(&self, agent_id: &str) -> Vec<FeedbackFloorEntry> {
         let dir = self.memory_dir.join(agent_id).join("feedback");
         let mut read_dir = match tokio::fs::read_dir(&dir).await {
             Ok(rd) => rd,
             Err(_) => return Vec::new(),
         };
 
-        let mut out: Vec<FeedbackFloorEntry> = Vec::new();
-        let mut scanned = 0usize;
+        // Collect candidates first so `SCAN_CAP` can drop the *oldest* files
+        // rather than whatever the filesystem happened to enumerate last.
+        // Truncating in readdir order meant that past 64 notes, which rules
+        // made the always-on floor was decided by directory iteration order —
+        // a Critical rule written yesterday could be invisible while a High
+        // one from last year was injected into every request.
+        let mut candidates: Vec<(std::time::SystemTime, PathBuf)> = Vec::new();
         while let Ok(Some(entry)) = read_dir.next_entry().await {
-            if scanned >= SCAN_CAP {
-                break;
-            }
             let file = entry.path();
             if file.extension().and_then(|e| e.to_str()) != Some("md") {
                 continue;
             }
-            scanned += 1;
+            let mtime = entry
+                .metadata()
+                .await
+                .and_then(|m| m.modified())
+                .unwrap_or(std::time::UNIX_EPOCH);
+            candidates.push((mtime, file));
+        }
+        candidates.sort_by_key(|(mtime, _)| std::cmp::Reverse(*mtime));
+        candidates.truncate(SCAN_CAP);
+
+        let mut out: Vec<FeedbackFloorEntry> = Vec::new();
+        for (_, file) in candidates {
             let Ok(content) = tokio::fs::read_to_string(&file).await else {
                 continue;
             };
@@ -89,15 +150,6 @@ impl FeedbackFloorLoader {
                 updated_at: note.updated_at,
             });
         }
-
-        // Critical before High (Severity derives Ord in ascending declaration
-        // order), then freshest first.
-        out.sort_by(|a, b| {
-            b.severity
-                .cmp(&a.severity)
-                .then(b.updated_at.cmp(&a.updated_at))
-        });
-        out.truncate(FLOOR_CAP);
         out
     }
 }

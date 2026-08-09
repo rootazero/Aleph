@@ -161,7 +161,12 @@ pub(super) fn HarnessDetailPanel(
                     }
                 }
                 Err(e) => {
-                    set_test_result.set(Some((false, format!("RPC error: {e}"))));
+                    set_test_result.set(Some((
+                        false,
+                        crate::components::admin_refusal::settings_write_error(i18n, &e, |e| {
+                            format!("RPC error: {e}")
+                        }),
+                    )));
                 }
             }
             set_testing.set(false);
@@ -195,7 +200,11 @@ pub(super) fn HarnessDetailPanel(
                     );
                 }
                 Err(e) => {
-                    set_action_error.set(Some(format!("Save failed: {e}")));
+                    set_action_error.set(Some(
+                        crate::components::admin_refusal::settings_write_error(i18n, &e, |e| {
+                            format!("Save failed: {e}")
+                        }),
+                    ));
                 }
             }
             set_saving.set(false);
@@ -221,7 +230,11 @@ pub(super) fn HarnessDetailPanel(
                 Err(e) => {
                     // Revert on error
                     enabled.set(!new_val);
-                    set_action_error.set(Some(format!("Toggle failed: {e}")));
+                    set_action_error.set(Some(
+                        crate::components::admin_refusal::settings_write_error(i18n, &e, |e| {
+                            format!("Toggle failed: {e}")
+                        }),
+                    ));
                 }
             }
         });
@@ -242,7 +255,11 @@ pub(super) fn HarnessDetailPanel(
                     selected_id.set(None);
                 }
                 Err(e) => {
-                    set_action_error.set(Some(format!("Delete failed: {e}")));
+                    set_action_error.set(Some(
+                        crate::components::admin_refusal::settings_write_error(i18n, &e, |e| {
+                            format!("Delete failed: {e}")
+                        }),
+                    ));
                 }
             }
             set_deleting.set(false);

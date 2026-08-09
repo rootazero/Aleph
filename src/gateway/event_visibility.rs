@@ -359,6 +359,31 @@ pub fn session_identity_of(topic: &str, data: Option<&Value>) -> SessionIdentity
             _ => SessionIdentity::Unattributed,
         },
 
+        // Host telemetry. The two producers this arm was written for —
+        // `host.presence.update` (the machine's `hostname`, its OS `username`
+        // and whether a human is sitting at it) and `host.mic_level.update`
+        // (whether the room is making noise) — were deleted on 2026-08-09 for
+        // having no subscriber. **The arm deliberately outlives them.**
+        //
+        // It is not plumbing waiting for a consumer; it is the default this
+        // classifier applies to a whole namespace. Without it `host.*` falls to
+        // `_ => Global`, and `EventScopeGuard` has no `host.` rule either, so
+        // the next small host reporter someone writes reaches every
+        // authenticated member and every filterless client on its first tick —
+        // which is exactly what happened the first time, and what
+        // `PresenceConfig`'s `default_enabled() == false` failed to prevent for
+        // any operator who followed the doc and turned it on. Deleting a
+        // fail-closed default because its first users are gone re-arms the
+        // trap; a match arm costs one line and misleads no one, so R10's
+        // retract-the-unused clause does not reach it.
+        //
+        // `OperatorOnly`, not a session key: the host belongs to whoever runs
+        // the daemon, not to any conversation — there is nothing to attribute
+        // it to. Structural prefix match rather than a topic whitelist, because
+        // a whitelist only covers the world as it was on the day it was
+        // written. Pinned by `the_host_namespace_stays_operator_only`.
+        t if t.starts_with("host.") => SessionIdentity::OperatorOnly,
+
         // --- TopicEvent-form frames genuinely session-scoped and NOT
         // covered by any other filter today ---
         "session.lifecycle.changed" | "sessions.changed" => {
@@ -422,6 +447,13 @@ pub fn session_identity_of(topic: &str, data: Option<&Value>) -> SessionIdentity
         // its OWN — already owner-filtered — `teams.list`.
         | "team.changed"
         | "surface.notify" => SessionIdentity::Global,
+
+        // The `workspace.` RPC family is admin-gated in `method_admin.rs` so a
+        // member cannot enumerate workspaces; broadcasting the ids on the event
+        // plane would hand back exactly what that gate withholds. `OperatorOnly`
+        // in its documented sense and not as a shortcut: a workspace has no
+        // owner column by decision, so there is no ownership to resolve.
+        "workspace.changed" => SessionIdentity::OperatorOnly,
 
         // Unrecognized topic: fail open at classification (see doc above).
         _ => SessionIdentity::Global,
@@ -1793,6 +1825,46 @@ mod tests {
         }
     }
 
+    /// The `host.` namespace stays operator-only even with zero producers.
+    ///
+    /// This test used to read the topic literal out of each of the two host
+    /// reporters' own source. Those reporters are gone (2026-08-09), and the
+    /// naive follow-up is to delete their classification with them — which
+    /// puts `host.*` back on `_ => Global` and hands the next host reporter
+    /// the original bug on its first tick. So the pin changed shape rather
+    /// than being retired: it no longer names a producer, it asserts the
+    /// **policy** that survives them.
+    ///
+    /// The unregistered names below matter more than any real topic would:
+    /// they are what an author who has never read this file will invent.
+    #[test]
+    fn the_host_namespace_stays_operator_only() {
+        for topic in [
+            "host.presence.update",
+            "host.mic_level.update",
+            "host.battery.update",
+            "host.anything.someone.adds.later",
+        ] {
+            assert_eq!(
+                session_identity_of(topic, None),
+                SessionIdentity::OperatorOnly,
+                "`{topic}` is host telemetry: it belongs to whoever runs the \
+                 daemon, not to every connected member. If this failed because \
+                 the `host.` arm was cleaned up as unused, read its doc — the \
+                 arm is the default, not plumbing for a deleted feature."
+            );
+        }
+
+        // The prefix must be a prefix, not a substring: a topic that merely
+        // contains "host." elsewhere is a different question and must not be
+        // silently narrowed to operators.
+        assert_ne!(
+            session_identity_of("session.host.changed", None),
+            SessionIdentity::OperatorOnly,
+            "the host rule is anchored at the start of the topic"
+        );
+    }
+
     #[test]
     fn no_published_team_topic_suffix_classifies_as_global() {
         const PRODUCERS: [(&str, &str, &str); 3] = [
@@ -1966,6 +2038,10 @@ mod tests {
                 GatewayEventFrame::SessionLifecycleChanged { session_key, .. } => {
                     SessionIdentity::BySessionKey(session_key.clone())
                 }
+                // Admin-gated family: the ids are what `method_admin.rs`
+                // withholds from a member, so the event plane must not
+                // volunteer them. See the frame's own doc.
+                GatewayEventFrame::WorkspaceChanged { .. } => SessionIdentity::OperatorOnly,
                 GatewayEventFrame::AcpSessionsChanged
                 | GatewayEventFrame::TokenRotated
                 | GatewayEventFrame::DeviceRevoked { .. }
@@ -2166,6 +2242,10 @@ mod tests {
             },
             GatewayEventFrame::TeamChanged {
                 team_id: "t1".into(),
+                change: ChangeKind::Updated,
+            },
+            GatewayEventFrame::WorkspaceChanged {
+                workspace_id: "crypto".into(),
                 change: ChangeKind::Updated,
             },
             GatewayEventFrame::SurfaceNotify {

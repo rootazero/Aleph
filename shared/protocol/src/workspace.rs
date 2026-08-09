@@ -1,9 +1,15 @@
-//! Workspace RPC contract — `workspace.{create,list,get,update,archive}`.
+//! Workspace RPC contract — `workspace.{create,list,get,update,archive,unarchive}`.
 //!
 //! # Why these types live here and not next to the handlers
 //!
-//! The family's only client is the CLI (`aleph workspace list|create|archive`),
-//! and `aleph-cli` deliberately **cannot** depend on `alephcore` — its
+//! The family has two clients, and they live in two different crates: the CLI
+//! (`aleph workspace list|get|create|update|archive|unarchive`) and, since
+//! 2026-08-09, the Panel's `/settings/workspaces` page. When this module was
+//! written the CLI was the only one, which is why the paragraphs below are
+//! about it — the argument is unchanged by the second client, and strengthened:
+//! a third place to hand-copy a field name is a third place to drift.
+//!
+//! `aleph-cli` deliberately **cannot** depend on `alephcore` — its
 //! `Cargo.toml` says so in capitals, because it doubles as the reference
 //! implementation of the protocol. So before this module the wire shape was
 //! written twice, once as a `#[derive(Deserialize)]` in the handler and once as
@@ -74,9 +80,10 @@ pub struct WorkspaceListParams {
     pub include_archived: bool,
 }
 
-/// Parameters for `workspace.get` and `workspace.archive`: an id, nothing else.
+/// Parameters for `workspace.get`, `workspace.archive` and
+/// `workspace.unarchive`: an id, nothing else.
 ///
-/// One type for two methods on purpose — they address the same thing, and a
+/// One type for three methods on purpose — they address the same thing, and a
 /// second struct would be a second place to drift.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct WorkspaceRef {
@@ -129,7 +136,7 @@ pub struct WorkspaceUpdateParams {
 /// type, never that it equals it, and four `AgentEnv` fields with no writer and
 /// no reader rode the wire for months inside exactly that gap. Both directions
 /// are now pinned on the server side, where the field names are owned —
-/// `handlers::workspace::the_read_responses_carry_the_contract_and_nothing_else`.
+/// `handlers::workspace::the_workspace_responses_carry_the_contract_and_nothing_else`.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct WorkspaceRow {
     /// Workspace identifier — the key `workspace.archive` takes.

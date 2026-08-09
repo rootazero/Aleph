@@ -152,6 +152,13 @@ pub fn GalaxyCanvas(
     /// (`canvas/overlay.rs`) — without it the user gets an unexplained black box.
     gl_error: RwSignal<Option<String>>,
 ) -> impl IntoView {
+    // Only reached by the `gl_error` write below, whose error is a WebGL2 init
+    // failure and never a gateway verdict. Routed through `admin_refusal`
+    // anyway: the rule is uniform because a non-refusal passes through
+    // byte-for-byte, and the alternative — an exception list saying which
+    // `Option<String>` error signals carry server errors — is a second source
+    // of truth that rots.
+    let i18n = crate::i18n::use_i18n();
     let canvas_ref = NodeRef::<leptos::html::Canvas>::new();
 
     // Non-Send GL scene — lives in Rc<RefCell> never crossed to another thread.
@@ -212,7 +219,11 @@ pub fn GalaxyCanvas(
             }
             Err(e) => {
                 web_sys::console::error_1(&format!("GalaxyCanvas GL init failed: {e}").into());
-                gl_error.set(Some(e));
+                gl_error.set(Some(
+                    crate::components::admin_refusal::settings_write_error(i18n, &e, |e| {
+                        e.to_string()
+                    }),
+                ));
                 return;
             }
         }

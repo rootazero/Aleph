@@ -401,7 +401,18 @@ fn scope_stamping_producers_are_all_accounted_for() {
         // that attribute also sits on test-only helpers in the middle of a
         // production file (`steering.rs`'s `find_steering_target`), and
         // truncating there hides real producers below it.
-        let head = text
+        //
+        // Line endings are normalised FIRST. This checkout is CRLF, so the
+        // separator below — which anchors a bare `\n` — matched nothing at all:
+        // `head` silently became the WHOLE file and `execution_adapter.rs` was
+        // reported as a producer on the strength of a construction inside its
+        // own test module. Red on Windows, green in CI, and pointing at a file
+        // this very comment already exonerates. It is the same defect
+        // `subagent_tool/loop_tool.rs` carried and CLAUDE.md §10 records —
+        // both guards were written in one session, the rule was written down,
+        // and only the first instance was fixed.
+        let normalised = text.replace("\r\n", "\n");
+        let head = normalised
             .split("#[cfg(test)]\nmod tests")
             .next()
             .unwrap_or_default();

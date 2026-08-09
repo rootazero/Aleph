@@ -1373,6 +1373,9 @@ impl ChatState {
     /// the legacy `error_message` field in sync.
     pub fn set_send_error(&self, err: ChatSendError) {
         self.error_message.set(Some(err.message.clone()));
+        // NOT routed through `admin_refusal`: `send_error` holds a typed
+        // `ChatSendError`, not the server's `error.message`. There is no
+        // protocol string here to recognise a refusal in.
         self.send_error.set(Some(err));
         self.phase.set(ChatPhase::Error);
     }

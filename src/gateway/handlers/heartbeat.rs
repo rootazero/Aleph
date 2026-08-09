@@ -9,12 +9,14 @@
 
 use serde_json::{json, Value};
 
-use super::super::protocol::{JsonRpcRequest, JsonRpcResponse, INTERNAL_ERROR, INVALID_PARAMS};
+use super::super::protocol::{JsonRpcRequest, JsonRpcResponse, INVALID_PARAMS};
+use crate::gateway::handlers::task_error;
 use crate::tasks::heartbeat::config::{HeartbeatTaskView, ProbeConfig, TriggerCondition};
 use crate::tasks::heartbeat::service::ops::HeartbeatTaskUpdates;
 use crate::tasks::heartbeat::wake::{WakePriority, WakeRequest};
 use crate::tasks::heartbeat::SharedHeartbeatService;
 use crate::tasks::shared::clock::SystemClock;
+use crate::tasks::shared::error::TaskError;
 
 // ============================================================================
 // Helper functions
@@ -28,21 +30,39 @@ fn extract_str(request: &JsonRpcRequest, key: &str) -> Option<String> {
     }
 }
 
-/// Parse the `failure_alert` parameter into the tri-state update convention.
+/// Read an optional-and-clearable parameter in the tri-state update
+/// convention: absent → `None` (leave alone); explicit `null` → `Some(None)`
+/// (clear); value → `Some(Some(cfg))`.
 ///
-/// Absent → `None` (leave alone); explicit `null` → `Some(None)` (clear);
-/// object → `Some(Some(cfg))`. Field names are the shared contract
-/// (`after` / `cooldown_ms` / `target`) — same shape cron accepts.
-fn parse_failure_alert(
+/// A parse error is rejected rather than ignored — a monitor whose alerting or
+/// delivery silently did not take is the exact failure these fields exist to
+/// prevent.
+fn parse_tristate<T: serde::de::DeserializeOwned>(
     params: &serde_json::Map<String, Value>,
-) -> Result<Option<Option<crate::tasks::shared::alert::FailureAlertConfig>>, String> {
-    match params.get("failure_alert") {
+    key: &str,
+) -> Result<Option<Option<T>>, String> {
+    match params.get(key) {
         None => Ok(None),
         Some(Value::Null) => Ok(Some(None)),
         Some(v) => serde_json::from_value(v.clone())
             .map(|cfg| Some(Some(cfg)))
-            .map_err(|e| format!("Invalid failure_alert: {e}")),
+            .map_err(|e| format!("Invalid {key}: {e}")),
     }
+}
+
+fn parse_failure_alert(
+    params: &serde_json::Map<String, Value>,
+) -> Result<Option<Option<crate::tasks::shared::alert::FailureAlertConfig>>, String> {
+    parse_tristate(params, "failure_alert")
+}
+
+/// Where this monitor's findings go. Nothing wrote `delivery_config` anywhere
+/// in the repo until 2026-08-09, so every task ever created ran its L2 turn and
+/// then dropped the finding while recording the run as a success.
+fn parse_delivery(
+    params: &serde_json::Map<String, Value>,
+) -> Result<Option<Option<crate::tasks::shared::delivery::DeliveryConfig>>, String> {
+    parse_tristate(params, "delivery")
 }
 
 /// Serialize a `HeartbeatTaskView` to JSON
@@ -60,6 +80,7 @@ fn task_view_to_json(view: &HeartbeatTaskView) -> Value {
         },
         "active_hours": view.active_hours,
         "failure_alert": view.failure_alert,
+        "delivery": view.delivery_config,
         "state": {
             "next_due_ms": view.state.next_due_ms,
             "running_at_ms": view.state.running_at_ms,
@@ -141,10 +162,13 @@ pub async fn handle_get(
         Some(view) => {
             JsonRpcResponse::success(request.id, json!({ "task": task_view_to_json(&view) }))
         }
-        None => JsonRpcResponse::error(
+        // `get_task` answers with an `Option`, so the classification is made
+        // here rather than inside the service — an unknown id is the caller's
+        // to fix and used to come back as `-32603 Internal error`.
+        None => task_error::respond(
             request.id,
-            INTERNAL_ERROR,
-            format!("Task not found: {task_id}"),
+            "Failed to get task",
+            &TaskError::not_found("task", &task_id),
         ),
     }
 }
@@ -270,16 +294,20 @@ pub async fn handle_create(
         Err(e) => return JsonRpcResponse::error(request.id, INVALID_PARAMS, e),
     }
 
+    // Optional: delivery. Without it the monitor has nowhere to report to and
+    // `resolve_alert_config`'s default failure target is dead too.
+    match parse_delivery(params) {
+        Ok(Some(delivery)) => task.delivery_config = delivery,
+        Ok(None) => {}
+        Err(e) => return JsonRpcResponse::error(request.id, INVALID_PARAMS, e),
+    }
+
     let clock = SystemClock;
     let service = service.lock().await;
     let task_id = match service.add_task(task, &clock).await {
         Ok(id) => id,
         Err(e) => {
-            return JsonRpcResponse::error(
-                request.id,
-                INTERNAL_ERROR,
-                format!("Failed to create heartbeat task: {e}"),
-            );
+            return task_error::respond(request.id, "Failed to create heartbeat task", &e);
         }
     };
     match service.get_task(&task_id).await {
@@ -353,6 +381,10 @@ pub async fn handle_update(
         Ok(alert) => updates.failure_alert = alert,
         Err(e) => return JsonRpcResponse::error(request.id, INVALID_PARAMS, e),
     }
+    match parse_delivery(params) {
+        Ok(delivery) => updates.delivery_config = delivery,
+        Err(e) => return JsonRpcResponse::error(request.id, INVALID_PARAMS, e),
+    }
 
     let clock = SystemClock;
     let service = service.lock().await;
@@ -366,11 +398,7 @@ pub async fn handle_update(
                 json!({ "task": { "id": task_id, "updated": true } }),
             ),
         },
-        Err(e) => JsonRpcResponse::error(
-            request.id,
-            INTERNAL_ERROR,
-            format!("Failed to update task: {e}"),
-        ),
+        Err(e) => task_error::respond(request.id, "Failed to update task", &e),
     }
 }
 
@@ -389,11 +417,7 @@ pub async fn handle_delete(
     let service = service.lock().await;
     match service.delete_task(&task_id).await {
         Ok(()) => JsonRpcResponse::success(request.id, json!({ "deleted": task_id })),
-        Err(e) => JsonRpcResponse::error(
-            request.id,
-            INTERNAL_ERROR,
-            format!("Failed to delete task: {e}"),
-        ),
+        Err(e) => task_error::respond(request.id, "Failed to delete task", &e),
     }
 }
 
@@ -441,11 +465,7 @@ pub async fn handle_toggle(
                 "enabled": new_enabled,
             }),
         ),
-        Err(e) => JsonRpcResponse::error(
-            request.id,
-            INTERNAL_ERROR,
-            format!("Failed to toggle task: {e}"),
-        ),
+        Err(e) => task_error::respond(request.id, "Failed to toggle task", &e),
     }
 }
 
@@ -494,10 +514,10 @@ pub async fn handle_wake(
                 }),
             )
         }
-        None => JsonRpcResponse::error(
+        None => task_error::respond(
             request.id,
-            INTERNAL_ERROR,
-            format!("Task not found: {task_id}"),
+            "Failed to wake task",
+            &TaskError::not_found("task", &task_id),
         ),
     }
 }
@@ -548,11 +568,10 @@ pub async fn handle_runs(
                 .collect();
             JsonRpcResponse::success(request.id, json!({ "task_id": task_id, "runs": runs_json }))
         }
-        Err(e) => JsonRpcResponse::error(
-            request.id,
-            INTERNAL_ERROR,
-            format!("Failed to get runs: {e}"),
-        ),
+        // The only failure the history query can produce is a store failure,
+        // so the classification is a one-liner rather than a service method
+        // with a single caller.
+        Err(e) => task_error::respond(request.id, "Failed to get runs", &TaskError::internal(e)),
     }
 }
 

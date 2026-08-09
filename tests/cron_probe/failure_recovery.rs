@@ -225,15 +225,9 @@ async fn catchup_staggers_missed() {
     }
 
     // Run catchup with max_missed=3, stagger=5000ms
-    let report = run_startup_catchup(
-        &h.state.store,
-        h.clock.as_ref(),
-        Some(3),
-        Some(5000),
-        900_000,
-    )
-    .await
-    .expect("catchup failed");
+    let report = run_startup_catchup(&h.state.store, h.clock.as_ref(), Some(3), Some(5000))
+        .await
+        .expect("catchup failed");
 
     assert_eq!(report.immediate_count, 3, "should have 3 immediate jobs");
     assert_eq!(report.deferred_count, 7, "should have 7 deferred jobs");

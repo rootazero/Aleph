@@ -478,4 +478,102 @@ mod tests {
         // Verify NOT approved
         assert!(!store.is_approved("imessage", "+15551234567").await.unwrap());
     }
+
+    /// The startup banner claims these methods answer. This asserts they do.
+    ///
+    /// # Why this reads source instead of booting a server
+    ///
+    /// What ships is a *runtime* check: `start/mod.rs` asks the live registry
+    /// `has_method` for every advertised name and logs `tracing::error!` on a
+    /// miss, under `--daemon` too. That is the right shape for an operator — a
+    /// wiring bug reports itself at boot instead of at somebody's first call —
+    /// and it is exactly the wrong shape for CI, which never boots the server.
+    /// The only test that could observe it would have to start one, and the
+    /// integration harness that starts one leaks a server process per run.
+    ///
+    /// So the guard compares the two *representations* directly. The defect it
+    /// exists to stop (2026-08-09) was precisely a drift between them: `list`
+    /// and `reject` sat in the banner — and in the webhook design doc's
+    /// copy-pasteable `aleph-server gateway call` invocation — while never
+    /// being passed to `register`, so the dispatcher answered
+    /// `METHOD_NOT_FOUND` to everyone who followed the advertisement.
+    ///
+    /// # Why it is bidirectional
+    ///
+    /// Advertised-but-unregistered is the bug that happened. Registered-but-
+    /// unadvertised is the same fact drifting the other way, and it is not
+    /// harmless here: the pairing code is delivered to the *stranger*, so the
+    /// banner is one of the few places an operator can discover that a method
+    /// exists at all.
+    ///
+    /// # The third leg is a runtime call, not a third scrape
+    ///
+    /// Whether these names are admin-gated is asked of the real predicate
+    /// rather than of `method_admin.rs`'s source, because a source scrape would
+    /// only prove a literal is written down somewhere — not that the gate
+    /// reaches it. `list` in particular is an enumeration face: it returns
+    /// every pending sender id across every channel.
+    #[test]
+    fn the_pairing_banner_advertises_exactly_what_start_registers() {
+        use std::collections::BTreeSet;
+
+        /// Every `"channel.pairing.*"` string literal that follows `prefix`.
+        ///
+        /// Prose mentions do not match: the doc comments above the table talk
+        /// about `list` and `reject` in backticks, never in wire form.
+        fn names_after(haystack: &str, prefix: &str) -> BTreeSet<String> {
+            let needle = format!("{prefix}\"channel.pairing.");
+            let mut out = BTreeSet::new();
+            let mut cursor = 0usize;
+            while let Some(at) = haystack[cursor..].find(&needle) {
+                let start = cursor + at + needle.len();
+                let Some(end) = haystack[start..].find('"') else {
+                    break;
+                };
+                out.insert(format!("channel.pairing.{}", &haystack[start..start + end]));
+                cursor = start + end;
+            }
+            out
+        }
+
+        // The Windows checkout is CRLF (git autocrlf). Nothing below anchors on
+        // a line ending, but normalising once up front is the shape that stays
+        // correct if someone later adds a separator that does — see CLAUDE.md
+        // §10, where a `\n`-anchored split silently matched nothing on Windows
+        // and turned a guard into a no-op that still reported green.
+        let src = include_str!("../../bin/aleph-server/commands/start/mod.rs").replace('\r', "");
+
+        let table_at = src.find("const CHANNEL_PAIRING_METHODS").expect(
+            "the banner table is gone or renamed; this guard is now protecting nothing. \
+             Point it at the new name rather than deleting it.",
+        );
+        let table_end = table_at
+            + src[table_at..]
+                .find("];")
+                .expect("CHANNEL_PAIRING_METHODS is unterminated");
+
+        let advertised = names_after(&src[table_at..table_end], "");
+        let registered = names_after(&src, ".register(");
+
+        assert!(
+            !advertised.is_empty(),
+            "found the banner table but no method names in it — the extractor drifted from \
+             the table's shape, which would make every assertion below vacuous"
+        );
+        assert_eq!(
+            advertised, registered,
+            "the startup banner and the `register` calls in start/mod.rs disagree. \
+             Names only in the banner answer METHOD_NOT_FOUND; names only in the \
+             registrations exist but cannot be discovered."
+        );
+
+        for method in &advertised {
+            assert!(
+                crate::gateway::method_admin::method_requires_admin(method),
+                "`{method}` answers but is not admin-gated. `channel.pairing.*` decides who \
+                 may DM the bot at all, and `.list` enumerates every pending sender id \
+                 across every channel."
+            );
+        }
+    }
 }

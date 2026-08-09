@@ -318,6 +318,7 @@ fn TokenSection(
     loading_guilds: RwSignal<bool>,
     channel_id: &'static str,
 ) -> impl IntoView {
+    let i18n = crate::i18n::use_i18n();
     let state = expect_context::<DashboardState>();
 
     let on_validate = move |_| {
@@ -403,15 +404,21 @@ fn TokenSection(
                             guilds.set(parsed);
                         }
                         Err(e) => {
-                            error.set(Some(format!(
-                                "Token valid, but failed to fetch guilds: {e}"
+                            error.set(Some(crate::components::admin_refusal::settings_load_error(
+                                i18n,
+                                &e,
+                                |e| format!("Token valid, but failed to fetch guilds: {e}"),
                             )));
                         }
                     }
                     loading_guilds.set(false);
                 }
                 Err(e) => {
-                    error.set(Some(format!("Token validation failed: {e}")));
+                    error.set(Some(
+                        crate::components::admin_refusal::settings_write_error(i18n, &e, |e| {
+                            format!("Token validation failed: {e}")
+                        }),
+                    ));
                     bot_identity.set(None);
                 }
             }
@@ -522,7 +529,11 @@ fn GuildSection(
                     guilds.set(parsed);
                 }
                 Err(e) => {
-                    error.set(Some(format!("Failed to refresh guilds: {e}")));
+                    error.set(Some(crate::components::admin_refusal::settings_load_error(
+                        i18n,
+                        &e,
+                        |e| format!("Failed to refresh guilds: {e}"),
+                    )));
                 }
             }
             loading_guilds.set(false);
@@ -643,7 +654,11 @@ fn GuildSection(
                     overall_health.set(health);
                 }
                 Err(e) => {
-                    error.set(Some(format!("Failed to audit permissions: {e}")));
+                    error.set(Some(crate::components::admin_refusal::settings_load_error(
+                        i18n,
+                        &e,
+                        |e| format!("Failed to audit permissions: {e}"),
+                    )));
                 }
             }
             loading_permissions.set(false);

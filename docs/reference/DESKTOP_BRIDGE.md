@@ -80,7 +80,7 @@ The deadlines live next to the method constants they belong to
 | `ax.*` | 15 s | `query_focused` 3 s |
 | `bridge.*` | 5 s | `ping` 2 s |
 | `input.*` | 2 s | `click` / `double_click` 5 s |
-| `media.*` | 60 s | `camera.snap` 10 s, `audio.list_devices` 5 s, `audio.mic_meter` 2 s, `audio.record_stop` 15 s |
+| `media.*` | 60 s | `camera.snap` 10 s, `audio.list_devices` 5 s, `audio.record_stop` 15 s |
 | `perm.*` | 10 s | — |
 | `pim.*` | 60 s | — |
 | `screen.*` | 10 s | `ocr` 20 s, `list_displays` 5 s |
@@ -285,7 +285,6 @@ of model context on the way in.
 | `media.audio.record` | Microphone (TCC) | Fixed-duration record from the default mic. Returns a **`file_path`** (typically `.m4a`) + actual `duration_secs` + `format`. It does **not** return audio bytes |
 | `media.audio.record_start` | Microphone (TCC) | Open-ended push-to-talk: start recording now, stop on a later call. Backs the Panel mic button (`WKWebView`'s `getUserMedia` is blocked on unsigned macOS builds, so capture happens natively) |
 | `media.audio.record_stop` | Microphone (TCC) | Stop the active push-to-talk recording; result mirrors `media.audio.record` |
-| `media.audio.mic_meter` | Microphone (TCC) | Poll the live input level. First call lazily installs an `AVAudioEngine` tap; the helper tears it down after an idle timeout |
 | `media.speech.transcribe_file` | Speech Recognition + Microphone (TCC) | Offline on-device STT via `SFSpeechRecognizer` (Apple's hard ~60s budget) |
 
 ### pim.* — Personal information (Notes, Calendar, Reminders, Contacts)

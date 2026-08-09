@@ -15,7 +15,12 @@ use alephcore::tasks::cron::service::timer::JobExecutorFn;
 use alephcore::tasks::shared::retry_hint::{RetryCategory, RetryHint};
 
 /// Record of a single job execution.
+///
+/// `executed_at_ms` / `prompt` are captured but not asserted on by any probe
+/// today; they are kept because they are what a failing assertion needs to be
+/// readable, and `Debug` is how they reach the failure message.
 #[derive(Debug, Clone)]
+#[allow(dead_code, reason = "carried for Debug output in assertion failures")]
 pub struct ExecutionRecord {
     pub job_id: String,
     pub trigger_source: TriggerSource,
@@ -79,12 +84,6 @@ impl MockExecutor {
     /// Check if a job was executed at least once.
     pub fn was_executed(&self, id: &str) -> bool {
         self.call_count(id) > 0
-    }
-
-    /// Clear all execution records.
-    pub fn reset_calls(&self) {
-        let mut log = self.call_log.lock().unwrap_or_else(|e| e.into_inner());
-        log.clear();
     }
 
     /// Convert into a `JobExecutorFn` for use with the cron service.

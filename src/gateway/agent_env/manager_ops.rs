@@ -77,6 +77,12 @@ impl AgentEnvStore {
 
         info!("Created agent env '{}' with profile '{}'", id, profile);
 
+        // After the guard, not under it: this is a broadcast nudge with no part
+        // in any authorization decision, so there is nothing for the DB lock to
+        // order it against.
+        drop(conn);
+        self.emit_change(id, crate::gateway::events::ChangeKind::Created);
+
         Ok(env)
     }
 
@@ -101,7 +107,9 @@ impl AgentEnvStore {
     /// paying for, one level down from the one that flag was added to fix.
     ///
     /// Read-only on purpose: archived workspaces are **readable, not
-    /// writable**. [`Self::update`] refuses them; there is no unarchive verb.
+    /// writable**. [`Self::update`] refuses them, and the way back is
+    /// [`Self::unarchive`] — a separate verb, so restoring a row is something
+    /// someone asked for rather than a side effect of editing one.
     pub async fn get_including_archived(
         &self,
         id: &str,
@@ -183,8 +191,14 @@ impl AgentEnvStore {
     /// Filtering the write (rather than widening the read-back) is what makes
     /// the existing `Ok(None)` answer TRUE, and it is the semantics the rest of
     /// the family already has: archived workspaces are readable
-    /// ([`Self::get_including_archived`]) and not writable. There is no
-    /// unarchive verb, so this is terminal by construction, not by omission.
+    /// ([`Self::get_including_archived`]) and not writable.
+    ///
+    /// This paragraph used to end "there is no unarchive verb, so this is
+    /// terminal by construction, not by omission". [`Self::unarchive`] landed
+    /// on 2026-08-09 and archiving is reversible now — but the refusal below is
+    /// unchanged, deliberately: the way back is **one explicit verb**, not a
+    /// rename that silently resurrects its target. Edit an archived row and it
+    /// still fails; unarchive it first.
     ///
     /// This `None` is therefore ambiguous by design — "no such row" and "that
     /// row is archived" arrive as the same value. `handle_update` disambiguates
@@ -231,6 +245,7 @@ impl AgentEnvStore {
         }
 
         debug!("Updated agent env '{}' metadata", id);
+        self.emit_change(id, crate::gateway::events::ChangeKind::Updated);
         self.get(id).await
     }
 
@@ -295,9 +310,85 @@ impl AgentEnvStore {
 
         if affected > 0 {
             info!("Archived agent env '{}'", id);
+            // `Updated`, not `Deleted` — see the frame's doc. Archiving is
+            // reversible and keeps the id taken; what left is the row's place
+            // in the default list, which a re-fetch is what reveals.
+            drop(conn);
+            self.emit_change(id, crate::gateway::events::ChangeKind::Updated);
         }
 
         Ok(affected > 0)
+    }
+
+    /// Restore an archived agent environment — the inverse of [`Self::archive`].
+    ///
+    /// Until 2026-08-09 a mistaken archive was permanent. The row stayed
+    /// readable ([`Self::get_including_archived`]) and unwritable
+    /// ([`Self::update`] filters `archived = 0`), and the id stayed taken,
+    /// because [`Self::create`] is a plain INSERT against a primary key. That
+    /// last part is unchanged and is the reason this verb exists rather than a
+    /// reclaiming `create`: a workspace id is also the directory name under
+    /// `~/.aleph/agents/<id>/`, which holds the notes vault, the memory
+    /// partition and the skills. Letting `create` take an archived id would
+    /// hand a brand-new workspace the previous one's memory, silently. Archive
+    /// does not touch any of that, so restoring the row is all there is to do.
+    ///
+    /// # Why `Option<AgentEnv>` and not `bool`
+    ///
+    /// [`Self::archive`] answers `bool` because its caller has nothing left to
+    /// show — the row has just left the default view. This one's caller does:
+    /// `workspace.unarchive` returns the restored workspace, so a client
+    /// re-renders from the response instead of racing a follow-up `get`.
+    ///
+    /// # This `None` is NOT [`Self::update`]'s `None`
+    ///
+    /// That one is ambiguous by design: "no such row" and "that row is
+    /// archived" arrive as the same value, because its UPDATE filters
+    /// `archived = 0`. The statement below carries no `archived` predicate, so
+    /// `Ok(None)` means exactly one thing — there is no row with this id. Do
+    /// not copy `handle_update`'s follow-up probe here; there is nothing left
+    /// to disambiguate, and a probe that cannot change the answer reads like
+    /// one that can.
+    ///
+    /// # Idempotent
+    ///
+    /// Unarchiving a live row succeeds. The postcondition promised — this
+    /// workspace is active — holds either way, and the symmetry is with
+    /// [`Self::archive`], which likewise reports success for a row that was
+    /// already archived (SQLite counts the rows a statement matched, not the
+    /// rows whose values it changed).
+    ///
+    /// `last_active_at` is bumped for the same reason [`Self::update`] bumps
+    /// it: both are metadata writes, the field already means "last touched"
+    /// rather than "last conversed" (`WorkspaceDetail::last_active_at` says so
+    /// on the wire), and `list` orders by it — a workspace someone just went
+    /// looking for should not come back buried.
+    pub async fn unarchive(&self, id: &str) -> Result<Option<AgentEnv>, AgentEnvError> {
+        if id == "global" {
+            return Err(AgentEnvError::CannotModifyGlobal);
+        }
+
+        // Scope the MutexGuard so it is dropped before the .await below.
+        let affected = {
+            let conn = self
+                .conn
+                .lock()
+                .map_err(|e| AgentEnvError::Database(format!("Lock error: {e}")))?;
+
+            conn.execute(
+                "UPDATE agent_envs SET archived = 0, last_active_at = ?1 WHERE id = ?2",
+                params![Utc::now().timestamp(), id],
+            )
+            .map_err(|e| AgentEnvError::Database(format!("Unarchive failed: {e}")))?
+        };
+
+        if affected == 0 {
+            return Ok(None);
+        }
+
+        info!("Unarchived agent env '{}'", id);
+        self.emit_change(id, crate::gateway::events::ChangeKind::Updated);
+        self.get(id).await
     }
 
     // =========================================================================
@@ -348,8 +439,10 @@ impl AgentEnvStore {
     /// The binding model is many-to-one (N channels → 1 agent), so deleting an
     /// agent must drop every channel that pointed at it — otherwise the orphaned
     /// channels keep a stale `agent_id` and the inbound router resolves them to a
-    /// ghost agent until it falls back. Mirrors the cleanup already in
-    /// [`Self::delete`], single DELETE-by-agent_id for atomicity.
+    /// ghost agent until it falls back. One DELETE-by-`agent_id` rather than a
+    /// loop, so a partial cleanup cannot leave some channels cleared and others
+    /// pointing at the ghost. (This used to say it mirrored `Self::delete`;
+    /// there is no such method on this store and never has been.)
     pub fn clear_bindings_for_agent(&self, agent_id: &str) -> Result<(), AgentEnvError> {
         let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
         conn.execute(

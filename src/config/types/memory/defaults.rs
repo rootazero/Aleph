@@ -64,6 +64,19 @@ pub const fn default_drift_max_pairs_per_run() -> usize {
     20
 }
 
+/// Ceiling on LLM-judged consolidation pairs per corpus per night.
+///
+/// `NoteConsolidate`'s candidate generation for a large category is a full
+/// O(n²) title cross-product with no cap, and every pair it returns costs one
+/// LLM call. That is the same unbounded shape `NoteDrift`'s doc records as
+/// "the reason one night of dreaming produced ten thousand provider calls" —
+/// and `feedback/` + `lesson/` are exactly the categories this learning axis
+/// keeps growing. Same default as drift: the work is the same kind, so a second
+/// number would only be a second thing to tune.
+pub const fn default_consolidate_max_pairs_per_run() -> usize {
+    20
+}
+
 pub const fn default_skill_distill_max_per_cycle() -> usize {
     3
 }

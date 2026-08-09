@@ -5,11 +5,12 @@
 //! modify the store and recompute next run times as needed.
 
 use crate::tasks::cron::config::{
-    CronJob, CronJobView, ErrorReason, FailureAlertConfig, ScheduleKind, SessionTarget,
+    CronJob, CronJobView, ErrorReason, FailureAlertConfig, JobChain, ScheduleKind, SessionTarget,
 };
 use crate::tasks::cron::stagger::compute_staggered_next;
 use crate::tasks::cron::store::CronStore;
 use crate::tasks::shared::clock::Clock;
+use crate::tasks::shared::error::TaskError;
 use crate::tasks::shared::schedule::{
     apply_min_gap, compute_next_cron, compute_next_every, resolve_anchor,
 };
@@ -150,7 +151,27 @@ pub fn validate_schedule_kind(kind: &ScheduleKind) -> Result<(), String> {
             }
             Ok(())
         }
-        ScheduleKind::At { .. } => Ok(()),
+        // A one-shot whose moment has already passed can never fire:
+        // `compute_next_run_for_job` returns `None` for it, so the job is
+        // accepted, reported as created/updated, and parks immediately with
+        // nothing to show for it. `cron_manage` rejected this at its own
+        // boundary while this — the shared validator both `cron.create` and
+        // `cron.update` call — had an empty arm, so the same input got two
+        // answers depending on which face the caller used.
+        ScheduleKind::At { at, .. } => {
+            let now_ms = chrono::Utc::now().timestamp_millis();
+            if *at <= now_ms {
+                let at_human = chrono::DateTime::from_timestamp_millis(*at).map_or_else(
+                    || format!("{at}ms"),
+                    |dt| dt.format("%Y-%m-%d %H:%M:%S UTC").to_string(),
+                );
+                return Err(format!(
+                    "Cannot schedule a one-shot task in the past. at={at} resolves to \
+                     {at_human}, but current time is {now_ms}ms. Provide a future timestamp."
+                ));
+            }
+            Ok(())
+        }
     }
 }
 
@@ -205,6 +226,14 @@ pub struct CronJobUpdates {
     /// outer `Some(Some(cfg))` installs, outer `Some(None)` clears, outer
     /// `None` leaves it alone.
     pub failure_alert: Option<Option<FailureAlertConfig>>,
+    /// Chain successors. Same tri-state convention again: outer `Some(Some)`
+    /// REPLACES both links, outer `Some(None)` clears them, outer `None`
+    /// leaves them alone.
+    ///
+    /// `CronService::update_job` runs `chain::validate` before calling this —
+    /// applying an unvalidated chain here would let the RPC and the tool
+    /// diverge on what a legal chain is.
+    pub chain: Option<Option<JobChain>>,
 }
 
 /// Apply partial updates to an existing job. Recomputes next run time.
@@ -213,10 +242,10 @@ pub fn update_job<C: Clock>(
     id: &str,
     updates: CronJobUpdates,
     clock: &C,
-) -> Result<(), String> {
+) -> Result<(), TaskError> {
     let job = store
         .get_job_mut(id)
-        .ok_or_else(|| format!("job not found: {id}"))?;
+        .ok_or_else(|| TaskError::not_found("job", id))?;
 
     if let Some(name) = updates.name {
         job.name = name;
@@ -245,6 +274,9 @@ pub fn update_job<C: Clock>(
     if let Some(alert_action) = updates.failure_alert {
         job.failure_alert = alert_action;
     }
+    if let Some(chain_action) = updates.chain {
+        job.set_chain(chain_action);
+    }
 
     job.updated_at = clock.now_ms();
     recompute_next_run_full(job, clock);
@@ -253,10 +285,10 @@ pub fn update_job<C: Clock>(
 
 /// Toggle a job's enabled state. Recomputes next run if enabling.
 /// Returns the new enabled state.
-pub fn toggle_job<C: Clock>(store: &mut CronStore, id: &str, clock: &C) -> Result<bool, String> {
+pub fn toggle_job<C: Clock>(store: &mut CronStore, id: &str, clock: &C) -> Result<bool, TaskError> {
     let job = store
         .get_job_mut(id)
-        .ok_or_else(|| format!("job not found: {id}"))?;
+        .ok_or_else(|| TaskError::not_found("job", id))?;
 
     job.enabled = !job.enabled;
     job.updated_at = clock.now_ms();
@@ -275,10 +307,10 @@ pub fn toggle_job<C: Clock>(store: &mut CronStore, id: &str, clock: &C) -> Resul
 }
 
 /// Delete a job by ID.
-pub fn delete_job(store: &mut CronStore, id: &str) -> Result<(), String> {
+pub fn delete_job(store: &mut CronStore, id: &str) -> Result<(), TaskError> {
     store
         .remove_job(id)
-        .ok_or_else(|| format!("job not found: {id}"))?;
+        .ok_or_else(|| TaskError::not_found("job", id))?;
     Ok(())
 }
 
@@ -791,6 +823,29 @@ mod tests {
             expr: "0 0 9 * * *".to_string(),
             tz: Some("Asia/Shanghai".to_string()),
             stagger_ms: None,
+        })
+        .is_ok());
+    }
+
+    /// A one-shot in the past can never fire — `compute_next_run_for_job`
+    /// returns `None` for it, so the job is accepted, reported as
+    /// created/updated, and parks immediately with no run and no explanation.
+    /// This arm was empty while `cron_manage` rejected the same input at its
+    /// own boundary: one writable schedule, two answers.
+    #[test]
+    fn validate_schedule_kind_rejects_a_one_shot_whose_moment_has_passed() {
+        let now = chrono::Utc::now().timestamp_millis();
+        assert!(
+            validate_schedule_kind(&ScheduleKind::At {
+                at: now - 60_000,
+                delete_after_run: false,
+            })
+            .is_err(),
+            "a past one-shot is unschedulable and must be refused at the write boundary"
+        );
+        assert!(validate_schedule_kind(&ScheduleKind::At {
+            at: now + 3_600_000,
+            delete_after_run: false,
         })
         .is_ok());
     }

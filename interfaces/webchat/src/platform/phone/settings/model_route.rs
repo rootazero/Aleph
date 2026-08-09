@@ -38,6 +38,7 @@ fn parse_limit(raw: &str) -> Option<u32> {
 #[component]
 #[must_use]
 pub fn PhoneModelRoute() -> impl IntoView {
+    let i18n = crate::i18n::use_i18n();
     let state = expect_context::<DashboardState>();
 
     // --- signals: identical set to route.rs ---
@@ -73,7 +74,11 @@ pub fn PhoneModelRoute() -> impl IntoView {
                         loading.set(false);
                     }
                     Err(e) => {
-                        error.set(Some(e));
+                        error.set(Some(
+                            crate::components::admin_refusal::settings_write_error(i18n, &e, |e| {
+                                e.to_string()
+                            }),
+                        ));
                         loading.set(false);
                     }
                 }
@@ -103,7 +108,11 @@ pub fn PhoneModelRoute() -> impl IntoView {
                     saved.set(true);
                 }
                 Err(e) => {
-                    error.set(Some(e));
+                    error.set(Some(
+                        crate::components::admin_refusal::settings_write_error(i18n, &e, |e| {
+                            e.to_string()
+                        }),
+                    ));
                     saving.set(false);
                 }
             }

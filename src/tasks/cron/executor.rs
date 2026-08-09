@@ -293,35 +293,56 @@ async fn execute_cron_job(
                         )
                         .await
                     }
+                    // `NotRequested`, not `NotDelivered`: the agent chose to say
+                    // nothing. Collapsing "nobody wanted a message" into "the
+                    // message was lost" is what made the delivery outcome
+                    // unusable as a failure signal in the first place.
                     None if final_response.is_some() => {
                         info!(job_id = %snapshot.id, "cron job replied with a silent protocol token, suppressing delivery");
-                        DeliveryStatus::NotDelivered
+                        DeliveryStatus::NotRequested
                     }
                     None => {
                         info!(job_id = %snapshot.id, "cron job produced no response text, skipping delivery");
-                        DeliveryStatus::NotDelivered
+                        DeliveryStatus::NotRequested
                     }
                 }
             } else {
-                DeliveryStatus::NotDelivered
+                // No channel/conversation on the job at all.
+                DeliveryStatus::NotRequested
             };
 
+            // A configured delivery that did not arrive is a failed run. It
+            // used to be recorded as `Ok` with the outcome parked in a side
+            // field nothing downstream read: `consecutive_errors` reset to
+            // zero, no alert, no backoff, no retry — a daily briefing whose
+            // channel was down simply stopped arriving, silently, forever.
+            // Transient by construction: the agent turn itself succeeded, so
+            // the existing backoff ladder is the right next step, not parking.
+            let delivery_failed = delivery_status.delivery_failed();
             ExecutionResult {
                 started_at,
                 ended_at,
                 duration_ms: ended_at.saturating_sub(started_at),
-                status: RunStatus::Ok,
+                status: if delivery_failed {
+                    RunStatus::Error
+                } else {
+                    RunStatus::Ok
+                },
                 output: if fell_back {
                     Some(prepend_fallback_note(final_response, &requested_agent))
                 } else {
                     final_response
                 },
-                error: None,
-                error_reason: None,
+                error: delivery_failed
+                    .then(|| "result delivery failed: no target accepted the payload".to_string()),
+                error_reason: delivery_failed
+                    .then(|| ErrorReason::Transient("result delivery failed".to_string())),
                 delivery_status: Some(delivery_status),
                 agent_used_messaging_tool: false,
                 trigger_source: snapshot.trigger_source,
-                retry_hint: None,
+                retry_hint: delivery_failed.then(|| {
+                    RetryHint::transient(crate::tasks::shared::retry_hint::RetryCategory::Network)
+                }),
             }
         }
         Err(ExecutionError::Timeout) => {
@@ -367,23 +388,27 @@ async fn execute_cron_job(
 
             let err_text = e.to_string();
             let hint = classify(&err_text);
-            let error_msg = format!(
-                "❌ Cron job execution failed\n\nJob: {}\nError: {}",
-                snapshot.id, err_text
-            );
-            if let (Some(ref ch_id), Some(ref conv_id)) = (
-                &snapshot.source_channel_id,
-                &snapshot.source_conversation_id,
-            ) {
-                let _ = deliver_to_channel(
-                    &channel_registry_cell,
-                    ch_id,
-                    conv_id,
-                    &error_msg,
-                    &snapshot.id,
-                )
-                .await;
-            }
+
+            // NO inline delivery here. This arm used to push
+            // "❌ Cron job execution failed … {err_text}" straight to the
+            // source conversation, which had three consequences, all bad:
+            //
+            //  1. It bypassed the alert gate entirely — no `failure_alert.after`
+            //     threshold, no `cooldown_ms`, no `TRANSIENT_ALERT_FLOOR`. That
+            //     floor's own doc says it is "what keeps an 8am 429 blip from
+            //     firing a 'failed 3 times' alarm"; this path woke the user on
+            //     failure number one, so the floor never applied in production.
+            //  2. It double-notified: phase3 synthesises a default alert at the
+            //     same channel/conversation when `notify_on_failure_default` is
+            //     on, so a permanent failure sent two differently-worded
+            //     messages from two different code paths.
+            //  3. It shipped the raw flattened error chain to the user, which
+            //     is exactly what `ExecutionError::user_receipt` exists to
+            //     prevent — and this was the fourth surface that skipped it.
+            //
+            // The text is not lost: it goes into `ExecutionResult.error` →
+            // `job.state.last_error`, which the alert renderer already includes.
+            // Timeout and failure now notify through the same single gate.
 
             // Match historical behaviour: errors that look transient stay
             // `Transient`; otherwise mark `Permanent` so phase3 can short-circuit

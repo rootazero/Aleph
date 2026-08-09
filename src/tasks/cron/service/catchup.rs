@@ -5,7 +5,7 @@ use tracing::info;
 use crate::sync_primitives::Arc;
 
 use crate::tasks::cron::config::{CronJob, ScheduleKind};
-use crate::tasks::cron::service::ops::{advance_next_run, recompute_next_run_full};
+use crate::tasks::cron::service::ops::{advance_next_run, recompute_next_run_maintenance};
 use crate::tasks::cron::store::CronStore;
 use crate::tasks::shared::clock::Clock;
 use crate::tasks::shared::schedule::compute_next_cron;
@@ -19,9 +19,6 @@ pub struct CatchupReport {
     /// Recurring jobs that were too stale to catch up and were fast-forwarded.
     pub fast_forwarded: usize,
 }
-
-/// Default stale threshold: 2 hours in milliseconds.
-const DEFAULT_STALE_THRESHOLD_MS: i64 = 7_200_000;
 
 /// Default maximum number of missed jobs to execute immediately.
 const DEFAULT_MAX_MISSED: usize = 5;
@@ -62,9 +59,16 @@ fn compute_grace_ms(job: &CronJob, now: i64) -> Option<i64> {
     Some((period_ms / 2).clamp(MIN_GRACE_MS, MAX_GRACE_MS))
 }
 
-/// Run startup catchup: clear stale running markers and reschedule missed jobs.
+/// Run startup catchup: clear running markers and reschedule missed jobs.
 ///
-/// - Stale markers: if `running_at_ms` is set and `now - running_at_ms > max(7_200_000, timeout_ms * 2)`, clear it.
+/// **Process-start semantics.** This runs once, at boot, before the timer
+/// loop; singleton is enforced by the OS-level flock on `aleph.lock`. Every
+/// invariant below leans on that.
+///
+/// - Running markers: cleared unconditionally — see Phase 1 for why an age
+///   threshold here is a predicate that is false by construction.
+/// - Missing `next_run_at_ms`: recomputed through the *maintenance* path, so a
+///   permanently-parked job stays parked across restarts.
 /// - Missed jobs: enabled, not running, `next_run_at_ms <= now`.
 ///   - Recurring jobs staler than their grace window are fast-forwarded
 ///     (the stale run is skipped) rather than replayed.
@@ -75,7 +79,6 @@ pub async fn run_startup_catchup<C: Clock>(
     clock: &C,
     max_missed: Option<usize>,
     stagger_ms: Option<i64>,
-    default_timeout_ms: i64,
 ) -> Result<CatchupReport, String> {
     let now = clock.now_ms();
     let max_missed = max_missed.unwrap_or(DEFAULT_MAX_MISSED);
@@ -87,26 +90,47 @@ pub async fn run_startup_catchup<C: Clock>(
     let mut report = CatchupReport::default();
     let mut changed = false;
 
-    // Phase 1: Clear stale running markers
+    // Phase 1: Clear EVERY running marker, unconditionally.
+    //
+    // This function runs at process start and nowhere else, and singleton is
+    // enforced by an OS-level flock on `~/.aleph/data/aleph.lock` — so by the
+    // time we get here the process that wrote these markers no longer exists
+    // and every one of them is an orphan. A marker is a claim left behind by a
+    // dead process, not state.
+    //
+    // The old age threshold (`max(2h, timeout * 2)`) was guarding against "the
+    // job might still be running", a condition that is false at this call
+    // site by construction. Its cost was real: phase1 unconditionally skips a
+    // job whose `running_at_ms` is set, and phase1 advances `next_run_at_ms`
+    // *before* dispatch, so a skipped job is not `parked` either — it looks
+    // perfectly healthy and simply does not fire for two hours. A 5-minute
+    // monitor silently loses ~24 firings after a `kill -9`, which this repo
+    // documents as a normal operation.
     for job in guard.jobs_mut().iter_mut() {
-        if let Some(running_at) = job.state.running_at_ms {
-            let stale_threshold =
-                DEFAULT_STALE_THRESHOLD_MS.max(job.effective_timeout_ms(default_timeout_ms) * 2);
-            if now.saturating_sub(running_at) > stale_threshold {
-                job.state.running_at_ms = None;
-                report.stale_markers_cleared += 1;
-                changed = true;
-            }
+        if job.state.running_at_ms.take().is_some() {
+            report.stale_markers_cleared += 1;
+            changed = true;
         }
     }
 
     // Phase 1.5: Recompute next_run_at_ms for enabled jobs that have None
-    // (e.g. after manual DB edits or data migration)
+    // (e.g. after manual DB edits or data migration).
+    //
+    // This goes through the *maintenance* recompute, which already carries the
+    // `enabled` check and — crucially — the permanent-failure guard. Using
+    // `recompute_next_run_full` here made every daemon restart equivalent to
+    // the operator pressing "enable": a job parked by phase3 for a permanent
+    // failure (missing agent, auth error, validation failure) was rescheduled,
+    // re-ran, re-failed, emitted another cooldown-bypassing alert, and parked
+    // again — with `parked` only flickering in the UI. `_full` is the
+    // operator's explicit fix path (`CronService::enable_job` clears
+    // `last_error_reason` first); a restart is not that.
     for job in guard.jobs_mut().iter_mut() {
-        if job.enabled && job.state.next_run_at_ms.is_none() {
-            recompute_next_run_full(job, clock);
-            changed = true;
+        if job.state.next_run_at_ms.is_some() {
+            continue;
         }
+        recompute_next_run_maintenance(job, clock);
+        changed |= job.state.next_run_at_ms.is_some();
     }
 
     // Phase 2: Classify past-due jobs.
@@ -188,8 +212,6 @@ mod tests {
     use crate::tasks::shared::clock::testing::FakeClock;
     use tempfile::TempDir;
 
-    const TEST_TIMEOUT_MS: i64 = 300_000;
-
     fn make_test_job(id: &str) -> CronJob {
         let mut job = CronJob::new(
             id.to_string(),
@@ -229,7 +251,7 @@ mod tests {
             guard.persist().unwrap();
         }
 
-        let report = run_startup_catchup(&store, &clock, None, None, TEST_TIMEOUT_MS)
+        let report = run_startup_catchup(&store, &clock, None, None)
             .await
             .unwrap();
 
@@ -240,6 +262,79 @@ mod tests {
         assert!(
             job.state.running_at_ms.is_none(),
             "stale running marker should be cleared"
+        );
+    }
+
+    /// A marker written one minute ago is just as orphaned as a three-hour-old
+    /// one: the process that wrote it is gone, because this pass only runs at
+    /// boot and singleton is enforced by flock. Restoring the old
+    /// `max(2h, timeout*2)` threshold turns this red — and in production it
+    /// meant a one-minute monitor sat out its next ~120 firings while looking
+    /// enabled, unparked and perfectly healthy.
+    #[tokio::test]
+    async fn a_marker_younger_than_the_old_threshold_is_still_an_orphan_at_boot() {
+        let (store, _dir) = make_store();
+        let clock = FakeClock::new(20_000_000);
+
+        {
+            let mut guard = store.lock().await;
+            let mut job = make_test_job("recent-runner");
+            job.created_at = 1_000_000;
+            let id = add_job(&mut guard, job, &clock);
+            let j = guard.get_job_mut(&id).unwrap();
+            j.state.running_at_ms = Some(20_000_000 - 60_000); // one minute ago
+            j.state.next_run_at_ms = Some(25_000_000);
+            guard.persist().unwrap();
+        }
+
+        let report = run_startup_catchup(&store, &clock, None, None)
+            .await
+            .unwrap();
+
+        assert_eq!(report.stale_markers_cleared, 1);
+        let guard = store.lock().await;
+        assert!(
+            guard
+                .get_job("recent-runner")
+                .unwrap()
+                .state
+                .running_at_ms
+                .is_none(),
+            "a running marker at boot is always an orphan, whatever its age"
+        );
+    }
+
+    /// A job phase3 parked for a permanent failure must stay parked across a
+    /// restart. Going through `recompute_next_run_full` here made every daemon
+    /// start equivalent to the operator pressing "enable".
+    #[tokio::test]
+    async fn a_permanently_parked_job_is_not_resurrected_by_a_restart() {
+        use crate::tasks::cron::config::ErrorReason;
+
+        let (store, _dir) = make_store();
+        let clock = FakeClock::new(20_000_000);
+
+        {
+            let mut guard = store.lock().await;
+            let mut job = make_test_job("parked-job");
+            job.created_at = 1_000_000;
+            let id = add_job(&mut guard, job, &clock);
+            let j = guard.get_job_mut(&id).unwrap();
+            j.enabled = true;
+            j.state.next_run_at_ms = None; // parked by phase3
+            j.state.last_error_reason = Some(ErrorReason::Permanent("no such agent".to_string()));
+            guard.persist().unwrap();
+        }
+
+        run_startup_catchup(&store, &clock, None, None)
+            .await
+            .unwrap();
+
+        let guard = store.lock().await;
+        let job = guard.get_job("parked-job").unwrap();
+        assert!(
+            job.state.next_run_at_ms.is_none(),
+            "a permanently parked job must survive a restart still parked"
         );
     }
 
@@ -264,7 +359,7 @@ mod tests {
         }
 
         let stagger = 10_000_i64;
-        let report = run_startup_catchup(&store, &clock, Some(3), Some(stagger), TEST_TIMEOUT_MS)
+        let report = run_startup_catchup(&store, &clock, Some(3), Some(stagger))
             .await
             .unwrap();
 
@@ -317,7 +412,7 @@ mod tests {
             guard.persist().unwrap();
         }
 
-        let report = run_startup_catchup(&store, &clock, None, None, TEST_TIMEOUT_MS)
+        let report = run_startup_catchup(&store, &clock, None, None)
             .await
             .unwrap();
 
@@ -359,15 +454,9 @@ mod tests {
         }
 
         let max_missed = 3;
-        let report = run_startup_catchup(
-            &store,
-            &clock,
-            Some(max_missed),
-            Some(30_000),
-            TEST_TIMEOUT_MS,
-        )
-        .await
-        .unwrap();
+        let report = run_startup_catchup(&store, &clock, Some(max_missed), Some(30_000))
+            .await
+            .unwrap();
 
         assert_eq!(
             report.immediate_count, 3,
@@ -411,7 +500,7 @@ mod tests {
             guard.persist().unwrap();
         }
 
-        let report = run_startup_catchup(&store, &clock, None, None, TEST_TIMEOUT_MS)
+        let report = run_startup_catchup(&store, &clock, None, None)
             .await
             .unwrap();
 
@@ -438,7 +527,7 @@ mod tests {
             guard.persist().unwrap();
         }
 
-        let report = run_startup_catchup(&store, &clock, None, None, TEST_TIMEOUT_MS)
+        let report = run_startup_catchup(&store, &clock, None, None)
             .await
             .unwrap();
 
@@ -474,7 +563,7 @@ mod tests {
             guard.persist().unwrap();
         }
 
-        let report = run_startup_catchup(&store, &clock, None, None, TEST_TIMEOUT_MS)
+        let report = run_startup_catchup(&store, &clock, None, None)
             .await
             .unwrap();
 

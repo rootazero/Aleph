@@ -521,7 +521,8 @@
       "moa": "MoA",
       "browser": "Browser",
       "execution": "Execution",
-      "network": "Network & Cluster"
+      "network": "Network & Cluster",
+      "workspaces": "Workspaces"
     },
     "general": {
       "title": "General Settings",
@@ -1463,9 +1464,37 @@
     },
     "admin_refusal": {
       "read_config": "This settings page needs operator privileges — the role this connection holds cannot read server-wide configuration.",
+      "write_config": "This change needs operator privileges — the role this connection holds cannot modify server-wide settings.",
       "read_setup_state": "Needs operator privileges — this connection cannot read this setting, so its status is unknown.",
       "read_tiers": "Needs operator privileges — this connection cannot read the selectable execution tiers.",
-      "read_modes": "Needs operator privileges — this connection cannot read the selectable session modes."
+      "read_modes": "Needs operator privileges — this connection cannot read the selectable session modes.",
+      "manage_workspaces": "Needs operator privileges — the role this connection holds cannot create, rename, archive or restore workspaces."
+    },
+    "workspaces": {
+      "title": "Workspaces",
+      "description": "Agent environments — each one has its own memory partition, notes and settings.",
+      "include_archived": "Show archived",
+      "new_workspace": "+ New workspace",
+      "no_workspaces": "No workspaces",
+      "select_or_add": "Select a workspace to view it, or create a new one.",
+      "loading": "Loading…",
+      "id_label": "ID",
+      "id_hint": "URL-safe slug, e.g. \"crypto\". This is the key everything else addresses the workspace by, and it cannot be changed later.",
+      "id_required": "An ID is required.",
+      "name_label": "Name",
+      "name_hint": "Display name. Defaults to the ID.",
+      "description_label": "Description",
+      "icon_label": "Icon",
+      "profile_label": "Profile",
+      "created_label": "Created",
+      "last_active_label": "Last active",
+      "status_active": "Active",
+      "status_archived": "Archived",
+      "archived_note": "This workspace is archived. It is read-only, and its ID stays taken — restore it to edit it again. Nothing was deleted: its memory and notes are still on disk.",
+      "create": "Create",
+      "save": "Save",
+      "archive": "Archive",
+      "unarchive": "Restore"
     }
   },
   "extensions": {
@@ -2016,7 +2045,14 @@
     "pairing_approved": "Sender approved successfully.",
     "pairing_approve_failed": "Failed to approve: ",
     "pairing_speaks_as": "Speaks as",
-    "pairing_speaks_as_owner": "Owner (default)"
+    "pairing_speaks_as_owner": "Owner (default)",
+    "pending_requests": "Pending Requests",
+    "no_pending_requests": "No pending requests.",
+    "refresh": "Refresh",
+    "reject": "Reject",
+    "pairing_list_failed": "Failed to load pending requests: ",
+    "pairing_reject_failed": "Failed to reject: ",
+    "pairing_approved_load_failed": "Failed to load approved senders: "
   },
   "execution_settings": {
     "title": "Execution",

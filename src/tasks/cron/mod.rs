@@ -49,8 +49,10 @@ pub use crate::tasks::shared::delivery::{DeliveryEngine, DeliveryPayload, Delive
 pub use config::{
     CronConfig, CronJob, CronJobView, DeliveryConfig, DeliveryMode, DeliveryOutcome,
     DeliveryStatus, DeliveryTargetConfig, ErrorReason, ExecutionResult, FailureAlertConfig,
-    JobSnapshot, JobStateV2, RunStatus, ScheduleKind, SessionTarget, TriggerSource,
+    JobChain, JobSnapshot, JobStateV2, RunStatus, ScheduleKind, SessionTarget, TriggerSource,
 };
+
+pub use crate::tasks::shared::error::TaskError;
 
 use crate::sync_primitives::Arc;
 use clock::{Clock, SystemClock};
@@ -135,25 +137,40 @@ impl CronService {
     // ── Read operations ─────────────────────────────────────────────
 
     /// List all jobs as read-only views.
-    pub async fn list_jobs(&self) -> Result<Vec<CronJobView>, String> {
+    pub async fn list_jobs(&self) -> Result<Vec<CronJobView>, TaskError> {
         let store = self.state.store.lock().await;
         Ok(service::ops::list_jobs(&store))
     }
 
     /// Get a single job by ID as a read-only view.
-    pub async fn get_job(&self, id: &str) -> Result<CronJobView, String> {
+    pub async fn get_job(&self, id: &str) -> Result<CronJobView, TaskError> {
         let store = self.state.store.lock().await;
-        service::ops::get_job(&store, id).ok_or_else(|| format!("job not found: {id}"))
+        service::ops::get_job(&store, id).ok_or_else(|| TaskError::not_found("job", id))
     }
 
     // ── Write operations ────────────────────────────────────────────
 
     /// Add a new job. Returns the job ID.
-    pub async fn add_job(&self, job: CronJob) -> Result<String, String> {
+    ///
+    /// This is the write chokepoint for creation: `cron_manage` and the
+    /// `cron.create` RPC both land here, so the chain check below is the one
+    /// definition of a legal chain rather than one per surface. (The store-level
+    /// `ops::add_job` stays unchecked on purpose — test fixtures build cyclic
+    /// graphs deliberately to exercise the fire-time guards.)
+    ///
+    /// Every rejection `chain::validate` can produce — empty target, self-link,
+    /// missing target, cycle — is a caller error, so the classification is made
+    /// once here rather than threaded through `chain.rs`. Reported as
+    /// [`TaskError::Invalid`] and not `NotFound` even for a missing target: the
+    /// job the caller *addressed* is the one being written, and answering
+    /// "not found" to a create would name the wrong thing. What is missing is
+    /// the value of the `chain` parameter.
+    pub async fn add_job(&self, job: CronJob) -> Result<String, TaskError> {
         let id = {
             let mut store = self.state.store.lock().await;
+            chain::validate(&store, &job.id, job.chain().as_ref()).map_err(TaskError::invalid)?;
             let id = service::ops::add_job(&mut store, job, self.state.clock.as_ref());
-            store.persist()?;
+            store.persist().map_err(TaskError::internal)?;
             id
         };
         self.emit_change(&id, crate::gateway::events::ChangeKind::Created);
@@ -165,22 +182,28 @@ impl CronService {
         &self,
         id: &str,
         updates: service::ops::CronJobUpdates,
-    ) -> Result<(), String> {
+    ) -> Result<(), TaskError> {
         {
             let mut store = self.state.store.lock().await;
+            // Same predicate as `add_job`, held under the same lock as the
+            // write it guards — validating outside the lock would let a
+            // concurrent delete turn a checked target into a missing one.
+            if let Some(chain) = updates.chain.as_ref() {
+                chain::validate(&store, id, chain.as_ref()).map_err(TaskError::invalid)?;
+            }
             service::ops::update_job(&mut store, id, updates, self.state.clock.as_ref())?;
-            store.persist()?;
+            store.persist().map_err(TaskError::internal)?;
         }
         self.emit_change(id, crate::gateway::events::ChangeKind::Updated);
         Ok(())
     }
 
     /// Delete a job by ID.
-    pub async fn delete_job(&self, id: &str) -> Result<(), String> {
+    pub async fn delete_job(&self, id: &str) -> Result<(), TaskError> {
         {
             let mut store = self.state.store.lock().await;
             service::ops::delete_job(&mut store, id)?;
-            store.persist()?;
+            store.persist().map_err(TaskError::internal)?;
         }
         self.emit_change(id, crate::gateway::events::ChangeKind::Deleted);
         Ok(())
@@ -196,12 +219,12 @@ impl CronService {
     /// jobs an operator reaches for this call to fix, reported success, and
     /// changed nothing — the job stayed dead. `enabled` was the wrong
     /// predicate; see [`CronJobView::parked`] for the right one.
-    pub async fn enable_job(&self, id: &str) -> Result<(), String> {
+    pub async fn enable_job(&self, id: &str) -> Result<(), TaskError> {
         {
             let mut store = self.state.store.lock().await;
             let job = store
                 .get_job_mut(id)
-                .ok_or_else(|| format!("job not found: {id}"))?;
+                .ok_or_else(|| TaskError::not_found("job", id))?;
             job.enabled = true;
             job.updated_at = self.state.clock.now_ms();
             // Clear the permanent-failure classification *before* recomputing:
@@ -209,19 +232,19 @@ impl CronService {
             // next maintenance pass re-park it.
             job.state.last_error_reason = None;
             service::ops::recompute_next_run_full(job, self.state.clock.as_ref());
-            store.persist()?;
+            store.persist().map_err(TaskError::internal)?;
         }
         self.emit_change(id, crate::gateway::events::ChangeKind::Updated);
         Ok(())
     }
 
     /// Disable a job by ID.
-    pub async fn disable_job(&self, id: &str) -> Result<(), String> {
+    pub async fn disable_job(&self, id: &str) -> Result<(), TaskError> {
         {
             let mut store = self.state.store.lock().await;
             let job = store
                 .get_job_mut(id)
-                .ok_or_else(|| format!("job not found: {id}"))?;
+                .ok_or_else(|| TaskError::not_found("job", id))?;
             if job.enabled {
                 job.enabled = false;
                 job.state.next_run_at_ms = None;
@@ -231,18 +254,18 @@ impl CronService {
                 job.state.manual_trigger_pending = false;
                 job.updated_at = self.state.clock.now_ms();
             }
-            store.persist()?;
+            store.persist().map_err(TaskError::internal)?;
         }
         self.emit_change(id, crate::gateway::events::ChangeKind::Updated);
         Ok(())
     }
 
     /// Toggle a job's enabled state. Returns the new enabled state.
-    pub async fn toggle_job(&self, id: &str) -> Result<bool, String> {
+    pub async fn toggle_job(&self, id: &str) -> Result<bool, TaskError> {
         let result = {
             let mut store = self.state.store.lock().await;
             let result = service::ops::toggle_job(&mut store, id, self.state.clock.as_ref())?;
-            store.persist()?;
+            store.persist().map_err(TaskError::internal)?;
             result
         };
         self.emit_change(id, crate::gateway::events::ChangeKind::Updated);
@@ -257,22 +280,30 @@ impl CronService {
     /// otherwise byte-identical to the schedule coming due, and phase 3 acts on
     /// the difference: a `delete_after_run` one-shot must survive being run by
     /// hand before its appointment.
-    pub async fn run_job(&self, id: &str) -> Result<(), String> {
+    ///
+    /// The two state refusals below are [`TaskError::Invalid`], not a variant
+    /// of their own: the request named a real job and was well-formed, the job
+    /// is simply in a state that refuses it. See
+    /// [`TaskError`][crate::tasks::shared::error::TaskError] for why there is
+    /// no `Conflict`.
+    pub async fn run_job(&self, id: &str) -> Result<(), TaskError> {
         {
             let mut store = self.state.store.lock().await;
             let job = store
                 .get_job_mut(id)
-                .ok_or_else(|| format!("job not found: {id}"))?;
+                .ok_or_else(|| TaskError::not_found("job", id))?;
             if !job.enabled {
-                return Err(format!("job '{id}' is disabled, enable it first"));
+                return Err(TaskError::invalid(format!(
+                    "job '{id}' is disabled, enable it first"
+                )));
             }
             if job.state.running_at_ms.is_some() {
-                return Err(format!("job '{id}' is already running"));
+                return Err(TaskError::invalid(format!("job '{id}' is already running")));
             }
             let now = self.state.clock.now_ms();
             job.state.next_run_at_ms = Some(now);
             job.state.manual_trigger_pending = true;
-            store.persist()?;
+            store.persist().map_err(TaskError::internal)?;
         }
         self.emit_change(id, crate::gateway::events::ChangeKind::StateChanged);
         Ok(())
@@ -305,15 +336,64 @@ impl CronService {
         }))
     }
 
+    /// The most recent runs of one job, newest first.
+    ///
+    /// The store has held this history all along and the `cron.runs` RPC reads
+    /// it, but nothing on the model-facing side did — so `cron_manage` could
+    /// create, delete and manually trigger a job while being unable to answer
+    /// "why does this keep failing?". That question is the one an operator
+    /// actually asks, and R8 says the model should be able to answer it in
+    /// conversation rather than sending someone to the Panel.
+    pub async fn job_runs(
+        &self,
+        job_id: &str,
+        limit: usize,
+    ) -> Result<Vec<crate::tasks::cron::history::CronRunRecord>, TaskError> {
+        let store = self.state.store.lock().await;
+        store.get_runs(job_id, limit).map_err(TaskError::internal)
+    }
+
+    /// Request a graceful shutdown of the timer loop.
+    ///
+    /// `ServiceState::request_shutdown` and the loop's `is_shutdown()` check
+    /// both existed, but nothing on `CronService` exposed the setter and the
+    /// daemon's shutdown path only called heartbeat's — so the cron loop's exit
+    /// arm was unreachable and it kept ticking (and dispatching jobs) while the
+    /// rest of the process tore its dependencies down.
+    pub fn request_shutdown(&self) {
+        self.state.request_shutdown();
+    }
+
+    /// Wall-clock ms of the scheduler's last completed due-scan, or `0` when it
+    /// has never scanned — the only honest answer to "is the scheduler alive?".
+    ///
+    /// See [`ServiceState::last_tick_at_ms`]: the timer loop's startup is
+    /// conditional on an execution adapter being wired, while every `cron.*`
+    /// handler is registered regardless.
+    #[must_use]
+    pub fn last_tick_at_ms(&self) -> i64 {
+        self.state.last_tick_at_ms()
+    }
+
+    /// How often the timer loop wakes, after the same clamp the loop applies.
+    /// Paired with [`Self::last_tick_at_ms`] so a caller can decide liveness
+    /// without hard-coding the interval.
+    #[must_use]
+    pub fn check_interval_secs(&self) -> u64 {
+        self.state.config.check_interval_secs.clamp(1, 60)
+    }
+
     /// Delete cron run history older than `history_retention_days`
     /// (from this service's `CronConfig`). Used by the shared task reaper
     /// daemon ([[reaper]]) so the cron history table does not grow without
     /// bound. Returns the number of rows deleted.
-    pub async fn reap_history(&self) -> Result<u64, String> {
+    pub async fn reap_history(&self) -> Result<u64, TaskError> {
         let now = self.state.clock.now_ms();
         let retention = self.state.config.history_retention_days;
         let store = self.state.store.lock().await;
-        store.cleanup_old_runs(retention, now)
+        store
+            .cleanup_old_runs(retention, now)
+            .map_err(TaskError::internal)
     }
 }
 
@@ -478,5 +558,267 @@ mod tests {
         let view = service.get_job(&id).await.unwrap();
         assert_eq!(view.name, "Updated");
         assert_eq!(view.prompt, "new prompt");
+    }
+
+    // ── Job chaining ────────────────────────────────────────────────
+    //
+    // The trigger machinery, its cycle detection and its tests shipped whole;
+    // what was missing until 2026-08-09 was any writer of the two link fields
+    // outside `#[cfg(test)]`. These cover the write half.
+
+    fn test_service(dir: &tempfile::TempDir) -> CronService {
+        CronService::new(CronConfig {
+            db_path: dir.path().join("cron.db").to_string_lossy().to_string(),
+            ..CronConfig::default()
+        })
+        .unwrap()
+    }
+
+    fn named_job(name: &str) -> CronJob {
+        CronJob::new(
+            name,
+            "agent-1",
+            "prompt",
+            ScheduleKind::Every {
+                every_ms: 60_000,
+                anchor_ms: None,
+            },
+        )
+    }
+
+    #[tokio::test]
+    async fn a_chain_set_at_create_is_stored_and_readable() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let service = test_service(&dir);
+
+        let target = service.add_job(named_job("target")).await.unwrap();
+        let recovery = service.add_job(named_job("recovery")).await.unwrap();
+
+        let mut job = named_job("source");
+        job.set_chain(Some(JobChain {
+            on_success: Some(target.clone()),
+            on_failure: Some(recovery.clone()),
+        }));
+        let id = service.add_job(job).await.unwrap();
+
+        // Read-back through the view is the half that makes this a wire and
+        // not a write-only field.
+        let view = service.get_job(&id).await.unwrap();
+        let chain = view.chain.expect("chain must survive the round trip");
+        assert_eq!(chain.on_success.as_deref(), Some(target.as_str()));
+        assert_eq!(chain.on_failure.as_deref(), Some(recovery.as_str()));
+
+        // And it must be the field `phase3` actually reads, not a parallel one.
+        let stored = service.state.store.lock().await;
+        let raw = stored.get_job(&id).unwrap();
+        assert_eq!(raw.next_job_id_on_success.as_deref(), Some(target.as_str()));
+        assert_eq!(
+            raw.next_job_id_on_failure.as_deref(),
+            Some(recovery.as_str())
+        );
+    }
+
+    #[tokio::test]
+    async fn update_replaces_the_whole_chain_and_can_clear_it() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let service = test_service(&dir);
+
+        let a = service.add_job(named_job("a")).await.unwrap();
+        let b = service.add_job(named_job("b")).await.unwrap();
+
+        let mut job = named_job("source");
+        job.set_chain(Some(JobChain {
+            on_success: Some(a.clone()),
+            on_failure: Some(b.clone()),
+        }));
+        let id = service.add_job(job).await.unwrap();
+
+        // Replace, not merge: sending only `on_success` drops `on_failure`.
+        service
+            .update_job(
+                &id,
+                service::ops::CronJobUpdates {
+                    chain: Some(Some(JobChain {
+                        on_success: Some(b.clone()),
+                        on_failure: None,
+                    })),
+                    ..Default::default()
+                },
+            )
+            .await
+            .unwrap();
+        let chain = service.get_job(&id).await.unwrap().chain.unwrap();
+        assert_eq!(chain.on_success.as_deref(), Some(b.as_str()));
+        assert!(chain.on_failure.is_none(), "replace, not merge");
+
+        // Outer `None` leaves it alone — an unrelated update must not erase it.
+        service
+            .update_job(
+                &id,
+                service::ops::CronJobUpdates {
+                    name: Some("renamed".to_string()),
+                    ..Default::default()
+                },
+            )
+            .await
+            .unwrap();
+        assert!(service.get_job(&id).await.unwrap().chain.is_some());
+
+        // Outer `Some(None)` clears.
+        service
+            .update_job(
+                &id,
+                service::ops::CronJobUpdates {
+                    chain: Some(None),
+                    ..Default::default()
+                },
+            )
+            .await
+            .unwrap();
+        assert!(service.get_job(&id).await.unwrap().chain.is_none());
+    }
+
+    /// A chain to a job that does not exist never fires and says nothing when
+    /// it doesn't. Rejecting at write time is the only moment the caller can
+    /// still act on it.
+    #[tokio::test]
+    async fn a_chain_to_a_nonexistent_job_is_refused_at_write_time() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let service = test_service(&dir);
+
+        let mut job = named_job("source");
+        job.set_chain(Some(JobChain {
+            on_success: Some("no-such-job".to_string()),
+            on_failure: None,
+        }));
+        let err = service.add_job(job).await.unwrap_err();
+        // `Invalid`, not `NotFound`: the job the caller addressed is the one
+        // being created. What is missing is the value of the `chain` field, so
+        // the RPC face answers INVALID_PARAMS rather than a 404 naming the
+        // wrong object. See `gateway::handlers::task_error`.
+        assert!(matches!(err, TaskError::Invalid(_)), "{err:?}");
+        assert!(
+            err.message().contains("no-such-job"),
+            "the refusal must name the target: {err}"
+        );
+
+        // ...and nothing was stored.
+        assert!(service.list_jobs().await.unwrap().is_empty());
+    }
+
+    /// Cycles and self-links are refused on update.
+    ///
+    /// Update, not create: both create faces mint the job id with
+    /// `CronJob::new`, so a brand-new job cannot yet be anyone's successor and
+    /// cannot close a loop. Create still runs the same predicate — one
+    /// definition of a legal chain for both faces beats two that agree today.
+    #[tokio::test]
+    async fn a_cycle_and_a_self_link_are_refused_on_update() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let service = test_service(&dir);
+
+        let a = service.add_job(named_job("a")).await.unwrap();
+        let mut b_job = named_job("b");
+        b_job.set_chain(Some(JobChain {
+            on_success: Some(a.clone()),
+            on_failure: None,
+        }));
+        let b = service.add_job(b_job).await.unwrap();
+
+        // a -> b would close the loop b -> a.
+        let err = service
+            .update_job(
+                &a,
+                service::ops::CronJobUpdates {
+                    chain: Some(Some(JobChain {
+                        on_success: Some(b.clone()),
+                        on_failure: None,
+                    })),
+                    ..Default::default()
+                },
+            )
+            .await
+            .unwrap_err();
+        assert!(matches!(err, TaskError::Invalid(_)), "{err:?}");
+        assert!(err.message().contains("cycle"), "{err}");
+
+        // The failure leg is walked too — a loop through `on_failure` is the
+        // same loop.
+        let err = service
+            .update_job(
+                &a,
+                service::ops::CronJobUpdates {
+                    chain: Some(Some(JobChain {
+                        on_success: None,
+                        on_failure: Some(b.clone()),
+                    })),
+                    ..Default::default()
+                },
+            )
+            .await
+            .unwrap_err();
+        assert!(err.message().contains("cycle"), "{err}");
+
+        // A self-link is the degenerate cycle and gets its own message.
+        let err = service
+            .update_job(
+                &a,
+                service::ops::CronJobUpdates {
+                    chain: Some(Some(JobChain {
+                        on_success: Some(a.clone()),
+                        on_failure: None,
+                    })),
+                    ..Default::default()
+                },
+            )
+            .await
+            .unwrap_err();
+        assert!(err.message().contains("itself"), "{err}");
+
+        // None of the refusals wrote anything.
+        assert!(service.get_job(&a).await.unwrap().chain.is_none());
+    }
+
+    /// Both write faces must reach the links through `set_chain`, never by
+    /// assigning `next_job_id_on_*` directly.
+    ///
+    /// A direct assignment compiles, passes review and skips the existence /
+    /// cycle check entirely — the two surfaces would then disagree about what
+    /// a legal chain is, which is how "the tool accepted it but the RPC didn't"
+    /// bugs are born. Source-level because at runtime a bypassed check and an
+    /// absent one are indistinguishable.
+    #[test]
+    fn no_write_surface_assigns_the_chain_links_directly() {
+        const SURFACES: [(&str, &str); 2] = [
+            (
+                "src/builtin_tools/cron_manage.rs",
+                include_str!("../../builtin_tools/cron_manage.rs"),
+            ),
+            (
+                "src/gateway/handlers/cron/real.rs",
+                include_str!("../../gateway/handlers/cron/real.rs"),
+            ),
+        ];
+
+        let mut reaches_the_setter = 0usize;
+        for (path, src) in SURFACES {
+            let production = src.split("#[cfg(test)]").next().unwrap_or(src);
+            for field in ["next_job_id_on_success", "next_job_id_on_failure"] {
+                assert!(
+                    !production.contains(&format!("{field} =")),
+                    "{path} assigns `{field}` directly — go through \
+                     `CronJob::set_chain` so `chain::validate` still runs"
+                );
+            }
+            if production.contains("set_chain(") {
+                reaches_the_setter += 1;
+            }
+        }
+        assert_eq!(
+            reaches_the_setter,
+            SURFACES.len(),
+            "both write surfaces must call `set_chain` — a surface that stopped \
+             doing so has either dropped the feature or grown its own path to it"
+        );
     }
 }

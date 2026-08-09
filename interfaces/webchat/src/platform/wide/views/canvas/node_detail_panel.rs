@@ -198,7 +198,11 @@ fn DetailFor(
                     }
                     Err(e) => {
                         is_saving.set(false);
-                        error.set(Some(e));
+                        error.set(Some(
+                            crate::components::admin_refusal::settings_write_error(i18n, &e, |e| {
+                                e.to_string()
+                            }),
+                        ));
                     }
                 }
             });
@@ -236,7 +240,11 @@ fn DetailFor(
                     }
                     Err(e) => {
                         is_saving.set(false);
-                        error.set(Some(e));
+                        error.set(Some(
+                            crate::components::admin_refusal::settings_write_error(i18n, &e, |e| {
+                                e.to_string()
+                            }),
+                        ));
                     }
                 }
             });
@@ -272,7 +280,11 @@ fn DetailFor(
                     Err(e) => {
                         is_saving.set(false);
                         confirm_delete.set(false); // reset on error
-                        error.set(Some(e));
+                        error.set(Some(
+                            crate::components::admin_refusal::settings_write_error(i18n, &e, |e| {
+                                e.to_string()
+                            }),
+                        ));
                     }
                 }
             });

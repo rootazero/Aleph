@@ -22,7 +22,7 @@ use aleph_desktop::media_types::{
     CameraSnapConfig, CameraSnapResult,
 };
 use aleph_desktop::script_exec::{is_deadline_failure, is_spawn_failure, output_capped};
-use aleph_desktop::traits::media::{MediaCapability, MicMeterSample};
+use aleph_desktop::traits::media::MediaCapability;
 use aleph_desktop::{DesktopError, Result};
 use async_trait::async_trait;
 use base64::{engine::general_purpose, Engine as _};
@@ -418,15 +418,6 @@ impl MediaCapability for LinuxMedia {
             duration_secs: config.duration_secs,
             format: "m4a".to_string(),
         })
-    }
-
-    async fn mic_level(&self) -> Result<MicMeterSample> {
-        // Linux has no warm-tap meter equivalent to macOS's AVAudioEngine here;
-        // report inactive (Ok, not Err) so the opt-in mic-level reporter stays
-        // quiet instead of log-spamming. Use `record_audio` for actual capture.
-        Ok(MicMeterSample::inactive(
-            "mic level metering is not implemented on Linux; use record_audio",
-        ))
     }
 }
 

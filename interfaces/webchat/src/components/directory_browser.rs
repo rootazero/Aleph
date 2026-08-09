@@ -103,7 +103,11 @@ pub fn DirectoryBrowser(
                         roots.set(r);
                     }
                 }
-                Err(e) => error.set(Some(format!("fs.allowed_roots: {e}"))),
+                Err(e) => error.set(Some(
+                    crate::components::admin_refusal::settings_write_error(i18n, &e, |e| {
+                        format!("fs.allowed_roots: {e}")
+                    }),
+                )),
             }
             busy.set(false);
         });
@@ -123,7 +127,11 @@ pub fn DirectoryBrowser(
             match FsApi::list_dir(&dash, &path, hidden).await {
                 Ok(res) => listing.set(Some(res)),
                 Err(e) => {
-                    error.set(Some(format!("fs.list_dir: {e}")));
+                    error.set(Some(crate::components::admin_refusal::settings_load_error(
+                        i18n,
+                        &e,
+                        |e| format!("fs.list_dir: {e}"),
+                    )));
                     listing.set(None);
                 }
             }
@@ -227,7 +235,11 @@ pub fn DirectoryBrowser(
                     }
                     current_path.set(Some(new_path));
                 }
-                Err(e) => error.set(Some(format!("fs.create_dir: {e}"))),
+                Err(e) => error.set(Some(crate::components::admin_refusal::settings_load_error(
+                    i18n,
+                    &e,
+                    |e| format!("fs.create_dir: {e}"),
+                ))),
             }
             busy.set(false);
         });

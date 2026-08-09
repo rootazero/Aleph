@@ -244,7 +244,9 @@ impl DreamPipeline {
             DreamStrategy::Consolidate => vec![
                 Box::new(stages::NoteLintStage),
                 Box::new(stages::NoteReviewStage::default()),
-                Box::new(stages::NoteConsolidateStage),
+                Box::new(stages::NoteConsolidateStage {
+                    max_pairs: dreaming_cfg.consolidate_max_pairs_per_run,
+                }),
                 // Distill user-correction signals on the FREQUENT consolidate
                 // path (not just the rarer synthesize path), so a freshly
                 // flagged correction becomes a recallable feedback rule within
@@ -301,7 +303,9 @@ impl DreamPipeline {
             DreamStrategy::Synthesize => vec![
                 Box::new(stages::NoteLintStage),
                 Box::new(stages::NoteReviewStage::default()),
-                Box::new(stages::NoteConsolidateStage),
+                Box::new(stages::NoteConsolidateStage {
+                    max_pairs: dreaming_cfg.consolidate_max_pairs_per_run,
+                }),
                 Box::new(stages::NoteSynthesisStage),
                 Box::new(stages::SkillDistillStage {
                     max_per_cycle: dreaming_cfg.skill_distill_max_per_cycle,

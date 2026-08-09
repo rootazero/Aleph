@@ -4,37 +4,22 @@
 //! The desktop *capabilities* themselves are constructed at the single
 //! per-OS injection point (`executor::builtin_registry::builder::constructor`)
 //! and the power capability in the binary boot path. This section only carries
-//! the **policy** knobs for the daemon-side *consumers* of those capabilities:
-//! the presence broadcaster, the mic-level meter, and the one input-rail policy
-//! the desktop tool enforces (`allow_global_pointer`).
+//! the **policy** knobs for the daemon-side *consumers* of those capabilities —
+//! today exactly one, the input-rail policy the desktop tool enforces
+//! (`allow_global_pointer`).
 //!
-//! The two reporter structs are reused verbatim from `crate::tasks::*` (the
-//! modules that own the reporters) so the config layer and the consumer share
-//! one definition — no duplicated schema, no drift.
+//! `[desktop.presence]` and `[desktop.mic_level]` were the other two until
+//! 2026-08-09; both reporters were removed (see `crate::tasks`). `Config` does
+//! not `deny_unknown_fields`, so a `config.toml` still carrying those tables
+//! parses unchanged — the keys are ignored rather than rejected, and no
+//! migration is needed.
 
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
-pub use crate::tasks::mic_level::MicLevelConfig;
-pub use crate::tasks::presence::PresenceConfig;
-
 /// Desktop daemon-consumer settings.
-///
-/// When `[desktop]` is absent from `config.toml`, `Default` reproduces the
-/// historical hardcoded behavior exactly: presence on at 30 s, mic-level off.
 #[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
 pub struct DesktopDaemonConfig {
-    /// Periodic broadcast of `(hostname, username, platform, idle)` on the
-    /// Gateway event bus. Enabled by default.
-    #[serde(default)]
-    pub presence: PresenceConfig,
-
-    /// Periodic mic-level meter snapshots on the Gateway event bus. Disabled
-    /// by default — the live meter keeps the OS "mic in use" indicator lit, so
-    /// it is opt-in.
-    #[serde(default)]
-    pub mic_level: MicLevelConfig,
-
     /// Permit coordinate-space desktop actions (click / drag / scroll /
     /// `type_text` / …) that name **no target process** and therefore run on the
     /// global HID event tap: they physically drag the user's cursor across the
@@ -60,16 +45,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn default_matches_reporter_defaults() {
-        let d = DesktopDaemonConfig::default();
-        // Both presence and mic-level ship off by default. Both publish
-        // privacy-sensitive data (hostname + username / mic amplitude) on
-        // the Gateway event bus and must be opted in explicitly.
-        assert!(!d.presence.enabled);
-        assert!(!d.mic_level.enabled);
-    }
-
-    #[test]
     fn global_pointer_is_denied_by_default() {
         // The intrusive rail (moves the user's real cursor, needs the app
         // frontmost) is opt-in. Nothing about the platform is consulted here —
@@ -85,28 +60,30 @@ mod tests {
         assert!(d.allow_global_pointer);
     }
 
+    /// An existing `config.toml` still carrying the two removed reporter
+    /// tables must keep parsing. Deleting a config field is a wire change for
+    /// every machine that already wrote it; this is the assertion that says
+    /// the change needs no migration.
     #[test]
-    fn deserializes_nested_sections() {
+    fn stale_reporter_tables_are_ignored_not_rejected() {
         let toml = r#"
+            allow_global_pointer = true
+
             [presence]
-            enabled = false
+            enabled = true
             interval_secs = 120
 
             [mic_level]
             enabled = true
             interval_secs = 2
         "#;
-        let d: DesktopDaemonConfig = toml::from_str(toml).expect("parse [desktop]");
-        assert!(!d.presence.enabled);
-        assert_eq!(d.presence.interval_secs, 120);
-        assert!(d.mic_level.enabled);
-        assert_eq!(d.mic_level.interval_secs, 2);
+        let d: DesktopDaemonConfig = toml::from_str(toml).expect("stale tables must not fail boot");
+        assert!(d.allow_global_pointer);
     }
 
     #[test]
     fn empty_table_uses_inner_defaults() {
         let d: DesktopDaemonConfig = toml::from_str("").expect("parse empty");
-        assert!(!d.presence.enabled);
-        assert!(!d.mic_level.enabled);
+        assert!(!d.allow_global_pointer);
     }
 }

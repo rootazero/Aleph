@@ -48,7 +48,11 @@ pub fn CronSparklines() -> impl IntoView {
                     jobs.set(visible);
                     error.set(None);
                 }
-                Err(e) => error.set(Some(e)),
+                Err(e) => error.set(Some(
+                    crate::components::admin_refusal::settings_write_error(i18n, &e, |e| {
+                        e.to_string()
+                    }),
+                )),
             }
             loading.set(false);
         });

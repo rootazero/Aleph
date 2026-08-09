@@ -13,7 +13,39 @@
 //! current_session_key IS NULL`. So a room's session key is *declared* in a
 //! second table rather than guessed — the predicate "a project row whose
 //! `current_session_key` names a session row with both attribution columns
-//! `NULL`" identifies exactly the legacy room conversations and nothing else.
+//! `NULL`" never mistakes some other conversation for a room's.
+//!
+//! ## The population this CANNOT see (verified 2026-08-09, do not re-derive)
+//!
+//! That predicate is precise, not complete, and the gap is on the older side.
+//! `handle_room_session` — the only producer of `current_session_key` — landed
+//! **2026-08-07** (`546f76c46`); before it the `project_id → session_key` map
+//! lived in each browser's `localStorage`, so the server never learned which
+//! conversation belonged to a room. A room whose chat predates that commit
+//! therefore has `current_session_key IS NULL`, and this pass `continue`s past
+//! it without even counting it.
+//!
+//! Those rooms are unrecoverable *and* unidentifiable, and the second half is
+//! why no counter is offered for them: `current_session_key IS NULL` is also
+//! the ordinary state of a room **nobody has opened yet**. Discriminating the
+//! two would mean guessing from `created_at`, i.e. a date heuristic, which is
+//! the kind of enumeration that only describes the world on the day it was
+//! written. A report that counted both together would be a confident wrong
+//! answer, which is worse than the honest silence.
+//!
+//! The exposure this pass *does* cover is correspondingly narrow: a room whose
+//! key was claimed (≥ 2026-08-07) but whose session row was created before
+//! `run_loop::ensure_session_under_request_scope` fixed the cross-`spawn`
+//! attribution loss (2026-08-08). Two days, not the "rooms created 08-06→08-08"
+//! it is tempting to assume — the stamping writer (`fcbed9380`, 08-05) predates
+//! rooms being creatable at all (`2f85faccc`, 08-06).
+//!
+//! Either way the damage was **visibility only**. Memory routing never depended
+//! on these columns: turn-level writes resolve their partition from the run's
+//! ambient scope (seeded from `request.metadata`, which carried the right
+//! attribution the whole time) and `memory::flush` enumerates partitions by
+//! `{agent}__` prefix. So a room in the uncovered population lost its roster's
+//! view of the transcript, not the transcript's memory partition.
 //!
 //! ## What was actually broken
 //!

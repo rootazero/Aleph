@@ -19,7 +19,7 @@ use crate::views::settings::{
     ChannelsOverview, EmbeddingProvidersView, ExecutionView, GeneralView, GenerationProvidersView,
     McpView, MemoryView, MoaView, NetworkView, PluginsView, PoliciesView, ProvidersView,
     RerankingProvidersView, RouteView, RoutingRulesView, SearchView, SecurityView, Settings,
-    SkillsView,
+    SkillsView, WorkspacesView,
 };
 use crate::views::subagent_tree::SubagentTree;
 use crate::views::tasks::TasksView;
@@ -694,6 +694,7 @@ fn desktop_settings_body(path: &str) -> AnyView {
         "/settings/security" => view! { <SecurityView /> }.into_any(),
         "/settings/policies" => view! { <PoliciesView /> }.into_any(),
         "/settings/execution" => view! { <ExecutionView /> }.into_any(),
+        "/settings/workspaces" => view! { <WorkspacesView /> }.into_any(),
         // Channels
         "/settings/channels" => view! { <ChannelsOverview /> }.into_any(),
         _ if path.starts_with("/settings/channels/") => {

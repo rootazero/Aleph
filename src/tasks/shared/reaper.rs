@@ -217,7 +217,10 @@ impl HistoryReap for CronHistoryReaper {
 
     async fn reap(&self) -> Result<u64, String> {
         let svc = self.0.lock().await;
-        svc.reap_history().await
+        // The reaper's own contract stays `String`: every failure it can see
+        // is a store failure, and its only consumer is a log line. Flattening
+        // here is the classification, not a loss of one.
+        svc.reap_history().await.map_err(|e| e.to_string())
     }
 }
 
@@ -263,7 +266,10 @@ impl HistoryReap for HeartbeatHistoryReaper {
 
     async fn reap(&self) -> Result<u64, String> {
         let svc = self.0.lock().await;
-        svc.reap_history().await.map(|n| n as u64)
+        svc.reap_history()
+            .await
+            .map(|n| n as u64)
+            .map_err(|e| e.to_string())
     }
 }
 

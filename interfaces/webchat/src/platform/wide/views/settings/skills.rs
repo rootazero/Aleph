@@ -218,7 +218,11 @@ pub fn SkillsView() -> impl IntoView {
                     .await
                 {
                     Ok(_) => load_skills(i18n, state, skills, loading, error),
-                    Err(e) => error.set(Some(format!("Failed to toggle skill: {e}"))),
+                    Err(e) => error.set(Some(
+                        crate::components::admin_refusal::settings_write_error(i18n, &e, |e| {
+                            format!("Failed to toggle skill: {e}")
+                        }),
+                    )),
                 }
             });
         })
@@ -706,7 +710,11 @@ fn SkillDetailDialog(
                                                                                         on_close();
                                                                                     }
                                                                                     Err(e) => {
-                                                                                        dep_error.set(Some(format!("Install failed: {e}")));
+                                                                                        dep_error.set(Some(crate::components::admin_refusal::settings_write_error(
+                                                                                            i18n,
+                                                                                            &e,
+                                                                                            |e| format!("Install failed: {e}"),
+                                                                                        )));
                                                                                         installing_dep.set(None);
                                                                                     }
                                                                                 }
@@ -832,7 +840,11 @@ fn SkillDetailDialog(
                                                                 on_close();
                                                             }
                                                             Err(e) => {
-                                                                key_error.set(Some(format!("Failed to save: {e}")));
+                                                                key_error.set(Some(crate::components::admin_refusal::settings_write_error(
+                                                                    i18n,
+                                                                    &e,
+                                                                    |e| format!("Failed to save: {e}"),
+                                                                )));
                                                                 saving_key.set(false);
                                                             }
                                                         }
@@ -892,7 +904,11 @@ fn SkillDetailDialog(
                                                     on_refresh();
                                                 }
                                                 Err(e) => {
-                                                    key_error.set(Some(format!("Failed to update: {e}")));
+                                                    key_error.set(Some(crate::components::admin_refusal::settings_write_error(
+                                                        i18n,
+                                                        &e,
+                                                        |e| format!("Failed to update: {e}"),
+                                                    )));
                                                     enabled.set(!new_val);
                                                     toggling.set(false);
                                                 }
@@ -918,7 +934,11 @@ fn SkillDetailDialog(
                                             .rpc_call("skills.update", json!({ "skill_id": id, "scope": new_scope }))
                                             .await
                                         {
-                                            key_error.set(Some(format!("Failed to update scope: {e}")));
+                                            key_error.set(Some(crate::components::admin_refusal::settings_write_error(
+                                                i18n,
+                                                &e,
+                                                |e| format!("Failed to update scope: {e}"),
+                                            )));
                                         } else {
                                             on_refresh();
                                         }
@@ -976,7 +996,11 @@ fn SkillDetailDialog(
                                                     on_close();
                                                 }
                                                 Err(e) => {
-                                                    key_error.set(Some(format!("Failed to remove: {e}")));
+                                                    key_error.set(Some(crate::components::admin_refusal::settings_write_error(
+                                                        i18n,
+                                                        &e,
+                                                        |e| format!("Failed to remove: {e}"),
+                                                    )));
                                                 }
                                             }
                                         });
@@ -1028,7 +1052,11 @@ fn AddSkillDialog(
                     on_success();
                 }
                 Err(e) => {
-                    dialog_error.set(Some(format!("Failed to add skill: {e}")));
+                    dialog_error.set(Some(
+                        crate::components::admin_refusal::settings_write_error(i18n, &e, |e| {
+                            format!("Failed to add skill: {e}")
+                        }),
+                    ));
                     adding.set(false);
                 }
             }

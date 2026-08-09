@@ -52,7 +52,7 @@ mod runtime_warmup;
 use runtime_warmup::runtime_startup_warmup;
 
 mod bootstrap_factories;
-use bootstrap_factories::{build_desktop_platform, build_task_delivery_engine};
+use bootstrap_factories::build_task_delivery_engine;
 
 // ── (subsystem initializer helpers extracted to start/helpers.rs) ────────────
 
@@ -834,7 +834,12 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
         use alephcore::gateway::AgentEnvStore;
         match AgentEnvStore::with_defaults() {
             Ok(wm) => {
-                let wm = Arc::new(wm);
+                // The store, not the four RPC handlers, is what announces a
+                // workspace mutation — so the CLI's writes (same handlers, over
+                // IPC) and any future in-process mutator emit it too. This is
+                // the only production construction site; the rest are tests,
+                // which deliberately run without a bus.
+                let wm = Arc::new(wm.with_event_bus(event_bus.clone()));
                 // Feed config.toml's [profiles.*] into the store. Without this
                 // every get_profile() falls back to ProfileConfig::default(),
                 // silently discarding model/tool/smart_recall profile settings.
@@ -846,7 +851,9 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
             }
             Err(e) => {
                 if !args.daemon {
-                    eprintln!("Warning: Failed to initialize workspace manager: {e}. channels.set_agent/agents.bindings disabled.");
+                    eprintln!(
+                        "Warning: Failed to initialize workspace manager: {e}. channels.set_agent/agents.bindings disabled."
+                    );
                 }
                 None
             }
@@ -965,7 +972,9 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
                         }
                         Err(e) => {
                             if !args.daemon {
-                                eprintln!("Warning: Failed to initialize heartbeat service: {e}. Heartbeat disabled.");
+                                eprintln!(
+                                    "Warning: Failed to initialize heartbeat service: {e}. Heartbeat disabled."
+                                );
                             }
                             None
                         }
@@ -2265,7 +2274,6 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
                     cron_state.clock.as_ref(),
                     cron_config.max_missed_jobs_per_restart,
                     cron_config.catchup_stagger_ms,
-                    cron_config.job_timeout_secs.saturating_mul(1000) as i64,
                 )
                 .await
                 {
@@ -2339,7 +2347,9 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
                     Ok(dir) => Some(dir),
                     Err(e) => {
                         if !args.daemon {
-                            eprintln!("Warning: Failed to resolve data directory for heartbeat DB ({e}), dedup disabled.");
+                            eprintln!(
+                                "Warning: Failed to resolve data directory for heartbeat DB ({e}), dedup disabled."
+                            );
                         }
                         tracing::warn!(error = %e, "Failed to resolve data directory; DedupEngine disabled");
                         None
@@ -2364,7 +2374,9 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
                             }
                             Err(e) => {
                                 if !args.daemon {
-                                    eprintln!("Warning: DedupEngine could not open heartbeat DB ({e}), dedup disabled.");
+                                    eprintln!(
+                                        "Warning: DedupEngine could not open heartbeat DB ({e}), dedup disabled."
+                                    );
                                 }
                                 Arc::new(DedupEngine::noop(hb_state.config.dedup.clone()))
                             }
@@ -2468,80 +2480,10 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
         }
     }
 
-    // Spawn the desktop daemon-consumer reporters (FEATURE_LOCATOR §7.6).
-    // Both read their policy from `[desktop]` in config.toml — previously they
-    // ran on hardcoded `::default()` settings, so the presence cadence could
-    // not be tuned and the opt-in mic-level meter had no config path to enable
-    // it at all. The "brain" (cadence / publish format) lives in
-    // `alephcore::tasks::{presence,mic_level}`; the "limb" (idle probe,
-    // system_info, mic tap) stays behind the capability traits in the
-    // platform-specific `desktop/*` crates.
-    {
-        let desktop_cfg = {
-            let guard = app_config.read().await;
-            guard.desktop.clone()
-        };
-        // Build the per-OS platform at most once and share the Arc across both
-        // reporters — only when at least one is enabled, so a fully-disabled
-        // `[desktop]` never touches the platform layer (no Swift helper spawn).
-        let platform = (desktop_cfg.presence.enabled || desktop_cfg.mic_level.enabled)
-            .then(build_desktop_platform);
-
-        // Presence — periodic broadcast of (hostname / username / idle) on the
-        // Gateway event bus. No-op when the platform has no SystemCapability
-        // (headless CI, etc.).
-        if desktop_cfg.presence.enabled {
-            let platform = platform
-                .clone()
-                .unwrap_or_else(|| panic!("platform must be built when presence is enabled"));
-            if platform.system().is_some() {
-                let reporter = alephcore::tasks::presence::PresenceReporter::new(
-                    platform,
-                    event_bus.as_ref().clone(),
-                    desktop_cfg.presence,
-                );
-                // Detached background task: the JoinHandle is intentionally
-                // dropped (dropping it does not cancel the spawned task).
-                #[allow(clippy::let_underscore_future)]
-                let _ = reporter.spawn();
-                if !args.daemon {
-                    println!("Presence reporter: started");
-                }
-            } else if !args.daemon {
-                println!("Presence reporter: skipped (no SystemCapability on this platform)");
-            }
-        } else if !args.daemon {
-            println!("Presence reporter: disabled");
-        }
-
-        // Mic-level — opt-in (default OFF, since the live meter keeps the OS
-        // "mic in use" indicator on continuously). When enabled, polls
-        // `MediaCapability::mic_level()` and publishes a categorical
-        // (Active/Quiet/Unavailable) snapshot on the Gateway event bus.
-        if desktop_cfg.mic_level.enabled {
-            let platform = platform
-                .clone()
-                .unwrap_or_else(|| panic!("platform must be built when mic_level is enabled"));
-            if platform.media().is_some() {
-                let reporter = alephcore::tasks::mic_level::MicLevelReporter::new(
-                    platform,
-                    event_bus.as_ref().clone(),
-                    desktop_cfg.mic_level,
-                );
-                // Detached background task: the JoinHandle is intentionally
-                // dropped (dropping it does not cancel the spawned task).
-                #[allow(clippy::let_underscore_future)]
-                let _ = reporter.spawn();
-                if !args.daemon {
-                    println!("Mic-level reporter: started");
-                }
-            } else if !args.daemon {
-                println!("Mic-level reporter: skipped (no MediaCapability on this platform)");
-            }
-        } else if !args.daemon {
-            println!("Mic-level reporter: disabled (opt-in)");
-        }
-    }
+    // The two desktop daemon-consumer reporters (presence broadcaster,
+    // mic-level meter) were spawned here until 2026-08-09. Both are gone —
+    // see `alephcore::tasks` for why — which also removes the only boot path
+    // that built the per-OS desktop platform eagerly at start-up.
 
     // Boot-scan: ProjectionReconciler (display back-fill) THEN ResumeCoordinator
     // (agent re-execution), in one ordered detached task so back-filled old
@@ -2691,6 +2633,43 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
     {
         use alephcore::gateway::handlers::pairing as pairing_handlers;
 
+        /// The advertised `channel.pairing.*` surface, printed by the startup
+        /// banner and cross-checked against the live registry below.
+        ///
+        /// It is one list rather than two because the two drifted: `list` and
+        /// `reject` were advertised here (and in the webhook design doc) while
+        /// never being registered, so the dispatcher answered
+        /// `METHOD_NOT_FOUND` to anyone who followed the banner. `list` is not
+        /// a convenience — the pairing code is delivered to the *stranger*
+        /// (`inbound_router::permission::send_pairing_request`), so enumerating
+        /// pending requests is the operator's only in-product way to learn one.
+        const CHANNEL_PAIRING_METHODS: [(&str, &str); 5] = [
+            (
+                "channel.pairing.list",
+                "List pending channel pairing requests",
+            ),
+            ("channel.pairing.approve", "Approve a channel sender"),
+            ("channel.pairing.reject", "Reject a pending pairing request"),
+            ("channel.pairing.approved", "List approved channel senders"),
+            ("channel.pairing.revoke", "Revoke a channel sender"),
+        ];
+
+        let store = channel_pairing_store.clone();
+        server
+            .handlers_mut()
+            .register("channel.pairing.list", move |req| {
+                let store = store.clone();
+                async move { pairing_handlers::handle_list(req, store).await }
+            });
+
+        let store = channel_pairing_store.clone();
+        server
+            .handlers_mut()
+            .register("channel.pairing.reject", move |req| {
+                let store = store.clone();
+                async move { pairing_handlers::handle_reject(req, store).await }
+            });
+
         let store = channel_pairing_store.clone();
         // The users store rides along so an approval can name the Aleph
         // principal this sender speaks as — the channel half of P0's identity
@@ -2721,13 +2700,29 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
                 async move { pairing_handlers::handle_revoke(req, store).await }
             });
 
+        // Falsifiable: the banner claims these methods answer, so ask the
+        // registry rather than restating the claim. The check runs even under
+        // `--daemon`, where nothing is printed and a wiring bug would otherwise
+        // be visible only as a caller's `METHOD_NOT_FOUND`.
         if !args.daemon {
             println!("Channel pairing methods:");
-            println!("  - channel.pairing.list     : List pending channel pairing requests");
-            println!("  - channel.pairing.approve  : Approve a channel sender");
-            println!("  - channel.pairing.reject   : Reject a channel sender");
-            println!("  - channel.pairing.approved : List approved channel senders");
-            println!("  - channel.pairing.revoke   : Revoke a channel sender");
+        }
+        for (method, description) in CHANNEL_PAIRING_METHODS {
+            let registered = server.handlers_mut().has_method(method);
+            if !registered {
+                tracing::error!(
+                    "advertised RPC `{method}` is not registered - callers get METHOD_NOT_FOUND"
+                );
+            }
+            if !args.daemon {
+                if registered {
+                    println!("  - {method:<25}: {description}");
+                } else {
+                    println!("  - {method:<25}: UNREGISTERED (wiring bug)");
+                }
+            }
+        }
+        if !args.daemon {
             println!();
         }
     }
@@ -2940,7 +2935,9 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
     // Inject ChannelRegistry into BuiltinToolRegistry (deferred — channels created after tools)
     if let Some(ref cell) = agent_result.channel_registry_cell {
         if cell.set(channel_registry.clone()).is_err() {
-            tracing::warn!("Failed to inject ChannelRegistry into BuiltinToolRegistry: cell already initialized");
+            tracing::warn!(
+                "Failed to inject ChannelRegistry into BuiltinToolRegistry: cell already initialized"
+            );
         } else {
             tracing::info!(
                 "ChannelRegistry injected into BuiltinToolRegistry for channel_pairing tool"
@@ -2951,7 +2948,9 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
     // Inject ClarificationManager into BuiltinToolRegistry (deferred) — enables `ask_user` (HITL P4).
     if let Some(ref cell) = agent_result.clarification_manager_cell {
         if cell.set(clarification_manager.clone()).is_err() {
-            tracing::warn!("Failed to inject ClarificationManager into BuiltinToolRegistry: cell already initialized");
+            tracing::warn!(
+                "Failed to inject ClarificationManager into BuiltinToolRegistry: cell already initialized"
+            );
         } else {
             tracing::info!(
                 "ClarificationManager injected into BuiltinToolRegistry for ask_user tool"
@@ -3126,6 +3125,16 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
     // orphaning them — mirroring the memory/channel monitor shutdowns above.
     if let Some(ref hb_svc) = heartbeat_service {
         let svc = hb_svc.lock().await;
+        svc.request_shutdown();
+    }
+
+    // Cron's timer loop has always had an `is_shutdown()` exit arm, but nothing
+    // ever set the flag: `ServiceState::request_shutdown` had no caller on the
+    // cron side and `CronService` did not expose it. The loop therefore kept
+    // waking and dispatching jobs while the delivery engine, providers and
+    // stores around it were being torn down.
+    if let Some(ref cron_svc) = cron_service {
+        let svc = cron_svc.lock().await;
         svc.request_shutdown();
     }
 

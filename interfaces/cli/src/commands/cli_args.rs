@@ -886,7 +886,8 @@ pub enum WorkspaceAction {
     ///
     /// This is the only way to fix a display name after `create`, and archiving
     /// is not an escape hatch: it is a soft delete, the ID stays taken, and an
-    /// archived workspace is read-only.
+    /// archived workspace is read-only. `unarchive` first if you need to edit
+    /// one.
     Update {
         /// Workspace ID (the ID column of `workspace list`)
         id: String,
@@ -901,8 +902,23 @@ pub enum WorkspaceAction {
         icon: Option<String>,
     },
     /// Archive a workspace
+    ///
+    /// A soft delete, and reversible — see `unarchive`. The ID stays taken
+    /// either way: `create` will refuse it while it is archived, and say so.
     Archive {
         /// Workspace ID to archive (the ID column of `workspace list`)
+        id: String,
+    },
+    /// Restore an archived workspace
+    ///
+    /// The inverse of `archive`. Find the ID with `workspace list
+    /// --include-archived`; the restored workspace is printed in full, and it
+    /// is writable again.
+    ///
+    /// This does not create anything: the ID was never released, and the
+    /// workspace's memory and notes stayed on disk under it the whole time.
+    Unarchive {
+        /// Workspace ID to restore (the ID column of `workspace list --include-archived`)
         id: String,
     },
 }

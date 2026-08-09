@@ -1,8 +1,8 @@
 //
 // Agents mode sidebar — agent list with create, select, and default agent controls.
 //
+use crate::api::agent_binding::AgentBindingApi;
 use crate::api::agents::{AgentSummary, AgentsApi};
-use crate::api::workspace::WorkspaceApi;
 use crate::context::DashboardState;
 use crate::i18n::{t, t_string, use_i18n};
 use leptos::prelude::*;
@@ -55,7 +55,7 @@ pub fn AgentsSidebar() -> impl IntoView {
             // Load channel bindings
             let dash = state;
             spawn_local(async move {
-                match WorkspaceApi::agent_bindings(&dash).await {
+                match AgentBindingApi::agent_bindings(&dash).await {
                     Ok(map) => bindings.set(map),
                     Err(e) => {
                         web_sys::console::warn_1(
@@ -143,7 +143,11 @@ pub fn AgentsSidebar() -> impl IntoView {
                                             reload();
                                         }
                                         Err(e) => {
-                                            create_error.set(Some(e));
+                                            create_error.set(Some(crate::components::admin_refusal::settings_write_error(
+                                                i18n,
+                                                &e,
+                                                |e| e.to_string(),
+                                            )));
                                         }
                                     }
                                 });

@@ -92,6 +92,7 @@ pub(super) fn MoaPresetEditor(
     on_saved: impl Fn() + 'static + Copy + Send,
     on_cancel: impl Fn() + 'static + Copy + Send,
 ) -> impl IntoView {
+    let i18n = crate::i18n::use_i18n();
     let state = expect_context::<DashboardState>();
     let is_new = initial_name.is_none();
 
@@ -152,7 +153,11 @@ pub(super) fn MoaPresetEditor(
                 }
                 Err(e) => {
                     saving.set(false);
-                    error.set(Some(format!("Failed to save preset: {e}")));
+                    error.set(Some(
+                        crate::components::admin_refusal::settings_write_error(i18n, &e, |e| {
+                            format!("Failed to save preset: {e}")
+                        }),
+                    ));
                 }
             }
         });

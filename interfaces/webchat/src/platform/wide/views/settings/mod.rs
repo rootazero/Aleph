@@ -22,6 +22,7 @@ pub mod routing_rules;
 pub mod search;
 pub mod security;
 pub mod skills;
+pub mod workspaces;
 
 pub use acp_harnesses::AcpHarnessesView;
 pub use appearance::AppearanceView;
@@ -46,6 +47,7 @@ pub use routing_rules::RoutingRulesView;
 pub use search::SearchView;
 pub use security::SecurityView;
 pub use skills::SkillsView;
+pub use workspaces::WorkspacesView;
 
 // Settings default view (sidebar is provided by SettingsLayout)
 use crate::api::{MemoryApi, ProvidersApi};

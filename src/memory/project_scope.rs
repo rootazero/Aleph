@@ -25,11 +25,21 @@
 //! - **Floors 分床 (split, P1/P2).** The two always-on floors do not share one
 //!   rule. The *user-profile* floor follows the session's personal scope and is
 //!   ABSENT in a shared room — [`profile_floor_id`] is its single source, and it
-//!   returns `Option` precisely so "there is no such thing here" is expressible
-//!   — while the *feedback/behaviour* floor stays under the *base* id
-//!   unconditionally (org-wide standing rules apply to everyone). Callers get
-//!   this by passing each floor loader `profile_floor_id`/the bare base id
-//!   respectively — this module imposes nothing beyond exposing both.
+//!   returns `Option` precisely so "there is no such thing here" is expressible.
+//!   The *feedback/behaviour* floor is **not narrowed** to the personal
+//!   partition, but neither is it pinned to the base id: it reads
+//!   [`session_read_ids`], i.e. base ∪ this session's own partition, the same
+//!   set ordinary note retrieval uses. Org-wide standing rules therefore reach
+//!   everyone (base is always in that set) *and* a correction the user just
+//!   made reaches them.
+//!
+//!   It used to be documented — and implemented — as "base id, unconditionally".
+//!   That could not work: every writer goes through
+//!   `caller_memory_partition`/[`session_write_id`], and a zero-config loopback
+//!   Panel session is already `Personal(u-owner)`, so the factory-default write
+//!   lands in `main__u-owner/feedback/` while the floor scanned `main/feedback/`.
+//!   The always-on leg was empty out of the box, silently, because those rules
+//!   still surfaced whenever retrieval matched them lexically.
 //!
 //! ## Session scope vs. the legacy project-directory feature
 //!

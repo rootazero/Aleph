@@ -25,6 +25,7 @@ const FILTERS: [(&str, &str); 3] = [
 #[component]
 #[must_use]
 pub fn PhoneAgentsList() -> impl IntoView {
+    let i18n = crate::i18n::use_i18n();
     let dashboard = expect_context::<DashboardState>();
     let st = expect_context::<PhoneAgentsState>();
     let navigate = use_navigate();
@@ -72,7 +73,11 @@ pub fn PhoneAgentsList() -> impl IntoView {
                     new_archetype.set("assistant".to_string());
                     st.reload_nonce.update(|n| *n += 1);
                 }
-                Err(e) => create_error.set(Some(e)),
+                Err(e) => create_error.set(Some(
+                    crate::components::admin_refusal::settings_write_error(i18n, &e, |e| {
+                        e.to_string()
+                    }),
+                )),
             }
         });
     };

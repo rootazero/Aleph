@@ -97,7 +97,11 @@ pub(super) fn AddProviderPanel(
                 }
                 Err(e) => {
                     set_adding.set(false);
-                    set_add_error.set(Some(format!("Failed to add: {e}")));
+                    set_add_error.set(Some(
+                        crate::components::admin_refusal::settings_write_error(i18n, &e, |e| {
+                            format!("Failed to add: {e}")
+                        }),
+                    ));
                 }
             }
         });

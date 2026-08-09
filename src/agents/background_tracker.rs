@@ -1023,6 +1023,12 @@ impl BackgroundAgentTracker {
             });
             if let Some(agent) = completed.get_mut(request_id) {
                 agent.consumed = true;
+                drop(completed);
+                // The other half of "the parent knows", alongside the announce
+                // path's success arm. A model that polled the result itself has
+                // been told just as surely as one that received an announce, so
+                // a restart must not re-deliver it.
+                crate::agents::background_persistence::record_announced(request_id);
                 return;
             }
         }

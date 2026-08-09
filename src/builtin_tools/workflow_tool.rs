@@ -1082,6 +1082,45 @@ impl AlephTool for WorkflowTool {
                         .flatten()
                         .unwrap_or_else(|| task.clone());
                     if live.status != CoordTaskStatus::Paused {
+                        // Not paused — but it may still be carrying the pause
+                        // INTENT this resume exists to cancel. `pause` stamps
+                        // `paused_from = "in_progress"` on a live step without
+                        // touching its status, and this loop's only writer sat
+                        // behind the `Paused` filter, so the one stamp that is
+                        // written to a non-Paused row was the one nothing ever
+                        // cleared. The stamp is durable and the orphan reclaim
+                        // reads it forever after: every future crash of this
+                        // task parks it `Paused` — a pause nobody asked for,
+                        // invisible to every janitor (they skip paused rows) —
+                        // while `resume` has already reported success. The
+                        // reclaim's own doc says "the stamp rides along and
+                        // `workflow(action='resume')` clears it"; this is the
+                        // line that makes that sentence true.
+                        if crate::agents::swarm::tasks::paused_from(&live.metadata).is_some() {
+                            let cleared = crate::agents::swarm::tasks::merge_metadata_patch(
+                                &live.metadata,
+                                serde_json::json!({
+                                    crate::agents::swarm::tasks::PAUSED_FROM_KEY:
+                                        serde_json::Value::Null,
+                                }),
+                            );
+                            if let Err(e) = self
+                                .coord_store
+                                .update_task(
+                                    &task.id,
+                                    CoordTaskUpdate {
+                                        metadata: Some(cleared),
+                                        ..Default::default()
+                                    },
+                                )
+                                .await
+                            {
+                                tracing::warn!(
+                                    task_id = %task.id, error = %e,
+                                    "workflow resume: could not clear stale pause intent"
+                                );
+                            }
+                        }
                         continue;
                     }
                     // A clarify step the dispatcher parked is Paused because it
@@ -1939,6 +1978,74 @@ mod tests {
             orphan_reset_status(&root),
             CoordTaskStatus::Pending,
             "and the reclaim decision must follow the cleared stamp"
+        );
+    }
+
+    /// The other half of the pause-during-a-live-step chain: the daemon does
+    /// **not** crash.
+    ///
+    /// The test above forces the row to `Paused` before resuming, so it only
+    /// ever exercised the post-restart path. In the ordinary case the step is
+    /// still `InProgress` when the user resumes, and the resume loop's
+    /// `status != Paused` short-circuit skipped it — leaving the pause intent
+    /// stamped forever on a row that `resume` had just reported as resumed.
+    /// From then on every crash of that task parks it `Paused`, which is
+    /// invisible to both janitors, so the step loses its watchdog for a pause
+    /// that was explicitly lifted.
+    #[tokio::test]
+    async fn resuming_while_the_step_is_still_live_clears_the_pause_intent() {
+        use crate::agents::swarm::tasks::{paused_from, PAUSED_FROM_IN_PROGRESS};
+        use crate::teams::dispatcher::schedule::orphan_reset_status;
+
+        let store = setup_store().await;
+        let t = tool(store, None);
+        let (run_id, ids) = materialize_run(&t, &linear_def(), "team-9").await;
+
+        t.coord_store
+            .update_task(
+                &ids[0],
+                crate::agents::swarm::tasks::CoordTaskUpdate {
+                    status: Some(CoordTaskStatus::InProgress),
+                    ..Default::default()
+                },
+            )
+            .await
+            .unwrap();
+
+        t.call(WorkflowArgs::Pause {
+            name: "pipeline".into(),
+            team_id: "team-9".into(),
+            run_id: Some(run_id.clone()),
+        })
+        .await
+        .expect("pause with a live step");
+        let root = t.coord_store.get_task(&ids[0]).await.unwrap().unwrap();
+        assert_eq!(paused_from(&root.metadata), Some(PAUSED_FROM_IN_PROGRESS));
+
+        // No crash: the step is still running when the user changes their mind.
+        t.call(WorkflowArgs::Resume {
+            name: "pipeline".into(),
+            team_id: "team-9".into(),
+            run_id: Some(run_id),
+        })
+        .await
+        .expect("resume");
+
+        let root = t.coord_store.get_task(&ids[0]).await.unwrap().unwrap();
+        assert_eq!(
+            root.status,
+            CoordTaskStatus::InProgress,
+            "resume must not clobber a live run's status"
+        );
+        assert_eq!(
+            paused_from(&root.metadata),
+            None,
+            "the pause intent must be gone — resume is what cancels it"
+        );
+        assert_eq!(
+            orphan_reset_status(&root),
+            CoordTaskStatus::Pending,
+            "a later crash must reclaim this step normally, not park it Paused"
         );
     }
 

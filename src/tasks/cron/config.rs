@@ -348,6 +348,56 @@ pub struct JobStateV2 {
     pub manual_trigger_pending: bool,
 }
 
+// ── JobChain ────────────────────────────────────────────────────────────
+
+/// The two chain successors of a job, carried as one settable unit.
+///
+/// The successors are persisted on `CronJob` as two flat `Option<String>`
+/// fields (unchanged on the wire and on disk); this is the shape every *write*
+/// surface takes, so both the `cron_manage` tool and the `cron.create` /
+/// `cron.update` RPCs express "set the chain" with one field and one clear
+/// flag rather than four independent knobs that can be set half-way.
+///
+/// Why this exists at all: the trigger machinery, its cycle detection and its
+/// tests shipped complete, but until 2026-08-09 the only writers of the two
+/// fields were `#[cfg(test)]`. `on_failure` in particular is not something the
+/// model can arrange for itself — when a job times out or its provider dies,
+/// no agent turn is running to call `cron_manage` — so this is capability the
+/// harness owes the model, not reasoning taken away from it.
+/// `deny_unknown_fields` because every field here is optional: without it a
+/// caller who writes `{"onSuccess": "b"}` deserializes cleanly into an EMPTY
+/// chain, which the update path reads as "clear the chain" and reports as
+/// success. That is the same silent no-op `failure_alert` shipped with, and
+/// all-optional structs are where it comes from. The cost is that adding a
+/// field here is a breaking change for any client that pins the old shape —
+/// acceptable while both ends of this wire ship from this tree.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct JobChain {
+    /// Job ID to run immediately after this job finishes `Ok` (or `Skipped`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub on_success: Option<String>,
+    /// Job ID to run immediately after this job finishes `Error` or `Timeout`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub on_failure: Option<String>,
+}
+
+impl JobChain {
+    /// `true` when neither successor is set — the same state as "no chain".
+    #[must_use]
+    pub const fn is_empty(&self) -> bool {
+        self.on_success.is_none() && self.on_failure.is_none()
+    }
+
+    /// Both successors, in a fixed order, skipping unset ones.
+    pub fn targets(&self) -> impl Iterator<Item = &str> {
+        self.on_success
+            .iter()
+            .chain(self.on_failure.iter())
+            .map(String::as_str)
+    }
+}
+
 // ── CronJob ─────────────────────────────────────────────────────────────
 
 /// A scheduled job definition
@@ -404,11 +454,13 @@ pub struct CronJob {
     #[serde(default)]
     pub session_target: SessionTarget,
 
-    /// Job ID to trigger on success
+    /// Job ID to trigger on success. Read via [`CronJob::chain`]; set via
+    /// [`CronJob::set_chain`] — do not assign directly outside test fixtures,
+    /// or the write-time cycle/existence check in `CronService` is bypassed.
     #[serde(default)]
     pub next_job_id_on_success: Option<String>,
 
-    /// Job ID to trigger on failure
+    /// Job ID to trigger on failure. Same accessors as the success link.
     #[serde(default)]
     pub next_job_id_on_failure: Option<String>,
 
@@ -494,6 +546,32 @@ impl CronJob {
             owner_user_id: None,
             scope_id: None,
         }
+    }
+
+    /// This job's chain successors, or `None` when it chains to nothing.
+    ///
+    /// Projected from the two persisted fields — never stored separately, so
+    /// a view can't disagree with what `phase3` actually reads.
+    #[must_use]
+    pub fn chain(&self) -> Option<JobChain> {
+        let chain = JobChain {
+            on_success: self.next_job_id_on_success.clone(),
+            on_failure: self.next_job_id_on_failure.clone(),
+        };
+        (!chain.is_empty()).then_some(chain)
+    }
+
+    /// Replace both chain successors. `None` clears the chain entirely.
+    ///
+    /// Replace, not merge: a caller that sends `{on_success: "b"}` after
+    /// `{on_success: "a", on_failure: "c"}` means "the chain is now just
+    /// b", which is the same convention `failure_alert` uses on update. The
+    /// caller is expected to have run `chain::validate` first — `CronService`
+    /// is the enforcement point.
+    pub fn set_chain(&mut self, chain: Option<JobChain>) {
+        let chain = chain.unwrap_or_default();
+        self.next_job_id_on_success = chain.on_success;
+        self.next_job_id_on_failure = chain.on_failure;
     }
 
     /// The timezone this job's schedule is evaluated in, if any.
@@ -608,6 +686,13 @@ pub struct CronJobView {
     pub session_target: SessionTarget,
     pub state: JobStateV2,
     pub failure_alert: Option<FailureAlertConfig>,
+    /// Chain successors, `None` when this job chains to nothing.
+    ///
+    /// Every surface that can *set* the chain reads it back through this
+    /// field. A settable field with no read-back is half a wire: the caller
+    /// gets `success` and has no way to confirm what was stored.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub chain: Option<JobChain>,
     pub timeout_ms: Option<i64>,
     pub created_at: i64,
     pub updated_at: i64,
@@ -629,6 +714,7 @@ impl From<&CronJob> for CronJobView {
             session_target: job.session_target.clone(),
             state: job.state.clone(),
             failure_alert: job.failure_alert.clone(),
+            chain: job.chain(),
             timeout_ms: job.timeout_ms,
             created_at: job.created_at,
             updated_at: job.updated_at,

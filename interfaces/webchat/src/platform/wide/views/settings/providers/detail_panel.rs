@@ -226,7 +226,11 @@ pub(super) fn ProviderDetailPanel(
                     }
                     selected.set(Some(name));
                 }
-                Err(e) => error.set(Some(format!("Failed to save: {e}"))),
+                Err(e) => error.set(Some(
+                    crate::components::admin_refusal::settings_write_error(i18n, &e, |e| {
+                        format!("Failed to save: {e}")
+                    }),
+                )),
             }
             saving.set(false);
         });
@@ -248,7 +252,11 @@ pub(super) fn ProviderDetailPanel(
                         providers.set(list);
                     }
                 }
-                Err(e) => error.set(Some(format!("Test failed: {e}"))),
+                Err(e) => error.set(Some(crate::components::admin_refusal::settings_load_error(
+                    i18n,
+                    &e,
+                    |e| format!("Test failed: {e}"),
+                ))),
             }
             testing.set(false);
         });
@@ -267,7 +275,11 @@ pub(super) fn ProviderDetailPanel(
                             providers.set(list);
                         }
                     }
-                    Err(e) => error.set(Some(format!("Failed: {e}"))),
+                    Err(e) => error.set(Some(
+                        crate::components::admin_refusal::settings_load_error(i18n, &e, |e| {
+                            format!("Failed: {e}")
+                        }),
+                    )),
                 }
                 saving.set(false);
             });
@@ -289,7 +301,11 @@ pub(super) fn ProviderDetailPanel(
                         }
                         selected.set(None);
                     }
-                    Err(e) => error.set(Some(format!("Failed: {e}"))),
+                    Err(e) => error.set(Some(
+                        crate::components::admin_refusal::settings_load_error(i18n, &e, |e| {
+                            format!("Failed: {e}")
+                        }),
+                    )),
                 }
                 saving.set(false);
             });
@@ -447,7 +463,11 @@ pub(super) fn ProviderDetailPanel(
                                                                             }
                                                                         }
                                                                         Err(e) => {
-                                                                            error.set(Some(format!("Logout failed: {e}")));
+                                                                            error.set(Some(crate::components::admin_refusal::settings_load_error(
+                                                                                i18n,
+                                                                                &e,
+                                                                                |e| format!("Logout failed: {e}"),
+                                                                            )));
                                                                         }
                                                                     }
                                                                 });
@@ -481,7 +501,11 @@ pub(super) fn ProviderDetailPanel(
                                                                             }
                                                                         }
                                                                         Err(e) => {
-                                                                            error.set(Some(format!("OAuth login failed: {e}")));
+                                                                            error.set(Some(crate::components::admin_refusal::settings_write_error(
+                                                                                i18n,
+                                                                                &e,
+                                                                                |e| format!("OAuth login failed: {e}"),
+                                                                            )));
                                                                         }
                                                                     }
                                                                     oauth_loading.set(false);

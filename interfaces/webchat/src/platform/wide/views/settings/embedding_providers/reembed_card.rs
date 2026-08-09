@@ -113,7 +113,11 @@ pub(super) fn ReembedMigrationCard() -> impl IntoView {
                 Ok(_) => {} // Progress tracked via events
                 Err(e) => {
                     set_migrating.set(false);
-                    set_error_message.set(Some(format!("Failed to start: {e}")));
+                    set_error_message.set(Some(
+                        crate::components::admin_refusal::settings_write_error(i18n, &e, |e| {
+                            format!("Failed to start: {e}")
+                        }),
+                    ));
                 }
             }
         });

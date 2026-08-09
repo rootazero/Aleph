@@ -91,6 +91,7 @@ const ACTION_DEREGISTER: &str = "注销节点";
 
 #[component]
 pub fn ClusterSection() -> impl IntoView {
+    let i18n = crate::i18n::use_i18n();
     let state = expect_context::<DashboardState>();
     let nodes = RwSignal::new(Vec::<Environment>::new());
     // (message, what was being attempted) — the fleet READ and a row's
@@ -156,7 +157,11 @@ pub fn ClusterSection() -> impl IntoView {
                     enroll_result.set(Some(r));
                     load();
                 }
-                Err(e) => enroll_err.set(Some(e)),
+                Err(e) => enroll_err.set(Some(
+                    crate::components::admin_refusal::settings_load_error(i18n, &e, |e| {
+                        e.to_string()
+                    }),
+                )),
             }
         });
     };

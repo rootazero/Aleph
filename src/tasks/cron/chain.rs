@@ -5,7 +5,53 @@
 
 use std::collections::HashSet;
 
+use crate::tasks::cron::config::JobChain;
 use crate::tasks::cron::store::CronStore;
+
+/// Validate a proposed chain for `job_id` before it is persisted.
+///
+/// The single predicate both write faces use — `cron_manage` and
+/// `cron.create` / `cron.update` both reach it through `CronService`, so a
+/// chain rejected in conversation is rejected over RPC for the same reason
+/// and with the same message.
+///
+/// This does **not** replace the fire-time guards in
+/// `service::concurrency::phase3` — those still skip a cyclic or missing
+/// successor, because a target can be deleted or re-chained long after this
+/// ran. It exists so the caller finds out *now*, at the moment they can still
+/// fix it, instead of at 3am in a log line nobody reads.
+///
+/// `None` (clear the chain) is always valid.
+pub fn validate(store: &CronStore, job_id: &str, chain: Option<&JobChain>) -> Result<(), String> {
+    let Some(chain) = chain else {
+        return Ok(());
+    };
+
+    for target in chain.targets() {
+        if target.is_empty() {
+            return Err("chain target must not be empty".to_string());
+        }
+        if target == job_id {
+            return Err(format!(
+                "job {job_id} cannot chain to itself; use the schedule to repeat a job"
+            ));
+        }
+        if store.get_job(target).is_none() {
+            return Err(format!(
+                "chain target not found: {target}. Create the target job first — \
+                 a chain to a job that does not exist never fires and reports nothing."
+            ));
+        }
+        if detect_cycle(store, job_id, target)? {
+            return Err(format!(
+                "chain {job_id} -> {target} would create a cycle; the jobs would \
+                 re-trigger each other every tick"
+            ));
+        }
+    }
+
+    Ok(())
+}
 
 /// Detect if adding a chain link would create a cycle.
 ///

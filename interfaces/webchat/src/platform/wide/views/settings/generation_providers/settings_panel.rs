@@ -40,7 +40,11 @@ pub(super) fn GenerationSettingsPanel() -> impl IntoView {
                     loading.set(false);
                 }
                 Err(e) => {
-                    load_error.set(Some(e));
+                    load_error.set(Some(
+                        crate::components::admin_refusal::settings_write_error(i18n, &e, |e| {
+                            e.to_string()
+                        }),
+                    ));
                     loading.set(false);
                 }
             }
@@ -88,7 +92,11 @@ pub(super) fn GenerationSettingsPanel() -> impl IntoView {
                 }
                 Err(e) => {
                     saving.set(false);
-                    save_error.set(Some(e));
+                    save_error.set(Some(
+                        crate::components::admin_refusal::settings_write_error(i18n, &e, |e| {
+                            e.to_string()
+                        }),
+                    ));
                 }
             }
         });

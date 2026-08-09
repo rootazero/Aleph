@@ -17,6 +17,11 @@ use leptos::task::spawn_local;
 macro_rules! section_save {
     ($config:expr) => {{
         let state = expect_context::<DashboardState>();
+        // Bound here, not taken from the call site: macro hygiene keeps the
+        // caller's `i18n` out of this body, and the refusal copy below needs
+        // one. Each section already calls `use_i18n()` for its own markup;
+        // `I18nContext` is `Copy` and this resolves to the same context.
+        let i18n = crate::i18n::use_i18n();
         let saving = RwSignal::new(false);
         let save_error = RwSignal::new(Option::<String>::None);
         let save_success = RwSignal::new(false);
@@ -38,7 +43,11 @@ macro_rules! section_save {
                     }
                     Err(e) => {
                         saving.set(false);
-                        save_error.set(Some(e));
+                        save_error.set(Some(
+                            crate::components::admin_refusal::settings_write_error(i18n, &e, |e| {
+                                e.to_string()
+                            }),
+                        ));
                     }
                 }
             });

@@ -19,12 +19,63 @@ use std::collections::HashMap;
 #[serde(rename_all = "snake_case")]
 pub enum DeliveryStatus {
     Delivered,
+    /// A delivery was asked for and did not arrive. This is a **failure of the
+    /// run**, not a footnote to it — see [`delivery_failed`].
     NotDelivered,
+    /// No delivery was asked for: no target configured, no text to send, or the
+    /// agent deliberately stayed silent. Distinct from `NotDelivered` precisely
+    /// so "nobody wanted a message" is never counted as "the message was lost".
     NotRequested,
 }
 
+impl DeliveryStatus {
+    /// Whether this outcome means the run failed to reach its audience.
+    ///
+    /// The single source both schedulers share. It exists because cron and
+    /// heartbeat had drifted to opposite answers: heartbeat folded a refused
+    /// delivery into `RunStatus::Error`, while cron wrote `RunStatus::Ok` and
+    /// left the delivery outcome as a side field nothing downstream read — so a
+    /// daily briefing whose channel was down reset `consecutive_errors` to
+    /// zero, produced no alert, took no backoff, and was never retried. The
+    /// user's brief simply stopped arriving.
+    ///
+    /// `NotRequested` is deliberately not a failure: a job whose agent decided
+    /// there was nothing worth saying did exactly what it was asked to.
+    #[must_use]
+    pub const fn delivery_failed(self) -> bool {
+        matches!(self, Self::NotDelivered)
+    }
+
+    /// The label heartbeat persists in its run history.
+    ///
+    /// These strings predate the enum and are written into stored rows, so they
+    /// are PascalCase rather than the snake_case serde uses elsewhere. They
+    /// live here — with [`Self::from_label`] — so the producer and the consumer
+    /// cannot drift into two spellings of the same fact.
+    #[must_use]
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::Delivered => "Delivered",
+            Self::NotDelivered => "NotDelivered",
+            Self::NotRequested => "NotRequested",
+        }
+    }
+
+    /// Inverse of [`Self::label`]. Unknown text is `None`, never a silent
+    /// default — a label nobody wrote is a bug, not a delivery outcome.
+    #[must_use]
+    pub fn from_label(label: &str) -> Option<Self> {
+        match label {
+            "Delivered" => Some(Self::Delivered),
+            "NotDelivered" => Some(Self::NotDelivered),
+            "NotRequested" => Some(Self::NotRequested),
+            _ => None,
+        }
+    }
+}
+
 /// Configuration for delivering task results
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct DeliveryConfig {
     pub mode: DeliveryMode,
     pub targets: Vec<DeliveryTargetConfig>,
@@ -33,7 +84,7 @@ pub struct DeliveryConfig {
 }
 
 /// Delivery mode
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub enum DeliveryMode {
     None,
     Primary,

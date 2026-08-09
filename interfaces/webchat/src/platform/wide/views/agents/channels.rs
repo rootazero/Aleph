@@ -22,7 +22,7 @@ pub fn ChannelsTab(agent_id: String) -> impl IntoView {
         }
         let id = agent_id.get_value();
         spawn_local(async move {
-            if let Ok(map) = crate::api::WorkspaceApi::agent_bindings(&dash).await {
+            if let Ok(map) = crate::api::AgentBindingApi::agent_bindings(&dash).await {
                 if let Some(chs) = map.get(&id) {
                     bound_channels.set(chs.clone());
                 }

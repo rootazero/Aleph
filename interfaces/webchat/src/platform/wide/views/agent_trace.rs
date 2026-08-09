@@ -124,7 +124,11 @@ pub fn AgentTrace() -> impl IntoView {
                     current_step.set(last);
                 }
                 Err(e) => {
-                    error_msg.set(Some(e));
+                    error_msg.set(Some(
+                        crate::components::admin_refusal::settings_write_error(i18n, &e, |e| {
+                            e.to_string()
+                        }),
+                    ));
                 }
             }
             is_loading.set(false);

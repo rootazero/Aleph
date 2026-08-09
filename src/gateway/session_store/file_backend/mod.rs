@@ -481,7 +481,25 @@ impl SessionStore for FileSessionStore {
         self.append_transcript(&key_str, &msg).await?;
         if let Some(mut meta) = self.read_metadata(&key_str).await? {
             meta.message_count += 1;
-            meta.last_active_at = msg.timestamp;
+            // SECONDS, via the boundary — never `msg.timestamp` raw. This field
+            // is written in seconds by its five other writers and read as
+            // seconds by all three `sessions.list` renderers
+            // (`DateTime::from_timestamp(x, 0)`) and by both idle sweeps, while
+            // `MessageRecord.timestamp` is MILLISECONDS in this backend and
+            // seconds in the SQLite one. Assigning it raw made every session
+            // that had received a message report a `last_active_at` ~1000x in
+            // the future: the Panel's session list showed the year 58574, and
+            // `now - session_expiry_secs` could never overtake it, so those
+            // sessions never aged out. Caught on a real two-identity install
+            // 2026-08-09; the unit trap itself is CLAUDE.md §10.
+            //
+            // An unrepresentable stamp keeps the previous value rather than
+            // substituting `now()`: appending is activity, but inventing one
+            // would silently extend the life of a session whose input is
+            // already known to be garbage.
+            meta.last_active_at = msg
+                .instant()
+                .map_or(meta.last_active_at, |dt| dt.timestamp());
             // The session's token/model columns are written by
             // `update_session_usage` alone (the run's `AssistantRunMeta`) — see
             // the twin comment in the SQLite backend's `add_message_full`.

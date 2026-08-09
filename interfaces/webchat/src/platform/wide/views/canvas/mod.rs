@@ -243,7 +243,11 @@ fn GalaxyCanvasView() -> impl IntoView {
                 }
                 Err(e) => {
                     web_sys::console::error_1(&format!("graph.query failed: {e}").into());
-                    load_error.set(Some(e));
+                    load_error.set(Some(
+                        crate::components::admin_refusal::settings_write_error(i18n, &e, |e| {
+                            e.to_string()
+                        }),
+                    ));
                 }
             }
             loading.set(false);
@@ -334,7 +338,11 @@ fn GalaxyCanvasView() -> impl IntoView {
                 },
                 Err(e) => {
                     web_sys::console::error_1(&format!("Search failed: {e}").into());
-                    notice.set(Some(format!("{failed} {e}")));
+                    notice.set(Some(
+                        crate::components::admin_refusal::settings_write_error(i18n, &e, |e| {
+                            format!("{failed} {e}")
+                        }),
+                    ));
                 }
             }
         });

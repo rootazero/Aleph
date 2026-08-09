@@ -186,7 +186,11 @@ pub fn SecurityView() -> impl IntoView {
                 Ok(_) => {}
                 Err(e) => {
                     pii_failed = true;
-                    error.set(Some(format!("Failed to save PII config: {e}")));
+                    error.set(Some(
+                        crate::components::admin_refusal::settings_write_error(i18n, &e, |e| {
+                            format!("Failed to save PII config: {e}")
+                        }),
+                    ));
                 }
             }
 
@@ -199,7 +203,11 @@ pub fn SecurityView() -> impl IntoView {
                         needs_restart.set(restart);
                     }
                     Err(e) => {
-                        error.set(Some(format!("Failed to save security config: {e}")));
+                        error.set(Some(
+                            crate::components::admin_refusal::settings_write_error(i18n, &e, |e| {
+                                format!("Failed to save security config: {e}")
+                            }),
+                        ));
                     }
                 }
             }

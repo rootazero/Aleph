@@ -215,6 +215,11 @@ async fn announce_one(
             // Ok covers both "fresh announce run completed" and "absorbed by
             // the live run as steering" — either way the parent saw it.
             Ok(()) => {
+                // Durable "the parent knows". Without this stamp, a restart
+                // inside this retry ladder leaves a `Settled` sidecar record
+                // that the boot reconcile skips, and the announcement promised
+                // at spawn time is withdrawn in silence.
+                crate::agents::background_persistence::record_announced(&request_id);
                 debug!(
                     request_id = %request_id,
                     session = %global_event.source_session_id,

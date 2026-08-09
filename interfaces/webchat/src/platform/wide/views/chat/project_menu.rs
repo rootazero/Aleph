@@ -65,7 +65,11 @@ pub fn ProjectMenu() -> impl IntoView {
         spawn_local(async move {
             match ProjectsApi::list(&dash).await {
                 Ok(list) => recents.set(list),
-                Err(e) => last_error.set(Some(e)),
+                Err(e) => last_error.set(Some(
+                    crate::components::admin_refusal::settings_load_error(i18n, &e, |e| {
+                        e.to_string()
+                    }),
+                )),
             }
         });
     });
@@ -95,7 +99,11 @@ pub fn ProjectMenu() -> impl IntoView {
                         ws.reset();
                     }
                 }
-                Err(e) => last_error.set(Some(e)),
+                Err(e) => last_error.set(Some(
+                    crate::components::admin_refusal::settings_write_error(i18n, &e, |e| {
+                        e.to_string()
+                    }),
+                )),
             }
         });
     });

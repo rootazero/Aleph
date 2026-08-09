@@ -131,7 +131,11 @@ pub(super) fn ProviderDetailPanel(
                 }
                 Err(e) => {
                     set_saving.set(false);
-                    set_action_error.set(Some(format!("Save failed: {e}")));
+                    set_action_error.set(Some(
+                        crate::components::admin_refusal::settings_write_error(i18n, &e, |e| {
+                            format!("Save failed: {e}")
+                        }),
+                    ));
                 }
             }
         });
@@ -152,7 +156,11 @@ pub(super) fn ProviderDetailPanel(
                 }
                 Err(e) => {
                     set_activating.set(false);
-                    set_action_error.set(Some(format!("Activation failed: {e}")));
+                    set_action_error.set(Some(
+                        crate::components::admin_refusal::settings_write_error(i18n, &e, |e| {
+                            format!("Activation failed: {e}")
+                        }),
+                    ));
                 }
             }
         });
@@ -174,7 +182,11 @@ pub(super) fn ProviderDetailPanel(
                 }
                 Err(e) => {
                     set_deleting.set(false);
-                    set_action_error.set(Some(format!("Delete failed: {e}")));
+                    set_action_error.set(Some(
+                        crate::components::admin_refusal::settings_write_error(i18n, &e, |e| {
+                            format!("Delete failed: {e}")
+                        }),
+                    ));
                 }
             }
         });

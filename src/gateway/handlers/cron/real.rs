@@ -2,11 +2,13 @@
 
 use serde_json::{json, Value};
 
-use crate::gateway::protocol::{JsonRpcRequest, JsonRpcResponse, INTERNAL_ERROR, INVALID_PARAMS};
+use crate::gateway::handlers::task_error;
+use crate::gateway::protocol::{JsonRpcRequest, JsonRpcResponse, INVALID_PARAMS};
 use crate::tasks::cron::clock::Clock;
 use crate::tasks::cron::service::ops::{validate_schedule_kind, CronJobUpdates};
 use crate::tasks::cron::{
-    CronJob, CronJobView, FailureAlertConfig, ScheduleKind, SessionTarget, SharedCronService,
+    CronJob, CronJobView, FailureAlertConfig, JobChain, ScheduleKind, SessionTarget,
+    SharedCronService,
 };
 
 // ============================================================================
@@ -66,6 +68,25 @@ fn parse_failure_alert(
     }
 }
 
+/// Parse the `chain` parameter into the tri-state update convention.
+///
+/// Identical shape to [`parse_failure_alert`], and for the same reason: absent
+/// → leave alone, explicit `null` → clear, object → replace. Malformed is an
+/// error rather than a silent skip — a client that misspells `on_success`
+/// would otherwise get `success` back with no chain stored, which is the exact
+/// failure this whole field was added to end.
+fn parse_chain(
+    params: &serde_json::Map<String, Value>,
+) -> Result<Option<Option<JobChain>>, String> {
+    match params.get("chain") {
+        None => Ok(None),
+        Some(Value::Null) => Ok(Some(None)),
+        Some(v) => serde_json::from_value::<JobChain>(v.clone())
+            .map(|c| Some((!c.is_empty()).then_some(c)))
+            .map_err(|e| format!("Invalid chain: {e}")),
+    }
+}
+
 /// Serialize a `CronJobView` to JSON (includes all new fields)
 fn job_view_to_json(view: &CronJobView) -> Value {
     json!({
@@ -93,6 +114,7 @@ fn job_view_to_json(view: &CronJobView) -> Value {
         "last_delivery_status": view.state.last_delivery_status,
         // Config fields
         "failure_alert": view.failure_alert,
+        "chain": view.chain,
         "timeout_ms": view.timeout_ms,
     })
 }
@@ -109,11 +131,7 @@ pub async fn handle_list(request: JsonRpcRequest, cron: SharedCronService) -> Js
             let jobs_json: Vec<Value> = jobs.iter().map(job_view_to_json).collect();
             JsonRpcResponse::success(request.id, json!({ "jobs": jobs_json }))
         }
-        Err(e) => JsonRpcResponse::error(
-            request.id,
-            INTERNAL_ERROR,
-            format!("Failed to list jobs: {e}"),
-        ),
+        Err(e) => task_error::respond(request.id, "Failed to list jobs", &e),
     }
 }
 
@@ -129,11 +147,7 @@ pub async fn handle_get(request: JsonRpcRequest, cron: SharedCronService) -> Jso
     let service = cron.lock().await;
     match service.get_job(&job_id).await {
         Ok(view) => JsonRpcResponse::success(request.id, json!({ "job": job_view_to_json(&view) })),
-        Err(e) => JsonRpcResponse::error(
-            request.id,
-            INTERNAL_ERROR,
-            format!("Failed to get job: {e}"),
-        ),
+        Err(e) => task_error::respond(request.id, "Failed to get job", &e),
     }
 }
 
@@ -244,6 +258,13 @@ pub async fn handle_create(request: JsonRpcRequest, cron: SharedCronService) -> 
         Ok(None) => {}
         Err(e) => return JsonRpcResponse::error(request.id, INVALID_PARAMS, e),
     }
+    match parse_chain(params) {
+        // Existence / cycle / self-link are checked inside `add_job`, under the
+        // store lock — the same predicate `cron_manage` gets.
+        Ok(Some(chain)) => job.set_chain(chain),
+        Ok(None) => {}
+        Err(e) => return JsonRpcResponse::error(request.id, INVALID_PARAMS, e),
+    }
     if let Some(tags) = params.get("tags").and_then(|v| v.as_array()) {
         job.tags = tags
             .iter()
@@ -288,11 +309,11 @@ pub async fn handle_create(request: JsonRpcRequest, cron: SharedCronService) -> 
             }
             Err(_) => JsonRpcResponse::success(request.id, json!({ "job": { "id": job_id } })),
         },
-        Err(e) => JsonRpcResponse::error(
-            request.id,
-            INTERNAL_ERROR,
-            format!("Failed to create job: {e}"),
-        ),
+        // The chain checks inside `add_job` land here. They are the reason
+        // this round happened: a chain to a job that does not exist, a cycle
+        // and a self-link are all things the caller typed, and all three used
+        // to come back as `-32603 Internal error`.
+        Err(e) => task_error::respond(request.id, "Failed to create job", &e),
     }
 }
 
@@ -364,6 +385,10 @@ pub async fn handle_update(request: JsonRpcRequest, cron: SharedCronService) -> 
         Ok(alert) => updates.failure_alert = alert,
         Err(e) => return JsonRpcResponse::error(request.id, INVALID_PARAMS, e),
     }
+    match parse_chain(params) {
+        Ok(chain) => updates.chain = chain,
+        Err(e) => return JsonRpcResponse::error(request.id, INVALID_PARAMS, e),
+    }
     // `timezone` needs a schedule to land in. Clients that edit the schedule
     // send both; clients that only change the zone send just `timezone`, so
     // fall back to the job's current schedule rather than dropping it — that
@@ -373,13 +398,7 @@ pub async fn handle_update(request: JsonRpcRequest, cron: SharedCronService) -> 
             Some(k) => k,
             None => match cron.lock().await.get_job(&job_id).await {
                 Ok(view) => view.schedule_kind,
-                Err(e) => {
-                    return JsonRpcResponse::error(
-                        request.id,
-                        INTERNAL_ERROR,
-                        format!("Failed to get job: {e}"),
-                    );
-                }
+                Err(e) => return task_error::respond(request.id, "Failed to get job", &e),
             },
         };
         if let Err(e) = apply_timezone(&mut kind, tz) {
@@ -435,11 +454,7 @@ pub async fn handle_update(request: JsonRpcRequest, cron: SharedCronService) -> 
                 json!({ "job": { "id": job_id, "updated": true } }),
             ),
         },
-        Err(e) => JsonRpcResponse::error(
-            request.id,
-            INTERNAL_ERROR,
-            format!("Failed to update job: {e}"),
-        ),
+        Err(e) => task_error::respond(request.id, "Failed to update job", &e),
     }
 }
 
@@ -455,11 +470,7 @@ pub async fn handle_delete(request: JsonRpcRequest, cron: SharedCronService) -> 
     let service = cron.lock().await;
     match service.delete_job(&job_id).await {
         Ok(()) => JsonRpcResponse::success(request.id, json!({ "deleted": job_id })),
-        Err(e) => JsonRpcResponse::error(
-            request.id,
-            INTERNAL_ERROR,
-            format!("Failed to delete job: {e}"),
-        ),
+        Err(e) => task_error::respond(request.id, "Failed to delete job", &e),
     }
 }
 
@@ -469,20 +480,33 @@ pub async fn handle_status(request: JsonRpcRequest, cron: SharedCronService) -> 
     match service.list_jobs().await {
         Ok(jobs) => {
             let enabled_count = jobs.iter().filter(|j| j.enabled).count();
+            // `running` used to be the literal `true`. The timer loop's startup
+            // is conditional (no execution adapter ⇒ "Cron timer loop: skipped"
+            // on stdout, and in daemon mode not even that) while every `cron.*`
+            // handler is registered either way — so an operator whose jobs
+            // silently never fire was told the scheduler was up, by the one
+            // surface that exists to answer that question. Derive it from the
+            // scan the loop actually performs: alive means it scanned within
+            // three intervals, which tolerates one missed wake-up without
+            // reporting a healthy scheduler as dead.
+            let last_tick_at_ms = service.last_tick_at_ms();
+            let liveness_window_ms = (service.check_interval_secs() as i64) * 1000 * 3;
+            let now_ms = chrono::Utc::now().timestamp_millis();
+            let running =
+                last_tick_at_ms != 0 && now_ms.saturating_sub(last_tick_at_ms) < liveness_window_ms;
             JsonRpcResponse::success(
                 request.id,
                 json!({
-                    "running": true,
+                    "running": running,
+                    // Reported alongside so a client can say "last scan 4m ago"
+                    // rather than only "false"; `null` = never scanned.
+                    "last_tick_at_ms": (last_tick_at_ms != 0).then_some(last_tick_at_ms),
                     "job_count": jobs.len(),
                     "enabled_count": enabled_count,
                 }),
             )
         }
-        Err(e) => JsonRpcResponse::error(
-            request.id,
-            INTERNAL_ERROR,
-            format!("Failed to get status: {e}"),
-        ),
+        Err(e) => task_error::respond(request.id, "Failed to get status", &e),
     }
 }
 
@@ -516,11 +540,10 @@ pub async fn handle_run(request: JsonRpcRequest, cron: SharedCronService) -> Jso
                 }),
             )
         }
-        Err(e) => JsonRpcResponse::error(
-            request.id,
-            INTERNAL_ERROR,
-            format!("Failed to run job: {e}"),
-        ),
+        // "job not found", "disabled, enable it first" and "already running"
+        // are three different things the caller can act on, and all three came
+        // back as an internal error before this went through the classifier.
+        Err(e) => task_error::respond(request.id, "Failed to run job", &e),
     }
 }
 
@@ -543,8 +566,11 @@ pub async fn handle_runs(request: JsonRpcRequest, cron: SharedCronService) -> Js
     };
 
     let service = cron.lock().await;
-    let store = service.state().store.lock().await;
-    match store.get_runs(&job_id, limit) {
+    // Through `job_runs`, not `state().store` directly: reaching past the
+    // service was a second path to the same rows whose failures could not be
+    // classified with the rest, and it is the path the conversational face
+    // (`cron_manage`) never used.
+    match service.job_runs(&job_id, limit).await {
         Ok(runs) => {
             let runs_json: Vec<Value> = runs
                 .iter()
@@ -566,11 +592,7 @@ pub async fn handle_runs(request: JsonRpcRequest, cron: SharedCronService) -> Js
                 .collect();
             JsonRpcResponse::success(request.id, json!({ "job_id": job_id, "runs": runs_json }))
         }
-        Err(e) => JsonRpcResponse::error(
-            request.id,
-            INTERNAL_ERROR,
-            format!("Failed to get runs: {e}"),
-        ),
+        Err(e) => task_error::respond(request.id, "Failed to get runs", &e),
     }
 }
 
@@ -607,11 +629,7 @@ pub async fn handle_toggle(request: JsonRpcRequest, cron: SharedCronService) -> 
                 "enabled": new_enabled,
             }),
         ),
-        Err(e) => JsonRpcResponse::error(
-            request.id,
-            INTERNAL_ERROR,
-            format!("Failed to toggle job: {e}"),
-        ),
+        Err(e) => task_error::respond(request.id, "Failed to toggle job", &e),
     }
 }
 
@@ -747,6 +765,249 @@ mod tests {
         assert!(parse_failure_alert(absent.as_object().unwrap())
             .unwrap()
             .is_none());
+    }
+
+    #[test]
+    fn chain_tri_state() {
+        let object = json!({ "chain": { "on_success": "job-b", "on_failure": "job-c" } });
+        let parsed = parse_chain(object.as_object().unwrap())
+            .unwrap()
+            .unwrap()
+            .unwrap();
+        assert_eq!(parsed.on_success.as_deref(), Some("job-b"));
+        assert_eq!(parsed.on_failure.as_deref(), Some("job-c"));
+
+        let cleared = json!({ "chain": null });
+        assert!(parse_chain(cleared.as_object().unwrap())
+            .unwrap()
+            .unwrap()
+            .is_none());
+
+        let absent = json!({});
+        assert!(parse_chain(absent.as_object().unwrap()).unwrap().is_none());
+
+        // `{}` means "no links", which is the same state as cleared — not a
+        // chain object with two `None`s that reads as "set" downstream.
+        let empty = json!({ "chain": {} });
+        assert!(parse_chain(empty.as_object().unwrap())
+            .unwrap()
+            .unwrap()
+            .is_none());
+    }
+
+    /// A misspelled link key must fail loudly rather than store nothing and
+    /// answer `success` — the same failure mode `failure_alert` shipped with.
+    #[test]
+    fn misspelled_chain_key_is_rejected() {
+        let typo = json!({ "chain": { "onSuccess": "job-b" } });
+        assert!(parse_chain(typo.as_object().unwrap()).is_err());
+    }
+
+    /// The chain must come back out of the same view the setters write into.
+    /// A settable field with no read-back leaves the caller unable to confirm
+    /// what was stored.
+    #[test]
+    fn the_rendered_job_carries_its_chain() {
+        let mut job = CronJob::new(
+            "src",
+            "agent",
+            "p",
+            ScheduleKind::Every {
+                every_ms: 60_000,
+                anchor_ms: None,
+            },
+        );
+        job.set_chain(Some(crate::tasks::cron::JobChain {
+            on_success: Some("job-b".to_string()),
+            on_failure: None,
+        }));
+        let rendered = job_view_to_json(&CronJobView::from(&job));
+        assert_eq!(rendered["chain"]["on_success"], "job-b");
+        assert!(rendered["chain"].get("on_failure").is_none());
+
+        job.set_chain(None);
+        let rendered = job_view_to_json(&CronJobView::from(&job));
+        assert!(rendered["chain"].is_null(), "no chain must render as null");
+    }
+
+    // ── Error classification over the wire ──────────────────────────
+    //
+    // Unit-testing `task_error::respond` proves the mapping; these prove the
+    // handlers reach it. Between the two sits the thing that was actually
+    // broken for a year: a `Result<_, String>` that gave every handler no
+    // choice but `INTERNAL_ERROR`.
+
+    use crate::tasks::cron::{CronConfig, CronService};
+
+    fn live_service(dir: &tempfile::TempDir) -> SharedCronService {
+        let service = CronService::new(CronConfig {
+            db_path: dir.path().join("cron.db").to_string_lossy().to_string(),
+            ..CronConfig::default()
+        })
+        .unwrap();
+        std::sync::Arc::new(tokio::sync::Mutex::new(service))
+    }
+
+    fn request(method: &str, params: Value) -> JsonRpcRequest {
+        JsonRpcRequest {
+            jsonrpc: "2.0".to_string(),
+            id: Some(json!(1)),
+            method: method.to_string(),
+            params: Some(params),
+        }
+    }
+
+    fn error_of(response: JsonRpcResponse) -> (i32, String) {
+        let e = response.error.expect("expected an error response");
+        (e.code, e.message)
+    }
+
+    /// The leftover this round exists for.
+    ///
+    /// `add_job` refuses a chain whose target does not exist — the caller
+    /// typed a job id that is not there and can fix it by creating that job
+    /// first. It arrived as `-32603 Internal error`: retry, read the server
+    /// log, the server is broken. None of that was true.
+    #[tokio::test]
+    async fn a_chain_to_a_missing_job_is_invalid_params_not_an_internal_error() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let cron = live_service(&dir);
+
+        let response = handle_create(
+            request(
+                "cron.create",
+                json!({
+                    "name": "source",
+                    "schedule_kind": { "kind": "every", "every_ms": 60_000 },
+                    "chain": { "on_success": "no-such-job" },
+                }),
+            ),
+            cron.clone(),
+        )
+        .await;
+
+        let (code, message) = error_of(response);
+        assert_eq!(code, INVALID_PARAMS, "message was: {message}");
+        assert!(
+            message.contains("no-such-job"),
+            "the refusal must still name the target: {message}"
+        );
+
+        // And the refusal wrote nothing.
+        let jobs = cron.lock().await.list_jobs().await.unwrap();
+        assert!(jobs.is_empty());
+    }
+
+    /// A self-link and a cycle are the same class — caller-authored content
+    /// the scheduler refuses — and must not be able to drift apart from the
+    /// case above.
+    #[tokio::test]
+    async fn a_self_link_is_also_invalid_params() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let cron = live_service(&dir);
+
+        let created = handle_create(
+            request(
+                "cron.create",
+                json!({ "name": "a", "schedule_kind": { "kind": "every", "every_ms": 60_000 } }),
+            ),
+            cron.clone(),
+        )
+        .await;
+        let id = created.result.unwrap()["job"]["id"]
+            .as_str()
+            .unwrap()
+            .to_string();
+
+        let response = handle_update(
+            request(
+                "cron.update",
+                json!({ "job_id": id, "chain": { "on_success": id } }),
+            ),
+            cron,
+        )
+        .await;
+
+        let (code, message) = error_of(response);
+        assert_eq!(code, INVALID_PARAMS, "message was: {message}");
+        assert!(message.contains("itself"), "{message}");
+    }
+
+    /// An id that is not in the store is `RESOURCE_NOT_FOUND`, not "the server
+    /// broke". `cron.*` is operator-gated, so there is no existence oracle to
+    /// protect and a named 404 is the honest answer.
+    #[tokio::test]
+    async fn an_unknown_job_id_is_resource_not_found_on_every_verb_that_addresses_one() {
+        use crate::gateway::protocol::RESOURCE_NOT_FOUND;
+
+        let dir = tempfile::TempDir::new().unwrap();
+        let cron = live_service(&dir);
+        let missing = json!({ "job_id": "ghost" });
+
+        for (verb, response) in [
+            (
+                "cron.get",
+                handle_get(request("cron.get", missing.clone()), cron.clone()).await,
+            ),
+            (
+                "cron.delete",
+                handle_delete(request("cron.delete", missing.clone()), cron.clone()).await,
+            ),
+            (
+                "cron.update",
+                handle_update(
+                    request("cron.update", json!({ "job_id": "ghost", "name": "x" })),
+                    cron.clone(),
+                )
+                .await,
+            ),
+            (
+                "cron.toggle",
+                handle_toggle(request("cron.toggle", missing.clone()), cron.clone()).await,
+            ),
+            (
+                "cron.run",
+                handle_run(request("cron.run", missing.clone()), cron.clone()).await,
+            ),
+        ] {
+            let (code, message) = error_of(response);
+            assert_eq!(
+                code, RESOURCE_NOT_FOUND,
+                "{verb} answered {code}: {message}"
+            );
+            assert!(message.contains("ghost"), "{verb}: {message}");
+        }
+    }
+
+    /// "the job is disabled" is a refusal the caller can act on in one call.
+    /// It shares `INVALID_PARAMS` with the content refusals above on purpose —
+    /// see `TaskError` for why there is no `Conflict` code with no consumer.
+    #[tokio::test]
+    async fn running_a_disabled_job_is_a_caller_error() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let cron = live_service(&dir);
+
+        let created = handle_create(
+            request(
+                "cron.create",
+                json!({
+                    "name": "off",
+                    "enabled": false,
+                    "schedule_kind": { "kind": "every", "every_ms": 60_000 },
+                }),
+            ),
+            cron.clone(),
+        )
+        .await;
+        let id = created.result.unwrap()["job"]["id"]
+            .as_str()
+            .unwrap()
+            .to_string();
+
+        let (code, message) =
+            error_of(handle_run(request("cron.run", json!({ "job_id": id })), cron).await);
+        assert_eq!(code, INVALID_PARAMS, "message was: {message}");
+        assert!(message.contains("enable it first"), "{message}");
     }
 
     /// The old Panel spelling (`after_n` / `cooldown` / `kind` / `channel`)

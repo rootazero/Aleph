@@ -284,6 +284,46 @@ pub enum GatewayEventFrame {
         team_id: String,
         change: ChangeKind,
     },
+    /// Emitted whenever a workspace row is mutated (created / renamed / archived
+    /// / restored). Topic: `workspace.changed`. Mirrors `CronJobChanged` —
+    /// payload-minimal; clients re-fetch `workspace.list`.
+    ///
+    /// Published from [`crate::gateway::agent_env::AgentEnvStore`] rather than
+    /// from the RPC handlers, so the CLI (which reaches the same handlers over
+    /// IPC) and any future in-process mutator emit it too, and so the four
+    /// handler signatures — and the ~15 test call sites that build them — stay
+    /// as they are.
+    ///
+    /// `change` is a rendering hint, not a lifecycle claim. **Archive and
+    /// restore both report `Updated`**: archiving is reversible and keeps the id
+    /// taken, so `Deleted` would be a statement a consumer could act on and be
+    /// wrong about. What actually left is the row's place in the default list,
+    /// and re-fetching is what tells a client that.
+    ///
+    /// **One `workspace.create` is two frames — `Created` then `Updated`.**
+    /// Emitting from the store means the count follows the store writes, and
+    /// `handle_create` is two of them (the INSERT, then the name/icon write
+    /// `AgentEnvStore::create` cannot take). Observed on a real machine
+    /// 2026-08-09 as two byte-identical `workspace.list` re-fetches in the same
+    /// millisecond. Harmless for a client that re-fetches — that is idempotent
+    /// — but a client that *renders* `change` will be told "created" and then
+    /// immediately "updated" for a single user action. Coalescing was rejected:
+    /// it would couple the store's emission to a handler's write count, which
+    /// is exactly the knowledge the store-level emission exists to not have.
+    /// Pinned by `handlers::workspace::tests::
+    /// create_reaches_the_wire_as_created_then_updated`.
+    ///
+    /// Classified `OperatorOnly` in `event_visibility::session_identity_of`,
+    /// not `Global`: the whole `workspace.` family is admin-gated in
+    /// `method_admin.rs` precisely so a member cannot enumerate workspaces, and
+    /// broadcasting the ids would hand back what that gate withholds. This is
+    /// `OperatorOnly`'s documented meaning rather than a convenience — a
+    /// workspace has no owner column *by decision* (see `method_admin.rs`'s
+    /// "NOT an owner column" note), so there is no ownership to resolve.
+    WorkspaceChanged {
+        workspace_id: String,
+        change: ChangeKind,
+    },
     /// Core-decided R5 interrupt addressed to one or more delivery surfaces.
     /// Unlike the raw agent-lifecycle frames, the "is this worth interrupting
     /// the user" policy has already been applied by the core R5 router; the
@@ -578,6 +618,7 @@ impl GatewayEventFrame {
             Self::CronJobChanged { .. } => "cron.job.changed",
             Self::HeartbeatTaskChanged { .. } => "heartbeat.task.changed",
             Self::TeamChanged { .. } => "team.changed",
+            Self::WorkspaceChanged { .. } => "workspace.changed",
             Self::SurfaceNotify { .. } => "surface.notify",
             Self::SurfaceApproval { .. } => "surface.approval",
         }

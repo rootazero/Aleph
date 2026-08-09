@@ -31,18 +31,8 @@ pub(super) fn build_task_delivery_engine(
     Arc::new(engine)
 }
 
-/// Build the platform-specific `DesktopPlatform` instance.
-pub(super) fn build_desktop_platform() -> Arc<dyn aleph_desktop::DesktopPlatform> {
-    #[cfg(target_os = "macos")]
-    {
-        Arc::new(aleph_desktop_macos::MacOSPlatform::new())
-    }
-    #[cfg(target_os = "linux")]
-    {
-        Arc::new(aleph_desktop_linux::LinuxPlatform::new())
-    }
-    #[cfg(target_os = "windows")]
-    {
-        Arc::new(aleph_desktop_windows::WindowsPlatform::new())
-    }
-}
+// `build_desktop_platform()` lived here until 2026-08-09. Its only caller was
+// the presence / mic-level reporter block in `start/mod.rs`, removed with those
+// reporters. The desktop platform is still built — lazily, at the single per-OS
+// injection point in `executor::builtin_registry::builder::constructor`, which
+// is where tools reach it; nothing else needs one at boot.

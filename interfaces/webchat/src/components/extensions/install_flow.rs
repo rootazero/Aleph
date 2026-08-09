@@ -69,6 +69,7 @@ pub fn next_step(result: &InstallResult) -> InstallStep {
 /// Call install with current values+ack and route to the next step. Uses the
 /// in-flight `id` (passed by the caller from `store.install_id`), never `selected`.
 fn drive_install(state: DashboardState, store: StoreState, id: String, ack: bool) {
+    let i18n = crate::i18n::use_i18n();
     store.installing.set(true);
     store.install_error.set(None);
     let values = Value::Object(store.config_values.get_untracked());
@@ -94,7 +95,11 @@ fn drive_install(state: DashboardState, store: StoreState, id: String, ack: bool
                 store.installing.set(false);
             }
             Err(e) => {
-                store.install_error.set(Some(e));
+                store.install_error.set(Some(
+                    crate::components::admin_refusal::settings_write_error(i18n, &e, |e| {
+                        e.to_string()
+                    }),
+                ));
                 store.install_step.set(InstallStep::Failed);
                 store.installing.set(false);
             }

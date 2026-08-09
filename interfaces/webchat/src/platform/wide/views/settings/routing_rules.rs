@@ -322,7 +322,11 @@ fn RuleEditor(
                     selected.set(None);
                 }
                 Err(e) => {
-                    error.set(Some(format!("Failed to save: {e}")));
+                    error.set(Some(
+                        crate::components::admin_refusal::settings_write_error(i18n, &e, |e| {
+                            format!("Failed to save: {e}")
+                        }),
+                    ));
                 }
             }
             saving.set(false);
@@ -351,7 +355,11 @@ fn RuleEditor(
                         selected.set(None);
                     }
                     Err(e) => {
-                        error.set(Some(format!("Failed to delete: {e}")));
+                        error.set(Some(
+                            crate::components::admin_refusal::settings_write_error(i18n, &e, |e| {
+                                format!("Failed to delete: {e}")
+                            }),
+                        ));
                     }
                 }
                 saving.set(false);

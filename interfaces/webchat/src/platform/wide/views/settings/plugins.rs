@@ -245,7 +245,11 @@ fn PluginCard(
                                                     load_plugins(i18n, state, plugins, loading, error);
                                                 }
                                                 Err(e) => {
-                                                    error.set(Some(format!("Failed to delete plugin: {e}")));
+                                                    error.set(Some(crate::components::admin_refusal::settings_write_error(
+                                                        i18n,
+                                                        &e,
+                                                        |e| format!("Failed to delete plugin: {e}"),
+                                                    )));
                                                     deleting.set(false);
                                                 }
                                             }
@@ -281,7 +285,11 @@ fn PluginCard(
                                                         toggling.set(false);
                                                     }
                                                     Err(e) => {
-                                                        error.set(Some(format!("Failed to toggle plugin: {e}")));
+                                                        error.set(Some(crate::components::admin_refusal::settings_write_error(
+                                                            i18n,
+                                                            &e,
+                                                            |e| format!("Failed to toggle plugin: {e}"),
+                                                        )));
                                                         enabled.set(!new_val);
                                                         toggling.set(false);
                                                     }
@@ -337,7 +345,11 @@ fn InstallPluginDialog(
                     on_close();
                 }
                 Err(e) => {
-                    dialog_error.set(Some(format!("Failed to install: {e}")));
+                    dialog_error.set(Some(
+                        crate::components::admin_refusal::settings_write_error(i18n, &e, |e| {
+                            format!("Failed to install: {e}")
+                        }),
+                    ));
                     installing.set(false);
                 }
             }

@@ -247,8 +247,9 @@ pub async fn get(server_url: &str, config: &CliConfig, id: &str, json: bool) -> 
 /// Change a workspace's name, description or icon.
 ///
 /// Omitted fields are left alone rather than cleared (the server COALESCEs).
-/// An archived workspace is refused — `get` can still show it, but there is no
-/// unarchive verb, so the archive is where writes stop.
+/// An archived workspace is refused — `get` can still show it, and [`unarchive`]
+/// is the way back. That refusal is deliberate rather than a gap: restoring a
+/// workspace is its own verb, not something a rename does on the side.
 pub async fn update(
     server_url: &str,
     config: &CliConfig,
@@ -301,6 +302,34 @@ pub async fn archive(server_url: &str, config: &CliConfig, id: &str, json: bool)
     } else {
         println!("Workspace '{id}' archived.");
     }
+
+    client.close().await?;
+    Ok(())
+}
+
+/// Restore an archived workspace — the inverse of [`archive`].
+///
+/// Prints the restored workspace in full rather than a one-line confirmation,
+/// which is why this reuses [`render_detail`] and [`archive`] does not: the
+/// server returns the row (its response is `get`/`update`'s envelope), and the
+/// thing the operator wants confirmed is that the workspace they meant is back
+/// — name, description and a Status line that now says `active`.
+///
+/// Nothing is created. The ID was never released while archived, so this is a
+/// flag coming off a row that stayed where it was, with the workspace's memory
+/// and notes untouched on disk under the same ID.
+pub async fn unarchive(
+    server_url: &str,
+    config: &CliConfig,
+    id: &str,
+    json: bool,
+) -> CliResult<()> {
+    let (client, _events) = AlephClient::connect(server_url, config).await?;
+
+    let params = WorkspaceRef { id: id.to_string() };
+    let result: Value = client.call("workspace.unarchive", Some(params)).await?;
+
+    render_detail(&result, json)?;
 
     client.close().await?;
     Ok(())

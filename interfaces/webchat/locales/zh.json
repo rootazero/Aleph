@@ -521,7 +521,8 @@
       "moa": "MoA",
       "browser": "浏览器",
       "execution": "执行",
-      "network": "服务与集群"
+      "network": "服务与集群",
+      "workspaces": "工作区"
     },
     "general": {
       "title": "通用设置",
@@ -1463,9 +1464,37 @@
     },
     "admin_refusal": {
       "read_config": "该设置页需要 operator 权限,当前连接的角色无法读取服务器全局配置。",
+      "write_config": "该改动需要 operator 权限,当前连接的角色无法修改服务器全局设置。",
       "read_setup_state": "需要 operator 权限,当前连接无法读取该项配置,状态未知。",
       "read_tiers": "需要 operator 权限,当前连接无法读取可选的执行档位。",
-      "read_modes": "需要 operator 权限,当前连接无法读取可选的会话模式。"
+      "read_modes": "需要 operator 权限,当前连接无法读取可选的会话模式。",
+      "manage_workspaces": "需要 operator 权限 —— 当前连接的角色无法创建、重命名、归档或恢复工作区。"
+    },
+    "workspaces": {
+      "title": "工作区",
+      "description": "Agent 运行环境 —— 每个工作区有独立的记忆分区、笔记与设置。",
+      "include_archived": "显示已归档",
+      "new_workspace": "+ 新建工作区",
+      "no_workspaces": "暂无工作区",
+      "select_or_add": "选择一个工作区查看，或新建一个。",
+      "loading": "加载中…",
+      "id_label": "ID",
+      "id_hint": "URL 安全的标识符，例如 \"crypto\"。这是其他一切寻址这个工作区所用的键，创建后不可更改。",
+      "id_required": "必须填写 ID。",
+      "name_label": "名称",
+      "name_hint": "显示名称，留空则使用 ID。",
+      "description_label": "描述",
+      "icon_label": "图标",
+      "profile_label": "Profile",
+      "created_label": "创建于",
+      "last_active_label": "最近活动",
+      "status_active": "使用中",
+      "status_archived": "已归档",
+      "archived_note": "该工作区已归档：只读，且 ID 仍被占用 —— 恢复后才能继续编辑。没有任何东西被删除，它的记忆与笔记仍在磁盘上。",
+      "create": "创建",
+      "save": "保存",
+      "archive": "归档",
+      "unarchive": "恢复"
     }
   },
   "extensions": {
@@ -2016,7 +2045,14 @@
     "pairing_approved": "发送者批准成功。",
     "pairing_approve_failed": "批准失败：",
     "pairing_speaks_as": "以谁的身份",
-    "pairing_speaks_as_owner": "机主（默认）"
+    "pairing_speaks_as_owner": "机主（默认）",
+    "pending_requests": "待批配对请求",
+    "no_pending_requests": "暂无待批请求。",
+    "refresh": "刷新",
+    "reject": "拒绝",
+    "pairing_list_failed": "加载待批请求失败：",
+    "pairing_reject_failed": "拒绝失败：",
+    "pairing_approved_load_failed": "加载已批准发送者失败："
   },
   "execution_settings": {
     "title": "执行",

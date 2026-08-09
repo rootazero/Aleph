@@ -58,7 +58,11 @@ pub fn MemoryView() -> impl IntoView {
                         error.set(None);
                     }
                     Err(e) => {
-                        error.set(Some(format!("Failed to save: {e}")));
+                        error.set(Some(
+                            crate::components::admin_refusal::settings_write_error(i18n, &e, |e| {
+                                format!("Failed to save: {e}")
+                            }),
+                        ));
                     }
                 }
                 saving.set(false);
@@ -975,11 +979,24 @@ fn RetrievalDebugPanel() -> impl IntoView {
                         trace_result.set(Some(resp));
                     }
                     Err(e) => {
-                        trace_error.set(Some(format!("Parse error: {e}")));
+                        // `e` is a serde parse failure, not a gateway verdict —
+                        // wrapped anyway because the rule has no allowlist and
+                        // a non-refusal passes through byte-for-byte.
+                        trace_error.set(Some(
+                            crate::components::admin_refusal::settings_write_error(
+                                i18n,
+                                &e.to_string(),
+                                |e| format!("Parse error: {e}"),
+                            ),
+                        ));
                     }
                 },
                 Err(e) => {
-                    trace_error.set(Some(format!("RPC error: {e}")));
+                    trace_error.set(Some(
+                        crate::components::admin_refusal::settings_write_error(i18n, &e, |e| {
+                            format!("RPC error: {e}")
+                        }),
+                    ));
                 }
             }
             searching.set(false);
@@ -1121,7 +1138,11 @@ fn DreamInsightsPanel() -> impl IntoView {
             error.set(None);
             match DreamInsightsApi::list(&state, ns, Some(30)).await {
                 Ok(resp) => data.set(Some(resp)),
-                Err(e) => error.set(Some(e)),
+                Err(e) => error.set(Some(crate::components::admin_refusal::settings_load_error(
+                    i18n,
+                    &e,
+                    |e| e.to_string(),
+                ))),
             }
             loading.set(false);
         });
@@ -1402,7 +1423,11 @@ fn CorrectionsPanel() -> impl IntoView {
             error.set(None);
             match CorrectionsApi::list(&state, None, include).await {
                 Ok(resp) => data.set(Some(resp)),
-                Err(e) => error.set(Some(e)),
+                Err(e) => error.set(Some(crate::components::admin_refusal::settings_load_error(
+                    i18n,
+                    &e,
+                    |e| e.to_string(),
+                ))),
             }
             loading.set(false);
         });

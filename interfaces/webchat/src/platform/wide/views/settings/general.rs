@@ -34,7 +34,11 @@ pub fn GeneralView() -> impl IntoView {
                         set_saving.set(false);
                     }
                     Err(e) => {
-                        set_error.set(Some(format!("Failed to save config: {e}")));
+                        set_error.set(Some(
+                            crate::components::admin_refusal::settings_write_error(i18n, &e, |e| {
+                                format!("Failed to save config: {e}")
+                            }),
+                        ));
                         set_saving.set(false);
                     }
                 }
@@ -242,7 +246,12 @@ fn ConfigReloadSection() -> impl IntoView {
                     set_result_msg.set(Some((result.ok, msg)));
                 }
                 Err(e) => {
-                    set_result_msg.set(Some((false, format!("Reload failed: {e}"))));
+                    set_result_msg.set(Some((
+                        false,
+                        crate::components::admin_refusal::settings_write_error(i18n, &e, |e| {
+                            format!("Reload failed: {e}")
+                        }),
+                    )));
                 }
             }
             set_reloading.set(false);

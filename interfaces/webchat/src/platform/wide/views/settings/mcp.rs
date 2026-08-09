@@ -294,7 +294,11 @@ fn McpServerCard(
                                                     load_servers(i18n, state, servers, loading, error);
                                                 }
                                                 Err(e) => {
-                                                    error.set(Some(format!("Failed to delete server: {e}")));
+                                                    error.set(Some(crate::components::admin_refusal::settings_write_error(
+                                                        i18n,
+                                                        &e,
+                                                        |e| format!("Failed to delete server: {e}"),
+                                                    )));
                                                     deleting.set(false);
                                                 }
                                             }
@@ -435,7 +439,11 @@ fn EditMcpServerDialog(
                     on_close();
                 }
                 Err(e) => {
-                    dialog_error.set(Some(format!("Failed to save: {e}")));
+                    dialog_error.set(Some(
+                        crate::components::admin_refusal::settings_write_error(i18n, &e, |e| {
+                            format!("Failed to save: {e}")
+                        }),
+                    ));
                     saving.set(false);
                 }
             }

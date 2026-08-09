@@ -20,6 +20,7 @@ use crate::tasks::heartbeat::{
 use crate::tasks::shared::active_hours::ActiveHoursSchedule;
 use crate::tasks::shared::alert::FailureAlertConfig;
 use crate::tasks::shared::clock::SystemClock;
+use crate::tasks::shared::delivery::{DeliveryConfig, DeliveryMode, DeliveryTargetConfig};
 use crate::tools::AlephTool;
 
 // =============================================================================
@@ -127,6 +128,24 @@ pub struct HeartbeatCreateArgs {
     /// lengthens the retry backoff and nobody is told.
     #[serde(default)]
     pub failure_alert: Option<FailureAlertConfig>,
+    /// Where to send the monitor's findings. Omit it and the task delivers to
+    /// the conversation it was created in, which is almost always what the user
+    /// meant by "tell me when X happens".
+    #[serde(default)]
+    pub delivery: Option<DeliveryConfig>,
+
+    // ── Internal (injected by dispatcher, not LLM-visible) ────────
+    /// Source channel id — injected by the tool dispatcher from turn context.
+    /// Used to synthesize the default delivery target, exactly as `cron_manage`
+    /// uses it for `source_channel_id`.
+    #[serde(default, rename = "__channel")]
+    #[schemars(skip)]
+    pub __channel: Option<String>,
+    /// Source conversation id — injected by the tool dispatcher from turn
+    /// context (for Telegram, the `chat_id`).
+    #[serde(default, rename = "__conversation_id")]
+    #[schemars(skip)]
+    pub __conversation_id: Option<String>,
 }
 
 /// Output from `heartbeat_create`
@@ -185,6 +204,31 @@ impl AlephTool for HeartbeatCreateTool {
         let agent_id = args.agent_id.unwrap_or_else(|| "main".to_string());
         let mut task = HeartbeatTask::new(args.name.clone(), agent_id, args.interval_ms, probe);
         task.failure_alert = args.failure_alert;
+        // The whole point of a heartbeat is the notification, and
+        // `delivery_config` gates it: `None` sends the L2 turn's findings
+        // nowhere and records the run as a success. Until now nothing in the
+        // repo ever set it — not this tool, not the RPC handlers — so every
+        // monitor ever created burned a full LLM turn deciding to alert the
+        // user and then dropped the message. `resolve_alert_config` reads the
+        // same field for its default failure target, so that was dead too.
+        //
+        // Explicit config wins; otherwise fall back to the conversation the
+        // task was created in, which is the shape `cron_manage` already uses
+        // for `source_channel_id` (a user who says "watch CI hourly" in
+        // Telegram should not also have to describe a delivery target they
+        // cannot see).
+        task.delivery_config = args.delivery.or_else(|| {
+            let (channel, chat_id) = (args.__channel?, args.__conversation_id?);
+            Some(DeliveryConfig {
+                mode: DeliveryMode::Primary,
+                targets: vec![DeliveryTargetConfig::Gateway {
+                    channel,
+                    chat_id,
+                    format: None,
+                }],
+                fallback_target: None,
+            })
+        });
 
         let clock = SystemClock;
         let id = {
@@ -192,7 +236,7 @@ impl AlephTool for HeartbeatCreateTool {
             service
                 .add_task(task, &clock)
                 .await
-                .map_err(crate::error::AlephError::tool)?
+                .map_err(|e| crate::error::AlephError::tool(e.to_string()))?
         };
 
         info!(task_id = %id, name = %args.name, "Heartbeat task created via tool");
@@ -231,6 +275,13 @@ pub struct HeartbeatUpdateArgs {
     /// Replace the failure alerting for this monitor (optional)
     #[serde(default)]
     pub failure_alert: Option<FailureAlertConfig>,
+    /// Change where this monitor's findings are delivered.
+    #[serde(default)]
+    pub delivery: Option<DeliveryConfig>,
+    /// Pass `true` to stop delivering this monitor's findings anywhere. Same
+    /// tri-state convention as `clear_failure_alert`.
+    #[serde(default)]
+    pub clear_delivery: Option<bool>,
     /// Pass `true` to remove an existing `failure_alert`. (A JSON tool call
     /// cannot distinguish `null` from "not mentioned", hence the flag.)
     #[serde(default)]
@@ -283,6 +334,12 @@ impl AlephTool for HeartbeatUpdateTool {
             args.failure_alert.map(Some)
         };
 
+        let delivery_config = if args.clear_delivery == Some(true) {
+            Some(None)
+        } else {
+            args.delivery.map(Some)
+        };
+
         let updates = HeartbeatTaskUpdates {
             name: args.name,
             agent_id: args.agent_id,
@@ -290,6 +347,7 @@ impl AlephTool for HeartbeatUpdateTool {
             enabled: args.enabled,
             active_hours: args.active_hours.map(Some),
             failure_alert,
+            delivery_config,
             ..Default::default()
         };
 

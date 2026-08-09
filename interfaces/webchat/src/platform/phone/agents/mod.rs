@@ -14,8 +14,8 @@ use leptos::prelude::*;
 use leptos::task::spawn_local;
 use leptos_router::hooks::use_location;
 
+use crate::api::agent_binding::AgentBindingApi;
 use crate::api::agents::{AgentSummary, AgentsApi};
-use crate::api::workspace::WorkspaceApi;
 use crate::context::DashboardState;
 
 use self::detail::PhoneAgentDetail;
@@ -42,6 +42,7 @@ pub struct PhoneAgentsState {
 #[component]
 #[must_use]
 pub fn PhoneAgents() -> impl IntoView {
+    let i18n = crate::i18n::use_i18n();
     let dashboard = expect_context::<DashboardState>();
 
     let st = PhoneAgentsState {
@@ -66,11 +67,15 @@ pub fn PhoneAgents() -> impl IntoView {
                         st.agents.set(resp.agents);
                         // Bindings are best-effort: a failure leaves the badge/
                         // filter empty but never blocks the list.
-                        if let Ok(map) = WorkspaceApi::agent_bindings(&dashboard).await {
+                        if let Ok(map) = AgentBindingApi::agent_bindings(&dashboard).await {
                             st.bindings.set(map);
                         }
                     }
-                    Err(e) => st.error.set(Some(e)),
+                    Err(e) => st.error.set(Some(
+                        crate::components::admin_refusal::settings_write_error(i18n, &e, |e| {
+                            e.to_string()
+                        }),
+                    )),
                 }
                 st.loaded.set(true);
             });

@@ -101,6 +101,222 @@ pub fn settings_load_error(
     }
 }
 
+/// What a settings page should display when its **write** failed.
+///
+/// The mirror of [`settings_load_error`], and it exists because the read half
+/// alone left the defect standing on the other side of the same page. Members
+/// are not kept off these pages — `settings::StepStatus::Restricted` only
+/// colours the Quick Setup checklist — so a page whose load was explained and
+/// whose Save button then answered with the raw protocol string was telling the
+/// user two different stories about one permission verdict.
+///
+/// Refusals become the localized explanation; **every other failure keeps the
+/// call site's own framing**, for the reason [`settings_load_error`] gives:
+/// `"Failed to save: …"` is useful context for a store error and a misleading
+/// preamble for a verdict that declined rather than failed.
+///
+/// One sentence covers every caller deliberately. The distinctions between
+/// saving a provider, installing a skill and waking a heartbeat task are real,
+/// but they are distinctions about the *action*, and the verdict is about the
+/// *role* — a key per call site would be ~170 translations of one fact, and the
+/// next call site would arrive without one.
+///
+/// Which of the two sentences a site gets is decided by the call it made, and
+/// on the unframed idiom (`set(Some(e))`, no verb in the copy to read) that is
+/// a judgement rather than a derivation — a refused load may say "this change".
+/// Left imprecise on purpose: the sentence that matters is "you need operator
+/// privilege", and the alternative was a heuristic that walks back through
+/// `match` arms and picks up the *other* arm's API call, which is worse than
+/// imprecise because it is confidently wrong.
+pub fn settings_write_error(
+    i18n: I18nContext<Locale>,
+    err: &str,
+    frame: impl FnOnce(&str) -> String,
+) -> String {
+    if is_admin_refusal(err) {
+        t_string!(i18n, settings.admin_refusal.write_config).to_string()
+    } else {
+        frame(err)
+    }
+}
+
+/// Guard: no user-facing error signal is fed an unclassified server error.
+///
+/// # The failure this exists to stop
+///
+/// The read half of this module landed first and was applied page by page. The
+/// write half was not — so on 2026-08-09 this scanner found **154** signal
+/// writes that put the raw English protocol string in front of the user, on
+/// surfaces whose RPC families are gated in `method_admin.rs`.
+///
+/// Two things about that number are the lesson. It was reported as **one**
+/// site (`routing_rules.rs`), and the first pass at fixing it caught 48 — every
+/// site written as `format!("Failed to …")`. That is a **lexical** subset, not
+/// the defect: `set(Some(e))` hands over the same string with no framing at
+/// all, and `format!("Delete failed: {e}")` is the same bug under a different
+/// verb. The split was 91 framed to 76 unframed, so an idiom-shaped rule would
+/// have certified nearly half the defect as fixed.
+///
+/// # Why the rule is uniform and has no allowlist
+///
+/// Not every surface here can be refused — a member may use the chat composer
+/// and the memory drawer. Wrapping those is still correct rather than noise,
+/// because [`labeled`] and both `settings_*_error` helpers pass a non-refusal
+/// through **verbatim**: on a surface that is never refused the wrapper is a
+/// byte-for-byte no-op. So the uniform rule costs nothing and an allowlist
+/// would cost a second source of truth about which families are gated — one
+/// that rots the first time a carve-out moves (`heartbeat.list` is a carve-out
+/// today). This is the same reasoning [`crate::disposed_reads`] gives for
+/// admitting no exceptions.
+///
+/// # What counts
+///
+/// A `.set(Some(…)` expression whose **target names an error signal**
+/// (`err` appears in the receiver — `error`, `save_error`, `enroll_err`,
+/// `set_error_message`) and whose span carries a server error, without
+/// mentioning `admin_refusal`. Two idioms carry one; on 2026-08-09 the split
+/// was 91 to 76, which is why neither can be the rule on its own:
+///
+/// - a `format!` interpolating `{e}` / `{err}` — always a `String`, so always
+///   routable;
+/// - a bare `Some(e)` / `Some(err)` — the protocol string with no frame at all.
+///
+/// Three deliberate boundaries:
+///
+/// - **Console logging is not matched.** It is not a surface, and framing it
+///   for a human would be the wrong fix.
+/// - **The receiver must name an error signal**, because `Some(e)` is also how
+///   a Leptos handler stores its event. Without that filter the guard reports
+///   non-errors, and a guard that cries wolf is a guard someone deletes.
+/// - **The bare form is skipped when the receiver provably holds something
+///   other than a `String`** — see [`receiver_holds_a_string`]. Two signals in
+///   this crate hold typed errors (`ChatSendError`, `MicError`) that are local
+///   facts, never a gateway verdict, and no wrapper can go there because the
+///   signal does not take a `String` at all. This is a **type** exception, not
+///   an allowlist of pages: it is re-derived from the source on every run and
+///   cannot rot into a licence for a surface.
+///
+/// The sanctioned form puts the frame in a closure, so the original wording
+/// survives for non-refusals and the span gains the `admin_refusal` mention:
+///
+/// ```ignore
+/// error.set(Some(admin_refusal::settings_write_error(
+///     i18n, &e, |e| format!("Failed to save: {e}"),
+/// )));
+/// ```
+#[cfg(test)]
+fn unclassified_error_writes(src: &str) -> Vec<(usize, String)> {
+    /// A `format!` frame interpolating the error.
+    const FRAMED: [&str; 4] = ["{e}", "{err}", "{e:?}", "{e:#?}"];
+    /// The error handed over with no frame at all.
+    const UNFRAMED: [&str; 2] = ["set(Some(e)", "set(Some(err)"];
+
+    let lines: Vec<&str> = src.lines().collect();
+    let mut out = Vec::new();
+    for (i, line) in lines.iter().enumerate() {
+        let Some(at) = line.find(".set(Some(") else {
+            continue;
+        };
+        // The identifier itself, not the whole prefix: `Err(e) => { row` would
+        // otherwise pass the error-signal filter on the `Err(` in the match arm,
+        // and the declaration lookup below would search for a name that is not
+        // one and never find it.
+        let receiver = receiver_ident(&line[..at]);
+        if !receiver.to_ascii_lowercase().contains("err") {
+            continue;
+        }
+        // Span of the write expression: from this line until the parens it
+        // opened balance again. Over-reading swallows a later `admin_refusal`
+        // and goes quiet; under-reading loses one and shouts. Both are possible
+        // with a paren inside a string literal, and the loud direction is the
+        // one this scanner is calibrated to take — see the RED tests below,
+        // which pin the shapes that actually occur.
+        let mut depth = 0i32;
+        let mut end = i;
+        for (j, inner) in lines.iter().enumerate().skip(i) {
+            depth += paren_delta(inner);
+            end = j;
+            if depth <= 0 {
+                break;
+            }
+        }
+        let span = lines[i..=end].join("\n");
+        if span.contains("admin_refusal") {
+            continue;
+        }
+        let framed = span.contains("format!(") && FRAMED.iter().any(|t| span.contains(t));
+        let unframed =
+            UNFRAMED.iter().any(|t| span.contains(t)) && receiver_holds_a_string(src, receiver);
+        if framed || unframed {
+            out.push((i + 1, (*line).trim().to_string()));
+        }
+    }
+    out
+}
+
+/// Whether `receiver`'s declaration in this file makes it a `String` signal.
+///
+/// Only consulted for the unframed idiom, where the stored value's type is the
+/// whole question: `send_error.set(Some(e))` is this module's business when `e`
+/// is the server's `error.message` and is none of its business when `e` is a
+/// `ChatSendError`, and the two lines are textually identical.
+///
+/// **Not finding a declaration returns `true`** — a receiver that comes in as a
+/// prop or out of a context is reported rather than excused. That is the loud
+/// direction, and the quiet one is how a scanner stops enforcing anything.
+#[cfg(test)]
+fn receiver_holds_a_string(src: &str, name: &str) -> bool {
+    for line in src.lines() {
+        // A declaration, not a use: it names a signal type.
+        if !(line.contains("RwSignal") || line.contains("Signal<") || line.contains("signal(")) {
+            continue;
+        }
+        if !mentions_token(line, name) {
+            continue;
+        }
+        return line.contains("Option::<String>") || line.contains("Option<String>");
+    }
+    true
+}
+
+/// The identifier a `.set(` was called on: the trailing `[A-Za-z0-9_]` run of
+/// everything before it. `self.send_error` yields `send_error`, and
+/// `Err(e) => { mic_error` yields `mic_error` rather than the whole match arm.
+#[cfg(test)]
+fn receiver_ident(prefix: &str) -> &str {
+    let end = prefix.trim_end().len();
+    let start = prefix[..end]
+        .char_indices()
+        .rev()
+        .take_while(|(_, c)| c.is_alphanumeric() || *c == '_')
+        .last()
+        .map_or(end, |(i, _)| i);
+    &prefix[start..end]
+}
+
+/// `name` appears in `line` as a whole identifier, so `error` does not match
+/// inside `save_error` — which would otherwise hand one signal another's type.
+#[cfg(test)]
+fn mentions_token(line: &str, name: &str) -> bool {
+    let boundary = |c: Option<char>| c.is_none_or(|c| !c.is_alphanumeric() && c != '_');
+    line.match_indices(name).any(|(idx, _)| {
+        boundary(line[..idx].chars().next_back())
+            && boundary(line[idx + name.len()..].chars().next())
+    })
+}
+
+/// Paren delta of a line, ignoring whole-line comments.
+#[cfg(test)]
+fn paren_delta(line: &str) -> i32 {
+    let code = if line.trim_start().starts_with("//") {
+        ""
+    } else {
+        line
+    };
+    i32::try_from(code.matches('(').count()).unwrap_or(0)
+        - i32::try_from(code.matches(')').count()).unwrap_or(0)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -141,6 +357,216 @@ mod tests {
             labeled(ADMIN_REQUIRED_MESSAGE, "cannot enrol a node"),
             ADMIN_REQUIRED_MESSAGE,
             "the refusal must be explained, not echoed as a bare protocol string"
+        );
+    }
+
+    /// RED proof: `routing_rules.rs`'s Save handler, exactly as it stood before
+    /// this guard existed. This is the one that got reported; 166 others were
+    /// the same defect.
+    #[test]
+    fn the_scan_rejects_a_bare_save_handler() {
+        let before = r#"
+            match result {
+                Ok(()) => { error.set(None); }
+                Err(e) => {
+                    error.set(Some(format!("Failed to save: {e}")));
+                }
+            }
+        "#;
+        let found = unclassified_error_writes(before);
+        assert_eq!(found.len(), 1, "expected one finding, got {found:?}");
+    }
+
+    /// RED proof, second shape: the one-line `Err(e) => …` arm, which is how
+    /// `moa/mod.rs` and `providers/detail_panel.rs` write theirs.
+    #[test]
+    fn the_scan_rejects_a_single_line_error_arm() {
+        let before = r#"
+            Err(e) => error.set(Some(format!("Failed to delete preset: {e}"))),
+        "#;
+        assert_eq!(unclassified_error_writes(before).len(), 1);
+    }
+
+    /// RED proof, third shape — **the one a `Failed to` scanner misses**, and
+    /// the reason this guard matches the class instead of the idiom. There is
+    /// no frame at all here: the protocol string goes to the user as-is. This
+    /// is `runtimes.rs` and `settings/route.rs` as they stood.
+    #[test]
+    fn the_scan_rejects_an_unframed_error() {
+        let before = r#"
+            Err(e) => error_msg.set(Some(e)),
+        "#;
+        assert_eq!(
+            unclassified_error_writes(before).len(),
+            1,
+            "an error with no frame is the same defect with less evidence"
+        );
+    }
+
+    /// RED proof, fourth shape: a different verb. `Failed to` was never the
+    /// rule — carrying the error is.
+    #[test]
+    fn the_scan_rejects_a_differently_worded_frame() {
+        let before = r#"
+            save_error.set(Some(format!("Delete failed: {e}")));
+        "#;
+        assert_eq!(unclassified_error_writes(before).len(), 1);
+    }
+
+    /// …and goes quiet on the sanctioned form, whose `format!` is three lines
+    /// below the `admin_refusal` mention that licenses it. A line-local check
+    /// would report every fixed call site — which is how a guard gets deleted.
+    #[test]
+    fn the_scan_accepts_the_labeled_form() {
+        let after = r#"
+            error.set(Some(admin_refusal::settings_write_error(
+                i18n,
+                &e,
+                |e| format!("Failed to save: {e}"),
+            )));
+        "#;
+        assert!(
+            unclassified_error_writes(after).is_empty(),
+            "the fixed shape must not be reported"
+        );
+    }
+
+    /// Console logging is not a surface. Framing it for a human would be the
+    /// wrong fix, and reporting it would push callers into noise.
+    #[test]
+    fn the_scan_ignores_console_logging() {
+        let ok = r#"
+            web_sys::console::error_1(&format!("Failed to refresh: {e}").into());
+        "#;
+        assert!(unclassified_error_writes(ok).is_empty());
+    }
+
+    /// `Some(e)` is also how a Leptos handler stores its event. Without the
+    /// receiver filter this guard would report those, and a guard that cries
+    /// about non-errors is a guard someone deletes.
+    #[test]
+    fn the_scan_ignores_a_non_error_signal() {
+        let ok = r#"
+            on:click=move |e| { last_click.set(Some(e)); }
+            selected_row.set(Some(e));
+        "#;
+        assert!(unclassified_error_writes(ok).is_empty());
+    }
+
+    /// A signal holding a **typed** error is out of scope, and provably so: no
+    /// wrapper can go there, because it does not take a `String`. This is
+    /// `voice/mod.rs`'s `MicError` — local hardware state, never a verdict.
+    #[test]
+    fn the_scan_ignores_a_typed_error_signal() {
+        let ok = r#"
+            let mic_error = RwSignal::new(Option::<MicError>::None);
+            Err(e) => { mic_error.set(Some(e)); }
+        "#;
+        assert!(
+            unclassified_error_writes(ok).is_empty(),
+            "a typed error signal cannot hold the localized copy, so demanding it is a false alarm"
+        );
+    }
+
+    /// …and the same shape over a `String` signal in the same file IS reported.
+    /// Without this the exception above would be indistinguishable from the
+    /// scanner simply not working.
+    #[test]
+    fn the_type_exception_does_not_disarm_the_string_case() {
+        let before = r#"
+            let mic_error = RwSignal::new(Option::<MicError>::None);
+            let save_error = RwSignal::new(Option::<String>::None);
+            Err(e) => { save_error.set(Some(e)); }
+        "#;
+        assert_eq!(unclassified_error_writes(before).len(), 1);
+    }
+
+    /// The declaration lookup matches whole identifiers. `error` reading
+    /// `save_error`'s declaration would hand one signal the other's type — and
+    /// in a file that has both, that is a coin flip on whether the rule applies.
+    #[test]
+    fn a_declaration_lookup_does_not_match_a_longer_name() {
+        assert!(mentions_token("let error = RwSignal::new(x);", "error"));
+        assert!(!mentions_token(
+            "let save_error = RwSignal::new(x);",
+            "error"
+        ));
+    }
+
+    /// A receiver this file does not declare — a prop, a context — is reported,
+    /// not excused. The quiet direction is how a scanner stops enforcing.
+    #[test]
+    fn an_undeclared_receiver_is_reported() {
+        assert!(receiver_holds_a_string("no declaration here", "error"));
+    }
+
+    /// The receiver is the identifier, not the line before it. Taking the whole
+    /// prefix made every declaration lookup miss (it searched for
+    /// `Err(e) => { mic_error`), which silently turned the type exception off
+    /// and made the guard report a signal it cannot apply to.
+    #[test]
+    fn the_receiver_is_the_identifier_not_the_line() {
+        assert_eq!(
+            receiver_ident("            Err(e) => { mic_error"),
+            "mic_error"
+        );
+        assert_eq!(receiver_ident("        self.send_error"), "send_error");
+        assert_eq!(receiver_ident("    error_msg"), "error_msg");
+    }
+
+    /// Sanity: the walk reaches real source. Without this the assertion below
+    /// passes vacuously the day the crate layout moves or the manifest dir
+    /// changes — a guard that scans nothing is green forever.
+    #[test]
+    fn the_scan_reaches_the_source_tree() {
+        let files = scanned_sources();
+        assert!(
+            files.len() > 50,
+            "found {} sources — the walk is broken, not the code",
+            files.len()
+        );
+        let writes = files
+            .iter()
+            .filter_map(|p| std::fs::read_to_string(p).ok())
+            .filter(|src| src.contains(".set(Some("))
+            .count();
+        assert!(
+            writes > 20,
+            "only {writes} files contain a signal write — the walk is not \
+             reaching the views, so the rule below is not being enforced"
+        );
+    }
+
+    /// This crate's sources, minus this file. Its RED fixtures are by
+    /// construction the exact shape the rule forbids, so scanning it would make
+    /// the guard report itself and never go green.
+    fn scanned_sources() -> Vec<std::path::PathBuf> {
+        crate::disposed_reads::rust_sources(&crate::disposed_reads::src_dir())
+            .into_iter()
+            .filter(|p| p.file_name().is_some_and(|n| n != "admin_refusal.rs"))
+            .collect()
+    }
+
+    #[test]
+    fn no_error_signal_is_fed_an_unclassified_error() {
+        let mut offenders = Vec::new();
+        for path in scanned_sources() {
+            let Ok(src) = std::fs::read_to_string(&path) else {
+                continue;
+            };
+            for (line, text) in unclassified_error_writes(&src) {
+                offenders.push(format!("{}:{line}: {text}", path.display()));
+            }
+        }
+        assert!(
+            offenders.is_empty(),
+            "an error signal is handed a server error that nothing classified, so \
+             on any surface whose RPC family is gated in `method_admin.rs` a \
+             member reads the raw protocol string. Route it through \
+             `admin_refusal::settings_write_error` (or `settings_load_error` for \
+             a read) — on a surface that is never refused the wrapper is a no-op, \
+             which is why this rule has no allowlist:\n{}",
+            offenders.join("\n")
         );
     }
 }

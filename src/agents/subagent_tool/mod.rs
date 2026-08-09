@@ -175,11 +175,10 @@ impl SubagentTool {
             trace_sink: None,
             // W27 — the operator's `[execution] max_concurrent_subagents`,
             // falling back to `DEFAULT_MAX_CONCURRENT_SUBAGENTS` in any process
-            // that never installed one (CLI, tests). Per-instance semaphore, so
-            // the value binds per agent run.
-            subagent_semaphore: Arc::new(tokio::sync::Semaphore::new(
-                types::max_concurrent_subagents(),
-            )),
+            // that never installed one (CLI, tests). Private until a session is
+            // named: `with_parent_session_id` swaps in that session's shared
+            // semaphore, because background children outlive the run.
+            subagent_semaphore: types::subagent_semaphore_for(None),
             parent_cancel: None,
             plugin_registry: None,
             stall_config: None,
@@ -332,7 +331,14 @@ impl SubagentTool {
 
     /// Spec 1 G2 — set the parent session id stamped onto Delegation rows.
     pub fn with_parent_session_id(mut self, sid: impl Into<String>) -> Self {
-        self.parent_session_id = Some(sid.into());
+        let sid = sid.into();
+        // Re-bind the concurrency semaphore to the SESSION now that we know
+        // which one this is. `new()` cannot do it — the session is not known
+        // there — and the cap has to be shared across a session's runs because
+        // background children outlive the run that spawned them. See
+        // `types::subagent_semaphore_for`.
+        self.subagent_semaphore = types::subagent_semaphore_for(Some(&sid));
+        self.parent_session_id = Some(sid);
         self
     }
 

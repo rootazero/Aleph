@@ -174,7 +174,11 @@ fn HeartbeatView() -> impl IntoView {
                     loading.set(false);
                 }
                 Err(e) => {
-                    error.set(Some(format!("Failed to load tasks: {e}")));
+                    error.set(Some(crate::components::admin_refusal::settings_load_error(
+                        i18n,
+                        &e,
+                        |e| format!("Failed to load tasks: {e}"),
+                    )));
                     loading.set(false);
                 }
             }
@@ -508,7 +512,11 @@ fn HeartbeatEditor(
                         saving.set(false);
                     }
                     Err(e) => {
-                        error.set(Some(format!("Failed to create task: {e}")));
+                        error.set(Some(
+                            crate::components::admin_refusal::settings_write_error(i18n, &e, |e| {
+                                format!("Failed to create task: {e}")
+                            }),
+                        ));
                         saving.set(false);
                     }
                 }
@@ -535,7 +543,11 @@ fn HeartbeatEditor(
                         saving.set(false);
                     }
                     Err(e) => {
-                        error.set(Some(format!("Failed to update task: {e}")));
+                        error.set(Some(
+                            crate::components::admin_refusal::settings_write_error(i18n, &e, |e| {
+                                format!("Failed to update task: {e}")
+                            }),
+                        ));
                         saving.set(false);
                     }
                 }
@@ -568,7 +580,11 @@ fn HeartbeatEditor(
                     form_enabled.set(new_enabled);
                 }
                 Err(e) => {
-                    error.set(Some(format!("Failed to toggle task: {e}")));
+                    error.set(Some(
+                        crate::components::admin_refusal::settings_write_error(i18n, &e, |e| {
+                            format!("Failed to toggle task: {e}")
+                        }),
+                    ));
                 }
             }
         });
@@ -589,7 +605,11 @@ fn HeartbeatEditor(
         let task_id = task.id.clone();
         spawn_local(async move {
             if let Err(e) = HeartbeatApi::wake(&state, &task_id).await {
-                error.set(Some(format!("Failed to wake task: {e}")));
+                error.set(Some(
+                    crate::components::admin_refusal::settings_write_error(i18n, &e, |e| {
+                        format!("Failed to wake task: {e}")
+                    }),
+                ));
             }
         });
     };
@@ -624,7 +644,11 @@ fn HeartbeatEditor(
                     confirm_delete.set(false);
                 }
                 Err(e) => {
-                    error.set(Some(format!("Failed to delete task: {e}")));
+                    error.set(Some(
+                        crate::components::admin_refusal::settings_write_error(i18n, &e, |e| {
+                            format!("Failed to delete task: {e}")
+                        }),
+                    ));
                     confirm_delete.set(false);
                 }
             }
