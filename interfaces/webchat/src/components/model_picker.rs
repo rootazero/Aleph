@@ -53,7 +53,11 @@ pub fn ModelPicker() -> impl IntoView {
         spawn_local(async move {
             match ProvidersApi::catalog(&dashboard, CatalogView::Configured).await {
                 Ok(items) => entries.set(items),
-                Err(e) => load_error.set(Some(e)),
+                Err(e) => load_error.set(Some(
+                    crate::components::admin_refusal::settings_write_error(i18n, &e, |e| {
+                        e.to_string()
+                    }),
+                )),
             }
             loading.set(false);
         });

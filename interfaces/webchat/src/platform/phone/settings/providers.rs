@@ -53,6 +53,7 @@ fn config_with_key(info: &ProviderInfo, key: String) -> ProviderConfig {
 #[component]
 #[must_use]
 pub fn PhoneProviders() -> impl IntoView {
+    let i18n = crate::i18n::use_i18n();
     let state = expect_context::<DashboardState>();
 
     let providers = RwSignal::new(Vec::<ProviderInfo>::new());
@@ -77,7 +78,11 @@ pub fn PhoneProviders() -> impl IntoView {
                         providers.set(list);
                         error.set(None);
                     }
-                    Err(e) => error.set(Some(format!("加载失败: {e}"))),
+                    Err(e) => error.set(Some(
+                        crate::components::admin_refusal::settings_load_error(i18n, &e, |e| {
+                            format!("加载失败: {e}")
+                        }),
+                    )),
                 }
                 loading.set(false);
             });
@@ -223,7 +228,11 @@ pub fn PhoneProviders() -> impl IntoView {
                                                         error.set(None);
                                                         reload();
                                                     }
-                                                    Err(e) => error.set(Some(format!("设置默认失败: {e}"))),
+                                                    Err(e) => error.set(Some(crate::components::admin_refusal::settings_write_error(
+                                                        i18n,
+                                                        &e,
+                                                        |e| format!("设置默认失败: {e}"),
+                                                    ))),
                                                 }
                                                 default_saving.set(false);
                                             });
@@ -263,7 +272,11 @@ pub fn PhoneProviders() -> impl IntoView {
                                                             error.set(None);
                                                             reload();
                                                         }
-                                                        Err(e) => error.set(Some(format!("更新失败: {e}"))),
+                                                        Err(e) => error.set(Some(crate::components::admin_refusal::settings_write_error(
+                                                            i18n,
+                                                            &e,
+                                                            |e| format!("更新失败: {e}"),
+                                                        ))),
                                                     }
                                                 });
                                             }
@@ -302,7 +315,11 @@ pub fn PhoneProviders() -> impl IntoView {
                                                             error.set(None);
                                                             reload();
                                                         }
-                                                        Err(e) => error.set(Some(format!("保存失败: {e}"))),
+                                                        Err(e) => error.set(Some(crate::components::admin_refusal::settings_write_error(
+                                                            i18n,
+                                                            &e,
+                                                            |e| format!("保存失败: {e}"),
+                                                        ))),
                                                     }
                                                     key_saving.set(false);
                                                 });

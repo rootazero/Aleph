@@ -62,7 +62,11 @@ pub fn RouteView() -> impl IntoView {
                     loading.set(false);
                 }
                 Err(e) => {
-                    error.set(Some(e));
+                    error.set(Some(
+                        crate::components::admin_refusal::settings_write_error(i18n, &e, |e| {
+                            e.to_string()
+                        }),
+                    ));
                     loading.set(false);
                 }
             }
@@ -91,7 +95,11 @@ pub fn RouteView() -> impl IntoView {
                     saved.set(true);
                 }
                 Err(e) => {
-                    error.set(Some(e));
+                    error.set(Some(
+                        crate::components::admin_refusal::settings_write_error(i18n, &e, |e| {
+                            e.to_string()
+                        }),
+                    ));
                     saving.set(false);
                 }
             }

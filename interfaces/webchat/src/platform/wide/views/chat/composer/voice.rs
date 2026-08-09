@@ -84,6 +84,7 @@ fn transcribe_and_send(
     state: RwSignal<RecState>,
     error: RwSignal<Option<String>>,
 ) {
+    let i18n = crate::i18n::use_i18n();
     state.set(RecState::Transcribing);
     spawn_local(async move {
         let mut params = serde_json::json!({ "audio_base64": base64 });
@@ -155,10 +156,16 @@ fn transcribe_and_send(
                         // Speak this run's reply when it completes (events.rs).
                         chat.mark_speak_run(&resp.run_id);
                     }
-                    Err(e) => error.set(Some(e)),
+                    Err(e) => error.set(Some(
+                        crate::components::admin_refusal::settings_write_error(i18n, &e, |e| {
+                            e.to_string()
+                        }),
+                    )),
                 }
             }
-            Err(e) => error.set(Some(e)),
+            Err(e) => error.set(Some(
+                crate::components::admin_refusal::settings_write_error(i18n, &e, |e| e.to_string()),
+            )),
         }
         state.set(RecState::Idle);
     });
@@ -210,6 +217,7 @@ fn begin(
     state: RwSignal<RecState>,
     error: RwSignal<Option<String>>,
 ) {
+    let i18n = crate::i18n::use_i18n();
     error.set(None);
     // Leave Idle synchronously so a second click while the permission dialog is
     // up is ignored (see `RecState::Starting`) rather than firing a duplicate
@@ -230,7 +238,11 @@ fn begin(
                     browser_start(handle, dash, chat, sessions, state, error);
                 } else {
                     // A real failure (e.g. mic permission denied on macOS).
-                    error.set(Some(e));
+                    error.set(Some(
+                        crate::components::admin_refusal::settings_write_error(i18n, &e, |e| {
+                            e.to_string()
+                        }),
+                    ));
                     state.set(RecState::Idle);
                 }
             }
@@ -352,6 +364,7 @@ fn finish(
     state: RwSignal<RecState>,
     error: RwSignal<Option<String>>,
 ) {
+    let i18n = crate::i18n::use_i18n();
     let native = handle.borrow().native;
     if native {
         state.set(RecState::Transcribing);
@@ -380,7 +393,11 @@ fn finish(
                     transcribe_and_send(dash, chat, sessions, base64, mime, state, error);
                 }
                 Err(e) => {
-                    error.set(Some(e));
+                    error.set(Some(
+                        crate::components::admin_refusal::settings_write_error(i18n, &e, |e| {
+                            e.to_string()
+                        }),
+                    ));
                     state.set(RecState::Idle);
                 }
             }

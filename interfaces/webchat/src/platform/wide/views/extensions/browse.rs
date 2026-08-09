@@ -31,7 +31,11 @@ pub(crate) fn load_catalog(
             }
             Err(e) => {
                 let prefix = t_string!(i18n, extensions.error.catalog_load).to_string();
-                store.error.set(Some(format!("{prefix}: {e}")));
+                store.error.set(Some(
+                    crate::components::admin_refusal::settings_write_error(i18n, &e, |e| {
+                        format!("{prefix}: {e}")
+                    }),
+                ));
                 if !quiet {
                     store.loading.set(false);
                 }

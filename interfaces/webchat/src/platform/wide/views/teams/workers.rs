@@ -32,7 +32,11 @@ pub fn WorkersView() -> impl IntoView {
                     error.set(None);
                 }
                 Err(e) => {
-                    error.set(Some(e));
+                    error.set(Some(crate::components::admin_refusal::settings_load_error(
+                        i18n,
+                        &e,
+                        |e| e.to_string(),
+                    )));
                 }
             }
             loading.set(false);
@@ -144,7 +148,11 @@ fn SessionCard(snapshot: AcpSessionSnapshot) -> impl IntoView {
         spawn_local(async move {
             match AcpApi::cancel_session(&dash, &h, &c, n.as_deref()).await {
                 Ok(()) => {}
-                Err(e) => action_error.set(Some(e)),
+                Err(e) => action_error.set(Some(
+                    crate::components::admin_refusal::settings_write_error(i18n, &e, |e| {
+                        e.to_string()
+                    }),
+                )),
             }
             busy.set(false);
         });
@@ -161,7 +169,11 @@ fn SessionCard(snapshot: AcpSessionSnapshot) -> impl IntoView {
         spawn_local(async move {
             match AcpApi::shutdown_session(&dash, &h, &c, n.as_deref()).await {
                 Ok(()) => {}
-                Err(e) => action_error.set(Some(e)),
+                Err(e) => action_error.set(Some(
+                    crate::components::admin_refusal::settings_write_error(i18n, &e, |e| {
+                        e.to_string()
+                    }),
+                )),
             }
             busy.set(false);
         });

@@ -57,7 +57,11 @@ pub fn KanbanView() -> impl IntoView {
         spawn_local(async move {
             match apply_move(&dash, &task_id, mv).await {
                 Ok(()) => refresh(),
-                Err(e) => move_error.set(Some(e)),
+                Err(e) => move_error.set(Some(
+                    crate::components::admin_refusal::settings_write_error(i18n, &e, |e| {
+                        e.to_string()
+                    }),
+                )),
             }
         });
     };

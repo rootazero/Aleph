@@ -155,7 +155,11 @@ pub fn ChannelPlatformPage(platform_type: String) -> impl IntoView {
                     refresh_trigger.update(|n| *n += 1);
                 }
                 Err(e) => {
-                    new_error.set(Some(format!("Failed to create: {e}")));
+                    new_error.set(Some(
+                        crate::components::admin_refusal::settings_write_error(i18n, &e, |e| {
+                            format!("Failed to create: {e}")
+                        }),
+                    ));
                 }
             }
             creating.set(false);

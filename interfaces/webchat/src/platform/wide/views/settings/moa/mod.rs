@@ -53,7 +53,11 @@ pub fn MoaView() -> impl IntoView {
         spawn_local(async move {
             match MoaApi::list_presets(&state).await {
                 Ok(cfg) => config.set(cfg),
-                Err(e) => error.set(Some(format!("Failed to reload MoA config: {e}"))),
+                Err(e) => error.set(Some(crate::components::admin_refusal::settings_load_error(
+                    i18n,
+                    &e,
+                    |e| format!("Failed to reload MoA config: {e}"),
+                ))),
             }
         });
     };
@@ -112,7 +116,11 @@ pub fn MoaView() -> impl IntoView {
         spawn_local(async move {
             match MoaApi::set_save_traces(&state, next).await {
                 Ok(()) => config.update(|c| c.save_traces = next),
-                Err(e) => error.set(Some(format!("Failed to update save_traces: {e}"))),
+                Err(e) => error.set(Some(
+                    crate::components::admin_refusal::settings_write_error(i18n, &e, |e| {
+                        format!("Failed to update save_traces: {e}")
+                    }),
+                )),
             }
         });
     };
@@ -121,7 +129,11 @@ pub fn MoaView() -> impl IntoView {
         spawn_local(async move {
             match MoaApi::set_default(&state, &name).await {
                 Ok(()) => reload(),
-                Err(e) => error.set(Some(format!("Failed to set default preset: {e}"))),
+                Err(e) => error.set(Some(
+                    crate::components::admin_refusal::settings_write_error(i18n, &e, |e| {
+                        format!("Failed to set default preset: {e}")
+                    }),
+                )),
             }
         });
     };
@@ -130,7 +142,11 @@ pub fn MoaView() -> impl IntoView {
         spawn_local(async move {
             match MoaApi::delete_preset(&state, &name).await {
                 Ok(()) => reload(),
-                Err(e) => error.set(Some(format!("Failed to delete preset: {e}"))),
+                Err(e) => error.set(Some(
+                    crate::components::admin_refusal::settings_write_error(i18n, &e, |e| {
+                        format!("Failed to delete preset: {e}")
+                    }),
+                )),
             }
         });
     };

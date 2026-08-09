@@ -52,7 +52,11 @@ pub fn Logs() -> impl IntoView {
                     logs_data.set(Some(response));
                 }
                 Err(e) => {
-                    error_msg.set(Some(e));
+                    error_msg.set(Some(crate::components::admin_refusal::settings_load_error(
+                        i18n,
+                        &e,
+                        |e| e.to_string(),
+                    )));
                 }
             }
             is_loading.set(false);

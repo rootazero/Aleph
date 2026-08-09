@@ -1464,6 +1464,7 @@
     },
     "admin_refusal": {
       "read_config": "该设置页需要 operator 权限,当前连接的角色无法读取服务器全局配置。",
+      "write_config": "该改动需要 operator 权限,当前连接的角色无法修改服务器全局设置。",
       "read_setup_state": "需要 operator 权限,当前连接无法读取该项配置,状态未知。",
       "read_tiers": "需要 operator 权限,当前连接无法读取可选的执行档位。",
       "read_modes": "需要 operator 权限,当前连接无法读取可选的会话模式。",

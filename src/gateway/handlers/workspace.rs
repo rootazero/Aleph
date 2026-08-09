@@ -865,6 +865,76 @@ mod tests {
     /// Same boundary as [`handle_list`]: this does NOT claim ordinary
     /// workspaces are isolated. The last block proves the opposite on
     /// purpose, so nobody reads this test as more than it is.
+    /// One `workspace.create` reaches the wire as TWO frames: `Created`, then
+    /// `Updated`.
+    ///
+    /// [`handle_create`] is two store writes — the INSERT, then the name/icon
+    /// write `AgentEnvStore::create` cannot take — and the frames are published
+    /// by the store, so the count follows the writes rather than the verb. Real
+    /// machine, 2026-08-09: a second Panel answered a single create with two
+    /// byte-identical `workspace.list` calls in the same millisecond.
+    ///
+    /// Pinned rather than fixed. Re-fetching is idempotent, so the cost is one
+    /// redundant list call per listener, while coalescing would teach the store
+    /// how many writes its callers make — the coupling that emitting from the
+    /// store instead of the handlers exists to avoid. What this test protects
+    /// is the *documentation*: `ChangeKind::Created` reads like a promise of
+    /// one frame, and a consumer that renders `change` (a toast) needs to know
+    /// it will be told "created" and then immediately "updated" for a single
+    /// user action. If a later change makes create a single write, this goes
+    /// red — and the frame's doc has to be corrected in the same commit.
+    #[tokio::test]
+    async fn create_reaches_the_wire_as_created_then_updated() {
+        use crate::gateway::event_bus::GatewayEventBus;
+        use crate::gateway::events::{ChangeKind, GatewayEventFrame};
+
+        let temp = tempfile::tempdir().unwrap();
+        let bus = Arc::new(GatewayEventBus::new());
+        let mut rx = bus.subscribe_typed();
+        let store = Arc::new(
+            AgentEnvStore::new(crate::gateway::agent_env::AgentEnvStoreConfig {
+                db_path: temp.path().join("agent_envs.db"),
+                default_profile: "default".to_string(),
+            })
+            .expect("agent env store")
+            .with_event_bus(Arc::clone(&bus)),
+        );
+        store.load_profiles(std::collections::HashMap::from([(
+            "default".to_string(),
+            crate::config::ProfileConfig::default(),
+        )]));
+
+        let created = handle_create(
+            JsonRpcRequest::with_id(
+                "workspace.create",
+                Some(json!({ "id": "crypto", "name": "Crypto" })),
+                json!(1),
+            ),
+            store.clone(),
+        )
+        .await;
+        assert!(created.error.is_none(), "create must succeed: {created:?}");
+
+        let mut seen = Vec::new();
+        while let Ok(frame) = rx.try_recv() {
+            if let GatewayEventFrame::WorkspaceChanged {
+                workspace_id,
+                change,
+            } = frame
+            {
+                seen.push((workspace_id, change));
+            }
+        }
+        assert_eq!(
+            seen,
+            vec![
+                ("crypto".to_string(), ChangeKind::Created),
+                ("crypto".to_string(), ChangeKind::Updated),
+            ],
+            "the second write is the name/icon one; see GatewayEventFrame::WorkspaceChanged"
+        );
+    }
+
     #[tokio::test]
     async fn the_workspace_writes_deny_a_foreign_partition_composed_id() {
         use crate::gateway::caller_identity::CALLER_USER;

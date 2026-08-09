@@ -413,6 +413,13 @@ pub fn session_identity_of(topic: &str, data: Option<&Value>) -> SessionIdentity
         | "team.changed"
         | "surface.notify" => SessionIdentity::Global,
 
+        // The `workspace.` RPC family is admin-gated in `method_admin.rs` so a
+        // member cannot enumerate workspaces; broadcasting the ids on the event
+        // plane would hand back exactly what that gate withholds. `OperatorOnly`
+        // in its documented sense and not as a shortcut: a workspace has no
+        // owner column by decision, so there is no ownership to resolve.
+        "workspace.changed" => SessionIdentity::OperatorOnly,
+
         // Unrecognized topic: fail open at classification (see doc above).
         _ => SessionIdentity::Global,
     }
@@ -1955,6 +1962,10 @@ mod tests {
                 GatewayEventFrame::SessionLifecycleChanged { session_key, .. } => {
                     SessionIdentity::BySessionKey(session_key.clone())
                 }
+                // Admin-gated family: the ids are what `method_admin.rs`
+                // withholds from a member, so the event plane must not
+                // volunteer them. See the frame's own doc.
+                GatewayEventFrame::WorkspaceChanged { .. } => SessionIdentity::OperatorOnly,
                 GatewayEventFrame::AcpSessionsChanged
                 | GatewayEventFrame::TokenRotated
                 | GatewayEventFrame::DeviceRevoked { .. }
@@ -2156,6 +2167,10 @@ mod tests {
             },
             GatewayEventFrame::TeamChanged {
                 team_id: "t1".into(),
+                change: ChangeKind::Updated,
+            },
+            GatewayEventFrame::WorkspaceChanged {
+                workspace_id: "crypto".into(),
                 change: ChangeKind::Updated,
             },
             GatewayEventFrame::SurfaceNotify {

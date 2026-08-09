@@ -112,7 +112,11 @@ pub fn TaskDetailDrawer(
                     comment_busy.set(false);
                 }
                 Err(e) => {
-                    error.set(Some(e));
+                    error.set(Some(
+                        crate::components::admin_refusal::settings_write_error(i18n, &e, |e| {
+                            e.to_string()
+                        }),
+                    ));
                     comment_busy.set(false);
                 }
             }
@@ -144,7 +148,11 @@ pub fn TaskDetailDrawer(
                 Err(e) => {
                     // Keep the drawer open so the user sees what failed.
                     busy.set(false);
-                    error.set(Some(e));
+                    error.set(Some(
+                        crate::components::admin_refusal::settings_write_error(i18n, &e, |e| {
+                            e.to_string()
+                        }),
+                    ));
                 }
             }
         });
@@ -176,7 +184,11 @@ pub fn TaskDetailDrawer(
                 }
                 Err(e) => {
                     busy.set(false);
-                    error.set(Some(e));
+                    error.set(Some(
+                        crate::components::admin_refusal::settings_write_error(i18n, &e, |e| {
+                            e.to_string()
+                        }),
+                    ));
                 }
             }
         });

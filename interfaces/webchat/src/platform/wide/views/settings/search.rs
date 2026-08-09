@@ -678,7 +678,11 @@ fn ProviderDetailPanel(
                 }
                 Err(e) => {
                     test_success.set(Some(false));
-                    error.set(Some(format!("Test failed: {e}")));
+                    error.set(Some(
+                        crate::components::admin_refusal::settings_write_error(i18n, &e, |e| {
+                            format!("Test failed: {e}")
+                        }),
+                    ));
                     set_timeout(
                         move || test_success.set(None),
                         std::time::Duration::from_secs(3),
@@ -722,7 +726,11 @@ fn ProviderDetailPanel(
                     );
                 }
                 Err(e) => {
-                    error.set(Some(format!("Failed to save: {e}")));
+                    error.set(Some(
+                        crate::components::admin_refusal::settings_write_error(i18n, &e, |e| {
+                            format!("Failed to save: {e}")
+                        }),
+                    ));
                 }
             }
             saving.set(false);
@@ -759,7 +767,11 @@ fn ProviderDetailPanel(
                     );
                 }
                 Err(e) => {
-                    error.set(Some(format!("Failed to save: {e}")));
+                    error.set(Some(
+                        crate::components::admin_refusal::settings_write_error(i18n, &e, |e| {
+                            format!("Failed to save: {e}")
+                        }),
+                    ));
                 }
             }
             saving.set(false);
@@ -785,7 +797,11 @@ fn ProviderDetailPanel(
                     selected.set(None);
                 }
                 Err(e) => {
-                    error.set(Some(format!("Delete failed: {e}")));
+                    error.set(Some(crate::components::admin_refusal::settings_load_error(
+                        i18n,
+                        &e,
+                        |e| format!("Delete failed: {e}"),
+                    )));
                 }
             }
             deleting.set(false);
@@ -1239,7 +1255,11 @@ fn AddCustomSearchProviderPanel(
                     on_added();
                 }
                 Err(e) => {
-                    error.set(Some(format!("Failed to add provider: {e}")));
+                    error.set(Some(
+                        crate::components::admin_refusal::settings_write_error(i18n, &e, |e| {
+                            format!("Failed to add provider: {e}")
+                        }),
+                    ));
                 }
             }
             saving.set(false);
@@ -1340,6 +1360,7 @@ fn AddCustomSearchProviderPanel(
 /// search master-detail). Manages its own FetchConfig signal and form state.
 #[component]
 fn FetchProvidersSection() -> impl IntoView {
+    let i18n = use_i18n();
     let state = expect_context::<DashboardState>();
 
     let fetch_config = RwSignal::new(FetchConfig {
@@ -1495,7 +1516,11 @@ fn FetchProvidersSection() -> impl IntoView {
                     );
                 }
                 Err(e) => {
-                    save_error.set(Some(format!("Failed to save: {e}")));
+                    save_error.set(Some(
+                        crate::components::admin_refusal::settings_write_error(i18n, &e, |e| {
+                            format!("Failed to save: {e}")
+                        }),
+                    ));
                 }
             }
             saving.set(false);
@@ -1552,7 +1577,12 @@ fn FetchProvidersSection() -> impl IntoView {
                     );
                 }
                 Err(e) => {
-                    test_result.set(Some((false, format!("Test failed: {e}"))));
+                    test_result.set(Some((
+                        false,
+                        crate::components::admin_refusal::settings_write_error(i18n, &e, |e| {
+                            format!("Test failed: {e}")
+                        }),
+                    )));
                     set_timeout(
                         move || test_result.set(None),
                         std::time::Duration::from_secs(5),
@@ -1601,7 +1631,12 @@ fn FetchProvidersSection() -> impl IntoView {
                     );
                 }
                 Err(e) => {
-                    fc_test_result.set(Some((false, format!("Test failed: {e}"))));
+                    fc_test_result.set(Some((
+                        false,
+                        crate::components::admin_refusal::settings_write_error(i18n, &e, |e| {
+                            format!("Test failed: {e}")
+                        }),
+                    )));
                     set_timeout(
                         move || fc_test_result.set(None),
                         std::time::Duration::from_secs(5),

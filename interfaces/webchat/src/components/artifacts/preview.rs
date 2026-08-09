@@ -137,7 +137,11 @@ pub(super) fn Preview(target: RwSignal<Option<PreviewTarget>>) -> impl IntoView 
         spawn_local(async move {
             match ArtifactsApi::read_text(&dash, &key, &id).await {
                 Ok(preview) => text.set(Some(preview)),
-                Err(e) => text_error.set(Some(e)),
+                Err(e) => text_error.set(Some(
+                    crate::components::admin_refusal::settings_load_error(i18n, &e, |e| {
+                        e.to_string()
+                    }),
+                )),
             }
         });
     });

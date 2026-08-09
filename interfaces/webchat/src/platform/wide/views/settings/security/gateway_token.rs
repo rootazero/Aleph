@@ -156,7 +156,11 @@ pub fn GatewayTokenSection() -> impl IntoView {
                 .await
             {
                 Ok(_) => devices_error.set(None),
-                Err(e) => devices_error.set(Some(e)),
+                Err(e) => devices_error.set(Some(
+                    crate::components::admin_refusal::settings_write_error(i18n, &e, |e| {
+                        e.to_string()
+                    }),
+                )),
             }
             devices_reload.update(|n| *n += 1);
         });
@@ -198,7 +202,11 @@ pub fn GatewayTokenSection() -> impl IntoView {
                     devices.set(parsed);
                     devices_error.set(None);
                 }
-                Err(e) => devices_error.set(Some(e)),
+                Err(e) => devices_error.set(Some(
+                    crate::components::admin_refusal::settings_write_error(i18n, &e, |e| {
+                        e.to_string()
+                    }),
+                )),
             }
         });
     });
@@ -220,7 +228,11 @@ pub fn GatewayTokenSection() -> impl IntoView {
                     );
                     error.set(None);
                 }
-                Err(e) => error.set(Some(e)),
+                Err(e) => error.set(Some(
+                    crate::components::admin_refusal::settings_write_error(i18n, &e, |e| {
+                        e.to_string()
+                    }),
+                )),
             }
         });
     });
@@ -243,7 +255,11 @@ pub fn GatewayTokenSection() -> impl IntoView {
                     pairing_expires_at.set(None);
                     devices_reload.update(|n| *n += 1);
                 }
-                Err(e) => error.set(Some(e)),
+                Err(e) => error.set(Some(
+                    crate::components::admin_refusal::settings_write_error(i18n, &e, |e| {
+                        e.to_string()
+                    }),
+                )),
             }
         });
     };
@@ -284,7 +300,11 @@ pub fn GatewayTokenSection() -> impl IntoView {
                     ));
                     pairing_error.set(None);
                 }
-                Err(e) => pairing_error.set(Some(e)),
+                Err(e) => pairing_error.set(Some(
+                    crate::components::admin_refusal::settings_write_error(i18n, &e, |e| {
+                        e.to_string()
+                    }),
+                )),
             }
         });
     };

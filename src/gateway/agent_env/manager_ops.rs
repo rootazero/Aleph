@@ -77,6 +77,12 @@ impl AgentEnvStore {
 
         info!("Created agent env '{}' with profile '{}'", id, profile);
 
+        // After the guard, not under it: this is a broadcast nudge with no part
+        // in any authorization decision, so there is nothing for the DB lock to
+        // order it against.
+        drop(conn);
+        self.emit_change(id, crate::gateway::events::ChangeKind::Created);
+
         Ok(env)
     }
 
@@ -239,6 +245,7 @@ impl AgentEnvStore {
         }
 
         debug!("Updated agent env '{}' metadata", id);
+        self.emit_change(id, crate::gateway::events::ChangeKind::Updated);
         self.get(id).await
     }
 
@@ -303,6 +310,11 @@ impl AgentEnvStore {
 
         if affected > 0 {
             info!("Archived agent env '{}'", id);
+            // `Updated`, not `Deleted` — see the frame's doc. Archiving is
+            // reversible and keeps the id taken; what left is the row's place
+            // in the default list, which a re-fetch is what reveals.
+            drop(conn);
+            self.emit_change(id, crate::gateway::events::ChangeKind::Updated);
         }
 
         Ok(affected > 0)
@@ -375,6 +387,7 @@ impl AgentEnvStore {
         }
 
         info!("Unarchived agent env '{}'", id);
+        self.emit_change(id, crate::gateway::events::ChangeKind::Updated);
         self.get(id).await
     }
 

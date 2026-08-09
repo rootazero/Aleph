@@ -140,7 +140,11 @@ pub(super) fn PresetSetupPanel(
                     }
                     Err(e) => {
                         set_adding.set(false);
-                        set_error.set(Some(format!("Failed: {e}")));
+                        set_error.set(Some(
+                            crate::components::admin_refusal::settings_write_error(i18n, &e, |e| {
+                                format!("Failed: {e}")
+                            }),
+                        ));
                     }
                 }
             });

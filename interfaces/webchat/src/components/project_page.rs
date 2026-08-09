@@ -122,6 +122,7 @@ fn EmptyState() -> impl IntoView {
 /// is scoped to exactly one project's lifetime.
 #[component]
 fn ProjectRoomPage(project_id: String) -> impl IntoView {
+    let i18n = crate::i18n::use_i18n();
     let dash = expect_context::<DashboardState>();
     let project: RwSignal<Option<ProjectInfo>> = RwSignal::new(None);
     let load_error: RwSignal<Option<String>> = RwSignal::new(None);
@@ -150,7 +151,11 @@ fn ProjectRoomPage(project_id: String) -> impl IntoView {
                         project.set(Some(p));
                         load_error.set(None);
                     }
-                    Err(e) => load_error.set(Some(e)),
+                    Err(e) => load_error.set(Some(
+                        crate::components::admin_refusal::settings_load_error(i18n, &e, |e| {
+                            e.to_string()
+                        }),
+                    )),
                 }
             });
         })

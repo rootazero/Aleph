@@ -80,7 +80,11 @@ pub fn PhoneChatHistory() -> impl IntoView {
                     loading.set(false);
                 }
                 Err(e) => {
-                    load_error.set(Some(e));
+                    load_error.set(Some(
+                        crate::components::admin_refusal::settings_write_error(i18n, &e, |e| {
+                            e.to_string()
+                        }),
+                    ));
                     loading.set(false);
                 }
             }

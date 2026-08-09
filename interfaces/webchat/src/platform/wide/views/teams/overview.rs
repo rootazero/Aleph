@@ -46,7 +46,11 @@ pub fn OverviewView() -> impl IntoView {
             error_msg.set(None);
             match TeamsApi::list(&state).await {
                 Ok(list) => teams.set(list),
-                Err(e) => error_msg.set(Some(e)),
+                Err(e) => error_msg.set(Some(
+                    crate::components::admin_refusal::settings_load_error(i18n, &e, |e| {
+                        e.to_string()
+                    }),
+                )),
             }
             is_loading.set(false);
         });
@@ -120,7 +124,11 @@ pub fn OverviewView() -> impl IntoView {
         spawn_local(async move {
             if let Err(e) = TeamsApi::disband(&state, &team_id).await {
                 web_sys::console::error_1(&format!("Disband failed: {e}").into());
-                error_msg.set(Some(format!("解散失败: {e}")));
+                error_msg.set(Some(
+                    crate::components::admin_refusal::settings_write_error(i18n, &e, |e| {
+                        format!("解散失败: {e}")
+                    }),
+                ));
                 return;
             }
             error_msg.set(None);
@@ -134,7 +142,11 @@ pub fn OverviewView() -> impl IntoView {
             is_loading.set(true);
             match TeamsApi::list(&state).await {
                 Ok(list) => teams.set(list),
-                Err(e) => error_msg.set(Some(e)),
+                Err(e) => error_msg.set(Some(
+                    crate::components::admin_refusal::settings_load_error(i18n, &e, |e| {
+                        e.to_string()
+                    }),
+                )),
             }
             is_loading.set(false);
         });
@@ -146,7 +158,11 @@ pub fn OverviewView() -> impl IntoView {
         spawn_local(async move {
             if let Err(e) = TeamsApi::delete(&state, &team_id).await {
                 web_sys::console::error_1(&format!("Delete failed: {e}").into());
-                error_msg.set(Some(format!("删除失败: {e}")));
+                error_msg.set(Some(
+                    crate::components::admin_refusal::settings_write_error(i18n, &e, |e| {
+                        format!("删除失败: {e}")
+                    }),
+                ));
                 return;
             }
             error_msg.set(None);
@@ -158,7 +174,11 @@ pub fn OverviewView() -> impl IntoView {
             is_loading.set(true);
             match TeamsApi::list(&state).await {
                 Ok(list) => teams.set(list),
-                Err(e) => error_msg.set(Some(e)),
+                Err(e) => error_msg.set(Some(
+                    crate::components::admin_refusal::settings_load_error(i18n, &e, |e| {
+                        e.to_string()
+                    }),
+                )),
             }
             is_loading.set(false);
         });
@@ -181,7 +201,11 @@ pub fn OverviewView() -> impl IntoView {
                     }
                     templates.set(list);
                 }
-                Err(e) => ft_error.set(Some(e)),
+                Err(e) => ft_error.set(Some(
+                    crate::components::admin_refusal::settings_write_error(i18n, &e, |e| {
+                        e.to_string()
+                    }),
+                )),
             }
             templates_loading.set(false);
         });
@@ -226,11 +250,19 @@ pub fn OverviewView() -> impl IntoView {
                     error_msg.set(None);
                     match TeamsApi::list(&state).await {
                         Ok(list) => teams.set(list),
-                        Err(e) => error_msg.set(Some(e)),
+                        Err(e) => error_msg.set(Some(
+                            crate::components::admin_refusal::settings_load_error(i18n, &e, |e| {
+                                e.to_string()
+                            }),
+                        )),
                     }
                     is_loading.set(false);
                 }
-                Err(e) => ft_error.set(Some(e)),
+                Err(e) => ft_error.set(Some(
+                    crate::components::admin_refusal::settings_load_error(i18n, &e, |e| {
+                        e.to_string()
+                    }),
+                )),
             }
         });
     };

@@ -28,6 +28,7 @@ struct TimelineRow {
 #[component]
 #[must_use]
 pub fn ReplayView() -> impl IntoView {
+    let i18n = crate::i18n::use_i18n();
     let dash = expect_context::<DashboardState>();
     let state = expect_context::<TeamsTabState>();
 
@@ -60,7 +61,11 @@ pub fn ReplayView() -> impl IntoView {
         spawn_local(async move {
             match TeamsApi::task_trace(&dash, &task_id).await {
                 Ok(v) => trace.set(Some(v)),
-                Err(e) => error.set(Some(e)),
+                Err(e) => error.set(Some(
+                    crate::components::admin_refusal::settings_write_error(i18n, &e, |e| {
+                        e.to_string()
+                    }),
+                )),
             }
             loading_trace.set(false);
         });

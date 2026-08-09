@@ -34,7 +34,11 @@ fn load_installed(
             }
             Err(e) => {
                 let prefix = t_string!(i18n, extensions.error.installed_load).to_string();
-                error.set(Some(format!("{prefix}: {e}")));
+                error.set(Some(
+                    crate::components::admin_refusal::settings_write_error(i18n, &e, |e| {
+                        format!("{prefix}: {e}")
+                    }),
+                ));
                 loading.set(false);
             }
         }
@@ -146,7 +150,11 @@ fn InstalledRow(
                 Ok(()) => toggling.set(false),
                 Err(e) => {
                     let prefix = t_string!(i18n, extensions.error.toggle_failed).to_string();
-                    error.set(Some(format!("{prefix}: {e}")));
+                    error.set(Some(
+                        crate::components::admin_refusal::settings_write_error(i18n, &e, |e| {
+                            format!("{prefix}: {e}")
+                        }),
+                    ));
                     enabled.set(!new_val);
                     toggling.set(false);
                 }
@@ -161,7 +169,11 @@ fn InstalledRow(
                 Ok(()) => load_installed(state, items, loading, error, i18n),
                 Err(e) => {
                     let prefix = t_string!(i18n, extensions.error.remove_failed).to_string();
-                    error.set(Some(format!("{prefix}: {e}")));
+                    error.set(Some(crate::components::admin_refusal::settings_load_error(
+                        i18n,
+                        &e,
+                        |e| format!("{prefix}: {e}"),
+                    )));
                     confirming.set(false);
                 }
             }

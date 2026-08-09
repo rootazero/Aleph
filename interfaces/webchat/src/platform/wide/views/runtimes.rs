@@ -28,7 +28,11 @@ pub fn RuntimesView() -> impl IntoView {
                     runtimes.set(r.runtimes);
                     error_msg.set(None);
                 }
-                Err(e) => error_msg.set(Some(e)),
+                Err(e) => error_msg.set(Some(
+                    crate::components::admin_refusal::settings_load_error(i18n, &e, |e| {
+                        e.to_string()
+                    }),
+                )),
             }
             loading.set(false);
         });
@@ -88,7 +92,11 @@ pub fn RuntimesView() -> impl IntoView {
                         runtimes.set(r.runtimes);
                         error_msg.set(None);
                     }
-                    Err(e) => error_msg.set(Some(e)),
+                    Err(e) => error_msg.set(Some(
+                        crate::components::admin_refusal::settings_write_error(i18n, &e, |e| {
+                            e.to_string()
+                        }),
+                    )),
                 }
                 loading.set(false);
             });
@@ -184,9 +192,17 @@ fn RuntimeCard(
                 match RuntimesApi::install(&state, &n).await {
                     Ok(_) => match RuntimesApi::list(&state).await {
                         Ok(r) => runtimes.set(r.runtimes),
-                        Err(e) => error_msg.set(Some(e)),
+                        Err(e) => error_msg.set(Some(
+                            crate::components::admin_refusal::settings_load_error(i18n, &e, |e| {
+                                e.to_string()
+                            }),
+                        )),
                     },
-                    Err(e) => error_msg.set(Some(e)),
+                    Err(e) => error_msg.set(Some(
+                        crate::components::admin_refusal::settings_load_error(i18n, &e, |e| {
+                            e.to_string()
+                        }),
+                    )),
                 }
                 installing.set(false);
             });

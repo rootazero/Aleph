@@ -80,7 +80,11 @@ pub fn KanbanCreateForm(
                 }
                 Err(e) => {
                     busy.set(false);
-                    error.set(Some(e));
+                    error.set(Some(
+                        crate::components::admin_refusal::settings_write_error(i18n, &e, |e| {
+                            e.to_string()
+                        }),
+                    ));
                 }
             }
         });

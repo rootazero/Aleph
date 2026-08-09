@@ -49,6 +49,7 @@ pub struct PhoneMemoryState {
 #[component]
 #[must_use]
 pub fn PhoneMemory() -> impl IntoView {
+    let i18n = crate::i18n::use_i18n();
     let dashboard = expect_context::<DashboardState>();
     let mem = expect_context::<MemoryState>();
 
@@ -95,7 +96,14 @@ pub fn PhoneMemory() -> impl IntoView {
                 st.error.set(None);
                 match MemoryApi::list_facts(&dashboard, &agent, NOTE_WINDOW, 0).await {
                     Ok((facts, _total)) => st.window.set(facts),
-                    Err(e) => st.error.set(Some(e)),
+                    Err(e) => {
+                        st.error
+                            .set(Some(crate::components::admin_refusal::settings_load_error(
+                                i18n,
+                                &e,
+                                |e| e.to_string(),
+                            )))
+                    }
                 }
                 st.loaded.set(true);
                 st.page.set(0);

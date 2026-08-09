@@ -20,6 +20,7 @@ use super::PhoneMemoryState;
 #[component]
 #[must_use]
 pub fn PhoneMemoryDetail() -> impl IntoView {
+    let i18n = crate::i18n::use_i18n();
     let dashboard = expect_context::<DashboardState>();
     let mem = expect_context::<MemoryState>();
     let st = expect_context::<PhoneMemoryState>();
@@ -62,7 +63,11 @@ pub fn PhoneMemoryDetail() -> impl IntoView {
                     body.set(Some(d.content));
                     backlinks.set(d.backlinks);
                 }
-                Err(e) => error.set(Some(e)),
+                Err(e) => error.set(Some(
+                    crate::components::admin_refusal::settings_write_error(i18n, &e, |e| {
+                        e.to_string()
+                    }),
+                )),
             }
         });
     });

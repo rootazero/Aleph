@@ -471,6 +471,10 @@ pub struct AgentEnvStore {
     pub(super) conn: Arc<Mutex<Connection>>,
     /// In-memory profile cache (loaded from config)
     pub(super) profiles: Arc<Mutex<HashMap<String, ProfileConfig>>>,
+    /// Attached by [`Self::with_event_bus`] at startup so mutations announce
+    /// themselves. `None` in tests and in any tool that opens the store without
+    /// a running gateway — the store must stay usable without a bus.
+    pub(super) event_bus: Option<Arc<crate::gateway::event_bus::GatewayEventBus>>,
 }
 
 impl AgentEnvStore {
@@ -494,12 +498,51 @@ impl AgentEnvStore {
             config,
             conn: Arc::new(Mutex::new(conn)),
             profiles: Arc::new(Mutex::new(HashMap::new())),
+            event_bus: None,
         })
     }
 
     /// Create with default configuration
     pub fn with_defaults() -> Result<Self, AgentEnvError> {
         Self::new(AgentEnvStoreConfig::default())
+    }
+
+    /// Attach an event bus so subsequent mutations emit
+    /// [`GatewayEventFrame::WorkspaceChanged`].
+    ///
+    /// Builder-style, mirroring `CronStore::with_event_bus`, and applied at the
+    /// single production construction site (`start/mod.rs`) before the store is
+    /// wrapped in an `Arc`. Emitting here rather than from the four RPC handlers
+    /// is what makes the CLI's writes — which reach the same handlers over IPC —
+    /// and any future in-process mutator announce themselves too.
+    ///
+    /// [`GatewayEventFrame::WorkspaceChanged`]:
+    ///     crate::gateway::events::GatewayEventFrame::WorkspaceChanged
+    #[must_use]
+    pub fn with_event_bus(mut self, bus: Arc<crate::gateway::event_bus::GatewayEventBus>) -> Self {
+        self.event_bus = Some(bus);
+        self
+    }
+
+    /// Publish a `WorkspaceChanged` frame if a bus is attached.
+    ///
+    /// Failures are debug-level: this is a refresh nudge, and a client that
+    /// misses one is stale until its next fetch, not wrong.
+    pub(super) fn emit_change(
+        &self,
+        workspace_id: &str,
+        change: crate::gateway::events::ChangeKind,
+    ) {
+        let Some(bus) = &self.event_bus else {
+            return;
+        };
+        let frame = crate::gateway::events::GatewayEventFrame::WorkspaceChanged {
+            workspace_id: workspace_id.to_string(),
+            change,
+        };
+        if let Err(e) = bus.publish_frame(&frame) {
+            debug!(error = %e, "workspace: failed to publish WorkspaceChanged frame");
+        }
     }
 
     /// Initialize database schema
@@ -1141,5 +1184,81 @@ mod tests {
     fn test_agent_env_context_custom() {
         let ctx = AgentEnvContext::new("crypto", NamespaceScope::Owner);
         assert_eq!(ctx.agent_id(), "crypto");
+    }
+
+    // -----------------------------------------------------------------------
+    // WorkspaceChanged emission
+    // -----------------------------------------------------------------------
+
+    /// Every mutating verb announces itself on the bus.
+    ///
+    /// Asserts the frames **arrive**, not that `emit_change` was called: a
+    /// subscriber is what a second Panel actually is, and a test that only
+    /// proved the call happened would stay green if the frame were published
+    /// onto a channel nobody reads.
+    ///
+    /// It is one test over all four verbs on purpose. Four tests, each opening
+    /// its own store, could not have caught the thing most likely to go wrong
+    /// here — a verb that emits nothing — because a missing emission is only
+    /// visible as a gap in a sequence.
+    #[tokio::test]
+    async fn every_mutating_verb_publishes_a_workspace_changed_frame() {
+        use crate::gateway::event_bus::GatewayEventBus;
+        use crate::gateway::events::{ChangeKind, GatewayEventFrame};
+
+        let temp = tempdir().unwrap();
+        let bus = Arc::new(GatewayEventBus::new());
+        let mut rx = bus.subscribe_typed();
+
+        let store = AgentEnvStore::new(test_config(temp.path().join("agent_envs.db")))
+            .expect("agent env store")
+            .with_event_bus(Arc::clone(&bus));
+        store.load_profiles(HashMap::new());
+
+        store.create("crypto", "default", None).await.unwrap();
+        store
+            .update("crypto", Some("Crypto"), None, None)
+            .await
+            .unwrap();
+        assert!(store.archive("crypto").await.unwrap());
+        assert!(store.unarchive("crypto").await.unwrap().is_some());
+
+        let mut seen = Vec::new();
+        while let Ok(frame) = rx.try_recv() {
+            if let GatewayEventFrame::WorkspaceChanged {
+                workspace_id,
+                change,
+            } = frame
+            {
+                seen.push((workspace_id, change));
+            }
+        }
+
+        assert_eq!(
+            seen,
+            vec![
+                ("crypto".to_string(), ChangeKind::Created),
+                ("crypto".to_string(), ChangeKind::Updated),
+                // Archive is `Updated`, not `Deleted` — reversible, and the id
+                // stays taken. See the frame's doc.
+                ("crypto".to_string(), ChangeKind::Updated),
+                ("crypto".to_string(), ChangeKind::Updated),
+            ],
+            "one frame per mutating verb, in order"
+        );
+    }
+
+    /// …and a store with no bus attached still works. Tests and any tool that
+    /// opens the store without a running gateway take this path, so an emit
+    /// that assumed a bus would turn every one of them into a panic.
+    #[tokio::test]
+    async fn a_store_without_a_bus_still_mutates() {
+        let temp = tempdir().unwrap();
+        let store =
+            AgentEnvStore::new(test_config(temp.path().join("agent_envs.db"))).expect("store");
+        store.load_profiles(HashMap::new());
+
+        store.create("crypto", "default", None).await.unwrap();
+        assert!(store.archive("crypto").await.unwrap());
     }
 }

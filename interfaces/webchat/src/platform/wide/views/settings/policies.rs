@@ -124,7 +124,11 @@ pub fn PoliciesView() -> impl IntoView {
                     modes.set(resp.modes);
                     mode_applied.set(true);
                 }
-                Err(e) => mode_error.set(Some(format!("Failed to apply mode: {e}"))),
+                Err(e) => mode_error.set(Some(
+                    crate::components::admin_refusal::settings_write_error(i18n, &e, |e| {
+                        format!("Failed to apply mode: {e}")
+                    }),
+                )),
             }
             mode_saving.set(false);
         });
@@ -177,7 +181,11 @@ pub fn PoliciesView() -> impl IntoView {
                     ));
                 }
                 Err(e) => {
-                    tp_error.set(Some(format!("Failed to save: {e}")));
+                    tp_error.set(Some(
+                        crate::components::admin_refusal::settings_write_error(i18n, &e, |e| {
+                            format!("Failed to save: {e}")
+                        }),
+                    ));
                 }
             }
             tp_saving.set(false);
@@ -204,7 +212,11 @@ pub fn PoliciesView() -> impl IntoView {
                     tier_confirm.set(None);
                     tier_applied.set(true);
                 }
-                Err(e) => tier_error.set(Some(format!("Failed to apply tier: {e}"))),
+                Err(e) => tier_error.set(Some(
+                    crate::components::admin_refusal::settings_write_error(i18n, &e, |e| {
+                        format!("Failed to apply tier: {e}")
+                    }),
+                )),
             }
             tier_saving.set(false);
         });

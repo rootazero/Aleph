@@ -71,7 +71,11 @@ pub fn ExecutionView() -> impl IntoView {
                     loading.set(false);
                 }
                 Err(e) => {
-                    error.set(Some(e));
+                    error.set(Some(crate::components::admin_refusal::settings_load_error(
+                        i18n,
+                        &e,
+                        |e| e.to_string(),
+                    )));
                     loading.set(false);
                 }
             }
@@ -87,7 +91,11 @@ pub fn ExecutionView() -> impl IntoView {
             match ExecutionConfigApi::update(&state, &c).await {
                 Ok(()) => saving.set(false),
                 Err(e) => {
-                    error.set(Some(e));
+                    error.set(Some(crate::components::admin_refusal::settings_load_error(
+                        i18n,
+                        &e,
+                        |e| e.to_string(),
+                    )));
                     saving.set(false);
                 }
             }

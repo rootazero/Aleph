@@ -42,6 +42,7 @@ pub struct PhoneAgentsState {
 #[component]
 #[must_use]
 pub fn PhoneAgents() -> impl IntoView {
+    let i18n = crate::i18n::use_i18n();
     let dashboard = expect_context::<DashboardState>();
 
     let st = PhoneAgentsState {
@@ -70,7 +71,11 @@ pub fn PhoneAgents() -> impl IntoView {
                             st.bindings.set(map);
                         }
                     }
-                    Err(e) => st.error.set(Some(e)),
+                    Err(e) => st.error.set(Some(
+                        crate::components::admin_refusal::settings_write_error(i18n, &e, |e| {
+                            e.to_string()
+                        }),
+                    )),
                 }
                 st.loaded.set(true);
             });

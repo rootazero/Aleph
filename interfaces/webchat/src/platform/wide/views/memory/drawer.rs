@@ -139,7 +139,11 @@ fn NoteDetail(
                         body.set(Some(d.content));
                         backlinks.set(d.backlinks);
                     }
-                    Err(e) => error.set(Some(e)),
+                    Err(e) => error.set(Some(
+                        crate::components::admin_refusal::settings_write_error(i18n, &e, |e| {
+                            e.to_string()
+                        }),
+                    )),
                 }
             });
         });
@@ -174,7 +178,11 @@ fn NoteDetail(
                     }
                     Err(e) => {
                         is_saving.set(false);
-                        error.set(Some(e));
+                        error.set(Some(
+                            crate::components::admin_refusal::settings_write_error(i18n, &e, |e| {
+                                e.to_string()
+                            }),
+                        ));
                     }
                 }
             });
@@ -217,7 +225,11 @@ fn NoteDetail(
                     }
                     Err(e) => {
                         is_saving.set(false);
-                        error.set(Some(e));
+                        error.set(Some(
+                            crate::components::admin_refusal::settings_write_error(i18n, &e, |e| {
+                                e.to_string()
+                            }),
+                        ));
                     }
                 }
             });
@@ -254,7 +266,11 @@ fn NoteDetail(
                     Err(e) => {
                         is_saving.set(false);
                         confirm_delete.set(false);
-                        error.set(Some(e));
+                        error.set(Some(
+                            crate::components::admin_refusal::settings_write_error(i18n, &e, |e| {
+                                e.to_string()
+                            }),
+                        ));
                     }
                 }
             });

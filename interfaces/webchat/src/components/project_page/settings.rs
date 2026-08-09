@@ -35,6 +35,7 @@ type OnDone = Callback<Result<(), String>>;
 #[component]
 #[must_use]
 pub fn SettingsTab(project: ProjectInfo, refresh: Callback<()>) -> impl IntoView {
+    let i18n = crate::i18n::use_i18n();
     let dash = expect_context::<DashboardState>();
     let dir = expect_context::<UserDirectoryState>();
     let tab_state = expect_context::<ProjectsTabState>();
@@ -54,7 +55,9 @@ pub fn SettingsTab(project: ProjectInfo, refresh: Callback<()>) -> impl IntoView
             error.set(None);
             refresh.run(());
         }
-        Err(e) => error.set(Some(e)),
+        Err(e) => error.set(Some(
+            crate::components::admin_refusal::settings_write_error(i18n, &e, |e| e.to_string()),
+        )),
     });
     // Archiving is the one mutation that leaves the room, not just changes
     // it (spec §6.4: "archive returns to the project list") — clearing the
@@ -64,7 +67,9 @@ pub fn SettingsTab(project: ProjectInfo, refresh: Callback<()>) -> impl IntoView
     // keep rendering the now-archived room in place.
     let on_archived: OnDone = Callback::new(move |result: Result<(), String>| match result {
         Ok(()) => tab_state.selected_project_id.set(None),
-        Err(e) => error.set(Some(e)),
+        Err(e) => error.set(Some(
+            crate::components::admin_refusal::settings_write_error(i18n, &e, |e| e.to_string()),
+        )),
     });
 
     view! {

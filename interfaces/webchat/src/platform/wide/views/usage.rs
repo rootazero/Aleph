@@ -106,7 +106,11 @@ pub fn UsageView() -> impl IntoView {
                 }
                 Err(e) => {
                     team_usage.set(None);
-                    usage_error.set(Some(e));
+                    usage_error.set(Some(
+                        crate::components::admin_refusal::settings_write_error(i18n, &e, |e| {
+                            e.to_string()
+                        }),
+                    ));
                 }
             }
         });

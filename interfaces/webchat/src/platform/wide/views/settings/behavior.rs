@@ -133,7 +133,11 @@ fn OutputModeSection(config: RwSignal<BehaviorConfig>) -> impl IntoView {
                 }
                 Err(e) => {
                     saving.set(false);
-                    save_error.set(Some(e));
+                    save_error.set(Some(
+                        crate::components::admin_refusal::settings_write_error(i18n, &e, |e| {
+                            e.to_string()
+                        }),
+                    ));
                 }
             }
         });
@@ -248,7 +252,11 @@ fn TypingSpeedSection(config: RwSignal<BehaviorConfig>) -> impl IntoView {
                 }
                 Err(e) => {
                     saving.set(false);
-                    save_error.set(Some(e));
+                    save_error.set(Some(
+                        crate::components::admin_refusal::settings_write_error(i18n, &e, |e| {
+                            e.to_string()
+                        }),
+                    ));
                 }
             }
         });

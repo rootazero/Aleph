@@ -292,7 +292,11 @@ pub(super) fn JobEditor(
                         selected.set(None);
                     }
                     Err(e) => {
-                        error.set(Some(format!("Failed to create job: {e}")));
+                        error.set(Some(
+                            crate::components::admin_refusal::settings_write_error(i18n, &e, |e| {
+                                format!("Failed to create job: {e}")
+                            }),
+                        ));
                     }
                 }
                 saving.set(false);
@@ -322,7 +326,13 @@ pub(super) fn JobEditor(
                             selected.set(None);
                         }
                         Err(e) => {
-                            error.set(Some(format!("Failed to update job: {e}")));
+                            error.set(Some(
+                                crate::components::admin_refusal::settings_write_error(
+                                    i18n,
+                                    &e,
+                                    |e| format!("Failed to update job: {e}"),
+                                ),
+                            ));
                         }
                     }
                     saving.set(false);
@@ -369,7 +379,13 @@ pub(super) fn JobEditor(
                             selected.set(None);
                         }
                         Err(e) => {
-                            error.set(Some(format!("Failed to delete job: {e}")));
+                            error.set(Some(
+                                crate::components::admin_refusal::settings_write_error(
+                                    i18n,
+                                    &e,
+                                    |e| format!("Failed to delete job: {e}"),
+                                ),
+                            ));
                         }
                     }
                     saving.set(false);
@@ -405,7 +421,13 @@ pub(super) fn JobEditor(
                             success_for_spawn.set(None);
                         }
                         Err(e) => {
-                            error_for_spawn.set(Some(format!("Failed to trigger run: {e}")));
+                            error_for_spawn.set(Some(
+                                crate::components::admin_refusal::settings_write_error(
+                                    i18n,
+                                    &e,
+                                    |e| format!("Failed to trigger run: {e}"),
+                                ),
+                            ));
                         }
                     }
                 });

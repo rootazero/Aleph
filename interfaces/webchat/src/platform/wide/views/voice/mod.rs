@@ -318,6 +318,8 @@ fn VoiceSession() -> impl IntoView {
             let session = match MicSession::open().await {
                 Ok(s) => s,
                 Err(e) => {
+                    // NOT routed through `admin_refusal`: a `MicError` is local
+                    // hardware/permission state, never a gateway verdict.
                     mic_error.set(Some(e));
                     return;
                 }

@@ -64,7 +64,11 @@ pub fn EmbeddingProvidersView() -> impl IntoView {
                         set_is_loading.set(false);
                     }
                     (Err(e), _) | (_, Err(e)) => {
-                        set_error_message.set(Some(format!("Failed to load: {e}")));
+                        set_error_message.set(Some(
+                            crate::components::admin_refusal::settings_load_error(i18n, &e, |e| {
+                                format!("Failed to load: {e}")
+                            }),
+                        ));
                         set_is_loading.set(false);
                     }
                 }

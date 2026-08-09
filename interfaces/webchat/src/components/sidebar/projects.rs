@@ -19,6 +19,7 @@ use crate::context::DashboardState;
 #[component]
 #[must_use]
 pub fn ProjectsSidebar() -> impl IntoView {
+    let i18n = crate::i18n::use_i18n();
     let dash = expect_context::<DashboardState>();
     let tab_state = expect_context::<ProjectsTabState>();
 
@@ -37,7 +38,11 @@ pub fn ProjectsSidebar() -> impl IntoView {
                     projects.set(list);
                     error.set(None);
                 }
-                Err(e) => error.set(Some(e)),
+                Err(e) => error.set(Some(crate::components::admin_refusal::settings_load_error(
+                    i18n,
+                    &e,
+                    |e| e.to_string(),
+                ))),
             }
         });
     };
@@ -63,7 +68,11 @@ pub fn ProjectsSidebar() -> impl IntoView {
                     tab_state.selected_project_id.set(Some(project.id));
                     refresh();
                 }
-                Err(e) => error.set(Some(e)),
+                Err(e) => error.set(Some(
+                    crate::components::admin_refusal::settings_write_error(i18n, &e, |e| {
+                        e.to_string()
+                    }),
+                )),
             }
         });
     };

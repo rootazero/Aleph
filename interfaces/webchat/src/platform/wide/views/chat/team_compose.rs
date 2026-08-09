@@ -155,10 +155,11 @@ pub fn TeamCompose(#[prop(into)] on_close: Callback<()>) -> impl IntoView {
                     on_close.run(());
                 }
                 Err(e) => {
-                    error.set(Some(format!(
-                        "{}{e}",
-                        t_string!(i18n, chat.team_create_failed)
-                    )));
+                    error.set(Some(
+                        crate::components::admin_refusal::settings_write_error(i18n, &e, |e| {
+                            format!("{}{e}", t_string!(i18n, chat.team_create_failed))
+                        }),
+                    ));
                     web_sys::console::error_1(&format!("teams.create failed: {e}").into());
                 }
             }

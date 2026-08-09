@@ -829,7 +829,12 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
         use alephcore::gateway::AgentEnvStore;
         match AgentEnvStore::with_defaults() {
             Ok(wm) => {
-                let wm = Arc::new(wm);
+                // The store, not the four RPC handlers, is what announces a
+                // workspace mutation — so the CLI's writes (same handlers, over
+                // IPC) and any future in-process mutator emit it too. This is
+                // the only production construction site; the rest are tests,
+                // which deliberately run without a bus.
+                let wm = Arc::new(wm.with_event_bus(event_bus.clone()));
                 // Feed config.toml's [profiles.*] into the store. Without this
                 // every get_profile() falls back to ProfileConfig::default(),
                 // silently discarding model/tool/smart_recall profile settings.

@@ -143,7 +143,11 @@ pub fn AgentsSidebar() -> impl IntoView {
                                             reload();
                                         }
                                         Err(e) => {
-                                            create_error.set(Some(e));
+                                            create_error.set(Some(crate::components::admin_refusal::settings_write_error(
+                                                i18n,
+                                                &e,
+                                                |e| e.to_string(),
+                                            )));
                                         }
                                     }
                                 });

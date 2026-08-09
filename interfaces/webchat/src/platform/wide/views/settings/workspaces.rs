@@ -106,6 +106,40 @@ pub fn WorkspacesView() -> impl IntoView {
         });
     };
 
+    // Live push: a workspace mutated anywhere else — a second Panel, the CLI
+    // over IPC — refreshes this roster. Without it the only thing that reloaded
+    // the list was this page's own actions, so two operators (or one across two
+    // windows) each saw a list that was correct when they last touched it.
+    //
+    // Subscribed per-mount rather than added to `BASE_TOPICS`: the ledger in
+    // `context.rs` replays it across reconnects, and a topic only this page
+    // consumes has no business on every socket.
+    //
+    // Tracks `is_connected` for the reason the loader above spells out: a bare
+    // `spawn_local` on mount races a socket that is usually still connecting,
+    // gets "Not connected", and never retries — and a subscription that failed
+    // is silent forever, because the page keeps working and merely stops
+    // hearing about anyone else's edits.
+    Effect::new(move |_| {
+        if !state.is_connected.get() {
+            return;
+        }
+        let dash = state;
+        spawn_local(async move {
+            let _ = dash.subscribe_topic("workspace.changed").await;
+        });
+    });
+    let sub_id = state.subscribe_events(move |evt| {
+        if evt.topic == "workspace.changed" {
+            // Only `rows` is rewritten. Unlike the routing-rules list — whose
+            // server indices shift under an open editor — a workspace is
+            // addressed by id, so a refresh cannot retarget whatever `pane` has
+            // open.
+            reload();
+        }
+    });
+    on_cleanup(move || state.unsubscribe_events(sub_id));
+
     view! {
         <div class="flex flex-col h-full">
             <div class="p-6 border-b border-border aleph-content-top">

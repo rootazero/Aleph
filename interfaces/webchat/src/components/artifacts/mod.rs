@@ -214,7 +214,11 @@ pub fn ArtifactsSurface() -> impl IntoView {
                 Ok(rows) => settle(rows),
                 // A session that has never stored anything is an empty list,
                 // not an error — so anything that lands here is worth showing.
-                Err(e) => error.set(Some(e)),
+                Err(e) => error.set(Some(crate::components::admin_refusal::settings_load_error(
+                    i18n,
+                    &e,
+                    |e| e.to_string(),
+                ))),
             }
         });
     };
@@ -281,7 +285,11 @@ pub fn ArtifactsSurface() -> impl IntoView {
                         offer(PendingOpen::export(&res.url));
                     }
                 }
-                Err(e) => error.set(Some(e)),
+                Err(e) => error.set(Some(crate::components::admin_refusal::settings_load_error(
+                    i18n,
+                    &e,
+                    |e| e.to_string(),
+                ))),
             }
             exporting.set(false);
         });
