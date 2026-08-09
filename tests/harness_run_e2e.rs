@@ -141,6 +141,11 @@ fn make_harness(session: Arc<dyn SessionService>) -> AgentHarness {
         system_prompt: None,
         system_prompt_parts: None,
         recall_context: None,
+        // `HarnessDeps.chain_context` was removed when the harness ratchet
+        // turned back (see `src/harness/CLAUDE.md`); the module still exists,
+        // the field does not. This initializer kept referencing it because
+        // neither `cargo check` nor `cargo test --lib` compiles `tests/*` —
+        // CLAUDE.md §10 blind spot, found by running the five-command set.
         guardrails: None,
         max_iterations: None,
         power: None,

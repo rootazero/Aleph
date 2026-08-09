@@ -287,10 +287,9 @@ pub(super) async fn run_namespace_cycle(
             ..Default::default()
         },
         pipeline_type: strategy.to_string(),
-        // rust-doctor-disable-next-line excessive-clone
-        activity_checker: deps.activity_checker.clone(),
         strategy,
         // rust-doctor-disable-next-line excessive-clone
+        activity_checker: deps.activity_checker.clone(),
         orientation: deps.orientation.clone(),
         evolution_budget: EditBudget::default(),
     };

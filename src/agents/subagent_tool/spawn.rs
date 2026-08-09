@@ -16,6 +16,62 @@ use crate::agents::subagent_tree_events::{emit_tree_event, now_ms};
 use crate::agents::AgentDef;
 use aleph_protocol::subagent_tree::{NodeLifecycle, SubagentNode, SubagentTreeEvent};
 
+/// The three task-locals a subagent must carry across a `tokio::spawn`, and
+/// the one way to carry them.
+///
+/// `tokio::task_local!` does not cross a spawn boundary — a child task reads
+/// `None`, never the parent's value. The three here decide, between them, which
+/// memory partition a child reads and writes, which project its file tools see,
+/// and which agent identity its notes are filed under. Losing them is silent:
+/// the child runs, answers, and files everything into the unscoped base
+/// namespace.
+///
+/// This exists as one type because the shape had already been written once,
+/// correctly, in `spawn_background` — and the batch legs of `subagent_loop`,
+/// added later in the same crate, re-seeded **none of the three**. Two copies
+/// of a three-line ritual is how the second variant loses it; `gateway/CLAUDE.md`
+/// 地雷 C even names "another subagent variant" as the thing to watch for. A
+/// third variant now inherits the fix instead of the ritual.
+#[derive(Clone)]
+pub(super) struct CarriedAttribution {
+    scope: Option<crate::scope::ScopeAttribution>,
+    project_root: Option<std::path::PathBuf>,
+    agent_id: Option<String>,
+}
+
+impl CarriedAttribution {
+    /// Read the three task-locals. **Must be called BEFORE `tokio::spawn`** —
+    /// inside the spawned future they are already gone.
+    pub(super) fn capture() -> Self {
+        Self {
+            scope: crate::scope::current_scope(),
+            project_root: crate::projects::current_project_root(),
+            agent_id: crate::agents::current_agent_id(),
+        }
+    }
+
+    /// Re-establish all three around `fut`, inside the spawned task.
+    ///
+    /// Boxed: `AgentRuntime::run`'s state machine is already large, and nesting
+    /// three task-local combinators around it inline overflowed the
+    /// debug-build test-thread stack. The `Box::pin` stays exactly where it was
+    /// when that was discovered — it is load-bearing, not tidiness.
+    pub(super) async fn reestablish<F, T>(self, fut: F) -> T
+    where
+        F: std::future::Future<Output = T> + Send + 'static,
+        T: Send + 'static,
+    {
+        crate::agents::with_agent_id(
+            self.agent_id,
+            crate::projects::with_project_root(
+                self.project_root,
+                crate::scope::with_scope(self.scope, Box::pin(fut)),
+            ),
+        )
+        .await
+    }
+}
+
 impl SubagentTool {
     /// A3 — a fresh child token derived from the parent run's token (cancelled
     /// when the parent is). Falls back to a standalone token for tests / direct
@@ -168,6 +224,9 @@ impl SubagentTool {
 
         let tracker = self.background_tracker.clone();
         let rid = request_id.clone();
+        // Separate clone: `rid` is consumed by the delegation-ctx capture below,
+        // and this one has to survive into the `AgentRuntimeConfig` literal.
+        let rid_for_child = request_id.clone();
         // Phase 1 — Settled emit captures (moved into the run task).
         let root_session_for_done = root_session;
         let tree_agent_id_for_done = tree_agent_id;
@@ -180,9 +239,7 @@ impl SubagentTool {
         // regardless of the parent run's project or owner. Mirrors
         // `run_loop`'s `with_request_scope` / `orchestrator::dispatch`'s
         // re-establishment at their own spawn boundaries.
-        let captured_scope = crate::scope::current_scope();
-        let captured_root = crate::projects::current_project_root();
-        let captured_agent = crate::agents::current_agent_id();
+        let carried = CarriedAttribution::capture();
         tokio::spawn(async move {
             let _cancel_guard = CancelGuard::new(bridge_cancel.clone());
             let runtime_config = AgentRuntimeConfig {
@@ -191,27 +248,21 @@ impl SubagentTool {
                 context_summary,
                 model,
                 timeout_secs,
+                // The one path where the id outlives the call: `request_id` is
+                // the only handle the model gets back, and the tracker holding
+                // it is process-memory. Threading it here makes it the child's
+                // ephemeral session id, so the durable `SubagentSpawned` /
+                // `SubagentReturned` pair in the parent log stays addressable
+                // by that same id after a restart (see `subagent_tool::recovery`).
+                request_id: Some(rid_for_child),
             };
-            // Boxed: `AgentRuntime::run`'s state machine is already large, and
-            // nesting three more task-local combinators directly around it
-            // inline overflowed the (debug-build) test-thread stack. Boxing
-            // moves that state machine to the heap so the wrappers above hold
-            // a pointer-sized `Pin<Box<_>>` instead of embedding it.
-            let result = crate::agents::with_agent_id(
-                captured_agent,
-                crate::projects::with_project_root(
-                    captured_root,
-                    crate::scope::with_scope(
-                        captured_scope,
-                        Box::pin(async move {
-                            AssertUnwindSafe(runtime.run(runtime_config))
-                                .catch_unwind()
-                                .await
-                        }),
-                    ),
-                ),
-            )
-            .await;
+            let result = carried
+                .reestablish(async move {
+                    AssertUnwindSafe(runtime.run(runtime_config))
+                        .catch_unwind()
+                        .await
+                })
+                .await;
             let outcome = match result {
                 Ok(Ok(r)) => {
                     let mut final_text = r.final_text.unwrap_or_else(|| "(no output)".to_string());

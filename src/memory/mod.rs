@@ -15,7 +15,6 @@
 
 // Public submodules
 pub mod assembler;
-pub mod cli;
 pub mod compression;
 pub mod content_scanner;
 pub mod context;
@@ -58,29 +57,19 @@ mod loom_concurrency;
 mod proptest_enums;
 
 // Re-export commonly used types
-pub use cli::{LockError, LockMode, MemoryLock};
 pub use compression::{
     CompressionScheduler, CompressionService, CompressionTrigger, SchedulerConfig,
 };
 pub use context::{
-    compute_parent_path, CognitiveLayer, CompressionResult, CompressionSession, ContextAnchor,
-    FactSource, FactSpecificity, FactStats, MemoryCategory, MemoryEntry, MemoryFact, MemoryLayer,
-    NoteType, TemporalScope, PRESET_PATHS,
+    compute_parent_path, CognitiveLayer, CompressionResult, FactSource, FactSpecificity,
+    MemoryCategory, MemoryFact, MemoryLayer, NoteType, TemporalScope,
 };
-pub use context_comptroller::{
-    ArbitratedContext, ComptrollerConfig, ContextComptroller, RetentionMode, TokenBudget,
-};
-pub use dreaming::{
-    ensure_dream_daemon, ensure_dream_daemon_with_orientation, record_activity, DailyInsight,
-    DreamStatus,
-};
+pub use context_comptroller::{ArbitratedContext, ComptrollerConfig, ContextComptroller, TokenBudget};
+pub use dreaming::{ensure_dream_daemon, ensure_dream_daemon_with_orientation, DailyInsight, DreamStatus};
 pub use embedding_manager::EmbeddingManager;
 pub use embedding_provider::{
     create_provider as create_embedding_provider, truncate_and_normalize, EmbeddingProvider,
     RemoteEmbeddingProvider,
-};
-pub use embedding_resolver::{
-    resolve as resolve_embedding, EmbeddingDecision, EmbeddingLocality, ResolutionReason,
 };
 pub use events::{
     commands::{
@@ -101,9 +90,7 @@ pub use scratchpad::{
     PlanItem, PlanItemStatus, ScratchpadConfig, ScratchpadManager, ScratchpadSnapshot,
 };
 pub use streaming_scrubber::{StreamingContextScrubber, DEFAULT_CLOSE_TAG, DEFAULT_OPEN_TAG};
-pub use transcript_indexer::{
-    SemanticChunkConfig, SemanticChunker, TranscriptIndexer, TranscriptIndexerConfig,
-};
+pub use transcript_indexer::{TranscriptIndexer, TranscriptIndexerConfig};
 // SQLite store types (Phase 3)
 pub use store::sqlite::SqliteMemoryBackend;
 pub use store::types::ScoredFact;

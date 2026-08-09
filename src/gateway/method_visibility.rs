@@ -167,8 +167,18 @@
 //!   configured) is NOT covered — `AgentRunManager` has no `SessionStore`
 //!   dependency, and this table must not overstate what's actually enforced.
 //! - `chat.abort`, `chat.history`, `chat.clear`, `chat.rewind` →
-//!   `KeyChecked`, same pattern (`chat.abort`'s `session_key` is optional;
-//!   absent it does nothing session-scoped, present it is checked).
+//!   `KeyChecked`, same pattern. `chat.abort` is the one with two addressed
+//!   identifiers: its `session_key` is optional and checked when present, and
+//!   its **`run_id` is now checked unconditionally**. This entry used to read
+//!   "absent it does nothing session-scoped" — false, and the falsehood was
+//!   load-bearing: omitting the optional key skipped the whole guard block and
+//!   fell through to `cancel_run(&params.run_id)`, which is process-global.
+//! - `agent.status`, `agent.cancel` → **KeyChecked** via
+//!   `handlers::agent::caller_may_address_run`, the run-id twin of
+//!   `session_visible`. Registered late (2026-08-08): `agent.run` and
+//!   `agent.resume` were registered in the P1 sweep and these two were not,
+//!   because that sweep enumerated by PARAMETER SHAPE and these take a
+//!   `run_id`. Enumerate by REACHABILITY.
 //! - `sessions.new` (`handle_new_session_db`) → KeyChecked on the addressed
 //!   (closing) session, before continuation termination or `close_session`.
 //! - `sessions.patch` (`handle_patch_db`) → KeyChecked before any field
@@ -215,6 +225,14 @@
 //! `SessionKey`. `agent.run` is exactly that shape, and it is `chat.send`
 //! with the guard missing:
 //!
+//! - `agent.resume` → **KeyChecked**. Same shape as `agent.run`, and the same
+//!   reason: it names a session and acts on it. `handlers::resume` resolves the
+//!   metadata and runs `visibility::session_visible` before the coordinator is
+//!   consulted at all, so an invisible session cannot be probed for existence —
+//!   it gets the byte-identical `not_found` a missing session gets. Note the
+//!   verb re-triggers a run under the *session's* persisted owner/scope
+//!   (`resume_metadata`), never the caller's, so a visible-session check is the
+//!   whole authorization question here.
 //! - `agent.run` → **KeyChecked**. The real-`ExecutionEngine` production path
 //!   (`server_init.rs::handle_run_with_engine`) now runs session resolution
 //!   through `visibility::existing_session_is_visible` immediately after
@@ -539,6 +557,23 @@ pub const SCOPED_METHODS: &[(&str, Treatment)] = &[
     ("graph.delete_note", Treatment::PartitionChecked),
     // --- Final-review fix round ---
     ("agent.run", Treatment::KeyChecked),
+    // --- Round 2 (2026-08-08): the run-id addressing shape ---
+    // The P1 sweep enumerated by parameter shape and therefore could not see
+    // these two: they take a `run_id`, not a `session_key`. `agent.cancel`
+    // reaches two process-global structures (the execution adapter's token
+    // registry and every busy-queue lane); `agent.status` returns the
+    // addressed run's `session_key`. Both resolve run → session → the one
+    // predicate via `handlers::agent::caller_may_address_run`.
+    ("agent.status", Treatment::KeyChecked),
+    ("agent.cancel", Treatment::KeyChecked),
+    // The approval gate's two faces, member-reachable since 2026-08-08 and
+    // filtered by `visibility::session_visible` on each record's own
+    // `session_key`. A record with an EMPTY key is a fleet approval (raised by
+    // a cluster node over reverse RPC, owned by no session) and stays
+    // operator-only — the delivery-side twin of that rule is
+    // `SessionIdentity::OperatorOnly`.
+    ("exec.approvals.pending", Treatment::ListFiltered),
+    ("exec.approval.resolve", Treatment::KeyChecked),
     ("trace.by_runs", Treatment::KeyChecked),
     ("group_chat.list", Treatment::ListFiltered),
     ("group_chat.continue", Treatment::KeyChecked),
@@ -610,6 +645,8 @@ pub const SCOPED_METHODS: &[(&str, Treatment)] = &[
     ("projects.member.remove", Treatment::KeyChecked),
     ("projects.member.list", Treatment::KeyChecked),
     ("projects.room_session", Treatment::KeyChecked),
+    // --- on-demand resume ---
+    ("agent.resume", Treatment::KeyChecked),
 ];
 
 /// Whole families ruled [`Treatment::OrgShared`], as prefixes.

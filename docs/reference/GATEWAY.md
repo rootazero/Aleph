@@ -103,6 +103,84 @@ The Gateway is Aleph's control plane, providing:
 | `agent.status` | Get run status | `run_id` |
 | `agent.cancel` | Cancel running agent | `run_id` |
 | `agent.abort` | Force abort | `run_id` |
+| `agent.resume` | Re-trigger this session's interrupted run (see [On-demand resume](#on-demand-resume)) | `session_key` |
+
+#### On-demand resume
+
+`ResumeCoordinator` scans for interrupted runs once, at boot. That covers the
+case it was built for and nothing else: a run interrupted while the daemon kept
+running, or a candidate skipped after a transient store error, had no second
+trigger and no way for anyone to ask for one. `agent.resume` and
+`POST /v1/admin/resume` (which `aleph-server resume <session-key>` calls) are
+that ask.
+
+Both land in `handlers::resume::resume_named_session` →
+`ResumeCoordinator::resume_session` → `resume_from_markers`, which the boot
+scan also calls. Every judgement — recency filter, crash-loop cap,
+crash-boundary repair, concurrency permit — is made once. **Change a resume
+criterion in `resume_from_markers` or you have built a second, weaker resume
+wearing the same word.**
+
+Four things worth knowing before touching it:
+
+- **`resume_session` deliberately ignores `[resume] enabled`.** That switch
+  governs whether the daemon resumes things nobody asked it to. An operator
+  naming a session has already made the decision it exists to defer, and
+  silently ignoring an explicit request is the kind of no-op that reads as a
+  broken feature. Consequently `set_global_resume_coordinator` must be called
+  **outside** the `enabled` branch at boot — a handle installed under a
+  narrower condition than its consumers fails closed on exactly the
+  deployments that need the manual verb most, and its only symptom is a
+  rejection.
+- **Visibility is `KeyChecked`, and it is worth different amounts per
+  transport.** Over JSON-RPC the caller identity is scoped around
+  `process_request`, so `visibility::session_visible` compares against a real
+  actor and an invisible session gets the byte-identical `not_found` a missing
+  one gets. Over `/v1/admin` there is no such scope, `visible_owner_filter()`
+  is `None`, and the gate admits everything — which is the trust model working
+  (that route is bearer-authenticated with the operator's shared token, and an
+  operator sees every session). The check lives in the shared body so this
+  reasoning is stated once rather than re-derived per transport.
+- **Lane is `Execute`, set explicitly.** `agent.resume` starts agent
+  execution; it just takes its input from the session log instead of the
+  request. The `.resume` suffix matches no heuristic token, so without the
+  `lane.rs::override_for` entry it defaults to `Mutate` and a burst of resumes
+  competes on the generic mutation lane instead of the run-concurrency budget.
+- **The CLI is IPC-only, with no local fallback.** Resuming means re-entering
+  the harness with the session's provider, tools and workspace. A `LockOrIpc`
+  local half would either do nothing or stand a second runtime beside the
+  singleton, so `aleph-server resume` uses `run_no_lock` + `forward_to_server`
+  and says so when no server is running.
+
+- **One resume per session at a time.** `repair_boundary` is a read-then-append,
+  so two concurrent resumes of one session both compute the same repair set and
+  both append it — leaving one `call_id` answered by two `tool_result`s, which
+  the provider rejects on every later turn of that session. The boot scan never
+  exposed this (it walks sessions in a sequential loop); the on-demand face
+  does, and it can collide with the boot scan itself, which is spawned while the
+  gateway is already serving requests. `ResumeCoordinator.in_flight` claims the
+  session before anything reads the log; a collision returns `busy` rather than
+  proceeding. `already_resuming` is checked **first** when deriving the status
+  word, because a busy report has every other counter at zero and would
+  otherwise render as `no_runs` — telling the operator a session has no history
+  at the moment it is being resumed.
+
+Status vocabulary (same on both surfaces): `resumed` · `already_resuming` ·
+`already_finished`
+(scanned, newest marker was a `RunFinished`) · `no_runs` (the session has no
+run markers at all — an answer, not a failure) · `abandoned` (too old, or the
+crash-loop cap tripped) · `not_resumed` (interrupted, but the boundary repair
+or the re-trigger failed; the server log has the reason).
+
+**Crash-boundary wording is part of this contract.** A dangling
+`ToolCallRequested` is answered with `boundary_repair_text`, which states that
+the outcome is **unknown** — not that the call failed. `ToolCallRequested` is
+persisted immediately before dispatch, and the two things that can still stop a
+call after that point (a guardrail `Block`, an approval denial) each write
+their own answer event, so "requested, never answered" means the call reached
+or passed the dispatch line and its side effects may have landed. The previous
+text read as a verdict, and the rational response to a failed call is to issue
+it again.
 
 ### Session Methods
 

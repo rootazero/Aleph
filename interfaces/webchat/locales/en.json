@@ -1460,6 +1460,12 @@
       "rpm": "Requests / min",
       "tpm": "Tokens / min",
       "unlimited": "Unlimited"
+    },
+    "admin_refusal": {
+      "read_config": "This settings page needs operator privileges — the role this connection holds cannot read server-wide configuration.",
+      "read_setup_state": "Needs operator privileges — this connection cannot read this setting, so its status is unknown.",
+      "read_tiers": "Needs operator privileges — this connection cannot read the selectable execution tiers.",
+      "read_modes": "Needs operator privileges — this connection cannot read the selectable session modes."
     }
   },
   "extensions": {

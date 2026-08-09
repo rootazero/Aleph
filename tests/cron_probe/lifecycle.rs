@@ -96,13 +96,15 @@ async fn manual_trigger() {
     h.assert_executed("manual-1");
     h.assert_execution_count("manual-1", 1);
 
-    // Verify trigger source was Manual
+    // Manual trigger flows through `run_job` semantics: `manual_trigger_pending`
+    // is raised and the timer tick consumes it, stamping the snapshot with a
+    // Manual attribution.
     let calls = h.executor.calls_for("manual-1");
     assert_eq!(calls.len(), 1);
     assert_eq!(
         calls[0].trigger_source,
         TriggerSource::Manual,
-        "manual_run should set TriggerSource::Manual"
+        "manual_run stamps the manual trigger source"
     );
 }
 

@@ -44,10 +44,6 @@ pub const fn default_dreaming_enabled() -> bool {
     true
 }
 
-pub const fn default_dreaming_idle_threshold_seconds() -> u32 {
-    900
-}
-
 pub fn default_dreaming_window_start() -> String {
     "02:00".to_string()
 }
@@ -56,20 +52,16 @@ pub fn default_dreaming_window_end() -> String {
     "05:00".to_string()
 }
 
+pub const fn default_dreaming_idle_threshold_seconds() -> u32 {
+    900
+}
+
 pub const fn default_dreaming_max_duration_seconds() -> u32 {
     600
 }
 
 pub const fn default_drift_max_pairs_per_run() -> usize {
     20
-}
-
-pub const fn default_synthesis_min_cluster_size() -> usize {
-    3
-}
-
-pub const fn default_synthesis_max_insights() -> usize {
-    10
 }
 
 pub const fn default_skill_distill_max_per_cycle() -> usize {
@@ -171,11 +163,7 @@ pub const fn default_raw_fragments_tokens() -> u32 {
 /// Token budget for the `Feedback` slot — user-taught rules/corrections.
 /// Small on purpose: these notes are short imperative rules, not prose.
 pub const fn default_feedback_tokens() -> u32 {
-    500
-}
-
-pub const fn default_assembly_retention_days() -> u32 {
-    14
+     500
 }
 
 pub const fn default_rrf_k() -> u32 {

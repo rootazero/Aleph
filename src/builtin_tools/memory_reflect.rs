@@ -121,7 +121,6 @@ impl AlephTool for MemoryReflectTool {
             agent_id: self.agent_id.clone(),
             namespace: NamespaceScope::Owner,
             max_tokens: None,
-            time_range: None,
             session_id: session_id.clone(),
         };
 

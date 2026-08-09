@@ -1500,6 +1500,7 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
         let admin_state = alephcore::gateway::admin_api::AdminApiState {
             shared_token: auth_bundle.auth_ctx.shared_token_mgr.clone(),
             agent_manager: agent_manager.clone(),
+            session_store: session_store.clone(),
         };
         server.set_admin_router(alephcore::gateway::admin_api::router(admin_state));
     }
@@ -2229,6 +2230,7 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
                 );
 
             let cron_config = cron_state.config.clone();
+            let cron_svc_handle = cron_svc.clone();
             tokio::spawn(async move {
                 // Run startup catchup before entering the timer loop
                 match run_startup_catchup(
@@ -2236,6 +2238,7 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
                     cron_state.clock.as_ref(),
                     cron_config.max_missed_jobs_per_restart,
                     cron_config.catchup_stagger_ms,
+                    cron_config.job_timeout_secs.saturating_mul(1000) as i64,
                 )
                 .await
                 {
@@ -2257,7 +2260,20 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
                 // Start timer loop (runs until shutdown). D4: pass the
                 // alert dispatcher so failure alerts produced by phase3
                 // are actually delivered instead of dropped on the floor.
-                run_timer_loop(cron_state, executor_fn, Some(alert_dispatcher_fn)).await;
+                // Also pass the scheduler-tick change emitter so scheduled-run
+                // writebacks push CronJobChanged to the panel (it dropped
+                // polling and relies on push).
+                let change_emitter = {
+                    let guard = cron_svc_handle.lock().await;
+                    guard.change_emitter()
+                };
+                run_timer_loop(
+                    cron_state,
+                    executor_fn,
+                    Some(alert_dispatcher_fn),
+                    change_emitter,
+                )
+                .await;
             });
 
             if !args.daemon {
@@ -2280,9 +2296,13 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
             use alephcore::tasks::heartbeat::probe::DefaultProbeExecutor;
             use alephcore::tasks::heartbeat::service::timer::{run_heartbeat_loop, TickContext};
 
-            let (hb_state, hb_wake) = {
+            let (hb_state, hb_wake, hb_change_emitter) = {
                 let guard = hb_svc.lock().await;
-                (guard.state().clone(), guard.wake_queue().clone())
+                (
+                    guard.state().clone(),
+                    guard.wake_queue().clone(),
+                    guard.change_emitter(),
+                )
             };
 
             // Open a dedicated connection for the DedupEngine (separate from the HeartbeatStore
@@ -2350,6 +2370,7 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
                 delivery: delivery_engine,
                 dedup: dedup_engine,
                 job_timeout_secs: hb_state.config.job_timeout_secs,
+                change_emitter: hb_change_emitter,
             });
 
             tokio::spawn(async move {
@@ -2531,8 +2552,28 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
                     skipped_legacy = rr.skipped_legacy,
                     "ProjectionReconciler boot scan finished"
                 );
-                if resume_cfg.enabled {
-                    if let (Some(exec_adapter), Some(registry)) = resume_collaborators {
+                if let (Some(exec_adapter), Some(registry)) = resume_collaborators {
+                    let auto_scan = resume_cfg.enabled;
+                    let coordinator =
+                        std::sync::Arc::new(alephcore::gateway::ResumeCoordinator::new(
+                            event_store,
+                            resume_cfg,
+                            exec_adapter,
+                            registry,
+                            sessions_for_resume,
+                            Some(bus_for_resume),
+                        ));
+                    // Published unconditionally, on purpose. `[resume] enabled`
+                    // governs the automatic scan below; `agent.resume` /
+                    // `aleph-server resume` are explicit operator requests and
+                    // must stay reachable when auto-resume is off — that is the
+                    // deployment that needs the manual verb most. Registering
+                    // inside the `auto_scan` branch would be a handle installed
+                    // under a narrower condition than its consumers, whose only
+                    // symptom is a rejection that reads like a missing feature.
+                    alephcore::gateway::set_global_resume_coordinator(coordinator.clone());
+
+                    if auto_scan {
                         // This scan is spawned before `initialize_inbound_router`
                         // publishes the channel-config snapshot; park until it is
                         // ready so `stamp_origin_identity` sees the per-channel deny
@@ -2541,14 +2582,6 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
                             std::time::Duration::from_secs(30),
                         )
                         .await;
-                        let coordinator = alephcore::gateway::ResumeCoordinator::new(
-                            event_store,
-                            resume_cfg,
-                            exec_adapter,
-                            registry,
-                            sessions_for_resume,
-                            Some(bus_for_resume),
-                        );
                         let report = coordinator.resume_interrupted_runs().await;
                         tracing::info!(
                             scanned = report.scanned,
@@ -2557,9 +2590,12 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
                             skipped = report.skipped,
                             "ResumeCoordinator boot scan finished"
                         );
+                    } else {
+                        tracing::debug!(
+                            "Resume coordinator: auto-scan disabled ([resume] enabled = false); \
+                             on-demand resume still available"
+                        );
                     }
-                } else {
-                    tracing::debug!("Resume coordinator: disabled ([resume] enabled = false)");
                 }
             });
             if !args.daemon {
@@ -2695,9 +2731,14 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
         use alephcore::exec::approval::channel_bridge::ChannelApprovalBridge;
 
         // exec.approval.* RPC handlers — server handlers refcount is 1 here.
+        // `session_store` backs the per-user visibility checks both methods
+        // apply: the family is carved out of the admin gate so a member can
+        // release their OWN parked tool call, and the scoping is what makes
+        // that carve-out safe (see `handlers/exec_approvals.rs`).
         alephcore::gateway::handlers::exec_approvals::register_handlers(
             server.handlers_mut(),
             exec_approval_manager.clone(),
+            session_store.clone(),
         );
 
         // clarification.* RPC handlers — same `Arc` the `ask_user` tool parks on.

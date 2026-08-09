@@ -284,6 +284,27 @@ impl CronService {
         &self.state
     }
 
+    /// Build a scheduler-tick change emitter for the timer loop.
+    ///
+    /// Returns a closure that publishes `CronJobChanged` (StateChanged) for a
+    /// job id, so the panel gets pushed the runtime-state updates a scheduled
+    /// run writes in `phase3_writeback` — not just CRUD ops. Returns `None`
+    /// when no event bus is wired (tests, CLI tooling).
+    #[must_use]
+    pub fn change_emitter(&self) -> Option<service::timer::ChangeEmitterFn> {
+        let bus = self.event_bus.clone()?;
+        Some(std::sync::Arc::new(move |job_id: &str| {
+            use crate::gateway::events::{ChangeKind, GatewayEventFrame};
+            let frame = GatewayEventFrame::CronJobChanged {
+                job_id: job_id.to_string(),
+                change: ChangeKind::StateChanged,
+            };
+            if let Err(e) = bus.publish_frame(&frame) {
+                tracing::debug!(error = %e, "cron: failed to publish CronJobChanged frame (timer tick)");
+            }
+        }))
+    }
+
     /// Delete cron run history older than `history_retention_days`
     /// (from this service's `CronConfig`). Used by the shared task reaper
     /// daemon ([[reaper]]) so the cron history table does not grow without

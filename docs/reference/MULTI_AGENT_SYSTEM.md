@@ -160,6 +160,89 @@ One additional defense layer exists:
   returns `None` when `max_depth` is reached, surfacing as a `"chain
   depth exceeded"` error.
 
+### Durable recovery of background sub-agents (round-11, 2026-08-08)
+
+`BackgroundAgentTracker` is process memory by design — two `RwLock<HashMap>`s
+plus a `Notify`. That is the right shape for a live registry and the wrong
+shape for the only record of a finished sub-agent: a daemon restart erases
+every background child this run ever spawned, **including the ones that
+already returned**, and the `completed` table's 1h TTL does the same thing
+without a restart. The model's only handle is the `request_id` the spawn
+returned, so it asked about work that had succeeded and got
+`"No background sub-agent found"`.
+
+The data was never actually lost. `spawn` writes
+`SubagentSpawned { child_id }` into the **parent** session's durable event log
+before the child's first turn and `SubagentReturned { child_id, summary }`
+after its last, and the child's full transcript lives in its own session. What
+was missing was an address: the tracker keyed on `request_id` while
+`ephemeral_for()` minted `child_id` from an unrelated UUID.
+
+**The wire.** `request_id` now travels
+`AgentRuntimeConfig.request_id` → `SpawnRequest.request_id` →
+`ephemeral_for(agent_id, request_id)`, so the child session key is
+`Ephemeral { agent_id, ephemeral_id: "sub-bg-<request_id>" }`
+(`SUBAGENT_BG_CHILD_PREFIX` is shared with the recovery reader). No schema
+change: `SessionKey`'s string form already round-trips. Only the **background**
+spawn passes `Some` — foreground, batch and MoA-aggregator spawns deliver
+inline and have no id that outlives the call, so they keep the historical bare
+nonce, `sub-<uuid>`.
+
+> The two prefixes must stay distinct. Uncorrelated children go through the
+> same spawner and write the same durable events, so if they carried the
+> background prefix, `recovery::enumerate` would read each one's nonce as an
+> unrecoverable `request_id` and `subagent list` would fill with every
+> foreground sub-agent the session ever ran, each labelled recoverable — the
+> same "the directory lies" defect, pointing the other way. Pinned by
+> `anonymous_foreground_children_are_not_enumerated`.
+
+> The correlation must be structural. One turn can spawn several background
+> children, so their `SubagentSpawned` events share a `turn_id` and cannot be
+> told apart by position — the same parallel-batch ambiguity that made
+> `tools::scoped::dispatch` replace a session-log scan with an ambient call
+> identity. Changing the shape minted by `ephemeral_for` silently blinds
+> recovery; `recovery.rs::child_key_roundtrips_through_the_request_id` is the
+> test that goes red first.
+
+**The reader** (`src/agents/subagent_tool/recovery.rs`) is lazy: it runs only
+when the tracker reports an id it has never seen, and one `get_events` serves
+every unknown id in that call. Three verdicts — `SubagentReturned` present →
+`completed_recovered` carrying the real summary; only `SubagentSpawned` →
+`interrupted` plus a `child_session` pointer to the partial transcript;
+neither → the pre-existing `unknown`. Wired into `check_status`, `wait`
+(single and `wait_any`), `cancel`, `wait_cancelled` and `list`.
+
+Both verdicts are `ToolResult::Success`, including `interrupted`: a restart is
+not a verdict on the call the model is making now.
+
+`list` gained a `from_durable_log` array. It documents itself as the way to
+"recover a request_id you no longer hold", so a directory that reports an empty
+session after a restart is the directory lying. That costs one read per `list`
+call; `list` is an on-demand directory, and cheap-and-wrong is not the trade to
+make there.
+
+Those rows go through `recovery::to_list_row`, not `to_json`: an entry reaches
+this path **permanently** once the tracker's TTL prunes it, so carrying each
+finished sub-agent's whole output would make the directory grow with session
+age. Rows preview at `LIST_RESULT_PREVIEW_CHARS`, state `result_chars` so the
+preview cannot read as the whole thing, and cap at `MAX_LISTED_COMPLETED` while
+naming how many were withheld — the same anti-silent-truncation rule the live
+half follows. `check_status` on the id still returns every byte.
+
+`annotate_unknown`'s wording was fixed in the same pass. It used to tell the
+model that every unknown id "will never complete — drop them from your next
+wait". After a restart *every* id is unknown to the tracker, so following that
+advice throws away finished output and redoes the work.
+
+`BackgroundAgentTracker` stays purely in-memory; the durable lookup lives in
+the tool layer, which already holds `session: Arc<dyn SessionService>` and
+`parent_session_id`.
+
+**Recovery reports; it does not restart.** Whether to re-run an interrupted
+child, and from where, is the model's call (R7). Auto-resuming one would mean
+rebuilding its cwd, tool permissions and parent-run liveness, and would burn
+tokens unattended.
+
 ### Filesystem Agent Loading (P2 Stage E)
 
 Aleph loads agent definitions from three tiers (highest precedence first):

@@ -5,20 +5,16 @@ use serde::{Deserialize, Serialize};
 pub struct DreamingConfig {
     #[serde(default = "super::defaults::default_dreaming_enabled")]
     pub enabled: bool,
-    #[serde(default = "super::defaults::default_dreaming_idle_threshold_seconds")]
-    pub idle_threshold_seconds: u32,
     #[serde(default = "super::defaults::default_dreaming_window_start")]
     pub window_start_local: String,
     #[serde(default = "super::defaults::default_dreaming_window_end")]
     pub window_end_local: String,
+    #[serde(default = "super::defaults::default_dreaming_idle_threshold_seconds")]
+    pub idle_threshold_seconds: u32,
     #[serde(default = "super::defaults::default_dreaming_max_duration_seconds")]
     pub max_duration_seconds: u32,
     #[serde(default = "super::defaults::default_drift_max_pairs_per_run")]
     pub drift_max_pairs_per_run: usize,
-    #[serde(default = "super::defaults::default_synthesis_min_cluster_size")]
-    pub synthesis_min_cluster_size: usize,
-    #[serde(default = "super::defaults::default_synthesis_max_insights")]
-    pub synthesis_max_insights: usize,
     #[serde(default = "super::defaults::default_skill_distill_max_per_cycle")]
     pub skill_distill_max_per_cycle: usize,
     /// Days of inactivity before a skill is mechanically aged from
@@ -58,13 +54,11 @@ impl Default for DreamingConfig {
     fn default() -> Self {
         Self {
             enabled: super::defaults::default_dreaming_enabled(),
-            idle_threshold_seconds: super::defaults::default_dreaming_idle_threshold_seconds(),
             window_start_local: super::defaults::default_dreaming_window_start(),
             window_end_local: super::defaults::default_dreaming_window_end(),
+            idle_threshold_seconds: super::defaults::default_dreaming_idle_threshold_seconds(),
             max_duration_seconds: super::defaults::default_dreaming_max_duration_seconds(),
             drift_max_pairs_per_run: super::defaults::default_drift_max_pairs_per_run(),
-            synthesis_min_cluster_size: super::defaults::default_synthesis_min_cluster_size(),
-            synthesis_max_insights: super::defaults::default_synthesis_max_insights(),
             skill_distill_max_per_cycle: super::defaults::default_skill_distill_max_per_cycle(),
             skill_stale_after_days: super::defaults::default_skill_stale_after_days(),
             feedback_distill_max_per_cycle: super::defaults::default_feedback_distill_max_per_cycle(

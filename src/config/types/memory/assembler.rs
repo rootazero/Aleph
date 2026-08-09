@@ -17,8 +17,6 @@ pub struct AssemblerConfig {
     pub force_fallback: bool,
     #[serde(default)]
     pub fallback_skeleton: FallbackSkeleton,
-    #[serde(default)]
-    pub assembly_log: AssemblyLogConfig,
 
     /// Mirror of `MemoryConfig.project_scoped`, populated by the server builder.
     /// When true and a project root is active, note retrieval unions the
@@ -59,7 +57,6 @@ impl Default for AssemblerConfig {
             render_style: crate::memory::assembler::render::RenderStyle::default(),
             force_fallback: false,
             fallback_skeleton: FallbackSkeleton::default(),
-            assembly_log: AssemblyLogConfig::default(),
             project_scoped: false,
             retrieval_scoring: super::RetrievalScoringConfig::default(),
             rerank: crate::memory::rerank::RerankConfig::default(),
@@ -92,15 +89,7 @@ impl Default for FallbackSkeleton {
             relevant_notes_tokens: super::defaults::default_relevant_notes_tokens(),
             raw_fragments_tokens: super::defaults::default_raw_fragments_tokens(),
             feedback_tokens: super::defaults::default_feedback_tokens(),
-            nudges_tokens: 0,
+                        nudges_tokens: 0,
         }
     }
-}
-
-#[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
-pub struct AssemblyLogConfig {
-    #[serde(default)]
-    pub enabled: bool,
-    #[serde(default = "super::defaults::default_assembly_retention_days")]
-    pub retention_days: u32,
 }

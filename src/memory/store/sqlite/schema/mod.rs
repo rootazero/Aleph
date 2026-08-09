@@ -140,9 +140,6 @@ pub fn init_schema(conn: &Connection) -> Result<(), AlephError> {
     migrations::migrate_notes_fts_trigram(conn)
         .map_err(|e| AlephError::config(format!("backfill notes_fts_trigram: {e}")))?;
 
-    conn.execute_batch(ddl::ASSEMBLY_LOGS_DDL)
-        .map_err(|e| AlephError::config(format!("Failed to create assembly_logs table: {e}")))?;
-
     conn.execute_batch(ddl::MEMORY_WRITE_DECISIONS_DDL)
         .map_err(|e| {
             AlephError::config(format!(

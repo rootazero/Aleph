@@ -9,9 +9,7 @@ pub enum LogAction {
     Ingest,
     Query,
     Lint,
-    Schema,
     Profile,
-    SessionEnd,
     Bootstrap,
 }
 
@@ -22,9 +20,7 @@ impl LogAction {
             Self::Ingest => "ingest",
             Self::Query => "query",
             Self::Lint => "lint",
-            Self::Schema => "schema",
             Self::Profile => "profile",
-            Self::SessionEnd => "session_end",
             Self::Bootstrap => "bootstrap",
         }
     }
@@ -93,9 +89,7 @@ mod tests {
             LogAction::Ingest,
             LogAction::Query,
             LogAction::Lint,
-            LogAction::Schema,
             LogAction::Profile,
-            LogAction::SessionEnd,
             LogAction::Bootstrap,
         ] {
             let j = serde_json::to_string(&a).unwrap();
@@ -107,7 +101,7 @@ mod tests {
     #[test]
     fn log_action_str_matches_serde_rename() {
         assert_eq!(LogAction::Ingest.as_str(), "ingest");
-        assert_eq!(LogAction::SessionEnd.as_str(), "session_end");
+        assert_eq!(LogAction::Profile.as_str(), "profile");
     }
 
     #[test]

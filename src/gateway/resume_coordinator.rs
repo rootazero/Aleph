@@ -26,6 +26,33 @@ use crate::session::events::{now_ms, RunOutcome, SessionEvent, SessionEventRecor
 use crate::session::service::SessionId;
 use crate::session::store::SessionEventStore;
 
+static GLOBAL_RESUME_COORDINATOR: std::sync::OnceLock<Arc<ResumeCoordinator>> =
+    std::sync::OnceLock::new();
+
+/// Publish the process-wide coordinator so on-demand resume
+/// ([`ResumeCoordinator::resume_session`]) can reach the same instance the boot
+/// scan used — same config, same collaborators, same concurrency permit pool.
+///
+/// **Register this outside any `[resume] enabled` branch.** `enabled` gates the
+/// automatic scan, not the explicit request; installing the handle under the
+/// narrower condition would make `agent.resume` return "unavailable" on exactly
+/// the deployments whose operators turned auto-resume off and therefore need the
+/// manual verb most — and the only symptom would be a rejection, which is
+/// indistinguishable from the feature not existing.
+///
+/// Idempotent: a second call is ignored (mirrors
+/// [`crate::session::service::set_global_session_service`]).
+pub fn set_global_resume_coordinator(coordinator: Arc<ResumeCoordinator>) {
+    let _ = GLOBAL_RESUME_COORDINATOR.set(coordinator);
+}
+
+/// The process-wide coordinator, if one has been installed. `None` in tests and
+/// in any boot path that has no execution adapter to re-trigger runs with.
+#[must_use]
+pub fn global_resume_coordinator() -> Option<Arc<ResumeCoordinator>> {
+    GLOBAL_RESUME_COORDINATOR.get().cloned()
+}
+
 /// Summary of one `resume_interrupted_runs` pass — for the boot log line
 /// and for tests.
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
@@ -43,6 +70,16 @@ pub struct ResumeReport {
     /// Their dangling marker is closed on the way out — see
     /// [`has_own_scheduler`].
     pub delegated: usize,
+    /// Sessions left alone because a resume for them was already in flight.
+    ///
+    /// Always 0 for the boot scan, which walks sessions sequentially. It exists
+    /// for the on-demand face: two `agent.resume` calls for one session — or one
+    /// racing the boot scan, which is spawned while the gateway is already
+    /// serving — must not both run `repair_boundary`, because that is a
+    /// read-then-append and two winners append **two** synthetic `ToolError`s
+    /// for the same `call_id`. A tool_use with two tool_results is a provider
+    /// API error on every later turn of that session.
+    pub busy: usize,
 }
 
 /// `task_type` of a cron-triggered run's session key.
@@ -171,10 +208,49 @@ pub(crate) fn resume_metadata(
     metadata
 }
 
-/// Walk a full session event log and return a synthetic `ToolError` for
-/// every `ToolCallRequested` whose `call_id` has no matching `ToolResult`
-/// or `ToolError`. The returned events are ready to append to the log; the
-/// caller emits them in order. An already-answered call yields nothing.
+/// The text a dangling tool call is answered with on resume.
+///
+/// The wording is the whole point. This used to read `"interrupted by server
+/// restart"`, which the model reads as a verdict — *the call failed* — and the
+/// rational response to a failed call is to issue it again. But a dangling call
+/// is precisely the case where **nobody knows** whether it ran:
+/// `ToolCallRequested` is emitted and `await`ed to disk in `harness::agent::act`
+/// *immediately before* dispatch, and the two things that can still stop a call
+/// after that point — a guardrail `Block` and an approval denial — both write
+/// their own answer event. So "requested, never answered" means the call was at
+/// or past the dispatch line, and its side effects may well have landed.
+///
+/// Aleph's own criterion for this shape says a mechanism that only records
+/// "done" cannot tell "never did it" from "did it and lost the receipt". This
+/// module cannot close that gap by itself — nothing stamps the crossing of the
+/// irreversible boundary — so the honest move is to stop pretending it can, and
+/// hand the model the epistemic state instead of a wrong conclusion.
+///
+/// Deliberately **not** a safety-level classifier. `ToolSafetyLevel` exists and
+/// could sort read-only calls from destructive ones, but reaching it here means
+/// a seventh constructor parameter on `ResumeCoordinator`, and deciding "is this
+/// safe to redo?" from a tool name and its arguments is exactly the reasoning
+/// R7 reserves for the model. State the fact; let it judge.
+fn boundary_repair_text(tool: &str) -> String {
+    format!(
+        "OUTCOME UNKNOWN — the server restarted after this `{tool}` call was dispatched but \
+         before its result was recorded. This is NOT a report that the call failed: it may \
+         have completed, and any side effects it has (file writes, commands, network calls, \
+         external state) have already landed. Verify the current state before deciding \
+         whether to repeat it."
+    )
+}
+
+/// Walk a full session event log and answer every `ToolCallRequested` whose
+/// `call_id` has no matching `ToolResult` or `ToolError`. The returned events
+/// are ready to append to the log; the caller emits them in order. An
+/// already-answered call yields nothing.
+///
+/// The answer is shaped as `ToolError` because there is no result to hand back
+/// — the alternative, a synthetic `ToolResult`, would make an invented payload
+/// indistinguishable from the tool's real output. What the event carries is
+/// [`boundary_repair_text`]; see there for why the wording matters more than the
+/// shape.
 pub(crate) fn compute_boundary_repairs(events: &[SessionEventRecord]) -> Vec<SessionEvent> {
     use std::collections::HashSet;
 
@@ -193,11 +269,14 @@ pub(crate) fn compute_boundary_repairs(events: &[SessionEventRecord]) -> Vec<Ses
         .iter()
         .filter_map(|record| match &record.event {
             SessionEvent::ToolCallRequested {
-                turn_id, call_id, ..
+                turn_id,
+                call_id,
+                name,
+                ..
             } if !answered.contains(call_id.as_str()) => Some(SessionEvent::ToolError {
                 turn_id: *turn_id,
                 call_id: call_id.clone(),
-                error: "interrupted by server restart".to_string(),
+                error: boundary_repair_text(name),
                 at,
             }),
             _ => None,
@@ -230,6 +309,32 @@ pub struct ResumeCoordinator {
     event_bus: Option<Arc<crate::gateway::event_bus::GatewayEventBus>>,
     /// Bounds the boot resume burst. `max_concurrent` permits.
     semaphore: Arc<Semaphore>,
+    /// Session keys with a resume in flight, so one session is never resumed
+    /// twice at once. See [`ResumeReport::busy`] for what the second winner
+    /// would corrupt.
+    ///
+    /// A `std::sync::Mutex` around a `HashSet`, never held across an `.await` —
+    /// the claim and the release are each a single lock/insert/drop, and the
+    /// slot itself is an RAII guard so an early return or a panic mid-resume
+    /// cannot leave a session permanently unresumable.
+    in_flight: std::sync::Mutex<std::collections::HashSet<String>>,
+}
+
+/// RAII claim on one session's resume slot.
+struct ResumeSlot<'a> {
+    owner: &'a std::sync::Mutex<std::collections::HashSet<String>>,
+    key: String,
+}
+
+impl Drop for ResumeSlot<'_> {
+    fn drop(&mut self) {
+        // Poison-safe (P7): recover the guard rather than leak the slot — a
+        // panicked resume must not make the session unresumable forever.
+        self.owner
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .remove(&self.key);
+    }
 }
 
 impl ResumeCoordinator {
@@ -251,7 +356,23 @@ impl ResumeCoordinator {
             session_store,
             event_bus,
             semaphore: Arc::new(Semaphore::new(permits)),
+            in_flight: std::sync::Mutex::new(std::collections::HashSet::new()),
         }
+    }
+
+    /// Take this session's resume slot, or `None` if a resume is already in
+    /// flight for it.
+    fn try_claim_resume(&self, session_id: &SessionId) -> Option<ResumeSlot<'_>> {
+        let key = session_id.to_key_string();
+        let inserted = self
+            .in_flight
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .insert(key.clone());
+        inserted.then(|| ResumeSlot {
+            owner: &self.in_flight,
+            key,
+        })
     }
 
     /// Scan for interrupted runs and re-trigger each. Best-effort: any
@@ -277,35 +398,8 @@ impl ResumeCoordinator {
         };
 
         for (session_id, markers) in marker_groups {
-            report.scanned += 1;
-            match classify_markers(&markers) {
-                ScanVerdict::Clean => {
-                    report.skipped += 1;
-                }
-                // Not ours to resume: the team dispatcher / cron / heartbeat
-                // each recover their own interrupted work, and a second driver
-                // on top of that is a duplicate run, not a safety net. Close
-                // the dangling marker so the next boot does not re-decide this.
-                ScanVerdict::Interrupted { .. } if has_own_scheduler(&session_id) => {
-                    tracing::info!(
-                        session = ?session_id,
-                        "resume: session has its own scheduler; handing recovery back to it"
-                    );
-                    self.close_delegated_marker(&session_id).await;
-                    report.delegated += 1;
-                }
-                ScanVerdict::Interrupted { trailing_starts } => {
-                    let project_root = latest_project_root(&markers);
-                    self.handle_interrupted(
-                        &session_id,
-                        &markers,
-                        trailing_starts,
-                        project_root,
-                        &mut report,
-                    )
-                    .await;
-                }
-            }
+            self.resume_from_markers(&session_id, &markers, &mut report)
+                .await;
         }
 
         tracing::info!(
@@ -314,6 +408,11 @@ impl ResumeCoordinator {
             abandoned = report.abandoned,
             skipped = report.skipped,
             delegated = report.delegated,
+            // Expected to be 0 here — the scan is sequential. A non-zero value
+            // means an on-demand `agent.resume` raced the boot scan, which is
+            // the collision `in_flight` exists to make harmless and which is
+            // worth seeing in the log rather than inferring.
+            busy = report.busy,
             "resume scan complete"
         );
         report
@@ -347,6 +446,109 @@ impl ResumeCoordinator {
                 tracing::warn!(session = ?session_id, error = %e, "resume: delegated marker seq allocation failed; leaving it open");
             }
         }
+    }
+
+    /// Classify one session's run markers and act on the verdict.
+    ///
+    /// The single derivation shared by the boot scan and the on-demand
+    /// [`resume_session`](Self::resume_session). A verb with two faces has to
+    /// share its reasoning, not just its name: an on-demand resume that skipped
+    /// the recency filter, the crash-loop cap or the boundary repair would be a
+    /// second, weaker resume wearing the same word.
+    async fn resume_from_markers(
+        &self,
+        session_id: &SessionId,
+        markers: &[SessionEventRecord],
+        report: &mut ResumeReport,
+    ) {
+        // Claimed before anything reads the log. `repair_boundary` is a
+        // read-then-append: two concurrent resumes of one session both compute
+        // the same repair set and both append it, leaving one `call_id` with
+        // two `ToolError`s — a tool_use with two tool_results, which the
+        // provider rejects on every later turn. The boot scan never exposed
+        // this (it walks sessions in a sequential loop); the on-demand face
+        // does, including against the boot scan itself, which is spawned while
+        // the gateway is already accepting requests.
+        let Some(_slot) = self.try_claim_resume(session_id) else {
+            tracing::info!(
+                session = ?session_id,
+                "resume: already in flight for this session; leaving it alone"
+            );
+            report.busy += 1;
+            return;
+        };
+        report.scanned += 1;
+        match classify_markers(markers) {
+            ScanVerdict::Clean => {
+                report.skipped += 1;
+            }
+            // Not ours to resume: the team dispatcher / cron / heartbeat
+            // each recover their own interrupted work, and a second driver
+            // on top of that is a duplicate run, not a safety net. Close
+            // the dangling marker so the next boot does not re-decide this.
+            ScanVerdict::Interrupted { .. } if has_own_scheduler(session_id) => {
+                tracing::info!(
+                    session = ?session_id,
+                    "resume: session has its own scheduler; handing recovery back to it"
+                );
+                self.close_delegated_marker(session_id).await;
+                report.delegated += 1;
+            }
+            ScanVerdict::Interrupted { trailing_starts } => {
+                let project_root = latest_project_root(markers);
+                self.handle_interrupted(session_id, markers, trailing_starts, project_root, report)
+                    .await;
+            }
+        }
+    }
+
+    /// Resume one session on demand.
+    ///
+    /// Boot is not the only moment a run can be found interrupted — the boot
+    /// scan runs once, so a session that was interrupted while the daemon kept
+    /// running, or one whose resume was skipped because a transient error ate
+    /// its candidate, had no second chance and no way to ask for one. This is
+    /// that way: `agent.resume` on the gateway and `aleph-server resume` on the
+    /// CLI both land here.
+    ///
+    /// Deliberately does **not** consult `config.enabled`. That switch governs
+    /// the *automatic* scan — whether the daemon resumes things nobody asked it
+    /// to. An operator naming a session has already made the decision the switch
+    /// exists to defer, and silently ignoring an explicit request is the kind of
+    /// no-op that reads as a broken feature.
+    ///
+    /// Everything else is shared with boot via
+    /// [`resume_from_markers`](Self::resume_from_markers): same recency filter,
+    /// same crash-loop cap, same boundary repair, same concurrency permit.
+    ///
+    /// Reads the same cross-session marker query boot uses and picks this
+    /// session out of it, rather than adding a narrower query. On-demand resume
+    /// is an operator action measured in ones per hour, and one query with one
+    /// grouping rule cannot drift from itself.
+    ///
+    /// A session with no run markers at all returns a zero report
+    /// (`scanned == 0`), which the caller renders as "nothing to resume" — not
+    /// an error, because "this session never ran anything" is a legitimate
+    /// answer to the question.
+    pub async fn resume_session(
+        &self,
+        session_id: &SessionId,
+    ) -> Result<ResumeReport, crate::session::service::SessionError> {
+        let mut report = ResumeReport::default();
+        let groups = self.event_store.load_run_markers().await?;
+        let Some((_, markers)) = groups.into_iter().find(|(sid, _)| sid == session_id) else {
+            return Ok(report);
+        };
+        self.resume_from_markers(session_id, &markers, &mut report)
+            .await;
+        tracing::info!(
+            session = ?session_id,
+            resumed = report.resumed,
+            abandoned = report.abandoned,
+            skipped = report.skipped,
+            "on-demand resume complete"
+        );
+        Ok(report)
     }
 
     /// Handle one interrupted candidate: recency filter, cap check,
@@ -839,7 +1041,30 @@ mod tests {
         match &repairs[0] {
             SessionEvent::ToolError { call_id, error, .. } => {
                 assert_eq!(call_id, "c2");
-                assert_eq!(error, "interrupted by server restart");
+                // Assert on meaning, not bytes. The defect this replaced was a
+                // text that read as a verdict ("interrupted by server restart"),
+                // which the model answers by re-issuing a call whose side
+                // effects may already have landed.
+                assert!(
+                    error.contains("OUTCOME UNKNOWN"),
+                    "repair must state the outcome is unknown, got: {error}"
+                );
+                assert!(
+                    error.contains("bash_exec"),
+                    "repair must name the tool so the model knows what to verify, got: {error}"
+                );
+                // The failure claim must be explicitly negated, not merely
+                // absent. "OUTCOME UNKNOWN" alone still leaves a model free to
+                // read the `ToolError` envelope as a failure and re-issue the
+                // call; the sentence that stops it is the one saying so.
+                assert!(
+                    error.contains("NOT a report that the call failed"),
+                    "repair must explicitly deny that the call failed, got: {error}"
+                );
+                assert!(
+                    error.contains("side effects"),
+                    "repair must warn that side effects may have landed, got: {error}"
+                );
             }
             other => panic!("expected ToolError, got {other:?}"),
         }

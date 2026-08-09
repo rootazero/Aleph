@@ -142,13 +142,6 @@ fn build_field_hints() -> std::collections::HashMap<String, FieldHint> {
             order: 5,
             advanced: true,
         },
-        "memory.dreaming.idle_threshold_seconds" => {
-            label: "Dreaming Idle Threshold",
-            help: "Seconds of idle time before dreaming starts",
-            group: "memory",
-            order: 6,
-            advanced: true,
-        },
         "memory.dreaming.window_start_local" => {
             label: "Dreaming Window Start",
             help: "Local time (HH:MM) when dreaming can start",

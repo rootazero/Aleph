@@ -397,8 +397,6 @@ mod tests {
                 category: "learning".into(),
                 ..Default::default()
             },
-            source_path: None,
-            fact_provenance: vec![],
             action: NoteWriteAction::Create,
             bypass_review: false,
             contradicts_existing: false,

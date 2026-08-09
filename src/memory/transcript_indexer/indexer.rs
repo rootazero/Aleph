@@ -1,4 +1,3 @@
-use crate::error::Result;
 use crate::memory::extensions::types::CaptureCtx;
 use crate::memory::extensions::{insert_with_capture_filter, MemoryExtensionRegistry};
 use crate::memory::namespace::NamespaceScope;
@@ -141,23 +140,6 @@ impl TranscriptIndexer {
         }
 
         created_ids
-    }
-
-    /// Index a single conversation turn
-    ///
-    /// This is called after a conversation turn completes.
-    /// The memory entry should already be in the database.
-    pub async fn index_turn(&self, _memory_id: &str) -> Result<()> {
-        // This is a no-op for MVP since memories table already has embeddings
-        // In future, this will handle chunking and additional indexing
-        Ok(())
-    }
-
-    /// Index with chunking support (future enhancement)
-    pub async fn index_with_chunking(&self, memory_id: &str) -> Result<Vec<String>> {
-        // TODO: Implement sliding window chunking
-        // For now, return single chunk ID
-        Ok(vec![memory_id.to_string()])
     }
 
     /// Chunk text into overlapping segments

@@ -8,13 +8,12 @@ use serde::{Deserialize, Serialize};
 
 use crate::error::AlephError;
 use crate::memory::notes::store::NoteStore;
-use crate::memory::notes::{FactProvenance, KnowledgeNote, Severity};
+use crate::memory::notes::{KnowledgeNote, Severity};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum NoteWriteAction {
     Create,
     Update,
-    Append,
     Delete,
     Supersede,
 }
@@ -24,8 +23,6 @@ pub struct CandidateNote {
     pub agent_id: String,
     pub category: String,
     pub note: KnowledgeNote,
-    pub source_path: Option<String>,
-    pub fact_provenance: Vec<FactProvenance>,
     pub action: NoteWriteAction,
     pub bypass_review: bool,
     pub contradicts_existing: bool,
@@ -58,7 +55,6 @@ pub enum GateOutcome {
 pub struct GateThresholds {
     pub min_confidence: f32,
     pub high_severity_min_confidence: f32,
-    pub critical_severity_floor: f32,
 }
 
 impl Default for GateThresholds {
@@ -66,7 +62,6 @@ impl Default for GateThresholds {
         Self {
             min_confidence: 0.5,
             high_severity_min_confidence: 0.8,
-            critical_severity_floor: 0.85,
         }
     }
 }
@@ -179,8 +174,6 @@ mod tests {
                 confidence,
                 ..Default::default()
             },
-            source_path: None,
-            fact_provenance: vec![],
             action: NoteWriteAction::Create,
             bypass_review: false,
             contradicts_existing: false,

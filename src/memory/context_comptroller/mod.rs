@@ -9,7 +9,7 @@ pub mod types;
 
 pub use comptroller::{ContextComptroller, RetrievalResult};
 pub use config::ComptrollerConfig;
-pub use types::{ArbitratedContext, RetentionMode, TokenBudget};
+pub use types::{ArbitratedContext, TokenBudget};
 
 #[cfg(test)]
 mod tests {

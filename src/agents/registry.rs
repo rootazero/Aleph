@@ -331,14 +331,12 @@ fn normalize_agent_alias(raw: &str) -> Option<&'static str> {
 #[must_use]
 pub fn builtin_agents() -> Vec<AgentDef> {
     vec![
-        // Main agent - full access. Explicit "flow_run" alongside "*" marks the
-        // sub-flow dispatch tool as an intentional capability in the catalog
-        // (registration wiring lands in Phase 6 — see orchestrator::flow_run_tool).
-        // Hub tools (hub_*) are reachable via the wildcard; install safety is
-        // enforced by the operator-tier gate (method_authz), not agent scoping.
+        // Main agent - full access. Hub tools (hub_*) are reachable via the
+        // wildcard; install safety is enforced by the operator-tier gate
+        // (method_authz), not agent scoping.
         AgentDef::new("main", AgentMode::Primary)
             .with_description("Primary agent that responds directly to user")
-            .with_allowed_tools(vec!["*".into(), "flow_run".into()]),
+            .with_allowed_tools(vec!["*".into()]),
         // Explore agent — INVESTIGATION named set (P2 Stage G demo migration).
         // Effective behavior unchanged: Stage B recursion guard blocks subagent
         // for SubAgent mode; denied_tools preserved. Default wildcard cleared so
@@ -860,7 +858,7 @@ mod tests {
         }
 
         // Unrelated tools must still be allowed on main.
-        assert!(main.is_tool_allowed("flow_run"));
+        assert!(main.is_tool_allowed("file_write"));
     }
 
     /// Drift guard: `denied_tools` is an exact-match list, so a Hub tool added to

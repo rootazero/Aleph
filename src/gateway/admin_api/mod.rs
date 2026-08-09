@@ -15,6 +15,7 @@
 // retained so the next iteration re-mounts it as soon as the CLI surfaces
 // those commands; see `agents.rs` for the unused handlers.
 pub mod agents;
+pub mod resume;
 pub mod secrets;
 
 use crate::sync_primitives::Arc;
@@ -33,11 +34,16 @@ use crate::gateway::security::SharedTokenManager;
 pub struct AdminApiState {
     pub shared_token: Arc<SharedTokenManager>,
     pub agent_manager: Arc<AgentManager>,
+    /// Session metadata source for `/v1/admin/resume`'s visibility gate. The
+    /// same store the JSON-RPC surface uses, so both faces of `agent.resume`
+    /// resolve a session key identically.
+    pub session_store: Arc<dyn crate::gateway::session_store::SessionStore>,
 }
 
 pub fn router(state: AdminApiState) -> Router {
     Router::new()
         .nest("/secrets", secrets::router())
+        .nest("/resume", resume::router())
         .with_state(state.clone())
         .layer(from_fn_with_state(state, admin_auth_middleware))
 }
@@ -64,6 +70,29 @@ async fn admin_auth_middleware(
     }
 
     next.run(request).await
+}
+
+/// A throwaway on-disk session store for the admin-router tests.
+///
+/// Shared by the three `AdminApiState` fixtures rather than repeated: they all
+/// already hold a `TempDir`, and the alternative — making `session_store`
+/// optional so tests can pass `None` — would let a production boot that forgot
+/// to wire it degrade into a permanently-503 resume route with no compile error
+/// to catch it.
+#[cfg(test)]
+pub(crate) fn test_session_store(
+    dir: &std::path::Path,
+) -> Arc<dyn crate::gateway::session_store::SessionStore> {
+    use crate::gateway::session_store::file_backend::{FileSessionStore, FileSessionStoreConfig};
+    let base = dir.join("sessions");
+    std::fs::create_dir_all(&base).expect("session dir");
+    Arc::new(
+        FileSessionStore::new(FileSessionStoreConfig {
+            base_dir: base,
+            ..Default::default()
+        })
+        .expect("file session store"),
+    )
 }
 
 fn admin_unauthorized(message: &str) -> Response {
@@ -104,6 +133,7 @@ mod tests {
         let app = router(AdminApiState {
             shared_token,
             agent_manager,
+            session_store: test_session_store(dir.path()),
         });
         (app, token, dir)
     }

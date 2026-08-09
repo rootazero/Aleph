@@ -215,6 +215,7 @@ async fn h_t1_worktree_isolation_happy_path() {
         isolation: Some(IsolationMode::Worktree),
         strategy: None,
         session_mode: None,
+        request_id: None,
     };
 
     let result = spawn(&base, req).await;

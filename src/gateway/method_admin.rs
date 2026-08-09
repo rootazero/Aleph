@@ -131,12 +131,19 @@ const ADMIN_PREFIXES: &[&str] = &[
     //
     // Gated whole, with no carve-out, because the family has exactly one
     // client and it is already operator: `interfaces/cli/src/commands/
-    // workspace_cmd.rs` (`aleph workspace list|create|archive`), which reaches
-    // the server over loopback/IPC. The Panel has NONE — `interfaces/webchat/
-    // src/api/workspace.rs`'s own doc records that `workspace.list` was dead
-    // and removed — and `workspace.update`/`workspace.get` have no client
-    // anywhere. A `MEMBER_CARVE_OUTS` entry for the reads would therefore be a
-    // zero-consumer opening (R10 YAGNI), not a preserved capability.
+    // workspace_cmd.rs` (`aleph workspace list|get|create|update|archive`),
+    // which reaches the server over loopback/IPC. The Panel has NONE —
+    // `interfaces/webchat/src/api/workspace.rs`'s own doc records that
+    // `workspace.list` was dead and removed. A `MEMBER_CARVE_OUTS` entry for
+    // the reads would therefore be a zero-consumer opening (R10 YAGNI), not a
+    // preserved capability.
+    //
+    // `get`/`update` had no client at all until 2026-08-08 and were listed here
+    // as such; they were CONNECTed rather than CUT because `update` is the only
+    // edit verb a workspace has — `archive` is a soft delete that keeps the id
+    // taken, so without it a display name mistyped at `create` was permanent.
+    // Both arrived already inside this gate, which is why the ruling above did
+    // not have to be reopened.
     //
     // NOT an owner column: that would build a permission model for per-user
     // workspaces, a capability no surface currently lets a member use. If that
@@ -229,15 +236,30 @@ const ADMIN_PREFIXES: &[&str] = &[
     // decision, and fail-closed-for-privilege is still this list's default
     // for anything not individually carved out. ---
     "tools.",
-    // --- Exec-tier approval resolution: a member resolving these is a
-    // privilege escalation over the approval gate itself. The delivery-side
-    // half is `event_scope.rs`: `approval.*` / `surface.approval` are guarded
-    // prefixes there, and a member no longer holds the `"*"` wildcard that
-    // short-circuits every rule (`event_scope::scope_for_role` — the wildcard
-    // is operator-only). Note the two halves are independent: that guard filters
-    // *delivery* of the cards, this list refuses the *resolution* RPCs, and
-    // neither implies the other. No carve-outs — ---
-    "exec.", // exec.approval.resolve, exec.approvals.pending.
+    // --- Exec configuration. The two APPROVAL methods are carved out below
+    // (2026-08-08); everything else in the family stays operator-only, so a
+    // future `exec.*` sibling is gated by default. ---
+    //
+    // The old comment here read: "a member resolving these is a privilege
+    // escalation over the approval gate itself", with "No carve-outs". Both
+    // halves of that were closed — this list refused the resolution RPCs and
+    // `event_scope.rs` refused delivery of the cards — and the note observed
+    // approvingly that "neither implies the other". Closing both is what made
+    // the gate structurally unusable for the person it gates: a member's run
+    // blocked on a confirmation they could neither see nor give, waited out the
+    // 120-second timeout, and the documented way to get work done was to send
+    // `exec_tier: "full"`. The safest tier was unusable and the least safe one
+    // was not — a permission system that pushes its users toward the wide
+    // setting has inverted its own purpose.
+    //
+    // What made a member resolving an approval an escalation was the ABSENCE of
+    // a predicate, not the verb. The handlers now filter by
+    // `visibility::session_visible_to`: a caller sees and answers exactly the
+    // approvals raised for sessions they can already see, which is strictly
+    // less than the run they are already permitted to start. Fleet approvals
+    // (empty `session_key`, raised by a cluster node over reverse RPC) remain
+    // operator-only on both faces.
+    "exec.", // exec.approval.resolve, exec.approvals.pending, exec config.
     // --- Persisted agent-trace replay (final-review round — C2). A trace is
     // a full transcript (prompts, tool inputs, tool outputs) keyed only by
     // `run_id`, with no owner recorded anywhere in the trace store, so this
@@ -273,6 +295,16 @@ const MEMBER_CARVE_OUTS: &[&str] = &[
     // session's own) — see `handlers/trace_replay.rs::handle_by_runs`. Its
     // siblings stay gated; this carve-out is as narrow as `tools.invoke`'s.
     "trace.by_runs",
+    // The approval gate's two faces, carved out 2026-08-08 so that the gate
+    // works for the person it gates. Both are filtered in
+    // `handlers/exec_approvals.rs` by the same visibility predicate the rest of
+    // the perimeter uses, and both are registered in `method_visibility`
+    // (ListFiltered / KeyChecked). This is the round's only carve-out that
+    // hands a member a WRITE verb, which is why the refusal shape is
+    // load-bearing: a foreign approval id gets the message a stale id already
+    // produces, so a refusal cannot be used to enumerate.
+    "exec.approvals.pending",
+    "exec.approval.resolve",
     // The Panel's cold-load seed for the sidebar running dot, and its usage
     // gauge. Admin-gating it (inherited from the `gateway.` family) meant both
     // were silently dead for every member — the RPC fallback that the
@@ -287,6 +319,38 @@ const MEMBER_CARVE_OUTS: &[&str] = &[
     // `gateway.metrics.subagent_concurrency`) stay gated — narrowing those is
     // a separate, not-yet-made decision.
     "gateway.metrics.run_concurrency",
+    // The enumeration behind the composer's two session pills — the exec-tier
+    // dial and the session-mode dial. Both pills READ this method and WRITE
+    // through `sessions.patch` / `chat.send`'s per-request `exec_tier`+`mode`,
+    // which are member daily surfaces and always have been. Gating only the
+    // read left the door open and the menu locked: a member could set a session
+    // tier over the wire but had no way to learn which tiers exist, so the tier
+    // popover degraded to a lone "follow global" with a blank label and the
+    // mode pill — whose own code hides itself on an empty `modes` — vanished
+    // outright. Session mode is defined as a tool-PRESENTATION partition that
+    // "grants and denies no permission" (CLAUDE.md), so refusing its id list
+    // bought nothing at all.
+    //
+    // Safe because the handler narrows the response for a member
+    // (`config::exec_permissions_value` vs `member_visible_permissions_value`):
+    // the two server-global policy axes Settings → Policies edits — the
+    // per-tool `overrides` map and its `default` — are dropped, leaving four
+    // id enumerations (`exec_tier`/`tiers`/`mode`/`modes`). The write sibling
+    // `config.update_tool_permissions` stays gated with the rest of `config.`;
+    // this carve-out is a read of the dial positions, not a hand on the dial.
+    "config.get_tool_permissions",
+    // A member approving their OWN parked tool call. `exec.` gated the whole
+    // family, which made the default `Auto` tier a dead end for every member:
+    // any non-idempotent tool call parked for the full approval window and then
+    // died as `Timeout`, because the only principal allowed to resolve it was
+    // someone else. Both methods are owner-scoped in the handler against the
+    // approval record's own `session_key` (`handlers/exec_approvals.rs`) — the
+    // pending list is filtered to the caller's sessions and a resolve for a
+    // foreign session is refused with the byte-identical not-found shape. A
+    // member can therefore unblock their own work and still cannot see, let
+    // alone resolve, anyone else's.
+    "exec.approvals.pending",
+    "exec.approval.resolve",
 ];
 
 #[must_use]
@@ -390,9 +454,13 @@ mod tests {
             "wizard.start",
             "diagnostics.run",
             "pty.spawn",
-            // exec approval (fix round — Finding 3)
-            "exec.approval.resolve",
-            "exec.approvals.pending",
+            // exec approval — BOTH registered methods are carved open (a
+            // member resolving their own parked call; see MEMBER_CARVE_OUTS),
+            // so what is pinned here is the PREFIX, through a name that is
+            // deliberately not registered. The family stays fail-closed, and a
+            // future `exec.*` sibling has to be carved out on purpose rather
+            // than inheriting the two narrow rulings made for these two.
+            "exec.some_future_sibling",
             // direct tool execution (final-review round — C2). `tools.invoke`
             // is carved open below (Task 9, P1 member hardening — the handler
             // now enforces the operator gate itself); the siblings are
@@ -456,6 +524,54 @@ mod tests {
         }
     }
 
+    /// The read of the two composer dials is carved open; every other way of
+    /// touching `config.` — above all the WRITE sibling that sets the same two
+    /// dials server-wide — stays gated. Reading a dial position is not a hand
+    /// on the dial.
+    #[test]
+    fn the_tool_permissions_read_is_carved_open_but_its_write_sibling_is_not() {
+        assert!(
+            !method_requires_admin("config.get_tool_permissions"),
+            "config.get_tool_permissions must stay open — it is the id \
+             enumeration behind the composer's tier and mode pills, whose \
+             write face (sessions.patch / chat.send) a member already has"
+        );
+        for sibling in [
+            "config.update_tool_permissions",
+            "config.set_tool_permissions",
+            "config.patch",
+            "config.get",
+            "config.reload",
+        ] {
+            assert!(
+                method_requires_admin(sibling),
+                "{sibling} must stay admin-gated — only the tool-permissions \
+                 READ is carved out"
+            );
+        }
+    }
+
+    /// Both `exec.*` methods are open to a member for the same reason: without
+    /// them the default `Auto` tier is a dead end, because a member's own
+    /// parked tool call had no principal allowed to resolve it and died at the
+    /// approval timeout. Their owner-scoping lives in the handler, so this
+    /// carve-out and that scoping are one decision.
+    #[test]
+    fn a_member_may_resolve_their_own_parked_tool_call() {
+        for m in ["exec.approvals.pending", "exec.approval.resolve"] {
+            assert!(
+                !method_requires_admin(m),
+                "{m} must stay open — it is how a member unblocks their OWN \
+                 tool call; the handler scopes it to their own sessions"
+            );
+        }
+        assert!(
+            method_requires_admin("exec.some_future_sibling"),
+            "the `exec.` prefix must stay fail-closed for methods nobody has \
+             ruled on yet"
+        );
+    }
+
     #[test]
     fn member_daily_methods_stay_open() {
         for m in [
@@ -474,6 +590,14 @@ mod tests {
             // siblings (`tools.catalog` etc., pinned in the admin table
             // above) are unaffected.
             "tools.invoke",
+            // The approval gate's two faces (2026-08-08). A member's own run
+            // blocks on a confirmation; if they cannot see it and cannot answer
+            // it, the run dies at the 120s timeout and the only way through is
+            // the widest tier — so leaving these closed did not restrict the
+            // member, it pushed them past the gate entirely. Filtered per
+            // caller in the handler, fleet approvals still operator-only.
+            "exec.approvals.pending",
+            "exec.approval.resolve",
             "agents.list",
             "agents.get",
             "heartbeat.list",
@@ -495,6 +619,12 @@ mod tests {
             "clarification.pending",
             "subagent.tree",
             "agent.run",
+            // Its twin: resuming a session's interrupted run is the same
+            // authorization question as starting one, and the run re-enters
+            // under the SESSION's persisted owner/scope, never the caller's.
+            // `handlers::resume` gates on `session_visible`, so a member can
+            // only name a session it can already see.
+            "agent.resume",
             "trace.by_runs",
             "gateway.metrics.run_concurrency",
             "session.compact",
@@ -570,7 +700,9 @@ mod tests {
             );
         }
         assert!(
-            !MEMBER_CARVE_OUTS.iter().any(|m| m.starts_with("workspace.")),
+            !MEMBER_CARVE_OUTS
+                .iter()
+                .any(|m| m.starts_with("workspace.")),
             "no workspace.* carve-out may be added without a member consumer to justify it"
         );
     }

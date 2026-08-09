@@ -426,15 +426,14 @@ impl GatewayEventBus {
         Ok(self.publish(json))
     }
 
-    pub fn publish_gateway_event(
-        &self,
-        event: &GatewayEvent,
-    ) -> Result<usize, serde_json::Error> {
+    pub fn publish_gateway_event(&self, event: &GatewayEvent) -> Result<usize, serde_json::Error> {
         match event {
-            GatewayEvent::ConfigChanged(event) => self.publish_frame(&GatewayEventFrame::ConfigChanged {
-                section: event.section.clone(),
-                value: event.value.clone(),
-            }),
+            GatewayEvent::ConfigChanged(event) => {
+                self.publish_frame(&GatewayEventFrame::ConfigChanged {
+                    section: event.section.clone(),
+                    value: event.value.clone(),
+                })
+            }
         }
     }
 

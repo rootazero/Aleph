@@ -274,7 +274,7 @@ mod tests {
             &llm,
             None,
             "child-agent",
-            &ephemeral_for("child-agent"),
+            &ephemeral_for("child-agent", None),
         );
         assert!(
             budget.is_none() && compactor.is_none() && preflight.is_none(),
@@ -292,7 +292,7 @@ mod tests {
             diminishing_threshold: 500,
             max_splits: 3,
         };
-        let child_id = ephemeral_for("child-agent");
+        let child_id = ephemeral_for("child-agent", None);
         let (budget, compactor, preflight) =
             super::super::build_context_triple(Some(&cfg), &llm, None, "child-agent", &child_id);
         assert!(
@@ -337,7 +337,7 @@ mod tests {
             diminishing_threshold: 500,
             max_splits: 3,
         };
-        let child_id = ephemeral_for("child-agent");
+        let child_id = ephemeral_for("child-agent", None);
 
         let (_, with_cheap, _) = super::super::build_context_triple(
             Some(&cfg),
@@ -442,6 +442,7 @@ mod tests {
             isolation: None,
             strategy: None,
             session_mode: None,
+            request_id: None,
         };
 
         let result = spawn(&base, req).await.expect("spawn ok");
@@ -483,6 +484,7 @@ mod tests {
             isolation: None,
             strategy: None,
             session_mode: None,
+            request_id: None,
         };
 
         let result = spawn(&base, req).await.expect("spawn ok");
@@ -521,6 +523,7 @@ mod tests {
                     isolation: None,
                     strategy: None,
                     session_mode: None,
+                    request_id: None,
                 },
             ),
         )
@@ -546,6 +549,7 @@ mod tests {
                     isolation: None,
                     strategy: None,
                     session_mode: None,
+                    request_id: None,
                 },
             ),
         )
@@ -594,6 +598,7 @@ mod tests {
                     isolation: None,
                     strategy: None,
                     session_mode: None,
+                    request_id: None,
                 },
             ),
         )
@@ -642,6 +647,7 @@ mod tests {
                     isolation: None,
                     strategy: None,
                     session_mode: None,
+                    request_id: None,
                 },
             ),
         )
@@ -685,6 +691,7 @@ mod tests {
             isolation: None,
             strategy: None,
             session_mode: None,
+            request_id: None,
         };
 
         let result = spawn(&base, req).await.expect("spawn ok");
@@ -714,6 +721,7 @@ mod tests {
             isolation: None,
             strategy: None,
             session_mode: None,
+            request_id: None,
         };
 
         let result = spawn(&base, req).await.expect("spawn ok");
@@ -739,6 +747,7 @@ mod tests {
             isolation: None,
             strategy: None,
             session_mode: None,
+            request_id: None,
         };
 
         let err = spawn(&base, req).await.expect_err("spawn should time out");
@@ -774,6 +783,7 @@ mod tests {
             isolation: None,
             strategy: None,
             session_mode: None,
+            request_id: None,
         };
 
         let result = spawn(&base, req).await.expect("spawn ok");
@@ -824,6 +834,7 @@ mod tests {
             isolation: None,
             strategy: None,
             session_mode: None,
+            request_id: None,
         };
 
         spawn(&base, req).await.expect("spawn ok");
@@ -894,6 +905,7 @@ mod tests {
             isolation: None,
             strategy: None,
             session_mode: None,
+            request_id: None,
         };
 
         let result = spawn(&base, req).await.expect("spawn ok");
@@ -922,6 +934,7 @@ mod tests {
             isolation: None,
             strategy: None,
             session_mode: None,
+            request_id: None,
         };
         assert!(req.isolation.is_none());
     }
@@ -979,7 +992,7 @@ mod tests {
         migrate_add_session_events(&conn).unwrap();
         let store: Arc<dyn SessionEventStore> = Arc::new(SqliteEventStore::new(conn));
         let session: Arc<dyn SessionService> = Arc::new(InProcessActorSessionService::new(store));
-        let child_id = ephemeral_for("edge");
+        let child_id = ephemeral_for("edge", None);
 
         // Turn 1: "thinking..." (real text). Turn 2: pure tool_use (empty).
         seed_session_with_assistant_texts(&session, &child_id, &[Some("thinking..."), None]).await;
@@ -1010,7 +1023,7 @@ mod tests {
         migrate_add_session_events(&conn).unwrap();
         let store: Arc<dyn SessionEventStore> = Arc::new(SqliteEventStore::new(conn));
         let session: Arc<dyn SessionService> = Arc::new(InProcessActorSessionService::new(store));
-        let child_id = ephemeral_for("happy");
+        let child_id = ephemeral_for("happy", None);
 
         // Turn 1: pure tool_use (empty). Turn 2: terminal text.
         seed_session_with_assistant_texts(&session, &child_id, &[None, Some("final answer")]).await;
@@ -1062,6 +1075,7 @@ mod tests {
             isolation: None,
             strategy: None,
             session_mode: None,
+            request_id: None,
         };
         let err = spawn(&base, req).await.expect_err("must fail loud");
         assert!(
@@ -1137,6 +1151,7 @@ mod tests {
             isolation: None,
             strategy: None,
             session_mode: None,
+            request_id: None,
         };
 
         spawn(&base, req).await.expect("spawn ok");
@@ -1256,6 +1271,7 @@ mod tests {
             isolation: None,
             strategy: None,
             session_mode: None,
+            request_id: None,
         };
 
         spawn(&base, req).await.expect("spawn ok");
@@ -1302,6 +1318,7 @@ mod tests {
             context_summary: None,
             model: None,
             timeout_secs: 5,
+            request_id: None,
         };
 
         runtime.run(config).await.expect("spawn ok");
@@ -1390,6 +1407,7 @@ mod tests {
             isolation: None,
             strategy: Some("Objective: weld it.\nGuardrails:\n- no shortcuts"),
             session_mode: None,
+            request_id: None,
         };
         let _ = spawn(&base, req).await.expect("spawn ok");
 
@@ -1419,6 +1437,7 @@ mod tests {
             isolation: None,
             strategy: None,
             session_mode: Some(crate::config::types::policies::SessionMode::Chat),
+            request_id: None,
         };
         let _ = spawn(&base, req).await.expect("spawn ok");
 
@@ -1446,6 +1465,7 @@ mod tests {
             isolation: None,
             strategy: None,
             session_mode: None,
+            request_id: None,
         };
         let _ = spawn(&base, req).await.expect("spawn ok");
 
@@ -1481,6 +1501,7 @@ mod tests {
             isolation: None,
             strategy: None,
             session_mode: None,
+            request_id: None,
         };
 
         let result = spawn(&base, req).await.expect("spawn ok");
@@ -1532,6 +1553,7 @@ mod tests {
             isolation: None,
             strategy: None,
             session_mode: None,
+            request_id: None,
         };
 
         let result = spawn(&base, req).await.expect("spawn ok");
@@ -1575,6 +1597,7 @@ mod tests {
             isolation: None,
             strategy: None,
             session_mode: None,
+            request_id: None,
         };
 
         spawn(&base, req).await.expect("spawn ok");

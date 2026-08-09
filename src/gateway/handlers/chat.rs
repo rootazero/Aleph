@@ -313,6 +313,22 @@ pub async fn handle_abort(
         }
     }
 
+    // …and the run id needs its own gate, because the block above is inside
+    // `if let Some(ref key_str)`. `session_key` is `#[serde(default)]
+    // Option<String>`, so OMITTING it skipped every check and went straight to
+    // `cancel_run` — the guard was real, and reaching it was optional. A
+    // conditional gate on an optional field gates only the callers who chose to
+    // fill it in.
+    if !crate::gateway::handlers::agent::caller_may_address_run(
+        &params.run_id,
+        &run_manager,
+        session_store.as_ref(),
+    )
+    .await
+    {
+        return visibility::not_found_response(request.id);
+    }
+
     // Drop the backlog before cancelling, never after: cancelling releases the
     // session slot, which wakes the lane's front waiter, which can be admitted
     // (and so leave the lane) before a later purge could mark it. Same ordering

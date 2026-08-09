@@ -147,12 +147,21 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         Some(Command::BootstrapToken) => return commands::handle_bootstrap_token(),
         // Mint a pairing ticket: one INSERT into the same 0600 security.db
         // (WAL + busy_timeout), so it works with or without a live daemon.
-        Some(Command::Pair { ttl }) => return commands::handle_pair(args.config.clone(), ttl),
+        Some(Command::Pair { ttl, user }) => {
+            return commands::handle_pair(args.config.clone(), ttl, user)
+        }
         // Version check + delegate to the official installer. Network/process
         // only — no tokio runtime, no instance lock (must not contend with a
         // running daemon).
         Some(Command::Update { check }) => return commands::handle_update(check),
         Some(Command::Status { json }) => return daemon::handle_status(&args.pid_file, json),
+        // Forwards to the running server over the admin IPC route: reads the
+        // endpoint file + bearer token, takes no lock, needs no tokio. The
+        // server is the only thing that can resume a run, so there is
+        // deliberately no local fallback.
+        Some(Command::Resume { session_key, json }) => {
+            return commands::handle_resume_command(session_key, json);
+        }
         // Shell-hook consent: pure file IO against ~/.aleph/, no tokio
         // runtime and no instance lock required (the consent module guards
         // its file with fs2 + atomic rename).
@@ -330,6 +339,7 @@ async fn async_main(args: Args) -> Result<(), Box<dyn std::error::Error>> {
             | Command::Status { .. }
             | Command::Hooks { .. }
             | Command::PromptSize { .. }
+            | Command::Resume { .. }
             | Command::SandboxInit { .. }
             | Command::SandboxInitWindows { .. },
         ) => unreachable!(),

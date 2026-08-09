@@ -20,6 +20,7 @@
 
 mod loop_tool;
 mod parse;
+mod recovery;
 mod spawn;
 mod types;
 

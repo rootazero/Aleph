@@ -50,11 +50,16 @@ pub struct ConnectionState {
     /// when that role changes. Operator ⇒ the `"*"` wildcard; member and walled
     /// ⇒ empty.
     ///
-    /// Read by exactly one consumer, [`EventScopeGuard::can_receive`] on the
-    /// per-event delivery path, and that guard is *default-allow*: an empty
-    /// scope still receives every unguarded topic (chat, session, `agent.run.*`)
-    /// and only loses the admin-guarded prefixes — `approval.*`,
-    /// `surface.approval`, `config.changed`, `pairing.*`, `guest.*`.
+    /// Read by two consumers on the per-event delivery path:
+    /// [`EventScopeGuard::can_receive`], which is *default-allow* — an empty
+    /// scope still receives every unguarded topic (chat, session,
+    /// `agent.run.*`) and only loses the admin-guarded prefixes
+    /// (`surface.approval`, `config.changed`, `pairing.*`, `guest.*`, `node.`)
+    /// — and `event_scope::is_superuser_scope`, which supplies the admin arm of
+    /// `event_visibility`'s `BySessionKeyOrAdmin`. The raw `approval.*` topics
+    /// moved from the first consumer to the second on 2026-08-08 so a member
+    /// can receive the card for their own parked tool call; see
+    /// `event_visibility`'s module doc.
     pub permissions: Vec<String>,
     /// Resolved client IP (the trusted-proxy-forwarded client behind a
     /// reverse proxy, else the raw socket peer). The per-IP connection cap

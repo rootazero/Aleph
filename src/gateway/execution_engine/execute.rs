@@ -1649,7 +1649,33 @@ async fn stop_loop_on_failure(
 /// (loop) / blocked note (goal).
 pub(super) async fn notify_origin(origin: Option<&OriginRoute>, text: String) {
     if let Some((reg, ch, conv)) = origin {
-        let msg = crate::gateway::channel::OutboundMessage::text(conv.clone(), text);
+        // The THIRD unattended-output leg. Two are wrapped in `run_loop::inner`
+        // — `RedactingEmitter` (the event/channel leg) and
+        // `UnattendedRedactingSink` (the trace leg) — and they agree byte for
+        // byte. This one bypassed both: it calls `ChannelRegistry::send`
+        // directly, and its callers push run-derived error text
+        // (`goal_continuation` formats the raw provider error, truncates it to
+        // 300 chars, and sends "⚠️ Autonomous pursuit of your standing goal
+        // halted: {reason}" to Telegram or Slack).
+        //
+        // That this string class carries secrets is not a new judgement: the
+        // emitter leg already masks `RunError.error` / `RunRetrying.reason`,
+        // with the comment "Provider failures do echo request material, so this
+        // is not identifier-only." Same class of string, same destination, one
+        // leg masked and two not — §5.1's recurrence shape, second occurrence.
+        //
+        // Masked HERE rather than at the five call sites: every caller of this
+        // function is a continuation notice, i.e. unattended by construction,
+        // so there is no attended path to charge for it.
+        //
+        // ⚠️ **This closes the leg, not the class.** `SecretMasker::new()` is
+        // pattern-based against a fixed vendor list, and `add_pattern` still
+        // has zero production callers — an operator's own credential, if it
+        // does not look like a vendor key, rides through all three legs
+        // unchanged. Wiring `add_pattern` to configuration is a separate change
+        // and is deliberately NOT implied by this one.
+        let masker = crate::exec::masker::SecretMasker::new();
+        let msg = crate::gateway::channel::OutboundMessage::text(conv.clone(), masker.mask(&text));
         if let Err(e) = reg
             .send(&crate::gateway::channel::ChannelId::new(ch.clone()), msg)
             .await

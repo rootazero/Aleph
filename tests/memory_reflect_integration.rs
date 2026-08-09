@@ -67,7 +67,6 @@ fn test_assembler_config() -> AssemblerConfig {
         // Skeleton fallback still packages any gathered candidates into slots.
         force_fallback: true,
         fallback_skeleton: Default::default(),
-        assembly_log: Default::default(),
         project_scoped: false,
         retrieval_scoring: Default::default(),
         rerank: Default::default(),

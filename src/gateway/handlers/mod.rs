@@ -97,6 +97,7 @@ pub mod providers;
 pub mod pty;
 pub mod request_state;
 pub mod rerank_config;
+pub mod resume;
 pub mod route_config;
 pub mod routing_rules;
 pub mod runtimes;

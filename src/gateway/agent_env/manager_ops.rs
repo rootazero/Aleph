@@ -7,6 +7,19 @@ use tracing::{debug, info};
 
 use super::{AgentEnv, AgentEnvError, AgentEnvStore, CacheState};
 
+/// The `agent_envs` columns [`AgentEnvStore::row_to_agent_env`] reads, in the
+/// order it reads them.
+///
+/// A constant rather than the literal repeated at each query site: the mapper
+/// reads by **index**, so a column added to one SELECT and not another does not
+/// fail — it shifts every later field of that query onto the wrong value, which
+/// deserializes as plausible garbage rather than as an error. There were three
+/// hand-copied copies of this list before `get_including_archived` would have
+/// made a fourth.
+const ENV_COLUMNS: &str = "id, profile, created_at, last_active_at, cache_state, env_vars, \
+                           description, name, icon, archived, decay_rate, permanent_fact_types, \
+                           default_model, system_prompt_override, allowed_tools";
+
 impl AgentEnvStore {
     // =========================================================================
     // AgentEnv CRUD
@@ -73,18 +86,50 @@ impl AgentEnvStore {
         Ok(env)
     }
 
-    /// Get an agent environment by ID
+    /// Get an agent environment by ID.
+    ///
+    /// Active rows only. Nearly every caller is a **runtime** lookup — the env
+    /// a run executes under, the profile a channel binds to — and resolving one
+    /// of those to a soft-deleted row would quietly resurrect it. Ask
+    /// [`Self::get_including_archived`] when the archive itself is the
+    /// question.
     pub async fn get(&self, id: &str) -> Result<Option<AgentEnv>, AgentEnvError> {
+        self.get_where(id, "AND archived = 0")
+    }
+
+    /// Get an agent environment by ID, archived or not.
+    ///
+    /// The one caller is `workspace.get`, and it is not a runtime lookup: the
+    /// caller already holds the exact id, and `is_archived` comes back in the
+    /// answer, so nothing is resurrected by showing it. Without this,
+    /// `workspace list --include-archived` prints a row that `workspace get`
+    /// then reports does not exist — the display-side lie this codebase keeps
+    /// paying for, one level down from the one that flag was added to fix.
+    ///
+    /// Read-only on purpose: archived workspaces are **readable, not
+    /// writable**. [`Self::update`] refuses them; there is no unarchive verb.
+    pub async fn get_including_archived(
+        &self,
+        id: &str,
+    ) -> Result<Option<AgentEnv>, AgentEnvError> {
+        self.get_where(id, "")
+    }
+
+    /// Shared body of the two by-id reads. `extra_predicate` is appended to the
+    /// `WHERE` clause and is a compile-time literal at both call sites — it
+    /// never carries caller input.
+    fn get_where(
+        &self,
+        id: &str,
+        extra_predicate: &str,
+    ) -> Result<Option<AgentEnv>, AgentEnvError> {
         let conn = self
             .conn
             .lock()
             .map_err(|e| AgentEnvError::Database(format!("Lock error: {e}")))?;
 
         let result = conn.query_row(
-            "SELECT id, profile, created_at, last_active_at, cache_state, env_vars, description,
-                    name, icon, archived, decay_rate, permanent_fact_types,
-                    default_model, system_prompt_override, allowed_tools
-             FROM agent_envs WHERE id = ? AND archived = 0",
+            &format!("SELECT {ENV_COLUMNS} FROM agent_envs WHERE id = ? {extra_predicate}"),
             params![id],
             Self::row_to_agent_env,
         );
@@ -103,20 +148,16 @@ impl AgentEnvStore {
             .lock()
             .map_err(|e| AgentEnvError::Database(format!("Lock error: {e}")))?;
 
-        let query = if include_archived {
-            "SELECT id, profile, created_at, last_active_at, cache_state, env_vars, description,
-                    name, icon, archived, decay_rate, permanent_fact_types,
-                    default_model, system_prompt_override, allowed_tools
-             FROM agent_envs ORDER BY last_active_at DESC"
+        let filter = if include_archived {
+            ""
         } else {
-            "SELECT id, profile, created_at, last_active_at, cache_state, env_vars, description,
-                    name, icon, archived, decay_rate, permanent_fact_types,
-                    default_model, system_prompt_override, allowed_tools
-             FROM agent_envs WHERE archived = 0 ORDER BY last_active_at DESC"
+            "WHERE archived = 0"
         };
+        let query =
+            format!("SELECT {ENV_COLUMNS} FROM agent_envs {filter} ORDER BY last_active_at DESC");
 
         let mut stmt = conn
-            .prepare(query)
+            .prepare(&query)
             .map_err(|e| AgentEnvError::Database(e.to_string()))?;
 
         let envs = stmt
@@ -132,7 +173,30 @@ impl AgentEnvStore {
     ///
     /// Only non-None fields are applied. Uses COALESCE to preserve existing
     /// values for fields not provided. Returns the updated agent environment,
-    /// or None if the agent environment was not found.
+    /// or None if the agent environment was not found **or is archived**.
+    ///
+    /// # Why the write filters `archived = 0`
+    ///
+    /// It did not until 2026-08-08, and the two halves of this function then
+    /// disagreed about what an archived row is: the UPDATE matched it (no
+    /// `archived` clause) while the read-back through [`Self::get`] did not.
+    /// So an archived row was **really rewritten** and the caller was then told
+    /// `Ok(None)` — which `workspace.update` then rendered as "not found". A write
+    /// that lands while the response denies it ever happened is the worst shape
+    /// available, and it was unreachable only because that RPC had no client;
+    /// wiring `aleph workspace update` up is what would have made it real.
+    ///
+    /// Filtering the write (rather than widening the read-back) is what makes
+    /// the existing `Ok(None)` answer TRUE, and it is the semantics the rest of
+    /// the family already has: archived workspaces are readable
+    /// ([`Self::get_including_archived`]) and not writable. There is no
+    /// unarchive verb, so this is terminal by construction, not by omission.
+    ///
+    /// This `None` is therefore ambiguous by design — "no such row" and "that
+    /// row is archived" arrive as the same value. `handle_update` disambiguates
+    /// it with a follow-up read, because the two deserve different refusals;
+    /// pushing that into the return type would make every existing caller
+    /// handle a distinction only one of them has a use for.
     pub async fn update(
         &self,
         id: &str,
@@ -162,7 +226,7 @@ impl AgentEnvStore {
                     description = COALESCE(?2, description),
                     icon = COALESCE(?3, icon),
                     last_active_at = ?4
-                 WHERE id = ?5",
+                 WHERE id = ?5 AND archived = 0",
                 params![name_owned, desc_owned, icon_owned, now, id],
             )
             .map_err(|e| AgentEnvError::Database(format!("Update failed: {e}")))?
@@ -346,39 +410,6 @@ impl AgentEnvStore {
             map.entry(agent_id).or_default().push(channel);
         }
         Ok(map)
-    }
-
-    // =========================================================================
-    // Maintenance
-    // =========================================================================
-
-    /// Archive inactive agent environments
-    pub async fn archive_inactive(&self) -> Result<usize, AgentEnvError> {
-        if self.config.archive_after_days == 0 {
-            return Ok(0);
-        }
-
-        let threshold =
-            Utc::now().timestamp() - (i64::from(self.config.archive_after_days) * 24 * 60 * 60);
-
-        let conn = self
-            .conn
-            .lock()
-            .map_err(|e| AgentEnvError::Database(format!("Lock error: {e}")))?;
-
-        let affected = conn
-            .execute(
-                "UPDATE agent_envs SET archived = 1
-                 WHERE last_active_at < ? AND id != 'global' AND archived = 0",
-                params![threshold],
-            )
-            .map_err(|e| AgentEnvError::Database(e.to_string()))?;
-
-        if affected > 0 {
-            info!("Archived {} inactive agent environments", affected);
-        }
-
-        Ok(affected)
     }
 
     // =========================================================================

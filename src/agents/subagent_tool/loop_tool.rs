@@ -18,6 +18,7 @@ use crate::tools::runtime::{LoopTool, ToolResult};
 use tokio_util::sync::CancellationToken;
 
 use super::parse::parse_args;
+use super::recovery::{self, Recovered};
 use super::spawn::CancelGuard;
 use super::types::{
     wave_aware_child_timeout_cap, wave_count, BatchTask, SubagentAction, BATCH_ABORT_DRAIN_SECS,
@@ -354,7 +355,7 @@ impl LoopTool for SubagentTool {
                     let request_id = &request_ids[0];
                     let outcome = tokio::select! {
                         biased;
-                        () = cancel.cancelled() => return self.wait_cancelled(&request_ids),
+                        () = cancel.cancelled() => return self.wait_cancelled(&request_ids).await,
                         outcome = self.background_tracker.wait(request_id, scope, dur) => outcome,
                     };
                     return match outcome {
@@ -402,17 +403,23 @@ impl LoopTool for SubagentTool {
                 // sees which child failed and can wait for the rest.
                 let outcome = tokio::select! {
                     biased;
-                    () = cancel.cancelled() => return self.wait_cancelled(&request_ids),
+                    () = cancel.cancelled() => return self.wait_cancelled(&request_ids).await,
                     outcome = self.background_tracker.wait_any(&request_ids, scope, dur) => outcome,
                 };
                 let unknown = self.background_tracker.unknown_ids(&request_ids, scope);
+                // One log read serves every unknown id in this call. Ids the
+                // durable log can account for are NOT unknown — they are
+                // finished-and-forgotten or interrupted-by-restart, and telling
+                // the model to "drop them from your next wait" would be a lie
+                // that costs it the result.
+                let recovered = self.recover_from_log(&unknown).await;
                 return match outcome {
                     WaitAnyOutcome::Completed {
                         request_id,
                         snapshot,
                     } => {
                         let mut output = completed_to_json(&request_id, "completed", &snapshot);
-                        annotate_unknown(&mut output, &unknown);
+                        annotate_unknown(&mut output, &unknown, &recovered);
                         ToolResult::Success { output }
                     }
                     WaitAnyOutcome::TimedOut { still_running } => {
@@ -433,7 +440,7 @@ impl LoopTool for SubagentTool {
                             "waited_secs": timeout_secs,
                             "note": "No sub-agent in the set finished within the wait window. Call 'wait' again with these request_ids to keep blocking, or do other work — completions are also announced to you.",
                         });
-                        annotate_unknown(&mut output, &unknown);
+                        annotate_unknown(&mut output, &unknown, &recovered);
                         ToolResult::Success { output }
                     }
                     // Every id in the set already handed you its result. Re-issuing
@@ -450,10 +457,24 @@ impl LoopTool for SubagentTool {
                             "request_ids": request_ids,
                             "note": "Every sub-agent in this set has finished and its result was already returned to you. Nothing is left to wait for; use 'check_status' with a specific request_id to re-read one.",
                         });
-                        annotate_unknown(&mut output, &unknown);
+                        annotate_unknown(&mut output, &unknown, &recovered);
                         ToolResult::Success { output }
                     }
                     WaitAnyOutcome::NotFound { unknown_ids } => {
+                        // Before calling the whole set bad: after a restart the
+                        // tracker knows none of these ids, yet the durable log
+                        // may hold finished results for all of them. That is a
+                        // Success carrying what was recovered, not an error.
+                        if !recovered.is_empty() {
+                            let mut output = json!({
+                                "status": "recovered_after_restart",
+                                "note": "None of these sub-agents is in the live registry — the \
+                                         server restarted since they were spawned. What the \
+                                         durable session log still knows about them is below.",
+                            });
+                            annotate_unknown(&mut output, &unknown, &recovered);
+                            return ToolResult::Success { output };
+                        }
                         // Round-8 — name the bad ids so the model fixes the
                         // call instead of issuing it again blind. The base
                         // "all unknown" message is preserved as a fallback
@@ -535,12 +556,26 @@ impl LoopTool for SubagentTool {
                             output: completed_to_json(&request_id, "already_completed", &snap),
                         }
                     }
-                    None => ToolResult::Error {
-                        error: format!(
-                            "No running or completed sub-agent found with request_id '{request_id}'"
-                        ),
-                        retryable: false,
-                    },
+                    None => {
+                        // Cancelling something the restart already stopped: the
+                        // honest answer is what happened to it, not "no such
+                        // sub-agent". An `Interrupted` row also tells the model
+                        // its cancel was a no-op because there was nothing left
+                        // to cancel.
+                        match self
+                            .recover_from_log(std::slice::from_ref(&request_id))
+                            .await
+                            .remove(&request_id)
+                        {
+                            Some(found) => recovery::to_result(&request_id, &found),
+                            None => ToolResult::Error {
+                                error: format!(
+                                    "No running or completed sub-agent found with request_id '{request_id}'"
+                                ),
+                                retryable: false,
+                            },
+                        }
+                    }
                 };
             }
             SubagentAction::List => {
@@ -572,6 +607,30 @@ impl LoopTool for SubagentTool {
                     .take(MAX_LISTED_COMPLETED)
                     .map(|(id, snap)| completed_row_json(id, snap))
                     .collect();
+                // The tracker is process memory, so everything above is empty
+                // after a restart — including for a session that spawned a dozen
+                // sub-agents and got results from all of them. Ask the durable
+                // log for the ones the tracker no longer has; `known` keeps a
+                // live entry from being listed twice.
+                let known: Vec<String> = running
+                    .iter()
+                    .filter_map(|row| row.get("request_id")?.as_str().map(str::to_string))
+                    .chain(all_completed.iter().map(|(id, _)| id.clone()))
+                    .collect();
+                // Rows, not full results: a recovered entry stays in this list
+                // for the life of the session (the tracker's TTL only ever
+                // moves entries *into* it), so carrying every byte of every
+                // finished sub-agent's output would grow the directory without
+                // bound. Newest last from the log, so the tail is the cap —
+                // matching `completed`'s newest-first intent.
+                let recovered_all = self.list_from_log(&known).await;
+                let recovered_total = recovered_all.len();
+                let from_log: Vec<Value> = recovered_all
+                    .iter()
+                    .skip(recovered_total.saturating_sub(MAX_LISTED_COMPLETED))
+                    .map(|(id, rec)| recovery::to_list_row(id, rec))
+                    .collect();
+
                 let mut output = json!({
                     "running": running,
                     "running_count": running.len(),
@@ -579,6 +638,36 @@ impl LoopTool for SubagentTool {
                     "completed_count": completed_total,
                     "note": "Rows are summaries. Use 'check_status' with a request_id for a sub-agent's full result text.",
                 });
+                if !from_log.is_empty() {
+                    if let Some(obj) = output.as_object_mut() {
+                        obj.insert("from_durable_log".to_string(), json!(from_log));
+                        obj.insert("from_durable_log_count".to_string(), json!(recovered_total));
+                        obj.insert(
+                            "from_durable_log_note".to_string(),
+                            json!(
+                                "These sub-agents are not in the live registry — the server \
+                                 restarted since they were spawned (or their entry aged out). \
+                                 Status 'completed_recovered' means that work is DONE and its \
+                                 output survived: 'check_status' with the request_id returns \
+                                 the full text, so do not re-run it. Status 'interrupted' \
+                                 means it never finished."
+                            ),
+                        );
+                        if recovered_total > MAX_LISTED_COMPLETED {
+                            // Same anti-silent-truncation rule the live half
+                            // follows: name what was withheld and how to reach
+                            // it, never let a cap read as "that's all of them".
+                            obj.insert(
+                                "from_durable_log_truncated_note".to_string(),
+                                json!(format!(
+                                    "Showing the {MAX_LISTED_COMPLETED} most recent of \
+                                     {recovered_total}; the rest are still retrievable by \
+                                     request_id via 'check_status'."
+                                )),
+                            );
+                        }
+                    }
+                }
                 if completed_total > MAX_LISTED_COMPLETED {
                     // Never let a cap read as "these are all of them" (the
                     // silent-truncation trap): say what was withheld and how to
@@ -816,6 +905,8 @@ impl LoopTool for SubagentTool {
                         context_summary: args.context_summary.clone(),
                         model,
                         timeout_secs: timeout,
+                        // Batch legs deliver inline; no id outlives the call.
+                        request_id: None,
                     };
 
                     let runtime = self.build_runtime(child_chain.clone(), batch_cancel.clone());
@@ -1016,6 +1107,7 @@ impl LoopTool for SubagentTool {
                         // W19 ① — the reduce is the `+1` serial round the share
                         // was divided by; it gets one round, same as a proposer.
                         timeout_secs: args.timeout_secs.min(child_cap_secs),
+                        request_id: None,
                     };
                     let agg_cancel = self.cancel_for_child_with(&cancel);
                     let _agg_cancel_guard = CancelGuard::new(agg_cancel.clone());
@@ -1196,6 +1288,9 @@ impl LoopTool for SubagentTool {
                 context_summary: args.context_summary,
                 model: args.model,
                 timeout_secs: args.timeout_secs,
+                // Foreground: the result is returned to the model in this very
+                // tool call, so there is no handle to recover it by later.
+                request_id: None,
             };
 
             let child_cancel = self.cancel_for_child_with(&cancel);
@@ -1270,7 +1365,11 @@ impl SubagentTool {
     /// cancel again without learning anything. Mirror the `annotate_unknown`
     /// pattern the success path uses so the model sees its typo even on
     /// cancel.
-    fn wait_cancelled(&self, request_ids: &[String]) -> ToolResult {
+    /// `async` for the durable-recovery lookup below: "unknown" has to mean the
+    /// same thing on the cancel path as on the success path, or the model learns
+    /// one story when its wait completes and a different one when it is
+    /// interrupted.
+    async fn wait_cancelled(&self, request_ids: &[String]) -> ToolResult {
         // W11 — scoped addressing, same as the wait it reports on.
         let scope = self.parent_session_id.as_deref();
         let still_running: Vec<Value> = request_ids
@@ -1286,37 +1385,69 @@ impl SubagentTool {
             })
             .collect();
         let unknown = self.background_tracker.unknown_ids(request_ids, scope);
+        let recovered = self.recover_from_log(&unknown).await;
         let mut output = json!({
             "status": "wait_interrupted",
             "still_running": still_running,
             "note": "The wait was interrupted before any sub-agent finished. The sub-agents themselves were not cancelled by this — their completions are still announced to you, and 'check_status' still reads their results.",
         });
-        annotate_unknown(&mut output, &unknown);
+        annotate_unknown(&mut output, &unknown, &recovered);
         ToolResult::Success { output }
     }
 }
 
-/// Attach the ids the tracker has never heard of to a `wait` report.
+/// Split the ids the tracker has never heard of into the ones the durable log
+/// can still account for and the ones that are genuinely unknown, and attach
+/// both to a `wait` report.
 ///
 /// A set containing one typo'd (or foreign-session, or TTL-pruned) id used to
 /// park for the whole window and report only on the good ids, so a typo was
 /// indistinguishable from a slow sub-agent. No-op when every id resolved, so
 /// the common case stays byte-identical.
-fn annotate_unknown(output: &mut Value, unknown: &[String]) {
+///
+/// `recovered` is the half that keeps the "they will never complete" sentence
+/// honest. After a restart every id in this run is unknown *to the tracker*,
+/// and telling the model to drop an id whose finished output is on disk is how
+/// a completed sub-agent's work gets thrown away and redone.
+fn annotate_unknown(
+    output: &mut Value,
+    unknown: &[String],
+    recovered: &std::collections::HashMap<String, Recovered>,
+) {
     if unknown.is_empty() {
         return;
     }
-    if let Some(obj) = output.as_object_mut() {
-        obj.insert("unknown_request_ids".to_string(), json!(unknown));
-        obj.insert(
-            "unknown_note".to_string(),
-            json!(
-                "These request_ids match no background sub-agent (never registered, \
-                 owned by another session, or expired). They will never complete — \
-                 drop them from your next 'wait', and use 'list' to recover valid ids."
-            ),
-        );
+    let Some(obj) = output.as_object_mut() else {
+        return;
+    };
+
+    if !recovered.is_empty() {
+        // Deterministic order: `unknown` is the caller's id order, and a
+        // HashMap iteration would reshuffle the array between identical calls.
+        let entries: Vec<Value> = unknown
+            .iter()
+            .filter_map(|id| recovered.get(id).map(|rec| recovery::to_json(id, rec)))
+            .collect();
+        obj.insert("recovered_subagents".to_string(), json!(entries));
     }
+
+    let still_unknown: Vec<&String> = unknown
+        .iter()
+        .filter(|id| !recovered.contains_key(*id))
+        .collect();
+    if still_unknown.is_empty() {
+        return;
+    }
+    obj.insert("unknown_request_ids".to_string(), json!(still_unknown));
+    obj.insert(
+        "unknown_note".to_string(),
+        json!(
+            "These request_ids match no background sub-agent (never registered, \
+             owned by another session, or expired) and nothing in this session's \
+             durable log accounts for them either. They will never complete — \
+             drop them from your next 'wait', and use 'list' to recover valid ids."
+        ),
+    );
 }
 
 /// What one sync-batch fan-out task returns: the child run's own

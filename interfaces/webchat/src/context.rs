@@ -1545,6 +1545,13 @@ pub fn DashboardContext(children: Children) -> impl IntoView {
 
 #[cfg(test)]
 mod tests {
+    // `role_is_operator` was imported here until 2026-08-08 — by NOTHING, the
+    // import line was its only mention. It went out with the client-side role
+    // predicate on 2026-08-07 (see the `DashboardState` field comment above),
+    // and because `cargo check` does not build `#[cfg(test)]`, this dangling
+    // name took the panel's ENTIRE unit-test target down with it, silently, for
+    // a day: every test in this crate stopped compiling, so none of them ran
+    // and none of them could fail.
     use super::{
         // `role_is_operator` was removed with the cached `role` field (see the
         // 2026-08-07 note above); nothing in this module used it and only the

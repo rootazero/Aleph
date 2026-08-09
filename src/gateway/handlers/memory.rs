@@ -775,7 +775,7 @@ pub async fn handle_reembed(
     // Create progress channel
     let (progress_tx, mut progress_rx) =
         tokio::sync::watch::channel(crate::memory::reembed::ReembedProgress {
-            phase: "facts",
+            phase: "notes",
             total: 0,
             completed: 0,
             failed: 0,
@@ -825,8 +825,6 @@ pub async fn handle_reembed(
                         "task_id": task_id_clone,
                         "facts_updated": r.facts_updated,
                         "facts_total": r.facts_total,
-                        "memories_updated": r.memories_updated,
-                        "memories_total": r.memories_total,
                         "errors": r.errors,
                     }),
                 ));

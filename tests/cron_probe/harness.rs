@@ -157,7 +157,7 @@ impl CronTestHarness {
 
     /// Run a single timer tick (mark due + execute + writeback).
     pub async fn tick(&self) {
-        on_timer_tick(&self.state, &self.executor_fn, None)
+        on_timer_tick(&self.state, &self.executor_fn, None, None)
             .await
             .expect("tick failed");
     }
@@ -176,6 +176,7 @@ impl CronTestHarness {
             self.clock.as_ref(),
             self.state.config.max_missed_jobs_per_restart,
             self.state.config.catchup_stagger_ms,
+            self.state.config.job_timeout_secs.saturating_mul(1000) as i64,
         )
         .await
         .expect("catchup failed");

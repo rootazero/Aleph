@@ -272,13 +272,6 @@ impl Config {
         }
 
         if self.memory.dreaming.enabled {
-            if self.memory.dreaming.idle_threshold_seconds == 0 {
-                error!("Dreaming idle_threshold_seconds is zero");
-                return Err(AlephError::invalid_config(
-                    "memory.dreaming.idle_threshold_seconds must be greater than 0",
-                ));
-            }
-
             if self.memory.dreaming.max_duration_seconds == 0 {
                 error!("Dreaming max_duration_seconds is zero");
                 return Err(AlephError::invalid_config(

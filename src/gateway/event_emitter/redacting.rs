@@ -339,15 +339,22 @@ mod tests {
         );
     }
 
-    /// The two legs of an unattended run must agree.
+    /// **All three** legs of an unattended run must agree.
     ///
-    /// A human can receive the same tool result down either the TraceSink leg
-    /// (persistence / channel progress push / `agent_trace` WS) or the emitter
-    /// leg (`ToolEnd`, and `RunComplete` onward to the bound channel). One
-    /// masked copy plus one clear copy is not redaction, so both legs share
-    /// `exec::masker` rather than each rolling its own walk.
+    /// A human can receive run-derived text down the TraceSink leg
+    /// (persistence / channel progress push / `agent_trace` WS), the emitter
+    /// leg (`ToolEnd`, and `RunComplete` onward to the bound channel), or —
+    /// found on 2026-08-08 — the direct-notice leg: `execute::notify_origin`
+    /// and its cron twin `cron::executor::deliver_to_channel`, which call
+    /// `ChannelRegistry::send` themselves and were wrapped by neither.
+    ///
+    /// One masked copy plus one clear copy is not redaction. The count in this
+    /// test's name went two → three because a census that stops at the legs
+    /// somebody remembered to wrap will keep finding a new one; all three share
+    /// `exec::masker` rather than each rolling its own walk, and a fourth that
+    /// does not will fail here.
     #[test]
-    fn both_legs_mask_identically() {
+    fn all_three_legs_mask_identically() {
         let masker = SecretMasker::new();
         let mut trace_side = serde_json::json!({ "stdout": format!("k={KEY}") });
         mask_json_strings(&masker, &mut trace_side);
@@ -355,8 +362,14 @@ mod tests {
         let emitter_side = RedactingEmitter::new(Arc::new(CollectingEventEmitter::new()));
         let masked_by_emitter = emitter_side.mask(&format!("k={KEY}"));
 
+        // The notice leg's masker, constructed exactly as `notify_origin` and
+        // `deliver_to_channel` construct it.
+        let masked_by_notice = SecretMasker::new().mask(&format!("k={KEY}"));
+
         assert_eq!(trace_side["stdout"].as_str().unwrap(), masked_by_emitter);
+        assert_eq!(masked_by_emitter, masked_by_notice);
         assert!(!masked_by_emitter.contains(KEY));
+        assert!(!masked_by_notice.contains(KEY));
     }
 
     /// Attended runs are not wrapped at all, but assert the pass-through arms

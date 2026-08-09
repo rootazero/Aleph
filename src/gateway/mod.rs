@@ -184,7 +184,9 @@ pub use agent_env::{
 pub use context::GatewayContext;
 pub use inter_agent_policy::AgentToAgentPolicy;
 pub use projection_reconciler::{ProjectionReconciler, ReconcileReport};
-pub use resume_coordinator::{ResumeCoordinator, ResumeReport};
+pub use resume_coordinator::{
+    global_resume_coordinator, set_global_resume_coordinator, ResumeCoordinator, ResumeReport,
+};
 pub use run_event_bus::{
     wait_for_run_end, ActiveRunHandle, QueueError, RunEndResult, RunEvent,
     RunStatus as RunEventStatus, WaitError,

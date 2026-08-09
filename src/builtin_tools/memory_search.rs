@@ -19,7 +19,7 @@ use crate::memory::store::raw_memory::RawMemoryStore;
 use crate::memory::store::MemoryBackend;
 use crate::memory::{
     ComptrollerConfig, ContextComptroller, EmbeddingProvider, SqliteMemoryBackend, TokenBudget,
-    TranscriptIndexer, DEFAULT_AGENT,
+    DEFAULT_AGENT,
 };
 use crate::tools::AlephTool;
 
@@ -85,6 +85,22 @@ pub struct MemorySearchOutput {
     /// Whether Smart Recall Phase 2 was triggered
     #[serde(skip_serializing_if = "std::ops::Not::not")]
     pub smart_recall_triggered: bool,
+    /// How many requested memory partitions this caller could not read.
+    ///
+    /// Reported because a silently narrowed search is worse than a refused
+    /// one: the model asked to "search everything", got fewer results, and has
+    /// no way to tell "nothing matched" from "you were not shown it" — so it
+    /// confidently reports absence. Omitted when zero, which is every
+    /// single-user install and every unrestricted caller.
+    #[serde(skip_serializing_if = "is_zero")]
+    pub partitions_filtered: usize,
+}
+
+/// `skip_serializing_if` for [`MemorySearchOutput::partitions_filtered`] — a
+/// named fn because `serde` takes a PATH, not a closure.
+#[allow(clippy::trivially_copy_pass_by_ref)]
+fn is_zero(n: &usize) -> bool {
+    *n == 0
 }
 
 /// A cross-workspace fact returned by Smart Recall Phase 2.
@@ -135,7 +151,6 @@ pub struct MemorySearchTool {
     database: MemoryBackend,
     note_retrieval: Arc<NoteFactRetrieval<SqliteMemoryBackend>>,
     comptroller: Arc<ContextComptroller>,
-    _indexer: Arc<TranscriptIndexer>,
     /// Shared default workspace ID, written per-request by the execution engine
     /// (`execute.rs`) from the session's agent id.
     /// Falls back to `DEFAULT_AGENT` ("main") when not set.
@@ -226,13 +241,10 @@ impl MemorySearchTool {
         let comptroller_config = ComptrollerConfig::default();
         let comptroller = Arc::new(ContextComptroller::new(comptroller_config));
 
-        let indexer = Arc::new(TranscriptIndexer::new(database.clone(), embedder.clone()));
-
         Self {
             database,
             note_retrieval,
             comptroller,
-            _indexer: indexer,
             default_workspace: Arc::new(RwLock::new(DEFAULT_AGENT.to_string())),
             default_session_key: Arc::new(RwLock::new(String::new())),
             smart_recall_config: Arc::new(RwLock::new(std::collections::HashMap::new())),
@@ -312,13 +324,60 @@ impl MemorySearchTool {
             Some(agent_id) => agent_id,
             None => DEFAULT_AGENT.to_string(),
         };
+        // All three workspace arguments are MODEL-supplied and name a memory
+        // partition directly, which is the same caller-supplied id the gateway
+        // gates at ~20 sites with `visibility::partition_visible`. The tool
+        // face gated none of them: `cross_workspace: true` reached
+        // `list_note_corpora`, i.e. literally every partition on disk
+        // (`main`, `main__u-alice`, `main__p-room`, …), and a named
+        // `workspace: "main__u-alice"` was accepted verbatim.
+        //
+        // The actor is `scope::ambient_owner()`, NOT `visible_owner_filter()`:
+        // the latter reads `CALLER_USER`, dead inside a spawned run, so it
+        // would be silently always-true for every tool call. `None` (cron /
+        // A2A / tests) stays unrestricted, matching every sibling predicate.
+        let actor = crate::scope::ambient_owner();
+        let admits =
+            |id: &str| crate::gateway::visibility::partition_visible_to(id, actor.as_deref());
+
+        let mut filtered_out = 0usize;
         let workspace_filter = if args.cross_workspace.unwrap_or(false) {
-            AgentEnvFilter::All
+            match actor.as_deref() {
+                // Unrestricted caller (cron / A2A / tests): the whole-disk
+                // fan-out is what it has always been.
+                None => AgentEnvFilter::All,
+                // A scoped caller gets "all the partitions that are yours",
+                // resolved HERE so there is one decision point rather than a
+                // second copy of the predicate inside the retrieval fan-out.
+                // `list_note_corpora` is the same enumeration `All` reaches;
+                // naming it here makes the narrowing visible and countable.
+                Some(_) => {
+                    let dir = crate::utils::paths::get_note_memory_dir().unwrap_or_else(|_| {
+                        std::env::temp_dir()
+                            .join("aleph")
+                            .join("memory")
+                            .join("note")
+                    });
+                    let all = crate::memory::project_scope::list_note_corpora(&dir);
+                    let kept: Vec<String> = all.iter().filter(|id| admits(id)).cloned().collect();
+                    filtered_out = all.len() - kept.len();
+                    AgentEnvFilter::Multiple(kept)
+                }
+            }
         } else if let Some(ref wss) = args.workspaces {
-            AgentEnvFilter::Multiple(wss.clone())
+            let kept: Vec<String> = wss.iter().filter(|w| admits(w)).cloned().collect();
+            filtered_out = wss.len() - kept.len();
+            AgentEnvFilter::Multiple(kept)
         } else {
             let ws = args.workspace.as_deref().unwrap_or(&default_ws);
-            AgentEnvFilter::Single(ws.to_string())
+            if !admits(ws) {
+                filtered_out = 1;
+                // Fall back to the caller's OWN default rather than erroring:
+                // a refusal that names the partition confirms it exists.
+                AgentEnvFilter::Single(default_ws.clone())
+            } else {
+                AgentEnvFilter::Single(ws.to_string())
+            }
         };
 
         // For logging and path lookups, extract a primary workspace name
@@ -645,6 +704,7 @@ impl MemorySearchTool {
             path_clusters,
             cross_workspace: cross_workspace_results,
             smart_recall_triggered: recall_triggered,
+            partitions_filtered: filtered_out,
         })
     }
 }
@@ -655,7 +715,6 @@ impl Clone for MemorySearchTool {
             database: self.database.clone(),
             note_retrieval: self.note_retrieval.clone(),
             comptroller: self.comptroller.clone(),
-            _indexer: self._indexer.clone(),
             default_workspace: self.default_workspace.clone(),
             default_session_key: self.default_session_key.clone(),
             smart_recall_config: self.smart_recall_config.clone(),

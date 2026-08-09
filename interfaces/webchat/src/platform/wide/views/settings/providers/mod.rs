@@ -76,7 +76,11 @@ pub fn ProvidersView() -> impl IntoView {
                 error.set(None);
             }
             Err(e) => {
-                error.set(Some(format!("Failed to load providers: {e}")));
+                error.set(Some(crate::components::admin_refusal::settings_load_error(
+                    i18n,
+                    &e,
+                    |e| format!("Failed to load providers: {e}"),
+                )));
             }
         }
         loading.set(false);

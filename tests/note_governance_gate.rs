@@ -31,8 +31,6 @@ async fn ingest_low_confidence_lands_in_queue_not_markdown() {
             severity: Severity::Low,
             ..Default::default()
         },
-        source_path: None,
-        fact_provenance: vec![],
         action: NoteWriteAction::Create,
         bypass_review: false,
         contradicts_existing: false,

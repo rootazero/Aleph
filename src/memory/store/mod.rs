@@ -22,7 +22,6 @@ pub use sqlite::SqliteMemoryBackend;
 use async_trait::async_trait;
 
 use crate::error::AlephError;
-use crate::memory::context::CompressionSession;
 use crate::memory::dreaming::{DailyInsight, DreamStatus};
 
 // ---------------------------------------------------------------------------
@@ -64,15 +63,6 @@ pub trait DreamStore: Send + Sync {
 pub trait CompressionStore: Send + Sync {
     /// Set the timestamp of the last successful compression run.
     async fn set_last_compression_timestamp(&self, timestamp: i64) -> Result<(), AlephError>;
-
-    /// Get the timestamp of the last successful compression run.
-    async fn get_last_compression_timestamp(&self) -> Result<Option<i64>, AlephError>;
-
-    /// Record a completed compression session for auditing.
-    async fn record_compression_session(
-        &self,
-        session: &CompressionSession,
-    ) -> Result<(), AlephError>;
 }
 
 // ---------------------------------------------------------------------------

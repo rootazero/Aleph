@@ -512,32 +512,14 @@ impl CronJob {
     /// Effective per-job execution timeout in milliseconds.
     ///
     /// Returns this job's `timeout_ms` override when set, else falls back to
-    /// the 15-minute baseline (matches `CronConfig::job_timeout_secs`'s default).
-    /// Used by the catchup stale-marker threshold; runtime execution gets the
-    /// timeout via `JobSnapshot.timeout_ms` threaded by `phase1_mark_due_jobs`,
-    /// which honours the per-job override against the *configured* default.
+    /// the provided configured default (`CronConfig::job_timeout_secs` in
+    /// production). Used by the catchup stale-marker threshold; runtime
+    /// execution gets the timeout via `JobSnapshot.timeout_ms` threaded by
+    /// `phase1_mark_due_jobs`, which honours the per-job override against the
+    /// *configured* default.
     #[must_use]
-    pub fn effective_timeout_ms(&self) -> i64 {
-        self.timeout_ms.unwrap_or(900_000)
-    }
-
-    /// Construct a generic `DeliveryPayload` from this job and its output.
-    ///
-    /// Used when handing off results to the shared delivery pipeline.
-    #[must_use]
-    #[allow(dead_code)]
-    fn to_delivery_payload(
-        &self,
-        output: String,
-    ) -> crate::tasks::shared::delivery::DeliveryPayload {
-        crate::tasks::shared::delivery::DeliveryPayload {
-            source_type: "cron".to_string(),
-            task_name: self.name.clone(),
-            agent_id: self.agent_id.clone(),
-            output,
-            channel_id: self.source_channel_id.clone(),
-            metadata: serde_json::Value::Null,
-        }
+    pub fn effective_timeout_ms(&self, default_timeout_ms: i64) -> i64 {
+        self.timeout_ms.unwrap_or(default_timeout_ms)
     }
 }
 
@@ -564,7 +546,7 @@ pub struct JobSnapshot {
     pub marked_at: i64,
     pub trigger_source: TriggerSource,
     /// P1 data isolation: copied from `CronJob::owner_user_id` at snapshot
-    /// time (both `phase1_mark_due_jobs` and `phase1_mark_manual`) so the
+    /// time (`phase1_mark_due_jobs`) so the
     /// fire path can rehydrate attribution with no completing run to inherit
     /// metadata from — see `executor::build_cron_metadata`.
     pub owner_user_id: Option<String>,
@@ -910,11 +892,11 @@ mod tests {
             job.timeout_ms.is_none(),
             "new jobs have no timeout override"
         );
-        assert_eq!(job.effective_timeout_ms(), 900_000);
+        assert_eq!(job.effective_timeout_ms(900_000), 900_000);
 
         let mut overridden = job.clone();
         overridden.timeout_ms = Some(600_000);
-        assert_eq!(overridden.effective_timeout_ms(), 600_000);
+        assert_eq!(overridden.effective_timeout_ms(900_000), 600_000);
         // Timestamps should be recent (within last second, in ms)
         let now = chrono::Utc::now().timestamp_millis();
         assert!((now - job.created_at).abs() < 1000);

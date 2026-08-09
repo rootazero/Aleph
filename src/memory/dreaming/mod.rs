@@ -428,6 +428,7 @@ impl Default for DreamPipeline {
 const DEFAULT_CHECK_INTERVAL_SECONDS: u64 = 60;
 
 static LAST_ACTIVITY_TS: Lazy<AtomicI64> = Lazy::new(|| AtomicI64::new(now_timestamp()));
+
 static DREAM_DAEMON: OnceCell<Arc<DreamDaemon>> = OnceCell::new();
 
 pub(crate) fn now_timestamp() -> i64 {
@@ -605,9 +606,10 @@ impl DreamRunStatus {
 
 /// Whether a scheduled cycle must be skipped because one already ran today.
 ///
-/// `cancelled` is the ONLY status that earns a retry: such a run yielded to
-/// fresh user activity before doing its work, so re-running once the user goes
-/// idle again is the intent.
+/// `cancelled` is the one status that earns a retry. It was written by the
+/// pre-idle-cut cycles that yielded to fresh user activity before doing any
+/// work; the guard still honors those persisted rows so an abandoned cycle
+/// gets a second chance once the user goes idle again.
 ///
 /// Every other same-day status — `success`, `timeout`, `error`, or a stale
 /// `running` left behind by a crashed process — means "today's cycle is spent,
@@ -686,6 +688,11 @@ pub struct DreamDaemon {
     /// absolute best survives a restart instead of resetting to 0 (which would
     /// let a worse-than-historical cycle masquerade as a new best).
     best_health: crate::sync_primitives::Mutex<f64>,
+    // `project_scoped` was mirrored here until 2026-08-08 to gate the
+    // per-namespace fan-out. It gated the wrong axis (see the fan-out site),
+    // and once the gate was removed the field had zero readers — withdrawn
+    // rather than left as a knob nothing consults. The config option itself
+    // still governs what it actually governs, in `project_scope.rs`.
 }
 
 impl DreamDaemon {
@@ -959,17 +966,6 @@ impl DreamDaemon {
             return Ok(());
         }
 
-        let idle = idle_seconds();
-        if idle < i64::from(self.config.idle_threshold_seconds) {
-            info!(
-                reason = "idle_below_threshold",
-                idle_seconds = idle,
-                threshold = self.config.idle_threshold_seconds,
-                "DreamDaemon tick: skipped"
-            );
-            return Ok(());
-        }
-
         if self
             .is_running
             .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
@@ -1033,12 +1029,7 @@ impl DreamDaemon {
                     notes_consolidated = outcome.report.notes_consolidated,
                     synthesis_count = outcome.report.synthesis_count,
                     notes_archived = outcome.report.notes_archived,
-                    "DreamDaemon {}",
-                    if outcome.status == DreamRunStatus::Cancelled {
-                        "cancelled"
-                    } else {
-                        "completed"
-                    }
+                    "DreamDaemon completed"
                 );
 
                 if let Err(e) = self
@@ -1209,7 +1200,6 @@ impl DreamDaemon {
                         ..Default::default()
                     },
                     pipeline_type: strategy.to_string(),
-                    // rust-doctor-disable-next-line excessive-clone
                     activity_checker: activity_checker.clone(),
                     strategy,
                     // rust-doctor-disable-next-line excessive-clone
@@ -1317,12 +1307,7 @@ impl DreamDaemon {
 
                 report.finished_at = now_timestamp();
                 report.duration_ms = ((report.finished_at - run_start).max(0) as u64) * 1000;
-                let status = if report.status == DreamReportStatus::Interrupted {
-                    DreamRunStatus::Cancelled
-                } else {
-                    DreamRunStatus::Success
-                };
-                (report, status)
+                (report, DreamRunStatus::Success)
             }
             _ => {
                 // Consolidation needs both an AI provider and an embedder
@@ -1739,8 +1724,8 @@ mod tests {
         ));
     }
 
-    /// `cancelled` is the one status that earns a retry: the cycle yielded to
-    /// fresh user activity and never got to do its work.
+    /// `cancelled` is the one status that earns a retry — a legacy row from a
+    /// pre-idle-cut cycle that yielded to user activity before doing any work.
     #[test]
     fn retries_when_todays_run_was_cancelled_by_user_activity() {
         assert!(!should_skip_scheduled_run(

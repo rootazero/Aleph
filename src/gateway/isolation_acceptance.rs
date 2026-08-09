@@ -325,6 +325,7 @@ async fn two_users_cannot_see_each_other_end_to_end() {
                 "stream.agent_trace",
                 Some(&alice_trace_frame),
                 Some("u-bob"),
+                false,
                 &sessions,
                 None,
             )
@@ -375,6 +376,7 @@ async fn two_users_cannot_see_each_other_end_to_end() {
                 "stream.agent_trace",
                 Some(&alice_trace_frame),
                 Some(OWNER_USER_ID),
+                false,
                 &sessions,
                 None,
             )
@@ -433,6 +435,7 @@ async fn two_users_cannot_see_each_other_end_to_end() {
                 "stream.agent_trace",
                 Some(&alice_trace_frame),
                 Some("u-alice"),
+                false,
                 &sessions,
                 None,
             )
@@ -613,6 +616,7 @@ async fn two_users_cannot_see_each_others_teams() {
                     &topic,
                     Some(&bubble),
                     Some("u-alice"),
+                    false,
                     &sessions,
                     Some(&teams)
                 )
@@ -625,6 +629,7 @@ async fn two_users_cannot_see_each_others_teams() {
                     &topic,
                     Some(&bubble),
                     Some("u-bob"),
+                    false,
                     &sessions,
                     Some(&teams)
                 )
@@ -947,27 +952,55 @@ async fn every_room_member_receives_the_rooms_live_frames() {
     ] {
         assert!(
             events
-                .event_admits(topic, Some(data), Some("u-live-bob"), &sessions, None)
+                .event_admits(
+                    topic,
+                    Some(data),
+                    Some("u-live-bob"),
+                    false,
+                    &sessions,
+                    None
+                )
                 .await,
             "{topic}: a room member who did not create the session must receive \
              the room's frames — including his own turn's"
         );
         assert!(
             events
-                .event_admits(topic, Some(data), Some("u-live-alice"), &sessions, None)
+                .event_admits(
+                    topic,
+                    Some(data),
+                    Some("u-live-alice"),
+                    false,
+                    &sessions,
+                    None
+                )
                 .await,
             "{topic}: the creator must still be admitted — the fix must not be a \
              blanket allow that happens to include bob"
         );
         assert!(
             !events
-                .event_admits(topic, Some(data), Some("u-live-mallory"), &sessions, None)
+                .event_admits(
+                    topic,
+                    Some(data),
+                    Some("u-live-mallory"),
+                    false,
+                    &sessions,
+                    None
+                )
                 .await,
             "{topic}: a logged-in non-member must not receive the room's frames"
         );
         assert!(
             !events
-                .event_admits(topic, Some(data), Some(OWNER_USER_ID), &sessions, None)
+                .event_admits(
+                    topic,
+                    Some(data),
+                    Some(OWNER_USER_ID),
+                    false,
+                    &sessions,
+                    None
+                )
                 .await,
             "{topic}: the operator is not on the roster either — same rule as \
              `sessions.list` (see two_users_cannot_see_each_other_end_to_end)"
@@ -982,6 +1015,7 @@ async fn every_room_member_receives_the_rooms_live_frames() {
                 "stream.agent_trace",
                 Some(&trace),
                 Some("u-live-bob"),
+                false,
                 &sessions,
                 None
             )
@@ -995,6 +1029,7 @@ async fn every_room_member_receives_the_rooms_live_frames() {
                 "stream.agent_trace",
                 Some(&trace),
                 Some("u-live-alice"),
+                false,
                 &sessions,
                 None
             )

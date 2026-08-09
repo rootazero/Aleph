@@ -26,6 +26,7 @@ pub mod thinking;
 pub mod trace_presentation;
 pub mod trace_replay;
 pub mod voice_text;
+pub mod workspace;
 
 // Re-export commonly used types at crate root
 pub use auth::{GuestScope, IdentityContext, Role};

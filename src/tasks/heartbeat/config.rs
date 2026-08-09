@@ -229,8 +229,6 @@ pub struct HeartbeatState {
     pub last_l2_at_ms: Option<i64>,
     /// Status of the last L2 run
     pub last_l2_status: Option<crate::tasks::cron::config::RunStatus>,
-    /// Hash of the last output used for dedup
-    pub last_output_hash: Option<String>,
     /// Number of consecutive errors without a success
     pub consecutive_errors: u32,
     /// Description of the last error
@@ -261,7 +259,6 @@ pub struct HeartbeatTaskView {
     pub enabled: bool,
     pub interval_ms: u64,
     pub probe: ProbeConfig,
-    pub dedup: DedupConfig,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub active_hours: Option<crate::tasks::shared::active_hours::ActiveHoursSchedule>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -280,7 +277,6 @@ impl From<&HeartbeatTask> for HeartbeatTaskView {
             enabled: task.enabled,
             interval_ms: task.interval_ms,
             probe: task.probe.clone(),
-            dedup: task.dedup.clone(),
             active_hours: task.active_hours.clone(),
             failure_alert: task.failure_alert.clone(),
             state: task.state.clone(),

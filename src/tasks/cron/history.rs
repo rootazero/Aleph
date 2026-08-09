@@ -201,47 +201,6 @@ pub fn get_cron_runs(
     Ok(records)
 }
 
-/// Get execution history for all jobs, most recent first.
-pub fn get_all_cron_runs(conn: &Connection, limit: usize) -> Result<Vec<CronRunRecord>, String> {
-    let mut stmt = conn
-        .prepare(
-            "SELECT id, job_id, trigger_source, status, started_at, ended_at,
-                    duration_ms, error, error_reason, output_summary, delivery_status, created_at,
-                    retry_category, retryable
-             FROM cron_job_runs
-             ORDER BY created_at DESC
-             LIMIT ?1",
-        )
-        .map_err(|e| format!("failed to prepare query: {e}"))?;
-
-    let rows = stmt
-        .query_map(params![limit as i64], |row| {
-            Ok(CronRunRecord {
-                id: row.get(0)?,
-                job_id: row.get(1)?,
-                trigger_source: row.get(2)?,
-                status: row.get(3)?,
-                started_at: row.get(4)?,
-                ended_at: row.get(5)?,
-                duration_ms: row.get(6)?,
-                error: row.get(7)?,
-                error_reason: row.get(8)?,
-                output_summary: row.get(9)?,
-                delivery_status: row.get(10)?,
-                created_at: row.get(11)?,
-                retry_category: row.get(12)?,
-                retryable: row.get::<_, Option<i64>>(13)?.map(|v| v != 0),
-            })
-        })
-        .map_err(|e| format!("failed to query cron runs: {e}"))?;
-
-    let mut records = Vec::new();
-    for row in rows {
-        records.push(row.map_err(|e| format!("failed to read row: {e}"))?);
-    }
-    Ok(records)
-}
-
 // ── Cleanup ─────────────────────────────────────────────────────────────
 
 /// Delete cron run records older than `retention_days`.

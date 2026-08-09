@@ -31,7 +31,7 @@ use commands::cli_args::{
     DaemonAction, GatewayAction, HeartbeatAction, HooksAction, IdentityAction, LogsAction,
     MarketplaceAction, McpAction, MemoryAction, PluginAction, ProvidersAction, ProxyAction,
     SandboxAction, SecretAction, ServicesAction, SessionAction, SkillsAction, ToolsAction,
-    TraceAction, WebhookAction, WorkspaceAction,
+    TraceAction, UsersAction, WebhookAction, WorkspaceAction,
 };
 
 /// Aleph CLI - Personal AI Assistant Client
@@ -169,6 +169,7 @@ async fn dispatch(
         Commands::Workspace { action } => {
             dispatch_workspace(server_url, config, action, json).await
         }
+        Commands::Users { action } => dispatch_users(server_url, config, action, json).await,
         Commands::Gateway { action } => dispatch_gateway(server_url, config, action, json).await,
         Commands::Logs { action } => dispatch_logs(server_url, config, action, json).await,
         Commands::Trace { action } => dispatch_trace(server_url, config, action, json).await,
@@ -788,12 +789,78 @@ async fn dispatch_workspace(
 ) -> CliResult<()> {
     use commands::workspace_cmd;
     match action {
-        WorkspaceAction::List => workspace_cmd::list(server_url, config, json).await,
-        WorkspaceAction::Create { name, description } => {
-            workspace_cmd::create(server_url, config, &name, description.as_deref(), json).await
+        WorkspaceAction::List { include_archived } => {
+            workspace_cmd::list(server_url, config, include_archived, json).await
         }
-        WorkspaceAction::Archive { name } => {
-            workspace_cmd::archive(server_url, config, &name, json).await
+        WorkspaceAction::Create {
+            id,
+            name,
+            description,
+            icon,
+        } => {
+            workspace_cmd::create(
+                server_url,
+                config,
+                &id,
+                name.as_deref(),
+                description.as_deref(),
+                icon.as_deref(),
+                json,
+            )
+            .await
+        }
+        WorkspaceAction::Get { id } => workspace_cmd::get(server_url, config, &id, json).await,
+        WorkspaceAction::Update {
+            id,
+            name,
+            description,
+            icon,
+        } => {
+            workspace_cmd::update(
+                server_url,
+                config,
+                &id,
+                name.as_deref(),
+                description.as_deref(),
+                icon.as_deref(),
+                json,
+            )
+            .await
+        }
+        WorkspaceAction::Archive { id } => {
+            workspace_cmd::archive(server_url, config, &id, json).await
+        }
+    }
+}
+
+async fn dispatch_users(
+    server_url: &str,
+    config: &CliConfig,
+    action: UsersAction,
+    json: bool,
+) -> CliResult<()> {
+    use commands::users_cmd;
+    match action {
+        UsersAction::List => users_cmd::list(server_url, config, json).await,
+        UsersAction::Create { display_name, role } => {
+            users_cmd::create(server_url, config, &display_name, role.as_deref(), json).await
+        }
+        UsersAction::Update {
+            user_id,
+            display_name,
+            role,
+            status,
+        } => {
+            users_cmd::update(
+                server_url,
+                config,
+                &user_id,
+                display_name.as_deref(),
+                role.as_deref(),
+                status.as_deref(),
+                json,
+            )
+            .await
         }
     }
 }

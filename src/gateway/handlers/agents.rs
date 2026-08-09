@@ -575,7 +575,6 @@ name = "Coder"
             AgentEnvStore::new(AgentEnvStoreConfig {
                 db_path: dir.path().join("env.db"),
                 default_profile: "default".to_string(),
-                archive_after_days: 0,
             })
             .unwrap(),
         )

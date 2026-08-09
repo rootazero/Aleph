@@ -4,11 +4,15 @@
 //! Channel agent binding: `channels.set_agent`, agents.bindings.
 //! All handlers delegate to `AgentEnvStore` (SQLite-backed).
 
+use aleph_protocol::workspace::{
+    WorkspaceCreateParams, WorkspaceListParams, WorkspaceRef, WorkspaceUpdateParams,
+};
 use serde::Deserialize;
 use serde_json::json;
 
 use super::super::protocol::{
-    JsonRpcRequest, JsonRpcResponse, INTERNAL_ERROR, INVALID_PARAMS, RESOURCE_NOT_FOUND,
+    JsonRpcRequest, JsonRpcResponse, INTERNAL_ERROR, INVALID_PARAMS, PERMISSION_DENIED,
+    RESOURCE_NOT_FOUND,
 };
 use super::parse_params;
 use crate::gateway::agent_env::AgentEnvStore;
@@ -20,21 +24,6 @@ use crate::sync_primitives::Arc;
 // Create
 // ============================================================================
 
-/// Parameters for workspace.create
-#[derive(Debug, Deserialize)]
-pub struct CreateParams {
-    /// Workspace identifier (URL-safe slug)
-    pub id: String,
-    /// Human-readable display name
-    pub name: String,
-    /// Optional description
-    #[serde(default)]
-    pub description: Option<String>,
-    /// Optional emoji or icon identifier
-    #[serde(default)]
-    pub icon: Option<String>,
-}
-
 /// Create a new workspace
 ///
 /// # Example Request
@@ -42,6 +31,11 @@ pub struct CreateParams {
 /// ```json
 /// {"jsonrpc":"2.0","method":"workspace.create","params":{"id":"crypto","name":"Crypto Trading"},"id":1}
 /// ```
+///
+/// The param type is [`aleph_protocol::workspace::WorkspaceCreateParams`], the
+/// same struct the CLI constructs — see that module for why the shape is not
+/// declared here, and for how this method came to reject its only client on
+/// every call while every test stayed green.
 ///
 /// P1 partition isolation on the WRITE side, with exactly the coverage
 /// boundary [`handle_list`] documents and no more: a workspace id is a
@@ -67,7 +61,7 @@ pub async fn handle_create(
     request: JsonRpcRequest,
     workspace_manager: Arc<AgentEnvStore>,
 ) -> JsonRpcResponse {
-    let params: CreateParams = match parse_params(&request) {
+    let params: WorkspaceCreateParams = match parse_params(&request) {
         Ok(p) => p,
         Err(e) => return e,
     };
@@ -156,16 +150,18 @@ pub async fn handle_create(
 /// `update` and `archive` take the same plain id and clear the same predicate.
 /// (That QA also produced a *false* pass on the list side: this handler looked
 /// filtered only because the member had archived the row one call earlier and
-/// `list(false)` skips archived.)
+/// the then-hard-coded `list(false)` skips archived.)
 ///
 /// That wording also said closing it needed an owner column plus a migration,
 /// "a schema change and a product decision, not a handler fix". It needed
 /// neither. The whole `workspace.` family joined
 /// [`crate::gateway::method_admin`]'s `ADMIN_PREFIXES` on 2026-08-08, with no
 /// carve-out, because the family has exactly one client and it is already
-/// operator (`aleph workspace list|create|archive`, over loopback); the Panel
-/// has none, and `update`/`get` have no client anywhere. A member no longer
-/// reaches any method in this file.
+/// operator (`aleph workspace list|get|create|update|archive`, over loopback);
+/// the Panel has none. A member no longer reaches any method in this file.
+/// (`get`/`update` had no client at all when that ruling was made and were
+/// cited here as such — they gained CLI subcommands on 2026-08-08, inside this
+/// same gate, so the ruling stands unchanged.)
 ///
 /// **The predicate below still earns its place, and this file is now the only
 /// place that says so.** The family left
@@ -179,11 +175,33 @@ pub async fn handle_create(
 /// `partition_visible` still refuses `main__u-alice` to an operator who is
 /// not alice. Two gates, two questions — "may this role call it" and "may
 /// this caller address that partition" — and neither implies the other.
+///
+/// # `include_archived`
+///
+/// Params are optional as a whole (no params = the active-only view), so this
+/// cannot use [`parse_params`], which treats absent params as an error. Params
+/// that are *present and unreadable* are still an error: silently defaulting
+/// them would answer a narrower question than the caller asked and look like an
+/// empty result.
 pub async fn handle_list(
     request: JsonRpcRequest,
     workspace_manager: Arc<AgentEnvStore>,
 ) -> JsonRpcResponse {
-    match workspace_manager.list(false).await {
+    let include_archived = match &request.params {
+        None => false,
+        Some(params) => match serde_json::from_value::<WorkspaceListParams>(params.clone()) {
+            Ok(parsed) => parsed.include_archived,
+            Err(e) => {
+                return JsonRpcResponse::error(
+                    request.id,
+                    INVALID_PARAMS,
+                    format!("Invalid params: {e}"),
+                );
+            }
+        },
+    };
+
+    match workspace_manager.list(include_archived).await {
         Ok(workspaces) => {
             let visible: Vec<_> = workspaces
                 .into_iter()
@@ -203,13 +221,6 @@ pub async fn handle_list(
 // Get
 // ============================================================================
 
-/// Parameters for workspace.get
-#[derive(Debug, Deserialize)]
-pub struct GetParams {
-    /// Workspace identifier
-    pub id: String,
-}
-
 /// Get a workspace by ID
 ///
 /// # Example Request
@@ -222,11 +233,24 @@ pub struct GetParams {
 /// documents: an invisible partition-composed id gets this method's OWN
 /// "not found" response, byte-identical to an id that does not exist, and
 /// the store is not read for it.
+///
+/// # Archived workspaces are visible here
+///
+/// This reads through [`AgentEnvStore::get_including_archived`] rather than
+/// `get`. The default read filters `archived = 0` because its callers resolve
+/// the env a run executes under; this one is addressed by exact id, is
+/// read-only, and reports `is_archived` in the answer.
+///
+/// Filtering here would reintroduce, one level down, the complaint that
+/// `include_archived` was added to `workspace.list` to fix: the list would
+/// print a row this method then swears does not exist. "Readable, not
+/// writable" is the whole rule — [`handle_update`] refuses the same rows, and
+/// [`AgentEnvStore::update`] enforces that below it.
 pub async fn handle_get(
     request: JsonRpcRequest,
     workspace_manager: Arc<AgentEnvStore>,
 ) -> JsonRpcResponse {
-    let params: GetParams = match parse_params(&request) {
+    let params: WorkspaceRef = match parse_params(&request) {
         Ok(p) => p,
         Err(e) => return e,
     };
@@ -242,7 +266,7 @@ pub async fn handle_get(
         return not_found();
     }
 
-    match workspace_manager.get(&params.id).await {
+    match workspace_manager.get_including_archived(&params.id).await {
         Ok(Some(ws)) => JsonRpcResponse::success(request.id, json!({ "workspace": ws })),
         Ok(None) => not_found(),
         Err(e) => JsonRpcResponse::error(
@@ -257,22 +281,6 @@ pub async fn handle_get(
 // Update
 // ============================================================================
 
-/// Parameters for workspace.update
-#[derive(Debug, Deserialize)]
-pub struct UpdateParams {
-    /// Workspace identifier
-    pub id: String,
-    /// New name (optional)
-    #[serde(default)]
-    pub name: Option<String>,
-    /// New description (optional)
-    #[serde(default)]
-    pub description: Option<String>,
-    /// New icon (optional)
-    #[serde(default)]
-    pub icon: Option<String>,
-}
-
 /// Update workspace metadata
 ///
 /// # Example Request
@@ -286,11 +294,34 @@ pub struct UpdateParams {
 /// partition-composed ids, not a closed boundary for ordinary ones. An
 /// invisible id gets this method's OWN "not found" response, byte-identical to
 /// an id that does not exist, and the store is never written for it.
+///
+/// # Archived workspaces are refused, and the refusal says which refusal it is
+///
+/// [`AgentEnvStore::update`] filters the write to active rows, so an archived
+/// id reaches the `Ok(None)` arm below with nothing written — see its doc for
+/// why the write was narrowed rather than the read-back widened, and for the
+/// shape this replaced (the row was really rewritten and the caller was told it
+/// did not exist).
+///
+/// That arm then asks which `None` it is, because the two have different honest
+/// answers and this is the split the rest of the codebase already draws
+/// (`src/gateway/CLAUDE.md`, P2 mine E): **invisible → `not_found`**, since
+/// existence is itself the secret; **visible but not writable →
+/// `PERMISSION_DENIED`**, since the caller can already read the row through
+/// [`handle_get`] and a "not found" would simply be false to their face.
+///
+/// The no-oracle property is untouched: a partition-invisible id returns from
+/// the check ABOVE and never reaches the store, so it cannot land on this
+/// branch and cannot learn anything from it.
+///
+/// This distinction only became reachable when `get` started showing archived
+/// rows in the same change — before that nothing could contradict the lie, and
+/// nothing had a client to see it with either.
 pub async fn handle_update(
     request: JsonRpcRequest,
     workspace_manager: Arc<AgentEnvStore>,
 ) -> JsonRpcResponse {
-    let params: UpdateParams = match parse_params(&request) {
+    let params: WorkspaceUpdateParams = match parse_params(&request) {
         Ok(p) => p,
         Err(e) => return e,
     };
@@ -316,15 +347,36 @@ pub async fn handle_update(
         .await
     {
         Ok(Some(ws)) => JsonRpcResponse::success(
-            request.id,
+            request.id.clone(),
             json!({
                 "ok": true,
                 "workspace": ws,
             }),
         ),
-        Ok(None) => not_found(),
+        // Which `None` is it? An archived row is visible to this caller, so
+        // saying "not found" would contradict the `workspace.get` they can run
+        // in the next breath. Anything else genuinely is not there.
+        Ok(None) => match workspace_manager.get_including_archived(&params.id).await {
+            // Gated on the OBSERVED flag, not on the row merely existing: the
+            // message states a fact about the row, so it has to be one we read
+            // rather than one we inferred from which arm we are on.
+            Ok(Some(ws)) if ws.is_archived => JsonRpcResponse::error(
+                request.id.clone(),
+                PERMISSION_DENIED,
+                format!(
+                    "Workspace '{}' is archived and cannot be modified",
+                    params.id
+                ),
+            ),
+            // Everything else — no row, the read failing, or a live row that
+            // somehow did not match the write. This probe exists to upgrade a
+            // refusal that is already true into a more specific one; a probe
+            // that cannot answer falls back to what it was refining rather
+            // than inventing something.
+            _ => not_found(),
+        },
         Err(e) => JsonRpcResponse::error(
-            request.id,
+            request.id.clone(),
             INTERNAL_ERROR,
             format!("Failed to update workspace: {e}"),
         ),
@@ -352,7 +404,7 @@ pub async fn handle_archive(
     request: JsonRpcRequest,
     workspace_manager: Arc<AgentEnvStore>,
 ) -> JsonRpcResponse {
-    let params: GetParams = match parse_params(&request) {
+    let params: WorkspaceRef = match parse_params(&request) {
         Ok(p) => p,
         Err(e) => return e,
     };
@@ -514,7 +566,6 @@ mod tests {
             AgentEnvStore::new(crate::gateway::agent_env::AgentEnvStoreConfig {
                 db_path: temp.path().join("agent_envs.db"),
                 default_profile: "default".to_string(),
-                archive_after_days: 0,
             })
             .expect("agent env store"),
         );
@@ -588,7 +639,6 @@ mod tests {
             AgentEnvStore::new(crate::gateway::agent_env::AgentEnvStoreConfig {
                 db_path: temp.path().join("agent_envs.db"),
                 default_profile: "default".to_string(),
-                archive_after_days: 0,
             })
             .expect("agent env store"),
         );
@@ -743,7 +793,7 @@ mod tests {
     #[test]
     fn test_create_params_deserialization() {
         let json = serde_json::json!({"id": "crypto", "name": "Crypto Trading"});
-        let params: CreateParams = serde_json::from_value(json).unwrap();
+        let params: WorkspaceCreateParams = serde_json::from_value(json).unwrap();
         assert_eq!(params.id, "crypto");
         assert_eq!(params.name, "Crypto Trading");
         assert!(params.description.is_none());
@@ -752,7 +802,7 @@ mod tests {
     #[test]
     fn test_create_params_with_optional_fields() {
         let json = serde_json::json!({"id": "novel", "name": "Novel", "description": "My novel project", "icon": "\u{1F4D6}"});
-        let params: CreateParams = serde_json::from_value(json).unwrap();
+        let params: WorkspaceCreateParams = serde_json::from_value(json).unwrap();
         assert_eq!(params.description.as_deref(), Some("My novel project"));
         assert_eq!(params.icon.as_deref(), Some("\u{1F4D6}"));
     }
@@ -760,14 +810,14 @@ mod tests {
     #[test]
     fn test_get_params_deserialization() {
         let json = serde_json::json!({"id": "crypto"});
-        let params: GetParams = serde_json::from_value(json).unwrap();
+        let params: WorkspaceRef = serde_json::from_value(json).unwrap();
         assert_eq!(params.id, "crypto");
     }
 
     #[test]
     fn test_update_params_deserialization() {
         let json = serde_json::json!({"id": "crypto", "name": "Crypto Research"});
-        let params: UpdateParams = serde_json::from_value(json).unwrap();
+        let params: WorkspaceUpdateParams = serde_json::from_value(json).unwrap();
         assert_eq!(params.id, "crypto");
         assert_eq!(params.name.as_deref(), Some("Crypto Research"));
         assert!(params.description.is_none());
@@ -782,11 +832,426 @@ mod tests {
             "description": "Updated description",
             "icon": "\u{1F4B0}"
         });
-        let params: UpdateParams = serde_json::from_value(json).unwrap();
+        let params: WorkspaceUpdateParams = serde_json::from_value(json).unwrap();
         assert_eq!(params.id, "crypto");
         assert_eq!(params.name.as_deref(), Some("Crypto Research"));
         assert_eq!(params.description.as_deref(), Some("Updated description"));
         assert_eq!(params.icon.as_deref(), Some("\u{1F4B0}"));
+    }
+
+    /// The two commands that had never once worked: `aleph workspace create`
+    /// sent `{"name": …}` at a handler that requires `id`, and
+    /// `aleph workspace archive` did the same, so both returned
+    /// `INVALID_PARAMS` on every invocation for as long as they had existed.
+    ///
+    /// This drives the handlers with the very types the CLI now constructs
+    /// (`aleph_protocol::workspace::*`), so the request half of that gap cannot
+    /// reopen without either failing here or failing to compile. The
+    /// assertions are on the STORE, not on the response — a handler that
+    /// answered `ok` while writing nothing would pass a response-only test.
+    ///
+    /// The last block re-asserts the historical shape is still rejected. That
+    /// is what keeps this test honest: without it, a handler loosened to accept
+    /// anything at all would look like a fix.
+    #[tokio::test]
+    async fn the_cli_create_and_archive_shapes_reach_their_handlers() {
+        let temp = tempfile::tempdir().unwrap();
+        let store = Arc::new(
+            AgentEnvStore::new(crate::gateway::agent_env::AgentEnvStoreConfig {
+                db_path: temp.path().join("agent_envs.db"),
+                default_profile: "default".to_string(),
+            })
+            .expect("agent env store"),
+        );
+        // `load_profiles` seeds "default" itself; this mirrors what
+        // `start/mod.rs` does with an empty `[profiles]` section, which is the
+        // shipped default and therefore the case that has to work.
+        store.load_profiles(std::collections::HashMap::new());
+
+        let created = handle_create(
+            JsonRpcRequest::with_id(
+                "workspace.create",
+                Some(
+                    serde_json::to_value(WorkspaceCreateParams {
+                        id: "crypto".to_string(),
+                        name: "Crypto Trading".to_string(),
+                        description: Some("trading notes".to_string()),
+                        icon: None,
+                    })
+                    .unwrap(),
+                ),
+                json!(1),
+            ),
+            store.clone(),
+        )
+        .await;
+        assert!(
+            created.is_success(),
+            "the CLI's create shape must be accepted: {:?}",
+            created.error
+        );
+        let row = store.get("crypto").await.unwrap().expect("row must exist");
+        assert_eq!(row.name, "Crypto Trading");
+        assert_eq!(row.description.as_deref(), Some("trading notes"));
+
+        let archived = handle_archive(
+            JsonRpcRequest::with_id(
+                "workspace.archive",
+                Some(
+                    serde_json::to_value(WorkspaceRef {
+                        id: "crypto".to_string(),
+                    })
+                    .unwrap(),
+                ),
+                json!(1),
+            ),
+            store.clone(),
+        )
+        .await;
+        assert!(
+            archived.is_success(),
+            "the CLI's archive shape must be accepted: {:?}",
+            archived.error
+        );
+        assert!(
+            store.get("crypto").await.unwrap().is_none(),
+            "archive must actually soft-delete the row"
+        );
+
+        // …and the shape that was broken is still a rejection, not a silently
+        // accepted alias.
+        for (method, params) in [
+            ("workspace.create", json!({ "name": "crypto" })),
+            ("workspace.archive", json!({ "name": "crypto" })),
+        ] {
+            let resp = if method == "workspace.create" {
+                handle_create(
+                    JsonRpcRequest::with_id(method, Some(params), json!(1)),
+                    store.clone(),
+                )
+                .await
+            } else {
+                handle_archive(
+                    JsonRpcRequest::with_id(method, Some(params), json!(1)),
+                    store.clone(),
+                )
+                .await
+            };
+            assert_eq!(
+                resp.error.as_ref().map(|e| e.code),
+                Some(INVALID_PARAMS),
+                "{method} must still require `id`"
+            );
+        }
+    }
+
+    /// Every column `aleph workspace list` prints has to exist in what this
+    /// handler actually emits.
+    ///
+    /// It did not. The table read `status` and `created`; an `AgentEnv`
+    /// serializes `is_archived` and `created_at`. Both columns were rendered
+    /// with `.unwrap_or("-")`, so every row printed dashes and read as "this
+    /// workspace has no status yet" rather than "this client is asking for
+    /// fields that do not exist" — and neither side's tests could see it,
+    /// because neither side ever looked at the other.
+    ///
+    /// The projection is asserted here, on the server, because this is the
+    /// side that owns the field names.
+    #[tokio::test]
+    async fn every_column_the_cli_renders_is_present_in_the_list_response() {
+        use aleph_protocol::workspace::WorkspaceList;
+
+        let temp = tempfile::tempdir().unwrap();
+        let store = Arc::new(
+            AgentEnvStore::new(crate::gateway::agent_env::AgentEnvStoreConfig {
+                db_path: temp.path().join("agent_envs.db"),
+                default_profile: "default".to_string(),
+            })
+            .expect("agent env store"),
+        );
+        store.load_profiles(std::collections::HashMap::new());
+        store
+            .create("crypto", "default", Some("trading notes"))
+            .await
+            .unwrap();
+
+        let resp = handle_list(
+            JsonRpcRequest::with_id("workspace.list", None, json!(1)),
+            store.clone(),
+        )
+        .await;
+        let list: WorkspaceList = serde_json::from_value(resp.result.expect("result"))
+            .expect("the CLI's list projection must parse the real response");
+
+        let row = list
+            .workspaces
+            .iter()
+            .find(|w| w.id == "crypto")
+            .expect("the created workspace must be listed");
+        assert_eq!(row.name, "crypto", "name defaults to the id server-side");
+        assert_eq!(row.description.as_deref(), Some("trading notes"));
+        assert!(
+            row.created_at.timestamp() > 0,
+            "created_at must be a real timestamp, not a default"
+        );
+    }
+
+    /// The `get`/`update` twin of
+    /// [`every_column_the_cli_renders_is_present_in_the_list_response`], and it
+    /// exists for the same reason: `aleph-cli` cannot depend on `alephcore`, so
+    /// the only guard that holds for this contract is a shared type plus an
+    /// assertion on THIS side, where the field names are owned.
+    ///
+    /// It runs against both methods because they return the same envelope from
+    /// two different code paths — `get` from a store read, `update` from a
+    /// read-back after a write — and a projection that parses one is not
+    /// thereby proven against the other.
+    #[tokio::test]
+    async fn every_field_the_cli_renders_is_present_in_the_get_and_update_responses() {
+        use aleph_protocol::workspace::{WorkspaceEnvelope, WorkspaceUpdateParams};
+
+        let temp = tempfile::tempdir().unwrap();
+        let store = Arc::new(
+            AgentEnvStore::new(crate::gateway::agent_env::AgentEnvStoreConfig {
+                db_path: temp.path().join("agent_envs.db"),
+                default_profile: "default".to_string(),
+            })
+            .expect("agent env store"),
+        );
+        store.load_profiles(std::collections::HashMap::new());
+        store
+            .create("crypto", "default", Some("trading notes"))
+            .await
+            .unwrap();
+
+        let got = handle_get(
+            JsonRpcRequest::with_id("workspace.get", Some(json!({ "id": "crypto" })), json!(1)),
+            store.clone(),
+        )
+        .await;
+        let detail: WorkspaceEnvelope = serde_json::from_value(got.result.expect("result"))
+            .expect("the CLI's detail projection must parse the real get response");
+        let detail = detail.workspace;
+        assert_eq!(detail.id, "crypto");
+        assert_eq!(detail.name, "crypto", "name defaults to the id server-side");
+        assert_eq!(detail.description.as_deref(), Some("trading notes"));
+        assert_eq!(
+            detail.profile, "default",
+            "Profile is a detail-only line — the list projection has no such field"
+        );
+        assert!(detail.icon.is_none(), "a fresh workspace has no icon");
+        assert!(detail.created_at.timestamp() > 0);
+        assert!(detail.last_active_at.timestamp() > 0);
+        assert!(!detail.is_archived);
+
+        let updated = handle_update(
+            JsonRpcRequest::with_id(
+                "workspace.update",
+                Some(
+                    serde_json::to_value(WorkspaceUpdateParams {
+                        id: "crypto".to_string(),
+                        name: Some("Crypto Research".to_string()),
+                        description: None,
+                        icon: Some("\u{1F4B0}".to_string()),
+                    })
+                    .unwrap(),
+                ),
+                json!(2),
+            ),
+            store.clone(),
+        )
+        .await;
+        let patched: WorkspaceEnvelope = serde_json::from_value(updated.result.expect("result"))
+            .expect("the same projection must parse the real update response");
+        assert_eq!(patched.workspace.name, "Crypto Research");
+        assert_eq!(patched.workspace.icon.as_deref(), Some("\u{1F4B0}"));
+        assert_eq!(
+            patched.workspace.description.as_deref(),
+            Some("trading notes"),
+            "an omitted field is a patch that leaves the value alone, not a clear"
+        );
+    }
+
+    /// Archived workspaces are **readable, not writable** — the ruling the
+    /// whole family now shares, asserted on both halves at once because each
+    /// half alone reads as an arbitrary choice.
+    ///
+    /// The write half is the one that was broken. `AgentEnvStore::update`'s
+    /// UPDATE matched archived rows while its read-back (`get`) filtered them,
+    /// so an archived workspace was **really rewritten** and the caller was
+    /// then told `Ok(None)` — which this handler renders as "not found". It was
+    /// unreachable only because `workspace.update` had no client; adding
+    /// `aleph workspace update` is what would have made it real.
+    ///
+    /// So the assertion is on the STORE, not on the response: a handler that
+    /// returned exactly this "not found" while the write still landed is
+    /// precisely the bug, and it would pass a response-only test.
+    #[tokio::test]
+    async fn an_archived_workspace_is_readable_but_not_writable() {
+        use aleph_protocol::workspace::WorkspaceEnvelope;
+
+        let temp = tempfile::tempdir().unwrap();
+        let store = Arc::new(
+            AgentEnvStore::new(crate::gateway::agent_env::AgentEnvStoreConfig {
+                db_path: temp.path().join("agent_envs.db"),
+                default_profile: "default".to_string(),
+            })
+            .expect("agent env store"),
+        );
+        store.load_profiles(std::collections::HashMap::new());
+        store.create("retired", "default", None).await.unwrap();
+        store
+            .update("retired", Some("Retired Project"), None, None)
+            .await
+            .unwrap();
+        assert!(store.archive("retired").await.unwrap());
+
+        // --- readable: the row `list --include-archived` prints is reachable
+        // by id, and says which state it is in.
+        let got = handle_get(
+            JsonRpcRequest::with_id("workspace.get", Some(json!({ "id": "retired" })), json!(1)),
+            store.clone(),
+        )
+        .await;
+        let envelope: WorkspaceEnvelope = serde_json::from_value(
+            got.result
+                .expect("an archived workspace must be reachable by id"),
+        )
+        .expect("projection");
+        assert_eq!(envelope.workspace.name, "Retired Project");
+        assert!(
+            envelope.workspace.is_archived,
+            "the Status line has to be able to say `archived`"
+        );
+
+        // --- not writable: refused, and the refusal is TRUE.
+        let refused = handle_update(
+            JsonRpcRequest::with_id(
+                "workspace.update",
+                Some(json!({ "id": "retired", "name": "renamed-after-archive" })),
+                json!(2),
+            ),
+            store.clone(),
+        )
+        .await;
+        // PERMISSION_DENIED, not RESOURCE_NOT_FOUND: the caller just read this
+        // row through `handle_get` above, so "not found" would be false to
+        // their face. The invisible case still gets `not_found` and is pinned
+        // by `the_workspace_writes_deny_a_foreign_partition_composed_id`, whose
+        // id never reaches the store at all.
+        assert_eq!(
+            refused.error.as_ref().map(|e| e.code),
+            Some(PERMISSION_DENIED),
+            "an archived row is visible to this caller — refusing it as \
+             `not found` contradicts the get they can run next"
+        );
+        assert!(refused
+            .error
+            .as_ref()
+            .is_some_and(|e| e.message.contains("archived")));
+        assert_eq!(
+            store
+                .get_including_archived("retired")
+                .await
+                .unwrap()
+                .expect("the row is still there")
+                .name,
+            "Retired Project",
+            "the refusal must mean the write did not land — this assertion is \
+             the whole test; the response above said `not found` even when it did"
+        );
+
+        // Not a false positive: the same patch against a LIVE workspace lands.
+        // Without this the test would also pass if `update` had simply been
+        // broken for everything.
+        store.create("live", "default", None).await.unwrap();
+        let applied = handle_update(
+            JsonRpcRequest::with_id(
+                "workspace.update",
+                Some(json!({ "id": "live", "name": "renamed" })),
+                json!(3),
+            ),
+            store.clone(),
+        )
+        .await;
+        assert!(applied.is_success(), "{:?}", applied.error);
+        assert_eq!(store.get("live").await.unwrap().unwrap().name, "renamed");
+    }
+
+    /// `include_archived` has to reach the store, and a params object this
+    /// handler cannot read has to be an error rather than the default view.
+    ///
+    /// The second half is the one worth a test: `archive` is a soft delete, so
+    /// "no archived workspaces" and "I ignored your flag" render identically —
+    /// an empty table. A silently-defaulted flag would be indistinguishable
+    /// from a correct answer at exactly the moment it mattered.
+    #[tokio::test]
+    async fn archived_rows_come_back_only_when_the_request_asks_for_them() {
+        use aleph_protocol::workspace::WorkspaceList;
+
+        let temp = tempfile::tempdir().unwrap();
+        let store = Arc::new(
+            AgentEnvStore::new(crate::gateway::agent_env::AgentEnvStoreConfig {
+                db_path: temp.path().join("agent_envs.db"),
+                default_profile: "default".to_string(),
+            })
+            .expect("agent env store"),
+        );
+        store.load_profiles(std::collections::HashMap::new());
+        store.create("retired", "default", None).await.unwrap();
+        assert!(store.archive("retired").await.unwrap());
+
+        let ids = |resp: JsonRpcResponse| -> Vec<String> {
+            serde_json::from_value::<WorkspaceList>(resp.result.expect("result"))
+                .expect("the CLI's projection must parse the real response")
+                .workspaces
+                .into_iter()
+                .map(|w| w.id)
+                .collect()
+        };
+
+        // No params at all is the default view — the shape every caller sent
+        // before this parameter existed.
+        let default_view = ids(handle_list(
+            JsonRpcRequest::with_id("workspace.list", None, json!(1)),
+            store.clone(),
+        )
+        .await);
+        assert!(!default_view.contains(&"retired".to_string()));
+
+        let asked = handle_list(
+            JsonRpcRequest::with_id(
+                "workspace.list",
+                Some(json!({ "include_archived": true })),
+                json!(2),
+            ),
+            store.clone(),
+        )
+        .await;
+        let listed: WorkspaceList =
+            serde_json::from_value(asked.result.expect("result")).expect("projection");
+        let retired = listed
+            .workspaces
+            .iter()
+            .find(|w| w.id == "retired")
+            .expect("the archived workspace must be reachable when asked for");
+        assert!(
+            retired.is_archived,
+            "the Status column has to be able to say `archived`"
+        );
+
+        // A misspelled flag is refused, not quietly answered with the narrower
+        // view (`deny_unknown_fields` on the params type).
+        let typo = handle_list(
+            JsonRpcRequest::with_id(
+                "workspace.list",
+                Some(json!({ "include_arcived": true })),
+                json!(3),
+            ),
+            store,
+        )
+        .await;
+        assert_eq!(typo.error.map(|e| e.code), Some(INVALID_PARAMS));
     }
 
     #[test]
@@ -818,7 +1283,6 @@ mod tests {
         let config = AgentEnvStoreConfig {
             db_path: temp.keep().join("test.db"),
             default_profile: "default".to_string(),
-            archive_after_days: 0,
         };
         Arc::new(AgentEnvStore::new(config).unwrap())
     }

@@ -126,16 +126,23 @@ pub(super) fn register_common_handlers(
 ) {
     // Register status/cancel (work for both real and simulated modes)
     if let Some(ref rm) = run_manager {
+        // Both take `session_store`: a bare `run_id` is a caller-supplied
+        // identifier like any other, so it resolves run → session → the one
+        // visibility predicate before either handler acts on it.
         let rm_status = rm.clone();
+        let sm_status = session_store.clone();
         server.handlers_mut().register("agent.status", move |req| {
             let manager = rm_status.clone();
-            async move { handle_agent_status(req, manager).await }
+            let store = sm_status.clone();
+            async move { handle_agent_status(req, manager, store).await }
         });
 
         let rm_cancel = rm.clone();
+        let sm_cancel = session_store.clone();
         server.handlers_mut().register("agent.cancel", move |req| {
             let manager = rm_cancel.clone();
-            async move { handle_agent_cancel(req, manager).await }
+            let store = sm_cancel.clone();
+            async move { handle_agent_cancel(req, manager, store).await }
         });
 
         // Register chat handlers (abort, history, clear work for both real and simulated)
@@ -164,6 +171,17 @@ pub(super) fn register_common_handlers(
     server.handlers_mut().register("chat.rewind", move |req| {
         let manager = sm_rewind.clone();
         async move { chat_handlers::handle_rewind(req, manager).await }
+    });
+
+    // agent.resume — the on-demand half of the boot resume scan. Registered
+    // unconditionally (not under `run_manager`, and not under `[resume]
+    // enabled`): the handler resolves the coordinator itself at call time and
+    // answers honestly when there is none, which is strictly better than a
+    // method that silently does not exist on some boots.
+    let sm_resume = session_store.clone();
+    server.handlers_mut().register("agent.resume", move |req| {
+        let manager = sm_resume.clone();
+        async move { alephcore::gateway::handlers::resume::handle_resume(req, manager).await }
     });
 
     // agent.list — returns available agents from the router

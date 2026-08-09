@@ -34,6 +34,15 @@ pub type JobExecutorFn =
 pub type AlertDispatcherFn =
     Arc<dyn Fn(Vec<PendingAlert>) -> Pin<Box<dyn Future<Output = ()> + Send>> + Send + Sync>;
 
+/// Emitter for `CronJobChanged` (state) frames after a scheduler-tick
+/// writeback.
+///
+/// The webchat panel dropped polling and relies on `cron.job.changed` push;
+/// without this, scheduled runs completing silently leave the panel stale
+/// (`last_run_at_ms`/`last_run_status` change but nothing is published).
+/// Wired at startup from the `CronService`'s event bus. Takes the job id.
+pub type ChangeEmitterFn = Arc<dyn Fn(&str) + Send + Sync>;
+
 /// RAII guard that clears the `is_running` flag on drop.
 ///
 /// Ensures the re-entrancy guard is released even if `on_timer_tick` panics.
@@ -58,6 +67,7 @@ pub async fn run_timer_loop<C: Clock>(
     state: Arc<ServiceState<C>>,
     executor: JobExecutorFn,
     alert_dispatcher: Option<AlertDispatcherFn>,
+    change_emitter: Option<ChangeEmitterFn>,
 ) {
     let interval_secs = state.config.check_interval_secs.clamp(1, 60);
 
@@ -79,7 +89,9 @@ pub async fn run_timer_loop<C: Clock>(
         }
         let _guard = RunningGuard { state: &state };
 
-        if let Err(e) = on_timer_tick(&state, &executor, alert_dispatcher.as_ref()).await {
+        if let Err(e) = on_timer_tick(&state, &executor, alert_dispatcher.as_ref(), change_emitter.as_ref())
+            .await
+        {
             error!(error = %e, "cron timer tick failed");
         }
 
@@ -92,6 +104,7 @@ pub async fn on_timer_tick<C: Clock>(
     state: &Arc<ServiceState<C>>,
     executor: &JobExecutorFn,
     alert_dispatcher: Option<&AlertDispatcherFn>,
+    change_emitter: Option<&ChangeEmitterFn>,
 ) -> Result<(), String> {
     // Phase 1: mark due jobs. The configured per-job timeout is threaded
     // into each snapshot so it reaches the executor (C5).
@@ -186,6 +199,15 @@ pub async fn on_timer_tick<C: Clock>(
                     count = alerts.len(),
                     "cron: failure alerts produced but no dispatcher wired; dropping"
                 );
+            }
+        }
+        // Push a `StateChanged` frame for every job whose writeback landed, so
+        // the panel (which dropped polling) refreshes `last_run_at_ms` etc.
+        // CRUD ops emit their own frames via `CronService`; this covers the
+        // scheduler-tick path only.
+        if let Some(emitter) = change_emitter {
+            for (job_id, _) in &all_results {
+                emitter(job_id);
             }
         }
     }

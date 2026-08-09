@@ -155,7 +155,7 @@ pub enum TerminateReason {
     /// budget's `FinalReply` hard-stop is gone — pressure now escalates
     /// `SplitSession` → `CompactToFit`'s deterministic truncation floor and the
     /// loop never breaks on it (pinned by the harness's never-break tests).
-    /// Kept for i18n / summary / `escalate_partial_result` back-compat and for
+    /// Kept for i18n / `escalate_partial_result` back-compat and for
     /// blobs persisted before the escalation landed.
     ContextBudgetExhausted,
     /// `stall_config` watchdog tripped before the loop emitted progress.
@@ -261,7 +261,7 @@ pub const BUDGET_PARTIAL_RESULT_LABEL: &str = "budget_exhausted_partial_result";
 /// produced any useful final text. Non-budget reasons and runs with no
 /// partial output pass through unchanged.
 ///
-/// Called once in `harness_bridge::run_outcome` just after
+/// Called once in `AgentHarnessRunner::run` just after
 /// `harness.terminate_reason()` so the policy lives in one place
 /// rather than at each of the 4 emit sites inside the harness loop.
 ///
