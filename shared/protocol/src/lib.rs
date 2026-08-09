@@ -23,6 +23,7 @@ pub mod plan;
 pub mod subagent_tree;
 pub mod team_topic;
 pub mod thinking;
+pub mod tool_permissions;
 pub mod trace_presentation;
 pub mod trace_replay;
 pub mod voice_text;
