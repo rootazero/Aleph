@@ -55,6 +55,14 @@ impl DenialLogger {
         Self::default()
     }
 
+    /// True where a unified denial log stream exists. False on Linux /
+    /// Windows, where [`DenialLogger`] is a no-op — callers should surface
+    /// that honestly rather than claim a logger is running.
+    #[must_use]
+    pub const fn supported() -> bool {
+        cfg!(target_os = "macos")
+    }
+
     /// Start `log stream`. On non-macOS platforms this is a no-op that
     /// still returns `Ok(())`, so callers can run the same code path
     /// across OSes without `#[cfg]` gates.

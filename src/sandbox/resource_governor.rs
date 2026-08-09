@@ -184,10 +184,6 @@ impl ResourceGovernor {
 
 #[async_trait]
 impl SandboxBeforeHook for ResourceGovernor {
-    fn name(&self) -> &'static str {
-        "sandbox.resource_governor"
-    }
-
     async fn before(&self, ctx: SandboxHookContext<'_>) -> SandboxHookResult {
         // Dormant unless enabled. Every command at this seam is a sandboxed
         // subprocess spawn → all are gated when the governor is on.

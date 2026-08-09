@@ -739,12 +739,6 @@ impl Default for BubblewrapDriver {
     }
 }
 
-impl BubblewrapDriver {
-    pub fn options(&self) -> LinuxSandboxOptions {
-        self.options
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;

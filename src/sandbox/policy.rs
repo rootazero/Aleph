@@ -11,7 +11,6 @@ pub struct SandboxPolicy {
     pub filesystem: FsPolicy,
     pub network: NetworkPolicy,
     pub process: ProcessPolicy,
-    pub environment: EnvPolicy,
 }
 
 /// Filesystem access policy.
@@ -58,17 +57,6 @@ pub struct ProcessPolicy {
     pub max_memory_mb: Option<u64>,
 }
 
-/// Environment variable policy.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum EnvPolicy {
-    /// Inherit the parent environment.
-    Inherit,
-    /// Restricted — only safe variables (PATH, HOME, etc.).
-    Restricted,
-    /// Minimal — only what the sandbox itself needs.
-    Minimal,
-}
-
 impl Default for SandboxPolicy {
     /// Strict defaults: workspace-only FS, no network, no fork.
     fn default() -> Self {
@@ -79,7 +67,6 @@ impl Default for SandboxPolicy {
                 allow_fork: false,
                 max_memory_mb: None,
             },
-            environment: EnvPolicy::Minimal,
         }
     }
 }
@@ -120,7 +107,6 @@ impl From<&SandboxCapabilities> for SandboxPolicy {
             filesystem,
             network,
             process,
-            environment: EnvPolicy::Minimal,
         }
     }
 }
@@ -136,7 +122,6 @@ mod tests {
         assert_eq!(policy.network, NetworkPolicy::None);
         assert!(!policy.process.allow_fork);
         assert_eq!(policy.process.max_memory_mb, None);
-        assert_eq!(policy.environment, EnvPolicy::Minimal);
     }
 
     #[test]
@@ -266,7 +251,6 @@ mod tests {
             NetworkPolicy::AllowHosts(vec!["github.com".into()])
         );
         assert!(policy.process.allow_fork);
-        assert_eq!(policy.environment, EnvPolicy::Minimal);
     }
 
     #[test]

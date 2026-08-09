@@ -127,12 +127,6 @@ impl SandboxJob {
         }
         Ok(())
     }
-
-    /// Get the underlying job object handle.
-    #[allow(dead_code)]
-    pub fn handle(&self) -> HANDLE {
-        self.handle
-    }
 }
 
 impl Drop for SandboxJob {

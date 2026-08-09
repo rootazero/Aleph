@@ -16,7 +16,7 @@ use crate::sandbox::capabilities::SandboxCapabilities;
 use crate::sandbox::command::{SandboxError, SandboxOutput};
 use crate::sandbox::driver::{OsSandboxDriverTrait, OsSandboxProfile};
 use crate::sandbox::platforms::common::run_child_with_drain;
-use crate::sandbox::policy::{EnvPolicy, FsPolicy, NetworkPolicy, ProcessPolicy, SandboxPolicy};
+use crate::sandbox::policy::{FsPolicy, NetworkPolicy, ProcessPolicy, SandboxPolicy};
 
 /// Path to the trusted `sandbox-exec` binary.
 /// We only trust `/usr/bin/sandbox-exec` to defend against PATH injection.
@@ -564,9 +564,6 @@ impl SeatbeltDriver {
         // Process policy
         self.add_process_policy(&mut profile, &policy.process);
 
-        // Environment policy
-        self.add_env_policy(&mut profile, &policy.environment);
-
         debug!("generated seatbelt profile ({} bytes)", profile.len());
         Ok(profile)
     }
@@ -888,30 +885,6 @@ impl SeatbeltDriver {
     fn add_process_policy(&self, profile: &mut String, process: &ProcessPolicy) {
         if !process.allow_fork {
             profile.push_str("; deny subprocess spawning\n(deny process-fork)\n");
-        }
-    }
-
-    fn add_env_policy(&self, profile: &mut String, env: &EnvPolicy) {
-        // `EnvPolicy` is *advisory only*. The child's environment is whatever
-        // the caller placed in `SandboxCommand::env`, which `run` installs via
-        // an unconditional `Command::env_clear().envs(env)` — the same blanket
-        // clear regardless of variant. SBPL has no `(with environment)` modifier
-        // (emitting one yields an invalid profile sandbox-exec rejects), so the
-        // variant cannot be enforced by the profile either. We therefore only
-        // record the declared intent as a profile comment for dumps; it does
-        // not change runtime behaviour. (To actually enforce a variant, the
-        // caller must build a narrower `env` map before constructing the
-        // command — that filtering lives at the call site, not here.)
-        match env {
-            EnvPolicy::Inherit => {
-                // Default — no annotation needed.
-            }
-            EnvPolicy::Restricted => {
-                profile.push_str("; environment policy: restricted (advisory only)\n");
-            }
-            EnvPolicy::Minimal => {
-                profile.push_str("; environment policy: minimal (advisory only)\n");
-            }
         }
     }
 }

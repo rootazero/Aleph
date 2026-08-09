@@ -39,9 +39,6 @@ impl<'a> SandboxHookContext<'a> {
 /// `SandboxHookResult::Deny { reason }` to block.
 #[async_trait]
 pub trait SandboxBeforeHook: Send + Sync + 'static {
-    /// Name identifying this hook for logging/debugging.
-    fn name(&self) -> &'static str;
-
     /// Called before sandboxed execution proceeds.
     async fn before(&self, ctx: SandboxHookContext<'_>) -> SandboxHookResult;
 }
@@ -83,12 +80,9 @@ mod tests {
     use crate::sandbox::capabilities::SandboxCapabilities;
     use crate::sandbox::command::SandboxCommand;
 
-    struct TestBeforeHook(&'static str, bool);
+    struct TestBeforeHook(bool);
     #[async_trait]
     impl SandboxBeforeHook for TestBeforeHook {
-        fn name(&self) -> &'static str {
-            self.0
-        }
         async fn before(&self, _: SandboxHookContext<'_>) -> SandboxHookResult {
             if self.1 {
                 SandboxHookResult::Allow
@@ -103,7 +97,7 @@ mod tests {
     #[tokio::test]
     async fn test_before_hook_allows() {
         use crate::routing::session_key::SessionKey;
-        let hooks = SandboxHooks::new().with_before(Arc::new(TestBeforeHook("allow", true)));
+        let hooks = SandboxHooks::new().with_before(Arc::new(TestBeforeHook(true)));
         let cmd = SandboxCommand {
             session_id: SessionKey::ephemeral("test"),
             program: "echo".into(),
@@ -124,7 +118,7 @@ mod tests {
     #[tokio::test]
     async fn test_before_hook_denies() {
         use crate::routing::session_key::SessionKey;
-        let hooks = SandboxHooks::new().with_before(Arc::new(TestBeforeHook("deny", false)));
+        let hooks = SandboxHooks::new().with_before(Arc::new(TestBeforeHook(false)));
         let cmd = SandboxCommand {
             session_id: SessionKey::ephemeral("test"),
             program: "echo".into(),
@@ -153,9 +147,6 @@ mod tests {
         }
         #[async_trait]
         impl SandboxBeforeHook for SecondBeforeHook {
-            fn name(&self) -> &'static str {
-                "second_hook"
-            }
             async fn before(&self, _: SandboxHookContext<'_>) -> SandboxHookResult {
                 self.flag.store(true, Ordering::SeqCst);
                 SandboxHookResult::Allow
@@ -163,7 +154,7 @@ mod tests {
         }
 
         let hooks = SandboxHooks::new()
-            .with_before(Arc::new(TestBeforeHook("first_deny", false))) // denies
+            .with_before(Arc::new(TestBeforeHook(false))) // denies
             .with_before(Arc::new(SecondBeforeHook {
                 flag: second_ran_clone,
             })); // would set flag if called

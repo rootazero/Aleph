@@ -345,10 +345,6 @@ impl CommandPolicyHook {
 
 #[async_trait]
 impl SandboxBeforeHook for CommandPolicyHook {
-    fn name(&self) -> &'static str {
-        "sandbox.command_policy"
-    }
-
     async fn before(&self, ctx: SandboxHookContext<'_>) -> SandboxHookResult {
         let text = command_text(ctx.command);
         let eval = self.policy.evaluate(&text);

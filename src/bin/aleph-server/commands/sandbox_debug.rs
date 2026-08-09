@@ -99,9 +99,13 @@ pub async fn handle_sandbox_debug(
 
     let denial = DenialLogger::new();
     if log_denials {
-        match denial.start().await {
-            Ok(()) => println!("\n[denial logger started]"),
-            Err(e) => eprintln!("\n[denial logger failed: {e}]"),
+        if DenialLogger::supported() {
+            match denial.start().await {
+                Ok(()) => println!("\n[denial logger started]"),
+                Err(e) => eprintln!("\n[denial logger failed: {e}]"),
+            }
+        } else {
+            eprintln!("\n[denial logger: only supported on macOS; skipping]");
         }
     }
 
@@ -134,17 +138,20 @@ pub async fn handle_sandbox_debug(
         tokio::time::sleep(std::time::Duration::from_millis(100)).await;
         let lines = denial.take_lines().await;
         denial.stop().await;
-        if lines.is_empty() {
-            println!("\n=== Sandbox denials: none observed ===");
-        } else {
-            println!("\n=== Sandbox denials ({} lines) ===", lines.len());
-            for line in lines.iter().take(50) {
-                println!("  {line}");
-            }
-            if lines.len() > 50 {
-                println!("  ... and {} more lines", lines.len() - 50);
+        if DenialLogger::supported() {
+            if lines.is_empty() {
+                println!("\n=== Sandbox denials: none observed ===");
+            } else {
+                println!("\n=== Sandbox denials ({} lines) ===", lines.len());
+                for line in lines.iter().take(50) {
+                    println!("  {line}");
+                }
+                if lines.len() > 50 {
+                    println!("  ... and {} more lines", lines.len() - 50);
+                }
             }
         }
+        // Unsupported platforms already warned at start; nothing to report.
     }
 
     match result {

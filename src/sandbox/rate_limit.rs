@@ -199,10 +199,6 @@ impl RateLimitHook {
 
 #[async_trait]
 impl SandboxBeforeHook for RateLimitHook {
-    fn name(&self) -> &'static str {
-        "sandbox.rate_limit"
-    }
-
     async fn before(&self, ctx: SandboxHookContext<'_>) -> SandboxHookResult {
         let session_id = &ctx.command.session_id;
         let category = categorize_tool(ctx.tool_name);
