@@ -31,7 +31,7 @@ pub async fn run(
 ) -> CliResult<()> {
     let (client, mut events) = AlephClient::connect(server_url, config).await?;
 
-    // Handshake (LAN-trust: no credentials)
+    // The `connect` handshake happens inside `AlephClient::connect`.
 
     // Resolve session key. Precedence:
     //   1. explicit --session  (clap rejects --last + --session simultaneously)

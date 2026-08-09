@@ -28,10 +28,16 @@ const WS_URL: &str = "ws://127.0.0.1:18790/ws";
 const INITIAL_BACKOFF: Duration = Duration::from_secs(2);
 const MAX_BACKOFF: Duration = Duration::from_mins(1);
 
-/// Core-decided approval banner, already gated operator-only by the gateway
-/// (`event_scope` `surface.approval`) and addressed to this desktop surface.
-/// The raw `approval.requested` frame still drives the Panel card; the shell
-/// only focus-gates and renders the core-supplied title/body for the banner.
+/// Core-decided approval banner, already scoped by the gateway to the session
+/// it belongs to (`event_visibility`, same rule as the three raw `approval.*`
+/// frames — it is NOT operator-only any more) and addressed to this desktop
+/// surface. The raw `approval.requested` frame still drives the Panel card; the
+/// shell only focus-gates and renders the core-supplied title/body.
+///
+/// The frame gained a `session_key` when that scoping landed. The shell does
+/// not read it and deliberately does not start: this bridge renders what the
+/// core decided to send, and a shell that began filtering by session would be a
+/// second, weaker copy of a decision already made upstream.
 const TOPIC_SURFACE_APPROVAL: &str = "surface.approval";
 
 /// Core-decided R5 interrupt, already gated for interrupt-worthiness by the

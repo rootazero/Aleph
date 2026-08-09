@@ -19,6 +19,7 @@ pub mod desktop_bridge;
 pub mod events;
 mod ids;
 pub mod jsonrpc;
+pub mod paths;
 pub mod plan;
 pub mod subagent_tree;
 pub mod team_topic;

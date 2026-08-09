@@ -13,11 +13,14 @@ use serde::{de::DeserializeOwned, Serialize};
 use serde_json::Value;
 use tokio::net::TcpStream;
 use tokio::sync::{mpsc, oneshot, Mutex, RwLock};
-use tokio_tungstenite::{connect_async, tungstenite::Message, MaybeTlsStream, WebSocketStream};
+use tokio_tungstenite::{
+    connect_async_tls_with_config, tungstenite::Message, MaybeTlsStream, WebSocketStream,
+};
 use tracing::{debug, error, info, warn};
 
 use crate::config::CliConfig;
 use crate::error::{CliError, CliResult};
+use crate::tls;
 
 /// Pending RPC request
 struct PendingRequest {
@@ -60,16 +63,17 @@ impl AlephClient {
         url: &str,
         config: &CliConfig,
     ) -> CliResult<(Self, mpsc::Receiver<StreamEvent>)> {
-        let (mut client, events) = Self::open(url).await?;
+        let (mut client, events) = Self::open(url, config).await?;
         client.role = client.handshake(config).await?;
         Ok((client, events))
     }
 
     /// Open the socket and spawn the read loop, without handshaking.
-    async fn open(url: &str) -> CliResult<(Self, mpsc::Receiver<StreamEvent>)> {
+    async fn open(url: &str, config: &CliConfig) -> CliResult<(Self, mpsc::Receiver<StreamEvent>)> {
         info!("Connecting to {}", url);
 
-        let (ws_stream, _) = connect_async(url)
+        let connector = tls::connector_for(url, config.ca_cert.as_deref())?;
+        let (ws_stream, _) = connect_async_tls_with_config(url, None, false, connector)
             .await
             .map_err(|e| CliError::Connection(e.to_string()))?;
 
@@ -353,12 +357,17 @@ impl AlephClient {
 
     /// Perform the `connect` handshake with the server.
     ///
-    /// LAN-trust model: the gateway has no authentication. `connect` carries
-    /// no credentials — it only declares a surface identity (`device_name`)
-    /// and receives the session baseline back: `{ role, state_version,
-    /// keepalive }`. No token is minted, stored, or replayed. Returns the
-    /// server-assigned role (always `"operator"` under LAN-trust), which
-    /// [`Self::connect`] latches into [`Self::role`].
+    /// `connect` carries no credential — it only declares a surface identity
+    /// (`device_name`) and receives the session baseline back: `{ role,
+    /// state_version, keepalive }`. No token is minted, stored, or replayed.
+    ///
+    /// That is sufficient on loopback, which the gateway resolves to `operator`
+    /// before consulting any credential, and it is the reason this client
+    /// cannot reach a REMOTE gateway: a non-loopback connection is walled until
+    /// it presents a device token, a bootstrap ticket, or the shared gateway
+    /// token, and this crate has a surface for none of the three. The role the
+    /// server returns is latched into [`Self::role`] either way, so a walled
+    /// connection reports what it actually got rather than assuming operator.
     ///
     /// Private on purpose — see [`Self::connect`].
     async fn handshake(&self, config: &CliConfig) -> CliResult<String> {
@@ -383,8 +392,8 @@ impl AlephClient {
 
     /// The server-assigned role latched at the `connect` handshake.
     ///
-    /// Always `"operator"` under LAN-trust; surfaced so `aleph connect` can
-    /// report what the server granted.
+    /// `"operator"` on loopback; surfaced so `aleph connect` reports what the
+    /// server actually granted rather than what the client hoped for.
     #[must_use]
     pub fn role(&self) -> &str {
         &self.role

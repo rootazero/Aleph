@@ -11,7 +11,7 @@ use serde::de::DeserializeOwned;
 use serde_json::{json, Value};
 use std::time::Duration;
 use tokio::time::timeout;
-use tokio_tungstenite::{connect_async, tungstenite::Message};
+use tokio_tungstenite::{connect_async_tls_with_config, tungstenite::Message};
 
 /// Default Gateway URL
 pub const DEFAULT_GATEWAY_URL: &str = "ws://127.0.0.1:18790/ws";
@@ -26,6 +26,7 @@ pub const DEFAULT_TIMEOUT_MS: u64 = 30000;
 pub struct GatewayClient {
     url: String,
     timeout_ms: u64,
+    ca_cert: Option<String>,
 }
 
 impl GatewayClient {
@@ -35,6 +36,7 @@ impl GatewayClient {
         Self {
             url: DEFAULT_GATEWAY_URL.to_string(),
             timeout_ms: DEFAULT_TIMEOUT_MS,
+            ca_cert: None,
         }
     }
 
@@ -42,6 +44,22 @@ impl GatewayClient {
     #[must_use]
     pub fn with_url(mut self, url: &str) -> Self {
         self.url = url.to_string();
+        self
+    }
+
+    /// Pin a PEM certificate for `wss://`, as `--ca-cert` does for the
+    /// persistent client.
+    ///
+    /// Left `None` by every caller today, and that is deliberate rather than an
+    /// oversight: this client is reached through `aleph-server gateway call`,
+    /// which by construction talks to the server on the same machine, and
+    /// [`crate::tls::connector_for`] already finds that server's own
+    /// certificate for a loopback URL with no configuration at all. The setter
+    /// exists so a future non-loopback caller is a one-line change instead of a
+    /// rediscovery of this whole problem.
+    #[must_use]
+    pub fn with_ca_cert(mut self, ca_cert: Option<String>) -> Self {
+        self.ca_cert = ca_cert;
         self
     }
 
@@ -66,10 +84,14 @@ impl GatewayClient {
     /// Call an RPC method and return the raw JSON value.
     pub async fn call_raw(&self, method: &str, params: Option<Value>) -> Result<Value, CliError> {
         // Connect to Gateway
-        let (ws_stream, _) = timeout(Duration::from_secs(5), connect_async(&self.url))
-            .await
-            .map_err(|e| CliError::Timeout(format!("Connection timeout: {e}")))?
-            .map_err(|e| CliError::Connection(e.to_string()))?;
+        let connector = crate::tls::connector_for(&self.url, self.ca_cert.as_deref())?;
+        let (ws_stream, _) = timeout(
+            Duration::from_secs(5),
+            connect_async_tls_with_config(&self.url, None, false, connector),
+        )
+        .await
+        .map_err(|e| CliError::Timeout(format!("Connection timeout: {e}")))?
+        .map_err(|e| CliError::Connection(e.to_string()))?;
 
         let (mut write, mut read) = ws_stream.split();
 

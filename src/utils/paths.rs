@@ -27,6 +27,45 @@ pub fn equivalent(a: &Path, b: &Path) -> bool {
     }
 }
 
+/// Legacy `MAX_PATH`. Past this length the `\\?\` prefix is load-bearing on
+/// Windows, so [`display_string`] leaves it alone.
+const LEGACY_MAX_PATH: usize = 260;
+
+/// Render an already-canonical path for a human.
+///
+/// `std::fs::canonicalize` on Windows returns the extended-length form
+/// (`\\?\C:\Users\zou\proj`). That prefix is correct at the API layer and wrong
+/// everywhere a person reads it: it has surfaced in the Panel's project chip,
+/// the directory browser's rows, and inside server-side refusal messages that
+/// embed a path.
+///
+/// **Display boundary only — never on a value that is stored or compared.**
+/// The transform is deliberately partial: a path past [`LEGACY_MAX_PATH`], or a
+/// UNC path (`\\?\UNC\server\share`, whose un-prefixed form is not a path at
+/// all), keeps its prefix. So simplifying one side of a `starts_with` and not
+/// the other silently flips an allow into a deny — which is exactly what an
+/// allowed-roots scope check does. Convert once, on the way out.
+///
+/// The rule runs on every platform rather than under `#[cfg(windows)]`: a Unix
+/// path can never carry this prefix, so the arm is a no-op there, and keeping
+/// it unconditional means the tests below actually run on the machine you are
+/// reading this on.
+#[must_use]
+pub fn display_string(path: &Path) -> String {
+    let raw = path.to_string_lossy();
+    let Some(rest) = raw.strip_prefix(r"\\?\") else {
+        return raw.into_owned();
+    };
+    let bytes = rest.as_bytes();
+    let is_plain_drive = bytes.first().is_some_and(u8::is_ascii_alphabetic)
+        && bytes.get(1) == Some(&b':')
+        && bytes.get(2) == Some(&b'\\');
+    if is_plain_drive && rest.len() < LEGACY_MAX_PATH {
+        return rest.to_string();
+    }
+    raw.into_owned()
+}
+
 /// Process-global environment guard for tests that mutate `ALEPH_HOME`.
 /// Acquiring this mutex serialises tests so they don't observe each other's
 /// temporary directories or leave stale values behind.
@@ -135,24 +174,14 @@ impl IsolatedAlephHome {
 /// # Errors
 /// Returns error if no home directory can be determined
 pub fn get_home_dir() -> Result<PathBuf> {
-    // Try HOME first (Unix standard, also set in Git Bash/MSYS2 on Windows)
-    if let Ok(home) = std::env::var("HOME") {
-        return Ok(PathBuf::from(home));
-    }
-
-    // Try USERPROFILE (Windows standard)
-    if let Ok(profile) = std::env::var("USERPROFILE") {
-        return Ok(PathBuf::from(profile));
-    }
-
-    // Try HOMEDRIVE + HOMEPATH (older Windows)
-    if let (Ok(drive), Ok(path)) = (std::env::var("HOMEDRIVE"), std::env::var("HOMEPATH")) {
-        return Ok(PathBuf::from(format!("{drive}{path}")));
-    }
-
-    Err(AlephError::config(
-        "Failed to determine home directory. Set HOME or USERPROFILE environment variable.",
-    ))
+    // The ladder itself lives in `aleph_protocol::paths` — see `get_config_dir`
+    // for why. This wrapper exists only to turn "not found" into this crate's
+    // error type with its actionable message.
+    aleph_protocol::paths::home_dir().ok_or_else(|| {
+        AlephError::config(
+            "Failed to determine home directory. Set HOME or USERPROFILE environment variable.",
+        )
+    })
 }
 
 /// Get the Aleph configuration directory in a cross-platform way
@@ -173,15 +202,19 @@ pub fn get_config_dir() -> Result<PathBuf> {
     // directory (same convention as canvas_io / cron carryover). This is the
     // single authoritative knob for relocating *all* Aleph state — honoured
     // here so config, data, vault and lock resolution stay consistent (e.g.
-    // test harnesses can fully isolate from the real ~/.aleph). When unset,
-    // behaviour is byte-identical to before.
-    if let Some(dir) = std::env::var_os("ALEPH_HOME") {
-        return Ok(PathBuf::from(dir));
-    }
-
-    // Use unified path ~/.aleph/ across all platforms
-    let home_dir = get_home_dir()?;
-    Ok(home_dir.join(".aleph"))
+    // test harnesses can fully isolate from the real ~/.aleph).
+    //
+    // The rule is `aleph_protocol::paths::aleph_home`, not a copy of it. It was
+    // moved down there when the CLI needed to find the server's self-signed
+    // certificate: `aleph-cli` and `aleph-client` are forbidden to depend on
+    // `alephcore`, so the alternative was a second spelling of this rule — and
+    // a second spelling of THIS rule in particular is undetectable on any
+    // machine where `ALEPH_HOME` is unset, which is every developer's.
+    aleph_protocol::paths::aleph_home().ok_or_else(|| {
+        AlephError::config(
+            "Failed to determine home directory. Set HOME or USERPROFILE environment variable.",
+        )
+    })
 }
 
 /// Resolve where a `~/.aleph`-rooted path lived *before* `ALEPH_HOME` existed.
@@ -236,9 +269,17 @@ pub fn get_runtimes_dir() -> Result<PathBuf> {
 ///
 /// Returns: `<config_dir>/data/`
 ///
-/// Creates the directory if it doesn't exist.
+/// Creates the directory if it doesn't exist — so this is NOT the function a
+/// diagnostic or an audit should call (see the module note on
+/// [`get_config_dir`] being a pure lookup and this one not being). The layout
+/// itself is [`aleph_protocol::paths::data_dir`], because a client that cannot
+/// depend on this crate still has to find the same directory.
 pub fn get_data_dir() -> Result<PathBuf> {
-    let data_dir = get_config_dir()?.join("data");
+    let data_dir = aleph_protocol::paths::data_dir().ok_or_else(|| {
+        AlephError::config(
+            "Failed to determine home directory. Set HOME or USERPROFILE environment variable.",
+        )
+    })?;
     std::fs::create_dir_all(&data_dir)
         .map_err(|e| AlephError::config(format!("Failed to create data directory: {e}")))?;
     Ok(data_dir)
@@ -703,6 +744,33 @@ pub fn migrate_legacy_db_files() {
 mod tests {
     use super::*;
     use tempfile::TempDir;
+
+    #[test]
+    fn display_string_strips_the_verbatim_prefix_only_where_it_is_reversible() {
+        // The case the Panel kept showing.
+        assert_eq!(
+            display_string(Path::new(r"\\?\C:\Users\zou\proj")),
+            r"C:\Users\zou\proj"
+        );
+        // No prefix ⇒ untouched, on every platform.
+        assert_eq!(
+            display_string(Path::new("/home/zou/proj")),
+            "/home/zou/proj"
+        );
+        assert_eq!(
+            display_string(Path::new(r"C:\Users\zou\proj")),
+            r"C:\Users\zou\proj"
+        );
+        // A UNC share un-prefixed is not a path — leave it whole.
+        assert_eq!(
+            display_string(Path::new(r"\\?\UNC\server\share\proj")),
+            r"\\?\UNC\server\share\proj"
+        );
+        // Past MAX_PATH the prefix is what makes the path openable, so a
+        // rendered-then-pasted value must keep it.
+        let long = format!(r"\\?\C:\{}", "x".repeat(LEGACY_MAX_PATH));
+        assert_eq!(display_string(Path::new(&long)), long);
+    }
 
     /// Files allowed to hand-roll a `.aleph` path off `dirs::home_dir()`,
     /// each with the reason it is not the bug this guard hunts.

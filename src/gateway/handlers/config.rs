@@ -922,6 +922,46 @@ mod tests {
         }
     }
 
+    /// The positive twin of the test above, and the thing "gap 0" actually
+    /// turned out to need.
+    ///
+    /// `MEMBER_WITHHELD_KEYS` is defined by removal, which is the right default
+    /// — a new field arrives withheld and somebody has to rule on it. The cost
+    /// is that the four fields a member's composer pills exist to read are
+    /// protected by nothing but that list staying short. Adding `"tiers"` to it
+    /// would compile, pass every test in this file, and reproduce the exact
+    /// symptom the carve-out was made to fix: a tier popover with one blank
+    /// option and a mode pill that hides itself on an empty `modes`.
+    #[test]
+    fn a_member_still_receives_both_dials_and_both_catalogues() {
+        let cfg = Config::default();
+        let value = member_visible_permissions_value(&cfg).expect("member view serializes");
+        let obj = value.as_object().expect("an object");
+
+        for key in ["exec_tier", "tiers", "mode", "modes"] {
+            assert!(
+                obj.contains_key(key),
+                "`{key}` must survive the member narrowing — the pills READ these \
+                 and WRITE through sessions.patch / chat.send, so withholding the \
+                 enumeration locks a menu the server would still honour"
+            );
+        }
+        assert!(
+            !obj["tiers"]
+                .as_array()
+                .expect("tiers is an array")
+                .is_empty(),
+            "an empty catalogue is indistinguishable from a product with one tier"
+        );
+        assert!(
+            !obj["modes"]
+                .as_array()
+                .expect("modes is an array")
+                .is_empty(),
+            "the mode pill hides itself on an empty list — it would simply vanish"
+        );
+    }
+
     async fn create_test_watcher() -> (Arc<ConfigWatcher>, NamedTempFile) {
         let mut temp_file = NamedTempFile::new().unwrap();
         writeln!(

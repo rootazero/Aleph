@@ -726,13 +726,24 @@ pub async fn build_run_request(
                     return Err(BuildRunError::from(format!(
                         "this project's folder is missing: {} — re-bind the project \
                          to another folder (projects.bind_workspace) or restore it",
-                        path.display()
+                        crate::utils::paths::display_string(&path)
                     )));
                 }
                 // Same fact, same representation as tier 1: anything reading
                 // `metadata["project_root"]` must not be able to tell which
                 // tier put the run there (`resume_coordinator` mirrors the
                 // override the same way).
+                //
+                // Deliberately NOT `paths::display_string` — this is the
+                // machine-facing mirror of `workspace_override`, and it has
+                // THREE producers (here, `resume_coordinator`,
+                // `sessions::send_tool`) that all spell it `p.display()`.
+                // Rendering only this one would make the tiers distinguishable,
+                // which is the exact property the line above promises. The
+                // path a human reads is a different carrier —
+                // `identity_meta.custom["project_root"]`, surfaced as
+                // `SessionInfo.project_root` — and the `\\?\` prefix is kept
+                // off it at the boundary that serves it.
                 metadata.insert("project_root".to_string(), path.display().to_string());
                 Ok(path)
             })

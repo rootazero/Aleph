@@ -1685,12 +1685,11 @@ pub(super) async fn notify_origin(origin: Option<&OriginRoute>, text: String) {
         // function is a continuation notice, i.e. unattended by construction,
         // so there is no attended path to charge for it.
         //
-        // ⚠️ **This closes the leg, not the class.** `SecretMasker::new()` is
-        // pattern-based against a fixed vendor list, and `add_pattern` still
-        // has zero production callers — an operator's own credential, if it
-        // does not look like a vendor key, rides through all three legs
-        // unchanged. Wiring `add_pattern` to configuration is a separate change
-        // and is deliberately NOT implied by this one.
+        // The class is closed too, as of `[[security.mask_patterns]]`: the
+        // vendor list is still a fixed floor, but an operator's own
+        // non-vendor-shaped credential can now be named in config and is
+        // installed onto the TYPE, so this leg picks it up without this call
+        // site being touched.
         let masker = crate::exec::masker::SecretMasker::new();
         let msg = crate::gateway::channel::OutboundMessage::text(conv.clone(), masker.mask(&text));
         if let Err(e) = reg

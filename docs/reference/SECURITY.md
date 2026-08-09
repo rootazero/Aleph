@@ -1557,31 +1557,65 @@ after (verified by `single_user_fixture_is_byte_identical_after_upgrade`,
      from an empty answer, keyed on the same `ADMIN_REQUIRED_MESSAGE` the server
      emits.
 
-- **Known gaps (deliberate, recorded, not silently dropped):**
-  0. **The exec-tier id CATALOG is still operator-only.** A member's composer
-     pill therefore cannot offer a stricter tier even though the server would
-     now honour it; the pill says so rather than silently showing one option.
-     Closing it needs a member-reachable catalog read — a wire change.
-  0b. **`surface.approval` (the R5 banner) is still `Global`.** Its three
-     `approval.*` siblings are now per-session; this one is a different payload
-     reaching a different audience through `audience_allows`, and narrowing it
-     is a UX ruling rather than a wire fix.
-  0c. **Legacy room attribution is not backfilled.** It is now known to be
-     *exactly* derivable — `ProjectStore::claim_session_key` is the sole writer
-     of `projects.current_session_key` and writes only `WHERE
-     current_session_key IS NULL`, so a legacy room's session key is DECLARED in
-     a second table rather than guessed (predicate: a project row whose
-     `current_session_key` names a session row with `owner_user_id IS NULL AND
-     scope_id IS NULL`). This **overturns the earlier record** that rooms were
-     unrecoverable; personal sessions genuinely are. Deferred because it is a
-     migration that GRANTS visibility and needs a new `SessionStore` trait
-     method on both backends (`SessionPatch` cannot write those columns). The
-     bleeding is stopped: `sessions.new` and `sessions.compaction.branch` no
-     longer create NEW unstamped rows.
-  0d. **Secret masking covers three legs but only the vendor-pattern class.**
-     `SecretMasker::new()` is a fixed vendor list and `add_pattern` has zero
-     production callers, so an operator's own non-vendor-shaped credential
-     rides through all three legs unchanged.
+- **Known gaps — all four CLOSED 2026-08-09; kept here with what closing each
+  one actually turned out to require:**
+  0. **The exec-tier id CATALOG.** ✅ Closed — and it turned out to be closed
+     already at the wire: `config.get_tool_permissions` is in
+     `method_admin::MEMBER_CARVE_OUTS` and the handler narrows the response
+     rather than refusing it, so a member receives all four id enumerations
+     (`exec_tier`/`tiers`/`mode`/`modes`). What was missing was a guard and two
+     stale docs claiming the opposite. `MEMBER_WITHHELD_KEYS` is defined by
+     REMOVAL, which is right, and leaves the four fields the pills exist to read
+     protected by nothing but that list staying short — adding `"tiers"` to it
+     would compile and pass every test. `config::tests::
+     a_member_still_receives_both_dials_and_both_catalogues` is the positive
+     twin of the existing withholding guard.
+  0b. **`surface.approval` (the R5 banner).** ✅ Closed by giving the frame the
+     `session_key` it is derived from. It was `Global` + role-gated not because
+     a banner is fleet-level but because `r5_router::approval_for` dropped the
+     field on the way through, leaving nothing to scope by. It now classifies
+     exactly like its three siblings (`BySessionKeyOrAdmin` / `OperatorOnly` on
+     an empty key) and its `EventScopeGuard` prefix rule is **gone** — keeping
+     both would have re-closed the member half, which is the shape recorded as
+     mine K. Symptom it fixes: the person whose own tool call is parked received
+     the decision card and never the interrupt whose job is to fetch them to it.
+     **Honest scope of the fix:** the frame carries `audience: ["desktop"]`, so
+     `audience_allows` still restricts it to connections whose surface kind is
+     `Desktop` — the shell's OS-notification bridge, never a browser Panel — and
+     that bridge hard-codes `ws://127.0.0.1:18790/ws`. Every consumer alive
+     today is therefore a loopback connection, which resolves to operator before
+     any of this is consulted, so the classification change moves nothing on a
+     shipped install. It is correct rather than useful: the previous state was
+     "gated by role because the payload lost its owner", and that is the state
+     that would have quietly excluded a member the moment the shell learned to
+     point at a remote core. **The real remaining gap is one level out** — there
+     is no member-reachable interrupt surface at all, because the only R5 banner
+     transport is a loopback desktop bridge. Closing *that* is a product
+     decision (an in-Panel banner, or a shell that can address a remote core),
+     not a visibility fix.
+  0c. **Legacy room attribution.** ✅ Backfilled. The predicate was exactly
+     derivable — `ProjectStore::claim_session_key` is the sole writer of
+     `projects.current_session_key` and writes only `WHERE current_session_key
+     IS NULL`, so a legacy room's session key is DECLARED in a second table
+     rather than guessed. `SessionStore::backfill_attribution` (both backends)
+     writes the pair only `WHERE owner_user_id IS NULL AND scope_id IS NULL` —
+     the guard is in the statement, not the caller, so it can never re-scope a
+     session somebody owns. Driven once at boot by
+     `projects::backfill_legacy_room_attribution`, before any handler is
+     reachable. Of the two columns only `scope_id` mattered: `owner_user_id`
+     NULL already reads as the default owner, while `scope_id` NULL reads as
+     "org-era personal session", so `project_visible` never fired and the room's
+     own conversation was invisible to its whole roster. Personal pre-P1
+     sessions remain genuinely unrecoverable.
+  0d. **Secret masking beyond the vendor-pattern class.** ✅ Closed by
+     `[[security.mask_patterns]]`, installed onto the **type**
+     (`exec::masker::install_operator_patterns`) rather than threaded to a
+     construction site — `SecretMasker::new()` has seven production call sites
+     and configuring one would have redacted one leg while six spelled the
+     secret out, with no test able to see it. Invalid regexes are logged at
+     `error`, never dropped silently: a redaction pattern that failed to compile
+     looks exactly like an operator who never configured one. `[security]` is
+     not a live-reload section, and `ReloadImpact::classify` already says so.
   1. `chat.send`'s Simulated-execution fallback path (used only when no LLM
      provider is configured — `AgentRunManager::start_run`, which has no
      `SessionStore` dependency) is not covered by the real-provider path's

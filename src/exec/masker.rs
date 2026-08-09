@@ -1,6 +1,6 @@
 use crate::exec::secret_patterns::secret_masker_patterns;
 use regex::Regex;
-use std::sync::LazyLock;
+use std::sync::{Arc, LazyLock, RwLock};
 
 static SECRET_PATTERNS: LazyLock<Vec<(regex::Regex, &'static str)>> = LazyLock::new(|| {
     secret_masker_patterns()
@@ -9,27 +9,65 @@ static SECRET_PATTERNS: LazyLock<Vec<(regex::Regex, &'static str)>> = LazyLock::
         .collect()
 });
 
-/// `SecretMasker` for redacting sensitive information.
-#[derive(Debug, Clone, Default)]
-pub struct SecretMasker {
-    /// Additional custom patterns
-    custom_patterns: Vec<(Regex, String)>,
+/// Operator-configured patterns from `[[security.mask_patterns]]`, compiled
+/// once at boot by [`install_operator_patterns`].
+///
+/// **Process-global on purpose.** `SecretMasker::new()` has *seven* production
+/// construction sites (background persistence, the guardian requester, the
+/// redacting emitter, the unattended trace sink, `execute.rs`, the sandbox
+/// approval card, the cron executor). Threading config to one of them would
+/// have redacted one leg and left six spelling the secret out — which is the
+/// failure this whole type exists to prevent, and which no test would have
+/// caught because each leg is tested alone. Config reaches the *type*, so
+/// every site inherits it whether or not its author knew this existed.
+static OPERATOR_PATTERNS: LazyLock<RwLock<Arc<Vec<(Regex, String)>>>> =
+    LazyLock::new(|| RwLock::new(Arc::new(Vec::new())));
+
+fn operator_patterns() -> Arc<Vec<(Regex, String)>> {
+    OPERATOR_PATTERNS
+        .read()
+        .unwrap_or_else(|e| e.into_inner())
+        .clone()
 }
+
+/// Compile and install the operator's `[[security.mask_patterns]]`, replacing
+/// any previous set. Returns the number installed.
+///
+/// Invalid regexes are **reported, not swallowed**: a redaction pattern that
+/// silently failed to compile is a secret printed in the clear with no symptom
+/// anywhere. The caller logs the rejects; the valid ones still install, because
+/// dropping the whole list over one typo is the worse failure.
+pub fn install_operator_patterns<'a>(
+    patterns: impl IntoIterator<Item = (&'a str, &'a str)>,
+) -> (usize, Vec<(String, regex::Error)>) {
+    let mut compiled = Vec::new();
+    let mut rejected = Vec::new();
+    for (pattern, replacement) in patterns {
+        match crate::security::safe_regex::bounded_builder(pattern).build() {
+            Ok(re) => compiled.push((re, replacement.to_string())),
+            Err(e) => rejected.push((pattern.to_string(), e)),
+        }
+    }
+    let installed = compiled.len();
+    *OPERATOR_PATTERNS.write().unwrap_or_else(|e| e.into_inner()) = Arc::new(compiled);
+    (installed, rejected)
+}
+
+/// `SecretMasker` for redacting sensitive information.
+///
+/// Carries no per-instance state: the vendor floor and the operator's patterns
+/// are both process-wide, and they are read at `mask()` time rather than
+/// snapshotted at construction so a masker built before boot finished seeding
+/// still redacts. Kept as a struct rather than free functions because the two
+/// redaction legs pass it around as a value.
+#[derive(Debug, Clone, Default)]
+pub struct SecretMasker;
 
 impl SecretMasker {
     /// Create a new secret masker with default patterns.
     #[must_use]
     pub fn new() -> Self {
-        Self::default()
-    }
-
-    /// Add a custom pattern with replacement.
-    pub fn add_pattern(&mut self, pattern: &str, replacement: &str) -> Result<(), regex::Error> {
-        self.custom_patterns.push((
-            crate::security::safe_regex::bounded_builder(pattern).build()?,
-            replacement.to_string(),
-        ));
-        Ok(())
+        Self
     }
 
     pub fn mask(&self, text: &str) -> String {
@@ -37,24 +75,15 @@ impl SecretMasker {
         for (regex, replacement) in SECRET_PATTERNS.iter() {
             result = regex.replace_all(&result, *replacement).to_string();
         }
-        for (regex, replacement) in &self.custom_patterns {
+        for (regex, replacement) in operator_patterns().iter() {
             result = regex.replace_all(&result, replacement.as_str()).to_string();
         }
         result
     }
 
     pub fn contains_secrets(&self, text: &str) -> bool {
-        for (regex, _) in SECRET_PATTERNS.iter() {
-            if regex.is_match(text) {
-                return true;
-            }
-        }
-        for (regex, _) in &self.custom_patterns {
-            if regex.is_match(text) {
-                return true;
-            }
-        }
-        false
+        SECRET_PATTERNS.iter().any(|(re, _)| re.is_match(text))
+            || operator_patterns().iter().any(|(re, _)| re.is_match(text))
     }
 }
 
@@ -196,15 +225,27 @@ MIIEvQIBADANBgkqhkiG9w0BAQEFAASCBKcwggSjAgEAAoIBAQ...
         assert!(!masker.contains_secrets("This is just normal text"));
     }
 
+    /// The operator's patterns must reach a masker that was constructed
+    /// *without* ever being told about them — that is the whole point of
+    /// hanging them off the type instead of a constructor argument, and it is
+    /// what makes the other six construction sites correct for free.
     #[test]
-    fn test_custom_pattern() {
-        let mut masker = SecretMasker::new();
-        masker
-            .add_pattern(r"CUSTOM_SECRET_\d+", "CUSTOM_***")
-            .unwrap();
-        let input = "Value: CUSTOM_SECRET_12345";
-        let output = masker.mask(input);
+    fn operator_patterns_reach_a_masker_nobody_configured() {
+        let (installed, rejected) = install_operator_patterns([
+            (r"CUSTOM_SECRET_\d+", "CUSTOM_***"),
+            ("([unclosed", "never"),
+        ]);
+        assert_eq!(installed, 1, "the valid pattern still installs");
+        assert_eq!(rejected.len(), 1, "the broken one is reported, not dropped");
+
+        let masker = SecretMasker::new();
+        let output = masker.mask("Value: CUSTOM_SECRET_12345");
         assert!(output.contains("CUSTOM_***"));
+        assert!(!output.contains("12345"));
+        assert!(masker.contains_secrets("CUSTOM_SECRET_9"));
+
+        // Leave the process as we found it — this static outlives the test.
+        let _ = install_operator_patterns(std::iter::empty());
     }
 
     #[test]

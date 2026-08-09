@@ -5,6 +5,34 @@ use super::{SessionIdentityMeta, SessionManager, SessionManagerError, SessionPat
 use crate::gateway::router::SessionKey;
 
 impl SessionManager {
+    /// Stamp the P1 attribution columns onto a row that has neither set.
+    ///
+    /// The `IS NULL AND IS NULL` guard lives in the statement, so this is safe
+    /// to call on any key: a session that already has an owner is left exactly
+    /// as it is and the call reports `false`. That is what keeps "session scope
+    /// is immutable" true while still letting the legacy-room backfill exist —
+    /// it writes only where there is nothing to overwrite.
+    pub async fn backfill_attribution(
+        &self,
+        key: &SessionKey,
+        owner_user_id: &str,
+        scope_id: &str,
+    ) -> Result<bool, SessionManagerError> {
+        let key_str = key.to_key_string();
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| SessionManagerError::DatabaseError(format!("Lock error: {e}")))?;
+        let rows = conn
+            .execute(
+                "UPDATE sessions SET owner_user_id = ?2, scope_id = ?3
+                 WHERE key = ?1 AND owner_user_id IS NULL AND scope_id IS NULL",
+                params![&key_str, owner_user_id, scope_id],
+            )
+            .map_err(|e| SessionManagerError::DatabaseError(e.to_string()))?;
+        Ok(rows > 0)
+    }
+
     /// Compact a session by removing old messages
     pub async fn compact_session(&self, key: &SessionKey) -> Result<usize, SessionManagerError> {
         let key_str = key.to_key_string();

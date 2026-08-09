@@ -822,6 +822,29 @@ impl SessionStore for FileSessionStore {
         Ok(())
     }
 
+    /// See the trait doc. The `IS NULL AND IS NULL` predicate the SQL backend
+    /// puts in its `WHERE` clause is the `is_some()` early return here — same
+    /// rule, and it must stay in the implementation rather than the caller for
+    /// the same reason.
+    async fn backfill_attribution(
+        &self,
+        key: &SessionKey,
+        owner_user_id: &str,
+        scope_id: &str,
+    ) -> Result<bool, SessionStoreError> {
+        let key_str = key.to_key_string();
+        let Some(mut meta) = self.read_metadata(&key_str).await? else {
+            return Ok(false);
+        };
+        if meta.owner_user_id.is_some() || meta.scope_id.is_some() {
+            return Ok(false);
+        }
+        meta.owner_user_id = Some(owner_user_id.to_string());
+        meta.scope_id = Some(scope_id.to_string());
+        self.write_metadata(&key_str, &meta).await?;
+        Ok(true)
+    }
+
     async fn set_project_root(
         &self,
         key: &SessionKey,

@@ -93,6 +93,15 @@ use crate::sync_primitives::Arc;
 /// ordinary shape for a room created through `projects.create`, and the reason
 /// this is an `Option` rather than the pre-P2 `path: String` that spelled
 /// "unbound" as `""`.
+///
+/// When it is set, it is rendered through
+/// [`crate::utils::paths::display_string`]. The stored value comes out of
+/// `std::fs::canonicalize`, so on Windows it carries the `\\?\`
+/// extended-length prefix — which is right for the filesystem layer and wrong
+/// in the project chip, the recents list, and every refusal message that
+/// echoes a path back. The row keeps the canonical bytes; only this projection
+/// is simplified, and the round trip is safe because every path the client
+/// sends back is re-canonicalised by `ProjectStore::canonical_dir`.
 #[derive(Debug, Clone, Serialize)]
 pub struct ProjectView {
     pub id: String,
@@ -112,7 +121,9 @@ impl ProjectView {
             id: p.id,
             name: p.name,
             owner_user_id: p.owner_user_id,
-            workspace_path: p.workspace_path.map(|w| w.to_string_lossy().to_string()),
+            workspace_path: p
+                .workspace_path
+                .map(|w| crate::utils::paths::display_string(&w)),
             status: p.status.as_str().to_string(),
             member_ids,
             created_at: p.created_at,
@@ -1254,7 +1265,13 @@ mod tests {
         .await;
 
         let view = &bound.result.expect("bind succeeds")["project"];
-        assert_eq!(view["workspace_path"], dir.to_string_lossy().to_string());
+        // The response is the DISPLAY form (no `\\?\` on Windows); the row keeps
+        // the canonical bytes. Asserting both in one test is the point — they
+        // are allowed to differ, and only here is that difference legible.
+        assert_eq!(
+            view["workspace_path"],
+            crate::utils::paths::display_string(&dir)
+        );
         assert_eq!(
             store.get(&project.id).unwrap().unwrap().workspace_path,
             Some(dir),

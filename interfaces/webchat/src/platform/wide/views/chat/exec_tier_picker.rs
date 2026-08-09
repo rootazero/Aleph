@@ -18,14 +18,20 @@
 //!    member can only ever arm the gate further, never disarm it.
 //! 4. "Follow global" clears the override.
 //!
-//! Step 2's fetch is admin-gated, which for a member means REFUSED. That is a
-//! state this component renders (see `refused`) rather than a warning it
-//! logs: an empty option list is indistinguishable from "this product has one
-//! choice", and saying nothing at all is how the member's only visible control
-//! over their own approval gate quietly disappeared. **Known gap:** the tier id
-//! CATALOG is still operator-only, so a member cannot pick a stricter tier from
-//! this pill even though the server would honour it — closing that needs a
-//! member-reachable catalog read, which is a wire change, not a copy fix.
+//! Step 2's fetch reaches a member: `config.get_tool_permissions` is carved out
+//! of the otherwise-admin `config.` family (`method_admin::MEMBER_CARVE_OUTS`)
+//! and the handler narrows the response to the four id enumerations, dropping
+//! the two server-global policy axes Settings → Policies edits. So the catalogue
+//! is real for a member and this pill offers the full ladder — which matters
+//! because the write paths were member-open all along: gating only the READ left
+//! the door open and the menu locked.
+//!
+//! The `refused` state below is therefore no longer a member's normal case, and
+//! it is deliberately kept: it is what an unauthorized or downgraded connection
+//! renders, and the alternative — an empty option list — is indistinguishable
+//! from "this product has one choice". Saying nothing at all is how the only
+//! visible control over one's own approval gate quietly disappeared once
+//! already.
 //!
 //! The trap: a brand-new conversation has no `session_key` yet, so there is
 //! nothing to patch — and the FIRST turn is the one the user armed the gate
@@ -65,13 +71,13 @@ pub fn ExecTierPicker() -> impl IntoView {
 
     // The global tier + the selectable ids.
     //
-    // `config.get_tool_permissions` is admin-gated, so for a member this call
-    // is REFUSED — and until 2026-08-08 the refusal was swallowed into a
-    // `console.warn`, leaving `tiers` empty and the popover showing a single
-    // "follow global" entry. The dial did not become unavailable, only
-    // invisible: the write paths (`sessions.patch` and `chat.send`'s
-    // `exec_tier`) are member-open, so the member kept the capability and lost
-    // the control. Now the refusal is a state the popover can render.
+    // This call succeeds for a member (see the module doc). It did not until
+    // 2026-08-08, and the refusal was swallowed into a `console.warn`, leaving
+    // `tiers` empty and the popover showing a single "follow global" entry. The
+    // dial did not become unavailable, only invisible: the write paths
+    // (`sessions.patch` and `chat.send`'s `exec_tier`) are member-open, so the
+    // member kept the capability and lost the control. The refusal is now a
+    // state the popover renders rather than a warning nobody reads.
     let load = move || {
         spawn_local(async move {
             match ToolPermissionsApi::get_global(&dashboard).await {
