@@ -118,6 +118,11 @@ pub struct ResolvedAgent {
     /// Link access whitelist (None or empty = all links allowed)
     pub allowed_links: Option<Vec<String>>,
 
+    /// Users who may start a run as this agent (None or empty = everyone).
+    /// Carried verbatim from [`AgentDefinition::allowed_users`]; the rule that
+    /// reads it is [`agent_admits_user`](crate::config::types::agent_admits_user).
+    pub allowed_users: Option<Vec<String>>,
+
     /// Per-agent tool permission overrides
     pub tool_permissions: Option<crate::config::types::policies::ToolPermissionsConfig>,
 }
@@ -374,6 +379,7 @@ impl AgentDefinitionResolver {
 
         let subagent_policy = agent.subagents.clone();
         let allowed_links = agent.allowed_links.clone();
+        let allowed_users = agent.allowed_users.clone();
         let tool_permissions = agent.tool_permissions.clone();
 
         ResolvedAgent {
@@ -390,6 +396,7 @@ impl AgentDefinitionResolver {
             skills_blacklist,
             subagent_policy,
             allowed_links,
+            allowed_users,
             tool_permissions,
         }
     }

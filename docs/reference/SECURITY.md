@@ -116,6 +116,35 @@ tiers — global → agent → channel, most-restrictive wins — and does not
 read `IdentityContext`. This is orthogonal to connection trust and is
 unchanged by the LAN-trust revert.
 
+#### The agent tier is a permission set, so who may select it is a permission (2026-08-10)
+
+The middle tier above is **per agent**, which means choosing an agent chooses
+a permission set. `agent_id` arrives on `chat.send` / `agent.run` from the
+caller, and until 2026-08-10 nothing checked it: a caller denied a tool under
+one agent could name another on the same request and inherit its allowances.
+The run-start guard that sat there — `visibility::existing_session_is_visible`
+— answers a different question ("is this SESSION mine") and structurally
+cannot answer this one: naming a different agent mints a *brand-new* session
+key, which that predicate admits by design.
+
+`AgentDefinition.allowed_users` closes it, with the same "unset or empty means
+everyone" convention as its neighbour `allowed_links` — so single-user installs
+and every pre-existing config are unchanged. One rule
+(`config::types::agent_admits_user`), one enforcement point
+(`handlers::agent::build_run_request`, shared by all three run-start paths,
+taking the agent config as a **required** parameter so a new surface cannot
+opt out), and one twin on the delegation face (`sessions_send`, because "use an
+agent you are allowed and have it delegate" is otherwise two legal steps that
+add up to the same thing). Refusal is an honest `PERMISSION_DENIED` naming the
+agent — `agents.list` already returns every agent to every authenticated
+caller, so there is no existence secret to protect, and a puzzle is what pushes
+an operator who forgot to list themselves into widening the setting.
+
+`agent_update` writes that list, and is therefore operator-gated: a gate must
+cover the verb that removes the gate. Full model and threat analysis in
+[AGENT_IDENTITY.md](AGENT_IDENTITY.md); the seam-level landmines are in
+`src/gateway/CLAUDE.md`.
+
 Shell-command execution safety (risk analysis, approval, allowlist,
 output masking) is a separate subsystem — see **Exec Kernel** below.
 
@@ -577,7 +606,7 @@ risk_segments}`.
 Security *events* (not approvals) still log through
 `src/security/audit.rs`; SSRF has its own trail (see below).
 
-### Signed agent ledger (2026-07-25, hardened 2026-07-26)
+### Signed agent ledger (2026-07-25, hardened 2026-07-26 … 2026-08-10)
 
 The session event log answers *what the run did*. It does not answer *who,
 provably*: its only actor identity is the `agent_id` inside the session key, and
@@ -595,6 +624,20 @@ covers surfaces the ambient `CallIdentity` cannot reach.
 This is the first production consumer of `gateway/security/crypto.rs`'s Ed25519
 helpers, which had none (the `devices.public_key BLOB NOT NULL` column every
 writer fills with empty bytes is the visible half of that).
+
+**Each record answers "who" twice (2026-08-10).** `agent_id` is the identity
+that acted; `principal` is the person who drove it (`users.user_id`). Recording
+only the first meant non-repudiation held for agents and not for people: on a
+multi-user install, agent `main`'s chain proved a command ran and was silent on
+whether the operator or a member asked for it. `principal` is resolved at the
+same chokepoint from `visibility::ambient_actor()` — never from tool arguments,
+the same provenance fence `agent_id` has — and is `None` only where there
+genuinely is no person (cron, heartbeat, a continuation, an A2A delegation, a
+chain's own opening record). It is **inside the preimage**, so an adversary with
+database write access can neither blame someone else nor erase the attribution:
+both edits move the digest the signature covers. Chains written before the
+column keep verifying — the field is committed last and a `None` emits no bytes
+at all, so a principal-less row hashes byte-for-byte as it did before.
 
 **Read it with `agent_identity` (tool, operator-gated) or `aleph-server
 identity` (CLI, read-only, no runtime and no instance lock — verification must

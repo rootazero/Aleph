@@ -327,6 +327,10 @@ impl AgentConfig {
                 .unwrap_or_else(|| std::path::PathBuf::from("/tmp"))
                 .join(format!(".aleph/agents/{agent_id}")),
             allowed_links: None,
+            // The legacy `[agents.<id>]` schema has no `allowed_users` key (nor
+            // `allowed_links`), so there is nothing to carry: unrestricted, the
+            // same answer this shape gave before the field existed.
+            allowed_users: None,
             tool_permissions: None,
             timeout_secs: None,
         }

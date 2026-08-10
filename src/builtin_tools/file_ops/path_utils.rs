@@ -2,8 +2,8 @@
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use std::sync::{OnceLock, RwLock};
-use tracing::info;
+use std::sync::{Arc, OnceLock, RwLock};
+use tracing::{info, warn};
 
 use crate::builtin_tools::error::ToolError;
 
@@ -21,6 +21,21 @@ use crate::builtin_tools::error::ToolError;
 /// Aleph's *own* credential surface (the encrypted `secrets.vault` and the
 /// `data/` auth/device-pairing databases), which an agent must never read or
 /// clobber through its file tools.
+///
+/// The returned list carries TWO kinds of entry, told apart by
+/// [`looks_like_glob`] and compiled by [`compile_denied_entry`]:
+/// 1. the fixed credential locations above, matched by canonicalizing prefix;
+/// 2. the operator's `[sandbox] deny_read_globs`
+///    ([`configured_deny_read_globs`]), matched by the same anchored regex the
+///    OS sandbox floor uses.
+///
+/// (2) exists because a file has **two faces that can read it** and the
+/// setting used to bind only one: `deny_read_globs` reached the OS drivers
+/// (macOS seatbelt `(deny file-read* …)` / Windows deny-read ACEs) and stopped
+/// there, so `deny_read_globs = ["**/.env"]` kernel-blocked `bash` while
+/// `file_read`, `file_ops search` and `file_ops stats` read the same file in
+/// plain text — with nothing anywhere telling the operator the floor was
+/// half-applied.
 pub fn get_denied_paths() -> Vec<String> {
     let mut denied_paths = vec![
         // SSH / PGP / AWS — the original Unix credential directories.
@@ -60,7 +75,10 @@ pub fn get_denied_paths() -> Vec<String> {
         // leaf beneath it via the canonicalizing prefix match. Without this the
         // agent's own `file_read`/`file_write` could exfiltrate or corrupt the
         // vault — a hole the OS `deny_globs` does not close because it only
-        // applies inside the sandboxed workspace root, not arbitrary reads.
+        // applies to commands run inside the sandbox, not to the file tools.
+        // The reverse leg of that asymmetry is closed at the bottom of this
+        // function: the operator's `deny_read_globs` are appended here so they
+        // bind the file tools too.
         denied_paths.push(format!("{}/secrets.vault", config_dir.display()));
         denied_paths.push(format!("{}/secrets.vault.lock", config_dir.display()));
         denied_paths.push(format!("{}/data", config_dir.display()));
@@ -103,13 +121,95 @@ pub fn get_denied_paths() -> Vec<String> {
         ]);
     }
 
+    // The operator's `[sandbox] deny_read_globs` floor. Appended last so a
+    // reader of this function sees the fixed credential set first and the
+    // configured patterns as an explicit extension of it.
+    denied_paths.extend_from_slice(configured_deny_read_globs());
+
     denied_paths
 }
 
-/// Expand a denylist entry's leading `~` (home) and Windows environment tokens
-/// (`%APPDATA%` / `%LOCALAPPDATA%` / `%USERPROFILE%`) to concrete paths so the
-/// prefix comparison below sees the same shape a canonical path has. Unix
-/// entries carry no `%…%` tokens, so the Windows expansion is a no-op there.
+/// The operator's `[sandbox] deny_read_globs`, read once per process.
+///
+/// **Why a snapshot and not a live read.** `[sandbox]` is a restart-scoped
+/// section (`ReloadImpact::classify("sandbox") == Restart`), and the OS drivers
+/// that consume the same setting latch it when the sandbox is constructed. A
+/// process-lifetime snapshot is therefore the honest reading, and it matches
+/// how the rest of this module already behaves — [`get_denied_paths`] is called
+/// at tool construction and [`denied_entry_normalized`] memoises each entry for
+/// the process lifetime.
+///
+/// **Why the raw file and not `Config::load()`.** `Config::load()` *writes* a
+/// default config file when none exists; a deny check running inside a tool
+/// call must not create what it measures. This reads the effective config path
+/// (a pure lookup) and parses nothing but the one array it needs, so an
+/// unrelated malformed section cannot take the credential denylist down with
+/// it.
+fn configured_deny_read_globs() -> &'static [String] {
+    static GLOBS: OnceLock<Vec<String>> = OnceLock::new();
+    GLOBS.get_or_init(|| {
+        let path = crate::config::Config::effective_path();
+        let Ok(text) = std::fs::read_to_string(&path) else {
+            // No config file (first boot, or a test/CI home): no floor to apply.
+            return Vec::new();
+        };
+        let globs = parse_deny_read_globs(&text);
+        if !globs.is_empty() {
+            info!(
+                count = globs.len(),
+                config = %path.display(),
+                "file_ops: [sandbox] deny_read_globs floor applied to the file tools"
+            );
+        }
+        globs
+    })
+}
+
+/// Extract `[sandbox] deny_read_globs` from a config TOML document.
+///
+/// Fail-soft by necessity — this runs on the file-tool path, where hard-failing
+/// on an unrelated config problem would take every file operation down — but
+/// never silently: an unparseable document or a non-string entry is logged as
+/// a warning that names what is *not* being enforced.
+fn parse_deny_read_globs(toml_text: &str) -> Vec<String> {
+    let doc = match toml_text.parse::<toml::Value>() {
+        Ok(doc) => doc,
+        Err(e) => {
+            warn!(
+                error = %e,
+                "file_ops: config file is not valid TOML; [sandbox] deny_read_globs NOT applied to the file tools"
+            );
+            return Vec::new();
+        }
+    };
+    let Some(entries) = doc
+        .get("sandbox")
+        .and_then(|s| s.get("deny_read_globs"))
+        .and_then(toml::Value::as_array)
+    else {
+        return Vec::new();
+    };
+    let mut globs = Vec::with_capacity(entries.len());
+    for entry in entries {
+        match entry.as_str() {
+            Some(pattern) if !pattern.is_empty() => globs.push(pattern.to_string()),
+            _ => warn!(
+                entry = ?entry,
+                "file_ops: ignoring empty/non-string deny_read_globs entry; it denies NOTHING to the file tools"
+            ),
+        }
+    }
+    globs
+}
+
+/// Expand a **literal** denylist entry's leading `~` (home) and Windows
+/// environment tokens (`%APPDATA%` / `%LOCALAPPDATA%` / `%USERPROFILE%`) to
+/// concrete paths so the prefix comparison below sees the same shape a
+/// canonical path has. Unix entries carry no `%…%` tokens, so the Windows
+/// expansion is a no-op there.
+///
+/// Pattern entries deliberately do NOT come through here — see
+/// [`compile_denied_entry`].
 fn expand_denied_entry(denied: &str) -> String {
     // `mut` is only exercised on Windows (the env-token expansion below); on
     // other targets the binding is written once.
@@ -142,11 +242,79 @@ fn expand_denied_entry(denied: &str) -> String {
     out
 }
 
-/// Memo of the expanded + normalized form of each raw denylist entry.
-static DENIED_NORM_CACHE: OnceLock<RwLock<HashMap<String, PathBuf>>> = OnceLock::new();
+/// One denylist entry in the form the matchers consume.
+enum DeniedEntry {
+    /// A concrete location: expanded ([`expand_denied_entry`]) and normalized
+    /// ([`safe_normalize`]) the same way an input path is, then matched by
+    /// path-component prefix so the entry covers its whole subtree.
+    Literal(PathBuf),
+    /// A git-style pattern from `[sandbox] deny_read_globs`, translated by the
+    /// SAME function the OS floor uses —
+    /// [`crate::sandbox::deny_globs::glob_to_anchored_regex`], which feeds the
+    /// macOS seatbelt `(deny file-read* (regex …))` rules and the Windows
+    /// deny-read ACE resolver. A second translator here would be the exact
+    /// mistake `src/sandbox/platforms/common.rs` documents deleting: a
+    /// semantically weaker twin that passes its own tests while producing a
+    /// quieter deny floor than the one the operator configured.
+    Glob(regex::Regex),
+    /// A `deny_read_globs` entry that did not translate or did not compile.
+    /// Matches nothing — the same outcome the OS floor reaches (it drops
+    /// uncompilable patterns with a warning). Kept as an explicit third state,
+    /// rather than dropped at parse time, so the memo stays a total function of
+    /// the entry string and the warning fires exactly once per process.
+    InertGlob,
+}
 
-/// The expanded ([`expand_denied_entry`]) and normalized ([`safe_normalize`])
-/// form of one raw denylist entry — computed once per process.
+/// Whether a raw denylist entry is a glob pattern rather than a concrete path.
+///
+/// Provenance would be the better discriminator — "did this come from
+/// `deny_read_globs`" — but the denylist reaches its two matchers as a plain
+/// `&[String]` from seven call sites (`file_ops::{read,write,edit,apply_patch,
+/// tool}`, `builtin_tools::node_file`, `cluster::node_file_cmd`), so shape is
+/// the only channel available without changing a type all seven own. None of
+/// the fixed credential entries contains one of these three characters; a
+/// *user* path that does (a home directory literally named `a[1]`) is misread
+/// as a pattern — `*`/`?` widen the deny, a character class can shift it — and
+/// that is why this stays a documented shape test rather than a silent
+/// heuristic.
+fn looks_like_glob(entry: &str) -> bool {
+    entry.contains(['*', '?', '['])
+}
+
+/// Compile one raw denylist entry into the form the matchers use.
+fn compile_denied_entry(denied: &str) -> DeniedEntry {
+    if looks_like_glob(denied) {
+        // Deliberately NO `~` / `%APPDATA%` expansion for patterns: the OS
+        // floor does not expand either, and a pattern that meant two different
+        // things to the two faces is the very asymmetry this wiring closes.
+        let Some(pattern) = crate::sandbox::deny_globs::glob_to_anchored_regex(denied) else {
+            warn!(entry = %denied, "file_ops: empty deny_read_globs entry ignored");
+            return DeniedEntry::InertGlob;
+        };
+        return match regex::Regex::new(&pattern) {
+            Ok(re) => DeniedEntry::Glob(re),
+            Err(e) => {
+                warn!(
+                    entry = %denied,
+                    regex = %pattern,
+                    error = %e,
+                    "file_ops: deny_read_globs pattern failed to compile; it denies NOTHING to the file tools"
+                );
+                DeniedEntry::InertGlob
+            }
+        };
+    }
+    let expanded = expand_denied_entry(denied);
+    DeniedEntry::Literal(
+        safe_normalize(Path::new(&expanded)).unwrap_or_else(|_| PathBuf::from(&expanded)),
+    )
+}
+
+/// Memo of the compiled form of each raw denylist entry.
+static DENIED_NORM_CACHE: OnceLock<RwLock<HashMap<String, Arc<DeniedEntry>>>> = OnceLock::new();
+
+/// The compiled ([`compile_denied_entry`]) form of one raw denylist entry —
+/// computed once per process.
 ///
 /// [`path_is_denied`] runs once per glob match inside the `search` / `stats`
 /// walks, and normalizing every entry on every call meant a `canonicalize()`
@@ -154,9 +322,14 @@ static DENIED_NORM_CACHE: OnceLock<RwLock<HashMap<String, PathBuf>>> = OnceLock:
 /// thousands of blocking syscalls on a tokio worker before returning four
 /// numbers — minutes of round-trips on a network mount. The entries are derived
 /// from the user's home / config dir at process start and do not change for the
-/// process lifetime, which is what makes normalizing each one exactly once
-/// sound.
-fn denied_entry_normalized(denied: &str) -> PathBuf {
+/// process lifetime, which is what makes compiling each one exactly once sound.
+/// The same argument covers pattern entries: regex compilation is far more
+/// expensive than a `canonicalize()`, and `[sandbox]` is restart-scoped.
+///
+/// This is also the reason the two directions cannot disagree: both
+/// [`path_is_denied`] and [`contains_denied_descendant`] read an entry's
+/// meaning from here and nowhere else.
+fn denied_entry_normalized(denied: &str) -> Arc<DeniedEntry> {
     let cache = DENIED_NORM_CACHE.get_or_init(Default::default);
     if let Some(hit) = cache
         .read()
@@ -166,14 +339,12 @@ fn denied_entry_normalized(denied: &str) -> PathBuf {
     {
         return hit;
     }
-    let expanded = expand_denied_entry(denied);
-    let normalized =
-        safe_normalize(Path::new(&expanded)).unwrap_or_else(|_| PathBuf::from(&expanded));
+    let compiled = Arc::new(compile_denied_entry(denied));
     cache
         .write()
         .unwrap_or_else(|e| e.into_inner())
-        .insert(denied.to_string(), normalized.clone());
-    normalized
+        .insert(denied.to_string(), Arc::clone(&compiled));
+    compiled
 }
 
 /// Whether an already-canonical path falls under any denylist entry.
@@ -182,14 +353,35 @@ fn denied_entry_normalized(denied: &str) -> PathBuf {
 /// [`check_and_resolve_path`] and by the per-entry re-checks that enumeration /
 /// relocation operations (`stats`, `organize`, recursive `copy`) run on paths
 /// they discover *after* the initial gate — a symlink or glob match can point
-/// at a denied target the top-level path never named. Each entry is expanded
-/// ([`expand_denied_entry`]) and normalized the SAME way as the input (resolving
-/// symlinks in existing ancestors) before the component-wise prefix compare, so
-/// a symlinked ancestor (`/etc` → `/private/etc` on macOS) cannot defeat it.
+/// at a denied target the top-level path never named.
+///
+/// Literal entries are expanded ([`expand_denied_entry`]) and normalized the
+/// SAME way as the input (resolving symlinks in existing ancestors) before the
+/// component-wise prefix compare, so a symlinked ancestor (`/etc` →
+/// `/private/etc` on macOS) cannot defeat it. Pattern entries are matched
+/// against the `/`-normalised string form of the same canonical path — the
+/// identical normalisation
+/// [`crate::sandbox::deny_globs::resolve_deny_read_paths_under`] applies before
+/// handing paths to the Windows ACE stamper, so a Windows `\` path and a Unix
+/// `/` path are judged by one rule.
 pub fn path_is_denied(canonical: &Path, denied_paths: &[String]) -> bool {
+    // Computed at most once per call, and only if a pattern entry is present.
+    let mut slash_form: Option<String> = None;
     for denied in denied_paths {
-        if canonical.starts_with(denied_entry_normalized(denied)) {
-            return true;
+        match &*denied_entry_normalized(denied) {
+            DeniedEntry::Literal(location) => {
+                if canonical.starts_with(location) {
+                    return true;
+                }
+            }
+            DeniedEntry::Glob(re) => {
+                let subject = slash_form
+                    .get_or_insert_with(|| canonical.to_string_lossy().replace('\\', "/"));
+                if re.is_match(subject) {
+                    return true;
+                }
+            }
+            DeniedEntry::InertGlob => {}
         }
     }
     false
@@ -209,11 +401,41 @@ pub fn path_is_denied(canonical: &Path, denied_paths: &[String]) -> bool {
 /// Returns the protected location so the refusal can name it. Equality is not a
 /// hit: a candidate that *is* a denied entry is already refused by the downward
 /// check.
+///
+/// # Pattern entries answer only the downward question
+///
+/// `deny_read_globs` entries ([`DeniedEntry::Glob`]) are skipped here, and that
+/// is a deliberate, disclosed gap rather than an oversight:
+///
+/// * A glob is a *predicate over paths*, not a location. There is no "the
+///   protected entry beneath `candidate`" to return without walking the
+///   candidate's subtree, and a walk has to be bounded (the OS-side walk
+///   [`crate::sandbox::deny_globs::resolve_deny_read_paths_under`] caps at
+///   50 000 entries). A capped walk answers "I found nothing" when it means "I
+///   stopped looking" — a fail-soft skip read as evidence of absence, on a
+///   security gate. That is worse than a documented gap.
+/// * The OS floor draws the same line. Seatbelt emits per-access
+///   `(deny file-read* …)` / `(deny file-write-unlink …)` rules; it refuses to
+///   *read or unlink a matching path*, and equally does not refuse renaming an
+///   ancestor directory that happens to contain one.
+///
+/// Consequence, stated plainly: with `deny_read_globs = ["**/.env"]`, a
+/// `file_ops delete` or `move` aimed at a *parent directory* still takes the
+/// matching file with it, whereas naming the file directly is refused (the
+/// downward check in [`path_is_denied`] covers that) and a recursive `copy`
+/// skips it and says so. The fixed credential entries keep full two-direction
+/// coverage, which is why the match below is on the entry kind and not a bare
+/// `if` — the two directions still read one compiled entry from
+/// [`denied_entry_normalized`] and cannot disagree about what an entry *means*.
 pub fn contains_denied_descendant(candidate: &Path, denied_paths: &[String]) -> Option<PathBuf> {
-    denied_paths.iter().find_map(|denied| {
-        let denied_norm = denied_entry_normalized(denied);
-        (denied_norm != candidate && denied_norm.starts_with(candidate)).then_some(denied_norm)
-    })
+    denied_paths
+        .iter()
+        .find_map(|denied| match &*denied_entry_normalized(denied) {
+            DeniedEntry::Literal(location) => {
+                (location != candidate && location.starts_with(candidate)).then(|| location.clone())
+            }
+            DeniedEntry::Glob(_) | DeniedEntry::InertGlob => None,
+        })
 }
 
 /// Whether `canonical` is a Linux `/proc/<pid>/…` pseudo-file that leaks another
@@ -414,7 +636,29 @@ pub fn resolve_for_removal(
     Ok(link_path)
 }
 
-/// Check if path is allowed and resolve it
+/// Check if path is allowed and resolve it — the **file layer's** sole path
+/// resolver.
+///
+/// # There are two path resolvers in this repo, on purpose
+///
+/// The other one is `sandbox::workspace::path::normalize_path` in
+/// `src/sandbox/workspace/path.rs`, and the two answer *different questions*.
+/// Unifying them would silently delete one of the two answers, so
+/// `path_utils::tests::the_two_path_resolvers_stay_split` fails by name if
+/// either stops being the sole resolver for its own layer, or if a third
+/// appears.
+///
+/// | | this function (file layer) | `sandbox::workspace::path::normalize_path` (exec layer) |
+/// |---|---|---|
+/// | question | "may the model's file tools touch this path, and where does it really land?" | "does this path stay inside the session's workspace jail?" |
+/// | `~` / `$HOME` / `$USER` | expanded | not expanded |
+/// | relative base | task-local [`FsScope`](crate::tools::fs_scope::FsScope), else the `ToolContext` output dir | the workspace root, always |
+/// | symlinks | canonicalized (existing ancestors resolved) | never resolved — `..` is popped *lexically*, before any syscall |
+/// | denylist | yes: credential entries + `[sandbox] deny_read_globs` + `/proc` secrets | none |
+/// | root containment | none — an absolute path is used as-is (see the tool `DESCRIPTION`) | hard jail enforced by the caller |
+///
+/// Net: the exec layer is an **allowlist jail with no denylist**; the file layer
+/// is a **denylist with no jail**. Each is unsound as the other's gate.
 ///
 /// Path resolution rules:
 /// 1. Environment variables ($HOME, $USER, etc.) - expanded first
@@ -814,6 +1058,298 @@ mod tests {
                 "{p} missing from denylist: {denied:?}"
             );
         }
+    }
+
+    // --- `[sandbox] deny_read_globs` (the OS floor's second face) ---
+
+    /// RED before the fix: `deny_read_globs = ["**/.env"]` kernel-blocked
+    /// `bash` while `file_read` / `file_ops` read the same file in plain text,
+    /// because the file layer only ever understood literal path entries.
+    #[test]
+    fn deny_read_glob_entry_refuses_the_matching_path() {
+        let root = tempdir().unwrap();
+        let secret = root.path().join("app/.env");
+        fs::create_dir_all(secret.parent().unwrap()).unwrap();
+        fs::write(&secret, b"TOKEN=1").unwrap();
+        let benign = root.path().join("app/config.toml");
+        fs::write(&benign, b"k=1").unwrap();
+
+        // Exactly the string an operator puts in `[sandbox] deny_read_globs`.
+        let denied = vec!["**/.env".to_string()];
+
+        let err = check_and_resolve_path(&secret, &denied, None)
+            .expect_err("a deny_read_globs match must be refused by the file tools too");
+        assert!(
+            err.to_string().contains("protected location"),
+            "refusal must name the reason, got: {err}"
+        );
+        assert!(
+            check_and_resolve_path(&benign, &denied, None).is_ok(),
+            "a non-matching sibling must still be readable"
+        );
+    }
+
+    /// The pattern is translated by the OS floor's own translator, so the two
+    /// faces cannot drift: component-scoped `*`, `**/` spanning directories,
+    /// and a metacharacter-free entry covering its whole subtree.
+    #[test]
+    fn deny_read_glob_semantics_match_the_os_floor() {
+        let root = tempdir().unwrap();
+        let deep = root.path().join("a/b");
+        fs::create_dir_all(&deep).unwrap();
+        let nested_pem = deep.join("key.pem");
+        fs::write(&nested_pem, b"-----BEGIN-----").unwrap();
+        let sub = root.path().join("a/keys");
+        fs::create_dir_all(&sub).unwrap();
+        let under_dir = sub.join("id_rsa");
+        fs::write(&under_dir, b"priv").unwrap();
+        let root_c = root.path().canonicalize().unwrap();
+
+        // `**/*.pem` crosses directories; the same regex the seatbelt driver
+        // would emit.
+        assert!(path_is_denied(
+            &nested_pem.canonicalize().unwrap(),
+            &["**/*.pem".to_string()]
+        ));
+        // `*` stays inside one component, so it must NOT reach a nested file.
+        assert!(!path_is_denied(
+            &nested_pem.canonicalize().unwrap(),
+            &[format!("{}/*.pem", root_c.display())]
+        ));
+        // A metacharacter-free entry is a literal location covering its subtree
+        // (both the glob translator and the literal prefix match agree here).
+        assert!(path_is_denied(
+            &under_dir.canonicalize().unwrap(),
+            &[sub.to_string_lossy().to_string()]
+        ));
+    }
+
+    /// A pattern entry answers only the DOWNWARD question. The upward twin
+    /// returns `None` for it by design (see `contains_denied_descendant`), and
+    /// this pins that so the gap stays a decision rather than a regression —
+    /// while a literal entry keeps full two-direction coverage.
+    #[test]
+    fn glob_entries_are_downward_only_literals_are_two_directional() {
+        let root = tempdir().unwrap();
+        let proj = root.path().join("proj");
+        fs::create_dir(&proj).unwrap();
+        let env = proj.join(".env");
+        fs::write(&env, b"TOKEN=1").unwrap();
+        let proj_c = proj.canonicalize().unwrap();
+        let env_c = env.canonicalize().unwrap();
+
+        // Downward: the pattern denies the file itself.
+        assert!(path_is_denied(&env_c, &["**/.env".to_string()]));
+        // Upward: the pattern cannot name a protected location under `proj`.
+        assert_eq!(
+            contains_denied_descendant(&proj_c, &["**/.env".to_string()]),
+            None,
+            "a glob is a predicate, not a location — see the doc comment"
+        );
+        // A literal entry naming the same file still answers upward.
+        assert_eq!(
+            contains_denied_descendant(&proj_c, &[env.to_string_lossy().to_string()]),
+            Some(env_c),
+            "literal entries must keep two-direction coverage"
+        );
+    }
+
+    /// An uncompilable pattern denies nothing (matching the OS floor, which
+    /// drops patterns whose regex will not compile) and must not poison the
+    /// literal entries sitting beside it in the same list.
+    #[test]
+    fn inert_glob_entry_denies_nothing_and_does_not_break_the_list() {
+        let root = tempdir().unwrap();
+        let vault = root.path().join("secrets.vault");
+        fs::write(&vault, b"ENCRYPTED").unwrap();
+        let plain = root.path().join("notes.txt");
+        fs::write(&plain, b"hi").unwrap();
+
+        // `[z-a]` translates to a syntactically valid glob class but an
+        // invalid regex range.
+        let denied = vec![
+            "[z-a]".to_string(),
+            "**/.env".to_string(),
+            vault.to_string_lossy().to_string(),
+        ];
+        assert!(
+            matches!(&*denied_entry_normalized("[z-a]"), DeniedEntry::InertGlob),
+            "an uncompilable pattern must land in the inert state, not silently \
+             become a literal"
+        );
+        assert!(check_and_resolve_path(&vault, &denied, None).is_err());
+        assert!(check_and_resolve_path(&plain, &denied, None).is_ok());
+    }
+
+    /// The config reader is a narrow, hermetic parse of one array — no
+    /// `Config::load()` (which writes a default file) and no dependency on the
+    /// developer's real `~/.aleph/config.toml`.
+    #[test]
+    fn parse_deny_read_globs_reads_the_sandbox_array_only() {
+        let toml = r#"
+[gateway]
+host = "127.0.0.1"
+
+[sandbox]
+enabled = true
+deny_read_globs = ["**/.env", "**/*.pem"]
+"#;
+        assert_eq!(
+            parse_deny_read_globs(toml),
+            vec!["**/.env".to_string(), "**/*.pem".to_string()]
+        );
+        // Absent section / absent key / wrong shape → empty, never a panic.
+        assert!(parse_deny_read_globs("[gateway]\nhost = \"x\"\n").is_empty());
+        assert!(parse_deny_read_globs("[sandbox]\nenabled = true\n").is_empty());
+        assert!(parse_deny_read_globs("this is not toml {{{").is_empty());
+        // Non-string / empty entries are dropped, the rest survive.
+        assert_eq!(
+            parse_deny_read_globs("[sandbox]\ndeny_read_globs = [\"**/.env\", 7, \"\"]\n"),
+            vec!["**/.env".to_string()]
+        );
+    }
+
+    /// The shape test that tells a pattern entry from a concrete location.
+    #[test]
+    fn looks_like_glob_separates_patterns_from_paths() {
+        assert!(looks_like_glob("**/.env"));
+        assert!(looks_like_glob("/tmp/file?.txt"));
+        assert!(looks_like_glob("/tmp/[abc].txt"));
+        for literal in [
+            "~/.ssh",
+            "/etc/passwd",
+            // Spelled without the real config-dir name on purpose:
+            // `utils::paths::tests::no_hand_rolled_aleph_home_outside_the_allowlist`
+            // is a FILE-level guard, and this module legitimately calls
+            // `dirs::home_dir()` — naming that directory here would make the
+            // pair look like a hand-rolled home resolution.
+            "/Users/x/config-dir/secrets.vault",
+            "%APPDATA%\\Microsoft\\Credentials",
+        ] {
+            assert!(
+                !looks_like_glob(literal),
+                "{literal} must stay a literal entry"
+            );
+        }
+    }
+
+    /// V4 guard: this repo has TWO path resolvers and the split is deliberate.
+    ///
+    /// `file_ops::path_utils::check_and_resolve_path` is a denylist with no
+    /// jail (tilde/HOME expansion, `FsScope` anchoring, canonicalization,
+    /// credential + glob denylist, `/proc` block, and — per the tool
+    /// DESCRIPTION — absolute paths used as-is).
+    /// `sandbox::workspace::path::normalize_path` is a jail with no denylist
+    /// (lexical `..` popping *before* any syscall, no expansion, no denylist,
+    /// hard containment enforced by its caller).
+    ///
+    /// Unifying them silently deletes one of the two answers, so this fails by
+    /// name if either stops being the sole resolver for its own layer, or if a
+    /// third resolver appears in either file.
+    #[test]
+    fn the_two_path_resolvers_stay_split() {
+        // CRLF-safe: strip carriage returns FIRST, then split on an unanchored
+        // needle (the bare attribute, no surrounding newlines) so a CRLF
+        // checkout does not turn the "production prefix" into the whole file.
+        fn production_prefix(src: &str) -> String {
+            src.replace('\r', "")
+                .split("#[cfg(test)]")
+                .next()
+                .unwrap_or_default()
+                .to_string()
+        }
+        /// Every `fn` name in `src` whose name mentions resolving or
+        /// normalizing — i.e. every candidate path resolver. Matches on a line
+        /// that *starts* a definition (after visibility / `const` / `async` /
+        /// `unsafe`), so prose mentioning a function name is not counted.
+        fn resolver_fn_names(src: &str) -> Vec<String> {
+            src.lines()
+                .filter_map(|line| {
+                    let mut rest = line.trim_start();
+                    for prefix in [
+                        "pub(crate) ",
+                        "pub(super) ",
+                        "pub ",
+                        "const ",
+                        "async ",
+                        "unsafe ",
+                    ] {
+                        if let Some(stripped) = rest.strip_prefix(prefix) {
+                            rest = stripped;
+                        }
+                    }
+                    let name = rest.strip_prefix("fn ")?;
+                    let name = name.split(['(', '<', ' ']).next().unwrap_or_default();
+                    (name.contains("resolve") || name.contains("normaliz"))
+                        .then(|| name.to_string())
+                })
+                .collect()
+        }
+
+        let file_layer_src = include_str!("path_utils.rs");
+        let exec_layer_src = include_str!("../../sandbox/workspace/path.rs");
+        let file_layer = production_prefix(file_layer_src);
+        let exec_layer = production_prefix(exec_layer_src);
+
+        // Non-vacuity: the split really removed this file's test module, and
+        // both halves really are the files we think they are.
+        assert!(
+            file_layer.len() < file_layer_src.replace('\r', "").len(),
+            "the cfg(test) split cut nothing off path_utils.rs — the needle drifted"
+        );
+        assert!(
+            !file_layer.contains("fn the_two_path_resolvers_stay_split"),
+            "this very test leaked into the production prefix"
+        );
+        assert!(
+            exec_layer.contains("workspace sandbox"),
+            "exec-layer source not found where expected"
+        );
+
+        // 1. Each layer has exactly the resolvers it is supposed to have. A new
+        //    one — or a moved one — fails here, by name.
+        let mut file_resolvers = resolver_fn_names(&file_layer);
+        file_resolvers.sort();
+        assert_eq!(
+            file_resolvers,
+            vec![
+                "check_and_resolve_path",
+                "denied_entry_normalized",
+                "resolve_for_removal",
+                "safe_normalize",
+            ],
+            "file-layer resolvers changed; if this is a new resolver, say which \
+             of the two questions it answers before adding it"
+        );
+        let mut exec_resolvers = resolver_fn_names(&exec_layer);
+        exec_resolvers.sort();
+        assert_eq!(
+            exec_resolvers,
+            vec!["normalize_path"],
+            "exec-layer resolvers changed; `normalize_path` must stay the only one"
+        );
+
+        // 2. The properties that make them different must survive. The exec
+        //    layer must never grow a denylist (its caller's jail is the gate),
+        //    and it must not start canonicalizing (its `..` popping is
+        //    deliberately lexical and pre-syscall).
+        for banned in ["path_is_denied", "denied_paths", "canonicalize("] {
+            assert!(
+                !exec_layer.contains(banned),
+                "`{banned}` appeared in the exec-layer resolver: the jail does not \
+                 get a denylist — that is the file layer's question"
+            );
+        }
+        // And the file layer must not start jailing through the exec resolver.
+        assert!(
+            !file_layer.contains("normalize_path("),
+            "the file layer must not call the exec-layer resolver; it has no \
+             workspace root to jail against"
+        );
+        assert!(
+            file_layer.contains("fn path_is_denied") && file_layer.contains("fs_scope"),
+            "the file layer lost its denylist or its FsScope anchoring"
+        );
     }
 
     /// The deny gate evaluates the FINAL (post-rebase) path — a rebase can

@@ -414,6 +414,7 @@ pub(super) fn preimage_of(r: &LedgerRecord) -> Preimage<'_> {
         detail: &r.detail,
         signer_fp: &r.signer_fp,
         prev_hash: r.prev_hash.as_deref(),
+        principal: r.principal.as_deref(),
     }
 }
 

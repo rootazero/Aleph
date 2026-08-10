@@ -15,6 +15,7 @@ use tracing::{debug, warn};
 use crate::gateway::channel::Attachment;
 use crate::gateway::media::{detect_mime, is_data_url, is_local_media_path, MediaItem};
 use crate::security::ssrf::{safe_fetch, SafeFetchRequest, SsrfPolicy};
+use crate::utils::filename::sanitize_filename;
 
 /// Maximum file size allowed (50 MB — for video files).
 const MAX_FILE_SIZE: u64 = 50 * 1024 * 1024;
@@ -517,23 +518,15 @@ async fn ensure_session_dir(session_id: &str) -> Result<PathBuf, std::io::Error>
 /// `download_media_item` resolves media items in parallel (`join_all`) into one
 /// shared per-session dir. Two items carrying the same `filename` would otherwise
 /// map to the same temp path and write over each other concurrently, corrupting
-/// both. The unique per-item id prefix keeps their paths distinct. Both halves are
-/// sanitized (no path separators), so the joined result stays traversal-safe.
+/// both. The unique per-item id prefix keeps their paths distinct.
+///
+/// Both halves go through the shared [`sanitize_filename`], so each is a single
+/// path component — no separator, no control byte, no character illegal on
+/// Windows, bounded length — and the joined result stays traversal-safe.
 fn unique_filename(id: &str, name: Option<&str>) -> String {
     let base = sanitize_filename(name.unwrap_or(id));
     let prefix = sanitize_filename(id);
     format!("{prefix}-{base}")
-}
-
-/// Strip directory components from a filename to prevent path traversal.
-///
-/// `foo/bar.txt` → `bar.txt`; `../../../etc/passwd` → `passwd`; `..` → `unnamed`.
-fn sanitize_filename(name: &str) -> String {
-    Path::new(name)
-        .file_name()
-        .and_then(|n| n.to_str())
-        .unwrap_or("unnamed")
-        .to_string()
 }
 
 /// Expand a leading `~/` (or bare `~`) into the user's home directory.
@@ -563,6 +556,57 @@ fn expand_tilde(path: &str) -> PathBuf {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::utils::filename::{FALLBACK_FILENAME, MAX_FILENAME_CHARS};
+
+    /// Before the two `sanitize_filename` copies converged, this half stripped
+    /// directory components and *nothing else*: a control byte, a character
+    /// illegal on Windows, and an unbounded length all reached the temp path
+    /// verbatim. Everything asserted below except the separator check would
+    /// have gone RED against that copy.
+    #[test]
+    fn unique_filename_hardens_the_display_name_not_only_its_directory() {
+        let id = "11111111-2222-3333-4444-555555555555";
+        let raw = format!("../re\u{7}port:{}.txt", "x".repeat(400));
+        let out = unique_filename(id, Some(&raw));
+
+        assert!(
+            out.starts_with(&format!("{id}-")),
+            "the per-item collision prefix must survive: {out:?}"
+        );
+        assert!(!out.contains('\u{7}'), "control byte survived: {out:?}");
+        assert!(
+            !out.contains(':'),
+            "a character illegal on Windows survived: {out:?}"
+        );
+        assert!(
+            !out.contains('/') && !out.contains('\\'),
+            "a path separator survived: {out:?}"
+        );
+        assert_eq!(
+            Path::new(&out).components().count(),
+            1,
+            "the temp filename must stay one path component: {out:?}"
+        );
+        assert!(
+            out.chars().count() <= 2 * MAX_FILENAME_CHARS + 1,
+            "each half is length-bounded: {} chars",
+            out.chars().count()
+        );
+    }
+
+    /// The fallback string is load-bearing here: it becomes a real path
+    /// component under the per-session media dir, so it must stay non-empty
+    /// and must never be the parent link.
+    #[test]
+    fn unique_filename_falls_back_when_the_display_name_sanitizes_away() {
+        let id = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee";
+        assert_eq!(
+            unique_filename(id, Some("..")),
+            format!("{id}-{FALLBACK_FILENAME}")
+        );
+        // No display name at all: the id stands in for both halves.
+        assert_eq!(unique_filename(id, None), format!("{id}-{id}"));
+    }
 
     #[test]
     fn session_dir_encodes_characters_illegal_on_windows() {

@@ -99,6 +99,10 @@ pub struct AgentPatch {
     pub skills_blacklist: Option<Vec<String>>,
     pub subagents: Option<SubagentPolicy>,
     pub allowed_links: Option<Vec<String>>,
+    /// Users permitted to run as this agent. Absent = unchanged; an empty list
+    /// removes the key, restoring "everyone" (same convention as
+    /// `allowed_links`).
+    pub allowed_users: Option<Vec<String>>,
     /// Model update tri-state: absent (`None`) = unchanged; `Some(None)` = clear → inherit system default; `Some(Some(ref))` = set to this model.
     #[serde(default, deserialize_with = "deserialize_double_option")]
     pub model: Option<Option<AgentModelRef>>,

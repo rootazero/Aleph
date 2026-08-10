@@ -348,8 +348,44 @@ impl SessionsSendTool {
             );
         }
 
-        // Get target agent from registry
         let agent_registry = context.agent_registry();
+
+        // The human axis, and the other half of the A2A check above: that one
+        // asks "may THIS AGENT reach that agent", this one asks "may the
+        // PERSON driving this run reach it" (`AgentDefinition::allowed_users`,
+        // enforced at run start by `handlers::agent::build_run_request`).
+        //
+        // Without it `allowed_users` is a one-step gate with a two-step
+        // bypass: a caller refused `ops` at run start names an agent they ARE
+        // allowed and has it delegate — both steps legal, the pair equivalent.
+        // It is the same argument that already makes this tool forward
+        // `channel_tool_permissions` to the child run: a restriction the
+        // parent turn ran under must not evaporate at a delegation boundary.
+        //
+        // Resolver is `ambient_actor()` — the one this file already uses for
+        // the session check above, and the only one that survives the spawn a
+        // tool call always runs inside. `None` (cron / A2A / internal) is
+        // unrestricted, like every sibling predicate.
+        if let Some(allowed) = agent_registry.get_allowed_users(&target_agent_id).await {
+            let actor = crate::gateway::visibility::ambient_actor();
+            if !crate::config::types::agent_admits_user(allowed.as_deref(), actor.as_deref()) {
+                warn!(
+                    run_id = %run_id,
+                    from = %self.current_agent_id,
+                    to = %target_agent_id,
+                    "sessions_send: target agent's allowed_users denies this caller"
+                );
+                return SessionsSendOutput::forbidden(
+                    run_id,
+                    format!(
+                        "not authorized to delegate to agent '{target_agent_id}' \
+                         (its `allowed_users` list does not include you)"
+                    ),
+                );
+            }
+        }
+
+        // Get target agent from registry
         let target_agent = match agent_registry.get(&target_agent_id).await {
             Some(agent) => agent,
             None => {

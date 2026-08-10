@@ -72,6 +72,30 @@ pub const WORKFLOW_ORIGIN_KEY: &str = "workflow_origin";
 /// mistaken for a reopen.
 pub const WORKFLOW_NOTIFIED_KEY: &str = "workflow_notified";
 
+/// Which stamper wrote [`WORKFLOW_NOTIFIED_KEY`] — [`NOTIFIED_BY_SETTLE`] or
+/// [`NOTIFIED_BY_CANCEL`].
+///
+/// The re-arm rule needs to know whether the marked run was fully settled at
+/// stamp time, and the stamp's AGE was standing in for that. It cannot: the
+/// grace exists because `cancel` stamps BEFORE its status writes land, so for a
+/// few moments a marked run legitimately has unsettled tasks — but applying that
+/// window to the settle sweep's OWN marker blinds it to the most likely reopen
+/// of all, "it failed" → the user says retry, seconds later. The corrected run's
+/// real outcome then never reaches anyone. Provenance answers the question the
+/// clock was being asked to guess.
+///
+/// Absent on rows stamped before this key existed → provenance unknown → the age
+/// grace still applies, i.e. exactly the previous behaviour.
+pub const WORKFLOW_NOTIFIED_BY_KEY: &str = "workflow_notified_by";
+/// Stamped by the dispatcher's settle sweep, which only ever writes the marker
+/// after observing the run fully settled. Any later unsettled task is therefore
+/// a genuine reopen, with no window to protect.
+pub const NOTIFIED_BY_SETTLE: &str = "settle";
+/// Stamped by the `workflow` tool's `cancel` (and by `materialize`'s partial
+/// rollback) BEFORE / INSTEAD OF the status writes, so unsettled tasks may
+/// legitimately linger for a moment. This is the marker the grace is for.
+pub const NOTIFIED_BY_CANCEL: &str = "cancel";
+
 /// Read the originating channel address stamped on a materialised workflow
 /// task under [`WORKFLOW_ORIGIN_KEY`]. Returns `(channel_id, conversation_id)`;
 /// `None` for legacy rows or non-interactive runs. Pure.
@@ -389,6 +413,36 @@ pub async fn materialize(
 /// are swallowed — we are already on an error path and a terminal status is the
 /// most we can guarantee without a batch/transaction API on the store.
 async fn cancel_partial(store: &dyn CoordTaskStore, ids: &[CoordTaskId]) {
+    // Stamp the once-only marker FIRST, on the same anchor rule the other two
+    // stampers use (smallest id). Cancelled is a settled status, and these rows
+    // already carry `WORKFLOW_RUN_ID_KEY` + `WORKFLOW_ORIGIN_KEY` — so without
+    // this the settle sweep sees a fully-settled interactive run and pushes
+    // "⚠️ Workflow 'x' finished … cancelled" to the user, seconds after the tool
+    // already returned an error saying the run could not be started. Two
+    // contradictory messages about a run that never executed a step.
+    //
+    // Marked `cancel` for the same reason the `cancel` action is: the status
+    // writes below are not atomic with it.
+    if let Some(anchor) = ids.iter().min() {
+        if let Ok(Some(task)) = store.get_task(anchor).await {
+            let merged = crate::agents::swarm::tasks::merge_metadata_patch(
+                &task.metadata,
+                serde_json::json!({
+                    WORKFLOW_NOTIFIED_KEY: now_epoch_secs(),
+                    WORKFLOW_NOTIFIED_BY_KEY: NOTIFIED_BY_CANCEL,
+                }),
+            );
+            let _ = store
+                .update_task(
+                    anchor,
+                    CoordTaskUpdate {
+                        metadata: Some(merged),
+                        ..Default::default()
+                    },
+                )
+                .await;
+        }
+    }
     for id in ids {
         let _ = store
             .update_task(
@@ -400,6 +454,13 @@ async fn cancel_partial(store: &dyn CoordTaskStore, ids: &[CoordTaskId]) {
             )
             .await;
     }
+}
+
+/// Epoch seconds, the unit [`WORKFLOW_NOTIFIED_KEY`] is stored in.
+fn now_epoch_secs() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.as_secs())
 }
 
 #[cfg(test)]

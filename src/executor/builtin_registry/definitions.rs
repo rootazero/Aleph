@@ -1246,6 +1246,65 @@ pub fn is_builtin_tool(name: &str) -> bool {
     BUILTIN_TOOL_DEFINITIONS.iter().any(|def| def.name == name)
 }
 
+/// Brings the trait consts named by [`REGISTRY_ONLY_DESCRIPTIONS`] into scope
+/// exactly the way `builder/core_tools.rs` has them, so the bytes measured
+/// resolve to the same const the registration passes.
+#[cfg(test)]
+use crate::tools::AlephTool as _;
+
+/// Tools the registry constructor registers that this catalog does NOT
+/// list — and whose descriptions reach the model exactly as a catalog
+/// entry's does.
+///
+/// `agent_init` builds the model's tool list from `BUILTIN_TOOL_DEFINITIONS`
+/// and then completes it from `BuiltinToolRegistry::unified_tools()`, so a
+/// `reg(tools, "goal", GoalTool::DESCRIPTION, …)` in
+/// `builder/core_tools.rs` ships its full description on every request even
+/// though no entry here names it. Registry-only registration is an accepted
+/// pattern (see `tool_catalog_init.rs`) — being unmeasured is not.
+///
+/// By direct const reference, never by literal. This is the same rule
+/// `no_catalog_entry_inlines_its_description` enforces on the catalog, for
+/// the same reason: a literal here would measure bytes that have stopped
+/// being the bytes actually sent, and the ratchet would go on passing.
+///
+/// Kept honest from both sides by `every_registered_core_tool_is_accounted`:
+/// a new `reg(` name that is in neither table fails by name, and an entry
+/// here that no longer corresponds to a registration fails too (a stale
+/// const inflates the ceiling with bytes nobody sends).
+///
+/// `pub(crate)` because the byte ratchet is not the only guard that was
+/// blind to this surface: `thinker::prompt_contract::no_sentence_is_stated_twice`
+/// scans the same shipped text for duplication and ingested only
+/// `BUILTIN_TOOL_DEFINITIONS`. It reads this table rather than keeping its
+/// own list — a second list is the exact failure this table exists to
+/// prevent, one layer up.
+#[cfg(test)]
+pub(crate) const REGISTRY_ONLY_DESCRIPTIONS: &[(&str, &str)] = &[
+    ("pim", crate::builtin_tools::PimTool::DESCRIPTION),
+    ("system", crate::builtin_tools::SystemTool::DESCRIPTION),
+    (
+        "automation",
+        crate::builtin_tools::AutomationTool::DESCRIPTION,
+    ),
+    (
+        "permission",
+        crate::builtin_tools::PermissionTool::DESCRIPTION,
+    ),
+    ("media", crate::builtin_tools::MediaTool::DESCRIPTION),
+    (
+        "scratchpad",
+        crate::builtin_tools::ScratchpadTool::DESCRIPTION,
+    ),
+    ("goal", crate::builtin_tools::GoalTool::DESCRIPTION),
+    ("loop", crate::builtin_tools::LoopTool::DESCRIPTION),
+    (
+        "loop_graph",
+        crate::builtin_tools::LoopGraphTool::DESCRIPTION,
+    ),
+    ("strategy", crate::builtin_tools::StrategyTool::DESCRIPTION),
+];
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1312,7 +1371,15 @@ mod tests {
         );
     }
 
-    /// Total description bytes this catalog puts in every request.
+
+    /// Total description bytes the builtin tool surface puts in every request.
+    ///
+    /// Covers `BUILTIN_TOOL_DEFINITIONS` **plus** `REGISTRY_ONLY_DESCRIPTIONS`
+    /// — the model's tool list is assembled from both, so a ceiling over only
+    /// the catalog bounds a surface smaller than the one being paid for. The
+    /// `CATALOG_` in the name is now narrower than what is measured; it is
+    /// kept because the rounds recorded below, `doctor.rs`, and the criteria
+    /// list all refer to this constant and its test by name.
     ///
     /// Measured, not computed: `cargo test catalog_description_bytes` prints the
     /// live number on failure. Raising it is a real cost — descriptions ship
@@ -1366,51 +1433,205 @@ mod tests {
     /// in `MemoryProtocolLayer` on every non-Minimal request, and a second
     /// abbreviated copy in a tool is exactly the near-repeat question 3 asks
     /// about.
-    /// 2026-08-10, `workspace_manage` (R8, the conversational face of
-    /// `workspace.*`): 82,462 -> 82,981 B. One new entry, 519 B for six verbs.
-    /// Against the three questions: (1) what survived is runtime fact only —
-    /// that a workspace id IS an agent id and names its memory partition, that
-    /// the record cannot change model/tools/prompt (so the model does not
-    /// promise a config change it did not make), that `create` is not
-    /// `agent_create`, and that `archive` is soft and reversible with the id
-    /// still taken (so it does not report a deletion that did not happen);
-    /// (2) a stronger model cannot derive any of those from the name or the
-    /// schema — they are facts about this deployment's data model; (3) the
-    /// first draft was 778 B and everything the argument schema already carries
-    /// was cut from it — that `update` is a patch, that `include_archived`
-    /// widens `list`, what each field means — since the schema ships to any
-    /// caller that has promoted the tool, and a description is not the place to
-    /// say it a second time.
-    const CATALOG_DESCRIPTION_CEILING_BYTES: usize = 82_981;
+    ///
+    /// 2026-08-10, two events on the same day, both additive to this ceiling:
+    ///
+    /// First the measurement was repointed: 82,462 -> 93,358 B.
+    /// **The increase is not new spending — it is bytes that were already
+    /// being sent and were not being counted.** Ten tools — `pim`, `system`,
+    /// `automation`, `permission`, `media`, `scratchpad`, `goal`, `loop`,
+    /// `loop_graph`, `strategy` — are registered only by
+    /// `builder/core_tools.rs` and have never had a catalog entry. Their
+    /// descriptions have shipped to the model on every request the whole time
+    /// (`agent_init` completes the tool list from the registry map), but the
+    /// ceiling summed the catalog alone, so it bounded ~85% of the surface
+    /// while reading as the whole of it — the guard underpinning "DESCRIPTION
+    /// bytes are precious" was handing out clean bills of health on 13,389 B
+    /// it could not see. Nothing was spent to make that number appear; what
+    /// changed is that the next tool to grow one of those ten now has to
+    /// answer the three questions above like every other tool.
+    ///
+    /// The catalog half went the other way in the same pass, 82,462 ->
+    /// 79,969 B. -2,419 of that is `code_exec`, which restated six things
+    /// `bash` documents in its own words — statelessness, `working_dir`,
+    /// `timeout`/exit 124, output caps and head-tail elision, signal exit
+    /// codes, the escalation/justification contract — and had already
+    /// conceded the overlap in prose ("See `bash` for the exact reuse and
+    /// narrowing policy"). Both tools are in `default_core_tools()` and
+    /// neither is deferred in any session mode, so every one of those bytes
+    /// went out twice per request; `code_exec` now carries its language table
+    /// and one pointer sentence. Its `Examples:` block went with them under
+    /// question 2 — the `bash` and `desktop` example blocks were cut for
+    /// exactly that reason on 2026-08-04 and `code_exec` was simply missed.
+    /// The remaining -74 B are unrelated same-day trims to `bash` and the
+    /// file tools that happened to land in the same measurement.
+    ///
+    /// Then `workspace_manage` (R8, the conversational face of
+    /// `workspace.*`, the same day's remote main) added its catalog entry:
+    /// catalog 79,969 -> 80,549 B (+580 B — its own entry is 519 B, the rest
+    /// the same round's workflow-tool description adjustment). Against the three
+    /// questions: (1) what survived is runtime fact only — that a workspace id
+    /// IS an agent id and names its memory partition, that the record cannot
+    /// change model/tools/prompt (so the model does not promise a config
+    /// change it did not make), that `create` is not `agent_create`, and that
+    /// `archive` is soft and reversible with the id still taken (so it does
+    /// not report a deletion that did not happen); (2) a stronger model cannot
+    /// derive any of those from the name or the schema — they are facts about
+    /// this deployment's data model; (3) the first draft was 778 B and
+    /// everything the argument schema already carries was cut from it — that
+    /// `update` is a patch, that `include_archived` widens `list`, what each
+    /// field means — since the schema ships to any caller that has promoted
+    /// the tool, and a description is not the place to say it a second time.
+    ///
+    /// Merged state after both halves of the day: 93,938 B — 80,549 B
+    /// catalog + 13,389 B registry-only.
+    const CATALOG_DESCRIPTION_CEILING_BYTES: usize = 93_938;
 
     #[test]
     fn catalog_description_bytes_ratchet() {
-        let total: usize = BUILTIN_TOOL_DEFINITIONS
+        let catalog: usize = BUILTIN_TOOL_DEFINITIONS
             .iter()
             .map(|def| def.description.len())
             .sum();
+        let registry_only: usize = REGISTRY_ONLY_DESCRIPTIONS
+            .iter()
+            .map(|(_, desc)| desc.len())
+            .sum();
+        let total = catalog + registry_only;
+
         let mut largest: Vec<(&str, usize)> = BUILTIN_TOOL_DEFINITIONS
             .iter()
             .map(|def| (def.name, def.description.len()))
+            .chain(
+                REGISTRY_ONLY_DESCRIPTIONS
+                    .iter()
+                    .map(|(name, desc)| (*name, desc.len())),
+            )
             .collect();
         largest.sort_by_key(|(_, len)| std::cmp::Reverse(*len));
         largest.truncate(5);
 
         assert!(
             total <= CATALOG_DESCRIPTION_CEILING_BYTES,
-            "catalog descriptions total {total} B, over the ceiling of \
-             {CATALOG_DESCRIPTION_CEILING_BYTES} B. These bytes ship in every request that \
-             lists these tools. Largest: {largest:?}. Answer the three questions documented \
-             on CATALOG_DESCRIPTION_CEILING_BYTES before raising it."
+            "builtin tool descriptions total {total} B ({catalog} B catalog + {registry_only} B \
+             registry-only), over the ceiling of {CATALOG_DESCRIPTION_CEILING_BYTES} B. These \
+             bytes ship in every request that lists these tools. Largest: {largest:?}. Answer \
+             the three questions documented on CATALOG_DESCRIPTION_CEILING_BYTES before \
+             raising it."
         );
 
-        // A ceiling over an empty measurement is not a ceiling. If the catalog
+        // A ceiling over an empty measurement is not a ceiling. If either half
         // ever stops carrying descriptions, this guard must fail loudly rather
-        // than certify zero bytes.
+        // than certify the remainder as the whole surface — that is exactly how
+        // it spent its life bounding the catalog alone.
         assert!(
-            total > 10_000,
-            "catalog descriptions measured only {total} B — the guard is no longer reading \
+            catalog > 10_000,
+            "catalog descriptions measured only {catalog} B — the guard is no longer reading \
              the descriptions it exists to bound"
+        );
+        assert!(
+            registry_only > 10_000,
+            "registry-only descriptions measured only {registry_only} B — the guard has lost \
+             sight of the tools that reach the model without a catalog entry"
+        );
+    }
+
+    /// Every tool the core registry registers is measured by the ratchet.
+    ///
+    /// This has to read the source. At runtime a registry-only tool and a
+    /// catalogued one are indistinguishable — both are just entries in the
+    /// `unified_tools()` map — so nothing observable says "these bytes are
+    /// outside the ceiling". The registration site is the only witness.
+    ///
+    /// Fails BY NAME in both directions: an eleventh registry-only tool is
+    /// named as unaccounted, and an accounted entry whose registration has
+    /// gone away is named as stale (it would otherwise keep charging the
+    /// ceiling for bytes nobody sends). A name in BOTH tables is also a
+    /// failure — the ratchet would count it twice.
+    #[test]
+    fn every_registered_core_tool_is_accounted() {
+        // CRLF-safe: strip carriage returns before any matching, so a Windows
+        // checkout scans the same bytes a Unix one does.
+        let src = include_str!("builder/core_tools.rs").replace('\r', "");
+
+        // The registrations are `reg(` on its own line, then `tools,`, then
+        // the name literal. Take the first string literal after each opener.
+        let mut registered: Vec<String> = Vec::new();
+        let mut awaiting_name = false;
+        for line in src.lines().map(str::trim) {
+            if line == "reg(" {
+                awaiting_name = true;
+                continue;
+            }
+            if awaiting_name {
+                if let Some(rest) = line.strip_prefix('"') {
+                    if let Some(name) = rest.split('"').next() {
+                        registered.push(name.to_string());
+                        awaiting_name = false;
+                    }
+                }
+            }
+        }
+
+        // Non-vacuity: every opener must have yielded a name. If rustfmt ever
+        // collapses a `reg(...)` onto one line the scan silently stops seeing
+        // it, and a census that cannot see a registration certifies nothing.
+        let openers = src.lines().filter(|l| l.trim() == "reg(").count();
+        assert_eq!(
+            registered.len(),
+            openers,
+            "the source scan matched {} names for {} `reg(` sites in core_tools.rs — it is no \
+             longer reading every registration, so the checks below prove nothing",
+            registered.len(),
+            openers
+        );
+        assert!(
+            registered.len() > 20,
+            "only {} registrations found in core_tools.rs — the scan is looking at the wrong \
+             shape",
+            registered.len()
+        );
+
+        let catalogued = |name: &str| BUILTIN_TOOL_DEFINITIONS.iter().any(|d| d.name == name);
+        let accounted = |name: &str| REGISTRY_ONLY_DESCRIPTIONS.iter().any(|(n, _)| *n == name);
+
+        let unaccounted: Vec<&str> = registered
+            .iter()
+            .map(String::as_str)
+            .filter(|name| !catalogued(name) && !accounted(name))
+            .collect();
+        assert!(
+            unaccounted.is_empty(),
+            "these tools are registered in core_tools.rs but appear in neither \
+             BUILTIN_TOOL_DEFINITIONS nor REGISTRY_ONLY_DESCRIPTIONS. Their descriptions still \
+             reach the model — agent_init completes the tool list from the registry map — so \
+             they are spending per-request bytes that nothing measures. Add each to \
+             REGISTRY_ONLY_DESCRIPTIONS by direct const reference (never a literal), then \
+             re-measure the ceiling: {unaccounted:?}"
+        );
+
+        let stale: Vec<&str> = REGISTRY_ONLY_DESCRIPTIONS
+            .iter()
+            .map(|(name, _)| *name)
+            .filter(|name| !registered.iter().any(|r| r == name))
+            .collect();
+        assert!(
+            stale.is_empty(),
+            "these entries in REGISTRY_ONLY_DESCRIPTIONS are no longer registered in \
+             core_tools.rs — they charge the ceiling for bytes that no longer ship, which \
+             leaves room for real growth to slip under it: {stale:?}"
+        );
+
+        let doubled: Vec<&str> = REGISTRY_ONLY_DESCRIPTIONS
+            .iter()
+            .map(|(name, _)| *name)
+            .filter(|name| catalogued(name))
+            .collect();
+        assert!(
+            doubled.is_empty(),
+            "these tools are in BOTH BUILTIN_TOOL_DEFINITIONS and REGISTRY_ONLY_DESCRIPTIONS, \
+             so the ratchet counts their description twice and the ceiling is that much \
+             looser than it reads: {doubled:?}"
         );
     }
 

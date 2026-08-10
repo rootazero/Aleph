@@ -1017,12 +1017,32 @@ impl ChatState {
     }
 
     /// Start a new assistant message placeholder (streaming).
+    ///
+    /// **Idempotent per run id.** A run has exactly one `assistant-{run_id}`
+    /// bubble, and two independent paths can now try to open it: the live
+    /// `run_accepted` frame, and `hydrate_and_follow` joining a turn already in
+    /// flight. Their order is genuinely undecidable — the `chat.history`
+    /// response and the `RunAccepted` event travel the same socket but are
+    /// written by different arms of the dispatch `select!` — so whichever
+    /// arrives second must be a no-op rather than a second empty bubble. The
+    /// same guard covers a transcript in which two persisted rows carry one run
+    /// id, which `replay_run` would otherwise render twice.
+    ///
+    /// The early return deliberately skips `archive_active_plan` too: a
+    /// duplicate open is not a new turn, so nothing should retire into the
+    /// conversation flow.
     pub fn start_assistant_message(&self, run_id: &str) {
+        let id = format!("assistant-{run_id}");
+        if self
+            .messages
+            .with_untracked(|msgs| msgs.iter().any(|m| m.id == id))
+        {
+            return;
+        }
         // Next-turn sink: a finished plan retires into the conversation flow
         // when the next run begins. Both live (`run_accepted`) and replay
         // (`replay_run`) call this, so the capsule reconstructs identically.
         self.archive_active_plan(ArchiveGate::Completed);
-        let id = format!("assistant-{run_id}");
         self.messages.update(|msgs| {
             msgs.push(ChatMessage {
                 id,
@@ -1270,6 +1290,38 @@ impl ChatState {
                 }
             }
         });
+    }
+
+    /// Stop treating `run_id` as in flight **without claiming an outcome**.
+    ///
+    /// For a run the server can no longer confirm: the core restarted (its
+    /// per-session run registry is in-memory), or the socket was down long
+    /// enough that the run's terminal frame is simply gone. Neither
+    /// [`Self::complete_run`] nor [`Self::fail_run`] is honest here — the turn
+    /// may have finished, may have been resumed under a new run id, may have
+    /// died. So the bubble stops streaming and its unfinished tool rows go to
+    /// `unknown` (the same word `replay_run` uses for a trace that ends
+    /// mid-tool, and the same posture the core's own crash-boundary repair
+    /// takes), and nothing is written into the message as an error.
+    ///
+    /// The composer release is **guarded**, unlike `complete_run`'s: a
+    /// conversation can have a second run outstanding — one this Panel queued
+    /// that the gateway is still holding in its wait lane — and unlocking the
+    /// composer for a run that is no longer the active one would say "idle"
+    /// while work is still going. Same reasoning as [`Self::fail_run`]'s.
+    pub fn settle_abandoned_run(&self, run_id: &str) {
+        let target_id = format!("assistant-{run_id}");
+        self.messages.update(|msgs| {
+            if let Some(msg) = msgs.iter_mut().rev().find(|m| m.id == target_id) {
+                msg.is_streaming = false;
+            }
+        });
+        self.settle_orphan_tools(run_id);
+        if self.active_run_id.get_untracked().as_deref() == Some(run_id) {
+            self.active_run_id.set(None);
+            self.phase.set(ChatPhase::Idle);
+            self.clear_provider_retry();
+        }
     }
 
     /// Record what a completed run cost (projected from `run_complete`).

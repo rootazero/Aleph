@@ -9,7 +9,8 @@ use loom::thread;
 
 /// Verify sequence counter allocates unique values under concurrent access.
 ///
-/// Models: gateway/run_event_bus.rs AtomicU64 seq_counter
+/// Models: `execution_engine::ActiveRun::next_seq` (AtomicU64 `seq_counter`),
+/// the per-run stream-event sequence every emitter stamps frames with.
 #[test]
 fn loom_seq_counter_uniqueness() {
     loom::model(|| {
@@ -85,7 +86,8 @@ fn loom_request_id_allocation() {
 
 /// Verify chunk counter reset doesn't lose concurrent increments.
 ///
-/// Models: gateway/run_event_bus.rs chunk_counter store(0) vs fetch_add(1)
+/// Models: `execution_engine::ActiveRun::next_chunk` (AtomicU32
+/// `chunk_counter`) — store(0) racing fetch_add(1).
 #[test]
 fn loom_chunk_counter_reset() {
     loom::model(|| {

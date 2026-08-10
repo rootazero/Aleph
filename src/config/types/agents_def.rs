@@ -251,6 +251,53 @@ pub struct AgentDefinition {
     /// Some(list) = only listed link IDs can access this agent.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub allowed_links: Option<Vec<String>>,
+
+    /// Which authenticated users may start a run **as** this agent
+    /// (`users.user_id` values).
+    ///
+    /// None or empty = every authenticated caller (default). Some(list) = only
+    /// those users; anyone else is refused before the run is built.
+    ///
+    /// This is the axis `tool_permissions` is keyed on. Until this field
+    /// existed, an agent's permission set was chosen by the caller — a member
+    /// denied `shell` under one agent simply named another agent on the wire
+    /// and inherited its permissions, because the run-start guard only asked
+    /// "is this SESSION mine", never "may I act as this AGENT". Enforcement is
+    /// [`agent_admits_user`], reached through
+    /// [`caller_may_act_as_agent`](crate::gateway::caller_identity::caller_may_act_as_agent).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub allowed_users: Option<Vec<String>>,
+}
+
+/// The one admission rule for [`AgentDefinition::allowed_users`].
+///
+/// Three carriers hold this list on its way to the run-start gate
+/// (`AgentDefinition` → `ResolvedAgent` → `AgentInstanceConfig`), and a
+/// predicate written at each would be three chances to disagree — the shape
+/// `restrictive_min` avoids for permissions and `session_visible` avoids for
+/// sessions. They all call this.
+///
+/// # Why an absent user is admitted
+///
+/// `user: None` is not "an anonymous stranger" — the login wall refuses those
+/// before any method runs. It means there is no gateway connection at all:
+/// cron, heartbeat, A2A, a team dispatcher, an in-process test. Every sibling
+/// predicate in the codebase opens with that same arm
+/// (`caller_may_choose_directory`, `role_is_operator`, `caller_is_member`),
+/// and deviating here would kill scheduled work on any restricted agent the
+/// moment an operator named a single user. Loopback is NOT this case — it
+/// resolves to the implicit owner, so a local Panel arrives as `Some(owner)`.
+#[must_use]
+pub fn agent_admits_user(allowed: Option<&[String]>, user: Option<&str>) -> bool {
+    match allowed {
+        // Unset or empty: unrestricted. This is what keeps a fresh install and
+        // every pre-existing config byte-for-byte unchanged in behaviour.
+        None | Some([]) => true,
+        Some(list) => match user {
+            Some(u) => list.iter().any(|allowed_user| allowed_user == u),
+            None => true,
+        },
+    }
 }
 
 // =============================================================================
@@ -562,5 +609,79 @@ mod model_ref_tests {
             serde_json::to_value(&m).unwrap(),
             serde_json::json!({ "provider": "openai", "model": "gpt-5" })
         );
+    }
+}
+
+#[cfg(test)]
+mod allowed_users_tests {
+    use super::*;
+
+    fn list(users: &[&str]) -> Vec<String> {
+        users.iter().map(|u| (*u).to_string()).collect()
+    }
+
+    /// The zero-change guarantee. Nothing in a fresh config — or in any config
+    /// written before this field existed — names anyone, and every one of those
+    /// installs must keep behaving exactly as it did.
+    #[test]
+    fn an_agent_that_names_nobody_admits_everyone() {
+        assert!(agent_admits_user(None, Some("u-alice")));
+        assert!(agent_admits_user(None, None));
+        assert!(agent_admits_user(Some(&[]), Some("u-alice")));
+    }
+
+    #[test]
+    fn a_named_user_is_admitted_and_an_unnamed_one_is_not() {
+        let allowed = list(&["u-alice", "u-carol"]);
+        assert!(agent_admits_user(Some(&allowed), Some("u-alice")));
+        assert!(agent_admits_user(Some(&allowed), Some("u-carol")));
+        assert!(!agent_admits_user(Some(&allowed), Some("u-bob")));
+    }
+
+    /// Matching is exact. A prefix/substring rule here would make `u-bob`
+    /// admissible on a list naming `u-bobby`, which is the kind of quiet
+    /// widening nobody re-reads a config to discover.
+    #[test]
+    fn matching_is_exact_not_prefix() {
+        let allowed = list(&["u-bobby"]);
+        assert!(!agent_admits_user(Some(&allowed), Some("u-bob")));
+        assert!(!agent_admits_user(Some(&allowed), Some("u-bobby-2")));
+        assert!(agent_admits_user(Some(&allowed), Some("u-bobby")));
+    }
+
+    /// A run with no gateway connection at all (cron, heartbeat, A2A, a team
+    /// dispatcher, an in-process test) is admitted — the same first arm every
+    /// sibling predicate opens with. Pinned because the alternative is
+    /// attractive-looking and wrong: refusing here would silently kill every
+    /// scheduled job on an agent the moment an operator named one user, and
+    /// the failure would surface as "the nightly run stopped happening".
+    #[test]
+    fn a_run_with_no_gateway_caller_is_admitted() {
+        let allowed = list(&["u-alice"]);
+        assert!(agent_admits_user(Some(&allowed), None));
+    }
+
+    /// The field survives a TOML round trip under the name the operator types.
+    #[test]
+    fn allowed_users_round_trips_through_toml() {
+        let toml_str = r#"
+            id = "ops"
+            allowed_users = ["u-alice", "u-carol"]
+        "#;
+        let agent: AgentDefinition = toml::from_str(toml_str).expect("parse");
+        assert_eq!(
+            agent.allowed_users.as_deref(),
+            Some(list(&["u-alice", "u-carol"]).as_slice())
+        );
+        let back = toml::to_string(&agent).expect("serialize");
+        assert!(back.contains("allowed_users"));
+
+        // Absent stays absent rather than serializing an empty list that would
+        // read, to a human, like "nobody is allowed".
+        let bare: AgentDefinition = toml::from_str(r#"id = "main""#).expect("parse");
+        assert!(bare.allowed_users.is_none());
+        assert!(!toml::to_string(&bare)
+            .expect("serialize")
+            .contains("allowed_users"));
     }
 }

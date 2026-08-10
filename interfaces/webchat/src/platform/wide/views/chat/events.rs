@@ -561,13 +561,57 @@ fn resolve_target(
     session_key: Option<&str>,
 ) -> Option<(ChatState, bool)> {
     let conv = match event_type {
-        // New run: the send path binds run_id → the conversation active at
-        // *send* time (authoritative when the user switches tabs before the
-        // run is accepted, I1), so prefer that route. Fall back to the active
-        // conversation only for runs with no client send (e.g. daemon-initiated).
+        // New run, resolved in three steps — and the ORDER is the whole point:
+        //
+        // 1. The send path binds `run_id` → the conversation active at *send*
+        //    time (authoritative when the user switches tabs before the run is
+        //    accepted, I1).
+        // 2. Otherwise this is a run THIS client did not start — a second
+        //    Panel tab, another member of a project room, the CLI/TUI, a
+        //    channel, cron, a resumed run. Route it by the identity the frame
+        //    itself carries. `RunAccepted` has always carried `session_key`
+        //    and `SessionMap::conv_for_session_key` has always existed; they
+        //    were simply never joined here.
+        // 3. Last resort, the foreground conversation — but only when it
+        //    cannot be shown to belong to a DIFFERENT session. A conversation
+        //    with no key yet (opened but never sent in) still qualifies, which
+        //    is what keeps a legacy core and any surface that does not
+        //    register its conversations working exactly as before.
+        //
+        // Step 3 used to be unconditional, and that was the "two terminals
+        // stepping on each other" defect: a foreign run's whole turn —
+        // reasoning, tool rows, final answer — rendered into whatever
+        // conversation the viewer happened to be reading, `bind_run` then
+        // pinned every later frame of that run to it, and the `run_accepted`
+        // arm below overwrote that tab's `session_key`, so the user's *next
+        // message* went to somebody else's session. Reachable from a second
+        // Panel tab, another member of a project room, the CLI, any channel,
+        // and every cron tick.
+        //
+        // A run whose session is open in no tab now resolves to `None` and is
+        // dropped. Nothing is lost by that: the sidebar dot still lights for
+        // it (`stream.running_set_changed` is keyed by session and never
+        // consulted this route), and the transcript arrives when the user
+        // opens that session — where `hydrate_and_follow` binds the run if it
+        // is still going, and the terminal `run.session_updated` re-hydrates
+        // if it is not.
         "run_accepted" => sessions
             .route_lookup(run_id)
-            .or_else(|| sessions.active_conv()),
+            .or_else(|| session_key.and_then(|sk| sessions.conv_for_session_key(sk)))
+            .or_else(|| {
+                let conv = sessions.active_conv()?;
+                let open = sessions.meta(conv).and_then(|m| m.session_key);
+                // Refuse ONLY what can be positively proved to belong
+                // elsewhere: both keys known and different. Everything else —
+                // a conversation with no key yet (a new chat before its first
+                // send response), a frame with no key at all (a core predating
+                // the field) — leaves the foreground as the only answer
+                // available, which is what step 3 has always been for.
+                match (open.as_deref(), session_key) {
+                    (Some(open), Some(incoming)) if open != incoming => None,
+                    _ => Some(conv),
+                }
+            }),
         // `reasoning` without a run_id: route to the active conversation too;
         // with a run_id it must follow that run's owning conversation like
         // every other event, so it doesn't bleed into whichever conversation
@@ -693,8 +737,19 @@ pub fn subscribe_run_events(
 
         match event_type {
             "run_accepted" => {
+                // BACKFILL, not assignment. A brand-new conversation learns
+                // its server-assigned key here (the send path routed the run
+                // before any key existed). But once a conversation has a key,
+                // this frame can never rename it: `resolve_target` now only
+                // hands us a conversation that either has no key yet or whose
+                // key IS this frame's, so a write over a different value could
+                // only be a routing bug re-entering through the back door —
+                // and its symptom (the user's next message silently addressed
+                // to another session) is the worst one in this file.
                 if let Some(sk) = data.get("session_key").and_then(|s| s.as_str()) {
-                    chat.session_key.set(Some(sk.to_string()));
+                    if chat.session_key.get_untracked().is_none() {
+                        chat.session_key.set(Some(sk.to_string()));
+                    }
                 }
                 chat.start_assistant_message(run_id);
             }
@@ -1455,6 +1510,145 @@ mod projection_tests {
         assert_eq!(
             status_of(&chat, "t1").unwrap().0,
             crate::views::chat::state::TOOL_STATUS_UNKNOWN
+        );
+    }
+
+    // ── Multi-client routing (two terminals on one thread) ──────────────
+
+    /// The defect the `run_accepted` fallback used to cause.
+    ///
+    /// A run this client did not start — a second Panel tab, another member of
+    /// a project room, the CLI/TUI, a channel, every cron tick — arrives with
+    /// a `run_id` no local route knows. The old fallback handed it the
+    /// **foreground** conversation, so somebody else's turn rendered into
+    /// whatever the viewer happened to be reading, and one arm later renamed
+    /// that tab's `session_key`, sending the user's *next message* to the
+    /// foreign session.
+    ///
+    /// Asserted on the resolved conversation and on the resulting route — not
+    /// on the predicate having been consulted.
+    #[test]
+    fn a_foreign_run_routes_by_its_own_session_key_not_by_what_you_are_reading() {
+        let owner = Owner::new();
+        owner.set();
+        let sessions = crate::state::sessions::SessionMap::new();
+        let singleton = ChatState::new();
+
+        let reading = sessions.open_conversation("agent-a", "reading");
+        let other = sessions.open_conversation("agent-b", "other");
+        // Both addressable AND both activated at least once — exactly what
+        // `ChatSidebar::on_select_session` does (`open_conversation` →
+        // `activate` → `set_session_key`). The activation matters: it is what
+        // materialises a conversation's background `ChatState`, and without it
+        // `chat_for` has nothing to hand back.
+        sessions.activate(singleton, other);
+        sessions.set_session_key(other, "sk-other");
+        sessions.activate(singleton, reading);
+        sessions.set_session_key(reading, "sk-reading");
+
+        let (target, is_fg) = resolve_target(
+            &sessions,
+            singleton,
+            "run_accepted",
+            "run-foreign",
+            Some("sk-other"),
+        )
+        .expect("a run on an open session resolves to that session's tab");
+        assert!(!is_fg, "the other conversation is not the foreground one");
+        target.start_assistant_message("run-foreign");
+        target.append_chunk("run-foreign", "not yours");
+        assert!(
+            singleton.assistant_text_for_run("run-foreign").is_empty(),
+            "the conversation being read must be untouched by a foreign run"
+        );
+        assert_eq!(
+            sessions.route_lookup("run-foreign"),
+            Some(other),
+            "and the run must be pinned to the session it belongs to"
+        );
+
+        // A run on a session no tab is showing is dropped outright.
+        assert!(
+            resolve_target(
+                &sessions,
+                singleton,
+                "run_accepted",
+                "run-elsewhere",
+                Some("sk-not-open"),
+            )
+            .is_none(),
+            "a run whose session is open nowhere has no conversation to render \
+             into — dropping it is the only answer that corrupts none"
+        );
+        assert!(
+            sessions.route_lookup("run-elsewhere").is_none(),
+            "and a dropped run must not be bound to anything"
+        );
+    }
+
+    /// Joining a live turn and the live `run_accepted` frame can open the same
+    /// bubble, in an order nobody controls: the `chat.history` response and the
+    /// `RunAccepted` event travel one socket but are written by different arms
+    /// of the dispatch `select!`. Whichever lands second must be a no-op.
+    #[test]
+    fn opening_one_runs_bubble_twice_leaves_one_bubble() {
+        let owner = Owner::new();
+        owner.set();
+        let chat = ChatState::new();
+
+        // Order A: the joiner binds first, then the live frame arrives.
+        chat.start_assistant_message("run-x");
+        chat.append_chunk("run-x", "partial");
+        chat.start_assistant_message("run-x");
+
+        let bubbles = chat
+            .messages
+            .with_untracked(|msgs| msgs.iter().filter(|m| m.id == "assistant-run-x").count());
+        assert_eq!(bubbles, 1, "a run has exactly one assistant bubble");
+        assert_eq!(
+            chat.assistant_text_for_run("run-x"),
+            "partial",
+            "and the second open must not blank the text already streamed \
+             into it"
+        );
+    }
+
+    /// The narrowed fallback still admits the two shapes that legitimately
+    /// need it, so a brand-new conversation and a core predating `session_key`
+    /// on this frame behave exactly as before.
+    #[test]
+    fn the_foreground_fallback_survives_for_an_unclaimed_conversation() {
+        let owner = Owner::new();
+        owner.set();
+        let sessions = crate::state::sessions::SessionMap::new();
+        let singleton = ChatState::new();
+        let fresh = sessions.open_conversation("agent-a", "fresh");
+        sessions.activate(singleton, fresh);
+
+        // No key yet ⇒ nothing can prove the frame belongs elsewhere. This is
+        // the first turn of a new chat, before any send response landed.
+        assert!(
+            resolve_target(
+                &sessions,
+                singleton,
+                "run_accepted",
+                "run-first",
+                Some("sk-brand-new"),
+            )
+            .is_some(),
+            "an unclaimed foreground conversation still accepts the frame"
+        );
+        assert_eq!(sessions.route_lookup("run-first"), Some(fresh));
+
+        // A frame carrying no session key at all names no other session, so
+        // the foreground remains the only available answer.
+        let sessions2 = crate::state::sessions::SessionMap::new();
+        let singleton2 = ChatState::new();
+        let conv = sessions2.open_conversation("agent-a", "legacy");
+        sessions2.set_session_key(conv, "sk-legacy");
+        sessions2.activate(singleton2, conv);
+        assert!(
+            resolve_target(&sessions2, singleton2, "run_accepted", "run-legacy", None).is_some(),
         );
     }
 }

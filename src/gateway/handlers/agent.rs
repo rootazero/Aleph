@@ -287,6 +287,7 @@ impl AgentRunManager {
             params,
             self.app_config.as_ref(),
             None,
+            agent.config(),
         )
         .await
         .map_err(|e| e.to_string())?;
@@ -414,14 +415,29 @@ impl AgentRunManager {
     pub fn running_sessions(&self) -> Vec<String> {
         self.execution_adapter.running_sessions()
     }
+
+    /// The run currently in flight on `session_key`, from the same
+    /// authoritative registry [`Self::running_sessions`] reads.
+    ///
+    /// Deliberately NOT resolved from `self.active_runs`: that map only holds
+    /// runs this manager started (Panel `agent.run` / `chat.send`), so a
+    /// session busy with a CLI, channel, cron or resumed turn would answer
+    /// "nothing running" there — which is exactly the case a joining client
+    /// needs answered.
+    #[must_use]
+    pub fn active_run_for_session(&self, session_key: &str) -> Option<String> {
+        self.execution_adapter.active_run_for_session(session_key)
+    }
 }
 
 /// Why a turn could not be turned into a [`RunRequest`].
 ///
-/// Two variants, because the transports must map them to different JSON-RPC
-/// codes and collapsing them would either turn a visibility denial into a
-/// chatty `INVALID_PARAMS` (which tells the caller the project exists) or a
-/// param complaint into a silent not-found.
+/// One variant per JSON-RPC code the transports must produce. Collapsing any
+/// two would either turn a visibility denial into a chatty `INVALID_PARAMS`
+/// (which tells the caller the project exists), or a param complaint into a
+/// silent not-found, or an authorization refusal into a puzzle — and the
+/// refusals differ on purpose: one has an existence secret to keep and one
+/// does not.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum BuildRunError {
     /// Malformed or unacceptable params → `INVALID_PARAMS`.
@@ -431,6 +447,15 @@ pub enum BuildRunError {
     /// a project id that was never minted produces, so `chat.send` cannot be
     /// used as a cross-user existence oracle.
     ProjectNotFound(String),
+    /// The turn asked to run **as** an agent this caller is not on the
+    /// `allowed_users` list of. Maps to `PERMISSION_DENIED` and names the
+    /// agent — deliberately NOT the `not_found` shape its `ProjectNotFound`
+    /// sibling uses, because there is no existence secret to keep here:
+    /// `agents.list` already returns every agent to every authenticated
+    /// caller. Shaping this as "not found" would only mean an operator who
+    /// forgot to add themselves to their own list gets a puzzle instead of an
+    /// answer, and a puzzle is what pushes people to widen the setting.
+    AgentForbidden(String),
 }
 
 impl From<String> for BuildRunError {
@@ -444,6 +469,10 @@ impl std::fmt::Display for BuildRunError {
         match self {
             BuildRunError::Invalid(s) => f.write_str(s),
             BuildRunError::ProjectNotFound(id) => write!(f, "project not found: {id}"),
+            BuildRunError::AgentForbidden(id) => write!(
+                f,
+                "not authorized to run as agent '{id}' (its `allowed_users` list does not include you)"
+            ),
         }
     }
 }
@@ -578,17 +607,35 @@ fn bound_workspace_of(
 /// existing session from a new one, so it treats every turn as new; see
 /// [`resolve_attribution`].
 ///
-/// Callers map [`BuildRunError`] to their transport's error shape — the two
-/// variants must NOT be flattened, because one is a bad-params complaint and
-/// the other is a visibility denial that has to stay byte-identical to a
-/// project id that was never minted.
+/// Callers map [`BuildRunError`] to their transport's error shape, and the
+/// variants must NOT be flattened into one another: a bad-params complaint, a
+/// visibility denial that has to stay byte-identical to a project id that was
+/// never minted, and an authorization refusal that deliberately does NOT hide
+/// behind "not found" (see each variant's doc for which is which and why).
 pub async fn build_run_request(
     run_id: String,
     session_key: &SessionKey,
     params: AgentRunParams,
     app_config: Option<&Arc<RwLock<crate::Config>>>,
     sessions: Option<&Arc<dyn crate::gateway::session_store::SessionStore>>,
+    agent: &crate::gateway::agent_instance::AgentInstanceConfig,
 ) -> Result<RunRequest, BuildRunError> {
+    // The agent axis of authorization, and it runs FIRST — before the voice
+    // registry write below, which is a side effect a refused turn must not
+    // leave behind.
+    //
+    // `agent` is the config of the instance the caller's `agent_id` actually
+    // resolved to, so this asks about the identity that would really run, not
+    // about the string on the wire (the two differ whenever the registry falls
+    // back to the default agent). Every run-start path funnels through this
+    // builder — `handle_run_with_engine`, `handle_chat_send_with_engine` and
+    // the Simulated-fallback `AgentRunManager::start_run` — which is why the
+    // parameter is required rather than `Option`: a new surface cannot acquire
+    // this hole by forgetting to opt in.
+    if !crate::gateway::caller_identity::caller_may_act_as_agent(agent.allowed_users.as_deref()) {
+        return Err(BuildRunError::AgentForbidden(agent.agent_id.clone()));
+    }
+
     let session_key_str = session_key.to_key_string();
 
     // Record voice mode for this session BEFORE the run spawns, so prompt
@@ -1426,7 +1473,14 @@ mod tests {
         let request = crate::gateway::caller_identity::CALLER_ROLE
             .scope(
                 Some("guest".to_string()),
-                build_run_request("run-1".to_string(), &session_key, params, None, None),
+                build_run_request(
+                    "run-1".to_string(),
+                    &session_key,
+                    params,
+                    None,
+                    None,
+                    &crate::gateway::agent_instance::AgentInstanceConfig::default(),
+                ),
             )
             .await
             .expect("build_run_request");
@@ -1495,9 +1549,16 @@ mod tests {
             ..base_params()
         };
 
-        let request = build_run_request("run-tier".to_string(), &session_key, params, None, None)
-            .await
-            .expect("build_run_request");
+        let request = build_run_request(
+            "run-tier".to_string(),
+            &session_key,
+            params,
+            None,
+            None,
+            &crate::gateway::agent_instance::AgentInstanceConfig::default(),
+        )
+        .await
+        .expect("build_run_request");
 
         assert_eq!(
             request
@@ -1520,9 +1581,16 @@ mod tests {
             ..base_params()
         };
 
-        let err = build_run_request("run-bad".to_string(), &session_key, params, None, None)
-            .await
-            .expect_err("an unknown tier must not silently fall back");
+        let err = build_run_request(
+            "run-bad".to_string(),
+            &session_key,
+            params,
+            None,
+            None,
+            &crate::gateway::agent_instance::AgentInstanceConfig::default(),
+        )
+        .await
+        .expect_err("an unknown tier must not silently fall back");
         assert!(
             err.to_string().contains("yolo"),
             "error should name the bad tier: {err}"
@@ -1541,9 +1609,16 @@ mod tests {
             ..base_params()
         };
 
-        let request = build_run_request("run-mode".to_string(), &session_key, params, None, None)
-            .await
-            .expect("build_run_request");
+        let request = build_run_request(
+            "run-mode".to_string(),
+            &session_key,
+            params,
+            None,
+            None,
+            &crate::gateway::agent_instance::AgentInstanceConfig::default(),
+        )
+        .await
+        .expect("build_run_request");
 
         assert_eq!(
             request.metadata.get(MODE_SESSION_KEY).map(String::as_str),
@@ -1562,9 +1637,16 @@ mod tests {
             ..base_params()
         };
 
-        let err = build_run_request("run-bad-mode".to_string(), &session_key, params, None, None)
-            .await
-            .expect_err("an unknown mode must not silently fall back");
+        let err = build_run_request(
+            "run-bad-mode".to_string(),
+            &session_key,
+            params,
+            None,
+            None,
+            &crate::gateway::agent_instance::AgentInstanceConfig::default(),
+        )
+        .await
+        .expect_err("an unknown mode must not silently fall back");
         assert!(
             err.to_string().contains("game"),
             "error should name the bad mode: {err}"
@@ -1759,7 +1841,14 @@ mod tests {
         let request = crate::gateway::caller_identity::CALLER_USER
             .scope(
                 Some("u-alice".to_string()),
-                build_run_request("run-room".to_string(), &session_key, params, None, None),
+                build_run_request(
+                    "run-room".to_string(),
+                    &session_key,
+                    params,
+                    None,
+                    None,
+                    &crate::gateway::agent_instance::AgentInstanceConfig::default(),
+                ),
             )
             .await
             .expect("build_run_request");
@@ -1806,6 +1895,7 @@ mod tests {
                             params,
                             None,
                             None,
+                            &crate::gateway::agent_instance::AgentInstanceConfig::default(),
                         ),
                     ),
                 ),
@@ -1831,7 +1921,14 @@ mod tests {
         let request = crate::gateway::caller_identity::CALLER_USER
             .scope(
                 Some("u-alice".to_string()),
-                build_run_request("run-unbound".to_string(), &session_key, params, None, None),
+                build_run_request(
+                    "run-unbound".to_string(),
+                    &session_key,
+                    params,
+                    None,
+                    None,
+                    &crate::gateway::agent_instance::AgentInstanceConfig::default(),
+                ),
             )
             .await
             .expect("build_run_request");
@@ -1859,7 +1956,14 @@ mod tests {
         let err = crate::gateway::caller_identity::CALLER_USER
             .scope(
                 Some("u-alice".to_string()),
-                build_run_request("run-gone".to_string(), &session_key, params, None, None),
+                build_run_request(
+                    "run-gone".to_string(),
+                    &session_key,
+                    params,
+                    None,
+                    None,
+                    &crate::gateway::agent_instance::AgentInstanceConfig::default(),
+                ),
             )
             .await
             .expect_err("a missing bound folder must not silently fall back");
@@ -1888,7 +1992,14 @@ mod tests {
         let request = crate::gateway::caller_identity::CALLER_USER
             .scope(
                 Some("u-alice".to_string()),
-                build_run_request("run-explicit".to_string(), &session_key, params, None, None),
+                build_run_request(
+                    "run-explicit".to_string(),
+                    &session_key,
+                    params,
+                    None,
+                    None,
+                    &crate::gateway::agent_instance::AgentInstanceConfig::default(),
+                ),
             )
             .await
             .expect("build_run_request");
@@ -2252,7 +2363,14 @@ mod tests {
             let req = CALLER_USER
                 .scope(
                     Some("u-alice".to_string()),
-                    build_run_request("r1".into(), &key, params(Some(&pid)), None, Some(&store)),
+                    build_run_request(
+                        "r1".into(),
+                        &key,
+                        params(Some(&pid)),
+                        None,
+                        Some(&store),
+                        &crate::gateway::agent_instance::AgentInstanceConfig::default(),
+                    ),
                 )
                 .await
                 .expect("a member may open a room session");
@@ -2276,7 +2394,14 @@ mod tests {
             let denied = CALLER_USER
                 .scope(
                     Some("u-mallory".to_string()),
-                    build_run_request("r2".into(), &key, params(Some(&pid)), None, Some(&store)),
+                    build_run_request(
+                        "r2".into(),
+                        &key,
+                        params(Some(&pid)),
+                        None,
+                        Some(&store),
+                        &crate::gateway::agent_instance::AgentInstanceConfig::default(),
+                    ),
                 )
                 .await
                 .expect_err("a stranger must be refused");
@@ -2289,6 +2414,7 @@ mod tests {
                         params(Some("p-never-minted")),
                         None,
                         Some(&store),
+                        &crate::gateway::agent_instance::AgentInstanceConfig::default(),
                     ),
                 )
                 .await
@@ -2325,7 +2451,14 @@ mod tests {
             let req = CALLER_USER
                 .scope(
                     Some("u-alice".to_string()),
-                    build_run_request("r4".into(), &key, params(Some(&pid)), None, Some(&store)),
+                    build_run_request(
+                        "r4".into(),
+                        &key,
+                        params(Some(&pid)),
+                        None,
+                        Some(&store),
+                        &crate::gateway::agent_instance::AgentInstanceConfig::default(),
+                    ),
                 )
                 .await
                 .expect("re-sending to your own session is fine");
@@ -2364,7 +2497,14 @@ mod tests {
             let req = CALLER_USER
                 .scope(
                     Some("u-bob".to_string()),
-                    build_run_request("r5".into(), &key, params(None), None, Some(&store)),
+                    build_run_request(
+                        "r5".into(),
+                        &key,
+                        params(None),
+                        None,
+                        Some(&store),
+                        &crate::gateway::agent_instance::AgentInstanceConfig::default(),
+                    ),
                 )
                 .await
                 .expect("a member may speak in the room");
@@ -2392,7 +2532,14 @@ mod tests {
             let req = CALLER_USER
                 .scope(
                     Some("u-alice".to_string()),
-                    build_run_request("r6".into(), &key, params(Some(&pid)), None, None),
+                    build_run_request(
+                        "r6".into(),
+                        &key,
+                        params(Some(&pid)),
+                        None,
+                        None,
+                        &crate::gateway::agent_instance::AgentInstanceConfig::default(),
+                    ),
                 )
                 .await
                 .expect("no store still resolves the request's own claim");
@@ -2415,9 +2562,16 @@ mod tests {
                 epoch: 0,
             };
 
-            let req = build_run_request("r7".into(), &key, params(Some(&pid)), None, Some(&store))
-                .await
-                .expect("unrestricted callers are never refused");
+            let req = build_run_request(
+                "r7".into(),
+                &key,
+                params(Some(&pid)),
+                None,
+                Some(&store),
+                &crate::gateway::agent_instance::AgentInstanceConfig::default(),
+            )
+            .await
+            .expect("unrestricted callers are never refused");
             assert_eq!(
                 stamped(&req),
                 (Some("u-owner"), Some(format!("project:{pid}").as_str())),
@@ -2438,11 +2592,176 @@ mod tests {
             let req = CALLER_USER
                 .scope(
                     Some("u-alice".to_string()),
-                    build_run_request("r8".into(), &key, params(None), None, Some(&store)),
+                    build_run_request(
+                        "r8".into(),
+                        &key,
+                        params(None),
+                        None,
+                        Some(&store),
+                        &crate::gateway::agent_instance::AgentInstanceConfig::default(),
+                    ),
                 )
                 .await
                 .expect("ordinary turn");
             assert_eq!(stamped(&req), (Some("u-alice"), Some("personal:u-alice")));
+        }
+    }
+
+    /// The agent axis of run-start authorization (§5.17 round 5).
+    ///
+    /// `chat.send` / `agent.run` let the caller name the agent to run as, and
+    /// `tool_permissions` is keyed on exactly that name — so until
+    /// `allowed_users` existed, a caller denied a tool under one agent could
+    /// name another on the wire and inherit its allowances. The session check
+    /// already here does not cover it and structurally cannot: naming a
+    /// different agent mints a BRAND-NEW session key, which
+    /// `existing_session_is_visible` admits by design.
+    ///
+    /// Effect tests through the real shared builder, under the task-local a
+    /// real dispatch applies.
+    mod agent_admission {
+        use super::*;
+        use crate::gateway::agent_instance::AgentInstanceConfig;
+        use crate::gateway::caller_identity::CALLER_USER;
+        use crate::gateway::router::AgentRouter;
+
+        fn turn() -> AgentRunParams {
+            AgentRunParams {
+                input: "do the thing".to_string(),
+                session_key: None,
+                channel: None,
+                peer_id: None,
+                stream: true,
+                thinking: None,
+                attachments: vec![],
+                agent_id: None,
+                project_root: None,
+                model_override: None,
+                exec_tier: None,
+                mode: None,
+                voice_input: false,
+                project_id: None,
+            }
+        }
+
+        fn agent_admitting(users: Option<&[&str]>) -> AgentInstanceConfig {
+            AgentInstanceConfig {
+                agent_id: "ops".to_string(),
+                allowed_users: users
+                    .map(|u| u.iter().map(|s| (*s).to_string()).collect::<Vec<_>>()),
+                ..AgentInstanceConfig::default()
+            }
+        }
+
+        /// The defect this round closes, stated as a test: a caller who is not
+        /// on the agent's list cannot start a run as it, even though the
+        /// session key is brand new and therefore passes every
+        /// session-visibility check there is.
+        #[tokio::test]
+        async fn a_caller_not_on_the_list_cannot_run_as_that_agent() {
+            let key = AgentRouter::new()
+                .route(None, None, None, Some("ops"))
+                .await;
+            let err = CALLER_USER
+                .scope(
+                    Some("u-bob".to_string()),
+                    build_run_request(
+                        "run-x".to_string(),
+                        &key,
+                        turn(),
+                        None,
+                        None,
+                        &agent_admitting(Some(&["u-alice"])),
+                    ),
+                )
+                .await
+                .expect_err("an unlisted caller must not borrow this agent's authority");
+            assert!(
+                matches!(err, BuildRunError::AgentForbidden(ref id) if id == "ops"),
+                "expected AgentForbidden, got {err:?}"
+            );
+        }
+
+        #[tokio::test]
+        async fn a_caller_on_the_list_may() {
+            let key = AgentRouter::new()
+                .route(None, None, None, Some("ops"))
+                .await;
+            CALLER_USER
+                .scope(
+                    Some("u-alice".to_string()),
+                    build_run_request(
+                        "run-y".to_string(),
+                        &key,
+                        turn(),
+                        None,
+                        None,
+                        &agent_admitting(Some(&["u-alice"])),
+                    ),
+                )
+                .await
+                .expect("a listed caller must be admitted");
+        }
+
+        /// The zero-change guarantee at the gate, not merely in the predicate:
+        /// an agent that names nobody stays reachable by anyone — which is
+        /// every agent in every config written before this field existed.
+        #[tokio::test]
+        async fn an_agent_that_names_nobody_is_reachable_by_anyone() {
+            let key = AgentRouter::new()
+                .route(None, None, None, Some("ops"))
+                .await;
+            CALLER_USER
+                .scope(
+                    Some("u-bob".to_string()),
+                    build_run_request(
+                        "run-z".to_string(),
+                        &key,
+                        turn(),
+                        None,
+                        None,
+                        &agent_admitting(None),
+                    ),
+                )
+                .await
+                .expect("an unrestricted agent must stay reachable");
+        }
+
+        /// A refused turn must leave no side effect behind. `build_run_request`
+        /// writes the per-session voice pin near its top, so a gate placed
+        /// after it would let a refused turn pin voice mode for a key its
+        /// caller was just told they may not use. Asserting on the registry
+        /// rather than on statement order is what keeps this true through a
+        /// reshuffle of the function body.
+        #[tokio::test]
+        async fn a_refused_turn_leaves_no_side_effect_behind() {
+            let key = AgentRouter::new()
+                .route(None, None, None, Some("ops"))
+                .await;
+            let mut params = turn();
+            params.voice_input = true;
+            let key_str = key.to_key_string();
+            crate::gateway::voice::voice_mode::set(&key_str, None);
+
+            let _ = CALLER_USER
+                .scope(
+                    Some("u-bob".to_string()),
+                    build_run_request(
+                        "run-w".to_string(),
+                        &key,
+                        params,
+                        None,
+                        None,
+                        &agent_admitting(Some(&["u-alice"])),
+                    ),
+                )
+                .await
+                .expect_err("refused");
+
+            assert!(
+                crate::gateway::voice::voice_mode::get(&key_str).is_none(),
+                "a refused turn must not have pinned voice mode for this session"
+            );
         }
     }
 }

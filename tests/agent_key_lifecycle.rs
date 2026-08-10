@@ -34,6 +34,7 @@ fn call(agent: &str, target: &str) -> NewRecord {
         outcome: LedgerOutcome::Ok,
         args_fp: Some("fp".into()),
         detail: format!("{target}: did a thing"),
+        principal: None,
     }
 }
 

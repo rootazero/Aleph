@@ -127,6 +127,23 @@ pub trait ExecutionAdapter: Send + Sync {
     fn running_sessions(&self) -> Vec<String> {
         Vec::new()
     }
+
+    /// The run currently in flight on ONE session key, if any.
+    ///
+    /// Point-lookup twin of [`Self::running_sessions`], and the reason it is a
+    /// separate method rather than a scan of that vector: the set answers
+    /// "which sessions are busy" while a client joining a session mid-turn
+    /// needs "and which run is it", so it can bind that run id and render the
+    /// rest of the turn live instead of watching a transcript that will not
+    /// move until the run ends.
+    ///
+    /// Default implementation returns `None` for adapters with no per-session
+    /// run registry (mocks, `SimpleExecutionEngine`) — the same degradation
+    /// [`Self::running_sessions`] already makes, and it reads as "no live turn
+    /// to join", which is the honest answer for an engine that cannot tell.
+    fn active_run_for_session(&self, _session_key: &str) -> Option<String> {
+        None
+    }
 }
 
 #[cfg(test)]

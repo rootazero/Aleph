@@ -114,13 +114,15 @@ pub fn PhoneChatHistory() -> impl IntoView {
         chat.agent_id.set(Some(row.agent_id.clone()));
         chat.session_key.set(Some(row.key.clone()));
         chat.active_project_root.set(row.project_root.clone());
-        spawn_local(hydrate_session_history(
-            dash,
-            chat,
-            Some(workspace),
-            row.key.clone(),
-            i18n.get_locale_untracked(),
-        ));
+        // The phone shell mounts no `ChatSidebar`, so it registers no
+        // conversations in `SessionMap` and has nothing to bind a live run to
+        // — the returned run id is discarded rather than followed. Deliberate:
+        // joining a turn needs a `ConvId` this surface never creates.
+        let locale = i18n.get_locale_untracked();
+        let key = row.key.clone();
+        spawn_local(async move {
+            let _live = hydrate_session_history(dash, chat, Some(workspace), key, locale).await;
+        });
         navigate("/", NavigateOptions::default());
     };
 

@@ -341,6 +341,18 @@ pub fn get_background_subagents_dir() -> Result<PathBuf> {
     Ok(get_data_dir()?.join("background_subagents"))
 }
 
+/// Get the directory for cross-process background `bash` job records.
+///
+/// Returns: `<data_dir>/background_processes/`
+///
+/// One function so the boot-time reconciliation and every later read/write of
+/// a job's journal row resolve the same directory — the same discipline as the
+/// background sub-agent sidecar above (see
+/// [`crate::builtin_tools::process_journal`]).
+pub fn get_background_processes_dir() -> Result<PathBuf> {
+    Ok(get_data_dir()?.join("background_processes"))
+}
+
 // ============================================================================
 // Multi-location Skills Discovery (OpenCode Compatible)
 // ============================================================================

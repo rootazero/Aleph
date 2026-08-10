@@ -27,6 +27,7 @@ pub enum WorktreeError {
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use std::time::Duration;
 use tokio::process::Command;
 
 use crate::harness::TraceSink;
@@ -293,8 +294,6 @@ impl crate::sandbox::Sandbox for WorktreeSandbox {
             )));
         }
 
-        let started = std::time::Instant::now();
-
         let mut cmd = tokio::process::Command::new(&command.program);
         cmd.args(&command.args)
             .current_dir(&self.worktree_path)
@@ -305,76 +304,34 @@ impl crate::sandbox::Sandbox for WorktreeSandbox {
             .stderr(std::process::Stdio::piped())
             .kill_on_drop(true);
 
-        let mut child = cmd
+        let child = cmd
             .spawn()
             .map_err(|e| crate::sandbox::SandboxError::Io(e.to_string()))?;
 
         // Default 1 MiB total budget, mirroring `WorkspaceSandbox::default`.
         const MAX_OUTPUT_BYTES: usize = 1024 * 1024;
 
-        let result = if let Some(timeout) = command.timeout {
-            crate::sandbox::platforms::common::run_child_with_drain(
-                child,
-                command.stdin.as_deref(),
-                timeout,
-                MAX_OUTPUT_BYTES,
-            )
-            .await
-        } else {
-            use tokio::io::{AsyncReadExt, AsyncWriteExt};
-            if let Some(mut child_stdin) = child.stdin.take() {
-                if let Some(data) = command.stdin.as_deref() {
-                    child_stdin.write_all(data).await.map_err(|e| {
-                        crate::sandbox::SandboxError::Io(format!("stdin write failed: {e}"))
-                    })?;
-                }
-                drop(child_stdin);
-            }
-            let stdout = child.stdout.take();
-            let stderr = child.stderr.take();
-            let stdout_task = tokio::spawn(async move {
-                let mut buf = Vec::new();
-                if let Some(mut pipe) = stdout {
-                    let _ = pipe.read_to_end(&mut buf).await;
-                }
-                buf
-            });
-            let stderr_task = tokio::spawn(async move {
-                let mut buf = Vec::new();
-                if let Some(mut pipe) = stderr {
-                    let _ = pipe.read_to_end(&mut buf).await;
-                }
-                buf
-            });
-            let status = child
-                .wait()
-                .await
-                .map_err(|e| crate::sandbox::SandboxError::Io(e.to_string()))?;
-            let elapsed_ms = started.elapsed().as_millis().try_into().unwrap_or(u64::MAX);
-            let stdout_buf = stdout_task.await.unwrap_or_default();
-            let stderr_buf = stderr_task.await.unwrap_or_default();
-            let (stdout, stdout_dropped) =
-                crate::sandbox::platforms::common::truncate_output(stdout_buf, MAX_OUTPUT_BYTES);
-            let (stderr, stderr_dropped) =
-                crate::sandbox::platforms::common::truncate_output(stderr_buf, MAX_OUTPUT_BYTES);
-            #[cfg(unix)]
-            let signal = {
-                use std::os::unix::process::ExitStatusExt;
-                status.signal()
-            };
-            #[cfg(not(unix))]
-            let signal: Option<i32> = None;
-            Ok(crate::sandbox::SandboxOutput {
-                stdout,
-                stderr,
-                exit_code: status.code(),
-                signal,
-                truncated: stdout_dropped > 0 || stderr_dropped > 0,
-                stdout_truncated_bytes: stdout_dropped,
-                stderr_truncated_bytes: stderr_dropped,
-                duration_ms: elapsed_ms,
-            })
-        };
+        // ONE drain implementation, deliberately. This branch used to hand-roll
+        // its own `read_to_end` pair for the no-timeout case: that copy read the
+        // whole stream into memory *before* truncating (the shared drain bounds
+        // it while reading, CWE-400), and — once background jobs grew a live
+        // output tail — it was also the one drain path that tee'd nothing, so a
+        // worktree-isolated job would have polled blind. Two defects from one
+        // cause: a second host for the same behaviour.
+        //
+        // `timeout: None` means "no wall-clock limit", which the shared drain
+        // expresses as a `Duration` rather than an `Option`. A year is not a
+        // timeout anyone waits out; it is the sentinel for "unbounded", chosen
+        // to stay far inside tokio's timer range instead of `Duration::MAX`,
+        // which saturates.
+        const NO_WALL_CLOCK_LIMIT: Duration = Duration::from_secs(365 * 24 * 60 * 60);
+        let result = crate::sandbox::platforms::common::run_child_with_drain(
+            child,
+            command.stdin.as_deref(),
+            command.timeout.unwrap_or(NO_WALL_CLOCK_LIMIT),
+            MAX_OUTPUT_BYTES,
+        )
+        .await;
 
         let exec = match result {
             Ok(out) => out,

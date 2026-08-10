@@ -72,6 +72,87 @@ fn v15_is_idempotent_when_the_column_is_already_there() {
     assert_eq!(store.get_schema_version().unwrap(), SCHEMA_VERSION);
 }
 
+/// The v16 twin, and the one migration in this file with **rows already in the
+/// table**. A fresh store cannot exercise it: `IDENTITY_SCHEMA` now carries
+/// `principal`, so every from-scratch install gets the column for free and the
+/// path that matters — an installation that has been recording since before it
+/// existed — is exactly the one an isolated fixture never reaches.
+///
+/// Two things have to hold, and the second is the one worth the test: the
+/// column arrives, AND the rows that were already there survive with NULL.
+/// A `principal`-less row is what every pre-v16 record is, and `NULL` is the
+/// value the preimage treats as "contributes no bytes" — so this is also what
+/// keeps those rows verifying under the signatures they were written with.
+#[test]
+fn v16_adds_the_ledger_principal_column_to_a_store_that_already_has_records() {
+    let store = SecurityStore::in_memory().unwrap();
+    {
+        let conn = store.conn.lock().unwrap_or_else(|e| e.into_inner());
+        // The historical shape, inlined on purpose — it is what the constant
+        // USED to say, so it cannot be sourced from the constant.
+        conn.execute_batch(
+            "DROP TABLE agent_ledger;
+             CREATE TABLE agent_ledger (
+                 agent_id   TEXT NOT NULL,
+                 seq        INTEGER NOT NULL,
+                 prev_hash  BLOB,
+                 hash       BLOB NOT NULL,
+                 signature  BLOB NOT NULL,
+                 signer_fp  TEXT NOT NULL,
+                 action     TEXT NOT NULL,
+                 target     TEXT NOT NULL,
+                 outcome    TEXT NOT NULL,
+                 args_fp    TEXT,
+                 detail     TEXT NOT NULL,
+                 at_ms      INTEGER NOT NULL,
+                 PRIMARY KEY (agent_id, seq)
+             );
+             INSERT INTO agent_ledger
+                 (agent_id, seq, prev_hash, hash, signature, signer_fp, action, target,
+                  outcome, args_fp, detail, at_ms)
+             VALUES ('main', 1, NULL, x'00', x'00', 'fp', 'tool_call', 'bash',
+                     'ok', NULL, 'pre-existing row', 1);",
+        )
+        .unwrap();
+        assert!(
+            conn.prepare("SELECT principal FROM agent_ledger LIMIT 0")
+                .is_err(),
+            "the fixture must start WITHOUT the column or this test proves nothing"
+        );
+    }
+    store.set_schema_version(15).unwrap();
+
+    store.migrate().unwrap();
+
+    let conn = store.conn.lock().unwrap_or_else(|e| e.into_inner());
+    let (detail, principal): (String, Option<String>) = conn
+        .query_row(
+            "SELECT detail, principal FROM agent_ledger WHERE agent_id='main' AND seq=1",
+            [],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )
+        .expect("the row written before the column existed must still be there");
+    assert_eq!(detail, "pre-existing row");
+    assert_eq!(
+        principal, None,
+        "an existing row must read as naming nobody, which is what its signature covers"
+    );
+}
+
+/// …and the other half, same shape as v15's: a store created from scratch
+/// already has the column (an earlier arm ran `IDENTITY_SCHEMA`, which now
+/// carries it), so the v16 arm must probe rather than trust the version gate.
+/// Without the probe this is `duplicate column name` on every FIRST boot.
+#[test]
+fn v16_is_idempotent_when_the_ledger_column_is_already_there() {
+    let store = SecurityStore::in_memory().unwrap();
+    store.set_schema_version(15).unwrap();
+    store
+        .migrate()
+        .expect("re-running v16 over an existing column must not be an error");
+    assert_eq!(store.get_schema_version().unwrap(), SCHEMA_VERSION);
+}
+
 #[test]
 fn test_device_crud() {
     let store = SecurityStore::in_memory().unwrap();

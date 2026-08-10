@@ -118,6 +118,34 @@ pub fn current_caller_user() -> Option<String> {
 /// — therefore ask the same question as the per-run `project_root` override.
 /// Gating only the run would leave "register a folder, then chat in it" as a
 /// two-step path to the same place, with both steps legal.
+/// May this connection start a run **as** the agent whose `allowed_users` list
+/// this is?
+///
+/// The twin of [`caller_may_choose_directory`] on the other caller-supplied
+/// run parameter. That one exists because `project_root` named a directory
+/// with nothing checking it; this one exists because `agent_id` named an
+/// **identity** with nothing checking it — and an identity is the axis
+/// `tool_permissions` is keyed on, so choosing the agent chose the permission
+/// set. A caller denied a tool under one agent could name another on the very
+/// same `chat.send` and inherit its allowances.
+///
+/// # Why the session check does not already cover this
+///
+/// `visibility::existing_session_is_visible` asks "is this SESSION mine", and
+/// naming a different agent produces a *brand-new* session key, which that
+/// predicate admits **by design** (it is the ordinary first message of a new
+/// conversation). Two questions, two predicates: the session one guards
+/// reading someone else's transcript, this one guards borrowing someone
+/// else's authority.
+///
+/// Takes the list rather than reading config so the caller passes the list off
+/// the object the runtime actually resolved (`AgentInstanceConfig`), not a
+/// second lookup that could answer about a different agent.
+#[must_use]
+pub fn caller_may_act_as_agent(allowed_users: Option<&[String]>) -> bool {
+    crate::config::types::agent_admits_user(allowed_users, current_caller_user().as_deref())
+}
+
 #[must_use]
 pub fn caller_may_choose_directory() -> bool {
     let role = current_caller_role();

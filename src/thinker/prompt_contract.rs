@@ -559,6 +559,21 @@ fn no_sentence_is_stated_twice() {
             .iter()
             .map(|def| (format!("tool `{}`", def.name), def.description.to_string())),
     );
+    // ...plus the ten tools the registry constructor registers without a
+    // catalog entry. They ship exactly as a catalog entry's description does
+    // (`agent_init` completes the model's tool list from the registry map),
+    // so leaving them out measured ~85% of the surface — the same blind spot
+    // the byte ratchet had until 2026-08-10, in the same place, found by the
+    // same question: *which block shape does this scanner recognise?* The
+    // table is shared with the ratchet rather than restated here; a second
+    // list is precisely the failure it exists to prevent.
+    surfaces.extend(
+        crate::executor::REGISTRY_ONLY_DESCRIPTIONS
+            .iter()
+            .map(|(name, description)| {
+                (format!("tool `{name}` (registry-only)"), (*description).to_string())
+            }),
+    );
 
     // Whitespace-normalized sentences long enough to be a claim rather than a
     // header, list marker or "Rules:" — short fragments collide by coincidence,
@@ -585,6 +600,22 @@ fn no_sentence_is_stated_twice() {
          back to certifying non-duplication across layers alone. Check that \
          BUILTIN_TOOL_DEFINITIONS is still the catalog agent_init maps into the model's \
          tool list, and that this test still ingests it."
+    );
+
+    // Same check for the registry-only half, and for the same reason: it was
+    // added because its absence made the verdict a claim about 85% of a
+    // request. An empty table here would restore that silently.
+    let registry_only_sentences = surfaces
+        .iter()
+        .filter(|(origin, _)| origin.ends_with("(registry-only)"))
+        .flat_map(|(_, text)| measured_sentences(text))
+        .count();
+    assert!(
+        registry_only_sentences > 0,
+        "the registry-only half of the surface contributed no measurable sentence. Those \
+         ten descriptions ship on every request without a catalog entry; if the table \
+         emptied or this test stopped ingesting it, the verdict below is once again about \
+         part of the request only."
     );
 
     let mut seen: Vec<(String, String)> = Vec::new();

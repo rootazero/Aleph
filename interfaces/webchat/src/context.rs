@@ -378,6 +378,27 @@ pub struct DashboardState {
     /// Lets the boot gate disengage and the service gate engage — two
     /// surfaces that differ only in "have we ever been live?".
     pub has_connected_once: RwSignal<bool>,
+    /// Bumped once per **successful handshake**, including the first. Any state
+    /// a client derives from a stream of server-sequenced frames is only valid
+    /// within one connection, so this is the edge on which such state must be
+    /// re-based.
+    ///
+    /// It exists because the running-session set was not. `SessionMap::
+    /// set_server_running` discards any `stream.running_set_changed` whose
+    /// `seq` is `<=` the highest it has applied — correct for reordering
+    /// *within* a socket, and quietly fatal across one: a restarted core
+    /// begins its `SessionRunRegistry` seq at 0 again, so every frame from the
+    /// new process was `<=` the old process's last seq and was dropped
+    /// **forever**. The Panel's running dots froze at whatever they showed
+    /// when the old process died, with no error anywhere. The cold-load seed
+    /// could not repair it either: it only applies while `server_seq == 0` and
+    /// only ran once, at mount.
+    ///
+    /// A monotonic counter rather than a server-reported instance id on
+    /// purpose: a reconnect voids the baseline whether or not the core
+    /// restarted (frames sent while we were offline are gone either way), so
+    /// the client already knows everything it needs without a protocol change.
+    pub connection_epoch: RwSignal<u64>,
 
     // Phase 3: Channel to send RPC requests to message loop
     rpc_tx: StoredValue<Option<mpsc::UnboundedSender<RpcRequest>>>,
@@ -658,6 +679,7 @@ impl DashboardState {
             connection_error: RwSignal::new(None),
             is_reconnecting: RwSignal::new(false),
             has_connected_once: RwSignal::new(false),
+            connection_epoch: RwSignal::new(0),
             rpc_tx: StoredValue::new(None),
             next_id: StoredValue::new(Arc::new(Mutex::new(1))),
             event_handlers: StoredValue::new(Arc::new(Mutex::new(Vec::new()))),
@@ -1274,6 +1296,13 @@ impl DashboardState {
                         self.reconnect_count.set(0);
                         self.is_reconnecting.set(false);
                         self.has_connected_once.set(true);
+                        // Bumped in the same place the topic ledger is
+                        // replayed below, and for the same reason: a fresh
+                        // socket starts from nothing. Anything a component
+                        // derived from server-sequenced frames on the previous
+                        // connection is now a baseline that can only cause
+                        // frames to be discarded — see the field's doc.
+                        self.connection_epoch.update(|n| *n += 1);
 
                         let state_for_subscribe = *self;
                         spawn_local(async move {

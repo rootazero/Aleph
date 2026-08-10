@@ -11,6 +11,7 @@ use tracing::warn;
 use uuid::Uuid;
 
 use super::{encode_session_key, ArtifactError, ArtifactOrigin, ArtifactRecord};
+use crate::utils::filename::sanitize_filename;
 
 /// Largest blob the store accepts, mirroring `media::cache::MAX_FILE_SIZE`
 /// (50 MB) so an attachment that made it through the media cache is never
@@ -20,13 +21,6 @@ pub const MAX_ARTIFACT_BYTES: u64 = 50 * 1024 * 1024;
 /// Retained artifacts per session. A `put` past this evicts the oldest, so a
 /// long-running session cannot grow the data directory without bound.
 pub const MAX_ARTIFACTS_PER_SESSION: usize = 200;
-
-/// Longest display filename kept, in characters. Keeps the value comfortably
-/// under filesystem and `Content-Disposition` limits downstream.
-const MAX_FILENAME_CHARS: usize = 200;
-
-/// Filename used when the caller's name sanitizes down to nothing.
-const FALLBACK_FILENAME: &str = "unnamed";
 
 /// MIME type used when the caller's is empty or implausible.
 const FALLBACK_MIME: &str = "application/octet-stream";
@@ -344,34 +338,6 @@ fn validate_id(id: &str) -> Result<(), ArtifactError> {
     }
 }
 
-/// Reduce a caller-supplied name to a plain display filename: no directory
-/// components, no characters that are illegal on Windows, no control bytes,
-/// bounded length.
-fn sanitize_filename(name: &str) -> String {
-    let base = Path::new(name)
-        .file_name()
-        .and_then(|n| n.to_str())
-        .unwrap_or_default();
-
-    let cleaned: String = base
-        .chars()
-        .filter(|c| {
-            !c.is_control() && !matches!(c, '/' | '\\' | ':' | '"' | '<' | '>' | '|' | '?' | '*')
-        })
-        .take(MAX_FILENAME_CHARS)
-        .collect();
-
-    // Trailing dots and spaces are silently dropped by Windows; strip them here
-    // so the recorded name matches what any filesystem would keep. This also
-    // turns a residual ".." into the fallback.
-    let trimmed = cleaned.trim().trim_end_matches('.').trim_end();
-    if trimmed.is_empty() {
-        FALLBACK_FILENAME.to_string()
-    } else {
-        trimmed.to_string()
-    }
-}
-
 /// Normalize a caller-supplied MIME type.
 ///
 /// Control characters are stripped because this value is later echoed into a
@@ -391,6 +357,7 @@ fn normalize_mime(mime: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::utils::filename::FALLBACK_FILENAME;
     use tempfile::TempDir;
 
     const SESSION: &str = "agent:main:main";
@@ -751,11 +718,5 @@ mod tests {
         let listed = store.list(SESSION).await.unwrap();
         assert_eq!(listed.len(), 1);
         assert_eq!(listed[0].filename, "good.txt");
-    }
-
-    #[test]
-    fn sanitize_filename_is_utf8_safe_when_truncating() {
-        let name = "é".repeat(MAX_FILENAME_CHARS + 50);
-        assert_eq!(sanitize_filename(&name).chars().count(), MAX_FILENAME_CHARS);
     }
 }

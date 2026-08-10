@@ -22,6 +22,7 @@ pub mod driver;
 pub mod exec_approval;
 pub mod factory;
 pub mod hooks;
+pub mod live_tail;
 pub mod platforms;
 pub mod policy;
 pub mod protected_paths;
@@ -44,6 +45,7 @@ pub use context::{current_justification, current_session};
 pub use driver::{OsSandboxDriverTrait, OsSandboxProfile};
 pub use factory::{build_sandbox, NoopSandbox};
 pub use hooks::{SandboxHookContext, SandboxHookResult, SandboxHooks};
+pub use live_tail::{LiveSnapshot, LiveStream, LiveTail};
 pub use platforms::{create_platform_driver, create_platform_driver_from_config};
 pub use policy::{FsPolicy, NetworkPolicy as PolicyNetworkPolicy, ProcessPolicy, SandboxPolicy};
 

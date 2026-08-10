@@ -3,11 +3,48 @@
 //!
 //! Unlike `ChannelApprovalBridgeAdapter` (which delivers back to the
 //! requester's own channel), this registers a pending approval in the shared
-//! [`ExecApprovalManager`] and publishes a `GatewayEventFrame::Approval*` event
-//! that — after the `event_scope` `approval.` guard — only operator-tier
-//! connections receive. The operator resolves it via the existing
-//! `exec.approval.resolve` RPC, waking the oneshot. Used by the config-tier gate
-//! in `ScopedToolService` (Phase 2b sudo).
+//! [`ExecApprovalManager`] and publishes a `GatewayEventFrame::Approval*` event.
+//! The operator resolves it via the existing `exec.approval.resolve` RPC, waking
+//! the oneshot. Used by the config-tier gate in `ScopedToolService` (Phase 2b
+//! sudo).
+//!
+//! ## Two instances, because this type serves two opposite audiences
+//!
+//! The `approval.` topic family used to be admin-gated wholesale, so "operator
+//! tier" was a property of the transport. That prefix rule is gone (see
+//! `src/gateway/CLAUDE.md` 地雷 K: a member MUST receive the card for their own
+//! parked tool call, or their run dies on the 120 s timeout and the documented
+//! workaround is `exec_tier:"full"` — the least safe tier becoming the only
+//! usable one). The judgement now lives in
+//! [`crate::gateway::event_visibility::session_identity_of`], which reads the
+//! frame's `session_key`: non-empty ⇒ owner-or-admin, empty ⇒ operator-only.
+//!
+//! That is the right judgement for the frames this type publishes on behalf of
+//! [`crate::approval::adapters::FallbackApprovalRequester`] — a Panel turn whose
+//! own `Ask`-tier tool parked, where the requester IS the audience. It is the
+//! **wrong** judgement for the config gate, whose entire premise is that the
+//! requester may not decide: `check_operator_gate` parks the call precisely
+//! because `role_is_operator` said no, and then this requester used to address
+//! the resulting card to that same member's session — which both the event plane
+//! and `exec.approvals.pending` / `exec.approval.resolve` (carved open to members)
+//! read as "yours". A member could raise the operator gate and answer it,
+//! reaching every `OPERATOR_TOOLS` entry; `loop_graph` is the sharpest instance
+//! because a `root:` body is injected verbatim into every governed session's
+//! system prompt, on every turn, persisted.
+//!
+//! So: [`OperatorApprovalRequester::new`] keeps the owner-scoped shape, and
+//! [`OperatorApprovalRequester::for_config_tier`] addresses the card to the
+//! operator. The split is per-instance rather than per-topic on purpose — a
+//! prefix rule cannot tell the two apart, which is what 地雷 K is about.
+//!
+//! Note the asymmetry between the frame and the record: the **frame** carries an
+//! empty `session_key` (the existing encoding for "no owner to compare against",
+//! shared with cluster-node approvals), while the **record** keeps the real one.
+//! Blanking the record too would look tidier and would be a bug: the manager
+//! matches `record.session_key` when cascading a session grant and when cleaning
+//! up a session's pending entries, so blank records would cascade decisions
+//! across unrelated users. The record therefore carries the fact explicitly, in
+//! [`ExecApprovalRecord::operator_only`].
 //!
 //! Scope (Phase 2b): `AllowOnce` + `AllowSession` only. `AllowAlways` collapses to a
 //! session grant — permanent device elevation is Phase 3 (the narrowing lives in
@@ -27,12 +64,55 @@ use crate::sync_primitives::Arc;
 pub struct OperatorApprovalRequester {
     manager: Arc<ExecApprovalManager>,
     event_bus: Arc<GatewayEventBus>,
+    /// See the module doc. `false` = the card belongs to the session that
+    /// raised it (the `FallbackApprovalRequester` leg); `true` = the card is an
+    /// operator-tier escalation and the raiser must not be able to answer it.
+    operator_only: bool,
 }
 
 impl OperatorApprovalRequester {
+    /// Owner-scoped: the card is delivered to, and resolvable by, the session
+    /// that raised it (plus any admin). This is the leg
+    /// [`crate::approval::adapters::FallbackApprovalRequester`] falls back to
+    /// when the requester's own channel cannot be reached — the Panel's
+    /// `gui:chat` is never registered, so every Panel `Ask`-tier card lands
+    /// here and MUST stay visible to whoever is sitting in front of it.
     #[must_use]
     pub const fn new(manager: Arc<ExecApprovalManager>, event_bus: Arc<GatewayEventBus>) -> Self {
-        Self { manager, event_bus }
+        Self {
+            manager,
+            event_bus,
+            operator_only: false,
+        }
+    }
+
+    /// Operator-scoped: for the config-tier gate in `ScopedToolService`, which
+    /// parks a call *because* the caller may not make this decision. Addressing
+    /// such a card to the caller's own session hands them the decision back.
+    #[must_use]
+    pub const fn for_config_tier(
+        manager: Arc<ExecApprovalManager>,
+        event_bus: Arc<GatewayEventBus>,
+    ) -> Self {
+        Self {
+            manager,
+            event_bus,
+            operator_only: true,
+        }
+    }
+
+    /// The key to publish on the `Approval*` frames for this instance.
+    ///
+    /// Empty for a config-tier escalation: `session_identity_of` reads an empty
+    /// key as [`crate::gateway::event_visibility::SessionIdentity::OperatorOnly`],
+    /// the same classification a cluster-node approval already gets, so no new
+    /// wire field and no new arm are needed.
+    fn frame_session_key(&self, session_key: &str) -> String {
+        if self.operator_only {
+            String::new()
+        } else {
+            session_key.to_string()
+        }
     }
 }
 
@@ -72,9 +152,15 @@ impl ApprovalRequester for OperatorApprovalRequester {
             // cascades to other pending cards of the same action.
             grant_key: action.grant_key.clone(),
         };
-        let record = self.manager.create(&request, DEFAULT_APPROVAL_TIMEOUT_MS);
+        let mut record = self.manager.create(&request, DEFAULT_APPROVAL_TIMEOUT_MS);
+        // The RPC leg of the same fact the blank frame key carries. Stamped on
+        // the record (not derived from its `session_key`, which stays real for
+        // the grant cascade) so `exec.approvals.pending` and
+        // `exec.approval.resolve` — both carved open to members — refuse it.
+        record.operator_only = self.operator_only;
         // Pairing key for the client: which tool row this card belongs under.
         let tool_call_id = record.tool_call_id.clone();
+        let frame_session_key = self.frame_session_key(&session_key_str);
         // Register the pending entry BEFORE publishing the event, so an operator
         // who resolves the instant they see it cannot race ahead of
         // registration (resolve-before-register would otherwise be lost and the
@@ -86,7 +172,7 @@ impl ApprovalRequester for OperatorApprovalRequester {
             .event_bus
             .publish_frame(&GatewayEventFrame::ApprovalRequested {
                 approval_id: approval_id.clone(),
-                session_key: session_key_str.clone(),
+                session_key: frame_session_key.clone(),
                 channel_id,
                 conversation_id,
                 tool_call_id,
@@ -129,16 +215,21 @@ impl ApprovalRequester for OperatorApprovalRequester {
             .await;
         let decision = resolved.decision;
 
+        // Same scoping as the request frame: an escalation the member could not
+        // be told about must not be closed out to them either — the resolved
+        // frame carries the approval id, which is the addressing capability the
+        // request frame was withheld to deny. They still learn their call
+        // un-parked, from its result.
         let frame = match decision {
             Some(d) => GatewayEventFrame::ApprovalResolved {
                 approval_id,
-                session_key: session_key_str,
+                session_key: frame_session_key,
                 decision: d,
                 resolved_by: None,
             },
             None => GatewayEventFrame::ApprovalExpired {
                 approval_id,
-                session_key: session_key_str,
+                session_key: frame_session_key,
             },
         };
         if let Err(e) = self.event_bus.publish_frame(&frame) {
@@ -236,6 +327,120 @@ mod tests {
             saw_notice,
             "expected a run-scoped waiting-for-approval ResponseChunk"
         );
+        let outcome = handle.await.unwrap();
+        assert_eq!(outcome.outcome, ApprovalOutcome::Approved);
+    }
+
+    /// The event leg of the config-tier split.
+    ///
+    /// `event_visibility::session_identity_of` reads an EMPTY `session_key` on
+    /// the `Approval*` family as `OperatorOnly` and a non-empty one as
+    /// owner-or-admin. The config gate parks a call because the caller may not
+    /// decide, so publishing the caller's own key pushes the card back to them.
+    /// Pinned on the frame rather than on the classifier because the classifier
+    /// is right — it is the key handed to it that was wrong.
+    #[tokio::test]
+    async fn a_config_tier_card_is_addressed_to_the_operator_not_to_its_raiser() {
+        let event_bus = Arc::new(GatewayEventBus::new());
+        let manager = Arc::new(ExecApprovalManager::new());
+        let requester =
+            OperatorApprovalRequester::for_config_tier(manager.clone(), event_bus.clone());
+        let mut rx = event_bus.subscribe_typed();
+
+        let mgr = manager.clone();
+        let handle = tokio::spawn(async move {
+            TURN_CONTEXT
+                .scope(guest_turn("run-cfg"), async move {
+                    requester
+                        .request_approval(&ApprovalAction::for_tool_call(
+                            "loop_graph",
+                            &serde_json::json!({"action": "node", "kind": "root"}),
+                            "config tier",
+                        ))
+                        .await
+                })
+                .await
+        });
+
+        let mut saw_request = false;
+        for _ in 0..6 {
+            let Ok(Ok(frame)) = tokio::time::timeout(Duration::from_secs(2), rx.recv()).await
+            else {
+                break;
+            };
+            if let GatewayEventFrame::ApprovalRequested {
+                approval_id,
+                session_key,
+                ..
+            } = frame
+            {
+                assert!(
+                    session_key.is_empty(),
+                    "a config-tier escalation must carry no session key — a non-empty one \
+                     classifies as BySessionKeyOrAdmin and delivers the card to the member \
+                     whose call the gate just parked"
+                );
+                saw_request = true;
+                mgr.resolve(&approval_id, ApprovalDecisionType::AllowOnce, None);
+                break;
+            }
+        }
+
+        assert!(saw_request, "expected an ApprovalRequested frame");
+        let outcome = handle.await.unwrap();
+        assert_eq!(outcome.outcome, ApprovalOutcome::Approved);
+    }
+
+    /// The twin that must NOT change: the fallback leg's cards belong to the
+    /// session that raised them (`src/gateway/CLAUDE.md` 地雷 K — a member has
+    /// to receive the card for their own parked tool call, or their run dies on
+    /// the 120 s timeout and the only workaround is `exec_tier:"full"`).
+    #[tokio::test]
+    async fn the_fallback_leg_still_addresses_the_card_to_its_own_session() {
+        let event_bus = Arc::new(GatewayEventBus::new());
+        let manager = Arc::new(ExecApprovalManager::new());
+        let requester = OperatorApprovalRequester::new(manager.clone(), event_bus.clone());
+        let mut rx = event_bus.subscribe_typed();
+
+        let mgr = manager.clone();
+        let handle = tokio::spawn(async move {
+            TURN_CONTEXT
+                .scope(guest_turn("run-own"), async move {
+                    requester
+                        .request_approval(&ApprovalAction::for_tool_call(
+                            "file_ops",
+                            &serde_json::json!({"operation": "delete"}),
+                            "destructive",
+                        ))
+                        .await
+                })
+                .await
+        });
+
+        let mut saw_request = false;
+        for _ in 0..6 {
+            let Ok(Ok(frame)) = tokio::time::timeout(Duration::from_secs(2), rx.recv()).await
+            else {
+                break;
+            };
+            if let GatewayEventFrame::ApprovalRequested {
+                approval_id,
+                session_key,
+                ..
+            } = frame
+            {
+                assert_eq!(
+                    session_key,
+                    SessionKey::main("approval-test").to_key_string(),
+                    "the fallback leg must keep addressing the card to its own session"
+                );
+                saw_request = true;
+                mgr.resolve(&approval_id, ApprovalDecisionType::AllowOnce, None);
+                break;
+            }
+        }
+
+        assert!(saw_request, "expected an ApprovalRequested frame");
         let outcome = handle.await.unwrap();
         assert_eq!(outcome.outcome, ApprovalOutcome::Approved);
     }

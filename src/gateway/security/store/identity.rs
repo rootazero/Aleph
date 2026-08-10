@@ -212,8 +212,8 @@ impl SecurityStore {
         tx.execute(
             "INSERT INTO agent_ledger
                (agent_id, seq, prev_hash, hash, signature, signer_fp, action, target, outcome,
-                args_fp, detail, at_ms)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
+                args_fp, detail, at_ms, principal)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)",
             params![
                 rec.agent_id,
                 rec.seq,
@@ -227,6 +227,7 @@ impl SecurityStore {
                 rec.args_fp,
                 rec.detail,
                 rec.at_ms,
+                rec.principal,
             ],
         )?;
         // Anchor moves forward only. A record that somehow lands below the

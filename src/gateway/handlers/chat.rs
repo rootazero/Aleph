@@ -360,10 +360,37 @@ pub async fn handle_abort(
 
 /// Handle chat.history RPC request
 ///
-/// Returns the chat history for a session.
+/// Returns the chat history for a session, plus `active_run` — the run id of
+/// the turn in flight on this session right now, or `null`.
+///
+/// # Why `active_run` rides on this response instead of its own RPC
+///
+/// Opening (or re-opening) a conversation that is *already running* used to
+/// hand a client a transcript with no way to learn that more was coming: the
+/// `stream.*` frames for that run carry a `run_id` the joiner never saw
+/// accepted, so they route to nothing, and the sidebar's re-hydrate is
+/// suppressed for exactly as long as the session is running. The joiner sat in
+/// front of a frozen transcript for the whole turn — the "two terminals share
+/// one thread" case failing silently on the second terminal.
+///
+/// The pointer belongs on this response rather than beside it because the two
+/// facts are one snapshot. A separate call would open a window where a client
+/// holds the transcript but not the run (or the reverse), and every window of
+/// that kind eventually renders a turn twice or not at all. It also costs
+/// nothing extra to authorize: this handler has already resolved the session's
+/// metadata and passed `visibility::session_visible` before it asks, so
+/// `active_run` inherits that gate instead of needing a second one — no new
+/// method to register in `method_visibility`, no new entry in
+/// `lane::override_for`, no second existence oracle.
+///
+/// `run_manager` is `Option` because `chat.history` is registered
+/// unconditionally while the run manager is not (`common_handlers.rs`); absent,
+/// the field is `null`, which reads as "no live turn to join" — the same
+/// honest degradation `ExecutionAdapter::active_run_for_session` makes.
 pub async fn handle_history(
     request: JsonRpcRequest,
     session_manager: Arc<dyn SessionStore>,
+    run_manager: Option<Arc<crate::gateway::handlers::agent::AgentRunManager>>,
 ) -> JsonRpcResponse {
     // Parse params
     let params: HistoryParams = match parse_params(&request) {
@@ -428,12 +455,25 @@ pub async fn handle_history(
                 .collect();
 
             let count = chat_messages.len();
+            // Resolved AFTER the visibility gate above, so it is scoped by the
+            // same decision that let the transcript out; a caller who cannot
+            // see the session never reaches this line.
+            //
+            // Looked up by the CANONICAL key (`session_key.to_key_string()`),
+            // not by `params.session_key`: the registry is keyed by what
+            // `SessionKey::to_key_string` produces, so a caller whose spelling
+            // parses but is not byte-identical to canonical would silently get
+            // "nothing running" — a miss that looks exactly like an idle
+            // session.
+            let active_run = run_manager
+                .and_then(|rm| rm.active_run_for_session(&session_key.to_key_string()));
             JsonRpcResponse::success(
                 request.id,
                 json!({
                     "session_key": params.session_key,
                     "messages": chat_messages,
                     "count": count,
+                    "active_run": active_run,
                 }),
             )
         }
@@ -1039,12 +1079,56 @@ mod tests {
                     handle_history(
                         request("chat.history", json!({ "session_key": alice_key_str })),
                         store.clone(),
+                        None,
                     ),
                 )
                 .await;
             assert_eq!(
                 as_bob.error.as_ref().map(|e| e.code),
                 Some(RESOURCE_NOT_FOUND)
+            );
+            assert!(
+                as_bob.result.is_none(),
+                "a denied history must not leak the live-turn pointer either — \
+                 `active_run` is resolved after this gate, and a refusal that \
+                 carried a result would be answering a question it just refused"
+            );
+        }
+
+        /// The live-turn pointer is part of this response's contract: the Panel
+        /// reads `active_run` to decide whether a session it has just opened is
+        /// mid-turn and should be joined. Present-and-null is the answer for
+        /// "nothing running" AND for a build with no run manager wired; both
+        /// mean "no live turn to join". A missing key would be indistinguishable
+        /// from an old core to the client's parser, so pin that it is emitted.
+        #[tokio::test]
+        async fn history_always_carries_the_live_turn_pointer() {
+            let temp = tempfile::tempdir().unwrap();
+            let store = store(&temp);
+            let alice_key = alice_session(&store).await;
+
+            let resp = CALLER_USER
+                .scope(
+                    Some("u-alice".to_string()),
+                    handle_history(
+                        request(
+                            "chat.history",
+                            json!({ "session_key": alice_key.to_key_string() }),
+                        ),
+                        store.clone(),
+                        None,
+                    ),
+                )
+                .await;
+            let result = resp.result.expect("alice may read her own history");
+            assert!(
+                result.get("active_run").is_some(),
+                "`active_run` must always be emitted — absent reads to the \
+                 client as an old core, not as `nothing is running`"
+            );
+            assert!(
+                result["active_run"].is_null(),
+                "no run manager ⇒ no live turn this handler can confirm"
             );
         }
 

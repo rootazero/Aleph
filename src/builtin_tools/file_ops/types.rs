@@ -178,6 +178,13 @@ pub struct FileOpsOutput {
     pub success: bool,
     pub operation: String,
     pub message: String,
+    /// The entries the operation is about. For `list` / `search` / `stats` /
+    /// `batch_move` / `organize` these are the entries that were *handled*; for
+    /// a partial `copy` they are the entries that were **skipped** (protected
+    /// or unresolvable). The `message` always says which of the two it is —
+    /// `FileOpsOutput` deliberately does not grow a second collection field for
+    /// the copy case, because every construction site would then have to name
+    /// it and the one that forgot would be the interesting one.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub files: Option<Vec<FileInfo>>,
     #[serde(skip_serializing_if = "Option::is_none")]

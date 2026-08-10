@@ -47,6 +47,7 @@ use super::ScopedToolService;
 /// attributable, so an unwired build pays one `Option::is_none` per tool call.
 pub(super) struct LedgerIntent {
     agent_id: String,
+    principal: Option<String>,
     tool: String,
     mutating: bool,
 }
@@ -75,6 +76,30 @@ impl ScopedToolService {
         crate::identity::current_actor().unwrap_or_else(|| turn.session_key.agent_id().to_string())
     }
 
+    /// The **person** a dispatch is recorded against — `agent_id`'s other half.
+    ///
+    /// [`Self::ledger_actor_for`] answers "which identity acted"; this answers
+    /// "who was driving it". Both are needed, and only together: a chain that
+    /// names only the agent proves `main` ran a command and stays silent on
+    /// whether the operator or a member asked for it, so non-repudiation held
+    /// for agents and not for people.
+    ///
+    /// Resolver is [`visibility::ambient_actor`](crate::gateway::visibility::ambient_actor),
+    /// and the two rejected alternatives are the ones this repo has each been
+    /// bitten by:
+    ///
+    /// * `CALLER_USER` — dead across `tokio::spawn`, and a tool call is always
+    ///   inside one. It would record `None` for every row, i.e. a column that
+    ///   silently answers "nobody" on a live multi-user install.
+    /// * `ambient_owner()` — in a project room that is the room's CREATOR, the
+    ///   same person for every member (that is the mechanism by which they
+    ///   share a memory partition). It would file each member's actions under
+    ///   the room owner: not a missing answer but a confidently wrong one, and
+    ///   signed.
+    fn ledger_principal() -> Option<String> {
+        crate::gateway::visibility::ambient_actor()
+    }
+
     /// The ledger intent for this call, or `None` when nothing is recordable —
     /// no ledger installed (unit tests, embedded use), or no turn to attribute
     /// the call to.
@@ -84,6 +109,7 @@ impl ScopedToolService {
         crate::identity::global()?;
         Some(LedgerIntent {
             agent_id: Self::ledger_actor_for(self.turn_context.as_ref()?),
+            principal: Self::ledger_principal(),
             tool: name.to_string(),
             mutating: !self.tool_facts(name).idempotent,
         })
@@ -148,6 +174,7 @@ impl LedgerIntent {
     ) {
         crate::identity::record_action(NewRecord {
             agent_id: self.agent_id.clone(),
+            principal: self.principal.clone(),
             action,
             target: self.tool.clone(),
             outcome,

@@ -134,6 +134,23 @@ impl SessionRunRegistry {
         }
     }
 
+    /// The run id currently claiming `session_key`, if any.
+    ///
+    /// Point lookup twin of [`Self::running_keys`]: that one answers "which
+    /// sessions are busy" (the sidebar dot), this one answers "and which run
+    /// is it" for ONE session the caller has already been cleared to address.
+    /// Reading the claim map is what makes it authoritative for runs started
+    /// by any interface — the Panel's own `AgentRunManager::active_runs` only
+    /// ever holds runs the Panel itself started.
+    #[must_use]
+    pub(super) fn run_id_for(&self, session_key: &str) -> Option<String> {
+        self.running
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .get(session_key)
+            .cloned()
+    }
+
     /// Snapshot of every session with a run currently claimed — the live,
     /// authoritative "which sessions are running" set (the in-memory gate, not
     /// the cosmetic persisted store marker, which can go stale on crash).
@@ -263,6 +280,42 @@ mod tests {
 
         drop(running);
         drop(follower);
+    }
+
+    /// The point lookup a client joining a session mid-turn depends on. It has
+    /// to answer for **any** interface's run, which is why it reads this
+    /// registry (the single admission gate) and not `AgentRunManager::
+    /// active_runs` (Panel-started runs only) — and it must not answer for a
+    /// session that merely happens to have had a run at some point.
+    #[test]
+    fn run_id_for_names_the_claiming_run_and_nothing_else() {
+        let reg = SessionRunRegistry::default();
+        let busy = sk("main", "conv-busy");
+        let idle = sk("main", "conv-idle");
+
+        assert_eq!(reg.run_id_for(&busy.to_key_string()), None, "nothing yet");
+        assert!(reg.try_claim(&busy, "run-live"));
+        assert_eq!(
+            reg.run_id_for(&busy.to_key_string()),
+            Some("run-live".to_string())
+        );
+        assert_eq!(
+            reg.run_id_for(&idle.to_key_string()),
+            None,
+            "a different session must not inherit the answer"
+        );
+        assert_eq!(
+            reg.run_id_for("agent:main:peer:never-seen"),
+            None,
+            "and neither must an unknown key"
+        );
+
+        reg.release(&busy, "run-live");
+        assert_eq!(
+            reg.run_id_for(&busy.to_key_string()),
+            None,
+            "a finished turn is not one a client should try to join"
+        );
     }
 
     #[test]

@@ -40,7 +40,19 @@ pub struct SessionMap {
     pub active: RwSignal<Option<ConvId>>,
     /// `run_id -> ConvId` routing table (Task 2).
     route: RwSignal<HashMap<String, ConvId>>,
-    /// Per-conversation in-flight run refcount; red dot = >0 (Task 2).
+    /// Per-conversation in-flight run refcount.
+    ///
+    /// **No longer answers "is this session running"** — [`Self::server_running`]
+    /// does, for every consumer (the row dot, the active counter, and since
+    /// 2026-08-10 the re-hydrate suppression that was the last hold-out). What
+    /// survives here is a *double-bind witness*: [`Self::bind_run`] increments
+    /// and [`Self::settle_run`] decrements, so a run bound twice leaves a
+    /// residue that one settle cannot clear, and the tests assert on exactly
+    /// that. Kept rather than cut for that reason — it is the only local
+    /// evidence that the three binding paths (send response, `run_accepted`,
+    /// `hydrate_and_follow`) do not overlap. It is deliberately NOT
+    /// authoritative: it only ever counted what THIS client happened to
+    /// observe, which is why it leaked whenever a terminal frame went missing.
     running: RwSignal<HashMap<ConvId, usize>>,
     /// Server-authoritative running state: maintained by `RunningSetChanged` events (or cold-load seed),
     /// the set of backend `session_key`s with in-flight runs. The sole input source for the red dot — purely server-authoritative,
@@ -247,6 +259,40 @@ impl SessionMap {
         }
     }
 
+    /// Record which backend session a conversation is showing.
+    ///
+    /// [`Self::conv_for_session_key`] is the reverse of this map, and every
+    /// decision that has to get from a backend session to an open tab reads
+    /// it: routing a foreign run's frames (`resolve_target`), reusing a tab
+    /// instead of opening a duplicate (`on_select_session`, `project_page`),
+    /// and mirroring a backend-generated topic onto the tab label.
+    ///
+    /// All of them were structurally blind to any conversation opened
+    /// **read-only** — the sidebar's `on_select_session` set only
+    /// `ChatState::session_key` and left this map empty, so until the user sent
+    /// a message in that tab (the only other writer, [`Self::bind_run`]) the
+    /// conversation had no discoverable identity: re-selecting it opened a
+    /// duplicate tab (A→B→A gave three), its label never picked up the
+    /// server's topic, and a run started elsewhere on that very session had no
+    /// tab to route to. (The sidebar ROW's dot was never affected — it keys off
+    /// the session key directly via [`Self::is_running_session_key`].)
+    ///
+    /// Idempotent and cheap: only writes when the value actually changes, so
+    /// the reactive `meta` signal does not churn on every selection.
+    pub fn set_session_key(&self, conv: ConvId, session_key: &str) {
+        let changed = self.meta.with_untracked(|m| {
+            m.get(&conv)
+                .is_some_and(|v| v.session_key.as_deref() != Some(session_key))
+        });
+        if changed {
+            self.meta.update(|m| {
+                if let Some(meta) = m.get_mut(&conv) {
+                    meta.session_key = Some(session_key.to_string());
+                }
+            });
+        }
+    }
+
     /// Bind a run to a conversation: register route, running+1, backfill meta.session_key.
     pub fn bind_run(&self, run_id: &str, conv: ConvId, session_key: Option<&str>) {
         self.route.update(|m| {
@@ -256,11 +302,8 @@ impl SessionMap {
             *m.entry(conv).or_insert(0) += 1;
         });
         if let Some(sk) = session_key {
-            self.meta.update(|m| {
-                if let Some(meta) = m.get_mut(&conv) {
-                    meta.session_key = Some(sk.to_string());
-                }
-            });
+            // One writer for this field, shared with the read-only open path.
+            self.set_session_key(conv, sk);
         }
     }
 
@@ -284,7 +327,12 @@ impl SessionMap {
         self.route.with_untracked(|m| m.get(run_id).copied())
     }
 
-    /// Reactive read: whether the conversation is in-flight (red dot).
+    /// Reactive read of the double-bind witness — see [`Self::running`].
+    ///
+    /// **Not** the answer to "is this session running": that is
+    /// [`Self::is_running_session_key`], server-authoritative and re-based on
+    /// every reconnect. Reading this one to decide UI state re-introduces the
+    /// leak the field's doc describes.
     #[must_use]
     pub fn is_running(&self, conv: ConvId) -> bool {
         self.running.with(|m| m.get(&conv).is_some_and(|n| *n > 0))
@@ -313,6 +361,69 @@ impl SessionMap {
         if self.server_running.with_untracked(|cur| *cur != keys) {
             self.server_running.set(keys);
         }
+    }
+
+    /// Void the `RunningSetChanged` sequence baseline so the next seed applies
+    /// and the next frame is accepted whatever its `seq`.
+    ///
+    /// Call this on every (re)connect. `seq` orders frames **within one
+    /// connection** and carries no meaning across one: a restarted core
+    /// restarts its own counter at 0, so a client that kept the old baseline
+    /// discarded every frame the new process ever sent — the running dots
+    /// froze at the moment the old process died and never moved again, with
+    /// nothing logged anywhere. Even without a restart, frames sent while the
+    /// socket was down are simply gone, so the surviving baseline describes a
+    /// set the client can no longer reconstruct.
+    ///
+    /// It deliberately does NOT clear `server_running`. Blanking the set would
+    /// extinguish every dot for the duration of the re-seed round trip, which
+    /// reads as "all runs finished" — the opposite of the truth in the case
+    /// that matters (a long autonomous run that outlived the disconnect). The
+    /// stale set is left standing and corrected by the seed that follows.
+    pub fn reset_running_baseline(&self) {
+        if self.server_seq.get_untracked() != 0 {
+            self.server_seq.set(0);
+        }
+    }
+
+    /// Client-side run routes whose session `live` does not report as running,
+    /// settled and returned as `(run_id, conv)` so the caller can close their
+    /// bubbles.
+    ///
+    /// The reconnect repair. A core restart wipes the in-memory
+    /// `SessionRunRegistry`, and a socket that was down long enough loses the
+    /// terminal frame either way — so a Panel reconnecting can hold routes for
+    /// runs that will never report again. Nothing else notices: `settle_run`
+    /// is only ever driven by `run_complete` / `run_error`, so the composer
+    /// stayed locked on Stop and the conversation's dot stayed lit until the
+    /// user reloaded the page.
+    ///
+    /// A conversation with **no session key** is skipped, not settled: its run
+    /// cannot be looked up in `live`, and "I can't tell" must not read as "it
+    /// died" — that is the first turn of a brand-new chat, whose row the
+    /// server may not have written yet.
+    ///
+    /// Pass a set taken from the server in the SAME breath (the
+    /// `run_concurrency` response), not [`Self::server_running`]: that signal
+    /// may still hold the pre-disconnect snapshot at the moment this runs.
+    pub fn settle_runs_absent_from(&self, live: &HashSet<String>) -> Vec<(String, ConvId)> {
+        let doomed: Vec<(String, ConvId)> = self.route.with_untracked(|routes| {
+            routes
+                .iter()
+                .filter(|(_, conv)| {
+                    self.meta.with_untracked(|m| {
+                        m.get(conv)
+                            .and_then(|v| v.session_key.as_deref())
+                            .is_some_and(|key| !live.contains(key))
+                    })
+                })
+                .map(|(run, conv)| (run.clone(), *conv))
+                .collect()
+        });
+        for (run, _) in &doomed {
+            self.settle_run(run);
+        }
+        doomed
     }
 
     /// Cold-load fallback seed (from `run_concurrency` RPC, no event seq).
@@ -636,6 +747,77 @@ mod tests {
             // Switch back to A: singleton restores to the accumulated transcript.
             map.activate(singleton, a);
             assert_eq!(singleton.assistant_text_for_run("run-a"), "hello");
+        });
+    }
+
+    /// A conversation opened **read-only** (selected in the sidebar, never
+    /// sent in) used to have no discoverable identity: `bind_run` was the only
+    /// writer of `meta.session_key`, so `conv_for_session_key` could not find
+    /// it. Three decisions read that map — routing a foreign run's frames,
+    /// applying a session's running dot, and reusing a tab instead of opening a
+    /// duplicate — and all three were blind to such a conversation.
+    #[test]
+    fn a_read_only_opened_conversation_is_addressable_by_its_session_key() {
+        with_owner(|| {
+            let map = SessionMap::new();
+            let conv = map.open_conversation("agent-a", "A");
+            assert!(
+                map.conv_for_session_key("sess-a").is_none(),
+                "premise: a freshly opened conversation claims no session"
+            );
+
+            map.set_session_key(conv, "sess-a");
+            assert_eq!(map.conv_for_session_key("sess-a"), Some(conv));
+
+            // Idempotent, and a later `bind_run` (the other writer) agrees
+            // rather than forking a second value.
+            map.set_session_key(conv, "sess-a");
+            map.bind_run("run-1", conv, Some("sess-a"));
+            assert_eq!(map.conv_for_session_key("sess-a"), Some(conv));
+        });
+    }
+
+    /// The permanent freeze this baseline reset exists to prevent.
+    ///
+    /// `set_server_running` drops any frame whose `seq` is `<=` the highest it
+    /// has applied — right for reordering inside one connection, fatal across
+    /// one. A restarted core numbers its `RunningSetChanged` frames from 0
+    /// again, so **every** frame the new process ever sends is `<=` the old
+    /// process's last seq. The running dots froze at the moment the old
+    /// process died and never moved again, with nothing logged anywhere; the
+    /// cold-load seed could not repair it either, because that only applies
+    /// while `server_seq == 0`.
+    #[test]
+    fn a_restarted_cores_first_frame_is_dropped_until_the_baseline_is_reset() {
+        with_owner(|| {
+            let map = SessionMap::new();
+
+            // Old connection got as far as seq 42.
+            map.set_server_running(42, HashSet::from(["sess-old".to_string()]));
+            assert!(map.is_running_session_key("sess-old"));
+
+            // Core restarts; its registry seq begins again at 1.
+            map.set_server_running(1, HashSet::from(["sess-new".to_string()]));
+            assert!(
+                !map.is_running_session_key("sess-new"),
+                "premise: without a reset the new process's frames are all discarded"
+            );
+
+            map.reset_running_baseline();
+            // The stale set is deliberately left standing until real data
+            // replaces it — blanking it would read as "all runs finished".
+            assert!(
+                map.is_running_session_key("sess-old"),
+                "resetting the baseline must not extinguish dots on its own"
+            );
+
+            // Both repair routes now work: the cold-load seed…
+            map.seed_server_running(HashSet::from(["sess-new".to_string()]));
+            assert!(map.is_running_session_key("sess-new"));
+            assert!(!map.is_running_session_key("sess-old"));
+            // …and the next event, at the restarted core's low seq.
+            map.set_server_running(2, HashSet::from(["sess-newer".to_string()]));
+            assert!(map.is_running_session_key("sess-newer"));
         });
     }
 }

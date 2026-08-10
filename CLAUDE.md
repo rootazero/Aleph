@@ -239,6 +239,7 @@
 - **一句关于"什么被闸住"的话，往往有三份拷贝，其中一份是发给模型的** —— 代码里的地板、doc comment、以及每回合进 prompt 的那句描述。改地板时三份一起改；**发给模型的那份说了假话最贵**（`Full` 档告诉模型"nothing pauses for confirmation"，而工具自声明的确认门根本不看档位）→ §5.12
 - **同一事实的两份表述，只改一份就是静默说谎** —— 代码 vs 工具 `DESCRIPTION`、代码 vs 文档数字、代码 vs 注释；**注释正是说谎的那一方**。⚠️ **一条"已知缺口"记录也是一份表述，而且它会被后来的修复悄悄作废**：gap 0（档位目录 member 不可读）在被裁决时**早已在 wire 上关掉了**——carve-out 与收窄响应都在，只有三处文档还在描述旧世界。开工修一条记录在案的 gap，第一步是**去代码里确认它还成立**，第二步才是修；确认成立不了时欠的是一条守卫（把"现在是对的"钉住），不是一次改动
 - **能不能按归属裁决，取决于生产者有没有把归属留下来** —— 一个帧被判成 `Global` + 角色闸，常常不是因为它真是舰队级的，而是因为**派生它的那个函数把 `session_key` 丢了**（`r5_router::approval_for` 从 `ApprovalRequested` 只抄了 `approval_id`）。症状读起来像"这类东西本来就没有归属"，而代价是**归属最明确的那个人收不到**。判据：写下"这个帧没有可用来 scope 的字段"之前，先 grep 它是从谁派生出来的，看那一步丢了什么 → §5.22
+- **两级缩减串联时，第二级看到的「尾巴」是第一级的尾巴，不是数据的尾巴** —— 而第二级的 doc 通常正是拿「保住结尾那个真正的错误」来论证自己存在的。判据：**这个缓冲是谁给我的，它完整吗**？把 `(kept, dropped)` 交给缩减器，它就分不出「连续」和「中间有洞」，于是补的 marker 报出一个不完整的数——传 `{head, tail, total}` 让这件事在类型上说得出口，计数按 total 而不是按幸存部分。⚠️ 同一句承诺照例有三份拷贝，**最贵的那份在工具 `DESCRIPTION` 里**（这里逐字写着 "we keep both the head and the tail"，而 >8 MiB 的 build 从来没拿到过尾巴）→ §3.15⑪A
 - **一个值有存储形态和展示形态时，转换只能发生在出线边界、且只发生一次** —— `canonicalize` 在 Windows 返回 `\\?\C:\…`，对 API 层是对的、对人是错的。修法是出线转换（`utils::paths::display_string`），**不是**把存储也换掉：那个转换**是部分的**（超过 `MAX_PATH` 与 UNC 保留前缀），所以两边各转一次会让 `starts_with` 从**放行翻成拒绝**——`allowed_roots` 作用域检查正是这个形状 → §5.22
 - **真源必须在被依赖的一侧** —— 依赖方向 `linux → shared` ⇒ 真源在 `shared/`；反着放就是把同一个问题回答 N 次
 - **契约的两半住在两个 crate 里时，"有测试"这件事本身会骗人** —— `aleph workspace create|archive` 自写下之日起每次调用都 `INVALID_PARAMS`（CLI 发 `{"name"}`，handler 要 `id`），而 CLI 那侧的测试断言的是 `json!({"name":…})["name"] == "test-ws"`：**一个只读自己刚写下的字面量的断言，测的是 serde_json 不是你的代码**，它永远绿。判据：跨 crate 的 wire 契约要么**共用一个类型**（重命名 ⇒ 编译错；单一源 `aleph_protocol::workspace`，`aleph-cli` 按设计不许依赖 `alephcore`），要么在**依赖两边的那一侧**留一条真正对账的测试（`workspace.rs::every_column_the_cli_renders_is_present_in_the_list_response`，用改 wire key 的变异证过 RED）。**同族：展示列也要对账**——那张表读的 `status`/`created` 服务端从来没发过（真名 `is_archived`/`created_at`），于是每行印一列破折号，看起来只是"还没有值"
@@ -265,6 +266,7 @@
 - **「先记录意图、再做不可逆动作」：只记录"做完了"的机件，分不出"没做"和"做了但没记上"** —— 跨越不可逆边界**之前**盖持久戳，新进程拿到状态那一刻按"结果未知"退休 → §5.6
 - **一次性的章不能在动作确认之前花掉** —— 要么事后盖，要么必须可归还
 - **一次性的动作，哪个面执行了哪个面就是唯一机会** —— 工具面触发、RPC 面不触发，事后补不回来
+- **一个动作有两个终端臂时，"公告"这类副作用默认只写在成功那一臂** —— `execute()` 的 `publish_session_updated` 住在 `Ok` 里，而**失败的一轮同样移动了 transcript**（harness 在派发**之前**就 append 了用户消息，错误回执也落了盘）⇒ 每一个靠这一帧重新水化的面停在失败前的状态。判据：写完终局副作用后**数一遍这个函数有几条终端路径**；两条以上就抽成一个共用函数（参数只推导一次），并留一条**点名失败路径**的守卫——只数调用次数会被"在成功臂里复制一遍"骗过 → §6.9 ③
 - **同一件事有两个 id，就等于没有寻址路径** —— 进程内句柄与持久记录键各自现造 UUID、互不指认时，那份数据**在库里但够不到**，症状是"查无此物"而非报错（`subagent` 的 `request_id` vs `SubagentSpawned.child_id`）。判据：**这个 id 在写它的那条记录上出现过吗**？位置/时间关联不是替代品——同一 turn 的并发兄弟共享 `turn_id`，按顺序对齐必然串台 → §4.11
 - **纯内存的注册表在进程消失后不是"空了"，是"撒谎了"** —— 它对已完成的工作回答"从来没有过这个东西"，而调用方的合理反应是**重做**。能力对标时逐行问**这张表在进程消失后还成立吗**：只比内存内的生命周期管理（容量／LRU／TTL）会让整张表漏掉这一维（§4.11 round-10 漏了一整轮）→ §4.11 §4.13b
 - **崩溃边界上的"未知"不能写成"失败"** —— 派发前已落盘的意图 + 没有应答 ⇒ 副作用**可能已经落地**；说"它失败了"等于请求重复执行不可逆操作。陈述认知状态，重做与否归模型 → §4.13a
@@ -277,6 +279,12 @@
 - **把一个字段升格成运行时能力之前，先数它有几个写入者** —— 休眠的展示字段（`workspace_path` 曾只是 picker 里的一行字）一旦接上运行时权力（成为 run 的 cwd），它的**每一个**写入者都追溯成了权限授予点；写入者与读取者必须同批过同一道闸，否则「两步都合法、合起来等价」（先注册目录、再进房间聊天）就是绕闸路径 → §5.22
 
 - **在构造期解析的身份，是一个没有生产者也照样"成功"的身份** —— `unwrap_or_else(|| "main")` 之类的兜底把一个**字面量焊进每一个消费者**并持续整个进程寿命，而**错误的身份是完全合法的身份** ⇒ 零报错、零测试红（`researcher` 领导的团队拒绝自己的 leader 并接受 `main`；审批全记在 `main` 名下）。判据两句：① 这个字段**有没有生产者**（grep 赋值点，不是 grep 类型）；② 施动者该由**这次调用**决定还是由**进程启动**决定——是前者就从 `TURN_CONTEXT` 每次取，构造参数只配当 fallback（单一源 `builtin_tools::acting_agent`）→ §4.13b
+- **一个进程全局的表被第二个实例写，症状是「我的行不见了」而不是「多了几行」** —— 上一条的实施陷阱。给内存表加 sidecar 时，写盘那半必须绑在**实例**上而不是全局读一个开关：`ProcessRegistry` 每个实例的 `next_id` 都从 1 开始，台账按 id 键控 ⇒ 第二个写者不是追加，是**用另一个 owner 覆盖行 #1**，真 owner 的 lookup 从此答"没有这个东西"（即这条 sidecar 本来要修的那个谎，换了个来源）。生产只有一个实例所以这问题不存在，**测试并行造几十个**，于是它以**单跑绿、全量红**浮出来——孤立跑的那些测试才是在说安慰话的那一方。修法是把非 journaling 构造函数标 `#[cfg(test)]`，让"别造第二个写者"从约定变成编译错误 → §3.15③
+- **用名字 grep 找断线，会漏掉那种「唯一的外部引用就是撒谎的注释」的断线** —— `kill_all_running_background` 全仓两处命中：定义，和 `process_registry.rs` 上那句声称它已接线的 doc。**把 bug 藏起来的注释正是它唯一的搜索命中**，所以扫断线前先剥掉注释行。同族：`#[derive(Serialize)]` 的 struct 字段没有 Rust 消费者是正常的——它们真正的消费者是读 JSON 的模型 → §3.15①
+- **一个「所有 X 都必须过闸」的守卫写完之后，问的不是规则对不对，而是它认得几种注册形状** —— 描述字节棘轮与 `no_sentence_is_stated_twice` **同时**漏掉十个工具 13,389 B，因为两者都只读 `BUILTIN_TOOL_DEFINITIONS`，而 `agent_init` 还会从 registry map 把工具表补全。两把尺、同一个盲区、同一处成因。收敛时**两者读同一张表**（`REGISTRY_ONLY_DESCRIPTIONS`）——各持一份清单就是这张表要防的错误挪高一层 → §3.15⑦
+- **一个值被检查过和被使用之间如果有 `await`，那次检查的有效期就是那个 await 的长度** —— 而**审批 await 的长度是人的反应时间**。判据不是"这里有没有 TOCTOU"（到处都有），而是**这个窗口里有没有别人写得进来**：沙箱进程能往自己的 session workspace 里写，所以兄弟命令换掉 cwd 的一个组件就够了。闸要架在「**这次调用是否真的 await 了人**」上，不是「网关配没配」——没配的网关立刻应答、缓存的授权根本不问，两者都不开窗口 → §3.15④
+- **一个权限层按某个轴分级，那个轴就不能由调用方自己挑** —— `tool_permissions` 三层合并的中间那层是**按 agent** 的，而 `agent_id` 是 `chat.send` 上调用方填的字符串、四轮无人校验：被某个 agent 的 `deny` 挡住，换个名字就换一套权限。**会话轴的闸答不了这一问，而且按设计答不了**——换 agent 产生的是一条**全新会话键**，`existing_session_is_visible` 必须放行它（新对话的第一句）。判据两句：① **指出这一层的分级键，再问「这个键是谁写的」**，答案是「请求里带来的」就等于没分级；② 闸放进**所有入口共用的那个构造器**并让它成为**必填参数**——编译错误强于注册表 pin，所以那种情况**别再加**登记条目或源码 pin（第二个更弱的真源）。顺带永远追问「有没有两步都合法、合起来等价的路」（这里是委派面）→ §5.17
+- **一条问责记录只记「哪个身份」时，对「哪个人」是沉默的——而那个人通常早就在上游算好了** —— 签名链记了四轮 `agent_id`，多用户装机上分不出 operator 和 member 的动作：非否认对 agent 成立、对人不成立。而 `build_run_request` 早已把 `AUTHOR_USER_KEY` 盖进 run metadata、`ambient_actor()` 早已能在工具面读到它——**两端都在，中间那根线没接**。判据：给任何「谁做的」字段命名前先问**它答的是哪一问**（哪个身份 / 哪个人），再 grep 另一问的答案是不是已经躺在 metadata 里。⚠️ **往 preimage 加可选字段：排在最后 + 空值一个字节都不发**，才不作废既存链（`opt_lp` 的 0x00 标记会）；兼容测试**手工重算旧布局**，别钉 hex 字面量——没人分得清真的 golden 和被刷新过的 golden → §5.17
 - **进程内存不是状态：凡"重启后这个 id 还查得到吗"答不上来的表，都欠一个 sidecar** —— 而且**只记录"做完了"的机件分不出"从没跑过"和"跑了但写丢了"**，所以开机对账要写**终态墓碑**而非删行（否则 not-found 同时意味着"你打错了"和"它随上个进程死了"，还顺手扔掉死前的产出）。**推论**：产物一旦跨进程落盘，脱敏就不能再按 run 的 attendedness 决定——读它的是**后来那个进程**，而它可能把内容扇出到聊天通道 → §4.13b §4.13c §5.1
 
 ### 1. Prompt · 前缀缓存 · 上下文（`src/thinker/` `src/context/`）
@@ -316,7 +324,9 @@
 
 - **能力接上了 ≠ 模型会用它** —— 加/删任何 capability 的同一笔改动里必须 grep 工具 `DESCRIPTION`（prompt 在劝模型别用，比缺失更难发现）→ §5.17
 - **⚠️ 分类器已经存在，只是没人问它**：`block_goal_on_failure` 曾把**任何**失败都判成 goal 的终态（Blocked + 删焊入计划 + 推「已中止」），而 `ExecutionError::receipt_kind()` **早就是三个用户面共用的单一源**，其 doc 自陈：此层出现限流/网络签名意味着整条 provider 链都试过、失败**确属瞬时**。同一仓里 `llm_retry::extract_retry_after_str` 能给退避时长、wait-barrier 能 park 自唤醒——**三块零件齐备，谁都没连**。判据一句话：写下一个 `if error { 终态 }` 之前先问**「这个错误已经被谁分过类了」**；答案通常是"有，而且比你打算写的那版更准"。同族是 §4.9「能被精确回答的数字，别用常量猜」——那条讲魔数，这条讲**分支**，两者都是「已知事实就在同一个 crate 里，零调用」。
-- **目录条目写字面量会整体遮蔽工具常量** —— `BUILTIN_TOOL_DEFINITIONS` 的 `description:` 必须指向常量；守卫 `definitions.rs::tests::no_catalog_entry_inlines_its_description` 是**源码级**的（运行时分不出"来自常量"和"恰好字节相同"）。现在要问的是**这些字节值不值**：`catalog_description_bytes_ratchet` 实测 81,274 B，**每个请求都付**（`truncate_tool_descriptions` 默认 `false`，没有任何一档配置让它免费）→ §5.17
+- **目录条目写字面量会整体遮蔽工具常量** —— `BUILTIN_TOOL_DEFINITIONS` 的 `description:` 必须指向常量；守卫 `definitions.rs::tests::no_catalog_entry_inlines_its_description` 是**源码级**的（运行时分不出"来自常量"和"恰好字节相同"）。现在要问的是**这些字节值不值**：`catalog_description_bytes_ratchet` 实测 **93,938 B**（目录 80,549 + registry-only 13,389，其中 workspace_manage 目录条目 +519 B 与同日 workflow 描述调整合并而来），**每个请求都付**（`truncate_tool_descriptions` 默认 `false`，没有任何一档配置让它免费）→ §5.17
+- **⚠️ 那个数字 2026-08-10 从 82,462 跳到 93,358，不是花掉了 11 KB，是量具第一次看见全部** —— 上一条的孪生，也是「守卫的绿只覆盖它的块识别器认得的那种块」在**同一条纪律自己的量具**上复发：十个工具（pim/system/automation/permission/media/scratchpad/goal/loop/loop_graph/strategy）由 `builder/core_tools.rs` 的 `reg(` 注册但**不在** `BUILTIN_TOOL_DEFINITIONS` 里，而 `agent_init` 会从 registry map 把工具表补全 ⇒ 它们的描述一直在每个请求上发，只是**从未被任何一把尺量到**。`no_sentence_is_stated_twice` 曾有**同一个**盲区，现读同一张表 `REGISTRY_ONLY_DESCRIPTIONS`（**不是各持一份清单**——那正是这张表要防的错误挪高一层）。判据：给一个「所有 X 都必须过闸」的守卫写完之后，问的不是规则对不对，而是**它认得几种注册形状**；`every_registered_core_tool_is_accounted` 现在按名字红。修法**刻意不是**把十个补进目录——`BUILTIN_TOOL_DEFINITIONS` 同时驱动 ToolCatalog 建行 / fallback 校验 / 渐进披露 / `dangerous_tools` 校验，registry-only 是有记录的既定形态
+- **一条 deny 策略有几个执行层，就要问它绑住了几个** —— `deny_read_globs` 的每个生产消费者都是 OS 驱动（seatbelt/AppContainer），而 `file_ops` 另建了一份不读它的凭据清单 ⇒ operator 写 `**/.env` 之后 `bash` 被内核挡住、`file_read` 明文可读，**而他没有任何办法知道**。同族于「一个动词有 N 个面时，谁能看要在每个面用同一个推导」，只是这次落在安全谓词上。翻译要**复用** `deny_globs::glob_to_anchored_regex` 而不是近似它 → §3.15⑤
 - **deny 检查有方向** —— `path_is_denied` 只向下问「我在不在保护区里」；还要 `contains_denied_descendant` 向上问「我下面有没有保护区」，且必须共用同一份展开+归一化。会**遍历**的动词（copy/move/delete/organize）顶层闸永远不够 → §3.4
 - **取消不是判决** —— 墙钟超时 / 传输抖动 / 审批过期 / 用户取消，四者都不是"关于这次调用的失败"；归因在派发咽喉 `scoped/dispatch.rs`，用**成功态**表达"被打断" → §3.3
 - **会 park 的工具必须听取消令牌** —— 这个 await 的最长睡眠时间就是取消的最坏延迟；超过一两秒必须进 `tokio::select!` → §4.11
@@ -325,7 +335,10 @@
 - **执行清单单一形状是 `shared/protocol/src/plan.rs::PlanSnapshot`** —— 分解 100% 归 LLM（R7），**不要新建 `todo` 工具**（Panel 按字面工具名 `"scratchpad"` 取数）→ §3.13
 - **执行档位唯一强制点是 `src/tools/scoped/`** —— 任何新的能执行工具的 surface（新 RPC / 快路径 / 后台产地）不经过它就自带旁路 → [SECURITY.md](docs/reference/SECURITY.md) §5.12
 - **参数级审批闸只在能举卡的 surface 上成立**，且**举给人的那张卡必须包含闸所依据的那个字段**（按字典序渲染 + 200 字符截断会把被闸字段挤掉）；「操作者显式点名了这个工具」在代码里必须是**精确匹配**，不能用会匹配 glob 的查找 → §4.12
-- **闸的范围必须覆盖「能把这个闸拿掉的那个动词」** —— 还要问「有没有两步都合法、合起来等价的路径」 → §4.12
+- **闸的范围必须覆盖「能把这个闸拿掉的那个动词」** —— 还要问「有没有两步都合法、合起来等价的路径」。**「另一个工具改配置」就是这条路**：参数级卡的正当性建立在「这条 override 是**人**写的」，而写它的那个工具（`self_config`）此前一张卡都不举 ⇒ 一次不举卡的 `policies.tool_permissions.overrides = {"loop_graph":"allow"}` 就永久摘掉 root/frozen 面前唯一的人闸。判据：**这道闸依赖的那个配置，谁能写它，那个写入面举卡吗** → §4.12 round-12 ②
+- **一道「升级给更高权限裁决」的闸，只有在发起者答不了它的时候才是闸** —— 这类闸通常**不拒绝**（`check_operator_gate` 对非 operator 举卡而非报错），于是"谁收到这张卡"才是真正的判据。卡按**发起者自己的 session_key** 登记，而列表/解决两个 RPC 对 member 是开的、可见性只问「这个 session 是不是你的」⇒ **member 自批**，整个 `OPERATOR_TOOLS` 家族一并失守。判据：**写下「转交给更高权限」的分支时，去看那张卡最后落在谁手里**。⚠️ 修法有陷阱：**帧**可以发空 key（复用既有 `OperatorOnly` 编码），**记录不能**——`cascade_session_grant` 与会话级清理都按 `record.session_key` 匹配，两边都置空会让不同用户的卡互相 cascade。安全位要**随记录走**（`ExecApprovalRecord::operator_only`），别去改那个记录**另有用途**的键 → §4.12 round-12 ①
+- **判据钉在一个「每轮都会改」的常量上，等于钉在空气上** —— 且它的失效方向是**反的**：`enable_audit` 拿 `job.prompt == AUDIT_TEMPLATE` 认领孤儿，而 job 的 prompt 是安装当天写死的、模板此后改了五次 ⇒ 对**存在最久**的那个环恒假，而它正是这段代码要认领的对象；新装的反而匹配，所以 fixture 与 CI 全绿、只有生产是坏的。判据：**比对用的这两个值，是同一时刻写下的吗**？不是就改用一个不会漂的身份（名字/id），把模板留作次要匹配 → §4.12 round-12 ⑥
+- **`Some("")` 不是「没有」，是一条通过每一次 `is_some()` 的假路由** —— 把 `String` 字段无条件包成 `Some(..)` 的注入器，在**恰恰没有那个东西**的回合上（无 channel 的 cron / heartbeat / webhook / `tools.invoke`）产出空串路由：下游 `approval_is_routable` 变真 ⇒ 值守判定反转、`UNATTENDED_KEY` 永不设置，而 prompt 还会告诉模型「运行时会替你投递，不要调消息工具」——**连它自己的兜底也一并拿走**。判据：`Option<String>` 的生产者要问**空串该不该塌缩成 `None`** → §4.12 round-12 ⑤
 - **命令硬底线扫的是 `normalize.rs` 的规范化副本**，不是你写的那行字（两份视图 / `-enc` 载荷已解码回注且关不掉 / 规则间隙用 `seg!()` 不是 `[^\n]*`）→ [SANDBOX.md](docs/reference/SANDBOX.md) §3.8
 
 ### 4. 网关 · 通道 · 投递（`src/gateway/`）
@@ -403,6 +416,10 @@
 - **别再造"写一个信号、指望别处排空"的预填通道** —— 多平台下必然漏一个消费者且**零报错**；草稿只有一个家 `ChatState.draft`，唯一入口 `seed_draft`（合并不覆盖，这个 composer 没有 undo）→ §4.8
 - **交付物 ≠ 聊天记录** —— `artifact_publish` 的成品 vs `session.export_html` 的 transcript；什么算成品 **100% 归模型判断（R7）**；导出文档**零 `<script>` 是硬约束**（`src/export/page.rs`）→ §6.8
 - **右栏默认是收起的**（`LayoutMode::ChatOnly`）—— 长在面板里的提示在那个状态下等于不存在；徽标必须数**面板真正装的东西**；「一行能点开什么」的谓词 offer 侧与 serve 侧必须读同一份（`PreviewTarget::for_item` ↔ `is_previewable_text`）→ §6.8
+- **一帧带着自己的归属到达，"我认不出它"就必须是丢弃，不能是"给我正在看的那个"** —— `resolve_target` 对本客户端没有 route 的 `run_accepted` 回退 `active_conv()`，于是**第二个标签页 / 房间队友 / CLI / 任意 channel / 每一次 cron tick** 的整段回合渲染进用户当前的对话，还把那个 tab 的 `session_key` 覆写掉（下一条消息发去别人的会话）。帧一直带着 `session_key`、`conv_for_session_key` 一直存在——**两者从未被连起来**。判据两句：① 回退到"前台/默认/当前"之前先问**这个东西自报了归属吗**；② 收窄时只拒**能被证明属于别处的**（两侧都已知且不同），别拒"我算不出来"——后者会连带杀掉新会话第一回合和老 core → §6.9 ①
+- **反向索引的写者只有一个时，"另一条路开的对象"整类不可寻址** —— `meta.session_key` 的唯一写者是 `bind_run`（发送路径），所以**只读打开**的对话没有身份，**三个**读这张表的判断同时哑掉（外来 run 路由 / 红点归属 / 重选会话复用 tab——A→B→A 开三个标签页）。判据：给一张反向索引加读者前先 grep 它的**写者有几个、覆盖哪几条创建路径** → §6.9 ①
+- **服务端序号是"一条连接内"的事实，把它当客户端寿命内的基线就会永久静默丢帧** —— `set_server_running` 丢 `seq <= server_seq`，而重启后的 core 从 0 重新编号 ⇒ 新进程的**每一帧**都被丢弃，红点冻结在旧进程死亡那一刻、无任何报错，冷启动种子也救不了（它只在 `server_seq == 0` 生效且只跑一次）。判据：任何按服务端 seq/revision 单调丢弃的客户端状态，都欠一条**每次握手成功就重置基线**的线；重置时**别顺手清空被守护的那份状态**（清空读起来是"全都结束了"，而那在长跑 run 跨过掉线时正好是反的）→ §6.9 ④
+- **只由终局帧驱动的客户端结算，跨不过连接中断** —— `settle_run` 只由 `run_complete`/`run_error` 驱动 ⇒ core 重启前那一轮永不结算，composer 卡在 Stop、红点常亮到刷新页面为止。修法是重连后拿服务端的权威集对账；**结算不等于判决**（可能已完成 / 已被 resume 成新 run / 已死），用 `settle_abandoned_run` 这种"停止认为它在飞"的形状，不用 `complete_run`/`fail_run`；**算不出归属的一律跳过而不是结算** → §6.9 ④
 - **Panel UI 编译期嵌入二进制**（`rust_embed`）—— 改完看不到效果 = 漏了重编 server → [DESKTOP_SHELL.md](docs/reference/DESKTOP_SHELL.md)
 
 ### 8. 配置 · 诊断 · 自管理 · Hook
@@ -454,7 +471,7 @@
 | `src/thinker/` `src/context/` | 判据清单 §1 · FEATURE_LOCATOR §2.3 §2.18 §2.19 |
 | `src/tool_output/` | 判据清单 §2 · FEATURE_LOCATOR §2.7 §3.14 |
 | `src/tools/` `src/builtin_tools/` | [TOOL_SYSTEM.md](docs/reference/TOOL_SYSTEM.md) · [SECURITY.md](docs/reference/SECURITY.md) · §3.2–§3.14 |
-| `src/gateway/` | [GATEWAY.md](docs/reference/GATEWAY.md) · `src/gateway/CLAUDE.md` · §4.8 §5.6 §5.18 |
+| `src/gateway/` | [GATEWAY.md](docs/reference/GATEWAY.md) · `src/gateway/CLAUDE.md` · §4.8 §5.6 §5.18 §6.9 |
 | `src/memory/` `src/note/` | [MEMORY_SYSTEM.md](docs/reference/MEMORY_SYSTEM.md) + memory/ 三分册 · §2.5 §2.9 §2.16 |
 | `src/providers/` | [MODEL_CATALOG.md](docs/reference/MODEL_CATALOG.md) · §3.6 §4.9 |
 | `src/mcp/` | §5.20（dual-era 协议） |
@@ -463,10 +480,10 @@
 | `src/identity/` | [AGENT_IDENTITY.md](docs/reference/AGENT_IDENTITY.md) · §5.17 |
 | `src/config/` `src/diagnostics/` | §5.8 §5.9 §5.10 |
 | `desktop/` | [WINDOWS_RUNTIME.md](docs/reference/WINDOWS_RUNTIME.md) · [LINUX_DESKTOP.md](docs/reference/LINUX_DESKTOP.md) · [DESKTOP_BRIDGE.md](docs/reference/DESKTOP_BRIDGE.md) · §7.1–§7.4 |
-| `interfaces/webchat/` | [DESKTOP_SHELL.md](docs/reference/DESKTOP_SHELL.md) · §4.7 §6.8 |
+| `interfaces/webchat/` | [DESKTOP_SHELL.md](docs/reference/DESKTOP_SHELL.md) · §4.7 §6.8 §6.9 |
 | `src/agents/` `src/teams/` | [MULTI_AGENT_SYSTEM.md](docs/reference/MULTI_AGENT_SYSTEM.md) · §4.4 §4.5 §4.13a–c |
 | `src/tasks/cron/` `src/tasks/heartbeat/` | §4.13b（写面对账守卫 · 共用告警判据 · 停摆 job）· §4.13c（**不阻塞 tick · 投递失败即失败 · 孪生子系统对账**）· `src/tasks/shared/{alert,delivery}.rs` |
-| `src/sandbox/` | [SANDBOX.md](docs/reference/SANDBOX.md) · §3.8 |
+| `src/sandbox/` | [SANDBOX.md](docs/reference/SANDBOX.md) · §3.8 · §3.15（后台执行生命周期 · 实时尾巴 · 两阶段 cwd 闸） |
 
 > **对照表已做完，别重做**：openclaw（gateway / cluster / hub / model catalog）· codex（权限模型 / Multi-agent V2）· hermes · pi · LangGraph · RouteLLM/LiteLLM/Bifrost · DeepSeek-Reasonix · FluidVoice/WhisperLive · SkillOpt · buzz。逐项结论与"刻意不做清单"都在对应 reference 文档里。
 

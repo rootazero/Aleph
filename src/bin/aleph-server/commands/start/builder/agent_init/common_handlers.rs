@@ -155,10 +155,16 @@ pub(super) fn register_common_handlers(
         });
     }
 
+    // Registered unconditionally (outside the `run_manager` branch above) so a
+    // transcript is always readable. `run_manager` is threaded in as an Option
+    // only to answer "is a turn in flight on this session right now" — see
+    // `handle_history`'s doc for why that pointer rides on this response.
     let sm_history = session_store.clone();
+    let rm_history = run_manager.clone();
     server.handlers_mut().register("chat.history", move |req| {
         let manager = sm_history.clone();
-        async move { chat_handlers::handle_history(req, manager).await }
+        let runs = rm_history.clone();
+        async move { chat_handlers::handle_history(req, manager, runs).await }
     });
 
     let sm_clear = session_store.clone();
