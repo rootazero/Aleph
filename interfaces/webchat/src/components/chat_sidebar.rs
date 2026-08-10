@@ -337,8 +337,18 @@ pub(crate) async fn hydrate_session_history(
             // ambiguous — no list, or a core too old to have the field — and
             // clearing on ambiguity would take the strip away from the very
             // clients that just got it back.
+            // `settle_plan`, not a hand-rolled `apply_plan_update` — the two
+            // are not the same and the difference is visible. Settling also
+            // SINKS a finished plan into the transcript, which is the terminal
+            // state the live client is already in; showing it without sinking
+            // pins a 100%-done checklist above this client's composer, and the
+            // next turn then sinks it a second time — a duplicate archive
+            // capsule, observed on a real machine (2026-08-10). Two clients of
+            // one conversation disagreeing is the exact defect this whole
+            // wiring exists to remove, so the cold path has to land on the same
+            // state, not merely on the same data.
             if let Some(plan) = loaded.plan {
-                chat.apply_plan_update(crate::views::chat::plan::plan_settlement(Some(&plan)));
+                chat.settle_plan(Some(&plan));
             }
 
             active_run

@@ -17,16 +17,19 @@ pub fn TodoPanel() -> impl IntoView {
     let i18n = use_i18n();
     let expanded = RwSignal::new(false);
 
-    let visible = move || {
-        chat.plan
-            .with(|p| p.as_ref().is_some_and(PlanView::has_content))
-    };
-
     view! {
         <style>{TODO_PANEL_CSS}</style>
-        <Show when=visible>
-            {move || {
-                let plan = chat.plan.get().expect("visible implies Some");
+        // One read of `plan`, and this body decides its own visibility from it.
+        //
+        // It used to be a `<Show when=…>` whose body re-read the signal and
+        // `expect`ed `Some` "because the guard proved it". A guard and its body
+        // are separate reactive scopes: when the plan is cleared — the run-end
+        // archive does `set(None)` one statement after `settle_plan` shows it —
+        // the body can re-run on the new value before the guard re-evaluates and
+        // unmounts it. That ordinary ordering was a Panel-wide panic, observed on
+        // a real machine (2026-08-10) the first time a plan reached 5/5.
+        {move || {
+            chat.plan.get().filter(PlanView::has_content).map(|plan| {
                 let pct = plan.percent();
                 let done = plan.done_count();
                 let total = plan.total();
@@ -116,8 +119,8 @@ pub fn TodoPanel() -> impl IntoView {
                         </Show>
                     </div>
                 }
-            }}
-        </Show>
+            })
+        }}
     }
 }
 
