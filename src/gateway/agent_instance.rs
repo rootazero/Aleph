@@ -40,6 +40,13 @@ pub struct AgentInstanceConfig {
     pub agent_dir: PathBuf,
     /// Link access whitelist (None or empty = all links allowed)
     pub allowed_links: Option<Vec<String>>,
+    /// Users who may start a run as this agent (None or empty = everyone).
+    ///
+    /// The registry is the authority for *which* agent actually runs
+    /// (`AgentRegistry::get`), so the run-start gate has to read the list off
+    /// the same object — reading it back out of `Config.agents.list` would
+    /// leave "registered but not in that list" as a bypass.
+    pub allowed_users: Option<Vec<String>>,
     /// Per-agent tool permission overrides
     pub tool_permissions: Option<crate::config::types::policies::ToolPermissionsConfig>,
     /// Optional per-agent timeout override (seconds). None = use global default.
@@ -64,6 +71,7 @@ impl Default for AgentInstanceConfig {
                 .unwrap_or_else(|| PathBuf::from("/tmp"))
                 .join(".aleph/agents/main"),
             allowed_links: None,
+            allowed_users: None,
             tool_permissions: None,
             timeout_secs: None,
         }
@@ -105,6 +113,7 @@ impl AgentInstanceConfig {
             tool_blacklist: agent.skills_blacklist.clone(),
             agent_dir: agent.agent_dir.clone(),
             allowed_links: agent.allowed_links.clone(),
+            allowed_users: agent.allowed_users.clone(),
             tool_permissions: agent.tool_permissions.clone(),
             timeout_secs: None,
         }
@@ -872,6 +881,21 @@ impl AgentRegistry {
         })
     }
 
+    /// Get the `allowed_users` for an agent (None = everyone). Outer `None`
+    /// means the agent is not registered at all.
+    ///
+    /// Twin of [`Self::get_allowed_links`] and non-instantiating for the same
+    /// reason: the delegation face asks this question before it decides to
+    /// build the target agent, and building one just to refuse it is wasted
+    /// work.
+    pub async fn get_allowed_users(&self, agent_id: &str) -> Option<Option<Vec<String>>> {
+        let agents = self.agents.read().await;
+        agents.get(agent_id).map(|entry| match entry {
+            AgentEntry::Instance(inst) => inst.config().allowed_users.clone(),
+            AgentEntry::Config { config, .. } => config.allowed_users.clone(),
+        })
+    }
+
     /// Remove an agent (works for both lazy and instantiated entries).
     ///
     /// Returns what was actually evicted. The previous signature
@@ -1219,6 +1243,7 @@ mod tests {
             skills_blacklist: vec![],
             subagent_policy: None,
             allowed_links: None,
+            allowed_users: None,
             tool_permissions: None,
         };
 
@@ -1255,6 +1280,7 @@ mod tests {
             skills_blacklist: vec!["bash".to_string(), "code_exec".to_string()],
             subagent_policy: None,
             allowed_links: None,
+            allowed_users: None,
             tool_permissions: None,
         };
 

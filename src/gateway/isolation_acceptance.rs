@@ -1367,7 +1367,14 @@ async fn two_members_of_a_room_work_in_the_same_bound_folder() {
                     Some("member".to_string()),
                     CALLER_IS_LOOPBACK.scope(
                         false,
-                        build_run_request(format!("run-{user}"), &session_key, params, None, None),
+                        build_run_request(
+                            format!("run-{user}"),
+                            &session_key,
+                            params,
+                            None,
+                            None,
+                            &crate::gateway::agent_instance::AgentInstanceConfig::default(),
+                        ),
                     ),
                 ),
             )

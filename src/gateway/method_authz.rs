@@ -42,6 +42,22 @@ const OPERATOR_TOOLS: &[&str] = &[
     "agent_create",
     "agent_delete",
     "agent_switch",
+    // The two siblings the list forgot. `agent_create`/`agent_delete`/
+    // `agent_switch` were gated from the start, which made the omissions read
+    // as "already covered" rather than as holes:
+    //
+    // `agent_update` rewrites a live agent's `system_prompt` — text re-injected
+    // into every session that agent serves, on every turn. That is the exact
+    // argument this list already spells out for `loop_graph`'s root bodies, and
+    // it applies more directly here (no argument card in front of it). It also
+    // now writes `allowed_users`, the list the run-start gate reads: leaving it
+    // open would let the people that gate refuses add themselves to it, which
+    // is the "the gate must cover the verb that removes the gate" rule.
+    "agent_update",
+    // `agent_unbind` drops a channel→agent binding, i.e. it edits routing. A
+    // chat-tier participant severing the binding that decides which agent
+    // answers a channel is a config change wearing a conversation's clothes.
+    "agent_unbind",
     "channel_pairing",
     "hub_install_run",
     "moa",
@@ -125,6 +141,12 @@ mod tests {
         // gates are different mechanisms: deleting this entry would not make
         // any `workspace.` RPC test go red, it would only widen the tool.
         "workspace_manage",
+        // Writes `allowed_users` — the list the run-start gate
+        // (`caller_may_act_as_agent`) reads. Ungated, the people that gate
+        // refuses could add themselves to it, and nothing in `handlers::agent`
+        // would go red: the gate would still be enforced, faithfully, against
+        // a list its own subjects had edited.
+        "agent_update",
     ];
 
     #[test]

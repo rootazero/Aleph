@@ -7,10 +7,22 @@
 //! `agent_delete` + reload, a TOML-only change is invisible until the next
 //! boot. This tool wires both, in the same order, with the same field set.
 //!
-//! Scope is intentionally narrow: model / name / description / system_prompt /
-//! archetype. Skills, allowed_links, and tool_permissions are managed via
-//! dedicated tools (`agent_info` for read, future `agent_grant`/`agent_revoke`
-//! for write) so each change path has one obvious owner.
+//! Scope: model / name / description / system_prompt / archetype /
+//! allowed_users. Skills, allowed_links and tool_permissions are still
+//! config-file-only.
+//!
+//! `allowed_users` joined the list in the §5.17 round-5 identity work, and it
+//! is why this tool is now in `method_authz::OPERATOR_TOOLS`: it writes the
+//! very list the run-start gate reads, so an ungated version would let the
+//! people that gate refuses add themselves to it. The rule that puts it here
+//! rather than behind a dedicated `agent_grant` is R8 — a security-relevant
+//! setting reachable only by hand-editing TOML is worse than one an operator
+//! can change by asking — and the reason it was safe to add is that the
+//! honesty half came with it: see `AgentUpdateOutput::takes_effect`. The
+//! runtime half of this tool is a no-op (`apply_runtime_patch` cannot mutate a
+//! shared `AgentInstanceConfig`), so nothing here takes effect before a
+//! restart, and reporting a revocation as already in force would be the worst
+//! lie this file could tell.
 
 use async_trait::async_trait;
 use schemars::JsonSchema;
@@ -57,6 +69,12 @@ pub struct AgentUpdateArgs {
     /// New soul archetype. Empty string clears it (= `assistant` default).
     #[serde(default)]
     pub archetype: Option<Option<String>>,
+    /// Which users (`users.user_id`) may start a run **as** this agent.
+    /// Absent = unchanged. An empty list clears the restriction, i.e. makes
+    /// the agent reachable by everyone again — the same "empty means
+    /// unrestricted" convention `allowed_links` uses.
+    #[serde(default)]
+    pub allowed_users: Option<Vec<String>>,
 }
 
 /// Output from agent update.
@@ -70,6 +88,22 @@ pub struct AgentUpdateOutput {
     pub fields_changed: Vec<String>,
     /// Human-readable status message.
     pub message: String,
+    /// When the patch actually starts governing behaviour.
+    ///
+    /// `[agents]` is not one of `reload_impact::LIVE_SECTIONS`, and this
+    /// tool's runtime half is by its own doc a no-op (`apply_runtime_patch`
+    /// takes `&AgentInstanceConfig` and can only record which field names were
+    /// supplied). So every field here is durable-but-deferred, and saying only
+    /// "updated" leaves the operator believing a change landed that has not.
+    /// Wording comes from [`ReloadImpact`] rather than a literal here, so this
+    /// surface cannot drift from the one the config tools already use — and so
+    /// that the day `[agents]` becomes a live section, this sentence changes
+    /// with it instead of becoming the stale copy.
+    ///
+    /// It matters most for `allowed_users`: a REVOCATION that reports success
+    /// and does not take effect is the one failure this whole field exists to
+    /// prevent.
+    pub takes_effect: String,
 }
 
 /// Serde helper: tri-state `Option<Option<T>>` — absent → `None`, explicit
@@ -118,9 +152,13 @@ impl AgentUpdateTool {
 impl AlephTool for AgentUpdateTool {
     const NAME: &'static str = "agent_update";
     const DESCRIPTION: &'static str =
-        "Patch an existing agent's name, description, model, system prompt, or archetype. \
-         All fields are optional; only supplied keys change. Explicit `null` clears a \
-         field. To rename `agent_id`, delete and re-create — IDs are the identity key.";
+        "Patch an existing agent's name, description, model, system prompt, archetype, or \
+         allowed_users. All fields are optional; only supplied keys change. Explicit `null` \
+         clears a field. To rename `agent_id`, delete and re-create — IDs are the identity key. \
+         `allowed_users` is the list of user ids permitted to start a run AS this agent (and to \
+         delegate to it); an empty list means everyone. Changes are written to config.toml and \
+         take effect after aleph-server restarts — relay the `takes_effect` field, never report \
+         a revocation as already in force.";
 
     type Args = AgentUpdateArgs;
     type Output = AgentUpdateOutput;
@@ -193,6 +231,10 @@ impl AlephTool for AgentUpdateTool {
             agent_id: args.agent_id,
             fields_changed,
             message,
+            // One source for "when does this bite" — see the field's doc.
+            takes_effect: crate::config::ReloadImpact::classify("agents")
+                .agent_hint()
+                .to_string(),
         })
     }
 }
@@ -233,6 +275,13 @@ fn apply_runtime_patch(
     if args.archetype.is_some() {
         fields_changed.push("archetype".to_string());
     }
+    if let Some(users) = args.allowed_users.as_ref() {
+        fields_changed.push(if users.is_empty() {
+            "allowed_users:cleared".to_string()
+        } else {
+            "allowed_users".to_string()
+        });
+    }
 }
 
 /// Translate `AgentUpdateArgs` into the TOML `AgentPatch` used by
@@ -253,6 +302,7 @@ fn build_toml_patch(args: &AgentUpdateArgs) -> AgentPatch {
         skills_blacklist: None,
         subagents: None,
         allowed_links: None,
+        allowed_users: args.allowed_users.clone(),
         // The wire form is `Option<Option<AgentModelRef>>`: absent = no
         // change, Some(None) = clear, Some(Some(_)) = set. `AgentPatch`
         // already uses the same tri-state, so a straight move is correct.
@@ -265,7 +315,15 @@ fn build_toml_patch(args: &AgentUpdateArgs) -> AgentPatch {
 /// "user supplied no patch at all". Walk the wire fields directly so a
 /// `{}-shaped` call returns `false` here.
 fn patch_has_changes(patch: &AgentPatch) -> bool {
-    patch.name.is_some() || patch.identity.is_some() || patch.model.is_some()
+    // Every field this tool can actually set must be named here. The list was
+    // safe to keep short while `skills` / `skills_blacklist` / `subagents` /
+    // `allowed_links` were hard-coded `None` above; `allowed_users` is the
+    // first one that is not, and omitting it would skip the TOML write
+    // silently while `fields_changed` still reported the change.
+    patch.name.is_some()
+        || patch.identity.is_some()
+        || patch.model.is_some()
+        || patch.allowed_users.is_some()
 }
 
 // =============================================================================
@@ -378,5 +436,87 @@ mod tests {
             .await
             .unwrap();
         assert!(out.fields_changed.contains(&"archetype".to_string()));
+    }
+
+    /// `allowed_users` is the list the run-start gate reads, so the two ways
+    /// this tool could silently lose it are both pinned here: a `fields_changed`
+    /// entry the model can verify, and — the one that actually loses data —
+    /// `patch_has_changes`, which decides whether the TOML write happens at
+    /// all. Every other field this tool sets was already named there; this was
+    /// the first that was not, and a miss would have reported success while
+    /// writing nothing.
+    #[tokio::test]
+    async fn allowed_users_reaches_both_the_report_and_the_toml_patch() {
+        let registry = Arc::new(AgentRegistry::new());
+        let (instance, _sm, _t) = test_utils::instance("ops");
+        registry.register(instance).await;
+        let tool = AgentUpdateTool::new(registry, None);
+
+        let args = AgentUpdateArgs {
+            agent_id: "ops".into(),
+            allowed_users: Some(vec!["u-alice".into()]),
+            ..Default::default()
+        };
+        let out = tool.call(args.clone()).await.unwrap();
+        assert!(out.fields_changed.contains(&"allowed_users".to_string()));
+
+        let patch = build_toml_patch(&args);
+        assert_eq!(
+            patch.allowed_users.as_deref(),
+            Some(&["u-alice".to_string()][..])
+        );
+        assert!(
+            patch_has_changes(&patch),
+            "an allowed_users-only patch must still trigger the TOML write"
+        );
+    }
+
+    /// Clearing is a distinct report from setting: "everyone may use this
+    /// agent again" is the answer an operator most needs to see spelled out,
+    /// and the TOML side removes the key rather than writing `[]`.
+    #[tokio::test]
+    async fn clearing_allowed_users_is_reported_as_cleared() {
+        let registry = Arc::new(AgentRegistry::new());
+        let (instance, _sm, _t) = test_utils::instance("ops");
+        registry.register(instance).await;
+        let tool = AgentUpdateTool::new(registry, None);
+
+        let out = tool
+            .call(AgentUpdateArgs {
+                agent_id: "ops".into(),
+                allowed_users: Some(vec![]),
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+        assert!(out
+            .fields_changed
+            .contains(&"allowed_users:cleared".to_string()));
+    }
+
+    /// The patch is durable-but-deferred, and this tool must say so. The
+    /// assertion is that the text IS `ReloadImpact`'s — not that it contains
+    /// some hand-picked word — so that a future round which makes `[agents]`
+    /// live updates this surface by updating that one source.
+    #[tokio::test]
+    async fn the_result_states_when_the_change_takes_effect() {
+        let registry = Arc::new(AgentRegistry::new());
+        let (instance, _sm, _t) = test_utils::instance("ops");
+        registry.register(instance).await;
+        let tool = AgentUpdateTool::new(registry, None);
+
+        let out = tool
+            .call(AgentUpdateArgs {
+                agent_id: "ops".into(),
+                allowed_users: Some(vec!["u-alice".into()]),
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+        assert_eq!(
+            out.takes_effect,
+            crate::config::ReloadImpact::classify("agents").agent_hint(),
+            "the notice must come from the one source, not a literal"
+        );
     }
 }

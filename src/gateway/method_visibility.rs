@@ -244,6 +244,26 @@
 //!   for the identical reason — `AgentRunManager` has no `SessionStore`
 //!   dependency — and this table must not overstate what is enforced.
 //!
+//! ## What `KeyChecked` on `agent.run` / `chat.send` does NOT cover
+//!
+//! It answers "is this SESSION mine". It is silent on the **agent** the turn
+//! names, and the two are independent axes: naming a different `agent_id`
+//! produces a brand-new session key, which `existing_session_is_visible`
+//! admits **by design** (the ordinary first message of a new conversation).
+//! Since `tool_permissions` is keyed per agent, that left the permission set
+//! selectable by the caller — refused a tool under one agent, name another.
+//!
+//! The agent axis is therefore a separate predicate,
+//! `caller_identity::caller_may_act_as_agent` over
+//! `AgentDefinition::allowed_users`, enforced in
+//! `handlers::agent::build_run_request` — the one builder all three run-start
+//! paths share, including the Simulated fallback this table has to carve out
+//! for the session check. It deliberately has **no** entry in this table and
+//! **no** source pin: the builder takes the agent config as a REQUIRED
+//! parameter, so a new run-start surface cannot acquire the hole by
+//! forgetting to opt in. A registry entry exists to make a deleted call a
+//! named failure; here a deleted call is a compile error, which is stronger.
+//!
 //! The same blind spot hid two more families, which address their data by
 //! `run_id` and by a group-chat `session_id` respectively:
 //!

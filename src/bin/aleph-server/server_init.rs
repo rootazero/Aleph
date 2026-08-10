@@ -83,6 +83,16 @@ fn build_run_error_response(
             RESOURCE_NOT_FOUND,
             format!("project not found: {pid}"),
         ),
+        // Honest `PERMISSION_DENIED`, not the `not_found` its sibling uses —
+        // see `BuildRunError::AgentForbidden`'s own doc for why an existence
+        // oracle is not in play here. The text comes from `Display` so the
+        // wording has one source across the RPC face and the string-typed
+        // Simulated path.
+        ref e @ BuildRunError::AgentForbidden(_) => alephcore::gateway::JsonRpcResponse::error(
+            id,
+            alephcore::gateway::protocol::PERMISSION_DENIED,
+            e.to_string(),
+        ),
     }
 }
 
@@ -164,7 +174,18 @@ where
             params.session_key.as_deref(),
             params.channel.as_deref(),
             params.peer_id.as_deref(),
-            None, // agent_id: legacy path, no explicit agent
+            // `AgentRunParams::agent_id` documents itself as "explicit target
+            // agent ID (bypasses channel binding resolution)", and both of its
+            // other consumers honor it — the `chat.send` twin forty lines down
+            // and the Simulated-fallback `AgentRunManager::start_run`. This arm
+            // passed `None` since the 2026-04 tree move, so `agent.run` was the
+            // one face where naming an agent was accepted and silently dropped:
+            // callers got the channel-bound or default agent and no error to
+            // say so. Honoring it here is safe because the agent axis is now
+            // authorized (`build_run_request`'s `caller_may_act_as_agent`) —
+            // before that guard existed, connecting this wire would have been
+            // widening an unchecked one.
+            params.agent_id.as_deref(),
         )
         .await;
 
@@ -230,6 +251,7 @@ where
         params,
         Some(&app_config),
         Some(&session_manager),
+        agent.config(),
     )
     .await
     {
@@ -415,6 +437,7 @@ where
         run_params,
         Some(&app_config),
         Some(&session_manager),
+        agent.config(),
     )
     .await
     {

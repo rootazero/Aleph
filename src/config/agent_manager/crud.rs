@@ -344,6 +344,22 @@ impl AgentManager {
             }
         }
 
+        if let Some(allowed_users) = &patch.allowed_users {
+            if allowed_users.is_empty() {
+                // Empty list = everyone allowed, remove the key. Writing an
+                // empty array would read, to whoever opens config.toml next,
+                // like "nobody may use this agent" — the opposite of what it
+                // means to `agent_admits_user`.
+                agent_table.remove("allowed_users");
+            } else {
+                let mut arr = Array::new();
+                for u in allowed_users {
+                    arr.push(u.as_str());
+                }
+                agent_table["allowed_users"] = toml_edit::value(arr);
+            }
+        }
+
         // Model: tri-state — Some(Some)=set, Some(None)=clear, None=untouched
         match &patch.model {
             Some(Some(model_ref)) => {
