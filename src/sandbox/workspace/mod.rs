@@ -9,9 +9,17 @@
 //! 4. `OsSandboxDriverTrait::profile_for`
 //! 5. `OsSandboxDriverTrait::run`
 //! 6. emit `capability_ledger` tracing audit record
+//!
+//! Step 2 is **two-phase**, not one-shot. Its verdict is only as fresh as the
+//! instant it ran, and step 3's approval wait is unbounded and human-paced — a
+//! sibling command writing in the same session workspace can swap a component
+//! of the approved path for a symlink while the card sits on someone's screen.
+//! So if — and only if — step 3 actually awaited a human, containment is
+//! re-established by [`revalidate_cwd_containment`] before step 4 uses the
+//! path.
 
 use std::collections::{HashMap, HashSet};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -167,40 +175,66 @@ impl Sandbox for WorkspaceSandbox {
 
         let ws = self.for_session(&cmd.session_id).await?;
 
-        let cwd = match &cmd.cwd {
+        // The requested cwd in LEXICAL form (`.`/`..` folded, every symlink
+        // component still spelled out as the caller wrote it). Kept next to the
+        // resolved `cwd` below because canonicalisation erases exactly the
+        // components that make a path swappable, and the post-approval
+        // re-validation has to re-walk the path as it was asked for.
+        let requested_cwd = match &cmd.cwd {
             // rust-doctor-disable-next-line excessive-clone
             None => ws.cwd.clone(),
-            Some(p) => {
-                let normalized = normalize_path(p, &ws.cwd);
-                // Canonicalize before the containment check: a symlink
-                // inside the workspace can satisfy a purely lexical
-                // `starts_with` check while resolving to a target
-                // outside the jail. Both sides are canonicalized so the
-                // comparison is symlink-aware; a cwd that cannot be
-                // resolved (missing directory / dangling link) is
-                // treated as outside and denied.
-                let real_root = match tokio::fs::canonicalize(&ws.cwd).await {
-                    Ok(r) => r,
-                    Err(_) => {
-                        return Err(SandboxError::CapabilityDenied {
-                            reason: "workspace root cannot be resolved".into(),
-                        });
-                    }
-                };
-                let resolved = tokio::fs::canonicalize(&normalized)
-                    .await
-                    .ok()
-                    .filter(|real| real.starts_with(&real_root));
-                match resolved {
-                    Some(real_cwd) => real_cwd,
-                    None => {
-                        return Err(SandboxError::CapabilityDenied {
-                            reason: "cwd outside workspace root".into(),
-                        });
-                    }
+            Some(p) => normalize_path(p, &ws.cwd),
+        };
+
+        let mut cwd = if cmd.cwd.is_none() {
+            // The session workspace root itself. Handed to the driver in the
+            // same lexical form the rest of the policy is built from —
+            // deliberately NOT canonicalised, because `profile_for` derives its
+            // writable-root rules from this exact string and rewriting
+            // `/var/…` to `/private/var/…` here would change the profile, not
+            // just the working directory.
+            // rust-doctor-disable-next-line excessive-clone
+            requested_cwd.clone()
+        } else {
+            // Canonicalize before the containment check: a symlink
+            // inside the workspace can satisfy a purely lexical
+            // `starts_with` check while resolving to a target
+            // outside the jail. Both sides are canonicalized so the
+            // comparison is symlink-aware; a cwd that cannot be
+            // resolved (missing directory / dangling link) is
+            // treated as outside and denied.
+            //
+            // This verdict is only true as of *now*: if this call goes on to
+            // wait for a human at the approval gate below, it is re-taken by
+            // `revalidate_cwd_containment` before the path is used.
+            let real_root = match tokio::fs::canonicalize(&ws.cwd).await {
+                Ok(r) => r,
+                Err(_) => {
+                    return Err(SandboxError::CapabilityDenied {
+                        reason: "workspace root cannot be resolved".into(),
+                    });
+                }
+            };
+            let resolved = tokio::fs::canonicalize(&requested_cwd)
+                .await
+                .ok()
+                .filter(|real| real.starts_with(&real_root));
+            match resolved {
+                Some(real_cwd) => real_cwd,
+                None => {
+                    return Err(SandboxError::CapabilityDenied {
+                        reason: "cwd outside workspace root".into(),
+                    });
                 }
             }
         };
+
+        // Did this call actually park on a human? Set at the one place that
+        // awaits the gate — NOT derived from "is a requester configured":
+        // an unconfigured gate answers instantly, a cached session grant never
+        // asks at all, and neither of those opens a window. Only a real await
+        // does, and only a real await pays for the re-check below.
+        let mut awaited_approval = false;
 
         let normalized_caps = cmd.capabilities.normalized();
         if !cmd.capabilities.is_within(&ws.baseline) {
@@ -254,6 +288,10 @@ impl Sandbox for WorkspaceSandbox {
                     cmd.cwd.as_deref(),
                     &reason,
                 );
+                // From here the call is parked on a person: the card can sit on
+                // a screen for minutes, and everything the earlier cwd check
+                // observed goes stale the moment we yield.
+                awaited_approval = true;
                 let response = self
                     .approval_gate
                     .request_approval_for_action(&action)
@@ -351,6 +389,26 @@ impl Sandbox for WorkspaceSandbox {
         // it's still required for `AllowAll` (no-op) and for the Linux
         // fallback path where AllowHosts goes straight to the driver.
         dns::resolve_hosts_in_capabilities(&mut cmd.capabilities).await?;
+
+        // Phase two of the cwd containment check — see `revalidate_cwd_containment`.
+        // Placed here rather than straight after the gate returns so the window
+        // it leaves open is as small as it can be: the proxy spawn and the DNS
+        // pre-resolution above are both awaits too, and DNS in particular is
+        // network-paced. Everything from this line to `run` is machine-paced.
+        if awaited_approval {
+            let reverified = revalidate_cwd_containment(&ws.cwd, &requested_cwd, &cwd)?;
+            if cmd.cwd.is_some() {
+                // Execute in the path the SECOND check resolved, not the one
+                // the first check did. They are equal or we would have bailed,
+                // but deriving the value from the fresh check is what keeps
+                // this a containment guarantee rather than a logged opinion.
+                cwd = reverified;
+            }
+            // `cmd.cwd == None` keeps the lexical workspace root it was given:
+            // the profile's writable-root rules are built from that exact
+            // string (see the resolution above), so substituting the canonical
+            // form here would silently rewrite the policy.
+        }
 
         let profile = self.os_driver.profile_for(&cmd.capabilities, &cwd)?;
 
@@ -460,6 +518,121 @@ impl Sandbox for WorkspaceSandbox {
 
         output
     }
+}
+
+/// Re-establish that `requested` is still contained in `workspace_root`, after
+/// the call has let go of the CPU for an unbounded amount of time.
+///
+/// [`WorkspaceSandbox::execute`] validates the requested cwd once, up front —
+/// and then the approval gate parks the call on a person. A sibling command
+/// running in the same session workspace (the sandboxed process *can* write
+/// there) only has to replace one component of the approved path with a symlink
+/// during that window, and the first check's verdict is worthless: the path
+/// that gets `chdir`-ed into is not the path that was approved. That is the
+/// TOCTOU class [`crate::sandbox::protected_paths::first_writable_symlink_component`]
+/// was written for, which is why this pass reuses it instead of only re-running
+/// `canonicalize`.
+///
+/// Arguments: `requested` is the lexical (pre-canonicalisation) cwd, `approved`
+/// is the exact path the first pass handed downstream — the lexical workspace
+/// root for `cwd: None`, the canonical resolved path otherwise.
+///
+/// Four ways this fails, every one a **denial**, never a warning:
+/// * the workspace root stopped resolving,
+/// * the requested path stopped resolving, or now resolves outside the root,
+/// * it resolves somewhere other than the directory that was approved,
+/// * a component of it *below* the root is a symlink — contained at this
+///   instant, but the sandboxed process can re-point it again between here and
+///   `exec`, so it is refused rather than raced.
+///
+/// The last two are not redundant, and the third is the weaker of the pair:
+/// `approved` is a *path*, not an inode, so re-canonicalising it walks through
+/// whatever now sits at that path. Swap the final component and both sides
+/// agree on the attacker's new target; only the fourth check sees it. The
+/// identity comparison earns its place on *intermediate* components, where the
+/// approved path survives the swap and the two forms genuinely disagree.
+///
+/// The last case also fires on a cwd that was **already** an in-workspace
+/// symlink before the approval: pass one deliberately allows those, and pass
+/// two cannot tell "always was" from "just became". Its message therefore
+/// states what it actually observed (a swappable component) rather than
+/// claiming a change it cannot prove. Every message here names the approval
+/// wait, so a reader can tell "the path stopped being contained while we
+/// waited" from pass one's "the path was never contained" — completely
+/// different incidents.
+///
+/// Deliberately synchronous: it is a handful of path syscalls on a local
+/// filesystem, and hopping to the blocking pool would only widen the window
+/// this function exists to narrow.
+fn revalidate_cwd_containment(
+    workspace_root: &Path,
+    requested: &Path,
+    approved: &Path,
+) -> Result<PathBuf, SandboxError> {
+    let deny = |reason: String| SandboxError::CapabilityDenied { reason };
+
+    let real_root = std::fs::canonicalize(workspace_root).map_err(|e| {
+        deny(format!(
+            "workspace root {} stopped resolving while waiting for approval ({e}); \
+             refusing to execute",
+            workspace_root.display()
+        ))
+    })?;
+
+    let resolved = std::fs::canonicalize(requested).map_err(|e| {
+        deny(format!(
+            "cwd {} stopped resolving while waiting for approval ({e}); refusing to execute",
+            requested.display()
+        ))
+    })?;
+
+    if !resolved.starts_with(&real_root) {
+        return Err(deny(format!(
+            "cwd left the workspace root while waiting for approval: {} now resolves to {}, \
+             outside {}",
+            requested.display(),
+            resolved.display(),
+            real_root.display()
+        )));
+    }
+
+    // Still the directory the human said yes to? Canonicalising both sides
+    // makes the comparison insensitive to which *form* each one is in.
+    let approved_real = std::fs::canonicalize(approved).map_err(|e| {
+        deny(format!(
+            "the directory approved for this command ({}) stopped resolving while waiting for \
+             approval ({e}); refusing to execute",
+            approved.display()
+        ))
+    })?;
+    if approved_real != resolved {
+        return Err(deny(format!(
+            "cwd changed while waiting for approval: {} resolved to {} when the request was \
+             made and resolves to {} now",
+            requested.display(),
+            approved_real.display(),
+            resolved.display()
+        )));
+    }
+
+    // Contained — but is it *pinned*? A symlink component below the root is
+    // writable by the sandboxed process, so "contained now" says nothing about
+    // "contained one syscall from now". Both root forms are offered because
+    // `requested` is spelled in the lexical one while `resolved` is not.
+    let roots: [&Path; 2] = [workspace_root, real_root.as_path()];
+    if let Some(symlink) =
+        crate::sandbox::protected_paths::first_writable_symlink_component(requested, &roots)
+    {
+        return Err(deny(format!(
+            "cwd {} crosses writable symlink {}, which the sandboxed process can re-point \
+             between this check and exec; refusing to execute it under the capabilities just \
+             approved. Use the real directory path.",
+            requested.display(),
+            symlink.display()
+        )));
+    }
+
+    Ok(resolved)
 }
 
 #[cfg(test)]
@@ -867,6 +1040,333 @@ mod tests {
             .await
             .expect_err("a symlink escaping the workspace must be denied");
         assert!(matches!(err, SandboxError::CapabilityDenied { .. }));
+    }
+
+    /// TOCTOU regression: the first cwd containment check runs *before* the
+    /// approval gate parks the call on a human. A sibling command running in
+    /// the same session workspace (which the sandboxed process may write to)
+    /// only has to swap one component of the approved cwd for a symlink while
+    /// the card sits on someone's screen. The post-approval re-check is the
+    /// only thing standing between that swap and `exec`.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn cwd_swapped_for_escaping_symlink_during_approval_wait_is_denied() {
+        /// Approves — but rewrites the approved cwd out of the jail first,
+        /// standing in for a concurrently-running sibling command.
+        struct SwappingRequester {
+            sub: PathBuf,
+            target: PathBuf,
+        }
+        #[async_trait]
+        impl ApprovalRequester for SwappingRequester {
+            async fn request_approval(
+                &self,
+                _action: &crate::sandbox::exec_approval::ApprovalAction,
+            ) -> crate::sandbox::exec_approval::ApprovalResponse {
+                std::fs::remove_dir(&self.sub).expect("remove the approved cwd");
+                std::os::unix::fs::symlink(&self.target, &self.sub).expect("plant the symlink");
+                ApprovalOutcome::Approved.into()
+            }
+        }
+
+        let tmp = tempfile::tempdir().unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        let session = sid();
+        let ws_dir = tmp.path().join(session_key_to_filename(&session));
+        tokio::fs::create_dir_all(ws_dir.join("sub")).await.unwrap();
+
+        let driver = Arc::new(FakeDriver::new());
+        let driver_trait: Arc<dyn OsSandboxDriverTrait> = driver.clone();
+        let gate = Arc::new(ApprovalGate::new(Some(Arc::new(SwappingRequester {
+            sub: ws_dir.join("sub"),
+            target: outside.path().to_path_buf(),
+        }))));
+        let sandbox = build_sandbox(&tmp, driver_trait, gate, SandboxHooks::new());
+
+        let err = sandbox
+            .execute(SandboxCommand {
+                session_id: session,
+                program: "curl".into(),
+                args: vec![],
+                env: HashMap::new(),
+                stdin: None,
+                cwd: Some("sub".into()),
+                // Elevated → the approval gate, and therefore the wait, is on
+                // this call's path.
+                capabilities: SandboxCapabilities {
+                    network: NetworkPolicy::AllowAll,
+                    ..SandboxCapabilities::strict()
+                },
+                timeout: None,
+            })
+            .await
+            .expect_err("a cwd swapped out during the approval wait must be denied");
+        match err {
+            SandboxError::CapabilityDenied { reason } => assert!(
+                reason.contains("while waiting for approval"),
+                "the refusal must say the path stopped being contained DURING the wait — \
+                 'never was contained' is a different incident: {reason}"
+            ),
+            other => panic!("expected CapabilityDenied, got {other:?}"),
+        }
+        assert_eq!(
+            *driver.run_count.read().await,
+            0,
+            "the command must never reach the OS driver"
+        );
+    }
+
+    /// The other half of the two-phase check: it must not start refusing the
+    /// calls it was never about. Nothing awaited here (strict caps → no gate),
+    /// so the window never opened and an in-workspace symlink cwd — which pass
+    /// one deliberately allows — still runs.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn symlinked_cwd_still_runs_when_no_approval_was_awaited() {
+        let tmp = tempfile::tempdir().unwrap();
+        let driver = Arc::new(FakeDriver::new());
+        let driver_trait: Arc<dyn OsSandboxDriverTrait> = driver.clone();
+        let sandbox = build_sandbox(
+            &tmp,
+            driver_trait,
+            build_gate_auto_deny(),
+            SandboxHooks::new(),
+        );
+        let session = sid();
+        let ws_dir = tmp.path().join(session_key_to_filename(&session));
+        tokio::fs::create_dir_all(ws_dir.join("real")).await.unwrap();
+        std::os::unix::fs::symlink(ws_dir.join("real"), ws_dir.join("link")).unwrap();
+
+        sandbox
+            .execute(SandboxCommand {
+                session_id: session,
+                program: "echo".into(),
+                args: vec![],
+                env: HashMap::new(),
+                stdin: None,
+                cwd: Some("link".into()),
+                capabilities: SandboxCapabilities::strict(),
+                timeout: None,
+            })
+            .await
+            .expect("no approval was awaited, so the re-check must not run");
+        assert_eq!(*driver.run_count.read().await, 1);
+    }
+
+    /// An approval that changes nothing must still execute — the re-check is a
+    /// containment guard, not a blanket tax on approved commands.
+    #[tokio::test]
+    async fn unchanged_cwd_survives_the_post_approval_recheck() {
+        let tmp = tempfile::tempdir().unwrap();
+        let driver = Arc::new(FakeDriver::new());
+        let driver_trait: Arc<dyn OsSandboxDriverTrait> = driver.clone();
+        let sandbox = build_sandbox(
+            &tmp,
+            driver_trait,
+            build_gate_with(ApprovalOutcome::Approved),
+            SandboxHooks::new(),
+        );
+        let session = sid();
+        let ws_dir = tmp.path().join(session_key_to_filename(&session));
+        tokio::fs::create_dir_all(ws_dir.join("sub")).await.unwrap();
+        let elevated = SandboxCapabilities {
+            network: NetworkPolicy::AllowAll,
+            ..SandboxCapabilities::strict()
+        };
+
+        // Explicit subdir …
+        sandbox
+            .execute(SandboxCommand {
+                session_id: session.clone(),
+                program: "curl".into(),
+                args: vec![],
+                env: HashMap::new(),
+                stdin: None,
+                cwd: Some("sub".into()),
+                capabilities: elevated.clone(),
+                timeout: None,
+            })
+            .await
+            .expect("an unchanged subdir must survive the re-check");
+        // … and the `cwd: None` workspace-root case, whose approved path is
+        // lexical while the re-check resolves canonically (on macOS the
+        // tempdir sits under the `/var → /private/var` symlink, so a naive
+        // string comparison of the two forms would refuse every approved call).
+        sandbox
+            .execute(SandboxCommand {
+                session_id: session,
+                program: "curl".into(),
+                args: vec![],
+                env: HashMap::new(),
+                stdin: None,
+                cwd: None,
+                capabilities: SandboxCapabilities {
+                    // Wider than the cached grant above, so this call asks
+                    // again instead of short-circuiting on `granted_elevations`.
+                    fs_write: vec!["/tmp".into()],
+                    ..elevated
+                },
+                timeout: None,
+            })
+            .await
+            .expect("the workspace root must survive the re-check");
+        assert_eq!(*driver.run_count.read().await, 2);
+    }
+
+    #[test]
+    fn revalidate_accepts_an_unchanged_real_subdir() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path();
+        std::fs::create_dir(root.join("sub")).unwrap();
+        let approved = std::fs::canonicalize(root.join("sub")).unwrap();
+        let ok = revalidate_cwd_containment(root, &root.join("sub"), &approved)
+            .expect("nothing changed");
+        assert_eq!(ok, approved);
+    }
+
+    #[test]
+    fn revalidate_accepts_the_workspace_root_itself() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path();
+        // `cwd: None` hands both `requested` and `approved` the LEXICAL root,
+        // which on macOS differs from its canonical form.
+        revalidate_cwd_containment(root, root, root).expect("the root itself must pass");
+    }
+
+    /// The whole point: the same helper says yes, then no, when a component is
+    /// swapped for an escaping symlink between the two calls.
+    #[cfg(unix)]
+    #[test]
+    fn revalidate_rejects_a_component_swapped_for_an_escaping_symlink() {
+        let tmp = tempfile::tempdir().unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        let root = tmp.path();
+        std::fs::create_dir(root.join("sub")).unwrap();
+        let requested = root.join("sub");
+        let approved = std::fs::canonicalize(&requested).unwrap();
+        revalidate_cwd_containment(root, &requested, &approved).expect("first pass: contained");
+
+        std::fs::remove_dir(&requested).unwrap();
+        std::os::unix::fs::symlink(outside.path(), &requested).unwrap();
+
+        let err = revalidate_cwd_containment(root, &requested, &approved)
+            .expect_err("second pass must refuse the swapped path");
+        let SandboxError::CapabilityDenied { reason } = err else {
+            panic!("expected CapabilityDenied");
+        };
+        assert!(
+            reason.contains("left the workspace root")
+                && reason.contains("while waiting for approval"),
+            "must name both what happened and when: {reason}"
+        );
+    }
+
+    /// A swap that lands *inside* the workspace is contained but not pinned:
+    /// the component is now a symlink the sandboxed process can re-point again
+    /// before `exec`, so it is refused rather than raced.
+    ///
+    /// Note which check catches it. The identity comparison cannot: `approved`
+    /// is a *path*, not an inode, so re-canonicalising it walks straight
+    /// through the symlink that was just planted at that very path and agrees
+    /// with the new target. Swapping the last component is exactly the case
+    /// the swappability check exists for.
+    #[cfg(unix)]
+    #[test]
+    fn revalidate_rejects_an_in_root_symlink_component() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path();
+        std::fs::create_dir(root.join("sub")).unwrap();
+        std::fs::create_dir(root.join("other")).unwrap();
+        let requested = root.join("sub");
+        let approved = std::fs::canonicalize(&requested).unwrap();
+
+        std::fs::remove_dir(&requested).unwrap();
+        std::os::unix::fs::symlink(root.join("other"), &requested).unwrap();
+
+        let err = revalidate_cwd_containment(root, &requested, &approved)
+            .expect_err("an in-root swap is still a swap");
+        let SandboxError::CapabilityDenied { reason } = err else {
+            panic!("expected CapabilityDenied");
+        };
+        assert!(
+            reason.contains("crosses writable symlink"),
+            "must name the swappable component: {reason}"
+        );
+    }
+
+    /// Pins the identity branch: an *intermediate* component re-pointed at a
+    /// different in-root directory leaves the approved path itself intact, so
+    /// the two canonical forms genuinely disagree and the refusal says the cwd
+    /// changed rather than merely that it is swappable.
+    #[cfg(unix)]
+    #[test]
+    fn revalidate_rejects_an_intermediate_component_repointed_in_root() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path();
+        std::fs::create_dir_all(root.join("mid2").join("leaf")).unwrap();
+        std::fs::create_dir_all(root.join("mid3").join("leaf")).unwrap();
+        std::os::unix::fs::symlink(root.join("mid2"), root.join("mid")).unwrap();
+        let requested = root.join("mid").join("leaf");
+        let approved = std::fs::canonicalize(&requested).unwrap();
+
+        std::fs::remove_file(root.join("mid")).unwrap();
+        std::os::unix::fs::symlink(root.join("mid3"), root.join("mid")).unwrap();
+
+        let err = revalidate_cwd_containment(root, &requested, &approved)
+            .expect_err("the approved directory is no longer the one we would chdir into");
+        let SandboxError::CapabilityDenied { reason } = err else {
+            panic!("expected CapabilityDenied");
+        };
+        assert!(
+            reason.contains("changed while waiting for approval")
+                && reason.contains("mid3"),
+            "must say what it resolves to now: {reason}"
+        );
+    }
+
+    /// A symlink component that resolves to the *exact* directory that was
+    /// approved passes both containment and identity — and must still be
+    /// refused, because it stays re-pointable right up to `exec`. Nothing but
+    /// the swappability check can catch this one.
+    #[cfg(unix)]
+    #[test]
+    fn revalidate_rejects_a_symlink_component_that_currently_agrees() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path();
+        std::fs::create_dir_all(root.join("mid2").join("leaf")).unwrap();
+        std::os::unix::fs::symlink(root.join("mid2"), root.join("mid")).unwrap();
+        let requested = root.join("mid").join("leaf");
+        let approved = std::fs::canonicalize(&requested).unwrap();
+
+        let err = revalidate_cwd_containment(root, &requested, &approved)
+            .expect_err("a symlink component is re-pointable even when it currently agrees");
+        let SandboxError::CapabilityDenied { reason } = err else {
+            panic!("expected CapabilityDenied");
+        };
+        assert!(
+            reason.contains("crosses writable symlink") && reason.contains("mid"),
+            "must name the swappable component: {reason}"
+        );
+    }
+
+    #[test]
+    fn revalidate_rejects_a_cwd_that_vanished() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path();
+        std::fs::create_dir(root.join("sub")).unwrap();
+        let requested = root.join("sub");
+        let approved = std::fs::canonicalize(&requested).unwrap();
+        std::fs::remove_dir(&requested).unwrap();
+
+        let err = revalidate_cwd_containment(root, &requested, &approved)
+            .expect_err("a cwd that no longer exists cannot be executed in");
+        let SandboxError::CapabilityDenied { reason } = err else {
+            panic!("expected CapabilityDenied");
+        };
+        assert!(
+            reason.contains("stopped resolving while waiting for approval"),
+            "gone is not the same as never contained: {reason}"
+        );
     }
 
     #[tokio::test]
