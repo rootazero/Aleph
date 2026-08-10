@@ -226,12 +226,28 @@ pub async fn spawn(base: &SpawnerBase, req: SpawnRequest<'_>) -> Result<LoopRunR
     // Explicit cleanup happens on the success path (after harness completes Ok).
     let worktree_handle: Option<crate::sandbox::WorktreeHandle> = match req.isolation {
         Some(crate::agents::IsolationMode::Worktree) => {
-            // `current_dir()` is a blocking syscall; run it on the blocking pool
-            // so the async runtime thread stays available.
-            let repo_root = tokio::task::spawn_blocking(std::env::current_dir)
-                .await
-                .map_err(|e| format!("sub-agent failed: cwd join: {e}"))?
-                .map_err(|e| format!("sub-agent failed: cwd: {e}"))?;
+            // B4-02: anchor on the run's project root, not the daemon's cwd.
+            // `aleph-server` is a long-lived process whose cwd is wherever it
+            // was launched (often `/` under the Tauri shell / launchd, the
+            // operator's shell cwd otherwise) and has no relationship to the
+            // active project. The main run path uses `current_project_root()`
+            // to anchor `FsScope` (and this very function reads the same
+            // value later for `session_write_id`, mod.rs:621), so the correct
+            // anchor is already in scope.
+            //
+            // Fall back to cwd only when no project root is published (e.g.
+            // operator ran the server outside any project). The fallback is
+            // the existing behaviour, preserved to keep `aleph-server` startable
+            // from anywhere — but the project's check_root_eq assertion below
+            // makes the wrong-tree failure visible.
+            let project_root = crate::projects::current_project_root();
+            let repo_root = match project_root.as_deref() {
+                Some(root) => root.to_path_buf(),
+                None => tokio::task::spawn_blocking(std::env::current_dir)
+                    .await
+                    .map_err(|e| format!("sub-agent failed: cwd join: {e}"))?
+                    .map_err(|e| format!("sub-agent failed: cwd: {e}"))?,
+            };
             let label = &req.agent_def.id;
             let handle =
                 crate::sandbox::worktree::create(&repo_root, label, base.trace_sink.clone())
