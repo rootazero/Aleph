@@ -17,14 +17,21 @@ pub(super) async fn create_task(
     // Generate the id before cycle-check so we can pass it as the new node.
     let id = uuid::Uuid::new_v4().to_string();
 
-    // Acquire the lock FIRST, then run cycle check synchronously inside
-    // the same lock scope. This eliminates the TOCTOU race where two
-    // concurrent create_task calls could each pass the cycle check before
-    // either inserts, forming a cycle together.
+    // Acquire the lock FIRST. B6-04 (vacuous predicate CUT): the previous
+    // call to `check_no_cycle_sync` here was structurally constant-true —
+    // the new id is a fresh UUID minted three lines earlier and not yet
+    // present in `coord_tasks`, so no `coord_task_dependencies` row can
+    // reference it and the BFS can never hit `current == new_task_id`.
+    // Cost was real (one prepare_cached per visited ancestor node, inside
+    // the connection mutex, on every create), benefit was zero. The DAG is
+    // acyclic by construction (edges are immutable after creation;
+    // dag.rs:3-5). The structural invariant belongs in a doc comment on
+    // `NewCoordTask::blocked_by` and a source-level guard that no other
+    // INSERT site exists in `coord_task_dependencies`. If a future path
+    // mutates edges on existing tasks, wire `check_no_cycle_sync` THERE —
+    // that is where it stops being vacuous.
     let conn = store.conn.lock().await;
 
-    // Verify that the proposed edges would not introduce a cycle.
-    crate::agents::swarm::tasks::dag::check_no_cycle_sync(&conn, &id, &input.blocked_by)?;
     let now = now_epoch();
     let metadata_json = serde_json::to_string(&input.metadata).unwrap_or_else(|_| "{}".into());
 
