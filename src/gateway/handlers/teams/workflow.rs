@@ -241,6 +241,18 @@ pub struct WorkflowStepReviewParams {
     /// Optional free-text comment appended as a task comment.
     #[serde(default)]
     pub comment: Option<String>,
+    /// Grounding evidence backing an approval (a measurement you ran yourself,
+    /// or one collected via subagent(agent_type='loop-auditor')). Required to
+    /// approve when the task carries `require_grounding: true`.
+    ///
+    /// B5-01: required for parity with the tool face
+    /// (`task_review` / `workflow_step_review`). The two faces of one verb
+    /// must share the gate; previously the RPC twin took no `grounding`
+    /// param and called `record_run_review` directly, so the
+    /// `require_grounding` metadata flag set by the leader could be silently
+    /// bypassed by the Panel "Approve" button.
+    #[serde(default)]
+    pub grounding: Option<crate::builtin_tools::team::task_review::GroundingEvidence>,
 }
 
 fn default_reviewer_kind() -> String {
@@ -316,6 +328,48 @@ pub async fn handle_workflow_approve_step(
             return JsonRpcResponse::success(request.id, json!({ "status": "completed" }))
         }
         VerdictGate::Refuse(msg) => return JsonRpcResponse::error(request.id, INVALID_PARAMS, msg),
+    }
+
+    // B5-01: share the `require_grounding` gate with the tool face. The two
+    // faces of one verb must share the predicate — branching only one is the
+    // same as not branching at all. The leader's prompt and the tool
+    // DESCRIPTION both promise `require_grounding` voids an approval without
+    // evidence; the RPC twin was making that promise a lie.
+    //
+    // Validate grounding kind vocabulary first (mirrors the tool face),
+    // then read the task metadata to consult the flag. `verdict_gate`
+    // already loaded the task; re-read it here rather than threading it
+    // through every arm — the read is cheap and matches the existing arm
+    // shape.
+    if let Some(g) = &params.grounding {
+        if !crate::builtin_tools::team::task_review::grounding_kind_valid(&g.kind) {
+            return JsonRpcResponse::error(
+                request.id,
+                INVALID_PARAMS,
+                format!(
+                    "workflow_step_review: grounding.kind '{}' invalid — must be one \
+                     of exit_code | numeric | line_count",
+                    g.kind
+                ),
+            );
+        }
+    }
+    if let Ok(Some(task)) = coord_store.get_task(&params.task_id).await {
+        if crate::builtin_tools::team::task_review::needs_grounding_bounce(
+            crate::builtin_tools::team::task_review::ReviewDecision::Approve,
+            &task.metadata,
+            params.grounding.is_some(),
+        ) {
+            return JsonRpcResponse::error(
+                request.id,
+                INVALID_PARAMS,
+                format!(
+                    "grounding_required: task '{}' carries require_grounding=true; \
+                     supply a grounding measurement (kind/source/value) on approval",
+                    params.task_id
+                ),
+            );
+        }
     }
 
     if let Err(e) = coord_store
