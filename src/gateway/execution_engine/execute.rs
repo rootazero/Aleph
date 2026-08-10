@@ -661,11 +661,7 @@ where
                 // Notify UI that the session was updated (global bus, so
                 // channel-originated runs reach the Panel too). RunComplete
                 // itself is single-sourced from the orchestrator drain.
-                self.publish_session_updated(
-                    &request.session_key,
-                    request.metadata.get("channel_id").map(String::as_str),
-                    &request.run_id,
-                );
+                self.announce_turn_end(&request);
 
                 // Persist the user-chosen project folder onto the session so the
                 // Panel can restore it after a reload (project workspaces G3).
@@ -951,6 +947,14 @@ where
                         "failed to emit RunError stream event"
                     );
                 }
+                // The same terminal announcement the success arm makes. A run
+                // that failed or was cancelled still MOVED the transcript: the
+                // harness appended the user message before dispatch, and any
+                // partial assistant text and the error receipt are persisted
+                // too. Announcing only on success is what left every other
+                // surface — a second Panel tab, a room peer, the sidebar row —
+                // showing a session that visibly never changed.
+                self.announce_turn_end(&request);
                 // Preserve the typed variant so downstream callers (cron / heartbeat
                 // executors) can dispatch on `ExecutionError::Timeout`,
                 // `Cancelled`, etc. Collapsing to `Failed(string)` here made the

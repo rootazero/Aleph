@@ -614,6 +614,39 @@ Knobs live in `[execution]`: `busy_queue_max_per_session` (32),
 `max_pending_steering` (16). Backlog is observable via
 `gateway.metrics.run_concurrency` → `busy_queue`.
 
+## Many clients, one thread
+
+A session key names a **conversation**, not a viewer. Any number of clients can
+be watching the same one — two Panel tabs, a Panel and the TUI, every member of
+a project room, plus whatever channel or cron job started the turn. There is no
+`attach` verb and deliberately none: delivery is `topic + per-connection
+visibility projection`, and an attachment table would be a second source of
+truth for a question `event_visibility` already answers. What that model owes
+its clients instead is two things, both of which were missing until 2026-08-10
+(full account in [FEATURE_LOCATOR §6.9](FEATURE_LOCATOR.md#69-多端共享一条线程--重连与崩溃后的状态重建-multi-client-thread-sharing--post-reconnect-state-rebuild)):
+
+- **Every frame must carry enough identity to be routed by a client that did
+  not start the run.** `RunAccepted` has always carried `session_key`; what was
+  missing was a client using it instead of guessing "the conversation in front
+  of the user". A frame that names a session no local view is showing must be
+  **dropped**, never redirected.
+- **A client joining mid-turn needs a pointer to the turn in flight.**
+  `chat.history` answers it: the response carries `active_run` — the run id
+  currently claiming this session's slot in the `SessionRunRegistry`, or `null`.
+  It rides on that response rather than a method of its own so the transcript
+  and the live pointer are one snapshot, and so it inherits the visibility gate
+  `handle_history` has already passed instead of opening a second one. Sourced
+  through `ExecutionAdapter::active_run_for_session` (default `None`), because
+  the registry is the only table that sees runs from *every* interface —
+  `AgentRunManager::active_runs` holds Panel-started runs only.
+
+**Turn-end announcements go out on both terminal arms.** `SessionUpdated` is
+what every other surface re-hydrates on, and a run that failed, timed out or
+was cancelled still moved the transcript (the harness appends the user message
+*before* dispatch). `ExecutionEngine::announce_turn_end` is the single
+derivation both arms of `execute()` call; a source-level guard pins that the
+failure path is one of them.
+
 ## Session Routing
 
 **Location**: `src/routing/session_key.rs`

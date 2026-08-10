@@ -182,15 +182,22 @@ pub(crate) fn occupancy_from_history(
 /// external-update live refresh (`run.session_updated` with an
 /// `origin_channel`); callers must already have `chat.session_key`
 /// pointing at `key`.
+///
+/// Returns the run in flight on this session at fetch time, if any. Callers
+/// that own a [`SessionMap`] should hand it to [`hydrate_and_follow`] rather
+/// than calling this directly — a transcript loaded while a turn is running is
+/// only half the answer.
 pub(crate) async fn hydrate_session_history(
     dash: DashboardState,
     chat: ChatState,
     workspace: Option<WorkspaceState>,
     key: String,
     locale: crate::i18n::Locale,
-) {
+) -> Option<String> {
     match ChatApi::history(&dash, &key, Some(50)).await {
-        Ok(history) => {
+        Ok(loaded) => {
+            let active_run = loaded.active_run;
+            let history = loaded.messages;
             // Distinct assistant run_ids → fetch their persisted traces.
             let run_ids: Vec<String> = {
                 let mut seen = std::collections::HashSet::new();
@@ -315,11 +322,76 @@ pub(crate) async fn hydrate_session_history(
                     }));
                 }
             }
+            active_run
         }
         Err(e) => {
             web_sys::console::error_1(&format!("Failed to load history: {e}").into());
+            None
         }
     }
+}
+
+/// Hydrate `key`'s transcript and, when a turn is already in flight on it,
+/// **join** that turn instead of watching a frozen transcript.
+///
+/// # The gap this closes
+///
+/// Opening a conversation someone else is currently driving — a second Panel
+/// tab, another member of a project room, a run started from the CLI, a
+/// channel, or cron — used to render a complete-looking transcript that then
+/// never moved. Nothing was wrong with the stream: every `stream.*` frame for
+/// that run reached this client. They were dropped one layer up, because
+/// `resolve_target` routes by `run_id` and this client never saw the
+/// `run_accepted` that would have bound it. Meanwhile the sidebar's re-hydrate
+/// is deliberately suppressed while a session is running, so nothing else
+/// filled the gap either: the viewer waited out the whole turn and only saw it
+/// appear at the end.
+///
+/// Binding the run id here restores the route, so the rest of the turn renders
+/// live from the join point on, and `run_complete` finishes with the
+/// history-authoritative answer — the joiner loses the *animation* of the part
+/// that already happened, never the content.
+///
+/// # Deliberate non-goals
+///
+/// - **No replay of the already-streamed part.** The core does not buffer it,
+///   and inventing a buffer to animate the past would be a second source of
+///   truth for text the transcript already owns.
+/// - **A run that ends between the fetch and the bind leaves a placeholder.**
+///   Self-healing, not ignored: that run's terminal
+///   `run.session_updated` — which since 2026-08-10 fires on the failure path
+///   too — finds the session no longer running and re-hydrates over it.
+pub(crate) async fn hydrate_and_follow(
+    dash: DashboardState,
+    chat: ChatState,
+    workspace: Option<WorkspaceState>,
+    sessions: SessionMap,
+    key: String,
+    locale: crate::i18n::Locale,
+) {
+    let Some(run_id) = hydrate_session_history(dash, chat, workspace, key.clone(), locale).await
+    else {
+        return;
+    };
+    // Already following it — our own send bound it, or `run_accepted` did.
+    // A second bind would leave a residue in the double-bind witness that one
+    // `settle_run` cannot clear (see `SessionMap::running`), and the route is
+    // the thing being established here, so having it already IS the answer.
+    if sessions.route_lookup(&run_id).is_some() {
+        return;
+    }
+    // `hydrate_session_history` wrote into the singleton `ChatState`, which is
+    // the ACTIVE conversation's projection. Only bind when the session we just
+    // loaded is in fact the active one, so the route and the bubbles cannot
+    // point at two different conversations.
+    let Some(conv) = sessions.conv_for_session_key(&key) else {
+        return;
+    };
+    if sessions.active_conv() != Some(conv) {
+        return;
+    }
+    sessions.bind_run(&run_id, conv, Some(&key));
+    chat.start_assistant_message(&run_id);
 }
 
 #[component]
@@ -465,12 +537,49 @@ pub fn ChatSidebar() -> impl IntoView {
         });
     });
 
-    // Fetch data on mount when connected
+    // Fetch data on mount, and again on every (re)connect.
     let dash = dashboard;
     let reload_for_mount = reload_data.clone();
     Effect::new(move || {
+        // Tracked for the dependency, not for the value: `connection_epoch`
+        // ticks once per successful handshake, so this effect re-runs even for
+        // a socket that was replaced without `is_connected` visibly flipping.
+        let _epoch = dash.connection_epoch.get();
         if dash.is_connected.get() {
+            // MUST precede the reload. `seed_server_running` inside it is a
+            // no-op while a sequence baseline survives, and the baseline from
+            // the previous connection is exactly what has to go: a restarted
+            // core numbers its `RunningSetChanged` frames from 0 again, so
+            // every frame it ever sends is `<=` the old baseline and is
+            // discarded — the running dots freeze permanently, silently, and
+            // no later refresh repairs them. Voiding it here makes this same
+            // reload the repair.
+            session_map.reset_running_baseline();
             reload_for_mount(dash);
+            // Second half of the reconnect repair, and the one that shows: ask
+            // the server which sessions are actually running and settle every
+            // client-side run it does not confirm. A core restart wipes the
+            // in-memory run registry, and a socket that was down long enough
+            // loses the terminal frame regardless — either way `settle_run` is
+            // driven only by `run_complete` / `run_error`, so those runs never
+            // settled: the composer stayed locked on Stop and the dot stayed
+            // lit until the user reloaded the page.
+            //
+            // Its own round trip rather than `reload_data`'s: this must
+            // reconcile against the set as it is NOW, and the shared seed is a
+            // no-op whenever a live frame has already advanced the baseline.
+            leptos::task::spawn_local(async move {
+                let Ok(metrics) = SystemApi::run_concurrency(&dash).await else {
+                    return;
+                };
+                let live: std::collections::HashSet<String> =
+                    metrics.running_sessions.into_iter().collect();
+                for (run_id, conv) in session_map.settle_runs_absent_from(&live) {
+                    if let Some(target) = session_map.chat_for(conv, chat) {
+                        target.settle_abandoned_run(&run_id);
+                    }
+                }
+            });
         }
     });
 
@@ -577,16 +686,25 @@ pub fn ChatSidebar() -> impl IntoView {
         if chat.session_key.get_untracked().as_deref() != Some(sk) {
             return;
         }
-        let running_now = session_map
-            .conv_for_session_key(sk)
-            .is_some_and(|c| session_map.is_running(c));
-        if running_now {
+        // "Is this session running?" is asked here, by the sidebar dot, and by
+        // the active-run counter — and it must be the SAME answer. This one
+        // used to read the client-side per-conversation refcount while the
+        // other two read the server-authoritative set, which is a second
+        // source of truth for one fact and, worse, a leaky one: the refcount
+        // is decremented only by `run_complete` / `run_error`, so a bind whose
+        // terminal frame never arrives (the run ended between
+        // `hydrate_and_follow`'s fetch and its bind, a socket drop, a core
+        // restart) pins it above zero and suppresses re-hydration for this
+        // conversation **permanently**. The server's set has no such failure
+        // mode: it is re-seeded on every reconnect and reconciled against.
+        if session_map.is_running_session_key(sk) {
             return;
         }
-        leptos::task::spawn_local(hydrate_session_history(
+        leptos::task::spawn_local(hydrate_and_follow(
             sub_dash,
             chat,
             workspace,
+            session_map,
             sk.to_string(),
             i18n.get_locale_untracked(),
         ));
@@ -654,6 +772,13 @@ pub fn ChatSidebar() -> impl IntoView {
         }
         selected_agent.set(Some(agent_id));
         chat.session_key.set(Some(key.clone()));
+        // Give the conversation a discoverable identity in the SAME breath as
+        // the ChatState signal. Without this the map above (`conv_for_session_key`)
+        // could only ever see conversations the user had already SENT in — the
+        // lookup on line 639 therefore missed its own tab and opened a duplicate
+        // on every re-selection, the row's dot never applied, and a run started
+        // from another surface on this very session had no tab to route to.
+        session_map.set_session_key(conv, &key);
 
         // Restore the session's persisted project folder (G3) so the composer
         // keeps running inside it and the project pill reflects it. Set the
@@ -709,10 +834,11 @@ pub fn ChatSidebar() -> impl IntoView {
         // only when there is nothing to preserve, i.e. a conversation being
         // opened here for the first time.
         if chat.messages.with_untracked(Vec::is_empty) {
-            leptos::task::spawn_local(hydrate_session_history(
+            leptos::task::spawn_local(hydrate_and_follow(
                 dash,
                 chat,
                 workspace,
+                session_map,
                 key,
                 i18n.get_locale_untracked(),
             ));

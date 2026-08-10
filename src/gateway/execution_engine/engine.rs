@@ -317,6 +317,52 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
         }
     }
 
+    /// Announce that a turn on `request.session_key` has reached its terminal
+    /// edge, whatever that edge was.
+    ///
+    /// # Why this is a function and not two copies of one statement
+    ///
+    /// `execute()` has two terminal arms and both must announce. Until
+    /// 2026-08-10 only the success arm did, so a run that failed, timed out or
+    /// was cancelled ended without any `SessionUpdated` — while the transcript
+    /// had in fact moved (the harness appends the user message *before*
+    /// dispatch, and the error receipt is persisted). Every surface that
+    /// re-hydrates on this frame — a second Panel tab, another member of a
+    /// project room, the sidebar row's `updated_at` — kept showing the state
+    /// from before the failed turn until the viewer manually reselected the
+    /// session.
+    ///
+    /// The three arguments are derived in exactly one place here rather than
+    /// spelled out at each call site: `origin_channel` in particular is read
+    /// out of `metadata["channel_id"]`, and a second hand-written copy of that
+    /// lookup is precisely the drift this collapses. The two call sites are
+    /// pinned by `execute_announces_the_turn_end_on_both_terminal_arms`.
+    pub(super) fn announce_turn_end(&self, request: &super::RunRequest) {
+        self.publish_session_updated(
+            &request.session_key,
+            request.metadata.get("channel_id").map(String::as_str),
+            &request.run_id,
+        );
+    }
+
+    /// The run currently claiming `session_key`'s single run slot, if any.
+    ///
+    /// The registry is the only authority that sees **every** run — Panel,
+    /// CLI, channel, cron, resume — because it is the gate they all pass
+    /// through (`AgentRunManager::active_runs` only holds Panel-originated
+    /// ones). Surfaced so a client that opens a session *while a turn is
+    /// already in flight* can bind that run and start rendering from the join
+    /// point instead of watching a frozen transcript; see
+    /// `handlers::chat::handle_history`.
+    ///
+    /// Carries no authorization of its own: the caller must already have
+    /// established that it may address `session_key`. `handle_history` does
+    /// that (`visibility::session_visible`) before it asks.
+    #[must_use]
+    pub fn active_run_for_session(&self, session_key: &str) -> Option<String> {
+        self.session_run_registry.run_id_for(session_key)
+    }
+
     /// Set the media processor for multimodal attachment handling.
     #[must_use]
     pub fn with_media_processor(

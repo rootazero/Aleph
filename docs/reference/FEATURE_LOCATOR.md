@@ -26,6 +26,10 @@
 | 横切 | copy 说成功但少了文件 / 拷贝目录静默漏掉保护文件 | Copy Discloses Its Skips | `file_ops/ops.rs::copy_dir_recursive` | ✅ (§3.15⑥, 2026-08-10) |
 | 横切 | 审批等了半天 / 批准的目录被换成软链 | Two-Phase cwd Containment | `sandbox/workspace/mod.rs::revalidate_cwd_containment` | ✅ (§3.15④, 2026-08-10) |
 | 横切 | 工具描述字节账不对 / 棘轮数字突然涨了 11 KB | Registry-Only Description Accounting | `definitions.rs::REGISTRY_ONLY_DESCRIPTIONS`（棘轮与 `no_sentence_is_stated_twice` 共用） | ✅ (§3.15⑦, 2026-08-10) |
+| Panel | 另一个标签页的回答跑到我这来了 / 定时任务的输出流进我正在看的对话 / 我下一句发错会话了 / 房间里看不见队友说话 | Frame-to-Conversation Routing | `platform/wide/views/chat/events.rs::resolve_target`（三步）+ `state/sessions.rs::set_session_key` | ✅ (§6.9, 2026-08-10) |
+| Panel | 打开一个正在跑的会话什么也不动 / 队友在跑我这边一片死寂 / 只能等它跑完 | Join A Live Turn | `handlers/chat.rs::handle_history`（`active_run`）+ `chat_sidebar.rs::hydrate_and_follow` | ✅ (§6.9, 2026-08-10) |
+| Panel | core 重启后红点不动了 / 重启后 Stop 键一直卡着 / 刷新页面才好 | Reconnect Baseline Rebase | `context.rs::connection_epoch` + `sessions.rs::{reset_running_baseline,settle_runs_absent_from}` | ✅ (§6.9, 2026-08-10) |
+| Loop | 出错/被取消的那一轮别的端看不到 / 侧栏时间不更新 / channel 报错后 Panel 还是旧的 | Turn-End Announced On Both Arms | `execution_engine/engine.rs::announce_turn_end`（`Ok`/`Err` 共用 + 源码级 pin） | ✅ (§6.9, 2026-08-10) |
 | Loop | 定时任务不准时 / 一个慢任务把调度器冻住 / cron 说 running 其实没跑 / 少了好几次触发 | Cron Scheduler Non-Blocking Tick | `src/tasks/cron/service/timer.rs`（detached spawn + 跨 tick 信号量）+ `state.rs::last_tick_at_ms` | ✅ (§4.13c, 2026-08-09) |
 | Loop | 定时任务失败了没人告诉我 / 简报突然不发了 / 一次 429 就被吵醒 | Delivery-Failure Is A Failed Run | `src/tasks/shared/delivery.rs::DeliveryStatus::delivery_failed`（cron ↔ heartbeat 共用） | ✅ (§4.13c, 2026-08-09) |
 | Loop | 心跳从来没通知过我 / heartbeat 说成功但没消息 / 监控白跑 | Heartbeat Delivery Wiring | `src/builtin_tools/heartbeat_manage.rs`（`delivery`）+ `registry/inherent.rs::inject_delivery_route` | ✅ (§4.13c, 2026-08-09) |
@@ -1338,6 +1342,8 @@
 
 ---
 
+> **接续**：这一节讲的是 core **自己**怎么从崩溃里爬起来。客户端那一半——重连后如何把自己的视图重建到与服务端一致，以及一个崩溃前的 run 在 Panel 上永不结算的问题——在 [§6.9](#69-多端共享一条线程--重连与崩溃后的状态重建-multi-client-thread-sharing--post-reconnect-state-rebuild) ④。两节共用同一种姿态：**跨过崩溃边界的"未知"不写成"失败"**。
+
 ### 4.13b 五维自主性加固 (Autonomy Hardening · 2026-08-08，三批)
 
 - **口语关键词**：跨会话记住进度、重启后子代理丢了、后台任务白跑、从失败里学、工具老是失败没人管、定时任务不触发、cron 改了没生效、心跳挂了没人告诉我、并行子代理超时、扇出批量全丢、团队工具认错人、`agent_type="main"` 提权、语料从没被维护过
@@ -2099,6 +2105,38 @@
   **刻意不做**：`RunError` 一律不 drain（`ReplyEmitter` 的 `RunError` 分支本来就不投媒体、也漏 temp 文件）。要改就三处一起改，别在通道之间制造无解释的分叉。
 
 > ⚠️ **同族但未修的预存 bug（2026-07-27 QA 发现，另立一轮）**：会话级 `SessionMetadata.last_active_at` 有**同一个单位病**且比消息级更广。`db_handlers/types.rs` 白纸黑字写 `updated_at` 是「Unix epoch seconds」，而 `query.rs` 直接透传 `m.last_active_at`，磁盘上却是毫秒（`~/.aleph/data/sessions/*/metadata.json` 里 `created_at` 秒、`last_active_at` 毫秒并存）→ Panel 侧栏 `format_session_subtitle` 再 `×1000`，于是今天用过的会话显示「12-13」「05-27」。**三个读取点同病**：`query.rs:83`（侧栏日期）、`builtin_tools/sessions/list_tool.rs:166`（`sessions` 工具的 `updated_at`）、`agent_instance.rs:630`（`from_timestamp(…, 0)`）；外加 `file_backend/mod.rs` 的 `active_minutes` 过滤把毫秒值和秒阈值直接比大小 ⇒ **该过滤器对毫秒记录恒不生效**。修法与消息级同形（1e11 分界归一 + 三处走同一 helper），但跨 SQLite/file 两个 backend，值得单独一轮。
+
+### 6.9 多端共享一条线程 · 重连与崩溃后的状态重建 (Multi-Client Thread Sharing & Post-Reconnect State Rebuild)
+
+- **口语关键词**：另一个标签页的回答跑到我这来了 / 我下一句发错会话了 / 房间里看不见队友在说话 / 打开一个正在跑的会话什么也不动 / core 重启后红点不动了 / 重启后 Stop 键一直卡着 / 出错的那一轮别的端看不到
+- **代码锚点**：
+  - 服务端 — `src/gateway/execution_engine/engine.rs`（`announce_turn_end` 单一源 · `active_run_for_session`）、`session_run_registry.rs::run_id_for`、`execution_adapter.rs::active_run_for_session`（默认 `None`）、`handlers/agent.rs::AgentRunManager::active_run_for_session`、`handlers/chat.rs::handle_history`（响应新增 `active_run`）
+  - 客户端 — `platform/wide/views/chat/events.rs::resolve_target`（三步解析）、`state/sessions.rs`（`set_session_key` / `reset_running_baseline` / `settle_runs_absent_from`）、`components/chat_sidebar.rs`（`hydrate_and_follow` + 重连 Effect）、`context.rs::connection_epoch`、`views/chat/state.rs::settle_abandoned_run`
+- **职责**：让**同一条会话线程**同时被多个终端观看而不互相污染，并让任意一端在**重连 / core 重启**之后把自己的视图重建到与服务端一致。
+- **状态**：✅ 2026-08-10（对标 codex `thread-store/local/writer_lock.rs` 的"一个线程一个写者"与 pi `LiveSession.connections` + `ServerSnapshot.revision` 的"逐连接快照"）。
+- **对标结论（先说不抄什么）**：codex 的 writer lock 是**文件级跨进程**互斥，Aleph 的等价物更强且已在位——`SessionRunRegistry` 的 per-session claim（执行层）+ `SessionActor` 的单任务串行 append（存储层，且带 seq 冲突自愈重试），跨进程那一层由 `~/.aleph/data/aleph.lock` 单例覆盖。pi 的显式 `attach`/`detach` + `requireAttached` 也**不移植**：Aleph 的投递模型是 topic + 逐连接可见性投影，加一张 attach 表就是给同一个问题制造第二个真源。真正缺的是 pi 那个模型**顺带**提供的两样东西——**帧到对话的权威路由**，和**重连时的基线协商**。
+
+- **① 前台劫持（CRITICAL，修 bug）**——`resolve_target` 对一个本客户端**没有 route** 的 `run_accepted` 直接回退 `active_conv()`，然后 `bind_run` 把该 run 钉在**用户当前正在看的**对话上，紧接着的 `"run_accepted"` 臂再把 `chat.session_key` 覆写成那个外来 run 的 key。三段连起来的后果是：外来 run 的整段回合（推理 / 工具行 / 最终答案）渲染进一个毫不相干的对话，此后该 run 的**每一帧**都继续钉在那里，而用户**下一条消息发到了别人的会话**。触发面不是边缘——第二个 Panel 标签页、项目房间里的另一个成员、CLI/TUI、任何 channel、**每一次 cron tick** 都产生这样的帧，且它们本来就该被这个客户端收到（`RunAccepted` 是 `BySessionKey`，同一个用户/房间成员都在受众里）。
+  帧**一直**带着 `session_key`，`SessionMap::conv_for_session_key` 也**一直**存在——两者从未被连起来。现 `resolve_target` 三步走：`route_lookup`（发送时绑定，权威）→ **按帧自带的 `session_key` 解析**→ 回退前台。第三步收窄成"**只拒能被证明属于别处的**"（两侧 key 都已知且不同才丢弃），于是新会话第一回合（对话还没有 key）与老 core（帧不带 key）两种形状原样保留。解析不出的 run 被丢弃**不损失任何信息**：侧栏红点走 `stream.running_set_changed`（按 session 键控，从不经过这条路由），transcript 由 `run.session_updated` 重新水化补齐。
+  **配套的第二根线（同一个缺陷的另一半）**：`conv_for_session_key` 此前对**只读打开**的对话结构性失明——`bind_run` 是 `meta.session_key` 的**唯一**写者，而侧栏 `on_select_session` 与项目房间入口都只写 `ChatState::session_key`。于是一个"打开过但没发过言"的对话没有可被寻址的身份，**每一个要从后端会话找到已开标签页的判断都同时哑掉**：外来 run 的路由、重选会话该复用还是新开 tab（A→B→A 开出三个标签页）、以及把服务端生成的 topic 映射到标签文字。（侧栏**行**上的红点不受影响——它按 session key 直接读 `is_running_session_key`。）新增 `SessionMap::set_session_key` 为共用写者，两个入口各调一次，`bind_run` 内部也改走它。
+
+- **② 加入一个正在跑的回合（连线）**——`chat.history` 只回持久化的 `messages`，所以在**中途**打开一个正在跑的会话，客户端拿不到任何指向 in-flight run 的指针：`stream.*` 帧带着一个它没见过 `run_accepted` 的 `run_id`，`route_lookup` 解不出、全部丢弃；而侧栏的重新水化对**正在跑**的会话是刻意抑制的（`if running_now { return }`）。两条路同时关着，第二个终端就在一份看起来已完成的 transcript 前面**干等整整一轮**。
+  修法是让指针**随 transcript 一起到达**：`chat.history` 响应新增 `active_run`。**刻意不新开 RPC**——那会多一次往返、多一个 `method_visibility` 登记、多一条 `lane::override_for` 条目、多一个存在性 oracle，而且会开出一个"客户端拿到了 transcript 但还没拿到 run（或反过来）"的窗口，那种窗口最终一定渲染出重复或缺失的一轮。真源是 `SessionRunRegistry`（**唯一**看得见所有接口的 run 的那张表；`AgentRunManager::active_runs` 只装 Panel 自己发起的），经 `ExecutionAdapter::active_run_for_session`（默认 `None`）下发。授权**不额外加闸**：`handle_history` 已经过了 `visibility::session_visible`，字段在那之后才解析，天然继承同一个判决。
+  客户端侧 `hydrate_and_follow` 在水化之后绑定该 run 并开占位气泡，于是**从加入点起**实时渲染，`run_complete` 再用 history-authoritative 的 `final_response` 收尾——**加入者丢的是已发生那段的动画，不是内容**。⚠️ **刻意不做已流过部分的回放**：core 不缓冲它，为了补一段动画去造一个缓冲区，就是给 transcript 已经拥有的文本制造第二个真源。取回与绑定之间 run 就结束的窗口**自愈**（那条终局 `run.session_updated` 发现会话已不在运行集里 → 重新水化覆盖占位气泡），这也正是 ③ 必须成立的原因。
+
+- **③ `SessionUpdated` 只在成功路径发布（修 bug）**——`publish_session_updated` 住在 `execute()` 的 `Ok` 臂里，`Err` 臂（失败 / 超时 / 取消）只发 `RunError` 就返回。但**失败的一轮同样移动了 transcript**：harness 在派发**之前**就 append 了用户消息，任何部分助手文本与错误回执也都落了盘。于是每一个靠这一帧重新水化的面——第二个标签页、房间里的另一个成员、侧栏行的 `updated_at`——都停在失败前的状态，直到用户手动重选会话。现抽 `Engine::announce_turn_end(&request)` 供两臂共用（三个参数、含 `metadata["channel_id"]` 查找，**只推导一次**），源码级 pin `execute_announces_the_turn_end_on_both_terminal_arms` 钉住"两个终端臂都要喊"且其中一个在失败路径上（只数数会被"在成功臂里复制一遍"骗过）。**已用变异证过 RED**。
+
+- **④ core 重启后运行状态永久冻结（CRITICAL，修 bug）**——`SessionMap::set_server_running` 丢弃 `seq <= server_seq` 的帧。这在**一条连接内**是对的（乱序自愈），跨连接是致命的：重启后的 core 从 0 重新编号自己的 `SessionRunRegistry.seq`，于是**新进程发出的每一帧**都 `<=` 旧进程的末位 seq、**永久**被丢弃。Panel 的红点冻结在旧进程死亡的那一刻再也不动，而且没有任何一处报错。冷启动种子也救不了：`seed_server_running` 只在 `server_seq == 0` 生效，且只在挂载时跑一次。
+  修法**零协议改动**：`DashboardState::connection_epoch` 每次握手成功 +1（与 topic ledger 重放同一个位置、同一个理由——新 socket 从零开始），侧栏那条本来就监听 `is_connected` 的 Effect 改为同时跟踪 epoch，并在 reload **之前**调 `reset_running_baseline()`。**刻意用单调计数器而不是服务端下发的实例 id**：重连本身就让基线作废（离线期间的帧无论如何都丢了），客户端不需要问服务端就已经知道。`reset_running_baseline` **刻意不清空 `server_running`**——清空会在重取往返期间熄灭所有红点，读起来是"所有 run 都结束了"，而那恰恰在最要紧的场景（一个跨过掉线的长自主 run）里是反的。
+  **同一根因的第二半**：客户端还持有那些 run 的 route，而 `settle_run` 只由 `run_complete` / `run_error` 驱动 ⇒ 崩溃前那一轮**永不结算**，composer 卡在 Stop、对话红点常亮，直到用户刷新页面。现重连时额外向服务端取一次运行集，`settle_runs_absent_from` 结算每一个服务端**不确认**的 run，`ChatState::settle_abandoned_run` 关掉它的气泡、把未完成的工具行落到 `unknown`。**不写成 `complete_run` 也不写成 `fail_run`**：这一轮可能已经完成、可能被 resume 成了新的 run id、可能死了——三者都不知道，而这正是 core 自己的崩溃边界修复（§4.13a ①）采取的同一种姿态。**没有 session key 的对话被跳过而不是结算**——"我算不出来"绝不能读作"它死了"，那是一个 brand-new 会话的第一回合。composer 的释放是**有守卫**的（同一个对话可能还有第二个 run 在网关的等待车道里），与 `fail_run` 同理，而 `complete_run` 无守卫是它自己那条路径的既有语义。
+
+- **⑤ 熵减**：删 `src/gateway/run_event_bus.rs`（887 行 · `ActiveRunHandle` / `wait_for_run_end` / 输入排队 / 取消信号，**全仓零生产消费者**，只在 `mod.rs` 里被 re-export）与 `src/gateway/hello_snapshot.rs`（130 行 · `HelloSnapshot` / `ConnectionLimits`，**零生产者**，从未被构造过）。共 **1017 行**。后者曾是本轮 ④ 的候选载体（它带 `server_id`），**判定 CUT 而非 CONNECT**：`connect` 响应已经在下发握手基线（`state_version` / `keepalive`），再加一个平行的快照结构就是第二个真源，而 ④ 的最终方案根本不需要服务端实例 id。`loom_concurrency.rs` 两条模型的 doc 指向被改指到仍然活着的宿主（`execution_engine::ActiveRun::next_seq` / `next_chunk`）。
+
+- **已知边界（本轮刻意未做）**：
+  - **phone 形态不参与**。`ChatSidebar` 在 phone 上不挂载（`app.rs` 的 `not_phone` 门），所以 `SessionMap` 在那里一个对话都没有，`resolve_target` 对 phone 的每一帧本来就返回 `None`——**这是预存缺陷，本轮既没修也没加重**（`hydrate_session_history` 在 phone 侧显式丢弃返回的 run id 并注明原因）。修它要给 phone 一条自己的会话登记路径，是独立一轮。
+  - **不做已流过部分的服务端缓冲**（见 ② 的"刻意不做"）。
+  - **对端发的那条用户消息没有实时回显**。wire 上没有 `stream.user_message`，`RunAccepted` 也只带 `{run_id, session_key, accepted_at}`——所以 A 在会话 S 发言时，**已经开着 S 的** B 会看到助手气泡开始流，却看不到那个提问，直到本轮结束。**已验证它在一轮之内自愈**：`drop(_run_slot)`（release → `RunningSetChanged`）排在 `announce_turn_end` **之前**，两帧同总线同 socket 有序，所以 B 处理 `run.session_updated` 时运行集里已经没有 S，`is_running_session_key` 为假 ⇒ 重新水化，问题与回答一起补齐。故这是**短暂的观感问题，不是数据丢失**。修它要么给热帧 `RunAccepted` 加 `input`、要么新增一个帧，两条都要处理"发送方自己别重复渲染"（`is_own_run` 已有），单独一轮更合适。
+  - **`chat.history` 的 `active_run` 只回 run id**，不回它已经跑了多久 / 到第几步。加字段容易，但每一个新字段都要回答"谁渲染它"——目前没有渲染者。
 
 ---
 

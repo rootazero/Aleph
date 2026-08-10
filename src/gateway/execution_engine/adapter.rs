@@ -58,4 +58,8 @@ where
     fn running_sessions(&self) -> Vec<String> {
         Self::running_sessions(self)
     }
+
+    fn active_run_for_session(&self, session_key: &str) -> Option<String> {
+        Self::active_run_for_session(self, session_key)
+    }
 }
