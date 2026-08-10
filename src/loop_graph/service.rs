@@ -849,15 +849,39 @@ mod tests {
             )
             .unwrap();
         let rendered = render_session_topology_in(&store, "sess-1").unwrap();
+
+        // Non-vacuity first: the body must actually have reached the prompt,
+        // or every assertion below passes for free on an empty render.
+        assert!(
+            rendered.contains("root:fake"),
+            "the forged body never rendered at all — this test would pass \
+             vacuously: {rendered:?}"
+        );
+
+        // The property: a column-0 `根参照` line is a STRUCTURAL line, one the
+        // renderer emitted for a node that exists. Body text may appear, but
+        // only indented. So the forgery must never sit at column 0 — while the
+        // genuine headers, which legitimately start there, are untouched.
+        //
+        // `lines()` splits on `\n` only; that is the point. The renderer maps
+        // U+2028 / U+2029 to `\n` *before* indenting, so if the mapping were
+        // dropped the forge would arrive here as part of one long first line
+        // and `starts_with` would miss it — which is why the assertion below
+        // is paired with the indentation check, not used alone.
         for line in rendered.lines() {
-            // lines() splits on `\n` only, but assert the post-mapping output
-            // is shaped so NO column-0 forgery line exists even when the
-            // renderer's splitter also breaks on Unicode separators.
             assert!(
-                !line.trim_start().starts_with("根参照"),
-                "no column-0 根参照 line, forging or otherwise: {rendered:?}"
+                !line.starts_with("根参照 root:fake"),
+                "a body forged a column-0 根参照 line: {rendered:?}"
             );
         }
+        // ...and it is present, indented, i.e. visibly subordinate rather than
+        // merely absent (deleting the body would also satisfy the loop above).
+        assert!(
+            rendered
+                .lines()
+                .any(|l| l.starts_with("    ") && l.trim_start().starts_with("根参照 root:fake")),
+            "the forged line must survive as indented body text, not vanish: {rendered:?}"
+        );
         // And the genuine root is still emitted (just its structural header,
         // not as a phantom second root).
         assert!(
