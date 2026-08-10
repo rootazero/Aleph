@@ -131,7 +131,18 @@ impl AgentRegistry {
     /// so the disclosure surface has to agree with the gate.
     pub fn spawnable_agent_ids(&self) -> Vec<String> {
         let mut ids: Vec<String> = self.list_subagents().into_iter().map(|a| a.id).collect();
-        ids.extend(plugin_subagents().iter().map(|a| a.id.clone()));
+        // B1-07: apply the same `mode == SubAgent` filter to plugin-shipped
+        // ids that `resolve_spawnable` applies to all sources — they are the
+        // two faces of one verb and must share a predicate. Today every
+        // plugin def is built SubAgent, so this is a latent guard, but the
+        // first plugin def built Primary would silently disagree: advertised
+        // as spawnable, rejected at spawn.
+        ids.extend(
+            plugin_subagents()
+                .iter()
+                .filter(|a| a.mode == AgentMode::SubAgent)
+                .map(|a| a.id.clone()),
+        );
         ids.sort();
         ids.dedup();
         ids
