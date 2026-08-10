@@ -16,6 +16,10 @@ pub struct PluginInfo {
     pub description: String,
     #[serde(default)]
     pub enabled: bool,
+    /// Invocation record from `plugins.list`. `None` when talking to a server
+    /// that predates the field — an empty cell, not a zero.
+    #[serde(default)]
+    pub usage: Option<aleph_protocol::extension_usage::UsageSummary>,
 }
 
 /// Load plugins list from Gateway
@@ -193,6 +197,7 @@ fn PluginCard(
     let toggling = RwSignal::new(false);
     let plugin_name = StoredValue::new(plugin.name.clone());
 
+    let usage_summary = plugin.usage.clone();
     let description = if plugin.description.is_empty() {
         "No description".to_string()
     } else {
@@ -221,6 +226,7 @@ fn PluginCard(
                         <div class="flex items-center gap-1 mt-2 text-xs text-text-tertiary">
                             <span>"📦"</span>
                             <span>{t!(i18n, settings.plugins.git_repository)}</span>
+                            <crate::components::usage_badge::UsageBadge usage=usage_summary />
                         </div>
                     </div>
                 </div>

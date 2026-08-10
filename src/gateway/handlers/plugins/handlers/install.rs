@@ -101,8 +101,15 @@ pub async fn handle_install(request: JsonRpcRequest) -> JsonRpcResponse {
                         agents_count: count_kind("agent"),
                         hooks_count: count_kind("hook"),
                         mcp_servers_count: count_kind("mcp_server"),
+                        tools_count: count_kind("tool"),
                         status: "loaded".to_string(),
+                        // A plugin installed one millisecond ago has no usage
+                        // record and never will have one yet. `None` here says
+                        // "unknown", which is the truth; `Some(calls: 0)` would
+                        // say "known never used" about something that has not
+                        // had the chance.
                         error: None,
+                        usage: None,
                     };
                     JsonRpcResponse::success(request.id, json!({ "plugin": info }))
                 }

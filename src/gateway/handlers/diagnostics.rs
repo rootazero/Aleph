@@ -47,10 +47,16 @@ pub struct DiagnosticsRunParams {
 ///   "params": { "fix": false, "only": ["core/data-dir"], "skip": [] }
 /// }
 /// ```
+/// `mcp` is the live MCP manager handle. It is threaded in — rather than left
+/// out and defaulted — so this RPC face and the `doctor` tool face register the
+/// SAME battery: without it `ext/idle-extensions` would report the MCP category
+/// as unknown here while answering it in the tool, and the two doctors would
+/// disagree about the same machine.
 pub async fn handle_run(
     request: JsonRpcRequest,
     config: Arc<RwLock<Config>>,
     vault: Arc<SharedTokenManager>,
+    mcp: Option<crate::mcp::manager::McpManagerHandle>,
 ) -> JsonRpcResponse {
     debug!("Handling diagnostics.run");
 
@@ -69,7 +75,9 @@ pub async fn handle_run(
     };
 
     let engine = match DiagnosticEngine::default_registry() {
-        Ok(e) => e.with_runtime_checks(config, vault),
+        Ok(e) => e
+            .with_runtime_checks(config, vault)
+            .with_extension_usage_check(mcp),
         Err(e) => {
             return JsonRpcResponse::error(
                 request.id,

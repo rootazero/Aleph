@@ -69,6 +69,11 @@ pub struct DoctorTool {
     config: Option<Arc<RwLock<Config>>>,
     /// Shared vault handle for resolving provider API keys during probes.
     token_manager: Option<Arc<SharedTokenManager>>,
+    /// Live MCP manager handle. Unlocks `ext/idle-extensions`, which needs to
+    /// enumerate configured servers before it can say which are unused.
+    /// `None` still registers the check — it then reports the MCP category as
+    /// UNKNOWN rather than as clean.
+    mcp: Option<crate::mcp::manager::McpManagerHandle>,
 }
 
 impl DoctorTool {
@@ -81,6 +86,13 @@ impl DoctorTool {
     ) -> Self {
         self.config = Some(config);
         self.token_manager = Some(token_manager);
+        self
+    }
+
+    /// Attach the MCP manager handle used by the idle-extensions inventory.
+    #[must_use]
+    pub fn with_mcp(mut self, mcp: crate::mcp::manager::McpManagerHandle) -> Self {
+        self.mcp = Some(mcp);
         self
     }
 }
@@ -110,6 +122,7 @@ impl AlephTool for DoctorTool {
         if let (Some(config), Some(vault)) = (self.config.as_ref(), self.token_manager.as_ref()) {
             engine = engine.with_runtime_checks(Arc::clone(config), Arc::clone(vault));
         }
+        engine = engine.with_extension_usage_check(self.mcp.clone());
         let posture = if args.fix {
             Posture::Fix
         } else {
@@ -150,7 +163,10 @@ mod tests {
     /// Registered-check count. Asserted rather than derived so adding a check
     /// is a deliberate edit here too — the alternative (`>= 1`) would let a
     /// check silently drop out of `default_registry`.
-    const REGISTERED_CHECKS: usize = 10;
+    /// 10 from `default_registry()` + `ext/idle-extensions`, which the tool
+    /// appends unconditionally (with `mcp: None` here, so it reports the MCP
+    /// category as unenumerable rather than being absent).
+    const REGISTERED_CHECKS: usize = 11;
 
     fn inspect_args() -> DoctorArgs {
         DoctorArgs::default()

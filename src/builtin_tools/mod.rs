@@ -111,6 +111,7 @@ pub mod strategy_manage;
 pub mod system_tool;
 pub mod task_manage;
 pub mod team;
+pub mod tool_usage;
 pub mod user_profile;
 pub mod vault_store;
 pub mod voice_tools;

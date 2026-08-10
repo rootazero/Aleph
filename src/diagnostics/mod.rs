@@ -101,6 +101,25 @@ impl DiagnosticEngine {
         self
     }
 
+    /// Append the `ext/idle-extensions` check.
+    ///
+    /// Separate from [`Self::with_runtime_checks`] because it needs a
+    /// *different* live handle (the MCP manager actor) and has a different
+    /// availability story: passing `None` still registers the check, which then
+    /// reports the MCP category as UNKNOWN rather than pretending it is clean.
+    /// It stays out of `default_registry()` for the same reason
+    /// `providers/connectivity` does — an inventory nobody can enumerate is
+    /// worse than no inventory line at all.
+    #[must_use]
+    pub fn with_extension_usage_check(
+        mut self,
+        mcp: Option<crate::mcp::manager::McpManagerHandle>,
+    ) -> Self {
+        self.checks
+            .push(Arc::new(checks::IdleExtensionsCheck::new(mcp)));
+        self
+    }
+
     /// Run every check concurrently and collect a report.
     pub async fn run(&self, posture: Posture) -> DiagnosticReport {
         self.run_with_filter(posture, None, &[]).await

@@ -217,6 +217,9 @@ impl ToolRegistry for BuiltinToolRegistry {
             "hub_fetch_docs" => {
                 Box::pin(async move { self.hub_fetch_docs_tool.call_json(arguments).await })
             }
+            "tool_usage" => {
+                Box::pin(async move { self.tool_usage_tool.call_json(arguments).await })
+            }
             "desktop" => Box::pin(async move { self.desktop_tool.call_json(arguments).await }),
             "desktop_ax_query_focused" => Box::pin(async move {
                 self.desktop_ax_query_focused_tool

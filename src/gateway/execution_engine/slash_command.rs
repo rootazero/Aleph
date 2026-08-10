@@ -178,6 +178,21 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
 
             "skill" => {
                 let skill_name = mode["display_name"].as_str().unwrap_or("skill");
+                // A `/<skill>` invocation IS a use, and this is the one place
+                // both faces reach it: the channel router and the Panel/CLI
+                // resolver both land here with the same serialized mode. The
+                // `skill_read` tool records its own uses, but a skill invoked
+                // only by slash command never touches that tool — it is
+                // expanded straight into the prompt below — so without this it
+                // aged into `stale` while being used daily, and the dream
+                // pipeline's co-occurrence miner never saw it at all.
+                if let Some(id) = mode["skill_id"].as_str().filter(|s| !s.is_empty()) {
+                    if let Some(mgr) = crate::extension::try_extension_manager() {
+                        mgr.skill_system()
+                            .record_use(&crate::domain::skill::SkillId::from(id))
+                            .await;
+                    }
+                }
                 // Skills need LLM processing with injected instructions — fall through
                 Err(ExecutionError::Fallthrough {
                     reason: format!("skill '{skill_name}'"),

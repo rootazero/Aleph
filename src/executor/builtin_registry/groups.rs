@@ -96,6 +96,12 @@ pub static TOOL_CATEGORIES: &[ToolCategory] = &[
             "read_config_guide",
             "config_audit",
             "doctor",
+            // Sibling of `doctor`, not of the hub tools: a read-only sensor
+            // over what is installed. Deliberately NOT in `extensions_store`,
+            // whose membership means "can change what is installed" — the
+            // `verify` agent denies that whole family, and denying a pure read
+            // to an agent whose job is reading would be backwards.
+            "tool_usage",
             "select_model",
             "list_models",
             "moa",

@@ -41,6 +41,11 @@ pub struct McpServerInfo {
     pub enabled: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub requires_runtime: Option<String>,
+    /// Invocation record for this server: call count, last-used date, idle
+    /// days. `None` when the usage report could not be built at all — which is
+    /// a different statement from a row whose `calls` is `Some(0)`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub usage: Option<aleph_protocol::extension_usage::UsageSummary>,
 }
 
 /// MCP server config from JSON
@@ -152,6 +157,43 @@ fn info_from_config(cfg: &McpManagerConfig) -> McpServerInfo {
         env: redact_secret_env(&cfg.env),
         enabled: cfg.auto_start,
         requires_runtime: cfg.requires_runtime.clone(),
+        usage: None,
+    }
+}
+
+/// Fill in each row's `usage` from the shared report.
+///
+/// Joined by `id`, which is what the sidecar keys on — the same registry ids
+/// this list is built from, so the two cannot drift the way a name-based join
+/// would. A row keeps `usage: None` when the report has no entry for it, which
+/// happens only if the inventory itself could not be read; that is deliberately
+/// distinct from `Some(UsageSummary { calls: Some(0), .. })` — "unknown" versus
+/// "known to be never used".
+async fn attach_usage(servers: &mut [McpServerInfo], mcp: &McpManagerHandle) {
+    // Aliased: this module already imports a DIFFERENT `ExtensionKind` at the
+    // top (`hub::types`, the install-target discriminant). A bare `use` here
+    // would shadow it inside this function only, which compiles and reads as
+    // though the two were the same type.
+    use crate::tools::usage::report::ExtensionKind as UsageKind;
+    use aleph_protocol::extension_usage::UsageSummary;
+
+    if servers.is_empty() {
+        return;
+    }
+    // The handle is passed through (costing one extra actor round-trip on top
+    // of the list we already have) rather than joining the sidecar here by
+    // hand: re-deriving the join would be a second definition of what a row
+    // means, and the `—`-vs-`0` distinction is exactly the thing that must have
+    // only one.
+    let report = crate::tools::usage::report::build_report_now(Some(mcp)).await;
+    for row in servers.iter_mut() {
+        if let Some(entry) = report
+            .entries
+            .iter()
+            .find(|e| e.kind == UsageKind::Mcp && e.id == row.id)
+        {
+            row.usage = Some(UsageSummary::from(entry));
+        }
     }
 }
 
@@ -163,7 +205,8 @@ fn info_from_config(cfg: &McpManagerConfig) -> McpServerInfo {
 pub async fn handle_list(request: JsonRpcRequest, mcp: McpManagerHandle) -> JsonRpcResponse {
     match mcp.list_server_configs().await {
         Ok(configs) => {
-            let servers: Vec<McpServerInfo> = configs.iter().map(info_from_config).collect();
+            let mut servers: Vec<McpServerInfo> = configs.iter().map(info_from_config).collect();
+            attach_usage(&mut servers, &mcp).await;
             JsonRpcResponse::success(request.id, json!({ "servers": servers }))
         }
         Err(e) => JsonRpcResponse::error(request.id, INTERNAL_ERROR, e.to_string()),
@@ -496,6 +539,52 @@ mod tests {
             .iter()
             .map(|(k, v)| ((*k).to_string(), (*v).to_string()))
             .collect()
+    }
+
+    /// The Panel keeps its own `McpServerInfo` DTO (it cannot depend on
+    /// `alephcore`), so the *value* type is shared via `aleph_protocol` — a
+    /// rename inside `UsageSummary` is a compile error on both sides. What is
+    /// still hand-kept is the container key, so pin the wire name here and in
+    /// the Panel's `api::mcp` test: if one side renames it the other decodes
+    /// `None` forever and the column silently goes blank, which is
+    /// indistinguishable from "no server has ever been called".
+    #[test]
+    fn a_row_carries_usage_under_its_wire_name() {
+        use aleph_protocol::extension_usage::UsageSummary;
+        let row = McpServerInfo {
+            id: "s".into(),
+            name: "s".into(),
+            command: "c".into(),
+            args: vec![],
+            env: HashMap::new(),
+            enabled: true,
+            requires_runtime: None,
+            usage: Some(UsageSummary {
+                calls: Some(3),
+                errors: 1,
+                ..Default::default()
+            }),
+        };
+        let v = serde_json::to_value(&row).unwrap();
+        let usage = v.get("usage").expect("wire key `usage` must be present");
+        assert_eq!(
+            usage.get("calls").and_then(serde_json::Value::as_u64),
+            Some(3)
+        );
+    }
+
+    /// A server with no report to attach must emit no `usage` key at all —
+    /// "unknown", not `calls: 0`. The two mean opposite things to a reader
+    /// deciding what to uninstall.
+    #[test]
+    fn an_absent_report_omits_the_key_rather_than_sending_zero() {
+        let cfg = McpManagerConfig::stdio("s", "s", "c");
+        let row = info_from_config(&cfg);
+        let v = serde_json::to_value(&row).unwrap();
+        assert!(
+            v.get("usage").is_none(),
+            "absent usage must be omitted, never serialized as a zero count"
+        );
     }
 
     #[test]

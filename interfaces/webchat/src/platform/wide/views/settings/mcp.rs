@@ -228,6 +228,8 @@ fn McpServerCard(
         .map(std::collections::HashMap::len)
         .unwrap_or(0);
 
+    let usage_summary = server.usage.clone();
+
     view! {
         <div class="p-4 bg-surface-raised border border-border rounded">
             <div class="flex items-start justify-between">
@@ -249,6 +251,7 @@ fn McpServerCard(
                             }>
                                 {if server.enabled { t_string!(i18n, settings.mcp.enabled).to_string() } else { t_string!(i18n, settings.mcp.disabled).to_string() }}
                             </span>
+                            <crate::components::usage_badge::UsageBadge usage=usage_summary />
                         </div>
                         <p class="text-xs text-text-secondary mt-1 font-mono">
                             {cmd_summary}

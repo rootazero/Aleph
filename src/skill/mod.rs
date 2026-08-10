@@ -38,7 +38,7 @@ pub use registry::SkillRegistry;
 pub use shared::{ensure_shared_skill_system_initialized, shared_skill_system};
 pub use snapshot::SkillSnapshot;
 pub use status::{InstallOption, MissingRequirements, SkillStatusEntry, SkillStatusFilter};
-pub use usage::{SkillState, UsageStats, UsageStore};
+pub use usage::{record_use_in_dir, SkillState, UsageStats, UsageStore};
 
 use crate::sync_primitives::Arc;
 use std::path::{Path, PathBuf};
@@ -380,6 +380,20 @@ impl SkillSystem {
         if let Some(dir) = self.owning_dir(id).await {
             UsageStore::new(dir).set_state(id.as_str(), state);
             self.rebuild_snapshot().await;
+        }
+    }
+
+    /// Record that a skill was actually used, for callers that hold only the
+    /// id (the `/<skill>` slash path). Resolves the owning dir, then defers to
+    /// [`usage::record_use_in_dir`] — the single definition of what a use is.
+    ///
+    /// Best-effort: silently no-ops when no registered dir owns the id, which
+    /// is the correct answer for plugin *commands* (registered as pseudo-skills
+    /// under a `plugin:command` id with no `SKILL.md` of their own).
+    pub async fn record_use(&self, id: &SkillId) {
+        if let Some(dir) = self.owning_dir(id).await {
+            let owned = id.as_str().to_string();
+            let _ = tokio::task::spawn_blocking(move || usage::record_use_in_dir(dir, &owned)).await;
         }
     }
 

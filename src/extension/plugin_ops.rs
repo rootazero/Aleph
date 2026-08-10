@@ -292,6 +292,7 @@ impl ExtensionManager {
                 agents_count: record.agent_count,
                 hooks_count: record.hook_count,
                 mcp_servers_count: record.mcp_server_count,
+                tools_count: record.tool_names.len(),
                 status: record.status.label().to_string(),
                 error: record.error.clone(),
             })
