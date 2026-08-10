@@ -155,9 +155,15 @@ next boot. The claim is earned, not assumed: `takes_effect` (tool) and
 `true`, the same downgrade rule as `config::live_apply::classify_verified`.
 `name` / `description` / `model` deliberately stay restart-only.
 
-⚠️ `agent.resume` is exempt from this guard, and one of its two original
-reasons died with the restart requirement — see `handlers/resume.rs` and
-[AGENT_IDENTITY.md](AGENT_IDENTITY.md) §6 ①.
+`agent.resume` used to be exempt from this guard; since 2026-08-10 it is not.
+It never reached `build_run_request`, so it never asked the agent question —
+and it is member-open, which made it the one way to put an agent back to work
+without being asked. The exemption stood on two legs and the load-bearing one
+("a revocation needs a restart anyway") died the day the live write above
+landed. The gate now runs inside `resume_named_session`, after the visibility
+gate and before the coordinator, refusing with an honest `PERMISSION_DENIED`
+that shares its wording with `BuildRunError::AgentForbidden`. See
+`handlers/resume.rs` and [AGENT_IDENTITY.md](AGENT_IDENTITY.md) §6 ①.
 
 Full model and threat analysis in [AGENT_IDENTITY.md](AGENT_IDENTITY.md); the
 seam-level landmines are in `src/gateway/CLAUDE.md`.
