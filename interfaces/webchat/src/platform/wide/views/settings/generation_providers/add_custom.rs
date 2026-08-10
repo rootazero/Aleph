@@ -110,7 +110,17 @@ pub(super) fn AddCustomProviderPanel(
                 }
                 Err(e) => {
                     set_testing.set(false);
-                    set_test_result.set(Some((false, e)));
+                    // No frame: the success arm shows `result.message` bare, so
+                    // a non-refusal keeps reading exactly as it did. What the
+                    // wrapper is here for is the OTHER branch — this family is
+                    // admin-gated, and a member was reading the raw protocol
+                    // string in the red "test failed" slot.
+                    set_test_result.set(Some((
+                        false,
+                        crate::components::admin_refusal::settings_write_error(i18n, &e, |e| {
+                            e.to_string()
+                        }),
+                    )));
                 }
             }
         });

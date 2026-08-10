@@ -174,11 +174,11 @@ pub fn ChannelConfigTemplate(
                     ));
                 }
                 Err(e) => {
-                    error.set(Some(format!(
-                        "{}{}",
-                        t_string!(i18n, channel_config.toast_save_failed),
-                        e
-                    )));
+                    error.set(Some(
+                        crate::components::admin_refusal::settings_write_error(i18n, &e, |e| {
+                            format!("{}{}", t_string!(i18n, channel_config.toast_save_failed), e)
+                        }),
+                    ));
                 }
             }
             saving.set(false);
@@ -212,11 +212,15 @@ pub fn ChannelConfigTemplate(
                 }
                 Err(e) => {
                     channel_status.set(ChannelStatus::Error);
-                    error.set(Some(format!(
-                        "{}{}",
-                        t_string!(i18n, channel_config.toast_connect_failed),
-                        e
-                    )));
+                    error.set(Some(
+                        crate::components::admin_refusal::settings_write_error(i18n, &e, |e| {
+                            format!(
+                                "{}{}",
+                                t_string!(i18n, channel_config.toast_connect_failed),
+                                e
+                            )
+                        }),
+                    ));
                 }
             }
             connecting.set(false);
@@ -244,11 +248,15 @@ pub fn ChannelConfigTemplate(
                     ));
                 }
                 Err(e) => {
-                    error.set(Some(format!(
-                        "{}{}",
-                        t_string!(i18n, channel_config.toast_disconnect_failed),
-                        e
-                    )));
+                    error.set(Some(
+                        crate::components::admin_refusal::settings_write_error(i18n, &e, |e| {
+                            format!(
+                                "{}{}",
+                                t_string!(i18n, channel_config.toast_disconnect_failed),
+                                e
+                            )
+                        }),
+                    ));
                 }
             }
         });
@@ -273,11 +281,15 @@ pub fn ChannelConfigTemplate(
                     }
                 }
                 Err(e) => {
-                    error.set(Some(format!(
-                        "{}{}",
-                        t_string!(i18n, channel_config.toast_delete_failed),
-                        e
-                    )));
+                    error.set(Some(
+                        crate::components::admin_refusal::settings_write_error(i18n, &e, |e| {
+                            format!(
+                                "{}{}",
+                                t_string!(i18n, channel_config.toast_delete_failed),
+                                e
+                            )
+                        }),
+                    ));
                     deleting.set(false);
                 }
             }
@@ -856,11 +868,15 @@ fn ChannelPairingSection(channel_id: StoredValue<String>) -> impl IntoView {
                     refresh_pending.update(|n| *n += 1);
                 }
                 Err(e) => {
-                    pairing_error.set(Some(format!(
-                        "{}{}",
-                        t_string!(i18n, channel_config.pairing_approve_failed),
-                        e
-                    )));
+                    pairing_error.set(Some(
+                        crate::components::admin_refusal::settings_write_error(i18n, &e, |e| {
+                            format!(
+                                "{}{}",
+                                t_string!(i18n, channel_config.pairing_approve_failed),
+                                e
+                            )
+                        }),
+                    ));
                 }
             }
             approving.set(false);
@@ -884,11 +900,15 @@ fn ChannelPairingSection(channel_id: StoredValue<String>) -> impl IntoView {
             {
                 Ok(_) => refresh_pending.update(|n| *n += 1),
                 Err(e) => {
-                    pairing_error.set(Some(format!(
-                        "{}{}",
-                        t_string!(i18n, channel_config.pairing_reject_failed),
-                        e
-                    )));
+                    pairing_error.set(Some(
+                        crate::components::admin_refusal::settings_write_error(i18n, &e, |e| {
+                            format!(
+                                "{}{}",
+                                t_string!(i18n, channel_config.pairing_reject_failed),
+                                e
+                            )
+                        }),
+                    ));
                 }
             }
         });

@@ -59,6 +59,14 @@ fn now_unix() -> i64 {
 /// Copy for a failed fleet call. Pure function — the page renders an error
 /// STATE, it never claims a verdict of its own.
 ///
+/// **Called at the write, not at the render.** It used to run inside the view,
+/// with the raw protocol string sitting in the signal until something printed
+/// it; every render site was then one `{e}` away from showing a member the
+/// English refusal, and the signal had to carry `action` around just to reach
+/// here. Classifying where the error arrives leaves exactly one place the raw
+/// string exists, which is also what lets `admin_refusal`'s scanner see this
+/// page at all — it reads writes.
+///
 /// The admin gate refuses with `AUTH_REQUIRED` + a fixed message, but the
 /// Panel's RPC layer keeps only `error.message` (the code is dropped in
 /// `context.rs`'s response arm), so the message text is the only recognisable
@@ -91,12 +99,14 @@ const ACTION_DEREGISTER: &str = "注销节点";
 
 #[component]
 pub fn ClusterSection() -> impl IntoView {
-    let i18n = crate::i18n::use_i18n();
     let state = expect_context::<DashboardState>();
     let nodes = RwSignal::new(Vec::<Environment>::new());
-    // (message, what was being attempted) — the fleet READ and a row's
-    // deregister both land here, and one sentence cannot honestly describe both.
-    let error = RwSignal::new(Option::<(String, &'static str)>::None);
+    // Already-classified copy. The fleet READ and a row's deregister both land
+    // here and one sentence cannot honestly describe both, so each write picks
+    // its own `ACTION_*` — which is why this is a finished `String` and not
+    // `(message, action)`: the verb is known at the write, and carrying it to
+    // the render only postponed the moment the raw error stopped existing.
+    let error = RwSignal::new(Option::<String>::None);
     let loading = RwSignal::new(true);
     // node_id currently being deregistered → disables that row's button.
     let removing = RwSignal::new(Option::<String>::None);
@@ -116,7 +126,7 @@ pub fn ClusterSection() -> impl IntoView {
                     nodes.set(list);
                     error.set(None);
                 }
-                Err(e) => error.set(Some((e, ACTION_READ_FLEET))),
+                Err(e) => error.set(Some(fleet_error_label(&e, ACTION_READ_FLEET))),
             }
             loading.set(false);
         });
@@ -157,11 +167,13 @@ pub fn ClusterSection() -> impl IntoView {
                     enroll_result.set(Some(r));
                     load();
                 }
-                Err(e) => enroll_err.set(Some(
-                    crate::components::admin_refusal::settings_load_error(i18n, &e, |e| {
-                        e.to_string()
-                    }),
-                )),
+                // `fleet_error_label`, not `settings_load_error`: enrolling is
+                // a WRITE, and the generic sentence tells the operator their
+                // enrolment failed to *read* server configuration. It also
+                // used to run twice — once here and once at the render below —
+                // which is exactly the shape that made the wrong sentence hard
+                // to see.
+                Err(e) => enroll_err.set(Some(fleet_error_label(&e, ACTION_ENROLL))),
             }
         });
     };
@@ -279,7 +291,7 @@ pub fn ClusterSection() -> impl IntoView {
                                                 spawn_local(async move {
                                                     match ClusterApi::deregister_node(&state, node_id).await {
                                                         Ok(()) => error.set(None),
-                                                        Err(e) => error.set(Some((e, ACTION_DEREGISTER))),
+                                                        Err(e) => error.set(Some(fleet_error_label(&e, ACTION_DEREGISTER))),
                                                     }
                                                     removing.set(None);
                                                     load();
@@ -297,10 +309,8 @@ pub fn ClusterSection() -> impl IntoView {
                 {move || {
                     error
                         .get()
-                        .map(|(e, action)| {
-                            view! {
-                                <p class="text-sm text-error mt-3">{fleet_error_label(&e, action)}</p>
-                            }
+                        .map(|e| {
+                            view! { <p class="text-sm text-error mt-3">{e}</p> }
                         })
                 }}
             </div>
@@ -355,9 +365,7 @@ pub fn ClusterSection() -> impl IntoView {
                                 enroll_err
                                     .get()
                                     .map(|e| {
-                                        view! {
-                                            <p class="text-sm text-error">{fleet_error_label(&e, ACTION_ENROLL)}</p>
-                                        }
+                                        view! { <p class="text-sm text-error">{e}</p> }
                                     })
                             }}
                         </Show>
