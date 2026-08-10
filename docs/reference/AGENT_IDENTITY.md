@@ -39,7 +39,9 @@
 | 撤销标记 vs 链 | 无（无生命周期概念） | `revoked_at` 列与链自己的 `IdentityRevoked` 两侧对账（`revoked_per_chain`），不一致就报出来 | **超越**（第四轮补）。"改回 NULL 抹不掉撤销"此前**没有任何代码在做这个比较** |
 | 委派身份 | 无子代理概念 | 子代理由 `AllowlistToolService` 就地开 `LEDGER_ACTOR` 作用域 → **自己的密钥、自己的链** | **超越**（参考实现无对位） |
 | 身份→权限 | `Scope` 16 条枚举，但生产恒发 `all_known()`（形同虚设）；真正差异在 membership / `MemberRole` / NIP-OA | 既有 `tool_permissions` 三级合并（global→agent→channel，`restrictive_min` 只收紧）× exec tier | **Aleph 领先，刻意不移植** buzz 的 scope 层：再加一套并行权限模型违 P2/P6 |
-| agent vs human | 只差**配额**不差权限 | 同（exec tier 与 agent 轴正交） | 平手 |
+| **谁可以用哪个 agent** | 无对位（无 agent 概念）——连接的 scope 由 token 决定，调用方无从自选 | 第五轮前：**调用方在 wire 上自己填 `agent_id`，零校验**。现 `AgentDefinition.allowed_users` × `caller_may_act_as_agent`，强制在三个 run-start 入口共用的 `build_run_request`（必填参数，不是 `Option`） | **修掉自己的缺陷**。上一行那套 `tool_permissions` 是**按 agent 分的**，而 agent 免检自选 ⇒ 权限层键在一条自助轴上：被某个 agent 拒了就换一个名字 |
+| **记录里的"谁"** | 无（无签名，更无 principal） | `agent_id`（哪个身份在动）+ `principal`（哪个人在驱动），**两者都在 preimage 内** | **超越**（第五轮）。只记 agent 时，非否认对 agent 成立、对**人**不成立——共用一个 agent 的两个人在链上无法区分 |
+| agent vs human | 只差**配额**不差权限 | 两条正交轴都在：exec tier（这次调用能做什么）× `allowed_users`（这个人能扮演谁） | **超越**（第五轮起） |
 | owner attestation | NIP-OA：owner 签名证明"谁授权了这个 agent"，**作者身份不可改写** | 无 owner 密钥概念；委派的**事实**落在父链的 `ToolCall(target="subagent")` 上 | **刻意不移植**（见 §6 已知边界④：凭空造 owner 层＝零消费者抽象） |
 | git 提交签名 | `git-sign-nostr`（O_NOFOLLOW/fstat/mode 检查/Zeroizing 全套） | 无 | **刻意不移植**：独立二进制 + `gpg.x509.program` 钩子，属生态外挂，按 R3 应做 Skill/MCP 而非进 core |
 | Nostr wire / relay 联邦 | 核心 | 无 | **刻意不移植**：Aleph 信任边界是网络边界（loopback + device tier），不是公开 relay |
@@ -47,6 +49,8 @@
 ## 3. 威胁模型 —— 它买到什么，买不到什么
 
 **买到：**
+- **「谁做的」有两个答案，且都在签名里**：`agent_id` 是哪个身份在动，`principal` 是哪个**人**在驱动它。改写、抹掉或凭空安上一个 `principal`，三种编辑都会让哈希移位 ⇒ `HashMismatch`——它不是一个可以随手 UPDATE 的问责列。`principal` 为空只在真的没有人时出现（cron / heartbeat / 续跑 / A2A / 链自己的开篇记录），以及本列存在之前写下的行；两者对读者是同一句话——**这条链没点名任何人**。
+- **一个人只能以他被允许的身份行动**。`agent_id` 仍是调用方给的字符串，但现在要过 `allowed_users`：一个被某个 agent 的 `tool_permissions` 拒掉的人，不能靠改一个名字换一套权限（第五轮前可以，见 §6 ①）。委派面同闸——否则「用允许的 agent 去委派给不允许的 agent」是一条两步都合法、合起来等价的路。
 - 任何**已存储记录**的改写、重排、中段删除、跨 agent 搬运、前缀删除、尾部截断，都会被 `verify` 检出并定位到 seq。
 - 伪造一条记录需要**该** agent 的私钥——仅有 DB 写权限不够（buzz 的 keyless 链在这一点上完全无防护：任何能写 DB 的人都能把整条链重算得天衣无缝）。「该」字是**执行出来的**：`ForeignSigner` 拒绝任何由别的 agent 的密钥签的行，哪怕签名在算术上完全有效。
 - 密钥生命周期本身也在链内：链首是签名的 `IdentityCreated`，轮转与撤销各是主体链上一条签名记录。把 `revoked_at` 列改回 NULL **不能**让撤销消失。
@@ -63,12 +67,18 @@
 ## 4. 架构
 
 ```
+gateway/handlers/agent.rs::build_run_request   ← 「这个人能不能扮演这个 agent」
+        │  caller_may_act_as_agent(agent.allowed_users)   （三个 run-start 入口共用的
+        │    ├─ 通过 → 继续；顺带把 AUTHOR_USER_KEY 盖进 run metadata      唯一 builder，
+        │    └─ 拒绝 → BuildRunError::AgentForbidden ⇒ PERMISSION_DENIED   参数必填不是 Option）
+        ▼
 agents/allowlist_tool_service.rs               ← 子代理身份注入（identity::as_actor）
         │  （只有它知道正在动作的 AgentDef，且它就在 Act 阶段
         │    per-call spawn 的任务里 —— 作用域必须开在这一层）
         ▼
 tools/scoped/dispatch.rs::execute_inner        ← 唯一生产者（全库唯一进工具注册表的路径）
         │  ledger_agent_id()                    scoped actor ?? turn 的 session_key
+        │  ledger_principal()                   visibility::ambient_actor()（谁在驱动）
         │  ledger_intent(name)                  （tools/scoped/ledger.rs）
         │    ├─ 变更类调用完成 → ToolCall(ok|error)
         │    ├─ 策略/钩子拒绝  → ToolDenied
@@ -119,13 +129,17 @@ SHA256( "aleph-agent-ledger-v1"
       ‖ lp(agent_id) ‖ seq:i64be ‖ at_ms:i64be
       ‖ lp(action) ‖ lp(outcome) ‖ lp(target)
       ‖ opt_lp(args_fp) ‖ lp(detail) ‖ lp(signer_fp)
-      ‖ prev_hash ?? 32×0x00 )
+      ‖ prev_hash ?? 32×0x00
+      ‖ [ 0x01 ‖ lp(principal) ]      ← 仅在 principal 非空时存在，否则一个字节都不发
 ```
 `lp(x)` = u32 大端长度 ‖ 字节。`agent_id` 领头 → 记录搬到别人链上重算即不符。
+
+**为什么 `principal` 排在最后、且空值不发字节**（第五轮）：这是**唯一**能让既存链继续验过的形状。域分隔串不动、`opt_lp` 不用（它的 `None` 会发一个 0x00 标记），于是一条没有 principal 的行与本列存在之前的行**逐字节相同**。改 `DOMAIN` 读起来更整齐，代价是作废磁盘上每一条链——本模块自己的 doc 明令禁止的那件事。分帧不受损：`prev_hash` 是定宽的，所以「字节到此为止」和「后面还有一个存在标记」不会混淆；标记本身仍然把 `Some("")` 和缺席分开。篡改**双向**可检出——从一行里抹掉 principal 会让 preimage 变短，往一条老行上安一个会让它变长，两种都移位摘要，而签名盖不住新的摘要。
 
 ### 记录里存什么、不存什么
 
 - **不存原始参数**。存 `args_fp = grant_fingerprint(tool, canonical args)`（与会话授权、拒绝账本**同一指纹**，所以一条记录能和授权它的那次审批对上）。
+- **存 `principal`：驱动这次动作的那个人**（`users.user_id`）。它由咽喉从 `visibility::ambient_actor()` 解析，**永不**取自工具参数——与 `agent_id` 同一道溯源栅栏，也是 `NewRecord` 至今不实现 `Deserialize` 的理由。两个被否掉的取法各自对应仓里踩过的坑：`CALLER_USER` 跨 `tokio::spawn` 即死而**每一次工具调用都在 spawn 里**（结果是每一行都记 `None`，一个在多用户真机上静默答「没有人」的列）；`ambient_owner()` 在项目房间里是**创建者**、对每个成员是同一个人（那正是他们共享记忆分区的机制），结果不是答不上来而是**自信地答错，并且签了名**。
 - 存一行**已脱敏、已截断**的摘要，走审批卡片的同一单一源 `exec_approval::action.rs::redact_and_cap`（`Authorization: Bearer` 那次泄漏就是因为存在第二份脱敏逻辑；这里不再开第二份）。
 
 ## 5. `verify` 能检出什么
@@ -163,7 +177,11 @@ SHA256( "aleph-agent-ledger-v1"
 
 ## 6. 已知边界（刻意留下，不要当成漏做）
 
-1. **不是防冒充**。`agent_id` 仍是 `chat.send` 上调用方传入的字符串，`router.rs::route` 原样返回，`AgentRunManager::start_run` 只做**存在性**检查。过了连接层认证的调用方仍可以任意已存在 agent 的身份发起 run，账本会**如实记录它收到的身份**。堵它要把声明的 agent 绑到设备授权范围——那是 RPC 授权模型的改动，不是本子系统的。
+1. ~~**不是防冒充**~~ → **第五轮已闭合，但闭合的是授权那一半，不是「agent_id 不再由调用方给」**。`agent_id` 仍是 `chat.send` / `agent.run` 上调用方传入的字符串，`router.rs::route` 仍原样返回——变的是这个字符串现在**要过一道谓词**：`build_run_request` 拿它实际解析到的 `AgentInstanceConfig`，问 `caller_may_act_as_agent(allowed_users)`。
+   - **默认仍然全开**：`allowed_users` 未设或为空 ＝ 所有认证调用方，与 `allowed_links` 同一约定。单用户装机与全部存量配置**行为逐字节不变**——这不是遗漏，是那条零变更保证。所以「没配 `allowed_users` 的部署里，任何认证调用方仍可扮演任意 agent」**依然成立**，只是它现在是一个**可以关掉的默认**而不是一条无法表达的事实。
+   - **无 gateway 连接的调用方不受限**（cron / heartbeat / A2A / teams dispatcher / 进程内测试），与仓里每一条同族谓词的第一臂一致。loopback **不属于**这一类：它解析成隐式 owner，所以本机 Panel 带着 `Some(owner)` 到达。
+   - **仍然不防的**：一个人在他**被允许的** agent 之内做的事。那不是冒充，是授权——而账本现在会记下是谁做的（`principal`）。
+   - **仍然不防的**：把 `agent_id` 绑到**设备**授权范围。那是 RPC 授权模型的改动，本轮没做，因为身份的粒度是**人**（`users.user_id`）而不是设备，且设备已经解析成人。
 2. **无 turn context 即不记录**。`approval::audit_identity` 在 turn 外回退字面量 `"main"`——对一行日志是合理默认，对**签名链就是伪造**。所以 `ledger_agent_id` 返回 `None`。（注意：**只有** turn 缺失才返回 `None`；子代理的角色注入是在有 turn 的前提下**替换**归属，不是新增一条无 turn 的路径。）
 3. **`revoke` 不是执行闸**。本子系统不拦任何执行。所以被撤销的 agent 若仍在动作，记录**照记**（用其已 retire 的钥签，`AgentKeystore::signing_identity`），而不是拒签。理由：拒签不会阻止行为，只会消灭证据；而"这个 agent 在被撤销 40 分钟后还在动作"恰恰是问责账本最该能证明的事。`revoke` 的真实语义是：标记该身份、retire 其密钥、拒绝 `keygen` 重新启用（要回来必须显式 `rotate`），并在其链上留下一条**由被撤销的那把钥自己签的** `IdentityRevoked`。
 4. **无 owner 层**。buzz 的 NIP-OA（owner 签名证明"谁授权了这个 agent"，作者身份永不改写）没有移植：Aleph 没有 owner 密钥概念，凭空造一个是没有消费者的抽象（YAGNI 撤回规则）。父子委派的**事实**已经落在父链上（`ToolCall(target="subagent")`，`detail` 带 `agent_type`），再加一个 `Delegation` 变体是零增量信息。
@@ -186,6 +204,7 @@ SHA256( "aleph-agent-ledger-v1"
 
 ## 7. 红线合规
 
+- **第五轮补充**：**R10** `src/harness/` 仍零改动（五轮皆是）；**R3/P6** 零新依赖（五轮皆是）；**Spec C** schema **v16**（`agent_ledger.principal`），迁移用「先探列再 ALTER」——与 v15 同形状同理由：从零建库的实例在更早的臂里已经跑过 `IDENTITY_SCHEMA`，而那份 batch 现在带着 `principal`，无条件 ALTER 会在**每一次首启**上撞 `duplicate column name`；**R8** 工具注册点零变化（`agent_identity` 一个 action 都没加，`agent_update` 只加了一个参数），但 `agent_update` 与 `agent_unbind` **进了 `OPERATOR_TOOLS`**——前者现在写的正是 run-start 闸读的那张表，闸必须覆盖能把闸拿掉的那个动词；**R7** 新增判定没有一个是推理（`agent_admits_user` 是集合成员判断，`principal` 是一次 task-local 读取）。
 - **R10**：`src/harness/` **零改动**（三轮都是）。账本挂在 `tools/scoped/`，身份注入挂在 `agents/allowlist_tool_service.rs`；harness 只经 `Arc<dyn ToolService>` 多态调用，从不点名任何一个。棘轮以 `budget.rs::CEILING` 为准，本轮不动它。
 - **R3 / P6**：**零新依赖**（三轮都是）。`ed25519-dalek` / `sha2` / `hex` / `zeroize` 早已是直接依赖，Ed25519 原语早已存在且此前**零生产消费者**；导出格式用的 `serde` / `serde_json` 同理。
 - **R8**：第三轮只给 `agent_identity` **加了一个 action**（`export`），第四轮一个 action 都没加 —— 所以下面那 6 个注册点两轮都不用动。⚠️ **但第 7 个登记面是第四轮才发现的**：`BUILTIN_TOOL_DEFINITIONS` 的 `description` 字段。写成字面量就**整体遮蔽** `AlephTool::DESCRIPTION`（`agent_init` 只追加目录里没有的名字），于是往 DESCRIPTION 里写的任何东西模型一个字都收不到。判据：**往 `DESCRIPTION` 里写模型必须看到的内容之前，先确认目录条目指向常量**——这条对全仓 156 个工具都成立，见 CLAUDE.md R9 前置条件段。
@@ -210,6 +229,19 @@ agent_identity(action="export", agent="main")      # 写出自包含文档，回
 
 `export` **写文件、不内联返回**：链是无界的，而这份文档的用途是交给别人，不是给模型读——内联等于把上下文窗口花在这段对话里没人会看的字节上。落点是 `<data_dir>/exports/`，文件名派生自 agent id，**不接受调用方给的路径**（不新增任何文件系统触达面，也没有穿越可写错）。
 
+限制谁能扮演一个 agent（第五轮）——config 里一行，或对话式一句：
+
+```toml
+[[agents.list]]
+id = "ops"
+allowed_users = ["u-alice"]     # 空或不写 = 所有认证调用方（出厂即此，零变更）
+```
+```
+agent_update(agent_id="ops", allowed_users=["u-alice"])   # 清空＝改回所有人：allowed_users=[]
+```
+
+`agent_update` **写 config.toml，重启后才生效**——`[agents]` 不是 live section，所以返回里那句 `takes_effect` 必须转达给用户。对一次**撤销**而言这是最要紧的一句：说「已经生效」而它没有，正是这个字段存在要防的那件事。被拒的调用方拿到的是**诚实的 `PERMISSION_DENIED` 并点名 agent**，不是 `not_found`——`agents.list` 本来就对每个认证调用方返回全部 agent，没有存在性秘密要守；而一道谜语只会把忘了把自己加进列表的 operator 推向「干脆全开」。
+
 `list` 里出现的不只是顶层 agent：**做过变更类动作的子代理角色各有自己的一条链**（身份即 `AgentDef.id`，故同一角色跨多次委派共用一条链——这是想要的，角色就是身份）。密钥在**首次被记录的动作**时铸造，纯只读的角色永远不会铸钥。链首那条 `identity_created` 就是它开始的地方。
 
 离线（daemon 停机亦可，这正是重点）：
@@ -231,6 +263,17 @@ aleph-server identity verify --input chain.json \
 两个钉都可以省，但输出会**每次都把省掉的那个说出来**：没有 `--pin` 就只证明了内部自洽（造文档的人也挑了里面的公钥），没有 `--expect-head` 就**检不出尾部截断**（锚是随文档走的）。写不出格式的 `--expect-head` 会被**拒绝**而不是当成没给——一个被静默读成"没钉"的钉子看起来和成功一模一样。
 
 ## 9. 熵减
+
+### 第五轮（2026-08-10）
+
+本轮的两件事互为前提，**顺序不能反**：`principal` 记的是「谁驱动了这次动作」，而在 agent 可以被免检自选之前，那个人本来就能挑一套权限——先记下来只会得到一份忠实记录的越权。
+
+- **`agent_admits_user` 是一条规则，不是三条**。`allowed_users` 在到达闸之前经过三个类型（`AgentDefinition` → `ResolvedAgent` → `AgentInstanceConfig`），各写一个谓词就是三次分歧机会——`restrictive_min` 对权限、`session_visible` 对会话都是这么收敛的。
+- **闸的参数必填，不是 `Option`**。`method_visibility.rs` 那张表存在的理由是「删掉一次调用会变成一条指名道姓的测试失败」；这里删掉它是**编译错误**，更强，所以本轮**没有**给这张表加条目，也**没有**加源码级 pin——加了就是第二个更弱的真源。
+- **`agent_update` 的 `takes_effect` 取自 `ReloadImpact::classify("agents")`，不是字面量**。`[agents]` 不是 live section，而这个工具的运行时那一半按它自己的 doc 是个 no-op，所以每一个字段都是「写进去了、但要重启」。把这句话写成常量会得到第二份表述，且它会在 `[agents]` 某天变成 live section 的那天开始撒谎。
+- **目录字节自己付账**。两处 `DESCRIPTION` 新增让 `CATALOG_DESCRIPTION_CEILING_BYTES` 超了 681 B，还的方式是在**同一批描述里**删掉参数 schema 已经发出去的 JSON 字面量与复述它的散文，而不是抬闸。
+- **`agent_identity` 的目录守卫改判**「这一行 bullet 介绍了这个 action」而非「描述里出现了 `"action": "x"` 这个 JSON 拼法」。判据落在性质上；落在排版上的守卫会为一次无害的改写变红，而那正是守卫被赶时间的人放松的方式。
+- **顺手修好一处先于本轮存在的损坏**（独立提交）：`loop_graph::service` 的 `unicode_line_separators_in_root_body_cannot_forge_a_root_line` 断言自相矛盾（`trim_start()` 后要求没有任何 `根参照` 行，同一个测试两句之后又要求真的根参照必须在第 0 列），自落地起一直红、连带 `cargo test -p alephcore --lib` 一起红。**防御本身是对的**——伪造行确实被缩进了；红的是断言。改成它 ASCII 孪生二十行之上一直用对的那个形状，并补上真正承重的那一句（`lines()` 只按 `\n` 切，所以拿掉 Unicode 映射后伪造内容会藏在**一行之内**、列检查照样通过），用变异证过 RED。
 
 ### 第四轮（2026-08-04）
 
