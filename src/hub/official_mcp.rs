@@ -41,7 +41,14 @@ fn map_env(ev: &PresetEnvVar) -> EnvDecl {
 fn is_projectable(t: &PresetTransport) -> bool {
     let clean = |s: &str| !s.contains('<');
     match t.kind {
-        McpTransportType::Stdio => t.args.iter().all(|a| clean(a)),
+        McpTransportType::Stdio => {
+            // The previous check covered `args` only; a stdio `command` with an
+            // interpolation (`<ENV_KEY>`) would have slipped through and the
+            // secrets resolver would have no real env var to substitute — the
+            // install would silently drop the placeholder. (review/hub-statics)
+            t.command.as_deref().map(clean).unwrap_or(false)
+                && t.args.iter().all(|a| clean(a))
+        }
         McpTransportType::Http | McpTransportType::Sse => {
             t.url.as_deref().map(clean).unwrap_or(false)
         }
