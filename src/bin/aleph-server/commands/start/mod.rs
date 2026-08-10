@@ -1340,6 +1340,27 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
         }
     }
 
+    // Same reconcile for background `bash` jobs, whose registry is likewise
+    // pure process memory. This one has NO ordering requirement against the
+    // announcer above: it only writes tombstones and broadcasts nothing, so
+    // there is no subscriber to be missing — the rows simply answer the next
+    // time the model polls. Fail-soft the same way: a missing data dir costs
+    // the durability, not the boot.
+    match alephcore::utils::paths::get_background_processes_dir() {
+        Ok(dir) => {
+            let interrupted = alephcore::builtin_tools::process_journal::init_and_reconcile(dir);
+            if interrupted > 0 {
+                tracing::info!(
+                    interrupted,
+                    "Tombstoned background bash jobs left running by a previous process"
+                );
+            }
+        }
+        Err(e) => {
+            tracing::warn!(error = %e, "Background bash job journal disabled (no data dir)");
+        }
+    }
+
     // Register the subagent tree relay — live spawn/progress/settle events are
     // republished to panels under `run.subagent_tree` for the background
     // sub-agent tree view (pure observability; no parent turn driven).
@@ -3082,6 +3103,24 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
 
     let shutdown_rx = setup_graceful_shutdown(args);
     let run_result = server.run_until_shutdown(shutdown_rx).await;
+    // Reap detached background `bash` jobs before the rest of teardown. This
+    // has to be an explicit call: `tokio::process::Child::kill_on_drop` is
+    // best-effort once the runtime itself is being torn down, so a
+    // `bash {background: true}` build/install would otherwise outlive the
+    // daemon as an orphan still writing into the session workspace. Placed
+    // here rather than in the signal handler because this line is reached by
+    // *both* signal paths (`setup_graceful_shutdown` funnels Ctrl-C and
+    // SIGTERM onto one oneshot) **and** by a fatal `run_until_shutdown`
+    // error, which no signal-handler placement covers. It must also precede
+    // the ledger drain further down, whose comment claims everything that can
+    // dispatch a tool has already stopped — background bash was the
+    // counterexample. Idempotent, so the wedged-shutdown failsafe in
+    // `helpers.rs` may call it again for free; the awaits that follow give the
+    // runtime the scheduler pass it needs to drop each aborted task's `Child`.
+    let reaped = alephcore::builtin_tools::bash_exec::kill_all_running_background();
+    if reaped > 0 {
+        tracing::info!(count = reaped, "reaped background bash jobs on shutdown");
+    }
     memory_monitor.shutdown().await;
     channel_health_monitor.shutdown().await;
     // Spec C: cleanup endpoint discovery file regardless of outcome. Both

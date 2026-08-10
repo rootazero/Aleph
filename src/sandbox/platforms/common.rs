@@ -1,10 +1,11 @@
-use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use tokio::io::AsyncReadExt;
 use tokio::process::Child;
 
 use crate::sandbox::command::{SandboxError, SandboxOutput};
+use crate::sandbox::live_tail::{LiveStream, LiveTail};
 
 /// How long to wait for the stdout/stderr reader tasks to drain after we
 /// kill a child that hit its wall-clock timeout. Matches codex's
@@ -41,65 +42,33 @@ pub fn wsl_version() -> Option<u32> {
         .map(|content| if content.contains("WSL2") { 2 } else { 1 })
 }
 
-#[must_use]
-pub fn normalize_path_for_sandbox(path: &Path, cwd: &Path) -> Option<PathBuf> {
-    if path.as_os_str().is_empty() {
-        return None;
-    }
-    if path.is_absolute() {
-        Some(path.to_path_buf())
-    } else {
-        Some(cwd.join(path))
-    }
-}
-
-#[must_use]
-pub fn path_is_allowed(path: &Path, allowed: &[PathBuf]) -> bool {
-    allowed.iter().any(|prefix| path.starts_with(prefix))
-}
-
-#[must_use]
-// rust-doctor-disable-next-line high-cyclomatic-complexity
-pub fn glob_to_regex(pattern: &str) -> Option<String> {
-    if pattern.is_empty() {
-        return None;
-    }
-
-    let mut regex = String::with_capacity(pattern.len() * 2);
-    regex.push('^');
-
-    let mut chars = pattern.chars().peekable();
-    while let Some(ch) = chars.next() {
-        match ch {
-            '*' => {
-                if chars.peek() == Some(&'*') {
-                    chars.next();
-                    regex.push_str(".*");
-                } else {
-                    regex.push_str("[^/]*");
-                }
-            }
-            '?' => regex.push_str("[^/]"),
-            '.' => regex.push_str("\\."),
-            '+' => regex.push_str("\\+"),
-            '(' => regex.push_str("\\("),
-            ')' => regex.push_str("\\)"),
-            '[' => regex.push_str("\\["),
-            ']' => regex.push_str("\\]"),
-            '{' => regex.push_str("\\{"),
-            '}' => regex.push_str("\\}"),
-            '^' => regex.push_str("\\^"),
-            '$' => regex.push_str("\\$"),
-            '|' => regex.push_str("\\|"),
-            '\\' => regex.push_str("\\\\"),
-            '/' => regex.push('/'),
-            c => regex.push(c),
-        }
-    }
-
-    regex.push('$');
-    Some(regex)
-}
+// NOTE (2026-08-10, entropy sweep): `normalize_path_for_sandbox`,
+// `path_is_allowed` and `glob_to_regex` used to live here. All three were
+// pre-`deny_globs` scaffolding with zero production consumers — only their
+// own unit tests. They are deleted rather than wired, deliberately:
+//
+// * `glob_to_regex` was a semantically *weaker* twin of the live
+//   [`crate::sandbox::deny_globs::glob_to_anchored_regex`]: it mapped `**`
+//   to `.*` without whole-component consumption, escaped `[`/`]` instead of
+//   preserving character classes, and had no bare-pattern-subtree rule.
+//   Wiring it into a future landlock path (which `deny_globs.rs` invites)
+//   would have produced a silently *weaker deny floor* that passed its own
+//   tests — the worst shape a security predicate can have.
+// * `path_is_allowed` was a bare uncanonicalized `starts_with`, i.e. exactly
+//   the Windows `\\?\` / display-form hazard the root CLAUDE.md warns about,
+//   shipped as public API where it invited being mistaken for the sandbox
+//   path gate.
+//
+// The live answers live in two different places, and the split is the point:
+//   * glob → regex, for the OS deny floor:
+//     [`crate::sandbox::deny_globs::glob_to_anchored_regex`], consumed by
+//     `deny_globs::resolve_deny_read_paths_under` → seatbelt / AppContainer.
+//   * "is this path denied", for the model's own file tools:
+//     [`crate::builtin_tools::file_ops::path_utils::path_is_denied`] and its
+//     upward twin `contains_denied_descendant`.
+// Do not re-add a translator or a containment predicate here.
+// (`approval/config.rs::glob_to_regex_str` is a third, deliberate translator
+// for the approval-rule domain and is out of scope of this note.)
 
 /// Truncate captured process output so the retained content is at most
 /// `max_bytes`, never cutting a UTF-8 codepoint in half (project rule P7).
@@ -220,6 +189,14 @@ fn termination_signal_xplat(_status: &std::process::ExitStatus) -> Option<i32> {
 /// Read `pipe` to EOF, keeping at most `buffer_ceiling` bytes and counting
 /// (but discarding) the rest. Returns `(kept, discarded)`.
 ///
+/// When `tee` is present every chunk is *also* pushed into a rolling
+/// [`LiveTail`] ring so a still-running background job can be polled for
+/// partial output. The tee sees the chunk **before** the ceiling is applied:
+/// `kept` is head-shaped and freezes at `buffer_ceiling`, whereas the ring is
+/// tail-shaped and must keep tracking the frontier — teeing only the retained
+/// slice would freeze the live view on exactly the long, loud builds it exists
+/// for. `None` (the foreground path) is byte-identical to the pre-tee loop.
+///
 /// Reading to EOF is the whole point: an earlier version wrapped the pipe in
 /// `take(ceiling)`, which stops reading at the ceiling and then DROPS the read
 /// end. The child's next write gets EPIPE/SIGPIPE and dies — so a command was
@@ -232,7 +209,11 @@ fn termination_signal_xplat(_status: &std::process::ExitStatus) -> Option<i32> {
 /// [`run_child_with_drain`] — not the pipe filling up. Draining costs one
 /// read loop into a fixed buffer; the producer burns the same CPU it would
 /// burn writing to a file.
-async fn drain_bounded<R>(pipe: Option<R>, buffer_ceiling: u64) -> (Vec<u8>, u64)
+async fn drain_bounded<R>(
+    pipe: Option<R>,
+    buffer_ceiling: u64,
+    tee: Option<(Arc<LiveTail>, LiveStream)>,
+) -> (Vec<u8>, u64)
 where
     R: tokio::io::AsyncRead + Unpin,
 {
@@ -248,6 +229,9 @@ where
     while let Ok(n) = pipe.read(&mut chunk).await {
         if n == 0 {
             break;
+        }
+        if let Some((tail, stream)) = &tee {
+            tail.push(*stream, &chunk[..n]);
         }
         let room = usize::try_from(buffer_ceiling)
             .unwrap_or(usize::MAX)
@@ -271,6 +255,13 @@ where
 /// `SandboxError::Timeout { elapsed_ms, partial_stdout, partial_stderr }`.
 /// Partial buffers may be empty if a grandchild was holding the pipes
 /// open longer than the drain budget.
+///
+/// While the child runs, both drain loops tee what they read into the
+/// [`LIVE_TAIL`](crate::sandbox::context::LIVE_TAIL) task-local's ring when one
+/// is in scope, so a backgrounded job can be polled for partial output instead
+/// of staying opaque until it exits. Those bytes are PRE-scrub — see
+/// [`LiveTail`] — and every reader owes them the same scrub-and-gate floor the
+/// finished path runs below.
 ///
 /// Used by every platform driver (seatbelt / bwrap / windows) so the
 /// kill-and-drain logic only lives in one place.
@@ -316,8 +307,21 @@ pub async fn run_child_with_drain(
     const DRAIN_BUFFER_FACTOR: u64 = 8;
     let buffer_ceiling = (max_output_bytes as u64).saturating_mul(DRAIN_BUFFER_FACTOR);
 
-    let stdout_task = tokio::spawn(drain_bounded(stdout, buffer_ceiling));
-    let stderr_task = tokio::spawn(drain_bounded(stderr, buffer_ceiling));
+    // Read the live-tail task-local HERE, on the caller's task: `tokio::spawn`
+    // does not carry task-locals into the spawned future, so each drain task
+    // has to be handed an owned clone instead of looking it up itself.
+    // `None` (foreground) leaves both loops byte-identical to their pre-tee form.
+    let live = crate::sandbox::context::current_live_tail();
+    let stdout_task = tokio::spawn(drain_bounded(
+        stdout,
+        buffer_ceiling,
+        live.clone().map(|t| (t, LiveStream::Stdout)),
+    ));
+    let stderr_task = tokio::spawn(drain_bounded(
+        stderr,
+        buffer_ceiling,
+        live.map(|t| (t, LiveStream::Stderr)),
+    ));
 
     let start = Instant::now();
     let wait_result = tokio::time::timeout(timeout, child.wait()).await;
@@ -374,116 +378,6 @@ pub async fn run_child_with_drain(
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn normalize_absolute_path() {
-        let path = Path::new("/usr/bin/python");
-        let cwd = Path::new("/home/user");
-        assert_eq!(
-            normalize_path_for_sandbox(path, cwd),
-            Some(PathBuf::from("/usr/bin/python"))
-        );
-    }
-
-    #[test]
-    fn normalize_relative_path() {
-        let path = Path::new("src/main.rs");
-        let cwd = Path::new("/home/user/project");
-        assert_eq!(
-            normalize_path_for_sandbox(path, cwd),
-            Some(PathBuf::from("/home/user/project/src/main.rs"))
-        );
-    }
-
-    #[test]
-    fn normalize_empty_path() {
-        let path = Path::new("");
-        let cwd = Path::new("/home/user");
-        assert_eq!(normalize_path_for_sandbox(path, cwd), None);
-    }
-
-    #[test]
-    fn normalize_dot_path() {
-        let path = Path::new(".");
-        let cwd = Path::new("/home/user");
-        assert_eq!(
-            normalize_path_for_sandbox(path, cwd),
-            Some(PathBuf::from("/home/user/."))
-        );
-    }
-
-    #[test]
-    fn path_allowed_exact_match() {
-        let path = Path::new("/home/user/project/src/main.rs");
-        let allowed = vec![PathBuf::from("/home/user/project")];
-        assert!(path_is_allowed(path, &allowed));
-    }
-
-    #[test]
-    fn path_allowed_multiple_prefixes() {
-        let path = Path::new("/tmp/test.txt");
-        let allowed = vec![
-            PathBuf::from("/home/user"),
-            PathBuf::from("/tmp"),
-            PathBuf::from("/var"),
-        ];
-        assert!(path_is_allowed(path, &allowed));
-    }
-
-    #[test]
-    fn path_not_allowed() {
-        let path = Path::new("/etc/passwd");
-        let allowed = vec![PathBuf::from("/home/user"), PathBuf::from("/tmp")];
-        assert!(!path_is_allowed(path, &allowed));
-    }
-
-    #[test]
-    fn path_allowed_empty_list() {
-        let path = Path::new("/home/user/file.txt");
-        let allowed: Vec<PathBuf> = vec![];
-        assert!(!path_is_allowed(path, &allowed));
-    }
-
-    #[test]
-    fn glob_star_matches_single_segment() {
-        let regex = glob_to_regex("*.rs").unwrap();
-        assert_eq!(regex, "^[^/]*\\.rs$");
-    }
-
-    #[test]
-    fn glob_double_star_matches_any() {
-        let regex = glob_to_regex("src/**/*.rs").unwrap();
-        assert_eq!(regex, "^src/.*/[^/]*\\.rs$");
-    }
-
-    #[test]
-    fn glob_question_mark() {
-        let regex = glob_to_regex("file?.txt").unwrap();
-        assert_eq!(regex, "^file[^/]\\.txt$");
-    }
-
-    #[test]
-    fn glob_literal_match() {
-        let regex = glob_to_regex("hello.txt").unwrap();
-        assert_eq!(regex, "^hello\\.txt$");
-    }
-
-    #[test]
-    fn glob_empty_pattern() {
-        assert_eq!(glob_to_regex(""), None);
-    }
-
-    #[test]
-    fn glob_special_chars_escaped() {
-        let regex = glob_to_regex("file(name)+[1].txt").unwrap();
-        assert_eq!(regex, "^file\\(name\\)\\+\\[1\\]\\.txt$");
-    }
-
-    #[test]
-    fn glob_mixed_pattern() {
-        let regex = glob_to_regex("src/**/test_*.rs").unwrap();
-        assert_eq!(regex, "^src/.*/test_[^/]*\\.rs$");
-    }
 
     #[test]
     fn linux_platform_defaults_not_empty() {
@@ -773,6 +667,95 @@ mod tests {
         assert_eq!(out.stdout.len(), 50);
         assert_eq!(out.stdout_truncated_bytes, 150);
         assert!(out.truncated);
+    }
+
+    /// The tee must reach BOTH drain loops through the task-local, and it must
+    /// see the whole stream — not the head-shaped slice `kept` retains. Without
+    /// the `LIVE_TAIL` scope the same run must leave the tail untouched.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn run_child_with_drain_tees_both_streams_into_the_live_tail() {
+        use crate::sandbox::context::LIVE_TAIL;
+        use tokio::process::Command;
+
+        let spawn = || {
+            Command::new("bash")
+                .arg("-c")
+                .arg("echo out-line; echo err-line 1>&2")
+                .stdout(std::process::Stdio::piped())
+                .stderr(std::process::Stdio::piped())
+                .stdin(std::process::Stdio::piped())
+                .kill_on_drop(true)
+                .spawn()
+                .expect("spawn bash")
+        };
+
+        let tail = Arc::new(LiveTail::new());
+        let scoped = tail.clone();
+        LIVE_TAIL
+            .scope(scoped, async {
+                run_child_with_drain(spawn(), None, Duration::from_secs(20), 1024)
+                    .await
+                    .expect("natural exit");
+            })
+            .await;
+        let snap = tail.snapshot();
+        assert_eq!(String::from_utf8_lossy(&snap.stdout), "out-line\n");
+        assert_eq!(String::from_utf8_lossy(&snap.stderr), "err-line\n");
+        assert_eq!(snap.stdout_total, 9);
+        assert_eq!(snap.stderr_total, 9);
+
+        // No scope ⇒ no tee: the foreground path must not pay for this.
+        let untouched = Arc::new(LiveTail::new());
+        run_child_with_drain(spawn(), None, Duration::from_secs(20), 1024)
+            .await
+            .expect("natural exit");
+        assert!(untouched.snapshot().is_empty());
+    }
+
+    /// The regression this whole feature turns on: `kept` stops growing at the
+    /// drain ceiling, so a tee wired to the retained slice would freeze. The
+    /// ring must keep tracking the frontier and the total must count every byte.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn live_tail_keeps_tracking_past_the_drain_ceiling() {
+        use crate::sandbox::context::LIVE_TAIL;
+        use tokio::process::Command;
+
+        // max_output_bytes = 64 ⇒ drain ceiling 512 bytes (8x). Emit ~4 KB of
+        // 'a' then a distinctive trailer that lands far past the ceiling.
+        let child = Command::new("bash")
+            .arg("-c")
+            .arg("head -c 4096 /dev/zero | tr '\\0' 'a'; printf 'THE-END'")
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .stdin(std::process::Stdio::piped())
+            .kill_on_drop(true)
+            .spawn()
+            .expect("spawn bash");
+
+        let tail = Arc::new(LiveTail::new());
+        let scoped = tail.clone();
+        let out = LIVE_TAIL
+            .scope(scoped, async {
+                run_child_with_drain(child, None, Duration::from_secs(20), 64)
+                    .await
+                    .expect("natural exit")
+            })
+            .await;
+
+        assert!(out.truncated, "the retained slice hit its cap");
+        let snap = tail.snapshot();
+        assert_eq!(
+            snap.stdout_total,
+            4096 + 7,
+            "the counter sees every byte the drain loop read, ceiling or not"
+        );
+        assert!(
+            String::from_utf8_lossy(&snap.stdout).ends_with("THE-END"),
+            "the live view tracks the frontier; a head-shaped tee would have \
+             frozen 3.5 KB earlier"
+        );
     }
 
     #[cfg(unix)]

@@ -12,11 +12,20 @@
 //!   `justification` / hermes `force`-with-reason parity. R8/R9: the model
 //!   explains in natural language, the system merely relays — zero added
 //!   judgment.
+//! - [`LIVE_TAIL`] — where the platform drivers' output drain loops tee a
+//!   rolling tail of the child's stdout/stderr, so a *still-running* background
+//!   job can be observed instead of being a black box until it exits.
+//!
+//! Every one of these is a `tokio::task_local`, which means: **the scope does
+//! not cross `tokio::spawn`**. A tool that hands work to a detached task must
+//! re-enter the scopes inside that task — see `bash_exec::spawn_background`,
+//! which re-enters `SESSION_ID` and `LIVE_TAIL` for exactly this reason.
 
 use std::sync::Arc;
 
 use tokio::task_local;
 
+use crate::sandbox::live_tail::LiveTail;
 use crate::sandbox::Sandbox;
 use crate::session::service::SessionId;
 
@@ -32,6 +41,13 @@ task_local! {
     /// `CARGO_TARGET_DIR` redirected) instead of the parent's shared workspace.
     /// Absent ⇒ tools use their construction-time sandbox (the common path).
     pub static SANDBOX_OVERRIDE: Arc<dyn Sandbox>;
+    /// Rolling tail of the currently-executing child's output. Scoped by
+    /// `bash`'s background spawner around the whole exec call; read by
+    /// [`run_child_with_drain`](crate::sandbox::platforms::common::run_child_with_drain)
+    /// which tees every chunk its drain loops read into it. Absent ⇒ nothing is
+    /// tee'd and the drain loops behave byte-identically to their pre-live-tail
+    /// form (the foreground path, which has no one to show a partial to).
+    pub static LIVE_TAIL: Arc<LiveTail>;
 }
 
 /// Returns the current session id if we're inside a `SESSION_ID.scope(...)`,
@@ -59,6 +75,15 @@ pub fn current_justification() -> Option<String> {
 pub fn current_sandbox_override() -> Option<Arc<dyn Sandbox>> {
     // rust-doctor-disable-next-line excessive-clone
     SANDBOX_OVERRIDE.try_with(|s| s.clone()).ok()
+}
+
+/// The live output tail in scope for the current exec call, if any. `None` on
+/// the foreground path — nobody can read a partial from a call that has not
+/// returned yet, so nothing is tee'd there.
+#[must_use]
+pub fn current_live_tail() -> Option<Arc<LiveTail>> {
+    // rust-doctor-disable-next-line excessive-clone
+    LIVE_TAIL.try_with(Arc::clone).ok()
 }
 
 /// Run `fut` with `sandbox` installed as the exec-tool sandbox override. `None`
@@ -93,6 +118,36 @@ mod tests {
             current_sandbox_override().is_none(),
             "override must clear once the scope ends"
         );
+    }
+
+    #[tokio::test]
+    async fn live_tail_visible_inside_and_cleared_after() {
+        let tail = Arc::new(crate::sandbox::live_tail::LiveTail::new());
+        let seen = LIVE_TAIL
+            .scope(tail, async { current_live_tail().is_some() })
+            .await;
+        assert!(seen, "tail must be visible inside the scope");
+        assert!(
+            current_live_tail().is_none(),
+            "tail must clear once the scope ends"
+        );
+    }
+
+    /// The reason `bash_exec::spawn_background` re-enters the scope *inside*
+    /// the detached task: task-locals do not cross `tokio::spawn`. If this ever
+    /// starts passing with the scope only on the outside, the re-entry in
+    /// `spawn_background` can be simplified — until then it is load-bearing.
+    #[tokio::test]
+    async fn live_tail_does_not_cross_tokio_spawn() {
+        let tail = Arc::new(crate::sandbox::live_tail::LiveTail::new());
+        let seen_inside_spawn = LIVE_TAIL
+            .scope(tail, async {
+                tokio::spawn(async { current_live_tail().is_some() })
+                    .await
+                    .expect("join")
+            })
+            .await;
+        assert!(!seen_inside_spawn);
     }
 
     #[tokio::test]

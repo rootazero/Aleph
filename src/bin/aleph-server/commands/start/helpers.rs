@@ -459,6 +459,25 @@ pub(super) fn setup_graceful_shutdown(args: &Args) -> tokio::sync::oneshot::Rece
             "graceful shutdown did not complete within {}s; forcing exit",
             SHUTDOWN_FAILSAFE.as_secs()
         );
+        // The orderly teardown in `start_server` never ran, so its reap of
+        // detached background `bash` jobs never ran either — and the
+        // `std::process::exit(0)` below skips every remaining destructor.
+        // A wedged shutdown usually coincides with load, which is exactly
+        // when a long `cargo build` is most likely to be in flight, so this
+        // is the case where orphans are most likely, not least. Idempotent
+        // with the `start_server` call site.
+        let reaped = alephcore::builtin_tools::bash_exec::kill_all_running_background();
+        if reaped > 0 {
+            // `abort()` only *marks* the task; the runtime drops its
+            // `tokio::process::Child` — and so fires `kill_on_drop` — on the
+            // next scheduler pass. `process::exit` gives it none, so yield
+            // briefly. Bounded and small: a wedged shutdown is already 5s late.
+            tracing::warn!(
+                count = reaped,
+                "reaping background bash jobs before forced exit"
+            );
+            tokio::time::sleep(std::time::Duration::from_millis(250)).await;
+        }
         std::process::exit(0);
     });
 
@@ -519,5 +538,59 @@ mod tests {
         assert!(line.contains("ts=2026-07-24T00:00:00+00:00"));
         assert!(line.contains("pid=4242"));
         assert!(line.contains("version=26.7.24"));
+    }
+
+    /// Both daemon exit paths must reap detached background `bash` jobs.
+    ///
+    /// This is a SOURCE pin, and deliberately so: the effect is "no orphan
+    /// OS process survives the daemon", which needs a real daemon boot, a
+    /// real backgrounded child and a real `SIGTERM` to observe — untestable
+    /// from a unit test, and the reason this wire sat cut while *two* doc
+    /// comments asserted it existed (`process_registry.rs`'s
+    /// `ProcessRegistry::shutdown` doc, and FEATURE_LOCATOR §3.7). What the
+    /// pin buys is precise: deleting either call fails a test by name
+    /// instead of silently re-orphaning every long build.
+    ///
+    /// Deliberately covers BOTH sites. They are not redundant —
+    /// `start_server`'s call is the orderly path (and the only one reached
+    /// when `run_until_shutdown` returns an error rather than a signal),
+    /// while this file's is the wedged path, where the failsafe
+    /// `std::process::exit(0)` skips the orderly block entirely.
+    #[test]
+    fn both_daemon_exit_paths_reap_background_jobs() {
+        let reaper = "kill_all_running_background";
+        for (label, raw) in [
+            ("start/helpers.rs", include_str!("helpers.rs")),
+            ("start/mod.rs", include_str!("mod.rs")),
+        ] {
+            // CRLF-safe: this repo's Windows checkout has `\r\n` line
+            // endings and `include_str!` hands over the raw bytes, so a
+            // separator anchored as "\n#[cfg(test)]" would match nothing,
+            // leave `production` as the whole file, and let this very test
+            // module's own mention of the identifier satisfy the assertion.
+            // Strip `\r` first and split on an unanchored needle.
+            let src = raw.replace('\r', "");
+            let production = src.split("#[cfg(test)]").next().unwrap_or(&src);
+            // Non-vacuity: prove the bound actually cut something off in the
+            // file that HAS a test module, so the split is doing real work.
+            if label.ends_with("helpers.rs") {
+                assert!(
+                    production.len() < src.len(),
+                    "{label}: the #[cfg(test)] bound matched nothing — this \
+                     test would then be reading its own source"
+                );
+            }
+            // Assert on the CALL (`ident(`), not the bare name: the prose
+            // above and the explanatory comments at both sites also spell
+            // the identifier, so `contains(reaper)` alone would stay green
+            // if someone deleted the statement and kept the comment.
+            assert!(
+                production.contains(&format!("{reaper}(")),
+                "{label} must call {reaper}() on its exit path — \
+                 `Child::kill_on_drop` is best-effort once the runtime is \
+                 being torn down, so without this a backgrounded build \
+                 outlives the daemon and keeps writing to the workspace"
+            );
+        }
     }
 }

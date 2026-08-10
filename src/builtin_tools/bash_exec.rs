@@ -19,12 +19,15 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 use super::code_exec::{CodeExecArgs, CodeExecOutput, CodeExecTool, Language};
+use super::process_journal::{self, JobPhase, RecoveredJob};
 use super::process_registry::{
     process_registry, KillOutcome, PollOutcome, RegisterOutcome, WaitOutcome,
 };
 use crate::error::Result;
-use crate::sandbox::context::SESSION_ID;
+use crate::sandbox::context::{LIVE_TAIL, SESSION_ID};
+use crate::sandbox::live_tail::{LiveSnapshot, LiveTail};
 use crate::sandbox::{current_session, Sandbox};
+use crate::tool_output::sanitize::sanitize_command_output;
 use crate::tools::AlephTool;
 
 /// Default wall-clock timeout (seconds) applied to a **background** job when
@@ -183,11 +186,11 @@ installs, long test runs). Set `background: true` and the call returns a
 ceiling: with no explicit `timeout` they get a generous 1-hour default
 (pass `timeout` to raise or lower it), and you can stop one anytime with
 `process_action: "kill"`. Manage it with `process_action`:
-- `{"process_action": "poll", "process_id": N}` → status while running, or
-  the full {exit_code, stdout, stderr} once finished (output is captured,
-  not streamed mid-run — poll again until done).
+- `{"process_action": "poll", "process_id": N}` → status + an 8 KB
+  `partial_stdout`/`partial_stderr` tail while running, or the full
+  {exit_code, stdout, stderr} once finished.
 - `{"process_action": "wait", "process_id": N}` → block until it finishes
-  and return its full output, or a `running` status if it is still going
+  and return its full output, or the same `running` status if it is still going
   after the wait window (default 60s, set `timeout` to extend up to 170s).
   Prefer `wait` over a tight `poll` loop — it costs no round-trips while
   the job runs.
@@ -259,7 +262,9 @@ impl BashExecTool {
     /// the right per-session workspace, and re-enters the ambient
     /// `CallIdentity` so a sandbox-elevation approval raised by the detached
     /// command still stamps the bash call that spawned it (otherwise the card
-    /// reverts to the uncorrelated pre-identity state for exactly this path).
+    /// reverts to the uncorrelated pre-identity state for exactly this path),
+    /// and enters a fresh `LIVE_TAIL` scope so the platform driver's drain
+    /// loops tee a rolling tail that `poll` / `wait` can show mid-run.
     fn spawn_background(&self, code_exec_args: CodeExecArgs) -> CodeExecOutput {
         let registry = process_registry();
         let caller = session_label();
@@ -267,6 +272,11 @@ impl BashExecTool {
         let identity = crate::approval::current_call_identity();
         let inner = self.inner.clone();
         let preview = code_exec_args.code.clone();
+        // One tail per background job: the detached task scopes it (so the
+        // drivers can tee into it) and the registry holds it (so `poll` can
+        // read it) until the entry retires.
+        let live = Arc::new(LiveTail::new());
+        let live_for_task = live.clone();
 
         // The task must not record completion before it has been registered
         // (a fast command could otherwise finish before `register_running`
@@ -287,14 +297,22 @@ impl BashExecTool {
             // legitimately run for the full 1h ceiling. `call_unclamped` runs
             // `execute` directly, bypassing the clamp in `AlephTool::call`.
             let result = crate::approval::with_call_identity(identity, async move {
-                match sid {
-                    Some(sid) => {
-                        SESSION_ID
-                            .scope(sid, inner.call_unclamped(code_exec_args))
-                            .await
-                    }
-                    None => inner.call_unclamped(code_exec_args).await,
-                }
+                // Task-locals do NOT cross `tokio::spawn`, so both the session
+                // scope and the live-tail scope have to be re-entered HERE, in
+                // the spawned task — entering them around `tokio::spawn` on the
+                // caller's task would leave the driver seeing neither.
+                LIVE_TAIL
+                    .scope(live_for_task, async move {
+                        match sid {
+                            Some(sid) => {
+                                SESSION_ID
+                                    .scope(sid, inner.call_unclamped(code_exec_args))
+                                    .await
+                            }
+                            None => inner.call_unclamped(code_exec_args).await,
+                        }
+                    })
+                    .await
             })
             .await;
             let output = result
@@ -304,6 +322,7 @@ impl BashExecTool {
 
         match registry.register_running(preview, caller, join.abort_handle()) {
             RegisterOutcome::Registered(id) => {
+                registry.attach_live(id, live);
                 let _ = id_tx.send(id);
                 info_output(serde_json::json!({
                     "process_id": id,
@@ -374,7 +393,30 @@ async fn handle_process_action(
     match action {
         "list" => {
             let rows = registry.list(caller.as_deref());
-            info_output(serde_json::json!({ "processes": rows }))
+            let live: Vec<u64> = rows.iter().map(|r| r.id).collect();
+            let mut payload = serde_json::Map::new();
+            payload.insert("processes".into(), serde_json::json!(rows));
+            let recovered = resolve_forgotten(None, caller.as_deref(), &live);
+            if !recovered.is_empty() {
+                payload.insert(
+                    "recovered".into(),
+                    serde_json::Value::Array(
+                        recovered
+                            .iter()
+                            .map(|job| serde_json::Value::Object(recovered_row(job)))
+                            .collect(),
+                    ),
+                );
+                payload.insert(
+                    "recovered_note".into(),
+                    serde_json::json!(
+                        "`recovered` rows come from the on-disk execution journal, not from a \
+                         live handle: they outlive the daemon that started them. Read each \
+                         row's `status` and `advisory` before acting on it."
+                    ),
+                );
+            }
+            info_output(serde_json::Value::Object(payload))
         }
         "poll" => {
             let Some(id) = process_id else {
@@ -383,18 +425,15 @@ async fn handle_process_action(
             match registry.poll(id, caller.as_deref()) {
                 // Surface the captured tool output verbatim once finished.
                 PollOutcome::Done(out) => *out,
-                PollOutcome::Running { elapsed_ms } => info_output(serde_json::json!({
-                    "process_id": id,
-                    "status": "running",
-                    "elapsed_ms": elapsed_ms,
-                })),
+                PollOutcome::Running {
+                    elapsed_ms,
+                    partial,
+                } => info_output(running_payload(id, elapsed_ms, partial, None)),
                 PollOutcome::Killed => info_output(serde_json::json!({
                     "process_id": id,
                     "status": "killed",
                 })),
-                PollOutcome::NotFound => error_output(format!(
-                    "bash: no background process #{id} for this session"
-                )),
+                PollOutcome::NotFound => recovered_or_unknown(id, caller.as_deref(), None),
             }
         }
         "wait" => {
@@ -416,18 +455,19 @@ async fn handle_process_action(
                     "process_id": id,
                     "status": "killed",
                 })),
-                WaitOutcome::TimedOut { elapsed_ms } => info_output(serde_json::json!({
-                    "process_id": id,
-                    "status": "running",
-                    "elapsed_ms": elapsed_ms,
-                    "message": format!(
+                WaitOutcome::TimedOut {
+                    elapsed_ms,
+                    partial,
+                } => info_output(running_payload(
+                    id,
+                    elapsed_ms,
+                    partial,
+                    Some(format!(
                         "Still running after waiting {secs}s. Wait again or poll later with \
                          {{\"process_action\":\"poll\",\"process_id\":{id}}}."
-                    ),
-                })),
-                WaitOutcome::NotFound => error_output(format!(
-                    "bash: no background process #{id} for this session"
+                    )),
                 )),
+                WaitOutcome::NotFound => recovered_or_unknown(id, caller.as_deref(), None),
             }
         }
         "kill" => {
@@ -443,15 +483,264 @@ async fn handle_process_action(
                     "process_id": id,
                     "status": "already_finished",
                 })),
-                KillOutcome::NotFound => error_output(format!(
-                    "bash: no background process #{id} for this session"
-                )),
+                // A journaled job has no `AbortHandle` in this process, so the
+                // kill is NOT attempted — and saying so is the whole point:
+                // silence here would read as "terminated".
+                KillOutcome::NotFound => recovered_or_unknown(
+                    id,
+                    caller.as_deref(),
+                    Some(
+                        "kill was NOT attempted: this process holds no handle for this job. If \
+                         its OS process is still alive, terminate it yourself (e.g. `pkill -f`).",
+                    ),
+                ),
             }
         }
         other => error_output(format!(
             "bash: unknown process_action '{other}' (expected poll|wait|kill|list)"
         )),
     }
+}
+
+/// **The** answer to "the in-memory registry cannot answer for this id".
+///
+/// One resolver for all four `process_action` faces: `poll` / `wait` / `kill`
+/// ask it by id from their `NotFound` arms, `list` asks it (with `target =
+/// None`) for everything this caller owns that the live table did not already
+/// show. Answering that question per face is how a directory ends up
+/// contradicting itself — the sub-agent tool shipped exactly that bug, `list`
+/// rendering an id as recovered while `check_status` on the same id said "no
+/// such thing", and `agents::subagent_tool::recovery::resolve_forgotten` is the
+/// single-chokepoint shape being copied here.
+///
+/// Scoping is the journal's, which is strict equality on the owning session
+/// label and refuses an unscoped caller outright.
+fn resolve_forgotten(target: Option<u64>, caller: Option<&str>, live: &[u64]) -> Vec<RecoveredJob> {
+    match target {
+        Some(id) => process_journal::lookup(id, caller).into_iter().collect(),
+        None => process_journal::list_for_scope(caller, live),
+    }
+}
+
+/// Render a journaled job for a by-id face, or fall back to the pre-existing
+/// unknown-id error when the journal has nothing either.
+///
+/// **Always [`info_output`], never [`error_output`].** A restart is not a
+/// verdict on the call the model is making now: `success: false` /
+/// `exit_code: -1` would teach it that *this* poll failed, when the poll
+/// succeeded and its answer is "that job belonged to a daemon that is gone".
+///
+/// `skipped` names an action this face could not perform on a recovered row
+/// (P7 / house rule: a fail-soft skip has to be stated in the result the model
+/// reads, not inferred from a missing key).
+fn recovered_or_unknown(id: u64, caller: Option<&str>, skipped: Option<&str>) -> CodeExecOutput {
+    let Some(job) = resolve_forgotten(Some(id), caller, &[]).into_iter().next() else {
+        return error_output(format!(
+            "bash: no background process #{id} for this session"
+        ));
+    };
+    let mut row = recovered_row(&job);
+    if let Some(note) = skipped {
+        row.insert("skipped".into(), serde_json::json!(note));
+    }
+    info_output(serde_json::Value::Object(row))
+}
+
+/// One journal row as the model sees it.
+///
+/// The advisory rides in the *response* rather than in the tool DESCRIPTION on
+/// purpose (R9, second ruler): it is a runtime fact about one specific id, so
+/// paying for it in every request's prompt would buy nothing.
+fn recovered_row(job: &RecoveredJob) -> serde_json::Map<String, serde_json::Value> {
+    let record = &job.record;
+    let mut obj = serde_json::Map::new();
+    obj.insert("process_id".into(), serde_json::json!(record.id));
+    obj.insert(
+        "status".into(),
+        serde_json::json!(record.phase.status_label()),
+    );
+    obj.insert("recovered".into(), serde_json::json!(true));
+    obj.insert("command".into(), serde_json::json!(record.command));
+    obj.insert("started_at_ms".into(), serde_json::json!(record.started_ms));
+    if let Some(ended) = record.ended_ms {
+        obj.insert("ended_at_ms".into(), serde_json::json!(ended));
+    }
+    if let Some(outcome) = record.outcome.as_deref() {
+        obj.insert("outcome".into(), serde_json::json!(outcome));
+    }
+    // Deliberately NOT the envelope's `exit_code`: `info_output` stamps 0, and
+    // two exit codes in one response is how the model learns the wrong one.
+    if let Some(code) = record.exit_code {
+        obj.insert("recorded_exit_code".into(), serde_json::json!(code));
+    }
+    if job.recorded_output.is_empty() {
+        obj.insert(
+            "recorded_output_absent".into(),
+            serde_json::json!(no_output_reason(record.phase, record.outcome.as_deref())),
+        );
+    } else {
+        obj.insert(
+            "recorded_output".into(),
+            serde_json::json!(job.recorded_output),
+        );
+    }
+    obj.insert("advisory".into(), serde_json::json!(advisory(record.phase)));
+    obj
+}
+
+/// Why a recovered row carries no output. Silence would read as "the command
+/// printed nothing", which is a different (and usually false) claim.
+fn no_output_reason(phase: JobPhase, outcome: Option<&str>) -> &'static str {
+    match (phase, outcome) {
+        (JobPhase::Settled, Some("killed")) => {
+            "No output was recorded: the job was killed, so it never produced a final result."
+        }
+        (JobPhase::Settled, _) => {
+            "This job recorded no output — its stdout and stderr were both empty."
+        }
+        _ => {
+            "No output was recorded: the journal captures a job's output only when it reaches a \
+             terminal state in the daemon that ran it, and this one never did."
+        }
+    }
+}
+
+/// What the model must understand about a row that came off disk.
+///
+/// The interrupted case says more than the sub-agent sidecar's equivalent
+/// because it knows less: a background `bash` child is a real OS process that
+/// can outlive a `SIGKILL`ed daemon, no pid is recorded anywhere, and nothing
+/// here probes for one. Claiming it died would be inventing a verdict.
+fn advisory(phase: JobPhase) -> &'static str {
+    match phase {
+        JobPhase::Interrupted => {
+            "This job was still running when the previous daemon stopped. Aleph no longer holds a \
+             handle to it and did NOT check whether the OS process is still alive — it may still \
+             be running, it may have finished, or it may have died with the daemon. This is not a \
+             verdict on the command: nothing about it failed. Check yourself (e.g. `ps`) before \
+             assuming either way, and before re-running work that may already be done."
+        }
+        JobPhase::Running => {
+            "This job's journal row still says running, but this process holds no handle for it. \
+             Aleph did NOT check whether the OS process is still alive."
+        }
+        JobPhase::Settled => {
+            "Recovered from the on-disk execution journal: this job reached a terminal state \
+             either in an earlier daemon or before its live entry was evicted. The fields here \
+             are what was recorded then; there is no live handle to it."
+        }
+    }
+}
+
+/// What a live partial snapshot is allowed to show.
+enum PartialView {
+    /// Nothing captured yet — the child has not written a byte.
+    Empty,
+    /// Cleared the same content floor the finished path enforces.
+    Text { stdout: String, stderr: String },
+    /// Block-class secret material in the raw bytes. The finished path fails
+    /// the whole call on this; the partial path refuses to render it.
+    Withheld,
+}
+
+/// Run the completed path's content floor over a PRE-scrub live snapshot.
+///
+/// The drain loops tee raw pipe bytes, so this is the one place that decides
+/// whether any of them may be shown. It runs exactly what
+/// `WorkspaceSandbox::execute` runs on a finished command —
+/// [`scrub_and_gate_output`](crate::sandbox::scrub::scrub_and_gate_output)
+/// (secret redaction + block-class gate + invisible/bidi neutralisation) via a
+/// throwaway [`SandboxOutput`](crate::sandbox::SandboxOutput), then
+/// [`sanitize_command_output`] for ANSI/control bytes. A block-class hit makes
+/// the finished call fail closed, so the partial is withheld rather than shown
+/// redacted: without this, "poll a running job" would be a way to read what the
+/// completed path refuses to return.
+///
+/// Residual, stated honestly: the gate sees only the bytes read so far, so a
+/// secret that straddles the current read frontier can still leak its **prefix**
+/// — the pattern cannot match a value whose second half has not arrived. The
+/// completed path catches the whole value and fails the call; a poll issued
+/// mid-write does not. Shrinking that window would mean holding back the tail
+/// of every snapshot, which is the same freeze this feature exists to remove.
+fn partial_view(snapshot: &LiveSnapshot) -> PartialView {
+    if snapshot.stdout.is_empty() && snapshot.stderr.is_empty() {
+        return PartialView::Empty;
+    }
+    let mut probe = crate::sandbox::SandboxOutput {
+        stdout: snapshot.stdout.clone(),
+        stderr: snapshot.stderr.clone(),
+        ..Default::default()
+    };
+    if !crate::sandbox::scrub::scrub_and_gate_output(&mut probe).is_empty() {
+        return PartialView::Withheld;
+    }
+    PartialView::Text {
+        stdout: sanitize_command_output(&String::from_utf8_lossy(&probe.stdout)).into_owned(),
+        stderr: sanitize_command_output(&String::from_utf8_lossy(&probe.stderr)).into_owned(),
+    }
+}
+
+/// Assemble the `status: "running"` payload for `poll` / `wait`.
+///
+/// The partial bytes go under their own `partial_stdout` / `partial_stderr`
+/// keys and are deliberately NOT promoted into the envelope's `stdout` /
+/// `stderr`: [`info_output`] hardcodes `success: true` / `exit_code: 0`, and an
+/// `exit_code: 0` sitting next to a compiler error — while the tool description
+/// teaches the model to read exit codes — is a worse bug than the silence this
+/// replaces.
+fn running_payload(
+    id: u64,
+    elapsed_ms: u64,
+    partial: Option<LiveSnapshot>,
+    message: Option<String>,
+) -> serde_json::Value {
+    let mut obj = serde_json::Map::new();
+    obj.insert("process_id".into(), serde_json::json!(id));
+    obj.insert("status".into(), serde_json::json!("running"));
+    obj.insert("elapsed_ms".into(), serde_json::json!(elapsed_ms));
+    if let Some(msg) = message {
+        obj.insert("message".into(), serde_json::json!(msg));
+    }
+    if let Some(snap) = partial {
+        // Full byte counts, ring-independent: `bytes_so_far` minus what the
+        // tail shows is what scrolled past.
+        obj.insert(
+            "bytes_so_far".into(),
+            serde_json::json!({ "stdout": snap.stdout_total, "stderr": snap.stderr_total }),
+        );
+        let out_elided = snap.stdout_total.saturating_sub(snap.stdout.len() as u64);
+        let err_elided = snap.stderr_total.saturating_sub(snap.stderr.len() as u64);
+        if out_elided > 0 || err_elided > 0 {
+            obj.insert(
+                "partial_elided_bytes".into(),
+                serde_json::json!({ "stdout": out_elided, "stderr": err_elided }),
+            );
+        }
+        match partial_view(&snap) {
+            // Running, nothing printed yet: `bytes_so_far` already says 0/0.
+            PartialView::Empty => {}
+            PartialView::Text { stdout, stderr } => {
+                if !stdout.is_empty() {
+                    obj.insert("partial_stdout".into(), serde_json::json!(stdout));
+                }
+                if !stderr.is_empty() {
+                    obj.insert("partial_stderr".into(), serde_json::json!(stderr));
+                }
+            }
+            // Say what was skipped — silence here would read as "it printed
+            // nothing", which is the opposite of what happened.
+            PartialView::Withheld => {
+                obj.insert(
+                    "partial_withheld".into(),
+                    serde_json::json!(
+                        "Partial output withheld: block-class secret material was detected in \
+                         the output so far. Poll again later, or inspect the job's own log file."
+                    ),
+                );
+            }
+        }
+    }
+    serde_json::Value::Object(obj)
 }
 
 /// Build a successful informational `CodeExecOutput` whose `stdout` carries a
@@ -491,6 +780,7 @@ fn error_output(message: impl Into<String>) -> CodeExecOutput {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::sandbox::live_tail::LIVE_TAIL_BYTES;
 
     /// TDD RED: `timeout_seconds` is the canonical spelling; the legacy bare
     /// `timeout` must still parse via `#[serde(alias = "timeout")]` so saved
@@ -594,6 +884,129 @@ mod tests {
             d.contains("file_read") && d.contains("search"),
             "should redirect to the purpose-built read/search tools"
         );
+    }
+
+    /// The description promises an "8 KB" tail; the ring is sized by
+    /// `LIVE_TAIL_BYTES`. Two statements of one fact — pin them together so a
+    /// resize cannot leave the model reading a stale promise.
+    #[test]
+    fn description_partial_tail_size_matches_the_ring() {
+        let d = <BashExecTool as AlephTool>::DESCRIPTION;
+        assert_eq!(LIVE_TAIL_BYTES, 8 * 1024);
+        assert!(d.contains("8 KB"), "should state the tail size");
+        assert!(
+            d.contains("partial_stdout") && d.contains("partial_stderr"),
+            "should name the keys the model has to read"
+        );
+        assert!(
+            !d.contains("not streamed mid-run"),
+            "the old claim that output is only captured at the end is now false"
+        );
+    }
+
+    fn snapshot(stdout: &[u8], stderr: &[u8], out_total: u64, err_total: u64) -> LiveSnapshot {
+        LiveSnapshot {
+            stdout: stdout.to_vec(),
+            stderr: stderr.to_vec(),
+            stdout_total: out_total,
+            stderr_total: err_total,
+        }
+    }
+
+    #[test]
+    fn running_payload_carries_partial_under_its_own_keys() {
+        let v = running_payload(
+            7,
+            1234,
+            Some(snapshot(b"Compiling\n", b"warning: x\n", 10, 11)),
+            None,
+        );
+        assert_eq!(v["status"], "running");
+        assert_eq!(v["partial_stdout"], "Compiling\n");
+        assert_eq!(v["partial_stderr"], "warning: x\n");
+        assert_eq!(v["bytes_so_far"]["stdout"], 10);
+        assert_eq!(v["bytes_so_far"]["stderr"], 11);
+        // Nothing elided yet, so the key stays off the wire.
+        assert!(v.get("partial_elided_bytes").is_none());
+        // The envelope must NOT be told these are the command's real streams:
+        // `info_output` stamps exit_code 0, and a 0 next to a compiler error
+        // would teach the model the build passed.
+        assert!(v.get("stdout").is_none() && v.get("stderr").is_none());
+        let envelope = info_output(v);
+        assert_eq!(envelope.exit_code, 0);
+        assert!(
+            envelope.stdout.contains("partial_stdout"),
+            "partial rides inside the JSON payload, not the envelope streams"
+        );
+    }
+
+    #[test]
+    fn running_payload_reports_how_much_scrolled_past_the_ring() {
+        let v = running_payload(1, 0, Some(snapshot(b"tail", b"", 4096, 0)), None);
+        assert_eq!(v["bytes_so_far"]["stdout"], 4096);
+        assert_eq!(v["partial_elided_bytes"]["stdout"], 4092);
+        assert_eq!(v["partial_elided_bytes"]["stderr"], 0);
+    }
+
+    #[test]
+    fn running_payload_with_no_output_yet_says_zero_not_nothing() {
+        let v = running_payload(1, 5, Some(snapshot(b"", b"", 0, 0)), None);
+        assert_eq!(v["bytes_so_far"]["stdout"], 0);
+        assert!(v.get("partial_stdout").is_none());
+        assert!(v.get("partial_withheld").is_none());
+    }
+
+    /// No live tail attached (a job registered before the tail was wired, or a
+    /// backend that never tees) ⇒ no partial keys at all. An empty
+    /// `partial_stdout` would claim the child printed nothing.
+    #[test]
+    fn running_payload_without_a_tail_omits_every_partial_key() {
+        let v = running_payload(1, 5, None, None);
+        assert!(v.get("bytes_so_far").is_none());
+        assert!(v.get("partial_stdout").is_none());
+    }
+
+    /// Rider (a): the drain bytes are PRE-scrub. Ordinary secrets are redacted
+    /// like the finished path redacts them...
+    #[test]
+    fn partial_output_is_scrubbed_like_the_finished_path() {
+        let raw = b"token=ghp_0123456789abcdefghijklmnopqrstuvwx\n";
+        let v = running_payload(1, 0, Some(snapshot(raw, b"", raw.len() as u64, 0)), None);
+        let shown = v["partial_stdout"].as_str().expect("partial shown");
+        assert!(
+            !shown.contains("ghp_0123456789abcdefghijklmnopqrstuvwx"),
+            "raw secret must not survive the scrub: {shown}"
+        );
+        assert!(shown.contains("[REDACTED:"), "redaction marker: {shown}");
+    }
+
+    /// ...and block-class material (which makes the FINISHED call fail closed)
+    /// refuses the partial outright rather than handing back redacted text.
+    /// The refusal is stated, not silent — silence would read as "no output".
+    #[test]
+    fn block_class_secret_withholds_the_partial_instead_of_redacting_it() {
+        let raw = b"-----BEGIN RSA PRIVATE KEY-----\nMIIE...\n";
+        let v = running_payload(1, 0, Some(snapshot(raw, b"", raw.len() as u64, 0)), None);
+        assert!(v.get("partial_stdout").is_none(), "must not render it");
+        assert!(
+            v["partial_withheld"]
+                .as_str()
+                .is_some_and(|s| s.contains("withheld")),
+            "the skip must be stated in the result the model reads"
+        );
+        // Still a plain running status — the job itself is unaffected.
+        assert_eq!(v["status"], "running");
+        assert_eq!(v["bytes_so_far"]["stdout"], raw.len());
+    }
+
+    /// ANSI colour codes from a live build must be stripped on the partial path
+    /// too — the finished path already does it, and a half-cleaned twin is how
+    /// two views of one stream drift.
+    #[test]
+    fn partial_output_is_ansi_sanitized() {
+        let raw = b"\x1b[32mok\x1b[0m\n";
+        let v = running_payload(1, 0, Some(snapshot(raw, b"", raw.len() as u64, 0)), None);
+        assert_eq!(v["partial_stdout"], "ok\n");
     }
 
     fn bash(args: BashExecArgs) -> impl std::future::Future<Output = CodeExecOutput> {
@@ -804,6 +1217,100 @@ mod tests {
         );
     }
 
+    /// A sandbox that writes into whatever live tail is in scope and then
+    /// blocks until released — i.e. it behaves like a build that has printed
+    /// its first lines but is nowhere near done.
+    struct TeeThenBlockSandbox {
+        release: Arc<tokio::sync::Notify>,
+    }
+
+    #[async_trait]
+    impl Sandbox for TeeThenBlockSandbox {
+        async fn execute(
+            &self,
+            _cmd: crate::sandbox::SandboxCommand,
+        ) -> std::result::Result<crate::sandbox::SandboxOutput, crate::sandbox::SandboxError>
+        {
+            let tail = crate::sandbox::context::current_live_tail()
+                .expect("the background spawner must re-enter LIVE_TAIL inside the spawned task");
+            tail.push(crate::sandbox::LiveStream::Stdout, b"Compiling alephcore\n");
+            self.release.notified().await;
+            Ok(crate::sandbox::SandboxOutput {
+                stdout: b"Finished\n".to_vec(),
+                exit_code: Some(0),
+                ..Default::default()
+            })
+        }
+    }
+
+    /// The whole wire, end to end: `background: true` scopes a live tail inside
+    /// the detached task (task-locals do not cross `tokio::spawn`), the sandbox
+    /// sees it, the registry holds it, and `poll` renders a partial for a job
+    /// that has NOT finished — the black box this change exists to open.
+    #[tokio::test]
+    async fn polling_a_still_running_background_job_shows_partial_output() {
+        let release = Arc::new(tokio::sync::Notify::new());
+        let sandbox: Arc<dyn Sandbox> = Arc::new(TeeThenBlockSandbox {
+            release: release.clone(),
+        });
+        let tool = BashExecTool::new().with_sandbox(sandbox);
+        let session = crate::routing::session_key::SessionKey::ephemeral("bash-bg-partial");
+
+        SESSION_ID
+            .scope(session, async {
+                let spawn = tool
+                    .call(BashExecArgs {
+                        cmd: "cargo build".to_string(),
+                        working_dir: None,
+                        timeout_seconds: None,
+                        allow_network: false,
+                        allow_subprocess: false,
+                        extra_writable_paths: Vec::new(),
+                        background: true,
+                        process_action: None,
+                        process_id: None,
+                        justification: None,
+                    })
+                    .await
+                    .unwrap();
+                let v: serde_json::Value = serde_json::from_str(&spawn.stdout).unwrap();
+                let id = v["process_id"].as_u64().expect("process_id");
+
+                // Poll until the detached task has reached the sandbox. The job
+                // is still blocked, so this is a genuinely mid-run poll.
+                let mut partial = None;
+                for _ in 0..400 {
+                    let polled = tool.call(args_action("poll", Some(id))).await.unwrap();
+                    let v: serde_json::Value = serde_json::from_str(&polled.stdout).unwrap();
+                    assert_eq!(v["status"], "running", "the job must still be blocked");
+                    if v.get("partial_stdout").is_some() {
+                        partial = Some(v);
+                        break;
+                    }
+                    tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+                }
+                let v = partial.expect("a running job must surface its output so far");
+                assert_eq!(v["partial_stdout"], "Compiling alephcore\n");
+                assert_eq!(v["bytes_so_far"]["stdout"], 20);
+
+                // Release it: the final output takes over and the partial keys
+                // are gone (the finished envelope is the authoritative answer).
+                release.notify_one();
+                for _ in 0..400 {
+                    let polled = tool.call(args_action("poll", Some(id))).await.unwrap();
+                    if !polled.stdout.contains("\"status\":\"running\"") {
+                        assert_eq!(polled.exit_code, 0);
+                        assert_eq!(polled.stdout, "Finished\n");
+                        assert!(!polled.stdout.contains("partial_stdout"));
+                        return;
+                    }
+                    tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+                }
+                panic!("released job never completed");
+            })
+            .await;
+    }
+
     /// Drive one background job (with the given explicit `timeout`) to
     /// completion through a `MockSandbox` and report the wall-clock timeout
     /// the inner `CodeExecTool` actually handed to the sandbox.
@@ -853,6 +1360,98 @@ mod tests {
 
         let calls = mock.calls.lock().await;
         calls.first().and_then(|c| c.timeout)
+    }
+
+    /// W5: every `process_action` face must reach the one journal resolver.
+    ///
+    /// A face left unwired keeps its own not-found arm, and bash reproduces
+    /// verbatim the self-contradiction the sub-agent recovery module documents:
+    /// `list` showing an id while `poll` on that same id insists it never
+    /// existed. Each assertion names the face it is speaking for.
+    #[tokio::test]
+    async fn every_process_action_face_reaches_the_journal_resolver() {
+        let _g = process_journal::test_gate();
+        let tmp = tempfile::tempdir().unwrap();
+        let session = crate::routing::session_key::SessionKey::ephemeral("bash-journal-faces");
+
+        SESSION_ID
+            .scope(session, async {
+                let owner = session_label().expect("the test runs inside a session scope");
+
+                // A job the previous daemon left running...
+                process_journal::enable_for_test(tmp.path().to_path_buf());
+                process_journal::record_spawn(4242, "cargo build --release", Some(&owner));
+                process_journal::disable_for_test();
+                // ...and a fresh daemon booting over the same directory.
+                process_journal::init_and_reconcile(tmp.path().to_path_buf());
+
+                for face in ["poll", "wait", "kill"] {
+                    let out = handle_process_action(face, Some(4242), Some(1)).await;
+                    let v: serde_json::Value =
+                        serde_json::from_str(&out.stdout).unwrap_or_else(|_| {
+                            panic!("`{face}` did not answer with a payload: {out:?}")
+                        });
+                    assert_eq!(
+                        v["status"], "interrupted_by_restart_liveness_unknown",
+                        "`{face}` never reached the journal resolver: {}",
+                        out.stdout
+                    );
+                    // The envelope has to be the `info_output` one: `error_output`
+                    // stamps success:false / exit_code:-1, i.e. a verdict on the
+                    // call the model is making right now.
+                    assert!(out.success, "`{face}`: {}", out.stderr);
+                    assert_eq!(out.exit_code, 0, "`{face}` used the failure envelope");
+                    assert!(
+                        out.stderr.is_empty(),
+                        "`{face}` used the failure envelope: {}",
+                        out.stderr
+                    );
+                }
+                // `kill` additionally has to admit it did not kill anything.
+                let killed = handle_process_action("kill", Some(4242), None).await;
+                assert!(
+                    killed.stdout.contains("kill was NOT attempted"),
+                    "`kill` must state the skip, not imply success: {}",
+                    killed.stdout
+                );
+
+                let listed = handle_process_action("list", None, None).await;
+                let v: serde_json::Value = serde_json::from_str(&listed.stdout).unwrap();
+                assert!(
+                    v["recovered"]
+                        .as_array()
+                        .is_some_and(|rows| rows.iter().any(|r| r["process_id"] == 4242)),
+                    "`list` never reached the journal resolver: {}",
+                    listed.stdout
+                );
+
+                // Scoping still holds on the recovered path: an id that exists
+                // for somebody else is still an unknown id here.
+                process_journal::enable_for_test(tmp.path().to_path_buf());
+                process_journal::record_spawn(4243, "sleep 9", Some("another-session"));
+                let foreign = handle_process_action("poll", Some(4243), None).await;
+                assert!(
+                    !foreign.success && foreign.stderr.contains("no background process"),
+                    "another session's journaled job must stay invisible: {foreign:?}"
+                );
+                process_journal::disable_for_test();
+            })
+            .await;
+    }
+
+    /// With the journal off (every test, every non-daemon binary) the four
+    /// faces answer exactly as they did before it existed.
+    #[tokio::test]
+    async fn an_unknown_id_is_still_an_error_while_the_journal_is_off() {
+        let _g = process_journal::test_gate();
+        process_journal::disable_for_test();
+        let out = bash(args_action("poll", Some(u64::MAX))).await;
+        assert!(!out.success);
+        assert!(
+            out.stderr.contains("no background process"),
+            "{}",
+            out.stderr
+        );
     }
 
     #[tokio::test]

@@ -88,6 +88,7 @@ pub mod note_schema;
 pub mod pdf_generate;
 pub mod permission_tool;
 pub mod pim;
+pub mod process_journal;
 pub mod process_registry;
 pub mod recall_context;
 pub mod recall_events;
