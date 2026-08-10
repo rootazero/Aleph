@@ -24,16 +24,27 @@ pub fn RoutingRulesView() -> impl IntoView {
     let loading = RwSignal::new(true);
     let saving = RwSignal::new(false);
     let error = RwSignal::new(Option::<String>::None);
+    // Separate from `error`, which belongs to the editor's save/delete path.
+    // Sharing one signal is why a failed load used to be invisible: `error` is
+    // only rendered by `RuleEditor`, which renders nothing at all until a rule
+    // is selected — so the page answered a failed read with "no rules yet".
+    let load_error = RwSignal::new(Option::<String>::None);
 
-    // Load rules on mount
+    // Load rules on mount. `rpc_call` parks until the socket is authorized, so
+    // this no longer loses the race against the handshake on a cold load (URL
+    // or refresh rather than SPA navigation) — see `DashboardState::rpc_call`.
     spawn_local(async move {
         match RoutingRulesApi::list(&state).await {
             Ok(list) => {
                 rules.set(list);
+                load_error.set(None);
                 loading.set(false);
             }
             Err(e) => {
-                error.set(Some(crate::components::admin_refusal::settings_load_error(
+                // The list is NOT cleared: a failed read says nothing about
+                // what is configured, and blanking it would be this page
+                // answering a question it never got to ask.
+                load_error.set(Some(crate::components::admin_refusal::settings_load_error(
                     i18n,
                     &e,
                     |e| format!("Failed to load rules: {e}"),
@@ -83,9 +94,17 @@ pub fn RoutingRulesView() -> impl IntoView {
                 </p>
             </div>
 
+            // Rendered at page level, not inside the editor: this is the one
+            // error the user can hit without ever opening a rule.
+            {move || load_error.get().map(|e| view! {
+                <div class="mx-6 mt-4 p-3 bg-danger-subtle border border-danger/20 rounded-lg text-danger text-sm">
+                    {e}
+                </div>
+            })}
+
             // Content
             <div class="flex-1 flex overflow-hidden">
-                <RulesList rules=rules selected=selected loading=loading />
+                <RulesList rules=rules selected=selected loading=loading load_failed=load_error />
                 <RuleEditor rules=rules selected=selected saving=saving error=error />
             </div>
         </div>
@@ -101,6 +120,10 @@ fn RulesList(
     rules: RwSignal<Vec<RoutingRuleInfo>>,
     selected: RwSignal<Option<usize>>,
     loading: RwSignal<bool>,
+    /// Set when the list read failed. Distinct from an empty list: "there are
+    /// no rules" is a statement about the config, and a failed read is not
+    /// entitled to make it.
+    load_failed: RwSignal<Option<String>>,
 ) -> impl IntoView {
     let i18n = use_i18n();
     view! {
@@ -125,6 +148,13 @@ fn RulesList(
                             </div>
                         }.into_any()
                     } else if rules.get().is_empty() {
+                        // Only an Ok read may claim the list is empty. After a
+                        // failure the page-level banner above says what
+                        // happened; repeating "no rules here" underneath it
+                        // would be the page inventing the answer it was denied.
+                        if load_failed.get().is_some() {
+                            return view! { <div></div> }.into_any();
+                        }
                         view! {
                             <div class="p-4 text-center text-text-secondary">
                                 {t!(i18n, settings.routing_rules.no_rules)}

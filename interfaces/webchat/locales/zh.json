@@ -35,7 +35,7 @@
     "connecting": "连接中",
     "reconnecting": "重新连接中",
     "connection_failed": "连接已断开",
-    "gateway_unavailable": "网关不可用 — 显示默认设置",
+    "gateway_unavailable": "网关不可达 — 设置未能加载",
     "channel_disconnected": "未连接",
     "channel_connecting": "连接中",
     "channel_connected": "已连接",

@@ -77,17 +77,35 @@ fn brace_delta(line: &str) -> i32 {
         - i32::try_from(code.matches('}').count()).unwrap_or(0)
 }
 
-/// A `spawn_local` block, as 0-based line bounds `[start, end]`.
+/// Anything that opens a body which can suspend, as 0-based line bounds
+/// `[start, end]`.
 ///
 /// Only call sites that open a block on their own line (`spawn_local(async move
 /// {`) are tracked. `spawn_local(some_future(..))` hands over a future built
 /// elsewhere and has no body here to scan — treating it as a block would run the
 /// brace counter to end-of-file and flag the entire remainder of the module.
-fn spawn_local_blocks(src: &str) -> Vec<(usize, usize)> {
+///
+/// `async fn` / `async move {` / `async {` are matched alongside
+/// `spawn_local(`. The scanner covered only `spawn_local` bodies until
+/// 2026-08-09, which left the hazard's other half invisible: the read that
+/// panics is any read past an `.await`, and a bare `async fn` reached from a
+/// `spawn_local` elsewhere is the same continuation with the same dead scope —
+/// it just does not say `spawn_local` on the line above.
+/// `DashboardState::await_gateway_ready` was written straight into that blind
+/// spot and the guard stayed green.
+///
+/// Widening cost nothing to adopt: the sweep that motivated it found **zero**
+/// pre-existing violations outside `spawn_local` bodies, so this is a uniform
+/// rule rather than a rule plus an allowlist — the second source of truth this
+/// module's doc refuses to keep.
+const SUSPENDING_BLOCK_OPENERS: [&str; 4] =
+    ["spawn_local(", "async fn ", "async move {", "async {"];
+
+fn awaiting_blocks(src: &str) -> Vec<(usize, usize)> {
     let lines: Vec<&str> = src.lines().collect();
     let mut out = Vec::new();
     for (i, line) in lines.iter().enumerate() {
-        if !line.contains("spawn_local(") || brace_delta(line) <= 0 {
+        if !SUSPENDING_BLOCK_OPENERS.iter().any(|o| line.contains(o)) || brace_delta(line) <= 0 {
             continue;
         }
         let mut depth = 0;
@@ -102,16 +120,19 @@ fn spawn_local_blocks(src: &str) -> Vec<(usize, usize)> {
     out
 }
 
-/// `(line_number, text)` for every plain `get_untracked()` that a `spawn_local`
+/// `(line_number, text)` for every plain `get_untracked()` that a suspending
 /// block reaches *after* its first `.await`. Line numbers are 1-based.
 ///
 /// `try_get_untracked()` is the sanctioned form and is not reported — the
 /// `try_` prefix is part of the matched token, so it cannot be confused with the
 /// bare call.
+///
+/// Findings are deduplicated by line: `spawn_local(async move {` matches two
+/// openers at once, and one offending read must not be reported twice.
 fn late_untracked_reads(src: &str) -> Vec<(usize, String)> {
     let lines: Vec<&str> = src.lines().collect();
-    let mut out = Vec::new();
-    for (start, end) in spawn_local_blocks(src) {
+    let mut out: Vec<(usize, String)> = Vec::new();
+    for (start, end) in awaiting_blocks(src) {
         let mut seen_await = false;
         for (n, line) in lines.iter().enumerate().take(end + 1).skip(start) {
             if line.contains(".await") {
@@ -124,12 +145,15 @@ fn late_untracked_reads(src: &str) -> Vec<(usize, String)> {
             // by `try_`.
             for (idx, _) in line.match_indices(".get_untracked()") {
                 if !line[..idx].ends_with("try") {
-                    out.push((n + 1, (*line).trim().to_string()));
+                    if !out.iter().any(|(seen, _)| *seen == n + 1) {
+                        out.push((n + 1, (*line).trim().to_string()));
+                    }
                     break;
                 }
             }
         }
     }
+    out.sort_by_key(|(line, _)| *line);
     out
 }
 
@@ -154,7 +178,7 @@ mod tests {
             .filter_map(|p| std::fs::read_to_string(p).ok())
             .map(|src| {
                 let lines: Vec<&str> = src.lines().collect();
-                spawn_local_blocks(&src)
+                awaiting_blocks(&src)
                     .into_iter()
                     .filter(|(s, e)| lines[*s..=*e].iter().any(|l| l.contains(".await")))
                     .count()
@@ -162,9 +186,50 @@ mod tests {
             .sum::<usize>();
         assert!(
             awaiting > 20,
-            "the scanner found only {awaiting} awaiting spawn_local blocks in the whole \
+            "the scanner found only {awaiting} awaiting blocks in the whole \
              crate — it is not parsing, so the rule below is not being enforced"
         );
+    }
+
+    /// The blind spot the openers were widened to cover: a plain `async fn`
+    /// that reads a signal after awaiting. No `spawn_local` appears anywhere in
+    /// it, so the pre-2026-08-09 scanner walked straight past this shape.
+    #[test]
+    fn the_check_rejects_a_bare_async_fn_continuation() {
+        let before = r#"
+            async fn await_gateway_ready(&self) -> Result<(), String> {
+                loop {
+                    TimeoutFuture::new(50).await;
+                    if self.is_connected.get_untracked() {
+                        return Ok(());
+                    }
+                }
+            }
+        "#;
+        let found = late_untracked_reads(before);
+        assert_eq!(
+            found.len(),
+            1,
+            "expected exactly one finding, got {found:?}"
+        );
+        assert!(found[0].1.contains("is_connected"));
+    }
+
+    /// …and the sanctioned form in the same shape is silent, so the widening
+    /// did not just make the guard shout at every `async fn`.
+    #[test]
+    fn a_bare_async_fn_using_the_sanctioned_form_is_accepted() {
+        let after = r#"
+            async fn await_gateway_ready(&self) -> Result<(), String> {
+                loop {
+                    TimeoutFuture::new(50).await;
+                    if self.is_connected.try_get_untracked() == Some(true) {
+                        return Ok(());
+                    }
+                }
+            }
+        "#;
+        assert!(late_untracked_reads(after).is_empty());
     }
 
     #[test]
@@ -262,7 +327,7 @@ mod tests {
     /// Reads outside `spawn_local` are ordinary synchronous code and are not
     /// this guard's business.
     #[test]
-    fn the_check_ignores_reads_outside_spawn_local() {
+    fn the_check_ignores_reads_in_a_body_that_cannot_suspend() {
         let ok = r#"
             let go_up = move |_| {
                 let Some(parent) = listing.get_untracked().and_then(|l| l.parent) else { return; };

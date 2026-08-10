@@ -29,12 +29,8 @@ pub fn PhoneChat() -> impl IntoView {
     {
         let dash = dashboard;
         spawn_local(async move {
-            for _ in 0..50 {
-                if dash.is_connected.get_untracked() {
-                    break;
-                }
-                gloo_timers::future::TimeoutFuture::new(100).await;
-            }
+            // The socket wait lives in `DashboardState::rpc_call` now; the
+            // 50×100 ms poll this used to open with is gone.
             if let Err(e) = dash.subscribe_topic("stream.*").await {
                 web_sys::console::error_1(&format!("phone chat stream sub failed: {e}").into());
             }

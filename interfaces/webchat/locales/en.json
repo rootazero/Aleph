@@ -35,7 +35,7 @@
     "connecting": "Connecting",
     "reconnecting": "Reconnecting",
     "connection_failed": "Connection lost",
-    "gateway_unavailable": "Gateway not available — showing default settings",
+    "gateway_unavailable": "Gateway not reachable — settings could not be loaded",
     "channel_disconnected": "Disconnected",
     "channel_connecting": "Connecting",
     "channel_connected": "Connected",

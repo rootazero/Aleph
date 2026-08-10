@@ -19,6 +19,60 @@ use std::sync::Mutex;
 
 const WS_OPEN_TIMEOUT_MS: u32 = 8_000;
 
+/// How long a request will park waiting for the socket to finish connecting
+/// before it is failed. Covers [`WS_OPEN_TIMEOUT_MS`] plus the `connect`
+/// handshake round-trip, with headroom for one reconnect backoff.
+const GATEWAY_READY_TIMEOUT_MS: u32 = 12_000;
+
+/// Poll interval while parked. `is_connected` is a signal, and a parked request
+/// has no reactive owner to subscribe with, so readiness is sampled.
+const GATEWAY_READY_POLL_MS: u32 = 50;
+
+/// Error text of a request that was **never put on the wire** because the socket
+/// had not finished connecting.
+///
+/// Deliberately distinguishable from every verdict the server can return: this
+/// says the question was never asked, so no caller may read it as an answer. It
+/// is a shared constant rather than a transcription for the reason
+/// [`crate::components::admin_refusal`] gives about `ADMIN_REQUIRED_MESSAGE` — a
+/// reword must move every consumer in one edit.
+pub const GATEWAY_NOT_READY: &str = "Gateway not ready: still connecting";
+
+/// Whether a request may be sent now, must wait, or is waiting on a human.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum GatewayReadiness {
+    /// Authorized socket — send it.
+    Ready,
+    /// Connecting or reconnecting. Parking is right; failing is a lie.
+    TooEarly,
+    /// Walled behind the login prompt. No amount of waiting helps — only the
+    /// user entering a credential does, and `TokenWall` owns the screen.
+    Walled,
+}
+
+/// The transport's answer to "is this request too early, or is it hopeless?".
+///
+/// Extracted as a pure function because the whole defect it exists to stop is
+/// invisible from inside `rpc_call`: the observable is a WS frame that either
+/// does or does not appear, which is exactly what went unnoticed for every page
+/// that loaded before the handshake. Same reason
+/// [`crate::state::user_directory::should_fetch`] is a pure function.
+///
+/// Gates on `is_connected` and **not** on `rpc_tx.is_some()`. The two are not
+/// interchangeable: `connect()` installs `rpc_tx` before it runs the handshake,
+/// so a request admitted on the channel's existence alone would be written to an
+/// unauthorized socket.
+#[must_use]
+pub const fn gateway_readiness(is_connected: bool, needs_token: bool) -> GatewayReadiness {
+    if is_connected {
+        GatewayReadiness::Ready
+    } else if needs_token {
+        GatewayReadiness::Walled
+    } else {
+        GatewayReadiness::TooEarly
+    }
+}
+
 // RPC request sent to the message loop
 struct RpcRequest {
     id: String,
@@ -786,8 +840,97 @@ impl DashboardState {
         replay_set(&ledger)
     }
 
-    /// Make an RPC call to the gateway
+    /// Make an RPC call to the gateway, waiting for the socket if it is still
+    /// connecting.
+    ///
+    /// # Why this waits
+    ///
+    /// [`Self::send_rpc`] answers "the socket is not up yet" with
+    /// `Err("Not connected")` — a value indistinguishable from a verdict about
+    /// the call. Every mount-time load in the Panel inherited that confusion: a
+    /// page opened by URL or reloaded (as opposed to navigated to inside the
+    /// SPA) issues its first read while `connect()` is still in flight, gets a
+    /// failure back, renders whatever it was initialized with, and **never
+    /// retries**. It reproduced 100% of the time, which is why it read as
+    /// "this page is broken" rather than as a race.
+    ///
+    /// Sixty-eight mount-reachable call sites had been answering that question
+    /// independently, in five different idioms (a tracked `Effect`, a bare
+    /// `spawn_local`, a 3×500 ms retry loop, a 50×100 ms poll, a pure
+    /// `should_fetch` predicate). Twenty-eight answered it wrong — thirteen
+    /// fired outside any reactive scope, fifteen from an `Effect` that never
+    /// read `is_connected` — and every one of those files had passing tests.
+    /// So the floor lives here instead: a caller that never heard of
+    /// `is_connected` still cannot ask too early.
+    ///
+    /// # What it does not do
+    ///
+    /// It does not re-run anything after a reconnect — that is a different
+    /// question ("ask again", not "do not ask too early") and it is answered
+    /// per page, by an `Effect` that reads `is_connected` alongside whatever
+    /// else that page reloads on. See `WorkspacesView` (tracks
+    /// `include_archived`) and `canvas::CanvasView` (tracks "agent list still
+    /// empty", because re-running its fetch would discard the user's
+    /// selection).
+    ///
+    /// A generic `on_gateway_ready(state, load)` helper was considered and
+    /// **withdrawn under R10**: every site that needs re-running needs it
+    /// keyed on additional signals, so a helper that knows only about
+    /// `is_connected` would be strictly less capable than the four-line
+    /// `Effect` it replaced, and would have had no callers.
     pub async fn rpc_call(&self, method: &str, params: Value) -> Result<Value, String> {
+        self.await_gateway_ready().await?;
+        self.send_rpc(method, params).await
+    }
+
+    /// Park until the socket is authorized, bounded by
+    /// [`GATEWAY_READY_TIMEOUT_MS`].
+    ///
+    /// Returns immediately on the hot path — once connected this costs one
+    /// untracked signal read and never yields, so a warm Panel is unaffected.
+    async fn await_gateway_ready(&self) -> Result<(), String> {
+        let mut waited = 0_u32;
+        loop {
+            // `try_get_untracked`, not `get_untracked`, because this loop reads
+            // signals on the far side of an `.await` — see `crate::disposed_reads`,
+            // whose rule admits no exceptions even for root-owned signals. Note
+            // that guard's scanner only walks `spawn_local` blocks and cannot see
+            // an `async fn` like this one, so this is the rule being followed,
+            // not the rule being enforced.
+            //
+            // `None` means the whole `DashboardState` scope is gone (the page is
+            // tearing down). Give up rather than park a task nothing can wake.
+            let (Some(connected), Some(walled)) = (
+                self.is_connected.try_get_untracked(),
+                self.needs_token.try_get_untracked(),
+            ) else {
+                return Err(GATEWAY_NOT_READY.to_string());
+            };
+            match gateway_readiness(connected, walled) {
+                GatewayReadiness::Ready => return Ok(()),
+                GatewayReadiness::Walled => return Err(GATEWAY_NOT_READY.to_string()),
+                GatewayReadiness::TooEarly if waited >= GATEWAY_READY_TIMEOUT_MS => {
+                    return Err(GATEWAY_NOT_READY.to_string())
+                }
+                GatewayReadiness::TooEarly => {}
+            }
+            TimeoutFuture::new(GATEWAY_READY_POLL_MS).await;
+            waited += GATEWAY_READY_POLL_MS;
+        }
+    }
+
+    /// Put a request on the wire **without** waiting for authorization.
+    ///
+    /// Private, and it has exactly one legitimate caller: [`Self::handshake`],
+    /// whose `connect` call is the thing that makes the socket authorized in
+    /// the first place. Routing it through [`Self::rpc_call`] would deadlock —
+    /// the handshake would wait for a state only the handshake can produce.
+    ///
+    /// That carve-out is a *separate function* rather than a `method ==
+    /// "connect"` test on purpose: an exemption spelled as a string compare is
+    /// one rename away from silently covering something else, and one new
+    /// unauthorized method away from being wrong.
+    async fn send_rpc(&self, method: &str, params: Value) -> Result<Value, String> {
         // Generate unique ID
         let id = {
             let next_id = self.next_id.with_value(std::clone::Clone::clone);
@@ -857,7 +1000,9 @@ impl DashboardState {
             "none"
         };
 
-        let resp = match self.rpc_call("connect", params).await {
+        // `send_rpc`, not `rpc_call`: this call is what makes the socket
+        // authorized, so waiting for authorization here would deadlock.
+        let resp = match self.send_rpc("connect", params).await {
             Ok(r) => r,
             Err(e) => return Handshake::Failed(classify(FailureStage::Handshake, Some(&e), false)),
         };
@@ -1558,14 +1703,82 @@ mod tests {
         // test tree still named it, so `cargo check -p aleph-panel` stayed
         // green while `cargo test` could not build (判据清单 §10).
         classify_credential,
+        gateway_readiness,
         query_with_bootstrap_ticket,
         replay_set,
         strip_params,
         ws_url_for,
+        GatewayReadiness,
         SubmittedCredential,
         BASE_TOPICS,
+        GATEWAY_NOT_READY,
     };
     use std::collections::BTreeSet;
+
+    /// The defect this floor exists to stop, stated as the predicate: a request
+    /// issued while the socket is still connecting must **wait**, not fail.
+    ///
+    /// Before this, `rpc_call` answered "not connected" with an `Err` that was
+    /// indistinguishable from a verdict about the call, and every mount-time
+    /// load in the Panel inherited it. A cold load of `/settings/general` (URL
+    /// or refresh — not SPA navigation) lost that race every time, showed
+    /// "gateway unavailable", rendered its initial defaults as though they were
+    /// the stored config, and never retried.
+    #[test]
+    fn a_request_issued_before_the_handshake_waits_instead_of_failing() {
+        assert_eq!(
+            gateway_readiness(false, false),
+            GatewayReadiness::TooEarly,
+            "still connecting is not a verdict — parking is the only honest answer"
+        );
+    }
+
+    #[test]
+    fn an_authorized_socket_is_never_delayed() {
+        assert_eq!(gateway_readiness(true, false), GatewayReadiness::Ready);
+        // needs_token is stale-but-set on the tick after a successful retry;
+        // `is_connected` wins, so a warm Panel never parks.
+        assert_eq!(gateway_readiness(true, true), GatewayReadiness::Ready);
+    }
+
+    /// Waiting is only right while something is still trying. Behind the login
+    /// wall nothing is: only the user entering a credential changes the state,
+    /// so parking every request for the full budget would turn `TokenWall` into
+    /// a screen full of spinners.
+    #[test]
+    fn the_login_wall_fails_fast_instead_of_parking() {
+        assert_eq!(gateway_readiness(false, true), GatewayReadiness::Walled);
+    }
+
+    /// The floor gates on authorization, not on "a channel exists".
+    ///
+    /// `connect()` installs `rpc_tx` *before* it runs the handshake, so those
+    /// two states are not interchangeable: admitting on the channel alone would
+    /// write requests to an unauthorized socket. This pins the choice, because
+    /// `rpc_tx.is_some()` is the tempting reading of "connected" and it is
+    /// wrong in exactly the window this code exists to cover.
+    #[test]
+    fn readiness_is_not_merely_that_the_channel_exists() {
+        // The handshake window: channel installed, not yet authorized.
+        assert_ne!(
+            gateway_readiness(false, false),
+            GatewayReadiness::Ready,
+            "an unauthorized socket must not be treated as ready"
+        );
+    }
+
+    /// The marker must not read as a verdict to any of the classifiers that
+    /// sort failures for the UI, or "we never asked" becomes an answer again.
+    #[test]
+    fn the_not_ready_marker_is_not_a_permission_verdict() {
+        assert!(!crate::components::admin_refusal::is_admin_refusal(
+            GATEWAY_NOT_READY
+        ));
+        assert!(
+            !GATEWAY_NOT_READY.is_empty(),
+            "an empty marker would make every framed error indistinguishable"
+        );
+    }
 
     fn ledger(patterns: &[&str]) -> BTreeSet<String> {
         patterns.iter().map(|p| (*p).to_string()).collect()

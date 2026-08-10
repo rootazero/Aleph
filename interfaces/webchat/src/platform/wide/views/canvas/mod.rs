@@ -47,48 +47,33 @@ fn GalaxyCanvasView() -> impl IntoView {
     let agent_id = mem.agent_id;
 
     // Fetch the agent list once on mount, writing results into MemoryState so
-    // MemorySidebar's <select> can render them. Uses a reusable closure for
-    // retry-safe reconnect behaviour.
+    // MemorySidebar's <select> can render them.
+    //
+    // This used to retry 3×500 ms on an error whose text contained "Not
+    // connected" — one of five hand-rolled answers in the Panel to "the socket
+    // may still be connecting". It was doubly redundant: the Effect below
+    // already gates the call on `is_connected`, and `rpc_call` now parks the
+    // request until the handshake completes. Matching on error *text* to decide
+    // whether to retry was also the fragile half — the transport's readiness is
+    // not something a caller should be re-deriving from a string.
     let fetch_agents = move || {
         let state = state;
         spawn_local(async move {
-            // Retry up to 3 times with 500ms delay to handle transient "Not connected"
-            // errors that occur when the WebSocket is still initializing.
-            let mut retries = 0;
-            const MAX_RETRIES: u32 = 3;
-            const RETRY_DELAY_MS: u32 = 500;
-
-            loop {
-                match AgentsApi::list(&state).await {
-                    Ok(resp) => {
-                        mem.agents.set(resp.agents);
-                        let new_default = resp.default_id;
-                        // Only override agent_id if it would actually change.
-                        // Post-`.await` (and inside a retry loop, so possibly
-                        // many seconds later) — see `crate::disposed_reads`.
-                        let Some(current) = mem.agent_id.try_get_untracked() else {
-                            return;
-                        };
-                        if current != new_default {
-                            mem.agent_id.set(new_default);
-                        }
-                        break;
+            match AgentsApi::list(&state).await {
+                Ok(resp) => {
+                    mem.agents.set(resp.agents);
+                    let new_default = resp.default_id;
+                    // Only override agent_id if it would actually change.
+                    // Post-`.await` — see `crate::disposed_reads`.
+                    let Some(current) = mem.agent_id.try_get_untracked() else {
+                        return;
+                    };
+                    if current != new_default {
+                        mem.agent_id.set(new_default);
                     }
-                    Err(e) => {
-                        if e.contains("Not connected") && retries < MAX_RETRIES {
-                            retries += 1;
-                            web_sys::console::log_1(
-                                &format!(
-                                    "Agents list not connected, retrying {retries}/{MAX_RETRIES} in {RETRY_DELAY_MS}ms..."
-                                )
-                                .into(),
-                            );
-                            gloo_timers::future::TimeoutFuture::new(RETRY_DELAY_MS).await;
-                            continue;
-                        }
-                        web_sys::console::error_1(&format!("Agents list failed: {e}").into());
-                        break;
-                    }
+                }
+                Err(e) => {
+                    web_sys::console::error_1(&format!("Agents list failed: {e}").into());
                 }
             }
         });

@@ -737,13 +737,8 @@ pub(crate) fn InputArea() -> impl IntoView {
         let dash = dashboard;
         let labels = palette_labels();
         spawn_local(async move {
-            // Wait until connected to avoid the "Not connected" error.
-            for _ in 0..50 {
-                if dash.is_connected.get_untracked() {
-                    break;
-                }
-                gloo_timers::future::TimeoutFuture::new(100).await;
-            }
+            // `rpc_call` waits for the handshake itself, so the 50×100 ms poll
+            // that used to stand here is gone — see `DashboardState::rpc_call`.
             match dash.rpc_call("commands.list", serde_json::json!({})).await {
                 Ok(result) => {
                     let mut cmds = Vec::new();

@@ -595,13 +595,11 @@ pub fn ChatSidebar() -> impl IntoView {
     // Ask the Gateway to push stream.session_updated events to this client.
     let dash_for_topic = dashboard;
     leptos::task::spawn_local(async move {
-        // Wait until connected before subscribing to avoid "Not connected" errors.
-        for _ in 0..50 {
-            if dash_for_topic.is_connected.get_untracked() {
-                break;
-            }
-            gloo_timers::future::TimeoutFuture::new(100).await;
-        }
+        // No local wait for the socket: `rpc_call` parks the request itself
+        // until the handshake is done (see `DashboardState::rpc_call`). The
+        // 50×100 ms poll that used to live here was one of five hand-rolled
+        // answers to that question, and the shortest — it gave up after 5 s and
+        // subscribed anyway, which is the failure it was written to prevent.
 
         // Run lifecycle topics drive the per-session running dot;
         // team.changed drives live group-chat name refresh after async auto-naming.
