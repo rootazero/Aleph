@@ -233,57 +233,29 @@ impl CodeExecTool {
     /// Tool identifier
     pub const NAME: &'static str = "code_exec";
 
-    /// Tool description for AI prompt — also used at the trait-impl
-    /// site below so the `bash` wrapper inherits the same teaching.
+    /// Tool description for AI prompt. Re-exported at the `AlephTool` impl
+    /// below so the type API and the prompt cannot drift apart.
+    ///
+    /// Deliberately short. `bash` documents the execution contract the two
+    /// tools SHARE — statelessness, `working_dir`, `timeout`/exit 124, output
+    /// caps and head-tail elision, signal exit codes, escalation approvals —
+    /// and both tools are in `default_core_tools()`, so every request that
+    /// lists one lists the other and a restatement here would send those bytes
+    /// a second time. Only what is true of `code_exec` and NOT of `bash` — the
+    /// language table — belongs here; everything else is a pointer.
+    ///
+    /// Hoisting the shared prose into one const shared by both tools is NOT
+    /// the fix and must not be attempted: the budget counts how many times a
+    /// sentence is SENT, not how many times it is written, and text behind a
+    /// shared const still ships once per tool that references it.
     pub const DESCRIPTION: &'static str = r#"Execute code in a per-session sandboxed workspace. Supported languages:
 - python: runs via `python3 -c <code>`
 - javascript: runs via `node -e <code>`
 - shell: runs via `bash -c <code>` (or `bash -s` over stdin for scripts >32 KB)
 
-Multi-line code is first-class for all three languages. For shell, prefer
-ONE multi-line script (newlines, heredocs, pipelines, `set -e`) over many
-small calls — each call is a fresh process, so `cd`, env vars, virtualenv
-activation, and similar state do NOT persist between calls. If you need
-cross-call state, write it to a file under `working_dir`. Re-running a shell
-command you already ran this session comes back with an `advisory` field
-flagging it — don't repeat unless you expect the output to have changed.
-
-`working_dir` (optional) resolves inside the session workspace and defaults
-to its root; anything outside is denied.
-
-`timeout` defaults to 60s; a foreground run that hits the ~180s per-turn
-ceiling is killed and any output preserved up to that point comes back with
-`exit_code = 124` (POSIX `timeout(1)` convention) so you always see what the
-script managed to print before being reaped. For longer scripts use the
-`process_action` background API rather than raising `timeout` past the
-foreground ceiling.
-
-Output is capped per stream; when a stream overflows we keep BOTH its
-head and its tail (with a `…[N bytes elided]…` marker between them), so a
-build that prints megabytes of progress and then fails still shows you the
-final error — not just the start. The response also carries
-`stdout_truncated_bytes` / `stderr_truncated_bytes` so you know exactly how
-much was elided. ANSI colour codes and stray binary control bytes are
-stripped automatically — no need for `--color=never` or piping through `cat`.
-
-If the process is killed by a signal it surfaces as `exit_code = 128 + N`
-(POSIX convention) with a `stderr` note naming the signal — e.g. `137`
-(SIGKILL, usually an out-of-memory or resource-limit kill), `139` (SIGSEGV,
-a crash), `134` (SIGABRT, an assertion/panic abort).
-
-Capability escalations (`allow_network`, `allow_subprocess`,
-`extra_writable_paths`) require one-time-per-session approval before they
-take effect. Attach a `justification` string with the WHY behind the
-escalation (one short sentence) so the human approver has the context they
-need; non-escalating calls can omit it. See `bash` for the exact reuse and
-narrowing policy that grants follow across calls.
-
-Examples:
-- Python: {"language": "python", "code": "print('Hello, World!')"}
-- JavaScript: {"language": "javascript", "code": "console.log('Hello, World!')"}
-- Shell (single-line): {"language": "shell", "code": "ls -la"}
-- Shell (multi-line): {"language": "shell", "code": "set -e\ncd src\ncargo check\necho ok"}
-- Shell (heredoc): {"language": "shell", "code": "cat <<'EOF' > /tmp/x\nhello\nEOF\nwc -l /tmp/x"}
+Multi-line code is first-class in all three. Everything else — stateless
+processes, `working_dir`, `timeout` and exit 124, output caps, signal exit
+codes, escalation approvals — is exactly as `bash` documents it.
 "#;
 
     /// Create a new code execution tool without a sandbox wired in yet.
@@ -775,9 +747,8 @@ impl Default for CodeExecTool {
 #[async_trait]
 impl AlephTool for CodeExecTool {
     const NAME: &'static str = "code_exec";
-    // Share the rich teaching with the inherent `DESCRIPTION` const so
-    // there's a single source of truth — keeps the prompt and the
-    // type-API description in lock-step.
+    // Point at the inherent `DESCRIPTION` const so there's a single source
+    // of truth — keeps the prompt and the type-API description in lock-step.
     const DESCRIPTION: &'static str = Self::DESCRIPTION;
 
     type Args = CodeExecArgs;
@@ -950,30 +921,65 @@ mod tests {
             .await;
     }
 
+    /// `code_exec` states its own content and points at `bash` for the rest.
+    ///
+    /// Until 2026-08-10 this description restated six things `bash` already
+    /// says in its own words — statelessness, `working_dir`, `timeout`/exit
+    /// 124, the output cap and head-tail elision, signal exit codes, and the
+    /// escalation/justification contract — plus a five-line `Examples:` block.
+    /// Both tools sit in `default_core_tools()` and `CHAT_CORE_SUBTRACT` keeps
+    /// both, so there is no session in which one ships without the other:
+    /// every one of those bytes went out twice, every request. This test
+    /// asserts the absence, not the presence — it is the only shape that goes
+    /// red if the paragraphs creep back.
     #[test]
-    fn description_teaches_partial_output_and_stateless_sessions() {
+    fn description_defers_to_bash_instead_of_restating_it() {
         let d = CodeExecTool::DESCRIPTION;
-        assert!(d.contains("multi-line"), "should encourage multi-line code");
-        assert!(d.contains("heredoc"), "should mention heredoc for shell");
+
+        // Own content: the language table is code_exec's alone. `bash` never
+        // mentions python or node, so cutting this would delete it outright.
         assert!(
-            d.contains("32 KB"),
-            "should mention the stdin-pipe threshold"
+            d.contains("python3 -c") && d.contains("node -e"),
+            "the language table is code_exec's own content and must stay"
         );
+
+        // The pointer has to name the tool that actually carries the
+        // contract. Without it the deleted paragraphs are simply gone, and
+        // the model has no way to learn where they went.
         assert!(
-            d.contains("124"),
-            "should document the POSIX timeout exit code"
+            d.contains("`bash`"),
+            "the description must point at `bash` for the shared execution \
+             contract, or the cut paragraphs are lost rather than deduplicated"
         );
+
+        // Facts `bash` documents in full. A near-repeat here is not free:
+        // it is a second copy on the wire in every request.
+        for restated in [
+            "stdout_truncated_bytes",
+            "exit_code = 124",
+            "128 + N",
+            "SIGKILL",
+            "allow_subprocess",
+            "justification",
+            "Examples:",
+        ] {
+            assert!(
+                !d.contains(restated),
+                "`{restated}` is documented by `bash`; restating it in \
+                 `code_exec` ships it twice in every request that lists both \
+                 tools (both are core, in every session mode)"
+            );
+        }
+
+        // Non-vacuity: the pointer replaced ~2.4 KB of prose, so a description
+        // that has quietly grown back past a kilobyte means the restatement
+        // returned under different wording than the literals above.
         assert!(
-            d.contains("preserved"),
-            "should promise partial output on kill"
-        );
-        assert!(
-            d.contains("stdout_truncated_bytes"),
-            "should mention the explicit truncation byte fields"
-        );
-        assert!(
-            d.contains("justification"),
-            "should teach passing a justification when escalating"
+            d.len() < 1_000,
+            "code_exec's description is {} B — it is a language table plus one \
+             pointer sentence; anything this large is bash's contract creeping \
+             back in different words",
+            d.len()
         );
     }
 
