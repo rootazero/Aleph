@@ -70,7 +70,7 @@ pub fn wsl_version() -> Option<u32> {
 // (`approval/config.rs::glob_to_regex_str` is a third, deliberate translator
 // for the approval-rule domain and is out of scope of this note.)
 
-/// Truncate captured process output so the retained content is at most
+/// Truncate a **contiguous** captured buffer so the retained content is at most
 /// `max_bytes`, never cutting a UTF-8 codepoint in half (project rule P7).
 /// Returns the (possibly rewritten) buffer and the number of bytes elided
 /// from the original (0 when no truncation happened).
@@ -87,6 +87,13 @@ pub fn wsl_version() -> Option<u32> {
 ///
 /// Tiny budgets (`< MIN_HEAD_TAIL_CAP`) and degenerate splits fall back to the
 /// original head-only truncation — see [`truncate_head_only`].
+///
+/// **Contiguity is a precondition, not a detail.** This is only reachable for a
+/// stream that fit entirely inside the drain's head buffer; a stream that
+/// overflowed it already has a gap in the middle, and splicing a second gap
+/// into it would make the one marker report a number that is not the whole
+/// truth. That case is [`Drained::assemble`]'s, which owns both fragments and
+/// emits exactly one marker over the exact total.
 #[must_use]
 pub fn truncate_output(buf: Vec<u8>, max_bytes: usize) -> (Vec<u8>, u64) {
     let orig_len = buf.len();
@@ -106,21 +113,9 @@ pub fn truncate_output(buf: Vec<u8>, max_bytes: usize) -> (Vec<u8>, u64) {
     // truncation silently dropped. For a failing `cargo build` that emits
     // megabytes of progress before erroring, head-only would hand the model all
     // the progress and LOSE the actual error at the end.
-    let head_budget = max_bytes * 2 / 5;
-    let tail_budget = max_bytes - head_budget;
-
-    // Head cut: back off any UTF-8 continuation byte so we never split a char.
-    let mut head_end = head_budget;
-    while head_end > 0 && (buf[head_end] & 0xC0) == 0x80 {
-        head_end -= 1;
-    }
-
-    // Tail cut: walk forward from (orig_len - tail_budget) to the next char
-    // boundary so the tail fragment also starts on a clean codepoint.
-    let mut tail_start = orig_len - tail_budget;
-    while tail_start < orig_len && (buf[tail_start] & 0xC0) == 0x80 {
-        tail_start += 1;
-    }
+    let (head_budget, tail_budget) = head_tail_budgets(max_bytes);
+    let head_end = back_off_to_boundary(&buf, head_budget);
+    let tail_start = advance_to_boundary(&buf, orig_len - tail_budget);
 
     // If the fragments meet or overlap (cap nearly equals len), nothing is
     // actually elided — fall back to head-only to avoid an empty/negative gap.
@@ -129,7 +124,7 @@ pub fn truncate_output(buf: Vec<u8>, max_bytes: usize) -> (Vec<u8>, u64) {
     }
 
     let dropped = (tail_start - head_end) as u64;
-    let marker = format!("\n…[{dropped} bytes elided]…\n");
+    let marker = elision_marker(dropped);
 
     let mut out = Vec::with_capacity(head_end + marker.len() + (orig_len - tail_start));
     out.extend_from_slice(&buf[..head_end]);
@@ -138,10 +133,51 @@ pub fn truncate_output(buf: Vec<u8>, max_bytes: usize) -> (Vec<u8>, u64) {
     (out, dropped)
 }
 
-/// Cap below which [`truncate_output`] keeps the original head-only behaviour
-/// instead of a head+tail split. Below this the elision marker plus two
-/// fragments would carry less signal than a single contiguous head slice.
+/// Cap below which a head+tail split degrades to head-only. Below this the
+/// elision marker plus two fragments would carry less signal than a single
+/// contiguous head slice. Honoured by both [`truncate_output`] and
+/// [`Drained::assemble`], because a budget too small to split is too small to
+/// split no matter which of them is doing the cutting.
 const MIN_HEAD_TAIL_CAP: usize = 256;
+
+/// The 40/60 head/tail division of a retention budget. One function so the two
+/// call sites cannot drift into two different splits.
+const fn head_tail_budgets(max_bytes: usize) -> (usize, usize) {
+    let head = max_bytes * 2 / 5;
+    (head, max_bytes - head)
+}
+
+/// The marker spliced between a head fragment and a tail fragment. Its byte
+/// count is deliberately NOT included in the reported drop count — the number
+/// describes the output, not the annotation.
+fn elision_marker(dropped: u64) -> String {
+    format!("\n…[{dropped} bytes elided]…\n")
+}
+
+/// Largest index `<= limit` that does not sit inside a multi-byte sequence.
+/// Used for a cut whose *left* side is kept. A `limit` at or past the end is
+/// returned as the end: cutting there splits nothing, and indexing `buf[len]`
+/// to discover that would panic.
+fn back_off_to_boundary(buf: &[u8], limit: usize) -> usize {
+    if limit >= buf.len() {
+        return buf.len();
+    }
+    let mut end = limit;
+    while end > 0 && (buf[end] & 0xC0) == 0x80 {
+        end -= 1;
+    }
+    end
+}
+
+/// Smallest index `>= from` that starts a codepoint. Used for a cut whose
+/// *right* side is kept.
+fn advance_to_boundary(buf: &[u8], from: usize) -> usize {
+    let mut start = from.min(buf.len());
+    while start < buf.len() && (buf[start] & 0xC0) == 0x80 {
+        start += 1;
+    }
+    start
+}
 
 /// Head-only truncation: keep the first `max_bytes`, backing off any UTF-8
 /// continuation byte so a multi-byte codepoint is never split. Used for tiny
@@ -153,10 +189,7 @@ fn truncate_head_only(mut buf: Vec<u8>, max_bytes: usize) -> (Vec<u8>, u64) {
     if orig_len <= max_bytes {
         return (buf, 0);
     }
-    let mut end = max_bytes;
-    while end > 0 && (buf[end] & 0xC0) == 0x80 {
-        end -= 1;
-    }
+    let end = back_off_to_boundary(&buf, max_bytes);
     buf.truncate(end);
     let dropped = (orig_len - end) as u64;
     (buf, dropped)
@@ -186,16 +219,84 @@ fn termination_signal_xplat(_status: &std::process::ExitStatus) -> Option<i32> {
     None
 }
 
-/// Read `pipe` to EOF, keeping at most `buffer_ceiling` bytes and counting
-/// (but discarding) the rest. Returns `(kept, discarded)`.
+/// What one drain loop retained from a stream.
+///
+/// Two disjoint fragments plus an exact byte total, never one head-shaped slab.
+/// The gap between them is `total - head.len() - tail.len()`, which is the
+/// number the model is owed and the reason this is a struct rather than a
+/// `(Vec<u8>, u64)` pair: a caller handed only "what was kept" cannot tell a
+/// contiguous buffer from one with a hole in it, and would splice a second
+/// elision marker reporting the wrong count.
+#[derive(Default)]
+struct Drained {
+    /// First `head_cap` bytes of the stream.
+    head: Vec<u8>,
+    /// The most recent bytes past the head, oldest first, at most `tail_cap`.
+    /// Empty exactly when the whole stream fit in `head`.
+    tail: Vec<u8>,
+    /// Every byte the loop read, retained or not.
+    total: u64,
+}
+
+impl Drained {
+    /// Render the retained fragments into one `max_bytes` buffer, plus the
+    /// number of bytes elided from the **original stream** (not merely from
+    /// what survived the drain).
+    ///
+    /// Contiguous input takes [`truncate_output`] unchanged — that is the
+    /// common case and its behaviour is byte-identical to before this struct
+    /// existed. A drain-level gap takes the branch below, which cuts each
+    /// fragment to the same 40/60 budget and emits exactly ONE marker whose
+    /// count spans both holes at once.
+    fn assemble(self, max_bytes: usize) -> (Vec<u8>, u64) {
+        let Self { head, tail, total } = self;
+        if total <= head.len() as u64 {
+            // The head IS the stream: nothing was elided on the way in.
+            return truncate_output(head, max_bytes);
+        }
+        // A budget too small to carry two fragments plus a marker keeps the
+        // opening only — same rule `truncate_output` applies, same constant.
+        if max_bytes < MIN_HEAD_TAIL_CAP {
+            let (out, _) = truncate_head_only(head, max_bytes);
+            let dropped = total.saturating_sub(out.len() as u64);
+            return (out, dropped);
+        }
+        let (head_budget, tail_budget) = head_tail_budgets(max_bytes);
+        let head_end = back_off_to_boundary(&head, head_budget);
+        // The tail window starts at an arbitrary byte offset in the stream, so
+        // its own front can already be mid-codepoint; advancing covers both
+        // that and the budget cut in one walk.
+        let tail_from = advance_to_boundary(&tail, tail.len().saturating_sub(tail_budget));
+        let kept = head_end + (tail.len() - tail_from);
+        let dropped = total.saturating_sub(kept as u64);
+        let marker = elision_marker(dropped);
+        let mut out = Vec::with_capacity(kept + marker.len());
+        out.extend_from_slice(&head[..head_end]);
+        out.extend_from_slice(marker.as_bytes());
+        out.extend_from_slice(&tail[tail_from..]);
+        (out, dropped)
+    }
+}
+
+/// Read `pipe` to EOF, retaining the first `head_cap` bytes and a rolling
+/// window of the most recent `tail_cap` bytes past them, and counting every
+/// byte that flowed through.
+///
+/// **Head AND tail, because the end is where the answer is.** An earlier
+/// version kept a single head-shaped buffer and discarded everything past it.
+/// `truncate_output` then took its "tail" from the end of *that buffer* — so
+/// for any stream over the ceiling (8 MiB at the default `max_output_bytes`)
+/// the model was handed the tail of the first 8 MiB and the actual final error
+/// was already gone before truncation ran. A `cargo build` that fails after
+/// emitting 30 MiB of progress is precisely the shape this tool exists for, and
+/// it was precisely the shape that lost its error message. The two windows sum
+/// to the same ceiling as the old single buffer, so peak memory is unchanged.
 ///
 /// When `tee` is present every chunk is *also* pushed into a rolling
 /// [`LiveTail`] ring so a still-running background job can be polled for
-/// partial output. The tee sees the chunk **before** the ceiling is applied:
-/// `kept` is head-shaped and freezes at `buffer_ceiling`, whereas the ring is
-/// tail-shaped and must keep tracking the frontier — teeing only the retained
-/// slice would freeze the live view on exactly the long, loud builds it exists
-/// for. `None` (the foreground path) is byte-identical to the pre-tee loop.
+/// partial output. The ring is not redundant with the tail window: this
+/// function's fragments only materialise when the child exits, whereas the ring
+/// is readable mid-run. `None` (the foreground path) skips the tee entirely.
 ///
 /// Reading to EOF is the whole point: an earlier version wrapped the pipe in
 /// `take(ceiling)`, which stops reading at the ceiling and then DROPS the read
@@ -211,17 +312,19 @@ fn termination_signal_xplat(_status: &std::process::ExitStatus) -> Option<i32> {
 /// burn writing to a file.
 async fn drain_bounded<R>(
     pipe: Option<R>,
-    buffer_ceiling: u64,
+    head_cap: usize,
+    tail_cap: usize,
     tee: Option<(Arc<LiveTail>, LiveStream)>,
-) -> (Vec<u8>, u64)
+) -> Drained
 where
     R: tokio::io::AsyncRead + Unpin,
 {
     let Some(mut pipe) = pipe else {
-        return (Vec::new(), 0);
+        return Drained::default();
     };
-    let mut kept: Vec<u8> = Vec::new();
-    let mut discarded: u64 = 0;
+    let mut head: Vec<u8> = Vec::new();
+    let mut tail: std::collections::VecDeque<u8> = std::collections::VecDeque::new();
+    let mut total: u64 = 0;
     let mut chunk = [0u8; 16 * 1024];
     // A read error ends the loop just like EOF: the pipe is unusable either
     // way, and what was already read stays valid (matches the previous
@@ -230,17 +333,29 @@ where
         if n == 0 {
             break;
         }
-        if let Some((tail, stream)) = &tee {
-            tail.push(*stream, &chunk[..n]);
+        let bytes = &chunk[..n];
+        if let Some((live, stream)) = &tee {
+            live.push(*stream, bytes);
         }
-        let room = usize::try_from(buffer_ceiling)
-            .unwrap_or(usize::MAX)
-            .saturating_sub(kept.len());
-        let take = room.min(n);
-        kept.extend_from_slice(&chunk[..take]);
-        discarded = discarded.saturating_add((n - take) as u64);
+        total = total.saturating_add(n as u64);
+        // Fill the head first; only what will not fit there reaches the
+        // rolling window, so the two never hold the same byte twice and
+        // `total - head - tail` is the exact size of the hole between them.
+        let take = head_cap.saturating_sub(head.len()).min(n);
+        head.extend_from_slice(&bytes[..take]);
+        let overflow = &bytes[take..];
+        if !overflow.is_empty() && tail_cap > 0 {
+            tail.extend(overflow.iter().copied());
+            if tail.len() > tail_cap {
+                tail.drain(..tail.len() - tail_cap);
+            }
+        }
     }
-    (kept, discarded)
+    Drained {
+        head,
+        tail: tail.into(),
+        total,
+    }
 }
 
 /// Spawn stdout/stderr reader tasks, optionally pipe `stdin_data`, then
@@ -296,16 +411,17 @@ pub async fn run_child_with_drain(
     let stdout = child.stdout.take();
     let stderr = child.stderr.take();
 
-    // Buffer PAST the keep-budget so `truncate_output` can both preserve a
+    // Buffer PAST the keep-budget so the assembly step can both preserve a
     // head+tail slice AND report how many bytes were elided — the
     // `*_truncated_bytes` contract surfaced to the model (see `code_exec`).
-    // Buffering exactly `max_output_bytes` would silently drop the overflow
-    // before it could be counted (drop count stuck at 0, `truncated` stuck
-    // false). Memory stays bounded: at most `DRAIN_BUFFER_FACTOR *
-    // max_output_bytes` is ever held for a runaway child; everything past that
-    // is read and discarded, counted but not kept.
+    // Memory stays bounded: at most `DRAIN_BUFFER_FACTOR * max_output_bytes` is
+    // ever held for a runaway child, split evenly between the opening bytes and
+    // a rolling window on the most recent ones; everything between the two is
+    // read and counted but not kept.
     const DRAIN_BUFFER_FACTOR: u64 = 8;
     let buffer_ceiling = (max_output_bytes as u64).saturating_mul(DRAIN_BUFFER_FACTOR);
+    let head_cap = usize::try_from(buffer_ceiling / 2).unwrap_or(usize::MAX);
+    let tail_cap = usize::try_from(buffer_ceiling - buffer_ceiling / 2).unwrap_or(usize::MAX);
 
     // Read the live-tail task-local HERE, on the caller's task: `tokio::spawn`
     // does not carry task-locals into the spawned future, so each drain task
@@ -314,12 +430,14 @@ pub async fn run_child_with_drain(
     let live = crate::sandbox::context::current_live_tail();
     let stdout_task = tokio::spawn(drain_bounded(
         stdout,
-        buffer_ceiling,
+        head_cap,
+        tail_cap,
         live.clone().map(|t| (t, LiveStream::Stdout)),
     ));
     let stderr_task = tokio::spawn(drain_bounded(
         stderr,
-        buffer_ceiling,
+        head_cap,
+        tail_cap,
         live.map(|t| (t, LiveStream::Stderr)),
     ));
 
@@ -329,15 +447,17 @@ pub async fn run_child_with_drain(
 
     match wait_result {
         Ok(Ok(status)) => {
-            let (stdout_buf, stdout_overflow) = stdout_task.await.unwrap_or_default();
-            let (stderr_buf, stderr_overflow) = stderr_task.await.unwrap_or_default();
-            // Bytes elided from the buffered slice PLUS the bytes that never
-            // fit in the buffer at all — the count the model reads is the
-            // whole overflow, not just the visible part of it.
-            let (stdout, stdout_kept_drop) = truncate_output(stdout_buf, max_output_bytes);
-            let (stderr, stderr_kept_drop) = truncate_output(stderr_buf, max_output_bytes);
-            let stdout_dropped = stdout_kept_drop.saturating_add(stdout_overflow);
-            let stderr_dropped = stderr_kept_drop.saturating_add(stderr_overflow);
+            // `assemble` reports against the stream total, so the count the
+            // model reads is the whole overflow — the bytes elided between the
+            // retained fragments AND the ones that never fit in either window.
+            let (stdout, stdout_dropped) = stdout_task
+                .await
+                .unwrap_or_default()
+                .assemble(max_output_bytes);
+            let (stderr, stderr_dropped) = stderr_task
+                .await
+                .unwrap_or_default()
+                .assemble(max_output_bytes);
             Ok(SandboxOutput {
                 stdout,
                 stderr,
@@ -355,17 +475,19 @@ pub async fn run_child_with_drain(
             // than relying on `kill_on_drop` firing when we return.
             let _ = child.start_kill();
             let drain = tokio::time::timeout(KILL_DRAIN_TIMEOUT, async {
-                let (stdout_buf, _) = stdout_task.await.unwrap_or_default();
-                let (stderr_buf, _) = stderr_task.await.unwrap_or_default();
-                (stdout_buf, stderr_buf)
+                let out = stdout_task.await.unwrap_or_default();
+                let err = stderr_task.await.unwrap_or_default();
+                (out, err)
             })
             .await;
             let (partial_stdout, partial_stderr) =
-                drain.unwrap_or_else(|_| (Vec::new(), Vec::new()));
-            // Cap partial output too — a runaway loop can fill the pipe
-            // with megabytes before the kill takes effect.
-            let (partial_stdout, _) = truncate_output(partial_stdout, max_output_bytes);
-            let (partial_stderr, _) = truncate_output(partial_stderr, max_output_bytes);
+                drain.unwrap_or_else(|_| (Drained::default(), Drained::default()));
+            // Cap partial output too — a runaway loop can fill the pipe with
+            // megabytes before the kill takes effect. The tail matters most
+            // here: a script killed at its wall clock was doing something at
+            // the moment it died, and that is the last thing it printed.
+            let (partial_stdout, _) = partial_stdout.assemble(max_output_bytes);
+            let (partial_stderr, _) = partial_stderr.assemble(max_output_bytes);
             Err(SandboxError::Timeout {
                 elapsed_ms,
                 partial_stdout,
@@ -486,6 +608,103 @@ mod tests {
             std::str::from_utf8(&out).is_ok(),
             "head+tail split must not split a multibyte codepoint"
         );
+    }
+
+    // ---- Drained::assemble ---------------------------------------------------
+
+    /// Contiguous input must behave exactly as it did before `Drained` existed:
+    /// straight through `truncate_output`, one marker, same accounting.
+    #[test]
+    fn assemble_without_a_drain_gap_is_plain_truncation() {
+        let buf = b"HEAD"
+            .iter()
+            .copied()
+            .cycle()
+            .take(4000)
+            .collect::<Vec<_>>();
+        let total = buf.len() as u64;
+        let drained = Drained {
+            head: buf.clone(),
+            tail: Vec::new(),
+            total,
+        };
+        let (out, dropped) = drained.assemble(1000);
+        let (want, want_dropped) = truncate_output(buf, 1000);
+        assert_eq!(out, want);
+        assert_eq!(dropped, want_dropped);
+    }
+
+    /// The regression this whole change is about: the bytes the drain never
+    /// buffered must still be counted, and the fragment shown as the "tail"
+    /// must come from the END of the stream, not from the end of the head
+    /// window. Exactly one marker, spanning both holes at once.
+    #[test]
+    fn assemble_reports_the_whole_hole_and_keeps_the_real_tail() {
+        let drained = Drained {
+            head: vec![b'H'; 4096],
+            tail: vec![b'T'; 4096],
+            // 4096 head + 4096 tail retained out of a 1,000,000-byte stream:
+            // 991,808 bytes never touched either window.
+            total: 1_000_000,
+        };
+        let (out, dropped) = drained.assemble(1000);
+        let text = String::from_utf8(out).expect("ASCII in, ASCII out");
+
+        assert!(text.starts_with("HHHH"), "the opening must survive");
+        assert!(
+            text.ends_with("TTTT"),
+            "the tail fragment must come from the end of the STREAM: {:?}",
+            &text[text.len().saturating_sub(40)..]
+        );
+        assert_eq!(
+            dropped,
+            1_000_000 - 1000,
+            "everything not retained is reported, including what the drain \
+             discarded between the two windows"
+        );
+        assert_eq!(
+            text.matches("bytes elided").count(),
+            1,
+            "one hole, one marker — two would each report a partial truth"
+        );
+        assert!(
+            text.contains(&format!("[{dropped} bytes elided]")),
+            "the marker must carry the whole-stream count: {text:.200}"
+        );
+    }
+
+    /// Both fragment cuts land on codepoint boundaries, and the tail window's
+    /// own front (an arbitrary byte offset into the stream) is advanced past
+    /// too — a ring cut and a budget cut in one walk.
+    #[test]
+    fn assemble_never_splits_a_multibyte_codepoint() {
+        let euro = "€".as_bytes();
+        // A tail window that itself starts mid-codepoint: drop the first byte.
+        let mut tail: Vec<u8> = euro.iter().copied().cycle().take(3000).collect();
+        tail.remove(0);
+        let drained = Drained {
+            head: euro.iter().copied().cycle().take(3000).collect(),
+            tail,
+            total: 500_000,
+        };
+        let (out, _) = drained.assemble(1000);
+        let text = std::str::from_utf8(&out).expect("both cuts land on boundaries");
+        assert!(text.starts_with('€'));
+        assert!(text.ends_with('€'));
+    }
+
+    /// A budget too small for two fragments keeps the opening only — the same
+    /// rule `truncate_output` applies, and the count still spans the stream.
+    #[test]
+    fn assemble_with_a_tiny_budget_keeps_the_head_and_still_counts_everything() {
+        let drained = Drained {
+            head: vec![b'H'; 4096],
+            tail: vec![b'T'; 4096],
+            total: 100_000,
+        };
+        let (out, dropped) = drained.assemble(64);
+        assert_eq!(out, vec![b'H'; 64]);
+        assert_eq!(dropped, 100_000 - 64);
     }
 
     #[cfg(unix)]
@@ -713,9 +932,52 @@ mod tests {
         assert!(untouched.snapshot().is_empty());
     }
 
-    /// The regression this whole feature turns on: `kept` stops growing at the
-    /// drain ceiling, so a tee wired to the retained slice would freeze. The
-    /// ring must keep tracking the frontier and the total must count every byte.
+    /// End-to-end proof through a real child: a stream far past the drain
+    /// ceiling must still hand back the bytes it printed LAST.
+    ///
+    /// Confirmed RED against the previous head-only drain, which discarded
+    /// everything past the ceiling before `truncate_output` ran — so the
+    /// "tail" the model got was the tail of the first ceiling bytes and the
+    /// trailer below never appeared. That is the exact shape of a `cargo build`
+    /// that fails after megabytes of progress.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn the_end_of_a_stream_past_the_drain_ceiling_still_reaches_the_caller() {
+        use tokio::process::Command;
+        // max_output_bytes = 1024 ⇒ ceiling 8192, split 4096 head / 4096 tail.
+        // Emit 40 KB — five times the whole ceiling — then the trailer.
+        let child = Command::new("bash")
+            .arg("-c")
+            .arg("head -c 40000 /dev/zero | tr '\\0' 'a'; printf 'FINAL-ERROR'")
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .stdin(std::process::Stdio::piped())
+            .kill_on_drop(true)
+            .spawn()
+            .expect("spawn bash");
+
+        let out = run_child_with_drain(child, None, Duration::from_secs(20), 1024)
+            .await
+            .expect("natural exit");
+        let text = String::from_utf8_lossy(&out.stdout);
+        assert!(
+            text.ends_with("FINAL-ERROR"),
+            "the last thing the command printed is the whole point: {:?}",
+            &text[text.len().saturating_sub(60)..]
+        );
+        assert!(text.starts_with("aaaa"), "the opening survives too");
+        assert!(text.contains("bytes elided"), "the gap must be announced");
+        assert_eq!(
+            out.stdout_truncated_bytes,
+            40_011 - 1024,
+            "the count spans the whole stream, not just the buffered part"
+        );
+    }
+
+    /// The regression the live tail turns on: the drain's fragments only
+    /// materialise when the child exits, so a mid-run view has to come from
+    /// somewhere else. The ring must track the frontier while the job runs and
+    /// the total must count every byte.
     #[cfg(unix)]
     #[tokio::test]
     async fn live_tail_keeps_tracking_past_the_drain_ceiling() {

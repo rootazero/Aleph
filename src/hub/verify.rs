@@ -8,14 +8,49 @@ pub struct VerifyReport {
     pub detail: String,
 }
 
+/// Distinguish "the process is up" from "the process is up AND behaving". A
+/// `Degraded` server is running — it answers MCP requests, it's just failed a
+/// probe recently — so verdict() must not treat it as "not running". Callers
+/// that want strict health gating should read `health` directly.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum HealthObservation {
+    Healthy,
+    Degraded,
+    /// The server is up but the system could not classify its health (e.g. the
+    /// MCP manager handle isn't available). Treated as "running but unknown
+    /// health" for verdict purposes.
+    Unknown,
+}
+
 /// Pure verdict from an MCP server's observed state.
+///
+/// `running` means "the manager reports the process is up" — this is `true`
+/// for both `Healthy` and `Degraded { .. }`.
 ///
 /// `other_capability_count` is the server's resources + resource templates +
 /// prompts. A server that exposes only those is a legitimate MCP server (a docs
 /// or resource provider), so the failure condition is "exposes *nothing*" rather
 /// than "exposes no tools" — otherwise a working install gets defamed.
 #[must_use]
-pub fn verdict(running: bool, tool_count: usize, other_capability_count: usize) -> VerifyReport {
+pub fn verdict(
+    running: bool,
+    tool_count: usize,
+    other_capability_count: usize,
+) -> VerifyReport {
+    verdict_with_health(running, HealthObservation::Unknown, tool_count, other_capability_count)
+}
+
+/// Same as [`verdict`] but exposes the health-classification alongside `ok` so
+/// callers (e.g. `extensions.install` and the verification tool) can render
+/// the distinction without re-deriving it from `HealthStatus`.
+#[must_use]
+pub fn verdict_with_health(
+    running: bool,
+    health: HealthObservation,
+    tool_count: usize,
+    other_capability_count: usize,
+) -> VerifyReport {
     if !running {
         return VerifyReport {
             ok: false,
@@ -27,14 +62,28 @@ pub fn verdict(running: bool, tool_count: usize, other_capability_count: usize) 
             ok: false,
             detail: "running but exposes no tools, resources or prompts".into(),
         },
-        (0, other) => VerifyReport {
-            ok: true,
-            detail: format!("running; 0 tools, {other} resources/prompts"),
-        },
-        (tools, _) => VerifyReport {
-            ok: true,
-            detail: format!("running; {tools} tools"),
-        },
+        (0, other) => {
+            let health_note = match health {
+                HealthObservation::Degraded => " (degraded)",
+                HealthObservation::Healthy | HealthObservation::Unknown => "",
+            };
+            VerifyReport {
+                ok: true,
+                detail: format!(
+                    "running; 0 tools, {other} resources/prompts{health_note}"
+                ),
+            }
+        }
+        (tools, _) => {
+            let health_note = match health {
+                HealthObservation::Degraded => " (degraded)",
+                HealthObservation::Healthy | HealthObservation::Unknown => "",
+            };
+            VerifyReport {
+                ok: true,
+                detail: format!("running; {tools} tools{health_note}"),
+            }
+        }
     }
 }
 
@@ -55,11 +104,24 @@ pub async fn verify_install(
             match mcp.list_servers().await {
                 Ok(servers) => match servers.into_iter().find(|s| &s.id == id) {
                     Some(info) => {
-                        let running =
-                            matches!(info.health, crate::mcp::manager::HealthStatus::Healthy);
+                        // Healthy and Degraded are both "running" — the manager's
+                        // circuit breaker puts Degraded below Healthy but above
+                        // Unhealthy/Restarting/Dead/Stopped. Treating Degraded
+                        // as "not running" caused verify_install to mis-report a
+                        // recoverable post-install blip as a hard failure (see
+                        // review/hub-statics).
+                        let (running, observation) = match info.health {
+                            crate::mcp::manager::HealthStatus::Healthy => {
+                                (true, HealthObservation::Healthy)
+                            }
+                            crate::mcp::manager::HealthStatus::Degraded { .. } => {
+                                (true, HealthObservation::Degraded)
+                            }
+                            _ => (false, HealthObservation::Unknown),
+                        };
                         let other =
                             info.resource_count + info.resource_template_count + info.prompt_count;
-                        verdict(running, info.tool_count, other)
+                        verdict_with_health(running, observation, info.tool_count, other)
                     }
                     None => VerifyReport {
                         ok: false,

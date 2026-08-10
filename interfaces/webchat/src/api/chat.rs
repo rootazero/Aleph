@@ -106,6 +106,21 @@ pub struct ContextEstimateResponse {
     pub window_tokens: u32,
 }
 
+/// One `chat.history` response: the persisted transcript, plus the run that is
+/// in flight on this session *right now* (`None` = nothing running).
+///
+/// `active_run` exists so a client that opens a conversation **mid-turn** can
+/// join it. Nothing else can tell it: the `stream.*` frames of a run in
+/// progress carry a `run_id` this client never saw accepted, so they route
+/// nowhere, and the sidebar's re-hydrate is suppressed for as long as the
+/// session is running. Without this the second terminal on a shared thread sat
+/// in front of a frozen transcript for the whole turn.
+#[derive(Debug, Clone)]
+pub struct SessionHistory {
+    pub messages: Vec<ChatMessage>,
+    pub active_run: Option<String>,
+}
+
 /// A file attachment to send with a chat message.
 #[derive(Debug, Clone)]
 pub struct ChatAttachment {
@@ -211,11 +226,18 @@ impl ChatApi {
     }
 
     /// Get chat history for a session.
+    /// Load a session's transcript **and** whether a turn is in flight on it.
+    ///
+    /// The two travel together because they are one snapshot of one session:
+    /// fetching them separately would leave a window in which the caller holds
+    /// the transcript but not the live run (so the rest of that turn renders
+    /// nowhere) or the reverse (so a placeholder bubble opens above a
+    /// transcript that has not loaded).
     pub async fn history(
         state: &DashboardState,
         session_key: &str,
         limit: Option<usize>,
-    ) -> Result<Vec<ChatMessage>, String> {
+    ) -> Result<SessionHistory, String> {
         let params = serde_json::json!({
             "session_key": session_key,
             "limit": limit,
@@ -225,7 +247,16 @@ impl ChatApi {
             .get("messages")
             .cloned()
             .unwrap_or(Value::Array(vec![]));
-        serde_json::from_value(messages).map_err(|e| e.to_string())
+        Ok(SessionHistory {
+            messages: serde_json::from_value(messages).map_err(|e| e.to_string())?,
+            // Absent against a core that predates the field, and `null`
+            // whenever nothing is running — both mean "no live turn to join",
+            // so one `and_then` covers the skew and the ordinary case.
+            active_run: result
+                .get("active_run")
+                .and_then(|v| v.as_str())
+                .map(str::to_owned),
+        })
     }
 
     /// Clear chat history for a session.

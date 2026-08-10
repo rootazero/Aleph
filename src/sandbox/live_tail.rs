@@ -7,12 +7,15 @@
 //! read into a fixed-size ring, and `bash`'s `process_action: "poll"` / `"wait"`
 //! render a snapshot of it.
 //!
-//! **Ring, not head.** `drain_bounded` keeps the HEAD of each stream and
-//! discards everything past its ceiling (8x `max_output_bytes`). A head-shaped
-//! live view would therefore FREEZE at the first few MiB — on exactly the long
-//! builds this exists for. The ring keeps the LAST [`LIVE_TAIL_BYTES`] instead,
-//! so the view always tracks the frontier, and a monotonic counter reports how
-//! much has flowed through in total.
+//! **Ring, not head.** A head-shaped live view would FREEZE at the first few
+//! MiB — on exactly the long builds this exists for. The ring keeps the LAST
+//! [`LIVE_TAIL_BYTES`] instead, so the view always tracks the frontier, and a
+//! monotonic counter reports how much has flowed through in total.
+//!
+//! `drain_bounded` also retains a rolling tail window of its own, and that is
+//! **not** a reason to delete this type: those fragments are assembled only
+//! when the child exits, which is the moment this side channel stops being
+//! needed. Mid-run, the ring is the only readable view of the frontier.
 //!
 //! **The bytes here are PRE-scrub.** They are the raw pipe bytes, before
 //! [`crate::sandbox::scrub::scrub_and_gate_output`] has seen them. Every reader

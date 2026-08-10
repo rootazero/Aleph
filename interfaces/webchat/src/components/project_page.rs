@@ -42,7 +42,7 @@ use leptos::task::spawn_local;
 
 use crate::api::agents::AgentsApi;
 use crate::api::projects::{ProjectInfo, ProjectsApi};
-use crate::components::chat_sidebar::hydrate_session_history;
+use crate::components::chat_sidebar::hydrate_and_follow;
 use crate::context::DashboardState;
 use crate::i18n::use_i18n;
 use crate::platform::wide::views::chat::composer::InputArea;
@@ -305,11 +305,27 @@ pub async fn enter_project_room(
     chat.clear_team_context();
     chat.room_project_id.set(Some(project_id.to_string()));
     chat.session_key.set(Some(key.clone()));
+    // Same wire as `ChatSidebar::on_select_session`, and it matters more here:
+    // a room's canonical session is shared with every other member, so a run
+    // started by a peer is the NORMAL case, not the exotic one. Without this
+    // the lookup two lines above never finds the tab it just opened and the
+    // peer's turn has nowhere to render.
+    session_map.set_session_key(conv, &key);
     // Mirror `ChatSidebar::on_select_session`: only hydrate when there is
     // nothing live to preserve — a conversation already open (background
     // `ChatState`) is at least as fresh as `chat.history`.
     if chat.messages.with_untracked(Vec::is_empty) {
-        spawn_local(hydrate_session_history(dash, chat, workspace, key, locale));
+        // `hydrate_and_follow`, not the bare hydrate: a room's session is
+        // shared, so "somebody else is mid-turn on it right now" is the normal
+        // state of a room you have just walked into.
+        spawn_local(hydrate_and_follow(
+            dash,
+            chat,
+            workspace,
+            session_map,
+            key,
+            locale,
+        ));
     }
     if let Some(ws) = workspace {
         ws.reset();

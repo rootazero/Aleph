@@ -2123,3 +2123,61 @@ async fn a_fired_timer_wake_leaves_nothing_for_the_sweep_to_claim() {
         "and it must not spend another iteration off the pursuit cap"
     );
 }
+
+/// Regression pin: `execute()` announces the turn's end on **both** of its
+/// terminal arms.
+///
+/// Until 2026-08-10 only the `Ok` arm published `SessionUpdated`. A run that
+/// failed, timed out or was cancelled therefore ended in silence — while the
+/// transcript HAD moved: the harness appends the user message before dispatch
+/// and the error receipt is persisted after. Every surface that re-hydrates on
+/// that frame (a second Panel tab, another member of a project room, the
+/// sidebar row's `updated_at`) kept rendering the state from before the failed
+/// turn until the viewer manually reselected the session.
+///
+/// A source-level pin because the real `ExecutionEngine::execute` needs a live
+/// orchestrator to reach either arm, so there is no unit-level harness that
+/// distinguishes "announced once" from "announced twice"; without this,
+/// deleting the `Err` arm's call leaves every test green again. The needle is
+/// the shared helper (`Engine::announce_turn_end`) rather than
+/// `publish_session_updated`, because the whole point of the helper is that the
+/// three arguments — including the `metadata["channel_id"]` lookup — are
+/// derived in exactly one place.
+///
+/// CRLF-safe: this repository is checked out with CRLF on Windows, so the file
+/// is normalised before any `\n`-anchored splitting. See the "source-level
+/// guards" criterion in CLAUDE.md §10 — a separator with a character in front
+/// of its `\n` matches nothing on a CRLF checkout, and the resulting "whole
+/// file" prefix then happily matches literals inside this very test.
+#[test]
+fn execute_announces_the_turn_end_on_both_terminal_arms() {
+    let src = include_str!("execute.rs").replace('\r', "");
+    let production = src
+        .split("#[cfg(test)]")
+        .next()
+        .expect("split always yields at least one element");
+    assert!(
+        production.len() > 1000,
+        "the production prefix must be the bulk of execute.rs, not an empty \
+         slice — a mis-split would make every assertion below vacuous"
+    );
+    let announcements = production
+        .matches("self.announce_turn_end(&request)")
+        .count();
+    assert_eq!(
+        announcements, 2,
+        "execute() has two terminal arms (Ok and Err) and both must announce \
+         the turn's end; found {announcements} call site(s)"
+    );
+
+    // …and specifically that one of them is on the failure path. Counting
+    // alone would pass if somebody duplicated the call inside the success arm.
+    let err_arm = production
+        .find("failed to emit RunError stream event")
+        .expect("the Err arm still emits a RunError stream event");
+    assert!(
+        production[err_arm..].contains("self.announce_turn_end(&request)"),
+        "the announcement must also happen after the failure receipt is \
+         emitted — a failed or cancelled turn moved the transcript too"
+    );
+}

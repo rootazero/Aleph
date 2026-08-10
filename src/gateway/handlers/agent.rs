@@ -415,6 +415,19 @@ impl AgentRunManager {
     pub fn running_sessions(&self) -> Vec<String> {
         self.execution_adapter.running_sessions()
     }
+
+    /// The run currently in flight on `session_key`, from the same
+    /// authoritative registry [`Self::running_sessions`] reads.
+    ///
+    /// Deliberately NOT resolved from `self.active_runs`: that map only holds
+    /// runs this manager started (Panel `agent.run` / `chat.send`), so a
+    /// session busy with a CLI, channel, cron or resumed turn would answer
+    /// "nothing running" there — which is exactly the case a joining client
+    /// needs answered.
+    #[must_use]
+    pub fn active_run_for_session(&self, session_key: &str) -> Option<String> {
+        self.execution_adapter.active_run_for_session(session_key)
+    }
 }
 
 /// Why a turn could not be turned into a [`RunRequest`].

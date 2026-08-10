@@ -147,21 +147,57 @@ pub fn install_git_skill(
     // Last path segment is the on-disk skill name; the guard above guarantees it
     // is non-empty and free of `..`.
     let safe_name = leaf.rsplit(['/', '\\']).next().unwrap_or(&leaf).to_string();
+    // Restrict accepted git URL schemes: HTTPS (`https://`) and SSH-style scp
+    // form (`git@host:…`). Anything else (file://, ssh://, plain /local/path,
+    // gopher://) is a foothold into the sandbox and gets rejected at install
+    // time rather than at clone time (where the failure mode is opaque).
+    //
+    // Tests under #[cfg(test)] opt out via `ALEPH_TEST_ALLOW_LOCAL_GIT_URL=1`
+    // so the existing fixture-driven harness (which clones from a tempdir) keeps
+    // working without making `file://` a production-grade escape hatch.
+    if !acceptable_git_url(git_url) {
+        return Err(format!(
+            "git_url must be https:// or git@<host>:..., got '{git_url}'"
+        ));
+    }
     // Clone into an isolated per-source checkout (never the live skills dir),
     // at the pinned revision when the catalog declares one.
     let checkout = skills_dir.join(".git-cache").join(mcp_server_id(&entry.id));
-    crate::bundled::clone_or_update_at(git_url, &checkout, git_ref.as_deref())?;
+    // Keep the clone call inside a closure so we can clean up the
+    // `.git-cache/<id>` directory on any error path that follows it.
+    let clone_result = crate::bundled::clone_or_update_at(git_url, &checkout, git_ref.as_deref());
+    if let Err(e) = clone_result {
+        let _ = std::fs::remove_dir_all(&checkout);
+        return Err(e.to_string());
+    }
     let src_leaf = checkout.join(&leaf);
     if !src_leaf.is_dir() {
+        let _ = std::fs::remove_dir_all(&checkout);
         return Err(format!("subdir '{leaf}' not found in {git_url}"));
     }
     // Enforce the content pin before the first write.
-    crate::extension::marketplace::installer::verify_plugin_integrity(
-        &src_leaf,
-        sha256.as_deref(),
-    )?;
+    if let Err(e) =
+        crate::extension::marketplace::installer::verify_plugin_integrity(&src_leaf, sha256.as_deref())
+    {
+        let _ = std::fs::remove_dir_all(&checkout);
+        return Err(e.to_string());
+    }
+    // Atomic stage-then-rename: copy into a fresh staging directory, then
+    // rename onto the target. A mid-copy failure leaves the staging dir as
+    // garbage (cleaned by official sync) and the existing target untouched.
     let target = skills_dir.join(&safe_name);
-    crate::bundled::copy_skill_leaf(&src_leaf, &target).map_err(|e| e.to_string())?;
+    let staging = skills_dir
+        .join(".staging")
+        .join(format!("{}-{nonce}", safe_name, nonce = mcp_server_id(&entry.id)));
+    let _ = std::fs::remove_dir_all(&staging);
+    if let Err(e) = crate::bundled::copy_skill_leaf(&src_leaf, &staging) {
+        let _ = std::fs::remove_dir_all(&staging);
+        return Err(e.to_string());
+    }
+    if let Err(e) = std::fs::rename(&staging, &target) {
+        let _ = std::fs::remove_dir_all(&staging);
+        return Err(e.to_string());
+    }
 
     // Stamp manifest as Github so official sync skips it.
     let mut manifest = crate::bundled::manifest::InstallRegistry::load(skills_dir)
@@ -176,7 +212,38 @@ pub fn install_git_skill(
         },
     );
     let _ = manifest.save(skills_dir);
+    // Note: the per-entry `.git-cache/<id>` clone is intentionally left on
+    // disk so a follow-up install with a stronger pin (sha256) can re-clone
+    // cheaply without a network round-trip. The disk leak that this creates
+    // is bounded by a periodic GC sweep in `hub::cache::gc_git_checkouts`
+    // (added separately, not by this fix).
     Ok(target.display().to_string())
+}
+
+/// Restrict accepted git URL schemes.
+///
+/// Production callers: HTTPS (`https://`) or SSH-style scp (`git@host:…`).
+/// Anything else (`file://`, `ssh://`, `/local/path`, `gopher://`) is a
+/// foothold into the sandbox; rejecting at install time gives a typed Err
+/// rather than an opaque libgit2 failure.
+///
+/// `#[cfg(test)]`: also accept the env opt-out `ALEPH_TEST_ALLOW_LOCAL_GIT_URL=1`
+/// so the existing fixture-driven tests, which clone from a tempdir, keep
+/// working without making `file://` a production-grade escape hatch. Outside
+/// test builds the env var is ignored.
+fn acceptable_git_url(url: &str) -> bool {
+    let production_ok =
+        url.starts_with("https://") || (url.starts_with("git@") && url.contains(':'));
+    #[cfg(test)]
+    {
+        if std::env::var_os("ALEPH_TEST_ALLOW_LOCAL_GIT_URL").is_some() {
+            return production_ok
+                || url.starts_with("file://")
+                || url.starts_with('/')
+                || url.starts_with("./");
+        }
+    }
+    production_ok
 }
 
 /// Resolve which marketplace an install entry's plugin lives in.
@@ -484,6 +551,31 @@ mod tests {
             !skills_dir.join("my-skill").exists(),
             "nothing may be installed when the pin does not match"
         );
+    }
+
+    /// Local paths and file:// are a foothold into the sandbox in production
+    /// but must remain allowed in tests so the existing fixture-driven
+    /// harness keeps working. The bypass is opt-in via an env var that does
+    /// nothing in non-test builds.
+    #[test]
+    fn git_url_scheme_accepts_https_and_rejects_local() {
+        // The bypass env var may be set by the wider test runner; temporarily
+        // clear it so we exercise the production accept-set.
+        let saved = std::env::var_os("ALEPH_TEST_ALLOW_LOCAL_GIT_URL");
+        std::env::remove_var("ALEPH_TEST_ALLOW_LOCAL_GIT_URL");
+        let result = std::panic::catch_unwind(|| {
+            assert!(acceptable_git_url("https://github.com/x/y"));
+            assert!(acceptable_git_url("git@github.com:x/y.git"));
+            assert!(!acceptable_git_url("/tmp/local-path"));
+            assert!(!acceptable_git_url("file:///tmp/local"));
+            assert!(!acceptable_git_url("ssh://github.com/x/y"));
+        });
+        if let Some(v) = saved {
+            std::env::set_var("ALEPH_TEST_ALLOW_LOCAL_GIT_URL", v);
+        }
+        if let Err(e) = result {
+            std::panic::resume_unwind(e);
+        }
     }
 
     #[test]
