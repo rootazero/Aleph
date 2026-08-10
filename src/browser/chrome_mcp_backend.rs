@@ -135,22 +135,12 @@ impl BrowserBackend for ChromeMcpBackend {
         // steal our "newest is last" id. List inline (not via the public
         // `list_tabs`, which would re-acquire the same lock and deadlock).
         let _guard = self.profile_guard().await;
-        let _result = self.call("new_page", json!({ "url": url })).await?;
+        self.call("new_page", json!({ "url": url })).await?;
         let tabs_text = Self::extract_text(&self.call("list_pages", json!({})).await?);
-        // Parse last numeric id from "N: URL" lines (newest tab is last)
-        let last_id = tabs_text
-            .lines()
-            .filter_map(|line| {
-                let line = line.trim();
-                let colon_pos = line.find(": ")?;
-                let id_str = line.get(..colon_pos)?.trim();
-                if id_str.chars().all(|c| c.is_ascii_digit()) && !id_str.is_empty() {
-                    Some(id_str.to_string())
-                } else {
-                    None
-                }
-            })
-            .next_back();
+        // Parse last numeric id (newest tab is last). Reuse the shared parser
+        // so the chrome-devtools-mcp "N: URL" and the playwright-cli
+        // "Tab N: URL" formats both yield the same id.
+        let last_id = super::tab_registry::parse_tab_ids(&tabs_text).last().cloned();
 
         // Post-navigation audit on the listing already fetched above (no
         // extra round trip): a redirect may have landed the new tab on a

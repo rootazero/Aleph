@@ -78,9 +78,6 @@ pub struct ChromeMcpDriver {
     /// because Chrome's host-resolver-rules are process-wide — once Chrome is
     /// up, the pin is fixed for its lifetime.
     pending_launch_pins: Mutex<HashMap<String, String>>,
-    /// Handle to the launched Chrome process, kept alive to prevent
-    /// the process from becoming an orphan.
-    chrome_child: Mutex<Option<tokio::process::Child>>,
 }
 
 impl ChromeMcpDriver {
@@ -93,7 +90,6 @@ impl ChromeMcpDriver {
             chrome_launch_lock: tokio::sync::Mutex::new(()),
             profile_locks: Mutex::new(HashMap::new()),
             pending_launch_pins: Mutex::new(HashMap::new()),
-            chrome_child: Mutex::new(None),
         }
     }
 
@@ -327,7 +323,11 @@ impl ChromeMcpDriver {
             }
         }
 
-        *self.chrome_child.lock().unwrap_or_else(|e| e.into_inner()) = Some(child);
+        // Drop the handle intentionally: `tokio::process::Child::kill_on_drop`
+        // defaults to `false`, so this does NOT terminate the launched Chrome
+        // process — it remains alive to serve the MCP server's `--autoConnect`.
+        // A future shutdown hook (e.g. `Drop` on `ChromeMcpDriver`) can reap it.
+        drop(child);
         Ok(())
     }
 
