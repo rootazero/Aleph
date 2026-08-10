@@ -30,12 +30,17 @@ pub(super) async fn create_task(
 
     // Wrap task + dependency inserts in a transaction so partial
     // failure (e.g. FK violation on a dependency) doesn't leave an
-    // orphaned task row.
-    conn.execute("BEGIN", []).map_err(db_err)?;
+    // orphaned task row. B6-01: use `unchecked_transaction()` instead of
+    // hand-rolled BEGIN/COMMIT — the RAII guard rolls back on any early
+    // return, INCLUDING a failed `tx.commit()`, which the literal form
+    // returned `Err` from without rolling back. The connection is shared
+    // process-wide with `SqliteSnapshotStore`, so a dangling transaction
+    // poisoned every later write until restart.
+    let tx = conn.unchecked_transaction().map_err(db_err)?;
 
-    let result = (|| -> std::result::Result<(), rusqlite::Error> {
+    let result: std::result::Result<(), rusqlite::Error> = (|| {
         // Always store as 'pending' — Blocked is derived
-        conn.execute(
+        tx.execute(
             r#"
         INSERT INTO coord_tasks (id, team_id, subject, description, status, owner, priority, metadata, created_at)
         VALUES (?1, ?2, ?3, ?4, 'pending', ?5, ?6, ?7, ?8)
@@ -54,7 +59,7 @@ pub(super) async fn create_task(
 
         // Insert dependency edges
         for dep_id in &input.blocked_by {
-            conn.execute(
+            tx.execute(
                 "INSERT INTO coord_task_dependencies (task_id, depends_on) VALUES (?1, ?2)",
                 params![id, dep_id],
             )?;
@@ -64,10 +69,10 @@ pub(super) async fn create_task(
 
     match result {
         Ok(()) => {
-            conn.execute("COMMIT", []).map_err(db_err)?;
+            tx.commit().map_err(db_err)?;
         }
         Err(e) => {
-            let _ = conn.execute("ROLLBACK", []);
+            // Drop rolls back automatically; surface the original error.
             return Err(db_err(e));
         }
     }
