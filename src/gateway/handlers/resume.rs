@@ -160,6 +160,26 @@ pub async fn resume_named_session(
 }
 
 /// Handle `agent.resume`.
+///
+/// # Why the agent-admission gate is not here
+///
+/// Every other run-start path passes through
+/// `handlers::agent::build_run_request`, which asks
+/// `caller_identity::caller_may_act_as_agent` (§5.17 round 5). This one does
+/// not: it re-triggers an interrupted run under the session's **stored**
+/// attribution, so the only question it asks is `session_visible`.
+///
+/// The residue is narrow and deliberate: after an operator removes someone
+/// from an agent's `allowed_users`, that person can still resume a run of
+/// their own that was interrupted earlier. They cannot **steer** it —
+/// `ResumeParams` carries only a session key, and giving the run new
+/// instructions means `chat.send`, which is gated. The work being resumed was
+/// authorized when it started, and a revocation already requires a restart to
+/// take effect at all (`[agents]` is not a live section).
+///
+/// **This reasoning expires the moment `agent.resume` accepts input.** If a
+/// caller can direct the resumed run, resume becomes a run-start path in
+/// substance and needs the same gate — see AGENT_IDENTITY.md §6 ①.
 pub async fn handle_resume(
     request: JsonRpcRequest,
     session_manager: Arc<dyn SessionStore>,
