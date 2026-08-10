@@ -419,10 +419,12 @@ impl AgentRunManager {
 
 /// Why a turn could not be turned into a [`RunRequest`].
 ///
-/// Two variants, because the transports must map them to different JSON-RPC
-/// codes and collapsing them would either turn a visibility denial into a
-/// chatty `INVALID_PARAMS` (which tells the caller the project exists) or a
-/// param complaint into a silent not-found.
+/// One variant per JSON-RPC code the transports must produce. Collapsing any
+/// two would either turn a visibility denial into a chatty `INVALID_PARAMS`
+/// (which tells the caller the project exists), or a param complaint into a
+/// silent not-found, or an authorization refusal into a puzzle — and the
+/// refusals differ on purpose: one has an existence secret to keep and one
+/// does not.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum BuildRunError {
     /// Malformed or unacceptable params → `INVALID_PARAMS`.
@@ -592,10 +594,11 @@ fn bound_workspace_of(
 /// existing session from a new one, so it treats every turn as new; see
 /// [`resolve_attribution`].
 ///
-/// Callers map [`BuildRunError`] to their transport's error shape — the two
-/// variants must NOT be flattened, because one is a bad-params complaint and
-/// the other is a visibility denial that has to stay byte-identical to a
-/// project id that was never minted.
+/// Callers map [`BuildRunError`] to their transport's error shape, and the
+/// variants must NOT be flattened into one another: a bad-params complaint, a
+/// visibility denial that has to stay byte-identical to a project id that was
+/// never minted, and an authorization refusal that deliberately does NOT hide
+/// behind "not found" (see each variant's doc for which is which and why).
 pub async fn build_run_request(
     run_id: String,
     session_key: &SessionKey,
