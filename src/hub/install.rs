@@ -147,21 +147,55 @@ pub fn install_git_skill(
     // Last path segment is the on-disk skill name; the guard above guarantees it
     // is non-empty and free of `..`.
     let safe_name = leaf.rsplit(['/', '\\']).next().unwrap_or(&leaf).to_string();
+    // Restrict accepted git URL schemes: HTTPS (`https://`) and SSH-style scp
+    // form (`git@host:…`). Anything else (file://, ssh://, plain /local/path,
+    // gopher://) is a foothold into the sandbox and gets rejected at install
+    // time rather than at clone time (where the failure mode is opaque).
+    if !(git_url.starts_with("https://")
+        || (git_url.starts_with("git@") && git_url.contains(':')))
+    {
+        return Err(format!(
+            "git_url must be https:// or git@<host>:..., got '{git_url}'"
+        ));
+    }
     // Clone into an isolated per-source checkout (never the live skills dir),
     // at the pinned revision when the catalog declares one.
     let checkout = skills_dir.join(".git-cache").join(mcp_server_id(&entry.id));
-    crate::bundled::clone_or_update_at(git_url, &checkout, git_ref.as_deref())?;
+    // Keep the clone call inside a closure so we can clean up the
+    // `.git-cache/<id>` directory on any error path that follows it.
+    let clone_result = crate::bundled::clone_or_update_at(git_url, &checkout, git_ref.as_deref());
+    if let Err(e) = clone_result {
+        let _ = std::fs::remove_dir_all(&checkout);
+        return Err(e.to_string());
+    }
     let src_leaf = checkout.join(&leaf);
     if !src_leaf.is_dir() {
+        let _ = std::fs::remove_dir_all(&checkout);
         return Err(format!("subdir '{leaf}' not found in {git_url}"));
     }
     // Enforce the content pin before the first write.
-    crate::extension::marketplace::installer::verify_plugin_integrity(
-        &src_leaf,
-        sha256.as_deref(),
-    )?;
+    if let Err(e) =
+        crate::extension::marketplace::installer::verify_plugin_integrity(&src_leaf, sha256.as_deref())
+    {
+        let _ = std::fs::remove_dir_all(&checkout);
+        return Err(e.to_string());
+    }
+    // Atomic stage-then-rename: copy into a fresh staging directory, then
+    // rename onto the target. A mid-copy failure leaves the staging dir as
+    // garbage (cleaned by official sync) and the existing target untouched.
     let target = skills_dir.join(&safe_name);
-    crate::bundled::copy_skill_leaf(&src_leaf, &target).map_err(|e| e.to_string())?;
+    let staging = skills_dir
+        .join(".staging")
+        .join(format!("{}-{nonce}", safe_name, nonce = mcp_server_id(&entry.id)));
+    let _ = std::fs::remove_dir_all(&staging);
+    if let Err(e) = crate::bundled::copy_skill_leaf(&src_leaf, &staging) {
+        let _ = std::fs::remove_dir_all(&staging);
+        return Err(e.to_string());
+    }
+    if let Err(e) = std::fs::rename(&staging, &target) {
+        let _ = std::fs::remove_dir_all(&staging);
+        return Err(e.to_string());
+    }
 
     // Stamp manifest as Github so official sync skips it.
     let mut manifest = crate::bundled::manifest::InstallRegistry::load(skills_dir)
@@ -176,6 +210,10 @@ pub fn install_git_skill(
         },
     );
     let _ = manifest.save(skills_dir);
+    // Best-effort: drop the per-entry `.git-cache/<id>` clone after a successful
+    // install. Re-installing would just re-clone; the on-disk leak from leaving
+    // it forever is the documented pathology (review/hub-statics).
+    let _ = std::fs::remove_dir_all(&checkout);
     Ok(target.display().to_string())
 }
 
