@@ -119,6 +119,16 @@ pub(super) fn migrate(conn: &Connection) -> crate::error::Result<()> {
 
         CREATE INDEX IF NOT EXISTS idx_coord_tasks_team_status ON coord_tasks(team_id, status);
         CREATE INDEX IF NOT EXISTS idx_coord_tasks_owner ON coord_tasks(owner);
+        // B6-03: index on coord_task_dependencies(depends_on). The edge
+        // table's only prior index is the implicit PK (task_id, depends_on),
+        // which by the leftmost-prefix rule cannot serve any lookup keyed on
+        // depends_on. Three production paths are keyed exactly that way:
+        //   * deps::get_dependents  WHERE depends_on = ?1
+        //   * deps::get_newly_unblocked  JOIN ... WHERE d.depends_on = ?1
+        //     (runs on every task completion)
+        //   * FK child scan for delete_team_tasks (O(deleted_tasks × total_edges))
+        CREATE INDEX IF NOT EXISTS idx_coord_task_deps_depends_on
+            ON coord_task_dependencies(depends_on);
         "#,
     )
     .map_err(db_err)?;
