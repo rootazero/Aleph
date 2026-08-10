@@ -219,6 +219,9 @@ impl ExecTier {
             // transport fails closed — the machine is structurally unable to
             // touch the graph's ground.
             "loop_graph" => loop_graph_touches_protected(input),
+            // The gate must cover the verb that removes the gate. See
+            // `self_config_touches_the_gate`.
+            "self_config" => self_config_touches_the_gate(input),
             _ => false,
         }
     }
@@ -356,6 +359,64 @@ fn loop_graph_touches_protected(input: &Value) -> bool {
             .and_then(Value::as_str)
             .is_some_and(|v| v.starts_with("root:") || v.starts_with("frozen:"))
     })
+}
+
+/// The two config subtrees that decide whether the argument-level cards above
+/// are raised at all.
+///
+/// - `policies.tool_permissions` — one entry named after a tool disarms that
+///   tool's card via `ScopedToolServiceBuilder::explicitly_named`, whose whole
+///   justification is "the operator already decided about this tool".
+/// - `policies.exec_tier` — `Full` never asks, by contract.
+const GATE_DECIDING_CONFIG_PATHS: &[&str] = &["policies.tool_permissions", "policies.exec_tier"];
+
+/// Whether this `self_config` call can reach the configuration that decides
+/// whether [`ExecTier::asks_for_arguments`] fires.
+///
+/// # Why this arm exists
+///
+/// `explicitly_named` is exact-match (round 11 made it so, after `"*" = "allow"`
+/// was found switching off the last card in front of `file_ops delete` and
+/// `root:`/`frozen:` writes). But exactness only answers *which* entry counts;
+/// it assumes the entry was written by a person. `self_config` breaks that
+/// assumption: it raises no card of its own — it is absent from
+/// `CONFIRMATION_REQUIRED_TOOLS`, `is_destructive` is false for it, and an
+/// operator connection sails through `check_operator_gate`. So on a default
+/// install the model could, in one un-carded call, write
+/// `policies.tool_permissions.overrides = {"loop_graph": "allow"}` and thereby
+/// retire — permanently, for every later turn — the only human checkpoint this
+/// repo's governance layer has. Two legal steps, and the composition is
+/// equivalent to the gated one-step write.
+///
+/// The predicate is a subtree-intersection rather than a prefix test, because a
+/// write at `policies` (or at the root) carries the same payload one level up.
+/// `rollback_config` restores a whole snapshot and therefore always intersects.
+///
+/// Note this covers its own removal: the first call that writes an override for
+/// `self_config` itself is a write to `policies.tool_permissions`, so it cards.
+fn self_config_touches_the_gate(input: &Value) -> bool {
+    match input.get("action").and_then(Value::as_str) {
+        // A snapshot restore reinstates whatever the snapshot held; there is no
+        // path argument to narrow it by.
+        Some("rollback_config") => true,
+        Some("update_config") => {
+            let path = input
+                .get("config_path")
+                .and_then(Value::as_str)
+                .unwrap_or_default();
+            GATE_DECIDING_CONFIG_PATHS
+                .iter()
+                .any(|target| dot_paths_intersect(path, target))
+        }
+        _ => false,
+    }
+}
+
+/// Whether two dot-paths name overlapping config subtrees — equal, or one an
+/// ancestor of the other. Segment-aware, so `policies.exec_tier_legacy` does not
+/// count as touching `policies.exec_tier`. An empty path is the whole config.
+fn dot_paths_intersect(a: &str, b: &str) -> bool {
+    a.is_empty() || a == b || a.starts_with(&format!("{b}.")) || b.starts_with(&format!("{a}."))
 }
 
 fn is_destructive(facts: ToolFacts<'_>) -> bool {
@@ -714,6 +775,79 @@ mod tests {
         assert!(builtin_tiers()
             .iter()
             .all(|p| ExecTier::from_id(p.id).is_some()));
+    }
+
+    /// The composition this arm exists to break: `self_config` raises no card
+    /// of its own, so without it the model can retire the `root:`/`frozen:`
+    /// checkpoint in ONE un-carded call and every later write sails through.
+    #[test]
+    fn writing_a_tool_permission_override_asks() {
+        let write = serde_json::json!({
+            "action": "update_config",
+            "config_path": "policies.tool_permissions.overrides",
+            "config_value": {"loop_graph": "allow"},
+        });
+        assert!(ExecTier::Auto.asks_for_arguments("self_config", &write));
+    }
+
+    /// A write one (or several) levels up carries the same payload.
+    #[test]
+    fn an_ancestor_path_write_asks_too() {
+        for path in ["policies", "", "policies.exec_tier"] {
+            let write = serde_json::json!({
+                "action": "update_config",
+                "config_path": path,
+                "config_value": {"exec_tier": "full"},
+            });
+            assert!(
+                ExecTier::Auto.asks_for_arguments("self_config", &write),
+                "a write at '{path}' reaches the gate-deciding config"
+            );
+        }
+    }
+
+    /// A snapshot restore reinstates whatever it held, path-blind.
+    #[test]
+    fn rolling_back_a_snapshot_asks() {
+        let rollback = serde_json::json!({"action": "rollback_config", "timestamp": "x"});
+        assert!(ExecTier::Auto.asks_for_arguments("self_config", &rollback));
+    }
+
+    /// The cost has to stay narrow, or the card becomes noise and gets turned
+    /// off — which is the same failure by another route.
+    #[test]
+    fn ordinary_self_config_work_still_does_not_ask() {
+        for (action, path) in [
+            ("update_config", "memory"),
+            ("update_config", "providers.openai"),
+            ("update_config", "policies.exec_tier_legacy"),
+            ("read_config", "policies.tool_permissions"),
+            ("list_files", ""),
+        ] {
+            let call = serde_json::json!({"action": action, "config_path": path});
+            assert!(
+                !ExecTier::Auto.asks_for_arguments("self_config", &call),
+                "{action} at '{path}' must not raise a card"
+            );
+        }
+    }
+
+    /// Segment-aware, in both directions — the prefix test that is not one.
+    #[test]
+    fn dot_path_intersection_is_segment_aware() {
+        assert!(dot_paths_intersect("policies", "policies.exec_tier"));
+        assert!(dot_paths_intersect("policies.exec_tier", "policies"));
+        assert!(dot_paths_intersect(
+            "policies.exec_tier",
+            "policies.exec_tier"
+        ));
+        assert!(dot_paths_intersect("", "policies.exec_tier"));
+        assert!(!dot_paths_intersect("policies_x", "policies"));
+        assert!(!dot_paths_intersect(
+            "policies.exec_tier_legacy",
+            "policies.exec_tier"
+        ));
+        assert!(!dot_paths_intersect("memory", "policies"));
     }
 
     #[test]

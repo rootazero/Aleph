@@ -282,11 +282,28 @@ impl ToolRegistry for BuiltinToolRegistry {
                                 })
                                 .unwrap_or((None, None)),
                         };
+                    // Only inject a route that names something. `TurnContext`
+                    // carries `channel_id`/`conversation_id` as `String`, and
+                    // they are EMPTY for exactly the turns that have no channel
+                    // — a governance or steward cron, a heartbeat probe, a
+                    // webhook turn, a `tools.invoke` call. Wrapping those in
+                    // `Some("")` is not "no route", it is a route that fails
+                    // every `is_some()` test the delivery side runs: the
+                    // installed job would be stamped
+                    // `source_channel_id = Some("")`, which makes
+                    // `cron::executor`'s `approval_is_routable` true, so
+                    // `UNATTENDED_KEY` is never set and the weekly audit run is
+                    // treated as attended; and `build_cron_prompt` then tells
+                    // the auditor "the runtime will deliver it to the user
+                    // automatically. Do NOT call any messaging tool" — taking
+                    // away the model's own fallback in favour of a delivery
+                    // that cannot happen. `None` is the honest value and every
+                    // one of those paths already handles it.
                     if let Some(obj) = args.as_object_mut() {
-                        if let Some(channel) = channel {
+                        if let Some(channel) = channel.filter(|c| !c.is_empty()) {
                             obj.insert("__channel".into(), serde_json::Value::String(channel));
                         }
-                        if let Some(conversation_id) = conversation_id {
+                        if let Some(conversation_id) = conversation_id.filter(|c| !c.is_empty()) {
                             obj.insert(
                                 "__conversation_id".into(),
                                 serde_json::Value::String(conversation_id),

@@ -278,6 +278,11 @@ pub struct WorkflowTool {
     team_store: Option<Arc<dyn crate::teams::TeamStore>>,
     /// Tool-free planner provider; `None` → no Strategy minted on `run`.
     planner_provider: Option<Arc<dyn AiProvider>>,
+    /// The registry the dispatcher will actually deliver a `clarify` question
+    /// through. Held ONLY so the run pre-flight can ask it the same question
+    /// `handle_clarify_task` will ask later — see `clarify_is_deliverable`.
+    /// `None` → the pre-flight cannot answer and does not refuse.
+    channels: Option<Arc<crate::gateway::channel_registry::ChannelRegistry>>,
 }
 
 impl WorkflowTool {
@@ -290,6 +295,7 @@ impl WorkflowTool {
             dispatch_signal,
             team_store: None,
             planner_provider: None,
+            channels: None,
         }
     }
 
@@ -297,6 +303,50 @@ impl WorkflowTool {
     pub fn with_planner_provider(mut self, provider: Option<Arc<dyn AiProvider>>) -> Self {
         self.planner_provider = provider;
         self
+    }
+
+    /// Wire the channel registry the clarify pre-flight consults. Mirrors
+    /// [`Self::with_team_store`]: an optional capability whose absence only
+    /// costs the pre-flight, never correctness (the dispatcher still fail-fasts
+    /// an undeliverable clarify, just asynchronously and after `run` already
+    /// reported success).
+    #[must_use]
+    pub fn with_channels(
+        mut self,
+        channels: Option<Arc<crate::gateway::channel_registry::ChannelRegistry>>,
+    ) -> Self {
+        self.channels = channels;
+        self
+    }
+
+    /// Will a `clarify` step actually reach the user?
+    ///
+    /// The pre-flight used to answer this with
+    /// [`TurnContext::is_channel_routable`], which is
+    /// `!channel_id.is_empty() && !conversation_id.is_empty()` — a question
+    /// about string emptiness, and structurally true for the surface most runs
+    /// are launched from. Every Panel turn carries `channel_id = "gui:chat"`, a
+    /// pseudo-channel that is deliberately NEVER registered, so the pre-flight
+    /// passed, `materialize` created the tasks, `run` reported success, and the
+    /// dispatcher then failed the clarify step at `channels.send(...)` and
+    /// cascaded its dependents `Unsatisfiable`. The guard written to prevent
+    /// exactly that outcome could not see it.
+    ///
+    /// So ask the delivery face's own question: is this channel in the registry
+    /// the dispatcher will send through. A missing registry answers "yes" —
+    /// refusing on a capability we simply do not hold would ground workflows
+    /// that work today.
+    async fn clarify_is_deliverable(&self, ctx: Option<&ClarifyContext>) -> bool {
+        let Some(ctx) = ctx else {
+            return false;
+        };
+        let Some(channels) = self.channels.as_ref() else {
+            return true;
+        };
+        channels
+            .get(&crate::gateway::channel::ChannelId::new(&ctx.channel_id))
+            .await
+            .is_some()
     }
 
     /// Wire the team roster so `run` can pre-flight team coverage. Builder form
@@ -754,7 +804,7 @@ impl AlephTool for WorkflowTool {
                 // its dependents Unsatisfiable, all AFTER this tool already
                 // reported success. Reject before any coord_task exists (P7
                 // boundary validation, same contract as team coverage above).
-                if clarify_ctx.is_none() {
+                if !self.clarify_is_deliverable(clarify_ctx.as_ref()).await {
                     let clarify_steps: Vec<&str> = def
                         .steps
                         .iter()
@@ -762,10 +812,21 @@ impl AlephTool for WorkflowTool {
                         .map(|s| s.id.as_str())
                         .collect();
                     if !clarify_steps.is_empty() {
+                        let surface = clarify_ctx.as_ref().map_or_else(
+                            || "this run has no originating channel".to_string(),
+                            |c| {
+                                format!(
+                                    "'{}' is not a channel the dispatcher can deliver to",
+                                    c.channel_id
+                                )
+                            },
+                        );
                         return Err(AlephError::invalid_input(format!(
-                            "workflow '{name}' has clarify step(s) [{}] but this run has no \
-                             interactive channel to ask the user on — run it from a channel \
-                             conversation, or remove/replace the clarify step(s)",
+                            "workflow '{name}' has clarify step(s) [{}] but there is no \
+                             interactive channel to ask the user on ({surface}) — run it from a \
+                             channel conversation (Telegram / Slack / …), or remove/replace the \
+                             clarify step(s). Note the Panel's `gui:chat` is not a deliverable \
+                             channel; use `ask_user` for an in-Panel question.",
                             clarify_steps.join(", "),
                         )));
                     }
@@ -856,7 +917,15 @@ impl AlephTool for WorkflowTool {
                         .map_or(0, |d| d.as_secs());
                     let merged = crate::agents::swarm::tasks::merge_metadata_patch(
                         &anchor.metadata,
-                        serde_json::json!({ crate::workflow::WORKFLOW_NOTIFIED_KEY: stamped_at }),
+                        serde_json::json!({
+                            crate::workflow::WORKFLOW_NOTIFIED_KEY: stamped_at,
+                            // This IS the stamper the re-arm grace exists for —
+                            // written before the status writes below land. Say
+                            // so, so the sweep applies the grace here and only
+                            // here.
+                            crate::workflow::WORKFLOW_NOTIFIED_BY_KEY:
+                                crate::workflow::NOTIFIED_BY_CANCEL,
+                        }),
                     );
                     if let Err(e) = self
                         .coord_store

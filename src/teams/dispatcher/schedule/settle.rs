@@ -173,10 +173,30 @@ impl TeamDispatcher {
                     .map_or(u64::MAX, |stamped| {
                         Self::now_epoch().saturating_sub(stamped)
                     });
-                if !all_settled && marker_age >= REOPEN_REARM_GRACE_SECS {
+                // The grace protects the `cancel` stamper's mid-write window
+                // and nothing else. THIS sweep only stamps after observing the
+                // run fully settled, so its own marker has no window — waiting
+                // out the grace on it just loses the commonest reopen of all
+                // ("it failed" → the user replies "retry" within seconds), and
+                // the corrected run's real outcome is then never announced.
+                // Unknown provenance (rows stamped before the key existed)
+                // keeps the age rule, i.e. the previous behaviour.
+                let stamped_after_settled = anchor
+                    .metadata
+                    .get(crate::workflow::WORKFLOW_NOTIFIED_BY_KEY)
+                    .and_then(|v| v.as_str())
+                    == Some(crate::workflow::NOTIFIED_BY_SETTLE);
+                if !all_settled && (stamped_after_settled || marker_age >= REOPEN_REARM_GRACE_SECS)
+                {
                     let cleared = merge_metadata_patch(
                         &anchor.metadata,
-                        serde_json::json!({ WORKFLOW_NOTIFIED_KEY: serde_json::Value::Null }),
+                        serde_json::json!({
+                            WORKFLOW_NOTIFIED_KEY: serde_json::Value::Null,
+                            // Clear the provenance with the stamp it describes;
+                            // a `_by` outliving its marker would answer for the
+                            // NEXT stamper.
+                            crate::workflow::WORKFLOW_NOTIFIED_BY_KEY: serde_json::Value::Null,
+                        }),
                     );
                     if let Err(e) = self
                         .coord_store
@@ -289,7 +309,17 @@ impl TeamDispatcher {
                     if let Some(anchor) = run_tasks.iter().min_by(|a, b| a.id.cmp(&b.id)) {
                         let merged = merge_metadata_patch(
                             &anchor.metadata,
-                            serde_json::json!({ WORKFLOW_NOTIFIED_KEY: Self::now_epoch() }),
+                            serde_json::json!({
+                                WORKFLOW_NOTIFIED_KEY: Self::now_epoch(),
+                                // Provenance, so the re-arm rule does not have
+                                // to guess it from the clock. This stamp is
+                                // written only after the run was observed fully
+                                // settled — there is no mid-write window to
+                                // protect, so a later unsettled task is a real
+                                // reopen no matter how recent the stamp.
+                                crate::workflow::WORKFLOW_NOTIFIED_BY_KEY:
+                                    crate::workflow::NOTIFIED_BY_SETTLE,
+                            }),
                         );
                         if let Err(e) = self
                             .coord_store

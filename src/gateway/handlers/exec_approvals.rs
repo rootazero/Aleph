@@ -116,11 +116,31 @@ pub fn register_handlers(
 /// A key that does not parse, or whose session row is not there, answers
 /// `false`: this predicate is asked "may I be told this approval exists", and
 /// "I could not work out whose it is" must never mean "everyone's".
-async fn approval_session_is_visible(sessions: &dyn SessionStore, session_key: &str) -> bool {
+///
+/// ## Why the record, not just its `session_key`
+///
+/// One family of cards is raised *because* the requester may not decide: the
+/// config-tier gate (`ScopedToolService::check_operator_gate`) parks a call
+/// after `role_is_operator` says no, and `OperatorApprovalRequester` registers
+/// the pending entry under the requester's OWN session — it has to, because the
+/// manager matches `record.session_key` when cascading a session grant and when
+/// clearing a session's entries. Asking only "is that session yours" therefore
+/// answers "yes" to the very member the gate exists to stop, and both methods
+/// below are in `MEMBER_CARVE_OUTS`: they could enumerate the escalation and
+/// then resolve it. So the fact rides on the record
+/// ([`ExecApprovalRecord::operator_only`]) and is asked FIRST — the ownership
+/// question is not merely wrong here, it is the wrong question.
+async fn approval_addressable_by_caller(
+    sessions: &dyn SessionStore,
+    record: &crate::exec::manager::ExecApprovalRecord,
+) -> bool {
     if !crate::gateway::caller_identity::caller_is_member() {
         return true;
     }
-    let Some(key) = SessionKey::from_key_string(session_key) else {
+    if record.operator_only {
+        return false;
+    }
+    let Some(key) = SessionKey::from_key_string(&record.session_key) else {
         return false;
     };
     matches!(
@@ -152,7 +172,7 @@ async fn handle_approval_resolve(
     // Ownership BEFORE the manager: `resolve_with_reason` unblocks the waiting
     // tool call, and that is not something to do first and check afterwards.
     let addressable = match manager.get_pending(&params.id) {
-        Some(p) => approval_session_is_visible(&*sessions, &p.record.session_key).await,
+        Some(p) => approval_addressable_by_caller(&*sessions, &p.record).await,
         None => false,
     };
 
@@ -195,7 +215,7 @@ async fn handle_approvals_pending(
     } else {
         let mut visible = Vec::with_capacity(all.len());
         for item in all {
-            if approval_session_is_visible(&*sessions, &item.record.session_key).await {
+            if approval_addressable_by_caller(&*sessions, &item.record).await {
                 visible.push(item);
             }
         }
@@ -372,6 +392,113 @@ mod tests {
             response.is_success(),
             "a member must be able to release their own parked tool call: {:?}",
             response.error
+        );
+    }
+
+    /// Park an operator-tier escalation on `session_key` — the shape
+    /// `OperatorApprovalRequester::for_config_tier` registers when
+    /// `check_operator_gate` refuses a member's `OPERATOR_TOOLS` call. Note the
+    /// record is deliberately parked on the MEMBER's own session, because that
+    /// is what production does (the manager needs a real key for the
+    /// session-grant cascade); the escalation is marked by `operator_only`.
+    fn park_operator_escalation(manager: &Arc<ExecApprovalManager>, session_key: &str) -> String {
+        let request = ExecApprovalRequest {
+            id: uuid::Uuid::new_v4().to_string(),
+            command: "loop_graph node kind=root id=root:aleph".to_string(),
+            cwd: None,
+            analysis: CommandAnalysis::error("test fixture"),
+            agent_id: "main".to_string(),
+            session_key: session_key.to_string(),
+            reason: Some("config tier".to_string()),
+            originator_user_id: None,
+            grant_key: None,
+        };
+        let mut record = manager.create(&request, 120_000);
+        record.operator_only = true;
+        let (id, rx, _timeout) = manager.register_pending(record);
+        std::mem::forget(rx);
+        id
+    }
+
+    /// The gate that is not a gate. `check_operator_gate` does not deny a
+    /// member's `OPERATOR_TOOLS` call — it escalates to an operator. If the
+    /// escalation is addressed to the member's own session (which is where the
+    /// manager must key it), then `exec.approval.resolve` — carved open to
+    /// members — hands the decision straight back to the principal the gate
+    /// exists to stop, and every `OPERATOR_TOOLS` entry becomes member-reachable
+    /// in two clicks. `loop_graph` is the sharpest: a `root:` body is injected
+    /// verbatim into every governed session's system prompt, every turn.
+    #[tokio::test]
+    async fn a_member_cannot_resolve_the_operator_escalation_they_raised() {
+        let manager = temp_manager();
+        let (_tmp, sess) = sessions();
+        create_session(&sess, "agent:main:main", Some("u-alice")).await;
+        let id = park_operator_escalation(&manager, "agent:main:main");
+
+        let response = as_member(
+            "u-alice",
+            handle_approval_resolve(resolve_request(&id), manager, sess),
+        )
+        .await;
+
+        assert!(
+            !response.is_success(),
+            "a member must not be able to answer the operator gate they tripped"
+        );
+    }
+
+    /// The other leg of the same fact: if the card is enumerable it is
+    /// resolvable, because the list is where the id comes from. Pinned
+    /// separately because the two methods call the predicate from two places
+    /// and a fix applied to one of them looks complete.
+    #[tokio::test]
+    async fn the_pending_list_hides_the_operator_escalation_from_its_own_raiser() {
+        let manager = temp_manager();
+        let (_tmp, sess) = sessions();
+        create_session(&sess, "agent:main:main", Some("u-alice")).await;
+        let own = park_approval(&manager, "agent:main:main");
+        let escalation = park_operator_escalation(&manager, "agent:main:main");
+
+        let response = as_member(
+            "u-alice",
+            handle_approvals_pending(
+                JsonRpcRequest::with_id("exec.approvals.pending", None, json!(1)),
+                manager,
+                sess,
+            ),
+        )
+        .await;
+
+        let ids = pending_ids(&response);
+        assert!(
+            ids.contains(&own),
+            "a member still sees their own parked tool call: {ids:?}"
+        );
+        assert!(
+            !ids.contains(&escalation),
+            "the operator escalation must not appear in its raiser's pending list: {ids:?}"
+        );
+    }
+
+    /// The operator half — the escalation is useless if the person it is FOR
+    /// cannot see it. Guards against "fix" by simply dropping the record.
+    #[tokio::test]
+    async fn an_operator_still_sees_the_escalation() {
+        let manager = temp_manager();
+        let (_tmp, sess) = sessions();
+        create_session(&sess, "agent:main:main", Some("u-alice")).await;
+        let escalation = park_operator_escalation(&manager, "agent:main:main");
+
+        let response = as_operator(handle_approvals_pending(
+            JsonRpcRequest::with_id("exec.approvals.pending", None, json!(1)),
+            manager,
+            sess,
+        ))
+        .await;
+
+        assert!(
+            pending_ids(&response).contains(&escalation),
+            "the operator must receive the card raised for them"
         );
     }
 

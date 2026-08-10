@@ -23,6 +23,38 @@ pub const AUDIT_TEMPLATE: &str = r#"你是「循环治理·审计环」——独
 /// Default schedule for the audit loop: Monday 10:00 (6-field cron expr).
 pub const AUDIT_DEFAULT_CRON_EXPR: &str = "0 0 10 * * MON";
 
+/// The cron job name `enable_audit` installs — and the identity its
+/// orphan-reclaim scan matches on.
+///
+/// **Why not match on the prompt.** The reclaim path exists so that an operator
+/// who followed the reinstall advice (`drop_node` + `gc`, which never delete the
+/// cron job) re-adopts the surviving ring instead of minting a second one — two
+/// seven-step audits filing verdicts that supersede each other forever, the
+/// exact outcome two rollback comments in this layer are written to prevent.
+/// Matching `job.prompt == AUDIT_TEMPLATE` cannot do that: the prompt is
+/// persisted verbatim by `CronJob::new` at install time and is never rewritten,
+/// while [`AUDIT_TEMPLATE`] has been edited in most rounds since the production
+/// ring was installed (2026-07-19). So the predicate is false for precisely the
+/// long-lived jobs the scan is for, and gets truer the more recently the ring
+/// was installed — i.e. it works in a fresh test fixture and fails in
+/// production.
+///
+/// The name is also the identity AUDIT_TEMPLATE's own roll-call step already
+/// tells the auditor to count ("名册里 `循环治理·审计环` 出现两次"), so keying
+/// on it makes the installer and the audit agree on what "the audit ring" means.
+pub const AUDIT_JOB_NAME: &str = "循环治理·审计环";
+
+/// The one fact about the auditor sub-agent that both governance templates must
+/// carry, asserted from a single place so they cannot drift apart again.
+///
+/// `loop-auditor`'s allowlist is `READ_ONLY ∪ {bash, governance_metrics}` — it
+/// deliberately has no `cron_manage` (a multiplexed tool containing write
+/// actions). Both templates name `cron_manage(action="list")` as the standing
+/// signal for run counts AND tell the session to prefer delegating evidence
+/// collection to `loop-auditor`; without this caveat that is a delegation that
+/// always fails. Round 11 added the caveat to [`AUDIT_TEMPLATE`] only.
+pub const AUDITOR_LACKS_CRON_MANAGE: &str = "loop-auditor 审计员没有 cron_manage";
+
 /// Body stamped on the node `enable_audit` installs — and the marker its
 /// idempotency guard keys on.
 ///
@@ -43,7 +75,7 @@ pub const WATCH_DEFAULT_CRON_EXPR: &str = "0 30 9 * * *";
 /// `loop_graph(action="pair")`. The counter-metric itself — WHAT to watch —
 /// is cognition and comes from the LLM/user prompt appended after this
 /// header; the header only fixes the watcher's role and discipline.
-pub const WATCH_TEMPLATE_HEADER: &str = r#"你是一个「看守环」——从反指标视角审查被看守优化环的表现：胜利是否用便宜方式取得（Goodhart）？先调用 loop_graph(action="status") 确认你看守的对象与其锚点，再按下面的看守指令真实取证（只读；不信自我报告）。治理常备信号——用户纠正数 / dreaming 分布——用 governance_metrics 工具取，cron 运行计数用 cron_manage(action="list")；`~/.aleph/data` 在工作区沙箱外，不要 shell sqlite（会被拒）。取证优先派独立审计员 subagent(agent_type="loop-auditor", task="<反指标探针+返回测量值>")——独立上下文测量，防与被看守环共读同套数据互证正确。
+pub const WATCH_TEMPLATE_HEADER: &str = r#"你是一个「看守环」——从反指标视角审查被看守优化环的表现：胜利是否用便宜方式取得（Goodhart）？先调用 loop_graph(action="status") 确认你看守的对象与其锚点，再按下面的看守指令真实取证（只读；不信自我报告）。治理常备信号——用户纠正数 / dreaming 分布——用 governance_metrics 工具取，cron 运行计数用 cron_manage(action="list")；`~/.aleph/data` 在工作区沙箱外，不要 shell sqlite（会被拒）。取证优先派独立审计员 subagent(agent_type="loop-auditor", task="<反指标探针+返回测量值>")——独立上下文测量，防与被看守环共读同套数据互证正确。**唯一例外：cron 运行计数只能你自己（本会话）取——loop-auditor 审计员没有 cron_manage（它含写动作，刻意不给），派它去取必然失败。**
 
 看守指令：
 "#;
@@ -69,6 +101,39 @@ mod tests {
         assert!(WATCH_TEMPLATE_HEADER.contains("反指标"));
         assert!(WATCH_TEMPLATE_FOOTER.contains("reference-proposal"));
         assert!(WATCH_TEMPLATE_HEADER.contains("loop-auditor"));
+    }
+
+    /// Every template that (a) names `cron_manage` as a standing signal and
+    /// (b) tells the session to delegate evidence to `loop-auditor` owes the
+    /// caveat that the auditor cannot run `cron_manage`. Asserted over BOTH
+    /// templates from one list, because round 11 wrote the caveat into
+    /// `AUDIT_TEMPLATE` alone and the watcher template kept prescribing a
+    /// delegation that always fails.
+    #[test]
+    fn every_template_that_delegates_to_the_auditor_names_its_one_blind_spot() {
+        for (name, tmpl) in [
+            ("AUDIT_TEMPLATE", AUDIT_TEMPLATE),
+            ("WATCH_TEMPLATE_HEADER", WATCH_TEMPLATE_HEADER),
+        ] {
+            if !tmpl.contains("loop-auditor") || !tmpl.contains("cron_manage") {
+                continue;
+            }
+            assert!(
+                tmpl.contains(AUDITOR_LACKS_CRON_MANAGE),
+                "{name} delegates evidence to loop-auditor and names cron_manage, but never \
+                 says the auditor cannot run it — that is a delegation that always fails"
+            );
+        }
+    }
+
+    /// The installer and the reclaim scan must name the ring the same way, and
+    /// the audit's own roll-call step counts occurrences of that same name.
+    #[test]
+    fn the_audit_ring_name_is_the_one_the_roll_call_step_counts() {
+        assert!(
+            AUDIT_TEMPLATE.contains(AUDIT_JOB_NAME),
+            "AUDIT_TEMPLATE's roll-call step must name the job the installer creates"
+        );
     }
 
     #[test]

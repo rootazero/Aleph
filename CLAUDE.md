@@ -325,7 +325,10 @@
 - **执行清单单一形状是 `shared/protocol/src/plan.rs::PlanSnapshot`** —— 分解 100% 归 LLM（R7），**不要新建 `todo` 工具**（Panel 按字面工具名 `"scratchpad"` 取数）→ §3.13
 - **执行档位唯一强制点是 `src/tools/scoped/`** —— 任何新的能执行工具的 surface（新 RPC / 快路径 / 后台产地）不经过它就自带旁路 → [SECURITY.md](docs/reference/SECURITY.md) §5.12
 - **参数级审批闸只在能举卡的 surface 上成立**，且**举给人的那张卡必须包含闸所依据的那个字段**（按字典序渲染 + 200 字符截断会把被闸字段挤掉）；「操作者显式点名了这个工具」在代码里必须是**精确匹配**，不能用会匹配 glob 的查找 → §4.12
-- **闸的范围必须覆盖「能把这个闸拿掉的那个动词」** —— 还要问「有没有两步都合法、合起来等价的路径」 → §4.12
+- **闸的范围必须覆盖「能把这个闸拿掉的那个动词」** —— 还要问「有没有两步都合法、合起来等价的路径」。**「另一个工具改配置」就是这条路**：参数级卡的正当性建立在「这条 override 是**人**写的」，而写它的那个工具（`self_config`）此前一张卡都不举 ⇒ 一次不举卡的 `policies.tool_permissions.overrides = {"loop_graph":"allow"}` 就永久摘掉 root/frozen 面前唯一的人闸。判据：**这道闸依赖的那个配置，谁能写它，那个写入面举卡吗** → §4.12 round-12 ②
+- **一道「升级给更高权限裁决」的闸，只有在发起者答不了它的时候才是闸** —— 这类闸通常**不拒绝**（`check_operator_gate` 对非 operator 举卡而非报错），于是"谁收到这张卡"才是真正的判据。卡按**发起者自己的 session_key** 登记，而列表/解决两个 RPC 对 member 是开的、可见性只问「这个 session 是不是你的」⇒ **member 自批**，整个 `OPERATOR_TOOLS` 家族一并失守。判据：**写下「转交给更高权限」的分支时，去看那张卡最后落在谁手里**。⚠️ 修法有陷阱：**帧**可以发空 key（复用既有 `OperatorOnly` 编码），**记录不能**——`cascade_session_grant` 与会话级清理都按 `record.session_key` 匹配，两边都置空会让不同用户的卡互相 cascade。安全位要**随记录走**（`ExecApprovalRecord::operator_only`），别去改那个记录**另有用途**的键 → §4.12 round-12 ①
+- **判据钉在一个「每轮都会改」的常量上，等于钉在空气上** —— 且它的失效方向是**反的**：`enable_audit` 拿 `job.prompt == AUDIT_TEMPLATE` 认领孤儿，而 job 的 prompt 是安装当天写死的、模板此后改了五次 ⇒ 对**存在最久**的那个环恒假，而它正是这段代码要认领的对象；新装的反而匹配，所以 fixture 与 CI 全绿、只有生产是坏的。判据：**比对用的这两个值，是同一时刻写下的吗**？不是就改用一个不会漂的身份（名字/id），把模板留作次要匹配 → §4.12 round-12 ⑥
+- **`Some("")` 不是「没有」，是一条通过每一次 `is_some()` 的假路由** —— 把 `String` 字段无条件包成 `Some(..)` 的注入器，在**恰恰没有那个东西**的回合上（无 channel 的 cron / heartbeat / webhook / `tools.invoke`）产出空串路由：下游 `approval_is_routable` 变真 ⇒ 值守判定反转、`UNATTENDED_KEY` 永不设置，而 prompt 还会告诉模型「运行时会替你投递，不要调消息工具」——**连它自己的兜底也一并拿走**。判据：`Option<String>` 的生产者要问**空串该不该塌缩成 `None`** → §4.12 round-12 ⑤
 - **命令硬底线扫的是 `normalize.rs` 的规范化副本**，不是你写的那行字（两份视图 / `-enc` 载荷已解码回注且关不掉 / 规则间隙用 `seg!()` 不是 `[^\n]*`）→ [SANDBOX.md](docs/reference/SANDBOX.md) §3.8
 
 ### 4. 网关 · 通道 · 投递（`src/gateway/`）

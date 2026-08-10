@@ -2847,7 +2847,16 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
         // Phase 2b: operator-targeted approval for config-tier tools. A chat-tier
         // remote device calling a config tool suspends here until an operator
         // resolves it via `exec.approval.resolve`.
-        alephcore::gateway::execution_engine::set_config_approval_requester(operator_requester);
+        //
+        // A SECOND instance, not `operator_requester.clone()`: that one is the
+        // fallback leg above, whose cards belong to the session that raised them
+        // (a Panel `Ask`-tier tool). These belong to the operator — the gate
+        // parked the call because the caller may not decide — so addressing them
+        // to the caller's session would let a member answer their own
+        // escalation. See `OperatorApprovalRequester`'s module doc.
+        alephcore::gateway::execution_engine::set_config_approval_requester(Arc::new(
+            OperatorApprovalRequester::for_config_tier(exec_approval_manager.clone(), event_bus.clone()),
+        ));
 
         // Phase 1 delivery surface: register the desktop shell as an addressable
         // outbound surface and spawn the core R5 router. The router applies the

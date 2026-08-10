@@ -166,13 +166,24 @@ fn scan_bare(raw: &str) -> Result<ImportOutcome> {
     // `name:` land on a schema property whose next token is `{`, aborting the
     // whole import; and a `description:` inside a schema could supply the
     // workflow's description instead of the author's.
+    // The fallback is per-SOURCE, not per-FIELD. A parsed `meta` is the
+    // authority on what the workflow is called AND on what it deliberately does
+    // not say: `export const meta = { name: 'audit', phases: [] }` omitting
+    // `description` is an answer, not a gap. Falling back key-by-key let the
+    // positional scan answer for those omissions, and the first `description:`
+    // in a file that follows the format's own hoist-your-schema-consts
+    // convention belongs to a JSON Schema property — so the workflow got
+    // "PASS or FAIL" as its description. Only an unparseable `meta` (one
+    // holding an expression) hands the question back to the scan.
     let meta_field = |field: &str| -> Option<String> {
-        meta_obj
-            .and_then(|m| m.get(field))
-            .and_then(|v| v.as_str())
-            .map(str::to_string)
-            .filter(|s| !s.is_empty())
-            .or_else(|| scan_meta_field(src, field))
+        match meta_obj {
+            Some(m) => m
+                .get(field)
+                .and_then(|v| v.as_str())
+                .map(str::to_string)
+                .filter(|s| !s.is_empty()),
+            None => scan_meta_field(src, field),
+        }
     };
     let name = meta_field("name").ok_or_else(|| {
         AlephError::invalid_input(
@@ -195,12 +206,25 @@ fn scan_bare(raw: &str) -> Result<ImportOutcome> {
         ),
         ("budget", "budget-driven control flow"),
         ("workflow(", "nested workflow() call"),
-        ("for ", "for loop"),
-        ("while ", "while loop"),
-        ("if (", "if conditional"),
-        ("if(", "if conditional"),
     ] {
         if skeleton.contains(needle) {
+            dropped.push(label.to_string());
+        }
+    }
+    // Control-flow KEYWORDS are matched structurally, not by spelling. JS puts
+    // any amount of whitespace (or none) between the keyword and its `(`, so a
+    // spelling list answers "was this file written with a space" rather than
+    // "does this file branch". It had `if (` and `if(` but only `for ` and
+    // `while ` — so `for(const t of TARGETS) { await agent(...) }` imported its
+    // loop body as ONE step and reported `dropped: []`, i.e. claimed a lossless
+    // import of a file whose per-target fan-out had been collapsed.
+    for (keyword, label) in [
+        ("for", "for loop"),
+        ("while", "while loop"),
+        ("if", "if conditional"),
+        ("switch", "switch statement"),
+    ] {
+        if contains_call_like_keyword(&skeleton, keyword) {
             dropped.push(label.to_string());
         }
     }
@@ -298,6 +322,12 @@ fn scan_bare(raw: &str) -> Result<ImportOutcome> {
                 // ref or a non-data literal) — the step imports, but say the
                 // schema was lost rather than leave it silently absent (P7).
                 if let Some(note) = call.opts.schema_dropped {
+                    dropped.push(note);
+                }
+                // Same rule, the case it did not cover: an opts object the
+                // reader could not finish. Silence here reads as "lossless
+                // import" while `review` / `requireGrounding` came back off.
+                if let Some(note) = call.opts.opts_abandoned {
                     dropped.push(note);
                 }
                 // A sibling inside a parallel block extends the current group; a
@@ -648,6 +678,20 @@ struct AgentOpts {
     /// Carried up so `scan_bare` can surface it in `dropped` (P7 honesty) rather
     /// than the schema vanishing silently.
     schema_dropped: Option<String>,
+    /// The opts object stopped being parseable partway through, so every key
+    /// AFTER that point was abandoned.
+    ///
+    /// The scanner is a small hand-rolled reader, not a JS parser, so it has to
+    /// stop somewhere — a spread (`{ ...BASE_OPTS, review: true }`), a computed
+    /// key, a template literal. Stopping is fine; stopping SILENTLY is not, and
+    /// this is the field that makes the difference. What lives past the stop is
+    /// the oversight half of the format: `review` (park in `WaitingReview` for
+    /// lead review) and `requireGrounding` (that review must touch reality).
+    /// Both default to `false`, so an abandoned tail downgrades a gated step
+    /// into an auto-completing one and `dropped` came back empty — the import
+    /// reported itself lossless. Same honesty rule as `schema_dropped`; this is
+    /// the case that rule did not cover.
+    opts_abandoned: Option<String>,
 }
 
 /// Read the optional `, { label: "…", phase: "…", model: "…", schema: {…},
@@ -662,6 +706,49 @@ struct AgentOpts {
 /// Other unknown keys and non-literal values are skipped without aborting the
 /// rest of the object — the inverse of `export`'s `render_agent_call`, so a
 /// header-stripped export round-trips its opts.
+/// Whether `skeleton` uses `keyword` as a statement keyword — the identifier
+/// followed by optional whitespace and `(`.
+///
+/// Two things a plain `contains` cannot do: accept every spacing JS allows
+/// (`for(`, `for (`, `for\t(`), and reject the keyword occurring INSIDE a
+/// longer identifier (`forEach(`, `iffy(`, a variable named `switcher`). The
+/// leading-boundary check is what makes it safe to match without a space.
+fn contains_call_like_keyword(skeleton: &str, keyword: &str) -> bool {
+    let bytes = skeleton.as_bytes();
+    skeleton.match_indices(keyword).any(|(at, _)| {
+        let leading_ok = at == 0
+            || !bytes
+                .get(at - 1)
+                .is_some_and(|b| b.is_ascii_alphanumeric() || *b == b'_' || *b == b'$');
+        if !leading_ok {
+            return false;
+        }
+        skeleton[at + keyword.len()..].trim_start().starts_with('(')
+    })
+}
+
+/// How much of an abandoned opts tail to quote back to the user.
+const ABANDON_SNIPPET_CHARS: usize = 60;
+
+/// Describe what stopped the opts reader and what it therefore did not read.
+///
+/// Naming the surviving text matters more than naming the cause: the author
+/// needs to see which keys were skipped, and "everything from here" is only
+/// actionable if "here" is shown.
+fn abandon_note(chars: &[char], at: usize, why: &str) -> String {
+    let tail: String = chars
+        .get(at..)
+        .unwrap_or_default()
+        .iter()
+        .take(ABANDON_SNIPPET_CHARS)
+        .collect();
+    let tail = tail.split_whitespace().collect::<Vec<_>>().join(" ");
+    format!(
+        "agent opts: stopped at `{tail}` ({why}) — every key after this point was NOT imported \
+         (this includes `review` / `requireGrounding`, which default to off)"
+    )
+}
+
 fn read_agent_opts(chars: &[char], start: usize, consts: &ConstTable) -> AgentOpts {
     let mut opts = AgentOpts::default();
     let mut i = first_non_ws(chars, start);
@@ -696,7 +783,10 @@ fn read_agent_opts(chars: &[char], start: usize, consts: &ConstTable) -> AgentOp
                     i = next;
                     lit
                 }
-                None => break,
+                None => {
+                    opts.opts_abandoned = Some(abandon_note(chars, i, "unterminated quoted key"));
+                    break;
+                }
             }
         } else {
             let key_start = i;
@@ -705,13 +795,17 @@ fn read_agent_opts(chars: &[char], start: usize, consts: &ConstTable) -> AgentOp
             }
             if i == key_start {
                 // Not a key at all — give up on the rest of the object rather
-                // than spin.
+                // than spin. This is the spread arm (`{ ...BASE, review: true }`)
+                // and every other construct this reader is not a parser for;
+                // record it, because what follows is usually the oversight half.
+                opts.opts_abandoned = Some(abandon_note(chars, i, "not a key"));
                 break;
             }
             chars[key_start..i].iter().collect()
         };
         i = first_non_ws(chars, i);
         if chars.get(i) != Some(&':') {
+            opts.opts_abandoned = Some(abandon_note(chars, i, "missing ':' after key"));
             break;
         }
         i = first_non_ws(chars, i + 1);
@@ -729,7 +823,10 @@ fn read_agent_opts(chars: &[char], start: usize, consts: &ConstTable) -> AgentOp
                     }
                     i = next;
                 }
-                None => break,
+                None => {
+                    opts.opts_abandoned = Some(abandon_note(chars, i, "unterminated string value"));
+                    break;
+                }
             },
             // An object / array literal value. Only `schema` carries one; it is
             // normalised via the bounded data parser, which accepts JS-lax
@@ -1758,6 +1855,84 @@ await agent('fix more')
                 .iter()
                 .any(|d| d.contains("MISSING_SCHEMA") && d.contains("unresolved")),
             "unresolved schema ref surfaced: {:?}",
+            outcome.dropped
+        );
+    }
+
+    /// The opts reader is not a JS parser, so it must stop at a spread — but
+    /// stopping SILENTLY loses the oversight half of the format. `review` and
+    /// `requireGrounding` both default to `false`, so an abandoned tail turns a
+    /// step that was authored to park in `WaitingReview` into one that
+    /// auto-completes, while `dropped` came back empty.
+    #[test]
+    fn bare_js_abandoned_opts_tail_is_disclosed() {
+        let src = "export const meta = { name: 'sp' }\n\
+                   await agent('deploy', { ...BASE_OPTS, review: true, requireGrounding: true })";
+        let outcome = parse_workflow_js(src).expect("scan");
+        assert!(
+            !outcome.manifest.steps[0].review,
+            "the spread really does hide the rest — this is the premise"
+        );
+        assert!(
+            outcome
+                .dropped
+                .iter()
+                .any(|d| d.contains("agent opts") && d.contains("review")),
+            "an abandoned opts tail must be disclosed: {:?}",
+            outcome.dropped
+        );
+    }
+
+    /// A parsed `meta` is the authority on what it does NOT say. Falling back
+    /// per-field let the first `description:` in the file answer — and the
+    /// format's own convention hoists schema consts above `meta`.
+    #[test]
+    fn a_hoisted_schema_const_does_not_hijack_the_description() {
+        let src = "const REPORT_SCHEMA = {\n\
+                   \x20 type: 'object',\n\
+                   \x20 properties: { verdict: { type: 'string', description: 'PASS or FAIL' } },\n\
+                   }\n\
+                   export const meta = { name: 'audit', whenToUse: 'after changes' }\n\
+                   await agent('run the audit')";
+        let outcome = parse_workflow_js(src).expect("scan");
+        assert_ne!(
+            outcome.manifest.description, "PASS or FAIL",
+            "a schema property must not supply the workflow description"
+        );
+        assert_eq!(outcome.manifest.name, "audit");
+    }
+
+    /// JS puts any amount of whitespace — or none — between a keyword and its
+    /// `(`. A spelling list answers "was this written with a space", not "does
+    /// this branch": `for(` collapsed a per-target loop into ONE step and
+    /// reported a lossless import.
+    #[test]
+    fn a_no_space_loop_is_disclosed_like_a_spaced_one() {
+        for src in [
+            "export const meta = { name: 'sweep' }\n\
+             for(const t of TARGETS) { await agent('audit one target') }",
+            "export const meta = { name: 'sweep' }\n\
+             for (const t of TARGETS) { await agent('audit one target') }",
+        ] {
+            let outcome = parse_workflow_js(src).expect("scan");
+            assert!(
+                outcome.dropped.iter().any(|d| d.contains("for loop")),
+                "a collapsed loop must be disclosed however it is spelled: {:?}",
+                outcome.dropped
+            );
+        }
+    }
+
+    /// The boundary check that makes the no-space match safe.
+    #[test]
+    fn a_keyword_inside_an_identifier_is_not_a_construct() {
+        let src = "export const meta = { name: 'ok' }\n\
+                   const r = items.forEach(x => x)\n\
+                   await agent('go')";
+        let outcome = parse_workflow_js(src).expect("scan");
+        assert!(
+            !outcome.dropped.iter().any(|d| d.contains("for loop")),
+            "`forEach(` is not a for loop: {:?}",
             outcome.dropped
         );
     }

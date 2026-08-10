@@ -13,7 +13,7 @@ use serde::{Deserialize, Serialize};
 use tracing::{info, warn};
 
 use crate::error::{AlephError, Result};
-use crate::loop_graph::templates::{AUDIT_DEFAULT_CRON_EXPR, AUDIT_TEMPLATE};
+use crate::loop_graph::templates::{AUDIT_DEFAULT_CRON_EXPR, AUDIT_JOB_NAME, AUDIT_TEMPLATE};
 use crate::loop_graph::{EdgeKind, GraphEdge, GraphNode, LoopGraphStore, NodeKind, Origin};
 use crate::sync_primitives::Arc;
 use crate::tasks::cron::{CronJob, ScheduleKind, SharedCronService};
@@ -342,8 +342,25 @@ impl LoopGraphTool {
                                 t.leader_id,
                                 truncate_with_marker(&t.name, 40, "…")
                             )),
+                            // `Ok(None)` is TWO answers here and this render
+                            // cannot tell them apart: the `TeamStore` in hand
+                            // is `ScopedTeamStore`, whose `get_team` filters
+                            // through `team_visible` → `ambient_owner_visible`,
+                            // an owner-keyed and role-BLIND predicate. So a
+                            // second admin auditing a ring whose `team:` node
+                            // belongs to another admin gets a refusal that used
+                            // to read as "记录已消失" — and AUDIT_TEMPLATE step 5
+                            // takes exactly this line as a naming-and-shaming
+                            // input, so the layer manufactured a standing audit
+                            // finding about a perfectly healthy team. Refusal is
+                            // deliberately indistinguishable from absence (the
+                            // no-oracle rule), which means the honest render is
+                            // the one that does not choose.
                             Ok(None) => {
-                                out.push_str("\n    live: ⚠ target missing（team 记录已消失）");
+                                out.push_str(
+                                    "\n    live: ⚠ 读不到该 team（不存在，或不属于当前调用者）\
+                                     ——不要据此点名",
+                                );
                             }
                             Err(e) => {
                                 tracing::warn!(node = %n.id, error = %e,
@@ -526,25 +543,41 @@ impl AlephTool for LoopGraphTool {
                 edge.note = args.note;
                 self.store.upsert_edge(&edge)?;
                 // Say so when the edge that was just built cannot carry the
-                // one thing a `watches` edge is chiefly for. A non-`cron:`
-                // watcher satisfies `lint_naked_loops` and renders in the
-                // prompt exactly like a real one, so the graph LOOKS sound
-                // while victory claims go unreviewed until the watcher's own
-                // cadence comes round. The model has no way to know that from
-                // the graph itself — it learns it here or not at all.
-                let unpokeable = kind == EdgeKind::Watches
-                    && !crate::loop_graph::service::watcher_is_pokeable(&from_id);
+                // one thing a `watches` edge is chiefly for. Such a watcher
+                // satisfies `lint_naked_loops` and renders in the prompt
+                // exactly like a real one, so the graph LOOKS sound while
+                // victory claims go unreviewed until the watcher's own cadence
+                // comes round. The model has no way to know that from the graph
+                // itself — it learns it here or not at all.
+                //
+                // Ask BOTH halves (`immediate_review_reaches`), because a
+                // promise of immediate review needs a wakeable watcher AND a
+                // target that announces a win — and for a non-`goal:` target
+                // this is the only surface that could ever ask the second half:
+                // `render_session_topology_in` builds its node id as
+                // `goal:{session}`, so a `daemon:`/`cron:`/`heartbeat:` target
+                // has no prompt surface at all. Round 11 mirrored the target
+                // half onto `pair` and did not carry it back here; the flagship
+                // dogfood pairing in GRAPH_LAYER §4.1 (a watcher on
+                // `daemon:dreaming`) is exactly the shape that fell through.
+                let caveat = if kind != EdgeKind::Watches
+                    || crate::loop_graph::service::immediate_review_reaches(&from_id, &to_id)
+                {
+                    ""
+                } else if !crate::loop_graph::service::target_has_victory_claim(&to_id) {
+                    // Target half first: when it fails, `pair` is not a remedy
+                    // either — it builds a `cron:` watcher, and that watcher's
+                    // own success message says the same thing. Recommending it
+                    // here would send the model to install a real cron job for
+                    // a promise no action can keep.
+                    "。注意：只有 goal:/team: 目标有胜利宣称触发点，\
+                     本目标没有终态时刻可挂，所以任何看守都只按自己的节奏跑，不会有即时评审。"
+                } else {
+                    "。注意：只有 cron: 看守能被胜利宣称即时唤醒，\
+                     本看守只会按它自己的节奏跑（要即时评审就用 action='pair'）。"
+                };
                 Ok(LoopGraphOutput {
-                    message: format!(
-                        "边已建立: {from_id} -[{}]-> {to_id}{}",
-                        kind.as_str(),
-                        if unpokeable {
-                            "。注意：只有 cron: 看守能被胜利宣称即时唤醒，\
-                             本看守只会按它自己的节奏跑（要即时评审就用 action='pair'）。"
-                        } else {
-                            ""
-                        }
-                    ),
+                    message: format!("边已建立: {from_id} -[{}]-> {to_id}{caveat}", kind.as_str()),
                     nodes: None,
                     edges: None,
                     rendered: None,
@@ -672,12 +705,24 @@ impl AlephTool for LoopGraphTool {
                 // (exactly what the rollback below is written to avoid). Adopt
                 // the survivor instead: re-register the node and re-wire, which
                 // is also what a re-`enable_audit` after a crash should do.
+                //
+                // Match on the NAME, not on the prompt. `CronJob::new` persists
+                // the prompt verbatim at install time and nothing ever rewrites
+                // it, while `AUDIT_TEMPLATE` is edited most rounds — so
+                // `j.prompt == AUDIT_TEMPLATE` is false for exactly the
+                // long-lived rings this scan exists to re-adopt, and true only
+                // for one installed since the last template edit. A fresh
+                // fixture passes; the production ring installed 2026-07-19 does
+                // not, and the reinstall it lets through is the duplicate
+                // seven-step audit both rollback paths here are written to
+                // prevent. The prompt stays as a secondary match so a ring
+                // renamed by hand is still re-adopted rather than duplicated.
                 let orphan = {
                     let service = cron.lock().await;
                     match service.list_jobs().await {
                         Ok(jobs) => jobs
                             .into_iter()
-                            .find(|j| j.prompt == AUDIT_TEMPLATE)
+                            .find(|j| j.name == AUDIT_JOB_NAME || j.prompt == AUDIT_TEMPLATE)
                             .map(|j| j.id),
                         Err(e) => {
                             // Unreadable roster: do NOT proceed to create. "I
@@ -704,7 +749,7 @@ impl AlephTool for LoopGraphTool {
                             &agent_id,
                             &audit_node_id,
                             NodeKind::LoopCron,
-                            "循环治理·审计环",
+                            AUDIT_JOB_NAME,
                             origin,
                         )
                         .with_cadence("weekly")
@@ -726,7 +771,7 @@ impl AlephTool for LoopGraphTool {
                 }
 
                 let mut job = CronJob::new(
-                    "循环治理·审计环",
+                    AUDIT_JOB_NAME,
                     &agent_id,
                     AUDIT_TEMPLATE,
                     ScheduleKind::Cron {
@@ -737,8 +782,7 @@ impl AlephTool for LoopGraphTool {
                 );
                 // Step 7 of AUDIT_TEMPLATE is "上报: 通知用户". A channel-less
                 // cron has nowhere to report to.
-                job.source_channel_id = delivery.0.clone();
-                job.source_conversation_id = delivery.1.clone();
+                stamp_governance_job(&mut job, &delivery);
                 let job_id = {
                     let service = cron.lock().await;
                     service.add_job(job).await.map_err(|e| {
@@ -751,7 +795,7 @@ impl AlephTool for LoopGraphTool {
                     &agent_id,
                     &audit_node_id,
                     NodeKind::LoopCron,
-                    "循环治理·审计环",
+                    AUDIT_JOB_NAME,
                     origin,
                 )
                 .with_cadence("weekly")
@@ -824,8 +868,7 @@ impl AlephTool for LoopGraphTool {
                 );
                 // WATCH_TEMPLATE_FOOTER: "发现便宜赢法 → 裁决写 note 并简短通知
                 // 用户". Same delivery route as the audit ring.
-                job.source_channel_id = delivery.0.clone();
-                job.source_conversation_id = delivery.1.clone();
+                stamp_governance_job(&mut job, &delivery);
                 let job_id = {
                     let service = cron.lock().await;
                     service.add_job(job).await.map_err(|e| {
@@ -863,6 +906,20 @@ impl AlephTool for LoopGraphTool {
                             "loop_graph pair: watcher cron left orphaned after a failed graph \
                              write — delete it by hand with cron_manage");
                     }
+                    // `wired` is node-then-edge, so an edge failure leaves the
+                    // NODE behind — and the rollback above has just deleted the
+                    // job it is named for. That residue is not inert: `status`
+                    // renders `⚠ target missing（cron job 已消失）` for it and
+                    // `lint_naked_loops` reports it as an unwatched optimisation
+                    // loop, forever, and AUDIT_TEMPLATE's roll-call step reads
+                    // exactly those two lines. A failed `pair` would then
+                    // manufacture a standing audit finding about a loop that
+                    // never existed. Roll back both halves or neither.
+                    if let Err(rollback) = self.store.delete_node(&agent_id, &watcher_id) {
+                        warn!(node = %watcher_id, error = %rollback,
+                            "loop_graph pair: watcher node left behind after a failed edge \
+                             write — remove it with action='drop_node'");
+                    }
                     return Err(e);
                 }
                 info!(job_id = %job_id, target = %to_id, "watcher paired");
@@ -899,6 +956,35 @@ fn require(v: Option<String>, action: &str, field: &str) -> Result<String> {
         .ok_or_else(|| AlephError::tool(format!("loop_graph {action}: '{field}' is required")))
 }
 
+/// Provenance every cron job this tool installs must carry, in one place
+/// because `enable_audit` and `pair` are the two installers and a fact set on
+/// only one of them is the kind of asymmetry this layer keeps rediscovering.
+///
+/// Two things, both of which `cron_manage` — the twin reached from the same
+/// tool surface behind the same operator gate — already does:
+///
+/// 1. **The delivery route**, so the ring can report (AUDIT_TEMPLATE step 7 /
+///    WATCH_TEMPLATE_FOOTER).
+/// 2. **`owner_user_id` / `scope_id`**, so the scheduled run executes as the
+///    admin who installed it. Without them `cron::executor::build_cron_metadata`
+///    finds no `ScopeAttribution` to rehydrate and the run is unscoped — which
+///    in a multi-user install means the weekly audit reads the graph, the notes
+///    and the sessions of nobody in particular, and its `note_manage` verdicts
+///    land outside the installer's partition. `CronJob::new` defaults both to
+///    `None` and nothing else on this path sets them.
+///
+/// `current_scope()` being `None` (single-user install, or a pre-P1 path) leaves
+/// both columns `None`, which is exactly the legacy shape `from_persisted`
+/// already treats as "unscoped" — no behaviour change there.
+fn stamp_governance_job(job: &mut CronJob, delivery: &(Option<String>, Option<String>)) {
+    job.source_channel_id = delivery.0.clone();
+    job.source_conversation_id = delivery.1.clone();
+    if let Some(attr) = crate::scope::current_scope() {
+        job.owner_user_id = Some(attr.owner_user_id);
+        job.scope_id = Some(attr.scope.render());
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -927,6 +1013,79 @@ mod tests {
             __channel: None,
             __conversation_id: None,
         }
+    }
+
+    /// Register `id` with `kind` so an edge can be built against it.
+    async fn seed_node(t: &LoopGraphTool, id: &str, kind: NodeKind) {
+        let mut a = args(LoopGraphAction::Node);
+        a.id = Some(id.to_string());
+        a.kind = Some(kind);
+        a.label = Some("x".into());
+        t.call(a).await.expect("node");
+    }
+
+    /// `link` is the third face asking the immediate-review question, and for a
+    /// non-`goal:` target it is the ONLY one that can: `render_session_topology`
+    /// keys on `goal:{session}`, so a `daemon:` target has no prompt surface.
+    ///
+    /// The half that matters most is the REMEDY. When the target has no victory
+    /// claim, `pair` cannot help either — it builds a `cron:` watcher whose own
+    /// success message says so — and recommending it sends the model to install
+    /// a real cron job that burns LLM runs for a promise nothing can keep.
+    #[tokio::test]
+    async fn link_onto_a_target_with_no_victory_claim_does_not_recommend_pair() {
+        let (_d, t) = tool();
+        seed_node(&t, "cron:dream-watch", NodeKind::LoopCron).await;
+        seed_node(&t, "daemon:dreaming", NodeKind::Daemon).await;
+
+        let mut a = args(LoopGraphAction::Link);
+        a.from_id = Some("cron:dream-watch".into());
+        a.to_id = Some("daemon:dreaming".into());
+        a.edge = Some(EdgeKind::Watches);
+        let out = t.call(a).await.expect("link");
+
+        assert!(
+            out.message.contains("胜利宣称触发点"),
+            "the target half must be disclosed: {}",
+            out.message
+        );
+        assert!(
+            !out.message.contains("pair"),
+            "`pair` builds a cron: watcher and cannot supply a victory claim — \
+             recommending it here installs a real job for a promise nothing keeps: {}",
+            out.message
+        );
+    }
+
+    /// The other two arms, so the fix cannot degenerate into "always warn".
+    #[tokio::test]
+    async fn link_stays_silent_when_both_halves_hold_and_offers_pair_when_only_the_watcher_fails() {
+        let (_d, t) = tool();
+        seed_node(&t, "cron:w", NodeKind::LoopCron).await;
+        seed_node(&t, "heartbeat:hb", NodeKind::LoopHeartbeat).await;
+        seed_node(&t, "goal:s1", NodeKind::LoopGoal).await;
+
+        let mut ok = args(LoopGraphAction::Link);
+        ok.from_id = Some("cron:w".into());
+        ok.to_id = Some("goal:s1".into());
+        ok.edge = Some(EdgeKind::Watches);
+        let out = t.call(ok).await.expect("link");
+        assert!(
+            !out.message.contains("注意"),
+            "a fully working pairing must carry no caveat: {}",
+            out.message
+        );
+
+        let mut unwakeable = args(LoopGraphAction::Link);
+        unwakeable.from_id = Some("heartbeat:hb".into());
+        unwakeable.to_id = Some("goal:s1".into());
+        unwakeable.edge = Some(EdgeKind::Watches);
+        let out = t.call(unwakeable).await.expect("link");
+        assert!(
+            out.message.contains("pair"),
+            "here `pair` IS the remedy — it builds the cron: watcher that is missing: {}",
+            out.message
+        );
     }
 
     #[tokio::test]

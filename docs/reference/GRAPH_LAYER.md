@@ -124,12 +124,26 @@ Graph RAG/多跳图检索（记忆检索议题）；Neo4j 等图数据库（红�
 | 路由器（Router）按重要程度分诊到不同检查强度 | 无，且**不建** | ❌ 违 R7：按内容判"这件事多重要"是模型的活；今天的等价物是模型自己决定要不要 `pair` 一个看守 |
 | 检查点 / 时间旅行 / pending writes | 工作图议题 | 见 LangGraph 表（SKIP/DEFER） |
 | 多智能体 token ≈ 普通对话 15 倍，只在价值够高时用 | — | ✅ 与 R10「先找最简单的方案」同向；本层零常驻成本（空图 ⇒ prompt 零字节） |
+| **V/E/S/P 里的 S**：状态沿边流动，下游只拿干净的结构化产出，不看上游的原始垃圾 | 工作图议题：`teams/dispatcher/handoff.rs::build_handoff_context` 把上游 step 产出注入下游 step 的 prompt（`compile.rs` 模块 doc 与 `WorkflowStepDef::prompt` 的 doc 都指名它） | ✅ 已有（**2026-08-10 round 12 补录**：此前七行表漏了这一行，不是缺口而是漏记） |
+| V/E/S/P 里的 **P**（谁能建节点/调工具/改图） | 角色图议题＝本层 | ✅ 本层就是 P |
 
 **结论：本轮同样无一项新机制可移植**，文章的价值是确认了分层判据（角色图 vs 工作图），而 round 11 的八项缺陷全部来自对本层自身的对抗审计。
 
 ### Round 11（2026-08-03）—— 八项，逐项见 FEATURE_LOCATOR §4.12
 
 一句话总结这一轮的形状：**round 9 与 round 10 修的是覆盖环的形状，round 11 修的是「谁有资格进入这张图的权力位置」以及「这张图对 prompt 说的话有没有兑现能力」。** 三条可跨子系统复用的纪律已提到 CLAUDE.md。
+
+### Round 12（2026-08-10）—— 十七项，逐项见 FEATURE_LOCATOR §4.12
+
+一句话总结这一轮的形状：**round 11 之后全仓做了多用户改造（P0/P1/P2 + round 2-3，2026-08-07~09），而本层的上一次审计早于它——所以 round 12 修的是「这一层在一个它从未被审过的世界里还成不成立」。**
+
+新增的一条参考材料结论：《什么是图工程》的 **V/E/S/P 四元组里的 S（沿边流动的共享状态）此前不在任何一张对照表上**。复核结论是**已有**——`teams/dispatcher/handoff.rs::build_handoff_context` 把上游 step 的产出注入下游 step 的 prompt，`compile.rs` 与 `def.rs` 的 doc 都指名它。表格补一行，不是功能缺口。
+
+三条本轮新得、可跨子系统复用的纪律：
+
+1. **一道「升级给别人裁决」的闸，只有在发起者答不了它的时候才是闸。** `check_operator_gate` 不拒绝、而是举卡给 operator，但卡是按**发起者自己的 session_key** 登记的，而 `exec.approvals.pending` / `exec.approval.resolve` 对 member 是开的 ⇒ member 自批。判据：**写下一个「转交给更高权限」的分支时，去看那张卡最后落在谁手里。**
+2. **闸的范围必须覆盖能把闸拿掉的那个动词——包括「用另一个工具改配置」这条路。** `explicitly_named` 的正当性建立在「这条 override 是人写的」，而 `self_config` 写 override **不举卡**：两步都合法，合起来等于永久摘掉 root/frozen 的唯一人闸。
+3. **判据钉在一个「每轮都会改」的常量上，等于钉在空气上。** `enable_audit` 的孤儿认领比对 `job.prompt == AUDIT_TEMPLATE`，而 job 的 prompt 是安装当天写死的、模板此后改了五次 ⇒ 对**存在最久**的那个环恒假，而它正是这段代码要认领的对象（新装的反而匹配，所以 fixture 全绿）。判据：**比对用的那个值，两边是同一时刻写下的吗？**
 
 ## 多智能体融合（2026-07-19 第二轮，spec: specs/2026-07-19-graph-multiagent-fusion-design.md）
 
