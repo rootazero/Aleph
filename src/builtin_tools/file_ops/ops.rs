@@ -364,46 +364,179 @@ pub async fn execute_copy(
         }
     }
 
-    let bytes = if from_canonical.is_file() {
-        fs::copy(&from_canonical, &to_canonical)
-            .map_err(|e| ToolError::Execution(format!("Failed to copy: {e}")))?
+    let mut tally = CopyTally::default();
+    if from_canonical.is_file() {
+        tally.bytes = fs::copy(&from_canonical, &to_canonical)
+            .map_err(|e| ToolError::Execution(format!("Failed to copy: {e}")))?;
     } else {
         // Directory copy - recursive. `denied_paths` are threaded through so a
         // symlink whose canonical target is a protected credential store is
         // skipped rather than followed and copied out.
         let mut visited = std::collections::HashSet::new();
-        copy_dir_recursive(&from_canonical, &to_canonical, denied_paths, &mut visited)?
-    };
+        copy_dir_recursive(
+            &from_canonical,
+            &to_canonical,
+            denied_paths,
+            &mut visited,
+            &mut tally,
+        )?;
+    }
+    let bytes = tally.bytes;
 
-    info!(from = %from_canonical.display(), to = %to_canonical.display(), bytes, "Copied");
+    info!(
+        from = %from_canonical.display(),
+        to = %to_canonical.display(),
+        bytes,
+        protected_skipped = tally.protected,
+        unresolvable_skipped = tally.unresolvable,
+        "Copied"
+    );
 
+    // `success` stays true on a partial copy, and the message says PARTIAL.
+    // Rationale for keeping the skip (rather than refusing outright the way
+    // `move` and `delete` do for the same hazard): those two are destructive to
+    // the SOURCE — a half-done move leaves the tree torn in two and a refused
+    // delete is the only way to keep a protected file alive — whereas copy
+    // leaves the source untouched, so the useful part of the work is worth
+    // keeping as long as the omission is disclosed rather than silent. What was
+    // wrong before was not the skipping; it was reporting an unconditional
+    // "Copied X to Y (N bytes)" that a reader can only take as complete.
     Ok(FileOpsOutput {
         success: true,
         operation: "copy".to_string(),
         message: format!(
-            "Copied {} to {} ({} bytes)",
+            "Copied {} to {} ({} bytes){}",
             from_canonical.display(),
             to_canonical.display(),
-            bytes
+            bytes,
+            tally.disclosure()
         ),
-        files: None,
+        files: tally.skipped_file_infos(),
         bytes_written: Some(bytes),
         items_affected: Some(1),
         summary: None,
     })
 }
 
+/// How many skipped paths a recursive copy names individually before it falls
+/// back to counting. Bounded for the same reason the listing operations are:
+/// an unbounded list of names is an unbounded tool result.
+const MAX_NAMED_COPY_SKIPS: usize = 20;
+
+/// What a recursive copy actually did.
+///
+/// The skip counts are separate because the two reasons are **not the same
+/// claim**: `protected` means "the denylist says no", `unresolvable` means "I
+/// could not find out" — a crash-boundary unknown, not a policy decision.
+/// Folding them into one number would let a result assert something it does not
+/// know.
+#[derive(Default)]
+struct CopyTally {
+    /// Bytes actually copied.
+    bytes: u64,
+    /// Entries skipped because their canonical path is on the denylist.
+    protected: usize,
+    /// Entries skipped because they could not be resolved at all (removed
+    /// mid-walk, EACCES): we do not know whether they were protected.
+    unresolvable: usize,
+    /// Source paths of the first [`MAX_NAMED_COPY_SKIPS`] skipped entries, so
+    /// the result can name them and not only count them.
+    named: Vec<PathBuf>,
+}
+
+impl CopyTally {
+    fn note_protected(&mut self, path: &Path) {
+        self.protected += 1;
+        self.remember(path);
+    }
+
+    fn note_unresolvable(&mut self, path: &Path) {
+        self.unresolvable += 1;
+        self.remember(path);
+    }
+
+    fn remember(&mut self, path: &Path) {
+        if self.named.len() < MAX_NAMED_COPY_SKIPS {
+            self.named.push(path.to_path_buf());
+        }
+    }
+
+    const fn skipped(&self) -> usize {
+        self.protected + self.unresolvable
+    }
+
+    /// The clause appended to the tool message. Empty when nothing was skipped,
+    /// so a complete copy reads exactly as it did before.
+    fn disclosure(&self) -> String {
+        let skipped = self.skipped();
+        if skipped == 0 {
+            return String::new();
+        }
+        let names = self
+            .named
+            .iter()
+            .map(|p| p.display().to_string())
+            .collect::<Vec<_>>()
+            .join(", ");
+        let more = if skipped > self.named.len() {
+            format!(" (first {} of {skipped})", self.named.len())
+        } else {
+            String::new()
+        };
+        format!(
+            ". PARTIAL COPY: skipped {skipped} entries — {} protected by policy, \
+             {} unresolvable (could not be checked, so neither copied nor cleared){more}: {names}. \
+             The source is unchanged; `files` lists the skipped source paths.",
+            self.protected, self.unresolvable
+        )
+    }
+
+    /// The skipped source paths as structured rows. `FileOpsOutput` has no
+    /// field of its own for this (adding one would break the `FileOpsOutput`
+    /// literals in `batch.rs` / `search.rs` / `stats.rs`), so `files` carries
+    /// them and the message says so. Metadata is best-effort `lstat`: an
+    /// unresolvable entry has none by definition, and this must not read a
+    /// protected entry's contents to describe it.
+    fn skipped_file_infos(&self) -> Option<Vec<FileInfo>> {
+        if self.named.is_empty() {
+            return None;
+        }
+        Some(
+            self.named
+                .iter()
+                .map(|path| {
+                    let meta = fs::symlink_metadata(path).ok();
+                    FileInfo {
+                        name: path
+                            .file_name()
+                            .map(|n| n.to_string_lossy().to_string())
+                            .unwrap_or_default(),
+                        path: path.to_string_lossy().to_string(),
+                        is_dir: meta.as_ref().is_some_and(std::fs::Metadata::is_dir),
+                        size: meta.as_ref().map_or(0, std::fs::Metadata::len),
+                        extension: path.extension().map(|e| e.to_string_lossy().to_string()),
+                        lines: None,
+                        mtime: None,
+                    }
+                })
+                .collect(),
+        )
+    }
+}
+
 /// Recursively copy a directory with symlink-cycle + deny guards.
+///
+/// Skips are accumulated into `tally` rather than swallowed: whatever this
+/// function declines to copy, [`execute_copy`] names in its result.
 fn copy_dir_recursive(
     from: &Path,
     to: &Path,
     denied_paths: &[String],
     visited: &mut std::collections::HashSet<PathBuf>,
-) -> Result<u64, ToolError> {
+    tally: &mut CopyTally,
+) -> Result<(), ToolError> {
     fs::create_dir_all(to)
         .map_err(|e| ToolError::Execution(format!("Failed to create directory: {e}")))?;
-
-    let mut total_bytes = 0u64;
 
     for entry in fs::read_dir(from)
         .map_err(|e| ToolError::Execution(format!("Failed to read directory: {e}")))?
@@ -427,30 +560,34 @@ fn copy_dir_recursive(
             // cannot be shown to be outside the denylist, and it is only
             // reachable at all because the top-level gate never saw it. Skipping
             // is the conservative half of that pair; copying it blind is what
-            // this guard exists to stop.
+            // this guard exists to stop. Recorded as UNRESOLVABLE, not
+            // protected: "I could not check" is not "policy said no".
             Err(e) => {
                 info!(
                     entry = %from_path.display(),
                     error = %e,
                     "copy: skipping entry that cannot be resolved"
                 );
+                tally.note_unresolvable(&from_path);
                 continue;
             }
         };
 
         // Deny guard on EVERY entry, not just symlinks: a plain file or
-        // directory whose own path is protected (`<config_dir>/data`, `~/.ssh`)
-        // is reached whenever the caller copies its PARENT — which the denylist
-        // does not name, so `check_and_resolve_path` waved the copy through and
-        // this is the only point that sees the descendant. A symlink is the same
-        // hole reached through its target. Checked before the cycle guard so a
-        // denied target does not consume a `visited` slot.
+        // directory whose own path is protected (`<config_dir>/data`, `~/.ssh`,
+        // or a `[sandbox] deny_read_globs` match) is reached whenever the caller
+        // copies its PARENT — which the denylist does not name, so
+        // `check_and_resolve_path` waved the copy through and this is the only
+        // point that sees the descendant. A symlink is the same hole reached
+        // through its target. Checked before the cycle guard so a denied target
+        // does not consume a `visited` slot.
         if path_is_denied(&canonical, denied_paths) {
             info!(
                 entry = %from_path.display(),
                 target = %canonical.display(),
                 "copy: skipping protected entry"
             );
+            tally.note_protected(&from_path);
             continue;
         }
         if is_symlink && !visited.insert(canonical.clone()) {
@@ -461,14 +598,14 @@ fn copy_dir_recursive(
         }
 
         if from_path.is_dir() {
-            total_bytes += copy_dir_recursive(&from_path, &to_path, denied_paths, visited)?;
+            copy_dir_recursive(&from_path, &to_path, denied_paths, visited, tally)?;
         } else {
-            total_bytes += fs::copy(&from_path, &to_path)
+            tally.bytes += fs::copy(&from_path, &to_path)
                 .map_err(|e| ToolError::Execution(format!("Failed to copy file: {e}")))?;
         }
     }
 
-    Ok(total_bytes)
+    Ok(())
 }
 
 /// Recursively count a path plus every entry beneath it, so `delete` can report
@@ -732,6 +869,118 @@ mod tests {
         assert!(
             !dst.join("data").exists(),
             "protected plain directory must not be copied out"
+        );
+    }
+
+    /// RED before the fix: a recursive copy that skipped a protected entry
+    /// still returned `success: true` with "Copied X to Y (N bytes)" and
+    /// `files: None` — a caller could only read that as a complete copy. The
+    /// skip has to be in the result the model reads, not only in a `tracing`
+    /// line the model never sees.
+    #[tokio::test]
+    async fn copy_discloses_skipped_protected_entries() {
+        let root = tempdir().unwrap();
+        let src = root.path().join("aleph");
+        fs::create_dir(&src).unwrap();
+        fs::write(src.join("ok.txt"), b"fine").unwrap();
+        let secret_dir = src.join("data");
+        fs::create_dir(&secret_dir).unwrap();
+        fs::write(secret_dir.join("pairing.db"), b"DB").unwrap();
+        let denied = vec![secret_dir.to_string_lossy().to_string()];
+
+        let dst = root.path().join("backup");
+        let out = execute_copy(&src, &dst, true, &denied, None).await.unwrap();
+
+        assert!(out.success, "a partial copy still succeeds");
+        assert!(
+            out.message.contains("PARTIAL COPY"),
+            "the omission must be named, got: {}",
+            out.message
+        );
+        assert!(
+            out.message.contains("1 protected"),
+            "the protected count must be reported, got: {}",
+            out.message
+        );
+        assert!(
+            out.message.contains("0 unresolvable"),
+            "the two skip reasons are separate claims, got: {}",
+            out.message
+        );
+        assert!(
+            out.message.contains("data"),
+            "the skipped path must be named, got: {}",
+            out.message
+        );
+        let skipped = out.files.expect("skipped entries must be structured too");
+        assert_eq!(skipped.len(), 1);
+        assert_eq!(skipped[0].name, "data");
+        assert!(dst.join("ok.txt").exists(), "the benign file still copies");
+        assert!(!dst.join("data").exists());
+    }
+
+    /// A copy with nothing to skip must read exactly as it did before — the
+    /// disclosure clause is empty and `files` stays absent.
+    #[tokio::test]
+    async fn copy_without_skips_says_nothing_extra() {
+        let root = tempdir().unwrap();
+        let src = root.path().join("src");
+        fs::create_dir(&src).unwrap();
+        fs::write(src.join("a.txt"), b"aaa").unwrap();
+        let dst = root.path().join("dst");
+
+        let out = execute_copy(&src, &dst, true, &[], None).await.unwrap();
+        assert!(out.success);
+        assert!(
+            !out.message.contains("PARTIAL"),
+            "a complete copy must not cry partial: {}",
+            out.message
+        );
+        assert!(out.files.is_none(), "no skips, no skip list");
+        assert_eq!(out.bytes_written, Some(3));
+    }
+
+    /// The second skip reason. An entry that cannot be resolved is NOT
+    /// "protected" — we never found out — so it is counted and disclosed under
+    /// its own name. Built by dropping the source directory's *search* bit
+    /// while keeping its read bit: `read_dir` still yields the child names,
+    /// while `canonicalize` on any child returns EACCES.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn copy_discloses_unresolvable_entries_separately() {
+        use std::os::unix::fs::PermissionsExt;
+        let root = tempdir().unwrap();
+        let src = root.path().join("src");
+        fs::create_dir(&src).unwrap();
+        fs::write(src.join("a.txt"), b"a").unwrap();
+        fs::write(src.join("b.txt"), b"b").unwrap();
+        let src_canonical = src.canonicalize().unwrap();
+        fs::set_permissions(&src, fs::Permissions::from_mode(0o400)).unwrap();
+
+        if fs::canonicalize(src.join("a.txt")).is_ok() {
+            // Running as root (or a filesystem ignoring mode bits): the shape
+            // cannot be constructed here.
+            fs::set_permissions(&src, fs::Permissions::from_mode(0o700)).unwrap();
+            return;
+        }
+
+        let dst = root.path().join("dst");
+        // `src` is already canonical for the copy itself; only its children are
+        // unreachable.
+        let out = execute_copy(&src_canonical, &dst, true, &[], None).await;
+        fs::set_permissions(&src, fs::Permissions::from_mode(0o700)).unwrap();
+
+        let out = out.expect("an unresolvable entry must not fail the whole copy");
+        assert!(out.success);
+        assert!(
+            out.message.contains("2 unresolvable"),
+            "the unknown must be reported as unknown, not as protected: {}",
+            out.message
+        );
+        assert!(
+            out.message.contains("0 protected"),
+            "an unresolvable entry must not be counted as a policy refusal: {}",
+            out.message
         );
     }
 
