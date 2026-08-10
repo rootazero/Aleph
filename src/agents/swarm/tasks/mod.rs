@@ -596,33 +596,37 @@ pub trait CoordTaskStore: Send + Sync {
 
     // --- Run history ---
     // Per-attempt records let the panel drawer surface retry history rather
-    // than only the final state. Default impls return empty so stores wired
-    // before this trait extension keep compiling.
+    // than only the final state.
+    //
+    // B5-03 (no-op default bodies deleted): with a single implementor
+    // (`SqliteCoordTaskStore`), `cargo check` is the enforcement mechanism.
+    // The previous defaults handed the dispatcher exactly the values it
+    // refuses to guess — `list_task_runs -> Ok(vec![])` reads as
+    // `failed_attempts = 0`, the budget predicate then returns `Retry`,
+    // `jittered_backoff_secs(0, …) = 0`, `retry_not_before = now`, and
+    // every future backend that inherits the defaults gets an unbounded,
+    // zero-backoff retry hot loop of real member runs against the
+    // provider. `record_run_review`'s default was the same shape for the
+    // audit trail — an approval returns `Ok(())` and is recorded nowhere.
 
     /// Record the start of a new execution attempt. Returns the assigned run id.
     async fn start_task_run(
         &self,
-        _task_id: &str,
-        _agent_id: &str,
-    ) -> crate::error::Result<String> {
-        Ok(String::new())
-    }
+        task_id: &str,
+        agent_id: &str,
+    ) -> crate::error::Result<String>;
 
     /// Finish a run started via [`start_task_run`]. No-op when `run_id` is empty.
     async fn finish_task_run(
         &self,
-        _run_id: &str,
-        _status: TaskRunStatus,
-        _summary: Option<String>,
-        _error: Option<String>,
-    ) -> crate::error::Result<()> {
-        Ok(())
-    }
+        run_id: &str,
+        status: TaskRunStatus,
+        summary: Option<String>,
+        error: Option<String>,
+    ) -> crate::error::Result<()>;
 
     /// List all runs for a task, oldest first.
-    async fn list_task_runs(&self, _task_id: &str) -> crate::error::Result<Vec<CoordTaskRun>> {
-        Ok(Vec::new())
-    }
+    async fn list_task_runs(&self, task_id: &str) -> crate::error::Result<Vec<CoordTaskRun>>;
 
     /// Close `running` run rows whose task is NOT in `live_task_ids` as
     /// [`TaskRunStatus::Abandoned`]. Keyed on the runs table (not task
@@ -635,27 +639,21 @@ pub trait CoordTaskStore: Send + Sync {
     /// removal after finish). A future producer outside the dispatcher must
     /// register its live task ids here or its rows will be swept.
     ///
-    /// Returns the number of rows closed. Default impl is a no-op.
+    /// Returns the number of rows closed.
     async fn abandon_orphaned_runs(
         &self,
-        _live_task_ids: &[String],
-    ) -> crate::error::Result<usize> {
-        Ok(0)
-    }
+        live_task_ids: &[String],
+    ) -> crate::error::Result<usize>;
 
     /// Record a step-level review verdict against the most recent
-    /// completed run of `task_id`. Phase C (workflow parity). Default
-    /// impl is a no-op so back-ends that don't support reviews fail
-    /// gracefully — callers should still check via `list_task_runs`.
+    /// completed run of `task_id`. Phase C (workflow parity).
     async fn record_run_review(
         &self,
-        _task_id: &str,
-        _verdict: ReviewVerdict,
-        _reviewer_kind: ReviewerKind,
-        _reviewer_id: Option<&str>,
-    ) -> crate::error::Result<()> {
-        Ok(())
-    }
+        task_id: &str,
+        verdict: ReviewVerdict,
+        reviewer_kind: ReviewerKind,
+        reviewer_id: Option<&str>,
+    ) -> crate::error::Result<()>;
 
     // --- Comments ---
     // Free-text handoff notes attached to a task. Stored permanently (no
