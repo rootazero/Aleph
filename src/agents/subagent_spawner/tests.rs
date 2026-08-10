@@ -1371,7 +1371,8 @@ mod tests {
 
         let key = SessionKey::Main {
             agent_id: "main".into(),
-            conversation_id: "main".into(),
+            main_key: "main".into(),
+            epoch: 0,
         };
         let raw = key.to_key_string();
         let parsed = parent_session_id_of(&raw).expect("must parse flat key-string");
