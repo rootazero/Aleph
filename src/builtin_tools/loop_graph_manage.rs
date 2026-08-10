@@ -1038,6 +1038,36 @@ mod tests {
         assert!(err.to_string().contains("cron service unavailable"));
     }
 
+    /// `Pair` is the highest-usage complex action (creates a watcher cron,
+    /// binds it as a node, wires a `watches` edge — and the trigger-line
+    /// disclosure differs by target kind via `target_has_victory_claim`).
+    /// It was the only one of the nine actions without any unit test: the
+    /// regressions that bit `enable_audit` (orphan detection, idempotency vs
+    /// reality, dual `audits` ring) all have analogues here, but the harness
+    /// did not exercise this path so a next refactor was free to break any
+    /// of them silently.
+    ///
+    /// The unit-test layer cannot attach a `SharedCronService` cheaply (the
+    /// happy-path branch touches a real backing store), so the pin is at the
+    /// EARLY-FAILURE seam that fires BEFORE any cron job is created — the
+    /// cron-handle guard, symmetric with the one already pinned for
+    /// `enable_audit`. A pair whose `to_id` does not exist in the graph would
+    /// in a real run be the NEXT guard down ("`loop_graph pair: 被看守节点
+    /// 'X' 不存在——先用 action='node' 登记它`"); in the no-cron harness the
+    /// first guard fires first, and pinning both orderings separately would
+    /// require a cron-injecting harness fixture better owned by integration
+    /// tests than the unit layer.
+    #[tokio::test]
+    async fn pair_without_cron_service_fails_gracefully() {
+        let (_d, t) = tool();
+        let mut a = args(LoopGraphAction::Pair);
+        a.to_id = Some("goal:sess-1".into());
+        a.label = Some("counter".into());
+        a.prompt = Some("probe".into());
+        let err = t.call(a).await.unwrap_err().to_string();
+        assert!(err.contains("cron service unavailable"), "{err}");
+    }
+
     /// The installer's idempotency guard keys on a live audit **loop** — a node
     /// carrying [`crate::loop_graph::AUDIT_NODE_BODY`] — not on "some `audits`
     /// edge exists".
