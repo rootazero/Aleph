@@ -64,8 +64,15 @@ struct UserFrontmatter {
     model_hint: Option<String>,
     #[serde(default)]
     provider_hint: Option<String>,
+    /// `None` = key absent in frontmatter (loader keeps the constructor
+    /// default). `Some(vec![])` = author wrote `allowed_tools: []` (explicit
+    /// deny-all, must NOT be silently promoted to the wildcard default —
+    /// this is the security boundary the empty-list fail-open was filed
+    /// against: `allowlist_tool_service` consumes `AgentDef.allowed_tools`
+    /// verbatim, so a "deny-all" author reading "deny" but getting `["*"]`
+    /// is the worst possible fail-open).
     #[serde(default)]
-    allowed_tools: Vec<String>,
+    allowed_tools: Option<Vec<String>>,
     #[serde(default)]
     allowed_tool_sets: Vec<String>,
     #[serde(default)]
@@ -151,8 +158,13 @@ pub(crate) fn parse_file(path: &Path, source: AgentSource) -> Result<AgentDef, L
     if let Some(p) = fm.provider_hint {
         def = def.with_provider_hint(p);
     }
-    if !fm.allowed_tools.is_empty() {
-        def = def.with_allowed_tools(fm.allowed_tools);
+    // Apply the flat list iff the key was present. `Some(empty)` keeps the
+    // empty list (explicit deny-all); `None` (absent) leaves the constructor
+    // default `["*"]` in place. The old `!is_empty()` guard conflated the two
+    // and turned an explicit deny-all into the wildcard — exactly the
+    // boundary the loader exists to enforce.
+    if let Some(tools) = fm.allowed_tools {
+        def = def.with_allowed_tools(tools);
     }
     if !fm.denied_tools.is_empty() {
         def = def.with_denied_tools(fm.denied_tools);
@@ -375,9 +387,35 @@ mod tests {
             "---\nid: minimal\ndescription: Minimal\nwhen_to_use: minimal\n---\n",
         );
         let def = parse_file(&path, AgentSource::Project).unwrap();
-        assert!(def.allowed_tools.is_empty() || def.allowed_tools == vec!["*"]);
+        // Absent → constructor default `["*"]` (the only safe value when no
+        // explicit allowlist is given — denial of every tool would break the
+        // model). Pinning this and the deny-all case as two separate
+        // assertions catches a future loader regression that promotes the
+        // empty list to the wildcard (the finding this test was added to
+        // guard).
+        assert_eq!(def.allowed_tools, vec!["*"]);
         assert!(def.denied_tools.is_empty());
         assert_eq!(def.source, AgentSource::Project);
+    }
+
+    #[test]
+    fn parses_explicit_empty_allowed_tools_as_deny_all() {
+        // Regression for B1-01: an explicit `allowed_tools: []` must stay
+        // empty (deny-all), NOT be silently promoted to the constructor
+        // wildcard `["*"]`. The wildcard is the safe default for *absent*;
+        // an empty list is an explicit deny and must round-trip as one.
+        let tmp = tempfile::tempdir().unwrap();
+        let path = write_tmp(
+            &tmp,
+            "locked-down.md",
+            "---\nid: locked-down\ndescription: locked down\nwhen_to_use: never\nallowed_tools: []\n---\n",
+        );
+        let def = parse_file(&path, AgentSource::User).unwrap();
+        assert!(
+            def.allowed_tools.is_empty(),
+            "explicit allowed_tools: [] must stay empty; got {:?}",
+            def.allowed_tools
+        );
     }
 
     #[test]
