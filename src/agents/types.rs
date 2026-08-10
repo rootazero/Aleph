@@ -114,6 +114,17 @@ pub struct AgentDef {
     pub prompt_sections: Vec<String>,
     /// Tools this agent is allowed to use ("*" for all)
     pub allowed_tools: Vec<String>,
+    /// Provenance of `allowed_tools`: was the flat list set explicitly by
+    /// the loader or another builder, or is it still the constructor default?
+    /// Distinguishes "author wrote `allowed_tools: ['*']`" from "no one has
+    /// touched this since `AgentDef::new`". `with_allowed_tool_sets` only
+    /// clears `['*']` in the second case (so a builtin like `explore` keeps
+    /// its cleared allowlist) and leaves an explicit `['*']` alone (so an
+    /// author who wrote both `allowed_tools: ['*']` and `allowed_tool_sets`
+    /// actually gets the union they asked for). Private to the module on
+    /// purpose — only the builders and the loader should mutate it.
+    #[serde(skip)]
+    pub allowed_tools_explicit: bool,
     /// Named tool sets for declarative agent allowlists. Resolved via
     /// `crate::agents::tool_sets::resolve`; unknown names contribute nothing
     /// (silent skip at runtime; the loader emits a warning at startup).
@@ -171,6 +182,7 @@ impl AgentDef {
             source: AgentSource::default(),
             mcp_servers: vec![],
             isolation: None,
+            allowed_tools_explicit: false,
         }
     }
 
@@ -187,23 +199,40 @@ impl AgentDef {
     }
 
     /// Set allowed tools
+    ///
+    /// Marks the flat list as *explicit* so [`Self::with_allowed_tool_sets`]
+    /// can distinguish an author-written `allowed_tools: ['*']` from the
+    /// constructor default — the previous value-inspection heuristic (B1-06)
+    /// conflated the two and silently dropped an explicit wildcard whenever a
+    /// named set was also declared. The provenance flag survives on the
+    /// struct via the (private) `allowed_tools_explicit` bit the loader is
+    /// expected to set when an `allowed_tools` key was actually present in
+    /// the parsed frontmatter.
     #[must_use]
     pub fn with_allowed_tools(mut self, tools: Vec<String>) -> Self {
         self.allowed_tools = tools;
+        self.allowed_tools_explicit = true;
         self
     }
 
     /// Set named tool sets.
     ///
-    /// If `allowed_tools` is still at its constructor default `["*"]`, the
-    /// wildcard is cleared so the named sets actually govern access. If the
-    /// caller has already called `with_allowed_tools(...)` with a non-wildcard
-    /// list, that flat list is preserved and unioned with the resolved sets.
-    /// Callers wanting both should chain `with_allowed_tools` after this method.
+    /// The flat `allowed_tools` is left alone **iff** the caller (or the
+    /// loader, via `with_allowed_tools`) marked it explicit. When the flat
+    /// list is still the constructor default `['*']`, it is cleared so the
+    /// named sets actually govern access; an explicit `['*']` (from
+    /// frontmatter or from another builder) survives intact.
+    ///
+    /// Callers wanting both an explicit flat list and named sets get both —
+    /// this matches the documented behaviour on the previous heuristic and
+    /// removes the silent-drop footgun the value-inspection heuristic had.
     #[must_use]
     pub fn with_allowed_tool_sets(mut self, sets: Vec<String>) -> Self {
         self.allowed_tool_sets = sets;
-        if self.allowed_tools.len() == 1 && self.allowed_tools.first().is_some_and(|s| s == "*") {
+        if !self.allowed_tools_explicit
+            && self.allowed_tools.len() == 1
+            && self.allowed_tools.first().is_some_and(|s| s == "*")
+        {
             self.allowed_tools = vec![];
         }
         self
@@ -375,6 +404,30 @@ mod tests {
 
         // Denied takes precedence
         assert!(!agent.is_tool_allowed("bash"));
+    }
+
+    #[test]
+    fn test_with_allowed_tool_sets_clears_constructor_wildcard() {
+        // No prior with_allowed_tools: the heuristic still fires and the
+        // constructor default `["*"]` is cleared so the named sets govern
+        // (this is the path builtin `explore` and `loop-auditor` rely on).
+        let agent = AgentDef::new("test", AgentMode::SubAgent)
+            .with_allowed_tool_sets(vec!["INVESTIGATION".into()]);
+        assert!(agent.allowed_tools.is_empty());
+        assert!(agent.allowed_tools_explicit);
+    }
+
+    #[test]
+    fn test_with_allowed_tool_sets_preserves_explicit_wildcard() {
+        // Regression for B1-06: an explicit `allowed_tools: ['*']` followed by
+        // `allowed_tool_sets` must NOT have the wildcard silently dropped. The
+        // heuristic must check provenance, not value, and the new field makes
+        // provenance observable.
+        let agent = AgentDef::new("test", AgentMode::SubAgent)
+            .with_allowed_tools(vec!["*".into()])
+            .with_allowed_tool_sets(vec!["INVESTIGATION".into()]);
+        assert_eq!(agent.allowed_tools, vec!["*"]);
+        assert!(agent.allowed_tools_explicit);
     }
 
     #[test]
