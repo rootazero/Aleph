@@ -307,7 +307,12 @@ pub async fn handle_create(
     let task_id = match service.add_task(task, &clock).await {
         Ok(id) => id,
         Err(e) => {
-            return task_error::respond(request.id, "Failed to create heartbeat task", &e);
+            // "task", not "heartbeat task": the other four verbs in this file
+            // call the object a task and `heartbeat.create` already says which
+            // kind. Naming it the same way as its siblings is also what lets
+            // the Panel's own framing collapse into it rather than stutter —
+            // see `components::admin_refusal::framed_once`.
+            return task_error::respond(request.id, "Failed to create task", &e);
         }
     };
     match service.get_task(&task_id).await {
