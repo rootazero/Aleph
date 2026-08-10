@@ -1009,9 +1009,11 @@ mod tests {
         // A plain `new()` registry — what every other test in this module
         // builds — spawns and settles a job while the journal is ENABLED.
         let reg = ProcessRegistry::new();
-        let id = unwrap_id(reg.register_running("cat /etc/shadow", Some("squatter".into()), {
-            live_handle().await
-        }));
+        let id = unwrap_id(
+            reg.register_running("cat /etc/shadow", Some("squatter".into()), {
+                live_handle().await
+            }),
+        );
         reg.complete(id, dummy_output(0, "secrets\n"));
 
         assert!(

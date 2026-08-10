@@ -46,13 +46,18 @@ const OPERATOR_TOOLS: &[&str] = &[
     // `agent_switch` were gated from the start, which made the omissions read
     // as "already covered" rather than as holes:
     //
-    // `agent_update` rewrites a live agent's `system_prompt` — text re-injected
-    // into every session that agent serves, on every turn. That is the exact
-    // argument this list already spells out for `loop_graph`'s root bodies, and
-    // it applies more directly here (no argument card in front of it). It also
-    // now writes `allowed_users`, the list the run-start gate reads: leaving it
-    // open would let the people that gate refuses add themselves to it, which
-    // is the "the gate must cover the verb that removes the gate" rule.
+    // `agent_update` writes `allowed_users`, the list the run-start gate
+    // reads: leaving it open would let the people that gate refuses add
+    // themselves to it — the "the gate must cover the verb that removes the
+    // gate" rule. Since 2026-08-10 that write is also LIVE
+    // (`AgentRegistry::set_allowed_users`), so an ungated version would not
+    // even cost the attacker a restart.
+    //
+    // ⚠️ The reason recorded here until 2026-08-10 was "it rewrites a live
+    // agent's `system_prompt`", and that was never true: the tool accepted a
+    // `system_prompt` argument that `AgentPatch` had no field for and no
+    // surface ever persisted. The argument has been cut; the gate stands on
+    // `allowed_users` alone, which is the stronger of the two anyway.
     "agent_update",
     // `agent_unbind` drops a channel→agent binding, i.e. it edits routing. A
     // chat-tier participant severing the binding that decides which agent

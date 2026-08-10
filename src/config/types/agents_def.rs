@@ -300,6 +300,27 @@ pub fn agent_admits_user(allowed: Option<&[String]>, user: Option<&str>) -> bool
     }
 }
 
+/// Storage form of a patched `allowed_users` list.
+///
+/// An empty list is the wire form of "clear the restriction", and the TOML
+/// writer expresses that by **removing the key** — writing `allowed_users = []`
+/// would read, to whoever opens `config.toml` next, like "nobody may use this
+/// agent", the opposite of what [`agent_admits_user`] does with it. This is the
+/// same collapse for the runtime half, so a live agent and the file it was
+/// loaded from cannot disagree about which of `None` / `Some([])` is on disk.
+///
+/// Both are admitted by [`agent_admits_user`], so this changes no verdict — it
+/// keeps one representation reaching the registry, which is what makes "reload
+/// from disk" and "apply live" produce the same object.
+#[must_use]
+pub fn normalized_allowed_users(list: &[String]) -> Option<Vec<String>> {
+    if list.is_empty() {
+        None
+    } else {
+        Some(list.to_vec())
+    }
+}
+
 // =============================================================================
 // SubagentPolicy
 // =============================================================================

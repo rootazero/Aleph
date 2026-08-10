@@ -567,13 +567,14 @@ fn no_sentence_is_stated_twice() {
     // same question: *which block shape does this scanner recognise?* The
     // table is shared with the ratchet rather than restated here; a second
     // list is precisely the failure it exists to prevent.
-    surfaces.extend(
-        crate::executor::REGISTRY_ONLY_DESCRIPTIONS
-            .iter()
-            .map(|(name, description)| {
-                (format!("tool `{name}` (registry-only)"), (*description).to_string())
-            }),
-    );
+    surfaces.extend(crate::executor::REGISTRY_ONLY_DESCRIPTIONS.iter().map(
+        |(name, description)| {
+            (
+                format!("tool `{name}` (registry-only)"),
+                (*description).to_string(),
+            )
+        },
+    ));
 
     // Whitespace-normalized sentences long enough to be a claim rather than a
     // header, list marker or "Rules:" — short fragments collide by coincidence,

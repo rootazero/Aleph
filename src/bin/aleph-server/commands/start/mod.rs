@@ -2876,7 +2876,10 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
         // to the caller's session would let a member answer their own
         // escalation. See `OperatorApprovalRequester`'s module doc.
         alephcore::gateway::execution_engine::set_config_approval_requester(Arc::new(
-            OperatorApprovalRequester::for_config_tier(exec_approval_manager.clone(), event_bus.clone()),
+            OperatorApprovalRequester::for_config_tier(
+                exec_approval_manager.clone(),
+                event_bus.clone(),
+            ),
         ));
 
         // Phase 1 delivery surface: register the desktop shell as an addressable

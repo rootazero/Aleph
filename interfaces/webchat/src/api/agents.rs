@@ -45,6 +45,20 @@ pub struct AgentDetail {
     pub file_count: usize,
 }
 
+/// What an `agents.update` actually did, beyond "the TOML write succeeded".
+///
+/// Mirrors `gateway::handlers::agents::handle_update`'s response. Only
+/// `allowed_users` has a runtime half (`AgentRegistry::set_allowed_users`), so
+/// this is the one field where "saved" and "in force" are different claims and
+/// the page must not collapse them.
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize)]
+pub struct AgentUpdateOutcome {
+    /// The patched admission list reached the live registry, so a revocation
+    /// binds on the refused caller's next turn. Absent ⇒ `false`.
+    #[serde(default)]
+    pub allowed_users_applied_live: bool,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WorkspaceFile {
     pub filename: String,
@@ -108,10 +122,21 @@ impl AgentsApi {
         Ok(())
     }
 
-    pub async fn update(state: &DashboardState, id: &str, patch: Value) -> Result<(), String> {
+    /// Patch an agent. The outcome carries whether the admission list — the
+    /// only patchable field with a runtime half — actually reached the live
+    /// registry, so the page can say "in force now" instead of guessing.
+    pub async fn update(
+        state: &DashboardState,
+        id: &str,
+        patch: Value,
+    ) -> Result<AgentUpdateOutcome, String> {
         let params = json!({"id": id, "patch": patch});
-        state.rpc_call("agents.update", params).await?;
-        Ok(())
+        let result = state.rpc_call("agents.update", params).await?;
+        // A server that predates the field, or one built without a runtime
+        // context, simply omits it — and `false` ("not in force") is the right
+        // reading of an absent flag, because the reassuring answer is the one
+        // that must be earned.
+        Ok(serde_json::from_value(result).unwrap_or_default())
     }
 
     pub async fn delete(state: &DashboardState, id: &str) -> Result<(), String> {

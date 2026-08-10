@@ -257,10 +257,24 @@ pub async fn handle_create(
 }
 
 /// Handle agents.update — update an existing agent via patch
+///
+/// With `runtime: Some(..)`, a patched `allowed_users` is also installed on the
+/// runtime registry, so a revocation binds on the refused caller's next turn
+/// instead of at the next boot. This is the same
+/// [`AgentRegistry::set_allowed_users`](crate::gateway::agent_instance::AgentRegistry::set_allowed_users)
+/// the `agent_update` tool calls: the two are faces of one verb, and a face
+/// that wrote only TOML would report a revocation as done while the refused
+/// user kept running. Its siblings `handle_create` / `handle_delete` have taken
+/// this context since they were written; `handle_update` was the one that did
+/// not, which is why the Panel had no way to revoke anything.
+///
+/// `None` (minimal server, tests) → TOML-only, and the response says so rather
+/// than claiming a live apply that had no runtime to land on.
 pub async fn handle_update(
     request: JsonRpcRequest,
     manager: Arc<AgentManager>,
     event_bus: Arc<GatewayEventBus>,
+    runtime: Option<Arc<AgentsRuntimeCtx>>,
 ) -> JsonRpcResponse {
     debug!("Handling agents.update request");
 
@@ -269,9 +283,27 @@ pub async fn handle_update(
         Err(resp) => return resp,
     };
 
+    // Read the admission list off the patch before `update` consumes it.
+    let allowed_users = params.patch.allowed_users.clone();
+
     match manager.update(&params.id, params.patch) {
         Ok(()) => {
             info!("Agent '{}' updated via RPC", params.id);
+
+            // The runtime half. Reported, not assumed: the Panel renders
+            // "in force now" vs "after restart" from this, and a `true` the
+            // registry never returned is the one lie this whole path exists to
+            // avoid.
+            let mut allowed_users_applied_live = false;
+            if let (Some(users), Some(rt)) = (allowed_users.as_ref(), runtime.as_ref()) {
+                allowed_users_applied_live = rt
+                    .registry
+                    .set_allowed_users(
+                        &params.id,
+                        crate::config::types::normalized_allowed_users(users),
+                    )
+                    .await;
+            }
 
             let event = GatewayEvent::ConfigChanged(ConfigChangedEvent {
                 section: Some("agents".to_string()),
@@ -280,7 +312,13 @@ pub async fn handle_update(
             });
             let _ = event_bus.publish_gateway_event(&event);
 
-            JsonRpcResponse::success(request.id, json!({ "success": true }))
+            JsonRpcResponse::success(
+                request.id,
+                json!({
+                    "success": true,
+                    "allowed_users_applied_live": allowed_users_applied_live,
+                }),
+            )
         }
         Err(e) => JsonRpcResponse::error(
             request.id,
@@ -678,6 +716,96 @@ name = "Coder"
             .unwrap()
             .is_none());
         assert!(ctx.env_store.get_active_agent("discord").unwrap().is_none());
+    }
+
+    /// `agents.update` is the Panel's face of the same verb `agent_update`
+    /// exposes to the model, and the admission list is the field where the two
+    /// disagreeing is a security bug rather than an inconsistency: whichever
+    /// face wrote only TOML would report a REVOCATION as done and leave the
+    /// refused user running until the next boot.
+    ///
+    /// The assertion is on the registry — the object `build_run_request` reads
+    /// the gate off — not on the response flag, because a flag can be `true`
+    /// while nothing moved.
+    #[tokio::test]
+    async fn update_installs_allowed_users_on_the_runtime_registry() {
+        let dir = TempDir::new().unwrap();
+        let manager = test_manager(&dir);
+        let registry = registry_with(&dir, &["main", "coder"]).await;
+        let ctx = test_runtime_ctx(&dir, Arc::clone(&registry));
+        let bus = Arc::new(GatewayEventBus::new());
+
+        let resp = handle_update(
+            req(
+                "agents.update",
+                json!({"id": "coder", "patch": {"allowed_users": ["u-alice"]}}),
+            ),
+            Arc::clone(&manager),
+            Arc::clone(&bus),
+            Some(Arc::clone(&ctx)),
+        )
+        .await;
+        assert!(resp.is_success(), "update failed: {:?}", resp.error);
+        assert_eq!(
+            registry.get_allowed_users("coder").await,
+            Some(Some(vec!["u-alice".to_string()])),
+            "the RPC face must reach the same registry the tool face does"
+        );
+        assert_eq!(
+            resp.result
+                .as_ref()
+                .and_then(|r| r.get("allowed_users_applied_live"))
+                .and_then(serde_json::Value::as_bool),
+            Some(true)
+        );
+
+        // …and the revocation direction, which is the one that must never be
+        // reported without being performed.
+        let resp = handle_update(
+            req(
+                "agents.update",
+                json!({"id": "coder", "patch": {"allowed_users": []}}),
+            ),
+            manager,
+            bus,
+            Some(ctx),
+        )
+        .await;
+        assert!(resp.is_success(), "clear failed: {:?}", resp.error);
+        assert_eq!(
+            registry.get_allowed_users("coder").await,
+            Some(None),
+            "an empty list must reach the registry as the storage form (None)"
+        );
+    }
+
+    /// Without a runtime ctx there is nothing to apply to, and the response
+    /// must say so rather than defaulting to the reassuring answer. Same
+    /// downgrade rule as `config::live_apply::classify_verified`.
+    #[tokio::test]
+    async fn update_without_a_runtime_ctx_does_not_claim_a_live_apply() {
+        let dir = TempDir::new().unwrap();
+        let manager = test_manager(&dir);
+        let bus = Arc::new(GatewayEventBus::new());
+
+        let resp = handle_update(
+            req(
+                "agents.update",
+                json!({"id": "coder", "patch": {"allowed_users": ["u-alice"]}}),
+            ),
+            manager,
+            bus,
+            None,
+        )
+        .await;
+        assert!(resp.is_success());
+        assert_eq!(
+            resp.result
+                .as_ref()
+                .and_then(|r| r.get("allowed_users_applied_live"))
+                .and_then(serde_json::Value::as_bool),
+            Some(false)
+        );
     }
 
     /// `agents.files.list` enumerates MEMORY.md, so the Panel file editor

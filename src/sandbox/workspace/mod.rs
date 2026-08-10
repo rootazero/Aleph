@@ -1134,7 +1134,9 @@ mod tests {
         );
         let session = sid();
         let ws_dir = tmp.path().join(session_key_to_filename(&session));
-        tokio::fs::create_dir_all(ws_dir.join("real")).await.unwrap();
+        tokio::fs::create_dir_all(ws_dir.join("real"))
+            .await
+            .unwrap();
         std::os::unix::fs::symlink(ws_dir.join("real"), ws_dir.join("link")).unwrap();
 
         sandbox
@@ -1318,8 +1320,7 @@ mod tests {
             panic!("expected CapabilityDenied");
         };
         assert!(
-            reason.contains("changed while waiting for approval")
-                && reason.contains("mid3"),
+            reason.contains("changed while waiting for approval") && reason.contains("mid3"),
             "must say what it resolves to now: {reason}"
         );
     }

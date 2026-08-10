@@ -1371,7 +1371,6 @@ mod tests {
         );
     }
 
-
     /// Total description bytes the builtin tool surface puts in every request.
     ///
     /// Covers `BUILTIN_TOOL_DEFINITIONS` **plus** `REGISTRY_ONLY_DESCRIPTIONS`
