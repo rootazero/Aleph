@@ -6,6 +6,19 @@
 
 use serde_json::Value;
 
+/// Render a [`serde_json::Value`] as a short kind tag (for parser error
+/// messages — 'object', 'array', 'string', 'number', 'bool', 'null').
+fn value_kind(v: &Value) -> &'static str {
+    match v {
+        Value::Null => "null",
+        Value::Bool(_) => "bool",
+        Value::Number(_) => "number",
+        Value::String(_) => "string",
+        Value::Array(_) => "array",
+        Value::Object(_) => "object",
+    }
+}
+
 use super::types::{
     max_run_timeout_secs, BatchTask, RunArgs, SubagentAction, ACCEPTED_ARG_KEYS,
     DEFAULT_RUN_TIMEOUT_SECS, DEFAULT_WAIT_TIMEOUT_SECS, MAX_WAIT_TIMEOUT_SECS,
@@ -176,38 +189,66 @@ pub(super) fn parse_args(input: &Value) -> Result<SubagentAction, String> {
 
     // Parse batch_tasks early — when present, top-level `task` is optional
     // since each sub-task carries its own.
+    //
+    // B3-01: every entry that is not an object with a non-empty string
+    // `task` must error, not silently drop. `reject_unknown_keys` exists
+    // precisely because a near-miss that runs with a different meaning than
+    // the caller asked for, and reports success, is the worst possible
+    // outcome — yet the old `filter_map` shape did exactly that on every
+    // entry. The two failure modes a silent drop enables are unacceptable:
+    //   1. Partial drop — a 5-row request runs 4 children; renumbering from 0
+    //      hides the loss.
+    //   2. Total collapse — every entry malformed collapses the fan-out
+    //      into a single ordinary sub-agent via `task`, reported as success.
     let max_run_timeout = max_run_timeout_secs();
-    let batch_tasks = input
-        .get("batch_tasks")
-        .and_then(|v| v.as_array())
-        .map(|arr| {
-            arr.iter()
-                .filter_map(|item| {
-                    let task = item.get("task")?.as_str()?.to_string();
-                    if task.trim().is_empty() {
-                        return None;
-                    }
-                    Some(BatchTask {
-                        task,
-                        agent_type: item
-                            .get("agent_type")
-                            .and_then(|v| v.as_str())
-                            .map(|s| s.to_string()),
-                        model: item
-                            .get("model")
-                            .and_then(|v| v.as_str())
-                            .map(|s| s.to_string()),
-                        // Clamped like the top-level value below — a per-entry
-                        // override must not escape the tool-budget ordering
-                        // either.
-                        timeout_secs: item
-                            .get("timeout_secs")
-                            .and_then(|v| v.as_u64())
-                            .map(|t| t.clamp(1, max_run_timeout)),
-                    })
-                })
-                .collect::<Vec<_>>()
-        });
+    let batch_tasks: Option<Vec<BatchTask>> = match input.get("batch_tasks") {
+        Some(v) if !v.is_null() => {
+            let arr = v.as_array().ok_or_else(|| {
+                format!("batch_tasks must be an array of objects (got {})", value_kind(v))
+            })?;
+            let mut rows = Vec::with_capacity(arr.len());
+            for (idx, item) in arr.iter().enumerate() {
+                let obj = item.as_object().ok_or_else(|| {
+                    format!(
+                        "batch_tasks[{idx}] must be an object with a non-empty string 'task' (got {})",
+                        value_kind(item)
+                    )
+                })?;
+                let task = obj
+                    .get("task")
+                    .and_then(Value::as_str)
+                    .ok_or_else(|| {
+                        format!("batch_tasks[{idx}] requires a non-empty string 'task'")
+                    })?
+                    .to_string();
+                if task.trim().is_empty() {
+                    return Err(format!(
+                        "batch_tasks[{idx}]: 'task' must not be empty"
+                    ));
+                }
+                rows.push(BatchTask {
+                    task,
+                    agent_type: obj
+                        .get("agent_type")
+                        .and_then(|v| v.as_str())
+                        .map(|s| s.to_string()),
+                    model: obj
+                        .get("model")
+                        .and_then(|v| v.as_str())
+                        .map(|s| s.to_string()),
+                    // Clamped like the top-level value below — a per-entry
+                    // override must not escape the tool-budget ordering
+                    // either.
+                    timeout_secs: obj
+                        .get("timeout_secs")
+                        .and_then(|v| v.as_u64())
+                        .map(|t| t.clamp(1, max_run_timeout)),
+                });
+            }
+            Some(rows)
+        }
+        _ => None,
+    };
     let has_batch = batch_tasks.as_ref().is_some_and(|v| !v.is_empty());
 
     // Run action — top-level `task` is required UNLESS batch_tasks supplies
