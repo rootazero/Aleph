@@ -892,9 +892,19 @@ const ANON_CHILD_PREFIX: &str = "sub-";
 /// that use it so the recovery reader cannot drift into a second one. A reader
 /// that disagreed about which session holds the events would find an empty log
 /// and report "unknown" forever — a silent failure with no error path.
+///
+/// B4-01: the previous body JSON-parsed the value with
+/// `serde_json::from_str::<SessionId>(raw).ok()`, but `SessionId` is an
+/// internally tagged enum and the only production caller passes a flat
+/// key-string from `SessionKey::to_key_string()` (e.g. `"agent:main:main"`),
+/// which is not a JSON document. Every production spawn therefore returned
+/// `None`, both `emit_event` guards skipped, and the recovery path's
+/// `SubagentSpawned`/`SubagentReturned` events were never written — leaving
+/// the event-log recovery reader to find an empty log and report the work
+/// as unknown forever. Use the existing flat-string reader.
 #[must_use]
 pub fn parent_session_id_of(raw: &str) -> Option<SessionId> {
-    serde_json::from_str::<SessionId>(raw).ok()
+    SessionKey::parse(raw)
 }
 
 /// Build a child's context-management triple — budget, LLM compactor, cheap-pass

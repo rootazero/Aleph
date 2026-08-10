@@ -1362,6 +1362,30 @@ mod tests {
         );
     }
 
+    // -- B4-01: parent_session_id_of must read flat key-strings ------------
+
+    #[test]
+    fn parent_session_id_of_round_trips_session_key_to_key_string() {
+        use crate::agents::subagent_spawner::parent_session_id_of;
+        use crate::routing::session_key::SessionKey;
+
+        let key = SessionKey::Main {
+            agent_id: "main".into(),
+            conversation_id: "main".into(),
+        };
+        let raw = key.to_key_string();
+        let parsed = parent_session_id_of(&raw).expect("must parse flat key-string");
+
+        assert_eq!(parsed, key);
+    }
+
+    #[test]
+    fn parent_session_id_of_rejects_garbage() {
+        use crate::agents::subagent_spawner::parent_session_id_of;
+        assert!(parent_session_id_of("not a session key").is_none());
+        assert!(parent_session_id_of("").is_none());
+    }
+
     // -- E1: strategy weld reaches the inline system prompt ------------------
 
     /// Provider that records the system prompt of the first request, then
