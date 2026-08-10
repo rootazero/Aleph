@@ -76,8 +76,8 @@ pub fn upsert_entry(conn: &Connection, e: &ExtensionEntry) -> rusqlite::Result<(
             source_id=excluded.source_id, installed=excluded.installed, data=excluded.data",
         params![
             e.id,
-            serde_json::to_value(e.kind).unwrap().as_str().unwrap(),
-            serde_json::to_value(e.category).unwrap().as_str().unwrap(),
+            e.kind.as_str(),
+            e.category.as_str(),
             e.name.to_lowercase(),
             e.source_id,
             e.installed as i64,
@@ -99,23 +99,11 @@ pub fn query_entries(
     }
     if let Some(k) = f.kind {
         sql.push_str(" AND kind = ?");
-        args.push(Box::new(
-            serde_json::to_value(k)
-                .unwrap()
-                .as_str()
-                .unwrap()
-                .to_string(),
-        ));
+        args.push(Box::new(k.as_str().to_string()));
     }
     if let Some(c) = f.category {
         sql.push_str(" AND category = ?");
-        args.push(Box::new(
-            serde_json::to_value(c)
-                .unwrap()
-                .as_str()
-                .unwrap()
-                .to_string(),
-        ));
+        args.push(Box::new(c.as_str().to_string()));
     }
     if let Some(s) = &f.source_id {
         sql.push_str(" AND source_id = ?");

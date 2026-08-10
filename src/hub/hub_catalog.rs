@@ -128,7 +128,11 @@ impl HubCatalogEntry {
             source_id: hub_id.to_string(),
             repo_url: self.repo_url.clone(),
             trust_tier: self.trust_tier,
-            requires_config: self.requires_config,
+            // `requires_config` is denormalized on the entry for fast UI rendering;
+            // always recompute from the authoritative spec rather than trusting the
+            // wire value, so a hostile publisher cannot lie about whether a key
+            // prompt is needed. See review/hub-statics.
+            requires_config: self.install_spec.requires_config(),
             config_schema: self.config_schema.clone(),
             installed: false,
             enabled: false,
