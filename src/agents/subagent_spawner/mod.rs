@@ -818,7 +818,20 @@ fn build_effective_task(
         Some(summary) if context_mode == crate::agents::types::ContextMode::Summary => {
             format!("## Context from parent agent\n\n{summary}\n\n---\n\n{task}")
         }
-        _ => task.to_string(),
+        // B4-04: surface dropped summaries to the model so it can see what
+        // happened. The tool schema advertises `context_summary`
+        // unconditionally; the previous fallback silently discarded it for
+        // every Fresh-mode agent (which is the default and includes the
+        // shipped builtins `explore`, `coder`, `researcher`). The model
+        // composed a 2 KB summary, passed it in, and the child received only
+        // the bare task — off-target answers with no signal. Annotate the
+        // task with a brief dropped-summary note (so the model can correlate
+        // to its own call) instead of erasing the fact.
+        Some(_) => format!(
+            "{task}\n\n[context_summary supplied by caller but ignored: target agent declares \
+             context_mode=Fresh; set context_mode=Summary on the agent to receive it]"
+        ),
+        None => task.to_string(),
     }
 }
 
