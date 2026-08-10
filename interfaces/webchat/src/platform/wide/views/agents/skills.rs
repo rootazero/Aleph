@@ -8,6 +8,7 @@
 // silently strip every built-in / MCP tool.
 
 use crate::api::agents::AgentsApi;
+use crate::components::admin_refusal;
 use crate::context::DashboardState;
 use crate::i18n::{t, t_string, use_i18n};
 use leptos::prelude::*;
@@ -153,8 +154,18 @@ pub fn SkillsTab(agent_id: String) -> impl IntoView {
                                     let dash = state;
                                     spawn_local(async move {
                                         match AgentsApi::update(&dash, &id, json!({"skills_blacklist": blacklist})).await {
-                                            Ok(()) => save_message.set(Some((true, t_string!(i18n, agents.skills.saved).to_string()))),
-                                            Err(e) => save_message.set(Some((false, e))),
+                                            Ok(_) => save_message.set(Some((true, t_string!(i18n, agents.skills.saved).to_string()))),
+                                            // `agents.` is admin-gated, so a member's Save comes
+                                            // back refused. The guard in `admin_refusal` cannot
+                                            // see this site — its receiver-name heuristic only
+                                            // recognises signals called `*err*` — which is why
+                                            // it stood while 154 named ones were fixed.
+                                            Err(e) => save_message.set(Some((
+                                                false,
+                                                admin_refusal::settings_write_error(i18n, &e, |detail| {
+                                                    format!("{}: {detail}", t_string!(i18n, agents.skills.save))
+                                                }),
+                                            ))),
                                         }
                                         is_saving.set(false);
                                     });

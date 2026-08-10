@@ -410,8 +410,15 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
     //
     // Phase 5 Task 5: Wire MessageProjector as the observer so every
     // session_events append materialises into the `messages` table.
+    // The bus makes this drain the producer of the live peer echo
+    // (`GatewayEventFrame::SessionUserMessage`): a room member's message
+    // reaches the other members the moment it becomes a transcript row,
+    // instead of only when the turn it started finishes.
     let projector: Arc<dyn alephcore::session::observer::SessionEventObserver> =
-        alephcore::gateway::session_projector::MessageProjector::new(session_store.clone());
+        alephcore::gateway::session_projector::MessageProjector::new(
+            session_store.clone(),
+            Some(event_bus.clone()),
+        );
     let session_service_and_store = build_sqlite_session_service(
         &alephcore::gateway::SessionManagerConfig::default().db_path,
         Some(projector),
@@ -2877,7 +2884,10 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
         // to the caller's session would let a member answer their own
         // escalation. See `OperatorApprovalRequester`'s module doc.
         alephcore::gateway::execution_engine::set_config_approval_requester(Arc::new(
-            OperatorApprovalRequester::for_config_tier(exec_approval_manager.clone(), event_bus.clone()),
+            OperatorApprovalRequester::for_config_tier(
+                exec_approval_manager.clone(),
+                event_bus.clone(),
+            ),
         ));
 
         // Phase 1 delivery surface: register the desktop shell as an addressable

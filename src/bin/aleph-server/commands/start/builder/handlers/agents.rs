@@ -13,9 +13,9 @@ pub(in crate::commands::start) fn register_agents_handlers(
 
     register_handler!(server, "agents.list", agents::handle_list, manager);
     register_handler!(server, "agents.get", agents::handle_get, manager);
-    // agents.create / agents.delete are hand-wired (not `register_handler!`)
-    // because they take an `Option<Arc<AgentsRuntimeCtx>>` — the macro only
-    // threads required `Arc`s.
+    // agents.create / agents.update / agents.delete are hand-wired (not
+    // `register_handler!`) because they take an `Option<Arc<AgentsRuntimeCtx>>`
+    // — the macro only threads required `Arc`s.
     {
         let manager = Arc::clone(manager);
         let event_bus = Arc::clone(event_bus);
@@ -27,13 +27,17 @@ pub(in crate::commands::start) fn register_agents_handlers(
             async move { agents::handle_create(req, manager, event_bus, runtime).await }
         });
     }
-    register_handler!(
-        server,
-        "agents.update",
-        agents::handle_update,
-        manager,
-        event_bus
-    );
+    {
+        let manager = Arc::clone(manager);
+        let event_bus = Arc::clone(event_bus);
+        let runtime = runtime.clone();
+        server.handlers_mut().register("agents.update", move |req| {
+            let manager = Arc::clone(&manager);
+            let event_bus = Arc::clone(&event_bus);
+            let runtime = runtime.clone();
+            async move { agents::handle_update(req, manager, event_bus, runtime).await }
+        });
+    }
     {
         let manager = Arc::clone(manager);
         let event_bus = Arc::clone(event_bus);

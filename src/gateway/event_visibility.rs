@@ -294,7 +294,11 @@ pub fn session_identity_of(topic: &str, data: Option<&Value>) -> SessionIdentity
         "stream.run_accepted"
         | "stream.ask_user"
         | "stream.clarification_ended"
-        | "stream.session_updated" => match str_field(data, "session_key") {
+        | "stream.session_updated"
+        // The peer-echo of a human's message. Session-scoped for the same
+        // reason its transcript is: the audience that may read the row is
+        // exactly the audience that may read the session it landed in.
+        | "stream.session_user_message" => match str_field(data, "session_key") {
             Some(k) => SessionIdentity::BySessionKey(k),
             None => SessionIdentity::Global,
         },
@@ -2003,7 +2007,8 @@ mod tests {
                 // (see the frame's own doc comment).
                 GatewayEventFrame::AskUser { session_key, .. }
                 | GatewayEventFrame::ClarificationEnded { session_key, .. }
-                | GatewayEventFrame::SessionUpdated { session_key, .. } => {
+                | GatewayEventFrame::SessionUpdated { session_key, .. }
+                | GatewayEventFrame::SessionUserMessage { session_key, .. } => {
                     SessionIdentity::BySessionKey(session_key.clone())
                 }
                 // Broadcast red-dot spanning every owner's sessions — no
@@ -2165,6 +2170,13 @@ mod tests {
                 session_key: "agent:main:main".into(),
                 origin_channel: None,
                 origin_run_id: None,
+            },
+            GatewayEventFrame::SessionUserMessage {
+                session_key: "agent:main:main".into(),
+                author_user_id: "u-alice".into(),
+                content: "hi".into(),
+                timestamp: "2026-08-10T00:00:00Z".into(),
+                seq: 7,
             },
             GatewayEventFrame::RunningSetChanged {
                 seq: 1,

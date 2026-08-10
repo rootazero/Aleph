@@ -174,11 +174,24 @@ pub async fn resume_named_session(
 /// their own that was interrupted earlier. They cannot **steer** it —
 /// `ResumeParams` carries only a session key, and giving the run new
 /// instructions means `chat.send`, which is gated. The work being resumed was
-/// authorized when it started, and a revocation already requires a restart to
-/// take effect at all (`[agents]` is not a live section).
+/// authorized when it started.
 ///
-/// **This reasoning expires the moment `agent.resume` accepts input.** If a
-/// caller can direct the resumed run, resume becomes a run-start path in
+/// ⚠️ **One of the two original reasons is gone, and the window is wider than
+/// this doc used to say.** It read "a revocation already requires a restart to
+/// take effect at all", so the residue was only reachable between a restart and
+/// the interrupted run ageing out. Since 2026-08-10 a revocation binds on the
+/// next turn (`AgentRegistry::set_allowed_users`, reached from both
+/// `agent_update` and `agents.update`), so the residue is reachable
+/// **immediately** after the revocation instead. What still holds is the other
+/// reason — the resumed run cannot be directed — and that is now the whole of
+/// it. Closing the gap means giving this shared body a way to read the
+/// registry, i.e. a second process-global handle next to
+/// `global_resume_coordinator`; that cost, against an unsteerable resume of
+/// already-authorized work, is the open judgement. It is recorded here rather
+/// than left to be re-derived, and in AGENT_IDENTITY.md §6 ①.
+///
+/// **This reasoning expires entirely the moment `agent.resume` accepts input.**
+/// If a caller can direct the resumed run, resume becomes a run-start path in
 /// substance and needs the same gate — see AGENT_IDENTITY.md §6 ①.
 pub async fn handle_resume(
     request: JsonRpcRequest,

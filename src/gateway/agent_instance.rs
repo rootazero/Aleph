@@ -265,6 +265,30 @@ impl AgentInstance {
         self
     }
 
+    /// A copy of this instance whose admission list is `allowed_users`,
+    /// sharing every runtime handle with the original.
+    ///
+    /// `state`, `session_store` and `raw_memory_writer` are cloned handles, so
+    /// a run already in flight against the old `Arc` keeps observing — and
+    /// updating — the same live state. That is the intended semantics: this
+    /// swaps *who may start a run*, not what is already running.
+    ///
+    /// Deliberately not routed through [`Self::new`], which `mkdir`s the agent
+    /// and workspace directories and logs an instance creation. An
+    /// admission-list edit is neither.
+    #[must_use]
+    pub fn with_allowed_users(&self, allowed_users: Option<Vec<String>>) -> Self {
+        let mut config = self.config.clone();
+        config.allowed_users = allowed_users;
+        Self {
+            config,
+            state: Arc::clone(&self.state),
+            agent_dir: self.agent_dir.clone(),
+            session_store: Arc::clone(&self.session_store),
+            raw_memory_writer: self.raw_memory_writer.clone(),
+        }
+    }
+
     /// Get the agent ID
     #[must_use]
     pub fn id(&self) -> &str {
@@ -894,6 +918,52 @@ impl AgentRegistry {
             AgentEntry::Instance(inst) => inst.config().allowed_users.clone(),
             AgentEntry::Config { config, .. } => config.allowed_users.clone(),
         })
+    }
+
+    /// Install a new `allowed_users` admission list on a registered agent
+    /// without a restart. Returns `false` when `agent_id` is not registered —
+    /// nothing was applied and no caller may report that it was.
+    ///
+    /// # Why this lives on the registry, and why it is the only one
+    ///
+    /// The run-start gate reads the list off whatever
+    /// [`AgentRegistry::get`] hands back (`build_run_request` →
+    /// [`caller_may_act_as_agent`](crate::gateway::caller_identity::caller_may_act_as_agent)),
+    /// so the registry is where a revocation has to land to bite. `agent_update`
+    /// (the tool) and `agents.update` (the RPC the Panel calls) are two faces of
+    /// one verb; both call this. A face that wrote only TOML would report a
+    /// REVOCATION as done while the refused user kept running until the next
+    /// boot — the single failure the whole admission axis exists to prevent, and
+    /// the one that is invisible to every test of the gate itself, because the
+    /// gate would still be enforced, faithfully, against a stale list.
+    ///
+    /// # Staleness boundary
+    ///
+    /// An `Arc<AgentInstance>` handed out **before** this call keeps the old
+    /// list. That is bounded and intended: those handles belong to runs whose
+    /// gate has already been passed, and every run-start path re-reads the
+    /// registry (`registry.get(..)` per turn) rather than caching an instance.
+    pub async fn set_allowed_users(
+        &self,
+        agent_id: &str,
+        allowed_users: Option<Vec<String>>,
+    ) -> bool {
+        let mut agents = self.agents.write().await;
+        match agents.get_mut(agent_id) {
+            // Lazy entry: the config in the map IS the one `get` will
+            // instantiate from, so writing it here is the whole job.
+            Some(AgentEntry::Config { config, .. }) => {
+                config.allowed_users = allowed_users;
+                true
+            }
+            // Instantiated: `AgentInstanceConfig` is not mutable behind the
+            // `Arc`, so swap in a sibling instance that shares the live state.
+            Some(AgentEntry::Instance(inst)) => {
+                *inst = Arc::new(inst.with_allowed_users(allowed_users));
+                true
+            }
+            None => false,
+        }
     }
 
     /// Remove an agent (works for both lazy and instantiated entries).

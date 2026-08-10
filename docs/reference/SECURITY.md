@@ -141,9 +141,26 @@ caller, so there is no existence secret to protect, and a puzzle is what pushes
 an operator who forgot to list themselves into widening the setting.
 
 `agent_update` writes that list, and is therefore operator-gated: a gate must
-cover the verb that removes the gate. Full model and threat analysis in
-[AGENT_IDENTITY.md](AGENT_IDENTITY.md); the seam-level landmines are in
-`src/gateway/CLAUDE.md`.
+cover the verb that removes the gate. Its RPC twin `agents.update` — what the
+Panel's per-agent access picker calls — is covered by the `agents.` prefix in
+`method_admin.rs` (only `list` / `get` are carved out for members).
+
+**A revocation binds on the refused caller's next turn**, with no restart
+(2026-08-10). Both faces install the new list on the runtime registry through
+one method, `AgentRegistry::set_allowed_users`, because that registry entry is
+what the run-start guard reads; a face that wrote only `config.toml` would
+report a revocation as done while the refused person kept running until the
+next boot. The claim is earned, not assumed: `takes_effect` (tool) and
+`allowed_users_applied_live` (RPC) say `Live` only when that write returned
+`true`, the same downgrade rule as `config::live_apply::classify_verified`.
+`name` / `description` / `model` deliberately stay restart-only.
+
+⚠️ `agent.resume` is exempt from this guard, and one of its two original
+reasons died with the restart requirement — see `handlers/resume.rs` and
+[AGENT_IDENTITY.md](AGENT_IDENTITY.md) §6 ①.
+
+Full model and threat analysis in [AGENT_IDENTITY.md](AGENT_IDENTITY.md); the
+seam-level landmines are in `src/gateway/CLAUDE.md`.
 
 Shell-command execution safety (risk analysis, approval, allowlist,
 output masking) is a separate subsystem — see **Exec Kernel** below.

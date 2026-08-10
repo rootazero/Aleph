@@ -8,6 +8,7 @@ use crate::i18n::{td_string, I18nCtx, Locale};
 use crate::state::layout::WorkspaceState;
 use crate::state::notifications::PendingAskView;
 use crate::state::sessions::SessionMap;
+use crate::state::user_directory::UserDirectoryState;
 use leptos::prelude::*;
 use std::collections::HashSet;
 use std::sync::{Arc, Mutex};
@@ -632,6 +633,37 @@ fn resolve_target(
     target.map(|chat| (chat, is_foreground))
 }
 
+/// Should this client render a `session_user_message` echo as a bubble?
+///
+/// The question is "did somebody ELSE type this", and it is answered by author
+/// identity alone — deliberately NOT by `is_own_run` the way
+/// `session_update_needs_rehydrate` answers its own question. That predicate is
+/// safe there because it runs at turn *end*, long after `chat.send` returned
+/// the run id. This frame can arrive before that response does: `start_run`
+/// spawns execution and returns the id afterwards, so the two race, and the
+/// losing order renders the sender's message twice with nothing to clean it up
+/// (the terminal re-hydrate is skipped for one's own run). Author identity has
+/// no such window — it is known before the send, not after it.
+///
+/// Both sides must be known. An unattributed message (`author` empty) cannot be
+/// told apart from the viewer's own, and a viewer who does not yet know their
+/// own id (`users.me` still in flight, or a loopback caller with no P1 identity
+/// at all) cannot make the comparison. Either way the answer is "don't", which
+/// costs only the pre-existing behavior: the message still lands when the turn
+/// ends and `run.session_updated` re-hydrates.
+///
+/// Consequence worth naming: a second tab of the SAME user is not served by
+/// this. It sees its own id and skips, then re-hydrates at turn end exactly as
+/// it does today. Serving it would need a per-connection discriminator this
+/// frame deliberately does not carry — see the frame's doc for why author, not
+/// origin, is the field it was given.
+fn peer_message_is_renderable(author_user_id: &str, my_user_id: Option<&str>) -> bool {
+    if author_user_id.is_empty() {
+        return false;
+    }
+    my_user_id.is_some_and(|me| !me.is_empty() && me != author_user_id)
+}
+
 /// Subscribe to `run.*` events and dispatch to `ChatState`. Tool args/results
 /// are mirrored into [`WorkspaceState::tool_payloads`] so the workspace
 /// pane can render real invocation details without an extra round-trip.
@@ -648,6 +680,14 @@ pub fn subscribe_run_events(
     // Owned Copy captured into the 'static event closure — used to drive
     // voice-loop TTS playback when a registered run completes.
     let dash = *dashboard;
+    // Captured HERE rather than read inside the closure: that closure is
+    // 'static and runs outside any reactive owner, where `use_context` has
+    // nothing to read from. `UserDirectoryState` is `Copy` and its signals are
+    // process-wide, so this handle keeps seeing later writes — including the
+    // `users.me` fetch `MessageList` kicks off on first render. `use_context`
+    // (not `expect_context`) because a mount without the directory must still
+    // stream normally; it simply never renders a peer echo.
+    let user_dir = use_context::<UserDirectoryState>();
     dashboard.subscribe_events(move |event: GatewayEvent| {
         if !event.topic.starts_with("run.") {
             return;
@@ -680,6 +720,56 @@ pub fn subscribe_run_events(
                 dash.pending_clarifications
                     .update(|list| list.retain(|p| p.session_key != session_key));
             }
+            return;
+        }
+
+        // `session_user_message`: another human's message became a transcript
+        // row. Like `clarification_ended` above it is keyed by session and
+        // carries no run_id — necessarily so: the run it belongs to is somebody
+        // else's, which is the entire reason this client cannot already see the
+        // message. Hence handled before the run_id guard.
+        //
+        // This closes the gap where a room peer watched an answer stream in
+        // with no question above it: `RunAccepted` starts the assistant bubble
+        // for a foreign run, but the user row behind it only arrived when the
+        // turn ended and `run.session_updated` re-hydrated (the sidebar's
+        // re-hydrate is suppressed while the session is running).
+        if event_type == "session_user_message" {
+            let Some(session_key) = data.get("session_key").and_then(|s| s.as_str()) else {
+                return;
+            };
+            let author = data
+                .get("author_user_id")
+                .and_then(|a| a.as_str())
+                .unwrap_or_default();
+            let me = user_dir.and_then(|d| d.my_user_id.get_untracked());
+            if !peer_message_is_renderable(author, me.as_deref()) {
+                return;
+            }
+            // Routed by the identity the frame carries, and dropped when no
+            // conversation holds that session — the same rule `resolve_target`
+            // applies to a foreign run, and for the same reason: the transcript
+            // arrives whole when the viewer opens the session.
+            let Some(chat) = sessions
+                .conv_for_session_key(session_key)
+                .and_then(|conv| sessions.chat_for(conv, singleton))
+            else {
+                return;
+            };
+            chat.push_peer_user_message(
+                data.get("seq")
+                    .and_then(serde_json::Value::as_u64)
+                    .unwrap_or(0),
+                data.get("content")
+                    .and_then(|c| c.as_str())
+                    .unwrap_or_default(),
+                author,
+                // The same parser the history path feeds, so a live bubble and
+                // its reloaded twin land on the same day separator.
+                data.get("timestamp")
+                    .and_then(|t| t.as_str())
+                    .and_then(super::timeline::parse_wire_timestamp),
+            );
             return;
         }
 
@@ -938,6 +1028,36 @@ mod projection_tests {
     use crate::views::chat::state::ChatState;
     use leptos::prelude::Owner;
     use serde_json::json;
+
+    /// The case the frame exists for: another member of the room typed, and
+    /// this viewer is not them.
+    #[test]
+    fn a_room_peers_message_renders() {
+        assert!(peer_message_is_renderable("u-alice", Some("u-bob")));
+    }
+
+    /// The sender's own echo, in every tab they have open. This is the whole
+    /// duplicate-suppression story — note it does NOT consult the run id,
+    /// because this frame can outrun the `chat.send` response that would
+    /// register it (see the predicate's doc).
+    #[test]
+    fn my_own_message_never_renders() {
+        assert!(!peer_message_is_renderable("u-alice", Some("u-alice")));
+    }
+
+    /// Either half unknown ⇒ the comparison is unanswerable, so decline. Costs
+    /// nothing beyond the pre-existing behavior (the message still lands when
+    /// the turn ends and `run.session_updated` re-hydrates), whereas guessing
+    /// "render" duplicates the sender's own bubble with nothing to clean it up.
+    #[test]
+    fn an_unanswerable_comparison_declines() {
+        // `users.me` still in flight, or a caller with no P1 identity at all.
+        assert!(!peer_message_is_renderable("u-alice", None));
+        assert!(!peer_message_is_renderable("u-alice", Some("")));
+        // Server-side this cannot happen (the frame's author is not optional),
+        // but a client must not treat an absent author as "somebody else".
+        assert!(!peer_message_is_renderable("", Some("u-bob")));
+    }
 
     #[test]
     fn replay_run_rebuilds_intermediates_then_final_answer() {

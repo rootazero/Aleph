@@ -145,7 +145,11 @@ impl ProjectionReconciler {
 
         let before = transcript.len();
         for rec in &events {
-            project_event(&self.session_store, session_id, rec, Some(watermark)).await;
+            // No bus: a boot-time back-fill is replaying messages that were
+            // typed in a previous process, so it must not announce them as
+            // live (`session_projector::peer_echo_frame` refuses them on the
+            // watermark alone — this is the structural half of the same rule).
+            project_event(&self.session_store, session_id, rec, Some(watermark), None).await;
         }
         let after = self
             .session_store

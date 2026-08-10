@@ -140,7 +140,9 @@ impl BrowserBackend for ChromeMcpBackend {
         // Parse last numeric id (newest tab is last). Reuse the shared parser
         // so the chrome-devtools-mcp "N: URL" and the playwright-cli
         // "Tab N: URL" formats both yield the same id.
-        let last_id = super::tab_registry::parse_tab_ids(&tabs_text).last().cloned();
+        let last_id = super::tab_registry::parse_tab_ids(&tabs_text)
+            .last()
+            .cloned();
 
         // Post-navigation audit on the listing already fetched above (no
         // extra round trip): a redirect may have landed the new tab on a

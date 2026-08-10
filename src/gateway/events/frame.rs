@@ -168,6 +168,47 @@ pub enum GatewayEventFrame {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         origin_run_id: Option<String>,
     },
+    /// A human's message became a transcript row — the live half of what
+    /// `chat.history` replays.
+    ///
+    /// # Why this is its own frame and not a field on `RunAccepted`
+    ///
+    /// `RunAccepted` is the only other frame carrying `{session_key}` at turn
+    /// start, and it is emitted BEFORE the harness seeds
+    /// `SessionEvent::UserMessage`. Two consequences, both of which make it the
+    /// wrong carrier: it fires for turns that never persist a user row at all
+    /// (a fast-path slash command — `fast_path.rs` re-emits the event by hand
+    /// precisely "so the projector writes them to messages"), and the text it
+    /// would carry is `request.input`, which is not always what lands in the
+    /// transcript (`/moa X` is rewritten before seeding; multimodal turns take
+    /// another path entirely). A bubble the next reload contradicts is worse
+    /// than a bubble that arrives late, so this frame is published from the
+    /// projector at the instant the row exists instead.
+    ///
+    /// # Why `author_user_id` is not an `Option`
+    ///
+    /// It is the delivery contract, not a convenience. A viewer decides
+    /// whether to render this by asking "is the author someone other than
+    /// me?", and an unattributed message cannot answer that — rendering it
+    /// would duplicate the sender's own optimistic bubble. Producers therefore
+    /// skip the frame entirely rather than send an absent author, which is
+    /// also why single-author sessions (`ambient_room_author` is `None`
+    /// outside a project room) cost zero bytes on this topic.
+    SessionUserMessage {
+        session_key: String,
+        author_user_id: String,
+        content: String,
+        /// RFC3339, taken from the SAME `MessageRecord` the history handler
+        /// will later serve. Derived rather than re-formatted because
+        /// `MessageRecord::rfc3339` owns the seconds-vs-milliseconds ambiguity
+        /// of the stored stamp (`session_store::types`); formatting the raw
+        /// value here would re-open it on exactly one of the two backends.
+        timestamp: String,
+        /// Source event seq — the row's identity (`session::projection::row_id`).
+        /// Carried so a client can order this against a concurrently-arriving
+        /// rehydrate without comparing text.
+        seq: u64,
+    },
     /// Authoritative running-session set changed (a run was claimed or
     /// released). `seq` is a monotonic version stamped by the
     /// `SessionRunRegistry` under its map lock; consumers keep the highest seq
@@ -600,6 +641,7 @@ impl GatewayEventFrame {
             Self::ModelResolved { .. } => "agent.model.resolved",
             Self::RunRetrying { .. } => "agent.run.retrying",
             Self::SessionUpdated { .. } => "session.updated",
+            Self::SessionUserMessage { .. } => "session.user.message",
             Self::RunningSetChanged { .. } => "running.set.changed",
             Self::ChannelMessage { .. } => "channel.message",
             Self::ChannelTyping { .. } => "channel.typing",
@@ -653,6 +695,7 @@ impl GatewayEventFrame {
             Self::ModelResolved { .. } => Some("stream.model_resolved"),
             Self::RunRetrying { .. } => Some("stream.run_retrying"),
             Self::SessionUpdated { .. } => Some("stream.session_updated"),
+            Self::SessionUserMessage { .. } => Some("stream.session_user_message"),
             Self::RunningSetChanged { .. } => Some("stream.running_set_changed"),
             _ => None,
         }

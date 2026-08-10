@@ -24,6 +24,8 @@ use std::sync::Arc;
 
 use tokio::sync::mpsc;
 
+use crate::gateway::event_bus::GatewayEventBus;
+use crate::gateway::events::GatewayEventFrame;
 use crate::gateway::session_store::types::MessageRecord;
 use crate::gateway::session_store::SessionStore;
 use crate::session::events::{SessionEvent, SessionEventRecord};
@@ -44,15 +46,75 @@ impl MessageProjector {
     ///
     /// The returned `Arc<MessageProjector>` implements [`SessionEventObserver`]
     /// and can be injected at boot (Task 5).
-    pub fn new(store: Arc<dyn SessionStore>) -> Arc<Self> {
+    ///
+    /// `bus` is what makes this drain the producer of the live peer echo
+    /// ([`GatewayEventFrame::SessionUserMessage`]). `None` keeps the projector
+    /// fully usable without a running gateway (tests, tools that open the store
+    /// directly) — it then only materialises rows, exactly as before.
+    pub fn new(store: Arc<dyn SessionStore>, bus: Option<Arc<GatewayEventBus>>) -> Arc<Self> {
         let (tx, mut rx) = mpsc::channel::<(SessionId, SessionEventRecord)>(QUEUE_CAP);
         tokio::spawn(async move {
             while let Some((id, rec)) = rx.recv().await {
-                project_event(&store, &id, &rec, None).await;
+                project_event(&store, &id, &rec, None, bus.as_ref()).await;
             }
         });
         Arc::new(Self { tx })
     }
+}
+
+/// The live peer-echo frame for a row that is about to be appended, or `None`
+/// when this row is not one.
+///
+/// Pure and separate from the write so the decision is unit-testable without a
+/// store, a bus, or a runtime — every condition below is a way this has to be
+/// able to say "no", and each one is load-bearing:
+///
+/// - **Live drain only.** `materialized_through` is `Some` exactly on the
+///   boot-time [`ProjectionReconciler`](crate::gateway::projection_reconciler)
+///   path, which replays a whole event log to back-fill rows a previous process
+///   never flushed. Those are old messages; echoing them would replay a dead
+///   conversation into every Panel that happens to be open at boot. (The
+///   reconciler also passes no bus, so this is belt and braces — but the
+///   criterion is "is this row new", not "did somebody hand me a bus".)
+/// - **Real user messages only.** `synthetic` user events are the prompt
+///   builder's `<system-reminder>` scaffolding, not something a human typed.
+/// - **Attributed only.** See the frame's own doc: an author-less message
+///   cannot be told apart from the viewer's own, so there is nobody it can be
+///   safely rendered to. Outside a project room `ambient_room_author` is
+///   `None`, which is why single-author deployments never emit this at all.
+/// - **Non-empty only.** `hydrate_session_history` skips blank rows, so
+///   emitting one would put up a bubble that the next reload takes away —
+///   the precise failure this whole frame exists to avoid.
+fn peer_echo_frame(
+    session_key: &str,
+    seq: u64,
+    event: &SessionEvent,
+    author_user_id: Option<&str>,
+    record: &MessageRecord,
+    materialized_through: Option<u64>,
+) -> Option<GatewayEventFrame> {
+    if materialized_through.is_some() {
+        return None;
+    }
+    let SessionEvent::UserMessage {
+        synthetic: false, ..
+    } = event
+    else {
+        return None;
+    };
+    let author = author_user_id.filter(|a| !a.is_empty())?;
+    if record.content.trim().is_empty() {
+        return None;
+    }
+    Some(GatewayEventFrame::SessionUserMessage {
+        session_key: session_key.to_string(),
+        author_user_id: author.to_string(),
+        content: record.content.clone(),
+        // The record's own accessor, not a hand-rolled format of
+        // `created_at_ms` — see the field's doc on the frame.
+        timestamp: record.rfc3339(),
+        seq,
+    })
 }
 
 /// True when this event was retired after it was enqueued — the drain is
@@ -101,11 +163,21 @@ async fn event_retired(id: &SessionId, seq: u64) -> bool {
 /// suppressed: that row is already in the projection, so re-projecting it is a
 /// no-op (reconcile idempotency, and dup-avoidance for mixed/legacy rows below
 /// the watermark).
+///
+/// `bus`, when present, publishes the live peer echo for a newly-materialised
+/// user row (see [`peer_echo_frame`]). It is published from HERE rather than
+/// from the run engines because this is the one point every producer of a user
+/// message passes through — `harness_bridge::session_seed` (the main path),
+/// `fast_path` (which re-emits the event by hand for exactly this reason),
+/// `SimpleExecutionEngine`, and mid-run `steering` — and because it is the only
+/// point where the text being announced is, by construction, the text
+/// `chat.history` will replay.
 pub(crate) async fn project_event(
     store: &Arc<dyn SessionStore>,
     id: &SessionId,
     rec: &SessionEventRecord,
     materialized_through: Option<u64>,
+    bus: Option<&Arc<GatewayEventBus>>,
 ) {
     let key = id.to_key_string();
     let suppress =
@@ -217,29 +289,41 @@ pub(crate) async fn project_event(
                 return;
             }
             if let Some(row) = project_row(other) {
-                if let Err(e) = store
-                    .append_message(
-                        id,
-                        MessageRecord {
-                            id: row_id(&key, rec.seq),
-                            role: row.role,
-                            content: row.text,
-                            timestamp: rec.created_at_ms,
-                            // String-valued, matching every other key in this
-                            // bag (`agent_instance::build_message_metadata`);
-                            // the history handler reads them all with `as_str`.
-                            metadata: row
-                                .author_user_id
-                                .map(|u| serde_json::json!({ "author_user_id": u })),
-                            input_tokens: 0,
-                            output_tokens: 0,
-                            tool_call_id: row.tool_call_id,
-                            tool_name: row.tool_name,
-                        },
-                    )
-                    .await
-                {
+                let record = MessageRecord {
+                    id: row_id(&key, rec.seq),
+                    role: row.role,
+                    content: row.text,
+                    timestamp: rec.created_at_ms,
+                    // String-valued, matching every other key in this
+                    // bag (`agent_instance::build_message_metadata`);
+                    // the history handler reads them all with `as_str`.
+                    metadata: row
+                        .author_user_id
+                        .as_ref()
+                        .map(|u| serde_json::json!({ "author_user_id": u })),
+                    input_tokens: 0,
+                    output_tokens: 0,
+                    tool_call_id: row.tool_call_id,
+                    tool_name: row.tool_name,
+                };
+                // Decided before the move, published only after the write
+                // succeeds: this frame's contract is "the transcript gained
+                // this row", so announcing a failed append would put a bubble
+                // on screen that no reload can reproduce.
+                let echo = peer_echo_frame(
+                    &key,
+                    rec.seq,
+                    other,
+                    row.author_user_id.as_deref(),
+                    &record,
+                    materialized_through,
+                );
+                if let Err(e) = store.append_message(id, record).await {
                     tracing::warn!(error = %e, "projector append failed");
+                    return;
+                }
+                if let (Some(bus), Some(frame)) = (bus, echo) {
+                    let _ = bus.publish_frame(&frame);
                 }
             }
         }
@@ -297,6 +381,143 @@ mod tests {
             thinking: None,
             thinking_signature: None,
         }
+    }
+
+    /// A user event as a room member's message: attributed, real, non-empty.
+    fn room_msg(author: Option<&str>, synthetic: bool) -> SessionEvent {
+        SessionEvent::UserMessage {
+            turn_id: uuid::Uuid::new_v4(),
+            content: msg_content("where did we land on the migration?"),
+            at: 0,
+            synthetic,
+            author_user_id: author.map(String::from),
+        }
+    }
+
+    /// The row `project_event` is about to append for [`room_msg`].
+    fn row_for(text: &str) -> MessageRecord {
+        MessageRecord {
+            id: "agent:main:main:7".into(),
+            role: "user".into(),
+            content: text.into(),
+            timestamp: 1_762_000_000_000,
+            metadata: None,
+            input_tokens: 0,
+            output_tokens: 0,
+            tool_call_id: None,
+            tool_name: None,
+        }
+    }
+
+    /// The happy path: another member's message, live, becomes a frame whose
+    /// text and timestamp are the row's — not the request's, not a re-format.
+    #[test]
+    fn peer_echo_announces_an_attributed_room_message() {
+        let row = row_for("where did we land on the migration?");
+        let frame = peer_echo_frame(
+            "agent:main:main",
+            7,
+            &room_msg(Some("u-alice"), false),
+            Some("u-alice"),
+            &row,
+            None,
+        )
+        .expect("an attributed live user row must be announced");
+        let GatewayEventFrame::SessionUserMessage {
+            session_key,
+            author_user_id,
+            content,
+            timestamp,
+            seq,
+        } = frame
+        else {
+            panic!("wrong frame variant");
+        };
+        assert_eq!(session_key, "agent:main:main");
+        assert_eq!(author_user_id, "u-alice");
+        assert_eq!(content, row.content);
+        assert_eq!(seq, 7);
+        // The record's accessor, so a live bubble and its reloaded twin sort
+        // identically. Formatting `created_at_ms` by hand here would diverge on
+        // whichever backend stores seconds.
+        assert_eq!(timestamp, row.rfc3339());
+    }
+
+    /// The boot reconciler back-fills rows a dead process never flushed. Those
+    /// messages are old; announcing them would replay a finished conversation
+    /// into every Panel open at boot.
+    #[test]
+    fn peer_echo_is_silent_on_the_boot_reconcile_path() {
+        assert!(peer_echo_frame(
+            "agent:main:main",
+            7,
+            &room_msg(Some("u-alice"), false),
+            Some("u-alice"),
+            &row_for("hi"),
+            Some(99),
+        )
+        .is_none());
+    }
+
+    /// No author ⇒ nobody can tell this from their own message, so there is no
+    /// viewer it can be safely rendered to. This is every single-author session.
+    #[test]
+    fn peer_echo_is_silent_without_an_author() {
+        assert!(
+            peer_echo_frame(
+                "agent:main:main",
+                7,
+                &room_msg(None, false),
+                None,
+                &row_for("hi"),
+                None,
+            )
+            .is_none(),
+            "an unattributed message must not be echoed"
+        );
+        assert!(
+            peer_echo_frame(
+                "agent:main:main",
+                7,
+                &room_msg(Some(""), false),
+                Some(""),
+                &row_for("hi"),
+                None,
+            )
+            .is_none(),
+            "an empty author id is an absent one, not a user named \"\""
+        );
+    }
+
+    /// `synthetic` user events are the prompt builder's `<system-reminder>`
+    /// scaffolding wearing a user role — nobody typed them.
+    #[test]
+    fn peer_echo_is_silent_for_synthetic_scaffolding() {
+        assert!(peer_echo_frame(
+            "agent:main:main",
+            7,
+            &room_msg(Some("u-alice"), true),
+            Some("u-alice"),
+            &row_for("hi"),
+            None,
+        )
+        .is_none());
+    }
+
+    /// `hydrate_session_history` skips blank rows, so echoing one would show a
+    /// bubble the next reload silently removes — the exact contradiction this
+    /// frame exists to avoid.
+    #[test]
+    fn peer_echo_is_silent_for_a_row_the_panel_would_not_render() {
+        assert!(peer_echo_frame(
+            "agent:main:main",
+            7,
+            &room_msg(Some("u-alice"), false),
+            Some("u-alice"),
+            &row_for("   \n "),
+            None,
+        )
+        .is_none());
     }
 
     fn user_msg(tid: TurnId) -> SessionEvent {
@@ -384,7 +605,7 @@ mod tests {
         manager.get_or_create(&id).await.unwrap();
 
         let store: Arc<dyn SessionStore> = Arc::new(manager);
-        let projector = MessageProjector::new(store.clone());
+        let projector = MessageProjector::new(store.clone(), None);
 
         let tid = uuid::Uuid::new_v4();
         let events: &[(EventSeq, SessionEvent)] = &[
@@ -466,7 +687,7 @@ mod tests {
         manager.get_or_create(&id).await.unwrap();
 
         let store: Arc<dyn SessionStore> = Arc::new(manager);
-        let projector = MessageProjector::new(store.clone());
+        let projector = MessageProjector::new(store.clone(), None);
 
         // Two Think steps — two LLM calls, two assistant rows — then the run's
         // one billing report. This is the shape production actually emits; the
@@ -582,7 +803,7 @@ mod tests {
 
         // The drain now reaches them.
         for (seq, ev) in &turn {
-            project_event(&store, &id, &rec(*seq, ev.clone()), None).await;
+            project_event(&store, &id, &rec(*seq, ev.clone()), None, None).await;
         }
 
         assert!(
@@ -610,16 +831,110 @@ mod tests {
         let watermark = Some(1u64);
 
         // seq 1 is at the watermark → its write is suppressed.
-        project_event(&store, &id, &rec(1, user_msg(tid)), watermark).await;
+        project_event(&store, &id, &rec(1, user_msg(tid)), watermark, None).await;
         assert!(
             store.get_history(&id, None).await.unwrap().is_empty(),
             "a materialised seq must not be re-written"
         );
 
         // seq 2 is above the watermark → written.
-        project_event(&store, &id, &rec(2, user_msg(tid)), watermark).await;
+        project_event(&store, &id, &rec(2, user_msg(tid)), watermark, None).await;
         let rows = store.get_history(&id, None).await.unwrap();
         assert_eq!(rows.len(), 1, "an unseen seq must be written");
         assert_eq!(rows[0].role, "user");
+    }
+
+    /// The wire itself, not the decision that feeds it.
+    ///
+    /// [`peer_echo_frame`]'s own tests all stay green if the `publish_frame`
+    /// call is deleted — they assert what the frame WOULD be, which is the
+    /// classic "guards the origin, not the connection" hole. This one fails if
+    /// the publish is removed, if it moves ahead of the append, or if it stops
+    /// carrying the row's text.
+    #[tokio::test]
+    async fn an_attributed_user_row_is_announced_on_the_bus_as_it_is_written() {
+        let temp = tempdir().unwrap();
+        let config = SessionManagerConfig {
+            db_path: temp.path().join("echo.db"),
+            max_messages: 10_000,
+            compaction_keep: 5_000,
+            ..Default::default()
+        };
+        let manager = SessionManager::new(config).unwrap();
+        let id = SessionId::ephemeral("echo");
+        manager.get_or_create(&id).await.unwrap();
+        let store: Arc<dyn SessionStore> = Arc::new(manager);
+
+        let bus = Arc::new(crate::gateway::event_bus::GatewayEventBus::new());
+        let mut rx = bus.subscribe_typed();
+
+        project_event(
+            &store,
+            &id,
+            &rec(1, room_msg(Some("u-alice"), false)),
+            None,
+            Some(&bus),
+        )
+        .await;
+
+        let frame = rx.try_recv().expect("the appended row must be announced");
+        let GatewayEventFrame::SessionUserMessage {
+            session_key,
+            author_user_id,
+            content,
+            seq,
+            ..
+        } = frame
+        else {
+            panic!("wrong frame variant on the bus");
+        };
+        assert_eq!(session_key, id.to_key_string());
+        assert_eq!(author_user_id, "u-alice");
+        assert_eq!(seq, 1);
+
+        // The announced text is the row's text — the property that makes a
+        // live bubble and its reloaded twin the same bubble.
+        let rows = store.get_history(&id, None).await.unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(content, rows[0].content);
+    }
+
+    /// Same call, unattributed: a row is still written, and nothing is said.
+    /// This is every single-author session, i.e. the default deployment.
+    #[tokio::test]
+    async fn an_unattributed_user_row_is_written_but_not_announced() {
+        let temp = tempdir().unwrap();
+        let config = SessionManagerConfig {
+            db_path: temp.path().join("echo_solo.db"),
+            max_messages: 10_000,
+            compaction_keep: 5_000,
+            ..Default::default()
+        };
+        let manager = SessionManager::new(config).unwrap();
+        let id = SessionId::ephemeral("echo_solo");
+        manager.get_or_create(&id).await.unwrap();
+        let store: Arc<dyn SessionStore> = Arc::new(manager);
+
+        let bus = Arc::new(crate::gateway::event_bus::GatewayEventBus::new());
+        let mut rx = bus.subscribe_typed();
+
+        project_event(
+            &store,
+            &id,
+            &rec(1, room_msg(None, false)),
+            None,
+            Some(&bus),
+        )
+        .await;
+
+        assert_eq!(
+            store.get_history(&id, None).await.unwrap().len(),
+            1,
+            "the row must still be materialised"
+        );
+        assert!(
+            rx.try_recv().is_err(),
+            "nothing to announce without an author"
+        );
     }
 }
