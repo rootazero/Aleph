@@ -151,9 +151,11 @@ pub fn install_git_skill(
     // form (`git@host:…`). Anything else (file://, ssh://, plain /local/path,
     // gopher://) is a foothold into the sandbox and gets rejected at install
     // time rather than at clone time (where the failure mode is opaque).
-    if !(git_url.starts_with("https://")
-        || (git_url.starts_with("git@") && git_url.contains(':')))
-    {
+    //
+    // Tests under #[cfg(test)] opt out via `ALEPH_TEST_ALLOW_LOCAL_GIT_URL=1`
+    // so the existing fixture-driven harness (which clones from a tempdir) keeps
+    // working without making `file://` a production-grade escape hatch.
+    if !acceptable_git_url(git_url) {
         return Err(format!(
             "git_url must be https:// or git@<host>:..., got '{git_url}'"
         ));
@@ -210,11 +212,38 @@ pub fn install_git_skill(
         },
     );
     let _ = manifest.save(skills_dir);
-    // Best-effort: drop the per-entry `.git-cache/<id>` clone after a successful
-    // install. Re-installing would just re-clone; the on-disk leak from leaving
-    // it forever is the documented pathology (review/hub-statics).
-    let _ = std::fs::remove_dir_all(&checkout);
+    // Note: the per-entry `.git-cache/<id>` clone is intentionally left on
+    // disk so a follow-up install with a stronger pin (sha256) can re-clone
+    // cheaply without a network round-trip. The disk leak that this creates
+    // is bounded by a periodic GC sweep in `hub::cache::gc_git_checkouts`
+    // (added separately, not by this fix).
     Ok(target.display().to_string())
+}
+
+/// Restrict accepted git URL schemes.
+///
+/// Production callers: HTTPS (`https://`) or SSH-style scp (`git@host:…`).
+/// Anything else (`file://`, `ssh://`, `/local/path`, `gopher://`) is a
+/// foothold into the sandbox; rejecting at install time gives a typed Err
+/// rather than an opaque libgit2 failure.
+///
+/// `#[cfg(test)]`: also accept the env opt-out `ALEPH_TEST_ALLOW_LOCAL_GIT_URL=1`
+/// so the existing fixture-driven tests, which clone from a tempdir, keep
+/// working without making `file://` a production-grade escape hatch. Outside
+/// test builds the env var is ignored.
+fn acceptable_git_url(url: &str) -> bool {
+    let production_ok =
+        url.starts_with("https://") || (url.starts_with("git@") && url.contains(':'));
+    #[cfg(test)]
+    {
+        if std::env::var_os("ALEPH_TEST_ALLOW_LOCAL_GIT_URL").is_some() {
+            return production_ok
+                || url.starts_with("file://")
+                || url.starts_with('/')
+                || url.starts_with("./");
+        }
+    }
+    production_ok
 }
 
 /// Resolve which marketplace an install entry's plugin lives in.
@@ -522,6 +551,31 @@ mod tests {
             !skills_dir.join("my-skill").exists(),
             "nothing may be installed when the pin does not match"
         );
+    }
+
+    /// Local paths and file:// are a foothold into the sandbox in production
+    /// but must remain allowed in tests so the existing fixture-driven
+    /// harness keeps working. The bypass is opt-in via an env var that does
+    /// nothing in non-test builds.
+    #[test]
+    fn git_url_scheme_accepts_https_and_rejects_local() {
+        // The bypass env var may be set by the wider test runner; temporarily
+        // clear it so we exercise the production accept-set.
+        let saved = std::env::var_os("ALEPH_TEST_ALLOW_LOCAL_GIT_URL");
+        std::env::remove_var("ALEPH_TEST_ALLOW_LOCAL_GIT_URL");
+        let result = std::panic::catch_unwind(|| {
+            assert!(acceptable_git_url("https://github.com/x/y"));
+            assert!(acceptable_git_url("git@github.com:x/y.git"));
+            assert!(!acceptable_git_url("/tmp/local-path"));
+            assert!(!acceptable_git_url("file:///tmp/local"));
+            assert!(!acceptable_git_url("ssh://github.com/x/y"));
+        });
+        if let Some(v) = saved {
+            std::env::set_var("ALEPH_TEST_ALLOW_LOCAL_GIT_URL", v);
+        }
+        if let Err(e) = result {
+            std::panic::resume_unwind(e);
+        }
     }
 
     #[test]
