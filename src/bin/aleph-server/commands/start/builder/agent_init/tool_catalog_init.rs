@@ -294,9 +294,11 @@ pub(super) async fn init_tool_catalog(
         let agents_for_invoke: std::sync::Arc<alephcore::agents::AgentRegistry> = {
             let r = std::sync::Arc::new(alephcore::agents::AgentRegistry::with_builtins());
             let aleph_home = alephcore::discovery::aleph_home_dir().ok();
-            let project_dir = std::env::current_dir().ok();
+            // B1-03: pass `None` for project_dir at boot. Project agents are
+            // scoped per-run via lookup_with_overlay, not loaded into the
+            // process-global registry.
             if let Some(home) = aleph_home.as_deref() {
-                if let Err(e) = r.register_from_dirs(home, project_dir.as_deref()) {
+                if let Err(e) = r.register_from_dirs(home, None) {
                     tracing::warn!(
                         error = %e,
                         "tools.invoke: failed to load user agent defs; allowlist degrades to builtins-only"
@@ -329,9 +331,11 @@ pub(super) async fn init_tool_catalog(
         let agent_def_registry = {
             let r = std::sync::Arc::new(alephcore::agents::AgentRegistry::with_builtins());
             let aleph_home = alephcore::discovery::aleph_home_dir().ok();
-            let project_dir = std::env::current_dir().ok();
+            // B1-03: pass `None` for project_dir at boot. Project agents are
+            // scoped per-run via lookup_with_overlay, not loaded into the
+            // process-global registry.
             if let Some(home) = aleph_home.as_deref() {
-                match r.register_from_dirs(home, project_dir.as_deref()) {
+                match r.register_from_dirs(home, None) {
                     Ok(shadows) => {
                         if !daemon && !shadows.is_empty() {
                             println!(

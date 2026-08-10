@@ -46,8 +46,10 @@ impl BuiltinToolRegistry {
         let agent_catalog = {
             let reg = Arc::new(crate::agents::AgentRegistry::with_builtins());
             if let Ok(home) = crate::discovery::aleph_home_dir() {
-                let project_dir = std::env::current_dir().ok();
-                if let Err(e) = reg.register_from_dirs(&home, project_dir.as_deref()) {
+                // B1-03: pass `None` for project_dir at boot. Project agents
+                // are scoped per-run via lookup_with_overlay, not loaded into
+                // the process-global registry.
+                if let Err(e) = reg.register_from_dirs(&home, None) {
                     warn!(error = %e, "agent catalog: failed to load user agent defs; degrades to builtins-only");
                 }
             }

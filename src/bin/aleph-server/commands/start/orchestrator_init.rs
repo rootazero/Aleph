@@ -88,9 +88,14 @@ pub(in crate::commands::start) async fn initialize_orchestrator(
     // trace_sink is not yet available at this point in startup.
     {
         let aleph_home = alephcore::discovery::aleph_home_dir().ok();
-        let project_dir = std::env::current_dir().ok();
+        // B1-03: pass `project_dir = None` at boot. Per
+        // `AgentRegistry::register_from_dirs` doc, project-tier agents are
+        // scoped per-run via `lookup_with_overlay`, not process-global.
+        // Passing cwd here would let `<cwd>/.aleph/agents/*` (where cwd is
+        // wherever the operator launched the daemon) become a permanent
+        // source of agent definitions visible to every session.
         if let Some(home) = aleph_home.as_deref() {
-            match agent_registry.register_from_dirs(home, project_dir.as_deref()) {
+            match agent_registry.register_from_dirs(home, None) {
                 Ok(shadows) => {
                     for shadow in &shadows {
                         tracing::info!(
