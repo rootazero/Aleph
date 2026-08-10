@@ -133,13 +133,22 @@ async fn announce_one(
     } else {
         "failed"
     };
-    let detail = if result.success {
-        result.summary.clone()
-    } else {
-        result
-            .error
-            .clone()
-            .unwrap_or_else(|| "(no error detail)".to_string())
+    // B2-01: prefer `summary` whenever it carries real content, with
+    // `error` appended as a headline. The previous success/error switch
+    // discarded `summary` on any non-success path, which dropped every
+    // recovered orphan's partial result on a mixed batch (3 interrupted + 2
+    // finished-unannounced children) — the finished children were also lost
+    // because `success` flipped on the interrupted count. The producer side
+    // (`background_persistence::init_and_announce_orphans`) puts the full
+    // grouped report in `summary` and the interruption headline in `error`;
+    // the consumer must render both, not one or the other.
+    let detail = match (result.summary.clone(), result.error.clone()) {
+        (s, _) if !s.is_empty() => match result.error.clone() {
+            Some(err) => format!("{err}\n\n{s}"),
+            None => s,
+        },
+        (_, Some(err)) => err,
+        _ => "(no detail)".to_string(),
     };
     let input = format!(
         "[system] Background subagent run {request_id} {status}.\n\
