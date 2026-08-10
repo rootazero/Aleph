@@ -1,0 +1,139 @@
+{
+  "batch": "agents-batch-5",
+  "title": "Swarm task orchestration: task model / store trait / retry / acceptance / DAG / timeout",
+  "date": "2026-08-10",
+  "reviewer": "static (4-perspective protocol)",
+  "worktree": "/tmp/aleph-review-agents",
+  "report": "review-results/agents-batch-5/REPORT.md",
+  "counts": {
+    "critical": 0,
+    "high": 1,
+    "medium": 5,
+    "low": 2,
+    "total": 8
+  },
+  "by_category": {
+    "security": 3,
+    "logic": 3,
+    "architecture": 4,
+    "quality": 4
+  },
+  "files_reviewed": [
+    { "path": "src/agents/swarm/tasks/mod.rs", "loc": 879, "findings": 1 },
+    { "path": "src/agents/swarm/tasks/retry.rs", "loc": 670, "findings": 2 },
+    { "path": "src/agents/swarm/tasks/acceptance.rs", "loc": 352, "findings": 2 },
+    { "path": "src/agents/swarm/tasks/dag.rs", "loc": 294, "findings": 1 },
+    { "path": "src/agents/swarm/tasks/timeout.rs", "loc": 175, "findings": 0 }
+  ],
+  "total_loc": 2370,
+  "findings": [
+    {
+      "id": 1,
+      "severity": "High",
+      "category": "Security/Architecture",
+      "file": "src/agents/swarm/tasks/acceptance.rs",
+      "line": 71,
+      "title": "require_grounding is enforced on the two tool faces only; the teams.workflow.approve_step RPC twin has no grounding gate and no grounding param, so the Panel approve button voids a control the tool DESCRIPTION and leader prompt promise",
+      "related": [
+        "src/gateway/handlers/teams/workflow.rs:296",
+        "src/gateway/handlers/teams/workflow.rs:232",
+        "src/builtin_tools/team/workflow_step.rs:327",
+        "src/builtin_tools/team/task_review.rs:65",
+        "interfaces/webchat/src/api/teams.rs:425"
+      ]
+    },
+    {
+      "id": 2,
+      "severity": "Medium",
+      "category": "Logic",
+      "file": "src/agents/swarm/tasks/retry.rs",
+      "line": 96,
+      "title": "Manual hard-retry re-arms the retry budget but never clears retry_not_before, so all four retry faces are silently deferred by the pending automatic backoff (up to retry_backoff_cap_secs)",
+      "related": [
+        "src/agents/swarm/tasks/retry.rs:55",
+        "src/teams/dispatcher/schedule/mod.rs:110",
+        "src/builtin_tools/team/task_control.rs:224",
+        "src/builtin_tools/team/workflow_step.rs:462",
+        "src/gateway/handlers/teams/workflow.rs:630"
+      ]
+    },
+    {
+      "id": 3,
+      "severity": "Medium",
+      "category": "Logic/Architecture",
+      "file": "src/agents/swarm/tasks/dag.rs",
+      "line": 56,
+      "title": "check_no_cycle_sync is structurally constant-true (always called with a freshly generated uuid, edges immutable) and every cycle test exercises the #[cfg(test)]-only duplicate, so the production path is untested and costs an O(V) BFS under the global DB mutex per create",
+      "related": [
+        "src/agents/swarm/tasks/dag.rs:20",
+        "src/agents/swarm/tasks/store/crud.rs:18",
+        "src/agents/swarm/tasks/store/crud.rs:27",
+        "src/agents/swarm/tasks/mod.rs:580"
+      ]
+    },
+    {
+      "id": 4,
+      "severity": "Medium",
+      "category": "Architecture/Quality",
+      "file": "src/agents/swarm/tasks/retry.rs",
+      "line": 353,
+      "title": "count_failed_attempts has zero consumers repo-wide while its doc claims to be the dispatcher's single source; it is the anchor-blind spelling of budget_failures_since, so any future reuse reintroduces the exhausted-budget bug the anchor fixed",
+      "related": ["src/teams/dispatcher/schedule/failure.rs:83", "src/agents/swarm/tasks/retry.rs:119"]
+    },
+    {
+      "id": 5,
+      "severity": "Medium",
+      "category": "Quality/Security",
+      "file": "src/agents/swarm/tasks/acceptance.rs",
+      "line": 204,
+      "title": "render_acceptance_section is the only handoff section with no byte cap; criteria are unbounded in count and length and interior newlines pass through, forging authoritative lines in the member prompt",
+      "related": [
+        "src/teams/dispatcher/handoff.rs:417",
+        "src/teams/dispatcher/handoff.rs:389",
+        "src/agents/swarm/tasks/acceptance.rs:149",
+        "src/builtin_tools/task_manage/create.rs:181"
+      ]
+    },
+    {
+      "id": 6,
+      "severity": "Medium",
+      "category": "Architecture/Logic",
+      "file": "src/agents/swarm/tasks/mod.rs",
+      "line": 623,
+      "title": "CoordTaskStore no-op defaults fail OPEN on a trait with one implementor: list_task_runs -> Ok(vec![]) yields failed_attempts = 0, which is exactly the value the dispatcher refuses to guess, producing an unbounded zero-backoff retry loop for any future backend",
+      "related": [
+        "src/agents/swarm/tasks/mod.rs:602",
+        "src/agents/swarm/tasks/mod.rs:650",
+        "src/agents/swarm/tasks/store/mod.rs:203",
+        "src/teams/dispatcher/schedule/failure.rs:84"
+      ]
+    },
+    {
+      "id": 7,
+      "severity": "Low",
+      "category": "Security",
+      "file": "src/gateway/handlers/teams/workflow.rs",
+      "line": 236,
+      "title": "reviewer_kind / reviewer_id are caller-asserted on the RPC review face (the tool face derives both), so an approval can be permanently attributed to the lead agent or to another agent's id",
+      "related": ["src/builtin_tools/team/workflow_step.rs:160", "src/agents/swarm/tasks/mod.rs:483"]
+    },
+    {
+      "id": 8,
+      "severity": "Low",
+      "category": "Quality",
+      "file": "src/agents/swarm/tasks/store/crud.rs",
+      "line": 34,
+      "title": "create_task drives BEGIN/COMMIT by hand: a failing COMMIT returns Err with the transaction still open on the connection shared with SqliteSnapshotStore, poisoning every later write until restart",
+      "related": ["src/agents/swarm/tasks/store/crud.rs:67", "src/agents/swarm/tasks/store/mod.rs:79"]
+    }
+  ],
+  "verified_clean": [
+    "retry path does not bypass acceptance: completion_status re-reads lead_review_required per attempt (dispatcher/schedule/select.rs:33)",
+    "both metadata-patch boundaries use merge_metadata_patch (task_manage/update.rs:145, gateway/handlers/teams/tasks.rs:148)",
+    "backoff/jitter math: shift guarded at 63, saturating multiply, cap applied, band [delay/2, delay] for all seeds",
+    "all epoch timestamps in these paths are seconds on both producer sides (store/helpers.rs:5, dispatcher/schedule/mod.rs:241)",
+    "snapshot restore recreates dependency edges in topological order via create_task (teams/snapshots/operations.rs:328)",
+    "PRAGMA foreign_keys = ON is set by migrate() and the sole production construction site migrates before publishing the handle",
+    "no unwrap/expect/panic sites outside #[cfg(test)] in the five reviewed files"
+  ]
+}

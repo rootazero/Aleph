@@ -1,0 +1,224 @@
+{
+  "batch": "agents-batch-2",
+  "title": "Background tracking + trace infrastructure (tracker, cross-process sidecar, forwarding trace sink, tree events)",
+  "date": "2026-08-10",
+  "protocol": "static 4-perspective (Security / Logic / Architecture / Quality)",
+  "confidence_threshold": "high (>=80%)",
+  "counts": {
+    "critical": 0,
+    "high": 1,
+    "medium": 6,
+    "low": 6,
+    "total": 13
+  },
+  "counts_by_category": {
+    "security": 0,
+    "logic": 6,
+    "architecture": 1,
+    "quality": 6
+  },
+  "files_reviewed": [
+    { "path": "src/agents/background_tracker.rs", "loc": 2869, "findings": 5 },
+    { "path": "src/agents/background_persistence.rs", "loc": 1068, "findings": 7 },
+    { "path": "src/agents/forwarding_trace_sink.rs", "loc": 310, "findings": 1 },
+    { "path": "src/agents/subagent_tree_events.rs", "loc": 38, "findings": 0 }
+  ],
+  "total_loc_in_scope": 4285,
+  "findings": [
+    {
+      "id": "B2-01",
+      "severity": "high",
+      "category": "logic",
+      "file": "src/agents/background_persistence.rs",
+      "line": 357,
+      "title": "Grouped orphan report is packed into SubAgentCompletionEvent.summary with success=false, and announce_one renders `error` instead of `summary` on failure - every recovered partial result is discarded on the primary restart path",
+      "related": ["src/gateway/subagent_announce.rs:136", "src/agents/background_persistence.rs:358", "src/agents/subagent_tool/spawn.rs:266"]
+    },
+    {
+      "id": "B2-02",
+      "severity": "medium",
+      "category": "logic",
+      "file": "src/agents/background_tracker.rs",
+      "line": 1035,
+      "title": "mark_consumed's running branch never calls record_announced, so a cancelled+consumed child stays `Settled && !announced` on disk and the next boot re-announces it as 'FINISHED ... do not repeat it'",
+      "related": ["src/agents/background_tracker.rs:1031", "src/agents/subagent_tool/loop_tool.rs:528", "src/gateway/subagent_announce.rs:103", "src/agents/background_persistence.rs:279"]
+    },
+    {
+      "id": "B2-03",
+      "severity": "medium",
+      "category": "logic",
+      "file": "src/agents/background_persistence.rs",
+      "line": 387,
+      "title": "summarize_orphans partitions on phase==Settled, so failed / timed_out / cancelled runs land in the 'FINISHED ... this work is done, do not repeat it' bucket",
+      "related": ["src/agents/background_persistence.rs:425", "src/agents/subagent_tool/spawn.rs:318"]
+    },
+    {
+      "id": "B2-04",
+      "severity": "medium",
+      "category": "logic",
+      "file": "src/agents/background_persistence.rs",
+      "line": 285,
+      "title": "One-shot `announced` stamp and Abandoned tombstone are written before the notification is delivered; every announce_one bail-out path silently withdraws the notice with no retry on any later boot",
+      "related": ["src/agents/background_persistence.rs:267", "src/agents/background_persistence.rs:370", "src/gateway/subagent_announce.rs:112", "src/gateway/subagent_announce.rs:233", "src/gateway/subagent_announce.rs:245"]
+    },
+    {
+      "id": "B2-05",
+      "severity": "medium",
+      "category": "quality",
+      "file": "src/agents/background_persistence.rs",
+      "line": 391,
+      "title": "Grouped orphan summary is unbounded: every recovered run's full 8 KiB partial_result is concatenated into one parent-turn prompt with no row cap, while the sibling `list` face caps rows and previews at 200 chars",
+      "related": ["src/agents/background_persistence.rs:79", "src/agents/subagent_tool/recovery.rs:306", "src/agents/subagent_tool/loop_tool.rs:642"]
+    },
+    {
+      "id": "B2-06",
+      "severity": "medium",
+      "category": "quality",
+      "file": "src/agents/background_persistence.rs",
+      "line": 669,
+      "title": "Blocking fs I/O incl. fsync on tokio worker threads: one open+append per progress event from ForwardingTraceSink::on_trace, one write_atomic fsync per mark_consumed inside wait_any; twin process_journal batches via a flusher and rewrites in place for exactly this reason",
+      "related": ["src/agents/background_tracker.rs:1337", "src/agents/background_tracker.rs:1031", "src/agents/forwarding_trace_sink.rs:132", "src/utils/atomic_io.rs:21", "src/builtin_tools/process_journal.rs:548"]
+    },
+    {
+      "id": "B2-07",
+      "severity": "medium",
+      "category": "quality",
+      "file": "src/agents/background_persistence.rs",
+      "line": 576,
+      "title": "list_for_scope reads and fully re-renders every retained record's trail (7-day retention) on every `subagent list`, discarding all but a 200-char preview; the append-only trail file itself has no size cap",
+      "related": ["src/agents/background_persistence.rs:704", "src/agents/background_persistence.rs:73", "src/agents/subagent_tool/recovery.rs:434", "src/builtin_tools/process_journal.rs:507"]
+    },
+    {
+      "id": "B2-08",
+      "severity": "low",
+      "category": "quality",
+      "file": "src/agents/background_persistence.rs",
+      "line": 486,
+      "title": "record_settled appends to the trail before the index check, creating <slug>/result.txt directories with no state.json that read_all skips and the retention sweep can never prune",
+      "related": ["src/agents/background_persistence.rs:754", "src/agents/background_persistence.rs:251", "src/builtin_tools/process_journal.rs:620"]
+    },
+    {
+      "id": "B2-09",
+      "severity": "low",
+      "category": "logic",
+      "file": "src/agents/background_tracker.rs",
+      "line": 490,
+      "title": "TOCTOU: a mark_consumed landing between mark_completed's running snapshot and its completed insert writes consume_on_completion onto an entry about to be removed, so the completed entry is born un-consumed (spurious announce on a cancel race)",
+      "related": ["src/agents/background_tracker.rs:510", "src/agents/background_tracker.rs:552", "src/agents/subagent_tool/loop_tool.rs:528"]
+    },
+    {
+      "id": "B2-10",
+      "severity": "low",
+      "category": "logic",
+      "file": "src/agents/background_tracker.rs",
+      "line": 575,
+      "title": "MAX_COMPLETED_RESULTS eviction is process-global and cross-session: one busy session evicts another session's still-unread completed results, which then read as 'unknown request_id'",
+      "related": ["src/agents/background_tracker.rs:47", "src/agents/background_tracker.rs:26"]
+    },
+    {
+      "id": "B2-11",
+      "severity": "low",
+      "category": "quality",
+      "file": "src/agents/background_tracker.rs",
+      "line": 936,
+      "title": "wait_any and unknown_ids clone the full CompletedSnapshot (entire final text + progress tail) per id per lap just to test presence; every process-wide completion wakes every waiter into another lap",
+      "related": ["src/agents/background_tracker.rs:818", "src/agents/background_tracker.rs:1192"]
+    },
+    {
+      "id": "B2-12",
+      "severity": "low",
+      "category": "architecture",
+      "file": "src/agents/background_tracker.rs",
+      "line": 486,
+      "title": "Stale invariant comment: 'no code path ever holds two of this struct's locks at the same time' is contradicted by subagent_snapshot, which holds both read guards; the only record of the lock order states a rule the code does not follow",
+      "related": ["src/agents/background_tracker.rs:760"]
+    },
+    {
+      "id": "B2-13",
+      "severity": "low",
+      "category": "quality",
+      "file": "src/agents/forwarding_trace_sink.rs",
+      "line": 109,
+      "title": "render_tool_result_preview serializes the entire tool output to a String (and re-scans it for a char count) to keep 200 chars, on every ToolCallCompleted of every background sub-agent",
+      "related": ["src/agents/forwarding_trace_sink.rs:116"]
+    }
+  ],
+  "angles_checked_clean": [
+    {
+      "angle": "GLOBAL_TRACKER init race / process-global lifetime",
+      "verdict": "Clean - OnceLock::get_or_init, Arc clone per caller. No process-exit cleanup needed (pure process memory); the durability gap it used to leave is what background_persistence closes."
+    },
+    {
+      "angle": "running -> completed transition ordering (spurious NotFound window)",
+      "verdict": "Clean - completed is inserted (:552) before running is removed (:590), so an id is never absent from both maps; flat_nodes de-dupes by completed_ids (:1222-1263) and addressable prefers the running copy (:695-701)."
+    },
+    {
+      "angle": "wait/wait_any lost wakeup + park correctness",
+      "verdict": "Clean - Notified is created and enable()d before every state read (:921-923), the deadline arm is a select! against the notifier, and each lap builds a fresh Notified. AllDelivered terminates the drain loop; wait() maps it back to the single-agent answer."
+    },
+    {
+      "angle": "wait_any scope re-check while parked (foreign completion claim)",
+      "verdict": "Clean - result_snapshot/running_meta go through addressable inside the loop (:936, :944), covered by wait_any_does_not_claim_a_foreign_completion_while_parked."
+    },
+    {
+      "angle": "Result TTL / count cap (recent MAX_COMPLETED_RESULTS fix)",
+      "verdict": "Verified - register_with_meta -> insert_running -> cleanup(BACKGROUND_RESULT_TTL) at :475 (running guard dropped first), and mark_completed caps by count under the same write lock at :575-585. Both bounds hold regardless of spawn cadence. Only defect is the cross-session eviction (B2-10)."
+    },
+    {
+      "angle": "Lock poisoning",
+      "verdict": "Clean - every acquisition in all four files uses unwrap_or_else(|e| e.into_inner()) with a warn!, including the sidecar's STORE_DIR / INDEX mutexes."
+    },
+    {
+      "angle": "Deadlock / lock-order inversion",
+      "verdict": "No inversion today - every site releases `completed` before touching `running`; subagent_snapshot is the only two-lock holder and takes running->completed. Documented invariant is wrong though (B2-12)."
+    },
+    {
+      "angle": "RunningRegistration RAII (presence-only) lifecycle",
+      "verdict": "Clean - registers presence-only, delists on Drop incl. panic unwind and future-drop, wakes waiters via notify_waiters; hidden from list_running/flat_nodes but visible to session_has_running / running_children_of / running_runs_of_session / cancel."
+    },
+    {
+      "angle": "Cancellation propagation across nodes",
+      "verdict": "Clean - cancel_in_scope gates on addressable, fires the stored token; tree token + child_token wiring verified by tree_cancel_fires_tree_token_and_members_stay_enumerable; CancelGuard in spawn.rs terminates the bridge watcher on every exit path incl. panic."
+    },
+    {
+      "angle": "subagent_semaphore_for ordering vs tracker registration",
+      "verdict": "Clean - registration + record_start happen before the permit is acquired (subagent_spawner/mod.rs:208), which is what makes a queued-then-cancelled child recoverable; the semaphore is session-keyed with Weak so it outlives the per-request SubagentTool."
+    },
+    {
+      "angle": "background_tracker <-> subagent_spawner::spawn attach semantics",
+      "verdict": "Consistent - background spawns always attach at parent_id=None under the session root (spawn.rs:100), matching flat_nodes / running_children_of docs; lifecycle_from_outcome is the single source shared by the stored lifecycle and the live Settled event, with byte-exact cancel classification."
+    },
+    {
+      "angle": "Sidecar scope (cross-session read leak)",
+      "verdict": "Clean - background_persistence::addressable is strict equality (the empty-root_session fail-open is fixed, :561-563) and list_for_scope uses the same predicate as lookup. Production SubagentTool always sets parent_session_id (run_loop/inner.rs:1054), so scope is never accidentally None."
+    },
+    {
+      "angle": "Path traversal via request_id (slug)",
+      "verdict": "Clean - slug() maps every non-[A-Za-z0-9_-] char to '_' and never yields empty; the 128-char truncation is a theoretical collision surface only, and every production id is a fresh UUID."
+    },
+    {
+      "angle": "Redaction of the new disk egress",
+      "verdict": "Clean - task text and every trail line go through SecretMasker via mask_line before hitting disk; asserted on raw bytes by the_activity_trail_is_redacted_before_it_reaches_the_disk. record_settled's `outcome` field is a fixed label, not model text."
+    },
+    {
+      "angle": "read_trail tail slice (UTF-8 / the take_while(..).last() fix)",
+      "verdict": "Correct - indices come from char_indices so the slice is on a boundary, and last() yields the smallest satisfying index (the real tail), not the first match. Cost of the full read is B2-07."
+    },
+    {
+      "angle": "Boot reconcile idempotence + subscriber ordering",
+      "verdict": "Correct - Running -> Abandoned tombstone is written to disk before returning, so a second boot does not re-report; start/mod.rs registers the announce subscriber before init_and_announce_orphans. The remaining defect is that the stamp precedes delivery (B2-04)."
+    },
+    {
+      "angle": "forwarding_trace_sink Arc aliasing / drop semantics / reentrancy",
+      "verdict": "Clean - no locks held across the inner sink call, tracker guard released inside push_progress before the persistence write and the tree emit; a post-completion event returns None and correctly suppresses the Progress emit; flush always forwards."
+    },
+    {
+      "angle": "subagent_tree_events trivial correctness",
+      "verdict": "Clean - now_ms saturates instead of panicking, emit_tree_event short-circuits on an empty session id before tokio::spawn, and every caller is inside a runtime. flush() (the plausible non-runtime caller) does not emit."
+    },
+    {
+      "angle": "Panic sites in production paths",
+      "verdict": "None found - all unwrap/expect are #[cfg(test)]; integer conversions use try_from(..).unwrap_or(u64::MAX); string truncation is char-indexed in both preview_from_outcome and read_trail. Only theoretical site is Instant::now()+timeout in wait_any:916, and callers clamp the timeout."
+    }
+  ]
+}

@@ -1,0 +1,132 @@
+{
+  "batch": "agents-batch-3",
+  "title": "SubagentTool pipeline",
+  "date": "2026-08-10",
+  "reviewer": "static (4-perspective protocol)",
+  "files_reviewed": [
+    { "path": "src/agents/subagent_tool/mod.rs", "loc": 390 },
+    { "path": "src/agents/subagent_tool/loop_tool.rs", "loc": 1902 },
+    { "path": "src/agents/subagent_tool/parse.rs", "loc": 345 },
+    { "path": "src/agents/subagent_tool/spawn.rs", "loc": 524 },
+    { "path": "src/agents/subagent_tool/recovery.rs", "loc": 643 },
+    { "path": "src/agents/subagent_tool/types.rs", "loc": 451 }
+  ],
+  "counts": { "critical": 0, "high": 1, "medium": 5, "low": 3, "total": 9 },
+  "findings": [
+    {
+      "id": "B3-01",
+      "severity": "High",
+      "category": "Logic",
+      "confidence": "High",
+      "file": "src/agents/subagent_tool/parse.rs",
+      "line": 185,
+      "title": "Malformed batch_tasks entries silently dropped; all-malformed array collapses the fan-out into a single run",
+      "summary": "filter_map drops any batch entry that is not an object with a non-empty string 'task' (e.g. an array of strings). Partial drops renumber results with no notice; when every entry is malformed has_batch=false and the call silently runs the top-level task as one ordinary sub-agent, reported as success.",
+      "impact": "Model believes an N-way fan-out ran when it did not; results indices shift; no diagnostic anywhere in the response.",
+      "fix": "Fail the parse with a per-index message instead of filter_map; also error when batch_tasks is present but not an array."
+    },
+    {
+      "id": "B3-02",
+      "severity": "Medium",
+      "category": "Logic",
+      "confidence": "High",
+      "file": "src/agents/subagent_tool/parse.rs",
+      "line": 246,
+      "title": "Wrong-typed scalars silently coerced to defaults while unknown keys are rejected loudly",
+      "summary": "timeout_secs (as_u64, :133/:240), run_in_background (as_bool, :246), synthesize (as_bool, :297) and the array fields fall back to defaults on a type mismatch. \"run_in_background\": \"true\" blocks the parent turn synchronously; \"timeout_secs\": 300.0 silently becomes 120.",
+      "impact": "Same 'ran with a different meaning than asked, reported success' failure reject_unknown_keys exists to prevent, one level down.",
+      "fix": "Distinguish absent/null from present-with-wrong-type; return a typed error per field via small req_bool/req_u64/req_array helpers."
+    },
+    {
+      "id": "B3-03",
+      "severity": "Medium",
+      "category": "Quality",
+      "confidence": "High",
+      "file": "src/agents/subagent_tool/loop_tool.rs",
+      "line": 1660,
+      "title": "MoA aggregator prompt concatenates every proposal in full, unbounded",
+      "summary": "build_synthesis_prompt appends each proposal's entire final_text with no per-proposal or total cap; record_batch_row clones the full text into proposals. Child output is unbounded.",
+      "impact": "Wide fan-outs of verbose children produce an oversized aggregator prompt -> prompt_too_long / provider error after the whole fan-out has already been paid for. Only unbounded accumulation in an otherwise carefully bounded pipeline.",
+      "fix": "Char-wise cap per proposal and on the assembled prompt, with an explicit truncation marker (no silent caps)."
+    },
+    {
+      "id": "B3-04",
+      "severity": "Medium",
+      "category": "Security",
+      "confidence": "High",
+      "file": "src/agents/subagent_tool/loop_tool.rs",
+      "line": 1666,
+      "title": "Sub-agent output interpolated into the aggregator prompt with markdown delimiters and no fencing (prompt injection)",
+      "summary": "Proposal bodies (which routinely embed external untrusted tool/web/file content) are concatenated between '### Proposal N' headings and a trailing '## Your task' instruction with no escaping or external-content fence.",
+      "impact": "A proposal can forge the frame: re-open the instruction section, impersonate another proposer, or steer the aggregator whose answer the parent consumes as the batch result.",
+      "fix": "Fence each proposal with the repo's external-content boundary (content_sanitizer::split_external_fence) or an escaped XML tag, and rewrite interior markers via tool_output/fence.rs::rewrite_interior."
+    },
+    {
+      "id": "B3-05",
+      "severity": "Medium",
+      "category": "Logic",
+      "confidence": "High",
+      "file": "src/agents/subagent_tool/loop_tool.rs",
+      "line": 1310,
+      "title": "A child queued on the concurrency semaphore is invisible to its own timeout_secs on the foreground and aggregator paths",
+      "summary": "subagent_spawner::spawn acquires the permit before arming tokio::time::timeout. The sync batch compensates with fanout_deadline and documents exactly this; the foreground single run (:1297-1317) and the MoA aggregator (:1144-1147) await the runtime directly with no queue-aware backstop.",
+      "impact": "With the default cap of 4 and four background children of the same session holding permits, a run with timeout_secs=120 can block the parent turn until the 1_800_000 ms tool budget fires (~30 min). The schema advertises timeout_secs as the maximum the sub-agent may run.",
+      "fix": "Wrap both awaits in timeout_at, or move the queue wait inside the spawner's own clock so 'Sub-agent timed out after Ns' covers queueing (single source; lets the batch drop its separate backstop)."
+    },
+    {
+      "id": "B3-06",
+      "severity": "Medium",
+      "category": "Quality",
+      "confidence": "High",
+      "file": "src/agents/subagent_tool/loop_tool.rs",
+      "line": 158,
+      "title": "execute is a ~1190-line function in a 1902-line file",
+      "summary": "async fn execute spans :158-:1349 with up to six nesting levels, mixing seven actions, the batch fan-out state machine, the deadline/grace/abort drain and the MoA reduce; the default-agent resolution is duplicated three times inside it.",
+      "impact": "Exceeds the repo's 500-line split threshold (P2 / CODE_ORGANIZATION.md); invariants like the deadline-snapshotted 'incomplete' require ~200 lines of context to verify.",
+      "fix": "Extract per-action handlers and split the run path into run_batch_sync / run_batch_background / run_single / run_moa_reduce; execute becomes a dispatch table."
+    },
+    {
+      "id": "B3-07",
+      "severity": "Low",
+      "category": "Architecture",
+      "confidence": "High",
+      "file": "src/agents/subagent_tool/loop_tool.rs",
+      "line": 940,
+      "title": "Sync-batch legs re-establish three of the four carried task-locals; background path uses CarriedAttribution (four)",
+      "summary": "spawn.rs uses CarriedAttribution (scope, project_root, agent_id, CALLER_ROLE); the batch legs hand-roll only the first three, and the file's own source guard (REQUIRED_TASK_LOCALS, :1827) encodes that same three-item list so it cannot see the omission.",
+      "impact": "Latent, not live: run_agent_loop does not re-establish CALLER_ROLE either, so both paths capture None today and tool gating flows through TurnContext.caller_role. The defect is the duplicated ritual CarriedAttribution exists to prevent; an absent role is fail-OPEN if it ever becomes live.",
+      "fix": "Use CarriedAttribution::capture()/reestablish() in the batch legs and retarget the source guard at those two symbols instead of a literal list of three combinators."
+    },
+    {
+      "id": "B3-08",
+      "severity": "Low",
+      "category": "Security",
+      "confidence": "High",
+      "file": "src/agents/subagent_tool/loop_tool.rs",
+      "line": 788,
+      "title": "The 'default' agent fallback bypasses the resolve_spawnable predicate (3 sites)",
+      "summary": "Explicit agent_type goes through resolve_spawnable (mode == SubAgent filter, added to close the 'agent_type = main -> Primary wildcard grant' hole). The fallbacks at :788, :1085 and :1245 call lookup_with_overlay(\"default\") with no mode filter.",
+      "impact": "Not currently exploitable (builtin/loader/plugin defaults are all SubAgent), but AgentRegistry::register accepts any AgentDef, so one Primary-mode 'default' registration re-opens the hole on the path taken whenever the model omits agent_type.",
+      "fix": "Call resolve_spawnable(\"default\", project_root_ref) at all three sites, keeping the existing miss arm."
+    },
+    {
+      "id": "B3-09",
+      "severity": "Low",
+      "category": "Logic",
+      "confidence": "High",
+      "file": "src/agents/subagent_tool/recovery.rs",
+      "line": 172,
+      "title": "enumerate is order-dependent while its sibling classify is explicitly order-independent",
+      "summary": "classify returns early on SubagentReturned ('Returned beats Spawned regardless of order'); enumerate's doc claims a Returned 'upgrades' the Spawned entry but the code is a blind last-write-wins insert, so a Spawned record after its Returned downgrades Completed to Interrupted. SessionService::get_events documents no ordering guarantee.",
+      "impact": "list would label a finished child 'interrupted ... it never finished', inviting the model to redo completed work — the exact failure the module exists to prevent.",
+      "fix": "Make Completed absorbing in the merge (entry().and_modify(...).or_insert(...)) so both readers share one precedence rule."
+    }
+  ],
+  "verified_clean": [
+    "All 29 SubagentTool fields are populated at the construction site (run_loop/inner.rs:990-1195) and threaded into every child runtime by build_runtime (spawn.rs:353-423); all three spawn paths share it, so there is no per-path drift.",
+    "subagent_semaphore_for (types.rs:68-85) performs get/retain/insert under one held Mutex guard — no double-init race; with_parent_session_id's semaphore rebind happens during construction before any Arc clone escapes.",
+    "Every spawn/await site derives its token through cancel_for_child_with and pairs it with a CancelGuard or explicit .cancel(); act.rs never cancels the per-call child token on normal completion, so background children correctly outlive a finished parent turn.",
+    "The 'Sub-agent timed out' prefix predicate is byte-identical across producer (subagent_spawner:668) and both consumers (runtime.rs:426, background_tracker.rs:98); cancel classification uses exact equality.",
+    "No cross-session disclosure reachable via the by-id faces: progress_snapshot takes no scope but every caller is gated first, and wait_any classifies out-of-scope ids as NotFound rather than TimedOut."
+  ]
+}

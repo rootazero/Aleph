@@ -1,0 +1,153 @@
+{
+  "batch": "agents-batch-4",
+  "title": "Subagent spawner + supporting modules",
+  "date": "2026-08-10",
+  "reviewer": "static (4-perspective protocol)",
+  "files_reviewed": [
+    { "path": "src/agents/subagent_spawner/mod.rs", "loc": 1015, "findings": 5 },
+    { "path": "src/agents/sub_agents/mod.rs", "loc": 8, "findings": 0 },
+    { "path": "src/agents/sub_agents/traits.rs", "loc": 128, "findings": 0 },
+    { "path": "src/agents/allowlist_tool_service.rs", "loc": 330, "findings": 0 },
+    { "path": "src/agents/teammates.rs", "loc": 80, "findings": 1 },
+    { "path": "src/agents/thinking.rs", "loc": 233, "findings": 0 },
+    { "path": "src/agents/tool_sets.rs", "loc": 132, "findings": 0 },
+    { "path": "src/agents/progress.rs", "loc": 39, "findings": 0 }
+  ],
+  "counts": { "critical": 0, "high": 3, "medium": 3, "low": 1, "total": 7 },
+  "findings": [
+    {
+      "id": "B4-01",
+      "severity": "High",
+      "category": "Logic",
+      "confidence": "High",
+      "file": "src/agents/subagent_spawner/mod.rs",
+      "line": 896,
+      "title": "parent_session_id_of JSON-parses a value that is always a key-string, so SubagentSpawned/SubagentReturned are never emitted",
+      "summary": "serde_json::from_str::<SessionKey> cannot parse the flat key-string ('agent:main:main') that the only production wiring site (run_loop/inner.rs:1054, to_key_string()) supplies, because SessionKey is an internally tagged enum. It returns None on every spawn, so both durable parent-log events are skipped and subagent_tool::recovery's event-log path is dead.",
+      "failure_scenario": "A background sub-agent completes, the daemon restarts, the model calls check_status(request_id). The in-memory tracker is empty and the parent log holds no SubagentReturned, so completed work with its output is reported as unknown and may be re-run.",
+      "related_lines": [412, 427, 689, 704, 896],
+      "related_files": [
+        "src/gateway/execution_engine/run_loop/inner.rs:1054",
+        "src/agents/subagent_tool/recovery.rs:186",
+        "src/routing/session_key.rs:31",
+        "src/routing/session_key.rs:383"
+      ],
+      "suggested_fix": "Replace the body with SessionKey::parse(raw) (the existing string reader, already used by gateway/orphan_notice.rs:37); add a to_key_string() round-trip guard and an assertion that a spawn writes SubagentSpawned into the parent log."
+    },
+    {
+      "id": "B4-02",
+      "severity": "High",
+      "category": "Logic/Security",
+      "confidence": "High",
+      "file": "src/agents/subagent_spawner/mod.rs",
+      "line": 231,
+      "title": "IsolationMode::Worktree anchors on the server process cwd instead of the run's project root",
+      "summary": "repo_root comes from std::env::current_dir() on a long-lived daemon, while the main run path anchors on workspace_override/agent.workspace() and this same function reads crate::projects::current_project_root() at line 621. Either the spawn hard-fails with NotAGitRepo, or the child is isolated into and rebased against the wrong repository.",
+      "failure_scenario": "Operator delegates to an isolation:worktree agent while working in ~/code/svc-a; the daemon was launched from ~/code/tooling, so the child branches, edits, and builds ~/code/tooling and reports success.",
+      "related_lines": [231, 237, 296, 306, 621],
+      "related_files": [
+        "src/gateway/execution_engine/run_loop/mod.rs:204",
+        "src/sandbox/worktree.rs:141"
+      ],
+      "suggested_fix": "Prefer crate::projects::current_project_root() and fall back to current_dir(); add a guard asserting the worktree's repo_root() equals the run's project root when one is published."
+    },
+    {
+      "id": "B4-03",
+      "severity": "High",
+      "category": "Architecture/Logic",
+      "confidence": "High",
+      "file": "src/agents/subagent_spawner/mod.rs",
+      "line": 483,
+      "title": "Inline MCP servers are spawned and advertised to the child but have no execution path",
+      "summary": "McpScope::provision starts real inline processes and their tools reach the child catalog through McpScopedToolService's list/dispatchable_list/describe/metadata_schema, but its execute arms forward only to the parent ('Stage I MVP: extras execution deferred to Task 12', mcp_scope_view.rs:67). The parent never knew the inline server (provision rejects name collisions with PluginRegistry), so every inline tool call resolves to tool-not-found. The routing the registrar's doc promises does not exist in the tree.",
+      "failure_scenario": "An agent def declares an inline MCP server; each spawn pays the process start and handshake, hands the child an uncallable catalog entry, and the child burns its iteration budget retrying before teardown.",
+      "related_lines": [248, 267, 483, 489],
+      "related_files": [
+        "src/tools/mcp_scope_view.rs:66",
+        "src/tools/mcp_scope_view.rs:113",
+        "src/extension/registrar/mcp_registrar.rs:194",
+        "src/extension/registrar/mcp_registrar.rs:243"
+      ],
+      "suggested_fix": "Either route inline names (plugin_id == 'inline:<server>') to the owning InlineMcpHandle inside McpScopedToolService, or stop advertising them: filter inline_tools out of McpScope::tools() and fail provision loudly for Inline specs until execution lands."
+    },
+    {
+      "id": "B4-04",
+      "severity": "Medium",
+      "category": "Logic",
+      "confidence": "High",
+      "file": "src/agents/subagent_spawner/mod.rs",
+      "line": 770,
+      "title": "context_summary is silently discarded for every Fresh-mode agent, including explore/coder/researcher",
+      "summary": "build_effective_task prepends the summary only when context_mode == Summary. ContextMode defaults to Fresh and the three most-used shipped delegates declare none, while the subagent tool schema advertises context_summary unconditionally (loop_tool.rs:128). The model gets no error and no signal.",
+      "failure_scenario": "Parent passes a 2 KB context_summary to 'explore'; the child receives only the bare task, answers off-target, and the parent cannot attribute the miss to a dropped parameter.",
+      "related_lines": [336, 770, 781],
+      "related_files": [
+        "src/agents/types.rs:85",
+        "src/agents/registry.rs:344",
+        "src/agents/registry.rs:380",
+        "src/agents/registry.rs:393",
+        "src/agents/subagent_tool/loop_tool.rs:128"
+      ],
+      "suggested_fix": "Either honour an explicit caller summary regardless of context_mode, or make the veto observable (report the drop in the tool result, qualify the schema description, and set Summary on explore/coder/researcher)."
+    },
+    {
+      "id": "B4-05",
+      "severity": "Medium",
+      "category": "Quality/Logic",
+      "confidence": "High",
+      "file": "src/agents/subagent_spawner/mod.rs",
+      "line": 738,
+      "title": "Worktree and MCP cleanup run only on the success path; errors fall to a blocking Drop",
+      "summary": "Both teardowns are gated on result.is_ok(), so timeout/cancel/error skip the async cleanup while still inside an async context. WorktreeHandle::drop then runs a synchronous git worktree remove --force on a tokio worker thread and emits leaked:true telemetry for an ordinary timeout; InlineMcpHandle::drop spawns an OS thread plus a fresh runtime per handle.",
+      "failure_scenario": "A worktree-isolated research child hits its 120s wall clock; the handle drops on a tokio worker, blocking it for the duration of a large-checkout git removal, and the trace stream reports a leak that did not occur.",
+      "related_lines": [738, 747, 752, 761],
+      "related_files": [
+        "src/sandbox/worktree.rs:86",
+        "src/extension/registrar/mcp_registrar.rs:76"
+      ],
+      "suggested_fix": "Run scope.shutdown().await and h.cleanup().await unconditionally before returning, logging failures; keep Drop strictly as the panic/abort safety net."
+    },
+    {
+      "id": "B4-06",
+      "severity": "Medium",
+      "category": "Logic",
+      "confidence": "High",
+      "file": "src/agents/teammates.rs",
+      "line": 25,
+      "title": "ensure_team check-then-create races into duplicate teams; the error fallback is inert without a UNIQUE constraint on teams.name",
+      "summary": "teams.name has no UNIQUE index (teams/store.rs:174), so concurrent ensure_team calls both insert and the create-error re-query never fires. get_team_by_name is a bare query_row with no ordering and no status filter, so lookups pick an arbitrary duplicate and a disbanded team is returned as live.",
+      "failure_scenario": "One turn fans out two parallel subagent send_message calls to team 'analysis'; two teams are created and the follow-up read_inbox resolves to the other row, reporting an empty inbox for delivered messages.",
+      "related_lines": [25, 30, 49],
+      "related_files": [
+        "src/teams/store.rs:174",
+        "src/teams/store.rs:462",
+        "src/agents/subagent_tool/loop_tool.rs:199",
+        "src/agents/subagent_tool/loop_tool.rs:256"
+      ],
+      "suggested_fix": "Add a unique index on teams(name) via a de-duplicating migration so the existing fallback becomes real, or use INSERT ... ON CONFLICT(name) DO NOTHING plus a re-read in one transaction; decide explicitly whether get_team_by_name should exclude disbanded teams."
+    },
+    {
+      "id": "B4-07",
+      "severity": "Low",
+      "category": "Quality",
+      "confidence": "High",
+      "file": "src/agents/subagent_spawner/mod.rs",
+      "line": 185,
+      "title": "spawn() is ~580 lines in a 1015-line file",
+      "summary": "spawn() spans lines 185-764 and owns admission, isolation provisioning, session seeding, prompt/provider/tool-service assembly, a 110-line HarnessDeps literal, run+timeout+panic isolation, event emission and two teardown paths — over the 500-line guideline in CODE_ORGANIZATION.md / P2.",
+      "failure_scenario": "No runtime failure; the length is what made the two exit-path defects above (B4-03, B4-05) hard to see during review and will do the same on the next change.",
+      "related_lines": [185, 534, 645, 764],
+      "suggested_fix": "Extract provision_isolation(), build_child_deps() and teardown() helpers, following the existing build_context_triple precedent."
+    }
+  ],
+  "cross_cutting": [
+    "Allowlist enforcement is sound: all six ToolService methods overridden, and act.rs:392 drives name repair from the already-filtered dispatchable_list, so case/separator/fuzzy repair cannot synthesize a denied name. tools/server/repair.rs's looser repairer has no callers outside its module.",
+    "All 21 SpawnerBase fields verified plumbed through AgentRuntime builders into execute_via_harness (runtime.rs:486-565); no dangling with_*.",
+    "thinking.rs is total and fail-closed; both production callers honour the reject contract. tool_sets.rs has no set math to get wrong and is pinned to canonical builtin names.",
+    "progress.rs verified; its 200-char preview truncates with chars().take(200), so no UTF-8 slice panic.",
+    "sub_agents/traits.rs round-trips (serde defaults missing Option fields to None) but carries no schema version field — fine intra-version, worth a written additive-only policy given the A2A boundary.",
+    "Per-agent MCP scope is additive, not restrictive: declaring mcp_servers does not confine the child to those servers; AllowlistToolService is the only narrowing layer. Documented, but the name invites the opposite reading.",
+    "SubagentReturned.summary can be empty by construction (final_text cleared for a pure-tool_use last message at mod.rs:814 + unwrap_or_default at :688), which recovery.rs:212 would render alongside a 'do NOT re-run' note. Latent until B4-01 is fixed; handle in the same change.",
+    "Cancellation coverage is good: the semaphore wait is biased-selected against the cancel token with a byte-exact error string matched by equality downstream. The only unguarded window is the subagent_semaphore:None path (tests / direct callers)."
+  ]
+}

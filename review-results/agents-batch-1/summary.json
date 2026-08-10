@@ -1,0 +1,110 @@
+{
+  "batch": "agents-batch-1",
+  "title": "Top-level agents module: types / registry / loader / runtime",
+  "date": "2026-08-10",
+  "reviewer": "static (4-perspective protocol)",
+  "worktree": "/tmp/aleph-review-agents",
+  "report": "review-results/agents-batch-1/REPORT.md",
+  "counts": {
+    "critical": 0,
+    "high": 3,
+    "medium": 3,
+    "low": 3,
+    "total": 9
+  },
+  "by_category": {
+    "security": 4,
+    "logic": 3,
+    "architecture": 1,
+    "quality": 1
+  },
+  "files_reviewed": [
+    { "path": "src/agents/mod.rs", "loc": 52, "findings": 0 },
+    { "path": "src/agents/types.rs", "loc": 644, "findings": 1 },
+    { "path": "src/agents/registry.rs", "loc": 911, "findings": 4 },
+    { "path": "src/agents/loader.rs", "loc": 510, "findings": 2 },
+    { "path": "src/agents/runtime.rs", "loc": 1017, "findings": 2 },
+    { "path": "src/agents/run_context.rs", "loc": 63, "findings": 0 }
+  ],
+  "total_loc": 3197,
+  "findings": [
+    {
+      "id": 1,
+      "severity": "High",
+      "category": "Security/Logic",
+      "file": "src/agents/loader.rs",
+      "line": 154,
+      "title": "Explicit `allowed_tools: []` (and an omitted key) silently becomes wildcard `[\"*\"]`"
+    },
+    {
+      "id": 2,
+      "severity": "High",
+      "category": "Security",
+      "file": "src/agents/registry.rs",
+      "line": 196,
+      "title": "Builtin ids are not reserved: a user/project `main.md` makes `main` spawnable with wildcard tools, re-opening the escalation resolve_spawnable closes"
+    },
+    {
+      "id": 3,
+      "severity": "High",
+      "category": "Security/Architecture",
+      "file": "src/agents/registry.rs",
+      "line": 190,
+      "title": "register_from_dirs doc says boot passes project_dir = None; the only boot caller passes std::env::current_dir(), loading CWD project agents into the global registry"
+    },
+    {
+      "id": 4,
+      "severity": "Medium",
+      "category": "Security/Architecture",
+      "file": "src/agents/registry.rs",
+      "line": 225,
+      "title": "Advertised agent catalog is built without the project overlay the spawn path applies (two faces, two predicates); overlay shadowing is also never logged"
+    },
+    {
+      "id": 5,
+      "severity": "Medium",
+      "category": "Architecture/Quality",
+      "file": "src/agents/runtime.rs",
+      "line": 719,
+      "title": "Subagent transcript store has one writer and zero readers, plus a destructive GC and zeroed metrics on the error/timeout arm (R10: CUT)"
+    },
+    {
+      "id": 6,
+      "severity": "Medium",
+      "category": "Logic",
+      "file": "src/agents/types.rs",
+      "line": 204,
+      "title": "with_allowed_tool_sets uses a value check as a provenance check, silently dropping an author's explicit [\"*\"]"
+    },
+    {
+      "id": 7,
+      "severity": "Low",
+      "category": "Security",
+      "file": "src/agents/registry.rs",
+      "line": 132,
+      "title": "spawnable_agent_ids re-derives the spawnability predicate and omits the mode filter for plugin agents"
+    },
+    {
+      "id": 8,
+      "severity": "Low",
+      "category": "Security",
+      "file": "src/agents/loader.rs",
+      "line": 130,
+      "title": "Agent ids validated only against the file stem; no charset/reserved-name check at the parse boundary"
+    },
+    {
+      "id": 9,
+      "severity": "Low",
+      "category": "Logic/Quality",
+      "file": "src/agents/runtime.rs",
+      "line": 686,
+      "title": "MAX_TRANSCRIPT_DIRS documented per-session but enforced across the whole transcripts root; GC derives its anchor via .parent()"
+    }
+  ],
+  "clean_areas": [
+    "run_context.rs task-local scoping, spawn-boundary capture via CarriedAttribution",
+    "Timeout classification prefix match cannot be spoofed (distinct prefixes for panic/failure)",
+    "resolve_spawn_route precedence + deterministic HashMap tie-break",
+    "RwLock poison recovery consistent across the registry"
+  ]
+}
