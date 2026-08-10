@@ -181,6 +181,11 @@ pub struct BuiltinToolRegistry {
     /// `agent_info` — always available (read-only, depends only on the agent
     /// definition catalog, which is built unconditionally).
     pub(crate) agent_info_tool: crate::builtin_tools::agent_manage::AgentInfoTool,
+    /// `workspace_manage` — the conversational face of `workspace.*` (R8).
+    /// Needs only the gateway's `AgentEnvStore`, so unlike the `agent_*` family
+    /// it does not also wait on an `AgentRegistry` or a `SessionManager`.
+    pub(crate) workspace_manage_tool:
+        Option<crate::builtin_tools::workspace_manage::WorkspaceManageTool>,
     /// Browser tools (always available, share a single `ProfileManager`)
     pub(crate) browser_open_tool: crate::builtin_tools::browser_tools::BrowserOpenTool,
     pub(crate) browser_click_tool: crate::builtin_tools::browser_tools::BrowserClickTool,

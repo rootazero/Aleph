@@ -498,6 +498,13 @@ pub const BUILTIN_TOOL_DEFINITIONS: &[BuiltinToolDefinition] = &[
         description: <crate::builtin_tools::agent_manage::info::AgentInfoTool as crate::tools::AlephTool>::DESCRIPTION,
         requires_config: false, // Always available — builds its own agent-definition catalog
     },
+    // The conversational face of `workspace.*` (R8). Shares every verdict with
+    // the RPC handlers via `gateway::agent_env::ops`.
+    BuiltinToolDefinition {
+        name: "workspace_manage",
+        description: <crate::builtin_tools::workspace_manage::WorkspaceManageTool as crate::tools::AlephTool>::DESCRIPTION,
+        requires_config: true, // Requires the gateway's AgentEnvStore (the one with the event bus)
+    },
     // Browser tools — always available, share a ProfileManager
     BuiltinToolDefinition {
         name: "browser_open",
@@ -1024,6 +1031,19 @@ pub fn create_tool_boxed(
         "vault_store" => config
             .and_then(|c| c.shared_token_manager.as_ref())
             .map(|mgr| Box::new(VaultStoreTool::new(Arc::clone(mgr))) as Box<dyn AlephToolDyn>),
+        // Takes the gateway's own store `Arc` and nothing else — that instance
+        // is the one carrying the event bus, so the mutating verbs announce
+        // themselves to open Panels. A store opened here would work and stay
+        // silent.
+        "workspace_manage" => config
+            .and_then(|c| c.workspace_manager.as_ref())
+            .map(|store| {
+                Box::new(
+                    crate::builtin_tools::workspace_manage::WorkspaceManageTool::new(Arc::clone(
+                        store,
+                    )),
+                ) as Box<dyn AlephToolDyn>
+            }),
         // Sessions tools require gateway_context and caller_agent_id at runtime,
         // so they cannot be created via create_tool_boxed. They are created
         // dynamically in BuiltinToolRegistry::execute_tool().
@@ -1414,7 +1434,9 @@ mod tests {
     /// abbreviated copy in a tool is exactly the near-repeat question 3 asks
     /// about.
     ///
-    /// 2026-08-10, the measurement was repointed: 82,462 -> 93,358 B.
+    /// 2026-08-10, two events on the same day, both additive to this ceiling:
+    ///
+    /// First the measurement was repointed: 82,462 -> 93,358 B.
     /// **The increase is not new spending — it is bytes that were already
     /// being sent and were not being counted.** Ten tools — `pim`, `system`,
     /// `automation`, `permission`, `media`, `scratchpad`, `goal`, `loop`,
@@ -1443,7 +1465,27 @@ mod tests {
     /// exactly that reason on 2026-08-04 and `code_exec` was simply missed.
     /// The remaining -74 B are unrelated same-day trims to `bash` and the
     /// file tools that happened to land in the same measurement.
-    const CATALOG_DESCRIPTION_CEILING_BYTES: usize = 93_358;
+    ///
+    /// Then `workspace_manage` (R8, the conversational face of
+    /// `workspace.*`, the same day's remote main) added its catalog entry:
+    /// catalog 79,969 -> 80,549 B (+580 B — its own entry is 519 B, the rest
+    /// the same round's workflow-tool description adjustment). Against the three
+    /// questions: (1) what survived is runtime fact only — that a workspace id
+    /// IS an agent id and names its memory partition, that the record cannot
+    /// change model/tools/prompt (so the model does not promise a config
+    /// change it did not make), that `create` is not `agent_create`, and that
+    /// `archive` is soft and reversible with the id still taken (so it does
+    /// not report a deletion that did not happen); (2) a stronger model cannot
+    /// derive any of those from the name or the schema — they are facts about
+    /// this deployment's data model; (3) the first draft was 778 B and
+    /// everything the argument schema already carries was cut from it — that
+    /// `update` is a patch, that `include_archived` widens `list`, what each
+    /// field means — since the schema ships to any caller that has promoted
+    /// the tool, and a description is not the place to say it a second time.
+    ///
+    /// Merged state after both halves of the day: 93,938 B — 80,549 B
+    /// catalog + 13,389 B registry-only.
+    const CATALOG_DESCRIPTION_CEILING_BYTES: usize = 93_938;
 
     #[test]
     fn catalog_description_bytes_ratchet() {

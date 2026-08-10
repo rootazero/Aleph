@@ -49,6 +49,7 @@ use thiserror::Error;
 use tracing::{debug, info};
 
 mod manager_ops;
+pub mod ops;
 
 use crate::config::ProfileConfig;
 use crate::memory::namespace::NamespaceScope;

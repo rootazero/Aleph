@@ -1,12 +1,33 @@
 //! Workspace RPC Handlers
 //!
-//! Handlers for workspace management: create, list, get, update, archive.
-//! Channel agent binding: `channels.set_agent`, agents.bindings.
-//! All handlers delegate to `AgentEnvStore` (SQLite-backed).
+//! Handlers for workspace management: create, list, get, update, archive,
+//! unarchive. Channel agent binding: `channels.set_agent`, `agents.bindings`.
+//!
+//! # These handlers reach no verdicts of their own
+//!
+//! The six workspace verbs are decided in
+//! [`crate::gateway::agent_env::ops`] — the partition gate, the split between
+//! "no such row" and "archived, read-only", and whether a create collision has
+//! a way back. What is left here is envelope work: parse this face's parameter
+//! shape, call the verb, and map the verdict onto a JSON-RPC code.
+//!
+//! That split arrived with the `workspace_manage` tool (R8), which gives the
+//! family a second face. Two reasons the logic moved rather than being copied:
+//! a second derivation of "an archived row is readable but not writable" drifts
+//! invisibly (both faces keep answering, just differently), and — the half that
+//! fails silently — the actor resolver is not the same one this file used to
+//! call. `visibility::partition_visible` reads `CALLER_USER`, which is live in
+//! gateway dispatch and **dead inside a spawned run**; every tool call is
+//! inside one. `ops` uses `ambient_partition_visible`, whose resolver reads
+//! `CALLER_USER` first and so is byte-identical here and correct there.
+//!
+//! `WorkspaceChanged` events are not emitted here either — [`AgentEnvStore`]
+//! publishes them from inside its own mutating verbs, which is what makes the
+//! CLI's writes (they arrive at these same handlers over IPC) and the tool's
+//! writes announce themselves without either caller knowing a bus exists.
 
 use aleph_protocol::workspace::{
-    WorkspaceCreateParams, WorkspaceDetail, WorkspaceListParams, WorkspaceRef, WorkspaceRow,
-    WorkspaceUpdateParams,
+    WorkspaceCreateParams, WorkspaceListParams, WorkspaceRef, WorkspaceUpdateParams,
 };
 use serde::Deserialize;
 use serde_json::json;
@@ -16,88 +37,48 @@ use super::super::protocol::{
     RESOURCE_NOT_FOUND,
 };
 use super::parse_params;
-use crate::gateway::agent_env::{AgentEnv, AgentEnvError, AgentEnvStore};
+use crate::gateway::agent_env::ops::{self, WorkspaceOpError};
+use crate::gateway::agent_env::AgentEnvStore;
 use crate::gateway::agent_instance::AgentRegistry;
 use crate::gateway::event_bus::GatewayEventBus;
 use crate::sync_primitives::Arc;
 
 // ============================================================================
-// Projection
+// Verdict → JSON-RPC
 // ============================================================================
 
-/// Project the stored [`AgentEnv`] onto the detail shape this family promises.
+/// How this face spells the way back from an archived id collision.
 ///
-/// Every read here used to serialize the whole `AgentEnv`, which put four
-/// fields on the wire that Aleph never reads back: `env_vars`,
-/// `allowed_tools`, `system_prompt_override` and `default_model`.
-/// [`crate::gateway::agent_env::ActiveAgentEnv`] — the struct that actually
-/// flows through the execution pipeline — carries `agent_id`, `profile`,
-/// `memory_filter` and `agent_env_path`, and drops all four at the resolution
-/// boundary. There was no writer for them either — none in any version, not
-/// just this one — so what shipped was a permanently-empty configuration
-/// surface that looked settable: the failure mode is a caller who sets
-/// `default_model` on a workspace and gets silence. Per R10 a channel with zero
-/// consumers is CUT, not connected. The four were dropped from `AgentEnv` and
-/// from the `agent_envs` table on the same day this projection landed, so today
-/// they are not reachable from here even by accident; this function's job is
-/// now the general one, of being the single place that decides what a client
-/// sees.
-///
-/// Projecting also makes the contract enforceable in the direction that
-/// matters. `aleph-cli` cannot depend on `alephcore`, so the only guard for
-/// this wire is the shared type plus assertions on this side; parsing proves
-/// the response is a *superset* of the contract, never that it is equal to it.
-/// Building the response FROM the contract type closes that gap by
-/// construction — a new `AgentEnv` field cannot leak onto the wire by being
-/// added, only by being added here on purpose.
-fn detail_of(ws: &AgentEnv) -> WorkspaceDetail {
-    WorkspaceDetail {
-        id: ws.id.clone(),
-        name: ws.name.clone(),
-        description: ws.description.clone(),
-        icon: ws.icon.clone(),
-        profile: ws.profile.clone(),
-        created_at: ws.created_at,
-        last_active_at: ws.last_active_at,
-        is_archived: ws.is_archived,
-    }
-}
+/// Passed to [`WorkspaceOpError::text`] rather than written into the sentence,
+/// because the tool face reaches `unarchive` by a different name and a second
+/// copy of the sentence is a second thing to reword. Only the archived arm
+/// reads it; a plain collision is byte-identical on both faces by construction,
+/// which is what keeps it from becoming an existence oracle.
+const RESTORE_VERB: &str = "`workspace.unarchive`";
 
-/// The list twin of [`detail_of`], onto the narrower row shape.
+/// Map a workspace verdict onto this face's error envelope.
 ///
-/// Deliberately not `detail_of(..)` minus fields: the two projections answer
-/// different questions and [`WorkspaceRow`] documents why it is a second one.
-fn row_of(ws: &AgentEnv) -> WorkspaceRow {
-    WorkspaceRow {
-        id: ws.id.clone(),
-        name: ws.name.clone(),
-        description: ws.description.clone(),
-        created_at: ws.created_at,
-        is_archived: ws.is_archived,
-    }
+/// The codes are the split `src/gateway/CLAUDE.md` (P2 mine E) draws:
+/// **invisible or absent → `RESOURCE_NOT_FOUND`**, since existence is itself
+/// the secret; **visible but not writable → `PERMISSION_DENIED`**, since the
+/// caller can already read the row through `workspace.get` and a "not found"
+/// would simply be false to their face. An id collision keeps `INTERNAL_ERROR`
+/// — the code this family has always answered with — because narrowing it is a
+/// wire change for the CLI and the Panel, not a cleanup.
+fn refuse(id: Option<serde_json::Value>, e: &WorkspaceOpError) -> JsonRpcResponse {
+    let code = match e {
+        WorkspaceOpError::NotFound(_) => RESOURCE_NOT_FOUND,
+        WorkspaceOpError::Archived(_) => PERMISSION_DENIED,
+        WorkspaceOpError::IdTaken { .. } | WorkspaceOpError::Store { .. } => INTERNAL_ERROR,
+    };
+    JsonRpcResponse::error(id, code, e.text(RESTORE_VERB))
 }
 
 // ============================================================================
 // Create
 // ============================================================================
 
-/// The one wording `workspace.create` has for "that id is not available".
-///
-/// A function rather than the same `format!` at two call sites, because the two
-/// sites are required to agree **byte for byte**: [`handle_create`] refuses a
-/// partition-invisible id with this shape so the refusal is indistinguishable
-/// from a genuine collision, and two literals that merely look alike are one
-/// reword away from becoming an existence oracle. Built from the real
-/// [`AgentEnvError::AlreadyExists`] value for the same reason — the store's
-/// wording is not copied here, it is produced.
-fn id_taken(id: &str) -> String {
-    format!(
-        "Failed to create workspace: {}",
-        AgentEnvError::AlreadyExists(id.to_string())
-    )
-}
-
-/// Create a new workspace
+/// Create a new workspace. Decided by [`ops::create`].
 ///
 /// # Example Request
 ///
@@ -109,44 +90,6 @@ fn id_taken(id: &str) -> String {
 /// same struct the CLI constructs — see that module for why the shape is not
 /// declared here, and for how this method came to reject its only client on
 /// every call while every test stayed green.
-///
-/// P1 partition isolation on the WRITE side, with exactly the coverage
-/// boundary [`handle_list`] documents and no more: a workspace id is a
-/// user-chosen name that encodes no owner and `agent_envs` has no owner
-/// column, so an ordinary id (`"crypto"`) passes for every caller who reaches
-/// this handler. What the check does buy is the composed-id half — without it
-/// a caller can plant `main__u-alice`, a row that then shows up in ALICE's
-/// filtered `workspace.list` under a name and description he chose. Reads were
-/// gated first; a write into a partition you cannot read is the strictly worse
-/// half.
-///
-/// An earlier wording here said the planted row carried "attacker-supplied
-/// `env_vars` / `system_prompt_override` / `allowed_tools`". That was never
-/// true in two separate ways: this method accepts none of those three, and as
-/// of 2026-08-09 they are not on the wire at all (see [`detail_of`] for why
-/// they have no writer and no reader). The predicate is kept on the honest
-/// justification — a row planted in someone else's namespace is bad on its own
-/// terms — because a guard resting on a false premise is one refactor away
-/// from being deleted as vacuous.
-///
-/// Since 2026-08-08 the reachable caller set is operator-only — the whole
-/// `workspace.` family is admin-gated ([`handle_list`]'s doc has the finding
-/// that made that the right fix rather than an owner column). The predicate
-/// stays because it is not vacuous for an operator either.
-///
-/// The denial reuses this method's own "that id is not available" shape
-/// ([`id_taken`]), produced from the REAL
-/// [`crate::gateway::agent_env::AgentEnvError::AlreadyExists`] value so it stays
-/// byte-identical to a genuine collision instead of hard-coding a copy of the
-/// store's wording.
-///
-/// Since 2026-08-09 a genuine collision has a second form: when the id is held
-/// by an **archived** workspace the message names [`handle_unarchive`], because
-/// "already exists" is true but unactionable and sends the operator off to pick
-/// a different id. The partition denial is unaffected — it returns above,
-/// without reading the store, so it always carries the plain shape and cannot
-/// become an existence oracle. `create_names_unarchive_when_the_id_is_held_by_
-/// an_archived_workspace` asserts both halves.
 pub async fn handle_create(
     request: JsonRpcRequest,
     workspace_manager: Arc<AgentEnvStore>,
@@ -156,100 +99,15 @@ pub async fn handle_create(
         Err(e) => return e,
     };
 
-    if !crate::gateway::visibility::partition_visible(&params.id) {
-        return JsonRpcResponse::error(request.id, INTERNAL_ERROR, id_taken(&params.id));
-    }
-
-    match workspace_manager
-        .create(&params.id, "default", params.description.as_deref())
-        .await
-    {
-        Ok(mut ws) => {
-            // `AgentEnvStore::create` takes neither name nor icon, so they are
-            // a second write.
-            ws.name = params.name;
-            ws.icon = params.icon.clone();
-            let persisted = workspace_manager
-                .update(&params.id, Some(&ws.name), None, params.icon.as_deref())
-                .await;
-
-            // Answer with the row that is ON DISK, not the one just asked for.
-            //
-            // Until 2026-08-09 this returned the locally-mutated `ws`, which
-            // made the response a **statement of intent** wearing the shape of
-            // an observation: the write above only `warn!`s on failure, so a
-            // workspace whose name never persisted was reported back carrying
-            // that name, and the caller learned otherwise on their next `get`.
-            // That is the same "said ok, wrote nothing" shape `handle_update`
-            // and `AgentEnvStore::update` were fixed for a day earlier.
-            //
-            // It also silently answered a different question about time.
-            // `create` builds `created_at` from `Utc::now()` while the store
-            // persists `timestamp()` — whole seconds — so the response carried
-            // sub-second precision that no later read would ever reproduce.
-            //
-            // A failed read-back falls back to the constructed value: the row
-            // does exist (the INSERT succeeded), and refusing the whole call
-            // would be a worse lie than an imprecise success.
-            let ws = match (persisted, workspace_manager.get(&params.id).await) {
-                (Ok(_), Ok(Some(stored))) => stored,
-                (persisted, read_back) => {
-                    tracing::warn!(
-                        workspace = %params.id,
-                        persist_error = ?persisted.err(),
-                        read_back = ?read_back.map(|r| r.is_some()),
-                        "workspace.create: could not confirm the stored row; \
-                         answering with the requested values"
-                    );
-                    ws
-                }
-            };
-
-            JsonRpcResponse::success(
-                request.id,
-                json!({
-                    "ok": true,
-                    "workspace": detail_of(&ws),
-                }),
-            )
-        }
-        // Which collision is it? Both are "that id is not available", but only
-        // one of them has a way out, and `unarchive` is not guessable from the
-        // words "already exists" — an operator who archived this workspace
-        // yesterday would read the bare collision as "someone else has the
-        // name" and pick a different id, stranding the row they meant to reuse.
-        //
-        // The probe only ever upgrades a refusal that is ALREADY TRUE into a
-        // more specific one — the same shape [`handle_update`] uses — so a
-        // probe that cannot answer falls back to what it was refining rather
-        // than inventing something.
-        //
-        // Not an existence oracle: a partition-invisible id returns from the
-        // check above and never reaches the store, so it always gets the plain
-        // shape; and for an id the caller CAN see, `workspace.get` reports
-        // `is_archived` outright.
-        Err(AgentEnvError::AlreadyExists(taken)) => {
-            let archived = matches!(
-                workspace_manager.get_including_archived(&taken).await,
-                Ok(Some(ws)) if ws.is_archived
-            );
-            let message = if archived {
-                format!(
-                    "{} — it is archived, not gone. Restore it with \
-                     `workspace.unarchive`; an archived workspace keeps its id, \
-                     and its memory and notes are still on disk under that id.",
-                    id_taken(&taken)
-                )
-            } else {
-                id_taken(&taken)
-            };
-            JsonRpcResponse::error(request.id, INTERNAL_ERROR, message)
-        }
-        Err(e) => JsonRpcResponse::error(
+    match ops::create(&workspace_manager, params).await {
+        Ok(ws) => JsonRpcResponse::success(
             request.id,
-            INTERNAL_ERROR,
-            format!("Failed to create workspace: {e}"),
+            json!({
+                "ok": true,
+                "workspace": ws,
+            }),
         ),
+        Err(e) => refuse(request.id, &e),
     }
 }
 
@@ -257,7 +115,7 @@ pub async fn handle_create(
 // List
 // ============================================================================
 
-/// List all workspaces
+/// List workspaces. Decided by [`ops::list`].
 ///
 /// # Example Request
 ///
@@ -265,70 +123,10 @@ pub async fn handle_create(
 /// {"jsonrpc":"2.0","method":"workspace.list","id":1}
 /// ```
 ///
-/// # P1 partition isolation — and what it does NOT cover
-///
-/// Each row is filtered by `visibility::partition_visible` on its id, the same
-/// predicate the `memory.*`/`graph.*` family uses, so an id composed with the
-/// partition grammar (`<base>__u-alice`) is invisible to everyone else.
-///
-/// This used to open by noting that a row "serializes as an [`AgentEnv`], which
-/// carries `env_vars`, `system_prompt_override` and `allowed_tools`" — i.e. the
-/// leak this filter prevents was about those fields. It no longer serializes as
-/// one ([`row_of`]), and those fields turned out to have no writer in the first
-/// place. The filter stands on what a row still exposes: its id, name and
-/// description.
-///
-/// That is defense in depth, NOT a closed boundary on its own, and the
-/// distinction is recorded here rather than implied by the presence of a
-/// check: a workspace id is a user-chosen name (`"project-aleph"`), it
-/// encodes no owner, and the `agent_envs` table has no owner column — so an
-/// ordinary workspace passes this predicate for every caller who reaches this
-/// handler.
-///
-/// # The residual was write, and it is closed at the admin gate
-///
-/// The 2026-08-08 real-machine QA exercised the write half: a member renamed
-/// and then archived a workspace the operator had just created, both
-/// returning `ok`. An earlier wording here named only "one member can read
-/// another's `env_vars`", which was wrong twice over: that field has no writer
-/// and is no longer sent, and naming a read understated the finding by a whole
-/// verb class —
-/// `update` and `archive` take the same plain id and clear the same predicate.
-/// (That QA also produced a *false* pass on the list side: this handler looked
-/// filtered only because the member had archived the row one call earlier and
-/// the then-hard-coded `list(false)` skips archived.)
-///
-/// That wording also said closing it needed an owner column plus a migration,
-/// "a schema change and a product decision, not a handler fix". It needed
-/// neither. The whole `workspace.` family joined
-/// [`crate::gateway::method_admin`]'s `ADMIN_PREFIXES` on 2026-08-08, with no
-/// carve-out, because the family has exactly one client and it is already
-/// operator (`aleph workspace list|get|create|update|archive`, over loopback);
-/// the Panel has none. A member no longer reaches any method in this file.
-/// (`get`/`update` had no client at all when that ruling was made and were
-/// cited here as such — they gained CLI subcommands on 2026-08-08, inside this
-/// same gate, so the ruling stands unchanged.)
-///
-/// **The predicate below still earns its place, and this file is now the only
-/// place that says so.** The family left
-/// `method_visibility::SCOPED_METHODS` in the same change — that table's
-/// contract is per-user filtering on surfaces a MEMBER reaches, so a claim
-/// there would have gone stale — but leaving the table is not the handlers
-/// dropping the check. A second `UserRole::Admin` principal connects with
-/// `CALLER_USER = Some(their own id)` rather than `OWNER_USER_ID`
-/// (`handlers::connect::resolve_connection_identity` returns the linked
-/// user's id for any admin that is not the zero-config loopback owner), so
-/// `partition_visible` still refuses `main__u-alice` to an operator who is
-/// not alice. Two gates, two questions — "may this role call it" and "may
-/// this caller address that partition" — and neither implies the other.
-///
-/// # `include_archived`
-///
-/// Params are optional as a whole (no params = the active-only view), so this
-/// cannot use [`parse_params`], which treats absent params as an error. Params
-/// that are *present and unreadable* are still an error: silently defaulting
-/// them would answer a narrower question than the caller asked and look like an
-/// empty result.
+/// Params are optional as a whole — a request with none is the default view —
+/// so this cannot go through [`parse_params`], which requires them. A malformed
+/// `include_archived` is refused rather than defaulted: silently narrowing the
+/// question would answer with something indistinguishable from an empty result.
 pub async fn handle_list(
     request: JsonRpcRequest,
     workspace_manager: Arc<AgentEnvStore>,
@@ -347,20 +145,9 @@ pub async fn handle_list(
         },
     };
 
-    match workspace_manager.list(include_archived).await {
-        Ok(workspaces) => {
-            let visible: Vec<WorkspaceRow> = workspaces
-                .iter()
-                .filter(|w| crate::gateway::visibility::partition_visible(&w.id))
-                .map(row_of)
-                .collect();
-            JsonRpcResponse::success(request.id, json!({ "workspaces": visible }))
-        }
-        Err(e) => JsonRpcResponse::error(
-            request.id,
-            INTERNAL_ERROR,
-            format!("Failed to list workspaces: {e}"),
-        ),
+    match ops::list(&workspace_manager, include_archived).await {
+        Ok(workspaces) => JsonRpcResponse::success(request.id, json!({ "workspaces": workspaces })),
+        Err(e) => refuse(request.id, &e),
     }
 }
 
@@ -368,31 +155,14 @@ pub async fn handle_list(
 // Get
 // ============================================================================
 
-/// Get a workspace by ID
+/// Get a workspace by id. Decided by [`ops::get`], which reads through archived
+/// rows — see its doc for why.
 ///
 /// # Example Request
 ///
 /// ```json
 /// {"jsonrpc":"2.0","method":"workspace.get","params":{"id":"crypto"},"id":1}
 /// ```
-///
-/// P1 partition isolation, with the same coverage boundary [`handle_list`]
-/// documents: an invisible partition-composed id gets this method's OWN
-/// "not found" response, byte-identical to an id that does not exist, and
-/// the store is not read for it.
-///
-/// # Archived workspaces are visible here
-///
-/// This reads through [`AgentEnvStore::get_including_archived`] rather than
-/// `get`. The default read filters `archived = 0` because its callers resolve
-/// the env a run executes under; this one is addressed by exact id, is
-/// read-only, and reports `is_archived` in the answer.
-///
-/// Filtering here would reintroduce, one level down, the complaint that
-/// `include_archived` was added to `workspace.list` to fix: the list would
-/// print a row this method then swears does not exist. "Readable, not
-/// writable" is the whole rule — [`handle_update`] refuses the same rows, and
-/// [`AgentEnvStore::update`] enforces that below it.
 pub async fn handle_get(
     request: JsonRpcRequest,
     workspace_manager: Arc<AgentEnvStore>,
@@ -402,27 +172,9 @@ pub async fn handle_get(
         Err(e) => return e,
     };
 
-    let not_found = || {
-        JsonRpcResponse::error(
-            request.id.clone(),
-            RESOURCE_NOT_FOUND,
-            format!("Workspace '{}' not found", params.id),
-        )
-    };
-    if !crate::gateway::visibility::partition_visible(&params.id) {
-        return not_found();
-    }
-
-    match workspace_manager.get_including_archived(&params.id).await {
-        Ok(Some(ws)) => {
-            JsonRpcResponse::success(request.id, json!({ "workspace": detail_of(&ws) }))
-        }
-        Ok(None) => not_found(),
-        Err(e) => JsonRpcResponse::error(
-            request.id,
-            INTERNAL_ERROR,
-            format!("Failed to get workspace: {e}"),
-        ),
+    match ops::get(&workspace_manager, &params.id).await {
+        Ok(ws) => JsonRpcResponse::success(request.id, json!({ "workspace": ws })),
+        Err(e) => refuse(request.id, &e),
     }
 }
 
@@ -430,42 +182,13 @@ pub async fn handle_get(
 // Update
 // ============================================================================
 
-/// Update workspace metadata
+/// Update workspace metadata. Decided by [`ops::update`].
 ///
 /// # Example Request
 ///
 /// ```json
 /// {"jsonrpc":"2.0","method":"workspace.update","params":{"id":"crypto","name":"Crypto Research"},"id":1}
 /// ```
-///
-/// P1 partition isolation, same predicate and the SAME coverage boundary
-/// [`handle_create`] and [`handle_list`] spell out — defense in depth against
-/// partition-composed ids, not a closed boundary for ordinary ones. An
-/// invisible id gets this method's OWN "not found" response, byte-identical to
-/// an id that does not exist, and the store is never written for it.
-///
-/// # Archived workspaces are refused, and the refusal says which refusal it is
-///
-/// [`AgentEnvStore::update`] filters the write to active rows, so an archived
-/// id reaches the `Ok(None)` arm below with nothing written — see its doc for
-/// why the write was narrowed rather than the read-back widened, and for the
-/// shape this replaced (the row was really rewritten and the caller was told it
-/// did not exist).
-///
-/// That arm then asks which `None` it is, because the two have different honest
-/// answers and this is the split the rest of the codebase already draws
-/// (`src/gateway/CLAUDE.md`, P2 mine E): **invisible → `not_found`**, since
-/// existence is itself the secret; **visible but not writable →
-/// `PERMISSION_DENIED`**, since the caller can already read the row through
-/// [`handle_get`] and a "not found" would simply be false to their face.
-///
-/// The no-oracle property is untouched: a partition-invisible id returns from
-/// the check ABOVE and never reaches the store, so it cannot land on this
-/// branch and cannot learn anything from it.
-///
-/// This distinction only became reachable when `get` started showing archived
-/// rows in the same change — before that nothing could contradict the lie, and
-/// nothing had a client to see it with either.
 pub async fn handle_update(
     request: JsonRpcRequest,
     workspace_manager: Arc<AgentEnvStore>,
@@ -475,60 +198,15 @@ pub async fn handle_update(
         Err(e) => return e,
     };
 
-    let not_found = || {
-        JsonRpcResponse::error(
-            request.id.clone(),
-            RESOURCE_NOT_FOUND,
-            format!("Workspace '{}' not found", params.id),
-        )
-    };
-    if !crate::gateway::visibility::partition_visible(&params.id) {
-        return not_found();
-    }
-
-    match workspace_manager
-        .update(
-            &params.id,
-            params.name.as_deref(),
-            params.description.as_deref(),
-            params.icon.as_deref(),
-        )
-        .await
-    {
-        Ok(Some(ws)) => JsonRpcResponse::success(
+    match ops::update(&workspace_manager, params).await {
+        Ok(ws) => JsonRpcResponse::success(
             request.id.clone(),
             json!({
                 "ok": true,
-                "workspace": detail_of(&ws),
+                "workspace": ws,
             }),
         ),
-        // Which `None` is it? An archived row is visible to this caller, so
-        // saying "not found" would contradict the `workspace.get` they can run
-        // in the next breath. Anything else genuinely is not there.
-        Ok(None) => match workspace_manager.get_including_archived(&params.id).await {
-            // Gated on the OBSERVED flag, not on the row merely existing: the
-            // message states a fact about the row, so it has to be one we read
-            // rather than one we inferred from which arm we are on.
-            Ok(Some(ws)) if ws.is_archived => JsonRpcResponse::error(
-                request.id.clone(),
-                PERMISSION_DENIED,
-                format!(
-                    "Workspace '{}' is archived and cannot be modified",
-                    params.id
-                ),
-            ),
-            // Everything else — no row, the read failing, or a live row that
-            // somehow did not match the write. This probe exists to upgrade a
-            // refusal that is already true into a more specific one; a probe
-            // that cannot answer falls back to what it was refining rather
-            // than inventing something.
-            _ => not_found(),
-        },
-        Err(e) => JsonRpcResponse::error(
-            request.id.clone(),
-            INTERNAL_ERROR,
-            format!("Failed to update workspace: {e}"),
-        ),
+        Err(e) => refuse(request.id, &e),
     }
 }
 
@@ -536,23 +214,13 @@ pub async fn handle_update(
 // Archive
 // ============================================================================
 
-/// Archive (soft-delete) a workspace
+/// Archive (soft-delete) a workspace. Decided by [`ops::archive`].
 ///
 /// # Example Request
 ///
 /// ```json
 /// {"jsonrpc":"2.0","method":"workspace.archive","params":{"id":"crypto"},"id":1}
 /// ```
-///
-/// P1 partition isolation, same predicate and the SAME coverage boundary
-/// [`handle_create`] and [`handle_list`] spell out. The soft-delete is the
-/// most destructive verb in this file — an invisible id gets this method's
-/// OWN "not found" response, byte-identical to an id that does not exist, and
-/// the row is never archived.
-///
-/// Reversible since 2026-08-09: see [`handle_unarchive`]. What has NOT changed
-/// is that the id stays taken — `workspace.create` still refuses it (with a
-/// refusal that now names the way back).
 pub async fn handle_archive(
     request: JsonRpcRequest,
     workspace_manager: Arc<AgentEnvStore>,
@@ -562,25 +230,9 @@ pub async fn handle_archive(
         Err(e) => return e,
     };
 
-    let not_found = || {
-        JsonRpcResponse::error(
-            request.id.clone(),
-            RESOURCE_NOT_FOUND,
-            format!("Workspace '{}' not found", params.id),
-        )
-    };
-    if !crate::gateway::visibility::partition_visible(&params.id) {
-        return not_found();
-    }
-
-    match workspace_manager.archive(&params.id).await {
-        Ok(true) => JsonRpcResponse::success(request.id, json!({ "ok": true })),
-        Ok(false) => not_found(),
-        Err(e) => JsonRpcResponse::error(
-            request.id,
-            INTERNAL_ERROR,
-            format!("Failed to archive workspace: {e}"),
-        ),
+    match ops::archive(&workspace_manager, &params.id).await {
+        Ok(()) => JsonRpcResponse::success(request.id, json!({ "ok": true })),
+        Err(e) => refuse(request.id, &e),
     }
 }
 
@@ -588,7 +240,8 @@ pub async fn handle_archive(
 // Unarchive
 // ============================================================================
 
-/// Restore an archived workspace — the inverse of [`handle_archive`].
+/// Restore an archived workspace. Decided by [`ops::unarchive`], which records
+/// why this verb answers with the row while `archive` answers with nothing.
 ///
 /// # Example Request
 ///
@@ -599,30 +252,6 @@ pub async fn handle_archive(
 /// Takes [`WorkspaceRef`], the same param type as `get` and `archive`: it
 /// addresses the same thing, and a third struct would be a third place to
 /// drift.
-///
-/// # Why archive stopped being terminal
-///
-/// It was terminal by omission dressed as design. "Readable, not writable" is a
-/// sound rule for an archived row, but with no way back a single mistyped
-/// `workspace.archive` was permanent — and it is permanent in the expensive
-/// direction, because the id stays taken (`AgentEnvStore::create` is a plain
-/// INSERT against a primary key) so the operator cannot even start over under
-/// the same name. See [`crate::gateway::agent_env::AgentEnvStore::unarchive`]
-/// for why the id staying taken is the right half to keep.
-///
-/// # This one returns the workspace, unlike `archive`
-///
-/// Deliberate asymmetry, recorded here so it is not "fixed" into symmetry
-/// later. `archive`'s result is that the row left the default view — there is
-/// nothing useful left to show. This one's result IS a row, and a caller that
-/// has to re-read it with a follow-up `get` is racing anything else holding the
-/// store. The envelope is `update`'s, so a client already parsing that shape
-/// parses this one.
-///
-/// P1 partition isolation, same predicate and the same coverage boundary the
-/// rest of the family documents: an invisible id gets this method's OWN "not
-/// found" response, byte-identical to an id that does not exist, and the flag
-/// is never flipped.
 pub async fn handle_unarchive(
     request: JsonRpcRequest,
     workspace_manager: Arc<AgentEnvStore>,
@@ -632,35 +261,15 @@ pub async fn handle_unarchive(
         Err(e) => return e,
     };
 
-    let not_found = || {
-        JsonRpcResponse::error(
-            request.id.clone(),
-            RESOURCE_NOT_FOUND,
-            format!("Workspace '{}' not found", params.id),
-        )
-    };
-    if !crate::gateway::visibility::partition_visible(&params.id) {
-        return not_found();
-    }
-
-    match workspace_manager.unarchive(&params.id).await {
-        Ok(Some(ws)) => JsonRpcResponse::success(
+    match ops::unarchive(&workspace_manager, &params.id).await {
+        Ok(ws) => JsonRpcResponse::success(
             request.id,
             json!({
                 "ok": true,
-                "workspace": detail_of(&ws),
+                "workspace": ws,
             }),
         ),
-        // Unambiguous, unlike `handle_update`'s `None`: the store's UPDATE
-        // carries no `archived` predicate, so this is "no such row" and nothing
-        // else. No follow-up probe — there is nothing to disambiguate, and a
-        // probe that cannot change the answer reads like one that can.
-        Ok(None) => not_found(),
-        Err(e) => JsonRpcResponse::error(
-            request.id,
-            INTERNAL_ERROR,
-            format!("Failed to unarchive workspace: {e}"),
-        ),
+        Err(e) => refuse(request.id, &e),
     }
 }
 
@@ -773,6 +382,9 @@ pub async fn handle_agent_bindings(
 #[cfg(test)]
 mod tests {
     use super::*;
+    // Only the tests name the projected shapes now — the handlers hand
+    // `ops`'s already-projected values straight to `json!`.
+    use aleph_protocol::workspace::WorkspaceDetail;
 
     /// Final-review I6, defense-in-depth half: a partition-composed workspace
     /// id belonging to another user is invisible, and `get` denies with this
@@ -2066,7 +1678,7 @@ mod tests {
         );
         assert_eq!(
             message(&invisible),
-            id_taken("main__u-alice"),
+            WorkspaceOpError::id_taken("main__u-alice"),
             "the partition refusal is the collision shape, produced not copied"
         );
     }

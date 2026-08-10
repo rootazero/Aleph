@@ -834,11 +834,16 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
         use alephcore::gateway::AgentEnvStore;
         match AgentEnvStore::with_defaults() {
             Ok(wm) => {
-                // The store, not the four RPC handlers, is what announces a
+                // The store, not the RPC handlers, is what announces a
                 // workspace mutation — so the CLI's writes (same handlers, over
-                // IPC) and any future in-process mutator emit it too. This is
-                // the only production construction site; the rest are tests,
-                // which deliberately run without a bus.
+                // IPC) and any in-process mutator emit it too. The `Arc` below
+                // is handed to the `workspace_manage` tool as well
+                // (`BuiltinToolConfig::workspace_manager`), which is how the
+                // model's writes refresh open Panels without the tool knowing a
+                // bus exists. Anything that opens its own store instead works
+                // perfectly and announces nothing. This is the only production
+                // construction site; the rest are tests, which deliberately run
+                // without a bus.
                 let wm = Arc::new(wm.with_event_bus(event_bus.clone()));
                 // Feed config.toml's [profiles.*] into the store. Without this
                 // every get_profile() falls back to ProfileConfig::default(),
@@ -2863,7 +2868,16 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
         // Phase 2b: operator-targeted approval for config-tier tools. A chat-tier
         // remote device calling a config tool suspends here until an operator
         // resolves it via `exec.approval.resolve`.
-        alephcore::gateway::execution_engine::set_config_approval_requester(operator_requester);
+        //
+        // A SECOND instance, not `operator_requester.clone()`: that one is the
+        // fallback leg above, whose cards belong to the session that raised them
+        // (a Panel `Ask`-tier tool). These belong to the operator — the gate
+        // parked the call because the caller may not decide — so addressing them
+        // to the caller's session would let a member answer their own
+        // escalation. See `OperatorApprovalRequester`'s module doc.
+        alephcore::gateway::execution_engine::set_config_approval_requester(Arc::new(
+            OperatorApprovalRequester::for_config_tier(exec_approval_manager.clone(), event_bus.clone()),
+        ));
 
         // Phase 1 delivery surface: register the desktop shell as an addressable
         // outbound surface and spawn the core R5 router. The router applies the

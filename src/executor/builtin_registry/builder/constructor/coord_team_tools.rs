@@ -408,7 +408,13 @@ impl BuiltinToolRegistry {
             use crate::builtin_tools::workflow_tool::WorkflowTool;
             let tool = WorkflowTool::new(Arc::clone(coord_store), config.dispatch_signal.clone())
                 .with_team_store(config.team_store.clone())
-                .with_planner_provider(config.planner_provider.clone());
+                .with_planner_provider(config.planner_provider.clone())
+                // Lets the `run` pre-flight ask whether a `clarify` step can
+                // actually be delivered, instead of whether the turn's
+                // `channel_id` string is non-empty — which the Panel's
+                // never-registered `gui:chat` satisfies. Same registry the
+                // dispatcher sends through, so the two faces cannot disagree.
+                .with_channels(config.channel_registry.clone());
             {
                 use crate::tools::AlephTool;
                 let td = tool.definition();

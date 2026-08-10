@@ -79,6 +79,19 @@ pub struct ExecApprovalRecord {
     /// identity: cluster node approvals, bare escalations) never cascades.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub grant_key: Option<String>,
+    /// This card is an **operator-tier escalation**: it was raised BECAUSE the
+    /// requester is not allowed to make this decision, so it belongs to the
+    /// operator and not to the session that triggered it. `session_key` above
+    /// still names that session — the manager needs it for the session-grant
+    /// cascade and for session-scoped cleanup — which is exactly why the fact
+    /// "who may answer this" cannot be derived from it and has to ride on the
+    /// record instead.
+    ///
+    /// Consumed by `handlers::exec_approvals::approval_addressable_by_caller`.
+    /// Absent on records persisted before this field existed, and `false` for
+    /// every other requester — both mean "owner-scoped", the prior behaviour.
+    #[serde(default)]
+    pub operator_only: bool,
 }
 
 impl ExecApprovalRecord {
@@ -128,6 +141,10 @@ impl ExecApprovalRecord {
             deny_reason: None,
             originator_user_id: request.originator_user_id.clone(),
             grant_key: request.grant_key.clone(),
+            // Owner-scoped by default. The one requester that raises cards on
+            // the operator's behalf stamps this to `true` on the record it gets
+            // back, before `register_pending` publishes it.
+            operator_only: false,
         }
     }
 

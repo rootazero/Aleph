@@ -282,11 +282,28 @@ impl ToolRegistry for BuiltinToolRegistry {
                                 })
                                 .unwrap_or((None, None)),
                         };
+                    // Only inject a route that names something. `TurnContext`
+                    // carries `channel_id`/`conversation_id` as `String`, and
+                    // they are EMPTY for exactly the turns that have no channel
+                    // — a governance or steward cron, a heartbeat probe, a
+                    // webhook turn, a `tools.invoke` call. Wrapping those in
+                    // `Some("")` is not "no route", it is a route that fails
+                    // every `is_some()` test the delivery side runs: the
+                    // installed job would be stamped
+                    // `source_channel_id = Some("")`, which makes
+                    // `cron::executor`'s `approval_is_routable` true, so
+                    // `UNATTENDED_KEY` is never set and the weekly audit run is
+                    // treated as attended; and `build_cron_prompt` then tells
+                    // the auditor "the runtime will deliver it to the user
+                    // automatically. Do NOT call any messaging tool" — taking
+                    // away the model's own fallback in favour of a delivery
+                    // that cannot happen. `None` is the honest value and every
+                    // one of those paths already handles it.
                     if let Some(obj) = args.as_object_mut() {
-                        if let Some(channel) = channel {
+                        if let Some(channel) = channel.filter(|c| !c.is_empty()) {
                             obj.insert("__channel".into(), serde_json::Value::String(channel));
                         }
-                        if let Some(conversation_id) = conversation_id {
+                        if let Some(conversation_id) = conversation_id.filter(|c| !c.is_empty()) {
                             obj.insert(
                                 "__conversation_id".into(),
                                 serde_json::Value::String(conversation_id),
@@ -791,6 +808,18 @@ impl ToolRegistry for BuiltinToolRegistry {
                 crate::builtin_tools::agent_identity::AgentIdentityTool::new()
                     .call_json(arguments)
                     .await
+            }),
+
+            // Workspace records (R8). Deliberately OUTSIDE the agent-management
+            // arm below: that arm injects `__channel` for the channel→agent
+            // binding verbs, and a workspace verb has no channel in it. Folding
+            // it in there would also have made it unreachable — the arm is
+            // guarded by an explicit name list.
+            "workspace_manage" => Box::pin(async move {
+                let tool = self.workspace_manage_tool.as_ref().ok_or_else(|| {
+                    AlephError::tool("workspace_manage not available: no AgentEnvStore configured")
+                })?;
+                tool.call_json(arguments).await
             }),
 
             // Agent management tools — snapshot session context into arguments

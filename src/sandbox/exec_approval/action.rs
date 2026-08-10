@@ -28,6 +28,13 @@ use crate::exec::masker::SecretMasker;
 /// short enough for a Telegram button prompt or an inline card.
 const MAX_SUMMARY_CHARS: usize = 200;
 
+/// Per-field cap for the IDENTITY half of a rendered card (see `preview`).
+///
+/// Sized so every gate-inspected field of the widest call still fits inside
+/// [`MAX_SUMMARY_CHARS`]: `action`(≤11) + `id` + `from_id` + `to_id` + `edge`
+/// ≈ 195 chars at this cap. Comfortably above a real id (`cron:<uuid>` = 41).
+const MAX_IDENTITY_CHARS: usize = 48;
+
 /// Tools whose payload IS a shell command, and whose summary therefore gets a
 /// real [`CommandAnalysis`] instead of a stub.
 const SHELL_TOOLS: &[&str] = &["bash", "code_exec"];
@@ -269,13 +276,32 @@ fn preview(name: &str, input: &Value) -> String {
     }
     if name == "loop_graph" {
         let mut out = String::new();
-        // Identity first, in gate order — every key the tier rule inspects.
-        for k in ["action", "id", "kind", "from_id", "to_id", "edge", "origin"] {
+        // Identity first, in gate order — every key the tier rule inspects,
+        // and the three it actually discriminates on (`id`, `from_id`,
+        // `to_id`, plus `edge` for the `unlink owns_reference` arm) ahead of
+        // the two it does not (`kind`, `origin`).
+        //
+        // Each identity VALUE is capped too, which is the other half of the
+        // same lesson. Ordering identity first only guarantees the cap eats
+        // prose if identity is itself bounded — and node ids are model-chosen
+        // free text with no length limit anywhere (`loop_graph node` validates
+        // only the kind prefix, `upsert_node` has no length check, the column
+        // is plain TEXT). So one un-carded `node` call could register
+        // `cron:<190 chars>` and a follow-up `link` from it would push
+        // `to_id=root:aleph` past [`MAX_SUMMARY_CHARS`] — the same card with
+        // no evidence on it, reached by a different route. The cap is generous
+        // enough for a real id (`cron:<uuid>` is 41 chars) and truncates from
+        // the END, so the `root:`/`frozen:` prefix the gate fired on always
+        // survives.
+        for k in ["action", "id", "from_id", "to_id", "edge", "kind", "origin"] {
             if let Some(v) = obj.get(k).and_then(Value::as_str) {
                 if !out.is_empty() {
                     out.push(' ');
                 }
-                out.push_str(&format!("{k}={v}"));
+                out.push_str(&format!(
+                    "{k}={}",
+                    crate::utils::text_format::truncate_with_marker(v, MAX_IDENTITY_CHARS, "…")
+                ));
             }
         }
         // Then the free text, which is the only thing the cap may eat.
@@ -532,6 +558,38 @@ mod tests {
         let action = ApprovalAction::for_tool_call("bash", &json!({ "cmd": long }), "gated");
         assert!(action.summary.chars().count() <= MAX_SUMMARY_CHARS + 10);
         assert!(action.summary.ends_with('…'));
+    }
+
+    /// Ordering identity first only bounds the card if identity is itself
+    /// bounded. Node ids are model-chosen free text with no length limit, so an
+    /// un-carded `node` call can mint `cron:<190 chars>` and the follow-up
+    /// `link` — which IS carded — would otherwise render with `to_id=root:aleph`
+    /// truncated clean off: a card carrying no evidence of what it fired on,
+    /// which `grant_fingerprint` then binds a session grant to.
+    #[test]
+    fn a_long_identity_field_cannot_push_the_gated_one_off_the_card() {
+        let action = ApprovalAction::for_tool_call(
+            "loop_graph",
+            &json!({
+                "action": "link",
+                "from_id": format!("cron:{}", "x".repeat(190)),
+                "to_id": "root:aleph",
+                "edge": "watches",
+                "origin": "llm",
+                "note": "合理的理由".repeat(60),
+            }),
+            "gated",
+        );
+        assert!(
+            action.summary.contains("to_id=root:aleph"),
+            "the gated identifier must survive every cap: {}",
+            action.summary
+        );
+        assert!(
+            action.summary.contains("from_id=cron:"),
+            "the truncation must keep the discriminating PREFIX: {}",
+            action.summary
+        );
     }
 
     #[test]

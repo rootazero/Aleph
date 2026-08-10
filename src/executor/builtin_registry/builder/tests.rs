@@ -166,3 +166,124 @@ mod agent_info_wiring_tests {
         );
     }
 }
+
+/// `workspace_manage` (R8) needs FIVE registrations to be usable, and each one
+/// fails in its own quiet way: the catalog entry (`BUILTIN_TOOL_DEFINITIONS`),
+/// the constructor (`workspace_manage_tool`), the schema
+/// (`register_optional_tools`), the dispatch arm, and the group listing.
+///
+/// The two that do not announce themselves: a missing schema registration
+/// leaves a tool the model is told about and cannot call correctly, and a
+/// missing dispatch arm leaves one it can see and cannot reach at all. This
+/// module walks the whole chain against a real store, because nothing else
+/// does — the tool's own unit tests construct it directly and so prove only
+/// that the last link works.
+///
+/// Its dispatch arm was, in fact, first written inside the `agent_create | … |
+/// agent_update` arm, where it was unreachable. Everything still compiled.
+#[cfg(test)]
+mod workspace_manage_wiring_tests {
+    use crate::config::types::memory::MemoryInjectionMode;
+    use crate::executor::builtin_registry::{BuiltinToolConfig, BuiltinToolRegistry};
+    use crate::executor::ToolRegistry;
+    use crate::gateway::agent_env::{AgentEnvStore, AgentEnvStoreConfig};
+    use crate::sync_primitives::Arc;
+
+    async fn registry_with_store(dir: &std::path::Path) -> BuiltinToolRegistry {
+        let store = AgentEnvStore::new(AgentEnvStoreConfig {
+            db_path: dir.join("agent_envs.db"),
+            ..Default::default()
+        })
+        .expect("agent env store");
+        store.load_profiles(std::collections::HashMap::new());
+        BuiltinToolRegistry::with_config(BuiltinToolConfig {
+            injection_mode: MemoryInjectionMode::Hybrid,
+            workspace_manager: Some(Arc::new(store)),
+            ..Default::default()
+        })
+        .await
+        .unwrap()
+    }
+
+    #[tokio::test]
+    async fn workspace_manage_is_registered_with_its_schema_and_dispatches() {
+        let _home = crate::utils::paths::IsolatedAlephHome::new();
+        let dir = tempfile::TempDir::new().expect("tempdir");
+        let registry = registry_with_store(dir.path()).await;
+
+        assert!(registry.has_tool("workspace_manage"));
+
+        // Name without schema = a tool the model is told about and cannot fill
+        // in. Assert on a field the args type actually declares, so a schema
+        // built from the wrong type is red too.
+        let schema = registry
+            .get_tool_schema("workspace_manage")
+            .expect("workspace_manage must register a parameters schema");
+        let props = schema
+            .get("properties")
+            .and_then(|p| p.as_object())
+            .expect("schema properties");
+        for field in ["action", "id", "include_archived"] {
+            assert!(
+                props.contains_key(field),
+                "schema is missing `{field}`: {schema}"
+            );
+        }
+
+        // Dispatch: reaches the tool, not the "not available" arm and not a
+        // "tool not found".
+        let listed = registry
+            .execute_tool("workspace_manage", serde_json::json!({"action": "list"}))
+            .await
+            .expect("workspace_manage must dispatch");
+        assert_eq!(listed["action"], "list");
+
+        // ...and it is the SAME store: a row written through the tool is
+        // readable through the tool. A registry that opened its own store would
+        // pass every assertion above and silently write somewhere else.
+        registry
+            .execute_tool(
+                "workspace_manage",
+                serde_json::json!({"action": "create", "id": "wiring-probe", "name": "Probe"}),
+            )
+            .await
+            .expect("create");
+        let read = registry
+            .execute_tool(
+                "workspace_manage",
+                serde_json::json!({"action": "get", "id": "wiring-probe"}),
+            )
+            .await
+            .expect("get");
+        assert_eq!(read["workspace"]["name"], "Probe");
+    }
+
+    /// With no store the tool must be absent, not present-and-broken: the
+    /// schema registration and the constructor are gated on the same handle, so
+    /// they have to appear and disappear together.
+    #[tokio::test]
+    async fn workspace_manage_is_absent_without_a_store() {
+        let _home = crate::utils::paths::IsolatedAlephHome::new();
+        let registry = BuiltinToolRegistry::with_config(BuiltinToolConfig {
+            injection_mode: MemoryInjectionMode::Hybrid,
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+        assert!(
+            !registry.has_tool("workspace_manage"),
+            "a tool the model can see but nothing can answer is worse than an absent one"
+        );
+    }
+
+    /// The tool face must not be wider than the wire face. `workspace.` has
+    /// been admin-gated since 2026-08-08; this is the tool-side half of the
+    /// same decision, and the two gates are separate mechanisms so nothing else
+    /// goes red if this entry is dropped.
+    #[test]
+    fn workspace_manage_requires_an_operator() {
+        assert!(crate::gateway::method_authz::tool_requires_operator(
+            "workspace_manage"
+        ));
+    }
+}

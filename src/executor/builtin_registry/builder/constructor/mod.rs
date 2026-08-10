@@ -215,6 +215,15 @@ impl BuiltinToolRegistry {
             VaultStoreTool::new(Arc::clone(mgr))
         });
 
+        // workspace_manage (requires the gateway's AgentEnvStore). Cloning the
+        // injected `Arc` rather than opening a store is load-bearing: only that
+        // instance carries the event bus, so only its writes publish
+        // `WorkspaceChanged` and refresh open Panels.
+        let workspace_manage_tool = config.workspace_manager.as_ref().map(|store| {
+            info!("Creating WorkspaceManageTool");
+            crate::builtin_tools::workspace_manage::WorkspaceManageTool::new(Arc::clone(store))
+        });
+
         // Store catalog-sync tool (requires CatalogCache)
         let hub_catalog_sync_tool = if let Some(ref cache) = config.catalog_cache {
             info!("Creating HubCatalogSyncTool");
@@ -1186,6 +1195,7 @@ impl BuiltinToolRegistry {
             agent_unbind_tool,
             agent_update_tool,
             agent_info_tool,
+            workspace_manage_tool,
             session_context_handle,
             extension_manager: config.extension_manager.clone(),
             acp_delegate_tool,

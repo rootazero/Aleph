@@ -198,6 +198,23 @@ impl BuiltinToolRegistry {
         );
         info!("Registered node_manage tool in BuiltinToolRegistry");
 
+        // workspace_manage — the conversational face of `workspace.*` (R8).
+        // Gated on the same handle the constructor builds the tool from, so
+        // the schema and the tool appear or stay absent together: a schema
+        // registered without a tool is a name the model can call and nothing
+        // can answer.
+        if config.workspace_manager.is_some() {
+            reg(
+                tools,
+                "workspace_manage",
+                crate::builtin_tools::WorkspaceManageTool::DESCRIPTION,
+                schema::<crate::builtin_tools::workspace_manage::WorkspaceManageArgs>(
+                    "workspace_manage",
+                ),
+            );
+            info!("Registered workspace_manage tool in BuiltinToolRegistry");
+        }
+
         // Vault store tool
         if vault_store_tool.is_some() {
             reg(

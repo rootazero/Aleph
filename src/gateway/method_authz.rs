@@ -8,8 +8,19 @@
 //! `caller_role` from its `ChannelPermissionLevel` (default `Chat` ⇒ `guest`),
 //! and `ScopedToolService` (`src/tools/scoped/dispatch.rs`) consults it here to
 //! refuse self-config tools to a chat-tier channel (e.g. a default Telegram
-//! bot). Panel runs are always operator once authorized, so this gate is a
-//! no-op for them — it governs channels only.
+//! bot).
+//!
+//! ⚠️ **"Panel runs are always operator once authorized, so this gate is a no-op
+//! for them"** was true when this module was written and stopped being true when
+//! P0 introduced `UserRole::Member` (2026-08-04): an authorized Panel connection
+//! now resolves to `operator` OR `member`, and a member's run reaches this
+//! classifier just like a chat-tier channel does. That is deliberate — the gate
+//! covers both surfaces — but it means the gate is load-bearing on the Panel and
+//! must be reasoned about as such. In particular the gate does not *deny*: it
+//! escalates to an operator via `config_approval_requester`, and that escalation
+//! is only a gate if the person who tripped it cannot answer it. See
+//! [`crate::approval::operator_requester`] for the half of that which does not
+//! live here.
 
 /// Self-management tool names that mutate Aleph's OWN configuration. A
 /// chat-tier channel run is rejected from these at the tool-dispatch gate
@@ -65,6 +76,14 @@ const OPERATOR_TOOLS: &[&str] = &[
     // front of it, and on a channel the human it asks IS the chat-tier
     // participant making the request.
     "loop_graph",
+    // Workspace records. The `workspace.` RPC family has been admin-gated
+    // since 2026-08-08, after real-machine QA watched a member rename and then
+    // archive a workspace the operator had just created — both returning `ok`.
+    // The tool face is the same verbs over the same seam
+    // (`gateway::agent_env::ops`), so leaving it open would reopen exactly that
+    // finding one surface over. `"member"` and `"guest"` both fail
+    // `turn_context::role_is_operator`, so this one entry covers both.
+    "workspace_manage",
 ];
 
 /// True when `tool` mutates Aleph's own configuration and therefore requires an
@@ -102,6 +121,10 @@ mod tests {
         "agent_identity",
         // Control-plane write: adding a hook fires code on future events.
         "hooks_manage",
+        // The tool half of an admin-gated RPC family. Pinned because the two
+        // gates are different mechanisms: deleting this entry would not make
+        // any `workspace.` RPC test go red, it would only widen the tool.
+        "workspace_manage",
     ];
 
     #[test]

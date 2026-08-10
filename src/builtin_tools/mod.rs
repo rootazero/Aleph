@@ -115,6 +115,7 @@ pub mod vault_store;
 pub mod voice_tools;
 pub mod web_fetch;
 pub mod workflow_tool;
+pub mod workspace_manage;
 
 pub use a2a_tools::{
     new_a2a_tool_handle, A2AAgentsArgs, A2AAgentsOutput, A2AAgentsTool, A2ADelegateArgs,
@@ -269,6 +270,7 @@ pub use voice_tools::{
     VoiceModeSetTool,
 };
 pub use web_fetch::{ExtractMode, Extractor, WebFetchArgs, WebFetchResult, WebFetchTool};
+pub use workspace_manage::{WorkspaceManageArgs, WorkspaceManageTool};
 
 // ============================================================================
 // Tool Progress Notifications (no-op stubs)
