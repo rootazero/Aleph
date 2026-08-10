@@ -1067,6 +1067,102 @@ audits a slightly larger suspicious set; it never reasons about model intent.
     positive safe-command allowlist deliberately stays in the exec-tier /
     approval layer, not here.
 
+## Cycle 8 — background-exec lifecycle & the two-phase cwd gate (2026-08-10)
+
+Findings from an audit against Cloudflare `computer` (Workspace VFS +
+pluggable execution backends). The portable part turned out to be contracts
+and discipline, not code — see FEATURE_LOCATOR §3.15 for the full ledger,
+including the explicit do-not-port list.
+
+### Containment is two-phase
+
+`WorkspaceSandbox::execute` validated the requested cwd at step 2 and did not
+consume it until steps 4-5. Between them sits
+`ApprovalGate::request_approval_for_action().await` — unbounded and
+human-paced. The sandboxed process can write inside its own session
+workspace, so a sibling command only has to swap one component of the
+approved path for a symlink while the card sits on a screen, and step 2's
+verdict is worthless.
+
+`revalidate_cwd_containment` now re-establishes containment after the gate
+and before `profile_for`. Four failure modes, all denials:
+
+| observed | meaning |
+|---|---|
+| workspace root stopped resolving | refuse |
+| requested path stopped resolving, or left the root | refuse |
+| resolves somewhere other than what was approved | refuse |
+| a component below the root is a writable symlink | refuse — contained *now* says nothing about contained one syscall from now |
+
+Gated on **whether the call actually awaited a human**, not on whether a
+requester is configured: an unconfigured gate answers instantly and a cached
+session grant never asks, and neither opens a window. Messages name the
+approval wait so "stopped being contained while we waited" is
+distinguishable from step 2's "was never contained".
+
+The primitive is not new — `protected_paths::first_writable_symlink_component`
+already existed and its own doc names this TOCTOU class. It was wired only
+into seatbelt/bwrap mount generation, never to the approved cwd.
+
+### One drain implementation, and it now tees
+
+`run_child_with_drain` is the single drain for all three OS drivers *and*
+`WorktreeSandbox`. It gained an optional tee into a `LiveTail` ring
+(`src/sandbox/live_tail.rs`), read from a fourth task-local
+(`context.rs::LIVE_TAIL`) so neither `OsSandboxDriverTrait::run` nor
+`SandboxCommand` changed — the alternative was measured at ~59 edit sites.
+
+`WorktreeSandbox` had a **second** drain for the `timeout: None` case: a
+hand-rolled `read_to_end` pair that buffered the whole stream before
+truncating (the shared drain bounds it *while* reading) and that tee'd
+nothing. Deleted; `None` maps to an explicit no-wall-clock-limit sentinel
+through the shared path.
+
+Task-locals do not cross `tokio::spawn`. The scope is therefore re-entered
+**inside** the detached background task in `bash_exec::spawn_background`,
+next to the existing `SESSION_ID.scope(...)`, and read into a local `Arc` in
+`run_child_with_drain` **before** the two drain tasks are spawned.
+
+### Partial output is scrubbed by the same gate as finished output
+
+A partial snapshot is built into a throwaway `SandboxOutput` and run through
+`scrub::scrub_and_gate_output` — the same function the finished path runs. A
+non-empty block list **withholds the partial** rather than returning redacted
+text: the completed path fails the whole call closed, so a poll must not
+become a way to read what it refuses.
+
+Residual, stated rather than hidden: a secret straddling the current read
+frontier can still leak its prefix, because a pattern cannot match a value
+whose second half has not been read yet.
+
+### Deleted
+
+`normalize_path_for_sandbox`, `path_is_allowed`, `glob_to_regex` — three
+zero-consumer helpers in `platforms/common.rs`. `glob_to_regex` was a
+semantically weaker twin of the live `deny_globs::glob_to_anchored_regex`
+(no whole-component `**`, escaped character classes instead of preserving
+them, no bare-pattern-subtree rule), and `deny_globs.rs` explicitly invites a
+future landlock consumer — which would have inherited a silently weaker deny
+floor that passed its own tests. `path_is_allowed` was a bare uncanonicalized
+`starts_with` shipped as public API where it invited being mistaken for the
+sandbox path gate.
+
+### The two path resolvers are deliberately different, and now say so
+
+| | `sandbox::workspace::path::normalize_path` | `file_ops::path_utils::check_and_resolve_path` |
+|---|---|---|
+| `~` / `$HOME` / `$USER` | literal | expanded |
+| relative base | workspace root | task-local `FsScope`, else error |
+| `..` | popped lexically, **before** symlink resolution | canonicalized first, popped only on the non-existent tail |
+| credential denylist / `/proc` | none | enforced |
+| root containment | enforced by the caller, as a hard jail | none |
+
+The exec layer is an allowlist-jail with no denylist; the file layer is a
+denylist with no jail. Neither is the other's fallback, and nothing asserted
+that until this cycle — so it could have been "unified" in either direction
+without a test going red. Both sides now carry the mirrored doc and a pin.
+
+
 ## References
 
 - **Spec:** `docs/superpowers/specs/2026-04-19-sandbox-workspace-design.md`

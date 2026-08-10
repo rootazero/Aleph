@@ -277,6 +277,11 @@
 - **把一个字段升格成运行时能力之前，先数它有几个写入者** —— 休眠的展示字段（`workspace_path` 曾只是 picker 里的一行字）一旦接上运行时权力（成为 run 的 cwd），它的**每一个**写入者都追溯成了权限授予点；写入者与读取者必须同批过同一道闸，否则「两步都合法、合起来等价」（先注册目录、再进房间聊天）就是绕闸路径 → §5.22
 
 - **在构造期解析的身份，是一个没有生产者也照样"成功"的身份** —— `unwrap_or_else(|| "main")` 之类的兜底把一个**字面量焊进每一个消费者**并持续整个进程寿命，而**错误的身份是完全合法的身份** ⇒ 零报错、零测试红（`researcher` 领导的团队拒绝自己的 leader 并接受 `main`；审批全记在 `main` 名下）。判据两句：① 这个字段**有没有生产者**（grep 赋值点，不是 grep 类型）；② 施动者该由**这次调用**决定还是由**进程启动**决定——是前者就从 `TURN_CONTEXT` 每次取，构造参数只配当 fallback（单一源 `builtin_tools::acting_agent`）→ §4.13b
+- **一个进程全局的表被第二个实例写，症状是「我的行不见了」而不是「多了几行」** —— 上一条的实施陷阱。给内存表加 sidecar 时，写盘那半必须绑在**实例**上而不是全局读一个开关：`ProcessRegistry` 每个实例的 `next_id` 都从 1 开始，台账按 id 键控 ⇒ 第二个写者不是追加，是**用另一个 owner 覆盖行 #1**，真 owner 的 lookup 从此答"没有这个东西"（即这条 sidecar 本来要修的那个谎，换了个来源）。生产只有一个实例所以这问题不存在，**测试并行造几十个**，于是它以**单跑绿、全量红**浮出来——孤立跑的那些测试才是在说安慰话的那一方。修法是把非 journaling 构造函数标 `#[cfg(test)]`，让"别造第二个写者"从约定变成编译错误 → §3.15③
+- **用名字 grep 找断线，会漏掉那种「唯一的外部引用就是撒谎的注释」的断线** —— `kill_all_running_background` 全仓两处命中：定义，和 `process_registry.rs` 上那句声称它已接线的 doc。**把 bug 藏起来的注释正是它唯一的搜索命中**，所以扫断线前先剥掉注释行。同族：`#[derive(Serialize)]` 的 struct 字段没有 Rust 消费者是正常的——它们真正的消费者是读 JSON 的模型 → §3.15①
+- **一个「所有 X 都必须过闸」的守卫写完之后，问的不是规则对不对，而是它认得几种注册形状** —— 描述字节棘轮与 `no_sentence_is_stated_twice` **同时**漏掉十个工具 13,389 B，因为两者都只读 `BUILTIN_TOOL_DEFINITIONS`，而 `agent_init` 还会从 registry map 把工具表补全。两把尺、同一个盲区、同一处成因。收敛时**两者读同一张表**（`REGISTRY_ONLY_DESCRIPTIONS`）——各持一份清单就是这张表要防的错误挪高一层 → §3.15⑦
+- **一个值被检查过和被使用之间如果有 `await`，那次检查的有效期就是那个 await 的长度** —— 而**审批 await 的长度是人的反应时间**。判据不是"这里有没有 TOCTOU"（到处都有），而是**这个窗口里有没有别人写得进来**：沙箱进程能往自己的 session workspace 里写，所以兄弟命令换掉 cwd 的一个组件就够了。闸要架在「**这次调用是否真的 await 了人**」上，不是「网关配没配」——没配的网关立刻应答、缓存的授权根本不问，两者都不开窗口 → §3.15④
+
 - **进程内存不是状态：凡"重启后这个 id 还查得到吗"答不上来的表，都欠一个 sidecar** —— 而且**只记录"做完了"的机件分不出"从没跑过"和"跑了但写丢了"**，所以开机对账要写**终态墓碑**而非删行（否则 not-found 同时意味着"你打错了"和"它随上个进程死了"，还顺手扔掉死前的产出）。**推论**：产物一旦跨进程落盘，脱敏就不能再按 run 的 attendedness 决定——读它的是**后来那个进程**，而它可能把内容扇出到聊天通道 → §4.13b §4.13c §5.1
 
 ### 1. Prompt · 前缀缓存 · 上下文（`src/thinker/` `src/context/`）
@@ -316,7 +321,9 @@
 
 - **能力接上了 ≠ 模型会用它** —— 加/删任何 capability 的同一笔改动里必须 grep 工具 `DESCRIPTION`（prompt 在劝模型别用，比缺失更难发现）→ §5.17
 - **⚠️ 分类器已经存在，只是没人问它**：`block_goal_on_failure` 曾把**任何**失败都判成 goal 的终态（Blocked + 删焊入计划 + 推「已中止」），而 `ExecutionError::receipt_kind()` **早就是三个用户面共用的单一源**，其 doc 自陈：此层出现限流/网络签名意味着整条 provider 链都试过、失败**确属瞬时**。同一仓里 `llm_retry::extract_retry_after_str` 能给退避时长、wait-barrier 能 park 自唤醒——**三块零件齐备，谁都没连**。判据一句话：写下一个 `if error { 终态 }` 之前先问**「这个错误已经被谁分过类了」**；答案通常是"有，而且比你打算写的那版更准"。同族是 §4.9「能被精确回答的数字，别用常量猜」——那条讲魔数，这条讲**分支**，两者都是「已知事实就在同一个 crate 里，零调用」。
-- **目录条目写字面量会整体遮蔽工具常量** —— `BUILTIN_TOOL_DEFINITIONS` 的 `description:` 必须指向常量；守卫 `definitions.rs::tests::no_catalog_entry_inlines_its_description` 是**源码级**的（运行时分不出"来自常量"和"恰好字节相同"）。现在要问的是**这些字节值不值**：`catalog_description_bytes_ratchet` 实测 81,274 B，**每个请求都付**（`truncate_tool_descriptions` 默认 `false`，没有任何一档配置让它免费）→ §5.17
+- **目录条目写字面量会整体遮蔽工具常量** —— `BUILTIN_TOOL_DEFINITIONS` 的 `description:` 必须指向常量；守卫 `definitions.rs::tests::no_catalog_entry_inlines_its_description` 是**源码级**的（运行时分不出"来自常量"和"恰好字节相同"）。现在要问的是**这些字节值不值**：`catalog_description_bytes_ratchet` 实测 **93,358 B**（目录 79,969 + registry-only 13,389），**每个请求都付**（`truncate_tool_descriptions` 默认 `false`，没有任何一档配置让它免费）→ §5.17
+- **⚠️ 那个数字 2026-08-10 从 82,462 跳到 93,358，不是花掉了 11 KB，是量具第一次看见全部** —— 上一条的孪生，也是「守卫的绿只覆盖它的块识别器认得的那种块」在**同一条纪律自己的量具**上复发：十个工具（pim/system/automation/permission/media/scratchpad/goal/loop/loop_graph/strategy）由 `builder/core_tools.rs` 的 `reg(` 注册但**不在** `BUILTIN_TOOL_DEFINITIONS` 里，而 `agent_init` 会从 registry map 把工具表补全 ⇒ 它们的描述一直在每个请求上发，只是**从未被任何一把尺量到**。`no_sentence_is_stated_twice` 曾有**同一个**盲区，现读同一张表 `REGISTRY_ONLY_DESCRIPTIONS`（**不是各持一份清单**——那正是这张表要防的错误挪高一层）。判据：给一个「所有 X 都必须过闸」的守卫写完之后，问的不是规则对不对，而是**它认得几种注册形状**；`every_registered_core_tool_is_accounted` 现在按名字红。修法**刻意不是**把十个补进目录——`BUILTIN_TOOL_DEFINITIONS` 同时驱动 ToolCatalog 建行 / fallback 校验 / 渐进披露 / `dangerous_tools` 校验，registry-only 是有记录的既定形态
+- **一条 deny 策略有几个执行层，就要问它绑住了几个** —— `deny_read_globs` 的每个生产消费者都是 OS 驱动（seatbelt/AppContainer），而 `file_ops` 另建了一份不读它的凭据清单 ⇒ operator 写 `**/.env` 之后 `bash` 被内核挡住、`file_read` 明文可读，**而他没有任何办法知道**。同族于「一个动词有 N 个面时，谁能看要在每个面用同一个推导」，只是这次落在安全谓词上。翻译要**复用** `deny_globs::glob_to_anchored_regex` 而不是近似它 → §3.15⑤
 - **deny 检查有方向** —— `path_is_denied` 只向下问「我在不在保护区里」；还要 `contains_denied_descendant` 向上问「我下面有没有保护区」，且必须共用同一份展开+归一化。会**遍历**的动词（copy/move/delete/organize）顶层闸永远不够 → §3.4
 - **取消不是判决** —— 墙钟超时 / 传输抖动 / 审批过期 / 用户取消，四者都不是"关于这次调用的失败"；归因在派发咽喉 `scoped/dispatch.rs`，用**成功态**表达"被打断" → §3.3
 - **会 park 的工具必须听取消令牌** —— 这个 await 的最长睡眠时间就是取消的最坏延迟；超过一两秒必须进 `tokio::select!` → §4.11
@@ -466,7 +473,7 @@
 | `interfaces/webchat/` | [DESKTOP_SHELL.md](docs/reference/DESKTOP_SHELL.md) · §4.7 §6.8 |
 | `src/agents/` `src/teams/` | [MULTI_AGENT_SYSTEM.md](docs/reference/MULTI_AGENT_SYSTEM.md) · §4.4 §4.5 §4.13a–c |
 | `src/tasks/cron/` `src/tasks/heartbeat/` | §4.13b（写面对账守卫 · 共用告警判据 · 停摆 job）· §4.13c（**不阻塞 tick · 投递失败即失败 · 孪生子系统对账**）· `src/tasks/shared/{alert,delivery}.rs` |
-| `src/sandbox/` | [SANDBOX.md](docs/reference/SANDBOX.md) · §3.8 |
+| `src/sandbox/` | [SANDBOX.md](docs/reference/SANDBOX.md) · §3.8 · §3.15（后台执行生命周期 · 实时尾巴 · 两阶段 cwd 闸） |
 
 > **对照表已做完，别重做**：openclaw（gateway / cluster / hub / model catalog）· codex（权限模型 / Multi-agent V2）· hermes · pi · LangGraph · RouteLLM/LiteLLM/Bifrost · DeepSeek-Reasonix · FluidVoice/WhisperLive · SkillOpt · buzz。逐项结论与"刻意不做清单"都在对应 reference 文档里。
 
