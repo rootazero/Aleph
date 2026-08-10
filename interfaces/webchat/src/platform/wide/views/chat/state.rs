@@ -1016,6 +1016,85 @@ impl ChatState {
         self.send_error.set(None);
     }
 
+    /// Append another human's message, live, from
+    /// `run.session_user_message`.
+    ///
+    /// # Why this is not `push_user_message`
+    ///
+    /// That one models *this viewer having just sent something*: it stamps
+    /// `now_millis()` and clears both error banners, because a fresh send
+    /// retires the complaint about the previous one. Neither is true of a room
+    /// peer's message — it carries the server's own timestamp (so it sorts
+    /// against reloaded rows instead of against this tab's clock), and a
+    /// message somebody else typed must not wipe an error banner describing
+    /// *my* last failed send.
+    ///
+    /// **Idempotent per source seq.** The id is the row's identity, so a frame
+    /// delivered twice, or one racing the re-hydrate that will replay the same
+    /// row, appends once.
+    ///
+    /// # Why it inserts rather than pushes
+    ///
+    /// This frame always arrives AFTER `run_accepted` for the same turn — the
+    /// server cannot announce a row it has not written yet, and the row is
+    /// written well inside the run. So by the time it lands, the empty
+    /// `assistant-{run_id}` placeholder is already the last bubble, and a plain
+    /// push would file the question BELOW the answer to it. It therefore lands
+    /// ahead of any trailing placeholder that has produced nothing yet.
+    ///
+    /// The same rule is what makes mid-run steering come out right, in the
+    /// other direction: by then the bubble carries text or tool calls, so it is
+    /// no longer "nothing yet" and the interjection appends after it — which is
+    /// exactly where `chat.history` will replay it from the event log.
+    pub fn push_peer_user_message(
+        &self,
+        seq: u64,
+        text: &str,
+        author_user_id: &str,
+        timestamp: Option<i64>,
+    ) {
+        /// A bubble opened for a run that has not emitted anything yet. It
+        /// stands for a *future* answer, so a message that arrives now belongs
+        /// in front of it.
+        fn awaits_its_first_output(m: &ChatMessage) -> bool {
+            m.role == "assistant"
+                && m.is_streaming
+                && m.content.is_empty()
+                && m.tool_calls.is_empty()
+        }
+
+        let id = format!("peer-{seq}");
+        self.messages.update(|msgs| {
+            if msgs.iter().any(|m| m.id == id) {
+                return;
+            }
+            let at = msgs
+                .iter()
+                .rposition(|m| !awaits_its_first_output(m))
+                .map_or(0, |i| i + 1);
+            msgs.insert(
+                at,
+                ChatMessage {
+                    id,
+                    role: "user".into(),
+                    content: text.to_string(),
+                    tool_calls: vec![],
+                    is_streaming: false,
+                    is_intermediate: false,
+                    error: None,
+                    model_info: None,
+                    is_final: false,
+                    text_finalized: false,
+                    timestamp,
+                    iteration: None,
+                    agent_id: None,
+                    plan_archive: None,
+                    author_user_id: Some(author_user_id.to_string()),
+                },
+            );
+        });
+    }
+
     /// Start a new assistant message placeholder (streaming).
     ///
     /// **Idempotent per run id.** A run has exactly one `assistant-{run_id}`
@@ -1669,6 +1748,70 @@ mod step_tests {
                 .map(|x| (x.id.clone(), x.iteration, x.is_streaming, x.is_intermediate))
                 .collect()
         })
+    }
+
+    fn ids(chat: &ChatState) -> Vec<String> {
+        chat.messages
+            .with(|m| m.iter().map(|x| x.id.clone()).collect())
+    }
+
+    /// The production order for a room peer's turn: `run_accepted` opens the
+    /// assistant placeholder first (the server cannot announce a row it has not
+    /// written yet), so a plain push would file the question under the answer.
+    #[test]
+    fn a_peer_message_lands_above_the_answer_it_started() {
+        let owner = Owner::new();
+        owner.set();
+        let chat = ChatState::new();
+        chat.start_assistant_message("r1");
+        chat.push_peer_user_message(7, "how did the migration go?", "u-alice", Some(1));
+
+        assert_eq!(ids(&chat), vec!["peer-7", "assistant-r1"]);
+    }
+
+    /// Mid-run steering is the same rule read the other way: the bubble has
+    /// produced output, so the interjection belongs after it — where the event
+    /// log will replay it from.
+    #[test]
+    fn a_peer_message_lands_below_an_answer_already_in_progress() {
+        let owner = Owner::new();
+        owner.set();
+        let chat = ChatState::new();
+        chat.start_assistant_message("r1");
+        chat.append_chunk("r1", "working on it");
+        chat.push_peer_user_message(9, "actually, hold off", "u-alice", Some(2));
+
+        assert_eq!(ids(&chat), vec!["assistant-r1", "peer-9"]);
+    }
+
+    /// Keyed by the row's own seq, so a duplicate delivery — or one racing the
+    /// re-hydrate that replays the same row — cannot double the bubble.
+    #[test]
+    fn a_peer_message_is_idempotent_per_source_seq() {
+        let owner = Owner::new();
+        owner.set();
+        let chat = ChatState::new();
+        chat.push_peer_user_message(7, "hi", "u-alice", Some(1));
+        chat.push_peer_user_message(7, "hi", "u-alice", Some(1));
+
+        assert_eq!(ids(&chat), vec!["peer-7"]);
+    }
+
+    /// Somebody else's message must not retire the banner describing MY last
+    /// failed send — the one behavioural difference from `push_user_message`
+    /// that is easy to lose by copying it.
+    #[test]
+    fn a_peer_message_leaves_my_own_send_error_alone() {
+        let owner = Owner::new();
+        owner.set();
+        let chat = ChatState::new();
+        chat.error_message.set(Some("my send failed".into()));
+        chat.push_peer_user_message(7, "hi", "u-alice", Some(1));
+
+        assert_eq!(
+            chat.error_message.get_untracked().as_deref(),
+            Some("my send failed")
+        );
     }
 
     #[test]
