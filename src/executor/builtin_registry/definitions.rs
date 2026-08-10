@@ -1226,14 +1226,68 @@ pub fn is_builtin_tool(name: &str) -> bool {
     BUILTIN_TOOL_DEFINITIONS.iter().any(|def| def.name == name)
 }
 
+/// Brings the trait consts named by [`REGISTRY_ONLY_DESCRIPTIONS`] into scope
+/// exactly the way `builder/core_tools.rs` has them, so the bytes measured
+/// resolve to the same const the registration passes.
+#[cfg(test)]
+use crate::tools::AlephTool as _;
+
+/// Tools the registry constructor registers that this catalog does NOT
+/// list — and whose descriptions reach the model exactly as a catalog
+/// entry's does.
+///
+/// `agent_init` builds the model's tool list from `BUILTIN_TOOL_DEFINITIONS`
+/// and then completes it from `BuiltinToolRegistry::unified_tools()`, so a
+/// `reg(tools, "goal", GoalTool::DESCRIPTION, …)` in
+/// `builder/core_tools.rs` ships its full description on every request even
+/// though no entry here names it. Registry-only registration is an accepted
+/// pattern (see `tool_catalog_init.rs`) — being unmeasured is not.
+///
+/// By direct const reference, never by literal. This is the same rule
+/// `no_catalog_entry_inlines_its_description` enforces on the catalog, for
+/// the same reason: a literal here would measure bytes that have stopped
+/// being the bytes actually sent, and the ratchet would go on passing.
+///
+/// Kept honest from both sides by `every_registered_core_tool_is_accounted`:
+/// a new `reg(` name that is in neither table fails by name, and an entry
+/// here that no longer corresponds to a registration fails too (a stale
+/// const inflates the ceiling with bytes nobody sends).
+///
+/// `pub(crate)` because the byte ratchet is not the only guard that was
+/// blind to this surface: `thinker::prompt_contract::no_sentence_is_stated_twice`
+/// scans the same shipped text for duplication and ingested only
+/// `BUILTIN_TOOL_DEFINITIONS`. It reads this table rather than keeping its
+/// own list — a second list is the exact failure this table exists to
+/// prevent, one layer up.
+#[cfg(test)]
+pub(crate) const REGISTRY_ONLY_DESCRIPTIONS: &[(&str, &str)] = &[
+    ("pim", crate::builtin_tools::PimTool::DESCRIPTION),
+    ("system", crate::builtin_tools::SystemTool::DESCRIPTION),
+    (
+        "automation",
+        crate::builtin_tools::AutomationTool::DESCRIPTION,
+    ),
+    (
+        "permission",
+        crate::builtin_tools::PermissionTool::DESCRIPTION,
+    ),
+    ("media", crate::builtin_tools::MediaTool::DESCRIPTION),
+    (
+        "scratchpad",
+        crate::builtin_tools::ScratchpadTool::DESCRIPTION,
+    ),
+    ("goal", crate::builtin_tools::GoalTool::DESCRIPTION),
+    ("loop", crate::builtin_tools::LoopTool::DESCRIPTION),
+    (
+        "loop_graph",
+        crate::builtin_tools::LoopGraphTool::DESCRIPTION,
+    ),
+    ("strategy", crate::builtin_tools::StrategyTool::DESCRIPTION),
+];
+
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    // Brings the trait consts named by `REGISTRY_ONLY_DESCRIPTIONS` into
-    // scope exactly the way `builder/core_tools.rs` has them in scope, so the
-    // bytes measured here resolve to the same const the registration passes.
-    use crate::tools::AlephTool;
 
     /// No entry may spell its description out here — see the module invariant.
     ///
@@ -1297,50 +1351,6 @@ mod tests {
         );
     }
 
-    /// Tools the registry constructor registers that this catalog does NOT
-    /// list — and whose descriptions reach the model exactly as a catalog
-    /// entry's does.
-    ///
-    /// `agent_init` builds the model's tool list from `BUILTIN_TOOL_DEFINITIONS`
-    /// and then completes it from `BuiltinToolRegistry::unified_tools()`, so a
-    /// `reg(tools, "goal", GoalTool::DESCRIPTION, …)` in
-    /// `builder/core_tools.rs` ships its full description on every request even
-    /// though no entry here names it. Registry-only registration is an accepted
-    /// pattern (see `tool_catalog_init.rs`) — being unmeasured is not.
-    ///
-    /// By direct const reference, never by literal. This is the same rule
-    /// `no_catalog_entry_inlines_its_description` enforces on the catalog, for
-    /// the same reason: a literal here would measure bytes that have stopped
-    /// being the bytes actually sent, and the ratchet would go on passing.
-    ///
-    /// Kept honest from both sides by `every_registered_core_tool_is_accounted`:
-    /// a new `reg(` name that is in neither table fails by name, and an entry
-    /// here that no longer corresponds to a registration fails too (a stale
-    /// const inflates the ceiling with bytes nobody sends).
-    const REGISTRY_ONLY_DESCRIPTIONS: &[(&str, &str)] = &[
-        ("pim", crate::builtin_tools::PimTool::DESCRIPTION),
-        ("system", crate::builtin_tools::SystemTool::DESCRIPTION),
-        (
-            "automation",
-            crate::builtin_tools::AutomationTool::DESCRIPTION,
-        ),
-        (
-            "permission",
-            crate::builtin_tools::PermissionTool::DESCRIPTION,
-        ),
-        ("media", crate::builtin_tools::MediaTool::DESCRIPTION),
-        (
-            "scratchpad",
-            crate::builtin_tools::ScratchpadTool::DESCRIPTION,
-        ),
-        ("goal", crate::builtin_tools::GoalTool::DESCRIPTION),
-        ("loop", crate::builtin_tools::LoopTool::DESCRIPTION),
-        (
-            "loop_graph",
-            crate::builtin_tools::LoopGraphTool::DESCRIPTION,
-        ),
-        ("strategy", crate::builtin_tools::StrategyTool::DESCRIPTION),
-    ];
 
     /// Total description bytes the builtin tool surface puts in every request.
     ///
