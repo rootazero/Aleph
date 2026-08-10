@@ -328,6 +328,21 @@ fn normalize_agent_alias(raw: &str) -> Option<&'static str> {
     }
 }
 
+/// Ids of builtin agents whose `AgentMode::Primary` (or, by future policy,
+/// any other elevated-mode role) is reserved against disk overrides. The
+/// loader consults this list at parse time so a user/project `<id>.md`
+/// cannot shadow a builtin Primary agent — flipping it to SubAgent via the
+/// loader's mode coercion and surviving `resolve_spawnable`'s mode filter
+/// (see `agents::loader` reserved-id check). Derived from `builtin_agents()`
+/// so the set cannot drift from the actual builtin list.
+#[must_use]
+pub fn builtin_primary_ids() -> Vec<&'static str> {
+    // The list is a literal because the underlying `AgentDef.id` strings are
+    // also literals (and the set is small + stable); a runtime derivation
+    // would require `static` storage of owned strings.
+    vec!["main"]
+}
+
 #[must_use]
 pub fn builtin_agents() -> Vec<AgentDef> {
     vec![

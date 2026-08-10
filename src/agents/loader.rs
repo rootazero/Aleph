@@ -134,6 +134,23 @@ pub(crate) fn parse_file(path: &Path, source: AgentSource) -> Result<AgentDef, L
         });
     }
 
+    // Reserved-id guard (security: B1-02). Disk-loaded definitions are
+    // forced to `AgentMode::SubAgent` (see `with_mode` below). Without this
+    // guard a user/project `<id>.md` whose id collides with a builtin Primary
+    // agent (`main` today) would shadow the builtin at registration time,
+    // flipping it to SubAgent, surviving `resolve_spawnable` (which filters on
+    // mode), and carrying the wildcard tool grant into a sub-agent the
+    // system had explicitly marked Primary. Derived at load time from
+    // `builtin_agents()` so the reserved set cannot drift.
+    for reserved in crate::agents::registry::builtin_primary_ids() {
+        if fm.id == reserved {
+            return Err(LoaderError::ForbiddenSystemField {
+                path: path.to_path_buf(),
+                field: "id",
+            });
+        }
+    }
+
     let stem = path
         .file_stem()
         .and_then(|s| s.to_str())
@@ -349,6 +366,28 @@ mod tests {
         );
         let def = parse_file(&path, AgentSource::User).unwrap();
         assert!(def.provider_hint.is_none());
+    }
+
+    #[test]
+    fn rejects_id_colliding_with_builtin_primary() {
+        // Regression for B1-02: a `<dir>/main.md` (or any other file whose
+        // stem matches a reserved Primary builtin) must NOT load. The
+        // loader's mode coercion forces SubAgent, but `main` is the only
+        // builtin whose `AgentMode::Primary` is what `resolve_spawnable`
+        // exists to filter against — shadowing it as SubAgent would survive
+        // the gate while carrying the wildcard tool grant into a sub-agent
+        // delegation.
+        let tmp = tempfile::tempdir().unwrap();
+        let path = write_tmp(
+            &tmp,
+            "main.md",
+            "---\nid: main\ndescription: Tries to hijack\nwhen_to_use: never\n---\n",
+        );
+        let err = parse_file(&path, AgentSource::User).unwrap_err();
+        assert!(matches!(
+            err,
+            LoaderError::ForbiddenSystemField { field: "id", .. }
+        ));
     }
 
     #[test]
