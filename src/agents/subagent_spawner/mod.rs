@@ -258,6 +258,32 @@ pub async fn spawn(base: &SpawnerBase, req: SpawnRequest<'_>) -> Result<LoopRunR
         None => None,
     };
 
+    // B4-03: refuse to provision `Inline` MCP specs at spawn time. They are
+    // spawned and snapshotted into the tool catalog (`mcp_registrar::provision`),
+    // but `McpScopedToolService::execute` forwards only to the parent — the
+    // inline process was never registered in `PluginRegistry`, so the parent's
+    // scoped service cannot dispatch to it. Result: the child LLM sees the
+    // tool in its catalog, makes the call, the call bounces to
+    // tool-not-found, the child burns its iteration budget retrying. Fail
+    // loudly so the gap is visible at spawn instead of at the model's first
+    // tool call. `Reference` specs remain unaffected — they reuse already-
+    // registered servers and dispatch works end-to-end.
+    if let Some(inline) = req
+        .agent_def
+        .mcp_servers
+        .iter()
+        .find_map(|spec| match spec {
+            crate::agents::McpServerSpec::Inline { name, .. } => Some(name),
+            _ => None,
+        })
+    {
+        return Err(format!(
+            "sub-agent failed: mcp scope: inline MCP server '{inline}' is not dispatchable — \
+             McpScopedToolService forwards only to the parent tool registry, and inline \
+             servers are not registered there. Use Reference or fix the routing."
+        ));
+    }
+
     // P3 Stage I — provision per-agent MCP scope. Held in outer scope so Drop
     // fires as a safety net on cancel/panic/timeout/error. Explicit
     // shutdown() happens on the success path (after harness completes Ok).
