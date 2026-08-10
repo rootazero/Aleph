@@ -793,6 +793,18 @@ impl ToolRegistry for BuiltinToolRegistry {
                     .await
             }),
 
+            // Workspace records (R8). Deliberately OUTSIDE the agent-management
+            // arm below: that arm injects `__channel` for the channel→agent
+            // binding verbs, and a workspace verb has no channel in it. Folding
+            // it in there would also have made it unreachable — the arm is
+            // guarded by an explicit name list.
+            "workspace_manage" => Box::pin(async move {
+                let tool = self.workspace_manage_tool.as_ref().ok_or_else(|| {
+                    AlephError::tool("workspace_manage not available: no AgentEnvStore configured")
+                })?;
+                tool.call_json(arguments).await
+            }),
+
             // Agent management tools — snapshot session context into arguments
             // to avoid race conditions from concurrent reads of the shared handle.
             "agent_create" | "agent_list" | "agent_delete" | "agent_switch" | "agent_unbind"

@@ -60,6 +60,14 @@ const CODE_CORE_ADD: &[&str] = &["apply_patch", "ctx_search"];
 /// (users paste images into chat), the `agent_*` management family stays
 /// (R8 conversational management), and `system`/`pim` stay (their desktop
 /// dependency is an implementation detail, not their register).
+///
+/// Added to that list 2026-08-10: `workspace_manage`. It reads like the
+/// `cron_manage` / `skill_manage` register — an admin surface — but its common
+/// use is the one-shot conversational question its group-mates already stay
+/// resident for ("which workspaces do I have?", "rename this one"), and
+/// deferring it saves no description bytes: the catalog ships those either way
+/// (`definitions.rs::CATALOG_DESCRIPTION_CEILING_BYTES`), so a defer entry buys
+/// only the schema, at the price of a `tool_search` round-trip.
 const CHAT_DEFER_FAMILIES: &[&str] = &[
     "desktop",
     "browser",

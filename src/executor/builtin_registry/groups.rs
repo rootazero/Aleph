@@ -223,6 +223,10 @@ pub static TOOL_CATEGORIES: &[ToolCategory] = &[
             "agent_update",
             "agent_info",
             "agent_identity",
+            // Agent ↔ AgentEnv is 1:1, so a workspace record IS an agent's
+            // environment — it belongs with the agent family, not in a
+            // category of its own.
+            "workspace_manage",
         ],
     },
     ToolCategory {

@@ -1833,6 +1833,17 @@
     ② **member 同时看到「需要 operator 权限」和「暂无工作区」。** 横幅是对的，列表是假的：`RosterList` 的空态不看 `load_error`，于是「被拒」被渲染成了「没有」——正是 `components::admin_refusal` 存在的理由，**在它上面一层复发**。那个模块只能让*错误*诚实，看不见一个兄弟组件渲染的、从没看过错误的空态。修法是把判据提成纯函数 `roster_empty_state(loading, failed)`（**只有成功的读才配说「没有」**），这样它从埋在 markup 里的形状变成可断言的值。**判据推广：凡页面的读可能被拒，它上面每一个能空的列表都欠这道闸。**
   - **QA 覆盖面（诚实标注）**：CLI 18 步全链路（含 `--json` 原始线上形状）· Panel operator 端 Chrome 全量 CRUD + archive/unarchive，并用 **CLI 与直读 SQLite 三方对账**确认 Panel 的写真的落盘 · **member 端真机会话**（`0.0.0.0` + 自签 TLS + `aleph-server pair --user` 绑定的一次性票，从局域网 IP 连——loopback 会短路成 operator，所以这是唯一能拿到 member 角色的路径）：五个 `workspace.*` 全部被服务端拒，拒绝语与 `ADMIN_REQUIRED_MESSAGE` **逐字节相同**，Panel 渲染出本地化文案且**不再**声称没有工作区。
 
+- **workspace 工具面（2026-08-10）：R8 的第三张脸，靠抽 seam 而不是抄一份判据。** `workspace_manage`（`action` ∈ list/get/create/update/archive/unarchive），锚点 `src/builtin_tools/workspace_manage.rs`。
+  - **判据先于代码：这个动词已经有两张脸了，第三张不能自带一份推导。** 六个 handler 的判决（分区闸 / `None` 是「归档只读」还是「查无此行」/ 撞 id 有没有回头路）上提为 `src/gateway/agent_env/ops.rs`，handler 瘦成 parse → ops → 映射错误码。**现有 15 条 RPC 级测试一行未改，就是这次抽取的回归证明**（全绿）。
+  - **真正非抄不可的那半：actor 解析器换了。** handler 一直用 `visibility::partition_visible`（读 `CALLER_USER`），而**每一次工具调用都在 spawn 出的 run 里**，那里它是死的 ⇒ 照抄就是**静默恒真**（地雷 L）。`ops` 统一用 `ambient_partition_visible`，其解析器 `ambient_actor` **先读 `CALLER_USER`**，所以在 RPC 面逐字节不变、在工具面才是对的。一个谓词、两个面、没有 per-caller 参数可以传错。
+  - **拒绝话术里唯一该分叉的那个词，只分叉那个词。** `WorkspaceOpError::text(restore_verb)`：撞归档 id 时 wire 面说 `` `workspace.unarchive` ``、工具面说 `action="unarchive"`（把工具指去一个它够不到的 RPC 方法＝给模型不可执行的建议）；而 `archived == false` 那半**与 `restore_verb` 无关**，所以「分区拒绝」与「真撞 id」的字节相等成了**构造性**的，不再靠纪律。
+  - **事件白拿，因为发射点在 store 里。** `AgentEnvStore` 自己在写锁内发 `WorkspaceChanged`，所以模型的写照样刷新开着的 Panel——**前提是工具拿的是启动时那个挂了总线的 `Arc`**（`BuiltinToolConfig::workspace_manager`）。自己 `with_defaults()` 开一个会完美工作并且一个事件都不发。
+  - **五处登记，两处静默失败。** 目录条目 / 构造器 / schema 注册 / dispatch 臂 / 分组。**dispatch 臂第一版写进了 `agent_create | … | agent_update` 那条臂里，不可达，全仓照常编译通过**——故补 `builder::tests::workspace_manage_wiring_tests`：真 store 建 registry，断言有 schema（按 args 类型真实声明的字段）、dispatch 到得了、**且写进去的行读得回来**（证明是同一个 store）。删掉 dispatch 臂**变异证过 RED**（`Unknown tool: workspace_manage`）。
+  - **闸：`method_authz::OPERATOR_TOOLS`。** `workspace.` 自 2026-08-08 整族 admin-gated，工具面不能更宽；`"member"` 与 `"guest"` 都过不了 `role_is_operator`，一条登记覆盖两者。**两道闸是不同机制**，所以删掉它不会让任何 `workspace.*` 的测试变红——故在 `MUST_STAY_GATED` 里钉住。
+  - **刻意不做**：不给 `action="archive"` 加参数级审批闸。它可逆（`unarchive`、id 不释放、记忆与笔记留在盘上），而 `DESTRUCTIVE_FILE_OPS` 自陈是 tier 系统**唯一**的参数级规则；也不进 `READ_ONLY_TOOLS`（读写混在一个名字下，`Ask` 档连 `list` 也举卡，与 `file_ops` 同形）。也**不**进 `CHAT_DEFER_FAMILIES`：defer 省不下目录字节（描述照发），只省 schema，换一次 `tool_search` 往返——理由记进了 `session_mode.rs` 的「审计保留」段，免得下次审计以为没考虑过。
+  - **字节账**：目录棘轮 82,462 → 82,981 B（+519 B / 六个动词）。初稿 778 B，砍掉的全是**参数 schema 已经承载**的话（`update` 是 patch、`include_archived` 放宽 `list`、各字段含义）；留下的只有 schema 说不出口的运行时事实——workspace id **就是** agent id 且指向它的记忆分区、这条记录**改不了** model/tools/prompt、`create` 不是 `agent_create`、`archive` 是软删且 id 仍被占。
+  - **未做**：无真机 QA（本轮全部为编译 + 单测验证，15,664 lib 测试全绿）。
+
 ---
 
 ## 6. UI / Panel

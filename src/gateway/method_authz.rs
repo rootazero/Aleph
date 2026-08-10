@@ -65,6 +65,14 @@ const OPERATOR_TOOLS: &[&str] = &[
     // front of it, and on a channel the human it asks IS the chat-tier
     // participant making the request.
     "loop_graph",
+    // Workspace records. The `workspace.` RPC family has been admin-gated
+    // since 2026-08-08, after real-machine QA watched a member rename and then
+    // archive a workspace the operator had just created — both returning `ok`.
+    // The tool face is the same verbs over the same seam
+    // (`gateway::agent_env::ops`), so leaving it open would reopen exactly that
+    // finding one surface over. `"member"` and `"guest"` both fail
+    // `turn_context::role_is_operator`, so this one entry covers both.
+    "workspace_manage",
 ];
 
 /// True when `tool` mutates Aleph's own configuration and therefore requires an
@@ -102,6 +110,10 @@ mod tests {
         "agent_identity",
         // Control-plane write: adding a hook fires code on future events.
         "hooks_manage",
+        // The tool half of an admin-gated RPC family. Pinned because the two
+        // gates are different mechanisms: deleting this entry would not make
+        // any `workspace.` RPC test go red, it would only widen the tool.
+        "workspace_manage",
     ];
 
     #[test]
