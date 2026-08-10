@@ -451,16 +451,18 @@ impl AgentRuntime {
             "SubagentEnd: sub-agent completed"
         );
 
-        // Persist on the blocking pool so the async runtime thread is not held
-        // by filesystem I/O. Transcript persistence is best-effort; errors are
-        // logged inside `persist_transcript`.
-        let transcript_for_persist = transcript.clone();
-        let chain_id_for_persist = self.child_chain.chain_id.clone();
-        // Detach rather than await: dropping the `JoinHandle` leaves the spawned
-        // task running (drop is not cancellation), which is what best-effort wants.
-        drop(tokio::task::spawn_blocking(move || {
-            persist_transcript(&transcript_for_persist, &chain_id_for_persist);
-        }));
+        // B1-05 (R10): CUT transcript persistence. The transcript file has zero
+        // readers repo-wide (the only `data/transcripts` occurrence is this
+        // write; nothing reads the directory, no RPC serves it, no tool
+        // exposes it, SubagentTranscript is deserialized only in this file's
+        // own round-trip tests). The durable subagent record consumers
+        // actually use is the SubagentSpawned / SubagentReturned session
+        // event pair. Detaching a spawn_blocking per completion to write a
+        // dead store (and trigger its own fs::remove_dir_all via cleanup)
+        // is exactly the 'zero existing consumer' R10 prescribes deleting.
+        // If observability is wanted later, route through TraceSink
+        // (already wired on this struct, runtime.rs:137) rather than a
+        // second, unread store.
 
         // SubagentStop lifecycle hook (observer-only). Carries the completion
         // outcome so hooks can react to delegation results without re-reading
@@ -682,74 +684,11 @@ const fn format_outcome(outcome: &TranscriptOutcome) -> &str {
     }
 }
 
-/// Maximum transcript directories to retain per session.
-const MAX_TRANSCRIPT_DIRS: usize = 50;
-
-fn cleanup_old_transcripts(base_dir: &std::path::Path) {
-    let parent = match base_dir.parent() {
-        Some(p) => p,
-        None => return,
-    };
-    let Ok(entries) = std::fs::read_dir(parent) else {
-        return;
-    };
-
-    let mut dirs: Vec<(std::path::PathBuf, std::time::SystemTime)> = entries
-        .filter_map(|e| e.ok())
-        .filter(|e| e.path().is_dir())
-        .filter_map(|e| {
-            let modified = e.metadata().ok()?.modified().ok()?;
-            Some((e.path(), modified))
-        })
-        .collect();
-
-    if dirs.len() <= MAX_TRANSCRIPT_DIRS {
-        return;
-    }
-
-    dirs.sort_by_key(|(_, t)| *t);
-    let to_remove = dirs.len() - MAX_TRANSCRIPT_DIRS;
-    for (path, _) in dirs.into_iter().take(to_remove) {
-        let _ = std::fs::remove_dir_all(path);
-    }
-}
-
-/// Persist a subagent transcript to disk for future retrieval.
-/// Best-effort: errors are logged but not propagated.
-fn persist_transcript(transcript: &SubagentTranscript, session_id: &str) {
-    // Sanitize path components so a user/project-controlled agent id or
-    // session id cannot traverse out of the transcript directory.
-    let safe_session = session_id.replace(['/', '\\'], "_").replace("..", "_");
-    let safe_agent_id = transcript
-        .agent_id
-        .replace(['/', '\\'], "_")
-        .replace("..", "_");
-    // `ALEPH_HOME`-aware: transcripts are Aleph state and belong under the
-    // configured home with every other store, not under the real one.
-    let base = match crate::utils::paths::get_config_dir() {
-        Ok(h) => h.join("data/transcripts").join(safe_session),
-        Err(e) => {
-            tracing::warn!(error = %e, "Cannot resolve Aleph home for transcript persistence");
-            return;
-        }
-    };
-    if let Err(e) = std::fs::create_dir_all(&base) {
-        tracing::warn!(error = %e, "Failed to create transcript directory");
-        return;
-    }
-    let path = base.join(format!("{safe_agent_id}.json"));
-    match serde_json::to_string_pretty(transcript) {
-        Ok(json) => {
-            if let Err(e) = std::fs::write(&path, json) {
-                tracing::warn!(path = %path.display(), error = %e, "Failed to write transcript");
-            } else {
-                tracing::debug!(path = %path.display(), "Transcript persisted");
-                cleanup_old_transcripts(&base);
-            }
-        }
-        Err(e) => tracing::warn!(error = %e, "Failed to serialize transcript"),
-    }
-}
+// B1-05 (R10 CUT): persist_transcript and cleanup_old_transcripts deleted —
+// they had zero consumers repo-wide (the only `data/transcripts` occurrence
+// was the write site; no reader, no RPC, no tool). The durable subagent
+// record consumers actually use is the session event log. If observability
+// is wanted later, route through TraceSink instead of a second unread store.
 
 // =============================================================================
 // Tests
