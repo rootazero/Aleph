@@ -398,6 +398,7 @@ mod tests {
                 args_fp: None,
                 detail: "x".into(),
                 at_ms: 1,
+                principal: None,
             })
             .unwrap();
 

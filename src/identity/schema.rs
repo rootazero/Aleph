@@ -61,6 +61,12 @@ CREATE TABLE IF NOT EXISTS agent_ledger (
     args_fp    TEXT,
     detail     TEXT NOT NULL,
     at_ms      INTEGER NOT NULL,
+    -- The person the row is attributable to (`users.user_id`), NULL when the
+    -- action had no human behind it (cron, heartbeat, A2A, a chain's own
+    -- opening record) and on every row written before this column existed.
+    -- Added in schema v16; see `LEDGER_ADD_PRINCIPAL_SQL` for the ALTER an
+    -- already-created table needs (re-running this CREATE cannot reach it).
+    principal  TEXT,
     PRIMARY KEY (agent_id, seq)
 );
 CREATE UNIQUE INDEX IF NOT EXISTS idx_agent_ledger_hash ON agent_ledger(agent_id, hash);
@@ -73,8 +79,15 @@ CREATE TABLE IF NOT EXISTS agent_ledger_health (
 );
 ";
 
+/// Reach an `agent_ledger` that already exists.
+///
+/// Lives beside the `CREATE` rather than inside `SecurityStore::migrate` for
+/// the same reason [`IDENTITY_SCHEMA`] does: the domain owns the shape, the
+/// store owns the file. Mirrors `security::audit::AUDIT_LOG_ADD_ACTOR_SQL`.
+pub const LEDGER_ADD_PRINCIPAL_SQL: &str = "ALTER TABLE agent_ledger ADD COLUMN principal TEXT";
+
 /// Columns selected by every ledger read, in the order
 /// [`row_to_record`](super::record::row_to_record) expects.
 pub const LEDGER_COLUMNS: &str =
     "agent_id, seq, prev_hash, hash, signature, signer_fp, action, target, outcome, args_fp, \
-     detail, at_ms";
+     detail, at_ms, principal";

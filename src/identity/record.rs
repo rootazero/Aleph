@@ -143,6 +143,23 @@ pub struct NewRecord {
     /// records use [`ApprovalAction::summary`](crate::sandbox::exec_approval::ApprovalAction),
     /// which is masked and capped at the single source.
     pub detail: String,
+    /// The **person** this action is attributable to (`users.user_id`), when
+    /// the run can name one.
+    ///
+    /// `agent_id` answers "which identity acted"; this answers "who was
+    /// driving it". They are different questions and a multi-user install
+    /// needs both: without this column a chain proves that agent `main` ran a
+    /// command, and is silent on whether the operator or a member asked for
+    /// it — so non-repudiation held for agents and not for people.
+    ///
+    /// `None` where there genuinely is no person: cron, heartbeat, a
+    /// continuation, an A2A delegation, a chain's own opening record. Absent
+    /// and "we did not bother" must not be confusable, which is why this is
+    /// resolved at the chokepoint from
+    /// [`visibility::ambient_actor`](crate::gateway::visibility::ambient_actor)
+    /// and never accepted from tool arguments — same provenance fence as
+    /// `agent_id`, and the reason this type is still not `Deserialize`.
+    pub principal: Option<String>,
 }
 
 /// Key-lifecycle records.
@@ -170,19 +187,35 @@ impl NewRecord {
             target: fingerprint.to_string(),
             outcome: LedgerOutcome::Ok,
             args_fp: None,
+            // The writer authors this one itself, on seeing an empty chain —
+            // there is no person behind it to name. The very next record is the
+            // action that caused the chain to open, and that one carries the
+            // principal.
+            principal: None,
             detail: format!("chain opened under key {fingerprint}"),
         }
     }
 
     /// Signed by the **new** key: the retired one no longer makes statements.
+    ///
+    /// `principal` is captured by the public entry point
+    /// ([`identity::rotate_identity`](super::rotate_identity)) while the
+    /// caller's context is still live — the single writer runs on its own
+    /// task, where task-locals are already gone.
     #[must_use]
-    pub fn identity_rotated(agent_id: &str, fingerprint: &str, previous: Option<&str>) -> Self {
+    pub fn identity_rotated(
+        agent_id: &str,
+        fingerprint: &str,
+        previous: Option<&str>,
+        principal: Option<String>,
+    ) -> Self {
         Self {
             agent_id: agent_id.to_string(),
             action: LedgerAction::IdentityRotated,
             target: fingerprint.to_string(),
             outcome: LedgerOutcome::Ok,
             args_fp: None,
+            principal,
             detail: previous.map_or_else(
                 || format!("signing key minted: {fingerprint}"),
                 |p| format!("signing key replaced: {p} retired, {fingerprint} active"),
@@ -193,14 +226,20 @@ impl NewRecord {
     /// Signed by the key being revoked — the chain's last statement under it,
     /// and the reason [`AgentKeystore::signing_identity`](super::AgentKeystore::signing_identity)
     /// tolerates a revoked agent instead of refusing to sign.
+    ///
+    /// "Who revoked this identity" is the question an incident review asks
+    /// first, so `principal` rides in from
+    /// [`identity::revoke_identity`](super::revoke_identity) the same way
+    /// rotation's does.
     #[must_use]
-    pub fn identity_revoked(agent_id: &str, fingerprint: &str) -> Self {
+    pub fn identity_revoked(agent_id: &str, fingerprint: &str, principal: Option<String>) -> Self {
         Self {
             agent_id: agent_id.to_string(),
             action: LedgerAction::IdentityRevoked,
             target: fingerprint.to_string(),
             outcome: LedgerOutcome::Ok,
             args_fp: None,
+            principal,
             detail: format!("identity revoked; key {fingerprint} retired"),
         }
     }
@@ -226,6 +265,11 @@ pub struct LedgerRecord {
     pub args_fp: Option<String>,
     pub detail: String,
     pub at_ms: i64,
+    /// The person this row is attributable to — see [`NewRecord::principal`].
+    /// `None` on every row written before the column existed and on every
+    /// genuinely person-less action; the two are indistinguishable here and
+    /// mean the same thing to a reader ("this chain does not name anyone").
+    pub principal: Option<String>,
 }
 
 fn ser_hex<S: serde::Serializer>(bytes: &[u8], s: S) -> Result<S::Ok, S::Error> {
@@ -264,6 +308,7 @@ pub fn row_to_record(row: &rusqlite::Row<'_>) -> rusqlite::Result<LedgerRecord> 
         args_fp: row.get(9)?,
         detail: row.get(10)?,
         at_ms: row.get(11)?,
+        principal: row.get(12)?,
     })
 }
 

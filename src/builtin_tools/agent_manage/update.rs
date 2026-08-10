@@ -152,13 +152,12 @@ impl AgentUpdateTool {
 impl AlephTool for AgentUpdateTool {
     const NAME: &'static str = "agent_update";
     const DESCRIPTION: &'static str =
-        "Patch an existing agent's name, description, model, system prompt, archetype, or \
-         allowed_users. All fields are optional; only supplied keys change. Explicit `null` \
-         clears a field. To rename `agent_id`, delete and re-create — IDs are the identity key. \
-         `allowed_users` is the list of user ids permitted to start a run AS this agent (and to \
-         delegate to it); an empty list means everyone. Changes are written to config.toml and \
-         take effect after aleph-server restarts — relay the `takes_effect` field, never report \
-         a revocation as already in force.";
+        "Patch an existing agent's name, description, model, system prompt, archetype or \
+         allowed_users. Only supplied keys change; explicit `null` clears one. To rename \
+         `agent_id`, delete and re-create — IDs are the identity key. `allowed_users` lists \
+         the user ids allowed to run AS this agent and to delegate to it; empty means \
+         everyone. Every change lands in config.toml and bites only after aleph-server \
+         restarts — say that, do not report a revocation as already in force.";
 
     type Args = AgentUpdateArgs;
     type Output = AgentUpdateOutput;

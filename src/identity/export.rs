@@ -223,6 +223,12 @@ pub struct ExportedRecord {
     pub args_fp: Option<String>,
     pub detail: String,
     pub at_ms: i64,
+    /// The person the row names, when it names one. `#[serde(default)]` is
+    /// what lets a document exported before this field existed still parse —
+    /// and it lands as `None`, which is also how the preimage treats it, so an
+    /// older export verifies with the same digests it was signed under.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub principal: Option<String>,
 }
 
 impl ExportedRecord {
@@ -239,6 +245,7 @@ impl ExportedRecord {
             args_fp: r.args_fp.clone(),
             detail: r.detail.clone(),
             at_ms: r.at_ms,
+            principal: r.principal.clone(),
         }
     }
 
@@ -273,6 +280,7 @@ impl ExportedRecord {
             args_fp: self.args_fp.clone(),
             detail: self.detail.clone(),
             at_ms: self.at_ms,
+            principal: self.principal.clone(),
         })
     }
 }

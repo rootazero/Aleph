@@ -47,6 +47,10 @@ pub struct Preimage<'a> {
     pub detail: &'a str,
     pub signer_fp: &'a str,
     pub prev_hash: Option<&'a [u8]>,
+    /// The human this action is attributable to (`users.user_id`), when the
+    /// chain can name one. See [`compute_hash`]'s trailing-field note for why
+    /// this is the last field and why `None` is byte-invisible.
+    pub principal: Option<&'a str>,
 }
 
 /// Length-prefixed field: `u32` big-endian length, then the bytes.
@@ -93,6 +97,25 @@ pub fn compute_hash(p: &Preimage<'_>) -> [u8; 32] {
         Some(prev) => h.update(prev),
         None => h.update(GENESIS_HASH),
     }
+    // `principal` is committed to LAST, and a `None` emits **nothing at all**
+    // rather than `opt_lp`'s zero tag.
+    //
+    // That asymmetry is the whole reason chains written before this field
+    // existed keep verifying: their preimage ends at the 32-byte `prev_hash`,
+    // and so does a principal-less row's today. Bumping `DOMAIN` or using
+    // `opt_lp` here would have been tidier to read and would have invalidated
+    // every stored chain — the one thing this module's own doc forbids.
+    //
+    // It costs nothing in framing. `prev_hash` is fixed-width, so "the bytes
+    // stopped" and "a presence tag follows" are not confusable; and the tag
+    // still separates `Some("")` from absent. Tampering is caught from both
+    // directions: stripping a principal from a row shortens its preimage,
+    // adding one to a legacy row lengthens it, and either way the digest moves
+    // and the signature no longer covers it.
+    if let Some(principal) = p.principal {
+        h.update([1u8]);
+        lp(&mut h, principal.as_bytes());
+    }
     h.finalize().into()
 }
 
@@ -112,6 +135,7 @@ mod tests {
             detail: "file_ops: operation=delete",
             signer_fp: "0011223344556677",
             prev_hash: None,
+            principal: None,
         }
     }
 
@@ -170,6 +194,92 @@ mod tests {
         let prev = [0xABu8; 32];
         p.prev_hash = Some(&prev);
         assert_ne!(base, compute_hash(&p));
+
+        let mut p = sample();
+        p.principal = Some("u-alice");
+        assert_ne!(base, compute_hash(&p));
+    }
+
+    /// The compatibility contract: a principal-less preimage must hash to
+    /// exactly what it hashed to before `principal` existed. Every chain
+    /// already on disk depends on it, and the failure mode is not
+    /// subtle-but-recoverable — it is every stored row reporting
+    /// `HashMismatch` at once, on a surface whose entire job is to be believed.
+    ///
+    /// The expectation is a **second, hand-written expression of the v1
+    /// layout**, deliberately not calling `compute_hash`. A golden hex literal
+    /// would have been shorter and worse: nobody can tell a genuine v1 digest
+    /// from one somebody refreshed to make a failing change pass, whereas this
+    /// says out loud which bytes v1 committed to and in what order. Any edit
+    /// to the field set, the field order, the domain tag or the length framing
+    /// makes the two diverge — which is precisely the set of edits that
+    /// invalidates existing chains.
+    #[test]
+    fn a_principal_less_row_hashes_exactly_as_it_did_before_the_field_existed() {
+        let p = sample();
+        let mut h = Sha256::new();
+        let prefixed = |h: &mut Sha256, bytes: &[u8]| {
+            h.update(u32::try_from(bytes.len()).unwrap().to_be_bytes());
+            h.update(bytes);
+        };
+
+        h.update(b"aleph-agent-ledger-v1");
+        prefixed(&mut h, p.agent_id.as_bytes());
+        // `seq` and `at_ms` are raw big-endian integers, not length-prefixed.
+        h.update(p.seq.to_be_bytes());
+        h.update(p.at_ms.to_be_bytes());
+        prefixed(&mut h, p.action.as_str().as_bytes());
+        prefixed(&mut h, p.outcome.as_str().as_bytes());
+        prefixed(&mut h, p.target.as_bytes());
+        match p.args_fp {
+            Some(fp) => {
+                h.update([1u8]);
+                prefixed(&mut h, fp.as_bytes());
+            }
+            None => h.update([0u8]),
+        }
+        prefixed(&mut h, p.detail.as_bytes());
+        prefixed(&mut h, p.signer_fp.as_bytes());
+        // `sample()` has no predecessor, so v1 hashed the genesis sentinel here.
+        h.update(GENESIS_HASH);
+        let v1: [u8; 32] = h.finalize().into();
+
+        assert_eq!(
+            compute_hash(&p),
+            v1,
+            "a row that names no principal must hash byte-for-byte as v1 did — \
+             every chain on disk is signed over that digest"
+        );
+    }
+
+    /// Tampering is caught from BOTH directions, which is what makes the
+    /// column worth having: an attacker who can write the database can neither
+    /// erase the person a row names nor pin one on a legacy row, because
+    /// either edit moves the digest the signature covers.
+    #[test]
+    fn adding_or_stripping_a_principal_both_move_the_digest() {
+        let without = compute_hash(&sample());
+        let mut p = sample();
+        p.principal = Some("u-alice");
+        let with = compute_hash(&p);
+        assert_ne!(without, with, "stripping a principal must be detectable");
+
+        let mut q = sample();
+        q.principal = Some("u-bob");
+        assert_ne!(
+            with,
+            compute_hash(&q),
+            "swapping one person for another must be detectable"
+        );
+    }
+
+    /// `Some("")` is not absence — the presence tag is what keeps a row that
+    /// names an empty principal from colliding with a row that names none.
+    #[test]
+    fn an_empty_principal_is_distinct_from_no_principal() {
+        let mut empty = sample();
+        empty.principal = Some("");
+        assert_ne!(compute_hash(&sample()), compute_hash(&empty));
     }
 
     #[test]

@@ -148,10 +148,15 @@ impl AgentLedger {
     /// Returns the new identity row and the fingerprint it replaced, so no
     /// caller has to read "what was active before" a second time and risk
     /// disagreeing with what actually happened.
-    fn perform_rotate(&self, agent_id: &str) -> Result<Rotation, KeyError> {
+    fn perform_rotate(
+        &self,
+        agent_id: &str,
+        principal: Option<String>,
+    ) -> Result<Rotation, KeyError> {
         let previous = self.keys.identity(agent_id)?.map(|r| r.active_fingerprint);
         let fingerprint = self.keys.mint_key(agent_id)?;
-        let declaration = NewRecord::identity_rotated(agent_id, &fingerprint, previous.as_deref());
+        let declaration =
+            NewRecord::identity_rotated(agent_id, &fingerprint, previous.as_deref(), principal);
         if let Err(e) = self.append_signed_by(&fingerprint, &declaration) {
             // A lifecycle statement that should be on the chain is not. Counted
             // for the same reason an ordinary lost append is: no chain check can
@@ -177,7 +182,11 @@ impl AgentLedger {
     ///
     /// Returns the fingerprint that was retired, or `None` when the agent had no
     /// live identity to revoke.
-    fn perform_revoke(&self, agent_id: &str) -> Result<Option<String>, KeyError> {
+    fn perform_revoke(
+        &self,
+        agent_id: &str,
+        principal: Option<String>,
+    ) -> Result<Option<String>, KeyError> {
         let Some(identity) = self.keys.identity(agent_id)? else {
             return Ok(None);
         };
@@ -189,7 +198,7 @@ impl AgentLedger {
         // and the reason `signing_identity` tolerates a revoked agent.
         if let Err(e) = self.append_signed_by(
             &fingerprint,
-            &NewRecord::identity_revoked(agent_id, &fingerprint),
+            &NewRecord::identity_revoked(agent_id, &fingerprint, principal),
         ) {
             self.note_lost();
             return Err(e);
@@ -221,6 +230,7 @@ impl AgentLedger {
             detail: &new.detail,
             signer_fp,
             prev_hash: prev_hash.as_deref(),
+            principal: new.principal.as_deref(),
         });
         let signature = self.keys.sign(signer_fp, &hash)?;
 
@@ -237,6 +247,7 @@ impl AgentLedger {
             args_fp: new.args_fp.clone(),
             detail: new.detail.clone(),
             at_ms,
+            principal: new.principal.clone(),
         };
         store.ledger_insert(&record)?;
         Ok(record)
@@ -338,10 +349,15 @@ enum LedgerJob {
     Append(NewRecord),
     Rotate {
         agent_id: String,
+        /// Resolved by the PUBLIC entry point, not here: the writer runs on
+        /// its own task, where the caller's task-locals are already gone, so
+        /// "who asked for this" has to be captured before the hand-off.
+        principal: Option<String>,
         ack: oneshot::Sender<Result<Rotation, KeyError>>,
     },
     Revoke {
         agent_id: String,
+        principal: Option<String>,
         ack: oneshot::Sender<Result<Option<String>, KeyError>>,
     },
     /// A barrier: acknowledged once every job queued ahead of it is written.
@@ -402,11 +418,19 @@ pub fn install(ledger: Arc<AgentLedger>) -> Option<tokio::task::JoinHandle<()>> 
                 // `perform_*`, at the exact step that failed, so a rotation
                 // whose declaration landed but whose activation did not is not
                 // miscounted as a lost record.
-                LedgerJob::Rotate { agent_id, ack } => {
-                    let _ = ack.send(ledger.perform_rotate(&agent_id));
+                LedgerJob::Rotate {
+                    agent_id,
+                    principal,
+                    ack,
+                } => {
+                    let _ = ack.send(ledger.perform_rotate(&agent_id, principal));
                 }
-                LedgerJob::Revoke { agent_id, ack } => {
-                    let _ = ack.send(ledger.perform_revoke(&agent_id));
+                LedgerJob::Revoke {
+                    agent_id,
+                    principal,
+                    ack,
+                } => {
+                    let _ = ack.send(ledger.perform_revoke(&agent_id, principal));
                 }
                 LedgerJob::Flush(ack) => {
                     let _ = ack.send(());
@@ -438,7 +462,16 @@ async fn submit<T>(
 /// caller may report success from.
 pub async fn rotate_identity(agent_id: &str) -> Result<Rotation, LedgerCommandError> {
     let agent_id = agent_id.to_string();
-    submit(|ack| LedgerJob::Rotate { agent_id, ack }).await
+    // Captured HERE, on the caller's task. `ambient_actor` reads a task-local
+    // first, and the writer task has none — resolving it inside `perform_*`
+    // would silently record every rotation as person-less.
+    let principal = crate::gateway::visibility::ambient_actor();
+    submit(|ack| LedgerJob::Rotate {
+        agent_id,
+        principal,
+        ack,
+    })
+    .await
 }
 
 /// Revoke an agent's identity **and** record that on its own chain.
@@ -447,7 +480,14 @@ pub async fn rotate_identity(agent_id: &str) -> Result<Rotation, LedgerCommandEr
 /// identity to revoke.
 pub async fn revoke_identity(agent_id: &str) -> Result<Option<String>, LedgerCommandError> {
     let agent_id = agent_id.to_string();
-    submit(|ack| LedgerJob::Revoke { agent_id, ack }).await
+    // See `rotate_identity`: the actor has to be read before the hand-off.
+    let principal = crate::gateway::visibility::ambient_actor();
+    submit(|ack| LedgerJob::Revoke {
+        agent_id,
+        principal,
+        ack,
+    })
+    .await
 }
 
 /// Wait until every record enqueued before this call has been written.
@@ -521,6 +561,7 @@ mod tests {
             outcome: LedgerOutcome::Ok,
             args_fp: Some("fp".into()),
             detail: format!("{target}: did a thing"),
+            principal: None,
         }
     }
 
@@ -607,6 +648,81 @@ mod tests {
         let report = l.verify("main").unwrap();
         assert!(!report.ok);
         assert!(report.faults.contains(&ChainFault::HashMismatch { seq: 2 }));
+    }
+
+    /// Rewriting *who* a row names is tamper-evident on the same terms as
+    /// rewriting *what* it says.
+    ///
+    /// The column would have been near-worthless otherwise: an accountability
+    /// record whose "who" is an ordinary mutable column is one UPDATE away
+    /// from naming somebody else, and it would carry a valid signature while
+    /// doing it. All three edits an adversary would actually try are covered —
+    /// swap the person, erase the person, invent one on a row that named
+    /// nobody.
+    #[test]
+    fn rewriting_the_principal_is_detected() {
+        let (l, store, _d) = ledger();
+        let mut named = entry("main", "bash");
+        named.principal = Some("u-alice".into());
+        l.append(&named).unwrap();
+        l.append(&entry("main", "file_ops")).unwrap();
+        assert!(l.verify("main").unwrap().ok, "baseline must be clean");
+
+        let set = |sql: &str| {
+            let conn = store.conn.lock().unwrap();
+            conn.execute(sql, []).unwrap();
+        };
+
+        // Blame someone else.
+        set("UPDATE agent_ledger SET principal='u-bob' WHERE agent_id='main' AND seq=2");
+        let report = l.verify("main").unwrap();
+        assert!(report.faults.contains(&ChainFault::HashMismatch { seq: 2 }));
+
+        // Erase the attribution entirely — the edit an insider would prefer,
+        // and the one a naive trailing-optional layout would have missed.
+        set("UPDATE agent_ledger SET principal=NULL WHERE agent_id='main' AND seq=2");
+        let report = l.verify("main").unwrap();
+        assert!(
+            report.faults.contains(&ChainFault::HashMismatch { seq: 2 }),
+            "stripping a principal must not restore a valid digest"
+        );
+
+        // Pin one on a row that named nobody (seq 3 was appended without a
+        // principal, as every legacy row is).
+        set("UPDATE agent_ledger SET principal='u-alice' WHERE agent_id='main' AND seq=3");
+        let report = l.verify("main").unwrap();
+        assert!(report.faults.contains(&ChainFault::HashMismatch { seq: 3 }));
+    }
+
+    /// A record that names a person survives the round trip through storage —
+    /// the column is written, read back, and covered by the digest the
+    /// signature is over. Without this the field could be silently dropped by
+    /// the INSERT and every test above would still pass, because a row that
+    /// never carried a principal hashes cleanly by design.
+    #[test]
+    fn a_principal_survives_the_write_and_read_back() {
+        let (l, _s, _d) = ledger();
+        let mut named = entry("main", "bash");
+        named.principal = Some("u-alice".into());
+        l.append(&named).unwrap();
+
+        let report = l.verify("main").unwrap();
+        assert!(report.ok, "{:?}", report.faults);
+
+        let rows = l.recent(Some("main"), 10).unwrap();
+        let call = rows
+            .iter()
+            .find(|r| r.action == LedgerAction::ToolCall)
+            .expect("the tool call row");
+        assert_eq!(call.principal.as_deref(), Some("u-alice"));
+
+        // The chain's own opening record has no person behind it, and must not
+        // borrow one from the action that caused it to open.
+        let opened = rows
+            .iter()
+            .find(|r| r.action == LedgerAction::IdentityCreated)
+            .expect("the genesis row");
+        assert_eq!(opened.principal, None);
     }
 
     #[test]
@@ -794,6 +910,7 @@ mod tests {
             args_fp: None,
             detail: "forged".into(),
             at_ms: 99,
+            principal: None,
         };
         let real_hash = super::super::hash::compute_hash(&super::super::hash::Preimage {
             agent_id: &forged.agent_id,
@@ -806,6 +923,7 @@ mod tests {
             detail: &forged.detail,
             signer_fp: &forged.signer_fp,
             prev_hash: forged.prev_hash.as_deref(),
+            principal: None,
         });
         let forged = LedgerRecord {
             hash: real_hash.to_vec(),
@@ -834,7 +952,7 @@ mod tests {
             .unwrap()
             .unwrap()
             .active_fingerprint;
-        let rotation = l.perform_rotate("main").unwrap();
+        let rotation = l.perform_rotate("main", None).unwrap();
         assert_eq!(rotation.previous_fingerprint.as_deref(), Some(old.as_str()));
         l.append(&entry("main", "after")).unwrap();
 
@@ -893,7 +1011,7 @@ mod tests {
             .unwrap()
             .active_fingerprint;
         let new = l
-            .perform_rotate("main")
+            .perform_rotate("main", None)
             .unwrap()
             .identity
             .active_fingerprint;
@@ -914,7 +1032,7 @@ mod tests {
         let (l, _s, _d) = ledger();
         let fp = l.keys().ensure("main").unwrap().active_fingerprint;
         assert_eq!(
-            l.perform_revoke("main").unwrap().as_deref(),
+            l.perform_revoke("main", None).unwrap().as_deref(),
             Some(fp.as_str())
         );
         assert!(l
@@ -931,7 +1049,7 @@ mod tests {
         assert_eq!(chain.last().unwrap().action, LedgerAction::IdentityRevoked);
         assert_eq!(chain.last().unwrap().signer_fp, fp);
         // Revoking again changes nothing and adds no second statement.
-        assert_eq!(l.perform_revoke("main").unwrap(), None);
+        assert_eq!(l.perform_revoke("main", None).unwrap(), None);
         assert_eq!(
             l.keys().store().ledger_chain("main").unwrap().len(),
             chain.len()
@@ -952,7 +1070,7 @@ mod tests {
             conn.execute("DROP TABLE agent_ledger", []).unwrap();
         }
 
-        assert!(l.perform_rotate("main").is_err());
+        assert!(l.perform_rotate("main", None).is_err());
 
         let after = l.keys().identity("main").unwrap().unwrap();
         assert_eq!(

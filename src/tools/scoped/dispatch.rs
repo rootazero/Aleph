@@ -869,6 +869,11 @@ impl ScopedToolService {
         // it authorized, not on the spawning agent's.
         crate::identity::record_action(crate::identity::NewRecord {
             agent_id: Self::ledger_actor_for(turn),
+            // And the same person. An approval record that named only the
+            // agent would leave "who authorized this" answerable one level
+            // less precisely than "who ran it" — on the two record kinds where
+            // a human decision is the entire content.
+            principal: crate::gateway::visibility::ambient_actor(),
             action: decision.ledger_action(),
             target: name.to_string(),
             outcome: decision.ledger_outcome(),

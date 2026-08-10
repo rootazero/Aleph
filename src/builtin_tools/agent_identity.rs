@@ -133,6 +133,14 @@ fn record_json(r: &LedgerRecord) -> Value {
         "detail": r.detail,
         "args_fingerprint": r.args_fp,
         "signer": r.signer_fp,
+        // The other half of "who did this". `agent` names the identity that
+        // acted; this names the person who was driving it — absent when there
+        // genuinely was none (cron, heartbeat, a continuation) and on rows
+        // written before the column existed. Emitted unconditionally, `null`
+        // included: a key that disappears when the answer is "nobody" reads,
+        // to whoever is scanning the output, like a field that sometimes is
+        // not collected.
+        "principal": r.principal,
     })
 }
 
@@ -143,18 +151,20 @@ impl AlephTool for AgentIdentityTool {
 
 Every agent holds its own Ed25519 keypair. Every mutating tool call, every refusal and every approval decision is appended to that agent's own hash-chained, signed ledger, so "who did this" has an answer that does not depend on trusting the log.
 
-- {"action": "list"} — every agent identity: key fingerprint, when it was minted, whether it is revoked, and how many records its chain holds.
-- {"action": "show", "agent": "main"} — one agent in full: its active key, every key it has ever held (retired keys are kept so their records stay verifiable), and its most recent records.
-- {"action": "ledger", "agent": "main", "limit": 50} — recent records, newest first. Omit `agent` to span every agent.
-- {"action": "verify", "agent": "main"} — recompute the chain and check every signature. Omit `agent` to verify all. Reports ok=true, or every fault found: an edited row, a broken link, a bad signature, a deleted prefix, a sequence gap, or a truncated tail.
-- {"action": "keygen", "agent": "main"} — mint the key if the agent does not have one yet (agents get one automatically on first recorded action).
-- {"action": "rotate", "agent": "main"} — replace the signing key. History signed by the old key stays verifiable; the chain is NOT reset.
-- {"action": "revoke", "agent": "main"} — stop the agent signing. Its chain stays readable and verifiable. `rotate` brings a revoked agent back.
-- {"action": "export", "agent": "main"} — write the agent's whole chain, its public keys and its anchor to one self-contained JSON file, and report the path. Contains no private key and no tool arguments. Hand it to an auditor: `aleph-server identity verify --input <path> --pin <root_fingerprint> --expect-head <expect_head>` checks it on a machine with no Aleph, no database and no daemon.
+Each record answers "who" twice: `agent` is the identity that acted, `principal` is the person who drove it. They differ whenever several people share an agent, and `principal` is null for work no person asked for (cron, heartbeat, continuations) — which is not the same as unknown. Both are inside the signature, so neither can be rewritten by editing the database.
 
-Rotation and revocation are themselves appended to the affected agent's chain, so key history cannot be quietly rewritten by editing the database. Both wait for that record to be written and report a failure rather than claiming a success the chain does not know about. A delegated sub-agent holds its own key and signs its own work; it is a separate agent here, not a line on its parent's chain.
+- list — every identity: key fingerprint, mint time, whether revoked, chain length.
+- show — one agent in full: its active key, every key it has ever held (retired keys are kept so their records stay verifiable), recent records.
+- ledger — recent records, newest first. Omit `agent` to span every agent.
+- verify — recompute the chain and check every signature. Omit `agent` to verify all. Reports ok, or every fault found: edited row, broken link, bad signature, deleted prefix, sequence gap, truncated tail.
+- keygen — mint the key early (agents get one automatically on first recorded action).
+- rotate — replace the signing key. History signed by the old key stays verifiable; the chain is NOT reset.
+- revoke — stop the agent signing. Its chain stays readable and verifiable; `rotate` brings it back.
+- export — write the whole chain, its public keys and its anchor to one self-contained JSON file and report the path. No private key, no tool arguments. An auditor checks it with `aleph-server identity verify --input <path> --pin <root_fingerprint> --expect-head <expect_head>` on a machine with no Aleph, no database and no daemon.
 
-What a clean verify does and does not prove: it proves no stored record was edited, reordered, deleted, re-signed under an undeclared key, or forged without the agent's private key. It does not defend against someone who controls the whole machine — key vault and database sit on the same disk. That is what `export` plus pinned values is for, and there are two, each covering what the other cannot. `root_fingerprint` pins the lineage: pin it once, off this host, and no later export can present a different chain as this agent's. `expect_head` pins where the chain had got to: the next export must extend it, which is the ONLY way a truncated tail can be caught — the anchor travels inside the file, so whoever produced the file can edit it as freely as the rows. Report both values to the user when you export, and tell them to keep them somewhere other than this machine. With neither, an export proves internal consistency only.
+Rotation and revocation are themselves appended to the affected agent's chain and wait for that record before reporting success, so key history cannot be quietly rewritten by editing the database. A delegated sub-agent holds its own key and signs its own work: a separate agent here, not a line on its parent's chain.
+
+A clean verify proves no stored record was edited, reordered, deleted, re-signed under an undeclared key, or forged without the agent's private key. It does not defend against someone who controls this machine — vault and database share a disk. That is what `export` plus two off-host pinned values is for, each covering what the other cannot: `root_fingerprint` pins the lineage, so no later export can present a different chain as this agent's; `expect_head` pins where the chain had got to, and is the ONLY way a truncated tail is caught, because the anchor travels inside the file and whoever produced it can edit that as freely as the rows. Report both when you export and tell the user to keep them off this machine. With neither, an export proves internal consistency only.
 
 Arguments are never stored; each record carries a fingerprint of them, plus a secret-redacted one-line summary."#;
 
@@ -438,13 +448,21 @@ mod tests {
             AgentIdentityTool::DESCRIPTION,
             "the catalog entry must point at the const, not restate it"
         );
+        // Matched on the bullet that introduces each action, not on a JSON
+        // literal spelling of it. The property is "the model is told this
+        // action exists"; the shape it is written in is presentation, and a
+        // guard keyed on presentation goes red for a rewording that changed
+        // nothing — which is how a guard gets loosened by whoever is in a
+        // hurry. Anchored at the start of a line so a passing mention inside
+        // prose cannot satisfy it.
         for action in [
             "list", "show", "keygen", "rotate", "revoke", "ledger", "verify", "export",
         ] {
             assert!(
                 entry
                     .description
-                    .contains(&format!("\"action\": \"{action}\"")),
+                    .lines()
+                    .any(|l| l.starts_with(&format!("- {action} "))),
                 "the model is never told about action `{action}`"
             );
         }

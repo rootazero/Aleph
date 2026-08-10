@@ -53,6 +53,12 @@ impl Fixture {
     }
 
     fn append(&self, agent: &str, target: &str) {
+        self.append_by(agent, target, None);
+    }
+
+    /// The same append, attributed to a person — the shape a real gateway turn
+    /// produces (`tools::scoped::ledger` resolves it from `ambient_actor`).
+    fn append_by(&self, agent: &str, target: &str, principal: Option<&str>) {
         self.ledger
             .append(&NewRecord {
                 agent_id: agent.to_string(),
@@ -61,6 +67,7 @@ impl Fixture {
                 outcome: LedgerOutcome::Ok,
                 args_fp: Some("fp".into()),
                 detail: format!("{target}: did a thing"),
+                principal: principal.map(str::to_string),
             })
             .unwrap();
     }
@@ -153,7 +160,7 @@ fn a_recorded_rotation_declares_its_key_whatever_order_it_lands_in() {
     f.ledger.keys().activate("main", &new).unwrap();
     f.append("main", "raced"); // already signed by the new key…
     f.ledger
-        .append(&NewRecord::identity_rotated("main", &new, Some(&old)))
+        .append(&NewRecord::identity_rotated("main", &new, Some(&old), None))
         .unwrap(); // …and the rotation record lands after it.
 
     let report = f.ledger.verify("main").unwrap();
@@ -224,6 +231,70 @@ fn editing_an_exported_row_is_detected() {
     assert!(report.faults.contains(&ChainFault::HashMismatch { seq: 2 }));
 }
 
+/// The person a row names travels off-box and stays tamper-evident there.
+///
+/// Two claims, and the second is the one that makes the first worth anything:
+/// the auditor can SEE who drove each action without the producing machine's
+/// database, and whoever hands them the file cannot quietly change that answer
+/// — not by blaming someone else, and not by erasing the attribution
+/// altogether, which is the edit an insider would actually make.
+///
+/// Exercised through the document, never the live ledger: this is the surface
+/// used precisely when the daemon that wrote the records is not trusted.
+#[test]
+fn the_person_a_row_names_survives_export_and_cannot_be_rewritten_there() {
+    let f = Fixture::new();
+    f.append_by("main", "bash", Some("u-alice"));
+    f.append("main", "cron_tick");
+
+    let json = serde_json::to_string(&export_chain(&f.ledger, "main").unwrap()).unwrap();
+    let doc: ChainExport = serde_json::from_str(&json).unwrap();
+    assert!(verify_export(&doc, &NO_PINS).unwrap().ok);
+    assert_eq!(
+        doc.records[1].principal.as_deref(),
+        Some("u-alice"),
+        "the document must carry who drove the action, not just which agent did"
+    );
+    assert_eq!(
+        doc.records[2].principal, None,
+        "an action no person asked for must not borrow the previous row's"
+    );
+
+    for edit in [Some("u-bob"), None] {
+        let mut forged: ChainExport = serde_json::from_str(&json).unwrap();
+        forged.records[1].principal = edit.map(str::to_string);
+        let report = verify_export(&forged, &NO_PINS).unwrap();
+        assert!(
+            report.faults.contains(&ChainFault::HashMismatch { seq: 2 }),
+            "rewriting the principal to {edit:?} must be detected"
+        );
+    }
+}
+
+/// A document written before the column existed still verifies.
+///
+/// Serialization skips `principal` when absent, so an older export is simply a
+/// document without the key — `#[serde(default)]` lands it as `None`, and a
+/// `None` principal contributes no preimage bytes, which is exactly the state
+/// those rows were signed in. Asserted by deleting the key from the JSON
+/// rather than by trusting that reasoning.
+#[test]
+fn an_export_written_before_the_principal_column_still_verifies() {
+    let f = Fixture::new();
+    f.append("main", "bash");
+    let mut value: serde_json::Value = serde_json::from_str(
+        &serde_json::to_string(&export_chain(&f.ledger, "main").unwrap()).unwrap(),
+    )
+    .unwrap();
+    for row in value["records"].as_array_mut().unwrap() {
+        row.as_object_mut().unwrap().remove("principal");
+    }
+
+    let doc: ChainExport = serde_json::from_value(value).unwrap();
+    let report = verify_export(&doc, &NO_PINS).unwrap();
+    assert!(report.ok, "{:?}", report.faults);
+}
+
 #[test]
 fn a_fabricated_chain_fails_the_pin() {
     // The threat the pin exists for: whoever produced the document also chose
@@ -261,7 +332,7 @@ fn a_rotation_keeps_the_pinned_root() {
     let old = f.active_fingerprint("main");
     let new = f.ledger.keys().mint_key("main").unwrap();
     f.ledger
-        .append(&NewRecord::identity_rotated("main", &new, Some(&old)))
+        .append(&NewRecord::identity_rotated("main", &new, Some(&old), None))
         .unwrap();
     f.ledger.keys().activate("main", &new).unwrap();
     f.append("main", "after");
@@ -503,7 +574,7 @@ fn the_export_reports_what_the_chain_says_about_revocation() {
     let fp = f.active_fingerprint("main");
     f.ledger.keys().revoke("main").unwrap();
     f.ledger
-        .append(&NewRecord::identity_revoked("main", &fp))
+        .append(&NewRecord::identity_revoked("main", &fp, None))
         .unwrap();
 
     let doc = export_chain(&f.ledger, "main").unwrap();

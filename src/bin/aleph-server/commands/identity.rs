@@ -226,10 +226,17 @@ pub fn handle_identity_command(action: IdentityAction) -> Result<(), Box<dyn Err
             }
             for r in records {
                 println!(
-                    "{} #{:<6} {:<20} {:<18} {:<8} {}",
+                    "{} #{:<6} {:<20} {:<14} {:<18} {:<8} {}",
                     ms(r.at_ms),
                     r.seq,
                     r.agent_id,
+                    // Who was driving. `-` where the chain names nobody: an
+                    // unattended action (cron, heartbeat, a continuation) or a
+                    // row from before the column existed. Printed as its own
+                    // column rather than folded into `detail`, because "which
+                    // rows is this person on" is the question this command
+                    // gets asked and a reader cannot grep a sentence.
+                    r.principal.as_deref().unwrap_or("-"),
                     r.action,
                     r.outcome,
                     r.detail

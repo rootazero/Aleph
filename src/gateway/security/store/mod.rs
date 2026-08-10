@@ -37,7 +37,7 @@ pub use types::*;
 pub use users::{UserRecord, UserRole, UserStatus, OWNER_USER_ID};
 
 /// Schema version for migrations
-const SCHEMA_VERSION: i32 = 15;
+const SCHEMA_VERSION: i32 = 16;
 
 /// Unified security storage backed by `SQLite`
 pub struct SecurityStore {
@@ -283,6 +283,28 @@ impl SecurityStore {
             drop(conn);
             self.set_schema_version(15)?;
         }
+        if version < 16 {
+            info!(
+                from = version,
+                to = 16,
+                "Migrating security schema to v16 (ledger principal column)"
+            );
+
+            let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
+            // Same shape as v15, and for the same reason: a store created from
+            // scratch has already run `IDENTITY_SCHEMA` in an earlier arm, and
+            // that batch now carries `principal` — so an unconditional ALTER
+            // would fail with `duplicate column name` on every FIRST boot.
+            let has_column: bool = conn
+                .prepare("SELECT principal FROM agent_ledger LIMIT 0")
+                .is_ok();
+            if !has_column {
+                conn.execute(crate::identity::LEDGER_ADD_PRINCIPAL_SQL, [])?;
+            }
+            drop(conn);
+            self.set_schema_version(16)?;
+        }
+
         // After all versioned migrations (runs on every open, idempotent):
         self.ensure_bootstrap_owner()?;
 
