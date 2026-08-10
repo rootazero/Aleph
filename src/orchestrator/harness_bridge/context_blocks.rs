@@ -11,20 +11,22 @@ use crate::sync_primitives::Arc;
 /// `has_pending_work()` gate the stop-verifier uses, so an empty or
 /// finished plan never adds noise.
 ///
+/// **Bounded on purpose.** `ExecutionPlanLayer` only passes its input through
+/// and is listed in `prompt_contract::CONDITIONALLY_SILENT`, so the per-layer
+/// byte ratchet measures it as 0 B no matter how large this gets — a layer that
+/// merely forwards content owes its bound in the producer, and this is the
+/// producer. `render_progress_bounded` is byte-identical to `render_progress`
+/// for an ordinary plan; it only bites on a pathological one.
+///
 /// Free async function so it can be unit-tested without a full
 /// `AgentHarnessRunner`, mirroring `compute_runtime_state_blocks`.
 /// Fail-soft on any I/O error: a transient scratchpad read must never
 /// wedge prompt assembly.
 pub async fn active_execution_plan(session_key: &str) -> Option<String> {
-    let project_id = crate::builtin_tools::scratchpad_registry::active(session_key)?;
-    let manager = crate::memory::scratchpad::ScratchpadManager::new(&project_id, "harness");
-    if !manager.exists() {
-        return None;
-    }
-    let snapshot = manager.snapshot().await.ok()?;
+    let snapshot = crate::builtin_tools::scratchpad::session_plan(session_key).await?;
     snapshot
         .has_pending_work()
-        .then(|| snapshot.render_progress())
+        .then(|| snapshot.render_progress_bounded())
 }
 
 /// Fetch the session's active standing goal as a compact, judgment-free

@@ -106,8 +106,8 @@ pub struct ContextEstimateResponse {
     pub window_tokens: u32,
 }
 
-/// One `chat.history` response: the persisted transcript, plus the run that is
-/// in flight on this session *right now* (`None` = nothing running).
+/// One `chat.history` response: the persisted transcript, plus the two facts
+/// about the session's *current* state that the transcript cannot express.
 ///
 /// `active_run` exists so a client that opens a conversation **mid-turn** can
 /// join it. Nothing else can tell it: the `stream.*` frames of a run in
@@ -115,10 +115,20 @@ pub struct ContextEstimateResponse {
 /// nowhere, and the sidebar's re-hydrate is suppressed for as long as the
 /// session is running. Without this the second terminal on a shared thread sat
 /// in front of a frozen transcript for the whole turn.
+///
+/// `plan` is the durable execution list, read server-side from the scratchpad
+/// file the model itself works. It exists for the same reason one field over:
+/// the Todo strip was fed only by live frames and by replaying the *lossy*
+/// trace mirror, so a fresh attach — refresh, second tab, second device, next
+/// morning — showed nothing for a checklist the model is still being held to.
+/// `None` means the session has no list, which is different from "we did not
+/// look": a core that predates the field also sends nothing, and that reads the
+/// same, which is why the caller applies it only when present.
 #[derive(Debug, Clone)]
 pub struct SessionHistory {
     pub messages: Vec<ChatMessage>,
     pub active_run: Option<String>,
+    pub plan: Option<aleph_protocol::plan::PlanSnapshot>,
 }
 
 /// A file attachment to send with a chat message.
@@ -128,6 +138,25 @@ pub struct ChatAttachment {
     pub mime_type: String,
     pub data_base64: String,
     pub size: u64,
+}
+
+/// Read the durable execution list off a `chat.history` response.
+///
+/// Free function so the skew and malformed cases are testable without a live
+/// gateway. Three inputs collapse to `None`, on purpose:
+///
+/// * field absent — a core older than the field;
+/// * `null` — this session has no execution list;
+/// * present but unparseable — a shape change on the core side.
+///
+/// The last one is the interesting choice: the transcript is what this call is
+/// for, and dropping it because a checklist did not decode would be a worse
+/// failure than the one the field exists to fix. The caller treats `None` as
+/// "say nothing about the plan" rather than "there is no plan", so all three
+/// degrade to the pre-existing behaviour instead of blanking a live strip.
+fn parse_history_plan(result: &Value) -> Option<aleph_protocol::plan::PlanSnapshot> {
+    let raw = result.get("plan").filter(|v| !v.is_null())?;
+    serde_json::from_value(raw.clone()).ok()
 }
 
 pub struct ChatApi;
@@ -256,6 +285,7 @@ impl ChatApi {
                 .get("active_run")
                 .and_then(|v| v.as_str())
                 .map(str::to_owned),
+            plan: parse_history_plan(&result),
         })
     }
 
@@ -312,6 +342,42 @@ mod tests {
     /// therefore start from a known state rather than from whatever ran before.
     fn clear_ledger() {
         OWN_RUNS.with_borrow_mut(VecDeque::clear);
+    }
+
+    /// The durable list arrives with every status intact — this is the field
+    /// that lets a refreshed page, a second tab, or a second device see a
+    /// checklist that until now only existed in whoever's browser had watched
+    /// it being built.
+    #[test]
+    fn a_served_plan_decodes_with_its_statuses() {
+        let resp = serde_json::json!({
+            "messages": [],
+            "plan": {
+                "objective": "Ship auth",
+                "complete": false,
+                "items": [
+                    {"text": "Design", "status": "completed"},
+                    {"text": "Build", "status": "in_progress"},
+                    {"text": "Test", "status": "pending"}
+                ]
+            }
+        });
+        let plan = parse_history_plan(&resp).expect("a served plan decodes");
+        assert_eq!(plan.objective.as_deref(), Some("Ship auth"));
+        assert_eq!(plan.done_count(), 1);
+        assert_eq!(plan.total(), 3);
+        assert_eq!(plan.current_step(), Some("Build"));
+    }
+
+    /// All three "we were told nothing usable" shapes collapse to `None`, and
+    /// the caller leaves the strip alone rather than clearing it. Clearing on
+    /// ambiguity would take the Todo panel away from exactly the clients this
+    /// field was added to serve.
+    #[test]
+    fn absent_null_and_malformed_plans_all_read_as_no_answer() {
+        assert!(parse_history_plan(&serde_json::json!({"messages": []})).is_none());
+        assert!(parse_history_plan(&serde_json::json!({"plan": null})).is_none());
+        assert!(parse_history_plan(&serde_json::json!({"plan": {"items": "nope"}})).is_none());
     }
 
     #[test]

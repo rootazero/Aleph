@@ -90,9 +90,7 @@ pub use explain::{ExplainedEvent, FactExplanation};
 pub use insights::{aggregate_tool_usage, ToolBreakdown, ToolUsageReport};
 pub use namespace::NamespaceScope;
 pub use ripple::{RippleConfig, RippleResult, RippleTask};
-pub use scratchpad::{
-    PlanItem, PlanItemStatus, ScratchpadConfig, ScratchpadManager, ScratchpadSnapshot,
-};
+pub use scratchpad::{PlanItem, PlanItemStatus, ScratchpadManager, ScratchpadSnapshot};
 pub use streaming_scrubber::{StreamingContextScrubber, DEFAULT_CLOSE_TAG, DEFAULT_OPEN_TAG};
 pub use transcript_indexer::{TranscriptIndexer, TranscriptIndexerConfig};
 // SQLite store types (Phase 3)

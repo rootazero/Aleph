@@ -21,23 +21,16 @@ use tokio::fs;
 
 use super::template::{generate_scratchpad, DEFAULT_TEMPLATE};
 
-/// Configuration for scratchpad behavior
-#[derive(Debug, Clone)]
-pub struct ScratchpadConfig {
-    /// Scratchpad filename (default: "scratchpad.md")
-    pub filename: String,
-    /// Create backup before overwrite
-    pub backup_on_write: bool,
-}
-
-impl Default for ScratchpadConfig {
-    fn default() -> Self {
-        Self {
-            filename: "scratchpad.md".to_string(),
-            backup_on_write: true,
-        }
-    }
-}
+/// The scratchpad's filename inside the agent workspace directory.
+///
+/// This was a `ScratchpadConfig { filename, backup_on_write }` struct with a
+/// `with_config` constructor. That constructor had zero call sites — production
+/// and tests alike went through `new` / `with_dir`, both of which built
+/// `ScratchpadConfig::default()` — so the two fields were constants wearing a
+/// config's clothes, and `backup_on_write` in particular was a knob no caller
+/// could ever turn off. R10: an abstraction with zero consumers is withdrawn,
+/// not kept "in case".
+const SCRATCHPAD_FILENAME: &str = "scratchpad.md";
 
 /// Lifecycle state of a plan item — mirrors Claude Code's `TodoWrite`
 /// 3-state model (`pending` → `in_progress` → `completed`). Modeled as an
@@ -170,12 +163,47 @@ impl ScratchpadSnapshot {
     /// each mutating scratchpad action (Claude Code `TodoWrite` parity: the
     /// tool always returns the updated list, giving the loop continuous
     /// visibility without touching the harness prompt builder). Pure render.
+    ///
+    /// Unbounded on purpose: this render is a **tool result**, one message the
+    /// model asked for, and the generic tool-output budget already backstops
+    /// it. The copy that rides the *system prompt* must be bounded instead —
+    /// see [`Self::render_progress_bounded`].
     #[must_use]
     pub fn render_progress(&self) -> String {
+        self.render_progress_with(None)
+    }
+
+    /// [`Self::render_progress`] clamped to [`PROMPT_PLAN_LIMITS`], for the
+    /// copy that lands in the **system prompt**.
+    ///
+    /// `ExecutionPlanLayer` is a `Dynamic` layer that only passes its input
+    /// through, and it sits in `prompt_contract::CONDITIONALLY_SILENT` — so the
+    /// per-layer byte ratchet measures it as 0 B forever and can never notice
+    /// how large it got. Per the standing rule ("a layer that only passes
+    /// content through owes its bound in the *producer*"), the bound lives
+    /// here, on the render, where both prompt-side callers reach it.
+    ///
+    /// What it does NOT do: reorder, drop finished steps, or renumber. The
+    /// items are addressed by 0-based index (`start_item` / `complete_item`),
+    /// so anything that shifts a position corrupts every index the model is
+    /// about to use — the exact hazard `plan_carry` exists to avoid. Elision is
+    /// therefore **tail-only** (rendered items keep indices `0..k`) and the
+    /// counts stay derived from the FULL list, not from the surviving slice.
+    #[must_use]
+    pub fn render_progress_bounded(&self) -> String {
+        self.render_progress_with(Some(PROMPT_PLAN_LIMITS))
+    }
+
+    /// One render, optionally clamped — so the bounded and unbounded forms
+    /// cannot drift into describing the same plan two different ways.
+    fn render_progress_with(&self, limits: Option<PlanRenderLimits>) -> String {
         let mut out = String::new();
         if let Some(obj) = &self.objective {
             out.push_str("Objective: ");
-            out.push_str(obj);
+            out.push_str(&clamp_chars(
+                obj,
+                limits.map_or(usize::MAX, |l| l.max_objective_chars),
+            ));
             out.push('\n');
         }
         if self.items.is_empty() {
@@ -183,20 +211,81 @@ impl ScratchpadSnapshot {
             return out;
         }
         out.push_str("Plan:\n");
-        for item in &self.items {
+        let shown = limits.map_or(self.items.len(), |l| l.max_items.min(self.items.len()));
+        for item in &self.items[..shown] {
             out.push_str("- ");
             out.push_str(item.status.glyph());
             out.push(' ');
-            out.push_str(&item.text);
+            out.push_str(&clamp_chars(
+                &item.text,
+                limits.map_or(usize::MAX, |l| l.max_item_chars),
+            ));
             out.push('\n');
         }
+        if shown < self.items.len() {
+            // Name the omitted index RANGE, not just a count: the reader's next
+            // move is an index-addressed call, so "how many" without "which"
+            // would be an invitation to guess.
+            out.push_str(&format!(
+                "… items {shown}–{} not shown here ({} total) — call \
+                 scratchpad(action='read') for the full list\n",
+                self.items.len() - 1,
+                self.items.len(),
+            ));
+        }
+        // Counts come from the whole list. A truncated view reporting progress
+        // over its own surviving slice is how a reduction step ends up stating
+        // a number that was never true of the data.
         let done = self.items.iter().filter(|i| i.is_done()).count();
         out.push_str(&format!("Progress: {}/{} done", done, self.items.len()));
         if let Some(cur) = self.current() {
             out.push_str(" · current: ");
-            out.push_str(&cur.text);
+            out.push_str(&clamp_chars(
+                &cur.text,
+                limits.map_or(usize::MAX, |l| l.max_item_chars),
+            ));
         }
         out
+    }
+}
+
+/// Clamps applied to a plan rendered into the system prompt.
+#[derive(Debug, Clone, Copy)]
+pub struct PlanRenderLimits {
+    /// Item lines rendered before tail elision kicks in.
+    pub max_items: usize,
+    /// Characters (not bytes) kept per item.
+    pub max_item_chars: usize,
+    /// Characters kept of the objective line.
+    pub max_objective_chars: usize,
+}
+
+/// The prompt-side ceiling.
+///
+/// Chosen so an ordinary plan renders **byte-identical** to the unbounded form:
+/// this is a ceiling that stops a pathological list from becoming an unbounded
+/// per-request tax, not a routine truncator. Worst case is roughly
+/// `40 × (200 + 6) + 400` ≈ 8.6 KB of plan text; before this it was however
+/// much the model had written.
+pub const PROMPT_PLAN_LIMITS: PlanRenderLimits = PlanRenderLimits {
+    max_items: 40,
+    max_item_chars: 200,
+    max_objective_chars: 400,
+};
+
+/// Truncate to `max` **characters**, appending `…` when anything was cut.
+///
+/// `char_indices` rather than byte slicing: plan text is free-form model output
+/// and is routinely CJK, where `&s[..n]` panics mid-codepoint (P7).
+fn clamp_chars(s: &str, max: usize) -> std::borrow::Cow<'_, str> {
+    // The unbounded render passes `usize::MAX`; short-circuit rather than walk
+    // every codepoint of every item to learn there was nothing to cut.
+    if max == usize::MAX {
+        return std::borrow::Cow::Borrowed(s);
+    }
+    match s.char_indices().nth(max) {
+        None => std::borrow::Cow::Borrowed(s),
+        Some((byte_idx, _)) => std::borrow::Cow::Owned(format!("{}…", &s[..byte_idx])),
     }
 }
 
@@ -205,7 +294,6 @@ pub struct ScratchpadManager {
     /// Base directory for this project's scratchpad files
     project_dir: PathBuf,
     session_id: String,
-    config: ScratchpadConfig,
 }
 
 impl ScratchpadManager {
@@ -220,7 +308,6 @@ impl ScratchpadManager {
         Self {
             project_dir,
             session_id: session_id.to_string(),
-            config: ScratchpadConfig::default(),
         }
     }
 
@@ -230,17 +317,6 @@ impl ScratchpadManager {
         Self {
             project_dir,
             session_id: session_id.to_string(),
-            config: ScratchpadConfig::default(),
-        }
-    }
-
-    /// Create with custom configuration
-    #[must_use]
-    pub fn with_config(project_dir: PathBuf, session_id: &str, config: ScratchpadConfig) -> Self {
-        Self {
-            project_dir,
-            session_id: session_id.to_string(),
-            config,
         }
     }
 
@@ -266,7 +342,7 @@ impl ScratchpadManager {
     /// Get the scratchpad file path
     #[must_use]
     pub fn scratchpad_path(&self) -> PathBuf {
-        self.project_dir.join(&self.config.filename)
+        self.project_dir.join(SCRATCHPAD_FILENAME)
     }
 
     /// Ensure the project directory exists
@@ -282,42 +358,18 @@ impl ScratchpadManager {
         self.scratchpad_path().exists()
     }
 
-    /// Check if scratchpad has meaningful content (not just template)
-    pub async fn has_content(&self) -> Result<bool, AlephError> {
-        if !self.exists() {
-            return Ok(false);
-        }
-
-        let content = self.read().await?;
-
-        // Check if it's more than just the default template
-        let has_objective = !content.contains("[No active task]");
-        let has_plan_items = content.contains("- [x]")
-            || (content.contains("- [ ]") && !content.contains("- [ ] ..."));
-        let has_working_state = {
-            const HEADER: &str = "## Working State";
-            if let Some(pos) = content.find(HEADER) {
-                let after = &content[pos..];
-                if let Some(next_section) = after[HEADER.len()..].find("##") {
-                    let working_content = &after[HEADER.len()..HEADER.len() + next_section];
-                    !working_content.trim().is_empty()
-                } else {
-                    false
-                }
-            } else {
-                false
-            }
-        };
-
-        Ok(has_objective || has_plan_items || has_working_state)
-    }
-
     /// Parse the objective + plan checkboxes into a [`ScratchpadSnapshot`].
     ///
-    /// Pure structural read — uses the same markers as [`Self::has_content`]
-    /// (`## Objective` / `## Plan` sections, `- [ ]` / `- [x]` checkboxes,
-    /// skipping the `- [ ] ...` placeholder). Returns an empty snapshot when
-    /// no scratchpad file exists.
+    /// Pure structural read — `## Objective` / `## Plan` sections,
+    /// `- [ ]` / `- [~]` / `- [x]` checkboxes, skipping the `- [ ] ...`
+    /// placeholder. Returns an empty snapshot when no scratchpad file exists.
+    ///
+    /// (A `has_content()` sibling used to live here, answering "is this more
+    /// than a bare template?" with three substring probes. It had zero
+    /// production consumers — only its own tests — and one of its three probes
+    /// read `## Working State`, a section no writing surface could reach.
+    /// Withdrawn per R10 rather than kept as a plausible-looking accessor whose
+    /// answer nothing acts on.)
     pub async fn snapshot(&self) -> Result<ScratchpadSnapshot, AlephError> {
         if !self.exists() {
             return Ok(ScratchpadSnapshot::default());
@@ -336,8 +388,10 @@ impl ScratchpadManager {
     pub async fn write(&self, content: &str) -> Result<(), AlephError> {
         self.ensure_dir().await?;
 
-        // Backup existing file if configured
-        if self.config.backup_on_write && self.exists() {
+        // Keep one generation of the previous file beside the live one. The
+        // plan is the only durable record of a multi-step run's progress, and
+        // every mutating action rewrites the whole document.
+        if self.exists() {
             let backup_path = self.scratchpad_path().with_extension("md.bak");
             if let Ok(existing) = fs::read_to_string(self.scratchpad_path()).await {
                 if let Err(e) = fs::write(&backup_path, &existing).await {
@@ -379,30 +433,60 @@ impl ScratchpadManager {
         self.write(&content).await
     }
 
-    /// Append a note to the Notes section
+    /// Prepend a timestamped note to the `## Notes` section.
+    ///
+    /// Newest-first is deliberate: the section is unbounded (one line per
+    /// call, forever) and every reader — `action='read'`, and the tool-output
+    /// budget behind it — takes the head, so the freshest note is the one that
+    /// survives truncation.
+    ///
+    /// **This was the last writer not routed through [`section_span`].** It
+    /// used a bare `content.find("## Notes")` and, when the header was absent,
+    /// fell out of the `if let` and wrote the document back *unchanged* while
+    /// the tool reported `success: true, "Note appended"` — the same
+    /// silently-successful no-op §3.13 ⑤ removed from `set_objective` /
+    /// `set_plan` and round-2 ② removed from `set_item_status`, surviving in
+    /// the one surface nobody had swept. Reachable without any hand-editing:
+    /// `action='clear'` writes `DEFAULT_TEMPLATE`, and any scratchpad whose
+    /// sections were reordered or trimmed loses every note from then on.
+    /// [`prepend_to_section`] self-heals the section instead, so the write
+    /// always lands.
     pub async fn append_note(&self, note: &str) -> Result<(), AlephError> {
-        let mut content = if self.exists() {
+        let note = note.trim();
+        if note.is_empty() {
+            return Err(AlephError::tool(
+                "Note text is empty: pass the note in `value`.".to_string(),
+            ));
+        }
+        let content = if self.exists() {
             self.read().await?
         } else {
             generate_scratchpad(None, &self.session_id)
         };
 
-        // Find Notes section and append
-        if let Some(notes_pos) = content.find("## Notes") {
-            let insert_pos = notes_pos + "## Notes".len();
-            let timestamp = chrono::Utc::now().format("%H:%M");
-            let note_line = format!("\n- [{timestamp}] {note}");
-            content.insert_str(insert_pos, &note_line);
-        }
-
-        // Update timestamp
-        content = self.update_timestamp(content);
-
+        let timestamp = chrono::Utc::now().format("%H:%M");
+        let content =
+            prepend_to_section(&content, NOTES_HEADER, &format!("- [{timestamp}] {note}"));
+        let content = self.update_timestamp(content);
         self.write(&content).await
     }
 
     /// Update the objective.
+    ///
+    /// An empty objective is rejected rather than written. `upsert_section`
+    /// renders an empty body as an empty section, so `set_objective("")` used
+    /// to *retire* the plan — `has_pending_work` false, `<execution_plan>`
+    /// silent, the stop guard dormant — and report `"Objective updated: "`.
+    /// Retiring a plan has a name (`action='clear'`); losing one by passing a
+    /// blank string should not be spelled the same way.
     pub async fn set_objective(&self, objective: &str) -> Result<(), AlephError> {
+        if objective.trim().is_empty() {
+            return Err(AlephError::tool(
+                "Objective is empty. Pass the objective text in `value`, or call \
+                 action='clear' to retire this execution list."
+                    .to_string(),
+            ));
+        }
         let content = if self.exists() {
             self.read().await?
         } else {
@@ -599,6 +683,8 @@ impl ScratchpadManager {
 /// ([`parse_snapshot`]) and the write side ([`upsert_section`]).
 pub(crate) const OBJECTIVE_HEADER: &str = "## Objective";
 pub(crate) const PLAN_HEADER: &str = "## Plan";
+/// Free-form scratch notes, newest first. See [`ScratchpadManager::append_note`].
+pub(crate) const NOTES_HEADER: &str = "## Notes";
 /// Placeholder written when the plan is emptied; [`parse_snapshot`] drops it.
 const PLAN_PLACEHOLDER: &str = "- [ ] ...";
 /// Start of the trailing metadata block (`---` / `_Last updated_` / `_Session_`).
@@ -671,6 +757,29 @@ fn upsert_section(content: &str, header: &str, body: &str) -> String {
     }
 }
 
+/// Insert `line` at the top of a section's body, **creating the section when
+/// it is absent**.
+///
+/// The append-shaped sibling of [`upsert_section`], sharing its two load-bearing
+/// properties: the header is located line-anchored via [`section_span`] (so
+/// `## Notes on the API` cannot answer a lookup for `## Notes`, and a `## Notes`
+/// line typed into some other section cannot hijack it), and a missing section
+/// is created ahead of the metadata footer rather than making the write a
+/// silent no-op.
+fn prepend_to_section(content: &str, header: &str, line: &str) -> String {
+    match section_span(content, header) {
+        Some((start, _)) => {
+            let mut out = String::with_capacity(content.len() + line.len() + 1);
+            out.push_str(&content[..start]);
+            out.push_str(line);
+            out.push('\n');
+            out.push_str(&content[start..]);
+            out
+        }
+        None => upsert_section(content, header, line),
+    }
+}
+
 /// Enforce "at most one in-progress step" over an incoming list: the first
 /// `[~]` keeps its status, any later one is demoted to `[ ]`. Pure — returns a
 /// new vector rather than mutating the caller's slice.
@@ -699,7 +808,7 @@ fn extract_section<'a>(content: &'a str, header: &str) -> Option<&'a str> {
 /// Parse objective + plan checkboxes out of raw scratchpad markdown.
 ///
 /// Free function (no I/O) so it is trivially unit-testable. Mirrors the
-/// marker conventions of [`ScratchpadManager::has_content`].
+/// marker conventions [`ScratchpadManager::set_plan`] writes.
 pub(crate) fn parse_snapshot(content: &str) -> ScratchpadSnapshot {
     let objective = extract_section(content, OBJECTIVE_HEADER)
         .map(str::trim)
@@ -816,6 +925,114 @@ mod tests {
         assert!(rendered.contains("- [ ] C"));
         assert!(rendered.contains("Progress: 1/3 done"));
         assert!(rendered.contains("current: B"));
+    }
+
+    fn plan_of(n: usize, item_text: &str) -> ScratchpadSnapshot {
+        ScratchpadSnapshot {
+            objective: Some("Ship".to_string()),
+            items: (0..n)
+                .map(|i| PlanItem::pending(format!("{item_text} {i}")))
+                .collect(),
+        }
+    }
+
+    /// An ordinary plan must render **byte-identical** under the bounded form.
+    /// The ceiling exists to stop a pathological list from becoming a
+    /// per-request tax, not to truncate everyday output — if these two ever
+    /// diverge for a normal plan, the model is being shown two different
+    /// descriptions of one list.
+    #[test]
+    fn an_ordinary_plan_is_byte_identical_bounded_and_unbounded() {
+        let snap = plan_of(12, "step");
+        assert_eq!(snap.render_progress(), snap.render_progress_bounded());
+    }
+
+    /// `ExecutionPlanLayer` is `Dynamic`, passes its input straight through,
+    /// and sits in `prompt_contract::CONDITIONALLY_SILENT` — so the per-layer
+    /// byte ratchet reads it as 0 B forever and cannot notice growth. The bound
+    /// therefore has to live on the producer side, and be pinned here.
+    #[test]
+    fn the_prompt_render_is_bounded_however_large_the_plan_gets() {
+        let huge = ScratchpadSnapshot {
+            objective: Some("o".repeat(5_000)),
+            items: (0..500)
+                .map(|i| PlanItem::pending(format!("{}{i}", "x".repeat(1_000))))
+                .collect(),
+        };
+        let bounded = huge.render_progress_bounded();
+        // Generous, but finite — and derived from the constants rather than a
+        // second hand-written number that could drift away from them.
+        let ceiling = PROMPT_PLAN_LIMITS.max_objective_chars
+            + PROMPT_PLAN_LIMITS.max_items * (PROMPT_PLAN_LIMITS.max_item_chars + 8)
+            + 512;
+        assert!(
+            bounded.len() < ceiling,
+            "bounded render is {} bytes, ceiling {ceiling}",
+            bounded.len()
+        );
+        assert!(
+            huge.render_progress().len() > 400_000,
+            "the unbounded form is what this bound exists for"
+        );
+    }
+
+    /// Elision is tail-only and the counts stay derived from the FULL list.
+    ///
+    /// Both halves matter. Items are addressed by 0-based index, so dropping
+    /// from anywhere but the tail shifts indices the model is about to pass to
+    /// `complete_item`; and a truncated view that computed `Progress:` over its
+    /// own surviving slice would state a number that was never true.
+    #[test]
+    fn tail_elision_keeps_indices_and_counts_honest() {
+        let mut snap = plan_of(60, "step");
+        snap.items[0].status = PlanItemStatus::Done;
+        snap.items[59].status = PlanItemStatus::Done;
+        let out = snap.render_progress_bounded();
+
+        assert!(out.contains("- [x] step 0"), "index 0 must still render");
+        assert!(
+            out.contains(&format!("- [ ] step {}", PROMPT_PLAN_LIMITS.max_items - 1)),
+            "the last rendered item is the one at max_items-1: {out}"
+        );
+        assert!(
+            !out.contains(&format!("- [ ] step {}", PROMPT_PLAN_LIMITS.max_items)),
+            "everything past the cap is elided"
+        );
+        assert!(
+            out.contains(&format!(
+                "… items {}–59 not shown here (60 total)",
+                PROMPT_PLAN_LIMITS.max_items
+            )),
+            "the omitted index range must be named, not just counted: {out}"
+        );
+        assert!(
+            out.contains("Progress: 2/60 done"),
+            "counts come from the whole list, including the elided tail: {out}"
+        );
+    }
+
+    /// Plan text is free-form model output and is routinely CJK; byte slicing
+    /// would panic mid-codepoint.
+    #[test]
+    fn clamping_is_utf8_safe_and_counts_characters() {
+        let cjk = "任务".repeat(500);
+        let snap = ScratchpadSnapshot {
+            objective: Some(cjk.clone()),
+            items: vec![PlanItem::pending(cjk)],
+        };
+        let out = snap.render_progress_bounded(); // must not panic
+        assert!(out.contains('…'));
+        assert_eq!(
+            clamp_chars("你好世界", 2),
+            "你好…",
+            "the clamp counts chars, not bytes"
+        );
+        assert_eq!(clamp_chars("abc", 10), "abc", "short input is untouched");
+        assert_eq!(
+            clamp_chars("abc", 3),
+            "abc",
+            "exactly at the limit is untouched"
+        );
     }
 
     #[test]
@@ -1066,7 +1283,7 @@ mod tests {
     fn upsert_section_replaces_body_without_disturbing_neighbours() {
         let out = upsert_section(DEFAULT_TEMPLATE, OBJECTIVE_HEADER, "Ship auth");
         assert!(out.contains("## Objective\nShip auth\n\n## Plan"));
-        assert!(out.contains("## Working State"));
+        assert!(out.contains("## Notes"));
         assert!(out.contains("_Last updated:"));
     }
 
@@ -1095,26 +1312,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_has_content_empty() {
-        let temp = tempdir().unwrap();
-        let manager = ScratchpadManager::with_dir(temp.path().to_path_buf(), "sess");
-
-        manager.initialize(None).await.unwrap();
-
-        assert!(!manager.has_content().await.unwrap());
-    }
-
-    #[tokio::test]
-    async fn test_has_content_with_objective() {
-        let temp = tempdir().unwrap();
-        let manager = ScratchpadManager::with_dir(temp.path().to_path_buf(), "sess");
-
-        manager.initialize(Some("Build feature X")).await.unwrap();
-
-        assert!(manager.has_content().await.unwrap());
-    }
-
-    #[tokio::test]
     async fn test_append_note() {
         let temp = tempdir().unwrap();
         let manager = ScratchpadManager::with_dir(temp.path().to_path_buf(), "sess");
@@ -1124,6 +1321,108 @@ mod tests {
 
         let content = manager.read().await.unwrap();
         assert!(content.contains("This is a test note"));
+    }
+
+    /// The note must land even when the document has no `## Notes` header.
+    ///
+    /// The old implementation wrapped the whole insert in
+    /// `if let Some(pos) = content.find("## Notes")` with no else arm, so a
+    /// scratchpad without that header silently kept every note out — while the
+    /// tool answered `success: true, "Note appended"`. Mutating the assertion
+    /// target below back to a bare `find` reproduces the RED.
+    #[tokio::test]
+    async fn a_note_lands_even_when_the_notes_section_is_missing() {
+        let temp = tempdir().unwrap();
+        let manager = ScratchpadManager::with_dir(temp.path().to_path_buf(), "sess");
+        // A scratchpad reduced to objective + plan (hand-edited, or written by
+        // a template that predates the section).
+        manager
+            .write("# Current Task\n\n## Objective\nShip\n\n## Plan\n- [ ] a\n\n---\n_Last updated: _\n_Session: _\n")
+            .await
+            .unwrap();
+
+        manager.append_note("remember the migration").await.unwrap();
+
+        let content = manager.read().await.unwrap();
+        assert!(
+            content.contains("remember the migration"),
+            "the note was dropped: {content}"
+        );
+        assert!(
+            content.contains(NOTES_HEADER),
+            "the section must be self-healed like every other writer's: {content}"
+        );
+        // Self-healing must not disturb what was already there.
+        assert!(content.contains("## Objective\nShip"));
+        assert!(content.contains("- [ ] a"));
+    }
+
+    /// A header that merely *starts with* `## Notes` must not answer the
+    /// lookup — the same line-anchoring `find_section_start` already gives the
+    /// objective and plan writers.
+    #[tokio::test]
+    async fn append_note_does_not_target_a_header_that_merely_shares_a_prefix() {
+        let temp = tempdir().unwrap();
+        let manager = ScratchpadManager::with_dir(temp.path().to_path_buf(), "sess");
+        manager
+            .write("## Objective\nShip\n\n## Notes on the API\nprose\n\n## Notes\n\n---\n_Last updated: _\n")
+            .await
+            .unwrap();
+
+        manager.append_note("real note").await.unwrap();
+
+        let content = manager.read().await.unwrap();
+        let decoy = content.find("## Notes on the API").unwrap();
+        let real = content.find("\n## Notes\n").unwrap();
+        let note = content.find("real note").unwrap();
+        assert!(
+            note > real && note > decoy,
+            "the note landed in the decoy section: {content}"
+        );
+        assert!(content.contains("prose"), "decoy body must be untouched");
+    }
+
+    #[tokio::test]
+    async fn newest_note_comes_first() {
+        let temp = tempdir().unwrap();
+        let manager = ScratchpadManager::with_dir(temp.path().to_path_buf(), "sess");
+        manager.initialize(None).await.unwrap();
+
+        manager.append_note("older").await.unwrap();
+        manager.append_note("newer").await.unwrap();
+
+        let content = manager.read().await.unwrap();
+        assert!(
+            content.find("newer").unwrap() < content.find("older").unwrap(),
+            "the freshest note must survive head-truncation: {content}"
+        );
+    }
+
+    #[tokio::test]
+    async fn an_empty_note_is_refused_rather_than_written_as_a_blank_bullet() {
+        let temp = tempdir().unwrap();
+        let manager = ScratchpadManager::with_dir(temp.path().to_path_buf(), "sess");
+        manager.initialize(None).await.unwrap();
+        assert!(manager.append_note("   ").await.is_err());
+    }
+
+    /// Blanking the objective retires the plan for every downstream consumer
+    /// (`has_pending_work`, `<execution_plan>`, the stop verifier). That is
+    /// what `action='clear'` is for; it must not also be reachable by passing
+    /// an empty string and being told "Objective updated: ".
+    #[tokio::test]
+    async fn an_empty_objective_is_refused_and_leaves_the_old_one_standing() {
+        let temp = tempdir().unwrap();
+        let manager = ScratchpadManager::with_dir(temp.path().to_path_buf(), "sess");
+        manager.set_objective("Ship auth").await.unwrap();
+
+        assert!(manager.set_objective("  ").await.is_err());
+
+        assert_eq!(
+            manager.snapshot().await.unwrap().objective.as_deref(),
+            Some("Ship auth"),
+            "a refused write must not land"
+        );
     }
 
     #[tokio::test]

@@ -322,6 +322,25 @@ pub(crate) async fn hydrate_session_history(
                     }));
                 }
             }
+
+            // The durable execution list, applied AFTER the replay loop.
+            //
+            // Order is the whole point. `replay_run` feeds every persisted
+            // `tool_call_completed` back through the same projection the live
+            // stream uses, so the Todo strip gets rebuilt from the trace — and
+            // that trace is the deliberately lossy mirror, replayed with none
+            // of the `settle_plan` reconciliation the live path has. Whatever
+            // it produced is a guess; this is the file the model works, so it
+            // speaks last.
+            //
+            // Applied only when the server actually sent one. `None` is
+            // ambiguous — no list, or a core too old to have the field — and
+            // clearing on ambiguity would take the strip away from the very
+            // clients that just got it back.
+            if let Some(plan) = loaded.plan {
+                chat.apply_plan_update(crate::views::chat::plan::plan_settlement(Some(&plan)));
+            }
+
             active_run
         }
         Err(e) => {
