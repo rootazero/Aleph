@@ -41,6 +41,13 @@
 //! through [`ADMIN_REQUIRED_MESSAGE`] — **the same `aleph_protocol` constant
 //! the server emits** — so a reword moves the server and every consumer here in
 //! one edit, instead of stranding members on the raw English string.
+//!
+//! # This is also where a server error becomes user copy
+//!
+//! Being the mandatory chokepoint for that (the guard at the bottom of this
+//! file admits no exceptions) makes it the only place that sees *both* halves
+//! of a message — the caller's framing and the server's — which is why the
+//! stutter [`framed_once`] removes can only be removed here.
 
 use aleph_protocol::jsonrpc::ADMIN_REQUIRED_MESSAGE;
 use leptos_i18n::I18nContext;
@@ -78,6 +85,65 @@ pub fn labeled(err: &str, explanation: &str) -> String {
     }
 }
 
+/// Apply a call site's framing to a server error **without saying the verb
+/// twice**.
+///
+/// # The failure this exists to stop
+///
+/// Both sides of the wire prepend a verb to the same failure, independently
+/// and without knowing the other did. A gateway handler writes
+/// `format!("Failed to create job: {e}")` into the JSON-RPC `message`, and the
+/// page that made the call wraps whatever comes back in `|e| format!("Failed
+/// to create job: {e}")`, so chaining a job to one that does not exist reads:
+///
+/// ```text
+/// Failed to create job: Failed to create job: chain target not found: b
+/// ```
+///
+/// Neither layer is wrong to want the verb. The server's message also reaches
+/// the CLI and the logs, where nothing else names the operation; the caller's
+/// framing is what makes a bare `"Not connected"` mean something. They are only
+/// wrong *together* — and this module is the one place both are in scope, which
+/// is what makes the fix a single edit rather than a sweep of call sites.
+///
+/// On 2026-08-10 thirteen verb prefixes were byte-identical across the two
+/// trees — `Failed to create job`, `Failed to update scope`, `Failed to audit
+/// permissions`, `Failed to toggle task`, … — of which ten reach a user
+/// surface and three only `console::error_1`, which is a developer log and not
+/// copy. The report named three lines in one file; fixing those by hand would
+/// have left the other seven surfaces stuttering behind a green build.
+///
+/// # Why the collapse is exact, and why near misses are left alone
+///
+/// The frame's contribution is recovered by subtraction — whatever it put in
+/// front of the error — and dropped only when the error already opens with
+/// exactly those bytes. Nothing is guessed and nothing is matched loosely.
+///
+/// `"Failed to save job: Failed to update job: …"` is deliberately untouched.
+/// Those two verbs are two different facts (what the user asked for, and what
+/// the server was doing), and collapsing them means picking one to delete on a
+/// similarity score. Leaving a stutter is a cosmetic loss; deleting the wrong
+/// clause is a wrong claim, and this module's whole premise is that the second
+/// is more expensive than the first.
+///
+/// A frame that does not end with the error — `{e:?}`, or wording that
+/// continues past the interpolation — leaves no recoverable prefix and is
+/// returned untouched.
+fn framed_once(err: &str, frame: impl FnOnce(&str) -> String) -> String {
+    let composed = frame(err);
+    let Some(prefix) = composed.strip_suffix(err) else {
+        return composed;
+    };
+    // An empty prefix means the frame added nothing, so there is nothing to
+    // collapse — and `starts_with("")` is true for every string, which would
+    // otherwise make this branch look like it fired.
+    if !prefix.is_empty() && err.starts_with(prefix) {
+        err.to_string()
+    } else {
+        composed
+    }
+}
+
 /// What a settings page should display when its load failed.
 ///
 /// A refusal becomes the localized explanation; **every other failure keeps the
@@ -97,7 +163,7 @@ pub fn settings_load_error(
     if is_admin_refusal(err) {
         t_string!(i18n, settings.admin_refusal.read_config).to_string()
     } else {
-        frame(err)
+        framed_once(err, frame)
     }
 }
 
@@ -136,7 +202,7 @@ pub fn settings_write_error(
     if is_admin_refusal(err) {
         t_string!(i18n, settings.admin_refusal.write_config).to_string()
     } else {
-        frame(err)
+        framed_once(err, frame)
     }
 }
 
@@ -358,6 +424,104 @@ mod tests {
             ADMIN_REQUIRED_MESSAGE,
             "the refusal must be explained, not echoed as a bare protocol string"
         );
+    }
+
+    /// RED proof for [`framed_once`]: the exact sentence a user read after
+    /// pointing a cron job's chain at a job that does not exist. `cron/real.rs`
+    /// answers `"Failed to create job: chain target not found: b"`, and
+    /// `job_editor.rs` frames it with the same words again.
+    #[test]
+    fn the_verb_is_not_said_twice() {
+        let from_server = "Failed to create job: chain target not found: b";
+        assert_eq!(
+            framed_once(from_server, |e| format!("Failed to create job: {e}")),
+            from_server,
+            "the caller's frame and the server's are the same words; one of them has to go"
+        );
+    }
+
+    /// …and the frame still lands where it is the only thing naming the action.
+    /// A transport failure arrives with no verb at all, which is the reason the
+    /// call sites frame in the first place.
+    #[test]
+    fn a_frame_still_reaches_an_error_that_carries_no_verb() {
+        assert_eq!(
+            framed_once("Not connected", |e| format!("Failed to create job: {e}")),
+            "Failed to create job: Not connected"
+        );
+    }
+
+    /// Two *different* verbs are two different facts — what the user asked for
+    /// and what the server was doing. Collapsing them would mean choosing one
+    /// to delete on a similarity score, which is a wrong claim rather than an
+    /// ugly one.
+    #[test]
+    fn two_different_verbs_are_both_kept() {
+        let composed = framed_once("Failed to update job: job not found: x", |e| {
+            format!("Failed to save job: {e}")
+        });
+        assert_eq!(
+            composed,
+            "Failed to save job: Failed to update job: job not found: x"
+        );
+    }
+
+    /// A frame whose wording continues past the interpolation leaves no
+    /// recoverable prefix. Returning it untouched is the quiet direction here
+    /// on purpose: the cost is a stutter, and the loud direction would be
+    /// cutting bytes out of a sentence this function cannot parse.
+    #[test]
+    fn a_frame_that_does_not_end_with_the_error_is_left_alone() {
+        assert_eq!(
+            framed_once("boom", |e| format!("Failed to save ({e}) — retry?")),
+            "Failed to save (boom) — retry?"
+        );
+        // `{e:?}` quotes the error, so the frame no longer ends with it either.
+        assert_eq!(framed_once("boom", |e| format!("{e:?}")), "\"boom\"");
+    }
+
+    /// A frame that contributes nothing must not read as a repeat of itself:
+    /// every string starts with `""`, so without the emptiness check this would
+    /// take the collapsing branch and look like the feature working.
+    #[test]
+    fn a_frame_that_adds_nothing_is_not_mistaken_for_a_repeat() {
+        assert_eq!(
+            framed_once("Not connected", |e: &str| e.to_string()),
+            "Not connected"
+        );
+    }
+
+    /// Wiring pin: both copy helpers must compose through [`framed_once`].
+    ///
+    /// Source-level because the alternative — a behavioural test — needs an
+    /// `I18nContext`, and thus a reactive runtime, to reach either function at
+    /// all. `framed_once` keeps one caller if the other reverts to `frame(err)`,
+    /// so nothing else would notice: no dead code, no failing test, just the
+    /// stutter back on half the surfaces.
+    ///
+    /// `\r` is stripped before splitting because the repo's Windows checkout is
+    /// CRLF, where a `\n`-anchored separator matches nothing and every window
+    /// below silently becomes the whole file — at which point one wired
+    /// function would vouch for both.
+    #[test]
+    fn both_copy_helpers_compose_through_the_collapse() {
+        let src = include_str!("admin_refusal.rs").replace('\r', "");
+        for name in ["settings_load_error", "settings_write_error"] {
+            let start = src
+                .find(&format!("pub fn {name}("))
+                .unwrap_or_else(|| panic!("{name} is gone — this pin is now vouching for nothing"));
+            let body = &src[start..];
+            let end = body[1..]
+                .find("\npub fn ")
+                .or_else(|| body[1..].find("\n#[cfg(test)]"))
+                .map_or(body.len(), |i| i + 1);
+            assert!(
+                body[..end].contains("framed_once"),
+                "{name} frames the error itself instead of going through \
+                 `framed_once`, so a server message that already opens with the \
+                 caller's own verb is shown to the user twice"
+            );
+        }
     }
 
     /// RED proof: `routing_rules.rs`'s Save handler, exactly as it stood before
