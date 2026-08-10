@@ -85,6 +85,7 @@ pub mod note_graph_query;
 pub mod note_manage;
 pub mod note_orient;
 pub mod note_schema;
+pub mod partial_output;
 pub mod pdf_generate;
 pub mod permission_tool;
 pub mod pim;

@@ -19,6 +19,7 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 use super::code_exec::{CodeExecArgs, CodeExecOutput, CodeExecTool, Language};
+use super::partial_output::{self, PartialView};
 use super::process_journal::{self, JobPhase, RecoveredJob};
 use super::process_registry::{
     process_registry, KillOutcome, PollOutcome, RegisterOutcome, WaitOutcome,
@@ -27,7 +28,6 @@ use crate::error::Result;
 use crate::sandbox::context::{LIVE_TAIL, SESSION_ID};
 use crate::sandbox::live_tail::{LiveSnapshot, LiveTail};
 use crate::sandbox::{current_session, Sandbox};
-use crate::tool_output::sanitize::sanitize_command_output;
 use crate::tools::AlephTool;
 
 /// Default wall-clock timeout (seconds) applied to a **background** job when
@@ -583,6 +583,26 @@ fn recovered_row(job: &RecoveredJob) -> serde_json::Map<String, serde_json::Valu
             "recorded_output".into(),
             serde_json::json!(job.recorded_output),
         );
+        // A live capture is a WINDOW, not a result. Handing it over unlabelled
+        // is how a model concludes a build succeeded because the last line it
+        // can see happens not to be an error.
+        if job.output_is_live_capture {
+            obj.insert("recorded_output_is_partial".into(), serde_json::json!(true));
+            obj.insert(
+                "recorded_output_note".into(),
+                serde_json::json!(
+                    "`recorded_output` is a snapshot of what this job had printed while it was \
+                     still running — NOT its final output. It holds at most the last 8 KB per \
+                     stream, so the beginning is likely missing, anything printed after the last \
+                     snapshot is absent, and there is no exit code behind it. Treat it as \
+                     evidence of progress, never as a result."
+                ),
+            );
+            obj.insert(
+                "recorded_output_as_of_ms".into(),
+                serde_json::json!(job.last_activity_ms),
+            );
+        }
     }
     obj.insert("advisory".into(), serde_json::json!(advisory(record.phase)));
     obj
@@ -590,17 +610,26 @@ fn recovered_row(job: &RecoveredJob) -> serde_json::Map<String, serde_json::Valu
 
 /// Why a recovered row carries no output. Silence would read as "the command
 /// printed nothing", which is a different (and usually false) claim.
+///
+/// Each arm names the mechanism that would have produced output, and why it did
+/// not: a job that outran no snapshot interval and a job that genuinely printed
+/// nothing are the same empty string, and the model cannot tell them apart
+/// without being told.
 fn no_output_reason(phase: JobPhase, outcome: Option<&str>) -> &'static str {
     match (phase, outcome) {
         (JobPhase::Settled, Some("killed")) => {
-            "No output was recorded: the job was killed, so it never produced a final result."
+            "No output was recorded: the job was killed before it produced a final result, and \
+             the snapshot taken as it was stopped was empty — either it had printed nothing yet, \
+             or what it had printed was withheld by the secret gate."
         }
         (JobPhase::Settled, _) => {
             "This job recorded no output — its stdout and stderr were both empty."
         }
         _ => {
-            "No output was recorded: the journal captures a job's output only when it reaches a \
-             terminal state in the daemon that ran it, and this one never did."
+            "No output was recorded. A job that does not reach a terminal state in the daemon \
+             that ran it can only leave behind a periodic snapshot of its live output, and this \
+             one has none: most likely it stopped within the first snapshot interval, or it had \
+             printed nothing by then."
         }
     }
 }
@@ -629,54 +658,6 @@ fn advisory(phase: JobPhase) -> &'static str {
              either in an earlier daemon or before its live entry was evicted. The fields here \
              are what was recorded then; there is no live handle to it."
         }
-    }
-}
-
-/// What a live partial snapshot is allowed to show.
-enum PartialView {
-    /// Nothing captured yet — the child has not written a byte.
-    Empty,
-    /// Cleared the same content floor the finished path enforces.
-    Text { stdout: String, stderr: String },
-    /// Block-class secret material in the raw bytes. The finished path fails
-    /// the whole call on this; the partial path refuses to render it.
-    Withheld,
-}
-
-/// Run the completed path's content floor over a PRE-scrub live snapshot.
-///
-/// The drain loops tee raw pipe bytes, so this is the one place that decides
-/// whether any of them may be shown. It runs exactly what
-/// `WorkspaceSandbox::execute` runs on a finished command —
-/// [`scrub_and_gate_output`](crate::sandbox::scrub::scrub_and_gate_output)
-/// (secret redaction + block-class gate + invisible/bidi neutralisation) via a
-/// throwaway [`SandboxOutput`](crate::sandbox::SandboxOutput), then
-/// [`sanitize_command_output`] for ANSI/control bytes. A block-class hit makes
-/// the finished call fail closed, so the partial is withheld rather than shown
-/// redacted: without this, "poll a running job" would be a way to read what the
-/// completed path refuses to return.
-///
-/// Residual, stated honestly: the gate sees only the bytes read so far, so a
-/// secret that straddles the current read frontier can still leak its **prefix**
-/// — the pattern cannot match a value whose second half has not arrived. The
-/// completed path catches the whole value and fails the call; a poll issued
-/// mid-write does not. Shrinking that window would mean holding back the tail
-/// of every snapshot, which is the same freeze this feature exists to remove.
-fn partial_view(snapshot: &LiveSnapshot) -> PartialView {
-    if snapshot.stdout.is_empty() && snapshot.stderr.is_empty() {
-        return PartialView::Empty;
-    }
-    let mut probe = crate::sandbox::SandboxOutput {
-        stdout: snapshot.stdout.clone(),
-        stderr: snapshot.stderr.clone(),
-        ..Default::default()
-    };
-    if !crate::sandbox::scrub::scrub_and_gate_output(&mut probe).is_empty() {
-        return PartialView::Withheld;
-    }
-    PartialView::Text {
-        stdout: sanitize_command_output(&String::from_utf8_lossy(&probe.stdout)).into_owned(),
-        stderr: sanitize_command_output(&String::from_utf8_lossy(&probe.stderr)).into_owned(),
     }
 }
 
@@ -716,7 +697,7 @@ fn running_payload(
                 serde_json::json!({ "stdout": out_elided, "stderr": err_elided }),
             );
         }
-        match partial_view(&snap) {
+        match partial_output::gate(&snap) {
             // Running, nothing printed yet: `bytes_so_far` already says 0/0.
             PartialView::Empty => {}
             PartialView::Text { stdout, stderr } => {

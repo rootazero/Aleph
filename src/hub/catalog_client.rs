@@ -9,6 +9,108 @@ use crate::hub::cache::CatalogCache;
 use crate::hub::hub_catalog::{HubCatalogArtifact, SUPPORTED_SCHEMA_VERSION};
 use crate::hub::trust::scan_for_injection;
 use crate::hub::types::{ExtensionEntry, TrustTier};
+use crate::security::ssrf::{safe_fetch, SafeFetchRequest, SsrfPolicy};
+
+/// Hard ceiling on the artifact body size.
+///
+/// The published Aleph Hub catalog is single-digit MiB today. A 32 MiB cap is
+/// generous and bounds the worst case (a hostile or buggy upstream serving a
+/// multi-GB response that would otherwise OOM the daemon before the JSON
+/// parse even starts). Mirrors `DOC_FETCH_CEILING` in `fetch_docs.rs`.
+pub const CATALOG_MAX_BYTES: usize = 32 * 1024 * 1024;
+
+/// Fetch timeout for the catalog artifact.
+const CATALOG_FETCH_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
+
+/// Validate the publisher's `generated_at` so downstream consumers see a
+/// bounded, RFC3339-shaped value. Anything else silently drops the field —
+/// the sync still succeeds (the catalog itself was fine), only its freshness
+/// signal degrades to "unknown".
+fn sanitize_generated_at(raw: &str) -> Option<String> {
+    // Length cap so a hostile publisher can't OOM the tool response.
+    if raw.len() > 64 {
+        return None;
+    }
+    let bytes = raw.as_bytes();
+    if bytes.len() < 20 {
+        return None;
+    }
+    // YYYY-MM-DDTHH:MM:SS [.<frac>] [Z|+HH:MM|-HH:MM]
+    // Cheap structural check; doesn't parse the whole grammar.
+    // Slot-by-slot positions where a non-digit character is required.
+    const DELIMITER_BYTES: &[u8] = b"-+:.T";
+    for (i, b) in bytes.iter().enumerate() {
+        let is_date_or_time_field = i < 19;
+        let is_separator = matches!(i, 4 | 7 | 10 | 13 | 16);
+        let is_tz_open = i == 19;
+        let is_accepted_elsewhere = DELIMITER_BYTES.contains(b)
+            || b.is_ascii_digit()
+            || (is_tz_open && matches!(b, b'.' | b'+' | b'-' | b'Z'));
+        // Whitespace anywhere is fatal — the publisher's payload should be
+        // tight, and trimming opens the door to look-alike padding attacks.
+        if b.is_ascii_whitespace() {
+            return None;
+        }
+        // Inside the date/time fields, allow only digits and separators at the
+        // exact slot positions; no other characters.
+        if is_date_or_time_field {
+            let allowed = if is_separator {
+                DELIMITER_BYTES.contains(b) && *b != b'.'
+            } else {
+                b.is_ascii_digit()
+            };
+            if !allowed {
+                return None;
+            }
+        }
+        // Past the 20th byte we relax the constraint for fractional seconds /
+        // timezone, gated only by `is_accepted_elsewhere` so a stray `[` or
+        // `;` cannot slip past.
+        if !is_date_or_time_field && !is_accepted_elsewhere {
+            return None;
+        }
+    }
+    // Day/month digit sanity on the fixed-width slots so the parser never
+    // hands a downstream consumer bytes it can re-parse. Full date validation
+    // would need `chrono` so we keep it cheap.
+    for slot in [&bytes[0..4], &bytes[5..7], &bytes[8..10]] {
+        if !slot.iter().all(|b| b.is_ascii_digit()) {
+            return None;
+        }
+    }
+    Some(raw.to_string())
+}
+
+#[cfg(test)]
+mod sanitize_tests {
+    use super::sanitize_generated_at;
+
+    #[test]
+    fn accepts_rfc3339_utc() {
+        assert!(sanitize_generated_at("2026-07-30T00:00:00Z").is_some());
+    }
+
+    #[test]
+    fn accepts_rfc3339_with_offset() {
+        assert!(sanitize_generated_at("2026-07-30T12:34:56+02:00").is_some());
+    }
+
+    #[test]
+    fn rejects_html() {
+        assert!(sanitize_generated_at("<script>alert(1)</script>").is_none());
+    }
+
+    #[test]
+    fn rejects_oversize() {
+        assert!(sanitize_generated_at(&"a".repeat(65)).is_none());
+    }
+
+    #[test]
+    fn rejects_short_or_malformed() {
+        assert!(sanitize_generated_at("2026/07/30").is_none());
+        assert!(sanitize_generated_at("not a date").is_none());
+    }
+}
 
 /// Built-in official Aleph Hub source.
 pub const ALEPH_HUB_ID: &str = "aleph-hub";
@@ -64,7 +166,6 @@ pub struct AlephHubCatalog {
     /// is clamped to it, so `official` is a property of the source rather than
     /// an entry's self-assertion.
     trust_tier: TrustTier,
-    http: reqwest::Client,
 }
 
 impl AlephHubCatalog {
@@ -80,7 +181,6 @@ impl AlephHubCatalog {
             name: name.into(),
             artifact_url: artifact_url.into(),
             trust_tier,
-            http: reqwest::Client::new(),
         }
     }
 
@@ -90,9 +190,13 @@ impl AlephHubCatalog {
     fn ingest(&self, body: &str) -> Result<Ingested, CatalogError> {
         let art: HubCatalogArtifact =
             serde_json::from_str(body).map_err(|e| CatalogError::Parse(e.to_string()))?;
-        if art.manifest.schema_version > SUPPORTED_SCHEMA_VERSION {
+        // Schema-version: exact match. The wire is `u32`, so anything less is a
+        // stale publisher miss, anything greater is a contract we haven't
+        // learned to read. Forward compatibility is the publisher's problem
+        // to negotiate (bump SUPPORTED_SCHEMA_VERSION here when ready).
+        if art.manifest.schema_version != SUPPORTED_SCHEMA_VERSION {
             return Err(CatalogError::Schema(format!(
-                "artifact schema_version {} > supported {}",
+                "artifact schema_version {} != supported {}",
                 art.manifest.schema_version, SUPPORTED_SCHEMA_VERSION
             )));
         }
@@ -116,7 +220,11 @@ impl AlephHubCatalog {
         }
         Ok(Ingested {
             entries: out,
-            generated_at: art.manifest.generated_at,
+            // Validate `generated_at` shape so a hostile publisher cannot ship
+            // an XSS payload or a multi-MiB string here. An invalid value
+            // drops the field rather than rejects the whole sync — a stale
+            // freshness signal is less harmful than refusing a valid catalog.
+            generated_at: art.manifest.generated_at.as_deref().and_then(sanitize_generated_at),
         })
     }
 
@@ -126,21 +234,25 @@ impl AlephHubCatalog {
     }
 
     async fn fetch_ingested(&self) -> Result<Ingested, CatalogError> {
-        let resp = self
-            .http
-            .get(&self.artifact_url)
-            .timeout(std::time::Duration::from_secs(30))
-            .send()
-            .await
-            .map_err(|e| CatalogError::Network(e.to_string()))?;
-        if !resp.status().is_success() {
-            return Err(CatalogError::Network(format!("HTTP {}", resp.status())));
+        // Use the project's `safe_fetch` so the same defenses every other
+        // module applies (URL allow-list, DNS pinning, no silent redirect to
+        // 10.0.0.x, cross-origin header strip) apply to the catalog too.
+        // The `with_max_body_bytes` cap is the one the engineering audit
+        // named explicitly: a hostile or buggy upstream cannot OOM the
+        // daemon even before the JSON parse runs.
+        let resp = safe_fetch(
+            &self.artifact_url,
+            &SsrfPolicy::default(),
+            SafeFetchRequest::get(CATALOG_FETCH_TIMEOUT).with_max_body_bytes(CATALOG_MAX_BYTES),
+        )
+        .await
+        .map_err(|e| CatalogError::Network(e.to_string()))?;
+        if !resp.status.is_success() {
+            return Err(CatalogError::Network(format!("HTTP {}", resp.status)));
         }
-        let body = resp
-            .text()
-            .await
-            .map_err(|e| CatalogError::Network(e.to_string()))?;
-        self.ingest(&body)
+        let body = std::str::from_utf8(&resp.body)
+            .map_err(|e| CatalogError::Parse(format!("non-utf8 body: {e}")))?;
+        self.ingest(body)
     }
 
     /// Fetch + atomically replace this source's cache slice. Never errors out:

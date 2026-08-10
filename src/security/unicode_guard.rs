@@ -23,7 +23,10 @@
 pub(crate) fn is_invisible_char(c: char) -> bool {
     matches!(
         c,
-        '\u{200B}' // ZERO WIDTH SPACE
+        '\u{00A0}' // NO-BREAK SPACE — looks like a space to a human, often
+        // dropped by tokenizers, ideal for splitting injected keywords
+        // without visible cost (review/hub-statics).
+        | '\u{200B}' // ZERO WIDTH SPACE
         | '\u{200C}' // ZERO WIDTH NON-JOINER
         | '\u{200D}' // ZERO WIDTH JOINER
         | '\u{FEFF}' // BYTE ORDER MARK / ZERO WIDTH NO-BREAK SPACE
@@ -113,6 +116,14 @@ mod tests {
         assert!(!is_invisible_char('🚀'));
         assert!(!is_invisible_char(' '));
         assert!(!is_invisible_char('\n'));
+    }
+
+    #[test]
+    fn detects_nbsp_as_invisible() {
+        // NBSP is "invisible" for injection-detection purposes: it renders as
+        // a space to a human reviewer and is often dropped by tokenizers, so it
+        // is the standard invisible-space splitting vector.
+        assert!(is_invisible_char('\u{00A0}'));
     }
 
     #[test]

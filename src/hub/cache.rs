@@ -43,7 +43,13 @@ pub fn matches_query(e: &ExtensionEntry, query: &str) -> bool {
 /// fresh install never sees one without the other.
 pub fn init_schema(conn: &Connection) -> rusqlite::Result<()> {
     conn.execute_batch(
-        "CREATE TABLE IF NOT EXISTS catalog (
+        // PRAGMA ordering matters: WAL must come before any read/write on this
+        // connection, and `busy_timeout` only takes effect on the next statement.
+        // We don't `PRAGMA synchronous=NORMAL` here — full-sync is cheaper than
+        // diagnosing a half-written catalog row after a crash.
+        "PRAGMA journal_mode = WAL;
+         PRAGMA busy_timeout = 5000;
+         CREATE TABLE IF NOT EXISTS catalog (
             id        TEXT PRIMARY KEY,
             kind      TEXT NOT NULL,
             category  TEXT NOT NULL,
@@ -70,8 +76,8 @@ pub fn upsert_entry(conn: &Connection, e: &ExtensionEntry) -> rusqlite::Result<(
             source_id=excluded.source_id, installed=excluded.installed, data=excluded.data",
         params![
             e.id,
-            serde_json::to_value(e.kind).unwrap().as_str().unwrap(),
-            serde_json::to_value(e.category).unwrap().as_str().unwrap(),
+            e.kind.as_str(),
+            e.category.as_str(),
             e.name.to_lowercase(),
             e.source_id,
             e.installed as i64,
@@ -93,23 +99,11 @@ pub fn query_entries(
     }
     if let Some(k) = f.kind {
         sql.push_str(" AND kind = ?");
-        args.push(Box::new(
-            serde_json::to_value(k)
-                .unwrap()
-                .as_str()
-                .unwrap()
-                .to_string(),
-        ));
+        args.push(Box::new(k.as_str().to_string()));
     }
     if let Some(c) = f.category {
         sql.push_str(" AND category = ?");
-        args.push(Box::new(
-            serde_json::to_value(c)
-                .unwrap()
-                .as_str()
-                .unwrap()
-                .to_string(),
-        ));
+        args.push(Box::new(c.as_str().to_string()));
     }
     if let Some(s) = &f.source_id {
         sql.push_str(" AND source_id = ?");
@@ -167,28 +161,37 @@ impl CatalogCache {
         })
     }
     pub async fn upsert_many(&self, entries: &[ExtensionEntry]) -> rusqlite::Result<()> {
-        let guard = self.conn.lock().await;
+        let mut guard = self.conn.lock().await;
+        // Wrap the whole batch so any per-row failure rolls back every prior
+        // insert in the same call. (See `replace_source` for the slot-level
+        // equivalent that adds the clear-and-refill semantics.)
+        let tx = guard.transaction()?;
         for e in entries {
-            upsert_entry(&guard, e)?;
+            upsert_entry(&tx, e)?;
         }
-        Ok(())
+        tx.commit()
     }
     pub async fn query(&self, f: &CatalogFilter) -> rusqlite::Result<Vec<ExtensionEntry>> {
         let guard = self.conn.lock().await;
         query_entries(&guard, f)
     }
     /// Atomic per-source refresh: clear the source's rows then insert fresh.
+    ///
+    /// The whole delete-then-insert is wrapped in a single SQLite transaction
+    /// so any failure (disk-full, malformed entry, lock contention) leaves the
+    /// slot exactly as it was — never half-populated.
     pub async fn replace_source(
         &self,
         source_id: &str,
         entries: &[ExtensionEntry],
     ) -> rusqlite::Result<()> {
-        let guard = self.conn.lock().await;
-        clear_source(&guard, source_id)?;
+        let mut guard = self.conn.lock().await;
+        let tx = guard.transaction()?;
+        clear_source(&tx, source_id)?;
         for e in entries {
-            upsert_entry(&guard, e)?;
+            upsert_entry(&tx, e)?;
         }
-        Ok(())
+        tx.commit()
     }
     /// Number of cached rows for a source. Used by the cold-start primer.
     pub async fn count_source(&self, source_id: &str) -> rusqlite::Result<usize> {
