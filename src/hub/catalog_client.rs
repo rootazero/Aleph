@@ -31,41 +31,50 @@ fn sanitize_generated_at(raw: &str) -> Option<String> {
     if raw.len() > 64 {
         return None;
     }
-    // Strictly RFC3339-ish: digit-digit-digit-digit (year), etc.
-    // Cheap structural check; doesn't parse the whole grammar.
-    fn is_ascii_digit(b: u8) -> bool {
-        b.is_ascii_digit()
-    }
     let bytes = raw.as_bytes();
     if bytes.len() < 20 {
         return None;
     }
-    // YYYY-MM-DDTHH:MM:SS ... Z (we accept fractional seconds and offsets too).
+    // YYYY-MM-DDTHH:MM:SS [.<frac>] [Z|+HH:MM|-HH:MM]
+    // Cheap structural check; doesn't parse the whole grammar.
+    // Slot-by-slot positions where a non-digit character is required.
+    const DELIMITER_BYTES: &[u8] = b"-+:.T";
     for (i, b) in bytes.iter().enumerate() {
-        let expected = match i {
-            4 | 7 => b'-',
-            10 => b'T',
-            13 | 16 => b':',
-            19 => &[b'.', b'+', b'-', b'Z'][..],
-            _ => {
-                if b.is_ascii_whitespace() {
-                    return None;
-                }
-                continue;
+        let is_date_or_time_field = i < 19;
+        let is_separator = matches!(i, 4 | 7 | 10 | 13 | 16);
+        let is_tz_open = i == 19;
+        let is_accepted_elsewhere = DELIMITER_BYTES.contains(b)
+            || b.is_ascii_digit()
+            || (is_tz_open && matches!(b, b'.' | b'+' | b'-' | b'Z'));
+        // Whitespace anywhere is fatal — the publisher's payload should be
+        // tight, and trimming opens the door to look-alike padding attacks.
+        if b.is_ascii_whitespace() {
+            return None;
+        }
+        // Inside the date/time fields, allow only digits and separators at the
+        // exact slot positions; no other characters.
+        if is_date_or_time_field {
+            let allowed = if is_separator {
+                DELIMITER_BYTES.contains(b) && *b != b'.'
+            } else {
+                b.is_ascii_digit()
+            };
+            if !allowed {
+                return None;
             }
-        };
-        let ok = match expected {
-            [single] => *b == *single,
-            many => many.contains(b),
-        };
-        if !ok {
+        }
+        // Past the 20th byte we relax the constraint for fractional seconds /
+        // timezone, gated only by `is_accepted_elsewhere` so a stray `[` or
+        // `;` cannot slip past.
+        if !is_date_or_time_field && !is_accepted_elsewhere {
             return None;
         }
     }
-    // Day/month digit sanity; full parse would need `chrono` so we keep it cheap.
-    for (i, slot) in [(0, &bytes[0..4]), (5, &bytes[5..7]), (8, &bytes[8..10])] {
-        let _ = i;
-        if !slot.iter().all(is_ascii_digit) {
+    // Day/month digit sanity on the fixed-width slots so the parser never
+    // hands a downstream consumer bytes it can re-parse. Full date validation
+    // would need `chrono` so we keep it cheap.
+    for slot in [&bytes[0..4], &bytes[5..7], &bytes[8..10]] {
+        if !slot.iter().all(|b| b.is_ascii_digit()) {
             return None;
         }
     }

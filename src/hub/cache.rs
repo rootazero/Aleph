@@ -161,7 +161,7 @@ impl CatalogCache {
         })
     }
     pub async fn upsert_many(&self, entries: &[ExtensionEntry]) -> rusqlite::Result<()> {
-        let guard = self.conn.lock().await;
+        let mut guard = self.conn.lock().await;
         // Wrap the whole batch so any per-row failure rolls back every prior
         // insert in the same call. (See `replace_source` for the slot-level
         // equivalent that adds the clear-and-refill semantics.)
@@ -185,7 +185,7 @@ impl CatalogCache {
         source_id: &str,
         entries: &[ExtensionEntry],
     ) -> rusqlite::Result<()> {
-        let guard = self.conn.lock().await;
+        let mut guard = self.conn.lock().await;
         let tx = guard.transaction()?;
         clear_source(&tx, source_id)?;
         for e in entries {
