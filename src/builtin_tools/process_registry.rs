@@ -29,7 +29,13 @@
 //! already-truncated `CodeExecOutput` for the rest of the entry's retention.
 //! **The snapshot bytes are PRE-scrub**; rendering one without re-running the
 //! finished path's secret gate would make "poll a running job" a way to read
-//! what the completed path refuses.
+//! what the completed path refuses. The one gate all of them share lives in
+//! [`partial_output`](super::partial_output).
+//!
+//! The rings are also the *only* record a job aborted mid-flight leaves behind
+//! — an abort drops the future, so there is no `CodeExecOutput` at all — so
+//! `kill` and `shutdown` take a gated snapshot on their way through, at the
+//! last instant the bytes exist. See [`journal_live_tail`].
 //!
 //! Durability: this table is pure process memory, so a daemon restart used to
 //! turn every id into `"no background process #N for this session"` — *"there
@@ -47,6 +53,7 @@ use tokio::sync::Notify;
 use tokio::task::AbortHandle;
 
 use crate::builtin_tools::code_exec::CodeExecOutput;
+use crate::builtin_tools::partial_output;
 use crate::builtin_tools::process_journal::{self, Verdict};
 use crate::sandbox::live_tail::{LiveSnapshot, LiveTail};
 use crate::sync_primitives::{Arc, AtomicU64, Mutex, MutexGuard, Ordering};
@@ -375,31 +382,35 @@ impl ProcessRegistry {
     /// Abort a running process. Dropping the task fires `kill_on_drop` on the
     /// underlying child, so the real OS process is `SIGKILL`ed.
     pub fn kill(&self, id: u64, caller: Option<&str>) -> KillOutcome {
-        let outcome = {
+        let (outcome, live) = {
             let mut procs = self.lock();
             match procs.get_mut(&id) {
                 Some(entry) if owns(entry, caller) => match entry.state {
                     ProcState::Running => {
                         entry.abort.abort();
-                        // Releases the live rings under this same lock — a
-                        // killed entry has no partial left to show.
+                        // Take the tail BEFORE retiring: `retire` releases the
+                        // rings under this same lock, and this is the last
+                        // instant the bytes exist anywhere.
+                        let live = entry.live.clone();
                         entry.retire(ProcState::Killed);
-                        KillOutcome::Killed
+                        (KillOutcome::Killed, live)
                     }
-                    _ => KillOutcome::AlreadyFinished,
+                    _ => (KillOutcome::AlreadyFinished, None),
                 },
-                _ => KillOutcome::NotFound,
+                _ => (KillOutcome::NotFound, None),
             }
         };
         // A kill transitions out of `Running`, so unblock any `wait`ers and
         // free the per-session slot the killed job was holding.
         if matches!(outcome, KillOutcome::Killed) {
-            // Durable verdict, with no output: aborting drops the in-flight
-            // future, so there is no `CodeExecOutput` to record and the live
-            // tail's bytes are PRE-scrub (persisting those would make a restart
-            // a way to read what the finished path refuses). The read side
-            // states the absence rather than showing an empty string.
             if self.journaled {
+                // Aborting drops the in-flight future, so there is no
+                // `CodeExecOutput` — but there IS a live tail, and this is the
+                // moment it stops existing. Gating and writing happen outside
+                // the table lock: the gate runs secret patterns over 16 KiB and
+                // the write touches the disk, neither of which belongs under a
+                // lock every poll contends for.
+                journal_live_tail(id, live.as_deref());
                 process_journal::record_settled(id, Verdict::Killed, None, "", "");
             }
             self.completion.notify_waiters();
@@ -478,15 +489,16 @@ impl ProcessRegistry {
     /// runtime itself is shutting down, so the registry has to be the
     /// authoritative reaper.
     pub fn shutdown(&self) -> usize {
-        let reaped: Vec<u64> = {
+        let reaped: Vec<(u64, Option<Arc<LiveTail>>)> = {
             let mut procs = self.lock();
             let mut reaped = Vec::new();
             for (id, entry) in procs.iter_mut() {
                 if matches!(entry.state, ProcState::Running) {
                     entry.abort.abort();
-                    // Same lock acquisition releases the live rings (see `kill`).
+                    // Take the tail before `retire` releases it (see `kill`).
+                    let live = entry.live.clone();
                     entry.retire(ProcState::Killed);
-                    reaped.push(*id);
+                    reaped.push((*id, live));
                 }
             }
             reaped
@@ -495,8 +507,11 @@ impl ProcessRegistry {
         // so these rows must not be left `Running` on disk — the next boot
         // would tombstone them as "still running when the daemon stopped,
         // liveness unknown", which is exactly the thing we DO know is false.
+        // They keep what they had printed, though: an operator who stops the
+        // daemon mid-build still gets to see how far it had got.
         if self.journaled {
-            for id in &reaped {
+            for (id, live) in &reaped {
+                journal_live_tail(*id, live.as_deref());
                 process_journal::record_settled(*id, Verdict::Killed, None, "", "");
             }
         }
@@ -504,6 +519,22 @@ impl ProcessRegistry {
             self.completion.notify_waiters();
         }
         reaped.len()
+    }
+
+    /// Every running job that has a live tail, for the journal's periodic
+    /// flusher. Not scoped to a caller: the flusher writes into each job's own
+    /// owner-scoped row and nothing here is rendered to anyone.
+    ///
+    /// Sole consumer is `process_journal::spawn_partial_flusher`. If that ever
+    /// goes away, so does this (R10) — it is not a general-purpose accessor and
+    /// must not become one, because handing out another session's live output
+    /// is precisely what `poll`'s owner check exists to prevent.
+    pub(crate) fn running_live_tails(&self) -> Vec<(u64, Arc<LiveTail>)> {
+        self.lock()
+            .iter()
+            .filter(|(_, e)| matches!(e.state, ProcState::Running))
+            .filter_map(|(id, e)| e.live.clone().map(|t| (*id, t)))
+            .collect()
     }
 
     /// Enumerate this caller's processes, newest first.
@@ -537,6 +568,31 @@ impl ProcessRegistry {
 
 fn owns(entry: &ProcEntry, caller: Option<&str>) -> bool {
     entry.session_label.as_deref() == caller
+}
+
+/// Persist what a job had printed, at the moment Aleph stopped it.
+///
+/// The two callers ([`ProcessRegistry::kill`] and
+/// [`ProcessRegistry::shutdown`]) are the paths where a job ends **without
+/// producing a result**: the future is aborted, so there is no
+/// `CodeExecOutput`, and until this existed the recovered row could only say
+/// "no output was recorded" — technically true and useless, since the job had
+/// very often printed thousands of lines.
+///
+/// The bytes are PRE-scrub, so they go through
+/// [`partial_output::durable_text`], which is the same gate `bash`'s own `poll`
+/// runs. That is the invariant that makes this safe: nothing lands on disk that
+/// a live poll would have refused, so recovering a row cannot become a way
+/// around the refusal.
+///
+/// Must be called with no registry lock held — the gate is regex work over the
+/// whole tail and the write touches the disk.
+fn journal_live_tail(id: u64, live: Option<&LiveTail>) {
+    let Some(live) = live else { return };
+    let snapshot = live.snapshot();
+    if let Some(text) = partial_output::durable_text(&snapshot) {
+        process_journal::record_partial(id, &text);
+    }
 }
 
 fn elapsed_ms(started: Instant) -> u64 {
@@ -1009,9 +1065,11 @@ mod tests {
         // A plain `new()` registry — what every other test in this module
         // builds — spawns and settles a job while the journal is ENABLED.
         let reg = ProcessRegistry::new();
-        let id = unwrap_id(reg.register_running("cat /etc/shadow", Some("squatter".into()), {
-            live_handle().await
-        }));
+        let id = unwrap_id(
+            reg.register_running("cat /etc/shadow", Some("squatter".into()), {
+                live_handle().await
+            }),
+        );
         reg.complete(id, dummy_output(0, "secrets\n"));
 
         assert!(
@@ -1029,5 +1087,151 @@ mod tests {
         assert_eq!(reg.shutdown(), 1);
         // Second call: nothing running, no abort, returns 0.
         assert_eq!(reg.shutdown(), 0);
+    }
+
+    /// Attach a live tail carrying `text` on stdout to a running entry.
+    fn attach_tail(reg: &ProcessRegistry, id: u64, text: &str) {
+        use crate::sandbox::live_tail::LiveStream;
+        let tail = Arc::new(LiveTail::new());
+        tail.push(LiveStream::Stdout, text.as_bytes());
+        reg.attach_live(id, tail);
+    }
+
+    /// A killed job must keep what it had printed.
+    ///
+    /// Aborting drops the in-flight future, so there is no `CodeExecOutput` and
+    /// never will be — the live tail is the ONLY record that ever existed, and
+    /// `kill` is the last instant it exists at all (`retire` releases the rings
+    /// under the same lock). Before this the recovered row said "no output was
+    /// recorded", which is technically true and useless for a build that had
+    /// printed thousands of lines.
+    ///
+    /// Asserts on the re-read through `lookup`, not on a call count: capturing
+    /// the snapshot and then dropping it on the floor would satisfy any
+    /// assertion about the capture *happening*.
+    #[tokio::test]
+    async fn killing_a_job_records_the_tail_it_had_printed() {
+        let _g = process_journal::test_gate();
+        let tmp = tempfile::tempdir().unwrap();
+        process_journal::init_and_reconcile(tmp.path().to_path_buf());
+        let reg = ProcessRegistry::new_journaled();
+        reg.seed_id_floor(process_journal::id_floor());
+        let owner = Some("kill-owner".to_string());
+
+        let id = unwrap_id(reg.register_running("cargo build", owner.clone(), live_handle().await));
+        attach_tail(&reg, id, "   Compiling alephcore v26.7.31\n");
+        assert!(matches!(
+            reg.kill(id, owner.as_deref()),
+            KillOutcome::Killed
+        ));
+
+        let found = process_journal::lookup(id, owner.as_deref()).expect("the row is journaled");
+        assert_eq!(found.record.outcome.as_deref(), Some("killed"));
+        assert!(
+            found.recorded_output.contains("Compiling alephcore"),
+            "a killed job's last output is the only thing it leaves: {:?}",
+            found.recorded_output
+        );
+        assert!(
+            found.output_is_live_capture,
+            "and it must be labelled a window, not a result"
+        );
+        process_journal::disable_for_test();
+    }
+
+    /// Same capture on the orderly-shutdown path. Not redundant with the `kill`
+    /// test: these are two different call sites, and the reaper's is the one an
+    /// operator hits by stopping the daemon mid-build.
+    #[tokio::test]
+    async fn shutdown_records_the_tail_of_every_job_it_reaps() {
+        let _g = process_journal::test_gate();
+        let tmp = tempfile::tempdir().unwrap();
+        process_journal::init_and_reconcile(tmp.path().to_path_buf());
+        let reg = ProcessRegistry::new_journaled();
+        reg.seed_id_floor(process_journal::id_floor());
+        let owner = Some("reaped-owner".to_string());
+
+        let id = unwrap_id(reg.register_running("make -j8", owner.clone(), live_handle().await));
+        attach_tail(&reg, id, "[ 87%] Building CXX object\n");
+        assert_eq!(reg.shutdown(), 1);
+
+        let found = process_journal::lookup(id, owner.as_deref()).expect("row");
+        assert!(
+            found.recorded_output.contains("87%"),
+            "stopping the daemon must not erase how far the build got: {:?}",
+            found.recorded_output
+        );
+        process_journal::disable_for_test();
+    }
+
+    /// The interrupted population's only mechanism: a crash runs nothing, so
+    /// the answer has to already be on disk. One flusher tick, driven directly.
+    ///
+    /// Also pins the idempotence the tick relies on — an unchanged job must not
+    /// be rewritten, because the loop runs forever and a `fsync` per idle job
+    /// per interval is a cost with no reader.
+    #[tokio::test]
+    async fn a_flusher_tick_persists_running_output_and_skips_unchanged_jobs() {
+        use crate::sandbox::live_tail::LiveStream;
+        let _g = process_journal::test_gate();
+        let tmp = tempfile::tempdir().unwrap();
+        process_journal::init_and_reconcile(tmp.path().to_path_buf());
+        let reg = ProcessRegistry::new_journaled();
+        reg.seed_id_floor(process_journal::id_floor());
+        let owner = Some("flush-owner".to_string());
+
+        let id = unwrap_id(reg.register_running("pytest -x", owner.clone(), live_handle().await));
+        let tail = Arc::new(LiveTail::new());
+        tail.push(LiveStream::Stdout, b"collected 812 items\n");
+        reg.attach_live(id, tail.clone());
+
+        let mut written = std::collections::HashMap::new();
+        assert_eq!(
+            process_journal::flush_running_partials_for_test(&reg, &mut written),
+            1,
+            "a running job with new bytes must be flushed"
+        );
+        let found = process_journal::lookup(id, owner.as_deref()).expect("row");
+        assert!(
+            found.recorded_output.contains("collected 812 items"),
+            "got: {:?}",
+            found.recorded_output
+        );
+        assert!(found.output_is_live_capture);
+        assert_eq!(
+            found.record.phase,
+            process_journal::JobPhase::Running,
+            "flushing must not settle the job — it is still going"
+        );
+
+        // Nothing new: the file already says exactly this.
+        assert_eq!(
+            process_journal::flush_running_partials_for_test(&reg, &mut written),
+            0,
+            "an idle job must not be rewritten every tick"
+        );
+        // ...and new bytes bring it back.
+        tail.push(LiveStream::Stdout, b"812 passed\n");
+        assert_eq!(
+            process_journal::flush_running_partials_for_test(&reg, &mut written),
+            1
+        );
+        assert!(process_journal::lookup(id, owner.as_deref())
+            .expect("row")
+            .recorded_output
+            .contains("812 passed"));
+
+        // A finished job leaves the running set, and its bookkeeping with it.
+        reg.complete(id, dummy_output(0, "812 passed\n"));
+        assert_eq!(
+            process_journal::flush_running_partials_for_test(&reg, &mut written),
+            0
+        );
+        assert!(
+            written.is_empty(),
+            "the per-job cursor must be pruned, or a long-lived daemon accumulates \
+             one entry per job it has ever run"
+        );
+        process_journal::disable_for_test();
     }
 }
