@@ -1,45 +1,52 @@
 //! `ask_user` — mid-task clarification tool.
 //!
-//! Lets the agent pause, ask the user a question through the originating
-//! channel, and resume once the user replies. The agent loop blocks inside
-//! this tool's `call` until the reply arrives, the question is superseded, or
-//! the clarification times out.
+//! Lets the agent pause, ask the user **one to four** questions through the
+//! originating channel, and resume once they answer. The agent loop blocks
+//! inside this tool's `call` until every answer arrives, the request is
+//! superseded, or the clarification times out.
 //!
-//! Flow:
-//! 1. Read the turn's `TURN_CONTEXT` for the originating channel + session.
-//! 2. Register a [`ClarificationRequest`] with the [`ClarificationManager`]
-//!    keyed by the session — *before* delivery, so a fast reply is never lost.
-//! 3. Deliver the rendered question — to the originating channel when one is
-//!    registered, otherwise onto the gateway event bus as a `stream.ask_user`
-//!    frame (see [`publish_to_event_bus`]).
-//! 4. Block on the oneshot until the reply arrives, or the timeout fires.
+//! Everything about *reaching* the human — routability, the headless refusal,
+//! the channel → event-bus delivery ladder, the secret rule, the wait — lives
+//! in [`crate::clarification::ask`], shared with the `scratchpad` plan-approval
+//! gate. What is left here is this tool's own job: its argument schema, the
+//! normalisation of what a model actually emits, and the shape of the answer it
+//! gets back.
 //!
-//! Both delivery paths converge on `ClarificationManager::resolve`, keyed by
-//! the same session: a channel reply (typed text or a `clarify:<idx>` inline
-//! button) is routed there by `inbound_router::try_intercept_hitl`; the Panel's
-//! answer to the `stream.ask_user` card is routed there by the
-//! `clarification.resolve` RPC (`gateway::handlers::clarification`).
+//! # Why more than one question
+//!
+//! A single-question tool makes the model pay a full round trip per question,
+//! so it either asks one thing and guesses the rest, or burns N turns. codex
+//! (`request_user_input`, 1–3), pi (`questionnaire`, N) and hermes
+//! (`clarify` + `multi_select`) all landed on the same answer. The cost of
+//! plurality is answered in `clarification::session`: rich clients answer all
+//! at once, plain-text surfaces answer one per message, and neither is a
+//! degraded mode of the other.
 
 use async_trait::async_trait;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
-use tracing::{info, warn};
 
 use crate::clarification::{
-    ClarificationManager, ClarificationOption, ClarificationRequest, ClarificationResult,
-    ClarificationResultType, DEFAULT_CLARIFY_TIMEOUT,
+    ask, ClarificationAnswer, ClarificationDeps, ClarificationManager, ClarificationOption,
+    ClarificationQuestion, ClarificationRequest, ClarificationResult, ClarificationResultType,
 };
 use crate::error::{AlephError, Result};
-use crate::gateway::channel::{ChannelId, InlineButton, InlineKeyboard, OutboundMessage};
 use crate::gateway::channel_registry::ChannelRegistry;
-use crate::gateway::events::GatewayEventFrame;
 use crate::sync_primitives::Arc;
-use crate::tools::turn_context::{current_turn_context, TurnContext};
 use crate::tools::AlephTool;
 
 // =============================================================================
 // Args / Output
 // =============================================================================
+
+/// Upper bound on questions per call.
+///
+/// Four, not "as many as you like": every extra question is one more thing a
+/// human has to hold in their head before they can answer any of them, and a
+/// sequential surface renders them one at a time — a ten-question wall is a
+/// worse interaction than two calls of five. codex caps at 3, Claude Code's own
+/// `AskUserQuestion` at 4.
+const MAX_QUESTIONS: usize = 4;
 
 /// A single choice offered to the user.
 ///
@@ -76,37 +83,80 @@ impl AskUserChoice {
             Self::Detailed { description, .. } => Some(description),
         }
     }
-}
 
-/// Render a compact button label `"<n>. <label>"`, truncated so a long choice
-/// doesn't bloat the keyboard — the full text is always listed in the message
-/// body, so the button only needs to be tappable, not complete.
-fn button_label(index: usize, label: &str) -> String {
-    /// Max button label length (chars) before truncation.
-    const MAX_LABEL_CHARS: usize = 32;
-
-    let text = format!("{index}. {label}");
-    if text.chars().count() > MAX_LABEL_CHARS {
-        let truncated: String = text.chars().take(MAX_LABEL_CHARS - 1).collect();
-        format!("{truncated}…")
-    } else {
-        text
+    fn to_option(&self) -> ClarificationOption {
+        let opt = ClarificationOption::new(self.label(), self.label());
+        match self.description() {
+            Some(desc) => opt.with_description(desc),
+            None => opt,
+        }
     }
 }
 
-/// Arguments for the `ask_user` tool.
+/// One question of an `ask_user` call.
+///
+/// Argument doc comments here become `description`s in the JSON schema and are
+/// billed by `registry_schema_bytes_ratchet`, so they carry only what the
+/// schema itself cannot state — a default, or a relationship to another field.
+/// The semantics live once in [`AskUserTool::DESCRIPTION`].
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
-pub struct AskUserArgs {
-    /// The question to ask the user. Make it specific and self-contained —
-    /// the user sees only this text, not the surrounding task context.
+pub struct AskUserQuestionArg {
+    /// Answer key. Defaults to `q1`, `q2`, … in order.
+    #[serde(default)]
+    pub id: Option<String>,
+
+    /// 2–3 word chip shown beside the question.
+    #[serde(default)]
+    pub header: Option<String>,
+
+    /// The question, self-contained — the user sees no other context.
     pub question: String,
 
-    /// Optional list of choices. When non-empty the user is asked to pick one;
-    /// their reply is matched by number, by label, or taken as free text. Each
-    /// choice may be a plain string or an object with a `label` and a short
-    /// `description` to help the user decide.
+    /// Choices: strings, or `{label, description}`.
     #[serde(default)]
     pub choices: Vec<AskUserChoice>,
+
+    /// Accept several picks.
+    #[serde(default)]
+    pub multi_select: bool,
+
+    /// Answer is a credential: masked input, no messaging channel.
+    #[serde(default)]
+    pub secret: bool,
+}
+
+/// Arguments for the `ask_user` tool.
+///
+/// Two accepted shapes. The flat `question` / `choices` pair is the one-question
+/// form; `questions` is the list form. Supplying both is an error rather than a
+/// merge — a merge would have to invent an order, and the order is what the
+/// user answers in.
+#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
+pub struct AskUserArgs {
+    /// One question. Not with `questions`.
+    #[serde(default)]
+    pub question: Option<String>,
+
+    /// Choices for `question`.
+    #[serde(default)]
+    pub choices: Vec<AskUserChoice>,
+
+    /// Up to four questions at once. Not with `question`.
+    #[serde(default)]
+    pub questions: Vec<AskUserQuestionArg>,
+}
+
+/// One answered question.
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+pub struct AskUserAnswer {
+    /// The question's `id` (auto-assigned `q1`, `q2`, … when not supplied).
+    pub question_id: String,
+    /// The user's answer — selected choice label(s), or their own text.
+    pub answer: String,
+    /// 0-based indices of the choices matched, empty when the user wrote
+    /// something not on the list.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub selected_indices: Vec<u32>,
 }
 
 /// Output of the `ask_user` tool.
@@ -115,188 +165,140 @@ pub struct AskUserOutput {
     /// `"answered"`, `"timeout"`, or `"cancelled"`.
     pub status: String,
 
-    /// The user's answer — selected option value or free text. Absent on
-    /// timeout or cancellation.
+    /// The first answer — the one-question shorthand. Absent on timeout or
+    /// cancellation.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub answer: Option<String>,
 
-    /// 0-based index of the chosen option, when a choice list was offered and
-    /// the reply matched one of the choices.
+    /// 0-based index of the chosen option for the first question, when a
+    /// choice list was offered and the reply matched one of the choices.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub selected_index: Option<u32>,
-}
 
-/// Publish the question on the gateway event bus as a `stream.ask_user` frame.
-///
-/// This is the producer for the `AskUser` consumer chain — the Panel renders
-/// the question inline against `run_id` and answers it with
-/// `clarification.resolve` on the frame's `session_key`, and the R5 surface
-/// router turns it into an "Aleph has a question" notification. Used when the
-/// turn's channel cannot take the question: the Panel talks to core over the
-/// `gui:chat` pseudo-channel, which is never registered in the
-/// `ChannelRegistry`.
-///
-/// Returns `false` when the question cannot be published — no bus wired (CLI
-/// subcommands, unit tests) or no gateway run to correlate against — so the
-/// caller can roll the pending clarification back instead of blocking on a
-/// reply that can never arrive.
-fn publish_to_event_bus(turn: &TurnContext, question: &str, choices: &[AskUserChoice]) -> bool {
-    if turn.run_id.is_empty() {
-        return false;
-    }
-    let Some(bus) = crate::gateway::event_emitter::gateway_event_bus() else {
-        return false;
-    };
-    if let Err(e) = bus.publish_frame(&build_ask_user_frame(turn, question, choices)) {
-        warn!(error = %e, "ask_user: failed to publish the question on the event bus");
-        return false;
-    }
-    true
-}
-
-/// Build the `AskUser` frame published by [`publish_to_event_bus`].
-fn build_ask_user_frame(
-    turn: &TurnContext,
-    question: &str,
-    choices: &[AskUserChoice],
-) -> GatewayEventFrame {
-    GatewayEventFrame::AskUser {
-        run_id: turn.run_id.clone(),
-        // The run's emitter owns the stream sequence counter and an
-        // out-of-band producer has no handle on it. Same convention as the
-        // operator approval requester's out-of-band frames.
-        seq: 0,
-        // The key `register` used above — the Panel posts its answer back
-        // against exactly this, so the two can never drift.
-        session_key: turn.session_key.to_string(),
-        question: question.to_string(),
-        options: choices.iter().map(|c| c.label().to_string()).collect(),
-    }
+    /// Every answer, in question order. One entry for a single question.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub answers: Vec<AskUserAnswer>,
 }
 
 // =============================================================================
 // Tool
 // =============================================================================
 
-/// Tool that asks the user a clarifying question and waits for the reply.
+/// Tool that asks the user clarifying questions and waits for the replies.
 #[derive(Clone)]
 pub struct AskUserTool {
-    clarification: Arc<ClarificationManager>,
-    channels: Arc<ChannelRegistry>,
+    deps: ClarificationDeps,
 }
 
 impl AskUserTool {
+    #[must_use]
     pub const fn new(
         clarification: Arc<ClarificationManager>,
         channels: Arc<ChannelRegistry>,
     ) -> Self {
         Self {
-            clarification,
-            channels,
+            deps: ClarificationDeps::new(clarification, channels),
         }
     }
 
-    /// Build the clarification request, the channel-rendered prompt, and an
-    /// optional inline keyboard mirroring the choices.
+    /// Turn the tool's two accepted argument shapes into one request.
     ///
-    /// The keyboard is the clarification twin of the approval `approve:`
-    /// keyboard ([`crate::exec::ApprovalBridge`]): each choice becomes a button
-    /// whose `callback_data` is `clarify:<1-based index>`, re-injected through
-    /// the normal pipeline and resolved by the inbound router's HITL
-    /// interception. The numbered text menu is always rendered too, so channels
-    /// without inline-keyboard support degrade gracefully to a typed reply.
-    fn build_request(
-        question: &str,
-        choices: &[AskUserChoice],
-    ) -> (ClarificationRequest, String, Option<InlineKeyboard>) {
-        if choices.is_empty() {
-            return (
-                ClarificationRequest::text(question),
-                format!("❓ {question}\n\nReply with your answer."),
-                None,
-            );
+    /// Rejects rather than repairs in the three cases where repairing would
+    /// mean inventing intent: both shapes at once (what order?), neither
+    /// (nothing to ask), and a blank prompt (a question the user cannot read).
+    fn build_request(args: &AskUserArgs) -> Result<ClarificationRequest> {
+        let flat = args
+            .question
+            .as_deref()
+            .map(str::trim)
+            .filter(|q| !q.is_empty());
+        if flat.is_some() && !args.questions.is_empty() {
+            return Err(AlephError::tool(
+                "ask_user: pass either `question` (one question) or `questions` (a list), not both",
+            ));
         }
-        let options: Vec<ClarificationOption> = choices
-            .iter()
-            .map(|c| {
-                let opt = ClarificationOption::new(c.label(), c.label());
-                match c.description() {
-                    Some(desc) => opt.with_description(desc),
-                    None => opt,
+
+        let mut questions: Vec<ClarificationQuestion> = Vec::new();
+        if let Some(prompt) = flat {
+            questions.push(ClarificationQuestion::select(
+                "q1",
+                prompt,
+                args.choices.iter().map(AskUserChoice::to_option).collect(),
+            ));
+        } else {
+            if args.questions.len() > MAX_QUESTIONS {
+                return Err(AlephError::tool(format!(
+                    "ask_user: at most {MAX_QUESTIONS} questions per call — ask the rest after \
+                     these are answered"
+                )));
+            }
+            for (i, q) in args.questions.iter().enumerate() {
+                let prompt = q.question.trim();
+                if prompt.is_empty() {
+                    return Err(AlephError::tool(format!(
+                        "ask_user: question {} has empty text",
+                        i + 1
+                    )));
                 }
-            })
-            .collect();
-        let mut menu = String::new();
-        for (i, choice) in choices.iter().enumerate() {
-            match choice
-                .description()
-                .map(str::trim)
-                .filter(|d| !d.is_empty())
-            {
-                Some(desc) => {
-                    menu.push_str(&format!("{}. {} — {desc}\n", i + 1, choice.label()));
+                let id =
+                    q.id.as_deref()
+                        .map(str::trim)
+                        .filter(|s| !s.is_empty())
+                        .map_or_else(|| format!("q{}", i + 1), ToString::to_string);
+                let mut built = ClarificationQuestion::select(
+                    &id,
+                    prompt,
+                    q.choices.iter().map(AskUserChoice::to_option).collect(),
+                )
+                .with_multi_select(q.multi_select)
+                .with_secret(q.secret);
+                if let Some(header) = q.header.as_deref() {
+                    built = built.with_header(header);
                 }
-                None => menu.push_str(&format!("{}. {}\n", i + 1, choice.label())),
+                questions.push(built);
             }
         }
-        (
-            ClarificationRequest::select(question, options),
-            format!("❓ {question}\n\n{menu}\nReply with the number or your answer."),
-            Self::build_choice_keyboard(choices),
-        )
-    }
 
-    /// Build an inline keyboard for `choices`, two buttons per row.
-    ///
-    /// Returns `None` when there are too many choices to render compactly — the
-    /// numbered text body always lists every choice, so a long list simply
-    /// falls back to typed selection and the keyboard payload stays well under
-    /// the channel's per-message limits.
-    fn build_choice_keyboard(choices: &[AskUserChoice]) -> Option<InlineKeyboard> {
-        /// Max choices rendered as buttons; beyond this the menu is text-only.
-        const MAX_CHOICE_BUTTONS: usize = 12;
+        if questions.is_empty() {
+            return Err(AlephError::tool(
+                "ask_user: `question` must not be empty — say what you need to know",
+            ));
+        }
+        // Distinct ids or the answer map is ambiguous. Auto-assigned ids are
+        // unique by construction, so this only ever fires on model-supplied
+        // duplicates.
+        let mut seen = std::collections::HashSet::with_capacity(questions.len());
+        if let Some(dup) = questions.iter().find(|q| !seen.insert(q.id.as_str())) {
+            return Err(AlephError::tool(format!(
+                "ask_user: duplicate question id `{}` — each question needs its own",
+                dup.id
+            )));
+        }
 
-        if choices.is_empty() || choices.len() > MAX_CHOICE_BUTTONS {
-            return None;
-        }
-        let buttons: Vec<InlineButton> = choices
-            .iter()
-            .enumerate()
-            .map(|(i, c)| InlineButton {
-                text: button_label(i + 1, c.label()),
-                // 1-based index; the router strips `clarify:` and resolves the
-                // pending clarification with the bare number (see
-                // `try_intercept_hitl`).
-                callback_data: format!("clarify:{}", i + 1),
-            })
-            .collect();
-        let mut keyboard = InlineKeyboard::new();
-        for chunk in buttons.chunks(2) {
-            keyboard.rows.push(chunk.to_vec());
-        }
-        Some(keyboard)
+        ClarificationRequest::new(questions).map_err(AlephError::tool)
     }
 
     /// Map a resolved [`ClarificationResult`] onto the tool output.
     fn result_to_output(result: ClarificationResult) -> AskUserOutput {
-        match result.result_type {
-            ClarificationResultType::Selected | ClarificationResultType::TextInput => {
-                AskUserOutput {
-                    status: "answered".to_string(),
-                    answer: result.value,
-                    selected_index: result.selected_index,
-                }
-            }
-            ClarificationResultType::Timeout => AskUserOutput {
-                status: "timeout".to_string(),
-                answer: None,
-                selected_index: None,
-            },
-            ClarificationResultType::Cancelled => AskUserOutput {
-                status: "cancelled".to_string(),
-                answer: None,
-                selected_index: None,
-            },
+        let status = match result.result_type {
+            ClarificationResultType::Answered => "answered",
+            ClarificationResultType::Timeout => "timeout",
+            ClarificationResultType::Cancelled => "cancelled",
+        };
+        let answers: Vec<AskUserAnswer> = result
+            .answers
+            .iter()
+            .map(|a: &ClarificationAnswer| AskUserAnswer {
+                question_id: a.question_id.clone(),
+                answer: a.value.clone(),
+                selected_indices: a.selected_indices.clone(),
+            })
+            .collect();
+        AskUserOutput {
+            status: status.to_string(),
+            answer: result.value().map(ToString::to_string),
+            selected_index: result.selected_index(),
+            answers,
         }
     }
 }
@@ -305,86 +307,21 @@ impl AskUserTool {
 impl AlephTool for AskUserTool {
     const NAME: &'static str = "ask_user";
     const DESCRIPTION: &'static str =
-        "Ask the user a clarifying question and wait for their reply before continuing. \
-         Use this when the task is ambiguous, a required detail is missing, or you need \
-         the user to choose between options — instead of guessing. Optionally pass a list \
-         of `choices` to offer a menu. The agent pauses until the user answers; the reply \
-         (or a timeout) is returned so you can resume.";
+        "Ask the user up to four clarifying questions and wait for the reply, instead of \
+         guessing a detail that is theirs to decide. Pass `question` for one, or `questions` \
+         for several in one interaction. Choices are strings or `{label, description}`; free \
+         text is always accepted, so never add an \"other\" choice. `multi_select` takes several \
+         picks; `secret` masks the input and refuses a messaging channel. The run pauses until \
+         they answer; the replies — or a timeout — come back.";
 
     type Args = AskUserArgs;
     type Output = AskUserOutput;
 
     async fn call(&self, args: Self::Args) -> Result<Self::Output> {
-        let question = args.question.trim();
-        if question.is_empty() {
-            return Err(AlephError::tool("ask_user: `question` must not be empty"));
-        }
-
-        // Resolve the originating channel for this turn.
-        let Some(turn) = current_turn_context() else {
-            return Err(AlephError::tool(
-                "ask_user is only available inside an interactive channel turn",
-            ));
-        };
-        if !turn.is_channel_routable() {
-            return Err(AlephError::tool(
-                "ask_user: this turn has no interactive channel to reach the user",
-            ));
-        }
-        let session_key = turn.session_key.to_string();
-
-        let (request, rendered, keyboard) = Self::build_request(question, &args.choices);
-
-        // Register BEFORE delivery so a reply arriving immediately is not lost.
-        let rx = self
-            .clarification
-            .register(session_key.clone(), request, DEFAULT_CLARIFY_TIMEOUT)
-            .await;
-
-        // Deliver the question to the originating channel. Channels that render
-        // inline keyboards (e.g. Telegram) show tappable choice buttons; the
-        // rest fall back to the numbered text menu.
-        let mut message = OutboundMessage::text(turn.conversation_id.clone(), rendered);
-        message.inline_keyboard = keyboard;
-        if let Err(e) = self
-            .channels
-            .send(&ChannelId::new(&turn.channel_id), message)
+        let request = Self::build_request(&args)?;
+        let result = ask(&self.deps, request)
             .await
-        {
-            // The Panel's `gui:chat` is a pseudo-channel that is never
-            // registered in the `ChannelRegistry`, so the channel transport
-            // alone denies every Panel question. Fall back to the gateway
-            // event bus — mirrors the approval path's channel → operator
-            // fallback (`exec::approval::FallbackApprovalRequester`).
-            if !publish_to_event_bus(&turn, question, &args.choices) {
-                // Neither transport can reach the user — nobody can ever
-                // answer. Drop the registration.
-                self.clarification.cancel(&session_key).await;
-                warn!(error = %e, "ask_user: failed to deliver question to channel");
-                return Err(AlephError::tool(format!(
-                    "ask_user: failed to deliver the question to the user's channel: {e}"
-                )));
-            }
-        }
-        info!(session = %session_key, "ask_user: question delivered — awaiting reply");
-
-        // Block until the user replies, the request is superseded, or the
-        // timeout fires. The explicit timeout guarantees the tool never hangs
-        // even if no cleanup pass reaps the registry entry.
-        let result = match tokio::time::timeout(DEFAULT_CLARIFY_TIMEOUT, rx).await {
-            Ok(Ok(result)) => result,
-            // Sender dropped without sending — treat as cancelled.
-            Ok(Err(_)) => ClarificationResult::cancelled(),
-            // Timed out — reap the stale registry entry. `cleanup_expired`
-            // rather than `cancel` so the terminal frame clients receive says
-            // `expired`, matching the status returned here; the entry is past
-            // its deadline by construction (same duration, registered first).
-            Err(_) => {
-                self.clarification.cleanup_expired().await;
-                ClarificationResult::timeout()
-            }
-        };
-
+            .map_err(|e| AlephError::tool(format!("ask_user: {e}")))?;
         Ok(Self::result_to_output(result))
     }
 }
@@ -396,6 +333,7 @@ impl AlephTool for AskUserTool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::clarification::ClarificationAnswer;
     use crate::tools::turn_context::{TurnContext, TURN_CONTEXT};
 
     fn tool() -> AskUserTool {
@@ -403,6 +341,14 @@ mod tests {
             Arc::new(ClarificationManager::new()),
             Arc::new(ChannelRegistry::new()),
         )
+    }
+
+    fn args(question: &str) -> AskUserArgs {
+        AskUserArgs {
+            question: Some(question.to_string()),
+            choices: vec![],
+            questions: vec![],
+        }
     }
 
     fn routable_turn() -> TurnContext {
@@ -420,51 +366,23 @@ mod tests {
     #[tokio::test]
     async fn errors_when_question_empty() {
         let err = tool()
-            .call(AskUserArgs {
-                question: "   ".to_string(),
-                choices: vec![],
-            })
+            .call(args("   "))
             .await
             .expect_err("empty question must be rejected");
-        assert!(err.to_string().contains("must not be empty"));
+        assert!(err.to_string().contains("must not be empty"), "{err}");
     }
 
     #[tokio::test]
     async fn errors_without_turn_context() {
         // No TURN_CONTEXT scope — the tool cannot reach any channel.
         let err = tool()
-            .call(AskUserArgs {
-                question: "Which one?".to_string(),
-                choices: vec![],
-            })
+            .call(args("Which one?"))
             .await
             .expect_err("missing turn context must be rejected");
-        assert!(err.to_string().contains("interactive channel turn"));
-    }
-
-    #[tokio::test]
-    async fn errors_on_non_routable_turn() {
-        let non_channel_turn = TurnContext {
-            session_key: crate::routing::session_key::SessionKey::task("main", "cron", "daily"),
-            run_id: String::new(),
-            channel_id: String::new(),
-            conversation_id: String::new(),
-            caller_role: None,
-            channel_tool_permissions: None,
-            unattended: false,
-        };
-        let err = TURN_CONTEXT
-            .scope(non_channel_turn, async {
-                tool()
-                    .call(AskUserArgs {
-                        question: "Which one?".to_string(),
-                        choices: vec![],
-                    })
-                    .await
-            })
-            .await
-            .expect_err("non-routable turn must be rejected");
-        assert!(err.to_string().contains("no interactive channel"));
+        assert!(
+            err.to_string().contains("interactive channel turn"),
+            "{err}"
+        );
     }
 
     #[tokio::test]
@@ -472,145 +390,133 @@ mod tests {
         // Routable turn, but the registry has no such channel AND the turn has
         // no gateway run (`run_id` empty) to publish an `AskUser` frame
         // against — neither transport can reach the user, so the pending
-        // clarification is rolled back inside `call` instead of blocking on a
-        // reply that can never arrive.
+        // clarification is rolled back instead of blocking on a reply that can
+        // never arrive.
         let err = TURN_CONTEXT
             .scope(routable_turn(), async {
-                tool()
-                    .call(AskUserArgs {
-                        question: "Which one?".to_string(),
-                        choices: vec![],
-                    })
-                    .await
+                tool().call(args("Which one?")).await
             })
             .await
             .expect_err("delivery failure must surface as an error");
-        assert!(err.to_string().contains("failed to deliver"));
+        assert!(err.to_string().contains("failed to deliver"), "{err}");
     }
 
-    /// The Panel's `gui:chat` is a pseudo-channel that is never registered, so
-    /// the channel transport can never carry a Panel question. The event-bus
-    /// frame is the producer the `AskUser` consumer chain was missing: it
-    /// carries the question + the choice labels against the run id the Panel
-    /// renders into, plus the session key the Panel posts its answer back on.
     #[test]
-    fn ask_user_frame_carries_run_id_session_key_question_and_choice_labels() {
-        let turn = TurnContext {
-            run_id: "run-panel-1".to_string(),
-            channel_id: "gui:chat".to_string(),
-            ..routable_turn()
+    fn build_request_flat_form_makes_one_question() {
+        let request = AskUserTool::build_request(&AskUserArgs {
+            question: Some("Pick?".into()),
+            choices: vec![
+                AskUserChoice::Simple("alpha".into()),
+                AskUserChoice::Detailed {
+                    label: "beta".into(),
+                    description: "the other one".into(),
+                },
+            ],
+            questions: vec![],
+        })
+        .expect("flat form builds");
+        assert_eq!(request.len(), 1);
+        let q = request.first();
+        assert_eq!(q.id, "q1");
+        assert_eq!(q.prompt, "Pick?");
+        // Description is wired onto the option, not merely rendered — this is
+        // the field that used to reach channels and nothing else.
+        assert_eq!(q.options[0].value, "alpha");
+        assert!(q.options[0].description.is_none());
+        assert_eq!(q.options[1].description.as_deref(), Some("the other one"));
+    }
+
+    #[test]
+    fn build_request_list_form_assigns_ids_and_carries_flags() {
+        let request = AskUserTool::build_request(&AskUserArgs {
+            question: None,
+            choices: vec![],
+            questions: vec![
+                AskUserQuestionArg {
+                    id: None,
+                    header: Some("Env".into()),
+                    question: "Where?".into(),
+                    choices: vec![AskUserChoice::Simple("prod".into())],
+                    multi_select: false,
+                    secret: false,
+                },
+                AskUserQuestionArg {
+                    id: Some("token".into()),
+                    header: None,
+                    question: "API token?".into(),
+                    choices: vec![],
+                    multi_select: false,
+                    secret: true,
+                },
+            ],
+        })
+        .expect("list form builds");
+        assert_eq!(request.len(), 2);
+        assert_eq!(request.questions[0].id, "q1", "omitted ids are positional");
+        assert_eq!(request.questions[0].header.as_deref(), Some("Env"));
+        assert_eq!(request.questions[1].id, "token");
+        assert!(request.questions[1].secret);
+    }
+
+    /// Merging the two shapes would have to invent an order, and the order is
+    /// what the user answers in.
+    #[test]
+    fn build_request_refuses_both_shapes_at_once() {
+        let err = AskUserTool::build_request(&AskUserArgs {
+            question: Some("Pick?".into()),
+            choices: vec![],
+            questions: vec![AskUserQuestionArg {
+                id: None,
+                header: None,
+                question: "Also this?".into(),
+                choices: vec![],
+                multi_select: false,
+                secret: false,
+            }],
+        })
+        .expect_err("ambiguous argument shape must be rejected");
+        assert!(err.to_string().contains("not both"), "{err}");
+    }
+
+    #[test]
+    fn build_request_caps_the_question_count() {
+        let many: Vec<AskUserQuestionArg> = (0..MAX_QUESTIONS + 1)
+            .map(|i| AskUserQuestionArg {
+                id: None,
+                header: None,
+                question: format!("Q{i}?"),
+                choices: vec![],
+                multi_select: false,
+                secret: false,
+            })
+            .collect();
+        let err = AskUserTool::build_request(&AskUserArgs {
+            question: None,
+            choices: vec![],
+            questions: many,
+        })
+        .expect_err("over-long question lists must be rejected");
+        assert!(err.to_string().contains("at most"), "{err}");
+    }
+
+    /// Duplicate ids make the answer set ambiguous for the model that asked.
+    #[test]
+    fn build_request_refuses_duplicate_ids() {
+        let dup = |id: &str| AskUserQuestionArg {
+            id: Some(id.to_string()),
+            header: None,
+            question: "?".into(),
+            choices: vec![],
+            multi_select: false,
+            secret: false,
         };
-        let expected_session = turn.session_key.to_string();
-        let frame = build_ask_user_frame(
-            &turn,
-            "Deploy where?",
-            &[
-                AskUserChoice::Simple("staging".to_string()),
-                AskUserChoice::Detailed {
-                    label: "production".to_string(),
-                    description: "live traffic".to_string(),
-                },
-            ],
-        );
-        match frame {
-            GatewayEventFrame::AskUser {
-                run_id,
-                session_key,
-                question,
-                options,
-                ..
-            } => {
-                assert_eq!(run_id, "run-panel-1");
-                // The key `register` used — `clarification.resolve` will not
-                // find the pending entry under any other string.
-                assert_eq!(session_key, expected_session);
-                assert_eq!(question, "Deploy where?");
-                // Labels only — the same values the clarification resolves on.
-                assert_eq!(options, vec!["staging", "production"]);
-            }
-            other => panic!("expected an AskUser frame, got {other:?}"),
-        }
-    }
-
-    #[test]
-    fn build_request_text_vs_select() {
-        let (text_req, text_prompt, text_kb) = AskUserTool::build_request("Pick?", &[]);
-        assert!(text_req.options.is_none());
-        assert!(text_prompt.contains("Reply with your answer"));
-        // No choices → open-ended → no keyboard (mirrors hermes' open-ended path).
-        assert!(text_kb.is_none());
-
-        let (select_req, select_prompt, select_kb) = AskUserTool::build_request(
-            "Pick?",
-            &[
-                AskUserChoice::Simple("alpha".to_string()),
-                AskUserChoice::Simple("beta".to_string()),
-            ],
-        );
-        assert_eq!(select_req.options.as_ref().map(|o| o.len()), Some(2));
-        assert!(select_prompt.contains("1. alpha"));
-        assert!(select_prompt.contains("2. beta"));
-        // Two choices → an inline keyboard with one `clarify:<idx>` button each.
-        let kb = select_kb.expect("choices must produce a keyboard");
-        let datas: Vec<&str> = kb
-            .rows
-            .iter()
-            .flatten()
-            .map(|b| b.callback_data.as_str())
-            .collect();
-        assert_eq!(datas, vec!["clarify:1", "clarify:2"]);
-    }
-
-    #[test]
-    fn build_request_detailed_choice_renders_and_wires_description() {
-        let (req, prompt, _kb) = AskUserTool::build_request(
-            "Strategy?",
-            &[
-                AskUserChoice::Detailed {
-                    label: "in-place".to_string(),
-                    description: "brief downtime".to_string(),
-                },
-                AskUserChoice::Simple("blue-green".to_string()),
-            ],
-        );
-        // Description is wired onto the ClarificationOption, not just rendered.
-        let options = req.options.expect("select request must carry options");
-        assert_eq!(options[0].value, "in-place");
-        assert_eq!(options[0].description.as_deref(), Some("brief downtime"));
-        assert!(options[1].description.is_none());
-        // Rendered menu surfaces the description with an em dash separator.
-        assert!(prompt.contains("1. in-place — brief downtime"));
-        assert!(prompt.contains("2. blue-green\n"));
-    }
-
-    #[test]
-    fn keyboard_caps_long_choice_lists_to_text_only() {
-        // Beyond MAX_CHOICE_BUTTONS the keyboard is suppressed (text menu still
-        // lists every choice), keeping the callback payload bounded.
-        let many: Vec<AskUserChoice> = (0..20)
-            .map(|i| AskUserChoice::Simple(format!("opt{i}")))
-            .collect();
-        let kb = AskUserTool::build_choice_keyboard(&many);
-        assert!(
-            kb.is_none(),
-            "oversized choice lists must not render buttons"
-        );
-
-        // At the cap boundary the keyboard is still rendered.
-        let twelve: Vec<AskUserChoice> = (0..12)
-            .map(|i| AskUserChoice::Simple(format!("opt{i}")))
-            .collect();
-        let kb = AskUserTool::build_choice_keyboard(&twelve).expect("12 choices render");
-        assert_eq!(kb.rows.iter().flatten().count(), 12);
-    }
-
-    #[test]
-    fn button_label_truncates_long_choice() {
-        let short = button_label(1, "staging");
-        assert_eq!(short, "1. staging");
-        let long = button_label(2, &"x".repeat(80));
-        assert!(long.chars().count() <= 32, "label too long: {long}");
-        assert!(long.ends_with('…'));
+        let err = AskUserTool::build_request(&AskUserArgs {
+            question: None,
+            choices: vec![],
+            questions: vec![dup("env"), dup("env")],
+        })
+        .expect_err("duplicate ids must be rejected");
+        assert!(err.to_string().contains("duplicate question id"), "{err}");
     }
 
     #[test]
@@ -626,22 +532,70 @@ mod tests {
         assert_eq!(detailed.description(), Some("live traffic"));
     }
 
+    /// The pre-multi-question call shape must keep deserializing verbatim —
+    /// it is what every existing prompt, skill and transcript emits.
+    #[test]
+    fn legacy_single_question_arguments_still_parse() {
+        let args: AskUserArgs =
+            serde_json::from_str(r#"{"question":"Deploy where?","choices":["staging","prod"]}"#)
+                .expect("legacy shape parses");
+        let request = AskUserTool::build_request(&args).expect("legacy shape builds");
+        assert_eq!(request.len(), 1);
+        assert_eq!(request.first().options.len(), 2);
+    }
+
     #[test]
     fn result_to_output_maps_each_status() {
-        let answered =
-            AskUserTool::result_to_output(ClarificationResult::text_input("hi".to_string()));
+        let answered = AskUserTool::result_to_output(ClarificationResult::answered(vec![
+            ClarificationAnswer {
+                question_id: "q1".into(),
+                selected_indices: vec![],
+                value: "hi".into(),
+            },
+        ]));
         assert_eq!(answered.status, "answered");
         assert_eq!(answered.answer.as_deref(), Some("hi"));
+        assert_eq!(answered.answers.len(), 1);
 
-        let selected =
-            AskUserTool::result_to_output(ClarificationResult::selected(1, "beta".to_string()));
-        assert_eq!(selected.status, "answered");
+        let selected = AskUserTool::result_to_output(ClarificationResult::answered(vec![
+            ClarificationAnswer {
+                question_id: "q1".into(),
+                selected_indices: vec![1],
+                value: "beta".into(),
+            },
+        ]));
         assert_eq!(selected.selected_index, Some(1));
 
         let timed_out = AskUserTool::result_to_output(ClarificationResult::timeout());
         assert_eq!(timed_out.status, "timeout");
+        assert!(timed_out.answer.is_none());
+        assert!(timed_out.answers.is_empty());
 
         let cancelled = AskUserTool::result_to_output(ClarificationResult::cancelled());
         assert_eq!(cancelled.status, "cancelled");
+    }
+
+    /// The one-question shorthands (`answer` / `selected_index`) are the FIRST
+    /// answer, never a silent join — a model that reads only `answer` on a
+    /// multi-question call must get one question's answer, not a merged blob.
+    #[test]
+    fn multi_question_output_keeps_the_shorthand_pointing_at_the_first() {
+        let out = AskUserTool::result_to_output(ClarificationResult::answered(vec![
+            ClarificationAnswer {
+                question_id: "env".into(),
+                selected_indices: vec![0],
+                value: "staging".into(),
+            },
+            ClarificationAnswer {
+                question_id: "ticket".into(),
+                selected_indices: vec![],
+                value: "ALEPH-1".into(),
+            },
+        ]));
+        assert_eq!(out.answer.as_deref(), Some("staging"));
+        assert_eq!(out.selected_index, Some(0));
+        assert_eq!(out.answers.len(), 2);
+        assert_eq!(out.answers[1].question_id, "ticket");
+        assert_eq!(out.answers[1].answer, "ALEPH-1");
     }
 }

@@ -83,32 +83,20 @@ pub async fn handle_list_db(
                     // Derive origin channel before the struct literal moves m's fields.
                     let channel = m.origin_channel();
                     let updated_at = m.last_active_at;
-                    // User-chosen project working directory, persisted via
-                    // `sessions.set_project_root` into identity_meta.custom.
-                    let project_root = m.identity_meta.as_ref().and_then(|im| {
-                        im.custom
-                            .get("project_root")
-                            .and_then(|v| v.as_str())
-                            .map(String::from)
-                    });
-                    // Same carrier as `project_root`: the per-session exec-tier
-                    // override the run loop enforces every turn. A JSON `null`
-                    // (how "follow global" clears the override) yields `None`
-                    // here, so a cleared session reports no override.
-                    let exec_tier = m.identity_meta.as_ref().and_then(|im| {
-                        im.custom
-                            .get(crate::config::types::policies::EXEC_TIER_SESSION_KEY)
-                            .and_then(|v| v.as_str())
-                            .map(String::from)
-                    });
-                    // Third twin: the per-session usage-mode override, so the
-                    // Panel pill restores on reload exactly like the tier.
-                    let mode = m.identity_meta.as_ref().and_then(|im| {
-                        im.custom
-                            .get(crate::config::types::policies::MODE_SESSION_KEY)
-                            .and_then(|v| v.as_str())
-                            .map(String::from)
-                    });
+                    // Every per-session knob, decoded by the one function
+                    // `chat.history` also uses. These used to be three inline
+                    // `im.custom.get(...)` reads here and zero anywhere else,
+                    // which is how `think_level` — persisted since the day it
+                    // was added — reached no client surface at all: the shape is
+                    // trivial, so it got copied per knob instead of shared, and
+                    // the copy nobody wrote is invisible.
+                    let snapshot = crate::gateway::session_snapshot::snapshot_from_metadata(&m);
+                    let project_root = snapshot.project_root;
+                    let exec_tier = snapshot.exec_tier;
+                    let mode = snapshot.mode;
+                    let think_level = snapshot.think_level;
+                    let memory_mode = snapshot.memory_mode;
+                    let model_pin = snapshot.model_pin;
 
                     SessionInfo {
                         key: m.key,
@@ -136,6 +124,9 @@ pub async fn handle_list_db(
                         project_root,
                         exec_tier,
                         mode,
+                        think_level,
+                        memory_mode,
+                        model_pin,
                     }
                 })
                 .collect();

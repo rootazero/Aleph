@@ -9,33 +9,56 @@
 use serde_json::{json, Value};
 use tui_textarea::TextArea;
 
-use aleph_protocol::{AgentTraceReplay, AgentTraceTaskSummary};
+use aleph_protocol::{
+    AgentRunAccepted, AgentRunRequest, AgentTraceReplay, AgentTraceTaskSummary, SessionSnapshot,
+};
 
 use aleph_client::AlephClient;
 
 use super::app::{self, AppState};
 use super::command_tree;
-use super::slash::{self, LocalCommand, ToolProgressMode};
+use super::slash::{self, LocalCommand, SessionKnob as SlashKnob, ToolProgressMode};
 
 /// Fire a message to the agent via `agent.run`.
 ///
 /// This is the single `agent.run` call site shared by every sender
 /// (SendMessage, GatewayCommand, the palette-confirm gateway path, and
 /// `/retry`). Callers keep their own transcript/history bookkeeping and delegate
-/// only the RPC + failure notice here, so the request shape can never drift
-/// across the four paths.
+/// only the RPC + failure notice here.
+///
+/// The request is **built from [`AgentRunRequest`]**, not from a hand-written
+/// `json!` literal. It used to be a literal sending `{"session_key", "message"}`
+/// — and `agent.run` takes `input` (`message` is `chat.send`'s key), so every
+/// send this TUI ever made came back `INVALID_PARAMS`. Nothing went red: this
+/// crate cannot depend on `alephcore`, so the literal had nothing to disagree
+/// with. Sharing the type makes a rename a compile error here and a red
+/// reconciliation test in the crate that depends on both sides.
+///
+/// The gateway's reply carries the **canonical** session key it actually routed
+/// to, which is not always the one we asked for (an unparseable key makes
+/// `AgentRouter::route` mint a fresh epoch instead of failing). Adopting it
+/// keeps every later `/usage`, `/tier`, `/compress` and `chat.history` call
+/// addressing the conversation the user is actually in.
 pub(super) async fn send_to_agent(
     state: &mut AppState,
     client: &AlephClient,
     message: &str,
     err_label: &str,
 ) {
-    let params = json!({
-        "session_key": state.session_key,
-        "message": message,
-    });
-    if let Err(e) = client.call::<_, Value>("agent.run", Some(params)).await {
-        state.add_system_message(format!("{err_label}: {e}"));
+    let request = AgentRunRequest {
+        input: message.to_string(),
+        // Empty = not routed yet: omit the key so the gateway routes one and
+        // tells us its canonical spelling, rather than us inventing one it
+        // cannot parse.
+        session_key: (!state.session_key.is_empty()).then(|| state.session_key.clone()),
+        ..AgentRunRequest::default()
+    };
+    match client
+        .call::<_, AgentRunAccepted>("agent.run", Some(request))
+        .await
+    {
+        Ok(accepted) => state.adopt_canonical_session_key(&accepted.session_key),
+        Err(e) => state.add_system_message(format!("{err_label}: {e}")),
     }
 }
 
@@ -92,7 +115,7 @@ pub(super) async fn execute_local_command(
         }
         LocalCommand::Retry => execute_retry(state, client).await,
         LocalCommand::Tools { mode } => execute_tools(state, mode),
-        LocalCommand::Tier { level } => execute_tier(state, client, level).await,
+        LocalCommand::Knob { knob, value } => execute_knob(state, client, knob, value).await,
         LocalCommand::Sessions => execute_sessions(state, client).await,
     }
 
@@ -150,7 +173,29 @@ pub(super) async fn confirm_session_switch(state: &mut AppState, client: &AlephC
         return;
     };
     state.close_overlay();
+    // switch_session clears transient state (including the token counter and
+    // the settings of the conversation being left) and adds a "Switched"
+    // banner; `attach_session` then restores the incoming conversation's own.
+    state.switch_session(&key);
+    attach_session(state, client, &key).await;
+}
 
+/// Load a conversation: its transcript **and** the settings that govern it.
+///
+/// The single attach path, used both at launch and after a switch. One call,
+/// because the transcript and the settings are one snapshot — a second RPC
+/// would open a window in which the screen shows a conversation while the
+/// status bar describes a different one's mode, tier and token count.
+///
+/// This is also why launching the TUI on an existing key finally shows
+/// anything: `chat.history` was previously reached *only* from the session
+/// picker, so `aleph-tui --session <key>` opened a blank screen over a
+/// transcript the server had all along.
+///
+/// Failure is reported and survivable: a conversation that cannot be loaded
+/// leaves the client on the key it was given with no settings, which the status
+/// bar renders as "unknown" rather than as the global defaults.
+pub(super) async fn attach_session(state: &mut AppState, client: &AlephClient, key: &str) {
     let params = json!({ "session_key": key });
     match client.call::<_, Value>("chat.history", Some(params)).await {
         Ok(result) => {
@@ -162,11 +207,26 @@ pub(super) async fn confirm_session_switch(state: &mut AppState, client: &AlephC
             let mapped: Vec<app::ChatMessage> =
                 rows.iter().filter_map(history_message_from_json).collect();
 
-            // switch_session clears transient state + adds a "Switched" banner;
-            // then render the server transcript verbatim (no local dedup/store).
-            state.switch_session(&key);
+            // Render the server transcript verbatim (no local dedup/store).
             for msg in mapped {
                 state.messages.push(msg);
+            }
+
+            // Restore the conversation's durable settings. Absent on an older
+            // gateway — read as "I was not told", so the caption falls back to
+            // the install default rather than to a value this client made up.
+            match result.get("session").cloned() {
+                Some(v) => match serde_json::from_value::<SessionSnapshot>(v) {
+                    Ok(snapshot) => state.apply_session_snapshot(snapshot),
+                    Err(e) => state.add_system_message(format!(
+                        "Session settings unreadable ({e}); showing install defaults."
+                    )),
+                },
+                None => state.add_system_message(
+                    "Gateway did not report session settings (older server); \
+                     showing install defaults."
+                        .to_string(),
+                ),
             }
             state.scroll_to_bottom();
         }
@@ -423,48 +483,103 @@ fn execute_tools(state: &mut AppState, mode: Option<ToolProgressMode>) {
     }
 }
 
-/// Set (or report usage for) the session's execution tier via `sessions.patch`.
+/// Set (or report) one of this conversation's persisted knobs via
+/// `sessions.patch`.
 ///
-/// The exec tier gates tool-approval prompts (Ask / Auto / Full). This is the
-/// TUI analogue of the Panel composer pill — an explicit operator control, not
-/// an LLM-mediated decision — and writes the same `metadata.exec_tier` key the
-/// server validates. `default` clears the per-session override (follow global
-/// policy) via a null write; an unrecognised arg parses to `None` and prints the
-/// usage hint (mirrors `/tools`).
-async fn execute_tier(state: &mut AppState, client: &AlephClient, level: Option<String>) {
-    let Some(level) = level else {
-        state.add_system_message(
-            "Exec tier gates tool-approval prompts. Usage: /tier ask|auto|full \
-             (or /tier default to follow the global policy)"
-                .to_string(),
+/// One handler for the family. Each knob writes the same
+/// `identity_meta.custom` bag the Panel pills and the run loop already use, so
+/// a value set here survives a restart and is read back by the attach snapshot
+/// — that contract is identical for all four. Writing a handler per knob is how
+/// `/tier` came to exist while `/mode`, `/think` and `/memory` did not, even
+/// though all three were already being enforced on every turn.
+///
+/// `default` clears the override: the server reads a JSON `null` as "follow
+/// global", which is the only way back to the install-wide value.
+///
+/// Local state is updated ONLY after the server accepts the write. An
+/// optimistic update on a refused patch would leave the status bar confidently
+/// describing a setting the session does not have.
+async fn execute_knob(
+    state: &mut AppState,
+    client: &AlephClient,
+    knob: SlashKnob,
+    value: Option<String>,
+) {
+    let Some(value) = value else {
+        let current = current_knob_value(state, knob).map_or_else(
+            || "follows the global default".to_string(),
+            |v| format!("`{v}`"),
         );
+        state.add_system_message(format!(
+            "/{cmd} — {purpose}. Currently {current}. Usage: /{cmd} {choices}              (or /{cmd} default to follow the global policy).",
+            cmd = knob.command(),
+            purpose = knob.purpose(),
+            choices = knob.choices(),
+        ));
         return;
     };
 
-    // `default` clears the per-session override; the server treats a null
-    // exec_tier metadata write as "follow global policy".
-    let tier_value = if level == "default" {
+    if state.session_key.is_empty() {
+        state.add_system_message(format!(
+            "/{}: this conversation has no session yet — send a message first, then set it.",
+            knob.command()
+        ));
+        return;
+    }
+
+    // `default` clears the override. JSON null is how both stores spell "remove
+    // this key"; omitting it would mean "leave it alone".
+    let wire = if value == "default" {
         Value::Null
     } else {
-        Value::String(level.clone())
+        Value::String(value.clone())
     };
     let params = json!({
         "session_key": state.session_key,
-        "metadata": { "exec_tier": tier_value },
+        "metadata": { knob.metadata_key(): wire },
     });
     match client
         .call::<_, Value>("sessions.patch", Some(params))
         .await
     {
         Ok(_) => {
-            let shown = if level == "default" {
-                "default (follow global policy)".to_string()
+            let stored = (value != "default").then(|| value.clone());
+            state.record_local_knob(app_knob(knob), stored);
+            let shown = if value == "default" {
+                "the global default".to_string()
             } else {
-                level
+                format!("`{value}`")
             };
-            state.add_system_message(format!("Exec tier set to {shown}."));
+            state.add_system_message(format!("/{} now follows {shown}.", knob.command()));
         }
-        Err(e) => state.add_system_message(format!("Tier error: {e}")),
+        Err(e) => state.add_system_message(format!("/{} error: {e}", knob.command())),
+    }
+}
+
+/// The knob's current value as the attach snapshot last reported it.
+fn current_knob_value(state: &AppState, knob: SlashKnob) -> Option<String> {
+    let knobs = state.session_knobs();
+    match knob {
+        SlashKnob::ExecTier => knobs.exec_tier,
+        SlashKnob::Mode => knobs.mode,
+        SlashKnob::Think => knobs.think_level,
+        SlashKnob::Memory => knobs.memory_mode,
+    }
+    .map(str::to_string)
+}
+
+/// Map the parser's knob onto the state's.
+///
+/// Two enums because they answer to two owners — the parser's list is "what a
+/// user may type", the state's is "what the status bar can show" — but the
+/// mapping is total in this direction, so a knob added to the parser without a
+/// state cell is a compile error here rather than a silently invisible setting.
+const fn app_knob(knob: SlashKnob) -> app::SessionKnob {
+    match knob {
+        SlashKnob::ExecTier => app::SessionKnob::ExecTier,
+        SlashKnob::Mode => app::SessionKnob::Mode,
+        SlashKnob::Think => app::SessionKnob::ThinkLevel,
+        SlashKnob::Memory => app::SessionKnob::MemoryMode,
     }
 }
 
@@ -615,6 +730,33 @@ fn build_help_text(state: &AppState) -> String {
 /// Fetch available commands from the Gateway for command palette display.
 /// Gracefully degrades to empty list if the Gateway doesn't support commands.list.
 /// Parses tree-structured command responses with namespace support.
+/// Local command words that would swallow a gateway command of the same name.
+///
+/// The TUI resolves local commands first and unconditionally, so a local word
+/// that matches a gateway one does not "take precedence" — it makes the gateway
+/// command **unreachable**, with no error anywhere. `/memory` was exactly that:
+/// the gateway namespaces `memory_search` / `memory_browse` / `memory_explore`
+/// under it, and a knob command claiming the bare word would have silently
+/// deleted all of them (caught by a parser test, which is luck, not a guard).
+///
+/// Checked at runtime against the list the gateway actually publishes rather
+/// than against a hardcoded set: the gateway's namespaces come from its live
+/// tool catalog, which grows with every installed skill, MCP server and plugin
+/// — a compile-time list here would describe the world on the day it was
+/// written and go quietly out of date, which is the failure mode it would exist
+/// to prevent.
+#[must_use]
+pub(super) fn shadowed_gateway_commands(gateway: &[command_tree::CommandEntry]) -> Vec<String> {
+    let mut clashes: Vec<String> = slash::local_commands()
+        .iter()
+        .map(|(name, _)| name.trim_start_matches('/').to_string())
+        .filter(|local| gateway.iter().any(|g| g.name == *local))
+        .collect();
+    clashes.sort_unstable();
+    clashes.dedup();
+    clashes
+}
+
 pub(super) async fn fetch_gateway_commands(
     client: &AlephClient,
 ) -> Vec<command_tree::CommandEntry> {

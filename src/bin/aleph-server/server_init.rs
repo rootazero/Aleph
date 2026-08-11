@@ -428,6 +428,7 @@ where
         model_override: params.model_override,
         exec_tier: params.exec_tier,
         mode: params.mode,
+        memory: params.memory,
         voice_input: params.voice_input,
         project_id: params.project_id,
     };

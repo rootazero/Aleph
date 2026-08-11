@@ -274,6 +274,20 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
         // only — schema-resident core set + deferred families — never
         // permissions; `Work` is the identity partition.
         let session_mode = self.resolve_turn_mode(request).await;
+        // This turn's memory mode (`/memory`, the RPC `memory` param, else the
+        // session's stamped value, else `[memory] enabled`). Gates the three
+        // INJECTED envelopes — curated memory, the wiki orientation index and
+        // per-query recall — at the one place they converge in
+        // `harness_bridge::prompt_build`. It gates neither the memory tools nor
+        // any write: "not injected" is a presentation choice, "not available"
+        // and "not recorded" are not, and conflating them is how a model comes
+        // to insist it saved something it did not.
+        let memory_mode = self.resolve_turn_memory_mode(request).await;
+        // Reinstate a `select_model` pin the session row remembers but this
+        // process does not (a restart). Must run BEFORE anything below reads
+        // `get_session_model` — the three readers are unchanged precisely
+        // because the map is correct by the time they look.
+        self.rehydrate_turn_model_pin(request).await;
         // Mode-effective schema-resident core set, fed to both
         // `build_request_tool_service` call sites and the SchemaLookupTool
         // registration gate below. Work returns the configured set unchanged.
@@ -1340,6 +1354,11 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
                 envelope: crate::thinker::TurnEnvelope {
                     exec_tier: Some(exec_tier),
                     session_mode: Some(session_mode),
+                    //   - `memory_mode` is the mode `prompt_build` gates the
+                    //     three injected memory envelopes on, so the prompt's
+                    //     statement about what this turn remembers matches what
+                    //     it was actually given.
+                    memory_mode: Some(memory_mode),
                     // rust-doctor-disable-next-line excessive-clone
                     cwd: Some(effective_workspace.clone()),
                     //   - `serving_model` is NOT resolvable here: which model

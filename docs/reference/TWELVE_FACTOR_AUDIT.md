@@ -42,8 +42,10 @@
 
 ### F7 · Contact Humans With Tool Calls — ✅
 - 原则：人在环 = 结构化工具调用，而非特例分支。
-- 现状：`ask_user` 工具 + clarification 闸 + 三级 approval。
-- 锚点：`src/clarification/`、`src/builtin_tools/ask_user.rs`、`src/approval/`。已对应 R5。
+- 现状：`ask_user` 工具（一次 1–4 问，带选项描述 / 多选 / 凭据问题）+ clarification 闸 + 三级 approval + **人类计划审批** `scratchpad(action:'request_approval')`。三者共用同一个 park 入口 `clarification::ask`，所以「怎么找到人」只有一个答案。
+- **人在环有三条腿，不是两条**：R5 的非阻塞多端推送 / `ask_user` 的阻塞式澄清 / 计划审批的**开工前**一次性裁决。第三条此前不存在——`workflow_step_review` 是 agent→agent，`exec_tier` 是每次调用，两者都答不了「这整份计划该不该开工」。
+- **无头是结构性的，不是约定**：`ask` 同时判 `is_channel_routable()` 与 `!unattended`，两条都不成立就立刻回一句可行动的工具错误（A2 自愈），从不占满 600 s。多问题请求在纯文本面按游标逐条作答，所以「没有富客户端」是一种**完整**的交付形态而不是降级。
+- 锚点：`src/clarification/{mod,render,session,ask}.rs`、`src/builtin_tools/ask_user.rs`、`src/builtin_tools/scratchpad.rs::request_approval`、`src/approval/`。已对应 R5。详见 FEATURE_LOCATOR §5.3 第六轮。
 
 ### F8 · Own Your Control Flow — ✅ 典范
 - 原则：自有控制流，自定义循环/中断/续跑。

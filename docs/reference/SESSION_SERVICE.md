@@ -69,6 +69,44 @@ A Harness that crashed mid-turn will surface as a `TurnStarted` with no matching
 
 Gateway `session.*` RPC methods remain on `SessionManager` (`src/gateway/session_manager/`). A dual-write shim (`src/session/shim.rs`) mirrors each `SessionManager` append into `SessionService` so `session_events` stays populated in parallel with the legacy `messages` table. A future phase will migrate Gateway RPC directly and remove the shim.
 
+## Re-attaching a client (`chat.history`'s `session` snapshot)
+
+A conversation's **durable settings** do not live in the event log — they live
+on the session row and in `SessionMetadata.identity_meta.custom`:
+
+| fact | where |
+|---|---|
+| `session_mode` / `exec_tier` / `think_level` / `memory_mode` / `model_pin` / `project_root` | `identity_meta.custom[…]`, written by the `turn_*` resolvers and `sessions.patch` |
+| `model` / `model_provider` / `input_tokens` / `output_tokens` / `total_tokens` / `estimated_cost_usd` | the `sessions` row, accumulated per run by `session_projector` on `AssistantRunMeta` |
+
+All of it has been durable for a long time; until 2026-08-11 **none of it was
+readable by a client attaching to a session by key**. `sessions.list` decoded
+three of the knobs inline (and not `think_level`), and `chat.history` decoded
+none — so a client that reopened a conversation painted the *install* defaults
+over one the run loop was still governing by its own stored values.
+
+`chat.history` now carries a `session` object typed by
+`aleph_protocol::SessionSnapshot`, built by the single decoder
+`gateway::session_snapshot::snapshot_from_metadata` that `sessions.list` also
+uses. It rides on this response, not a new method, for the reason the handler's
+own doc already gives for `active_run` and `plan`: they are **one snapshot**, a
+second call opens a window in which a client holds the transcript but not the
+settings that govern it, and the authorization is free (the handler has already
+resolved the metadata and passed `visibility::session_visible`).
+
+Contract rules for anything added to that snapshot:
+
+- **`None` means "follow the global default", never "off".** The server resolves
+  globals per turn from live config; baking today's value into a snapshot would
+  go stale while still looking authoritative.
+- **Add the decode and the `sessions.patch` validation in the same change.**
+  Two source-derived census tests enforce it
+  (`session_snapshot.rs::no_session_knob_constant_is_left_unread`,
+  `modify.rs::every_session_knob_is_validated_on_patch`).
+- **A field with no client renderer is the defect, not a head start.**
+
+See [FEATURE_LOCATOR §5.23](FEATURE_LOCATOR.md).
+
 ## Consumer migration status
 
 | Consumer | Status |

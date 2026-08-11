@@ -60,6 +60,7 @@ pub fn render(frame: &mut Frame, state: &AppState, textarea: &TextArea) {
             .run_started_at
             .filter(|_| state.current_run.is_some())
             .map(|t| t.elapsed()),
+        knobs: state.session_knobs(),
     };
     status.render(frame, status_area);
 

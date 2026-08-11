@@ -43,6 +43,18 @@
 use crate::thinker::prompt_layer::{AssemblyPath, LayerInput, LayerStability, PromptLayer};
 use crate::thinker::prompt_mode::PromptMode;
 
+/// The muted-memory bullet, verbatim.
+///
+/// A constant beside the layer rather than an inline `format!`, matching
+/// `ExecTier::approval_prompt_line` / `SessionMode::prompt_line`: the sentence
+/// the model reads about a gate is one of the three copies of that gate's rule
+/// (code, doc, prompt), and it is the expensive one to get wrong.
+const MEMORY_MUTED_LINE: &str =
+    "- Memory: OFF for this conversation. Curated memory, the note index \
+and automatic recall are NOT in this prompt — you have not forgotten them, they were withheld. \
+The memory tools still work if you need something specific, and what you learn here is still \
+recorded.\n";
+
 pub struct OperatingEnvelopeLayer;
 
 impl PromptLayer for OperatingEnvelopeLayer {
@@ -106,6 +118,7 @@ impl PromptLayer for OperatingEnvelopeLayer {
         // nothing rather than a guessed default.
         if ctx.approval_tier.is_none()
             && ctx.session_mode.is_none()
+            && !ctx.memory_muted
             && writable_roots.is_none()
             && run_id_line.is_none()
             && network_line.is_none()
@@ -128,6 +141,17 @@ impl PromptLayer for OperatingEnvelopeLayer {
         // behind `tool_search` instead of discovering absences by failed calls.
         if let Some(mode) = ctx.session_mode {
             output.push_str(&format!("- {}\n", mode.prompt_line()));
+        }
+
+        // Muted memory. Rendered ONLY when muted, so an unmuted prompt is
+        // byte-identical to every release before the knob existed — and stated
+        // at all because withheld memory is indistinguishable from absent
+        // memory from the inside: without this line the model concludes it
+        // never knew, and either invents a reason for the gap or re-asks what
+        // the user already told it. It also names what is still reachable, so
+        // the model does not read "no memory" as "the memory tools are gone".
+        if ctx.memory_muted {
+            output.push_str(MEMORY_MUTED_LINE);
         }
 
         // Where the agent may write. Tagged `(sandbox)` because its other half —
@@ -189,6 +213,50 @@ mod tests {
         let mut out = String::new();
         OperatingEnvelopeLayer.inject(&mut out, &input);
         out
+    }
+
+    /// Muted memory renders — and says the two things a model would otherwise
+    /// get wrong: that it did not forget (the memory was withheld), and that
+    /// the memory tools still work.
+    #[test]
+    fn muted_memory_is_stated() {
+        let mut c = ctx();
+        c.memory_muted = true;
+        let out = render(&c);
+        assert!(out.contains("## Operating Envelope"));
+        assert!(out.contains("Memory: OFF"), "{out}");
+        assert!(
+            out.contains("withheld"),
+            "the model must be able to tell withheld memory from absent memory: {out}"
+        );
+        assert!(
+            out.contains("memory tools still work"),
+            "muting injection must not read as 'the tools are gone': {out}"
+        );
+    }
+
+    /// The default renders nothing — every prompt that does not mute memory is
+    /// byte-identical to the ones this knob's release replaced.
+    #[test]
+    fn unmuted_memory_renders_nothing() {
+        let unset = render(&ctx());
+        let mut c = ctx();
+        c.memory_muted = false;
+        assert_eq!(render(&c), unset);
+        assert!(!unset.contains("Memory:"));
+    }
+
+    /// Muted memory alone is enough to open the section: it is a fact about
+    /// this turn's regime, so an internal dispatch that resolved nothing else
+    /// must still state it rather than swallow it with the empty-section gate.
+    #[test]
+    fn muted_memory_alone_opens_the_section() {
+        let mut c = ctx();
+        c.approval_tier = None;
+        c.session_mode = None;
+        c.memory_muted = true;
+        let out = render(&c);
+        assert!(out.starts_with("## Operating Envelope"), "{out}");
     }
 
     // SandboxCapabilities::strict is used to construct a posture with

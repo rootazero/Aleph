@@ -11,7 +11,8 @@ use ratatui::{
     Frame,
 };
 
-use crate::tui::slash::ToolProgressMode;
+use crate::tui::app::SessionKnobs;
+use crate::tui::slash::{SessionKnob, ToolProgressMode};
 use crate::tui::theme::DEFAULT_THEME;
 
 /// Braille spinner frames for the working indicator (matches the tool-block set).
@@ -44,6 +45,13 @@ pub struct StatusBar<'a> {
     /// Elapsed time of the active run, or `None` when idle. When set, the
     /// trailing help hint is replaced by a live working indicator.
     pub run_elapsed: Option<Duration>,
+    /// This conversation's persisted knobs, as the server last reported them.
+    ///
+    /// Each is `None` when the session carries no override — rendered as
+    /// *nothing*, not as a guessed value: the TUI does not read the server's
+    /// config, so printing "auto" for an unset tier would be this client
+    /// inventing a fact. An unset knob is invisible; a set one is named.
+    pub knobs: SessionKnobs<'a>,
 }
 
 impl StatusBar<'_> {
@@ -126,6 +134,21 @@ impl StatusBar<'_> {
             ));
         }
 
+        // The conversation's own settings — the reason reopening a terminal
+        // mid-task now lands you back where you were rather than on the install
+        // defaults. Enumerated from `SessionKnob::ALL` so a knob added to the
+        // parser cannot quietly fail to appear here.
+        for knob in SessionKnob::ALL {
+            let Some(value) = knob_value(&self.knobs, knob) else {
+                continue;
+            };
+            spans.push(sep());
+            spans.push(Span::styled(
+                format!(" {}:{value} ", knob.command()),
+                text_style,
+            ));
+        }
+
         spans.push(sep());
         spans.push(Span::styled(
             format!(" T:{} ", self.tool_progress_mode.glyph()),
@@ -137,6 +160,19 @@ impl StatusBar<'_> {
 
         let paragraph = Paragraph::new(line).style(Style::default().bg(DEFAULT_THEME.status_bg));
         frame.render_widget(paragraph, area);
+    }
+}
+
+/// One knob's value, or `None` when the session follows the global default.
+///
+/// The exhaustive `match` is the point: it is what turns "a knob was added to
+/// the command parser but never shown" into a compile error.
+const fn knob_value<'a>(knobs: &SessionKnobs<'a>, knob: SessionKnob) -> Option<&'a str> {
+    match knob {
+        SessionKnob::ExecTier => knobs.exec_tier,
+        SessionKnob::Mode => knobs.mode,
+        SessionKnob::Think => knobs.think_level,
+        SessionKnob::Memory => knobs.memory_mode,
     }
 }
 

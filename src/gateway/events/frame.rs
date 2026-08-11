@@ -100,6 +100,9 @@ pub enum GatewayEventFrame {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         session_key: Option<String>,
     },
+    /// The agent is parked on a human. Built in exactly one place —
+    /// [`crate::clarification::session::ask_user_frame`] — so the two
+    /// projections below cannot drift apart.
     AskUser {
         run_id: String,
         seq: u64,
@@ -107,8 +110,23 @@ pub enum GatewayEventFrame {
         /// `clarification.resolve` to unblock the parked `ask_user` tool. The
         /// frame carries it because the reply is routed by session, not by run.
         session_key: String,
+        /// Legacy single-question projection: the prompt of the question **at
+        /// the cursor** (not `questions[0]`). A client that understands only
+        /// this and `options` still drives a multi-question request to
+        /// completion one reply at a time — that is the plain-text fallback,
+        /// and it is why this field is a projection rather than a duplicate.
         question: String,
+        /// Choice labels for that same question.
         options: Vec<String>,
+        /// Full-fidelity view of every question in the request, including the
+        /// per-option `description` the flat `options` array cannot carry.
+        /// Empty only on a frame minted before this field existed.
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        questions: Vec<crate::clarification::ClarificationQuestionView>,
+        /// How many of `questions` already have answers — where a client that
+        /// renders the full set resumes.
+        #[serde(default)]
+        answered: usize,
     },
     /// Terminal twin of [`Self::AskUser`]: the question on `session_key` is
     /// over and nothing is parked on an answer any more.
@@ -571,12 +589,16 @@ impl From<StreamEvent> for GatewayEventFrame {
                 session_key,
                 question,
                 options,
+                questions,
+                answered,
             } => Self::AskUser {
                 run_id,
                 seq,
                 session_key,
                 question,
                 options,
+                questions,
+                answered,
             },
             StreamEvent::ReasoningBlock {
                 run_id,

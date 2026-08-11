@@ -348,6 +348,83 @@ async fn handle_delete_db_inner(
     }
 }
 
+/// Every per-session knob `sessions.patch` may write, with the parser that
+/// decides whether a value is a legal id for it.
+///
+/// The list is the contract: a knob missing from here can be written with any
+/// junk at all, which persists, renders as an override to every client, and is
+/// then dropped with a warn on each turn — the session runs at the global value
+/// while every surface says otherwise.
+///
+/// `model_pin` / `model_pin_provider` are deliberately absent: their legal
+/// values are the live provider catalog, not a closed set, and `select_model`
+/// (the writer that has the catalog in hand) already refuses ids it knows are
+/// retired. Validating them here against a snapshot of the catalog would refuse
+/// models released after the binary was built — the failure mode
+/// `refuse_unusable_model` was written to avoid.
+type KnobValidator = fn(&str) -> bool;
+fn knob_validators() -> [(&'static str, KnobValidator); 4] {
+    [
+        (crate::config::types::policies::EXEC_TIER_SESSION_KEY, |v| {
+            crate::config::types::policies::ExecTier::from_id(v).is_some()
+        }),
+        (crate::config::types::policies::MODE_SESSION_KEY, |v| {
+            crate::config::types::policies::SessionMode::from_id(v).is_some()
+        }),
+        (crate::agents::thinking::THINK_LEVEL_SESSION_KEY, |v| {
+            crate::agents::thinking::normalize_think_level(v).is_some()
+        }),
+        (
+            crate::memory::session_memory_mode::MEMORY_MODE_SESSION_KEY,
+            |v| crate::memory::session_memory_mode::MemoryMode::from_id(v).is_some(),
+        ),
+    ]
+}
+
+/// Session-metadata keys this endpoint refuses rather than validates.
+///
+/// The model pin has **two** stores that must agree: the session row (durable,
+/// restored at run start) and `providers::session_model_handle`'s process map
+/// (what the run builder actually reads). `select_model` writes both, in that
+/// order. A `sessions.patch` writing only the row would be silently ineffective
+/// in a live process and take effect after the next restart — the shape of
+/// defect where a setting "sometimes works", which is worse to diagnose than
+/// one that never does.
+///
+/// Refusing is honest and cheap: no shipped client writes these, and the one
+/// that would want to (a `/model` command) should call the tool.
+const NOT_PATCHABLE: &[&str] = &[
+    crate::providers::session_model_handle::MODEL_PIN_SESSION_KEY,
+    crate::providers::session_model_handle::MODEL_PIN_PROVIDER_SESSION_KEY,
+];
+
+/// The first key in `bag` that this endpoint refuses to write at all.
+fn first_foreign_knob(bag: &serde_json::Map<String, Value>) -> Option<&'static str> {
+    NOT_PATCHABLE
+        .iter()
+        .copied()
+        .find(|key| bag.contains_key(*key))
+}
+
+/// The first knob in `bag` carrying a value its own parser rejects.
+///
+/// `null` passes for every knob — that is how a client clears an override back
+/// to "follow global". A non-string value fails: the bag is flat strings by
+/// construction, and a number silently stored under `exec_tier` reads back as
+/// no override at all.
+fn first_invalid_knob(
+    bag: &serde_json::Map<String, Value>,
+) -> Option<(&'static str, &serde_json::Value)> {
+    knob_validators().into_iter().find_map(|(key, valid)| {
+        let v = bag.get(key)?;
+        if v.is_null() {
+            return None;
+        }
+        let ok = v.as_str().is_some_and(valid);
+        (!ok).then_some((key, v))
+    })
+}
+
 /// Handle sessions.patch RPC request with database backend
 pub async fn handle_patch_db(
     request: JsonRpcRequest,
@@ -391,50 +468,40 @@ pub async fn handle_patch_db(
     }
 
     // Both stores merge `metadata` opaquely into `identity_meta.custom`, so this
-    // is the only place an `exec_tier` written through sessions.patch can be
-    // checked. An unknown id would persist, render as an override in the Panel,
-    // and then be dropped with a warn at run time — every turn silently running
-    // at the GLOBAL tier, possibly weaker than the one the caller believes it
-    // armed. `chat.send` already refuses an unknown id (handlers/agent.rs); the
-    // two write paths must agree. `null` stays legal: it is how "follow global"
-    // clears the override.
-    if let Some(v) = params
-        .get("metadata")
-        .and_then(Value::as_object)
-        .and_then(|m| m.get(crate::config::types::policies::EXEC_TIER_SESSION_KEY))
-    {
-        let valid = v.is_null()
-            || v.as_str()
-                .and_then(crate::config::types::policies::ExecTier::from_id)
-                .is_some();
-        if !valid {
+    // is the only place a knob written through `sessions.patch` can be checked.
+    // An unknown id would persist, render as an override in the Panel, and then
+    // be dropped with a warn at run time — every turn silently running at the
+    // GLOBAL value, possibly weaker than the one the caller believes it armed.
+    // `chat.send` already refuses unknown ids (handlers/agent.rs); the two write
+    // paths must agree. `null` stays legal on every knob: it is how "follow
+    // global" clears an override.
+    //
+    // One table rather than one `if let` per knob. The per-knob form is how the
+    // family drifted in the first place: `exec_tier` and `session_mode` each got
+    // their own block and `think_level` — persisted by `turn_thinking` since it
+    // was written — got none, so junk could be stored on it and silently
+    // dropped every turn. `every_session_knob_is_validated_on_patch` pins the
+    // table against the constants rather than against a remembered list.
+    if let Some(bag) = params.get("metadata").and_then(Value::as_object) {
+        // Keys this endpoint must refuse outright, before validation: writing
+        // them here would be accepted, persisted, and then ignored for the rest
+        // of the process's life.
+        if let Some(key) = first_foreign_knob(bag) {
             return JsonRpcResponse::error(
                 request.id,
                 INVALID_PARAMS,
-                format!("Unknown exec_tier: {v}"),
+                format!(
+                    "`{key}` is not writable through sessions.patch — the model pin's writer is \
+                     `select_model`, which also updates the in-process map the run builder reads. \
+                     A patch here would be honored only after a restart."
+                ),
             );
         }
-    }
-
-    // Same paired-validation contract for the session usage mode (the tier's
-    // third twin): `chat.send` refuses an unknown mode id in
-    // `build_run_request`, so this write path must refuse it too, or a stored
-    // junk value shows as an override in the Panel while every turn silently
-    // runs at the global default. `null` stays legal — "follow global".
-    if let Some(v) = params
-        .get("metadata")
-        .and_then(Value::as_object)
-        .and_then(|m| m.get(crate::config::types::policies::MODE_SESSION_KEY))
-    {
-        let valid = v.is_null()
-            || v.as_str()
-                .and_then(crate::config::types::policies::SessionMode::from_id)
-                .is_some();
-        if !valid {
+        if let Some((key, value)) = first_invalid_knob(bag) {
             return JsonRpcResponse::error(
                 request.id,
                 INVALID_PARAMS,
-                format!("Unknown session_mode: {v}"),
+                format!("Unknown {key}: {value}"),
             );
         }
     }
@@ -796,6 +863,134 @@ mod tests {
     use crate::session::events::{MessageContent, SessionEvent};
     use crate::session::store::SessionEventStore;
     use tempfile::tempdir;
+
+    /// Census: every knob the attach snapshot reads back must either be
+    /// validated on write, or be named here with a reason.
+    ///
+    /// Derived from `session_snapshot.rs`'s **source** rather than from a list
+    /// remembered in this file, because a remembered list is the thing that
+    /// went wrong: `exec_tier` and `session_mode` were each given a validation
+    /// block, `think_level` was not, and the gap was invisible precisely
+    /// because nothing enumerated the family in one place. Adding a knob to the
+    /// snapshot now turns this red until it is either validated or excused.
+    #[test]
+    fn every_session_knob_is_validated_on_patch() {
+        let snapshot_src = include_str!("../../../session_snapshot.rs");
+        let production = snapshot_src
+            .split("#[cfg(test)]")
+            .next()
+            .unwrap_or(snapshot_src);
+
+        // Constants the snapshot decodes, in the order it decodes them.
+        let read_by_snapshot: Vec<&str> = [
+            ("EXEC_TIER_SESSION_KEY", "exec_tier"),
+            ("MODE_SESSION_KEY", "session_mode"),
+            ("THINK_LEVEL_SESSION_KEY", "think_level"),
+            ("MEMORY_MODE_SESSION_KEY", "memory_mode"),
+            ("MODEL_PIN_SESSION_KEY", "model_pin"),
+            ("MODEL_PIN_PROVIDER_SESSION_KEY", "model_pin_provider"),
+            ("PROJECT_ROOT_SESSION_KEY", "project_root"),
+        ]
+        .into_iter()
+        .filter(|(constant, _)| production.contains(constant))
+        .map(|(_, wire)| wire)
+        .collect();
+        assert!(
+            read_by_snapshot.len() >= 4,
+            "the census found almost nothing — did `session_snapshot.rs` move? \
+             a guard that scans the wrong text is green for the wrong reason"
+        );
+
+        // Knobs whose legal values are not a closed set, so a table here would
+        // refuse values that work. Each needs its refusal to live with whoever
+        // owns the value space.
+        const OPEN_VALUE_SPACE: &[&str] = &[
+            // An absolute path, checked by `sessions.set_project_root` (which
+            // must hit the filesystem — a string test cannot).
+            "project_root",
+        ];
+
+        let validated: Vec<&str> = knob_validators().iter().map(|(k, _)| *k).collect();
+        for knob in read_by_snapshot {
+            assert!(
+                validated.contains(&knob)
+                    || NOT_PATCHABLE.contains(&knob)
+                    || OPEN_VALUE_SPACE.contains(&knob),
+                "`{knob}` is persisted and read back but this endpoint neither validates nor \
+                 refuses it: junk would render as an override on every client and be dropped \
+                 with a warn on every turn"
+            );
+        }
+    }
+
+    #[test]
+    fn a_junk_knob_value_is_refused_and_null_is_not() {
+        let bag = |v: serde_json::Value| {
+            let mut m = serde_json::Map::new();
+            m.insert("think_level".to_string(), v);
+            m
+        };
+        assert!(first_invalid_knob(&bag(serde_json::json!("high"))).is_none());
+        // `null` is how a client clears an override back to "follow global".
+        assert!(first_invalid_knob(&bag(serde_json::Value::Null)).is_none());
+        assert_eq!(
+            first_invalid_knob(&bag(serde_json::json!("nonsense"))).map(|(k, _)| k),
+            Some("think_level"),
+            "the twin that had no validation block until now"
+        );
+        // A non-string stores as an unreadable value, which reads back as "no
+        // override" — a write that reports success and changes nothing.
+        assert_eq!(
+            first_invalid_knob(&bag(serde_json::json!(3))).map(|(k, _)| k),
+            Some("think_level")
+        );
+    }
+
+    #[test]
+    fn unrelated_metadata_keys_pass_through() {
+        // The bag is open by design (topic, status, custom client keys); only
+        // the knobs this server enforces are policed.
+        let mut m = serde_json::Map::new();
+        m.insert("topic".to_string(), serde_json::json!("anything at all"));
+        m.insert("some_client_key".to_string(), serde_json::json!(42));
+        assert!(first_invalid_knob(&m).is_none());
+    }
+
+    /// The pin has two stores that must agree, and only `select_model` writes
+    /// both. A row-only write would take effect after the next restart and not
+    /// before it — "sometimes works" is the worst shape to debug.
+    #[test]
+    fn the_model_pin_is_refused_rather_than_written_row_only() {
+        let mut m = serde_json::Map::new();
+        m.insert("model_pin".to_string(), serde_json::json!("gpt-5"));
+        assert_eq!(first_foreign_knob(&m), Some("model_pin"));
+
+        let mut m2 = serde_json::Map::new();
+        m2.insert(
+            "model_pin_provider".to_string(),
+            serde_json::json!("openai"),
+        );
+        assert_eq!(first_foreign_knob(&m2), Some("model_pin_provider"));
+
+        // Even `null` — "clear the pin" — goes through the tool, which also
+        // evicts the process map. Clearing the row alone leaves the live pin.
+        let mut m3 = serde_json::Map::new();
+        m3.insert("model_pin".to_string(), serde_json::Value::Null);
+        assert_eq!(first_foreign_knob(&m3), Some("model_pin"));
+
+        let mut ok = serde_json::Map::new();
+        ok.insert("exec_tier".to_string(), serde_json::json!("auto"));
+        assert_eq!(first_foreign_knob(&ok), None);
+    }
+
+    #[test]
+    fn memory_mode_is_policed_too() {
+        let mut m = serde_json::Map::new();
+        m.insert("memory_mode".to_string(), serde_json::json!("maybe"));
+        assert_eq!(first_invalid_knob(&m).map(|(k, _)| k), Some("memory_mode"));
+        m.insert("memory_mode".to_string(), serde_json::json!("off"));
+        assert!(first_invalid_knob(&m).is_none());
+    }
 
     fn user_event(text: &str) -> SessionEvent {
         SessionEvent::UserMessage {

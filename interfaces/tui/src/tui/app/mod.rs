@@ -13,7 +13,7 @@ mod tests;
 
 use std::time::{Duration, Instant};
 
-use aleph_protocol::RunSummary;
+use aleph_protocol::{RunSummary, SessionSnapshot};
 use chrono::{DateTime, Utc};
 
 use super::command_tree::{CommandEntry, DisplayEntry};
@@ -285,6 +285,29 @@ pub struct SessionPickerState {
 
 /// Central application state. Owned by the main loop, mutated through
 /// methods that enforce invariants (e.g. `auto_scroll` toggling).
+/// Which per-session knob a local command just wrote.
+///
+/// One enum rather than five setters so the status bar and the write paths
+/// enumerate the same list — a knob added here without a renderer is a compile
+/// error in the `match`, not a silently invisible setting.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SessionKnob {
+    Mode,
+    ExecTier,
+    ThinkLevel,
+    MemoryMode,
+}
+
+/// The four session knobs as the status bar reads them. Borrowed from the
+/// snapshot so the renderer cannot hold a stale copy across an attach.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct SessionKnobs<'a> {
+    pub mode: Option<&'a str>,
+    pub exec_tier: Option<&'a str>,
+    pub think_level: Option<&'a str>,
+    pub memory_mode: Option<&'a str>,
+}
+
 #[derive(Debug)]
 pub struct AppState {
     // -- Chat --
@@ -298,8 +321,26 @@ pub struct AppState {
 
     // -- Session / model --
     pub session_key: String,
+    /// The model name to display. Seeded from the gateway's default provider at
+    /// launch and replaced by the conversation's own model the moment a
+    /// [`SessionSnapshot`] arrives — a thread pinned with `select_model` must
+    /// not be captioned with the install-wide default it overrode.
     pub model_name: String,
+    /// Fallback model caption: the gateway's default-provider model, kept so a
+    /// snapshot that names no model (a conversation that has not run yet) can
+    /// restore the caption instead of leaving whatever the previous session had.
+    default_model_name: String,
     pub total_tokens: u64,
+    /// The conversation's durable settings as the server last reported them
+    /// (`chat.history`'s `session` object). `None` until the first attach — and
+    /// `None` is read as "the server has not told me", never as "nothing is
+    /// set": an unset knob and an unknown knob look identical to a user, but
+    /// only one of them is safe to render as a concrete value.
+    ///
+    /// Stored whole rather than fanned out into sibling fields: the snapshot is
+    /// one fact with one producer, and six copies of it are six chances for a
+    /// `switch_session` to reset five of them.
+    pub session_snapshot: Option<SessionSnapshot>,
     /// Live context-window occupancy `(used_tokens, window_tokens)` from the
     /// latest `ContextGauge` event. `None` until the session's first gauge
     /// arrives. The pair always travels together (one event), so a single
@@ -376,8 +417,16 @@ pub struct AppState {
 impl AppState {
     /// Create a new `AppState` with a welcome system message.
     pub fn new(session_key: String, model_name: String) -> Self {
+        // An empty key is not a key — it means "the gateway has not routed this
+        // conversation yet". Printing it verbatim renders `Session:  |`, which
+        // reads like a bug; naming the state reads like the truth.
+        let session_line = if session_key.is_empty() {
+            "Session: new (the gateway names it on your first message)".to_string()
+        } else {
+            format!("Session: {session_key}")
+        };
         let welcome = format!(
-            "Welcome to Aleph CLI. Session: {session_key} | Model: {model_name}. Type /help for commands.",
+            "Welcome to Aleph CLI. {session_line} | Model: {model_name}. Type /help for commands."
         );
         Self {
             messages: vec![ChatMessage::System { content: welcome }],
@@ -388,8 +437,10 @@ impl AppState {
             history_index: None,
 
             session_key,
+            default_model_name: model_name.clone(),
             model_name,
             total_tokens: 0,
+            session_snapshot: None,
             context_gauge: None,
             cache_stat: None,
             cache_stat_agent: None,
@@ -724,10 +775,96 @@ impl AppState {
         }
     }
 
+    /// Adopt the canonical session key the gateway reports on the `agent.run`
+    /// result.
+    ///
+    /// The gateway is the only authority on what key a run was routed to: an
+    /// explicit key that fails `SessionKey::parse` does not fail the call, it
+    /// makes `AgentRouter::route` mint a fresh epoch instead. A client that
+    /// keeps its own guess afterwards addresses a session that does not exist,
+    /// and every keyed RPC it makes (`chat.history`, `session.usage`,
+    /// `sessions.patch`, `session.compact`) answers about nothing.
+    ///
+    /// A no-op when the key is unchanged or empty, so the common path costs
+    /// nothing and a server that omits the field cannot blank the key.
+    pub fn adopt_canonical_session_key(&mut self, canonical: &str) {
+        if canonical.is_empty() || canonical == self.session_key {
+            return;
+        }
+        self.session_key = canonical.to_string();
+        // The settings we hold describe the key we just replaced. Dropping them
+        // makes the status bar say "unknown" until the next attach, which is
+        // true; keeping them would make it confidently describe someone else's
+        // conversation.
+        self.session_snapshot = None;
+    }
+
+    /// Restore this conversation's durable settings from the server's snapshot.
+    ///
+    /// Called on attach (`chat.history`) and after a session switch. Everything
+    /// here is read back, never invented: the cumulative token count comes from
+    /// the `sessions` row rather than from this process's own tally, which is
+    /// why reopening a terminal mid-task no longer restarts the counter at 0.
+    pub fn apply_session_snapshot(&mut self, snapshot: SessionSnapshot) {
+        self.session_key = snapshot.session_key.clone();
+        self.total_tokens = u64::try_from(snapshot.total_tokens).unwrap_or(0);
+        self.model_name = snapshot
+            .effective_model()
+            .map_or_else(|| self.default_model_name.clone(), str::to_string);
+        self.session_snapshot = Some(snapshot);
+    }
+
+    /// The conversation's usage mode, exec tier, thinking depth and memory mode
+    /// as the status bar renders them.
+    ///
+    /// `None` in the tuple means the session follows the global default — the
+    /// renderer prints nothing rather than guessing which default is live,
+    /// because the TUI does not read the server's config and a guess would be
+    /// indistinguishable from a fact.
+    #[must_use]
+    pub fn session_knobs(&self) -> SessionKnobs<'_> {
+        let snap = self.session_snapshot.as_ref();
+        SessionKnobs {
+            mode: snap.and_then(|s| s.mode.as_deref()),
+            exec_tier: snap.and_then(|s| s.exec_tier.as_deref()),
+            think_level: snap.and_then(|s| s.think_level.as_deref()),
+            memory_mode: snap.and_then(|s| s.memory_mode.as_deref()),
+        }
+    }
+
+    /// Locally record a knob the user just changed, so the status bar reflects
+    /// it before the next attach re-reads it from the server.
+    ///
+    /// Only ever called after the write RPC returned `Ok` — an optimistic
+    /// update on a refused write is exactly the "confident false answer" the
+    /// snapshot exists to prevent. `field` selects which knob; the value is
+    /// `None` for "follow global".
+    pub fn record_local_knob(&mut self, field: SessionKnob, value: Option<String>) {
+        let snap = self
+            .session_snapshot
+            .get_or_insert_with(|| SessionSnapshot {
+                session_key: self.session_key.clone(),
+                ..SessionSnapshot::default()
+            });
+        match field {
+            SessionKnob::Mode => snap.mode = value,
+            SessionKnob::ExecTier => snap.exec_tier = value,
+            SessionKnob::ThinkLevel => snap.think_level = value,
+            SessionKnob::MemoryMode => snap.memory_mode = value,
+        }
+    }
+
     /// Switch to a different session and reset transient chat/run UI state.
     /// The caller then appends the fetched `chat.history` transcript.
     pub fn switch_session(&mut self, session_key: &str) {
         self.session_key = session_key.to_string();
+        // Per-conversation facts, and this component is a singleton: a counter
+        // that survives the switch reports the previous conversation's spend
+        // under the new one's name. The caller restores the real figures from
+        // the incoming snapshot immediately after.
+        self.total_tokens = 0;
+        self.session_snapshot = None;
+        self.model_name.clone_from(&self.default_model_name);
         self.messages.clear();
         self.current_run = None;
         self.run_started_at = None;

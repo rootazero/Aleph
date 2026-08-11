@@ -1123,7 +1123,7 @@ impl InboundMessageRouter {
 
         // Clarification button callback: `clarify:<1-based index>` from an
         // inline keyboard (the clarification twin of the `approve:` callback,
-        // built in `ask_user::build_choice_keyboard`). Only a well-formed
+        // built by `clarification::render`). Only a well-formed
         // positive integer suffix is treated as a callback — buttons are
         // 1-based, so `0` and any non-numeric suffix are malformed. A
         // malformed `clarify:` falls through without consuming so the raw
@@ -1133,12 +1133,14 @@ impl InboundMessageRouter {
             match parse_clarify_index(suffix) {
                 Some(idx) => {
                     if let Some(ref mgr) = self.clarification_manager {
-                        if mgr.has_pending(&session_key).await
-                            && mgr.resolve(&session_key, &idx.to_string()).await
-                        {
-                            info!(
-                                "[Router] Routed button callback to pending clarification for {session_key}"
-                            );
+                        if mgr.has_pending(&session_key).await {
+                            let outcome = mgr.resolve(&session_key, &idx.to_string()).await;
+                            if outcome.consumed() {
+                                info!(
+                                    "[Router] Routed button callback to pending clarification for {session_key}"
+                                );
+                            }
+                            self.deliver_next_question(ctx, outcome).await;
                         }
                     }
                     return true;
@@ -1173,9 +1175,17 @@ impl InboundMessageRouter {
         // `clarify:` button and `/approve` branches above already use — so all
         // three HITL paths interpret one text source and never drift.
         if let Some(ref mgr) = self.clarification_manager {
-            if mgr.has_pending(&session_key).await && mgr.resolve(&session_key, &raw).await {
-                info!("[Router] Routed reply to pending clarification for {session_key}");
-                return true;
+            if mgr.has_pending(&session_key).await {
+                let outcome = mgr.resolve(&session_key, &raw).await;
+                if outcome.consumed() {
+                    info!("[Router] Routed reply to pending clarification for {session_key}");
+                    // A multi-question request advances one question per
+                    // message on a text channel. The surface that received
+                    // answer *k* is the only one holding a transport, so it is
+                    // the one that must ask question *k+1*.
+                    self.deliver_next_question(ctx, outcome).await;
+                    return true;
+                }
             }
         }
 
@@ -1192,6 +1202,40 @@ impl InboundMessageRouter {
         }
 
         false
+    }
+
+    /// Deliver the next question of a multi-question clarification, if the
+    /// answer just recorded left one outstanding.
+    ///
+    /// The manager cannot do this itself: it holds no transport, and the right
+    /// transport is by definition the one the answer arrived on. A send failure
+    /// is logged, not surfaced — the clarification stays parked, and
+    /// `clarification.pending` (plus the `AskUser` frame the manager published
+    /// on advance) still reaches any attached rich client.
+    async fn deliver_next_question(
+        &self,
+        ctx: &InboundContext,
+        outcome: crate::clarification::ResolveOutcome,
+    ) {
+        use crate::clarification::ResolveOutcome;
+        let ResolveOutcome::More { next, .. } = outcome else {
+            return;
+        };
+        let message = super::channel::OutboundMessage {
+            conversation_id: ctx.reply_route.conversation_id.clone(),
+            text: next.text,
+            attachments: vec![],
+            reply_to: None,
+            inline_keyboard: next.keyboard,
+            metadata: Default::default(),
+        };
+        if let Err(e) = self
+            .channel_registry
+            .send(&ctx.reply_route.channel_id, message)
+            .await
+        {
+            warn!(error = %e, "[Router] failed to deliver the next clarification question");
+        }
     }
 
     /// Complete a paused workflow `clarify` step for `session_key` from the
@@ -1251,8 +1295,8 @@ impl InboundMessageRouter {
             }
             // Interpret number / label / free-text exactly like `ask_user`.
             let request = meta.build_request();
-            let result = crate::clarification::session::interpret_reply(&request, reply);
-            let answer = result.value.unwrap_or_default();
+            let answer =
+                crate::clarification::session::interpret_reply(request.first(), reply).value;
             if let Err(e) = store
                 .update_task(
                     &task.id,
@@ -1387,7 +1431,7 @@ mod tests {
             ],
         );
         let rx = clarification
-            .register(session_key.to_string(), request, Duration::from_secs(60))
+            .register(session_key.to_string(), request, Duration::from_secs(60), "")
             .await;
 
         let router = InboundMessageRouter::new(
@@ -1420,8 +1464,8 @@ mod tests {
         );
         let result = rx.await.unwrap();
         // Button 2 → 1-based index "2" → option index 1, value "beta".
-        assert_eq!(result.selected_index, Some(1));
-        assert_eq!(result.get_value(), Some("beta"));
+        assert_eq!(result.selected_index(), Some(1));
+        assert_eq!(result.value(), Some("beta"));
     }
 
     /// A `clarify:` callback with nothing pending is still consumed (returns
@@ -1490,6 +1534,7 @@ mod tests {
                 session_key.to_string(),
                 ClarificationRequest::text("Pick one:"),
                 Duration::from_secs(60),
+                "",
             )
             .await;
 
@@ -1567,6 +1612,7 @@ mod tests {
                 session_key.to_string(),
                 ClarificationRequest::text("Which file?"),
                 Duration::from_secs(60),
+                "",
             )
             .await;
 

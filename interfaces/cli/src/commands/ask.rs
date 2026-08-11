@@ -3,6 +3,7 @@
 //! Adds codex-parity affordances on top of the original "send and print":
 //!
 //! - `--last`: pick the session with the latest `last_active_at`
+//!   (`aleph_client::resolve_last_session`, shared with `aleph chat --continue`)
 //! - `--json` (top-level): emit raw protocol events as JSONL to stdout
 //! - `--output-last-message <FILE>` (`-o`): write the final agent text to FILE
 //! - stdin piping: `echo "prompt" | aleph ask` (and `git diff | aleph ask "review"`),
@@ -15,7 +16,7 @@
 use serde::Serialize;
 use serde_json::Value;
 
-use aleph_client::{AlephClient, CliConfig, CliError, CliResult};
+use aleph_client::{AlephClient, CliConfig, CliResult};
 
 use super::run_follow::{self, FollowOptions};
 
@@ -41,7 +42,10 @@ pub async fn run(
     let session_key = if let Some(s) = session {
         s.to_string()
     } else if last {
-        resolve_last_session(&client).await?
+        // One resolver, shared with `aleph chat --continue` (and any future
+        // client): two commands that both mean "the thread I was in" must not
+        // be able to disagree about which one that is.
+        aleph_client::resolve_last_session(&client).await?
     } else {
         config
             .default_session
@@ -90,37 +94,6 @@ pub async fn run(
 
     client.close().await?;
     Ok(())
-}
-
-/// Pick the session with the maximum `last_active_at` (RFC3339 ISO strings
-/// sort lexicographically). Errors when the server returns no sessions.
-async fn resolve_last_session(client: &AlephClient) -> CliResult<String> {
-    let listed: Value = client.call("sessions.list", None::<()>).await?;
-    let sessions = listed
-        .get("sessions")
-        .and_then(|v| v.as_array())
-        .ok_or_else(|| CliError::Other("sessions.list returned no `sessions` array".to_string()))?;
-
-    let mut best_key: Option<&str> = None;
-    let mut best_ts: &str = "";
-    for entry in sessions {
-        let Some(k) = entry.get("key").and_then(|v| v.as_str()) else {
-            continue;
-        };
-        let ts = entry
-            .get("last_active_at")
-            .and_then(|v| v.as_str())
-            .unwrap_or("");
-        // Prefer strictly greater timestamps; ties keep the earlier candidate.
-        if best_key.is_none() || ts > best_ts {
-            best_key = Some(k);
-            best_ts = ts;
-        }
-    }
-
-    best_key
-        .map(std::string::ToString::to_string)
-        .ok_or_else(|| CliError::Other("--last: no sessions available to resume".to_string()))
 }
 
 /// Read piped stdin, returning `Some` only when stdin is NOT a TTY and the
