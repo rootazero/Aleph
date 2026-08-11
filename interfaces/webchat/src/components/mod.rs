@@ -35,8 +35,8 @@ pub mod team_task_strip;
 pub mod theme_toggle;
 pub mod token_wall;
 pub mod tool_card;
-pub mod usage_badge;
 pub mod ui;
+pub mod usage_badge;
 pub mod workspace_panel;
 
 // Re-export layout components
