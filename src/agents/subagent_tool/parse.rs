@@ -204,7 +204,10 @@ pub(super) fn parse_args(input: &Value) -> Result<SubagentAction, String> {
     let batch_tasks: Option<Vec<BatchTask>> = match input.get("batch_tasks") {
         Some(v) if !v.is_null() => {
             let arr = v.as_array().ok_or_else(|| {
-                format!("batch_tasks must be an array of objects (got {})", value_kind(v))
+                format!(
+                    "batch_tasks must be an array of objects (got {})",
+                    value_kind(v)
+                )
             })?;
             let mut rows = Vec::with_capacity(arr.len());
             for (idx, item) in arr.iter().enumerate() {
@@ -222,9 +225,7 @@ pub(super) fn parse_args(input: &Value) -> Result<SubagentAction, String> {
                     })?
                     .to_string();
                 if task.trim().is_empty() {
-                    return Err(format!(
-                        "batch_tasks[{idx}]: 'task' must not be empty"
-                    ));
+                    return Err(format!("batch_tasks[{idx}]: 'task' must not be empty"));
                 }
                 rows.push(BatchTask {
                     task,
