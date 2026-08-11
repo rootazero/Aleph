@@ -144,7 +144,15 @@ impl ScopedToolService {
         // gates match the literal name and miss, then routing resolves the
         // alias to the real tool and runs it. Evaluate every gate against the
         // canonical name the registry will actually execute.
-        let canonical = self.inner.resolve(name).map(|t| t.name().to_string());
+        let resolved = self.inner.resolve(name);
+        let canonical = resolved.map(|t| t.name().to_string());
+        // Provenance for the usage sidecar, taken here because this is the one
+        // place the tool object is in scope. `None` for every builtin — see
+        // `LoopTool::usage_origin`. Resolving it up front (rather than after
+        // the call) also means a tool that gets unregistered mid-dispatch —
+        // an MCP server disconnecting — is still attributed to the server it
+        // actually ran on.
+        let usage_origin = resolved.and_then(LoopTool::usage_origin).map(|o| o.key());
         let name: &str = canonical.as_deref().unwrap_or(name);
 
         // `None` when no ledger is installed or the dispatch carries no
@@ -334,6 +342,17 @@ impl ScopedToolService {
         // records its own refusal.
         if let Some(ref l) = ledger {
             l.commit_execution(&input, &result).await;
+        }
+
+        // Per-origin usage sidecar — the "is anyone still using this MCP
+        // server / plugin?" evidence that `doctor`, the `tool_usage` tool and
+        // the Panel's extension pages read. Only calls that REACHED the tool
+        // are counted: every gate above returns before this point, and a
+        // refusal is not usage (it is already in the signed ledger, with its
+        // reason). Builtins carry no origin and never touch the disk here.
+        if let Some(origin) = usage_origin {
+            crate::tools::usage::record_call_detached(origin, name.to_string(), result.is_ok())
+                .await;
         }
 
         result

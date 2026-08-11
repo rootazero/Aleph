@@ -9,7 +9,7 @@ use serde_json::{json, Value};
 use tokio_util::sync::CancellationToken;
 
 use crate::executor::ToolRegistry;
-use crate::tool_metadata::UnifiedTool;
+use crate::tool_metadata::{ToolSource as UnifiedToolSource, UnifiedTool};
 
 use crate::tools::runtime::{LoopTool, LoopToolRegistry, ToolResult};
 
@@ -24,6 +24,15 @@ struct RegistryToolAdapter<R: ToolRegistry + 'static> {
     registry: Arc<R>,
     /// Default working directory for `bash/code_exec` tools (agent workspace)
     default_working_dir: Arc<Option<String>>,
+    /// Owning plugin id when the wrapped `UnifiedTool` declared
+    /// `ToolSource::Plugin`, else `None`.
+    ///
+    /// Snapshotted at construction because that is the only moment the source
+    /// is in scope: this adapter delegates by *name* into the executor
+    /// registry, and the dispatch chokepoint downstream sees only
+    /// `&dyn LoopTool`. Builtins keep `None` and are never usage-recorded (see
+    /// [`crate::tools::usage`]).
+    plugin_id: Option<String>,
 }
 
 /// Tools that should have `working_dir` injected when not specified by LLM
@@ -102,6 +111,15 @@ pub(crate) const READ_ONLY_TOOLS: &[&str] = &[
     "recall_events",
     // Governance audit reality probe (correction + dreaming counts). Pure read.
     "governance_metrics",
+    // Extension invocation records. `forget_orphans: true` writes, which
+    // normally disqualifies a tool from this list — it is here anyway because
+    // both properties this list actually asserts hold for it: forgetting a row
+    // is idempotent (dropping it twice equals dropping it once), and the store
+    // serializes concurrent writers on a cross-process file lock. What it can
+    // never touch is anything *installed* — the deletion is confined to this
+    // module's own bookkeeping sidecar. Keeping it read-only matters because
+    // the whole point is to be callable under `Ask` BEFORE any uninstall.
+    "tool_usage",
     "user_profile",
     // Session / inbox reads. (`inbox_read` is NOT one: `mark_read` defaults
     // to true, so a read CONSUMES unread state — an auto-retry after a
@@ -333,6 +351,12 @@ impl<R: ToolRegistry + 'static> LoopTool for RegistryToolAdapter<R> {
         self.schema.clone()
     }
 
+    fn usage_origin(&self) -> Option<crate::tools::usage::UsageOrigin<'_>> {
+        self.plugin_id
+            .as_deref()
+            .map(crate::tools::usage::UsageOrigin::Plugin)
+    }
+
     fn is_concurrent_safe(&self, _input: &Value) -> bool {
         // Safe default: only explicitly-known read-only tools are freely
         // concurrent. Path-scoped file writers are not "freely" concurrent
@@ -529,6 +553,10 @@ pub fn build_tool_adapters_from_tools<R: ToolRegistry + 'static>(
             schema,
             registry: Arc::clone(&tool_registry),
             default_working_dir: Arc::clone(&default_working_dir),
+            plugin_id: match &tool.source {
+                UnifiedToolSource::Plugin { plugin_id } => Some(plugin_id.clone()),
+                _ => None,
+            },
         }));
     }
 

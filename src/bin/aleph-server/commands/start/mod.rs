@@ -1578,6 +1578,7 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
         agent_result.multi_registry.clone(),
         auth_bundle.auth_ctx.shared_token_mgr.clone(),
         acp_manager.clone(),
+        mcp_handle.clone(),
     );
     // `self_config` and `moa` tools need the same `ConfigPatcher`; it is built
     // after the registry, so we late-bind it now. Both `Arc`s are cheap clones.
@@ -2883,7 +2884,10 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
         // to the caller's session would let a member answer their own
         // escalation. See `OperatorApprovalRequester`'s module doc.
         alephcore::gateway::execution_engine::set_config_approval_requester(Arc::new(
-            OperatorApprovalRequester::for_config_tier(exec_approval_manager.clone(), event_bus.clone()),
+            OperatorApprovalRequester::for_config_tier(
+                exec_approval_manager.clone(),
+                event_bus.clone(),
+            ),
         ));
 
         // Phase 1 delivery surface: register the desktop shell as an addressable

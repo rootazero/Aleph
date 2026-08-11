@@ -206,6 +206,11 @@ impl BuiltinToolRegistry {
             if let (Some(cfg), Some(mgr)) = (&config.config, &config.shared_token_manager) {
                 tool = tool.with_runtime(Arc::clone(cfg), Arc::clone(mgr));
             }
+            // Same handle `hub_install_verify` uses; unlocks the
+            // `ext/idle-extensions` inventory.
+            if let Some(mcp) = &config.hub_mcp_handle {
+                tool = tool.with_mcp(mcp.clone());
+            }
             tool
         };
 
@@ -284,6 +289,14 @@ impl BuiltinToolRegistry {
 
         // Store fetch-docs tool (scaffold — no CatalogCache dep; always constructed)
         let hub_fetch_docs_tool = crate::builtin_tools::hub::HubFetchDocsTool;
+
+        // tool_usage — the read half of the store. Always constructed: without
+        // the MCP handle it still answers for plugins and skills and names
+        // `mcp` as unenumerable, which is strictly better than being absent
+        // (an absent tool makes the model guess).
+        let tool_usage_tool = crate::builtin_tools::tool_usage::ToolUsageTool {
+            mcp: config.hub_mcp_handle.clone(),
+        };
 
         // Build platform-specific DesktopPlatform.
         //
@@ -943,6 +956,24 @@ impl BuiltinToolRegistry {
             info!("Registered schema for hub_install_verify");
         }
 
+        // tool_usage: no CatalogCache dep — register unconditionally.
+        {
+            use crate::tools::AlephTool;
+            let td = crate::builtin_tools::tool_usage::ToolUsageTool {
+                mcp: config.hub_mcp_handle.clone(),
+            }
+            .definition();
+            let mut ut = UnifiedTool::new(
+                format!("builtin:{}", td.name),
+                &td.name,
+                &td.description,
+                ToolSource::Builtin,
+            );
+            ut = ut.with_parameters_schema(td.parameters.clone());
+            tools.insert(td.name.clone(), ut);
+            info!("Registered schema for tool_usage");
+        }
+
         // Register optional tool metadata
         Self::register_optional_tools(
             &mut tools,
@@ -1066,6 +1097,7 @@ impl BuiltinToolRegistry {
             hub_install_run_tool,
             hub_install_verify_tool,
             hub_fetch_docs_tool,
+            tool_usage_tool,
             desktop_tool,
             desktop_ax_query_focused_tool,
             desktop_ax_query_tree_tool,

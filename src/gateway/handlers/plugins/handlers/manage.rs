@@ -30,12 +30,32 @@ pub async fn handle_list(request: JsonRpcRequest) -> JsonRpcResponse {
         tracing::warn!("Failed to load extensions: {}", e);
     }
 
-    let plugins: Vec<PluginInfoJson> = manager
+    let mut plugins: Vec<PluginInfoJson> = manager
         .get_plugin_info()
         .await
         .into_iter()
         .map(PluginInfoJson::from)
         .collect();
+
+    // Join the invocation record onto each row. `PluginInfo::name` IS the
+    // registry id (`plugin_ops::get_plugin_info` copies `record.id` into it),
+    // which is the same key the usage sidecar writes under — so this is an
+    // id join, not a name match. `None` for the MCP handle is deliberate: this
+    // handler only reads the plugin rows, and asking for an MCP inventory it
+    // will not use would cost an actor round-trip per plugin list.
+    if !plugins.is_empty() {
+        use crate::tools::usage::report::ExtensionKind;
+        let report = crate::tools::usage::report::build_report_now(None).await;
+        for row in &mut plugins {
+            if let Some(entry) = report
+                .entries
+                .iter()
+                .find(|e| e.kind == ExtensionKind::Plugin && e.id == row.name)
+            {
+                row.usage = Some(aleph_protocol::extension_usage::UsageSummary::from(entry));
+            }
+        }
+    }
 
     JsonRpcResponse::success(request.id, json!({ "plugins": plugins }))
 }

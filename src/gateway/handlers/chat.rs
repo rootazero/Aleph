@@ -494,12 +494,12 @@ pub async fn handle_history(
             // parses but is not byte-identical to canonical would silently get
             // "nothing running" — a miss that looks exactly like an idle
             // session.
-            let canonical = session_key.to_key_string();
-            let active_run = run_manager.and_then(|rm| rm.active_run_for_session(&canonical));
             // Same canonical key, same post-gate position, same reason (see the
             // rationale above). Resolved through the one "session → plan"
             // function the prompt layer and the stop verifier also call, so a
             // client and the model can never be told different lists.
+            let canonical = session_key.to_key_string();
+            let active_run = run_manager.and_then(|rm| rm.active_run_for_session(&canonical));
             let plan = crate::builtin_tools::scratchpad::session_plan_snapshot(&canonical).await;
             JsonRpcResponse::success(
                 request.id,

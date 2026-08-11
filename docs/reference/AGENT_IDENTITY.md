@@ -182,7 +182,11 @@ SHA256( "aleph-agent-ledger-v1"
    - **无 gateway 连接的调用方不受限**（cron / heartbeat / A2A / teams dispatcher / 进程内测试），与仓里每一条同族谓词的第一臂一致。loopback **不属于**这一类：它解析成隐式 owner，所以本机 Panel 带着 `Some(owner)` 到达。
    - **仍然不防的**：一个人在他**被允许的** agent 之内做的事。那不是冒充，是授权——而账本现在会记下是谁做的（`principal`）。
    - **仍然不防的**：把 `agent_id` 绑到**设备**授权范围。那是 RPC 授权模型的改动，本轮没做，因为身份的粒度是**人**（`users.user_id`）而不是设备，且设备已经解析成人。
-   - **`agent.resume` 不过这道闸，刻意的**（自审发现，记在这里而不是静默留着）。它不经 `build_run_request`——按会话**已存的**归属重跑一个中断的 run，`handlers::resume` 只问 `session_visible`。于是收紧 `allowed_users` **之后**，一个已被移出名单的人仍能恢复他自己那条会话里早先被中断的 run。三条理由让它停在文档而不是代码里：① 那份工作在被中断时**已经过闸**，resume 不接受新输入（`ResumeParams` 只有 `session_key`），所以他**无法操纵**它——想操纵就得 `chat.send`，而那条路过闸；② 撤销本来就要重启才生效（`[agents]` 不是 live section），所以这条窄缝的前提是「重启之后、那条中断 run 还在」；③ 补它要把 registry 穿进 resume 协调器，为一个不可操纵的、已授权的续跑造一套机件——违 P6。**如果哪天 resume 开始接受新输入，这条边界立刻作废，必须补闸。**
+   - **`agent.resume` 曾经不过这道闸；第七轮（2026-08-10）补上了。** 它不经 `build_run_request`——按会话**已存的**归属重跑一个中断的 run——而它又是 member-open（`method_admin.rs` 的 `MEMBER_CARVE_OUTS` 逐字钉着它，那条注释自己写的是「与启动一个 run 是同一个授权问题」）。于是收紧 `allowed_users` 之后，一个已被移出名单的人仍能恢复他自己那条会话里早先被中断的 run。豁免站在两条腿上，**承重的那条是个 bug**：
+     - ~~① 撤销本来就要重启才生效（`[agents]` 不是 live section），所以这条窄缝的前提是「重启之后、那条中断 run 还在」~~ —— 第六轮把 `AgentRegistry::set_allowed_users` 修成真的之后，这句话当天就不成立了，窄缝从「重启之后才可达」变成「**紧跟撤销就可达**」，而 resume 那侧一个字符都没动、一条测试都不会红。**这是「一个缺陷被别处引用成安全论证」的教科书实例**，判据已提到根 CLAUDE.md。
+     - ② resume 不接受新输入（`ResumeParams` 只有 `session_key`），所以他**无法操纵**它——想操纵就得 `chat.send`，而那条路过闸。**这条仍然为真，但它一条腿撑不住**：`allowed_users` 守的是 `tool_permissions` 的 agent 轴，而续跑不是重播一份已定的 transcript——它**重新进 harness、继续按那个 agent 的权限调工具**。「那份工作被中断时已经过闸」说的是**已经做完的**那部分，对下一轮模型自己想出来的动作一个字都没说。
+   - **现在的形状**：闸在 `resume_named_session` 里，**排在 `session_visible` 之后**（可见性有存在性秘密要守 ⇒ `not_found`；准入闸只在那个秘密已经花掉之后才可达 ⇒ 诚实的 `PERMISSION_DENIED`，措辞与 `BuildRunError::AgentForbidden` 同源）。registry 走**必填参数**而不是第二个 `global_*` 句柄——新面漏传是编译错误，全局漏设是沉默（`build_run_request` 的 `agent` 参数不是 `Option` 也是这个理由）。`None` = 这台 server 根本没有 registry（Simulated 构建），它也不跑工具，所以那不是洞；`/v1/admin` 传 `None` 是因为那条路没有 `CALLER_USER`，谓词在那里**按构造**恒真，塞一个进去只会看起来像一道从不生效的闸。
+   - **仍然不问的**：run 依旧按会话**已存**的归属重入，从不按调用者的。resume 不是「以我的身份跑点什么」的路子，这道闸只决定你有没有资格说「把它接上」。
 2. **无 turn context 即不记录**。`approval::audit_identity` 在 turn 外回退字面量 `"main"`——对一行日志是合理默认，对**签名链就是伪造**。所以 `ledger_agent_id` 返回 `None`。（注意：**只有** turn 缺失才返回 `None`；子代理的角色注入是在有 turn 的前提下**替换**归属，不是新增一条无 turn 的路径。）
 3. **`revoke` 不是执行闸**。本子系统不拦任何执行。所以被撤销的 agent 若仍在动作，记录**照记**（用其已 retire 的钥签，`AgentKeystore::signing_identity`），而不是拒签。理由：拒签不会阻止行为，只会消灭证据；而"这个 agent 在被撤销 40 分钟后还在动作"恰恰是问责账本最该能证明的事。`revoke` 的真实语义是：标记该身份、retire 其密钥、拒绝 `keygen` 重新启用（要回来必须显式 `rotate`），并在其链上留下一条**由被撤销的那把钥自己签的** `IdentityRevoked`。
 4. **无 owner 层**。buzz 的 NIP-OA（owner 签名证明"谁授权了这个 agent"，作者身份永不改写）没有移植：Aleph 没有 owner 密钥概念，凭空造一个是没有消费者的抽象（YAGNI 撤回规则）。父子委派的**事实**已经落在父链上（`ToolCall(target="subagent")`，`detail` 带 `agent_type`），再加一个 `Delegation` 变体是零增量信息。
@@ -241,7 +245,7 @@ allowed_users = ["u-alice"]     # 空或不写 = 所有认证调用方（出厂�
 agent_update(agent_id="ops", allowed_users=["u-alice"])   # 清空＝改回所有人：allowed_users=[]
 ```
 
-`agent_update` **写 config.toml，重启后才生效**——`[agents]` 不是 live section，所以返回里那句 `takes_effect` 必须转达给用户。对一次**撤销**而言这是最要紧的一句：说「已经生效」而它没有，正是这个字段存在要防的那件事。被拒的调用方拿到的是**诚实的 `PERMISSION_DENIED` 并点名 agent**，不是 `not_found`——`agents.list` 本来就对每个认证调用方返回全部 agent，没有存在性秘密要守；而一道谜语只会把忘了把自己加进列表的 operator 推向「干脆全开」。
+`agent_update` 的 **`allowed_users` 下一轮即生效**（第六轮，2026-08-10）：它把新名单装进 `AgentRegistry`——run-start 闸读的正是那个对象——所以一次**撤销**在被拒者的下一回合就绑定。`name` / `description` / `model` **仍然是写 config.toml、重启后才生效**，所以 `takes_effect` 现在**按本次 patch 实际落地的情况分开措辞**，两半的文案仍取自 `ReloadImpact`。**`Live` 只在 registry 写入返回 `true` 时才声称**（与 `live_apply::classify_verified` 同一条降级规则）——说「已经生效」而它没有，正是这个字段存在要防的那件事。**RPC 面 `agents.update` 走同一个 registry 方法**并回 `allowed_users_applied_live`，两张脸不会对「撤销有没有发生」给出两个答案。被拒的调用方拿到的是**诚实的 `PERMISSION_DENIED` 并点名 agent**，不是 `not_found`——`agents.list` 本来就对每个认证调用方返回全部 agent，没有存在性秘密要守；而一道谜语只会把忘了把自己加进列表的 operator 推向「干脆全开」。
 
 `list` 里出现的不只是顶层 agent：**做过变更类动作的子代理角色各有自己的一条链**（身份即 `AgentDef.id`，故同一角色跨多次委派共用一条链——这是想要的，角色就是身份）。密钥在**首次被记录的动作**时铸造，纯只读的角色永远不会铸钥。链首那条 `identity_created` 就是它开始的地方。
 
@@ -271,7 +275,7 @@ aleph-server identity verify --input chain.json \
 
 - **`agent_admits_user` 是一条规则，不是三条**。`allowed_users` 在到达闸之前经过三个类型（`AgentDefinition` → `ResolvedAgent` → `AgentInstanceConfig`），各写一个谓词就是三次分歧机会——`restrictive_min` 对权限、`session_visible` 对会话都是这么收敛的。
 - **闸的参数必填，不是 `Option`**。`method_visibility.rs` 那张表存在的理由是「删掉一次调用会变成一条指名道姓的测试失败」；这里删掉它是**编译错误**，更强，所以本轮**没有**给这张表加条目，也**没有**加源码级 pin——加了就是第二个更弱的真源。
-- **`agent_update` 的 `takes_effect` 取自 `ReloadImpact::classify("agents")`，不是字面量**。`[agents]` 不是 live section，而这个工具的运行时那一半按它自己的 doc 是个 no-op，所以每一个字段都是「写进去了、但要重启」。把这句话写成常量会得到第二份表述，且它会在 `[agents]` 某天变成 live section 的那天开始撒谎。
+- **`agent_update` 的 `takes_effect` 两半都取自 `ReloadImpact`，不是字面量**。第五轮它每个字段都是「写进去了、但要重启」，因为运行时那一半是 no-op；第六轮 `allowed_users` 有了真的运行时半边，于是一次 patch **可能同时跨两个答案**，措辞按**本次调用实际落地了什么**合成。把任一半写成常量会得到第二份表述。⚠️ **`:cleared` 是报告的装饰不是另一个字段**——`is_live_field` 按基名匹配，否则「清空名单」会被描述成需要重启，而 registry 早就改完了（往安全方向撒的谎，最容易活过评审）。
 - **目录字节自己付账**。两处 `DESCRIPTION` 新增让 `CATALOG_DESCRIPTION_CEILING_BYTES` 超了 681 B，还的方式是在**同一批描述里**删掉参数 schema 已经发出去的 JSON 字面量与复述它的散文，而不是抬闸。
 - **`agent_identity` 的目录守卫改判**「这一行 bullet 介绍了这个 action」而非「描述里出现了 `"action": "x"` 这个 JSON 拼法」。判据落在性质上；落在排版上的守卫会为一次无害的改写变红，而那正是守卫被赶时间的人放松的方式。
 - **顺手修好一处先于本轮存在的损坏**（独立提交）：`loop_graph::service` 的 `unicode_line_separators_in_root_body_cannot_forge_a_root_line` 断言自相矛盾（`trim_start()` 后要求没有任何 `根参照` 行，同一个测试两句之后又要求真的根参照必须在第 0 列），自落地起一直红、连带 `cargo test -p alephcore --lib` 一起红。**防御本身是对的**——伪造行确实被缩进了；红的是断言。改成它 ASCII 孪生二十行之上一直用对的那个形状，并补上真正承重的那一句（`lines()` 只按 `\n` 切，所以拿掉 Unicode 映射后伪造内容会藏在**一行之内**、列检查照样通过），用变异证过 RED。

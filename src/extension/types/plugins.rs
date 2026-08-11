@@ -22,6 +22,11 @@ pub struct PluginInfo {
     pub agents_count: usize,
     pub hooks_count: usize,
     pub mcp_servers_count: usize,
+    /// Tools this plugin registers. Load-bearing beyond display: zero means
+    /// tool-call accounting has nothing to observe for this plugin, so its
+    /// usage must render as `—` rather than `0`.
+    #[serde(default)]
+    pub tools_count: usize,
     /// Runtime status label: "loaded" | "disabled" | "overridden" | "error".
     #[serde(default)]
     pub status: String,

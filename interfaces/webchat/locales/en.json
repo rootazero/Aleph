@@ -1612,7 +1612,19 @@
       "description_placeholder": "What this agent specializes in...",
       "model_config": "Model Configuration",
       "primary_model": "Primary Model",
-      "saved": "Saved successfully"
+      "saved": "Saved successfully",
+      "access_title": "Who may run as this agent",
+      "access_everyone": "Nobody selected = everyone. Every authenticated user may run as this agent and delegate to it.",
+      "access_restricted": "Only the selected users may start a run as this agent or delegate to it.",
+      "access_live_note": "Access changes bind on the next turn — no restart needed.",
+      "access_applied_live": "Access list is in force now.",
+      "access_not_applied_live": "Access list was saved to config.toml but is NOT yet in force — restart aleph-server.",
+      "access_users_failed": "Could not load the list of users",
+      "access_no_users": "No principals exist yet. Create one with `aleph users create <name>`.",
+      "access_unknown_user": "not a known principal",
+      "load_failed": "Could not load this agent",
+      "save_disabled_unloaded": "Loading — saving is disabled until this agent's current values are known.",
+      "saved_restart_note": "Name / description / model take effect after aleph-server restarts."
     },
     "channels": {
       "title": "Channel Binding",
@@ -1955,7 +1967,15 @@
     "th_out": "Out",
     "th_cache_r": "Cache R",
     "th_cache_w": "Cache W",
-    "th_reasoning": "Reasoning"
+    "th_reasoning": "Reasoning",
+    "extension": {
+      "never_used": "Never used",
+      "never_used_hint": "Installed, but no call has ever been recorded.",
+      "not_measurable": "No tool-call channel to measure - this is not evidence it is unused.",
+      "calls_suffix": "calls",
+      "days_ago_suffix": "d ago",
+      "errors_suffix": "errors"
+    }
   },
   "skills_page": {
     "header_desc": "Manage AI skills and their requirements",

@@ -1,6 +1,7 @@
 // Files Tab — fixed 5 identity files with inline editor
 
 use crate::api::agents::{AgentsApi, WorkspaceFile};
+use crate::components::admin_refusal;
 use crate::context::DashboardState;
 use crate::i18n::{t, t_string, use_i18n};
 use leptos::prelude::*;
@@ -197,7 +198,16 @@ pub fn FilesTab(agent_id: String) -> impl IntoView {
                                             spawn_local(async move {
                                                 match AgentsApi::files_set(&dash, &id, &filename, &content).await {
                                                     Ok(()) => save_message.set(Some((true, t_string!(i18n, agents.files.saved).to_string()))),
-                                                    Err(e) => save_message.set(Some((false, e))),
+                                                    // `agents.files.set` is admin-gated (only
+                                                    // `agents.list` / `agents.get` are carved
+                                                    // out), so a member's Save is refused and
+                                                    // must be explained, not transcribed.
+                                                    Err(e) => save_message.set(Some((
+                                                        false,
+                                                        admin_refusal::settings_write_error(i18n, &e, |detail| {
+                                                            format!("{}: {detail}", t_string!(i18n, common.save))
+                                                        }),
+                                                    ))),
                                                 }
                                                 is_saving.set(false);
                                             });

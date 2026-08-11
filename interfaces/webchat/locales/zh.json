@@ -1612,7 +1612,19 @@
       "description_placeholder": "此智能体擅长的领域...",
       "model_config": "模型配置",
       "primary_model": "主要模型",
-      "saved": "保存成功"
+      "saved": "保存成功",
+      "access_title": "谁可以以此 agent 运行",
+      "access_everyone": "一个都不勾 = 所有人。任何已认证用户都可以以此 agent 发起运行并向它委派。",
+      "access_restricted": "只有勾选的用户可以以此 agent 发起运行或向它委派。",
+      "access_live_note": "权限改动在下一轮对话即生效，无需重启。",
+      "access_applied_live": "权限清单已即时生效。",
+      "access_not_applied_live": "权限清单已写入 config.toml，但**尚未生效** —— 请重启 aleph-server。",
+      "access_users_failed": "无法加载用户列表",
+      "access_no_users": "还没有任何用户。用 `aleph users create <name>` 创建一个。",
+      "access_unknown_user": "不是已知用户",
+      "load_failed": "无法加载该 agent",
+      "save_disabled_unloaded": "加载中 —— 在读到当前值之前禁止保存。",
+      "saved_restart_note": "名称 / 描述 / 模型需重启 aleph-server 后生效。"
     },
     "channels": {
       "title": "频道绑定",
@@ -1955,7 +1967,15 @@
     "th_out": "输出",
     "th_cache_r": "缓存读",
     "th_cache_w": "缓存写",
-    "th_reasoning": "推理"
+    "th_reasoning": "推理",
+    "extension": {
+      "never_used": "从未使用",
+      "never_used_hint": "已安装，但从未记录到任何一次调用。",
+      "not_measurable": "没有可统计的工具调用口径 —— 这不代表它没被使用。",
+      "calls_suffix": "次调用",
+      "days_ago_suffix": "天前",
+      "errors_suffix": "次错误"
+    }
   },
   "skills_page": {
     "header_desc": "管理 AI 技能及其依赖",

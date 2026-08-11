@@ -262,6 +262,25 @@ impl UsageStore {
     }
 }
 
+/// What "a skill was used" consists of, in one place.
+///
+/// A use is **two** writes — the `.usage.json` counter and the `.cooccur.json`
+/// ring the dream pipeline mines into workflow proposals — and they have to
+/// happen together or the second signal silently describes only part of the
+/// activity.
+///
+/// This exists because the same event arrives on two faces and only one of
+/// them used to record it: `skill_read` (the tool the model calls) did both
+/// writes inline, while a user typing `/<skill>` expands the skill straight
+/// into the prompt without ever touching the reader — so a skill used only by
+/// slash command aged into `stale` while being used daily. Both faces now call
+/// this function, so "what counts as a use" cannot drift between them.
+pub fn record_use_in_dir(skills_dir: impl AsRef<Path>, skill_id: &str) {
+    let dir = skills_dir.as_ref();
+    UsageStore::new(dir).record_use(skill_id);
+    super::cooccurrence::CoOccurrenceLog::new(dir).record(skill_id);
+}
+
 fn now_iso() -> String {
     chrono::Utc::now().to_rfc3339()
 }

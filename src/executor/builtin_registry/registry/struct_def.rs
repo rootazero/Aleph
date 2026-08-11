@@ -345,6 +345,7 @@ pub struct BuiltinToolRegistry {
     pub(crate) hub_install_run_tool: Option<crate::builtin_tools::hub::HubInstallRunTool>,
     /// Store install-verify tool (optional - live MCP handle optional for plugin-only verification).
     pub(crate) hub_install_verify_tool: Option<crate::builtin_tools::hub::HubInstallVerifyTool>,
+    pub(crate) tool_usage_tool: crate::builtin_tools::tool_usage::ToolUsageTool,
     /// Store fetch-docs tool (scaffold - HTTP-only, no CatalogCache dep)
     pub(crate) hub_fetch_docs_tool: crate::builtin_tools::hub::HubFetchDocsTool,
     /// Live Config handle for the `config_audit` tool (security-posture audit).

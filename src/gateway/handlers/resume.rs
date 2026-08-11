@@ -25,11 +25,15 @@ use crate::sync_primitives::Arc;
 use serde::Deserialize;
 use serde_json::json;
 
-use super::super::protocol::{JsonRpcRequest, JsonRpcResponse, INTERNAL_ERROR, INVALID_PARAMS};
+use super::super::protocol::{
+    JsonRpcRequest, JsonRpcResponse, INTERNAL_ERROR, INVALID_PARAMS, PERMISSION_DENIED,
+};
 use super::super::router::SessionKey;
 use super::super::session_store::SessionStore;
 use super::super::visibility;
+use super::agent::BuildRunError;
 use super::parse_params;
+use crate::gateway::agent_instance::AgentRegistry;
 use crate::gateway::ResumeReport;
 
 /// Parameters for `agent.resume`.
@@ -49,6 +53,16 @@ pub enum ResumeOutcome {
     /// caller. One variant for all three on purpose: a caller who cannot see a
     /// session must not be able to learn whether it exists.
     NotFound,
+    /// The caller can see the session but is not on its agent's
+    /// `allowed_users` list. Carries the agent id.
+    ///
+    /// Deliberately NOT folded into [`Self::NotFound`]: this arm is only
+    /// reachable *after* `session_visible` passed, so the caller has already
+    /// proven it may know the session exists and there is no oracle left to
+    /// protect. The same ruling `BuildRunError::AgentForbidden` records for
+    /// the run-start face, for the same reason — a puzzle is what pushes an
+    /// operator to widen the setting.
+    AgentForbidden(String),
     /// No coordinator is published — this server has no execution adapter to
     /// re-trigger runs with. Distinct from a clean zero report, which would
     /// read as "there was nothing to resume".
@@ -80,6 +94,9 @@ impl ResumeOutcome {
             }),
             Self::InvalidKey => json!({ "status": "invalid_session_key" }),
             Self::NotFound => json!({ "status": "not_found" }),
+            Self::AgentForbidden(agent_id) => {
+                json!({ "status": "agent_forbidden", "agent_id": agent_id })
+            }
             Self::Unavailable => json!({ "status": "unavailable" }),
             Self::Failed(e) => json!({ "status": "failed", "error": e }),
         }
@@ -118,19 +135,47 @@ fn status_of(report: &ResumeReport) -> &'static str {
 
 /// Resolve, gate, and resume one named session. Shared by both surfaces.
 ///
-/// The visibility gate runs before the coordinator is consulted at all, so an
-/// invisible session cannot be probed for existence. Note what the gate is
-/// worth on each surface: over JSON-RPC the caller's identity is scoped around
-/// `process_request`, so `session_visible` compares against a real actor. Over
-/// `/v1/admin` there is no such scope, `visible_owner_filter()` is `None` and
-/// the gate admits everything — which is the trust model working as designed,
-/// not a hole: that route is bearer-authenticated with the operator's shared
-/// token, and an operator sees every session anyway. The check stays in the
-/// shared body rather than being lifted into the RPC handler precisely so that
-/// this reasoning lives at the gate instead of being re-derived per transport.
+/// # The two gates, in this order
+///
+/// **Visibility first**, before the coordinator is consulted at all, so an
+/// invisible session cannot be probed for existence. **Admission second**,
+/// because it answers a different question — see [`handle_resume`]'s doc for
+/// why resume needs it and what it costs when it is missing.
+///
+/// The order is what lets the two refusals have different shapes: the first
+/// has an existence secret to keep and answers `NotFound`; the second is only
+/// reachable once that secret is already spent, so it answers honestly.
+///
+/// # What each gate is worth per surface
+///
+/// Over JSON-RPC the caller's identity is scoped around `process_request`, so
+/// both gates compare against a real actor. Over `/v1/admin` there is no such
+/// scope: `visible_owner_filter()` is `None` and `current_caller_user()` is
+/// `None`, so **both** gates admit everything — which is the trust model
+/// working as designed, not a hole. That route is bearer-authenticated with
+/// the operator's shared token, and an operator both sees every session and
+/// may act as every agent. The checks stay in the shared body rather than
+/// being lifted into the RPC handler precisely so that this reasoning lives at
+/// the gate instead of being re-derived per transport.
+///
+/// # Why `agents` is a required parameter and not a process-global
+///
+/// A second `OnceLock` beside `global_resume_coordinator` would give a third
+/// resume face the gate for free — and would give it silence if the wiring
+/// ever stopped setting it. A required parameter gives a compile error
+/// instead, which is the stronger of the two (the same ruling
+/// `build_run_request` records for its non-`Option` `agent` argument).
+///
+/// `None` means *this server has no registry to ask* — the Simulated-execution
+/// build, which has no `AgentRegistry` at all. That is not a hole in the
+/// deployment sense: the thing `allowed_users` protects is the agent's
+/// `tool_permissions`, and Simulated execution runs no tools. It is passed
+/// explicitly at both call sites rather than defaulted, so a new face has to
+/// write down which it is.
 pub async fn resume_named_session(
     raw_key: &str,
     session_manager: &Arc<dyn SessionStore>,
+    agents: Option<&Arc<AgentRegistry>>,
 ) -> ResumeOutcome {
     let Some(session_key) = SessionKey::from_key_string(raw_key) else {
         return ResumeOutcome::InvalidKey;
@@ -144,6 +189,25 @@ pub async fn resume_named_session(
     };
     if !visibility::session_visible(&meta) {
         return ResumeOutcome::NotFound;
+    }
+
+    // The agent axis. Read off the REGISTRY, not `Config.agents.list`: the
+    // registry is the authority on which agent will actually run, and it is
+    // where a revocation lands without a restart
+    // (`AgentRegistry::set_allowed_users`). Reading config would leave
+    // "registered but not in the TOML" as a bypass.
+    //
+    // The outer `None` — this agent is not registered at all — admits. There
+    // is no admission list to enforce, and inventing a refusal for a deleted
+    // agent would answer a policy question nobody asked; the resume itself
+    // then reports `not_resumed` on its own terms. This is the same arm
+    // `agent_admits_user` already takes for an absent list.
+    if let Some(registry) = agents {
+        if let Some(allowed) = registry.get_allowed_users(&meta.agent_id).await {
+            if !crate::gateway::caller_identity::caller_may_act_as_agent(allowed.as_deref()) {
+                return ResumeOutcome::AgentForbidden(meta.agent_id.clone());
+            }
+        }
     }
 
     let Some(coordinator) = crate::gateway::global_resume_coordinator() else {
@@ -161,40 +225,70 @@ pub async fn resume_named_session(
 
 /// Handle `agent.resume`.
 ///
-/// # Why the agent-admission gate is not here
+/// # Why the agent-admission gate IS here
 ///
-/// Every other run-start path passes through
+/// Every run-start path passes through
 /// `handlers::agent::build_run_request`, which asks
-/// `caller_identity::caller_may_act_as_agent` (§5.17 round 5). This one does
-/// not: it re-triggers an interrupted run under the session's **stored**
-/// attribution, so the only question it asks is `session_visible`.
+/// `caller_identity::caller_may_act_as_agent` (§5.17 round 5). `agent.resume`
+/// is member-open (`method_admin.rs` pins it in `MEMBER_CARVE_OUTS`), so until
+/// 2026-08-10 it was the one way to put an agent back to work without being
+/// asked that question.
 ///
-/// The residue is narrow and deliberate: after an operator removes someone
-/// from an agent's `allowed_users`, that person can still resume a run of
-/// their own that was interrupted earlier. They cannot **steer** it —
-/// `ResumeParams` carries only a session key, and giving the run new
-/// instructions means `chat.send`, which is gated. The work being resumed was
-/// authorized when it started, and a revocation already requires a restart to
-/// take effect at all (`[agents]` is not a live section).
+/// It stood on two legs, and **the load-bearing one was a bug**:
 ///
-/// **This reasoning expires the moment `agent.resume` accepts input.** If a
-/// caller can direct the resumed run, resume becomes a run-start path in
-/// substance and needs the same gate — see AGENT_IDENTITY.md §6 ①.
+/// 1. *"A revocation needs a restart to take effect anyway"* — so the residue
+///    was only reachable between a restart and the interrupted run ageing out.
+///    That sentence stopped being true the same day `AgentRegistry::
+///    set_allowed_users` landed: a revocation now binds on the next turn, and
+///    the residue moved to **immediately after the revocation**. Nothing on
+///    this file changed when that happened, and no test went red — the leg was
+///    a fact about another module, cited from here.
+/// 2. *"The resumed run cannot be steered"* — `ResumeParams` carries only a
+///    session key, and giving a run new instructions means `chat.send`, which
+///    is gated. Still true.
+///
+/// Leg 2 alone does not cover it. What `allowed_users` protects is the agent
+/// axis of `tool_permissions`, and a resumed run does not replay a decided
+/// transcript — it re-enters the harness and keeps **calling tools** under
+/// that agent's permissions. "The work was authorized when it started" is
+/// true of the work already done and says nothing about the work the next turn
+/// invents. So the question resume asks is the one `method_admin.rs`'s own
+/// carve-out comment already claimed it asks: *the same authorization question
+/// as starting one.*
+///
+/// The gate lives in [`resume_named_session`], not here, so both faces derive
+/// it once — see that function for the ordering, the per-surface worth of each
+/// gate, and why the registry arrives as a parameter.
+///
+/// # What is deliberately still not asked
+///
+/// The run re-enters under the session's **stored** attribution, never the
+/// caller's. Resume is not a way to run something as yourself; it is a way to
+/// say "pick that back up", and this gate only decides whether you may say it.
 pub async fn handle_resume(
     request: JsonRpcRequest,
     session_manager: Arc<dyn SessionStore>,
+    agents: Option<Arc<AgentRegistry>>,
 ) -> JsonRpcResponse {
     let params: ResumeParams = match parse_params(&request) {
         Ok(p) => p,
         Err(e) => return e,
     };
 
-    let outcome = resume_named_session(&params.session_key, &session_manager).await;
+    let outcome =
+        resume_named_session(&params.session_key, &session_manager, agents.as_ref()).await;
     match &outcome {
         ResumeOutcome::InvalidKey => {
             JsonRpcResponse::error(request.id, INVALID_PARAMS, "Invalid session_key format")
         }
         ResumeOutcome::NotFound => visibility::not_found_response(request.id),
+        // The wording comes from `BuildRunError::AgentForbidden`'s `Display`
+        // so the two faces of one refusal cannot drift into two sentences.
+        ResumeOutcome::AgentForbidden(agent_id) => JsonRpcResponse::error(
+            request.id,
+            PERMISSION_DENIED,
+            BuildRunError::AgentForbidden(agent_id.clone()).to_string(),
+        ),
         ResumeOutcome::Unavailable => JsonRpcResponse::error(
             request.id,
             INTERNAL_ERROR,
@@ -270,6 +364,201 @@ mod tests {
         assert_eq!(
             ResumeOutcome::InvalidKey.to_json("s")["status"],
             "invalid_session_key"
+        );
+        let forbidden = ResumeOutcome::AgentForbidden("ops".to_string()).to_json("s");
+        assert_eq!(forbidden["status"], "agent_forbidden");
+        assert_eq!(
+            forbidden["agent_id"], "ops",
+            "a refusal that does not name the agent leaves the operator guessing \
+             which `allowed_users` list to look at"
+        );
+    }
+
+    // ─── The agent-admission gate ────────────────────────────────────────────
+    //
+    // These go through `resume_named_session` itself, under the same task-local
+    // nesting a real dispatch applies (`server::handler::
+    // dispatch_with_caller_context`), because the gate's whole subject is what
+    // those task-locals hold — calling `caller_may_act_as_agent` directly would
+    // test `agent_admits_user`, which already has its own tests, and would stay
+    // green if this file stopped calling it.
+
+    use crate::gateway::agent_instance::{AgentInstanceConfig, AgentRegistry};
+    use crate::gateway::caller_identity::CALLER_USER;
+    use crate::gateway::session_manager::{SessionManager, SessionManagerConfig};
+    use crate::gateway::session_store::SessionStore;
+    use crate::scope::{with_scope, ScopeAttribution};
+    use tempfile::TempDir;
+
+    /// Mirrors `isolation_acceptance::as_caller` — the P1 scope attribution
+    /// wrapping the P0 identity, both seeded from one caller id, exactly as
+    /// `dispatch_with_caller_context` nests them.
+    async fn as_caller<F, T>(user: &str, fut: F) -> T
+    where
+        F: std::future::Future<Output = T>,
+    {
+        with_scope(
+            Some(ScopeAttribution::personal(user)),
+            CALLER_USER.scope(Some(user.to_string()), fut),
+        )
+        .await
+    }
+
+    /// A session owned by `owner`, on an agent named after the test, plus a
+    /// registry holding that agent with `allowed` as its admission list.
+    ///
+    /// The agent id carries a uuid so two tests in one process cannot collide
+    /// on the shared session-key namespace.
+    async fn fixture(
+        owner: &str,
+        allowed: Option<Vec<String>>,
+    ) -> (TempDir, Arc<dyn SessionStore>, Arc<AgentRegistry>, String) {
+        let temp = TempDir::new().unwrap();
+        let sessions: Arc<dyn SessionStore> = Arc::new(
+            SessionManager::new(SessionManagerConfig {
+                db_path: temp.path().join("sessions.db"),
+                ..Default::default()
+            })
+            .unwrap(),
+        );
+        let agent_id = format!("ops-{}", uuid::Uuid::new_v4().simple());
+        let key = SessionKey::main(agent_id.clone());
+        as_caller(owner, async {
+            sessions.get_or_create(&key).await.unwrap();
+        })
+        .await;
+
+        let registry = Arc::new(AgentRegistry::new());
+        registry
+            .register_config(
+                AgentInstanceConfig {
+                    agent_id: agent_id.clone(),
+                    allowed_users: allowed,
+                    ..Default::default()
+                },
+                sessions.clone(),
+            )
+            .await;
+        (temp, sessions, registry, key.to_key_string())
+    }
+
+    /// The residue this gate was added for, stated as the scenario that
+    /// produces it: an operator removes Alice from `ops`'s `allowed_users`,
+    /// and Alice reaches for the run of her own that was interrupted earlier.
+    ///
+    /// She still passes `session_visible` — it is her session — which is
+    /// precisely why the visibility gate could never have covered this. Before
+    /// 2026-08-10 the answer here was a resumed run under an agent whose
+    /// permissions she no longer holds.
+    #[tokio::test]
+    async fn a_revoked_user_cannot_resume_their_own_interrupted_run() {
+        let (_t, sessions, registry, key) =
+            fixture("u-alice", Some(vec!["u-bob".to_string()])).await;
+
+        let outcome = as_caller(
+            "u-alice",
+            resume_named_session(&key, &sessions, Some(&registry)),
+        )
+        .await;
+
+        assert!(
+            matches!(outcome, ResumeOutcome::AgentForbidden(_)),
+            "a revoked caller must be refused, not resumed; got {outcome:?}"
+        );
+    }
+
+    /// …and the same call by someone still on the list goes through. Without
+    /// this the test above would also pass if the gate refused everybody.
+    ///
+    /// `Unavailable` is what "both gates admitted, the coordinator was asked"
+    /// looks like in a test process: `set_global_resume_coordinator` has
+    /// exactly one caller and it is in the `aleph-server` binary, so no test in
+    /// this crate can publish one.
+    #[tokio::test]
+    async fn a_still_admitted_user_reaches_the_coordinator() {
+        let (_t, sessions, registry, key) =
+            fixture("u-alice", Some(vec!["u-alice".to_string()])).await;
+
+        let outcome = as_caller(
+            "u-alice",
+            resume_named_session(&key, &sessions, Some(&registry)),
+        )
+        .await;
+
+        assert!(
+            matches!(outcome, ResumeOutcome::Unavailable),
+            "an admitted caller must get past the gate; got {outcome:?}"
+        );
+    }
+
+    /// An agent the registry does not know has no admission list to enforce,
+    /// so it admits — the same arm `agent_admits_user` takes for an absent
+    /// list. Refusing here would invent a policy about deleted agents and
+    /// would answer "you are not allowed" to what is really "that agent is
+    /// gone".
+    #[tokio::test]
+    async fn an_unregistered_agent_has_no_list_to_enforce() {
+        let (_t, sessions, _registry, key) = fixture("u-alice", None).await;
+        let empty = Arc::new(AgentRegistry::new());
+
+        let outcome = as_caller(
+            "u-alice",
+            resume_named_session(&key, &sessions, Some(&empty)),
+        )
+        .await;
+
+        assert!(
+            matches!(outcome, ResumeOutcome::Unavailable),
+            "an unknown agent must not be turned into a refusal; got {outcome:?}"
+        );
+    }
+
+    /// `agents: None` is "this server has no registry to ask", not "refuse".
+    /// Pinned because the honest-looking alternative — fail closed when the
+    /// gate cannot run — would take resume away from the Simulated build
+    /// entirely, and the thing the list protects (an agent's
+    /// `tool_permissions`) does not exist there to protect.
+    #[tokio::test]
+    async fn no_registry_means_the_gate_cannot_run_not_that_it_refuses() {
+        let (_t, sessions, _registry, key) =
+            fixture("u-alice", Some(vec!["u-bob".to_string()])).await;
+
+        let outcome = as_caller("u-alice", resume_named_session(&key, &sessions, None)).await;
+
+        assert!(
+            matches!(outcome, ResumeOutcome::Unavailable),
+            "a missing registry must not read as a refusal; got {outcome:?}"
+        );
+    }
+
+    /// The `/v1/admin` surface, reproduced: no `CALLER_USER` scope at all.
+    /// Both gates admit — that is the trust model, and this pins that the
+    /// admission gate did not accidentally become the one predicate in this
+    /// file that fails closed on an unscoped process (which would take cron,
+    /// heartbeat and the CLI's `aleph-server resume` down with it).
+    #[tokio::test]
+    async fn an_unscoped_process_is_admitted_by_both_gates() {
+        let (_t, sessions, registry, key) =
+            fixture("u-alice", Some(vec!["u-bob".to_string()])).await;
+
+        // Deliberately NOT wrapped in `as_caller`.
+        let outcome = resume_named_session(&key, &sessions, Some(&registry)).await;
+
+        assert!(
+            matches!(outcome, ResumeOutcome::Unavailable),
+            "an unscoped caller must be admitted; got {outcome:?}"
+        );
+    }
+
+    /// One wording, two faces. The RPC handler renders its refusal through
+    /// `BuildRunError::AgentForbidden`'s `Display` so `agent.resume` and
+    /// `chat.send` cannot answer the same verdict with two sentences.
+    #[test]
+    fn the_refusal_wording_has_one_source() {
+        let from_run_start = BuildRunError::AgentForbidden("ops".to_string()).to_string();
+        assert!(
+            from_run_start.contains("allowed_users"),
+            "the shared sentence must name the setting the operator has to edit"
         );
     }
 }

@@ -224,7 +224,11 @@ impl AlephHubCatalog {
             // an XSS payload or a multi-MiB string here. An invalid value
             // drops the field rather than rejects the whole sync — a stale
             // freshness signal is less harmful than refusing a valid catalog.
-            generated_at: art.manifest.generated_at.as_deref().and_then(sanitize_generated_at),
+            generated_at: art
+                .manifest
+                .generated_at
+                .as_deref()
+                .and_then(sanitize_generated_at),
         })
     }
 

@@ -50,7 +50,16 @@ async fn resume_session(
     State(state): State<AdminApiState>,
     Json(body): Json<ResumeRequest>,
 ) -> Result<Json<ResumeResponse>, (StatusCode, String)> {
-    let outcome = resume_named_session(&body.session_key, &state.session_store).await;
+    // `None` — no registry, on purpose rather than by omission. This route
+    // carries no `CALLER_USER` (the task-locals are scoped around the WS
+    // `process_request`, not around axum), so `caller_may_act_as_agent` would
+    // be vacuously true even with a registry in hand: the gate is a no-op
+    // here by construction. Threading one in would look like an enforcement
+    // point that never enforces. The route's real gate is the bearer token in
+    // `admin_auth_middleware`, and an operator may act as every agent —
+    // the same reasoning `resume_named_session` records for `session_visible`
+    // on this surface.
+    let outcome = resume_named_session(&body.session_key, &state.session_store, None).await;
     match outcome {
         ResumeOutcome::InvalidKey => Err((
             StatusCode::BAD_REQUEST,
@@ -59,6 +68,16 @@ async fn resume_session(
         ResumeOutcome::NotFound => Err((
             StatusCode::NOT_FOUND,
             format!("no such session: {}", body.session_key),
+        )),
+        // Unreachable from this route today — the gate above is a no-op here
+        // for the reason given at the call — but rendered rather than folded
+        // into another arm. Folding it would mean this transport silently
+        // reported a permission verdict as a 404 the day it *did* become
+        // reachable (a future scoped admin identity), and that shape is a
+        // puzzle, not a refusal.
+        ResumeOutcome::AgentForbidden(ref agent_id) => Err((
+            StatusCode::FORBIDDEN,
+            format!("not authorized to run as agent '{agent_id}'"),
         )),
         ResumeOutcome::Unavailable => Err((
             StatusCode::SERVICE_UNAVAILABLE,
