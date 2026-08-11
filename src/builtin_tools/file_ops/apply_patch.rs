@@ -84,6 +84,20 @@ pub struct ApplyPatchOutput {
     pub files: Vec<FileOutcome>,
 }
 
+/// Hard upper bound on the patch envelope (UTF-8 bytes). The whole envelope is
+/// parsed and held in memory before any write, so an unbounded input is a
+/// memory-exhaustion vector the model can be steered into. 4 MiB is well over
+/// any legitimate V4A patch (the realistic ceiling is single-digit KB) while
+/// still leaving room for large refactors. The error message points the model
+/// at `file_write` / `file_edit` for bulk rewrites that genuinely need more.
+const MAX_PATCH_BYTES: usize = 4 * 1024 * 1024;
+
+/// Maximum number of file ops (Add/Update/Delete headers) in a single envelope.
+/// Each op is materialised into a `PatchOp` + body before commit; an
+/// unbounded count lets one envelope hold a million Add ops and balloon
+/// resident memory. 500 is well past anything a legitimate refactor needs.
+const MAX_PATCH_OPS: usize = 500;
+
 /// The `apply_patch` builtin tool.
 pub struct ApplyPatchTool {
     denied_paths: Vec<String>,
@@ -153,6 +167,28 @@ make several coordinated edits at once."#;
         );
 
         // Parse the whole envelope before touching the filesystem.
+        // Bound the input first: parse_patch builds a `Vec<PatchOp>` plus per-op
+        // `lines: Vec<Line>` entirely in memory, so a runaway envelope is a
+        // memory-exhaustion vector the model can be steered into.
+        if args.patch.len() > MAX_PATCH_BYTES {
+            return Err(ToolError::InvalidArgs(format!(
+                "apply_patch envelope is {} bytes; the cap is {MAX_PATCH_BYTES} bytes. \
+                 Split into multiple `apply_patch` calls or use `file_write`/`file_edit` for bulk rewrites.",
+                args.patch.len()
+            )));
+        }
+        let op_headers = args
+            .patch
+            .matches("\n*** Add File:")
+            .count()
+            + args.patch.matches("\n*** Update File:").count()
+            + args.patch.matches("\n*** Delete File:").count();
+        if op_headers > MAX_PATCH_OPS {
+            return Err(ToolError::InvalidArgs(format!(
+                "apply_patch envelope declares {op_headers} file ops; the cap is \
+                 {MAX_PATCH_OPS}. Split the change into multiple envelopes."
+            )));
+        }
         let ops = parse_patch(&args.patch).map_err(ToolError::InvalidArgs)?;
 
         let output_dir = self.resolve_output_dir().await;

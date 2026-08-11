@@ -10,6 +10,14 @@ use crate::error::Result;
 use crate::sync_primitives::Arc;
 use crate::tools::AlephTool;
 
+/// Hard upper bound on the JavaScript payload that `browser_evaluate` will
+/// forward to the backend. `browser_evaluate` is the most powerful browser
+/// action (arbitrary JS in the page context), so even with an approval gate
+/// the input must be size-bounded: a multi-MB script blocks the backend's
+/// serializer or starves the browser process. 64 KiB is generous for any
+/// plausible DOM query / automation snippet.
+const MAX_EVAL_SCRIPT_CHARS: usize = 64 * 1024;
+
 /// Arguments for the `browser_evaluate` tool.
 #[derive(Debug, Serialize, Deserialize, JsonSchema)]
 pub struct BrowserEvaluateArgs {
@@ -61,6 +69,21 @@ impl AlephTool for BrowserEvaluateTool {
     type Output = BrowserEvaluateOutput;
 
     async fn call(&self, args: Self::Args) -> Result<Self::Output> {
+        // Size-bounded before the approval check so a payload-limit refusal is
+        // not logged as "user approved a 50 MB script". The cap is named in the
+        // message so the model can split the work into smaller evals.
+        if args.script.chars().count() > MAX_EVAL_SCRIPT_CHARS {
+            return Ok(BrowserEvaluateOutput {
+                success: false,
+                result: None,
+                message: Some(format!(
+                    "browser_evaluate script is {} chars; the cap is {MAX_EVAL_SCRIPT_CHARS} \
+                     chars. Split the script into smaller evals or use `browser_snapshot` / \
+                     targeted actions for bulk DOM work.",
+                    args.script.chars().count()
+                )),
+            });
+        }
         if let Some(message) = super::check_browser_approval(
             self.approval_policy.as_ref(),
             ActionType::BrowserEvaluate,

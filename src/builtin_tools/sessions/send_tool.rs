@@ -66,6 +66,13 @@ const fn default_timeout() -> u32 {
     30
 }
 
+/// Hard upper bound on the message body for `session_send`. The body is
+/// forwarded into the receiving runner's prompt, persisted into that session's
+/// history, and replayed on every subsequent read. 64 KiB is well past any
+/// realistic cross-session prompt (the practical ceiling is single-digit KB)
+/// while still leaving headroom for inline code attachments.
+const MAX_CROSS_SESSION_MESSAGE_CHARS: usize = 64 * 1024;
+
 /// Status of the `sessions_send` operation
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
@@ -236,6 +243,20 @@ impl SessionsSendTool {
     /// Execute the tool (internal implementation)
     async fn call_impl(&self, args: SessionsSendArgs) -> SessionsSendOutput {
         let run_id = uuid::Uuid::new_v4().to_string();
+
+        // Bound the message body at the dispatcher: a multi-MB cross-session
+        // message blocks the gateway and the receiving runner, and there is no
+        // downstream reader that wants more than a few KB of prompt.
+        if args.message.len() > MAX_CROSS_SESSION_MESSAGE_CHARS {
+            return SessionsSendOutput::error(
+                run_id,
+                format!(
+                    "session_send message is {} chars; the cap is {MAX_CROSS_SESSION_MESSAGE_CHARS} \
+                     chars. Split the message or attach large payloads as artifacts.",
+                    args.message.len()
+                ),
+            );
+        }
 
         notify_tool_start(
             Self::NAME,
