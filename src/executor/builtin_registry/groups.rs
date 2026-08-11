@@ -359,4 +359,42 @@ mod tests {
             }
         }
     }
+
+    /// Reverse of the catalog-only check, but across BOTH the
+    /// `BUILTIN_TOOL_DEFINITIONS` table AND `REGISTRY_ONLY_DESCRIPTIONS`
+    /// (the catalog is no longer the whole of what the model sees; ten
+    /// tools reach it via `builder/core_tools.rs` alone and must still
+    /// appear in a group, or the Panel never surfaces them).
+    ///
+    /// Named per-tool, not per-missing-line, so a future orphan is
+    /// easy to triage.
+    #[test]
+    fn every_accounted_tool_appears_in_some_group() {
+        let grouped: std::collections::HashSet<&str> = TOOL_CATEGORIES
+            .iter()
+            .flat_map(|g| g.tools.iter().copied())
+            .collect();
+        let mut orphans = Vec::new();
+        for def in BUILTIN_TOOL_DEFINITIONS.iter() {
+            if !grouped.contains(def.name) {
+                orphans.push(def.name.to_string());
+            }
+        }
+        for (name, _) in super::super::definitions::REGISTRY_ONLY_DESCRIPTIONS
+            .iter()
+            .copied()
+        {
+            // REGISTRY_ONLY_DESCRIPTIONS is gated `#[cfg(test)]` so it
+            // is not exported under the production binary — this test
+            // needs the dev profile to compile, which is fine for a
+            // test-only constant.
+            if !grouped.contains(name) {
+                orphans.push(name.to_string());
+            }
+        }
+        assert!(
+            orphans.is_empty(),
+            "these tools reach the model but are listed in no group: {orphans:?}"
+        );
+    }
 }

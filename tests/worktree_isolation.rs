@@ -212,6 +212,8 @@ async fn h_t1_worktree_isolation_happy_path() {
         model: None,
         timeout_secs: 30,
         cancel: CancellationToken::new(),
+        spawn_context: None,
+        fork_source: None,
         isolation: Some(IsolationMode::Worktree),
         strategy: None,
         session_mode: None,

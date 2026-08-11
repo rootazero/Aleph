@@ -222,6 +222,16 @@ impl ChannelApprovalBridge {
         action: &crate::sandbox::exec_approval::ApprovalAction,
         approval_id: &str,
     ) -> Option<bool> {
+        // Truncate `action.summary` to the same shape the manager's
+        // `display_line` uses, so the text-fallback path can never overflow
+        // a channel's message limit (Telegram's is 4096 chars; a 4 KB
+        // command summary would silently truncate or refuse to send).
+        const MAX_SUMMARY_CHARS: usize = 1000;
+        let mut summary: String = action.summary.chars().take(MAX_SUMMARY_CHARS).collect();
+        if action.summary.chars().count() > MAX_SUMMARY_CHARS {
+            summary.push('…');
+        }
+        let _ = approval_id; // already used by the caller for register_pending; not echoed in the fallback text
         let tool_name = action.tool_name.as_str();
         let reason = action.reason.as_str();
         let channel = self.registry.get(channel_id).await?;
@@ -233,14 +243,15 @@ impl ChannelApprovalBridge {
         let Some(capability) = capability else {
             // The action summary is the point of the prompt: `/approve` on a
             // bare tool name approves whatever the model happened to pass.
+            // The truncated form keeps the fallback under every channel's
+            // message limit (Telegram's is 4096 chars).
             //
             // The reply menu is built from the same `allowed_decisions` the
             // keyboard path uses. A plain-text channel that kept a fixed menu
             // would be the third copy of "which tiers exist" — and the one that
             // teaches the user a word (`always`) the resolver would narrow.
             let text = format!(
-                "⚠️ 工具 `{tool_name}` 需要你的授权。\n```\n{}\n```\n{reason}\n\n{}",
-                action.summary,
+                "⚠️ 工具 `{tool_name}` 需要你的授权。\n```\n{summary}\n```\n{reason}\n\n{}",
                 plain_text_menu(&action.allowed_decisions)
             );
             let ch = channel.read().await;

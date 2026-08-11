@@ -60,6 +60,85 @@ pub(super) fn find_steering_target_id(
     })
 }
 
+/// The running sibling that owns this session's slot, read out of
+/// `active_runs` **once**.
+///
+/// Every arm of the busy-input decision needs something from the same run —
+/// `for_shared_room` needs its author, `Interrupt` needs its id and its
+/// admission instant, `Steer` needs its model and workspace to compare
+/// against. Those used to be three separate `active_runs.read().await`
+/// acquisitions inside one decision, so the mode could be chosen against one
+/// snapshot and applied against another; the widest of those windows spanned
+/// the whole of `try_inject_steering`'s first log read. One read, one snapshot,
+/// one decision.
+pub(super) struct BusySibling {
+    /// The run to cancel if this turns out to be an `Interrupt`.
+    pub(super) run_id: String,
+    /// The sibling's request metadata — `for_shared_room` reads its author out
+    /// of this to decide whether the incoming turn has authority over it.
+    pub(super) metadata: HashMap<String, String>,
+    /// Locked in for the sibling's whole run: a steer cannot change it, so a
+    /// message asking for a different one must be deferred rather than folded.
+    pub(super) model_override: Option<crate::gateway::model_override::ModelOverride>,
+    /// Same argument, with file-writing consequences.
+    pub(super) workspace_override: Option<std::path::PathBuf>,
+    /// When the gate admitted it, on the monotonic clock. Compared against
+    /// [`crate::gateway::busy_queue::waiting_since`] — see
+    /// [`interrupt_targets_an_unseen_run`].
+    pub(super) admitted_at: std::time::Instant,
+}
+
+/// Resolve the busy sibling for `session_key`, excluding `new_run_id` itself.
+///
+/// The single `active_runs` read behind the whole busy-input decision; see
+/// [`BusySibling`].
+pub(super) async fn find_busy_sibling(
+    active_runs: &RwLock<HashMap<String, ActiveRun>>,
+    new_run_id: &str,
+    session_key: &SessionKey,
+) -> Option<BusySibling> {
+    let runs = active_runs.read().await;
+    let id = find_steering_target_id(&runs, new_run_id, session_key)?;
+    let run = runs.get(&id)?;
+    Some(BusySibling {
+        run_id: id,
+        metadata: run.request.metadata.clone(),
+        model_override: run.request.model_override.clone(),
+        workspace_override: run.request.workspace_override.clone(),
+        admitted_at: run.admitted_at,
+    })
+}
+
+/// Whether an `Interrupt`-mode message would be cancelling a run that started
+/// **after** the message began waiting — i.e. a run its author never saw.
+///
+/// `Interrupt` means "supersede the task that was running when I sent this".
+/// Since [`crate::gateway::busy_queue::mark_admitted`] let followers reach the
+/// engine mid-run, a *burst* of interrupt-mode messages read it instead as
+/// "supersede whatever is running when my turn comes round" — and by then that
+/// is the run the message immediately ahead of me just became. Each queued
+/// message killed its own predecessor milliseconds after admission, so an
+/// N-message burst left only the last alive and destroyed N-1 turns of work
+/// that no user had asked to stop. (codex reaches the same end state from the
+/// other side: a replacing task aborts the previous one exactly once, with
+/// `TurnAbortReason::Replaced`, and the rest queue.)
+///
+/// A message with no ticket — a run that never came through a lane, or one the
+/// lane already admitted — is unconstrained: `waiting_since` is `None` and a
+/// genuine fresh interrupt still cancels. That is the case this predicate must
+/// NOT catch, and it is why the cheaper "is the target the run my lane admitted
+/// most recently?" is wrong: it also suppresses the real interrupt that arrives
+/// while a healthy sibling runs, which is the entire point of the mode.
+///
+/// Pure, so the rule is unit-testable without an engine.
+#[must_use]
+pub(super) fn interrupt_targets_an_unseen_run(
+    sibling_admitted_at: std::time::Instant,
+    waiting_since: Option<std::time::Instant>,
+) -> bool {
+    waiting_since.is_some_and(|since| sibling_admitted_at > since)
+}
+
 /// Decide whether `session_key` already has *another* `Running` sibling run.
 /// Thin boolean wrapper over [`find_steering_target_id`] for the `Steer` path,
 /// which does not need the id.
@@ -151,33 +230,6 @@ pub(super) fn has_steering_content(request: &RunRequest) -> bool {
     !request.input.trim().is_empty() || !request.attachments.is_empty()
 }
 
-/// Render the user-visible session text for a steering interjection: the raw
-/// input, plus a text marker for any attachment.
-///
-/// This is NOT byte-identical to how `execute()` stores a first message — that
-/// path stores the *raw* input as text and carries attachments as real media
-/// `ContentBlock`s (`FlowInput::Multimodal`). A steering event has empty
-/// `blocks`, so a marker is the only way to represent an attachment in text.
-/// In practice `try_inject_steering` now defers attachment-bearing steers to the
-/// busy queue, so the sole production caller reaches here with plain text; the
-/// markers remain a fallback for any direct caller. Do NOT "restore parity" by
-/// copying these markers into `execute()` — the normal path deliberately keeps
-/// the stored message and the derived session title equal to the raw input.
-pub(super) fn render_user_session_text(request: &RunRequest) -> String {
-    let mut text = request.input.clone();
-    for att in &request.attachments {
-        let label = att.filename.as_deref().unwrap_or("file");
-        if att.mime_type.starts_with("image/") {
-            text.push_str(&format!("\n[Image attached: {}]", att.mime_type));
-        } else if att.mime_type.starts_with("audio/") {
-            text.push_str(&format!("\n[Audio attached: {}]", att.mime_type));
-        } else {
-            text.push_str(&format!("\n[Attachment: {} ({})]", label, att.mime_type));
-        }
-    }
-    text
-}
-
 /// Prepended to a steering message when the target session has an active
 /// scratchpad execution list, so the model reconciles its task list before
 /// continuing. The model decides append / insert / reprioritize (R7 — the
@@ -205,6 +257,9 @@ pub(super) fn apply_reconcile_preamble(text: String, has_active_scratchpad: bool
 /// unbounded `UserMessage` events to the live log, bloating the very next
 /// prompt. Past the cap the injection is rejected so the busy wait lane
 /// redelivers the message once the burst drains — backpressure, never a drop.
+/// "Once the burst drains" is [`wake_lane_if_burst_drained`], not the lane's
+/// fallback tick: [`defer_for_backpressure`] marks the ticket on the way out so
+/// the assistant turn that empties the burst can find it.
 ///
 /// This constant is the single source for the `[execution] max_pending_steering`
 /// default (see `ExecutionEngineConfig::max_pending_steering`); the effective
@@ -235,6 +290,63 @@ pub(super) fn count_pending_steering(events: &[SessionEventRecord]) -> usize {
         .iter()
         .filter(|r| matches!(&r.event, SessionEvent::UserMessage { synthetic, .. } if !*synthetic))
         .count()
+}
+
+/// Does appending `event` to the session log drain the un-consumed steering
+/// burst — i.e. reset [`count_pending_steering`] to zero?
+///
+/// Derived from that function's boundary rather than restated: it counts the
+/// non-synthetic user messages *after the last assistant message*, so an
+/// assistant message is exactly the event that empties the count. Whoever moves
+/// that boundary has to move this with it, and
+/// `the_drain_predicate_agrees_with_the_count_it_resets` fails if they drift.
+fn drains_steering_burst(event: &SessionEvent) -> bool {
+    matches!(event, SessionEvent::AssistantMessage { .. })
+}
+
+/// Wake `session_key`'s busy lane when `event` drained its steering burst.
+///
+/// The lane's other wake edges are both about the run **slot**
+/// (`notify_slot_free` on release, `mark_admitted` on claim), and neither fires
+/// when the running loop merely answers the burst it is already carrying. So a
+/// steer refused by [`try_inject_steering`]'s `pending >= max_pending` branch —
+/// which this module documents as "the queue redelivers once the burst
+/// drains" — actually waited out `wake_fallback_secs` (30 s by default). That
+/// tick is the missed-signal safety net, not the mechanism; this is the
+/// mechanism.
+///
+/// Called from the gateway's one "an event was appended" seam
+/// (`session_projector::MessageProjector`'s observer), so it covers every
+/// producer of an assistant turn — harness run, fast path, simple engine —
+/// rather than whichever one happened to be in view.
+pub(crate) fn wake_lane_if_burst_drained(session_key: &str, event: &SessionEvent) {
+    if drains_steering_burst(event) {
+        crate::gateway::busy_queue::notify_burst_drained(session_key);
+    }
+}
+
+/// Refuse a steer because the running loop's un-consumed burst is at the cap,
+/// telling the lane *why* on the way out. Always returns `false` — the
+/// "deferred to the busy queue" answer [`try_inject_steering`] gives its
+/// caller.
+///
+/// Split out of that branch so the mark is reachable from a test: the branch
+/// itself sits behind a live `Orchestrator` and a real session read, and a wake
+/// edge whose producer is only exercised in production is how the first version
+/// of this shipped without one at all.
+///
+/// A request that never took a ticket (loop tick, goal continuation, delegated
+/// child, the OpenAI-compat surface) matches nothing in the lane and the mark
+/// is a no-op — the same fail-open posture as `busy_queue::waiting_since`.
+fn defer_for_backpressure(session_key: &str, run_id: &str, pending: usize, cap: usize) -> bool {
+    crate::gateway::busy_queue::mark_awaiting_burst_drain(session_key, run_id);
+    tracing::warn!(
+        session = %session_key,
+        pending,
+        cap,
+        "mid-loop steering: pending burst at cap; deferring to busy-queue backpressure",
+    );
+    false
 }
 
 /// How far back [`read_steering_events`] reads before falling back to the whole
@@ -418,7 +530,7 @@ pub(super) async fn build_steering_rescue_request(
 pub(super) async fn try_inject_steering(
     enabled: bool,
     max_pending: usize,
-    active_runs: &RwLock<HashMap<String, ActiveRun>>,
+    sibling: &BusySibling,
     orchestrator: &OnceLock<Arc<Orchestrator>>,
     request: &RunRequest,
     new_run_id: &str,
@@ -443,26 +555,12 @@ pub(super) async fn try_inject_steering(
         return false;
     }
 
-    let (target_model, target_workspace) = {
-        let runs = active_runs.read().await;
-        match find_steering_target_id(&runs, new_run_id, &request.session_key) {
-            Some(id) => match runs.get(&id) {
-                Some(r) => (
-                    r.request.model_override.clone(),
-                    r.request.workspace_override.clone(),
-                ),
-                None => return false,
-            },
-            None => return false,
-        }
-    };
-
     // The sibling is already committed to its model for this run; a steer cannot
     // change it. Folding in a message that asked for a different one would apply
     // the text and silently drop the directive — the composer's model pill would
     // read `opus` while the answer came from `sonnet`, with no banner and no
     // error. Defer instead, so the request gets the model it asked for.
-    if request.model_override != target_model {
+    if request.model_override != sibling.model_override {
         return false;
     }
 
@@ -474,7 +572,7 @@ pub(super) async fn try_inject_steering(
     // project-room turn is still running, or the reverse — would silently
     // execute in the other directory, which is the same class of lie as the
     // model pill and one with file-writing consequences.
-    if request.workspace_override != target_workspace {
+    if request.workspace_override != sibling.workspace_override {
         return false;
     }
 
@@ -499,13 +597,12 @@ pub(super) async fn try_inject_steering(
     // busy wait lane redelivers once the loop drains the burst or goes idle —
     // backpressure against a flooding channel, not a drop.
     if pending >= max_pending {
-        tracing::warn!(
-            session = %request.session_key.to_key_string(),
+        return defer_for_backpressure(
+            &request.session_key.to_key_string(),
+            new_run_id,
             pending,
-            cap = max_pending,
-            "mid-loop steering: pending burst at cap; deferring to busy-queue backpressure",
+            max_pending,
         );
-        return false;
     }
 
     // If this session is driving a scratchpad execution list, tell the model to
@@ -519,7 +616,15 @@ pub(super) async fn try_inject_steering(
     let has_active_scratchpad = pending == 0
         && crate::builtin_tools::scratchpad_registry::active(&request.session_key.to_key_string())
             .is_some();
-    let text = apply_reconcile_preamble(render_user_session_text(request), has_active_scratchpad);
+    // The raw input, and nothing derived from it. `carries_more_than_text`
+    // above has already deferred every attachment-bearing request to the lane,
+    // so there is no second content channel left to represent here — the
+    // attachment-marker renderer this line used to call had no reachable
+    // production input and was cut (P6). Do NOT reintroduce markers: the normal
+    // path deliberately keeps the stored message and the derived session title
+    // equal to the raw input, and a marker would make a steered turn read
+    // differently from the same text sent while idle.
+    let text = apply_reconcile_preamble(request.input.clone(), has_active_scratchpad);
     let event = SessionEvent::UserMessage {
         turn_id: uuid::Uuid::new_v4(),
         content: MessageContent {
@@ -689,6 +794,7 @@ mod tests {
                 request: run_request(session, "prior"),
                 state,
                 started_at: chrono::Utc::now(),
+                admitted_at: std::time::Instant::now(),
                 completed_at: None,
                 steps_completed: 0,
                 current_tool: None,
@@ -765,6 +871,92 @@ mod tests {
         ));
     }
 
+    // ---- interrupt_targets_an_unseen_run (burst self-annihilation) ----
+
+    #[test]
+    fn a_fresh_interrupt_supersedes_the_run_that_was_already_going() {
+        let admitted = std::time::Instant::now();
+        let arrived_later = admitted + std::time::Duration::from_millis(1);
+        assert!(
+            !interrupt_targets_an_unseen_run(admitted, Some(arrived_later)),
+            "the run was already up when this message was written — that is \
+             exactly what Interrupt means"
+        );
+    }
+
+    #[test]
+    fn an_interrupt_never_supersedes_a_run_admitted_after_it_started_waiting() {
+        let arrived = std::time::Instant::now();
+        let admitted_later = arrived + std::time::Duration::from_millis(1);
+        assert!(
+            interrupt_targets_an_unseen_run(admitted_later, Some(arrived)),
+            "this is the predecessor's run: it did not exist when the message \
+             was written, so cancelling it destroys work nobody asked to stop"
+        );
+    }
+
+    #[test]
+    fn a_message_that_never_queued_is_unconstrained() {
+        // Producers with no lane ticket — the OpenAI-compat surface, a loop
+        // tick, a delegated child — keep the pre-existing behaviour exactly.
+        // Getting this arm wrong would disable Interrupt outright rather than
+        // fix the burst.
+        assert!(!interrupt_targets_an_unseen_run(
+            std::time::Instant::now(),
+            None
+        ));
+    }
+
+    /// The composition, against the real lane: A and B arrive as a burst, A is
+    /// admitted, and B must NOT read A's brand-new run as its interrupt target.
+    /// Then a genuinely later message does.
+    ///
+    /// Before this rule, every message in an interrupt-mode burst killed its
+    /// own predecessor milliseconds after the lane admitted it, so N messages
+    /// left one survivor and N-1 destroyed turns.
+    #[test]
+    fn a_burst_of_interrupts_does_not_eat_itself() {
+        use crate::gateway::busy_queue;
+        let key = "agent:burst";
+
+        // R0 was already running when the burst arrived.
+        let r0_admitted = std::time::Instant::now();
+        std::thread::sleep(std::time::Duration::from_millis(2));
+
+        let a = busy_queue::register(key, 8, "run-a").expect("lane accepts A");
+        let b = busy_queue::register(key, 8, "run-b").expect("lane accepts B");
+
+        // A supersedes R0 — the one cancellation the burst is entitled to.
+        assert!(!interrupt_targets_an_unseen_run(
+            r0_admitted,
+            busy_queue::waiting_since(key, "run-a")
+        ));
+
+        // A is admitted and becomes the live run.
+        busy_queue::mark_admitted(key, "run-a");
+        std::thread::sleep(std::time::Duration::from_millis(2));
+        let a_admitted = std::time::Instant::now();
+
+        // B, still waiting since before A ever ran, must leave it alone.
+        assert!(
+            interrupt_targets_an_unseen_run(a_admitted, busy_queue::waiting_since(key, "run-b")),
+            "B was queued behind A; A's run is not the task B meant to interrupt"
+        );
+
+        // A message that arrives now, with A visibly running, still interrupts.
+        std::thread::sleep(std::time::Duration::from_millis(2));
+        let c = busy_queue::register(key, 8, "run-c").expect("lane accepts C");
+        assert!(
+            !interrupt_targets_an_unseen_run(a_admitted, busy_queue::waiting_since(key, "run-c")),
+            "suppressing this one would be the cheap-and-wrong rule: it is the \
+             genuine mid-run interrupt the mode exists for"
+        );
+
+        drop(a);
+        drop(b);
+        drop(c);
+    }
+
     #[test]
     fn preamble_added_only_when_scratchpad_active() {
         let with = apply_reconcile_preamble("do X".to_string(), true);
@@ -794,23 +986,6 @@ mod tests {
             data: None,
         }];
         assert!(has_steering_content(&req));
-    }
-
-    #[test]
-    fn render_appends_attachment_markers() {
-        let mut req = run_request("s1", "hello");
-        req.attachments = vec![Attachment {
-            id: "att-1".to_string(),
-            mime_type: "image/png".to_string(),
-            filename: Some("a.png".to_string()),
-            size: None,
-            url: None,
-            path: None,
-            data: None,
-        }];
-        let text = render_user_session_text(&req);
-        assert!(text.starts_with("hello"));
-        assert!(text.contains("[Image attached: image/png]"));
     }
 
     // ---- count_pending_steering (coalesce / bound predicate) ----
@@ -890,6 +1065,70 @@ mod tests {
             rec_user("auto", true),
         ];
         assert_eq!(count_pending_steering(&events), 0);
+    }
+
+    /// The wake edge's predicate and the count it exists to reset have to agree.
+    /// Deliberately not a second `matches!` (that would restate
+    /// `drains_steering_burst`, and restatements agree with anything): build a
+    /// real burst, append the event the predicate calls a drain, and assert the
+    /// COUNT goes to zero. Move `count_pending_steering`'s boundary — to a
+    /// prompt watermark, say — without moving the predicate and this fails.
+    #[test]
+    fn the_drain_predicate_agrees_with_the_count_it_resets() {
+        let mut events = vec![rec_user("task", false), rec_assistant("turn-1")];
+        for i in 0..3 {
+            events.push(rec_user(&format!("steer-{i}"), false));
+        }
+        assert_eq!(count_pending_steering(&events), 3);
+
+        let drain = rec_assistant("turn-2");
+        assert!(drains_steering_burst(&drain.event));
+        events.push(drain);
+        assert_eq!(
+            count_pending_steering(&events),
+            0,
+            "the event the wake edge fires on must be the one that empties the burst"
+        );
+
+        // The counter-example, so a predicate that answered `true` for
+        // everything (waking the lane on every tool output) fails here too.
+        let not_a_drain = rec_user("steer-4", false);
+        assert!(!drains_steering_burst(&not_a_drain.event));
+        events.push(not_a_drain);
+        assert_eq!(count_pending_steering(&events), 1);
+    }
+
+    /// The producer half of that edge. `try_inject_steering`'s cap branch is
+    /// unreachable without a live `Orchestrator`, so the mark it leaves behind
+    /// is asserted through the helper it delegates to — and asserted by its
+    /// EFFECT: the lane wakes a waiter it would otherwise ignore. Drop the
+    /// `mark_awaiting_burst_drain` call and this goes red.
+    #[tokio::test]
+    async fn a_backpressure_defer_marks_the_ticket_the_drain_edge_looks_for() {
+        use crate::gateway::busy_queue;
+        let key = "steer-test-defer-marks";
+        let ticket = busy_queue::register(key, 8, "steer-defer-run").expect("lane accepts it");
+        let wake = ticket.wake_handle();
+        let parked = wake.notified();
+        tokio::pin!(parked);
+
+        // Unmarked, the drain edge deliberately ignores this lane.
+        busy_queue::notify_burst_drained(key);
+        assert!(
+            tokio::time::timeout(std::time::Duration::from_millis(10), &mut parked)
+                .await
+                .is_err(),
+            "a lane with no backpressured waiter must not wake on an assistant turn"
+        );
+
+        assert!(
+            !defer_for_backpressure(key, "steer-defer-run", 16, 16),
+            "deferring must report `not injected` to try_inject_steering"
+        );
+        busy_queue::notify_burst_drained(key);
+        tokio::time::timeout(std::time::Duration::from_millis(500), &mut parked)
+            .await
+            .expect("after the defer, the drained burst must wake the message it deferred");
     }
 
     #[test]

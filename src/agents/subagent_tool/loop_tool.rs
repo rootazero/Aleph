@@ -30,7 +30,7 @@ use super::SubagentTool;
 #[async_trait]
 impl LoopTool for SubagentTool {
     fn name(&self) -> &str {
-        "subagent"
+        super::SUBAGENT_TOOL_NAME
     }
 
     fn description(&self) -> &str {
@@ -127,7 +127,17 @@ impl LoopTool for SubagentTool {
                 },
                 "context_summary": {
                     "type": "string",
-                    "description": "A summary of the parent agent's context to pass to the sub-agent."
+                    "description": "A summary of the parent agent's context. Delivered only under context='summary'; otherwise the task says it was dropped."
+                },
+                "context": {
+                    "type": "string",
+                    "enum": ["isolated", "summary", "fork"],
+                    "description": "Where the sub-agent starts from; omit for the target agent's default. 'isolated' = task only — use for review/verification, since your account of your own work is the most biasing thing you can hand a checker. 'summary' = your 'context_summary' is prefixed. 'fork' = a verbatim copy of this conversation's recent turns, so it sees what happened rather than your description of it, and a fan-out of forked children shares one cached prompt prefix instead of paying per child. Fork inherits your framing — do not fork a reviewer."
+                },
+                "fork_turns": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "description": "With context='fork': how many of the most recent complete turns to carry. Omit to carry as many as the child's context budget allows."
                 },
                 "request_id": {
                     "type": "string",
@@ -703,6 +713,56 @@ impl LoopTool for SubagentTool {
             SubagentAction::Run(run_args) => run_args,
         };
 
+        // `context=fork` — capture the parent transcript ONCE, here, before any
+        // branch. Every child of this call then forks the same instant.
+        //
+        // Doing it per child would break the mode two ways, both silent: a
+        // background child detaches and would read the log after the parent had
+        // moved on (forking a future that did not exist at delegation time),
+        // and a fan-out's K children would each get a different transcript, so
+        // K different prompt prefixes — K full-price cache writes instead of
+        // one write and K−1 reads, which is the entire saving the mode exists
+        // for. See `subagent_spawner::fork::ForkSource`.
+        let fork_source = if args.spawn_context.is_some_and(|c| c.is_fork()) {
+            let parent = self
+                .parent_session_id
+                .as_deref()
+                .and_then(crate::agents::subagent_spawner::parent_session_id_of);
+            match parent {
+                Some(id) => {
+                    match crate::agents::subagent_spawner::fork::snapshot(
+                        self.session.as_ref(),
+                        &id,
+                    )
+                    .await
+                    {
+                        Ok(src) => Some(src),
+                        Err(e) => {
+                            return ToolResult::Error {
+                                error: e,
+                                retryable: false,
+                            }
+                        }
+                    }
+                }
+                None => {
+                    // Refuse rather than degrade. A caller that asked to fork
+                    // and got an isolated child would receive an answer formed
+                    // without the context it believed it supplied, with nothing
+                    // in the result saying so.
+                    return ToolResult::Error {
+                        error: "context=\"fork\" needs a parent conversation to fork from, and \
+                                this run has none (cron / webhook / nested spawn). Use \
+                                context=\"isolated\" or context=\"summary\"."
+                            .to_string(),
+                        retryable: false,
+                    };
+                }
+            }
+        } else {
+            None
+        };
+
         // MoA shorthand: `proposer_models` replicates the top-level `task`
         // across models as parallel proposers (same prompt, different model —
         // the classic Mixture-of-Agents shape). Explicit `batch_tasks` always
@@ -809,7 +869,11 @@ impl LoopTool for SubagentTool {
                         let rid = self.spawn_background(
                             agent_def,
                             task,
-                            args.context_summary.clone(),
+                            super::spawn::StartingContext {
+                                summary: args.context_summary.clone(),
+                                mode: args.spawn_context,
+                                source: fork_source.clone(),
+                            },
                             model,
                             timeout,
                             child_chain.clone(),
@@ -917,6 +981,8 @@ impl LoopTool for SubagentTool {
                         agent_def,
                         task,
                         context_summary: args.context_summary.clone(),
+                        spawn_context: args.spawn_context,
+                        fork_source: fork_source.clone(),
                         model,
                         timeout_secs: timeout,
                         // Batch legs deliver inline; no id outlives the call.
@@ -1117,6 +1183,15 @@ impl LoopTool for SubagentTool {
                         agent_def: aggregator_def,
                         task: synthesis_prompt,
                         context_summary: args.context_summary.clone(),
+                        // The reduce inherits the call's context choice like
+                        // every other leg. Honouring `isolated` here matters
+                        // most: an aggregator that quietly reads the parent's
+                        // summary while the proposers were kept clean would
+                        // re-introduce, at the one step whose output the caller
+                        // actually keeps, exactly the framing the caller asked
+                        // to exclude.
+                        spawn_context: args.spawn_context,
+                        fork_source: fork_source.clone(),
                         model: args.aggregator_model.clone().or_else(|| args.model.clone()),
                         // W19 ① — the reduce is the `+1` serial round the share
                         // was divided by; it gets one round, same as a proposer.
@@ -1280,7 +1355,11 @@ impl LoopTool for SubagentTool {
             let request_id = self.spawn_background(
                 agent_def,
                 args.task.clone(),
-                args.context_summary,
+                super::spawn::StartingContext {
+                    summary: args.context_summary,
+                    mode: args.spawn_context,
+                    source: fork_source,
+                },
                 args.model,
                 args.timeout_secs,
                 child_chain,
@@ -1300,6 +1379,8 @@ impl LoopTool for SubagentTool {
                 agent_def,
                 task: args.task.clone(),
                 context_summary: args.context_summary,
+                spawn_context: args.spawn_context,
+                fork_source: fork_source.clone(),
                 model: args.model,
                 timeout_secs: args.timeout_secs,
                 // Foreground: the result is returned to the model in this very

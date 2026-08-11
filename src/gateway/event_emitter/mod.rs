@@ -183,6 +183,12 @@ pub trait EventEmitter: Send + Sync {
                 seq,
                 error: error.to_string(),
                 error_code: error_code.map(|s| s.to_string()),
+                // This helper only ever knows a run id, and every caller of it
+                // is post-admission — the run's own `RunAccepted` already
+                // seeded the delivery filter. Only a producer whose run never
+                // reached the engine has to name its session; see
+                // `busy_queue::spawn_queued_run`.
+                session_key: None,
             })
             .await
         {

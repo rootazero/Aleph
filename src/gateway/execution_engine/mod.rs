@@ -51,6 +51,7 @@ pub use engine::{ContinuationDeps, ExecutionEngine};
 pub(crate) use scratchpad_progress_sink::ScratchpadProgressSink;
 pub use simple::SimpleExecutionEngine;
 pub(crate) use slash_command::{is_continuation_driven_slash, is_shorthand_alias};
+pub(crate) use steering::wake_lane_if_burst_drained;
 #[allow(unused_imports)] // wired into run_loop.rs in this commit
 pub(crate) use tool_service_builder::build_request_tool_service;
 pub use tool_service_builder::set_config_approval_requester;
@@ -387,6 +388,15 @@ pub(crate) struct ActiveRun {
     pub(crate) request: RunRequest,
     pub(crate) state: RunState,
     pub(crate) started_at: chrono::DateTime<chrono::Utc>,
+    /// The same moment as [`Self::started_at`], on the monotonic clock.
+    ///
+    /// Not redundant: `started_at` is a wall-clock value that exists to be
+    /// *reported* (`RunStatus`, traces, the Panel), and the busy-input gate has
+    /// to *compare* it against `busy_queue::waiting_since` to decide whether an
+    /// interrupt-mode message is superseding a run it ever saw. Comparing wall
+    /// clocks across a clock step would flip that decision silently, and the
+    /// wrong answer is "cancel a run this message never knew about".
+    pub(crate) admitted_at: std::time::Instant,
     pub(crate) completed_at: Option<chrono::DateTime<chrono::Utc>>,
     pub(crate) steps_completed: u32,
     pub(crate) current_tool: Option<String>,

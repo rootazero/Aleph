@@ -51,8 +51,16 @@
 //!   ([`crate::gateway::execution_engine`]'s `SessionRunRegistry::release`
 //!   calls [`notify_slot_free`]) — the authoritative "you may try now" edge;
 //! * the engine admits a queued run ([`mark_admitted`]) — the symmetric
-//!   "the lane just got shorter" edge; or
-//! * a ticket leaves the lane ([`TicketGuard`]'s `Drop`), promoting the next.
+//!   "the lane just got shorter" edge;
+//! * a ticket leaves the lane ([`TicketGuard`]'s `Drop`), promoting the next;
+//!   or
+//! * the session's live loop drains its steering burst
+//!   ([`notify_burst_drained`], fired when an assistant turn lands in the
+//!   session log) — the edge for a waiter that is **not** waiting for the run
+//!   slot at all. A steer refused because the burst is at
+//!   `max_pending_steering` needs its target to keep running; what it waits for
+//!   is the loop answering, and only [`mark_awaiting_burst_drain`] tickets
+//!   receive this one.
 //!
 //! A bounded fallback tick (`wake_fallback_secs`) still runs, so a missed
 //! signal degrades to a slightly later delivery rather than a wedged lane.
@@ -75,6 +83,7 @@ pub use spawn::spawn_queued_run;
 use std::collections::{HashMap, VecDeque};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, OnceLock};
+use std::time::Instant;
 
 use tokio::sync::Notify;
 
@@ -89,9 +98,31 @@ struct Ticket {
     /// `active_runs` yet, so `ExecutionEngine::cancel` cannot see it and the
     /// user would face an unstoppable pending bubble.
     run_id: String,
+    /// When this message joined the lane, on the monotonic clock.
+    ///
+    /// Read back by [`waiting_since`] so the admission gate can answer
+    /// "was the run I am about to cancel already running when I got here?".
+    /// Wall time would do for a log line but not for a decision: the
+    /// comparison is against another in-process instant, and a clock step
+    /// would silently flip the answer.
+    enqueued_at: Instant,
     /// Set by [`purge`] / [`cancel_queued_run`]: this waiter should abandon
     /// its message.
     cancelled: bool,
+    /// Set by [`mark_awaiting_burst_drain`]: this waiter's message was refused
+    /// mid-loop steering because the running loop's un-consumed steering burst
+    /// is at `max_pending_steering`, so what it is waiting for is the *burst*
+    /// draining, not the run *slot* freeing. [`notify_burst_drained`] fires
+    /// only for lanes that hold at least one such ticket, so an assistant turn
+    /// does not change the retry cadence of ordinary `Queue`-mode waiters —
+    /// they still wait for the slot, which is the only thing that can help
+    /// them.
+    ///
+    /// Sticky for the ticket's lifetime: a later attempt deferred for some
+    /// other reason keeps the flag, costing at most one extra delivery attempt
+    /// per assistant turn. Cheaper than tracking why each attempt failed, and
+    /// wrong only in the harmless direction (a wake the waiter re-checks).
+    awaiting_burst_drain: bool,
 }
 
 /// One session's wait lane: arrival-ordered tickets plus the wake handle every
@@ -140,7 +171,9 @@ pub fn register(session_key: &str, max_per_session: usize, run_id: &str) -> Opti
     lane.tickets.push_back(Ticket {
         id: ticket,
         run_id: run_id.to_string(),
+        enqueued_at: Instant::now(),
         cancelled: false,
+        awaiting_burst_drain: false,
     });
     Some(TicketGuard {
         session_key: session_key.to_string(),
@@ -157,6 +190,72 @@ pub fn notify_slot_free(session_key: &str) {
     let wake = {
         let map = lock();
         map.get(session_key).map(|lane| Arc::clone(&lane.wake))
+    };
+    if let Some(wake) = wake {
+        wake.notify_waiters();
+    }
+}
+
+/// Record that the message that would become `run_id` on `session_key` was
+/// refused mid-loop steering **for backpressure** — the running loop's
+/// un-consumed steering burst is at `max_pending_steering`.
+///
+/// Called from `execution_engine::steering::try_inject_steering`'s cap branch.
+/// A run that holds no ticket matches nothing and this is a no-op (fail open,
+/// same posture as [`waiting_since`]).
+///
+/// # Why the lane needs to know
+///
+/// Every other wake edge answers "is the run slot free?". This waiter is not
+/// waiting for the slot — the sibling it wants to steer must keep running for
+/// the steer to mean anything — it is waiting for that sibling to *answer* its
+/// burst. Without the mark, [`notify_burst_drained`] could not tell which lanes
+/// have anything to gain from an assistant turn, and the documented
+/// "redelivers once the burst drains" degraded to the `wake_fallback_secs`
+/// tick.
+///
+/// # The check-then-mark window is covered by the burst itself
+///
+/// The mark lands *after* the read that found the burst at the cap, so a drain
+/// that commits in between fires against an unmarked lane and is missed. That
+/// costs one turn, never the message: the burst is at the cap, so the loop has
+/// un-answered user messages to consume and every answer is another drain edge —
+/// and the last one of the run is followed by [`notify_slot_free`]. The waiter
+/// is armed on the lane's `Notify` before its attempt begins, so a drain during
+/// the attempt itself is delivered, not dropped.
+pub fn mark_awaiting_burst_drain(session_key: &str, run_id: &str) {
+    let mut map = lock();
+    let Some(lane) = map.get_mut(session_key) else {
+        return;
+    };
+    if let Some(ticket) = lane.tickets.iter_mut().find(|t| t.run_id == run_id) {
+        ticket.awaiting_burst_drain = true;
+    }
+}
+
+/// Signal that `session_key`'s live loop just drained its steering burst (it
+/// committed an assistant turn), so a steer refused for backpressure may now
+/// fit.
+///
+/// Fired from the gateway's single "an event was appended" seam via
+/// `execution_engine::steering::wake_lane_if_burst_drained`, which owns the
+/// predicate for *which* events drain a burst (it is derived from
+/// `count_pending_steering`, not restated).
+///
+/// Fires only for a lane that actually holds a backpressure-deferred waiter:
+/// an assistant turn is a frequent event and waking `Queue`-mode waiters on
+/// every one of them would replace their slot-free wake with a per-turn retry
+/// storm, gaining nothing (only the slot can admit them).
+pub fn notify_burst_drained(session_key: &str) {
+    let wake = {
+        let map = lock();
+        map.get(session_key)
+            .filter(|lane| {
+                lane.tickets
+                    .iter()
+                    .any(|t| t.awaiting_burst_drain && !t.cancelled)
+            })
+            .map(|lane| Arc::clone(&lane.wake))
     };
     if let Some(wake) = wake {
         wake.notify_waiters();
@@ -208,6 +307,42 @@ pub fn mark_admitted(session_key: &str, run_id: &str) {
     // Promote whoever was behind the admitted run so it can attempt right away
     // instead of waiting out the fallback tick.
     wake.notify_waiters();
+}
+
+/// When the still-waiting message that would become `run_id` joined
+/// `session_key`'s lane, or `None` if it holds no ticket.
+///
+/// `None` covers three genuinely different callers and all three want the same
+/// treatment — "no constraint from the lane": a run that never queued (loop
+/// tick, goal continuation, delegated child, the OpenAI-compat surface), a run
+/// whose ticket [`mark_admitted`] already withdrew, and a lane that has since
+/// been garbage-collected.
+///
+/// # Why the admission gate needs this
+///
+/// `BusyInputMode::Interrupt` means "supersede the task that was running when I
+/// sent this". Once [`mark_admitted`] let followers reach the engine mid-run
+/// (Round-6), a *burst* of interrupt-mode messages read that as "supersede
+/// whatever is running when my turn to ask comes round" — and what is running by
+/// then is the run the message immediately ahead of me just became. Each queued
+/// message killed its own predecessor milliseconds after the lane admitted it,
+/// so an N-message burst left only the last one alive and N-1 turns of work
+/// destroyed with nothing to show for them.
+///
+/// The correct predicate is temporal, and this is the half of it the lane owns:
+/// a message may only cancel a run that was **already admitted when the message
+/// began waiting**. Cheaper predicates are wrong in the same direction — "is the
+/// target the run my own lane admitted most recently?" would also suppress a
+/// genuine interrupt that arrives while a healthy sibling runs, which is the
+/// entire reason the mode exists.
+#[must_use]
+pub fn waiting_since(session_key: &str, run_id: &str) -> Option<Instant> {
+    let map = lock();
+    map.get(session_key)?
+        .tickets
+        .iter()
+        .find(|t| t.run_id == run_id)
+        .map(|t| t.enqueued_at)
 }
 
 /// Abandon every message waiting on `session_key` and return how many were
@@ -280,13 +415,25 @@ pub fn cancel_queued_run(run_id: &str) -> bool {
 /// Total messages waiting across all sessions, plus the per-session breakdown
 /// (deepest first). Feeds `gateway.metrics.run_concurrency` so an operator can
 /// see backlog the same way they see run-slot saturation.
+/// A cancelled ticket is not counted. [`purge`] / [`cancel_queued_run`] mark
+/// rather than remove — the waiter owns its guard and drops it when it next
+/// wakes — so between the stop and that wake the lane still holds tickets whose
+/// messages have already been abandoned. Counting them reports a backlog the
+/// user just cancelled, which is the same class of lie `mark_admitted` fixed on
+/// the other side (a message that had already become a run counted as
+/// waiting). `total_waiting` means what it says: messages that may still run.
 #[must_use]
 pub fn snapshot() -> BusyQueueSnapshot {
     let map = lock();
     let mut per_session: Vec<(String, usize)> = map
         .iter()
-        .filter(|(_, lane)| !lane.tickets.is_empty())
-        .map(|(key, lane)| (key.clone(), lane.tickets.len()))
+        .map(|(key, lane)| {
+            (
+                key.clone(),
+                lane.tickets.iter().filter(|t| !t.cancelled).count(),
+            )
+        })
+        .filter(|(_, depth)| *depth > 0)
         .collect();
     per_session.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
     BusyQueueSnapshot {
@@ -420,6 +567,47 @@ mod tests {
 
     // Tests share one process-global lane map, so each test uses a unique
     // session key to stay isolated under the parallel test runner.
+
+    /// The lane's half of the interrupt-burst rule. What the gate needs is not
+    /// "is this message queued" but "since when" — and the answer has to
+    /// survive the predecessor being admitted out from under it.
+    #[test]
+    fn waiting_since_reports_arrival_and_stops_reporting_once_admitted() {
+        let key = "agent:since";
+        assert_eq!(
+            waiting_since(key, "run-1"),
+            None,
+            "no lane, no ticket, no constraint"
+        );
+
+        let first = register(key, CAP, "run-1").expect("lane accepts");
+        let t1 = waiting_since(key, "run-1").expect("a queued message names when it arrived");
+
+        let second = register(key, CAP, "run-2").expect("lane accepts");
+        let t2 = waiting_since(key, "run-2").expect("so does the follower");
+        assert!(t2 >= t1, "arrival order is monotonic on the lane");
+
+        assert_eq!(
+            waiting_since(key, "run-absent"),
+            None,
+            "a run that never queued is unconstrained, not blocked"
+        );
+
+        // Admission withdraws the ticket, so the run that is now EXECUTING no
+        // longer reports a wait — which is what makes it a legitimate
+        // interrupt target for anything that arrives from here on.
+        mark_admitted(key, "run-1");
+        assert_eq!(waiting_since(key, "run-1"), None);
+        assert_eq!(
+            waiting_since(key, "run-2"),
+            Some(t2),
+            "the follower's own arrival instant is unchanged by its \
+             predecessor's admission — that is the whole point"
+        );
+
+        drop(first);
+        drop(second);
+    }
 
     #[test]
     fn tickets_deliver_in_fifo_order() {
@@ -607,6 +795,28 @@ mod tests {
         assert_eq!(depth, Some(1), "only the waiting message counts as backlog");
     }
 
+    /// The other half of that gauge's honesty. A stop marks tickets rather than
+    /// removing them — the waiter owns its guard — so between the purge and the
+    /// waiter's next wake the lane still holds them. Reporting a backlog the
+    /// user just cancelled is the same lie in the other direction.
+    #[test]
+    fn snapshot_excludes_messages_an_explicit_stop_already_abandoned() {
+        let s = "bq-test-snap-purged";
+        let _a = register(s, CAP, "run-a").unwrap();
+        let _b = register(s, CAP, "run-b").unwrap();
+        assert_eq!(purge(s), 2);
+
+        let depth = snapshot()
+            .per_session
+            .iter()
+            .find(|(k, _)| k == s)
+            .map(|(_, d)| *d);
+        assert_eq!(
+            depth, None,
+            "a fully purged lane is empty backlog, even before its waiters wake"
+        );
+    }
+
     #[test]
     fn mark_admitted_is_a_no_op_for_runs_that_never_queued() {
         // Loop ticks, goal continuations and delegated children reach
@@ -733,5 +943,74 @@ mod tests {
     #[test]
     fn notify_slot_free_on_an_unknown_session_is_a_no_op() {
         notify_slot_free("bq-test-notify-unknown");
+    }
+
+    /// The third wake edge. A steer refused for backpressure is NOT waiting for
+    /// the run slot — its target has to keep running for the steer to mean
+    /// anything — so neither slot-side edge fires for it and it used to wait out
+    /// `wake_fallback_secs` (30 s), not the burst.
+    #[tokio::test]
+    async fn a_backpressure_deferred_waiter_is_woken_when_the_burst_drains() {
+        let s = "bq-test-burst-drain";
+        let front = register(s, CAP, "bq-drain-a").unwrap();
+        let wake = front.wake_handle();
+        let parked = wake.notified();
+        tokio::pin!(parked);
+
+        // Unflagged, this lane holds an ordinary `Queue` waiter: an assistant
+        // turn cannot help it (only the slot can), so the edge must skip it
+        // rather than turn every turn into a retry tick.
+        notify_burst_drained(s);
+        assert!(
+            tokio::time::timeout(std::time::Duration::from_millis(10), &mut parked)
+                .await
+                .is_err(),
+            "a lane with no backpressured waiter must not wake on a drained burst"
+        );
+
+        mark_awaiting_burst_drain(s, "bq-drain-a");
+        notify_burst_drained(s);
+        tokio::time::timeout(std::time::Duration::from_millis(500), &mut parked)
+            .await
+            .expect("a drained burst must wake the steer it deferred");
+    }
+
+    /// A stop already woke its waiters and told them to abandon the message;
+    /// a later drain has nothing to offer them, and the lane it leaves behind
+    /// must not keep waking on every assistant turn until the guards drop.
+    #[tokio::test]
+    async fn a_cancelled_waiter_does_not_keep_the_drain_edge_firing() {
+        let s = "bq-test-burst-drain-cancelled";
+        let front = register(s, CAP, "bq-drain-cancelled").unwrap();
+        mark_awaiting_burst_drain(s, "bq-drain-cancelled");
+        assert_eq!(purge(s), 1);
+
+        let wake = front.wake_handle();
+        let parked = wake.notified();
+        tokio::pin!(parked);
+        notify_burst_drained(s);
+        assert!(
+            tokio::time::timeout(std::time::Duration::from_millis(10), &mut parked)
+                .await
+                .is_err(),
+            "an abandoned message is not waiting for the burst any more"
+        );
+    }
+
+    #[test]
+    fn marking_a_run_that_never_queued_is_a_no_op() {
+        // Loop ticks, goal continuations, delegated children and the
+        // OpenAI-compat surface reach the engine without a ticket.
+        mark_awaiting_burst_drain("bq-test-mark-unknown-session", "run-x");
+        notify_burst_drained("bq-test-mark-unknown-session");
+
+        let s = "bq-test-mark-unknown-run";
+        let held = register(s, CAP, "bq-mark-a").unwrap();
+        mark_awaiting_burst_drain(s, "some-other-run");
+        assert!(
+            held.is_front(),
+            "an unrelated mark must not disturb the lane"
+        );
+        assert_eq!(purge(s), 1, "and must not silently drop the ticket");
     }
 }

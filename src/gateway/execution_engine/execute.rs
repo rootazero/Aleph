@@ -937,6 +937,8 @@ where
                         seq: final_seq,
                         error: error_message,
                         error_code: Some(error_code.to_string()),
+                        // Post-admission: `RunAccepted` already seeded the index.
+                        session_key: None,
                     })
                     .await
                 {

@@ -24,6 +24,23 @@ use aleph_protocol::subagent_tree::{NodeLifecycle, SubagentNode, SubagentTreeEve
 /// here under its old name so this module reads the same as before.
 use crate::scope::CarriedAttribution;
 
+/// The three inputs that together answer "where does this child start from".
+///
+/// Bundled rather than passed as three more positional parameters: they are one
+/// decision, they are always set together, and `spawn_background` was already
+/// at seven arguments — a call site where two `Option<String>`s sit next to
+/// each other is one refactor away from a silent swap the type checker cannot
+/// see.
+#[derive(Clone, Default)]
+pub(super) struct StartingContext {
+    /// The caller's hand-written summary of the parent's context, if any.
+    pub(super) summary: Option<String>,
+    /// Per-call override; `None` defers to the agent's `context_mode`.
+    pub(super) mode: Option<crate::agents::SpawnContext>,
+    /// Parent transcript for a fork, captured once per tool call.
+    pub(super) source: Option<crate::agents::subagent_spawner::fork::ForkSource>,
+}
+
 impl SubagentTool {
     /// A3 — a fresh child token derived from the parent run's token (cancelled
     /// when the parent is). Falls back to a standalone token for tests / direct
@@ -75,7 +92,7 @@ impl SubagentTool {
         &self,
         agent_def: AgentDef,
         task: String,
-        context_summary: Option<String>,
+        starting: StartingContext,
         model: Option<String>,
         timeout_secs: u64,
         child_chain: crate::harness::chain_context::ChainContext,
@@ -197,7 +214,9 @@ impl SubagentTool {
             let runtime_config = AgentRuntimeConfig {
                 agent_def,
                 task,
-                context_summary,
+                context_summary: starting.summary,
+                spawn_context: starting.mode,
+                fork_source: starting.source,
                 model,
                 timeout_secs,
                 // The one path where the id outlives the call: `request_id` is

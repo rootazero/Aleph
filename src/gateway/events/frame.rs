@@ -93,6 +93,12 @@ pub enum GatewayEventFrame {
         seq: u64,
         error: String,
         error_code: Option<String>,
+        /// Present only when the run may not be resolvable by id — see
+        /// `event_emitter::types::StreamEvent::RunError::session_key`. Read by
+        /// `EventVisibilityIndex::note_frame`, which seeds the run→session
+        /// index from any frame naming both.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        session_key: Option<String>,
     },
     AskUser {
         run_id: String,
@@ -551,11 +557,13 @@ impl From<StreamEvent> for GatewayEventFrame {
                 seq,
                 error,
                 error_code,
+                session_key,
             } => Self::RunError {
                 run_id,
                 seq,
                 error,
                 error_code,
+                session_key,
             },
             StreamEvent::AskUser {
                 run_id,

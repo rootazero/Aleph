@@ -125,11 +125,21 @@ impl CommandResolution {
     /// Create a resolution for an executable not found in PATH
     pub fn not_found(raw: impl Into<String>) -> Self {
         let raw = raw.into();
-        let name = std::path::Path::new(&raw)
-            .file_name()
-            .and_then(|n| n.to_str())
-            .unwrap_or(&raw)
-            .to_string();
+        // Guard the empty-`raw` corner: `Path::new("").file_name()` returns
+        // None, the fallback is `&raw` which is `""`, and an
+        // `executable_name: ""` slips past any "non-empty executable"
+        // filter downstream. The parser's tokenizer never produces an
+        // empty token, but the constructor is `pub` and reachable from
+        // tests / future callers. `<empty>` is the honest signal.
+        let name = if raw.is_empty() {
+            "<empty>".to_string()
+        } else {
+            std::path::Path::new(&raw)
+                .file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or(&raw)
+                .to_string()
+        };
 
         Self {
             raw_executable: raw,

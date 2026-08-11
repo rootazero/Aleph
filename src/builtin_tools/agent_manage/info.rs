@@ -144,7 +144,14 @@ impl AgentInfoTool {
             allowed_tools,
             denied_tools: agent_def.denied_tools,
             max_iterations: agent_def.max_iterations,
-            context_mode: agent_def.context_mode.to_string(),
+            // Rendered in the vocabulary the caller will actually type — the
+            // `subagent` tool's `context` argument — not `ContextMode`'s own
+            // `Display`. `Fresh` and `isolated` are the same thing, and a
+            // reader shown the first while needing to write the second has to
+            // guess that from nothing.
+            context_mode: crate::agents::SpawnContext::from_context_mode(&agent_def.context_mode)
+                .as_arg()
+                .to_string(),
             model_hint: agent_def.model_hint,
             token_budget: agent_def.token_budget,
             bound_channels: Vec::new(), // Filled in by `call` from the store.

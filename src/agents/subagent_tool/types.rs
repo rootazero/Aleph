@@ -235,7 +235,9 @@ pub(super) const ACCEPTED_ARG_KEYS: &[&str] = &[
     "agent_type",
     "aggregator_model",
     "batch_tasks",
+    "context",
     "context_summary",
+    "fork_turns",
     "model",
     "name",
     "proposer_models",
@@ -302,6 +304,10 @@ pub(super) struct RunArgs {
     pub(super) timeout_secs: u64,
     pub(super) run_in_background: bool,
     pub(super) context_summary: Option<String>,
+    /// Per-call override of where the child starts from. `None` defers to the
+    /// target agent's `context_mode`, which is what an omitted `context`
+    /// argument means and what every pre-knob caller gets.
+    pub(super) spawn_context: Option<crate::agents::SpawnContext>,
     /// Batch tasks for parallel execution. When provided, all tasks run in
     /// background automatically and a list of `request_ids` is returned.
     pub(super) batch_tasks: Option<Vec<BatchTask>>,

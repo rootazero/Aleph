@@ -71,14 +71,28 @@ impl ApprovalBridge {
     /// where decision is "once", "session", "always", or "deny"
     #[must_use]
     pub fn parse_callback(data: &str) -> Option<(String, ApprovalDecisionType)> {
-        // Use split_once to be robust against IDs that might contain colons
-        let (prefix, rest) = data.split_once(':')?;
+        // Strict three-field split (not `rsplit_once`). A callback id that
+        // happens to contain a `:` — a future SessionKey-prefixed id, a
+        // debugging format, an attacker payload — would be silently
+        // truncated by `rsplit_once` and the manager would look up a
+        // non-existent record. Three-field split rejects anything that is
+        // not exactly `approve:<id>:<decision>`, so the wire format is the
+        // contract instead of a convention. The Telegram callback is a
+        // public surface (any user with access to the bot can craft a
+        // callback), so the parser is the only line of defence against
+        // spoofed callbacks.
+        let mut parts = data.splitn(3, ':');
+        let prefix = parts.next()?;
         if prefix != "approve" {
             return None;
         }
-        let (id, decision_str) = rest.rsplit_once(':')?;
+        let id = parts.next()?;
+        let decision_str = parts.next()?;
         if id.is_empty() {
             return None;
+        }
+        if parts.next().is_some() {
+            return None; // trailing junk — the format is fixed-width
         }
 
         let approval_id = id.to_string();

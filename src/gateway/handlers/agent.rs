@@ -371,7 +371,32 @@ impl AgentRunManager {
         // in-flight Think→Act loop (LLM call, tool execution, and between
         // iterations). Updating local status alone never reaches the running
         // task, which is why the chat-window Stop button used to do nothing.
-        let signalled = self.execution_adapter.cancel(run_id).await.is_ok();
+        //
+        // Resolve the session and stop the whole tree, not just this run. A
+        // leader that delegated work (`task_manage`, delegate workflows,
+        // background sub-agents) has its member runs registered under the
+        // leader's session key, and only `cancel_session` walks them — bare
+        // `cancel` fires one token and leaves the members running, detached,
+        // still billing, with no surface left that can reach them. That walk
+        // was added for `/stop` in 2026-07-24 and every run-id-addressed stop
+        // (Panel `chat.abort`, TUI `/stop`, `aleph chat abort`) landed here and
+        // missed it, while `cancel_session`'s own doc and FEATURE_LOCATOR §4.8
+        // both claimed `chat.abort` took that path.
+        //
+        // Per-session mutual exclusion makes this exact, not approximate: if
+        // the engine holds `run_id`, it IS the run on that session, so
+        // `cancel_session` cancels that run and nothing else's. A run the
+        // engine does not hold (finished, or still queued in its busy lane)
+        // resolves to `None` and falls through to the run-id primitive — which
+        // is also what `cancel_queued_run` below needs.
+        let signalled = match self.execution_adapter.session_of_run(run_id).await {
+            Some(session_key) => self
+                .execution_adapter
+                .cancel_session(&session_key)
+                .await
+                .is_ok_and(|cancelled| cancelled.is_some()),
+            None => self.execution_adapter.cancel(run_id).await.is_ok(),
+        };
 
         // A run can also be waiting in its session's busy lane — the client has
         // its `run_id` (both RPC handlers return one up front) but the engine
@@ -2031,8 +2056,89 @@ mod tests {
         assert_eq!(
             &*cancelled,
             &["run-under-test".to_string()],
-            "cancel_run must forward the run_id to ExecutionAdapter::cancel"
+            "a run the engine does not hold (finished, or still queued in its \
+             busy lane) still goes through the run-id primitive"
         );
+    }
+
+    /// Adapter that holds one live run on a session which also owns a
+    /// delegated child — the shape a leader run has after `task_manage` /
+    /// delegate / background sub-agent work. Its `cancel_session` walks the
+    /// child exactly as `ExecutionEngine::cancel_session` does; its `cancel`
+    /// does not, exactly as `ExecutionEngine::cancel` does not.
+    #[derive(Default)]
+    struct DelegatingExecutionAdapter {
+        cancelled: std::sync::Mutex<Vec<String>>,
+    }
+
+    #[async_trait]
+    impl ExecutionAdapter for DelegatingExecutionAdapter {
+        async fn execute(
+            &self,
+            _request: RunRequest,
+            _agent: Arc<AgentInstance>,
+            _emitter: Arc<dyn EventEmitter + Send + Sync>,
+        ) -> Result<(), ExecutionError> {
+            Ok(())
+        }
+
+        async fn cancel(&self, run_id: &str) -> Result<(), ExecutionError> {
+            self.cancelled
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .push(run_id.to_string());
+            Ok(())
+        }
+
+        async fn session_of_run(&self, run_id: &str) -> Option<SessionKey> {
+            (run_id == "leader-run").then(|| SessionKey::main("conv-delegating"))
+        }
+
+        async fn cancel_session(
+            &self,
+            _session_key: &SessionKey,
+        ) -> Result<Option<String>, ExecutionError> {
+            self.cancel("leader-run").await?;
+            self.cancel("delegated-child").await?;
+            Ok(Some("leader-run".to_string()))
+        }
+
+        async fn get_status(&self, _run_id: &str) -> Option<EngineRunStatus> {
+            None
+        }
+
+        async fn active_run_count(&self) -> usize {
+            1
+        }
+    }
+
+    /// Regression: stopping a run has to stop the work that run owns.
+    ///
+    /// Every run-id-addressed stop lands here — Panel `chat.abort`, TUI
+    /// `/stop`, `aleph chat abort` — and it used to fire only the leader's
+    /// token, leaving delegated member runs detached and still billing with no
+    /// surface able to reach them. The channel `/stop` path, which always had
+    /// the session key, always got the walk. Both `cancel_session`'s doc and
+    /// FEATURE_LOCATOR §4.8 described `chat.abort` as taking that path; it did
+    /// not, and nothing was red.
+    #[tokio::test]
+    async fn cancelling_a_leader_run_by_id_also_stops_its_delegated_children() {
+        let router = Arc::new(AgentRouter::new());
+        let event_bus = Arc::new(GatewayEventBus::new());
+        let (agent_registry, _tmp) = registry_with_main_agent().await;
+        let adapter = Arc::new(DelegatingExecutionAdapter::default());
+        let execution_adapter: Arc<dyn ExecutionAdapter> = adapter.clone();
+        let manager = AgentRunManager::new(router, event_bus, agent_registry, execution_adapter);
+
+        assert!(manager.cancel_run("leader-run").await);
+
+        let cancelled = adapter.cancelled.lock().unwrap_or_else(|e| e.into_inner());
+        assert!(
+            cancelled.contains(&"delegated-child".to_string()),
+            "the child must be cancelled too, or the Stop button leaves it \
+             running; got {cancelled:?}"
+        );
+        assert!(cancelled.contains(&"leader-run".to_string()));
     }
 
     /// Round-2 E3: selecting the "moa" pseudo-provider row in the picker

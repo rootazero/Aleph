@@ -118,6 +118,11 @@ impl BuiltinToolRegistry {
                 if let Some(ref am) = config.agent_manager {
                     tool.with_agent_manager(Arc::clone(am))
                 } else {
+                    tracing::warn!(
+                        "agent_create: TOML persistence disabled (no agent_manager); \
+                         created agents will not survive daemon restart — supply [agents] \
+                         manager config to enable persistence"
+                    );
                     tool
                 }
             };
@@ -135,6 +140,11 @@ impl BuiltinToolRegistry {
                 if let Some(ref am) = config.agent_manager {
                     tool.with_agent_manager(Arc::clone(am))
                 } else {
+                    tracing::warn!(
+                        "agent_delete: TOML persistence disabled (no agent_manager); \
+                         deleted agents will resurrect on daemon restart — supply [agents] \
+                         manager config to enable persistence"
+                    );
                     tool
                 }
             };

@@ -144,6 +144,37 @@ pub trait ExecutionAdapter: Send + Sync {
     fn active_run_for_session(&self, _session_key: &str) -> Option<String> {
         None
     }
+
+    /// The session a live run belongs to — the inverse lookup of
+    /// [`Self::active_run_for_session`], and the reason it exists is
+    /// [`Self::cancel_session`].
+    ///
+    /// Stopping a run means stopping the work it owns. `cancel` fires exactly
+    /// one run's token; `cancel_session` additionally walks the delegated
+    /// children registered under that session's key, which is what keeps a
+    /// cancelled leader from leaving its member runs detached and still
+    /// billing. The channel `/stop` path always had the session key and so
+    /// always got the walk; every run-id-addressed stop — Panel `chat.abort`,
+    /// TUI `/stop`, `aleph chat abort` — went through `AgentRunManager::
+    /// cancel_run`, which had only a run id and therefore only ever fired the
+    /// leader's token. Both `cancel_session`'s own doc and FEATURE_LOCATOR
+    /// §4.8 described `chat.abort` as taking the session path; it did not.
+    ///
+    /// With this lookup the run-id face resolves the session first and joins
+    /// the same verb, so "stop" means the same thing on every surface. A run
+    /// the engine does not hold — already finished, or still waiting in its
+    /// busy lane — yields `None` and the caller falls back to the run-id
+    /// primitive, which is also what reaches `busy_queue::cancel_queued_run`.
+    ///
+    /// Default implementation returns `None`, the same degradation
+    /// [`Self::active_run_for_session`] makes: an adapter with no per-session
+    /// run table keeps exactly its previous behaviour.
+    async fn session_of_run(
+        &self,
+        _run_id: &str,
+    ) -> Option<crate::routing::session_key::SessionKey> {
+        None
+    }
 }
 
 #[cfg(test)]

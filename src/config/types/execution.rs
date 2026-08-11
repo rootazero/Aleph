@@ -107,10 +107,12 @@ pub struct ExecutionConfig {
 
     /// Safety net between wake signals for a queued message (default: 30s).
     ///
-    /// Waiters are woken by the engine's session-slot release, so this tick
-    /// only exists so a missed signal degrades to a slightly later delivery
-    /// instead of a wedged lane. It is NOT the delivery latency — that is
-    /// governed by the wake signal. Lower it only when debugging.
+    /// Waiters are woken by the engine's session-slot release (and, for a
+    /// steer deferred by `max_pending_steering`, by the running loop draining
+    /// that burst), so this tick only exists so a missed signal degrades to a
+    /// slightly later delivery instead of a wedged lane. It is NOT the delivery
+    /// latency — that is governed by the wake signal. Lower it only when
+    /// debugging.
     #[serde(default = "default_busy_queue_wake_fallback_secs")]
     pub busy_queue_wake_fallback_secs: u64,
 
@@ -118,9 +120,12 @@ pub struct ExecutionConfig {
     /// the gateway applies backpressure (default: 16).
     ///
     /// Past the cap an injection is refused so the busy FIFO lane redelivers
-    /// once the burst drains — backpressure, never a drop. Each pending
-    /// message lands in the running loop's next prompt, so this bounds how
-    /// much a flooding channel can inflate that prompt.
+    /// once the burst drains — backpressure, never a drop. "Once the burst
+    /// drains" is a real edge, not the fallback tick: the refusal marks the
+    /// waiting ticket (`busy_queue::mark_awaiting_burst_drain`) and the
+    /// assistant turn that empties the burst wakes it. Each pending message
+    /// lands in the running loop's next prompt, so this bounds how much a
+    /// flooding channel can inflate that prompt.
     #[serde(default = "default_max_pending_steering")]
     pub max_pending_steering: usize,
 }
