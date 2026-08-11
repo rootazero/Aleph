@@ -102,7 +102,7 @@ pub struct Environment {
 /// reverse RPC and run the same per-node fail-fast check `node_invoke` uses.
 /// `tags` is carried so the caller can build a "available tags" hint on a
 /// zero-match. Cloneable; holds a `ReverseRpcChannel` clone.
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct NodeMatch {
     pub node_id: String,
     pub name: String,
@@ -478,24 +478,76 @@ pub fn maybe_register_node(
     if role != Some("node") {
         return false;
     }
-    let device_name = params
+    // (B1-08) A connect frame from a node without `device_name` is
+    // suspicious: every shipped runtime sends the field. Surface the absence
+    // so an operator chasing an "anonymous" fleet entry has a breadcrumb.
+    let device_name = match params
         .and_then(|p| p.get("device_name"))
         .and_then(|v| v.as_str())
-        .unwrap_or("unknown")
-        .to_string();
-    let declared_commands = params
+    {
+        Some(s) => s.to_string(),
+        None => {
+            tracing::warn!(
+                device_id = %device_id,
+                conn_id = %conn_id,
+                "cluster node connect frame omitted device_name; falling back to \"unknown\""
+            );
+            "unknown".to_string()
+        }
+    };
+    // (B1-02) Parse failures used to silently downgrade to an empty list. A
+    // node with no declared commands is registered as "online but every
+    // command denied" — confusing for the operator, and lets a peer hold
+    // fleet slots with malformed frames. Log and downgrade; only `commands`
+    // is gating (every node ships `bash`), so an empty commands list keeps
+    // the registration but is loud about it.
+    let declared_commands: Vec<CommandDescriptor> = match params
         .and_then(|p| p.get("commands"))
-        .and_then(|v| serde_json::from_value::<Vec<CommandDescriptor>>(v.clone()).ok())
-        .unwrap_or_default();
-    let tags = params
+        .map(|v| serde_json::from_value::<Vec<CommandDescriptor>>(v.clone()))
+    {
+        Some(Ok(v)) => v,
+        Some(Err(e)) => {
+            tracing::warn!(
+                device_id = %device_id,
+                node = %device_name,
+                error = %e,
+                "cluster node connect frame carried malformed commands; registering with empty catalog"
+            );
+            Vec::new()
+        }
+        None => Vec::new(),
+    };
+    let tags: Vec<String> = match params
         .and_then(|p| p.get("tags"))
-        .and_then(|v| serde_json::from_value::<Vec<String>>(v.clone()).ok())
-        .unwrap_or_default();
-    let version = params
-        .and_then(|p| p.get("version"))
-        .and_then(|v| v.as_str())
-        .filter(|s| !s.is_empty())
-        .map(String::from);
+        .map(|v| serde_json::from_value::<Vec<String>>(v.clone()))
+    {
+        Some(Ok(v)) => v,
+        Some(Err(e)) => {
+            tracing::warn!(
+                device_id = %device_id,
+                node = %device_name,
+                error = %e,
+                "cluster node connect frame carried malformed tags; registering with empty tag list"
+            );
+            Vec::new()
+        }
+        None => Vec::new(),
+    };
+    let version: Option<String> = match params.and_then(|p| p.get("version")) {
+        None => None,
+        Some(v) => match v.as_str() {
+            Some(s) if !s.is_empty() => Some(s.to_string()),
+            Some(_) => None,
+            None => {
+                tracing::warn!(
+                    device_id = %device_id,
+                    node = %device_name,
+                    "cluster node connect frame version field is not a string; treating as absent"
+                );
+                None
+            }
+        },
+    };
     // Version skew is **surfaced, not enforced**. A center and its fleet live on
     // separate upgrade schedules, so refusing a skewed node (openclaw's
     // `server.node-version-mismatch` guard, which only governs its same-machine
