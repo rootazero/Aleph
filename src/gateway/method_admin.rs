@@ -335,6 +335,20 @@ const MEMBER_CARVE_OUTS: &[&str] = &[
     // reason.
     "exec.approvals.pending",
     "exec.approval.resolve",
+    // The same gate's peacetime face (2026-08-11): a member who answered
+    // "allow for this session" must be able to SEE that grant and take it
+    // back. Refusing them the list is the shape that made the resolve RPCs a
+    // dead end for the population they gate — with the difference that a
+    // revoke can only ever narrow authority, so the worst outcome of an
+    // over-permissive revoke is one extra approval card.
+    //
+    // Scoped per row in `handlers/exec_grants.rs` by the SAME predicate as its
+    // sibling above: a member sees only session grants for sessions already
+    // visible to them, and no install-wide ("always") grant at all — they
+    // cannot create one, and enumerating them would list the operator's
+    // exceptions to somebody who cannot change them.
+    "exec.grants.list",
+    "exec.grant.revoke",
     // The Panel's cold-load seed for the sidebar running dot, and its usage
     // gauge. Admin-gating it (inherited from the `gateway.` family) meant both
     // were silently dead for every member — the RPC fallback that the

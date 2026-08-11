@@ -517,6 +517,9 @@ Consequence: "Allow for this session" authorizes **that exact call**. Under
 `Ask`, `bash` re-prompts per distinct command instead of whitelisting arbitrary
 argv after one approval (codex's `ApprovalStore` semantics). Noisier, deliberately.
 
+The same fingerprint keys the persistent tier, so "Always allow" authorizes that
+exact call and nothing else either — see *Standing grants* below.
+
 ### Approval decision
 
 ```rust
@@ -524,10 +527,15 @@ argv after one approval (codex's `ApprovalStore` semantics). Noisier, deliberate
 pub enum ApprovalDecisionType {
     AllowOnce,    // this call
     AllowSession, // this call, for the rest of the session (by fingerprint)
-    AllowAlways,  // clamped to AllowSession by clamp_decision — no surface offers it
+    AllowAlways,  // this call, until revoked, across restarts — ONLY if the card offered it
     Deny,
 }
 ```
+
+`AllowAlways` was a legacy wire value narrowed to `AllowSession` everywhere
+until 2026-08-11; it is now the persistent tier of the grant store, and the
+narrowing is **conditional on the card**: `clamped_for(&record.allowed_decisions)`
+(see *Standing grants* below).
 
 - **Timeout ⇒ refusal.** `DEFAULT_APPROVAL_TIMEOUT_MS` = 120s;
   `ApprovalOutcome::is_approved` excludes `Timeout`. A timeout is deliberately
@@ -576,6 +584,90 @@ reason, no reason without a gate.
 Before this, all three ask-arms produced the identical sentence "Tool `x`
 requires your confirmation to run."
 
+### Standing grants: two tiers, one store, and a way back (2026-08-11)
+
+`src/sandbox/exec_approval/grants.rs` is the one store of "what did a human say
+yes to, and for how long". Two scopes:
+
+| scope | lives in | created by | ends |
+|---|---|---|---|
+| `Session` | memory, keyed by `SessionKey` | any card offering it | the process, or a revoke |
+| `Always` | `~/.aleph/approval-grants.json` | **only** a card that offered the tier | a revoke |
+
+Both key on the same action fingerprint, so a grant covers the call that was
+shown and nothing else. Every grant also stores the **redacted summary the human
+read**, plus who granted it and when: a revocation list of SHA-256 prefixes is
+not a revocation list, and that field is the whole reason the store holds
+records instead of a `HashSet<String>`.
+
+**Who may create a persistent grant.** `exec::allowed_decisions::for_confirm_gate`
+adds `AllowAlways` only when both hold:
+
+1. the requesting turn is **operator-tier** (`TurnContext::caller_is_operator`,
+   the same predicate the operator tool gate uses). A persistent grant is
+   install-wide — the per-call sibling of a `[policies.tool_permissions]`
+   `allow` entry — so a member creating one would silently authorize everybody
+   else's identical call. On an operator *escalation* card the requester is by
+   construction not operator-tier, so answering "always" there cannot
+   permanently strip a gate a member has to pass; and
+2. the gate is **not** the tool's own declared floor (`tool_declared`). That
+   card's own sentence says nothing switches the gate off, including `full` and
+   an explicit `allow`. A button that switched it off would make that sentence
+   false at the moment it is read.
+
+**The offer is enforced, not merely drawn.** The set rides the record
+(`ExecApprovalRecord::allowed_decisions`) and `ExecApprovalManager::resolve*`
+clamps the incoming decision against it. This matters because "no surface offers
+the button" was never a control: `allow-always` has always been an accepted wire
+value on `exec.approval.resolve`, and every renderer that hardcoded three
+buttons was one RPC client away from irrelevant. A renderer may still draw
+*fewer* buttons than the record allows — that direction is safe — which is why
+`ApprovalDecisionType::to_outcome_within` takes the offered set and has no
+argument-free variant: a surface that never offers a standing grant has to say
+so, in code, at the point it maps the decision.
+
+**One derivation, both directions.** A card that may not *create* a persistent
+grant is also never *satisfied* by one (`GrantStore::granted_within`). Without
+that clause an operator's "always" on their own card would silently retire the
+operator-escalation card a MEMBER trips on the byte-identical call — the
+escalation would stop being raised for everybody, from one click on an unrelated
+surface, and the person who clicked was never asked that question. The same
+clause covers a tool that starts declaring a confirmation floor after a grant
+was taken (an MCP server adding `destructiveHint`).
+
+And the gate narrows on the way in as well as on the way out: an
+`ApprovalRequester` returns an `ApprovalOutcome` **directly**, so the manager's
+clamp only covers the implementations that route through it — and that trait has
+several (channel bridge, operator, cluster centre, guardian, fallback, and a
+debug auto-approver). `confirm_with_memory` therefore records an
+`ApprovedAlways` as a session grant, with a warning, when the card it raised did
+not offer the tier: the gate does not trust the outcome it is handed.
+
+**Unattended runs are unaffected.** The `if self.unattended` auto-deny in
+`confirm_with_memory` still precedes *both* tiers. A persistent grant is wider
+than a session grant, so the 2026-08-07 ruling applies a fortiori: executing
+something with nobody watching rests on a present decision, and "remembered from
+last month" is further from present than "remembered ten minutes ago", not
+closer. Pinned by
+`tools::scoped::tests::a_persistent_grant_does_not_survive_into_an_unattended_run`,
+the twin of the session-grant guard.
+
+**And there is a way back.** `exec.grants.list` / `exec.grant.revoke`
+(`gateway/handlers/exec_grants.rs`, rendered under Settings → Policies) show
+every standing grant with the summary that was approved, and take one back. Both
+are scoped exactly like their `exec.approvals.*` siblings: an unrestricted
+caller sees everything; a member sees only session grants for sessions already
+visible to them, and no install-wide grant at all; a grant that is not
+addressable is refused exactly as an unknown fingerprint is. Revocation only
+ever narrows authority — the worst outcome of an over-permissive revoke is one
+extra approval card — which is what makes the write verb safe to carve open to
+members while the rest of the `exec.` family stays operator-only.
+
+Before this, the subsystem was asymmetric in the direction that matters: the
+*negative* half had an exit (the denial breaker below cools down and half-opens)
+and the positive half had none. A user who clicked "allow for this session"
+could neither see the grant nor take it back.
+
 ### The denial breaker recovers (2026-08-11)
 
 `DenialLedger`'s session pause has the same three states as its in-repo twin,
@@ -590,6 +682,15 @@ the guardian judge's `GuardianBreaker`: `Closed` / `Open` / `HalfOpen`, with
   tool-result-cache purge); an approval closes it.
 - Per-intent stickiness is untouched: an approval of action A says nothing about
   the refusal of action B.
+- **A blind retry does not spend the probe** (2026-08-11 follow-up). Stickiness
+  is checked first, against a non-advancing read of the breaker, because a
+  repeat of an already-refused intent reaches nobody — the next branch refuses
+  it — and consuming the `Open` → `HalfOpen` transition on it left the breaker
+  recovered on paper and unasked in fact. An agent looping on the action it was
+  just refused could keep every cooldown to itself while the user saw nothing.
+  While the pause is genuinely in force the reported reason is still
+  `ThresholdExceeded` (the stronger, more actionable statement); only after the
+  cooldown elapses does the per-intent refusal report itself.
 
 It used to be neither. `total` only ever went up and nothing cleared it, so the
 word "consecutive" — in the constant's doc, the module doc, and the product spec
@@ -608,8 +709,15 @@ prompt per cooldown, and their refusal re-opens it.
 ## Command allowlist
 
 There is **no** `src/exec/allowlist.rs` and no `exec.allowlist` / `exec.blocklist`
-config table — an older revision of this doc invented one. "Which commands run"
-is decided by the two real layers already described:
+config table — an older revision of this doc invented one. There is a **grant
+registry** (`~/.aleph/approval-grants.json`, see *Standing grants* above), and it
+is deliberately not the same thing: it holds per-CALL exceptions a human created
+by answering a card, keyed on `(tool, canonical arguments)`, never a command
+glob or a pattern language. Nothing writes it but a human answering an approval,
+and it can only ever exempt calls that were shown to somebody.
+
+"Which commands run" is otherwise decided by the two real layers already
+described:
 
 - What is **always refused**: the `[sandbox.command_policy]` hardline floor plus
   any user `deny` in `[policies.tool_permissions]` (an explicit entry beats the

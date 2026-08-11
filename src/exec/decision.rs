@@ -35,6 +35,13 @@ pub struct ExecApprovalRequest {
     /// route escalations) — those never participate in the session-grant
     /// cascade.
     pub grant_key: Option<String>,
+    /// The decision tiers this card may offer, from
+    /// [`ApprovalAction::allowed_decisions`] — derived once at the gate and
+    /// enforced at the resolver, so a client that sends a wider wire value than
+    /// the card offered is narrowed rather than obeyed.
+    ///
+    /// [`ApprovalAction::allowed_decisions`]: crate::sandbox::exec_approval::ApprovalAction::allowed_decisions
+    pub allowed_decisions: Vec<crate::exec::socket::ApprovalDecisionType>,
 }
 
 /// Backward compatibility type alias

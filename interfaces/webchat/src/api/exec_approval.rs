@@ -36,6 +36,22 @@ struct PendingRecord {
     /// operator only ever sees a bare tool name.
     #[serde(default)]
     reason: Option<String>,
+    /// Which decision tiers this card may offer, kebab-case. Absent from an
+    /// older core, where the historical session ceiling is the right reading —
+    /// `default_decisions` supplies it rather than an empty list, since an
+    /// empty list would render a card with no buttons at all.
+    #[serde(default = "default_decisions")]
+    allowed_decisions: Vec<String>,
+}
+
+/// What a card offers when the server did not say — the pre-2026-08-11 button
+/// set, and never `allow-always`: a missing field may narrow, never widen.
+fn default_decisions() -> Vec<String> {
+    vec![
+        "allow-once".to_string(),
+        "allow-session".to_string(),
+        "deny".to_string(),
+    ]
 }
 
 impl ExecApprovalApi {
@@ -63,12 +79,16 @@ impl ExecApprovalApi {
                 tool_call_id: p.record.tool_call_id,
                 reason: p.record.reason,
                 expires_at_ms: now + p.remaining_ms as i64,
+                allowed_decisions: p.record.allowed_decisions,
             })
             .collect())
     }
 
     /// Resolve a pending approval. `decision` is the kebab-case wire value:
-    /// "allow-once" | "allow-session" | "deny". `reason` is the operator's
+    /// "allow-once" | "allow-session" | "allow-always" | "deny" — one of the
+    /// values the card carried in `allowed_decisions`. The server narrows
+    /// anything wider than that card offered, so this is a rendering contract,
+    /// not the enforcement point. `reason` is the operator's
     /// free-text objection on a deny — the server relays it verbatim to the
     /// model ("The user said: …") so it re-plans on the actual objection.
     /// Blank reasons are dropped; the field is omitted rather than sent empty.

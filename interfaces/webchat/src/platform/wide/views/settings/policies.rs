@@ -4,6 +4,7 @@ use crate::components::exec_tier_labels::{tier_desc, tier_label, FULL_TIER};
 use crate::components::mode_labels::{mode_desc, mode_label};
 use crate::context::DashboardState;
 use crate::i18n::{t, t_string, use_i18n};
+use crate::platform::wide::views::settings::grants::StandingGrantsSection;
 use leptos::prelude::*;
 use leptos::task::spawn_local;
 use std::collections::HashMap;
@@ -374,6 +375,12 @@ pub fn PoliciesView() -> impl IntoView {
                     </div>
                 </div>
                 </Show>
+
+                // Standing approvals — the per-CALL answer to "what runs without
+                // asking me", next to the tier (per-session) and the overrides
+                // (per-tool). It is the only one of the three that a user could
+                // create but not see.
+                <StandingGrantsSection />
 
                 // Tool Permissions Section — advanced overrides layered on top of
                 // the tier preset above.

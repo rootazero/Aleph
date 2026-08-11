@@ -200,10 +200,15 @@ impl LedgerIntent {
 pub(super) enum ApprovalRecord<'a> {
     /// A human answered this prompt.
     GrantedByUser,
-    /// A grant taken earlier in this session satisfied the gate — nobody was
-    /// asked. Wires [`ApprovalSource::Trusted`](crate::session::events::ApprovalSource),
+    /// A standing grant satisfied the gate — nobody was asked. Wires
+    /// [`ApprovalSource::Trusted`](crate::session::events::ApprovalSource),
     /// which had no producer at all before.
-    GrantedBySessionMemory,
+    ///
+    /// Carries the scope, because "a click earlier in this conversation" and "a
+    /// permanent exception someone made last month" are different authorities
+    /// and an audit trail that spells them the same way cannot answer the
+    /// question it exists for.
+    GrantedByStandingGrant(crate::sandbox::exec_approval::GrantScope),
     Denied(&'a str),
 }
 
@@ -219,7 +224,7 @@ impl<'a> ApprovalRecord<'a> {
     pub(super) const fn approval_source(self) -> crate::session::events::ApprovalSource {
         use crate::session::events::ApprovalSource;
         match self {
-            Self::GrantedBySessionMemory => ApprovalSource::Trusted,
+            Self::GrantedByStandingGrant(_) => ApprovalSource::Trusted,
             _ => ApprovalSource::User,
         }
     }
@@ -239,10 +244,14 @@ impl<'a> ApprovalRecord<'a> {
     }
 
     pub(super) fn detail(self) -> String {
+        use crate::sandbox::exec_approval::GrantScope;
         match self {
             Self::GrantedByUser => "approved by the user".to_string(),
-            Self::GrantedBySessionMemory => {
+            Self::GrantedByStandingGrant(GrantScope::Session) => {
                 "satisfied by an earlier session grant for this exact call".to_string()
+            }
+            Self::GrantedByStandingGrant(GrantScope::Always) => {
+                "satisfied by a persistent grant for this exact call".to_string()
             }
             Self::Denied(reason) => redact_and_cap(reason),
         }

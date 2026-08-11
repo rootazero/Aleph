@@ -20,11 +20,15 @@ impl ApprovalBridge {
     /// `[Allow Once] [Allow Session]` / `[Deny]`; a blocked command offers only
     /// `Deny`.
     ///
-    /// No `Allow Always` button is ever rendered, even when `allowed` carries
-    /// [`ApprovalDecisionType::AllowAlways`]: there is no persistent allowlist
-    /// to write to, so the button would promise a permanence the system cannot
-    /// deliver (`ExecApprovalManager::clamp_decision` narrows it to a session
-    /// grant anyway).
+    /// `Allow Always` is rendered **only** when `allowed` carries
+    /// [`ApprovalDecisionType::AllowAlways`] — which
+    /// [`crate::exec::allowed_decisions::for_confirm_gate`] grants to an
+    /// operator-tier turn outside the declared-confirmation floor, and to
+    /// nobody else. It used to be suppressed unconditionally, because there was
+    /// no persistent allowlist to write to and the button would have promised a
+    /// permanence the system could not deliver; there is one now
+    /// (`sandbox::exec_approval::grants`), and the promise is kept by the same
+    /// list this keyboard reads, enforced again at the resolver.
     #[must_use]
     pub fn build_approval_keyboard(
         approval_id: &str,
@@ -41,6 +45,13 @@ impl ApprovalBridge {
             allow_row.push(InlineButton {
                 text: "✅ Allow Session".into(),
                 callback_data: format!("approve:{approval_id}:session"),
+            });
+        }
+
+        if allowed.contains(&ApprovalDecisionType::AllowAlways) {
+            allow_row.push(InlineButton {
+                text: "♾️ Allow Always".into(),
+                callback_data: format!("approve:{approval_id}:always"),
             });
         }
 
@@ -90,9 +101,12 @@ impl ApprovalBridge {
     pub const fn decision_response_text(decision: &ApprovalDecisionType) -> &'static str {
         match decision {
             ApprovalDecisionType::AllowOnce => "✅ Allowed (once)",
-            ApprovalDecisionType::AllowSession | ApprovalDecisionType::AllowAlways => {
-                "✅ Allowed (session)"
-            }
+            ApprovalDecisionType::AllowSession => "✅ Allowed (session)",
+            // The decision reaching here is post-clamp, so `AllowAlways` means
+            // the card really did offer the persistent tier and the grant
+            // really is durable. Echoing "(session)" would understate what the
+            // user just did — and this echo IS the read-what-you-approved loop.
+            ApprovalDecisionType::AllowAlways => "✅ Allowed (always — revocable in settings)",
             ApprovalDecisionType::Deny => "❌ Denied",
         }
     }
@@ -145,7 +159,20 @@ mod tests {
         );
         assert!(
             !json.contains("approve:req-1:always"),
-            "danger keyboard must not offer allow-always"
+            "a card raised at the session ceiling must not offer allow-always"
+        );
+
+        // And the other half of the same rule: when the gate DID offer the
+        // persistent tier, the button is there — otherwise the tier would be
+        // reachable from the Panel and dead on every channel.
+        let kb = ApprovalBridge::build_approval_keyboard(
+            "req-2",
+            &crate::exec::allowed_decisions::with_persistent(),
+        );
+        let json = serde_json::to_string(&kb).unwrap();
+        assert!(
+            json.contains("approve:req-2:always"),
+            "allow-always button missing when the card offered it: {json}"
         );
     }
 
@@ -166,24 +193,31 @@ mod tests {
     }
 
     #[test]
-    fn test_build_approval_keyboard_never_offers_always() {
-        // Even a decision set that still carries the legacy `AllowAlways` must
-        // not render a button promising permanence — nothing persists it.
+    fn test_build_approval_keyboard_renders_exactly_the_offered_tiers() {
+        // The legacy backfill set (`AllowOnce` / `AllowAlways` / `Deny`, no
+        // session tier): every offered tier is rendered and nothing else is
+        // invented. This test used to assert that `always` was suppressed
+        // unconditionally — true while no persistent allowlist existed, and a
+        // silent lie the moment one did.
         let keyboard = ApprovalBridge::build_approval_keyboard(
             "test123",
             &crate::exec::allowed_decisions::full_set(),
         );
         assert_eq!(keyboard.rows.len(), 2);
-        assert_eq!(keyboard.rows[0].len(), 1); // Allow Once only
+        assert_eq!(keyboard.rows[0].len(), 2); // Allow Once + Allow Always
         assert_eq!(keyboard.rows[1].len(), 1); // Deny
         assert!(keyboard.rows[0][0].callback_data.contains("test123"));
         assert!(keyboard.rows[0][0].callback_data.contains("once"));
+        assert!(keyboard.rows[0][1].callback_data.ends_with(":always"));
         assert!(keyboard.rows[1][0].callback_data.contains("deny"));
-        assert!(!keyboard
-            .rows
-            .iter()
-            .flatten()
-            .any(|b| b.callback_data.contains("always")));
+        assert!(
+            !keyboard
+                .rows
+                .iter()
+                .flatten()
+                .any(|b| b.callback_data.ends_with(":session")),
+            "a tier the set did not carry must not appear"
+        );
     }
 
     #[test]
@@ -205,10 +239,14 @@ mod tests {
             ApprovalBridge::decision_response_text(&ApprovalDecisionType::AllowSession),
             "✅ Allowed (session)"
         );
-        // Legacy `AllowAlways` reports the session grant that is actually applied.
+        // The decision reaching this renderer is post-clamp, so `AllowAlways`
+        // means the card really offered the persistent tier and the grant
+        // really is durable. Reporting "(session)" — which is what this
+        // asserted while the tier was legacy — would understate what the user
+        // just did, on the one echo that closes the read-what-you-approved loop.
         assert_eq!(
             ApprovalBridge::decision_response_text(&ApprovalDecisionType::AllowAlways),
-            "✅ Allowed (session)"
+            "✅ Allowed (always — revocable in settings)"
         );
         assert_eq!(
             ApprovalBridge::decision_response_text(&ApprovalDecisionType::Deny),

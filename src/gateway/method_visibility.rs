@@ -594,6 +594,14 @@ pub const SCOPED_METHODS: &[(&str, Treatment)] = &[
     // `SessionIdentity::OperatorOnly`.
     ("exec.approvals.pending", Treatment::ListFiltered),
     ("exec.approval.resolve", Treatment::KeyChecked),
+    // The standing-grant face of the same gate (2026-08-11). The list filters
+    // per row on the grant's OWN `session_key`; the revoke resolves the grant
+    // first and checks that same key before touching the store, answering a
+    // foreign fingerprint exactly as an unknown one. An `always`-scoped grant
+    // belongs to no session and is operator-only on both faces — the twin of
+    // the empty-key fleet-approval rule above.
+    ("exec.grants.list", Treatment::ListFiltered),
+    ("exec.grant.revoke", Treatment::KeyChecked),
     ("trace.by_runs", Treatment::KeyChecked),
     ("group_chat.list", Treatment::ListFiltered),
     ("group_chat.continue", Treatment::KeyChecked),

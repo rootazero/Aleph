@@ -85,6 +85,7 @@ mod tests {
             reason: None,
             originator_user_id: None,
             grant_key: None,
+            allowed_decisions: crate::exec::allowed_decisions::session_max(),
         }
     }
 

@@ -2894,6 +2894,254 @@ async fn a_session_grant_does_not_survive_into_an_unattended_run() {
     );
 }
 
+/// PINS THE SAME ADJUDICATED DECISION, one tier wider — a **persistent** grant
+/// does not carry into an unattended continuation either.
+///
+/// The 2026-08-07 ruling was made about session grants; a grant that outlives
+/// the process is strictly wider, so the reasoning applies a fortiori:
+/// executing something with nobody watching must rest on a present decision,
+/// not on a remembered click — and "remembered from last month" is further from
+/// present than "remembered ten minutes ago", not closer.
+///
+/// The block order is what enforces it (`if self.unattended` precedes BOTH
+/// standing-grant short-circuits, which are now one call), so this test and its
+/// session-scoped sibling fail together if anybody reorders them. It is here as
+/// its own case because "the persistent tier is exactly the feature people
+/// reach for to make cron stop asking" is precisely the argument that would be
+/// made for moving it, and the answer is to make the continuation attended.
+#[tokio::test]
+async fn a_persistent_grant_does_not_survive_into_an_unattended_run() {
+    use crate::sandbox::exec_approval::gate::ApprovalOutcome;
+
+    // `bash` under the `Ask` tier on an operator turn: a card that really does
+    // offer the persistent tier, so this test is about the unattended flag and
+    // not about the offer.
+    let requester = StdArc::new(FakeRequester::new(ApprovalOutcome::ApprovedAlways));
+    let ctx = turn_ctx("agent-always-vs-unattended");
+
+    let attended = ScopedToolService::new(tier_registry(), BTreeSet::new())
+        .with_exec_tier(crate::config::types::policies::ExecTier::Ask)
+        .with_turn_context(ctx.clone())
+        .with_confirmation(StdArc::clone(&requester) as _);
+    attended
+        .execute("bash", json!({"probe": "always-vs-unattended"}))
+        .await
+        .expect("granted");
+    assert_eq!(requester.calls.load(Ordering::SeqCst), 1);
+    attended
+        .execute("bash", json!({"probe": "always-vs-unattended"}))
+        .await
+        .expect("the persistent grant holds while a human is attached");
+    assert_eq!(requester.calls.load(Ordering::SeqCst), 1);
+
+    let unattended = ScopedToolService::new(tier_registry(), BTreeSet::new())
+        .with_exec_tier(crate::config::types::policies::ExecTier::Ask)
+        .with_turn_context(ctx)
+        .with_confirmation(StdArc::clone(&requester) as _)
+        .with_unattended(true);
+    let err = unattended
+        .execute("bash", json!({"probe": "always-vs-unattended"}))
+        .await
+        .unwrap_err();
+    assert!(
+        matches!(err, ToolError::Execution { .. }),
+        "a persistent grant must not authorize an unattended run, got {err:?}"
+    );
+    assert_eq!(
+        requester.calls.load(Ordering::SeqCst),
+        1,
+        "and no card was raised into the void"
+    );
+}
+
+/// The difference the persistent tier actually buys: it satisfies the gate in a
+/// **different session**, where a session grant structurally cannot.
+///
+/// Without this the feature would be indistinguishable from the session tier in
+/// a single-process test run — which is how a store that silently wrote to the
+/// wrong bucket would still look green.
+#[tokio::test]
+async fn a_persistent_grant_satisfies_a_later_session() {
+    use crate::sandbox::exec_approval::gate::ApprovalOutcome;
+
+    let args = json!({"probe": "always-across-sessions"});
+    let requester = StdArc::new(FakeRequester::new(ApprovalOutcome::ApprovedAlways));
+    let first = ScopedToolService::new(tier_registry(), BTreeSet::new())
+        .with_exec_tier(crate::config::types::policies::ExecTier::Ask)
+        .with_turn_context(turn_ctx("agent-always-session-a"))
+        .with_confirmation(StdArc::clone(&requester) as _);
+    first.execute("bash", args.clone()).await.expect("granted");
+    assert_eq!(requester.calls.load(Ordering::SeqCst), 1);
+
+    // A different conversation entirely — a session grant would re-prompt here.
+    let second = ScopedToolService::new(tier_registry(), BTreeSet::new())
+        .with_exec_tier(crate::config::types::policies::ExecTier::Ask)
+        .with_turn_context(turn_ctx("agent-always-session-b"))
+        .with_confirmation(StdArc::clone(&requester) as _);
+    second
+        .execute("bash", args)
+        .await
+        .expect("the persistent grant is not session-scoped");
+    assert_eq!(
+        requester.calls.load(Ordering::SeqCst),
+        1,
+        "the second session must not have raised a card"
+    );
+}
+
+/// A requester that answers wider than the card offered cannot mint a
+/// persistent grant.
+///
+/// `ApprovalRequester` implementations return an `ApprovalOutcome` **directly**
+/// — the manager's clamp only covers the ones that route through it, and that
+/// trait has several. `danger` declares its own confirmation floor, so its card
+/// never offers the persistent tier; an outcome claiming one is recorded as a
+/// session grant instead. Observable end-to-end: the grant holds inside the
+/// session it was taken in, and does NOT cross into another one.
+#[tokio::test]
+async fn an_outcome_wider_than_the_card_cannot_mint_a_persistent_grant() {
+    use crate::sandbox::exec_approval::gate::ApprovalOutcome;
+
+    let args = json!({"probe": "wider-than-offered"});
+    let requester = StdArc::new(FakeRequester::new(ApprovalOutcome::ApprovedAlways));
+    let first = ScopedToolService::new(confirm_registry(), BTreeSet::new())
+        .with_turn_context(turn_ctx("agent-wider-a"))
+        .with_confirmation(StdArc::clone(&requester) as _);
+    first
+        .execute("danger", args.clone())
+        .await
+        .expect("granted");
+    first
+        .execute("danger", args.clone())
+        .await
+        .expect("it is still a grant — within this session");
+    assert_eq!(requester.calls.load(Ordering::SeqCst), 1);
+
+    let second = ScopedToolService::new(confirm_registry(), BTreeSet::new())
+        .with_turn_context(turn_ctx("agent-wider-b"))
+        .with_confirmation(StdArc::clone(&requester) as _);
+    second.execute("danger", args).await.expect("approved");
+    assert_eq!(
+        requester.calls.load(Ordering::SeqCst),
+        2,
+        "a grant the card never offered must not have outlived its session"
+    );
+}
+
+/// An operator's persistent grant does not silently cover a MEMBER's identical
+/// call.
+///
+/// The grant is install-wide by design — it is the per-call sibling of a
+/// `[policies.tool_permissions]` `allow` entry — but the person clicking
+/// "always" on their own card was not asked whether a member may issue the
+/// byte-identical call without stopping. Since a member's card never offers the
+/// tier, it is also never satisfied by it: one derivation, both directions
+/// (`GrantStore::granted_within`). Without this, the operator-escalation card
+/// for that call would stop being raised for everybody, permanently, from one
+/// click on an unrelated surface.
+#[tokio::test]
+async fn an_operators_persistent_grant_does_not_cover_a_members_identical_call() {
+    use crate::sandbox::exec_approval::gate::ApprovalOutcome;
+
+    let args = json!({"probe": "always-across-tiers"});
+    let operator_requester = StdArc::new(FakeRequester::new(ApprovalOutcome::ApprovedAlways));
+    let operator = ScopedToolService::new(tier_registry(), BTreeSet::new())
+        .with_exec_tier(crate::config::types::policies::ExecTier::Ask)
+        .with_turn_context(turn_ctx("agent-always-operator"))
+        .with_confirmation(StdArc::clone(&operator_requester) as _);
+    operator
+        .execute("bash", args.clone())
+        .await
+        .expect("granted");
+    assert_eq!(operator_requester.calls.load(Ordering::SeqCst), 1);
+
+    // Same action, same arguments — a member's turn. Their card never offered
+    // the persistent tier, so it is not satisfied by one either: they are asked.
+    let member_requester = StdArc::new(FakeRequester::new(ApprovalOutcome::Approved));
+    let mut member_ctx = turn_ctx("agent-always-member");
+    member_ctx.caller_role = Some("member".to_string());
+    let member = ScopedToolService::new(tier_registry(), BTreeSet::new())
+        .with_exec_tier(crate::config::types::policies::ExecTier::Ask)
+        .with_turn_context(member_ctx)
+        .with_confirmation(StdArc::clone(&member_requester) as _);
+    member.execute("bash", args).await.expect("approved");
+    assert_eq!(
+        member_requester.calls.load(Ordering::SeqCst),
+        1,
+        "the member must still have been asked"
+    );
+}
+
+/// A member's card must not offer the persistent tier, and the tool's own
+/// declared floor must not offer it to anybody.
+///
+/// This is the production narrowing scenario `allowed_decisions` exists for —
+/// before it, the Panel drew three fixed buttons and the field had no consumer
+/// that could ever disagree with them. The set is asserted on the ACTION the
+/// gate handed the requester, which is the same object every surface renders
+/// from, so this covers the Panel, the channels and the TUI at once.
+#[tokio::test]
+async fn the_offered_decision_set_narrows_by_rule_and_by_tier() {
+    use crate::exec::socket::ApprovalDecisionType;
+    use crate::sandbox::exec_approval::gate::ApprovalOutcome;
+
+    // `danger` declares its own confirmation gate (`tool_declared`): no tier,
+    // no `allow` entry and no button may switch it off — including for an
+    // operator, whose turn this is (`caller_role: None`).
+    let requester = StdArc::new(FakeRequester::new(ApprovalOutcome::Approved));
+    let operator = ScopedToolService::new(confirm_registry(), BTreeSet::new())
+        .with_turn_context(turn_ctx("agent-offer-declared"))
+        .with_confirmation(StdArc::clone(&requester) as _);
+    operator
+        .execute("danger", json!({"probe": "declared"}))
+        .await
+        .expect("approved");
+    let offered = requester.seen.lock().unwrap()[0].allowed_decisions.clone();
+    assert!(
+        !offered.contains(&ApprovalDecisionType::AllowAlways),
+        "the declared-floor card said no configuration can switch it off; \
+         offering a permanent grant makes that sentence false as it is read"
+    );
+
+    // A tier-raised card on the same turn DOES offer it… (`bash` is a plain
+    // mutator: gated by the `Ask` tier, not by the operator gate, so this
+    // exercises the decision set and nothing else.)
+    let requester = StdArc::new(FakeRequester::new(ApprovalOutcome::Approved));
+    let operator = ScopedToolService::new(tier_registry(), BTreeSet::new())
+        .with_exec_tier(crate::config::types::policies::ExecTier::Ask)
+        .with_turn_context(turn_ctx("agent-offer-tier"))
+        .with_confirmation(StdArc::clone(&requester) as _);
+    operator
+        .execute("bash", json!({"probe": "tier"}))
+        .await
+        .expect("approved");
+    let offered = requester.seen.lock().unwrap()[0].allowed_decisions.clone();
+    assert!(
+        offered.contains(&ApprovalDecisionType::AllowAlways),
+        "an operator-tier turn outside the declared floor may create a standing grant"
+    );
+
+    // …and the same card raised by a MEMBER does not. A persistent grant is
+    // install-wide; a member creating one would authorize everybody else's
+    // identical call.
+    let requester = StdArc::new(FakeRequester::new(ApprovalOutcome::Approved));
+    let mut member_ctx = turn_ctx("agent-offer-member");
+    member_ctx.caller_role = Some("member".to_string());
+    let member = ScopedToolService::new(tier_registry(), BTreeSet::new())
+        .with_exec_tier(crate::config::types::policies::ExecTier::Ask)
+        .with_turn_context(member_ctx)
+        .with_confirmation(StdArc::clone(&requester) as _);
+    member
+        .execute("bash", json!({"probe": "member"}))
+        .await
+        .expect("approved");
+    let offered = requester.seen.lock().unwrap()[0].allowed_decisions.clone();
+    assert!(
+        !offered.contains(&ApprovalDecisionType::AllowAlways),
+        "a member's card must not offer an install-wide grant"
+    );
+}
+
 /// The card must name the rule that gated the call.
 ///
 /// `danger` declares its own confirmation gate, which no tier and no explicit

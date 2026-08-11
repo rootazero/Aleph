@@ -54,7 +54,6 @@ use async_trait::async_trait;
 
 use crate::exec::decision::ApprovalRequest;
 use crate::exec::manager::{ExecApprovalManager, DEFAULT_APPROVAL_TIMEOUT_MS};
-use crate::exec::socket::ApprovalDecisionType;
 use crate::gateway::event_bus::GatewayEventBus;
 use crate::gateway::events::GatewayEventFrame;
 use crate::sandbox::exec_approval::gate::{ApprovalOutcome, ApprovalRequester, ApprovalResponse};
@@ -151,7 +150,12 @@ impl ApprovalRequester for OperatorApprovalRequester {
             // Session-grant identity of this action: a session-level decision
             // cascades to other pending cards of the same action.
             grant_key: action.grant_key.clone(),
+            // What the gate decided this card may offer. Carried onto the
+            // record, where the resolve RPC enforces it.
+            allowed_decisions: action.allowed_decisions.clone(),
         };
+        // Kept for the outcome mapping below: `request` is moved into `create`.
+        let allowed_decisions = action.allowed_decisions.clone();
         let mut record = self.manager.create(&request, DEFAULT_APPROVAL_TIMEOUT_MS);
         // The RPC leg of the same fact the blank frame key carries. Stamped on
         // the record (not derived from its `session_key`, which stays real for
@@ -237,7 +241,14 @@ impl ApprovalRequester for OperatorApprovalRequester {
         }
 
         ApprovalResponse {
-            outcome: decision.map_or(ApprovalOutcome::Timeout, ApprovalDecisionType::to_outcome),
+            // Against the set this card was raised with (see
+            // `ApprovalAction::allowed_decisions`). On an operator ESCALATION
+            // that set never contains the persistent tier — the requesting turn
+            // is by construction not operator-tier — so answering "always" here
+            // cannot permanently strip the gate a member has to pass.
+            outcome: decision.map_or(ApprovalOutcome::Timeout, |d| {
+                d.to_outcome_within(&allowed_decisions)
+            }),
             deny_reason: resolved.deny_reason,
         }
     }
@@ -246,6 +257,7 @@ impl ApprovalRequester for OperatorApprovalRequester {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::exec::socket::ApprovalDecisionType;
     use crate::routing::session_key::SessionKey;
     use crate::tools::turn_context::{TurnContext, TURN_CONTEXT};
     use std::time::Duration;

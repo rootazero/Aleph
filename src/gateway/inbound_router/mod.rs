@@ -1008,9 +1008,11 @@ impl InboundMessageRouter {
         // Approval reply: `/approve [n] [once|session|always]` or
         // `/deny [n] [reason…]`. A bare `/approve` (or any unrecognized
         // suffix) stays the least-privilege `AllowOnce`; `session` widens the
-        // grant to the rest of the session. `always` is accepted for
-        // backwards compatibility but the manager clamps it to a session
-        // grant — nothing persists. The optional 1-based index picks a
+        // grant to the rest of the session. `always` asks for the persistent
+        // tier and is honoured only when THAT card was raised offering it
+        // (`exec::allowed_decisions::for_confirm_gate`); otherwise the manager
+        // narrows it to a session grant, and the reply below echoes whichever
+        // one the user actually got. The optional 1-based index picks a
         // specific card when several pend concurrently (approval-gated calls
         // may share a parallel batch); a bare reply then resolves NOTHING and
         // the manager hands back the numbered listing instead of
@@ -1066,10 +1068,11 @@ impl InboundMessageRouter {
                 } else {
                     None
                 };
-                // Reply with the EFFECTIVE decision (the manager clamps an
-                // `always` to a session grant, so never promise permanence)
-                // and echo WHAT was resolved, closing the read-what-you-
-                // approve loop.
+                // Reply with the EFFECTIVE decision — the manager narrows an
+                // `always` to a session grant unless THAT card offered the
+                // persistent tier, so the echo is the only place the user
+                // learns which one they actually got — and echo WHAT was
+                // resolved, closing the read-what-you-approve loop.
                 let reply = match mgr.resolve_for_session(
                     &session_key,
                     index,

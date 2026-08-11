@@ -23,6 +23,9 @@ fn request(id: &str) -> ApprovalRequest {
         reason: None,
         originator_user_id: None,
         grant_key: None,
+        // The default ceiling every gate but the operator-tier confirm gate
+        // raises its cards with.
+        allowed_decisions: alephcore::exec::allowed_decisions::session_max(),
     }
 }
 

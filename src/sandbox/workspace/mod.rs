@@ -298,11 +298,21 @@ impl Sandbox for WorkspaceSandbox {
                     .await;
                 let outcome = response.outcome;
                 match outcome {
-                    // Either grant flavour elevates; this path already caches the
+                    // Every grant flavour elevates; this path already caches the
                     // grant per-session in `granted_elevations`, so a one-shot
                     // `Approved` and a session-scoped `ApprovedForSession` are
                     // equivalent here.
-                    ApprovalOutcome::Approved | ApprovalOutcome::ApprovedForSession => {
+                    //
+                    // `ApprovedAlways` is listed for exhaustiveness and is
+                    // unreachable: `ApprovalAction::for_command` raises this
+                    // card at the session ceiling, so the resolver narrows an
+                    // "always" before it can get here. There is no persistent
+                    // tier for capability elevations — `granted_elevations` is
+                    // per-workspace and per-session — and honouring one here
+                    // would persist an elevation nothing can list or revoke.
+                    ApprovalOutcome::Approved
+                    | ApprovalOutcome::ApprovedForSession
+                    | ApprovalOutcome::ApprovedAlways => {
                         ws.granted_elevations.write().await.insert(normalized_caps);
                         // A yes ends the run of consecutive refusals the
                         // brute-force breaker counts. Both gates share one

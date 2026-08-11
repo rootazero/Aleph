@@ -2803,6 +2803,17 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
             session_store.clone(),
         );
 
+        // exec.grants.* — the peacetime face of the same subsystem: what has
+        // been allowed standing, and how to take it back. `grants::global()`
+        // and NOT a fresh store: this must be the very instance the confirm
+        // gate (`ScopedToolService::confirm_with_memory`) reads, or a
+        // revocation would report success and change nothing.
+        alephcore::gateway::handlers::exec_grants::register_handlers(
+            server.handlers_mut(),
+            alephcore::sandbox::exec_approval::grants::global(),
+            session_store.clone(),
+        );
+
         // clarification.* RPC handlers — same `Arc` the `ask_user` tool parks on.
         // `session_store` backs the P1 per-user visibility checks (spec
         // §11-1c) `register_handlers` now applies to both methods.

@@ -282,6 +282,7 @@ mod tests {
             reason: Some("non-idempotent".to_string()),
             originator_user_id: None,
             grant_key: None,
+            allowed_decisions: crate::exec::allowed_decisions::session_max(),
         };
         let record = manager.create(&request, 120_000);
         let (id, rx, _timeout) = manager.register_pending(record);
@@ -412,6 +413,7 @@ mod tests {
             reason: Some("config tier".to_string()),
             originator_user_id: None,
             grant_key: None,
+            allowed_decisions: crate::exec::allowed_decisions::session_max(),
         };
         let mut record = manager.create(&request, 120_000);
         record.operator_only = true;
