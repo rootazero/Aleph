@@ -1627,7 +1627,13 @@ impl ToolRegistry for BuiltinToolRegistry {
                 }
                 let tool = tool_name.to_string();
                 error!(tool = %tool, "Unknown tool requested");
-                Box::pin(async move { Err(AlephError::tool(format!("Unknown tool: {tool}"))) })
+                // Truncate the echoed name — the model is told the tool list, so
+                // echoing the verbatim name back as a tool result is small
+                // information disclosure (a malicious or buggy harness asking
+                // for a name not in the model list would otherwise get back the
+                // exact name it asked for, which it could then broadcast).
+                let display: String = tool.chars().take(64).collect();
+                Box::pin(async move { Err(AlephError::tool(format!("Unknown tool: {display}"))) })
             }
         }
     }
