@@ -1,6 +1,6 @@
 //! `ScratchpadProgressSink` — the R5 "AI comes to you" progress side-channel.
 //!
-//! `progress_echo` (`builtin_tools/scratchpad.rs`) renders the task checklist
+//! `progress_parts` (`builtin_tools/scratchpad.rs`) renders the task checklist
 //! into the *tool result*, which is **model-facing** only. When Aleph runs a
 //! long multi-step task headless (background / daemon-triggered), the user
 //! sees nothing until the final reply — a black box.
@@ -35,17 +35,6 @@ use crate::gateway::channel_registry::ChannelRegistry;
 use crate::harness::trace::LoopTraceEvent;
 use crate::harness::TraceSink;
 
-/// Scratchpad actions whose completion is worth surfacing to the user.
-///
-/// These are exactly the actions whose `content` is a `render_progress`
-/// checklist. Deliberately excluded:
-/// * `read` / `initialize` — `content` is the **raw markdown document**, not a
-///   checklist, so pushing it would dump the whole file under a "任务进度"
-///   header (`initialize` used to be listed and did exactly that);
-/// * `append_note` — internal scratch;
-/// * `clear` — returns no `content` at all, so its arm could never fire.
-const PROGRESS_ACTIONS: &[&str] = &["set_objective", "set_plan", "start_item", "complete_item"];
-
 /// Translate a trace event into a human-readable progress line for the user's
 /// channel, or `None` when the event carries no surfaceable progress.
 ///
@@ -56,26 +45,26 @@ pub(crate) fn scratchpad_progress_line(event: &LoopTraceEvent) -> Option<String>
     use crate::tools::runtime::ToolResult;
 
     match event {
-        // Objective set / plan laid out / step ticked — the `content` field
-        // carries the `render_progress` checklist snapshot.
+        // Objective set / plan laid out / step ticked — `ScratchpadOutput`
+        // carries the `render_progress` checklist in `progress`.
+        //
+        // This used to be gated on a `PROGRESS_ACTIONS` whitelist of four
+        // action names, because the echo shared the `content` field with the
+        // raw markdown that `read` / `initialize` return and there was no other
+        // way to tell them apart (`initialize` was once on the list, and did
+        // push the whole file under a 任务进度 header). A name list only
+        // describes the actions that existed the day it was written: a fifth
+        // mutating action would have stopped reaching the user's channel with
+        // nothing failing anywhere. The tool now says which of the two it is,
+        // so the shape is the criterion and there is no list to forget.
         LoopTraceEvent::ToolCallCompleted { call, result, .. }
             if call.tool_name == "scratchpad" =>
         {
-            let action = call
-                .input
-                .get("action")
-                .and_then(|a| a.as_str())
-                .unwrap_or_default();
-            if !PROGRESS_ACTIONS.contains(&action) {
-                return None;
-            }
             let output = match result {
-                ToolResult::Success { output } => {
-                    output
-                }
+                ToolResult::Success { output } => output,
                 ToolResult::Error { .. } => return None,
             };
-            let content = output.get("content")?.as_str()?.trim();
+            let content = output.get("progress")?.as_str()?.trim();
             if content.is_empty() {
                 return None;
             }
@@ -166,9 +155,9 @@ mod tests {
     use crate::orchestrator::dispatch::TerminateReason;
     use crate::tools::runtime::ToolResult;
 
-    fn scratchpad_completed(action: &str, content: Option<&str>) -> LoopTraceEvent {
-        let output = match content {
-            Some(c) => serde_json::json!({ "success": true, "content": c }),
+    fn scratchpad_completed(action: &str, progress: Option<&str>) -> LoopTraceEvent {
+        let output = match progress {
+            Some(c) => serde_json::json!({ "success": true, "progress": c }),
             None => serde_json::json!({ "success": true }),
         };
         LoopTraceEvent::ToolCallCompleted {
@@ -206,15 +195,41 @@ mod tests {
         assert!(line.contains("Ship auth"));
     }
 
+    /// `read` returns the raw markdown in `content` and never sets `progress`,
+    /// so the pull is not mistaken for a push. Before, this was true only
+    /// because "read" was absent from a hand-kept action list.
     #[test]
-    fn read_action_is_not_surfaced() {
-        // Read returns content too, but it is a pull — not progress.
-        let ev = scratchpad_completed("read", Some("[ ] A"));
+    fn a_raw_markdown_read_is_not_surfaced_as_progress() {
+        let ev = LoopTraceEvent::ToolCallCompleted {
+            iteration: 1,
+            call: ToolCallEndEvent {
+                tool_id: "id".into(),
+                tool_name: "scratchpad".into(),
+                input: serde_json::json!({ "action": "read" }),
+                duration_ms: 5,
+            },
+            result: ToolResult::Success {
+                output: serde_json::json!({
+                    "success": true,
+                    "content": "# Current Task\n\n## Objective\nShip\n"
+                }),
+            },
+        };
         assert!(scratchpad_progress_line(&ev).is_none());
     }
 
+    /// The real contract this replaced a whitelist with: whether a line is
+    /// pushed is decided by the OUTPUT shape, not by the action's name. A
+    /// mutating action nobody remembered to register still surfaces.
     #[test]
-    fn mutation_without_content_is_skipped() {
+    fn an_unregistered_action_name_still_surfaces_when_it_carries_progress() {
+        let ev = scratchpad_completed("some_future_mutation", Some("[x] A\n[ ] B"));
+        let line = scratchpad_progress_line(&ev).expect("shape decides, not the name");
+        assert!(line.contains("任务进度"));
+    }
+
+    #[test]
+    fn mutation_without_progress_is_skipped() {
         let ev = scratchpad_completed("set_plan", None);
         assert!(scratchpad_progress_line(&ev).is_none());
     }
@@ -230,7 +245,7 @@ mod tests {
                 duration_ms: 5,
             },
             result: ToolResult::Success {
-                output: serde_json::json!({ "content": "x" }),
+                output: serde_json::json!({ "progress": "x" }),
             },
         };
         assert!(scratchpad_progress_line(&ev).is_none());

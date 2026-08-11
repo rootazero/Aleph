@@ -199,6 +199,43 @@ pub fn plan_snapshot_dto(s: &ScratchpadSnapshot) -> PlanSnapshotDto {
     }
 }
 
+/// Resolve the execution list a session is currently writing to.
+///
+/// **The single "session → plan" resolution point.** Three surfaces need this
+/// answer and they must not each derive it: the prompt layer
+/// (`harness_bridge::context_blocks::active_execution_plan`), the stop guard
+/// (`ScratchpadGoalVerifier`, which additionally needs the raw snapshot for its
+/// veto text), and `chat.history`, which hands the durable list to a client
+/// that just attached. Registry → manager → parse, once.
+///
+/// `None` when the session never bound a scratchpad, the file is gone, or it
+/// cannot be read. Fail-soft on I/O for the same reason the verifier is: a
+/// transient read error must never wedge prompt assembly or a history fetch.
+pub async fn session_plan(session_key: &str) -> Option<ScratchpadSnapshot> {
+    let project_id = scratchpad_registry::active(session_key)?;
+    // The real session key, not a literal: `ScratchpadManager` stamps it into
+    // the file's `_Session:` line on any write, and a reader that passes a
+    // stand-in is one refactor away from becoming a writer that stamps it.
+    let manager = ScratchpadManager::new(&project_id, session_key);
+    if !manager.exists() {
+        return None;
+    }
+    manager.snapshot().await.ok()
+}
+
+/// [`session_plan`] projected onto the wire shape, for renderers.
+///
+/// Returns `None` for an inert list (no objective *and* no items) so a caller
+/// that hydrates a widget from this never blanks one it did not produce —
+/// the same rule the tool's own read-shaped actions follow.
+pub async fn session_plan_snapshot(session_key: &str) -> Option<PlanSnapshotDto> {
+    let snap = session_plan(session_key).await?;
+    if snap.objective.is_none() && snap.items.is_empty() {
+        return None;
+    }
+    Some(plan_snapshot_dto(&snap))
+}
+
 /// Arguments for the scratchpad tool
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct ScratchpadArgs {
@@ -230,8 +267,21 @@ pub struct ScratchpadOutput {
     pub success: bool,
     /// Human-readable result message
     pub message: String,
-    /// Scratchpad content (returned for Read/Initialize)
+    /// The raw scratchpad markdown — `read` / `initialize` only.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub content: Option<String>,
+    /// The updated checklist, echoed after a **mutating** action.
+    ///
+    /// Its own field rather than sharing `content` with the raw markdown
+    /// above. Two different things in one field forced every consumer to
+    /// recover the difference from somewhere else, and the progress sink did
+    /// it with a hand-kept list of action names (`PROGRESS_ACTIONS`) — a
+    /// whitelist that only describes the actions that existed the day it was
+    /// written, so a ninth action would silently stop reaching the user's
+    /// channel with nothing failing. Now the shape answers it: this field is
+    /// present exactly when there is progress to surface.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub progress: Option<String>,
     /// Structured plan snapshot for the Panel Todo widget (mutating actions only).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub snapshot: Option<PlanSnapshotDto>,
@@ -279,19 +329,10 @@ impl ScratchpadTool {
     }
 }
 
-/// Read the scratchpad snapshot once and produce BOTH the model-facing
-/// progress echo text and the Panel-facing structured DTO, so the two never
-/// drift. Fail-soft: returns (None, None) on any read error rather than
-/// failing the op.
-///
-/// When the action just finished the objective (every box `[x]`), the echo
-/// becomes a wrap-up completion summary instead of the in-progress checklist —
-/// closing the goal-loop with hermes-agent `mark_done` parity. The summary is
-/// structural (the model's own checkboxes), so the model stays sovereign over
-/// completion (R7); the progress sink mirrors it to the user channel (R5).
-/// Panel-facing DTO only, with no model-facing echo — for read-shaped actions
-/// whose `content` is already the raw markdown. Fail-soft to `None`; an empty
-/// plan yields `None` so a read never blanks a widget it did not produce.
+/// Panel-facing DTO only, with no model-facing echo — for the read-shaped
+/// actions whose `content` is already the raw markdown. Fail-soft to `None`;
+/// an empty plan yields `None` so a read never blanks a widget it did not
+/// produce.
 async fn plan_snapshot(manager: &ScratchpadManager) -> Option<PlanSnapshotDto> {
     let snap = manager.snapshot().await.ok()?;
     if snap.objective.is_none() && snap.items.is_empty() {
@@ -300,6 +341,19 @@ async fn plan_snapshot(manager: &ScratchpadManager) -> Option<PlanSnapshotDto> {
     Some(plan_snapshot_dto(&snap))
 }
 
+/// Read the scratchpad once and produce BOTH the model-facing progress echo
+/// and the Panel-facing structured DTO, so the two never drift. Fail-soft:
+/// `(None, None)` on any read error rather than failing the op.
+///
+/// When the action just finished the objective (every box `[x]`), the echo
+/// becomes a wrap-up completion summary instead of the in-progress checklist —
+/// closing the goal-loop with hermes-agent `mark_done` parity. The summary is
+/// structural (the model's own checkboxes), so the model stays sovereign over
+/// completion (R7); the progress sink mirrors it to the user channel (R5).
+///
+/// Unbounded by design — this is a tool result, one message the model asked
+/// for, backstopped by the generic tool-output budget. The prompt-resident copy
+/// is the one that has to be capped; see `render_progress_bounded`.
 async fn progress_parts(manager: &ScratchpadManager) -> (Option<String>, Option<PlanSnapshotDto>) {
     match manager.snapshot().await {
         Ok(s) => {
@@ -397,6 +451,7 @@ impl AlephTool for ScratchpadTool {
                         "Scratchpad initialized".to_string()
                     },
                     content: Some(content),
+                    progress: None,
                     // Read-shaped actions carry the snapshot too, so the Panel
                     // Todo widget rehydrates on reconnect / a fresh session
                     // attaching to an existing project — it used to stay hidden
@@ -411,6 +466,7 @@ impl AlephTool for ScratchpadTool {
                         success: true,
                         message: "No scratchpad exists for this project".to_string(),
                         content: None,
+                        progress: None,
                         snapshot: None,
                     });
                 }
@@ -419,6 +475,7 @@ impl AlephTool for ScratchpadTool {
                     success: true,
                     message: "Scratchpad content loaded".to_string(),
                     content: Some(content),
+                    progress: None,
                     snapshot: plan_snapshot(&manager).await,
                 })
             }
@@ -426,11 +483,12 @@ impl AlephTool for ScratchpadTool {
             ScratchpadAction::SetObjective => {
                 let value = args.value.unwrap_or_default();
                 manager.set_objective(&value).await?;
-                let (content, snapshot) = progress_parts(&manager).await;
+                let (progress, snapshot) = progress_parts(&manager).await;
                 Ok(ScratchpadOutput {
                     success: true,
                     message: format!("Objective updated: {value}"),
-                    content,
+                    content: None,
+                    progress,
                     snapshot,
                 })
             }
@@ -445,7 +503,7 @@ impl AlephTool for ScratchpadTool {
                     .map(str::trim)
                     .filter(|v| !v.is_empty());
                 let written = manager.set_plan(objective, &items).await?;
-                let (content, snapshot) = progress_parts(&manager).await;
+                let (progress, snapshot) = progress_parts(&manager).await;
                 let inert = objective.is_none() && current.objective.is_none() && written > 0;
                 let message = if inert {
                     format!(
@@ -459,31 +517,34 @@ impl AlephTool for ScratchpadTool {
                 Ok(ScratchpadOutput {
                     success: true,
                     message,
-                    content,
+                    content: None,
+                    progress,
                     snapshot,
                 })
             }
 
             ScratchpadAction::StartItem => {
-                let index = args.item_index.unwrap_or(0);
+                let index = require_item_index(args.item_index, "start_item")?;
                 manager.start_item(index).await?;
-                let (content, snapshot) = progress_parts(&manager).await;
+                let (progress, snapshot) = progress_parts(&manager).await;
                 Ok(ScratchpadOutput {
                     success: true,
                     message: format!("Item {index} marked in progress (current step)"),
-                    content,
+                    content: None,
+                    progress,
                     snapshot,
                 })
             }
 
             ScratchpadAction::CompleteItem => {
-                let index = args.item_index.unwrap_or(0);
+                let index = require_item_index(args.item_index, "complete_item")?;
                 manager.complete_item(index).await?;
-                let (content, snapshot) = progress_parts(&manager).await;
+                let (progress, snapshot) = progress_parts(&manager).await;
                 Ok(ScratchpadOutput {
                     success: true,
                     message: format!("Item {index} marked as complete"),
-                    content,
+                    content: None,
+                    progress,
                     snapshot,
                 })
             }
@@ -495,6 +556,7 @@ impl AlephTool for ScratchpadTool {
                     success: true,
                     message: "Note appended".to_string(),
                     content: None,
+                    progress: None,
                     snapshot: None,
                 })
             }
@@ -505,11 +567,30 @@ impl AlephTool for ScratchpadTool {
                     success: true,
                     message: "Scratchpad cleared".to_string(),
                     content: None,
+                    progress: None,
                     snapshot: None,
                 })
             }
         }
     }
+}
+
+/// `item_index` is required by the two index-addressed actions.
+///
+/// It used to default to `0`. An out-of-range index has been a real error
+/// since §3.13 ④ — because "you completed item 7" for a 3-item plan tells the
+/// model it recorded work it did not, and the run then burns `steer_max`
+/// against a veto it cannot explain. A *missing* index reaches the identical
+/// end state by a shorter road: it silently ticks whatever step 0 happens to
+/// be, reports success, and the step the model meant stays open. Same
+/// consequence, so the same answer.
+fn require_item_index(index: Option<usize>, action: &str) -> Result<usize> {
+    index.ok_or_else(|| {
+        crate::error::AlephError::tool(format!(
+            "action='{action}' needs `item_index` (0-based, from the current plan). \
+             Call action='read' to see the list."
+        ))
+    })
 }
 
 /// Derive a filesystem-safe default scratchpad project id from the live
@@ -621,6 +702,134 @@ mod tests {
             "plan file must name its owning session, got:\n{content}"
         );
         assert!(!content.contains("_Session: tool_"));
+    }
+
+    fn args(action: ScratchpadAction) -> ScratchpadArgs {
+        ScratchpadArgs {
+            project_id: Some("shape-probe".to_string()),
+            action,
+            value: None,
+            items: None,
+            item_index: None,
+        }
+    }
+
+    /// The two index-addressed actions must not silently default to item 0.
+    ///
+    /// An out-of-range index has been a hard error since the round that found
+    /// runs burning `steer_max` against a veto they could not explain — the
+    /// model had been told it recorded work it never did. A *missing* index
+    /// reached the same place faster: tick step 0, report success, leave the
+    /// intended step open.
+    #[tokio::test]
+    async fn an_index_addressed_action_without_an_index_is_refused() {
+        let _home = crate::utils::paths::IsolatedAlephHome::new();
+        let tool = ScratchpadTool::new();
+        tool.call(ScratchpadArgs {
+            value: Some("Ship".into()),
+            items: Some(vec![
+                PlanItemArg::Text("first".into()),
+                PlanItemArg::Text("second".into()),
+            ]),
+            ..args(ScratchpadAction::SetPlan)
+        })
+        .await
+        .unwrap();
+
+        for action in [ScratchpadAction::StartItem, ScratchpadAction::CompleteItem] {
+            let err = tool.call(args(action)).await.unwrap_err();
+            assert!(
+                err.to_string().contains("item_index"),
+                "the refusal must name the missing argument: {err}"
+            );
+        }
+
+        // And nothing was ticked behind the refusal.
+        let snap = session_plan("").await;
+        assert!(snap.is_none(), "no session bound, so no ambient plan");
+        let manager = ScratchpadManager::new("shape-probe", "");
+        let items = manager.snapshot().await.unwrap().items;
+        assert!(
+            items.iter().all(|i| i.status == PlanItemStatus::Pending),
+            "a refused call must not move an item: {items:?}"
+        );
+    }
+
+    /// `content` is the raw markdown, `progress` is the checklist echo. The
+    /// progress sink decides what to push to the user's channel from the
+    /// presence of the second one, so a mutating action that put its echo in
+    /// `content` would either go unpushed or push a whole markdown file.
+    #[tokio::test]
+    async fn the_two_output_texts_live_in_their_own_fields() {
+        let _home = crate::utils::paths::IsolatedAlephHome::new();
+        let tool = ScratchpadTool::new();
+
+        let mutated = tool
+            .call(ScratchpadArgs {
+                value: Some("Ship auth".into()),
+                items: Some(vec![PlanItemArg::Text("Design".into())]),
+                ..args(ScratchpadAction::SetPlan)
+            })
+            .await
+            .unwrap();
+        assert!(
+            mutated.content.is_none(),
+            "a mutation returns no raw markdown"
+        );
+        let progress = mutated.progress.expect("a mutation echoes the checklist");
+        assert!(progress.contains("Objective: Ship auth"));
+        assert!(progress.contains("- [ ] Design"));
+
+        let read = tool.call(args(ScratchpadAction::Read)).await.unwrap();
+        assert!(
+            read.progress.is_none(),
+            "a read is a pull, not progress — pushing it would dump the file"
+        );
+        let markdown = read.content.expect("a read returns the document");
+        assert!(markdown.starts_with("# Current Task"));
+        // Both shapes still carry the structured snapshot the Panel reads.
+        assert!(read.snapshot.is_some() && mutated.snapshot.is_some());
+    }
+
+    /// The seam `chat.history` serves: whatever the tool wrote is readable
+    /// back out of the durable file by session key alone, with no live frame
+    /// and no trace involved.
+    #[tokio::test]
+    async fn a_written_plan_is_resolvable_from_the_session_key_alone() {
+        let _home = crate::utils::paths::IsolatedAlephHome::new();
+        let session = "agent:resolver:main:s1";
+        let tool = ScratchpadTool::new()
+            .with_session_key_handle(Some(Arc::new(RwLock::new(session.to_string()))));
+
+        assert!(
+            session_plan_snapshot(session).await.is_none(),
+            "nothing bound yet"
+        );
+
+        tool.call(ScratchpadArgs {
+            project_id: None, // derive from the session, the single-chat case
+            action: ScratchpadAction::SetPlan,
+            value: Some("Ship auth".into()),
+            items: Some(vec![
+                PlanItemArg::Detailed {
+                    text: "Design".into(),
+                    status: Some(PlanItemStatusArg::Completed),
+                },
+                PlanItemArg::Text("Build".into()),
+            ]),
+            item_index: None,
+        })
+        .await
+        .unwrap();
+
+        let dto = session_plan_snapshot(session)
+            .await
+            .expect("the durable list is reachable by session key");
+        assert_eq!(dto.objective.as_deref(), Some("Ship auth"));
+        assert_eq!(dto.done_count(), 1);
+        assert_eq!(dto.total(), 2);
+        assert!(!dto.complete);
+        crate::builtin_tools::scratchpad_registry::clear(session);
     }
 
     #[test]

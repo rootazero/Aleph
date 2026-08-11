@@ -32,9 +32,7 @@
 use async_trait::async_trait;
 use tokio_util::sync::CancellationToken;
 
-use crate::builtin_tools::scratchpad_registry;
 use crate::memory::scratchpad::ScratchpadSnapshot;
-use crate::memory::ScratchpadManager;
 use crate::verification::turn_verifier::{TurnVerifier, TurnVerifyContext, VerifierVerdict};
 
 /// Cap on how many pending items a single veto message enumerates.
@@ -74,20 +72,20 @@ impl TurnVerifier for ScratchpadGoalVerifier {
         let Some(session_key) = ctx.session_id else {
             return VerifierVerdict::Continue;
         };
-        // Which project the session is writing its scratchpad to.
-        let Some(project_id) = scratchpad_registry::active(session_key) else {
-            return VerifierVerdict::Continue;
-        };
-
-        let manager = ScratchpadManager::new(&project_id, session_key);
+        // Registry lookup + parse, through the single "session → plan"
+        // resolver the prompt layer and `chat.history` also use — three
+        // surfaces answering "which list is this session working?" separately
+        // is three chances to answer it differently.
+        //
+        // Fail-open on `None`: a watchdog must never wedge the loop because a
+        // read failed.
         let snapshot = match tokio::select! {
             biased;
             _ = _cancel.cancelled() => return VerifierVerdict::Continue,
-            res = manager.snapshot() => res,
+            res = crate::builtin_tools::scratchpad::session_plan(session_key) => res,
         } {
-            Ok(s) => s,
-            // Fail-open: a watchdog must never wedge the loop on I/O error.
-            Err(_) => return VerifierVerdict::Continue,
+            Some(s) => s,
+            None => return VerifierVerdict::Continue,
         };
         // Dormant unless an objective is set AND a box is still unchecked
         // (the user-chosen "activate only when there is an objective" gate).
