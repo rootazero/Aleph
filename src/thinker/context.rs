@@ -187,6 +187,38 @@ pub struct TurnEnvelope {
     /// means "follow the agent's `[general] language`" — the legacy behaviour
     /// and identical prompt bytes.
     pub response_language: Option<String>,
+    /// Whether this turn's prompt gets memory injected — curated memory, the
+    /// wiki orientation index and per-query recall.
+    ///
+    /// Resolved by `execution_engine::turn_memory` (request > session >
+    /// `[memory] enabled`) and consumed by `harness_bridge::prompt_build` at
+    /// the one point those three envelopes converge. It rides the envelope
+    /// rather than a new parameter because `build_system_prompt` already
+    /// receives this struct, and because the fact belongs to the same family
+    /// the envelope exists for: what regime this turn runs under.
+    ///
+    /// `None` means "not resolved" and behaves as **on** — every dispatch path
+    /// that does not set it (sub-flows, token estimation, tests) must keep the
+    /// behaviour it had before this knob existed. `Some(Off)` is the only value
+    /// that suppresses anything, and it is also the only one the prompt
+    /// mentions: the model needs to know its memory is muted, or it will
+    /// explain its own amnesia by inventing a reason.
+    pub memory_mode: Option<crate::memory::session_memory_mode::MemoryMode>,
+}
+
+impl TurnEnvelope {
+    /// Whether the memory envelopes should be built for this turn.
+    ///
+    /// One derivation for the "unset means on" rule. Spelling it as
+    /// `!matches!(env.memory_mode, Some(Off))` at each consumer is how a second
+    /// consumer eventually gets the polarity backwards on the `None` case,
+    /// which silently strips memory from every dispatch path that does not set
+    /// the field.
+    #[must_use]
+    pub fn injects_memory(&self) -> bool {
+        self.memory_mode
+            .is_none_or(crate::memory::session_memory_mode::MemoryMode::injects)
+    }
 }
 
 /// Sub-agent binding carried by [`TurnEnvelope::parent`]. Newtype so a future
@@ -330,6 +362,18 @@ pub struct ResolvedContext {
     /// (request pill > session > global). `None` on internal / subagent
     /// dispatch, keeping their prompt byte-identical.
     pub session_mode: Option<crate::config::types::policies::SessionMode>,
+
+    /// Set only when this turn's memory injection is **muted**
+    /// (`memory_mode = off`), rendered by `OperatingEnvelopeLayer` as the
+    /// `Memory:` line.
+    ///
+    /// `false` — the overwhelmingly common case — renders nothing, so every
+    /// prompt that does not mute memory stays byte-identical. The muted case
+    /// must be stated: a model whose curated memory and note index were
+    /// silently withheld does not conclude "they were withheld", it concludes
+    /// it never knew, and then explains its own amnesia by inventing a reason
+    /// or by re-asking things the user already told it.
+    pub memory_muted: bool,
     /// Sub-agent dispatch ONLY: the parent session that spawned this run.
     /// Rendered by `RuntimeContextLayer` (priority 1720, Dynamic) as a
     /// nested `<parent kind="…">…</parent>` element inside the
@@ -380,6 +424,7 @@ impl ContextAggregator {
             voice_vocabulary: None,
             approval_tier: None,
             session_mode: None,
+            memory_muted: false,
             envelope_parent: None,
             run_id: None,
         }
@@ -400,6 +445,37 @@ impl ContextAggregator {
             security_notes: security.security_notes(),
             elevated_policy_note: security.elevated_policy_note(),
         }
+    }
+}
+
+/// Unit tests for the envelope's own derivations.
+#[cfg(test)]
+mod memory_mode_envelope_tests {
+    use super::TurnEnvelope;
+    use crate::memory::session_memory_mode::MemoryMode;
+
+    /// `None` must behave as ON. Every dispatch path that predates this knob
+    /// leaves the field unset, and the polarity getting flipped here would
+    /// silently strip memory from all of them — a change with no error, no
+    /// failing test of its own, and a symptom ("the model forgot") that reads
+    /// as a model problem.
+    #[test]
+    fn an_unset_memory_mode_still_injects() {
+        assert!(TurnEnvelope::default().injects_memory());
+    }
+
+    #[test]
+    fn only_off_suppresses_injection() {
+        let on = TurnEnvelope {
+            memory_mode: Some(MemoryMode::On),
+            ..TurnEnvelope::default()
+        };
+        assert!(on.injects_memory());
+        let off = TurnEnvelope {
+            memory_mode: Some(MemoryMode::Off),
+            ..TurnEnvelope::default()
+        };
+        assert!(!off.injects_memory());
     }
 }
 

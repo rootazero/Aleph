@@ -397,6 +397,14 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
     } else {
         session_store
     };
+    // Give `select_model`'s pin a place to survive a restart. Installed here,
+    // at the one point the final `session_store` exists, because the map that
+    // holds pins lives in `providers` and must not depend on the gateway: it
+    // publishes a sink trait, this fills it in. Wiring durability to one of the
+    // tool's three construction sites instead would have left the other two
+    // writing to memory only, each with its own green unit test.
+    alephcore::gateway::session_model_pin::StoreBackedPinSink::install(session_store.clone());
+
     // Keep a clone reachable at the boot-scan wiring site below for the
     // ProjectionReconciler; `session_store` itself is moved into downstream
     // subsystems below.

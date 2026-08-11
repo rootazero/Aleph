@@ -65,7 +65,9 @@ pub mod config;
 pub mod execution_engine;
 pub mod health_prober;
 pub mod session_manager;
+pub mod session_model_pin;
 pub mod session_projector;
+pub mod session_snapshot;
 pub mod session_store;
 // loop_callback_adapter removed (depended on old OTAF agent_loop types)
 pub mod channel;

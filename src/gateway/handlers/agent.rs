@@ -100,6 +100,16 @@ pub struct AgentRunParams {
     /// surface (schema-resident vs deferred), never permissions.
     #[serde(default)]
     pub mode: Option<String>,
+    /// Per-session memory mode (`"on"` / `"off"`) chosen by the caller. Fifth
+    /// twin of `exec_tier` / `thinking` / `mode`: rides the request so it can
+    /// govern the first turn of a conversation that has no session row yet, is
+    /// stamped onto the session by `resolve_turn_memory_mode`, and later turns
+    /// read it back from `identity_meta.custom["memory_mode"]`.
+    ///
+    /// Gates the three INJECTED memory envelopes only — never the memory tools,
+    /// never writes. See `memory::session_memory_mode`.
+    #[serde(default)]
+    pub memory: Option<String>,
     /// Marks this run's user input as ASR-transcribed speech (the Panel voice
     /// loop). Wires the session voice-mode registry so `VoiceModeLayer`
     /// injects spoken-reply guidance into this turn's prompt, and applies the
@@ -862,6 +872,18 @@ pub async fn build_run_request(
         );
     }
 
+    // Caller-chosen memory mode. Same fail-loud contract as its four twins: a
+    // caller who asks for a clean-room turn and silently gets their curated
+    // memory folded in has been told the opposite of what happened.
+    if let Some(raw) = params.memory.as_deref() {
+        let mode = crate::memory::session_memory_mode::MemoryMode::from_id(raw)
+            .ok_or_else(|| format!("unknown memory mode: {raw}"))?;
+        metadata.insert(
+            crate::memory::session_memory_mode::MEMORY_MODE_SESSION_KEY.to_string(),
+            mode.id().to_string(),
+        );
+    }
+
     // Convert RPC attachments (base64 payload from chat.send / agent.run)
     // into channel attachments so the engine's media processor sees them.
     // Undecodable entries are skipped with a warning rather than failing the
@@ -1133,6 +1155,106 @@ mod tests {
     use async_trait::async_trait;
     use chrono::Utc;
 
+    /// The `agent.run` contract, reconciled across the crate boundary.
+    ///
+    /// `aleph-tui` and `aleph-cli` cannot depend on `alephcore`, so they build
+    /// their request from [`aleph_protocol::AgentRunRequest`]. This crate
+    /// depends on both — it is the only place an assertion can compare the two
+    /// sides instead of comparing a literal to itself, which is exactly how the
+    /// original defect survived: the TUI sent `message`, the handler required
+    /// `input`, and every send since the TUI was written came back
+    /// `INVALID_PARAMS` with no test to notice.
+    ///
+    /// The check runs in the deserialize direction on purpose — a client
+    /// **constructs** the wire from the shared type, so what must hold is that
+    /// the handler accepts everything that type can emit. Renaming
+    /// `AgentRunParams::input` turns this red; renaming
+    /// `AgentRunRequest::input` turns the clients into compile errors.
+    #[test]
+    fn the_shared_run_request_deserializes_into_the_handler_params() {
+        let shared = aleph_protocol::AgentRunRequest {
+            input: "hello".into(),
+            session_key: Some("agent:main:main".into()),
+            channel: Some("cli:term1".into()),
+            agent_id: Some("main".into()),
+            thinking: Some("high".into()),
+            mode: Some("code".into()),
+            exec_tier: Some("auto".into()),
+        };
+        let wire = serde_json::to_value(&shared).expect("serialize shared request");
+        let parsed: AgentRunParams =
+            serde_json::from_value(wire.clone()).unwrap_or_else(|e| panic!("{e}: {wire}"));
+
+        assert_eq!(parsed.input, shared.input);
+        assert_eq!(parsed.session_key, shared.session_key);
+        assert_eq!(parsed.channel, shared.channel);
+        assert_eq!(parsed.agent_id, shared.agent_id);
+        assert_eq!(parsed.thinking, shared.thinking);
+        assert_eq!(parsed.mode, shared.mode);
+        assert_eq!(parsed.exec_tier, shared.exec_tier);
+    }
+
+    /// The response half of the same contract, checked by **key-set equality**,
+    /// not by parsing.
+    ///
+    /// Parsing only proves the server sends a superset: serde ignores unknown
+    /// keys, so a `from_value` assertion is structurally blind both to a field
+    /// the server stopped sending under a new name and to fields it sends that
+    /// nothing reads. Equality catches the first — which for this response
+    /// means the TUI silently keeping its own (possibly unroutable) session key
+    /// forever — and the second, which is how a whole `AgentEnv` once went out
+    /// on `workspace.get`.
+    ///
+    /// The expected set is derived from the contract type by serializing it, so
+    /// it cannot drift into a hand-maintained literal.
+    #[test]
+    fn the_run_result_carries_exactly_what_the_shared_type_declares() {
+        fn keys<T: serde::Serialize>(value: &T) -> std::collections::BTreeSet<String> {
+            serde_json::to_value(value)
+                .expect("serialize")
+                .as_object()
+                .expect("object")
+                .keys()
+                .cloned()
+                .collect()
+        }
+
+        let server = AgentRunResult {
+            run_id: "r-1".into(),
+            session_key: "agent:main:main:s2".into(),
+            accepted_at: "2026-08-11T00:00:00+00:00".into(),
+        };
+        let contract = aleph_protocol::AgentRunAccepted::default();
+
+        assert_eq!(
+            keys(&server),
+            keys(&contract),
+            "agent.run's response and the shared client contract disagree about which fields \
+             exist; a client cannot adopt a canonical session key it is not sent"
+        );
+
+        // And the value a thin client actually depends on survives the trip.
+        let parsed: aleph_protocol::AgentRunAccepted =
+            serde_json::from_value(serde_json::to_value(&server).expect("serialize"))
+                .expect("parse");
+        assert_eq!(parsed.session_key, "agent:main:main:s2");
+    }
+
+    /// The minimal request — a client that only has text and a session — must
+    /// parse too. The maximal case above would still pass if `input` had picked
+    /// up a `#[serde(default)]`, which would turn a client's *missing* field
+    /// into a silently empty prompt rather than a refusal.
+    #[test]
+    fn the_shared_run_request_parses_with_only_input_and_session() {
+        let shared = aleph_protocol::AgentRunRequest::new("agent:main:main", "hi");
+        let wire = serde_json::to_value(&shared).expect("serialize");
+        let parsed: AgentRunParams =
+            serde_json::from_value(wire.clone()).unwrap_or_else(|e| panic!("{e}: {wire}"));
+        assert_eq!(parsed.input, "hi");
+        assert!(parsed.attachments.is_empty());
+        assert!(parsed.model_override.is_none());
+    }
+
     /// Build a registry containing a "main" AgentInstance backed by a tempdir
     /// FileSessionStore. Holds onto the TempDir so callers can keep it alive
     /// for the duration of the test (dropping it tears down the workspace).
@@ -1253,6 +1375,7 @@ mod tests {
             model_override: None,
             exec_tier: None,
             mode: None,
+            memory: None,
             voice_input: false,
             project_id: None,
         };
@@ -1296,6 +1419,7 @@ mod tests {
             model_override: None,
             exec_tier: None,
             mode: None,
+            memory: None,
             voice_input: true,
             project_id: None,
         };
@@ -1320,6 +1444,7 @@ mod tests {
             model_override: None,
             exec_tier: None,
             mode: None,
+            memory: None,
             voice_input: false,
             project_id: None,
         };
@@ -1391,6 +1516,7 @@ mod tests {
             model_override: None,
             exec_tier: None,
             mode: None,
+            memory: None,
             voice_input: false,
             project_id: None,
         };
@@ -1491,6 +1617,7 @@ mod tests {
             }),
             exec_tier: None,
             mode: None,
+            memory: None,
             voice_input: false,
             project_id: None,
         };
@@ -1555,6 +1682,7 @@ mod tests {
             model_override: None,
             exec_tier: None,
             mode: None,
+            memory: None,
             voice_input: false,
             project_id: None,
         }
@@ -1699,6 +1827,7 @@ mod tests {
             model_override: None,
             exec_tier: None,
             mode: None,
+            memory: None,
             voice_input: false,
             project_id: None,
         };
@@ -1733,6 +1862,7 @@ mod tests {
             model_override: None,
             exec_tier: None,
             mode: None,
+            memory: None,
             voice_input: false,
             project_id: None,
         };
@@ -1767,6 +1897,7 @@ mod tests {
             model_override: None,
             exec_tier: None,
             mode: None,
+            memory: None,
             voice_input: false,
             project_id: None,
         };
@@ -1804,6 +1935,7 @@ mod tests {
             model_override: None,
             exec_tier: None,
             mode: None,
+            memory: None,
             voice_input: false,
             project_id: None,
         };
@@ -2332,6 +2464,7 @@ mod tests {
                 model_override: None,
                 exec_tier: None,
                 mode: None,
+                memory: None,
                 voice_input,
                 project_id: None,
             }
@@ -2441,6 +2574,7 @@ mod tests {
                 model_override: None,
                 exec_tier: None,
                 mode: None,
+                memory: None,
                 voice_input: false,
                 project_id: project_id.map(str::to_string),
             }
@@ -2745,6 +2879,7 @@ mod tests {
                 model_override: None,
                 exec_tier: None,
                 mode: None,
+                memory: None,
                 voice_input: false,
                 project_id: None,
             }

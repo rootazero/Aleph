@@ -21,6 +21,10 @@ struct Args {
     #[arg(short = 'k', long)]
     session: Option<String>,
 
+    /// Reopen the most recently active session (by `last_active_at`)
+    #[arg(short = 'c', long = "continue", conflicts_with = "session")]
+    continue_last: bool,
+
     /// Enable verbose logging
     #[arg(short, long)]
     verbose: bool,
@@ -57,6 +61,7 @@ async fn main() -> CliResult<()> {
         &args.server,
         None,
         args.session.as_deref(),
+        args.continue_last,
         &config,
         args.verbose,
     )
