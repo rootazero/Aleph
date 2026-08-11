@@ -346,9 +346,15 @@ impl NodeRegistry {
     /// `tags` slice matches every online node (the "broadcast" case). Used by
     /// `node_invoke_many` for tag-selected concurrent fan-out. Returns a clone
     /// snapshot so the caller dispatches without holding the registry lock.
+    ///
+    /// Results are sorted by `(node_id, name)` so the JoinSet spawn order is
+    /// deterministic across calls — `node_invoke_many` already sorts its
+    /// result envelope, but a future caller that observes spawn order, or a
+    /// test asserting on fan-out sequencing, would otherwise inherit
+    /// HashMap-iteration jitter.
     pub fn resolve_all_by_tags(&self, tags: &[String]) -> Vec<NodeMatch> {
         let inner = self.inner.read().unwrap_or_else(|e| e.into_inner());
-        inner
+        let mut out: Vec<NodeMatch> = inner
             .nodes_by_id
             .values()
             .filter(|s| tags.iter().all(|t| s.tags.contains(t)))
@@ -359,7 +365,9 @@ impl NodeRegistry {
                 declared_commands: s.declared_commands.clone(),
                 tags: s.tags.clone(),
             })
-            .collect()
+            .collect();
+        out.sort_by(|a, b| a.node_id.cmp(&b.node_id).then_with(|| a.name.cmp(&b.name)));
+        out
     }
 
     /// Actively evict a session by `node_id` (used by operator deregister).
@@ -1026,6 +1034,43 @@ mod tests {
         // NodeMatch carries the node's tags (used for the zero-match hint).
         let gpu = reg.resolve_all_by_tags(&["gpu".into()]);
         assert!(gpu.iter().any(|m| m.tags.contains(&"us".to_string())));
+        // (B1-05) HashMap iteration is per-process-random; fan-out callers
+        // rely on this returning the same order across calls so JoinSet
+        // spawn order is deterministic.
+        let gpu_again = reg.resolve_all_by_tags(&["gpu".into()]);
+        assert_eq!(
+            gpu.iter().map(|m| &m.node_id).collect::<Vec<_>>(),
+            gpu_again.iter().map(|m| &m.node_id).collect::<Vec<_>>(),
+            "resolve_all_by_tags must be deterministic across calls"
+        );
+        assert_eq!(
+            gpu.iter().map(|m| &m.node_id).collect::<Vec<_>>(),
+            vec![&"a".to_string(), &"b".to_string()],
+            "ordered by node_id"
+        );
+    }
+
+    #[test]
+    fn resolve_error_display_covers_each_variant() {
+        // (B1-07) Each variant's Display string is part of the operator-facing
+        // contract for cluster.deregister and node_invoke — test the surface
+        // directly so a refactor that drops the human-readable prefix is caught.
+        assert_eq!(
+            ResolveError::NotFound.to_string(),
+            "no online node matches"
+        );
+        assert_eq!(
+            ResolveError::Ambiguous(vec!["a (aaa)".into(), "b (bbb)".into()])
+                .to_string(),
+            "ambiguous — matches: a (aaa), b (bbb)"
+        );
+        assert_eq!(
+            ResolveError::NodeNotFound {
+                name_or_id: "x".into()
+            }
+            .to_string(),
+            "internal node lookup failed for 'x'"
+        );
     }
 
     #[test]
