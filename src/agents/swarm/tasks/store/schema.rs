@@ -119,14 +119,14 @@ pub(super) fn migrate(conn: &Connection) -> crate::error::Result<()> {
 
         CREATE INDEX IF NOT EXISTS idx_coord_tasks_team_status ON coord_tasks(team_id, status);
         CREATE INDEX IF NOT EXISTS idx_coord_tasks_owner ON coord_tasks(owner);
-        // B6-03: index on coord_task_dependencies(depends_on). The edge
-        // table's only prior index is the implicit PK (task_id, depends_on),
-        // which by the leftmost-prefix rule cannot serve any lookup keyed on
-        // depends_on. Three production paths are keyed exactly that way:
-        //   * deps::get_dependents  WHERE depends_on = ?1
-        //   * deps::get_newly_unblocked  JOIN ... WHERE d.depends_on = ?1
-        //     (runs on every task completion)
-        //   * FK child scan for delete_team_tasks (O(deleted_tasks × total_edges))
+        -- B6-03: index on coord_task_dependencies(depends_on). The edge
+        -- table's only prior index is the implicit PK (task_id, depends_on),
+        -- which by the leftmost-prefix rule cannot serve any lookup keyed on
+        -- depends_on. Three production paths are keyed exactly that way:
+        --   * deps::get_dependents  WHERE depends_on = ?1
+        --   * deps::get_newly_unblocked  JOIN ... WHERE d.depends_on = ?1
+        --     (runs on every task completion)
+        --   * FK child scan for delete_team_tasks (O(deleted_tasks × total_edges))
         CREATE INDEX IF NOT EXISTS idx_coord_task_deps_depends_on
             ON coord_task_dependencies(depends_on);
         "#,
@@ -291,4 +291,70 @@ fn add_column_if_missing(
         conn.execute(&sql, []).map_err(db_err)?;
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// `migrate` must succeed against an empty database.
+    ///
+    /// It did not, for a day: a `// …` comment block was written inside one of
+    /// the `execute_batch` SQL literals, and SQLite's line comment is `--`. The
+    /// whole batch failed to parse, so `SqliteCoordTaskStore` could not
+    /// initialise at all — every team task, workflow materialisation and swarm
+    /// dependency edge, at runtime, not just in tests.
+    ///
+    /// The suite *did* catch it: 133 lib tests went red together. But 133
+    /// failures spread across `workflow::compile`, `teams::snapshots`,
+    /// `teams::dispatcher` and `hub::install` read as "the test environment is
+    /// broken", which is exactly the reading that gets a run dismissed. This
+    /// test fails **by name**, on the one thing that is actually wrong.
+    #[test]
+    fn migrate_runs_on_an_empty_database() {
+        let conn = Connection::open_in_memory().expect("in-memory db opens");
+        migrate(&conn).expect("the schema migration must apply to a fresh database");
+        // Applying it twice is how every real boot after the first one goes.
+        migrate(&conn).expect("the schema migration must be idempotent");
+    }
+
+    /// No SQL literal in this file may carry a Rust line comment.
+    ///
+    /// The direct test above proves the schema parses *today*; this one names
+    /// the specific mistake, so the next person who explains an index in a
+    /// `r#"…"#` block finds out at `cargo test` rather than at boot. Reads the
+    /// source with `\r` stripped first — CLAUDE.md §10: a source-level guard
+    /// that anchors on `\n` matches nothing in this CRLF checkout while passing
+    /// on CI's LF, which looks like a platform quirk and is really a blind spot.
+    #[test]
+    fn no_sql_literal_carries_a_rust_line_comment() {
+        let src = std::fs::read_to_string(file!())
+            .or_else(|_| {
+                std::fs::read_to_string(concat!(
+                    env!("CARGO_MANIFEST_DIR"),
+                    "/src/agents/swarm/tasks/store/schema.rs"
+                ))
+            })
+            .expect("this file is readable")
+            .replace('\r', "");
+
+        // Every `r#"…"#` literal in the file; the SQL lives in exactly these.
+        let mut checked = 0usize;
+        for (i, chunk) in src.split("r#\"").enumerate().skip(1) {
+            let body = chunk.split("\"#").next().unwrap_or("");
+            checked += 1;
+            for line in body.lines() {
+                assert!(
+                    !line.trim_start().starts_with("//"),
+                    "raw string literal #{i} contains a Rust line comment: {line:?}. \
+                     SQLite's line comment is `--`; `//` is a syntax error that fails \
+                     the entire batch."
+                );
+            }
+        }
+        assert!(
+            checked > 0,
+            "found no r#\"…\"# literals — the migrations moved and this guard is blind"
+        );
+    }
 }

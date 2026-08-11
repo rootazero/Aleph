@@ -610,11 +610,7 @@ pub trait CoordTaskStore: Send + Sync {
     // audit trail — an approval returns `Ok(())` and is recorded nowhere.
 
     /// Record the start of a new execution attempt. Returns the assigned run id.
-    async fn start_task_run(
-        &self,
-        task_id: &str,
-        agent_id: &str,
-    ) -> crate::error::Result<String>;
+    async fn start_task_run(&self, task_id: &str, agent_id: &str) -> crate::error::Result<String>;
 
     /// Finish a run started via [`start_task_run`]. No-op when `run_id` is empty.
     async fn finish_task_run(
@@ -640,10 +636,7 @@ pub trait CoordTaskStore: Send + Sync {
     /// register its live task ids here or its rows will be swept.
     ///
     /// Returns the number of rows closed.
-    async fn abandon_orphaned_runs(
-        &self,
-        live_task_ids: &[String],
-    ) -> crate::error::Result<usize>;
+    async fn abandon_orphaned_runs(&self, live_task_ids: &[String]) -> crate::error::Result<usize>;
 
     /// Record a step-level review verdict against the most recent
     /// completed run of `task_id`. Phase C (workflow parity).

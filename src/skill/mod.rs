@@ -393,7 +393,8 @@ impl SkillSystem {
     pub async fn record_use(&self, id: &SkillId) {
         if let Some(dir) = self.owning_dir(id).await {
             let owned = id.as_str().to_string();
-            let _ = tokio::task::spawn_blocking(move || usage::record_use_in_dir(dir, &owned)).await;
+            let _ =
+                tokio::task::spawn_blocking(move || usage::record_use_in_dir(dir, &owned)).await;
         }
     }
 
