@@ -136,6 +136,14 @@ pub enum ReverseRpcError {
     Serialize(#[from] serde_json::Error),
 }
 
+/// Cap on how long `ReverseRpcChannel::call` may spend pushing the request
+/// frame onto the outbound mpsc before it declares the peer a slow consumer
+/// (see B3-01). Once the frame is enqueued, the call switches to the
+/// response-wait budget (the remainder of the caller's `timeout_ms`).
+/// Splitting the two keeps a peer that received and started executing the
+/// frame from being told "timed out" by the center.
+const OUTBOUND_PUSH_BUDGET_MS: u64 = 500;
+
 /// A reverse RPC channel bound to a **single connection**: writes request
 /// frames into that connection's outbound mpsc and awaits the associated
 /// response through a shared [`PendingInvokes`].
@@ -244,12 +252,35 @@ impl ReverseRpcChannel {
     ) -> Result<JsonRpcResponse, ReverseRpcError> {
         let (id, rx) = self.pending.register();
         let req = JsonRpcRequest::with_id(method, Some(params), Value::String(id.clone()));
-        let frame = serde_json::to_string(&req)?;
+        // (B3-03) A serialization failure must cancel the registered waiter
+        // before bubbling up — otherwise the id lingers in `waiters` until
+        // either (a) the per-id timeout (which never fires because we return
+        // early) or (b) `cancel_all` on disconnect.
+        let frame = match serde_json::to_string(&req) {
+            Ok(f) => f,
+            Err(e) => {
+                self.pending.cancel(&id);
+                return Err(ReverseRpcError::Serialize(e));
+            }
+        };
 
         let budget = Duration::from_millis(timeout_ms);
-        let deadline = tokio::time::Instant::now() + budget;
+        // (B3-01) Split the timeout into an outbound-enqueue sub-budget and a
+        // response sub-budget. Previously the SAME `deadline` was reused for
+        // both phases — if the outbound push consumed most of the budget, the
+        // response wait could time out *after* the peer had already received
+        // and started executing the frame, leaving the peer to execute a
+        // command the center has now told its caller "timed out".
+        //
+        // `OUTBOUND_PUSH_BUDGET_MS` caps the enqueue half regardless of the
+        // caller's `timeout_ms`; the response window gets whatever remains.
+        let outbound_budget = Duration::from_millis(
+            timeout_ms.min(OUTBOUND_PUSH_BUDGET_MS),
+        );
+        let outbound_deadline = tokio::time::Instant::now() + outbound_budget;
+        let response_deadline = tokio::time::Instant::now() + budget;
 
-        match tokio::time::timeout_at(deadline, self.outbound.send(frame)).await {
+        match tokio::time::timeout_at(outbound_deadline, self.outbound.send(frame)).await {
             // Receiver gone: the connection's writer task is finished.
             Ok(Err(_)) => {
                 self.pending.cancel(&id);
@@ -269,7 +300,7 @@ impl ReverseRpcChannel {
             Ok(Ok(())) => {}
         }
 
-        match tokio::time::timeout_at(deadline, rx).await {
+        match tokio::time::timeout_at(response_deadline, rx).await {
             Ok(Ok(resp)) => Ok(resp),
             Ok(Err(_)) => Err(ReverseRpcError::Cancelled), // sender dropped
             Err(_) => {
