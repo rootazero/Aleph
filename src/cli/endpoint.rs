@@ -12,8 +12,11 @@ const CURRENT_ENDPOINT_VERSION: u32 = 1;
 /// Build the IPC endpoint URL for a server bound on `addr`.
 ///
 /// Rules:
-/// - `tls = true` → `https://`, else `http://`. (Self-signed cert trust is
-///   the caller's problem; this only formats the URL.)
+/// - `tls = true` → `https://`, else `http://`. The CLI's HTTP client
+///   (`ipc_client::build_client`) accepts self-signed certs **only** when
+///   the URL host is loopback; a non-loopback `https://` URL is refused
+///   outright. If you need a non-loopback admin channel, terminate TLS
+///   at a CA-signed proxy in front of the server instead.
 /// - `0.0.0.0` is a wildcard for IPv4 — map to `127.0.0.1` so a client
 ///   that is also on the box can reach the loopback listener.
 /// - `::` is the IPv6 wildcard — map to `::1`.
@@ -65,12 +68,16 @@ pub fn write_endpoint(data_dir: &Path, endpoint: &IpcEndpoint) -> std::io::Resul
     {
         use std::os::unix::fs::PermissionsExt;
         let perm = std::fs::Permissions::from_mode(0o600);
-        std::fs::set_permissions(&path, perm).map_err(|e| {
-            std::io::Error::new(
+        if let Err(e) = std::fs::set_permissions(&path, perm) {
+            // Don't leave a possibly world-readable file on disk if the
+            // chmod step fails — the endpoint URL and PID are sensitive and
+            // a half-secured file is worse than a missing one.
+            let _ = std::fs::remove_file(&path);
+            return Err(std::io::Error::new(
                 std::io::ErrorKind::PermissionDenied,
                 format!("failed to restrict endpoint file permissions: {e}"),
-            )
-        })?;
+            ));
+        }
     }
     Ok(())
 }
@@ -207,5 +214,25 @@ mod tests {
     fn url_treats_explicit_loopback_as_concrete_ipv6() {
         let url = build_endpoint_url(sa_v6("::1", 9000), false);
         assert_eq!(url, "http://[::1]:9000");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn write_endpoint_sets_owner_only_permissions() {
+        // The success-path contract: the file is created with mode 0o600
+        // on Unix. The chmod-failure path is reviewed by code inspection
+        // (we cannot reliably simulate a chmod failure on the
+        // filesystems that unit tests run on) — the relevant guarantee
+        // here is that the *successful* path tightens perms.
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        let ep = IpcEndpoint::current("http://127.0.0.1:9000");
+        write_endpoint(dir.path(), &ep).unwrap();
+        let mode = std::fs::metadata(endpoint_path(dir.path()))
+            .unwrap()
+            .permissions()
+            .mode()
+            & 0o777;
+        assert_eq!(mode, 0o600, "endpoint file must be owner-only readable");
     }
 }
