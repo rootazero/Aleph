@@ -97,8 +97,22 @@ pub enum StreamEvent {
         /// `GatewayEventFrame::AskUser` the wire carries.
         #[serde(default)]
         session_key: String,
+        /// Legacy single-question projection: the prompt of the question at the
+        /// cursor. A client that reads only this and `options` still answers a
+        /// multi-question request to completion, one reply at a time.
         question: String,
+        /// Choice labels for that same question.
         options: Vec<String>,
+        /// Full-fidelity question list, including each option's `description`
+        /// — which `options` structurally cannot carry, so a client reading
+        /// only the flat array renders a bare label where a channel renders
+        /// `label — description`.
+        #[serde(default)]
+        questions: Vec<AskUserQuestion>,
+        /// How many of `questions` already have answers; where a client that
+        /// renders the whole set resumes.
+        #[serde(default)]
+        answered: usize,
     },
 
     /// Structured reasoning block with semantic type
@@ -699,6 +713,48 @@ pub struct ToolErrorItem {
     pub tool_name: String,
     pub error: String,
     pub tool_id: String,
+}
+
+/// One option offered inside an [`StreamEvent::AskUser`] question.
+///
+/// Mirrors `alephcore::clarification::ClarificationOptionView`. The option's
+/// internal `value` is deliberately absent from the wire: a client answers by
+/// 1-based index or free text, so the core's `interpret_reply` stays the only
+/// place a reply becomes a value.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct AskUserOption {
+    /// What the user reads.
+    pub label: String,
+    /// Why they might pick it — rendered beside the label. **A client reading
+    /// only the flat `options: Vec<String>` array shows a bare label where a
+    /// channel shows `label — description`; this field is what closes that.**
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+}
+
+/// One question of an [`StreamEvent::AskUser`] request.
+///
+/// Mirrors `alephcore::clarification::ClarificationQuestionView`. Every field
+/// past `prompt` carries a `#[serde(default)]` so a core that predates it (or
+/// simply has nothing to say) deserializes cleanly.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct AskUserQuestion {
+    /// Stable id, echoed back with the answer.
+    pub id: String,
+    /// Short chip shown beside the prompt where there is room for one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub header: Option<String>,
+    /// The prompt shown to the user.
+    pub prompt: String,
+    /// Offered choices; empty means free text.
+    #[serde(default)]
+    pub options: Vec<AskUserOption>,
+    /// Several picks are accepted (comma-separated when typed).
+    #[serde(default)]
+    pub multi_select: bool,
+    /// The answer is a credential: mask the input, never echo it.
+    #[serde(default)]
+    pub secret: bool,
 }
 
 #[cfg(test)]

@@ -38,7 +38,8 @@ pub use auth::{GuestScope, IdentityContext, Role};
 pub use events::{
     AgentTraceEvent, AgentTraceSessionOutcome, AgentTraceState, AgentTraceTextKind,
     AgentTraceToolCallEnd, AgentTraceToolCallStart, AgentTraceToolResult, AgentTraceTurnMetrics,
-    AgentTraceTurnOutcome, RunSummary, StreamEvent, TokenBreakdownView, ToolResult,
+    AgentTraceTurnOutcome, AskUserOption, AskUserQuestion, RunSummary, StreamEvent,
+    TokenBreakdownView, ToolResult,
 };
 pub use jsonrpc::{
     JsonRpcError, JsonRpcRequest, JsonRpcResponse, ToolCallContext, ToolCallParams, ToolCallResult,

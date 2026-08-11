@@ -255,7 +255,7 @@ Rule of thumb: `ctx_search` = "what did that tool print?", `recall_events` =
 | Tool | Description | Args |
 |------|-------------|------|
 | `skill_read` | Read skill definition | `skill_name` |
-| `ask_user` | Ask user question | `question`, `options?` |
+| `ask_user` | Ask 1–4 questions, park until answered | `question` + `choices?`, **or** `questions[]` (`id?`/`header?`/`question`/`choices?`/`multi_select?`/`secret?`) |
 | `canvas_show` | Display in canvas | `content`, `type` |
 
 ---

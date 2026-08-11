@@ -137,7 +137,7 @@ impl MessageId {
 }
 
 /// Inline keyboard button
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct InlineButton {
     /// Button text
     pub text: String,
@@ -149,7 +149,7 @@ pub struct InlineButton {
 pub type InlineKeyboardRow = Vec<InlineButton>;
 
 /// Inline keyboard markup
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct InlineKeyboard {
     /// Rows of buttons
     pub rows: Vec<InlineKeyboardRow>,

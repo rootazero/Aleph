@@ -183,8 +183,17 @@ pub enum StreamEvent {
         /// Clarification registry key the reply must be posted back against
         /// (`clarification.resolve`). Replies route by session, not by run.
         session_key: String,
+        /// Legacy single-question projection: the question at the cursor.
         question: String,
+        /// Its choice labels.
         options: Vec<String>,
+        /// Full-fidelity question list — see
+        /// [`crate::gateway::events::GatewayEventFrame::AskUser`].
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        questions: Vec<crate::clarification::ClarificationQuestionView>,
+        /// How many of `questions` are already answered.
+        #[serde(default)]
+        answered: usize,
     },
 
     /// Structured reasoning block with semantic type

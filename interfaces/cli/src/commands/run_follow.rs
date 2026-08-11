@@ -244,10 +244,17 @@ pub async fn follow_run(
                 break;
             }
             StreamEvent::AskUser {
-                question, options, ..
+                question,
+                options,
+                questions,
+                answered,
+                ..
             } => {
                 if !opts.json {
-                    eprintln!("{}", exec_echo::render_ask_user(&question, &options));
+                    eprintln!(
+                        "{}",
+                        exec_echo::render_ask_user(&question, &options, &questions, answered)
+                    );
                 }
             }
             StreamEvent::UncertaintySignal { uncertainty, .. } => {

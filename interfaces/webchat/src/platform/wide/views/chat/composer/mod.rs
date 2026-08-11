@@ -413,13 +413,23 @@ pub(crate) fn InputArea() -> impl IntoView {
         input_text.set(String::new());
         let dash = dashboard;
         spawn_local(async move {
-            match crate::api::ClarificationApi::resolve(&dash, &ask.session_key, &reply).await {
-                Ok(true) => {
+            match crate::api::ClarificationApi::resolve(&dash, &ask.session_key, &reply)
+                .await
+                .map(|o| (o.accepted, o.is_finished()))
+            {
+                Ok((true, finished)) => {
                     chat.push_user_message(&reply);
-                    dash.pending_clarifications
-                        .update(|l| l.retain(|p| p.session_key != ask.session_key));
+                    // Only drop the card when the whole request is over. A
+                    // multi-question request keeps the card (re-rendered at the
+                    // new cursor by the advance frame) so the next question can
+                    // still own Enter — dropping it here would strand the rest
+                    // of the walk behind a card the user can no longer see.
+                    if finished {
+                        dash.pending_clarifications
+                            .update(|l| l.retain(|p| p.session_key != ask.session_key));
+                    }
                 }
-                Ok(false) => {
+                Ok((false, _)) => {
                     // The question is dead: drop it so it stops owning Enter,
                     // put the draft back, and send it as the ordinary message it
                     // turned out to be.

@@ -6,12 +6,60 @@ use super::state::{
 use crate::context::{DashboardState, GatewayEvent};
 use crate::i18n::{td_string, I18nCtx, Locale};
 use crate::state::layout::WorkspaceState;
-use crate::state::notifications::PendingAskView;
+use crate::state::notifications::{AskOptionView, AskQuestionView, PendingAskView};
 use crate::state::sessions::SessionMap;
 use crate::state::user_directory::UserDirectoryState;
 use leptos::prelude::*;
 use std::collections::HashSet;
 use std::sync::{Arc, Mutex};
+
+/// Parse one entry of the `AskUser` frame's structured `questions` array.
+///
+/// A question with no `prompt` is dropped rather than rendered blank: an empty
+/// card is indistinguishable from a bug, and the flat `question` field is still
+/// there to fall back on.
+fn parse_ask_question(value: &serde_json::Value) -> Option<AskQuestionView> {
+    let prompt = value.get("prompt")?.as_str()?.to_string();
+    Some(AskQuestionView {
+        id: value
+            .get("id")
+            .and_then(|v| v.as_str())
+            .unwrap_or_default()
+            .to_string(),
+        header: value
+            .get("header")
+            .and_then(|v| v.as_str())
+            .filter(|h| !h.trim().is_empty())
+            .map(String::from),
+        prompt,
+        options: value
+            .get("options")
+            .and_then(serde_json::Value::as_array)
+            .map(|opts| {
+                opts.iter()
+                    .filter_map(|o| {
+                        Some(AskOptionView {
+                            label: o.get("label")?.as_str()?.to_string(),
+                            description: o
+                                .get("description")
+                                .and_then(|d| d.as_str())
+                                .filter(|d| !d.trim().is_empty())
+                                .map(String::from),
+                        })
+                    })
+                    .collect()
+            })
+            .unwrap_or_default(),
+        multi_select: value
+            .get("multi_select")
+            .and_then(serde_json::Value::as_bool)
+            .unwrap_or(false),
+        secret: value
+            .get("secret")
+            .and_then(serde_json::Value::as_bool)
+            .unwrap_or(false),
+    })
+}
 
 /// Project one persisted/live `AgentTraceEvent` (tagged `kind` or `type`)
 /// onto `ChatState` (step bubbles, tool status, narration) + `WorkspaceState`
@@ -803,6 +851,19 @@ pub fn subscribe_run_events(
                             .collect()
                     })
                     .unwrap_or_default(),
+                // Structured view. Absent on a core that predates it — the
+                // card then renders from `question`/`options` above, exactly
+                // as a plain-text channel does.
+                questions: data
+                    .get("questions")
+                    .and_then(serde_json::Value::as_array)
+                    .map(|qs| qs.iter().filter_map(parse_ask_question).collect())
+                    .unwrap_or_default(),
+                answered: data
+                    .get("answered")
+                    .and_then(serde_json::Value::as_u64)
+                    .and_then(|n| usize::try_from(n).ok())
+                    .unwrap_or(0),
             };
             // One question per session, core-side (a second `ask_user`
             // supersedes the first) — mirror that here instead of stacking.

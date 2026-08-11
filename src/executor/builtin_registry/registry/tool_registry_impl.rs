@@ -257,9 +257,25 @@ impl ToolRegistry for BuiltinToolRegistry {
                 Box::pin(async move { self.permission_tool.call_json(arguments).await })
             }
             "media" => Box::pin(async move { self.media_tool.call_json(arguments).await }),
-            "scratchpad" => {
-                Box::pin(async move { self.scratchpad_tool.call_json(arguments).await })
-            }
+            // Scratchpad. `action='request_approval'` parks on a human, so it
+            // needs the same two deferred handles `ask_user` does — injected
+            // per call because both cells are filled after construction. When
+            // either is missing the action reports that no gate is wired
+            // instead of pretending to have asked; every other action is
+            // unaffected.
+            "scratchpad" => Box::pin(async move {
+                let tool = match (
+                    self.clarification_manager_cell.get(),
+                    self.channel_registry_cell.get(),
+                ) {
+                    (Some(cm), Some(cr)) => self
+                        .scratchpad_tool
+                        .clone()
+                        .with_clarification(Arc::clone(cm), Arc::clone(cr)),
+                    _ => self.scratchpad_tool.clone(),
+                };
+                tool.call_json(arguments).await
+            }),
             "goal" => Box::pin(async move { self.goal_tool.call_json(arguments).await }),
             "loop_graph" => {
                 // Same delivery plumbing `cron_manage` gets, for the same
