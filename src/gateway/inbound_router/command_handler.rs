@@ -154,24 +154,18 @@ pub fn serialize_parsed_command(parsed: &crate::command::ParsedCommand) -> Optio
         }),
         CommandContext::Custom {
             system_prompt,
-            provider,
             pattern,
         } => serde_json::json!({
             "type": "custom",
             "tool_id": parsed.tool_id,
             "system_prompt": system_prompt,
-            "provider": provider,
             "pattern": pattern,
             "args": args,
             "source": "custom",
         }),
-        CommandContext::Mcp {
-            server_name,
-            tool_name,
-        } => serde_json::json!({
+        CommandContext::Mcp { server_name } => serde_json::json!({
             "type": "mcp",
             "server_name": server_name,
-            "tool_name": tool_name,
             "args": args,
             "source": "mcp",
         }),
