@@ -1578,6 +1578,7 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
         agent_result.multi_registry.clone(),
         auth_bundle.auth_ctx.shared_token_mgr.clone(),
         acp_manager.clone(),
+        mcp_handle.clone(),
     );
     // `self_config` and `moa` tools need the same `ConfigPatcher`; it is built
     // after the registry, so we late-bind it now. Both `Arc`s are cheap clones.

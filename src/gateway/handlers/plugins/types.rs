@@ -26,6 +26,14 @@ pub struct PluginInfoJson {
     /// Error message when the plugin failed to load.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
+    /// Tools this plugin contributes. Zero means usage is **not measurable**
+    /// for it (its `usage.calls` will be `None`), not that it is unused — the
+    /// renderer needs both numbers to say the right thing.
+    #[serde(default)]
+    pub tools_count: u32,
+    /// Invocation record. `None` only when the report could not be built.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub usage: Option<aleph_protocol::extension_usage::UsageSummary>,
 }
 
 impl From<PluginInfo> for PluginInfoJson {
@@ -43,6 +51,10 @@ impl From<PluginInfo> for PluginInfoJson {
             mcp_servers_count: info.mcp_servers_count as u32,
             status: info.status,
             error: info.error,
+            tools_count: info.tools_count as u32,
+            // Filled by the list handler, which is where the usage report is
+            // available; `From` has no async and no registry.
+            usage: None,
         }
     }
 }

@@ -187,6 +187,26 @@ pub trait LoopTool: Send + Sync {
     fn max_duration_ms(&self) -> Option<u64> {
         None
     }
+
+    /// Which uninstallable thing this tool belongs to, for usage accounting.
+    ///
+    /// `None` (the default) means "nothing to account" — that is the honest
+    /// answer for every builtin, and it is why builtins cost one
+    /// `Option::is_none` at dispatch instead of a disk write. Only the two
+    /// adapters that actually know a provenance override it:
+    /// [`McpRegistryTool`](crate::tools::adapters::McpRegistryTool) returns its
+    /// server id, and the executor-registry adapter returns a plugin id when
+    /// the `UnifiedTool` it wrapped declared `ToolSource::Plugin`.
+    ///
+    /// Declared here rather than derived at the recording site because the
+    /// chokepoint sees only a `&dyn LoopTool`: provenance is knowable at
+    /// construction and unrecoverable afterwards (the `name → server` map lives
+    /// in the live registry and dies with the connection). A tool that does not
+    /// carry it forward cannot be attributed later — see
+    /// [`crate::tools::usage`] for why mining `session_events` cannot substitute.
+    fn usage_origin(&self) -> Option<crate::tools::usage::UsageOrigin<'_>> {
+        None
+    }
 }
 
 // =============================================================================

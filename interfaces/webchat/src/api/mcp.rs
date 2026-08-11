@@ -15,6 +15,11 @@ pub struct McpServerInfo {
     pub enabled: bool,
     #[serde(default)]
     pub requires_runtime: Option<String>,
+    /// Invocation record from `mcp_config.list`. `None` when the server could
+    /// not build the report (or predates the field) — an empty cell, which is
+    /// a different statement from `calls: Some(0)` = "known never used".
+    #[serde(default)]
+    pub usage: Option<aleph_protocol::extension_usage::UsageSummary>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -79,5 +84,43 @@ impl McpConfigApi {
         let params = serde_json::json!({ "id": id });
         state.rpc_call("mcp_config.delete", params).await?;
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Twin of `alephcore`'s `mcp_config::tests::a_row_carries_usage_under_its_wire_name`.
+    /// The value type (`UsageSummary`) is shared through `aleph_protocol`, so a
+    /// field rename inside it breaks both crates at compile time; the container
+    /// key below is the one thing still spelled twice, and a drift there fails
+    /// open — this DTO would decode `None` forever and the column would go
+    /// blank, which reads exactly like "nothing has ever been called".
+    #[test]
+    fn a_server_row_decodes_the_usage_column() {
+        let row: McpServerInfo = serde_json::from_value(serde_json::json!({
+            "id": "ctx7",
+            "name": "ctx7",
+            "command": "npx",
+            "usage": { "calls": 12, "errors": 0, "idle_days": 3 }
+        }))
+        .expect("row must decode");
+        let usage = row.usage.expect("usage column must be populated");
+        assert_eq!(usage.display_calls(), Some(12));
+        assert_eq!(usage.idle_days, Some(3));
+        assert!(!usage.never_used());
+    }
+
+    /// The Panel ships independently of the daemon; a row from an older server
+    /// has no `usage` key and must still decode, leaving the column empty
+    /// rather than failing the whole list.
+    #[test]
+    fn a_row_without_usage_still_decodes() {
+        let row: McpServerInfo = serde_json::from_value(serde_json::json!({
+            "id": "old", "name": "old", "command": "npx"
+        }))
+        .expect("row must decode without the usage key");
+        assert!(row.usage.is_none());
     }
 }

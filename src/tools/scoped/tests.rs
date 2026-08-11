@@ -2663,3 +2663,162 @@ async fn a_small_result_is_untouched_by_ingress_hygiene() {
         "under-budget results must be byte-identical"
     );
 }
+
+// -------------------------------------------------------------------------
+// Extension usage recording at the chokepoint
+//
+// These assert the EFFECT (a row exists in the sidecar), not that a function
+// was called: delete the `record_call_detached` line in `execute_inner` and
+// they go red. A test that only counted calls would stay green if the write
+// were routed to a store nobody reads.
+// -------------------------------------------------------------------------
+
+/// A tool that reports a provenance, the way `McpRegistryTool` and the plugin
+/// arm of `RegistryToolAdapter` do.
+struct OriginTool {
+    tool_name: &'static str,
+    origin: Option<(&'static str, &'static str)>,
+    fails: bool,
+}
+
+#[async_trait::async_trait]
+impl LoopTool for OriginTool {
+    fn name(&self) -> &str {
+        self.tool_name
+    }
+    fn description(&self) -> &str {
+        "origin stub"
+    }
+    fn schema(&self) -> Value {
+        json!({ "type": "object" })
+    }
+    fn is_concurrent_safe(&self, _input: &Value) -> bool {
+        true
+    }
+    fn usage_origin(&self) -> Option<crate::tools::usage::UsageOrigin<'_>> {
+        use crate::tools::usage::UsageOrigin;
+        match self.origin {
+            Some(("mcp", id)) => Some(UsageOrigin::Mcp(id)),
+            Some(("plugin", id)) => Some(UsageOrigin::Plugin(id)),
+            _ => None,
+        }
+    }
+    async fn execute(&self, _input: Value, _cancel: CancellationToken) -> LoopToolResult {
+        if self.fails {
+            LoopToolResult::Error {
+                error: "boom".into(),
+                retryable: false,
+            }
+        } else {
+            LoopToolResult::Success {
+                output: json!({ "ok": true }),
+            }
+        }
+    }
+}
+
+fn origin_service(tools: Vec<OriginTool>) -> ScopedToolService {
+    let mut registry = LoopToolRegistry::new();
+    for t in tools {
+        registry.register(Box::new(t));
+    }
+    ScopedToolService::new(StdArc::new(registry), std::collections::BTreeSet::new())
+}
+
+fn usage_snapshot() -> std::collections::HashMap<String, crate::tools::usage::OriginUsage> {
+    crate::tools::usage::ToolUsageStore::default_path()
+        .map(|s| s.snapshot())
+        .unwrap_or_default()
+}
+
+#[tokio::test]
+async fn a_dispatched_mcp_tool_lands_in_the_usage_sidecar() {
+    let _home = crate::utils::paths::IsolatedAlephHome::new();
+    let svc = origin_service(vec![OriginTool {
+        tool_name: "query_docs",
+        origin: Some(("mcp", "ctx7")),
+        fails: false,
+    }]);
+
+    svc.execute("query_docs", json!({})).await.unwrap();
+    svc.execute("query_docs", json!({})).await.unwrap();
+
+    let row = usage_snapshot()
+        .remove("mcp:ctx7")
+        .expect("the dispatch must have written an `mcp:ctx7` row");
+    assert_eq!(row.call_count, 2);
+    assert_eq!(row.error_count, 0);
+    assert_eq!(row.tools.get("query_docs"), Some(&2));
+    assert!(row.last_used_at.is_some());
+}
+
+#[tokio::test]
+async fn a_failing_call_still_counts_as_usage_and_records_the_error() {
+    let _home = crate::utils::paths::IsolatedAlephHome::new();
+    let svc = origin_service(vec![OriginTool {
+        tool_name: "flaky",
+        origin: Some(("plugin", "p1")),
+        fails: true,
+    }]);
+
+    // The call errors; the point is that the server/plugin was still exercised.
+    let _ = svc.execute("flaky", json!({})).await;
+
+    let row = usage_snapshot()
+        .remove("plugin:p1")
+        .expect("a failed call is still usage");
+    assert_eq!(row.call_count, 1);
+    assert_eq!(row.error_count, 1);
+    assert!(row.last_error_at.is_some());
+}
+
+/// Builtins carry no origin, so the hot path must never touch the disk. If this
+/// goes red, every `file_read` in every turn just became a locked file write.
+#[tokio::test]
+async fn a_builtin_writes_nothing() {
+    let _home = crate::utils::paths::IsolatedAlephHome::new();
+    let svc = origin_service(vec![OriginTool {
+        tool_name: "file_read",
+        origin: None,
+        fails: false,
+    }]);
+
+    svc.execute("file_read", json!({})).await.unwrap();
+
+    assert!(
+        usage_snapshot().is_empty(),
+        "a builtin must not create a usage row (or the sidecar file at all)"
+    );
+    assert!(
+        crate::utils::paths::tool_usage_path().is_some_and(|p| !p.exists()),
+        "the sidecar must not even be created by builtin traffic"
+    );
+}
+
+/// A refused call is not usage: the server was never reached. It IS recorded,
+/// with its reason, in the signed identity ledger — recording it here too would
+/// make "40 calls" mean two different things.
+#[tokio::test]
+async fn a_permission_denied_call_is_not_counted_as_usage() {
+    use crate::extension::PermissionAction;
+    let _home = crate::utils::paths::IsolatedAlephHome::new();
+
+    let mut registry = LoopToolRegistry::new();
+    registry.register(Box::new(OriginTool {
+        tool_name: "denied_tool",
+        origin: Some(("mcp", "walled")),
+        fails: false,
+    }));
+    let svc = ScopedToolService::new(StdArc::new(registry), std::collections::BTreeSet::new())
+        .with_tool_permissions(perms(
+            PermissionAction::Allow,
+            &[("denied_tool", PermissionAction::Deny)],
+        ));
+
+    let err = svc.execute("denied_tool", json!({})).await.unwrap_err();
+    assert!(matches!(err, ToolError::PermissionDenied { .. }));
+    assert!(
+        usage_snapshot().is_empty(),
+        "a call the gate refused never reached the server; it is not usage"
+    );
+}

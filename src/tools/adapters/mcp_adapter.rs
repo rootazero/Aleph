@@ -121,6 +121,15 @@ impl LoopTool for McpRegistryTool {
         self.max_duration_ms
     }
 
+    fn usage_origin(&self) -> Option<crate::tools::usage::UsageOrigin<'_>> {
+        // `server_id` is empty for the capability-gated builtins that share the
+        // bridge registry (`mcp_read_resource`, `mcp_get_prompt`, `mcp_login`)
+        // — see `from_registry_entry`. Those have no originating server, so
+        // attributing their calls to one would invent usage for whichever
+        // server happened to trigger the gate.
+        (!self.server_id.is_empty()).then(|| crate::tools::usage::UsageOrigin::Mcp(&self.server_id))
+    }
+
     async fn execute(&self, input: Value, cancel: CancellationToken) -> ToolResult {
         // MCP tool calls are JSON-RPC roundtrips. On cancel, dropping the
         // inner future closes our end; the server may still be mid-work but

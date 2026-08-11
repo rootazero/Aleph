@@ -54,6 +54,7 @@ mod server;
 mod traits;
 pub mod turn_budget;
 mod types;
+pub mod usage;
 
 // Markdown skill system
 pub mod markdown_skill;

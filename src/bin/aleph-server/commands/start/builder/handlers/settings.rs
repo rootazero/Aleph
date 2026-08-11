@@ -283,6 +283,7 @@ pub(in crate::commands::start) fn register_config_handlers(
     multi_registry: Option<Arc<alephcore::MultiProviderRegistry>>,
     shared_token_mgr: Arc<alephcore::gateway::security::SharedTokenManager>,
     acp_manager: Option<Arc<alephcore::acp::manager::AcpAdapterManager>>,
+    mcp_handle: Option<alephcore::mcp::manager::McpManagerHandle>,
 ) -> Arc<alephcore::ConfigPatcher> {
     use alephcore::gateway::handlers::behavior_config;
     use alephcore::gateway::handlers::browser_config;
@@ -324,13 +325,22 @@ pub(in crate::commands::start) fn register_config_handlers(
     // Unified self-diagnosis engine over RPC — the daemon-side battery the
     // `aleph doctor` CLI and the Panel consume instead of duplicating checks
     // client-side. `fix=true` applies mechanical repairs only.
-    register_handler!(
-        server,
-        "diagnostics.run",
-        diagnostics::handle_run,
-        config,
-        shared_token_mgr
-    );
+    // Hand-rolled rather than `register_handler!`: the macro `Arc::clone`s every
+    // context arg, and the MCP handle is an `Option<_>` (absent when no server
+    // is configured), not an `Arc`.
+    {
+        let config = Arc::clone(&config);
+        let vault = Arc::clone(&shared_token_mgr);
+        let mcp = mcp_handle.clone();
+        server
+            .handlers_mut()
+            .register("diagnostics.run", move |req| {
+                let config = Arc::clone(&config);
+                let vault = Arc::clone(&vault);
+                let mcp = mcp.clone();
+                async move { diagnostics::handle_run(req, config, vault, mcp).await }
+            });
+    }
 
     // Global tool permissions
     register_handler!(

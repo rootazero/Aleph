@@ -1967,7 +1967,15 @@
     "th_out": "Out",
     "th_cache_r": "Cache R",
     "th_cache_w": "Cache W",
-    "th_reasoning": "Reasoning"
+    "th_reasoning": "Reasoning",
+    "extension": {
+      "never_used": "Never used",
+      "never_used_hint": "Installed, but no call has ever been recorded.",
+      "not_measurable": "No tool-call channel to measure - this is not evidence it is unused.",
+      "calls_suffix": "calls",
+      "days_ago_suffix": "d ago",
+      "errors_suffix": "errors"
+    }
   },
   "skills_page": {
     "header_desc": "Manage AI skills and their requirements",

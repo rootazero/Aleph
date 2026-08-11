@@ -329,6 +329,26 @@ pub fn get_scratchpad_bindings_path() -> Result<PathBuf> {
     Ok(get_data_dir()?.join("scratchpad_bindings.json"))
 }
 
+/// Get the path for the extension tool-usage sidecar.
+///
+/// Returns: `<data_dir>/tool_usage.json` — **without creating anything**.
+///
+/// Deliberately a pure lookup (`aleph_protocol::paths::data_dir` + join)
+/// rather than `get_data_dir()?.join(..)` like its neighbours above. Its
+/// readers are a diagnostic (`diagnostics::checks::IdleExtensionsCheck`) and a
+/// read-only tool, and a sensor must not create what it measures (§5.9): a
+/// `doctor` run on a machine that has never written the sidecar would
+/// otherwise materialise `~/.aleph/data/` as a side effect of *asking* whether
+/// it exists. The one writer ([`crate::tools::usage::ToolUsageStore`]) creates
+/// the parent itself.
+///
+/// Returns `None` only when no home directory can be determined — the same
+/// condition every other path helper reports as an error.
+#[must_use]
+pub fn tool_usage_path() -> Option<PathBuf> {
+    Some(aleph_protocol::paths::data_dir()?.join("tool_usage.json"))
+}
+
 /// Get the directory for cross-process background sub-agent records.
 ///
 /// Returns: `<data_dir>/background_subagents/`

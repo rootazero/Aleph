@@ -1967,7 +1967,15 @@
     "th_out": "输出",
     "th_cache_r": "缓存读",
     "th_cache_w": "缓存写",
-    "th_reasoning": "推理"
+    "th_reasoning": "推理",
+    "extension": {
+      "never_used": "从未使用",
+      "never_used_hint": "已安装，但从未记录到任何一次调用。",
+      "not_measurable": "没有可统计的工具调用口径 —— 这不代表它没被使用。",
+      "calls_suffix": "次调用",
+      "days_ago_suffix": "天前",
+      "errors_suffix": "次错误"
+    }
   },
   "skills_page": {
     "header_desc": "管理 AI 技能及其依赖",

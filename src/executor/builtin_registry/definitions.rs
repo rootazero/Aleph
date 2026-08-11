@@ -364,6 +364,16 @@ pub const BUILTIN_TOOL_DEFINITIONS: &[BuiltinToolDefinition] = &[
         requires_config: true,
     },
     BuiltinToolDefinition {
+        name: "tool_usage",
+        // Const, not a literal: a literal here would SHADOW
+        // `ToolUsageTool::DESCRIPTION` (agent_init only appends registry tools
+        // whose name this catalog does not already carry), and the sentence
+        // being shadowed is the one that stops the model reading a `—` count as
+        // "unused" and proposing to delete a hooks-only plugin.
+        description: <crate::builtin_tools::tool_usage::ToolUsageTool as crate::tools::AlephTool>::DESCRIPTION,
+        requires_config: true,
+    },
+    BuiltinToolDefinition {
         name: "note_orient",
         description: crate::builtin_tools::note_orient::NoteOrientTool::DESCRIPTION,
         requires_config: true,
@@ -1012,6 +1022,9 @@ pub fn create_tool_boxed(
                 if let (Some(c), Some(m)) = (&cfg.config, &cfg.shared_token_manager) {
                     tool = tool.with_runtime(Arc::clone(c), Arc::clone(m));
                 }
+                if let Some(mcp) = &cfg.hub_mcp_handle {
+                    tool = tool.with_mcp(mcp.clone());
+                }
             }
             Some(Box::new(tool))
         }
@@ -1484,7 +1497,23 @@ mod tests {
     ///
     /// Merged state after both halves of the day: 93,938 B — 80,549 B
     /// catalog + 13,389 B registry-only.
-    const CATALOG_DESCRIPTION_CEILING_BYTES: usize = 93_938;
+    ///
+    /// Then `tool_usage` (2026-08-10, the R8 face of the extension invocation
+    /// sidecar): catalog 80,549 -> 80,917 B, +368 B. Against the three
+    /// questions: (1) two runtime facts survive, and only two — that a `—`
+    /// count is a *different claim* from `0` (a plugin shipping only hooks has
+    /// no tool-call channel to measure, so reading its blank as "unused" is how
+    /// a live plugin gets deleted), and which three tools actually perform a
+    /// removal, since this one deliberately performs none; (2) neither is
+    /// derivable by a stronger model — the first is a property of this store's
+    /// accounting, the second a fact about which surfaces own which registry;
+    /// (3) the first draft was 575 B and everything the schema already ships
+    /// was cut — `scope`/`idle_days` semantics live in their `#[schemars]`
+    /// descriptions, and the "answer is partial" caveat was cut because the
+    /// runtime `summary` string states it in the response itself, which is
+    /// strictly better than paying for it on every request that merely lists
+    /// the tool.
+    const CATALOG_DESCRIPTION_CEILING_BYTES: usize = 94_306;
 
     #[test]
     fn catalog_description_bytes_ratchet() {

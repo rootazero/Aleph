@@ -404,15 +404,13 @@ impl ReadSkillTool {
 
         // Best-effort usage tracking — never affects the tool result.
         if let Some(parent) = skill_dir.parent() {
-            let store = crate::skill::UsageStore::new(parent);
             if file_name == "SKILL.md" {
-                store.record_use(&args.skill_id);
-                // Co-occurrence capture rides this existing use chokepoint: the
-                // dream pipeline mines temporally-close uses into MetaSkill
-                // proposals (see `WorkflowProposalStage`). Best-effort.
-                crate::skill::CoOccurrenceLog::new(parent).record(&args.skill_id);
+                // Both writes (counter + co-occurrence ring) live in one
+                // function so this face and the `/<skill>` slash face cannot
+                // disagree about what a use is — see `skill::usage::record_use_in_dir`.
+                crate::skill::record_use_in_dir(parent, &args.skill_id);
             } else {
-                store.record_view(&args.skill_id);
+                crate::skill::UsageStore::new(parent).record_view(&args.skill_id);
             }
         }
 

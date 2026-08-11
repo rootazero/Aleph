@@ -17,6 +17,7 @@ pub mod auth;
 pub mod canvas_format;
 pub mod desktop_bridge;
 pub mod events;
+pub mod extension_usage;
 mod ids;
 pub mod jsonrpc;
 pub mod paths;
