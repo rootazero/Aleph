@@ -200,6 +200,8 @@ pub(crate) async fn emit_flow_event(
                     seq,
                     error: reason,
                     error_code: Some("safety_block".to_string()),
+                    // Post-admission: `RunAccepted` already seeded the index.
+                    session_key: None,
                 })
                 .await?;
         }

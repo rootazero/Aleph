@@ -557,9 +557,32 @@ impl EventVisibilityIndex {
     /// Seed the run→session cache from a delivered frame. Called
     /// UNCONDITIONALLY (before filtering) on every connection's delivery
     /// loop, so the shared index stays warm regardless of which connection
-    /// happens to process a given `RunAccepted` first — first writer wins,
+    /// happens to process a given seeding frame first — first writer wins,
     /// and re-seeding an already-known run_id is harmless (same session_key
     /// every time for a given run).
+    ///
+    /// # The rule is "names both", not "is `RunAccepted`"
+    ///
+    /// This used to key off `topic == "stream.run_accepted"`, which made the
+    /// resolver's reach **narrower than its frames' producers** — the shape
+    /// `gateway/CLAUDE.md` calls landmine H. `RunAccepted` is emitted by
+    /// `execute()`, i.e. after the admission gate; but the client is handed a
+    /// `run_id` the moment `chat.send` returns, and `busy_queue::
+    /// spawn_queued_run` emits a terminal `RunError` for the three outcomes
+    /// where the run **never reaches the engine** (lane full, wait deadline,
+    /// purged by a stop). Those frames classify `ByRunId`, resolved against a
+    /// seed that by construction does not exist — so the filter fail-closed
+    /// denied them to every connection, the operator's included. Three
+    /// documented receipts were silently discarded, among them the one
+    /// `cancel_queued_run` was written to deliver.
+    ///
+    /// Any frame naming BOTH `run_id` and `session_key` therefore seeds. The
+    /// widening cannot be exploited: frames are built server-side, `run_id`s
+    /// are never reused, and first-writer-wins means an honest producer cannot
+    /// be overwritten by a later one. The alternative — teaching each new
+    /// pre-admission frame to carry its own classification — is the enumeration
+    /// this file's module doc already warns about, and it would have to be
+    /// remembered once per frame.
     ///
     /// ⚠️ There is deliberately NO eviction arm for `RunComplete`/`RunError`,
     /// and re-adding one is not hygiene — it is a total outage of both frames.
@@ -577,12 +600,21 @@ impl EventVisibilityIndex {
     /// that is FIFO-capped at [`MAX_TRACKED_RUNS`] on its own, and run ids
     /// are never reused, so ageing out is the whole lifecycle it needs.
     pub async fn note_frame(&self, topic: &str, data: Option<&Value>) {
-        if topic != "stream.run_accepted" {
+        // Only `stream.*` frames describe a run. Team topics carry a
+        // `session_key`-shaped root and a fan-out tree id that is not an engine
+        // run — seeding from those would map a tree id onto a session and hand
+        // `ByRunId` an answer for a question it was never asked.
+        if !topic.starts_with("stream.") {
             return;
         }
-        let (Some(run_id), Some(session_key)) =
-            (str_field(data, "run_id"), str_field(data, "session_key"))
-        else {
+        // `session_key` first: this runs per frame per connection, and the
+        // overwhelming majority of stream frames (chunks, traces, tool
+        // lifecycle) carry a `run_id` and no session, so testing the rare
+        // field first short-circuits them in one lookup.
+        let Some(session_key) = str_field(data, "session_key") else {
+            return;
+        };
+        let Some(run_id) = str_field(data, "run_id") else {
             return;
         };
         self.insert_run(run_id, session_key).await;
@@ -938,6 +970,138 @@ mod tests {
         )
         .await
         .unwrap();
+    }
+
+    /// A run that never reached the engine has no `RunAccepted`, so the only
+    /// frame it will ever produce is its own terminal `RunError` — and that
+    /// frame classifies `ByRunId`, against a seed nothing could have written.
+    ///
+    /// This is the whole failure `busy_queue::spawn_queued_run` was silently
+    /// suffering: the lane-full rejection, the wait-deadline timeout and the
+    /// stop-purge receipt were each built, emitted, and then denied to every
+    /// connection — the run's own owner included. The frame now names its
+    /// session, which both seeds the index (this call) and makes the lookup on
+    /// the very next line succeed.
+    #[tokio::test]
+    async fn a_queued_run_that_never_reached_the_engine_can_still_report_its_failure() {
+        let (store, _temp) = test_store();
+        let key = SessionKey::main("conv-queued");
+        stamp_owner(&store, &key, "alice").await;
+        let store: Arc<dyn SessionStore> = Arc::new(store);
+
+        // Exactly what `spawn_queued_run` puts on the wire for `Rejected` /
+        // `TimedOut` / `Purged`. Note the absence of any prior frame.
+        let run_error = serde_json::json!({
+            "run_id": "r-never-admitted",
+            "seq": 0,
+            "error": "Agent is busy",
+            "error_code": "AGENT_BUSY",
+            "session_key": key.to_key_string(),
+        });
+
+        let index = EventVisibilityIndex::new();
+        index.note_frame("stream.run_error", Some(&run_error)).await;
+        assert!(
+            index
+                .event_admits(
+                    "stream.run_error",
+                    Some(&run_error),
+                    Some("alice"),
+                    false,
+                    &store,
+                    None
+                )
+                .await,
+            "the owner must receive the receipt for their own dropped message"
+        );
+        assert!(
+            !index
+                .event_admits(
+                    "stream.run_error",
+                    Some(&run_error),
+                    Some("bob"),
+                    false,
+                    &store,
+                    None
+                )
+                .await,
+            "naming the session must not widen the audience beyond that session"
+        );
+
+        // …and the counter-example that pins WHY the field exists: the same
+        // frame without it is denied to its own owner, because `ByRunId` has
+        // nothing to resolve against.
+        let unnamed = serde_json::json!({
+            "run_id": "r-also-never-admitted",
+            "seq": 0,
+            "error": "Agent is busy",
+            "error_code": "AGENT_BUSY",
+        });
+        let bare = EventVisibilityIndex::new();
+        bare.note_frame("stream.run_error", Some(&unnamed)).await;
+        assert!(
+            !bare
+                .event_admits(
+                    "stream.run_error",
+                    Some(&unnamed),
+                    Some("alice"),
+                    false,
+                    &store,
+                    None
+                )
+                .await,
+            "an unresolvable run id still fails closed — the seed is what changed, not the rule"
+        );
+    }
+
+    /// Seeding is keyed on "names both", not on a topic allowlist — but only
+    /// within `stream.*`. A team fan-out tree id is not an engine run, and
+    /// mapping one onto a session would answer a `ByRunId` question that was
+    /// never asked about it.
+    #[tokio::test]
+    async fn only_stream_frames_seed_the_run_index() {
+        let index = EventVisibilityIndex::new();
+        let looks_like_a_run = serde_json::json!({
+            "run_id": "fanout-tree-1",
+            "session_key": SessionKey::main("conv-x").to_key_string(),
+        });
+        index
+            .note_frame("team.t1.fanout", Some(&looks_like_a_run))
+            .await;
+        assert_eq!(
+            index.session_key_for_run("fanout-tree-1").await,
+            None,
+            "a non-stream topic must not write the run→session index"
+        );
+
+        index
+            .note_frame("stream.run_error", Some(&looks_like_a_run))
+            .await;
+        assert!(
+            index.session_key_for_run("fanout-tree-1").await.is_some(),
+            "the same payload on a stream topic does seed"
+        );
+    }
+
+    /// The producer half of the pair above. `spawn_queued_run` is the one
+    /// `RunError` producer whose run never reached the engine, so it is the one
+    /// that must name its session; the runtime tests cannot reach it (it needs
+    /// a live `ExecutionEngine` and an `AgentInstance`), and dropping the field
+    /// there would silently restore the outage while every test above stays
+    /// green.
+    #[test]
+    fn the_queued_run_receipt_names_its_session() {
+        let src = include_str!("busy_queue/spawn.rs");
+        let ctor = src
+            .split("StreamEvent::RunError {")
+            .nth(1)
+            .expect("spawn_queued_run still emits a RunError");
+        let ctor = &ctor[..ctor.find("})").unwrap_or(ctor.len())];
+        assert!(
+            ctor.contains("session_key: Some("),
+            "the queued-run receipt must name its session or the delivery \
+             filter drops it before any client sees it; found:\n{ctor}"
+        );
     }
 
     /// The brief's own worked example: `RunAccepted{run_id: r1, session_key:
@@ -2122,6 +2286,7 @@ mod tests {
                 seq: 1,
                 error: "e".into(),
                 error_code: None,
+                session_key: None,
             },
             GatewayEventFrame::AskUser {
                 run_id: "r1".into(),
