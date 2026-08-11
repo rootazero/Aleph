@@ -1,0 +1,92 @@
+{
+  "batch": "cluster-batch-4",
+  "title": "Node-side commands: file + dispatch table",
+  "date": "2026-08-11",
+  "reviewer": "static (4-perspective protocol)",
+  "worktree": "/tmp/aleph-review-cluster",
+  "report": "review-results/cluster-batch-4/REPORT.md",
+  "counts": {
+    "critical": 0,
+    "high": 1,
+    "medium": 3,
+    "low": 3,
+    "total": 7
+  },
+  "by_category": {
+    "security": 1,
+    "logic": 1,
+    "quality": 3,
+    "documentation": 1,
+    "configurability": 1
+  },
+  "files_reviewed": [
+    { "path": "src/cluster/node_file_cmd.rs", "loc": 323, "findings": 4 },
+    { "path": "src/cluster/node_runtime.rs", "loc": 272, "findings": 3 }
+  ],
+  "total_loc": 595,
+  "findings": [
+    {
+      "id": "B4-01",
+      "severity": "high",
+      "category": "security/path-traversal",
+      "file": "src/cluster/node_file_cmd.rs",
+      "line": 36,
+      "title": "resolve_in_jail follows symlinks in workspace_dir itself; a replaced workspace dir can defeat the jail"
+    },
+    {
+      "id": "B4-02",
+      "severity": "medium",
+      "category": "quality/api-ergonomics",
+      "file": "src/cluster/node_runtime.rs",
+      "line": 155,
+      "title": "with_bash + register_file_commands is a two-step pattern; no with_bash_and_files convenience constructor"
+    },
+    {
+      "id": "B4-03",
+      "severity": "medium",
+      "category": "quality/documentation",
+      "file": "src/cluster/node_file_cmd.rs",
+      "line": 91,
+      "title": "FileWriteCommand OpenOptions has redundant create(true)+create_new(true) when overwrite=false; doc comment is unclear"
+    },
+    {
+      "id": "B4-04",
+      "severity": "medium",
+      "category": "logic/memory",
+      "file": "src/cluster/node_file_cmd.rs",
+      "line": 148,
+      "title": "FileReadCommand reads the entire file into memory; size cap is post-allocation"
+    },
+    {
+      "id": "B4-05",
+      "severity": "low",
+      "category": "quality/defense-in-depth",
+      "file": "src/cluster/node_runtime.rs",
+      "line": 103,
+      "title": "BashNodeCommand relies on BashExecTool internal sandbox timeout; layering should be documented"
+    },
+    {
+      "id": "B4-06",
+      "severity": "low",
+      "category": "documentation",
+      "file": "src/cluster/node_runtime.rs",
+      "line": 50,
+      "title": "descriptors() sort is str::cmp (byte order), not locale-aware"
+    },
+    {
+      "id": "B4-07",
+      "severity": "low",
+      "category": "configurability",
+      "file": "src/cluster/node_file_cmd.rs",
+      "line": 3,
+      "title": "MAX_FILE_BYTES hardcoded; no per-node override"
+    }
+  ],
+  "clean_areas": [
+    "SHA-256 verification of file.write correct and tested",
+    "Base64 size cap tight (4/3 + 4 padding)",
+    "dispatch allowlist authority correct",
+    "BashNodeCommand SESSION_ID.scope binding correct",
+    "Existing tests cover round-trip, oversize, sha mismatch, traversal, overwrite, missing, oversize read"
+  ]
+}

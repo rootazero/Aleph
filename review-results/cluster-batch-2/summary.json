@@ -1,0 +1,88 @@
+{
+  "batch": "cluster-batch-2",
+  "title": "Node lifecycle: enrollment / admit_node / deregister",
+  "date": "2026-08-11",
+  "reviewer": "static (4-perspective protocol)",
+  "worktree": "/tmp/aleph-review-cluster",
+  "report": "review-results/cluster-batch-2/REPORT.md",
+  "counts": {
+    "critical": 0,
+    "high": 0,
+    "medium": 3,
+    "low": 3,
+    "total": 6
+  },
+  "by_category": {
+    "logic": 3,
+    "quality": 2,
+    "documentation": 1
+  },
+  "files_reviewed": [
+    { "path": "src/cluster/enrollment.rs", "loc": 612, "findings": 6 }
+  ],
+  "total_loc": 612,
+  "withdrawn_findings": [
+    {
+      "id": "B2-01",
+      "severity_originally": "high",
+      "reason": "uuid 1.x exposes pub fn new_v4() -> Uuid (infallible). Confirmed against crate source at ~/.cargo/registry/.../uuid-1.22.0/src/v4.rs. No panic risk."
+    }
+  ],
+  "findings": [
+    {
+      "id": "B2-02",
+      "severity": "medium",
+      "category": "logic/correctness",
+      "file": "src/cluster/enrollment.rs",
+      "line": 204,
+      "title": "mint_node_device fingerprint uses &device_id[..16] — assumes ASCII-UUID, should use truncate_on_char_boundary for parity with admit_node path 4"
+    },
+    {
+      "id": "B2-03",
+      "severity": "medium",
+      "category": "quality",
+      "file": "src/cluster/enrollment.rs",
+      "line": 189,
+      "title": "mint_node_device mint failure bubbles an unhelpful error string; warn! happens at the caller, not at the source"
+    },
+    {
+      "id": "B2-04",
+      "severity": "medium",
+      "category": "logic/reliability",
+      "file": "src/cluster/enrollment.rs",
+      "line": 283,
+      "title": "deregister_node only warns on revoke_device failure; no caller acts on device_removed:false"
+    },
+    {
+      "id": "B2-05",
+      "severity": "low",
+      "category": "logic/edge",
+      "file": "src/cluster/enrollment.rs",
+      "line": 174,
+      "title": "admit_node path 4's truncate_on_char_boundary(id, 16) can collide for short non-ASCII ids"
+    },
+    {
+      "id": "B2-06",
+      "severity": "low",
+      "category": "logic/ux",
+      "file": "src/cluster/enrollment.rs",
+      "line": 316,
+      "title": "deregister_node ambiguity branch loses structured ResolveError::Ambiguous candidates"
+    },
+    {
+      "id": "B2-07",
+      "severity": "low",
+      "category": "documentation",
+      "file": "src/cluster/enrollment.rs",
+      "line": 1,
+      "title": "R10 caveat duplicated in cluster/mod.rs and enrollment.rs — cosmetic"
+    }
+  ],
+  "clean_areas": [
+    "enroll_node_device idempotence contract",
+    "admit_node Decision Order documented",
+    "deregister_is_sticky_and_reaches_offline_nodes test",
+    "IdentityConflict variant correctly distinguished from Deregistered",
+    "mint_node_device fingerprint ASCII-safe at current call site"
+  ]
+}

@@ -1,0 +1,55 @@
+{
+  "module": "src/cluster",
+  "date": "2026-08-11",
+  "reviewer": "static (4-perspective protocol, 5 parallel batches)",
+  "worktree": "/tmp/aleph-review-cluster",
+  "branch": "review/cluster",
+  "counts": {
+    "critical": 0,
+    "high": 6,
+    "medium": 10,
+    "low": 14,
+    "total": 30
+  },
+  "counts_by_category": {
+    "security": 4,
+    "logic": 11,
+    "race": 1,
+    "lifecycle": 1,
+    "quality": 7,
+    "documentation": 4,
+    "configurability": 1,
+    "path_traversal": 1
+  },
+  "files_reviewed": [
+    { "path": "src/cluster/registry.rs", "loc": 964, "findings": 8 },
+    { "path": "src/cluster/enrollment.rs", "loc": 612, "findings": 6 },
+    { "path": "src/cluster/reverse_rpc.rs", "loc": 493, "findings": 6 },
+    { "path": "src/cluster/node_file_cmd.rs", "loc": 323, "findings": 4 },
+    { "path": "src/cluster/node_runtime.rs", "loc": 272, "findings": 3 },
+    { "path": "src/cluster/node_approval.rs", "loc": 211, "findings": 4 },
+    { "path": "src/cluster/mod.rs", "loc": 41, "findings": 2 }
+  ],
+  "total_loc": 2916,
+  "batches": [
+    { "id": "cluster-batch-1", "scope": "registry.rs", "report": "review-results/cluster-batch-1/REPORT.md" },
+    { "id": "cluster-batch-2", "scope": "enrollment.rs", "report": "review-results/cluster-batch-2/REPORT.md" },
+    { "id": "cluster-batch-3", "scope": "reverse_rpc.rs", "report": "review-results/cluster-batch-3/REPORT.md" },
+    { "id": "cluster-batch-4", "scope": "node_file_cmd.rs + node_runtime.rs", "report": "review-results/cluster-batch-4/REPORT.md" },
+    { "id": "cluster-batch-5", "scope": "node_approval.rs + mod.rs", "report": "review-results/cluster-batch-5/REPORT.md" }
+  ],
+  "high_findings": [
+    "B1-01 register() overwrite without close_connection() on prev session",
+    "B1-02 malformed commands/tags/version silently downgrade",
+    "B1-03 cross-node-id conn_id collision leaves orphan session",
+    "B3-01 call() may push frame then return Timeout (peer half-executes)",
+    "B3-02 resolve() true for already-handled id masks double-resolve",
+    "B4-01 resolve_in_jail follows symlinks in workspace_dir"
+  ],
+  "withdrawn_findings": [
+    {
+      "id": "B2-01",
+      "reason": "uuid 1.x exposes pub fn new_v4() -> Uuid (infallible). Confirmed against crate source."
+    }
+  ]
+}

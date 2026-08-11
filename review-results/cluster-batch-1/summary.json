@@ -1,0 +1,98 @@
+{
+  "batch": "cluster-batch-1",
+  "title": "Cluster registry: NodeRegistry + resolve + tagging",
+  "date": "2026-08-11",
+  "reviewer": "static (4-perspective protocol)",
+  "worktree": "/tmp/aleph-review-cluster",
+  "report": "review-results/cluster-batch-1/REPORT.md",
+  "counts": {
+    "critical": 0,
+    "high": 3,
+    "medium": 2,
+    "low": 3,
+    "total": 8
+  },
+  "by_category": {
+    "security": 1,
+    "logic": 4,
+    "lifecycle": 1,
+    "quality": 2
+  },
+  "files_reviewed": [
+    { "path": "src/cluster/registry.rs", "loc": 964, "findings": 8 }
+  ],
+  "total_loc": 964,
+  "findings": [
+    {
+      "id": "B1-01",
+      "severity": "high",
+      "category": "logic/lifecycle",
+      "file": "src/cluster/registry.rs",
+      "line": 155,
+      "title": "Re-registering the same node_id silently overwrites the previous session without closing that connection"
+    },
+    {
+      "id": "B1-02",
+      "severity": "high",
+      "category": "security/logic",
+      "file": "src/cluster/registry.rs",
+      "line": 434,
+      "title": "Malformed commands/tags/version silently downgrade to empty/None; a node with no declared commands still occupies a fleet slot"
+    },
+    {
+      "id": "B1-03",
+      "severity": "high",
+      "category": "logic",
+      "file": "src/cluster/registry.rs",
+      "line": 150,
+      "title": "Two distinct node_ids registering on the same conn_id leave the first session orphaned"
+    },
+    {
+      "id": "B1-04",
+      "severity": "medium",
+      "category": "quality/observability",
+      "file": "src/cluster/registry.rs",
+      "line": 155,
+      "title": "register/deregister/forget are silent; 'node came back online' has no log breadcrumb"
+    },
+    {
+      "id": "B1-05",
+      "severity": "medium",
+      "category": "logic/determinism",
+      "file": "src/cluster/registry.rs",
+      "line": 297,
+      "title": "resolve_all_by_tags returns HashMap iteration order; fan-out spawn order differs between calls"
+    },
+    {
+      "id": "B1-06",
+      "severity": "low",
+      "category": "quality",
+      "file": "src/cluster/registry.rs",
+      "line": 106,
+      "title": "NodeMatch has no Debug impl; test failures cannot pretty-print it"
+    },
+    {
+      "id": "B1-07",
+      "severity": "low",
+      "category": "quality",
+      "file": "src/cluster/registry.rs",
+      "line": 62,
+      "title": "ResolveError has Display but no test coverage"
+    },
+    {
+      "id": "B1-08",
+      "severity": "low",
+      "category": "quality",
+      "file": "src/cluster/registry.rs",
+      "line": 455,
+      "title": "maybe_register_node falls back to 'unknown' when device_name is absent without logging"
+    }
+  ],
+  "clean_areas": [
+    "truncate_on_char_boundary correctness (delegates to utils::text_format::truncate_bytes)",
+    "Lock-poisoning recovery consistent across the registry",
+    "forget drops the write lock before signalling — no deadlock on re-entry",
+    "normalize_node_key is Unicode-aware and tested against CJK names",
+    "Existing reconnect/deregister happy-path tests"
+  ]
+}
