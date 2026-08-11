@@ -104,8 +104,16 @@ pub fn analyze_shell_command(
     // string exhausts memory/CPU before any security check returns. Real
     // user-typed commands are well under 64 KiB; anything longer is almost
     // certainly a DoS attempt or a tooling mistake.
+    //
+    // Both bytes AND chars are bounded: a 64 KiB-of-4-byte-UTF-8 string is
+    // only 16k chars but allocates ~256 KiB in `split_command_chain` (which
+    // builds `current: String` chunk-by-chunk via `chars().next()` +
+    // `push(ch)`), so a byte cap alone does not bound the worst-case
+    // allocation when the input is mostly multi-byte. The chars cap closes
+    // the other end (pure ASCII at 64 KiB-of-chars is the same cost).
     const MAX_COMMAND_BYTES: usize = 64 * 1024;
-    if command.len() > MAX_COMMAND_BYTES {
+    const MAX_COMMAND_CHARS: usize = 64 * 1024;
+    if command.len() > MAX_COMMAND_BYTES || command.chars().count() > MAX_COMMAND_CHARS {
         return CommandAnalysis::error("command exceeds maximum analyzable length");
     }
 
