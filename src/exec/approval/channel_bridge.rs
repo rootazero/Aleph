@@ -201,6 +201,16 @@ impl ChannelApprovalBridge {
         action: &crate::sandbox::exec_approval::ApprovalAction,
         approval_id: &str,
     ) -> Option<bool> {
+        // Truncate `action.summary` to the same shape the manager's
+        // `display_line` uses, so the text-fallback path can never overflow
+        // a channel's message limit (Telegram's is 4096 chars; a 4 KB
+        // command summary would silently truncate or refuse to send).
+        const MAX_SUMMARY_CHARS: usize = 1000;
+        let mut summary: String = action.summary.chars().take(MAX_SUMMARY_CHARS).collect();
+        if action.summary.chars().count() > MAX_SUMMARY_CHARS {
+            summary.push('…');
+        }
+        let _ = approval_id; // already used by the caller for register_pending; not echoed in the fallback text
         let tool_name = action.tool_name.as_str();
         let reason = action.reason.as_str();
         let channel = self.registry.get(channel_id).await?;
@@ -212,11 +222,13 @@ impl ChannelApprovalBridge {
         let Some(capability) = capability else {
             // The action summary is the point of the prompt: `/approve` on a
             // bare tool name approves whatever the model happened to pass.
+            // Use the truncated form so the text-fallback message stays
+            // under every channel's limit.
             let text = format!(
-                "⚠️ 工具 `{tool_name}` 需要你的授权。\n```\n{}\n```\n{reason}\n\n\
+                "⚠️ 工具 `{tool_name}` 需要你的授权。\n```\n{summary}\n```\n{reason}\n\n\
                  回复 /approve 批准本次、/approve session 本会话内不再询问、\
                  /deny 拒绝（可附原因：/deny 原因…，会转告给 agent）。",
-                action.summary
+                summary = summary,
             );
             let ch = channel.read().await;
             return match ch
