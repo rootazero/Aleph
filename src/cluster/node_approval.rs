@@ -30,13 +30,26 @@ pub type ApprovalSlot = Arc<RwLock<Option<ReverseRpcChannel>>>;
 pub const NODE_APPROVAL_TIMEOUT_MS: u64 = 130_000;
 
 /// Map the center's outcome string back to an `ApprovalOutcome`. Any unknown
-/// value (including `"denied"`) is fail-closed `Denied`.
+/// value (including `"denied"`) is fail-closed `Denied`. The canonical
+/// `"denied"` string is mapped explicitly (not via the unknown arm) so the
+/// consumer contract with the center is one place.
 pub(crate) fn outcome_from_str(s: &str) -> ApprovalOutcome {
     match s {
         "approved" => ApprovalOutcome::Approved,
         "approved_session" => ApprovalOutcome::ApprovedForSession,
         "timeout" => ApprovalOutcome::Timeout,
-        _ => ApprovalOutcome::Denied,
+        "denied" => ApprovalOutcome::Denied,
+        // (B5-01) Drift guard: if the center ever adds a new outcome string
+        // (e.g. `ApprovedWithConstraints`) and forgets to update this consumer,
+        // the unknown arm previously fell through silently to `Denied`. Warn so
+        // an operator can spot the drift before a real denial is misclassified.
+        other => {
+            tracing::warn!(
+                outcome = %other,
+                "node approval got an outcome string it does not recognize; fail-closed to Denied"
+            );
+            ApprovalOutcome::Denied
+        }
     }
 }
 
@@ -57,7 +70,23 @@ impl ApprovalRequester for CenterApprovalRequester {
         // a std RwLock guard is not Send.
         let channel = self.slot.read().unwrap_or_else(|e| e.into_inner()).clone();
         let Some(channel) = channel else {
-            tracing::warn!("node approval requested with no live center channel; denying");
+            // (B5-02) Rate-limit the no-channel warning: a headless node that
+            // has lost its center connection would otherwise log the same line
+            // for every escalation. Warn every 100th denial with the running
+            // count; debug! for the rest. The counter is process-wide because
+            // a node process holds at most one `ApprovalSlot`.
+            use std::sync::atomic::{AtomicU64, Ordering};
+            static COUNTER: AtomicU64 = AtomicU64::new(0);
+            const WARN_EVERY: u64 = 100;
+            let n = COUNTER.fetch_add(1, Ordering::Relaxed) + 1;
+            if n == 1 || n % WARN_EVERY == 0 {
+                tracing::warn!(
+                    count = n,
+                    "node approval requested with no live center channel; denying"
+                );
+            } else {
+                tracing::debug!("node approval denied: no live center channel");
+            }
             return ApprovalOutcome::Denied.into();
         };
         // `action` carries the redacted summary the center's operator card

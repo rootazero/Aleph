@@ -196,12 +196,10 @@ impl NodeCommand for FileReadCommand {
             .await
             .map_err(|e| format!("file.read: {e}"))?;
         let mut buf = Vec::with_capacity(std::cmp::min(size, MAX_FILE_BYTES as u64) as usize);
-        let capped = file
-            .take((MAX_FILE_BYTES as u64) + 1)
+        file.take((MAX_FILE_BYTES as u64) + 1)
             .read_to_end(&mut buf)
             .await
             .map_err(|e| format!("file.read: {e}"))?;
-        let _ = capped; // capped is the byte count actually read into `buf`
         if buf.len() > MAX_FILE_BYTES {
             return Err(format!(
                 "file.read: >{MAX_FILE_BYTES} bytes (cap enforced at read)"
